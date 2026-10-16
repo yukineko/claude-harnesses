@@ -71,6 +71,8 @@ cargo test -p stuckguard --bin stuckguard --quiet near_repeat_escalates_even_pas
 
 ## 3. 軽微な規約逸脱(実害なし)
 
+<!-- record: 2026-07-13 rev: 49eb5976422d2d4af258942e26354f824aad218f -->
+
 - **場所**: `crates/blastguard/tests/overwatch_violation.rs`(L118, 125, 143, 158)、
   `crates/overwatch/tests/bridge_to_backlog.rs`(L12, L41)
 - **内容**: `std::os::unix::fs::PermissionsExt::set_mode` を `#[cfg(unix)]` ガード無しで
@@ -81,6 +83,8 @@ cargo test -p stuckguard --bin stuckguard --quiet near_repeat_escalates_even_pas
   Windowsでビルドしようとした場合のみコンパイルが通らない(このリポジトリの対象プラット
   フォーム外)。
 - **優先度**: 低。ただし規約の一貫性を保つ観点では直しておく価値がある。
+
+<!-- /record -->
 
 ## 4. 対象外と判断した失敗(参考記録)
 

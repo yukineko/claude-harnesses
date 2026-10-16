@@ -93,6 +93,7 @@ run_ca --round 2026W28 --target specguard,stuckguard \
     --finding 'R-007|high|confirmed real finding|crates/specguard/src/y.rs'
 [ "$RC" -eq 0 ] || fail "record run should exit 0 (got $RC)"
 grep -q "round 2026W28 recorded" <<<"$OUT" || fail "record run should confirm the round was recorded"
+grep -q "^PASS: round 2026W28" <<<"$OUT" || fail "record run should sign off PASS"
 
 # The finding must surface in the review queue.
 QUEUE="$( run_ow review-queue --json )"

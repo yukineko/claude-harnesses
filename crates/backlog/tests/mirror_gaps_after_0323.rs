@@ -128,6 +128,14 @@ fn setup(tag: &str) -> Env {
         <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
     )
     .unwrap();
+    // Warm the freshly written shim: the first exec of a new file can be slow
+    // on macOS (OS scanning, observed > 2.5s under a parallel `cargo test`)
+    // and would trip add's bounded claim check, refusing the fixture add for a
+    // reason unrelated to what these tests pin (same as claim_check_contract.rs).
+    let _ = Command::new(bin.join("condukt"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 
     let e = Env {
         home,
@@ -393,31 +401,16 @@ fn render(invs: &[Vec<String>]) -> String {
 
 /// `backlog add`, returning the generated task id. The project is this repo's
 /// real path so `git_remote_origin_url` finds the github.com origin and the
-/// create arm actually engages.
+/// create arm actually engages. Since the intake contract v2 (user rulings
+/// 2026-10-04) `add` files — and so mirrors — ONLY a reproduced finding, so
+/// this is the same filing as [`add_pending`].
 fn add(e: &Env, title: &str, notes: &str) -> String {
-    let project = e.repo.display().to_string();
-    let (c, o, er) = bl(
-        e,
-        &[
-            "add",
-            "--title",
-            title,
-            "--project",
-            &project,
-            "--notes",
-            notes,
-        ],
-    );
-    assert_eq!(c, 0, "backlog add must succeed\nstdout={o}\nstderr={er}");
-    o.lines()
-        .find_map(|l| l.strip_prefix("added: "))
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| panic!("add must print `added: <id>`; stdout was {o:?}"))
+    add_pending(e, title, notes)
 }
 
 /// Like [`add`], but the task lands `pending`: since close-evidence (main
-/// 04ea9b35) a finding filed without a REPRODUCED repro test lands
-/// `unconfirmed`, and the body re-sync arm deliberately acts only on workable
+/// 04ea9b35) a finding filed without a REPRODUCED repro test is
+/// refused, and the body re-sync arm deliberately acts only on workable
 /// rows (`pending` / `failed`). The repro script exits 1 (= reproduced) and is
 /// committed, because only a git-tracked script at HEAD is evidence.
 fn add_pending(e: &Env, title: &str, notes: &str) -> String {
@@ -568,7 +561,7 @@ fn the_argv_log_round_trips_multibyte_and_huge_arguments() {
 // the issue open. main's close-evidence change (04ea9b35) then removed that
 // route entirely: `edit --status` may only name `pending` / `failed`, and a
 // terminal state needs a recorded closure (`done` with evidence, `cancel
-// --reason`, or a human `ruling approve`). The merge of the two lines keeps
+// --reason`). The merge of the two lines keeps
 // the stricter rule, so Gap 1 is now closed from BOTH ends and is pinned that
 // way:
 //   * `edit --status <terminal>` is refused with nothing written and nothing

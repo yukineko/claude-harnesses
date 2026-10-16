@@ -19,7 +19,7 @@ pub struct Config {
     pub on_stop: bool,
     /// Notify when Claude Code raises a Notification (waiting for input/permission).
     pub on_notification: bool,
-    /// On Stop, append a short tail of Claude's last message to the body.
+    /// On Stop, append the head (first `snippet_chars` chars) of Claude's last message to the body.
     pub include_snippet: bool,
     /// Max characters of that snippet.
     pub snippet_chars: usize,

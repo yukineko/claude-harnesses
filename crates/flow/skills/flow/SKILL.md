@@ -84,7 +84,10 @@ SOURCE（課題の供給。上から順に引く）   EXECUTOR（解決手段の
 引数が空なら → Step 1 へ（source から自動ピックするループ）。
 
 **どちらの経路でも、着手した課題が終わるまでそれだけをやる**（「ハードルール」の逸脱禁止・常時起票を参照）。
-途中で見つけた別の問題は `backlog add` して**その課題に戻る**。乗り換えない。
+途中で見つけた別の問題は再現テスト（RED）を書いて `backlog add --repro-test "<cmd>"` で起票し、**その課題に戻ること** [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome]。
+乗り換えはしない。
+テスト無しの `backlog add` は拒否され store に何も書かれない [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere]。
+下の「常時起票」を参照すること。
 
 ### Step 0.5 — 自律ゲート（`condukt policy answer` で per-gate graded 判定）
 
@@ -249,10 +252,8 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
 
 「source が尽きる / 予算超過 / ユーザー中断」まで以下を繰り返す。
 
-> **cwd は常にこのセッションの linked worktree**（backlog 1e6f00ae）。`backlog`（add / done / fail /
-> edit / cancel / confirm / ruling request・approve・withdraw / `sync --apply`）と `compass`（charter --write / gap --write / outcome / opportunity add /
-> apply / evaluate / carve-reset / route）の **store 書き込みは、main（primary checkout）の作業ツリー内では
-> 拒否される**（非 0 終了・何も書かない。CLAUDE.md §8: main の作業ツリーは merge だけを受け取る）。
+> cwd は常にこのセッションの **linked worktree** にすること。
+> `backlog`（add / done / fail / edit / cancel / `sync --apply`）と `compass`（charter --write / gap --write / outcome / opportunity add / evaluate）の **store 書き込みは、main（primary checkout）の作業ツリー内では拒否される**（非 0 終了・何も書かない） [test: crates/backlog/tests/store_worktree_boundary.rs::add_from_primary_checkout_is_refused_and_writes_nothing] [test: crates/backlog/tests/store_worktree_boundary.rs::done_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary_env.rs::fail_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary.rs::edit_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary_env.rs::cancel_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary.rs::sync_apply_from_primary_checkout_is_refused_and_creates_no_issue] [test: crates/compass/tests/store_worktree_boundary.rs::charter_write_from_primary_checkout_is_refused_and_writes_nothing] [test: crates/compass/tests/store_worktree_boundary.rs::gap_write_from_primary_checkout_is_refused_and_charter_unchanged] [test: crates/compass/tests/store_worktree_boundary.rs::outcome_from_primary_checkout_is_refused_and_writes_nothing] [test: crates/compass/tests/store_worktree_boundary.rs::opportunity_add_from_primary_checkout_is_refused_and_writes_nothing] [test: crates/compass/tests/store_worktree_boundary.rs::evaluate_from_primary_checkout_is_refused_and_writes_nothing]。
 > 判定不能（git が答えない）も拒否に倒れる。したがって以下の `backlog` / `compass` はすべて
 > **セッションの worktree を cwd にして**実行する（`git worktree add …` で作った linked worktree）。
 > 読み取り（list / next（--claim なし）/ pivot-check / `compass charter`（--write なし）/ `compass gap`
@@ -318,7 +319,8 @@ backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drive
       こと（weight が compass→backlog→flow と流れ、影響度の高い機会が先頭に来て同じ並列バッチに乗りやすくなる）:
       ```bash
       W=$(compass gap | jq -r '.opportunities[0].weight // empty')   # active outcome の最重要 opportunity の weight
-      backlog add --title "<課題>" --project "$PWD" --priority p1 --weight "${W:-0}"
+      backlog add --title "<課題>" --project "$PWD" --priority p1 --weight "${W:-0}" \
+        --repro-test "<その課題を再現するコミット済みテスト>"   # 再現しなければ拒否され store に何も書かれない [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]
       ```
       weight 無指定は既定 0.0＝従来の (priority, created_at) 順（後方互換）。weight は順序を変えるだけで priority は上書きしない。
       クロスプロジェクトで繰り返し検出される作業種別は `docs/backlog-tag-taxonomy.md` の規約タグ（例:
@@ -742,23 +744,25 @@ JSON の `idle_source` が `session_flag`）。transcript が見つからない�
 - **ユーザーの課題から逸脱しない。着手した課題は、終わるまでそれだけをやる。**
   作業中に別の問題（より重要に見えるもの・途中で詰まった原因・気づいた欠陥）が現れても、
   **そこへ乗り換えない**。判定基準は常に「いまユーザーの prompt に忠実か」であり、
-  それが解決するまではその課題に注力する。見つけた別課題は**その場で `backlog add` して戻る**。
-  課題が完了してから、自律モードであれば次の backlog を処理する（＝順序であって、並行ではない）。
+  それが解決するまではその課題に注力すること。見つけた別課題は**その場で再現テストを書いて `backlog add --repro-test` し、戻る** [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome]。
+  課題が完了してから（並行ではなく順序として）、自律モードであれば次の backlog を処理すること。
+
   **Why**: 逸脱は個々の判断としては常に正当に見える（「これを直さないと進めない」「こちらの方が重要だ」）。
   だが逸脱が積み重なると、ユーザーから見て「結局いま何をしているのか」が失われ、
   最初の課題は未完のまま残る。実際に起きた形: rollout 中に見つけた別クレートの欠陥を追いかけ、
   rollout 自体は drift が残ったまま「完了」と報告されかけた。
   **逸脱してよい唯一の例外は、その問題を解決しないと元の課題が物理的に前に進まない場合**であり、
   そのときも「元の課題のために何を迂回しているか」を明示してから行い、済み次第すぐ戻る。
-- **気づいたことは常に起票する。起票するかどうかを判断しない。**
-  「些細だ」「意図的な仕様かもしれない」「今回のスコープ外だ」を理由に `backlog add` を省かない。
-  **それが本当に課題かどうかは、後でチケットから判定する。**
-  **Why**: 起票しないという判断は、**観測が最も新しく最も未検証な瞬間**に下される予測である。
-  省いた時点で唯一の永続記録が消えるので、その問いは二度と決着しない
-  （CLAUDE.md 第2節「判断は予測にすぎない」・第6節の自己許可そのもの）。
-  不要な 1 件のコストはキューの 1 行、落とした 1 件のコストは誰にも見えないまま残る。非対称であり、常に起票側が安い。
-  **起票の中身**: 逐語の実測値・測定点（rev と日付）・判定不能なら**両方の読み**（(a) 実在の欠陥 / (b) 意図的な仕様）と、
-  **どちらかを見分ける方法**を書く。起票は着手ではないので、書いたら元の課題へ戻る。
+- **気づいたことは常に起票すること。起票するかどうかを判断しない。ただしテストが無ければ起票しない（2026-10-04 ユーザー裁定:
+  「testがないなら起票してはならない」）。**
+  起票は **(1) 再現テスト（RED）を書いてコミット → (2) `backlog add --repro-test "<cmd>"`** の順で行うこと [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome]。
+  `backlog add` は再現した時だけ task を書き、それ以外は拒否して store に何も書かない [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]。
+  テストが書けないなら Ask すること。
+  「些細だ」「意図的な仕様かもしれない」「今回のスコープ外だ」を理由にこの手順を省かないこと。
+  **それが本当に課題かどうかは、後でチケットから判定すること**。
+  **起票の中身**には逐語の実測値・測定点（rev と日付）・判定不能なら**両方の読み**（(a) 実在の欠陥 / (b) 意図的な仕様）と、
+  **どちらかを見分ける方法**を書くこと。
+  起票を着手として扱わず、書いたら元の課題へ戻ること。
 - **source/executor の役割を混ぜない**: 課題の選定は compass/backlog、実行は condukt。`/flow` 自身は判定とループだけ。
 - **キューを独占しない**: `/flow` は同じ project で並走してよい（排他は task 単位＝`next --claim` +
   `condukt state claim-task`）。他セッションが driver 登録済みでも見送らない。**待つのは解ではない。**

@@ -1,82 +1,58 @@
-# parallelguard
+A concurrency cap for Claude Code tool calls, counted by a binary instead of by
+a sentence in a prompt. [test: crates/parallelguard/tests/concurrency.rs::eight_simultaneous_shells_admit_exactly_three]
 
-A per-session concurrency cap for Claude Code, enforced by a binary instead of
-by a sentence in a prompt.
+parallelguard counts the calls that have passed `acquire` and not yet reached
+`release`, and refuses the call that would exceed the cap. [test: crates/parallelguard/src/model.rs::the_fourth_concurrent_shell_is_denied] [test: crates/parallelguard/tests/concurrency.rs::releasing_returns_the_slot]
 
-Freezing a WSL2 host takes one thing: too many processes at once. Every fan-out
-in this harness — a skill spawning one auditor per shard, a batch of parallel
-`Bash` calls in a single message — spends the same budget. Before parallelguard
-the only thing between a wide fan-out and a frozen session was a request in a
-SKILL.md asking the model to please send at most N at a time.
+Two independent pools, capped at **3 each**: [test: crates/parallelguard/src/model.rs::a_full_shell_pool_does_not_block_subagents] [test: crates/parallelguard/tests/concurrency.rs::eight_simultaneous_shells_admit_exactly_three] [test: crates/parallelguard/tests/concurrency.rs::eight_simultaneous_subagents_admit_exactly_three]
 
-parallelguard counts what is *actually in flight* and refuses the call that
-would exceed the cap.
-
-## What it bounds
-
-Two independent pools, **3 each** by default:
-
-| pool | tools | cap |
+| pool | tools | cap [test: crates/parallelguard/tests/concurrency.rs::eight_simultaneous_shells_admit_exactly_three] |
 |---|---|---|
-| shell | `Bash` | 3 concurrent |
-| subagent | `Task` / `Agent` | 3 concurrent |
+| shell | `Bash` | 3 concurrent [test: crates/parallelguard/tests/concurrency.rs::eight_simultaneous_shells_admit_exactly_three] |
+| subagent | `Task` / `Agent` | 3 concurrent [test: crates/parallelguard/tests/concurrency.rs::eight_simultaneous_subagents_admit_exactly_three] [test: crates/parallelguard/src/model.rs::bash_and_task_draw_from_different_pools] |
 
-Two pools rather than one shared pool of 3, because a shared pool deadlocks: a
-subagent holds its slot for its whole lifetime, so with 3 subagents live, every
-`Bash` call *those same subagents* make would be denied — the holders could
-never progress and so could never release.
+Do not merge the two pools into one shared pool: with two pools a full shell
+pool never blocks a subagent. [test: crates/parallelguard/tests/concurrency.rs::a_full_shell_pool_never_blocks_a_subagent]
 
-`HARNESS_MAX_PARALLEL` may **lower** the cap. Nothing raises it: 3 is a ceiling,
-and an out-of-range or unparsable value resolves to the ceiling.
-
-## How it is wired
+Nothing raises the cap: 3 is a ceiling, and an out-of-range-high or unparsable
+`HARNESS_MAX_PARALLEL` value resolves to the ceiling [test: crates/parallelguard/tests/prose_claims.rs::claim_ceiling] [test: crates/parallelguard/tests/concurrency.rs::the_cap_can_be_lowered_but_not_raised].
+`HARNESS_MAX_PARALLEL` may **lower** the cap [test: crates/parallelguard/tests/prose_claims.rs::claim_lower_cap].
+A value of `0` is raised to the floor of 1, not to the ceiling. [test: crates/parallelguard/tests/prose_claims.rs::claim_ceiling_zero_actual_behaviour]
 
 ```
-PreToolUse(Bash|Task|Agent)          -> parallelguard acquire   take a slot, or deny
-PostToolUse(Bash|Task|Agent)         -> parallelguard release   give the slot back
-SessionStart|UserPromptSubmit|Stop   -> parallelguard reset      clear the ledger
+PreToolUse(Bash|Task|Agent)          -> parallelguard acquire   take a slot, or deny [test: crates/parallelguard/tests/prose_claims.rs::claim_hooks_wiring] [test: crates/parallelguard/src/model.rs::the_fourth_concurrent_shell_is_denied]
+PostToolUse(Bash|Task|Agent)         -> parallelguard release   give the slot back [test: crates/parallelguard/tests/prose_claims.rs::claim_hooks_wiring] [test: crates/parallelguard/tests/concurrency.rs::releasing_returns_the_slot]
+SessionStart|UserPromptSubmit|Stop   -> parallelguard reset      clear the ledger [test: crates/parallelguard/tests/prose_claims.rs::claim_hooks_wiring] [test: crates/parallelguard/tests/concurrency.rs::reset_clears_a_leaked_ledger]
 ```
 
 The ledger is one JSON file per session under
 `$HOME/.parallelguard/state/sessions/` (override with an absolute
-`PARALLELGUARD_STATE_DIR`), guarded by an advisory lockfile so the concurrent
-hook processes of a parallel tool batch cannot race each other into admitting
-more than the cap.
+`PARALLELGUARD_STATE_DIR`) [test: crates/parallelguard/tests/prose_claims.rs::claim_ledger_path] [test: crates/parallelguard/src/store.rs::a_relative_state_dir_override_is_ignored].
+It is guarded by an advisory lockfile so the concurrent hook processes of a
+parallel tool batch cannot race each other into admitting more than the cap. [test: crates/parallelguard/tests/prose_claims.rs::claim_lock_serializes] [test: crates/parallelguard/tests/concurrency.rs::eight_simultaneous_shells_admit_exactly_three]
 
-## Cannot-determine denies
-
+Silence is not available as a degraded mode: none of the paths below exits 0
+with empty stdout [test: crates/parallelguard/tests/prose_claims.rs::claim_never_silent] [test: crates/parallelguard/tests/concurrency.rs::the_launcher_denies_when_no_binary_is_bundled].
 An unparseable payload, an unreadable ledger, a lock that will not come free, a
-write that fails, a panic in the binary, a missing platform build — each means
-the number in flight is **unknown**, and an unknown count is not a free slot.
-All of them deny (CLAUDE.md 3). Silence is not available as a degraded mode: a
-`PreToolUse` hook that exits 0 with no output *is* an allow, byte for byte, so
-"the gate broke" would be indistinguishable from "the gate found room".
+write that fails, a missing platform build — each means the number in flight is
+**unknown**, and an unknown count is not a free slot: all of them deny (CLAUDE.md 3) [test: crates/parallelguard/tests/concurrency.rs::an_unparseable_payload_denies] [test: crates/parallelguard/tests/concurrency.rs::an_unreadable_ledger_denies_rather_than_reading_as_empty] [test: crates/parallelguard/tests/prose_claims.rs::claim_lock_held_denies] [test: crates/parallelguard/tests/prose_claims.rs::claim_write_failure_denies] [test: crates/parallelguard/tests/concurrency.rs::the_launcher_denies_when_no_binary_is_bundled].
 
-The cost of that choice is bounded on purpose — every deny is recoverable
-without a human:
-
-* the ledger is cleared at every turn boundary by `reset`;
+* the ledger is cleared at every turn boundary by `reset`; [test: crates/parallelguard/tests/prose_claims.rs::claim_hooks_wiring] [test: crates/parallelguard/tests/concurrency.rs::reset_clears_a_leaked_ledger]
 * a killed hook never wedges the lock: it is a kernel advisory lock
   (`flock`) on a persistent lockfile, released by the kernel when the holder
-  dies — there is no staleness timeout and nothing is ever stolen;
-* a denied call is a call that simply did not run — re-issuing it costs a round,
-  not work.
+  dies — there is no staleness timeout and nothing is ever stolen; [test: crates/parallelguard/tests/prose_claims.rs::claim_killed_holder]
 
-## What it does NOT bound
-
-* `Bash` with `run_in_background: true` returns immediately, so its
-  `PostToolUse` fires while the process keeps running. Background shells are
-  outside the count.
-* Slots never expire by age. A long-running call holds its slot until it
-  finishes or the turn ends — "this looks old, assume it died" would be a
-  permissive guess and a way to exceed the cap by taking longer.
-
-## Operator commands
+* Slots never expire by age. [test: crates/parallelguard/src/model.rs::a_slot_never_expires_by_age]
+* `Bash` with `run_in_background: true` is not special-cased: it takes a slot
+  at `acquire` and gives it back at `release` like any other `Bash` call, so a
+  background process still running after its `release` is outside the count. [test: crates/parallelguard/tests/prose_claims.rs::claim_background_not_special]
 
 ```sh
-parallelguard status       # the cap in force, per-session counts, recent denials
-parallelguard --protects   # print the PROTECTS / AGAINST / GROUNDS statement (no verdict)
+parallelguard status       # the cap in force, per-session counts, recent denials [test: crates/parallelguard/tests/prose_claims.rs::claim_status_contents]
+parallelguard --protects   # print the PROTECTS / AGAINST / GROUNDS statement [test: crates/parallelguard/tests/protects_flag.rs::protects_prints_three_labelled_nonempty_lines_and_exits_zero]
 ```
 
-`status` distinguishes "nothing in flight" from "this hook has never run" —
-they produce an identical empty ledger otherwise.
+`status` prints per-pool counts while a session ledger exists, even with
+nothing in flight, and a "the gate is NOT running" line when no ledger exists [test: crates/parallelguard/tests/prose_claims.rs::claim_status_distinguishes].
+The turn-boundary `reset` deletes the ledger, so right after a `reset` `status`
+prints that same "NOT running" line although the gate has run. [test: crates/parallelguard/tests/prose_claims.rs::claim_status_after_reset]

@@ -17,14 +17,12 @@ The `backlog` binary owns the queue and its exclusive run-lock:
 
 | Subcommand | What it does |
 |---|---|
-| `add` | Append a task (`--title`, `--project`, `--tag`, `--priority p0/p1/p2`, `--notes`, `--weight`, `--force`, `--repro-test`). With `--repro-test` the test is run at HEAD first: a behavioural failure lands the task `pending`; anything else lands it `unconfirmed` (outside the workable queue). The add itself always succeeds |
-| `confirm <id> --repro-test CMD` | Re-run a repro test for an `unconfirmed` task; promotes it to `pending` only on `reproduced`, otherwise records the attempt and exits non-zero |
+| `add` | Append a task (`--title`, `--project`, `--tag`, `--priority p0/p1/p2`, `--notes`, `--weight`, `--force`, `--repro-test`). See **File only with a reproducing test** [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome] |
 | `list` | List the store's tasks, filterable by `--tag` / `--status` (`pending` / `done` / `failed` / `cancelled` / `claimed` — not `open`, that's `hypothesis`'s vocabulary; `claimed` is derived) and `--json`. For a repo store `--project` is an assertion, not a filter — see **Scope** |
-| `next` | Print the next highest-priority pending task as JSON (`--claim` reserves it — see below) |
+| `next` | Print the next highest-priority pending task that carries a reproduced repro, as JSON (`--claim` reserves it — see below) [test: crates/backlog/tests/no_confirm_no_unproven.rs::next_hands_out_the_reproduced_row_over_a_repro_less_one] [test: crates/backlog/src/store.rs::next_returns_highest_priority] |
 | `done <id>` | Mark a task done **with evidence**: exactly one of `--test CMD --red-rev REV` (`--reason fixed\|already-fixed\|obsolete`), `--doc-only COMMIT`, or `--duplicate-of ID`. A bare `done <id>` is refused |
 | `fail <id>` | Mark a task failed (`--reason`); defers re-run by 2 days |
-| `cancel <id> --reason R` | Close as "decided not to do it": terminal, never requeued, recorded as a `discard` closure, no test or ruling needed |
-| `ruling {request,approve,withdraw,list}` | Human rulings for closes no executed test can justify. `request` puts a task in `needs-ruling`; `approve` requires an interactive TTY and the id typed back |
+| `cancel <id> --reason R` | Close as "decided not to do it": terminal, never requeued, recorded as a `discard` closure, no test needed [test: crates/backlog/tests/cancel_evidence.rs::cancel_pending_task_records_a_discard_closure_without_tty] |
 | `audit-closures` | Read-only classification of every terminal row's closure evidence (`--json`); never writes the store |
 | `overlap` | Group queued tasks by declared `touched_files` scope (advisory; undeclared scopes listed separately) |
 | `edit <id>` | Update a task's title / tags / notes / status |
@@ -69,18 +67,20 @@ ownership-marked).
 
 ## Store writes need a linked worktree
 
-`add` / `done` / `fail` / `edit` / `cancel` / `confirm` / `ruling request|approve|withdraw` / `sync --apply` are **refused** (non-zero exit,
-nothing written) when the store lies inside the *primary* working tree of a git repo: main's
-tree only receives merges (CLAUDE.md §8), so run them from a linked worktree
-(`git worktree add …`). If git cannot say which kind of checkout this is, the write is
-refused too. Reads (`list`, `next`, `ruling list`, `audit-closures`, `sync` without `--apply`) work anywhere, and `next --claim` is allowed in the primary tree too: its lease goes to `~/.backlog/claims` and it never writes `tasks.toml`, but it does take the tasks-file lock, which creates `.backlog/` (if absent) and a transient `.backlog/tasks.toml.lock` in the cwd's checkout (neither is tracked, so `git status` stays clean), and a cwd outside any git
-repo behaves as before. The SessionStart hook skips its requeue in the primary tree and says so.
+`add` / `done` / `fail` / `edit` / `cancel` / `sync --apply` are **refused** (non-zero exit,
+nothing written) when the store lies inside the *primary* working tree of a git repo, so run them
+from a linked worktree (`git worktree add …`) [test: crates/backlog/tests/store_worktree_boundary.rs::add_from_primary_checkout_is_refused_and_writes_nothing] [test: crates/backlog/tests/store_worktree_boundary.rs::done_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary_env.rs::fail_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary.rs::edit_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary_env.rs::cancel_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary.rs::sync_apply_from_primary_checkout_is_refused_and_creates_no_issue].
+If git cannot say which kind of checkout this is, the write is refused too [test: crates/backlog/tests/store_worktree_boundary_env.rs::add_where_dot_git_points_at_a_missing_gitdir_is_refused].
+`list` works in the primary tree [test: crates/backlog/tests/store_worktree_boundary.rs::list_from_primary_checkout_still_works].
+`next --claim` is allowed there too and leaves `git status` clean [test: crates/backlog/tests/store_worktree_boundary.rs::next_claim_from_primary_checkout_is_allowed_and_never_dirties_main].
+The SessionStart hook skips its requeue in the primary tree and says so [test: crates/backlog/tests/store_boundary_hooks.rs::session_start_in_primary_skips_the_requeue_visibly_and_does_not_write].
 
 ## Standalone (cargo)
 
 ```sh
 cargo install --path .
-backlog add --title "Fix X" --project "$PWD" --priority p1   # queue an item
+backlog add --title "Fix X" --project "$PWD" --priority p1 \
+  --repro-test "bash tests/repro_fix_x.sh"                  # file an item ONLY if the committed test fails at HEAD
 backlog list --status pending                                # see the queue
 backlog next                                                 # pick the next item
 backlog done <id> --test "cargo test -p x" --red-rev <rev>  # resolve it (RED at rev, GREEN at HEAD)
@@ -95,6 +95,23 @@ backlog uninstall           # remove it again
 
 `install`/`uninstall` accept `--dry-run` to print the resulting settings without
 writing.
+
+## File only with a reproducing test
+
+- `add` writes a task **only** when `--repro-test CMD` fails behaviourally at HEAD; the task lands
+  `pending` with the reproduced repro recorded [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome].
+- Any other outcome is refused with a non-zero exit and nothing written to the store: no `--repro-test` [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere],
+  not reproduced [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere], undetermined [test: crates/backlog/tests/repro_evidence.rs::undetermined_repro_files_no_row_and_writes_nothing].
+- `next` / `next --claim` never hand out a row without a reproduced repro [test: crates/backlog/tests/no_confirm_no_unproven.rs::next_skips_pending_row_without_repro] [test: crates/backlog/tests/no_confirm_no_unproven.rs::next_claim_skips_pending_row_without_repro].
+- A store holding a row with status `unconfirmed` or `needs-ruling` is refused by `list` and `next`,
+  naming the row [test: crates/backlog/tests/no_unconfirmed.rs::list_fails_closed_on_an_unconfirmed_row_in_tasks_toml] [test: crates/backlog/tests/no_unconfirmed.rs::next_fails_closed_on_an_unconfirmed_row_in_tasks_toml] [test: crates/backlog/tests/no_needs_ruling.rs::list_fails_closed_on_a_needs_ruling_row_in_tasks_toml] [test: crates/backlog/tests/no_needs_ruling.rs::next_fails_closed_on_a_needs_ruling_row_in_tasks_toml] [test: crates/backlog/tests/status_type.rs::store_with_unconfirmed_row_fails_naming_id_and_status] [test: crates/backlog/tests/status_type.rs::store_with_needs_ruling_row_fails_naming_id_and_status].
+- `backlog audit-open [--json]` audits OPEN rows (pending / failed) as `has-test` / `no-test` /
+  `undetermined`, read from the recorded repro [test: crates/backlog/tests/audit_open_once.rs::first_run_classifies_open_rows_and_excludes_terminal].
+- `audit-open` runs no test [test: crates/backlog/tests/audit_open_once.rs::no_test_is_executed].
+- Determined results go to the ledger `~/.backlog/audit-open/<project-slug>.json` [test: crates/backlog/tests/audit_open_once.rs::first_run_ledger_records_has_and_no_test_but_not_undetermined].
+- A determined row is skipped on later runs, even if a repro is added later [test: crates/backlog/tests/audit_open_once.rs::row_checked_as_no_test_stays_skipped_after_repro_added].
+- An undetermined row is re-examined on the next run [test: crates/backlog/tests/audit_open_once.rs::second_run_skips_checked_and_reexamines_undetermined].
+- An unreadable ledger fails the command [test: crates/backlog/tests/audit_open_once.rs::garbage_ledger_is_undetermined_human] [test: crates/backlog/tests/audit_open_once.rs::garbage_ledger_is_undetermined_json].
 
 ## Duplicate-task rejection (content hashkey)
 

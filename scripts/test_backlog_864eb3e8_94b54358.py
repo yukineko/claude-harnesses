@@ -22,7 +22,6 @@ class Backlog864eb3e8(unittest.TestCase):
     def test_control_no_github_dir(self):
         self.assertFalse((REPO / ".github").exists())
 
-    @unittest.expectedFailure  # backlog 864eb3e8: open defect, remove when fixed
     def test_doc_does_not_present_a_gha_workflow_as_a_gate(self):
         offenders = []
         for n, line in enumerate(DOC.read_text(encoding="utf-8").splitlines(), 1):

@@ -240,17 +240,15 @@ overwatch escalations [--json] [--threshold N] [--window-secs S]    # systemic �
 | 分類 | コマンド |
 |---|---|
 | canary rollout | `canary-plan`（純粋な stage 分割）、`canary-gate`（PROCEED/ROLLBACK の JSON。rollback 推奨時は **exit 3**）、`canary-rollback-plan`（純粋な復元計画）、`record-rollback`（`scripts/rollout-plugins.sh` が呼ぶ。store 書き込みエラーは stderr に警告し、呼び出し元を失敗させない） |
-| review 窓口 | `review-queue [--json] [--since] [--limit] [--to-backlog]`（6 source — systemic 違反・canary rollback・AI review finding・condukt escalation・未解決の merge conflict・`needs-ruling` の backlog task — を severity 順の 1 リストに統合。`--to-backlog` は表示専用の needs-ruling 以外の全 stream を backlog へ流す）、`record-finding`、`record-disposition`、`review-metrics`、`compact-findings`、`resolve-merge-conflict`、`reconcile-fixed [--since-ref\|--range\|--last-n] [--dry-run]`（既定は直近 50 commit）、`auto-approved [--since] [--sample 5] [--seed 0]` |
+| review 窓口 | `review-queue [--json] [--since] [--limit]`（5 source — systemic 違反・canary rollback・AI review finding・condukt escalation・未解決の merge conflict — を severity 順の 1 リストに統合 [test: crates/overwatch/tests/review_queue_five_sources.rs::review_queue_merges_exactly_five_sources]）、`record-finding`、`record-disposition`、`review-metrics`、`compact-findings`、`resolve-merge-conflict`、`reconcile-fixed [--since-ref\|--range\|--last-n] [--dry-run]`（既定は直近 50 commit）、`auto-approved [--since] [--sample 5] [--seed 0]` |
 | Continuous-Audit | `audit-round record` / `audit-round close`、`audit-metrics [--window 3]` |
 | テレメトリ | `undetermined-metrics [--window-days N]`、`gate-outcomes`（donegate / tdd / reviewgate の発火結果を `~/.<gate>/state/log.jsonl` から集計） |
 
 読み取り側の exit code 規約: ledger/journal が（不在・空ではなく）**読めない**とき、
-`review-queue`（`--to-backlog` を含む）・`review-metrics`・`reconcile-fixed`・`auto-approved`・
-`gate-outcomes` は 0 件/空の答えを出す代わりに **exit 3** し、判定不能だった source を明示する。
-`audit-metrics` と `undetermined-metrics` は 0 件レポートではなくエラー（非 0）を返す。
+`review-queue` [test: crates/overwatch/tests/undetermined_e2e.rs::undecodable_violation_ledger_is_not_rendered_as_no_systemic_violations]・`review-metrics` [test: crates/overwatch/tests/undetermined_e2e.rs::review_metrics_with_an_unreadable_disposition_ledger_reports_null_not_zero]・`reconcile-fixed` [test: crates/overwatch/tests/undetermined_e2e.rs::reconcile_fixed_with_an_unreadable_disposition_ledger_writes_nothing]・
+`gate-outcomes` [test: crates/overwatch/tests/gate_outcomes_cli.rs::undetermined_lines_are_counted_with_correct_line_numbers_and_exit_3] は 0 件/空の答えを出す代わりに **exit 3** し、`auto-approved` は非 0 で終わる [test: crates/overwatch/tests/auto_approved_cli.rs::unreadable_journal_does_not_exit_clean]。
 `reconcile-fixed` が fail-soft なのは **git** 側だけで、`git log` の失敗は「0 commit scanned」
-（exit 0）として読まれる。`review-queue --to-backlog` は backlog 側で fail-soft
-（`backlog` バイナリ不在や `backlog add` 失敗は警告してスキップ）。
+（exit 0）として読まれる [test: crates/overwatch/tests/reconcile_fixed.rs::reconcile_fixed_fail_soft_when_not_a_git_repo]。
 
 ## PDO（Pending Data Object）との関連
 

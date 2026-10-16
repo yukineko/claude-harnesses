@@ -369,7 +369,8 @@ fn classify_red(cmd: &TestCmd, r: &RunResult) -> Result<(), String> {
         return Err(format!(
             "the run failed at BUILD/compile time (output contains {m:?}), not behaviourally; a \
              build failure is not RED. Restructure the test so the pre-fix revision builds and \
-             fails an assertion, or route the item via `backlog ruling request`"
+             fails an assertion; if no behavioural RED can be shown, the item is cancelled \
+             (`backlog cancel ID --reason R`)"
         ));
     }
     match cmd.runner {
@@ -379,8 +380,8 @@ fn classify_red(cmd: &TestCmd, r: &RunResult) -> Result<(), String> {
             } else {
                 Err(format!(
                     "cargo exited {} without a `test result: FAILED` line, so no test is shown \
-                     to have run and failed (a build/compile failure is not RED; route via \
-                     `backlog ruling request` if the RED cannot be behavioural)",
+                     to have run and failed (a build/compile failure is not RED; if the RED \
+                     cannot be behavioural, the item is cancelled)",
                     r.exit
                 ))
             }
@@ -678,8 +679,9 @@ fn run_in_temp_worktree(
 /// Run a finding's repro test at HEAD and record the outcome. Polarity: a
 /// repro that FAILS behaviourally reproduces the bug (same as a RED test);
 /// exit 0 is not-reproduced; everything that cannot be run to a conclusion is
-/// undetermined, with the cause in `detail`. Never returns an error: a finding
-/// is never lost because its repro could not run.
+/// undetermined, with the cause in `detail`. Never returns an error: the
+/// caller (`add`) files a task only on `reproduced` and writes nothing for
+/// any other outcome.
 pub fn run_repro(cwd: &Path, text: &str, now: i64) -> Repro {
     let undetermined = |detail: String, rev: Option<String>| Repro {
         outcome: REPRO_UNDETERMINED.to_string(),

@@ -166,7 +166,8 @@ fn read_sources(root: &Path, rel_files: &[String]) -> (Vec<(String, String)>, us
 /// recorded one (or when any index file is missing); otherwise do nothing.
 ///
 /// Fail-closed on the inputs it needs: if the `.rs` set cannot be enumerated,
-/// nothing is written and the result is `Undetermined`.
+/// nothing is written and the result is `Undetermined`. A symbol index body or
+/// meta that cannot be written is also `Undetermined`, never `rebuilt: true`.
 pub fn build_if_stale(root: &Path) -> Determination<BuildStats> {
     build_inner(root, false)
 }
@@ -230,15 +231,28 @@ fn build_inner(root: &Path, force: bool) -> Determination<BuildStats> {
     for (path, contents) in &sources {
         symbols.extend(code_index::extract_symbols(contents, path));
     }
-    code_index::write_index(&paths.symbols_body, &symbols);
-    code_index::write_meta(
+    // The symbol writes are fail-loud: a build that could not write its symbol
+    // index is not a build, so it is reported as `Undetermined` rather than as
+    // `rebuilt: true` over whatever (stale or absent) index is still on disk.
+    if let Err(e) = code_index::write_index(&paths.symbols_body, &symbols) {
+        return Determination::undetermined(format!(
+            "symbol index could not be written to {}: {e}",
+            paths.symbols_body.display()
+        ));
+    }
+    if let Err(e) = code_index::write_meta(
         &paths.symbols_meta,
         &code_index::IndexMeta {
             fingerprint: fp.clone(),
             files: rel_files.len(),
             symbols: symbols.len(),
         },
-    );
+    ) {
+        return Determination::undetermined(format!(
+            "symbol index meta could not be written to {}: {e}",
+            paths.symbols_meta.display()
+        ));
+    }
 
     let text = text_index::build(&sources, &fp);
     text_index::write(&paths.text_body, &paths.text_meta, &text);
@@ -263,8 +277,9 @@ fn build_inner(root: &Path, force: bool) -> Determination<BuildStats> {
 /// Load the text index and verify it describes the tree as it is now.
 ///
 /// This runs *after* [`build_if_stale`] has already tried to make the index
-/// current, and it is not redundant: index writes are deliberately fail-soft,
-/// so a rebuild can leave the previous, stale index in place without saying so
+/// current, and it is not redundant: text-index writes are deliberately
+/// fail-soft (unlike the symbol-index writes, which fail the build), so a
+/// rebuild can leave the previous, stale text index in place without saying so
 /// (an unwritable `.fugu`, a read-only index file). Re-checking the fingerprint
 /// here is what turns that silent failure into `Undetermined` instead of a
 /// confident answer about a tree that has moved on.
@@ -366,13 +381,15 @@ fn fresh_symbols(root: &Path) -> Determination<Vec<Symbol>> {
             ))
         }
     }
-    if !paths.symbols_body.exists() {
-        return Determination::undetermined(format!(
-            "symbol index missing at {}",
-            paths.symbols_body.display()
-        ));
+    // Strict load: a missing body, an unreadable body (IO error, invalid
+    // UTF-8, a directory), a line that is not a symbol record, or a body whose
+    // record count disagrees with the meta is `Undetermined` — never `Known`
+    // over an empty or partial list, which every caller would read as "that
+    // symbol is not there".
+    match code_index::load_index_checked(&paths.symbols_body, &paths.symbols_meta) {
+        Ok(symbols) => Determination::known(symbols),
+        Err(e) => Determination::undetermined(e.to_string()),
     }
-    Determination::known(code_index::load_index(&paths.symbols_body))
 }
 
 /// Every symbol in the current index.
@@ -693,7 +710,8 @@ mod tests {
                 files: files.len(),
                 symbols: 0,
             },
-        );
+        )
+        .unwrap();
         let out = known(search_text(dir.path(), "qqq_marker", 5));
         assert!(
             out.hits.iter().any(|h| h.file == "src/beta.rs"),

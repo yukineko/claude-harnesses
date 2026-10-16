@@ -1,5 +1,6 @@
 # Build the per-platform binaries the launcher (bin/deepwiki) dispatches to.
-# `make bins` refreshes both bundled targets; commit them.
+# `make bins` refreshes the per-platform binaries; they are gitignored and not
+# committed (only the bin/deepwiki launcher is tracked).
 #
 # Linux cross-build uses cargo-zigbuild (no Docker). One-time setup on macOS:
 #   brew install zig

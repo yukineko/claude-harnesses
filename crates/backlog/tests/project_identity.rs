@@ -172,6 +172,11 @@ notes = ""
 created_at = 1000
 updated_at = 1000
 weight = 0.0
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p fixture"
+observed_at = 1000
+detail = "fixture"
 "#
     );
     std::fs::write(store_dir.join("tasks.toml"), toml).unwrap();
@@ -196,6 +201,11 @@ notes = ""
 created_at = 1000
 updated_at = 1000
 weight = {weight:?}
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p fixture"
+observed_at = 1000
+detail = "fixture"
 "#
         ));
     }
@@ -209,12 +219,23 @@ weight = {weight:?}
 fn add_with_main_project_writes_to_worktree_not_main() {
     let home = temp_home("add-writes-to-wt");
     let (main_tree, wt_tree) = setup_repo_with_worktree("add-writes-to-wt");
+    // `add` files only a reproduced finding (intake contract v2): commit a
+    // repro that exits 1 into the checkout the add runs in.
+    common::commit_repro(&wt_tree);
 
     let main_canonical = main_tree.canonicalize().unwrap();
     let main_path_str = main_canonical.to_string_lossy();
 
     let (add_code, add_out, add_err) = run_in(
-        &["add", "--title", "Test Task", "--project", &main_path_str],
+        &[
+            "add",
+            "--title",
+            "Test Task",
+            "--project",
+            &main_path_str,
+            "--repro-test",
+            common::COMMITTED_REPRO,
+        ],
         "",
         &home,
         &wt_tree,
@@ -258,6 +279,9 @@ fn add_with_main_project_writes_to_worktree_not_main() {
 fn list_sees_task_stored_with_main_project_path() {
     let home = temp_home("list-sees-main-project");
     let (main_tree, wt_tree) = setup_repo_with_worktree("list-sees-main-project");
+    // `add` files only a reproduced finding (intake contract v2): commit a
+    // repro that exits 1 into the checkout the add runs in.
+    common::commit_repro(&wt_tree);
 
     let main_canonical = main_tree.canonicalize().unwrap();
     let main_path_str = main_canonical.to_string_lossy();
@@ -269,6 +293,8 @@ fn list_sees_task_stored_with_main_project_path() {
             "Task for main project",
             "--project",
             &main_path_str,
+            "--repro-test",
+            common::COMMITTED_REPRO,
         ],
         "",
         &home,
@@ -879,6 +905,9 @@ fn add_under_an_undetermined_scope_marks_the_stored_task() {
     let home = temp_home("undetermined-write-marker");
     let broken_dir = temp_dir("undetermined-write-marker-dir");
     common::linked_checkout_of_bare(&broken_dir);
+    // `add` files only a reproduced finding (intake contract v2): commit a
+    // repro that exits 1 into the checkout the add runs in.
+    common::commit_repro(&broken_dir);
 
     let broken_str = broken_dir.to_string_lossy().into_owned();
     let (add_code, _add_out, add_err) = run_in(
@@ -888,6 +917,8 @@ fn add_under_an_undetermined_scope_marks_the_stored_task() {
             "Filed under a guess",
             "--project",
             &broken_str,
+            "--repro-test",
+            common::COMMITTED_REPRO,
         ],
         "",
         &home,

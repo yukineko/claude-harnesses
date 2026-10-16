@@ -77,57 +77,23 @@ subcommands and the `<vault>/backlog.md` / `backlog.json` store have been
 removed.
 
 ```sh
-backlog add --title "rebuild darwin-x86_64 on an x86 Mac" --project harness
+backlog add --title "rebuild darwin-x86_64 on an x86 Mac" --project harness --repro-test "<cmd>"
 backlog list --project harness --status pending
 backlog done <id> --test "cargo test -p x" --red-rev <rev>   # close with evidence
 ```
 
-Store writes (`add` / `done` / …) are refused in the primary working tree — run them
-from a linked worktree. A bare `backlog done <id>` is refused: closing needs evidence
-(`--test … --red-rev …`, `--doc-only <commit>` or `--duplicate-of <id>`), and an
-`add` without `--repro-test` lands as `unconfirmed`, outside the workable queue. See
-the backlog README for the exact rules.
+Store writes (`add` / `done` / …) are refused in the primary working tree [test: crates/backlog/tests/store_worktree_boundary.rs::add_from_primary_checkout_is_refused_and_writes_nothing] [test: crates/backlog/tests/store_worktree_boundary.rs::done_from_primary_checkout_is_refused_and_file_unchanged] — run them
+from a linked worktree. A bare `backlog done <id>` is refused [test: crates/backlog/tests/closure_evidence.rs::bare_done_is_refused_and_status_unchanged].
+Closing needs evidence: `--test … --red-rev …`, `--doc-only <commit>` or `--duplicate-of <id>` [test: crates/backlog/tests/closure_evidence.rs::allowlisted_bash_script_with_red_rev_closes_and_records_closure] [test: crates/backlog/tests/doc_only_closure.rs::plain_docs_paths_are_accepted] [test: crates/backlog/tests/closure_evidence.rs::duplicate_of_pending_target_is_accepted].
+An `add` without a reproducing `--repro-test` is refused and writes nothing to the store [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere].
+See the backlog README for the exact rules.
 
 The `/record` command reconciles this backlog: it closes what the session finished
 and adds genuinely-open follow-ups from `## 残課題` (`backlog add`). Note that the
 command text (`commands/record.md`) still tells the model to close items with a
 bare `backlog done <id>`, which the current backlog CLI refuses.
 
-### One-time migration from the old session-insights backlog
-
-If you used the old `session-insights backlog` and have a `backlog.json` in your
-state dir, migrate its open items into the standalone backlog **once**, from a
-linked worktree of the target repo. The script below is idempotent (the
-standalone `backlog add` refuses a duplicate title+project) and is a no-op when
-`backlog.json` is empty or absent. Migrated items have no repro test, so they
-land as `unconfirmed`:
-
-```sh
-# Default state dir is ~/.session-insights/state (override = state_dir in
-# session-insights.toml; adjust BACKLOG_JSON below if you set a custom one).
-STATE_DIR="$HOME/.session-insights/state"
-BACKLOG_JSON="$STATE_DIR/backlog.json"
-if [ -s "$BACKLOG_JSON" ]; then
-  jq -r '.[] | select(.status=="open") | [.project, .text] | @tsv' "$BACKLOG_JSON" \
-    | while IFS=$'\t' read -r project text; do
-        [ -n "$text" ] && backlog add --title "$text" --project "${project:-default}"
-      done
-else
-  echo "no backlog.json to migrate (nothing to do)"
-fi
-```
-
-`backlog add` now REFUSES (non-zero, message on stderr) a duplicate, or when its
-cross-session claim check cannot be made (use `--force` to add anyway); the loop
-above does not stop on a refusal. Before deleting `backlog.json`, verify that
-every open item actually migrated (no refusal messages, and `backlog list`
-shows each one) — a refused item exists only in `backlog.json`.
-
-After migrating and verifying, you can delete `backlog.json` (and the auto-generated
-`<vault>/backlog.md`, which was a session-insights render artifact and is no
-longer produced).
-
-## Obsidian logging (opt-in)
+## Enable Obsidian logging (opt-in)
 
 Set `obsidian_log = true` and point `obsidian_vault` at your vault. On every Stop
 the session is written/overwritten to `<vault>/sessions/<date>-<id>.md` with

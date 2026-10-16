@@ -31,23 +31,24 @@ use harness_core::hook::HookInput;
 
 /// Reason returned when the analyser itself panics.
 ///
-/// "Never break the turn" and "never block the call" are NOT the same
-/// contract (see `blastguard::main` for the sibling fix). `main`'s outer
-/// `run_hook` already catches any panic that escapes this hook and turns it
-/// into a silent `exit 0` — but for a PreToolUse gate, a silent exit 0 IS an
-/// allow. So a panic anywhere in `check_read`/`check_bash` (glob matching,
-/// regex, filesystem metadata) used to silently ALLOW the very Read/Bash call
-/// it had failed to analyse — exactly the huge-unexamined-dump case this hook
-/// exists to stop. `analyse` below catches that panic and turns it into a
-/// deny instead, which is a normal, non-breaking outcome.
+/// For a PreToolUse gate a silent exit 0 IS an allow. `main` used to run this
+/// hook under `run_hook`, whose barrier turns an escaping panic into exactly
+/// that, so a panic anywhere in `check_read`/`check_bash` (glob matching,
+/// regex, filesystem metadata) silently ALLOWED the very Read/Bash call it had
+/// failed to analyse. `analyse` below catches a detector panic and turns it
+/// into a deny carrying this reason. Everything around the detector (stdin,
+/// parse, config, the deny print) now runs under `main`'s
+/// `harness_core::hook::run_pretooluse_guarded`, which maps a panic there to
+/// exit 2 (block) — backlog dc7a3bc3.
 pub const INTERNAL_ERROR_REASON: &str =
     "[context-rot guard] 内部エラーで解析に失敗したため、安全側に倒してこの呼び出しを拒否しました \
      （原因不明のまま通すと巨大な読み込みが未検証で context に流れ込む恐れがあるため）。 \
      Explore か general-purpose sub-agent 経由で読み直すか、limit を付けて再試行してください。";
 
 /// Run [`run`] behind a panic barrier: a panic in the detector becomes a deny
-/// instead of falling through to `main`'s outer `run_hook` backstop, which
-/// would otherwise turn it into a silent allow (see `INTERNAL_ERROR_REASON`).
+/// with a steering reason, instead of falling through to `main`'s outer
+/// `run_pretooluse_guarded` barrier (which would block with exit 2 but without
+/// the actionable reroute hint; see `INTERNAL_ERROR_REASON`).
 /// Mirrors blastguard's `analyse`. This is the entry point `main` calls.
 pub fn analyse(input: &HookInput, cfg: &Config) -> Option<String> {
     analyse_barrier(std::panic::AssertUnwindSafe(|| run(input, cfg)))

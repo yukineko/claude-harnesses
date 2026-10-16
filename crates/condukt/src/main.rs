@@ -281,6 +281,11 @@ enum Command {
         /// Failure count from the previous iteration (used for no-progress detection).
         #[arg(long)]
         prev_failures: Option<usize>,
+        /// Iteration cap for this invocation, overriding `[loop] max_iters` in
+        /// config.toml. An `--iteration` above the cap is refused without running
+        /// the cycle: stop=true, a stop_reason naming the cap, exit 1.
+        #[arg(long)]
+        max_iters: Option<usize>,
     },
     /// Durable async escalation channel: enqueue / list / resolve out-of-band
     /// questions in a per-project persistent store, so a blocked or GATED task
@@ -1895,7 +1900,8 @@ fn editgate_block_reason(verdict: &serde_json::Value) -> String {
 /// `{"decision":"block","reason":<verdict reason, then diagnostics>}` (see
 /// [`editgate_block_reason`]) so the worker fixes it in the same turn. It also
 /// blocks, with a stated reason, when the project's run state cannot be
-/// located. Out-of-scope paths (non-edit tool, no file, non-Rust file,
+/// located, including when condukt's configuration cannot be loaded
+/// (config.toml unreadable or unparseable). Out-of-scope paths (non-edit tool, no file, non-Rust file,
 /// out-of-worktree edit), a clean build, and empty/invalid stdin print nothing.
 /// Called under [`run_hook`], so the process exits 0 — exit status is not this
 /// hook's verdict channel; the printed block line is. Note that `run_hook`
@@ -1919,7 +1925,26 @@ fn run_editgate() {
         None => return,
     };
 
-    let cfg = Config::load();
+    // An undeterminable config (config.toml unreadable/unparseable) means the
+    // run-state store this edit must be checked against is unknown (its
+    // `state_dir` may be configured): that blocks, stated, it is not "out of
+    // scope".
+    let cfg = match Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            let out = serde_json::json!({
+                "decision": "block",
+                "reason": format!(
+                    "condukt editgate could not load its configuration, so whether this \
+                     edit is inside a live condukt worktree is unknown: {e}"
+                ),
+            });
+            if let Ok(line) = serde_json::to_string(&out) {
+                println!("{line}");
+            }
+            return;
+        }
+    };
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
         Err(_) => return,
@@ -1973,7 +1998,19 @@ fn run_editgate() {
 /// write a timestamp that could not be justified (a fabricated heartbeat makes
 /// a dead child look alive downstream).
 fn run_subagent_stop() {
-    let cfg = Config::load();
+    // The configured `state_dir` is unknown when config.toml cannot be read or
+    // parsed; writing to the default store would advance a timestamp nobody
+    // reads (or the wrong project's), so nothing is written and that is said.
+    let cfg = match Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "condukt subagent-stop: no progress timestamp written: configuration \
+                 undetermined ({e}), so the project's run state could not be located"
+            );
+            return;
+        }
+    };
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
         Err(e) => {
@@ -1988,8 +2025,56 @@ fn run_subagent_stop() {
     eprintln!("condukt subagent-stop: {}", outcome.describe());
 }
 
+/// A user command refused because `Config::load` could not determine the
+/// configuration (config.toml exists but is unreadable or unparseable). Every
+/// user command reads some configured value (`shared_globs`, `state_dir`,
+/// `worktree_base`, `autonomous`, the test/loop commands, ...), and running it
+/// on the built-in defaults would silently drop what the user configured — a
+/// task their `shared_globs` serializes would be scheduled in parallel, run
+/// state would be read from the wrong store, autonomy would read as off.
+///
+/// `condukt loop` keeps its JSON verdict shape (stop, null `failure_count`,
+/// exit 1) so a driving script sees a refused iteration, not a crash; the
+/// `stop_reason` names the cap as undetermined when the cap would have come
+/// from the file. Every other command fails with the error (exit 1) — for
+/// `policy decide/answer` that is the "anything else → ask a human" branch of
+/// the shim's exit contract, never `auto`.
+fn refuse_undetermined_config(cmd: &Command, err: &str) -> Result<()> {
+    if let Command::Loop {
+        module,
+        iteration,
+        max_iters,
+        ..
+    } = cmd
+    {
+        let stop_reason = match max_iters {
+            None => format!("max iters undetermined: {err}"),
+            Some(_) => format!("config undetermined: {err}"),
+        };
+        let out = serde_json::json!({
+            "iteration": iteration,
+            "module": module,
+            "failure_count": serde_json::Value::Null,
+            "success": false,
+            "stop": true,
+            "stop_reason": stop_reason,
+            "output": "",
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        std::process::exit(1);
+    }
+    bail!(
+        "{err} ({}): refusing to run on built-in defaults, which would silently drop \
+         the configured settings; fix or remove the file",
+        config::base_dir().join("config.toml").display()
+    )
+}
+
 fn run_user(cmd: Command) -> Result<()> {
-    let cfg = Config::load();
+    let cfg = match Config::load() {
+        Ok(c) => c,
+        Err(e) => return refuse_undetermined_config(&cmd, &e),
+    };
     let cwd = std::env::current_dir().context("getting cwd")?;
     match cmd {
         Command::Schedule { file } => {
@@ -2229,7 +2314,6 @@ fn run_user(cmd: Command) -> Result<()> {
         },
         Command::Sandbox { action } => match action {
             SandboxAction::Run { cmd, timeout } => {
-                let cfg = Config::load();
                 let workdir = std::env::current_dir()
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|_| ".".to_string());
@@ -2470,29 +2554,58 @@ fn run_user(cmd: Command) -> Result<()> {
             module,
             iteration,
             prev_failures,
+            max_iters,
         } => {
             use crate::config::ModuleCycle;
             use crate::state::{loop_should_stop, run_cycle};
             let cycle = ModuleCycle::from_str(&module)
                 .ok_or_else(|| anyhow!("unknown module '{module}'; use server, client, or e2e"))?;
-            let result = run_cycle(&cfg, &cwd, cycle)?;
-            let (stop, stop_reason) = loop_should_stop(prev_failures, result.failure_count);
+            // The cap is enforced here, not in skill prose. A cap that cannot be
+            // determined (config.toml unreadable/unparseable and no --max-iters)
+            // refuses the iteration instead of running it uncapped.
+            let cap = match max_iters {
+                Some(n) => Ok(n),
+                None => config::loop_max_iters_strict(),
+            };
+            let refusal = match &cap {
+                Ok(n) if iteration > *n => Some(format!(
+                    "max iters reached: iteration {iteration} exceeds max_iters {n}"
+                )),
+                Ok(_) => None,
+                Err(e) => Some(format!("max iters undetermined: {e}")),
+            };
+            // A refused iteration runs no cycle, so failure_count is null (not
+            // observed) rather than a carried-over value.
+            let (failure_count, success, stop, stop_reason, output) = match refusal {
+                Some(reason) => (None, false, true, reason, String::new()),
+                None => {
+                    let result = run_cycle(&cfg, &cwd, cycle)?;
+                    let (stop, reason) = loop_should_stop(prev_failures, result.failure_count);
+                    (
+                        Some(result.failure_count),
+                        result.success,
+                        stop,
+                        reason.to_string(),
+                        result.output,
+                    )
+                }
+            };
             let out = serde_json::json!({
                 "iteration": iteration,
                 "module": module,
-                "failure_count": result.failure_count,
-                "success": result.success,
+                "failure_count": failure_count,
+                "success": success,
                 "stop": stop,
                 "stop_reason": stop_reason,
-                "output": result.output,
+                "output": output,
             });
             println!("{}", serde_json::to_string_pretty(&out)?);
             // Exit non-zero when not all tests pass so shell scripts can branch on it.
-            if !result.success && stop {
+            if !success && stop {
                 std::process::exit(1);
             }
         }
-        Command::Policy { action } => run_policy(action),
+        Command::Policy { action } => run_policy(&cfg, action),
         Command::Escalate { action } => run_escalate(&cfg, &cwd, action)?,
         Command::Precedent { action } => run_precedent(&cfg, &cwd, action)?,
         Command::Status { all } => status::render(&cfg, &cwd, all)?,
@@ -3259,6 +3372,7 @@ fn run_precedent(cfg: &Config, cwd: &Path, action: PrecedentAction) -> Result<()
 /// condition lives HERE, in the binary, rather than in skill prose, so a skill
 /// cannot lose its consent prompt by forgetting to check autonomy first.
 fn resolve_policy_verdict(
+    cfg: &Config,
     risk: policy::Level,
     reversible: policy::Level,
     confidence: policy::Level,
@@ -3270,7 +3384,7 @@ fn resolve_policy_verdict(
         policy::decide_untestable(risk, reversible, confidence)
     } else if conflict {
         policy::decide_conflict_resolution(risk, reversible, confidence)
-    } else if approval && policy_is_autonomous(&config::Config::load()) {
+    } else if approval && policy_is_autonomous(cfg) {
         policy::decide_approval(risk, reversible, confidence)
     } else {
         policy::decide(risk, reversible, confidence)
@@ -3347,7 +3461,7 @@ fn run_diffrisk_report(cfg: &Config, cwd: &Path, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn run_policy(action: PolicyAction) -> ! {
+fn run_policy(cfg: &Config, action: PolicyAction) -> ! {
     match action {
         PolicyAction::Decide {
             risk,
@@ -3374,7 +3488,7 @@ fn run_policy(action: PolicyAction) -> ! {
             // other way (escalate→auto) but only when autonomous, and never
             // relaxes a block. See `resolve_policy_verdict` for the precedence.
             let decision = resolve_policy_verdict(
-                risk, reversible, confidence, conflict, untestable, approval,
+                cfg, risk, reversible, confidence, conflict, untestable, approval,
             );
             println!("{decision}");
             let code = match decision {
@@ -3412,7 +3526,7 @@ fn run_policy(action: PolicyAction) -> ! {
             // run is autonomous, and still refuses on `block`. See
             // `resolve_policy_verdict` for the precedence between them.
             let decision = resolve_policy_verdict(
-                risk, reversible, confidence, conflict, untestable, approval,
+                cfg, risk, reversible, confidence, conflict, untestable, approval,
             );
             let outcome = gatelog::answer_outcome(decision, &options, recommend);
             // Every *consultation* is journaled — auto, escalate and block alike —
@@ -3422,9 +3536,7 @@ fn run_policy(action: PolicyAction) -> ! {
             // escalate/block `chosen` is empty because nothing was picked; the
             // record says the question was asked and what came back.
             let journal = |policy: &str, chosen: String| {
-                let dir = journal_dir
-                    .clone()
-                    .unwrap_or_else(|| config::Config::load().state_dir);
+                let dir = journal_dir.clone().unwrap_or_else(|| cfg.state_dir.clone());
                 let entry = gatelog::GateDecision {
                     question: question.clone(),
                     options: options.clone(),
@@ -3469,7 +3581,7 @@ fn run_policy(action: PolicyAction) -> ! {
             std::process::exit(outcome.exit_code());
         }
         PolicyAction::Answers { journal_dir } => {
-            let dir = journal_dir.unwrap_or_else(|| config::Config::load().state_dir);
+            let dir = journal_dir.unwrap_or_else(|| cfg.state_dir.clone());
             for entry in gatelog::load_decisions(&dir) {
                 if let Ok(line) = serde_json::to_string(&entry) {
                     println!("{line}");
@@ -4390,8 +4502,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 t.branch = None;
                 t.branch_sha = None;
             } else if branch.is_some() {
-                // Record the SHA at assignment time so reconcile can detect
-                // force-push false-positives by checking the original commit.
+                // Record the SHA at assignment time (the fork point at
+                // dispatch) so reconcile can refuse a branch rewritten away
+                // from it. It is not merge evidence on its own.
                 if let Some(ref b) = branch {
                     if t.branch_sha.is_none() {
                         let repo = worktree::toplevel(cwd).ok();
@@ -5981,8 +6094,9 @@ type GaugeAccounting = (Option<f64>, Option<(u64, u64)>);
 /// `agent_id` `None` (the task recorded no agentId) → `Known((None, None))`:
 /// nothing to look up, the caller uses its manual fallback. Otherwise the
 /// two lookups' answers are combined; either one `Undetermined` makes the
-/// whole result `Undetermined` (gauge could not be located or run), which the
-/// caller must keep distinct from "no data".
+/// whole result `Undetermined` (gauge could not be located or run, or printed
+/// unparseable output — backlog 18ebbfe6), which the caller must keep distinct
+/// from "no data".
 fn gauge_accounting(agent_id: Option<&str>) -> Determination<GaugeAccounting> {
     let Some(id) = agent_id else {
         return Determination::Known((None, None));

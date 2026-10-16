@@ -70,7 +70,7 @@ users — the work runs inside Claude Code via two skills (`/condukt`,
 | `condukt shadow-run exec --topic <t> --branch <b> --model <m>` | gated on the enable flag (refuses with a non-zero exit while disabled, before creating anything): creates a second worktree via the existing `worktree create` machinery and prints its path. The caller (the `/condukt` skill, via a worker agent) runs the SAME task under `--model` inside it, purely to produce a clean side-by-side data point. |
 | `condukt shadow-run finish --path <p> --branch <b> --title <t> --model <m> [--pass] --cost <c> --duration <d>` | discards the shadow worktree (force-remove the dir + force-delete its branch — the shadow attempt is **never merged**, whatever the primary worker produced is what ships) and best-effort records the pass/fail/cost/duration outcome to `fugu-router record --class shadow-run` for later routing comparison. Soft dependency: succeeds even when `fugu-router` is absent or older than this flag set. |
 | `condukt state stats` | aggregate all runs (complete and incomplete): completion rate, task count, status distribution — useful as a before/after benchmark. |
-| `condukt state reconcile --run <id> [--dry-run]` | auto-promote tasks to `verified` when their branch is already merged into the default branch or has been deleted with its worktree. Fixes stale state after a session crash without manual `state set` calls. **Cross-run duplicate guard:** before that auto-promotion, it scans sibling runs for any hashkey this run completed (`done`/`verified`) that another `run_id` *also* completed *after* this run's `claimed_at`; on a hit it mutates nothing, prints `{"duplicate_completion":[{hashkey,runs:[run_id...]}]}`, and **exits 2** (escalate → human/HOTL picks which implementation to keep — per condukt's 0=auto / 2=escalate / 3=block convention). The no-duplicate path is unchanged (auto-verify, exit 0). |
+| `condukt state reconcile --run <id> [--dry-run]` | auto-promote a task to `verified` only on positive evidence that its own work reached the default branch: its branch has commits beyond its fork point and those commits are merged [test: crates/condukt/tests/backlog_41c837ab.rs::control_really_merged_task_is_still_promoted]. A `failed` task whose branch commit is not in the default branch stays `failed` [test: crates/condukt/tests/backlog_41c837ab.rs::failed_unmerged_task_is_not_promoted_to_verified_by_reconcile]. Fixes stale state after a session crash without manual `state set` calls. **Cross-run duplicate guard:** before that auto-promotion, it scans sibling runs for any hashkey this run completed (`done`/`verified`) that another `run_id` *also* completed *after* this run's `claimed_at`; on a hit it mutates nothing, prints `{"duplicate_completion":[{hashkey,runs:[run_id...]}]}`, and **exits 2** (escalate → human/HOTL picks which implementation to keep — per condukt's 0=auto / 2=escalate / 3=block convention) [test: crates/condukt/tests/reconcile_duplicate_e2e.rs::cross_run_duplicate_completion_escalates_exit_2]. The no-duplicate path auto-verifies a merged task and exits 0 [test: crates/condukt/tests/reconcile_duplicate_e2e.rs::no_duplicate_branch_merged_auto_verifies_exit_0]. |
 | `condukt state timings --run <id> [--json]` | per-task **phase timing** breakdown from the `TaskState` phase timestamps (`worker_started_at`/`worker_ended_at`/`verifier_started_at`/`verifier_ended_at`/`merge_completed_at`), each stamped by the real orchestrator transition it already performs — `state set --status running` → worker start, the first `--status done` → worker end + verifier start, `--status verified`/`failed` → verifier end, and a successful `worktree merge --run --task` → merge complete (set-once; measurement only — never consulted by scheduling/routing). An **unmeasured** phase is rendered as an explicit `unmeasured` marker (text) / `null` (JSON), NEVER as `0` seconds, so a never-measured phase stays distinguishable from one that completed instantly — the same tri-state norm as fugu-router's `duration_secs`. Backward-compatible: run-state JSON written before these fields existed still loads (`Option` + serde-default/skip). |
 | `condukt state resume-context --run <id>` | emit pending/failed/done tasks as JSON for resuming a stopped run across sessions (see Phase 0-alt in the skill). |
 | `condukt state test` | run the project's test suite from the repo root (auto-detects `cargo test` / `npm test` / `pytest`, or uses `[test].command` from config). |
@@ -262,7 +262,7 @@ result. The `/condukt-loop` skill calls this repeatedly, inserting a fix step
 between iterations, until all tests pass or no progress is detected.
 
 ```
-condukt loop --module <server|client|e2e> [--iteration N] [--prev-failures N]
+condukt loop --module <server|client|e2e> [--iteration N] [--prev-failures N] [--max-iters N]
 ```
 
 **Cycle sequences** (configured via `[loop]` in `config.toml`):
@@ -290,6 +290,10 @@ condukt loop --module <server|client|e2e> [--iteration N] [--prev-failures N]
 `stop=true` when `failure_count == 0` (`stop_reason: "all tests pass"`) or when
 `failure_count == prev_failures` (`stop_reason: "no progress: failure count unchanged"`).
 Exits 0 while progress is being made, and 1 when `stop=true` with tests still failing.
+An `--iteration` above the cap (`--max-iters`, else `[loop] max_iters`) runs no cycle and returns
+`stop=true`, `failure_count: null` and a `stop_reason` beginning `max iters reached` [test: crates/condukt/tests/loop_max_iters_flag.rs::max_iters_flag_lowers_the_configured_cap].
+If `config.toml` exists but cannot be read or parsed and no `--max-iters` is given, the cap is undetermined and the
+iteration is refused the same way with `max iters undetermined` [test: crates/condukt/tests/loop_max_iters_flag.rs::unparseable_config_refuses_instead_of_running_uncapped].
 
 **Config:**
 
@@ -297,7 +301,7 @@ Exits 0 while progress is being made, and 1 when `stop=true` with tests still fa
 [loop]
 build_command  = "npm run build"
 deploy_command = "kubectl rollout restart deployment/api && kubectl rollout status deployment/api"
-max_iters      = 10   # safety cap; the skill enforces it
+max_iters      = 10   # iteration cap, enforced by `condukt loop` [test: crates/condukt/tests/drift_b1_loop_cap.rs::loop_refuses_iteration_beyond_configured_max_iters]
 ```
 
 ### `condukt state test`

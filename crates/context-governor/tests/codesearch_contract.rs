@@ -272,7 +272,7 @@ fn load_with_one_valid_symbol_line_is_ok_with_that_symbol() {
         line: 7,
         signature: "fn alpha_helper() {".to_string(),
     };
-    write_index(&index_path, std::slice::from_ref(&symbol));
+    write_index(&index_path, std::slice::from_ref(&symbol)).expect("write index");
 
     let result = load(dir.path()).expect("a valid index must load Ok");
     assert_eq!(result, vec![symbol]);
@@ -305,7 +305,7 @@ fn lookup_serves_a_fresh_index_hit() {
         line: 7,
         signature: "fn alpha_helper() {".to_string(),
     };
-    write_index(&index_path, std::slice::from_ref(&symbol));
+    write_index(&index_path, std::slice::from_ref(&symbol)).expect("write index");
 
     let outcome = context_governor::codesearch::lookup(dir.path(), "alpha_helper", 10);
 
@@ -341,7 +341,7 @@ fn lookup_never_serves_a_non_symbol_shaped_pattern() {
         line: 7,
         signature: "fn alpha_helper() {".to_string(),
     };
-    write_index(&index_path, std::slice::from_ref(&symbol));
+    write_index(&index_path, std::slice::from_ref(&symbol)).expect("write index");
 
     let outcome = context_governor::codesearch::lookup(dir.path(), "alpha.*", 10);
     assert!(

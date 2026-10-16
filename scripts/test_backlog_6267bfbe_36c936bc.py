@@ -12,19 +12,18 @@ post-commit / post-merge read that certificate afterwards.
 
 - 6267bfbe: `git commit --amend` of a gated commit, itself gated, is written to the
   bypass ledger as an UNGATED COMMIT (the certificate's HEAD is the commit being
-  replaced, which is not a parent of the replacement).
+  replaced, which is not a parent of the replacement). USER RULING 2026-10-15
+  (backlog 5d7867f0): this is the DOCUMENTED fail-closed design of
+  `.githooks/pre-commit`, not a defect; the test below now pins that the amend IS
+  recorded (scripts/test_gate_bypass.py AmendIsRecordedFailClosed pins the
+  clearing half).
 - 36c936bc: `git merge --ff-only` onto a merge commit that was already gated in
   another worktree is written to the ledger: post-merge uses the parent count of
   HEAD as a proxy for "this operation created a merge commit", and an ff whose
   new HEAD happens to be a merge commit passes that proxy.
 
-Both are open defects (false positives that fail closed); each test is marked
-expectedFailure until fixed.
-
-scripts/test_gate_bypass.py AmendIsNotABypass pins 6267bfbe too, but at HEAD
-f764bfeb it fails at its seed commit ("scripts/check-fail-open-diff.py is missing")
-because its SCANNERS fixture lags the real hook list, so it cannot observe the
-defect. This file does not depend on the scanner list.
+36c936bc was filed as an open defect (a false positive that fails closed) and is
+marked expectedFailure. This file does not depend on the pre-commit scanner list.
 """
 
 import os
@@ -100,10 +99,9 @@ class Scratch:
 
 
 class AmendOfGatedCommit(unittest.TestCase):
-    """backlog 6267bfbe"""
+    """backlog 6267bfbe, re-anchored by user ruling 2026-10-15 (5d7867f0)."""
 
-    @unittest.expectedFailure
-    def test_gated_amend_is_not_recorded_as_ungated(self):
+    def test_gated_amend_is_recorded_fail_closed(self):
         s = Scratch(self)
         s.write(s.main, "a.txt", "one\n")
         s.git(s.main, "add", "a.txt")
@@ -116,11 +114,13 @@ class AmendOfGatedCommit(unittest.TestCase):
         s.write(s.main, "b.txt", "y\n")
         s.git(s.main, "add", "b.txt")
         p = s.git(s.main, "commit", "-q", "--amend", "--no-edit")
+        amended = s.git(s.main, "rev-parse", "HEAD").stdout.strip()
         self.assertEqual(
-            s.ledger(),
-            [],
-            "the amend went through the (green) gate, so the ledger must not "
-            "record it as ungated; post-commit stderr: %r" % p.stderr,
+            [l.split("\t")[0] for l in s.ledger()],
+            [amended],
+            "by design (.githooks/pre-commit, user ruling 2026-10-15) the amend "
+            "re-parents away from the certified HEAD and is recorded as ungated "
+            "(fail closed); post-commit stderr: %r" % p.stderr,
         )
 
 

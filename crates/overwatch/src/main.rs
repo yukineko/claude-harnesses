@@ -5,7 +5,6 @@
 mod aggregate;
 pub mod audit_round;
 mod audit_round_cli;
-mod bridge;
 pub mod canary;
 mod canary_cli;
 pub mod changeset;
@@ -24,11 +23,9 @@ mod review_escalation;
 pub mod review_finding;
 mod review_gate_decisions;
 mod review_queue;
-mod review_ruling;
 pub mod rollback;
 mod rollback_cli;
 pub mod store;
-mod test_freshness;
 pub mod undetermined_metrics;
 pub mod violation;
 mod violation_cli;
@@ -293,10 +290,9 @@ enum Command {
         /// state. Recording is the moment the verifier knows whether it settled
         /// the claim, so it has to say (user ruling 2026-07-21, backlog
         /// eda212a0). `refuted` is adjudicated against `--probe` and
-        /// `--signed-off-by` before it is stored (see those flags). Only
-        /// `confirmed` findings are forwarded by
-        /// `review-queue --to-backlog`; `unverified` ones stay visible in the
-        /// queue, marked, pending re-verification.
+        /// `--signed-off-by` before it is stored (see those flags).
+        /// `unverified` findings stay visible in the review queue, marked,
+        /// pending re-verification.
         #[arg(long)]
         verdict: String,
         /// Machine reachability-probe result file for a `refuted` verdict:
@@ -427,24 +423,10 @@ enum Command {
         /// severity-first ordering); shed lower-risk rows are reported.
         #[arg(long)]
         limit: Option<usize>,
-        /// Drain the WHOLE review queue to the backlog instead of rendering:
-        /// each not-yet-bridged entry (AI finding, systemic violation, canary
-        /// rollback, or condukt escalation) is forwarded via `backlog add`.
-        /// Idempotent — findings on `bridged_findings.jsonl` (bare finding-id),
-        /// the other three streams on `bridged_entries.jsonl`
-        /// (`<kind>:<identifier>`). Fail-soft on the BACKLOG side: an absent
-        /// `backlog` binary or a failed `backlog add` is warned and skipped,
-        /// and the command still succeeds. NOT fail-soft on the STORE side: a
-        /// ledger that could not be READ makes the drain skip that stream, say
-        /// which one in `undetermined_sources`, and exit 3 — "0 bridged"
-        /// because nothing needed bridging and "0 bridged" because part of the
-        /// queue was invisible must not reach a script as the same answer.
-        #[arg(long = "to-backlog")]
-        to_backlog: bool,
     },
     /// Compact the review-findings store: move every finding whose
-    /// finding_id has been resolved (bridged to the backlog, or
-    /// dispositioned by a human) out of the hot review_findings.jsonl into a
+    /// finding_id has been dispositioned out of the hot
+    /// review_findings.jsonl into a
     /// cold review_findings_archive.jsonl. Non-lossy (archive, never
     /// delete): `review-metrics` keeps joining archived findings via the
     /// combined hot-plus-archive history, while `review-queue` keeps reading
@@ -838,18 +820,8 @@ fn main() -> Result<()> {
         } => {
             merge_conflict::record_resolution(id, &choose, &by, note, store::now())?;
         }
-        Command::ReviewQueue {
-            json,
-            since,
-            limit,
-            to_backlog,
-        } => {
-            let health = if to_backlog {
-                bridge::to_backlog()?
-            } else {
-                review_queue::run(json, since, limit)?
-            };
-            exit_on_undetermined_sources(health);
+        Command::ReviewQueue { json, since, limit } => {
+            exit_on_undetermined_sources(review_queue::run(json, since, limit)?);
         }
         Command::GateOutcomes { json } => {
             gate_outcomes::run_cli(json, store::now())?;
@@ -885,8 +857,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Handler for `overwatch compact-findings`: move resolved (bridged or
-/// dispositioned) review findings out of the hot review_findings.jsonl into
+/// Handler for `overwatch compact-findings`: move dispositioned review
+/// findings out of the hot review_findings.jsonl into
 /// the cold review_findings_archive.jsonl, keeping the hot file bounded to
 /// OPEN items while the review-metrics latency join reads hot plus archive
 /// (`store::read_review_findings_all`) so nothing regresses. See

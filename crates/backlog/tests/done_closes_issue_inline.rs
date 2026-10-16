@@ -64,6 +64,14 @@ fn setup(tag: &str) -> Env {
         <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
     )
     .unwrap();
+    // Warm the freshly written shim: the first exec of a new file can be slow
+    // on macOS (OS scanning, observed > 2.5s under a parallel `cargo test`)
+    // and would trip add's bounded claim check, refusing the fixture add for a
+    // reason unrelated to what these tests pin (same as claim_check_contract.rs).
+    let _ = Command::new(bin.join("condukt"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 
     let ghlog = t.join("gh.log");
     let stub = format!(
@@ -94,6 +102,11 @@ fn setup(tag: &str) -> Env {
     // A LINKED worktree: store writes are refused in a PRIMARY working tree (1e6f00ae).
     common::linked_checkout(&repo);
     g(&["remote", "add", "origin", "https://github.com/o/r.git"]);
+    // `add` files (and mirrors) only a reproduced finding (intake contract
+    // v2): commit a repro that exits 1, and expose `bash` (the allowlisted
+    // runner) in the PATH=bin the binary runs with.
+    common::commit_repro(&repo);
+    symlink("/bin/bash", bin.join("bash")).unwrap();
 
     Env {
         home,
@@ -157,7 +170,18 @@ fn done_file(e: &Env) -> String {
 #[test]
 fn done_closes_the_issue_inline_and_records_it() {
     let e = setup("ok");
-    let (c, o, er) = bl(&e, &["add", "--title", "inline close me", "--project", "."]);
+    let (c, o, er) = bl(
+        &e,
+        &[
+            "add",
+            "--title",
+            "inline close me",
+            "--project",
+            ".",
+            "--repro-test",
+            common::COMMITTED_REPRO,
+        ],
+    );
     assert_eq!(c, 0, "add failed: {er}");
     let id = o
         .lines()
@@ -217,7 +241,18 @@ fn done_closes_the_issue_inline_and_records_it() {
 #[test]
 fn a_failed_inline_close_is_not_recorded_and_stays_in_the_sync_plan() {
     let e = setup("fail");
-    let (c, o, er) = bl(&e, &["add", "--title", "close will fail", "--project", "."]);
+    let (c, o, er) = bl(
+        &e,
+        &[
+            "add",
+            "--title",
+            "close will fail",
+            "--project",
+            ".",
+            "--repro-test",
+            common::COMMITTED_REPRO,
+        ],
+    );
     assert_eq!(c, 0, "add failed: {er}");
     let id = o
         .lines()

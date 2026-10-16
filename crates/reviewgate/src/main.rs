@@ -218,6 +218,29 @@ fn review_run(hook: Option<HookInput>, interactive: bool) -> ! {
         std::process::exit(0);
     }
 
+    // A value we read but cannot interpret (unknown `mode`, backlog 7d56f1e3)
+    // is undetermined, not a mode choice: block before `review::evaluate`, so
+    // it fires even when nothing is reviewable. After the enabled check and
+    // the session skip, which stay the escape hatches. Same emit path as the
+    // `Decision::Block` arm below (including the repeat-ledger waiver).
+    if let Some(why) = &cfg.config_invalid {
+        let tag = "config-invalid";
+        let reason = config_invalid_reason(why);
+        log_event(&cfg, &session, tag, &[], 0);
+        emit_violation(&root, &session, tag);
+        harness_core::hook_latency::record(
+            "reviewgate",
+            &session,
+            __start.elapsed().as_millis() as u64,
+        );
+        if interactive {
+            eprintln!("{reason}");
+            std::process::exit(1);
+        }
+        harness_core::repeat::emit_stop_block("reviewgate", &reason);
+        std::process::exit(0);
+    }
+
     let prior = state::load(&cfg.state_dir, &session);
     let decision = review::evaluate(&cfg, &root, &prior, &input.transcript_path);
 
@@ -295,6 +318,20 @@ fn review_run(hook: Option<HookInput>, interactive: bool) -> ! {
     }
 }
 
+/// The user/agent-visible block reason for [`Config::config_invalid`].
+fn config_invalid_reason(why: &str) -> String {
+    format!(
+        "🚧 reviewgate: config-invalid — 設定値を解釈できません: {why}\n\n\
+         `mode` に指定できる値は \"inject\" または \"subprocess\" (別名: reviewer / independent) です。\
+         綴り間違いをどちらかのモードに推測で割り当てると、独立レビューが自己レビューへ黙って降格する\
+         (または意図しない reviewer_cmd の起動が走る) ため、この停止をブロックしています。\n\n\
+         前に進むには次のいずれか:\n\
+         - 設定ファイルの `mode` を修正する (`reviewgate status` で対象ファイルを確認)。\n\
+         - このチェックを1回だけスキップ: `reviewgate skip --reason ...` を実行 (理由を1行)。\n\
+         - reviewgate を完全に無効化: 環境変数 REVIEWGATE_DISABLE=1。"
+    )
+}
+
 /// Append one JSONL line per decision. Best effort, local only.
 /// Record a fleet-level violation for a blocking review verdict (or for the
 /// `review-giveup` allow, which lets a known violation through), for
@@ -352,7 +389,14 @@ fn status() {
         None => println!("config:        {}", src.display()),
     }
     println!("enabled:       {}", cfg.enabled);
-    println!("mode:          {}", cfg.mode.as_str());
+    match &cfg.config_invalid {
+        Some(why) => println!(
+            "mode:          config-invalid ({why} — valid: \"inject\" / \"subprocess\" \
+             [aliases reviewer, independent]); stops are BLOCKED (a repeat of the same block in a \
+             session is waived with a systemMessage) until fixed"
+        ),
+        None => println!("mode:          {}", cfg.mode.as_str()),
+    }
     if cfg.mode == Mode::Subprocess {
         println!("reviewer_cmd:  {}", cfg.reviewer_cmd);
     }

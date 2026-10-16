@@ -255,15 +255,16 @@ pub struct NearDuplicate {
 /// IS surfaced, because "somebody else is already on this" is the single most
 /// useful thing this check can say.
 pub fn is_queued(t: &Task) -> bool {
-    matches!(t.status.as_str(), "pending" | "failed" | "claimed")
+    use crate::task::Status;
+    matches!(t.status, Status::Pending | Status::Failed | Status::Claimed)
 }
 
-/// Whether a task is a LIVE finding for near-duplicate purposes: queued
-/// ([`is_queued`]) or non-terminal but outside the workable queue
-/// (`unconfirmed`, `needs-ruling`). A new filing that duplicates an
-/// unconfirmed finding is exactly what should be surfaced.
+/// Whether a task is a LIVE finding for near-duplicate purposes: exactly the
+/// queued ones ([`is_queued`]). The non-queue open statuses `unconfirmed` /
+/// `needs-ruling` were removed (user ruling 2026-10-15; `store::load` refuses
+/// a store that still holds one).
 pub fn is_live_finding(t: &Task) -> bool {
-    is_queued(t) || matches!(t.status.as_str(), "unconfirmed" | "needs-ruling")
+    is_queued(t)
 }
 
 /// Peers of `anchor` in the same project's queue whose titles score
@@ -341,7 +342,7 @@ mod tests {
             project_unresolved: false,
             tags: Vec::new(),
             touched_files: touched.iter().map(|s| s.to_string()).collect(),
-            status: "pending".to_string(),
+            status: crate::task::Status::Pending,
             notes: String::new(),
             created_at: 0,
             updated_at: 0,
@@ -352,9 +353,6 @@ mod tests {
             issue_closed_at: None,
             issue_body_synced_rev: None,
             rev: 0,
-            ruling_kind: None,
-            rationale: None,
-            untestable_reason: None,
             repro: None,
             closure: None,
         }
@@ -524,11 +522,11 @@ mod tests {
     fn near_duplicates_ignores_finished_work_and_other_projects() {
         let anchor = task("aaaa", "add touched_files field to backlog task", &[]);
         let mut done = task("bbbb", "add touched_files field to backlog task", &[]);
-        done.status = "done".to_string();
+        done.status = crate::task::Status::Done;
         let mut foreign = task("cccc", "add touched_files field to backlog task", &[]);
         foreign.project = "/other".to_string();
         let mut claimed = task("dddd", "add touched_files field to backlog task", &[]);
-        claimed.status = "claimed".to_string();
+        claimed.status = crate::task::Status::Claimed;
         let tasks = vec![anchor.clone(), done, foreign, claimed];
         let found = near_duplicates(&anchor, &tasks, NEAR_DUPLICATE_THRESHOLD);
         assert_eq!(

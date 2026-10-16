@@ -84,6 +84,9 @@ fn fx(tag: &str) -> Fx {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&repo).unwrap();
     common::linked_checkout(&repo);
+    // `add` files only a reproduced finding (intake contract v2); belt 2 lives
+    // on that path, so the setup commits a repro that exits 1.
+    common::commit_repro(&repo);
     let lib = build_shim(&root);
     Fx { home, repo, lib }
 }
@@ -97,6 +100,8 @@ fn add(f: &Fx, title: &str, armed: bool) -> (i32, String, String) {
         title,
         "--project",
         f.repo.to_str().unwrap(),
+        "--repro-test",
+        common::COMMITTED_REPRO,
     ])
     .env("HOME", &f.home)
     .env("DYLD_INSERT_LIBRARIES", &f.lib)

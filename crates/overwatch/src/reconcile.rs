@@ -11,7 +11,7 @@
 //! findings were all already fixed in source with passing tests, but none
 //! had been dispositioned). This module closes that gap deterministically:
 //! scan a range of git commit messages for finding-id references
-//! (`CA-<crate>-<NNN>`, the convention already used by `bridge.rs` /
+//! (`CA-<crate>-<NNN>`, the convention already used by
 //! `continuous-audit.sh`) and auto-record a CONFIRMED disposition for any
 //! referenced finding that is on the store but not yet disposed.
 //!

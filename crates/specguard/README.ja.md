@@ -162,8 +162,10 @@ specguard run                      # 監査を実行 (claude --print を shard �
 specguard scope                    # 解決されたスコープだけ表示 (agent 呼ばない)
 specguard prompt                   # 各 shard のプロンプトを表示 (agent 呼ばない)
 specguard prompt --json            # shard を機械可読 JSON で出力 (プラグインが使う)
-specguard ingest [--from <file>]   # 収集済み shard 出力(JSON/stdin)を食わせて
-                                   #   parse→report→sentinel (agent を spawn しない)
+specguard ingest [--from <file>] [--kind drift|audit] [--filter <q>]
+#   収集済み shard 出力(JSON/stdin)を食わせて parse→report→sentinel (agent を spawn しない) [test: crates/specguard/tests/findings_20261015.rs::audit_report_survives_a_same_day_drift_ingest]
+#   --kind: 出力がどの shard 集合への回答か。drift (`prompt --json`) か audit (`audit --json`) [test: crates/specguard/tests/findings_20261015.rs::audit_report_survives_a_same_day_drift_ingest]
+#   --filter: audit 出力専用。`audit --json` 実行時と同じ `--filter` の値 [test: crates/specguard/tests/findings_20261015.rs::readme_ingest_usage_lists_every_ingest_flag]
 specguard brief "<task>"           # 着手前の read-only 仕様ブリーフィング (agent 実行)
 specguard brief "<task>" --prompt  # ブリーフィングプロンプトのみ描画 (プラグインが使う)
 specguard brief "<task>" --json    # 決定論的な canon カバレッジ判定のみ (agent なし):
@@ -341,7 +343,7 @@ feature 単位で検出する。各 entry を read-only subagent が3次元で�
 
 | パス | 内容 |
 |---|---|
-| `<report_dir>/<date>.md` | レポート本体 |
+| `<report_dir>/<date>.md` | レポート本体: drift レポートと、同じファイル内のマーカー付きセクションとしての spec-audit レポート。後から同日に drift を ingest してもそのセクションは残る [test: crates/specguard/tests/findings_20261015.rs::audit_report_survives_a_same_day_drift_ingest] |
 | `<report_dir>/.last-ref` | 最後に監査した HEAD (次回の change-triggered baseline) |
 | `<sentinel>` | `needs_user=yes` のときだけ (date / report / summary) |
 | `<report_dir>/.shard-fingerprints` | 各 shard の、最後に **clean** だった監査時の入力 fingerprint (下記) |

@@ -39,6 +39,22 @@
 #   doc-claims         check-doc-claims.py        a `path:line` citation in
 #                                                 docs/**/*.md that no longer
 #                                                 describes reality
+#   prose-tests        check-prose-tests.py       a claim sentence in CLAUDE.md,
+#                                                 docs/**/*.md, crates/*/README*.md
+#                                                 or crates/*/skills/*/SKILL.md
+#                                                 (changed vs HEAD) with no
+#                                                 `[test: path::name]` citation to
+#                                                 an existing test, or a citation
+#                                                 that does not resolve. Dated
+#                                                 records and imperatives pass.
+#   doc-duplication    check-doc-duplication.py   a change that ADDS a copy of a
+#                                                 block (Jaccard >= 0.6 over
+#                                                 5-char shingles) between two
+#                                                 corpus files, one of them a
+#                                                 skill/agent/command/CLAUDE.md.
+#                                                 Ratchet vs HEAD per file pair;
+#                                                 existing copies grandfathered.
+#                                                 `--all` prints the full audit.
 #   claudemd-claims    check-claudemd-claims.py   a `path:line` citation in
 #                                                 CLAUDE.md itself that no
 #                                                 longer describes reality —
@@ -112,7 +128,12 @@
 #                                                 plugin's hooks never run, so the
 #                                                 gate goes DARK, not red
 #                                                 (backlog 8cb3bc22)
-#   clippy-lints       check-clippy-lints.py      an unwrap_used/expect_used/
+#   backlog-store      check-backlog-store.py     an indexed .backlog/*.toml with
+#                                                 merge conflict markers or that
+#                                                 does not parse as TOML. Also runs
+#                                                 for merge commits via
+#                                                 pre-merge-commit (backlog ece51b35)
+#   clippy-lints      check-clippy-lints.py      an unwrap_used/expect_used/
 #                                                 panic deny-lint violation in a
 #                                                 crate that inherits `[lints]
 #                                                 workspace = true`. Scoped to
@@ -209,6 +230,8 @@ run check-fail-open.py        fail-open-guard
 run check-fail-open-diff.py   fail-open-diff
 run check-doc-claims.py       doc-claims
 run check-claudemd-claims.py  claudemd-claims
+run check-prose-tests.py     prose-tests
+run check-doc-duplication.py  doc-duplication
 # check-test-weakening.py is NOT run here: it is run from .githooks/commit-msg
 # instead. Its acknowledgment marker lives in the commit message, which git has
 # not prepared yet at pre-commit time, so from here the remedy it prints is
@@ -225,6 +248,7 @@ run check-gate-protection.py gate-protection
 run check-cross-crate-constants.py crossx-constants
 run check-launcher-exec-bit.py launcher-exec-bit
 run check-clippy-lints.py     clippy-lints
+run check-backlog-store.py    backlog-store
 
 # main-tree-guard — CLAUDE.md §8, the one gate here that is Rust rather than
 # python3, because its decision is a tri-state over injectable inputs and is
@@ -238,7 +262,23 @@ run check-clippy-lints.py     clippy-lints
 # 2) — which blocks, as an unrunnable gate must. Build with
 # `cargo build --release -p condukt`, or roll the plugin out, rather than
 # loosening this.
+#
+# Resolution order: $CONDUKT_BIN, target/release, target/debug, then the
+# rolled-out plugin cache, then PATH. A fresh worktree has no target/, so the
+# plugin cache is what makes a worker's first commit gateable. The cache lookup
+# mirrors harness_core::plugin_bin::cache_lookup_in
+# (crates/harness-core/src/plugin_bin.rs): it enumerates
+# ~/.claude/plugins/cache/yukineko/condukt/<version>/bin/condukt, follows
+# symlinks when classifying entries, skips non-directories and dangling
+# entries, picks the highest version by numeric dot-components (not a string
+# sort, so 0.1.12 beats 0.1.9), and is consulted BEFORE PATH because the cache
+# is the copy whose provenance is known (rollout-plugins.sh). Three answers:
+# found (exit 0, path on stdout), not installed (exit 1, fall through to PATH),
+# or undetermined (exit 2: $HOME unset, or the cache dir / an entry / a
+# candidate could not be read or stat'ed). Undetermined blocks rather than
+# falling through to PATH (CLAUDE.md §3).
 guard_bin=""
+guard_undetermined=""
 for cand in "${CONDUKT_BIN:-}" "$REPO/target/release/condukt" "$REPO/target/debug/condukt"; do
     if [ -n "$cand" ] && [ -x "$cand" ]; then
         guard_bin="$cand"
@@ -246,14 +286,81 @@ for cand in "${CONDUKT_BIN:-}" "$REPO/target/release/condukt" "$REPO/target/debu
     fi
 done
 if [ -z "$guard_bin" ]; then
+    cache_out="$(python3 - <<'PY'
+import os
+import stat
+import sys
+
+home = os.environ.get("HOME", "")
+if not home:
+    print("$HOME is unset, so the plugin cache could not be located")
+    sys.exit(2)
+base = os.path.join(home, ".claude", "plugins", "cache", "yukineko", "condukt")
+try:
+    names = os.listdir(base)
+except FileNotFoundError:
+    sys.exit(1)  # never rolled out here: an observation
+except OSError as e:
+    print("could not enumerate %s: %s" % (base, e))
+    sys.exit(2)
+versions = []
+for name in names:
+    entry = os.path.join(base, name)
+    try:
+        st = os.stat(entry)  # follows symlinks, like std::fs::metadata
+    except FileNotFoundError:
+        continue  # dangling symlink / vanished entry
+    except OSError as e:
+        print("could not stat %s: %s" % (entry, e))
+        sys.exit(2)
+    if not stat.S_ISDIR(st.st_mode):
+        continue  # e.g. the .version-history.jsonl written by rollout
+    cand = os.path.join(entry, "bin", "condukt")
+    try:
+        os.stat(cand)
+    except FileNotFoundError:
+        continue
+    except OSError as e:
+        print("could not test %s: %s" % (cand, e))
+        sys.exit(2)
+    versions.append(name)
+if not versions:
+    sys.exit(1)
+
+
+def key(n):
+    return ([(1, int(p)) if p.isdigit() else (0, 0) for p in n.split(".")], n)
+
+
+print(os.path.join(base, max(versions, key=key), "bin", "condukt"))
+sys.exit(0)
+PY
+)"
+    cache_status=$?
+    if [ "$cache_status" -eq 0 ] && [ -n "$cache_out" ] && [ -x "$cache_out" ]; then
+        guard_bin="$cache_out"
+    elif [ "$cache_status" -eq 0 ]; then
+        guard_undetermined="plugin-cache condukt is not executable: $cache_out"
+    elif [ "$cache_status" -ne 1 ]; then
+        guard_undetermined="plugin-cache lookup undetermined (exit $cache_status): $cache_out"
+    fi
+fi
+if [ -z "$guard_bin" ] && [ -z "$guard_undetermined" ]; then
     guard_bin="$(command -v condukt 2>/dev/null)" || guard_bin=""
 fi
 
-if [ -z "$guard_bin" ]; then
+if [ -n "$guard_undetermined" ]; then
+    echo "" >&2
+    echo "main-tree-guard: $guard_undetermined" >&2
+    echo "  Whether a condukt is installed could not be determined — the §8 gate" >&2
+    echo "  could not run, so this blocks." >&2
+    rc=1
+elif [ -z "$guard_bin" ]; then
     echo "" >&2
     echo "main-tree-guard: no condukt binary found (tried \$CONDUKT_BIN, target/release," >&2
-    echo "  target/debug, PATH) — the §8 gate could not run, so this blocks." >&2
-    echo "  Build it: cargo build --release -p condukt" >&2
+    echo "  target/debug, ~/.claude/plugins/cache/yukineko/condukt/<ver>/bin/condukt," >&2
+    echo "  PATH) — the §8 gate could not run, so this blocks." >&2
+    echo "  Build it (cargo build --release -p condukt) or roll the plugin out." >&2
     rc=1
 else
     "$guard_bin" guard main-tree
@@ -293,6 +400,10 @@ Remediation hints:
                     gate; a reasoned `<!-- doc-claim-exempt: <reason> -->` on
                     the line before a deliberately historical claim is the
                     only escape hatch.
+  prose-tests       cite a test that reproduces the claim with
+                    `[test: <path>::<name>]`, or delete the claim. A past
+                    observation stays as a record only with a dated marker
+                    (`実測 YYYY-MM-DD`, `[record: YYYY-MM-DD]`).
   test-weakening    restore the assertion, or acknowledge one specific finding
                     with a commit-message line
                     `test-weakening-justified: <path>:<kind> - <reason>`.

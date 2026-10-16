@@ -44,8 +44,8 @@ fn setup(tag: &str) -> Env {
     common::linked_checkout(&repo);
     g(&["remote", "add", "origin", "https://github.com/o/r.git"]);
     // Close-evidence fixture: only a `pending` row (a REPRODUCED, committed
-    // repro test) is live work that `sync` mirrors; an `unconfirmed` one is
-    // not, which would leave sync with nothing to do. Commit a failing repro
+    // repro test) is live work that `sync` mirrors; without one `add`
+    // writes nothing, which would leave sync with nothing to do. Commit a failing repro
     // script and expose `bash` (the allowlisted runner) on PATH — still no `gh`.
     std::fs::create_dir_all(repo.join("tests")).unwrap();
     std::fs::write(
@@ -123,7 +123,17 @@ fn gh_absent_on_add_is_reported() {
     let e = setup("add");
     let (c, o, er) = bl(
         &e,
-        &["add", "--title", "verify gh absent add", "--project", "."],
+        &[
+            "add",
+            "--title",
+            "verify gh absent add",
+            "--project",
+            ".",
+            // The mirror push runs only on the filed (reproduced) path
+            // (intake contract v2), so the setup must reproduce.
+            "--repro-test",
+            "bash tests/repro_yes.sh",
+        ],
     );
     eprintln!("ADD code={c} stdout={o:?} stderr={er:?}");
     assert_eq!(c, 0);

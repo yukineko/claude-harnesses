@@ -140,8 +140,11 @@ test adequacy の次元は「テストファイルが存在するか」だけで
   **全 shard を必ず含める**。
 - 監査対象なしのときは `{ "shards": [] }`。
 
-次に `specguard ingest --from .specguard-audit-ingest.json $BASELINE_ARGS` を Bash
-で実行する。終了後、一時ファイルは `rm -f .specguard-audit-ingest.json` で削除する。
+次に `specguard ingest --from .specguard-audit-ingest.json --kind audit --filter <resolved> $BASELINE_ARGS`
+を Bash で実行する (`--filter` は手順 3 と **同じ値**。map 全体対象なら省略)。
+ハーネスはその filter で `audit --json` が出す shard label 集合と突き合わせる。
+audit の ingest は report と sentinel を書くが、drift の baseline は動かさない。
+終了後、一時ファイルは `rm -f .specguard-audit-ingest.json` で削除する。
 
 ingest の終了コードで結果を解釈する:
 
@@ -155,6 +158,12 @@ ingest の終了コードで結果を解釈する:
   その shard を手順 4 から **やり直す** か、ユーザーに報告する。
 - **exit 4** (agent-failed): 返し損ねた shard / 失敗 shard がある。stderr が該当
   label を挙げるので、その shard を手順 4 で再実行して手順 5 をやり直す。
+- **exit 5**: ingest 冒頭の批准ゲート (prompt = メタ正典が未批准/変更あり) で拒否された。
+  audit の findings はまだ取り込まれていない。ユーザーに `/specguard:accept-prompt`
+  での批准を依頼して止め、批准後に手順 5 を再実行する。
+- **exit 2**: ingest がエラーで中断した (例: 手順 3 と違う `--filter`、label の
+  書き換え・重複、map が読めない)。findings は確定していない — 「問題なし」とは
+  報告せず stderr をそのまま見せ、`--filter` と label を手順 3 の出力に合わせて再実行する。
 
 ## 6. coverage 是正を executor にハンドオフする (テスト追加は spec-audit がしない)
 
@@ -168,7 +177,8 @@ executor に委譲します。**コスト有界**: 監査が実際にフラグ�
   是正タスクを積む:
 
   ```sh
-  backlog add --title "add tests for <entry key>: <網羅すべき振る舞い>" --project "$PWD" --priority p2
+  backlog add --title "add tests for <entry key>: <網羅すべき振る舞い>" --project "$PWD" --priority p2 \
+    --repro-test "<不足を示す、HEAD で失敗するコミット済みテスト>"   # 再現しなければ拒否され store に何も書かれない [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]
   ```
 
   (`backlog add` は Bash 経由。backlog store に書くだけで、リポジトリの仕様/実装/

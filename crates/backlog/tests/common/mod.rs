@@ -13,11 +13,7 @@
 //!   backlog done ID --test CMD [--red-rev REV] [--reason fixed|already-fixed|obsolete]
 //!   backlog done ID --duplicate-of ID
 //!   backlog done ID --doc-only COMMIT
-//!   backlog ruling request ID --kind judgment --rationale T
-//!   backlog ruling request ID --kind untestable --untestable-reason T
-//!   backlog ruling approve ID | withdraw ID | list
-//!   backlog add ... [--repro-test CMD]   (only a REPRODUCED outcome lands pending; else `unconfirmed`)
-//!   backlog confirm ID --repro-test CMD
+//!   backlog add ... [--repro-test CMD]   (only a REPRODUCED outcome lands pending; else refused, nothing written)
 //!   backlog audit-closures [--json]
 //! A closed row is read back with `list --all --json`; its recorded closure is
 //! the JSON object under the key `closure`.
@@ -355,6 +351,40 @@ impl Fixture {
         cur.push_str(&body);
         std::fs::write(&p, cur).unwrap();
     }
+
+    /// Plant an OPEN row (e.g. a legacy row with a removed status, which `add`
+    /// cannot create) straight into the
+    /// LIVE file `tasks.toml`. `project` must be the label a filed task carries
+    /// in this fixture — read it off a reproduced row (see
+    /// [`Fixture::add_with_label`]) rather than assuming `self.project()`.
+    pub fn plant_open(&self, id: &str, title: &str, status: &str, project: &str) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let body = format!(
+            "[[task]]\nid = \"{id}\"\ntitle = \"{title}\"\nproject = \"{project}\"\nproject_unresolved = false\ntags = []\ntouched_files = []\nstatus = \"{status}\"\nnotes = \"\"\ncreated_at = {now}\nupdated_at = {now}\nweight = 0.0\n"
+        );
+        let p = self.tasks_path();
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let mut cur = std::fs::read_to_string(&p).unwrap_or_default();
+        if !cur.is_empty() && !cur.ends_with('\n') {
+            cur.push('\n');
+        }
+        cur.push_str(&body);
+        std::fs::write(&p, cur).unwrap();
+    }
+
+    /// File a reproduced task (as [`Fixture::add`]) and return `(id, project
+    /// label it was stored under)`.
+    pub fn add_with_label(&self, title: &str) -> (String, String) {
+        let id = self.add(title);
+        let label = self.row(&id)["project"]
+            .as_str()
+            .unwrap_or_else(|| panic!("row {id} has no project: {}", self.row(&id)))
+            .to_string();
+        (id, label)
+    }
 }
 
 pub const REPRO_YES: &str = "bash tests/repro_yes.sh";
@@ -589,4 +619,48 @@ pub fn isolated_path_with(shim: &Path) -> String {
         std::os::unix::fs::symlink(&git, &link).expect("symlink git");
     }
     format!("{}:{}:/usr/bin:/bin", shim.display(), tools.display())
+}
+
+// ---- Committed repro script for non-`Fixture` checkouts (intake contract v2) ----
+
+/// The `--repro-test` command that runs the script [`commit_repro`] commits.
+pub const COMMITTED_REPRO: &str = "bash tests/backlog_fixture_repro.sh";
+
+/// `add` files ONLY a finding whose `--repro-test` reproduces at HEAD of a
+/// clean checkout (user rulings 2026-10-04). For tests that use `add` merely
+/// to SET UP a task, commit a repro script that exits 1 (= reproduced) into
+/// the git checkout `dir` (a linked worktree or a primary tree; the commit
+/// lands on whatever HEAD is checked out there) and return the command to pass
+/// as `--repro-test`. The tree is left clean apart from `.backlog`. The
+/// fixture repos carry no hooks (global/system git config are /dev/null).
+pub fn commit_repro(dir: &Path) -> &'static str {
+    use std::os::unix::fs::PermissionsExt;
+    let rel = "tests/backlog_fixture_repro.sh";
+    let p = dir.join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).expect("mkdir tests");
+    std::fs::write(
+        &p,
+        "#!/bin/bash\necho 'fixture finding reproduced'\nexit 1\n",
+    )
+    .expect("write repro");
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod repro");
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} in {} failed: {}",
+            dir.display(),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["add", "-f", "--", rel]);
+    git(&["commit", "-q", "-m", "fixture repro"]);
+    COMMITTED_REPRO
 }

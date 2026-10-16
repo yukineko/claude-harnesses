@@ -11,8 +11,7 @@ use std::time::Duration;
 /// (backlog `0dafa254`).
 pub use crate::task::STATUS_CANCELLED;
 use crate::task::{
-    new_id, Closure, Repro, Task, STATUS_DONE, STATUS_FAILED, STATUS_NEEDS_RULING, STATUS_PENDING,
-    STATUS_UNCONFIRMED,
+    new_id, Closure, Repro, Status, Task, STATUS_DONE, STATUS_FAILED, STATUS_PENDING,
 };
 
 /// The DERIVED claim status (backlog f09db5ce). It is never written to the
@@ -29,10 +28,17 @@ use crate::task::{
 /// ledger and a legacy row without a live lease is claimable again. The row
 /// is rewritten as `pending` only incidentally, by the next unrelated locked
 /// write of the store.
-pub(crate) const STATUS_CLAIMED: &str = "claimed";
+pub(crate) const STATUS_CLAIMED: Status = Status::Claimed;
 
 /// TOML ファイル全体のラッパー。[[task]] 配列を保持する。
+///
+/// Every store row type is `deny_unknown_fields` (user ruling 2026-10-15):
+/// a row carrying a field the types do not declare (the removed
+/// `ruling_kind` / `rationale` / `untestable_reason`, a `closure.ruling`
+/// table, a typo) fails the load naming the row, instead of loading with
+/// the field silently dropped and erased by the next write.
 #[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TasksFile {
     #[serde(default)]
     task: Vec<Task>,
@@ -42,8 +48,8 @@ struct TasksFile {
 /// lives in the done file (see [`done_path`]), and terminal is MONOTONIC: no
 /// write path moves a terminal task back to a non-terminal status, and when
 /// the two files disagree about an id the terminal row wins (see [`load`]).
-pub(crate) fn is_terminal_status(status: &str) -> bool {
-    status == STATUS_DONE || status == STATUS_CANCELLED
+pub(crate) fn is_terminal_status(status: &Status) -> bool {
+    status.is_terminal()
 }
 
 /// The sibling done file of a store: `<dir>/<stem>.done.toml` for
@@ -75,9 +81,45 @@ fn read_tasks_file(path: &Path) -> Result<Option<(String, Vec<Task>)>> {
             return Err(anyhow::Error::new(e).context(format!("failed to read {}", path.display())))
         }
     };
-    let file: TasksFile =
-        toml::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))?;
+    let file: TasksFile = match toml::from_str(&text) {
+        Ok(f) => f,
+        Err(e) => {
+            let row = e
+                .span()
+                .and_then(|sp| row_id_at(&text, sp.start))
+                .map(|id| format!(" (task {id})"))
+                .unwrap_or_default();
+            // The deserialize error itself is the reason (for a removed status:
+            // serde's "unknown variant `needs-ruling`, expected one of ...").
+            let why = e.message().to_string();
+            return Err(anyhow::Error::new(e)
+                .context(format!("failed to parse {}{row}: {why}", path.display())));
+        }
+    };
     Ok(Some((text, file.task)))
+}
+
+/// The `id` of the `[[task]]` row whose text contains byte `offset` of `text`
+/// — used to name the row a deserialize error points into (e.g. a `status`
+/// that is not a [`Status`]: the removed `needs-ruling` / `unconfirmed`).
+/// `None` when the offset is outside any row or the row has no plain `id`.
+fn row_id_at(text: &str, offset: usize) -> Option<String> {
+    let head = text.get(..offset.min(text.len()))?;
+    let start = head.rfind("[[task]]")?;
+    let rest = &text[start + "[[task]]".len()..];
+    let row = match rest.find("\n[") {
+        Some(end) => &rest[..end],
+        None => rest,
+    };
+    row.lines().find_map(|l| {
+        let v = l
+            .trim()
+            .strip_prefix("id")?
+            .trim_start()
+            .strip_prefix('=')?;
+        let v = v.trim();
+        Some(v.strip_prefix('"')?.strip_suffix('"')?.to_string())
+    })
 }
 
 /// Load every task of a store: the UNION of `tasks.toml` and its done file
@@ -104,11 +146,17 @@ fn read_tasks_file(path: &Path) -> Result<Option<(String, Vec<Task>)>> {
 /// A row persisted with the legacy `status = "claimed"` (written by binaries
 /// before backlog f09db5ce) is returned as `pending`: a claim is now a lease in
 /// the untracked ledger, never a stored status (see [`STATUS_CLAIMED`]).
+///
+/// FAIL CLOSED on a status that is not a [`Status`] (the removed `unconfirmed`
+/// / `needs-ruling`; user ruling 2026-10-15): deserialization rejects it and
+/// the whole load is an `Err` naming the row (via `read_tasks_file`). Reading
+/// it as pending would put an item with no reproducing test in the workable
+/// queue; skipping it would report a store holding it as clean.
 pub fn load(path: &Path) -> Result<Vec<Task>> {
     let mut tasks = load_union(path)?;
     for t in tasks.iter_mut() {
         if t.status == STATUS_CLAIMED {
-            t.status = STATUS_PENDING.to_string();
+            t.status = STATUS_PENDING;
         }
     }
     Ok(tasks)
@@ -938,7 +986,7 @@ pub fn add_with_weight(
             // a guessed label never reads as a resolved one later.
             project_unresolved,
             tags,
-            status: STATUS_PENDING.to_string(),
+            status: STATUS_PENDING,
             notes: notes.to_string(),
             created_at: now,
             updated_at: now,
@@ -949,10 +997,10 @@ pub fn add_with_weight(
             issue_closed_at: None,
             issue_body_synced_rev: None,
             rev: 0,
-            ruling_kind: None,
-            rationale: None,
-            untestable_reason: None,
-            repro: None,
+            // A fixture `reproduced` repro: since 2026-10-15 `next` hands out
+            // only reproduced rows, and this test-only add stands in for a
+            // reproduced `backlog add`.
+            repro: Some(fixture_reproduced_repro(now)),
             closure: None,
             touched_files: Vec::new(),
         };
@@ -960,6 +1008,18 @@ pub fn add_with_weight(
         save(path, &tasks)?;
         Ok(id)
     })
+}
+
+/// Test-only: the repro a reproduced finding carries, without running a test.
+#[cfg(test)]
+pub(crate) fn fixture_reproduced_repro(now: i64) -> Repro {
+    Repro {
+        outcome: crate::task::REPRO_REPRODUCED.to_string(),
+        cmd: "cargo test -p fixture".to_string(),
+        rev: None,
+        observed_at: now,
+        detail: "test fixture".to_string(),
+    }
 }
 
 /// Reject an add whose content [`crate::task::hashkey`] is already held by
@@ -1007,13 +1067,10 @@ fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
 
     if tasks.iter().any(|t| {
         crate::task::hashkey(&t.title, &t.project) == hk
-            && matches!(
-                t.status.as_str(),
-                STATUS_PENDING | STATUS_FAILED | STATUS_UNCONFIRMED | STATUS_NEEDS_RULING
-            )
+            && matches!(t.status, STATUS_PENDING | STATUS_FAILED)
     }) {
         return Err(anyhow!(
-            "duplicate task rejected: an existing pending/failed/claimed/unconfirmed/needs-ruling task already has this content (hashkey {hk}); use --force to add anyway"
+            "duplicate task rejected: an existing pending/failed/claimed task already has this content (hashkey {hk}); use --force to add anyway"
         ));
     }
 
@@ -1277,6 +1334,8 @@ fn run_with_bounded_wait(
 /// tag_filter: Some(tag) なら tags にそのタグを含むものだけ。
 /// project_filter: Some(project) ならプロジェクトが一致するものだけ (repo_root との比較)。
 /// defer_until が未来のタスク (is_deferred) はスキップする。
+/// `wontfix` タグ (人間の「実装しない」裁定、Task::is_ruled_wontfix) を持つタスクは
+/// tag_filter に関わらず常にスキップする (backlog 016c2562)。
 ///
 /// CA-backlog-001: this is a PURE READ — no lock, no mutation. It returns a
 /// clone of a task left in `pending`, so two concurrent callers can be handed
@@ -1345,13 +1404,13 @@ pub fn derive_claimed(tasks: &mut [Task], leases: &std::collections::HashMap<Str
         let Some(&claimed_at) = leases.get(&t.id) else {
             continue;
         };
-        let claimed = match t.status.as_str() {
+        let claimed = match t.status {
             STATUS_PENDING => true,
             STATUS_FAILED => claimed_at > t.updated_at,
             _ => false,
         };
         if claimed {
-            t.status = STATUS_CLAIMED.to_string();
+            t.status = STATUS_CLAIMED;
         }
     }
 }
@@ -1378,7 +1437,14 @@ fn pick_next<'a>(
     let mut candidates: Vec<&Task> = tasks
         .iter()
         .filter(|t| t.is_pending())
+        // FAIL CLOSED: a row with no reproduced repro is not a task (user
+        // ruling 2026-10-15), so it is never handed out — not even flagged.
+        .filter(|t| t.has_reproduced_repro())
         .filter(|t| !t.is_deferred(now))
+        // A `wontfix` tag is a recorded human ruling (do not implement); it is
+        // excluded unconditionally — even under `--tag wontfix` — so a ruled
+        // item is never dispatched as if unjudged (backlog 016c2562).
+        .filter(|t| !t.is_ruled_wontfix())
         // Leased (claimed) in some checkout of this project, per the ledger.
         .filter(|t| !excluded.contains(&t.id))
         .filter(|t| match tag_filter {
@@ -1548,7 +1614,7 @@ fn claim_next_locked(
         return Ok(Determination::known(None));
     };
     let mut claimed = winner.clone();
-    claimed.status = STATUS_CLAIMED.to_string();
+    claimed.status = STATUS_CLAIMED;
 
     // The ledger reservation IS the claim. Nothing is written to the tracked
     // store (backlog f09db5ce), so a failed reservation claims nothing.
@@ -1611,14 +1677,12 @@ pub fn requeue_expired(path: &Path, now: i64) -> Result<usize> {
             // retry-later path, and its expiry returning to `pending` is the
             // whole point (`requeue_expired_restores_pending`).
             let terminal = task.status == STATUS_DONE || task.status == STATUS_CANCELLED;
-            // `unconfirmed` / `needs-ruling` are not queue states either: a
-            // stale `defer_until` on one of them must not promote it into the
-            // workable queue without its repro / ruling.
-            let requeueable = matches!(task.status.as_str(), STATUS_PENDING | STATUS_FAILED);
+            // Only the two queue statuses are requeueable.
+            let requeueable = matches!(task.status, STATUS_PENDING | STATUS_FAILED);
             if let Some(defer_until) = task.defer_until {
                 if defer_until <= now && !terminal && requeueable {
                     task.defer_until = None;
-                    task.status = STATUS_PENDING.to_string();
+                    task.status = STATUS_PENDING;
                     changed = true;
                 }
             }
@@ -1660,7 +1724,7 @@ pub fn mark_done(path: &Path, id: &str) -> Result<()> {
             // Already done — idempotent no-op, nothing to persist.
             return Ok(());
         }
-        task.status = STATUS_DONE.to_string();
+        task.status = STATUS_DONE;
         // updated_at はシステム時刻で更新（呼び出し元が now を持たないため現在時刻を使う）
         touch(task, now_unix());
         save(path, &tasks)
@@ -1689,7 +1753,7 @@ pub fn update_task(
             .ok_or_else(|| anyhow!("task not found: {}", id))?;
         f(task, &snapshot)?;
         // Through `touch`, not a bare `updated_at` write: every closure,
-        // confirm and ruling transition rewrites the row (status, notes,
+        // transition rewrites the row (status, notes,
         // closure), and the body re-sync arm reads `rev`, which only `touch`
         // advances (see `Task::issue_body_synced_rev`).
         touch(task, now_unix());
@@ -1697,21 +1761,12 @@ pub fn update_task(
     })
 }
 
-/// Refuse unless `task` is in a status an evidence close may start from:
-/// `pending`, `failed` or `unconfirmed`. A `needs-ruling` row is closed only
-/// by `backlog ruling approve`; a terminal row is final.
+/// Refuse unless `task` is in a status a close may start from: `pending` or
+/// `failed`. A terminal row is final.
 pub fn require_closable(task: &Task) -> Result<()> {
-    match task.status.as_str() {
-        STATUS_PENDING | STATUS_FAILED | STATUS_UNCONFIRMED => Ok(()),
-        STATUS_NEEDS_RULING => Err(anyhow!(
-            "refused: task {} is needs-ruling; only `backlog ruling approve {}` (a human, at a \
-             TTY) closes it — or `backlog ruling withdraw {}` returns it to pending, after which \
-             an evidence-gated `done` applies",
-            task.id,
-            task.id,
-            task.id
-        )),
-        s if is_terminal_status(s) => Err(anyhow!(
+    match task.status {
+        STATUS_PENDING | STATUS_FAILED => Ok(()),
+        s if is_terminal_status(&s) => Err(anyhow!(
             "refused: task {} is already {s} (terminal status is final)",
             task.id
         )),
@@ -1723,7 +1778,7 @@ pub fn require_closable(task: &Task) -> Result<()> {
 }
 
 /// Close `task` as `status` with `closure`, after [`require_closable`].
-pub fn apply_closure(task: &mut Task, status: &str, closure: Closure) -> Result<()> {
+pub fn apply_closure(task: &mut Task, status: Status, closure: Closure) -> Result<()> {
     require_closable(task)?;
     if !closure.has_evidence() {
         return Err(anyhow!(
@@ -1731,7 +1786,7 @@ pub fn apply_closure(task: &mut Task, status: &str, closure: Closure) -> Result<
             task.id
         ));
     }
-    task.status = status.to_string();
+    task.status = status;
     task.closure = Some(closure);
     task.defer_until = None;
     Ok(())
@@ -1825,7 +1880,7 @@ impl SyncAction {
 pub fn sync_plan(tasks: &[Task]) -> Vec<SyncAction> {
     let mut plan = Vec::new();
     for t in tasks {
-        match (t.status.as_str(), t.issue_number, t.issue_closed_at) {
+        match (t.status, t.issue_number, t.issue_closed_at) {
             (STATUS_PENDING, None, _) => plan.push(SyncAction::Create {
                 id: t.id.clone(),
                 title: t.title.clone(),
@@ -2199,16 +2254,6 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
             // Already failed — idempotent no-op, nothing to persist.
             return Ok(());
         }
-        // `failed` is a QUEUE status (`next` retries it). An unconfirmed
-        // finding or a row awaiting a human ruling must not reach the queue
-        // through `fail`.
-        if task.status == STATUS_UNCONFIRMED || task.status == STATUS_NEEDS_RULING {
-            return Err(anyhow!(
-                "refused: task {id} is {} and `fail` would move it into the workable queue; use \
-                 `backlog confirm` (unconfirmed) or `backlog ruling withdraw` (needs-ruling)",
-                task.status
-            ));
-        }
         // backlog 45c3a699: terminal is monotonic — `fail` must not reopen a
         // done/cancelled task (failed is a retryable, non-terminal status).
         if is_terminal_status(&task.status) {
@@ -2218,7 +2263,7 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
                 task.status
             ));
         }
-        task.status = STATUS_FAILED.to_string();
+        task.status = STATUS_FAILED;
         if let Some(r) = reason {
             if task.notes.is_empty() {
                 task.notes = r.to_string();
@@ -2252,8 +2297,7 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
 /// Idempotent: an already-cancelled task is left untouched (no second copy of
 /// the reason, no re-stamped closure). Refused, with nothing written: a `done`
 /// task (rewriting a completion as a cancellation would erase the record that
-/// the work was done) and a `needs-ruling` task (a human ruling is pending;
-/// `ruling approve --cancel` or `ruling withdraw` resolves it).
+/// the work was done).
 pub fn mark_cancelled(path: &Path, id: &str, reason: &str) -> Result<()> {
     let reason = reason.trim();
     if reason.is_empty() {
@@ -2277,24 +2321,16 @@ pub fn mark_cancelled(path: &Path, id: &str, reason: &str) -> Result<()> {
                  as a cancellation"
             ));
         }
-        if task.status == STATUS_NEEDS_RULING {
-            return Err(anyhow!(
-                "refused: task {id} is needs-ruling (a human ruling is pending); a human closes it \
-                 with `backlog ruling approve {id} --cancel`, or `backlog ruling withdraw {id}` \
-                 returns it to pending"
-            ));
-        }
-        // Only the non-terminal workable/suspicion statuses may be discarded;
+        // Only the non-terminal workable statuses may be discarded;
         // anything else is refused with its status named.
         require_closable(task)?;
-        task.status = STATUS_CANCELLED.to_string();
+        task.status = STATUS_CANCELLED;
         task.closure = Some(Closure {
             reason: "discard".to_string(),
             duplicate_of: None,
             doc_only_commit: None,
             green: None,
             red: None,
-            ruling: None,
             discard_reason: Some(reason.to_string()),
         });
         if task.notes.is_empty() {
@@ -2336,19 +2372,22 @@ pub fn edit(
         if let Some(w) = crate::task::stored_status_error(status) {
             return Err(anyhow!("{w}"));
         }
+        let status: Option<Status> = match status.map(str::parse::<Status>).transpose() {
+            Ok(v) => v,
+            Err(e) => return Err(anyhow!("{e}")),
+        };
         // Close-evidence: `edit --status` is not a route to any status that
         // needs a recorded closure. Terminal statuses need one (`backlog done
         // ... --test/--doc-only/--duplicate-of`, `backlog cancel --reason`'s
-        // discard, or a human `ruling approve`); `unconfirmed` / `needs-ruling` are entered
-        // and left only through `add`/`confirm` and `ruling`.
+        // discard).
         if let Some(v) = status {
             if v != STATUS_PENDING && v != STATUS_FAILED {
                 return Err(anyhow!(
                     "refused: `edit --status {v}` is not allowed. `done` needs evidence: \
                      `backlog done ID --test CMD --red-rev REV`, `--doc-only COMMIT` or \
                      `--duplicate-of ID`; `cancelled` is `backlog cancel ID --reason R` (a \
-                     recorded discard); judgment/untestable closes need a human ruling \
-                     (`backlog ruling request` then `ruling approve`)"
+                     recorded discard). There is no evidence-free close: an item no test \
+                     reproduces is cancelled"
                 ));
             }
         }
@@ -2360,15 +2399,7 @@ pub fn edit(
         // backlog 45c3a699: terminal is monotonic. Refuse BEFORE touching any
         // field so a refused edit leaves the task exactly as it was.
         if let Some(v) = status {
-            if task.status == STATUS_UNCONFIRMED || task.status == STATUS_NEEDS_RULING {
-                return Err(anyhow!(
-                    "refused: task {id} is {} and `edit --status {v}` would move it into the \
-                     workable queue without its repro / ruling; use `backlog confirm` or \
-                     `backlog ruling withdraw`",
-                    task.status
-                ));
-            }
-            if is_terminal_status(&task.status) && !is_terminal_status(v) {
+            if is_terminal_status(&task.status) && !is_terminal_status(&v) {
                 return Err(anyhow!(
                     "refused: task {id} is {} (terminal) and terminal status is final; \
                      `edit --status {v}` would reopen it. File a new task for the remaining work",
@@ -2386,7 +2417,7 @@ pub fn edit(
             task.notes = v.to_string();
         }
         if let Some(v) = status {
-            task.status = v.to_string();
+            task.status = v;
         }
         touch(task, now_unix());
         save(path, &tasks)
@@ -2434,8 +2465,8 @@ pub fn edit(
 /// collapsed into a bool.
 ///
 /// Test-only since the close-evidence change: it files the task straight into
-/// the workable queue (`pending`) with no repro evidence, which the shipped
-/// binary never does any more. The production entry point is
+/// the workable queue (`pending`) with a FIXTURE `reproduced` repro (no test
+/// is run), so `next` hands it out as it would a real reproduced finding. The production entry point is
 /// [`add_finding`], which takes the [`Intake`] (status + observed repro)
 /// decided by `main.rs`; this wrapper exists so the locking/verify-the-write
 /// tests above keep driving that SAME body.
@@ -2466,37 +2497,31 @@ pub fn add_with_weight_and_github_push<R: Fn(&[&str]) -> Option<(bool, String)>>
         run,
         Intake {
             status: STATUS_PENDING,
-            repro: None,
+            repro: Some(fixture_reproduced_repro(now)),
         },
     )
 }
 
 /// Where a new finding lands and what was observed about it.
 ///
-/// Only a `reproduced` repro outcome may land in `pending` (the workable
-/// queue); everything else lands in [`STATUS_UNCONFIRMED`]. `main.rs` builds
-/// this from the repro run via [`Intake::from_repro`], which is the only
-/// production constructor.
+/// Only a `reproduced` repro outcome may be filed at all (user rulings
+/// 2026-10-04: 「testがないなら起票してはならない」). Every other outcome is NOT a
+/// task and nothing is written for it (user ruling 2026-10-15). [`Intake::reproduced`] is the only production
+/// constructor and returns `None` for anything that did not reproduce.
 pub struct Intake {
-    pub status: &'static str,
+    pub status: Status,
     pub repro: Option<Repro>,
 }
 
 impl Intake {
-    /// `pending` exactly when `repro` observed the problem; `unconfirmed`
-    /// otherwise (no repro test, not reproduced, or undetermined).
-    pub fn from_repro(repro: Option<Repro>) -> Self {
-        let reproduced = repro
-            .as_ref()
-            .is_some_and(|r| r.outcome == crate::task::REPRO_REPRODUCED);
-        Intake {
-            status: if reproduced {
-                STATUS_PENDING
-            } else {
-                STATUS_UNCONFIRMED
-            },
-            repro,
-        }
+    /// `Some(pending)` exactly when `repro` observed the problem; `None`
+    /// otherwise (not reproduced, or undetermined) — such a finding is not
+    /// filed.
+    pub fn reproduced(repro: Repro) -> Option<Self> {
+        (repro.outcome == crate::task::REPRO_REPRODUCED).then_some(Intake {
+            status: STATUS_PENDING,
+            repro: Some(repro),
+        })
     }
 }
 
@@ -2561,7 +2586,7 @@ pub fn add_finding<R: Fn(&[&str]) -> Option<(bool, String)>>(
             // point (this one) would be the fail-open hole.
             project_unresolved,
             tags,
-            status: intake.status.to_string(),
+            status: intake.status,
             notes: notes.to_string(),
             created_at: now,
             updated_at: now,
@@ -2572,9 +2597,6 @@ pub fn add_finding<R: Fn(&[&str]) -> Option<(bool, String)>>(
             issue_closed_at: None,
             issue_body_synced_rev: None,
             rev: 0,
-            ruling_kind: None,
-            rationale: None,
-            untestable_reason: None,
             repro: intake.repro,
             closure: None,
             touched_files: Vec::new(),
@@ -3529,13 +3551,13 @@ mod tests {
     fn requeue_expired_leaves_done_and_cancelled_terminal() {
         let path = tmp_path();
         let now = 10_000i64;
-        let seed_task = |id: &str, status: &str| Task {
+        let seed_task = |id: &str, status: Status| Task {
             id: id.to_string(),
             title: format!("{id}-{status}"),
             project: "/repo".to_string(),
             project_unresolved: false,
             tags: vec![],
-            status: status.to_string(),
+            status,
             notes: String::new(),
             created_at: 100,
             updated_at: 200,
@@ -3548,9 +3570,6 @@ mod tests {
             issue_closed_at: None,
             issue_body_synced_rev: None,
             rev: 0,
-            ruling_kind: None,
-            rationale: None,
-            untestable_reason: None,
             repro: None,
             closure: None,
             touched_files: Vec::new(),
@@ -3630,7 +3649,7 @@ mod tests {
                     project: "/repo".to_string(),
                     project_unresolved: false,
                     tags: vec![],
-                    status: STATUS_FAILED.to_string(),
+                    status: STATUS_FAILED,
                     notes: String::new(),
                     created_at: 100,
                     updated_at: 100,
@@ -3641,9 +3660,6 @@ mod tests {
                     issue_closed_at: None,
                     issue_body_synced_rev: None,
                     rev: 0,
-                    ruling_kind: None,
-                    rationale: None,
-                    untestable_reason: None,
                     repro: None,
                     closure: None,
                     touched_files: Vec::new(),
@@ -4224,7 +4240,7 @@ mod tests {
                     project: "/repo".to_string(),
                     project_unresolved: false,
                     tags: vec![],
-                    status: STATUS_PENDING.to_string(),
+                    status: STATUS_PENDING,
                     notes: String::new(),
                     created_at: 100,
                     updated_at: 100,
@@ -4235,9 +4251,6 @@ mod tests {
                     issue_closed_at: None,
                     issue_body_synced_rev: None,
                     rev: 0,
-                    ruling_kind: None,
-                    rationale: None,
-                    untestable_reason: None,
                     repro: None,
                     closure: None,
                     touched_files: Vec::new(),
@@ -4357,7 +4370,7 @@ mod tests {
                 let status = derived
                     .iter()
                     .find(|t| &t.id == winner_id)
-                    .map(|t| t.status.as_str());
+                    .map(|t| t.status);
                 assert_eq!(
                     status,
                     Some(STATUS_CLAIMED),
@@ -4813,7 +4826,7 @@ mod tests {
                             project: "/repo".to_string(),
                             project_unresolved: false,
                             tags: vec![],
-                            status: STATUS_PENDING.to_string(),
+                            status: STATUS_PENDING,
                             notes: String::new(),
                             created_at: 100,
                             updated_at: 100,
@@ -4824,9 +4837,6 @@ mod tests {
                             issue_closed_at: None,
                             issue_body_synced_rev: None,
                             rev: 0,
-                            ruling_kind: None,
-                            rationale: None,
-                            untestable_reason: None,
                             repro: None,
                             closure: None,
                             touched_files: Vec::new(),
@@ -4895,7 +4905,7 @@ mod tests {
                 project: "/repo".to_string(),
                 project_unresolved: false,
                 tags: vec![],
-                status: STATUS_PENDING.to_string(),
+                status: STATUS_PENDING,
                 notes: String::new(),
                 created_at: 100,
                 updated_at: 100,
@@ -4906,9 +4916,6 @@ mod tests {
                 issue_closed_at: None,
                 issue_body_synced_rev: None,
                 rev: 0,
-                ruling_kind: None,
-                rationale: None,
-                untestable_reason: None,
                 repro: None,
                 closure: None,
                 touched_files: Vec::new(),
@@ -4988,7 +4995,7 @@ mod tests {
         );
 
         // Close-evidence (2026-10-01): `done`/`cancelled` are no longer valid
-        // EDIT targets — a close must go through `done`/`ruling` and record
+        // EDIT targets — a close must go through `done`/`cancel` and record
         // evidence — so the positive control moved from "done" to "failed".
         let err = edit(&path, &id, None, None, None, Some("done"))
             .expect_err("edit --status done must be refused");
@@ -5022,7 +5029,7 @@ mod tests {
             project: "/repo".to_string(),
             project_unresolved: false,
             tags: vec![],
-            status: STATUS_CLAIMED.to_string(),
+            status: STATUS_CLAIMED,
             notes: String::new(),
             created_at: 100,
             updated_at,
@@ -5033,10 +5040,8 @@ mod tests {
             issue_closed_at: None,
             issue_body_synced_rev: None,
             rev: 0,
-            ruling_kind: None,
-            rationale: None,
-            untestable_reason: None,
-            repro: None,
+            // Reproduced, so `next` may hand it out (2026-10-15 contract).
+            repro: Some(fixture_reproduced_repro(100)),
             closure: None,
             touched_files: Vec::new(),
         };
@@ -5929,7 +5934,7 @@ mod tests {
                 project: "/repo".to_string(),
                 project_unresolved: false,
                 tags: vec![],
-                status: STATUS_PENDING.to_string(),
+                status: STATUS_PENDING,
                 notes: String::new(),
                 created_at: 100,
                 updated_at: 100,
@@ -5940,9 +5945,6 @@ mod tests {
                 issue_closed_at: None,
                 issue_body_synced_rev: None,
                 rev: 0,
-                ruling_kind: None,
-                rationale: None,
-                untestable_reason: None,
                 repro: None,
                 closure: None,
                 touched_files: Vec::new(),
@@ -6048,7 +6050,7 @@ mod tests {
     /// only be about the mirror logic.
     fn sync_task(
         id: &str,
-        status: &str,
+        status: Status,
         issue_number: Option<u64>,
         issue_closed_at: Option<i64>,
     ) -> Task {
@@ -6058,7 +6060,7 @@ mod tests {
             project: "/repo".to_string(),
             project_unresolved: false,
             tags: vec![],
-            status: status.to_string(),
+            status,
             notes: format!("notes-{id}"),
             created_at: 100,
             updated_at: 100,
@@ -6069,9 +6071,6 @@ mod tests {
             issue_closed_at,
             issue_body_synced_rev: None,
             rev: 0,
-            ruling_kind: None,
-            rationale: None,
-            untestable_reason: None,
             repro: None,
             closure: None,
             touched_files: Vec::new(),

@@ -37,7 +37,7 @@ fn edit_status_cancelled_is_refused() {
     let f = Fixture::new("editcancel");
     let id = f.add("t");
     let o = f.run(&["edit", &id, "--status", "cancelled"]);
-    assert_refused_unchanged(&f, &id, "pending", &o, "cancelled needs a ruling");
+    assert_refused_unchanged(&f, &id, "pending", &o, "cancelled is not an edit");
 }
 
 // ---- runner allowlist --------------------------------------------------------

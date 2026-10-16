@@ -116,6 +116,15 @@ struct Cli {
     command: Option<Command>,
 }
 
+/// The shard set an `ingest` input answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum IngestKind {
+    /// Drift shards from `prompt --json` (area / `invariants` / `decisions`).
+    Drift,
+    /// Correctness-audit shards from `audit --json` (map-entry keys).
+    Audit,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Run the full audit (default).
@@ -136,10 +145,26 @@ enum Command {
     /// shard prompts via `prompt --json`, dispatches each to a read-only in-session
     /// subagent (billed to the host subscription, no nested `claude --print`), then
     /// feeds the outputs back here. Same exit codes as `run`.
+    ///
+    /// It also ingests `audit --json` shard outputs (labels = map-entry keys):
+    /// those produce a report and raise the sentinel on `needs_user: yes`, but
+    /// never move the drift baseline. Every provided output must be accounted
+    /// for: a label that matches no expected shard, a duplicated label, or a
+    /// label set that cannot be attributed to exactly one kind is an error
+    /// (exit 2), never a silent drop.
     Ingest {
         /// Read the outputs JSON from a file instead of stdin.
         #[arg(long)]
         from: Option<PathBuf>,
+        /// Which shard set the outputs answer: `drift` (`prompt --json`) or
+        /// `audit` (`audit --json`). Omitted: inferred from the labels, and an
+        /// ambiguous or unattributable label set is an error.
+        #[arg(long, value_enum)]
+        kind: Option<IngestKind>,
+        /// The `--filter` the `audit --json` run used (audit outputs only), so
+        /// the expected label set is the one that run emitted.
+        #[arg(long)]
+        filter: Option<String>,
     },
     /// Print the active fix-offer block if a sentinel is pending (for the
     /// SessionStart hook). Resolves the sentinel path from `[output].sentinel`,
@@ -580,12 +605,23 @@ fn run(cli: &Cli) -> Result<u8> {
             }
             return Ok(EXIT_OK);
         }
-        Some(Command::Ingest { ref from }) => {
+        Some(Command::Ingest {
+            ref from,
+            kind,
+            ref filter,
+        }) => {
             if let Some(code) = ratification_block(&l)? {
                 return Ok(code);
             }
-            let outs = read_ingest(from.as_deref(), &l, &scope, &shards)?;
-            return finish(&l, &scope, &shards, &paths, outs);
+            let req = IngestRequest {
+                from: from.as_deref(),
+                kind,
+                filter: filter.as_deref(),
+            };
+            return match read_ingest(&req, &l, &scope, &shards)? {
+                IngestPlan::Drift(outs) => finish(&l, &scope, &shards, &paths, outs),
+                IngestPlan::Audit { outs, filter } => finish_audit(&l, &paths, &filter, outs),
+            };
         }
         Some(Command::Ack { .. })
         | Some(Command::Pending)
@@ -1163,11 +1199,7 @@ fn finish(
         .collect();
     if !missing.is_empty() {
         let merged = merge_report(&l.cfg, scope, &l.date, &head, &parsed);
-        if let Some(dir) = paths.report.parent() {
-            std::fs::create_dir_all(dir).ok();
-        }
-        std::fs::write(&paths.report, &merged)
-            .with_context(|| format!("writing report {}", paths.report.display()))?;
+        report::write_report(paths, &merged)?;
         eprintln!(
             "specguard: WARN marker '{}' missing in shard(s): {}; saved {} but cannot assess findings",
             parse::MARKER,
@@ -1202,10 +1234,18 @@ fn finish(
         // the unfixed drift in the next run's diff so it is re-detected; a human
         // releases it with `specguard ack` once handled.
         let summary = merge_summary(&parsed);
+        // A sentinel already pending (e.g. raised by a same-day spec-audit
+        // ingest) keeps its `covers:` ids: the new sentinel carries the union,
+        // and one that cannot be read refuses the raise rather than dropping
+        // them. Read BEFORE emitting, so a refusal leaves no uncovered findings.
+        let prev = report::pending_sentinel_covers(paths)?;
         // Put each flagged shard on the unified review queue and stamp the ids
         // into the sentinel, so the eventual `ack` can dispose of them by id
         // instead of clearing an anonymous flag.
-        let covers = emit_drift_findings(&l.repo_root, &report_rel, &parsed);
+        let covers = report::union_covers(
+            emit_drift_findings(&l.repo_root, &report_rel, &parsed),
+            prev,
+        );
         report::write_sentinel(paths, &l.date, &report_rel, &summary, &head, &covers)?;
         println!(
             "specguard: 修正候補あり -> {} (report: {}); baseline は据え置き (ack するまで再検出)",
@@ -1304,17 +1344,42 @@ fn emit_prompt_json(l: &Loaded, scope: &scope::Scope, shards: &[prompt::Shard]) 
     Ok(())
 }
 
-/// Read the `ingest` input (stdin or `--from`) and align its outputs to the
-/// freshly resolved shards by label. A shard with no matching output becomes an
-/// agent failure (`code = -1`) so `finish` flags it like any other failed shard —
-/// the plugin must return every shard it was handed.
+/// What one `ingest` invocation was asked to do (the CLI flags, minus config).
+struct IngestRequest<'a> {
+    from: Option<&'a Path>,
+    kind: Option<IngestKind>,
+    filter: Option<&'a str>,
+}
+
+/// The ingest input, attributed to exactly one shard set and aligned to it.
+enum IngestPlan {
+    /// Outputs for the drift shards of the resolved scope (`prompt --json`).
+    Drift(Vec<agent::ShardOutput>),
+    /// Outputs for the correctness-audit shards (`audit --json --filter <filter>`).
+    Audit {
+        outs: Vec<agent::ShardOutput>,
+        filter: String,
+    },
+}
+
+/// Read the `ingest` input (stdin or `--from`), attribute it to ONE shard set
+/// (drift or audit — explicit `--kind`, else inferred by [`infer_ingest_kind`])
+/// and align its outputs to that set's expected labels.
+///
+/// Every provided output must be accounted for. A duplicated label, a label
+/// that matches no expected shard, or a label set that cannot be attributed to
+/// exactly one kind is an `Err` (exit 2 via `main`): the outputs are never
+/// silently dropped, so ingest can never report clean over findings it was
+/// handed and did not read. Conversely an expected shard with no output becomes
+/// an agent failure (`code = -1`) so `finish` / `finish_audit` flag it (exit 4)
+/// — the plugin must return every shard it was handed.
 fn read_ingest(
-    from: Option<&Path>,
+    req: &IngestRequest,
     l: &Loaded,
     scope: &scope::Scope,
     shards: &[prompt::Shard],
-) -> Result<Vec<agent::ShardOutput>> {
-    let raw = match from {
+) -> Result<IngestPlan> {
+    let raw = match req.from {
         Some(p) => std::fs::read_to_string(p)
             .with_context(|| format!("reading ingest file {}", p.display()))?,
         None => {
@@ -1327,36 +1392,256 @@ fn read_ingest(
         }
     };
     let parsed: IngestJson = serde_json::from_str(&raw).context("parsing ingest JSON")?;
-    let mut by_label: std::collections::HashMap<String, IngestShard> = parsed
+
+    let mut seen = std::collections::BTreeSet::new();
+    let dups: std::collections::BTreeSet<&str> = parsed
         .shards
-        .into_iter()
-        .map(|s| (s.label.clone(), s))
-        .collect();
-    let outs = shards
         .iter()
-        .map(|&sh| {
-            let label = prompt::shard_label(&l.cfg, scope, sh);
-            match by_label.remove(&label) {
-                Some(s) => agent::ShardOutput {
-                    label,
-                    out: agent::AgentOutput {
-                        stdout: s.stdout,
-                        stderr: s.stderr,
-                        code: s.code,
-                    },
+        .map(|s| s.label.as_str())
+        .filter(|label| !seen.insert(*label))
+        .collect();
+    if !dups.is_empty() {
+        anyhow::bail!(
+            "ingest input has duplicate label(s) {}: cannot tell which output answers the shard",
+            dups.into_iter().collect::<Vec<_>>().join(", ")
+        );
+    }
+    if req.kind == Some(IngestKind::Drift) && req.filter.is_some() {
+        anyhow::bail!("--filter applies to audit outputs only (got --kind drift)");
+    }
+
+    let drift_labels: Vec<String> = shards
+        .iter()
+        .map(|&sh| prompt::shard_label(&l.cfg, scope, sh))
+        .collect();
+    let filter = req.filter.unwrap_or("");
+    let kind = match (req.kind, req.filter) {
+        (Some(k), _) => k,
+        (None, Some(_)) => IngestKind::Audit,
+        // Legacy shape: `{"shards": []}` from an empty `prompt --json`.
+        (None, None) if parsed.shards.is_empty() => IngestKind::Drift,
+        (None, None) => {
+            let provided: Vec<&str> = parsed.shards.iter().map(|s| s.label.as_str()).collect();
+            infer_ingest_kind(&provided, &drift_labels, &expected_audit_labels(l, filter)?)?
+        }
+    };
+    match kind {
+        IngestKind::Drift => Ok(IngestPlan::Drift(align_ingest(
+            "drift",
+            &drift_labels,
+            parsed.shards,
+        )?)),
+        IngestKind::Audit => {
+            let expected = expected_audit_labels(l, filter)?;
+            Ok(IngestPlan::Audit {
+                outs: align_ingest("audit", &expected, parsed.shards)?,
+                filter: filter.trim().to_string(),
+            })
+        }
+    }
+}
+
+/// The audit shard labels `audit --json --filter <filter>` emits for the
+/// persisted map (an absent map reads as empty, exactly as `audit` reads it).
+/// A map that exists but cannot be loaded is an `Err`: the expected set is
+/// then unknown, and an unknown set must not be treated as empty.
+fn expected_audit_labels(l: &Loaded, filter: &str) -> Result<Vec<String>> {
+    let map_path = l.repo_root.join(&l.cfg.map.path);
+    let map = specmap::SpecMap::load(&map_path).with_context(|| {
+        format!(
+            "loading spec map {} to determine the expected audit shards",
+            map_path.display()
+        )
+    })?;
+    Ok(auditmap::audit_labels(&map, filter))
+}
+
+/// Attribute a non-empty set of provided labels to one shard set. Pure and
+/// deterministic: drift when the drift labels cover every provided label and
+/// the audit labels do not, audit symmetrically. Both covering them is
+/// ambiguous and neither covering them is unattributable — both are `Err`,
+/// never a guess.
+fn infer_ingest_kind(provided: &[&str], drift: &[String], audit: &[String]) -> Result<IngestKind> {
+    let covers = |set: &[String]| provided.iter().all(|p| set.iter().any(|s| s == p));
+    match (covers(drift), covers(audit)) {
+        (true, false) => Ok(IngestKind::Drift),
+        (false, true) => Ok(IngestKind::Audit),
+        (true, true) => anyhow::bail!(
+            "ingest labels {} match both the drift shards and the audit shards; \
+             pass --kind drift or --kind audit",
+            provided.join(", ")
+        ),
+        (false, false) => {
+            let stray: Vec<&str> = provided
+                .iter()
+                .copied()
+                .filter(|p| !drift.iter().chain(audit).any(|s| s == p))
+                .collect();
+            anyhow::bail!(
+                "ingest labels cannot be attributed to one shard set (drift shards: [{}]; \
+                 audit shards: [{}]; matching neither: [{}]). Copy each label verbatim \
+                 from the same `prompt --json` / `audit --json` run (with --filter for a \
+                 filtered audit), and do not mix the two",
+                drift.join(", "),
+                audit.join(", "),
+                stray.join(", ")
+            )
+        }
+    }
+}
+
+/// Align `provided` outputs to the `expected` labels, in expected order. A
+/// missing output becomes a failed shard (`code = -1`); a provided output whose
+/// label is not expected is an `Err` naming it — never dropped.
+fn align_ingest(
+    kind: &str,
+    expected: &[String],
+    provided: Vec<IngestShard>,
+) -> Result<Vec<agent::ShardOutput>> {
+    let mut by_label: std::collections::BTreeMap<String, IngestShard> =
+        provided.into_iter().map(|s| (s.label.clone(), s)).collect();
+    let outs = expected
+        .iter()
+        .map(|label| match by_label.remove(label) {
+            Some(s) => agent::ShardOutput {
+                label: label.clone(),
+                out: agent::AgentOutput {
+                    stdout: s.stdout,
+                    stderr: s.stderr,
+                    code: s.code,
                 },
-                None => agent::ShardOutput {
-                    out: agent::AgentOutput {
-                        stdout: String::new(),
-                        stderr: format!("no output provided for shard '{label}' in ingest input"),
-                        code: -1,
-                    },
-                    label,
+            },
+            None => agent::ShardOutput {
+                out: agent::AgentOutput {
+                    stdout: String::new(),
+                    stderr: format!("no output provided for shard '{label}' in ingest input"),
+                    code: -1,
                 },
-            }
+                label: label.clone(),
+            },
         })
         .collect();
+    if !by_label.is_empty() {
+        anyhow::bail!(
+            "{} ingest output(s) match no expected {kind} shard and would be lost: [{}] \
+             (expected: [{}])",
+            by_label.len(),
+            by_label.into_keys().collect::<Vec<_>>().join(", "),
+            expected.join(", ")
+        );
+    }
     Ok(outs)
+}
+
+/// The `ingest` tail for correctness-audit (`audit --json`) outputs: parse,
+/// merge a report, and raise the sentinel when a shard says `needs_user: yes`.
+///
+/// Differs from [`finish`] deliberately: the audit's scope is the spec map, not
+/// the git diff, so it NEVER advances (or otherwise touches) the drift baseline
+/// — a clean audit says nothing about unreviewed drift. The drift-only
+/// verification gates and content-hash memo are not applied. A sentinel that is
+/// already pending keeps its `covers:` ids (the new one carries their union),
+/// and one that cannot be read is an error rather than an overwrite — the same
+/// rule [`finish`] applies. The report goes into the dated report's spec-audit
+/// section ([`report::write_audit_report`]), so a same-day drift ingest keeps it.
+fn finish_audit(
+    l: &Loaded,
+    paths: &report::Paths,
+    filter: &str,
+    outs: Vec<agent::ShardOutput>,
+) -> Result<u8> {
+    let head = scope::current_head(&l.repo_root)
+        .unwrap_or_else(|_| report::POISONED_RAISED_AT.to_string());
+    let scope_line = format!(
+        "## スコープ\n- 源: 仕様マップ store (`{}`), filter: {}\n- canon commit (HEAD): `{head}`\n- drift baseline は変更しない (spec-audit は git-diff スコープを使わない)\n",
+        l.cfg.map.path,
+        if filter.is_empty() { "(なし: map 全体)" } else { filter },
+    );
+    let title = format!(
+        "# {} 仕様↔実装 正しさ監査 (spec-audit) {}\n\n",
+        l.cfg.project.name, l.date
+    );
+
+    if outs.is_empty() {
+        report::write_audit_report(
+            paths,
+            &format!("{title}{scope_line}\n## findings\n監査対象なし。\n"),
+        )?;
+        println!(
+            "specguard: spec-audit 監査対象なし (report: {}); baseline は変更しない",
+            paths.report.display()
+        );
+        return Ok(EXIT_OK);
+    }
+
+    let failed: Vec<&agent::ShardOutput> = outs.iter().filter(|o| o.out.code != 0).collect();
+    if !failed.is_empty() {
+        for f in &failed {
+            eprintln!(
+                "specguard: shard '{}' agent exited with code {}\n--- agent stderr ---\n{}",
+                f.label,
+                f.out.code,
+                f.out.stderr.trim_end()
+            );
+        }
+        return Ok(EXIT_AGENT_FAILED);
+    }
+
+    let parsed: Vec<(String, parse::Parsed)> = outs
+        .iter()
+        .map(|o| (o.label.clone(), parse::parse(&o.out.stdout)))
+        .collect();
+    let mut body = format!(
+        "{title}{scope_line}- shard: {}\n",
+        join(&parsed.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>())
+    );
+    for (label, p) in &parsed {
+        body.push_str(&format!("\n---\n\n## shard: {label}\n\n"));
+        body.push_str(p.report.trim_end());
+        body.push('\n');
+    }
+    report::write_audit_report(paths, &body)?;
+
+    let missing: Vec<&str> = parsed
+        .iter()
+        .filter(|(_, p)| !p.marker_found)
+        .map(|(l, _)| l.as_str())
+        .collect();
+    if !missing.is_empty() {
+        eprintln!(
+            "specguard: WARN marker '{}' missing in shard(s): {}; saved {} but cannot assess findings",
+            parse::MARKER,
+            missing.join(", "),
+            paths.report.display()
+        );
+        return Ok(EXIT_NO_MARKER);
+    }
+
+    if !parsed.iter().any(|(_, p)| p.needs_user) {
+        println!(
+            "specguard: spec-audit 修正候補なし (report: {}); baseline は変更しない",
+            paths.report.display()
+        );
+        return Ok(EXIT_OK);
+    }
+
+    let report_rel = format!("{}/{}.md", l.cfg.output.report_dir, l.date);
+    // Read the pending sentinel's covers BEFORE emitting, so an unreadable
+    // sentinel refuses the raise without leaving freshly emitted findings that
+    // no sentinel covers.
+    let prev = report::pending_sentinel_covers(paths)?;
+    let covers = report::union_covers(
+        emit_spec_audit_findings(&l.repo_root, &report_rel, &parsed),
+        prev,
+    );
+    let summary = merge_summary(&parsed);
+    report::write_sentinel(paths, &l.date, &report_rel, &summary, &head, &covers)?;
+    println!(
+        "specguard: spec-audit 修正候補あり -> {} (report: {}); baseline は変更しない",
+        paths.sentinel.display(),
+        paths.report.display()
+    );
+    Ok(EXIT_OK)
 }
 
 /// Pre-task spec briefing (read-only). Renders the briefing prompt over every
@@ -2400,8 +2685,7 @@ fn emit_audit_violations(repo_root: &Path, findings: &[auditmap::StructuralFindi
 /// per-finding disposition. The review-finding stream is per-item and shows up
 /// immediately. `store::record_finding` stores the row `Unverified` (overwatch
 /// backlog 7f07228e: nothing here adversarially verified the finding), so it is
-/// shown on the review surface with an `UNVERIFIED` marker and
-/// `review-queue --to-backlog` does NOT bridge it to the backlog.
+/// shown on the review surface with an `UNVERIFIED` marker.
 ///
 /// Idempotency and recurrence: `finding_id` is the EPISODE id
 /// `specguard:<kind>:<key>:<epoch>` (see `reconcile.rs` "Episodes" and
@@ -2680,6 +2964,55 @@ fn emit_drift_findings(
     report_rel: &str,
     parsed: &[(String, parse::Parsed)],
 ) -> Vec<String> {
+    emit_shard_findings(repo_root, report_rel, parsed, drift_finding_kind)
+}
+
+/// The kind/severity of a flagged DRIFT shard. Three kinds, not one flag. The
+/// order of the arms IS the precedence and is asserted by tests: "could not
+/// say" outranks "only stale docs", which outranks nothing.
+fn drift_finding_kind(p: &parse::Parsed) -> (&'static str, &'static str) {
+    if p.indeterminate {
+        ("audit-indeterminate", "high")
+    } else if p.doc_only {
+        // Every contradiction in this shard was class C (`正典が陳腐化`):
+        // the implementation moved and the canon doc has not caught up.
+        // Still queued — it is real work and dropping it would be exactly
+        // the silent suppression this crate exists to prevent — but under
+        // its own kind at `low`, which `severity_to_priority` files at p2
+        // instead of alongside defects at p1.
+        ("spec-doc-stale", "low")
+    } else {
+        ("spec-drift", "medium")
+    }
+}
+
+/// [`emit_drift_findings`] for correctness-audit (`audit --json`) shards fed
+/// through `ingest`. Its own kinds (`spec-audit`, `spec-audit-indeterminate`),
+/// so an audit finding on map key `src` can never share an id with a drift
+/// finding on area `src`, and `reconcile-findings` (structural kinds only)
+/// never closes it.
+fn emit_spec_audit_findings(
+    repo_root: &Path,
+    report_rel: &str,
+    parsed: &[(String, parse::Parsed)],
+) -> Vec<String> {
+    emit_shard_findings(repo_root, report_rel, parsed, |p| {
+        if p.indeterminate {
+            ("spec-audit-indeterminate", "high")
+        } else {
+            ("spec-audit", "medium")
+        }
+    })
+}
+
+/// Shared body of [`emit_drift_findings`] / [`emit_spec_audit_findings`]:
+/// `classify` names the kind/severity of one flagged shard.
+fn emit_shard_findings(
+    repo_root: &Path,
+    report_rel: &str,
+    parsed: &[(String, parse::Parsed)],
+    classify: impl Fn(&parse::Parsed) -> (&'static str, &'static str),
+) -> Vec<String> {
     // `Err` means the store could not be read, NOT that it is empty — same
     // reasoning as `emit_audit_findings`: re-appending is visible and harmless,
     // withholding a finding is neither.
@@ -2694,22 +3027,7 @@ fn emit_drift_findings(
         if !p.needs_user {
             continue;
         }
-        // Three kinds, not one flag. The order of the arms IS the precedence and
-        // is asserted by tests: "could not say" outranks "only stale docs",
-        // which outranks nothing.
-        let (kind, severity) = if p.indeterminate {
-            ("audit-indeterminate", "high")
-        } else if p.doc_only {
-            // Every contradiction in this shard was class C (`正典が陳腐化`):
-            // the implementation moved and the canon doc has not caught up.
-            // Still queued — it is real work and dropping it would be exactly
-            // the silent suppression this crate exists to prevent — but under
-            // its own kind at `low`, which `severity_to_priority` files at p2
-            // instead of alongside defects at p1.
-            ("spec-doc-stale", "low")
-        } else {
-            ("spec-drift", "medium")
-        };
+        let (kind, severity) = classify(p);
         let finding_id = format!("specguard:{kind}:{label}");
         covers.push(finding_id.clone());
         if already.contains(&finding_id) {
@@ -3271,6 +3589,56 @@ fn canonicalize(p: &Path) -> Result<PathBuf> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn ingest_shard(label: &str) -> IngestShard {
+        IngestShard {
+            label: label.to_string(),
+            stdout: "out".to_string(),
+            stderr: String::new(),
+            code: 0,
+        }
+    }
+
+    #[test]
+    fn infer_ingest_kind_attributes_only_when_exactly_one_set_covers_all() {
+        let drift = strs(&["src", "invariants"]);
+        let audit = strs(&["src/main.rs", "docs/spec.md"]);
+        assert_eq!(
+            infer_ingest_kind(&["src"], &drift, &audit).unwrap(),
+            IngestKind::Drift
+        );
+        assert_eq!(
+            infer_ingest_kind(&["src/main.rs"], &drift, &audit).unwrap(),
+            IngestKind::Audit
+        );
+        // Mixed, unknown, and ambiguous label sets are errors, never a guess.
+        assert!(infer_ingest_kind(&["src", "src/main.rs"], &drift, &audit).is_err());
+        assert!(infer_ingest_kind(&["nope"], &drift, &audit).is_err());
+        assert!(infer_ingest_kind(&["nope"], &[], &[]).is_err());
+        assert!(infer_ingest_kind(&["x"], &strs(&["x"]), &strs(&["x"])).is_err());
+    }
+
+    #[test]
+    fn align_ingest_refuses_unexpected_labels_and_fails_missing_shards() {
+        let Err(err) = align_ingest(
+            "drift",
+            &strs(&["src"]),
+            vec![ingest_shard("src"), ingest_shard("stray")],
+        ) else {
+            panic!("an unexpected label must be an error, not dropped");
+        };
+        assert!(format!("{err:#}").contains("stray"), "{err:#}");
+        // Nothing expected, something provided: still an error (the empty-scope case).
+        assert!(align_ingest("drift", &[], vec![ingest_shard("stray")]).is_err());
+        let outs = align_ingest("audit", &strs(&["a", "b"]), vec![ingest_shard("b")]).unwrap();
+        assert_eq!(outs.len(), 2);
+        assert_eq!((outs[0].label.as_str(), outs[0].out.code), ("a", -1));
+        assert_eq!((outs[1].label.as_str(), outs[1].out.code), ("b", 0));
+    }
 
     fn make_paths(sentinel: PathBuf) -> report::Paths {
         report::Paths {

@@ -399,6 +399,10 @@ pub fn run_with_timeout_and_stdin(
         }
     }
 
+    // Drain both pipes from now on, not after the exit (backlog b8d4f503).
+    let stdout_reader = spawn_pipe_reader(child.stdout.take());
+    let stderr_reader = spawn_pipe_reader(child.stderr.take());
+
     match child.wait_timeout(timeout) {
         Ok(Some(status)) => {
             let Some(code) = status.code() else {
@@ -414,16 +418,14 @@ pub fn run_with_timeout_and_stdin(
             // building a new one — `read_pipe_bounded` already recorded that
             // give-up at its origin, and re-minting here would count one
             // event twice as it bubbles up.
-            let stdout =
-                match read_pipe_bounded(child.stdout.take(), timeout, "stdout", &display, code) {
-                    Determination::Known(text) => text,
-                    Determination::Undetermined(why) => return Determination::Undetermined(why),
-                };
-            let stderr =
-                match read_pipe_bounded(child.stderr.take(), timeout, "stderr", &display, code) {
-                    Determination::Known(text) => text,
-                    Determination::Undetermined(why) => return Determination::Undetermined(why),
-                };
+            let stdout = match read_pipe_bounded(stdout_reader, timeout, "stdout", &display, code) {
+                Determination::Known(text) => text,
+                Determination::Undetermined(why) => return Determination::Undetermined(why),
+            };
+            let stderr = match read_pipe_bounded(stderr_reader, timeout, "stderr", &display, code) {
+                Determination::Known(text) => text,
+                Determination::Undetermined(why) => return Determination::Undetermined(why),
+            };
             Determination::known(CommandOutput {
                 code,
                 stdout,
@@ -444,6 +446,31 @@ pub fn run_with_timeout_and_stdin(
              not passed"
         )),
     }
+}
+
+/// A pipe being drained on its own thread since spawn; `None` when the pipe
+/// was never captured. Joined by [`read_pipe_bounded`].
+struct PipeReader(Option<std::sync::mpsc::Receiver<Result<String, String>>>);
+
+/// Start draining `pipe` immediately, so the child can never block on a full
+/// pipe while the caller waits for it to exit.
+fn spawn_pipe_reader<R: io::Read + Send + 'static>(pipe: Option<R>) -> PipeReader {
+    let Some(mut p) = pipe else {
+        return PipeReader(None);
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut out = String::new();
+        // The error, not the buffer: `read_to_string` guarantees `out` is
+        // left unchanged when it fails, so what sits in it at that point is
+        // not a short read of the output, it is nothing at all.
+        let read = p
+            .read_to_string(&mut out)
+            .map(|_| out)
+            .map_err(|e| e.to_string());
+        let _ = tx.send(read);
+    });
+    PipeReader(Some(rx))
 }
 
 /// Kill a timed-out child's whole process tree, not just the direct process.
@@ -492,6 +519,12 @@ fn kill_process_tree(child: &mut std::process::Child) {
 ///   a partial read presented as complete output is indistinguishable from a
 ///   process that printed nothing.
 ///
+/// The reader thread is started by [`spawn_pipe_reader`] right after spawn,
+/// BEFORE the bounded wait, and this function only joins it. Reading only
+/// after the child exited deadlocked: a child that writes more than the OS
+/// pipe buffer (64 KiB on macOS) blocks in write() and never exits, so every
+/// large-output command was reported as timed out (backlog b8d4f503).
+///
 /// `Known(String::new())` is reserved for the two genuinely empty
 /// observations: a pipe that was never captured (`None`), and a read that
 /// completed with nothing in it.
@@ -504,29 +537,16 @@ fn kill_process_tree(child: &mut std::process::Child) {
 /// days after the norm that named it. Its own callers' docs already claimed
 /// this behavior ("the call is `Undetermined` rather than silently returning a
 /// partial read"); the code did not do it.
-fn read_pipe_bounded<R: io::Read + Send + 'static>(
-    pipe: Option<R>,
+fn read_pipe_bounded(
+    reader: PipeReader,
     timeout: Duration,
     which: &str,
     display: &str,
     code: i32,
 ) -> Determination<String> {
-    use std::sync::mpsc;
-    let Some(mut p) = pipe else {
+    let PipeReader(Some(rx)) = reader else {
         return Determination::known(String::new());
     };
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut out = String::new();
-        // The error, not the buffer: `read_to_string` guarantees `out` is
-        // left unchanged when it fails, so what sits in it at that point is
-        // not a short read of the output, it is nothing at all.
-        let read = p
-            .read_to_string(&mut out)
-            .map(|_| out)
-            .map_err(|e| e.to_string());
-        let _ = tx.send(read);
-    });
     match rx.recv_timeout(timeout) {
         Ok(Ok(text)) => Determination::known(text),
         Ok(Err(e)) => Determination::undetermined(format!(

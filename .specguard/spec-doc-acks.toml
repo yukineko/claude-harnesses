@@ -168,20 +168,12 @@ path = "crates/propguard/src/fault_injection_tests.rs"
 reason = "Unit-test submodule (classified impl by the path heuristic) pinning that a faulted git scan resolves to decide_scan_failed's git-scan-failed BLOCK (8696dd7e). propguard.md has no scan-failure section (grep scan_failed / git-scan: 0 hits). Spec debt."
 
 [[ack]]
-path = "crates/overwatch/src/test_freshness.rs"
-reason = "Reverse-looks up a `#[ignore = \"<finding-id>: …\"]` regression test from a finding_id and re-runs it so bridge.rs can mark a backlog task live-or-resolved. docs/specs/overwatch.md describes none of it (grep -ci on docs/specs/overwatch.md, 2026-10-02 @5f709e6c: freshness 0, test_freshness 0, bridge 0, 'ignore]' 0); the convention it implements is written in docs/DESIGN-continuous-audit-triage.md §2.5, which is not a docs/specs doc and so cannot be bound here. Spec debt."
-
-[[ack]]
 path = "crates/parallelguard/src/fault_injection_tests.rs"
 reason = "Unit-test submodule (classified impl by the path heuristic) blinding boundary::read_to_string under decide_with and pinning that the PreToolUse verdict stays Deny (8696dd7e slice 4). parallelguard has no docs/specs doc at all — docs/specs/parallelguard.md does not exist, which specguard.toml's gate-area comment already records — so there is nothing to bind to. Spec debt."
 
 [[ack]]
 path = "crates/overwatch/src/observed_close.rs"
 reason = "Observation-based closure plumbing for review findings (open_findings tri-state, close_observed appends `resolved` only on Known(Resolved), ReconcileReport exit 0/3; backlog 89544915). No docs/specs doc describes it: overwatch.md has no observation-closure or reconcile section (grep -ci on docs/specs/overwatch.md, 2026-10-04 @5af9693e: reconcile 0, observed_close 0, episode 0; its one `resolved` hit is compact-findings rotation, a different behaviour). Spec debt."
-
-[[ack]]
-path = "crates/overwatch/src/review_ruling.rs"
-reason = "Bridges .backlog/tasks.toml rows with status needs-ruling into the review-queue as EntryKind::NeedsRuling, read tri-state (absent -> Known(empty), unreadable/unparseable -> Undetermined). No docs/specs doc describes it: overwatch.md's review-queue section enumerates only systemic/rollback/ai-finding/escalation (grep -ci 'needs.ruling' docs/specs/overwatch.md, 2026-10-04 @5af9693e: 0) and its fail-soft bullet ('破損でも、そのソースは何も寄与せず') states the opposite of this file's Undetermined-on-corruption read. Binding would claim coverage the doc contradicts. Spec debt."
 
 [[ack]]
 path = "crates/specguard/src/observed.rs"

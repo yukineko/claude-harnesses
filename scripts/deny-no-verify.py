@@ -24,13 +24,21 @@ Protocol: reads the PreToolUse JSON payload on stdin.
              this hook does not recognise as a bypass)
     exit 2   deny; stderr is shown to the model as the reason
 
-Fail-closed vs fail-open, deliberately chosen per branch: an UNPARSEABLE payload
-exits 0. That is not the doctrine's "cannot determine resolves to the restricted
-side" being waived — for the `--no-verify` class this hook is not the gate. The
-gate is `.githooks/*` plus the bypass ledger: `post-commit` records a commit this
-hook never certified and `pre-push` then refuses to send it. Blocking every Bash
-call in the session because one payload failed to decode would take the whole
-turn down to protect a check that has a working backstop.
+An UNREADABLE payload exits 2 (backlog bee1ccbc). That covers stdin that is not
+JSON (including empty stdin), JSON that is not an object, and a Bash payload
+whose `tool_input` is present but not an object. A Bash payload with no
+`tool_input` or a missing / non-string `command` still exits 0, by user ruling
+2026-10-14 (bee1ccbc). In each refused case whether the command is a bypass cannot be determined, and CLAUDE.md 3
+resolves that to the restricted side. This mirrors the sibling guards
+`guard-maintree-bash.py` and `guard-maintree-edit.py`, which refuse the same
+payloads. An uncaught exception would exit 1, which Claude Code treats as a
+non-blocking error (the tool call proceeds), so a crash barrier at the entry
+point turns any exception (e.g. RecursionError on a deeply nested payload)
+into exit 2 as well. An
+earlier version crashed that way on a non-object payload and exited 0 on a
+non-JSON one, justified by "this hook is not the gate, the ledger is the
+backstop". The next paragraph shows why that backstop does not cover every
+bypass.
 
 THE BACKSTOP DOES NOT COVER EVERY BYPASS, and an earlier version of this
 paragraph claimed it did — "the gate is `.githooks/*` plus the bypass ledger,
@@ -44,12 +52,9 @@ The chain is post-commit -> ledger -> pre-push, and overriding `hooksPath` break
 it at the first link: `post-commit` never runs, so nothing is recorded, so
 `pre-push` reads an empty ledger and lets the ungated commit leave the machine.
 
-So the asymmetry above is narrower than it was written to be. For the hooksPath
-class this hook is the ONLY control, not redundant cover, which means a fail-open
-here is unconditional. The payload branch keeps its exemption on the reasoning
-that a Bash payload which fails to DECODE is a harness fault rather than an
-author's command — but it no longer gets to lean on a backstop that, for one of
-the two bypass classes it covers, is not there.
+For the hooksPath class this hook is the ONLY control, not redundant cover, so
+any fail-open here is unconditional. That is why the payload branch has no
+exemption.
 
 An unparseable COMMAND is a different question, and it used to be answered the
 same permissive way — wrongly. Splitting on `;` / `|` with a regex BEFORE
@@ -66,8 +71,7 @@ A single character in a commit message turned the refusal off. The separator
 split is now done on TOKENS (`shlex` with `punctuation_chars`), so a quoted
 separator stays inside its argument, and a command that still will not tokenize
 resolves to DENY rather than allow whenever the raw text carries a bypass
-marker. The payload branch above keeps its exemption; this one does not get to
-borrow it.
+marker.
 
 WHAT THIS HOOK DOES NOT CATCH. An adversarial verifier reproduced the following
 against real git, and they are recorded here rather than left for the next
@@ -476,17 +480,38 @@ Rephrase the command so it tokenizes (balance the quotes), and it will be
 judged on what it actually says.
 """
 
+UNREADABLE = """Refused: the hook payload could not be read ({why}).
+
+Whether this Bash call is a gate bypass (`git commit --no-verify`, `-c
+core.hooksPath=`) cannot be determined, and a check that could not run has not
+passed (CLAUDE.md 3), so this resolves to a refusal rather than to permission.
+"""
+
 
 def main() -> int:
+    # Unreadable payload: undetermined, so refuse (module docstring, bee1ccbc).
+    # Return 2 explicitly; an uncaught exception would exit 1 = allow.
     try:
-        payload = json.load(sys.stdin)
-    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
-        return 0  # see module docstring: this hook is not the gate
+        payload = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+    except ValueError as exc:  # JSONDecodeError and UnicodeDecodeError both subclass it
+        sys.stderr.write(UNREADABLE.format(why="not JSON (%s)" % exc))
+        return 2
+    if not isinstance(payload, dict):
+        sys.stderr.write(UNREADABLE.format(why="not a JSON object"))
+        return 2
 
     if payload.get("tool_name") != "Bash":
         return 0
-    command = (payload.get("tool_input") or {}).get("command")
+    # An ABSENT tool_input is the missing-command case (allowed, see below); a
+    # PRESENT tool_input that is not an object is unreadable (refused).
+    tool_input = payload.get("tool_input", {})
+    if not isinstance(tool_input, dict):
+        sys.stderr.write(UNREADABLE.format(why="Bash tool_input is not a JSON object"))
+        return 2
+    command = tool_input.get("command")
     if not isinstance(command, str):
+        # Missing / non-string command: allowed by user ruling 2026-10-14
+        # (bee1ccbc), pinned by test_gate_bypass.py::test_non_string_command_is_allowed.
         return 0
 
     segments = split_commands(command)
@@ -509,4 +534,16 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        _rc = main()
+    except Exception as _crash:  # noqa: BLE001
+        # An uncaught exception (e.g. RecursionError decoding a deeply nested
+        # payload) exits 1, which Claude Code treats as a non-blocking error,
+        # i.e. the call proceeds. A check that crashed has not passed
+        # (CLAUDE.md 3), so it resolves to exit 2 (bee1ccbc; mirrors
+        # guard-maintree-edit.py e033c406).
+        sys.stderr.write(
+            f"Refused: deny-no-verify.py crashed ({type(_crash).__name__}: {_crash}); "
+            "a check that could not run has not passed.\n")
+        _rc = 2
+    sys.exit(_rc)

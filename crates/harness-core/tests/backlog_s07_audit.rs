@@ -47,7 +47,6 @@ fn backlog_ff98fed0_unknown_model_is_not_priced_free() {
 
 // --- 00a8ba29: unreadable existing ledger read as empty ledger ---
 #[test]
-#[ignore = "backlog 00a8ba29: open defect, remove ignore when fixed"]
 fn backlog_00a8ba29_unreadable_existing_ledger_is_not_empty_ledger() {
     let dir = tempfile::tempdir().unwrap();
     // ledger.json exists but cannot be read as a file (it is a directory -> EISDIR).
@@ -82,7 +81,6 @@ fn backlog_f58a303f_probe_repo_times_out_on_hung_git() {
 
 // --- 814cfbbb: undetermined.jsonl default sink is per-checkout, not per-project ---
 #[test]
-#[ignore = "backlog 814cfbbb: open defect, remove ignore when fixed"]
 fn backlog_814cfbbb_default_sink_is_shared_across_worktrees() {
     use std::process::Command;
     let td = tempfile::tempdir().unwrap();

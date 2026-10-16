@@ -97,7 +97,7 @@ class Backlog_bee1ccbc(unittest.TestCase):
             with self.subTest(payload=bad):
                 self.assertEqual(_hook("guard-maintree-edit.py", bad).returncode, 2)
 
-    @open_defect("bee1ccbc")
+    # deny-no-verify.py half fixed under bee1ccbc (scripts/test_backlog_bee1ccbc.py).
     def test_deny_no_verify_refuses_unreadable_payload(self):
         for bad in ("this is not json\n", "[1,2]\n"):
             with self.subTest(payload=bad):
@@ -124,7 +124,6 @@ class Backlog_e3d49aea(unittest.TestCase):
 
 
 class Backlog_911a93b8(unittest.TestCase):
-    @open_defect("911a93b8")
     def test_python_test_assertion_loss_is_reported(self):
         d = _scratch_repo()
         self.addCleanup(shutil.rmtree, d, True)

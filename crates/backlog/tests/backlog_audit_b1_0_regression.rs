@@ -54,7 +54,7 @@ fn run(args: &[&str], cwd: &Path, home: &Path) -> (i32, String, String) {
 }
 
 /// Close-evidence fixture: `add` lands `pending` only with a REPRODUCED repro
-/// test (otherwise `unconfirmed`, outside the workable queue). Commit a repro
+/// test (otherwise `add` is refused and writes nothing). Commit a repro
 /// script that fails (= reproduced) so the fixture rows are `pending` as before.
 const REPRO: &str = "bash tests/repro_yes.sh";
 fn commit_repro_script(cwd: &Path, home: &Path) {

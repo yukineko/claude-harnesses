@@ -41,7 +41,6 @@
 
 use serde_json::Value;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -66,15 +65,13 @@ fn overwatch_bin() -> &'static str {
 }
 
 /// Run the binary in a sandboxed HOME + cwd and return the whole `Output`.
-/// The process HOME of the TEST is never mutated (unlike
-/// `bridge_entries_to_backlog.rs`), so these tests cannot race each other or
-/// any other test binary over a process-global env var.
+/// The process HOME of the TEST is never mutated, so these tests cannot race
+/// each other or any other test binary over a process-global env var.
 fn run_ow_raw(home: &Path, work: &Path, args: &[&str]) -> Output {
     Command::new(overwatch_bin())
         .args(args)
         .env("HOME", home)
         .env_remove("CLAUDE_CODE_SESSION_ID")
-        .env_remove("OVERWATCH_BACKLOG_BIN")
         .current_dir(work)
         .output()
         .expect("failed to spawn overwatch binary")
@@ -397,228 +394,6 @@ fn limit_zero_on_a_readable_store_sheds_every_row_and_exits_zero() {
         1,
         "control on the control: the row the cap shed really did exist"
     );
-}
-
-// ===========================================================================
-// 3. `review-queue --to-backlog`, END TO END through a fake `backlog`.
-//
-//    69a90432 explicitly disclosed this gap: "`--to-backlog`'s undetermined
-//    paths are covered by UNIT tests of `drain_ledger` and `plan_entry_adds`,
-//    not end-to-end through the fake-backlog integration harness."
-//
-//    The unit test proves `drain_ledger` returns `None`. It does NOT prove
-//    that `run_in` then refrains from SPAWNING `backlog add` — that is the
-//    consequence a human pays for (duplicate tasks to reconcile by hand), and
-//    it is only observable by counting the spawns.
-// ===========================================================================
-
-/// A fake `backlog` that appends one line per `add` to `$FAKE_BACKLOG_LOG`.
-fn write_fake_backlog(dir: &Path) -> PathBuf {
-    fs::create_dir_all(dir).unwrap();
-    let script = dir.join("backlog");
-    fs::write(
-        &script,
-        r#"#!/bin/sh
-if [ "$1" = "add" ]; then
-  shift
-  title=""
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --title) title="$2"; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  printf '%s\n' "$title" >> "$FAKE_BACKLOG_LOG"
-fi
-exit 0
-"#,
-    )
-    .unwrap();
-    let mut perm = fs::metadata(&script).unwrap().permissions();
-    perm.set_mode(0o755);
-    fs::set_permissions(&script, perm).unwrap();
-    script
-}
-
-/// Run `review-queue --to-backlog` with the fake backlog wired in via
-/// `OVERWATCH_BACKLOG_BIN` (no PATH mutation, so nothing leaks between tests).
-fn run_drain(home: &Path, work: &Path, backlog: &Path, log: &Path) -> Output {
-    Command::new(overwatch_bin())
-        .args(["review-queue", "--to-backlog"])
-        .env("HOME", home)
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .env("OVERWATCH_BACKLOG_BIN", backlog)
-        .env("FAKE_BACKLOG_LOG", log)
-        .current_dir(work)
-        .output()
-        .expect("failed to spawn overwatch binary")
-}
-
-fn add_count(log: &Path) -> usize {
-    fs::read_to_string(log)
-        .map(|t| t.lines().filter(|l| !l.trim().is_empty()).count())
-        .unwrap_or(0)
-}
-
-/// `(home, work, backlog script, add log)` with a rollback already recorded.
-fn drain_sandbox(tag: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
-    let (home, work) = make_sandbox(tag);
-    let backlog = write_fake_backlog(&home.join("bin"));
-    let log = home.join("backlog-add.log");
-    seed_rollback(&home, &work, "specguard");
-    (home, work, backlog, log)
-}
-
-#[test]
-fn to_backlog_with_a_readable_store_bridges_the_row_and_exits_zero() {
-    // ANTI-VACUITY control, deliberately FIRST: the two failure arms below
-    // both assert "0 adds", which a drain that bridges nothing ever also
-    // satisfies. This is the test that says the drain works at all.
-    let (home, work, backlog, log) = drain_sandbox("drain-control");
-
-    let out = run_drain(&home, &work, &backlog, &log);
-    assert!(
-        out.status.success(),
-        "a fully readable store must exit 0: stderr={}",
-        stderr_of(&out)
-    );
-    assert_eq!(add_count(&log), 1, "the seeded rollback must be forwarded");
-    let body = json_of(&out);
-    assert_eq!(body["entries_bridged"], 1);
-    assert_eq!(
-        body["undetermined_sources"].as_array().unwrap().len(),
-        0,
-        "every ledger was read, so the list must be empty (present, not absent)"
-    );
-}
-
-#[test]
-fn to_backlog_with_an_unreadable_idempotency_ledger_bridges_nothing() {
-    // The idempotency ledger is the OPPOSITE direction from a source: reading
-    // it as empty does not hide a row, it re-forwards every row that was
-    // already filed. So the whole stream must be SKIPPED — no `backlog add`
-    // may be spawned — and that must reach the shell.
-    let (home, work, backlog, log) = drain_sandbox("drain-idempotency");
-    make_unreadable(&store_dir(&home, &work).join("bridged_entries.jsonl"));
-
-    let out = run_drain(&home, &work, &backlog, &log);
-    let stderr = stderr_of(&out);
-
-    assert_eq!(
-        add_count(&log),
-        0,
-        "with the already-bridged set unknown, NOTHING may be forwarded — \
-         proceeding would re-file items a human then reconciles by hand"
-    );
-    assert!(
-        stderr.contains("SKIPPED") && stderr.contains("bridged_entries.jsonl"),
-        "the skipped stream must be named on stderr: stderr={stderr:?}"
-    );
-    let body = json_of(&out);
-    let named: Vec<&str> = body["undetermined_sources"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
-    assert!(
-        named.contains(&"bridged_entries.jsonl"),
-        "the JSON summary must name the ledger, not just count zero: {body}"
-    );
-    assert_eq!(
-        out.status.code(),
-        Some(3),
-        "`\"entries_bridged\": 0` is byte-identical to a clean no-op run, so the exit \
-         code is the channel that carries the difference; stderr={stderr}"
-    );
-}
-
-#[test]
-fn to_backlog_with_an_undecodable_source_ledger_bridges_nothing_from_it() {
-    // The other direction: the SOURCE could not be read. Bridging nothing is
-    // safe (append-only ledgers, re-derived every run) but must not be
-    // reported as "there was nothing to bridge".
-    let (home, work, backlog, log) = drain_sandbox("drain-source");
-    append_undecodable_line(&store_dir(&home, &work).join("rollbacks.jsonl"));
-
-    let out = run_drain(&home, &work, &backlog, &log);
-    let stderr = stderr_of(&out);
-
-    assert_eq!(
-        add_count(&log),
-        0,
-        "the rollback stream contributed no rows, so no add may be spawned"
-    );
-    assert!(
-        stderr.contains("WARNING") && stderr.contains("rollbacks.jsonl"),
-        "stderr must name the source ledger: stderr={stderr:?}"
-    );
-    assert!(
-        stderr.contains("NOT a report that the source is empty"),
-        "the warning must refuse the zero reading explicitly: stderr={stderr:?}"
-    );
-    assert_eq!(out.status.code(), Some(3));
-
-    // The idempotency ledger must NOT have been written for a row that was
-    // never forwarded (otherwise a later, readable run would skip it).
-    let entries = store_dir(&home, &work).join("bridged_entries.jsonl");
-    assert!(
-        !entries.exists() || fs::read_to_string(&entries).unwrap().trim().is_empty(),
-        "nothing was bridged, so nothing may be recorded as bridged"
-    );
-}
-
-/// The MIRROR TWIN of the test above. `--to-backlog` keeps TWO idempotency
-/// ledgers on purpose (`bridged_findings.jsonl` keyed on bare finding-ids —
-/// also the review-metrics "resolved" source — and `bridged_entries.jsonl`
-/// keyed on `<kind>:<identifier>`), and they are read by two separate
-/// `drain_ledger` calls. This repo's recurring failure mode is fixing one
-/// mirror and calling it converged, so the finding half is pinned separately
-/// rather than assumed to follow from the entry half.
-#[test]
-fn to_backlog_with_an_unreadable_finding_idempotency_ledger_bridges_nothing() {
-    let (home, work) = make_sandbox("drain-findings-idempotency");
-    let backlog = write_fake_backlog(&home.join("bin"));
-    let log = home.join("backlog-add.log");
-    seed_finding(&home, &work, "CA-e2e-010");
-
-    // Control first, in this same test: the finding really does bridge when
-    // the ledger is readable, so the "0 adds" below is not trivially true.
-    let control = run_drain(&home, &work, &backlog, &log);
-    assert!(control.status.success(), "stderr={}", stderr_of(&control));
-    assert_eq!(
-        add_count(&log),
-        1,
-        "the confirmed finding must be forwarded"
-    );
-
-    // Now the same store, with the finding-idempotency ledger unreadable and a
-    // SECOND finding pending: proceeding with an unknown already-bridged set
-    // would re-file CA-e2e-010 as well.
-    seed_finding(&home, &work, "CA-e2e-011");
-    make_unreadable(&store_dir(&home, &work).join("bridged_findings.jsonl"));
-
-    let out = run_drain(&home, &work, &backlog, &log);
-    let stderr = stderr_of(&out);
-    assert_eq!(
-        add_count(&log),
-        1,
-        "no further add may be spawned while the already-bridged set is unknown"
-    );
-    assert!(
-        stderr.contains("SKIPPED") && stderr.contains("bridged_findings.jsonl"),
-        "the skipped stream must be named: stderr={stderr:?}"
-    );
-    assert!(
-        json_of(&out)["undetermined_sources"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|v| v == "bridged_findings.jsonl"),
-        "the JSON summary must name it: {}",
-        stdout_of(&out)
-    );
-    assert_eq!(out.status.code(), Some(3));
 }
 
 // ===========================================================================

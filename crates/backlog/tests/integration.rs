@@ -43,7 +43,7 @@ fn temp_repo(tag: &str) -> PathBuf {
 
 /// Close-evidence (2026-10-01): `backlog add` lands `pending` (workable, what
 /// `next` / `next --claim` hand out) only when a committed repro test
-/// REPRODUCES the finding; without one it lands `unconfirmed`. This commits a
+/// REPRODUCES the finding; without one `add` is refused and writes nothing. This commits a
 /// repro script (exit 1 = reproduced) into `repo`, which must already be a
 /// real git repo, so the fixture's adds can pass `--repro-test` and exercise
 /// the same queue behaviour as before.
@@ -233,11 +233,22 @@ fn list_json_emits_machine_readable_array() {
 #[test]
 fn add_naming_a_foreign_project_is_refused_by_a_repo_store() {
     let home = temp_home("list-scope-cwd");
-    let cwd_a = temp_repo("list-scope-cwd-repo-a");
+    // `add` files only a reproduced finding (intake contract v2), so both adds
+    // carry a reproducing repro: B's refusal must then be the project-scope
+    // one, not "not filed for lack of evidence".
+    let cwd_a = evidence_repo("list-scope-cwd-repo-a");
     let project_a = project_of(&cwd_a);
 
     let (add_a, _) = run_in(
-        &["add", "--title", "Task A", "--project", &project_a],
+        &[
+            "add",
+            "--title",
+            "Task A",
+            "--project",
+            &project_a,
+            "--repro-test",
+            REPRO,
+        ],
         "",
         &home,
         Some(&cwd_a),
@@ -245,7 +256,15 @@ fn add_naming_a_foreign_project_is_refused_by_a_repo_store() {
     assert_eq!(add_a, 0, "add of THIS repo's own project must succeed");
 
     let (add_b, out_b) = run_in(
-        &["add", "--title", "Task B", "--project", "/other/project"],
+        &[
+            "add",
+            "--title",
+            "Task B",
+            "--project",
+            "/other/project",
+            "--repro-test",
+            REPRO,
+        ],
         "",
         &home,
         Some(&cwd_a),
@@ -296,17 +315,39 @@ fn list_all_flag_returns_every_project_in_the_resolved_store() {
         format!("store_dir = {:?}\n", pinned.to_string_lossy()),
     )
     .unwrap();
+    // `add` files only a reproduced finding (intake contract v2): the adds run
+    // from a repo holding a committed repro. The store stays pinned, and the
+    // `list` reads below keep their original cwd.
+    let repro_cwd = evidence_repo("list-all-flag-cwd");
 
-    let (add_a, _) = run(
-        &["add", "--title", "Task A", "--project", "/proj/a"],
+    let (add_a, _) = run_in(
+        &[
+            "add",
+            "--title",
+            "Task A",
+            "--project",
+            "/proj/a",
+            "--repro-test",
+            REPRO,
+        ],
         "",
         &home,
+        Some(&repro_cwd),
     );
     assert_eq!(add_a, 0, "add A must succeed");
-    let (add_b, _) = run(
-        &["add", "--title", "Task B", "--project", "/proj/b"],
+    let (add_b, _) = run_in(
+        &[
+            "add",
+            "--title",
+            "Task B",
+            "--project",
+            "/proj/b",
+            "--repro-test",
+            REPRO,
+        ],
         "",
         &home,
+        Some(&repro_cwd),
     );
     assert_eq!(add_b, 0, "add B must succeed");
     assert!(
@@ -353,17 +394,39 @@ fn list_project_flag_wins_over_all_when_both_given() {
         format!("store_dir = {:?}\n", pinned.to_string_lossy()),
     )
     .unwrap();
+    // `add` files only a reproduced finding (intake contract v2): the adds run
+    // from a repo holding a committed repro. The store stays pinned, and the
+    // `list` reads below keep their original cwd.
+    let repro_cwd = evidence_repo("list-project-wins-cwd");
 
-    let (add_a, _) = run(
-        &["add", "--title", "Task A", "--project", "/proj/a"],
+    let (add_a, _) = run_in(
+        &[
+            "add",
+            "--title",
+            "Task A",
+            "--project",
+            "/proj/a",
+            "--repro-test",
+            REPRO,
+        ],
         "",
         &home,
+        Some(&repro_cwd),
     );
     assert_eq!(add_a, 0, "add A must succeed");
-    let (add_b, _) = run(
-        &["add", "--title", "Task B", "--project", "/proj/b"],
+    let (add_b, _) = run_in(
+        &[
+            "add",
+            "--title",
+            "Task B",
+            "--project",
+            "/proj/b",
+            "--repro-test",
+            REPRO,
+        ],
         "",
         &home,
+        Some(&repro_cwd),
     );
     assert_eq!(add_b, 0, "add B must succeed");
     assert!(

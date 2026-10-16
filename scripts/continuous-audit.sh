@@ -13,10 +13,7 @@
 # The finder/verifier review itself is LLM-driven and is NOT performed by this
 # script. This script's DETERMINISTIC responsibility is to RECORD a round:
 #   * for each CONFIRMED finding -> `overwatch record-finding ...` (the durable
-#     findings-history/dedup ledger), then forward it to the backlog via
-#     `overwatch review-queue --to-backlog` (idempotent on finding-id) so the
-#     single actionable queue /flow drains never leaves an audit result
-#     unattended, and
+#     findings-history/dedup ledger), and
 #   * once per round -> `overwatch audit-round record ...`
 #     (the convergence-metrics ledger read back by `overwatch audit-metrics`).
 # It then prints the finding list + `overwatch audit-metrics`.
@@ -43,13 +40,12 @@
 # empty in that case (backward compatible).
 #
 # VERDICTS ARE TRI-STATE (CONFIRMED / REFUTED / UNVERIFIED).
-#   --finding             -> recorded with `--verdict confirmed`: established,
-#                            bridged to the backlog as actionable work.
+#   --finding             -> recorded with `--verdict confirmed`: established.
 #   --unverified-finding  -> recorded with `--verdict unverified`: the verifier
 #                            could NEITHER establish NOR refute it. Same format.
 #                            It is NOT dropped (it stays on the review-queue
-#                            surface, marked [UNVERIFIED]) and NOT bridged to the
-#                            backlog — it stays pending re-verification.
+#                            surface, marked [UNVERIFIED]) — it stays pending
+#                            re-verification.
 #   A verifier REFUTED is passed as --unverified-finding (not dropped): overwatch
 #   stores a REFUTED only with BOTH a machine probe result showing
 #   not_reproduced (--probe) AND a human sign-off (--signed-off-by), and this
@@ -114,11 +110,11 @@ DRY_RUN=0
 declare -a FINDINGS=()
 # UNVERIFIED findings: undetermined verdicts. Kept in a SEPARATE array (not
 # folded into FINDINGS) because they take a different path: recorded with
-# `--verdict unverified`, visible in review-queue, NOT bridged to the backlog.
+# `--verdict unverified`, visible in review-queue, marked [UNVERIFIED].
 declare -a UNVERIFIED_FINDINGS=()
 
 usage() {
-  sed -n '2,83p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,79p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -156,23 +152,6 @@ else
   exit 0   # fail-soft: never hard-fail the caller
 fi
 
-# --- locate the backlog binary (findings sink) -------------------------------
-# The CONFIRMED findings are forwarded to the backlog (the single actionable
-# queue /flow drains) so an audit result is never left unattended. Resolve it
-# the same way overwatch does and export OVERWATCH_BACKLOG_BIN so the bridge
-# finds it even when `backlog` is not on PATH. Fail-soft: if none resolves the
-# bridge itself warns and skips (never aborts the loop).
-if [ -z "${OVERWATCH_BACKLOG_BIN:-}" ]; then
-  if command -v backlog >/dev/null 2>&1; then
-    OVERWATCH_BACKLOG_BIN="$(command -v backlog)"
-  elif [ -x "$REPO/target/release/backlog" ]; then
-    OVERWATCH_BACKLOG_BIN="$REPO/target/release/backlog"
-  elif [ -x "$REPO/target/debug/backlog" ]; then
-    OVERWATCH_BACKLOG_BIN="$REPO/target/debug/backlog"
-  fi
-fi
-export OVERWATCH_BACKLOG_BIN
-
 if [ -z "$ROUND" ]; then
   echo "continuous-audit: --round <round-id> is required (or --dry-run to preview)" >&2
   [ "$DRY_RUN" -eq 1 ] || exit 0
@@ -201,7 +180,7 @@ else
 fi
 echo
 echo "--- UNVERIFIED (undetermined) findings this round (${#UNVERIFIED_FINDINGS[@]}) ---"
-echo "  (recorded and kept visible, but NOT bridged to the backlog: pending re-verification)"
+echo "  (recorded and kept visible: pending re-verification)"
 if [ "${#UNVERIFIED_FINDINGS[@]}" -eq 0 ]; then
   echo "  (none supplied via --unverified-finding)"
 else
@@ -253,7 +232,6 @@ if [ "$DRY_RUN" -eq 1 ]; then
   fi
   echo "  overwatch audit-round record --round ${ROUND} --target ${TARGET} \\"
   echo "    --new-findings ${NEW_FINDINGS} --confirmed ${CONFIRMED} --unverified ${UNVERIFIED} --regression-tests-added ${REGRESSION_TESTS_ADDED}${FINDER_MODEL:+ --finder-model ${FINDER_MODEL}}${VERIFIER_MODEL:+ --verifier-model ${VERIFIER_MODEL}}"
-  echo "  overwatch review-queue --to-backlog   # forward each CONFIRMED finding to the backlog (idempotent on finding-id)"
   echo
   echo "--- current metrics (read-only) ---"
   run_ow audit-metrics
@@ -284,8 +262,7 @@ fi
 
 # --- record each UNVERIFIED finding (undetermined verdict) -------------------
 # Recorded so the claim is NOT silently dropped, with `--verdict unverified` so
-# it is never read as an established finding and is not bridged to the backlog
-# as actionable work by `review-queue --to-backlog` below.
+# it is never read as an established finding.
 if [ "${#UNVERIFIED_FINDINGS[@]}" -gt 0 ]; then
   record_findings_with_verdict unverified "${UNVERIFIED_FINDINGS[@]}"
 fi
@@ -317,33 +294,9 @@ echo
 echo "--- auto-reconciling fixed findings against recent commits ---"
 run_ow reconcile-fixed --last-n 200 --json
 
-# --- forward CONFIRMED findings to the backlog (single actionable queue) ------
-# This closes the discover->fix loop deterministically: every not-yet-bridged
-# finding-id becomes a `backlog add` (idempotent via bridged_findings.jsonl,
-# severity high->p0/med->p1/low->p2), so /flow can pick it up and it is never
-# left unattended. Fail-soft: a missing findings store / absent backlog is
-# warned and skipped inside the bridge (never aborts the loop).
-echo
-echo "--- forwarding CONFIRMED findings to backlog (UNVERIFIED ones stay pending) ---"
-# The bridge exits 0 and prints a JSON summary even when individual `backlog add`
-# calls were refused or failed (it only warns on stderr; its "considered" count
-# includes already-bridged findings, so it cannot be diffed against "bridged").
-# The only per-failure signal it emits is those stderr WARNING lines, so capture
-# them (replayed to stderr afterwards) and count them for the final summary.
-BRIDGE_ERR="$(mktemp "${TMPDIR:-/tmp}/continuous-audit-bridge.XXXXXX")"
-run_ow review-queue --to-backlog 2> "$BRIDGE_ERR"
-cat "$BRIDGE_ERR" >&2
-BRIDGE_FAILED="$(grep -cE 'WARNING `backlog add` failed|WARNING could not spawn backlog|WARNING backlog binary not found' "$BRIDGE_ERR" 2>/dev/null || true)"
-BRIDGE_FAILED="${BRIDGE_FAILED:-0}"
-rm -f "$BRIDGE_ERR"
-
 echo
 echo "--- convergence metrics after this round ---"
 run_ow audit-metrics
 
 echo
-if [ "$BRIDGE_FAILED" -gt 0 ]; then
-  echo "PARTIAL: round ${ROUND} recorded (metrics -> audit ledger) but ${BRIDGE_FAILED} backlog forward(s) FAILED or were refused (see the WARNING lines above); those findings did NOT reach the backlog. Fix the cause (e.g. backlog add refusing on an undetermined claim check) and re-run review-queue --to-backlog (idempotent)."
-else
-  echo "PASS: round ${ROUND} recorded (findings -> backlog, metrics -> audit ledger)."
-fi
+echo "PASS: round ${ROUND} recorded (findings -> review store, metrics -> audit ledger)."

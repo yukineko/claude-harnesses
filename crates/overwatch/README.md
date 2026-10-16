@@ -252,19 +252,18 @@ overwatch escalations [--json] [--threshold N] [--window-secs S]   # only the si
 | group | commands |
 |---|---|
 | canary rollout | `canary-plan` (pure stage split), `canary-gate` (PROCEED/ROLLBACK JSON; **exit 3** when rollback is advised), `canary-rollback-plan` (pure restore plan), `record-rollback` (called by `scripts/rollout-plugins.sh`; a store-write error is warned on stderr and does not fail the caller) |
-| review surface | `review-queue [--json] [--since] [--limit] [--to-backlog]` (merges six sources — systemic violations, canary rollbacks, AI review findings, condukt escalations, unresolved merge conflicts, and backlog tasks in `needs-ruling` — into one severity-ordered list; `--to-backlog` drains every stream except needs-ruling, which is display-only), `record-finding`, `record-disposition`, `review-metrics`, `compact-findings`, `resolve-merge-conflict`, `reconcile-fixed [--since-ref\|--range\|--last-n] [--dry-run]` (default last 50 commits), `auto-approved [--since] [--sample 5] [--seed 0]` |
+| review surface | `review-queue [--json] [--since] [--limit]` (merges five sources — systemic violations, canary rollbacks, AI review findings, condukt escalations and unresolved merge conflicts — into one severity-ordered list [test: crates/overwatch/tests/review_queue_five_sources.rs::review_queue_merges_exactly_five_sources]), `record-finding`, `record-disposition`, `review-metrics`, `compact-findings`, `resolve-merge-conflict`, `reconcile-fixed [--since-ref\|--range\|--last-n] [--dry-run]` (default last 50 commits), `auto-approved [--since] [--sample 5] [--seed 0]` |
 | Continuous-Audit | `audit-round record` / `audit-round close`, `audit-metrics [--window 3]` |
 | telemetry | `undetermined-metrics [--window-days N]`, `gate-outcomes` (donegate / tdd / reviewgate firing outcomes from `~/.<gate>/state/log.jsonl`) |
 
 Exit-code convention for the read side: when a ledger/journal **cannot be read**
-(as opposed to being absent or empty), `review-queue` (including
-`--to-backlog`), `review-metrics`, `reconcile-fixed`, `auto-approved` and
-`gate-outcomes` exit **3** and say which source was undetermined, rather than
-printing a zero/empty answer; `audit-metrics` and `undetermined-metrics` return
-an error (non-zero) instead of a zero report. `reconcile-fixed` remains
+(as opposed to being absent or empty), `review-queue` [test: crates/overwatch/tests/undetermined_e2e.rs::undecodable_violation_ledger_is_not_rendered_as_no_systemic_violations],
+`review-metrics` [test: crates/overwatch/tests/undetermined_e2e.rs::review_metrics_with_an_unreadable_disposition_ledger_reports_null_not_zero], `reconcile-fixed` [test: crates/overwatch/tests/undetermined_e2e.rs::reconcile_fixed_with_an_unreadable_disposition_ledger_writes_nothing] and
+`gate-outcomes` [test: crates/overwatch/tests/gate_outcomes_cli.rs::undetermined_lines_are_counted_with_correct_line_numbers_and_exit_3] exit **3** rather than
+printing a zero/empty answer, and `auto-approved` exits non-zero [test: crates/overwatch/tests/auto_approved_cli.rs::unreadable_journal_does_not_exit_clean].
+`reconcile-fixed` remains
 fail-soft on the **git** side only: a failing `git log` is read as "0 commits
-scanned" (exit 0). `review-queue --to-backlog` is fail-soft on the backlog side
-(an absent `backlog` binary or failed `backlog add` is warned and skipped).
+scanned" (exit 0) [test: crates/overwatch/tests/reconcile_fixed.rs::reconcile_fixed_fail_soft_when_not_a_git_repo].
 
 ## PDO positioning
 

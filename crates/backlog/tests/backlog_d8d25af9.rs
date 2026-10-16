@@ -36,8 +36,8 @@ impl Fx {
         std::fs::create_dir_all(&repo).unwrap();
         let repo = std::fs::canonicalize(&repo).unwrap();
         common::linked_checkout(&repo);
-        // Close-evidence fixture: `add` without a reproduced repro test lands
-        // `unconfirmed` (outside the workable queue). Commit a repro script
+        // Close-evidence fixture: `add` without a reproduced repro test is
+        // refused and writes nothing. Commit a repro script
         // that FAILS (= the problem is reproduced) so `add` lands `pending`,
         // the state every test below starts from.
         std::fs::create_dir_all(repo.join("tests")).unwrap();

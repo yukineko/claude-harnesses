@@ -6,8 +6,9 @@
 //! never references `../harness-core` at runtime.
 //!
 //! What lives here is the part that MUST be identical in every plugin —
-//! especially the parallel-session-safe note store and the never-break-a-turn
-//! hook wrapper (see the harness invariants). Plugin-specific domain logic and
+//! especially the parallel-session-safe note store and the hook panic-barrier
+//! wrappers (`hook::run_hook` for observability hooks, `hook::run_pretooluse_guarded`
+//! and `gate::run::run_guarded` for verdict-bearing ones). Plugin-specific domain logic and
 //! config/metrics *fields* stay in each plugin crate and compose these.
 
 // Test code asserts by unwrapping/expecting/panicking on purpose — that's the

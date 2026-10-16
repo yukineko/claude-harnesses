@@ -32,8 +32,7 @@ use std::path::Path;
 ///
 /// [`Unverified`](Self::Unverified) is the RESTRICTIVE resolution: the claim is
 /// neither established nor dismissed, so the item stays pending. Only
-/// [`Confirmed`](Self::Confirmed) findings take the actionable path
-/// (`review-queue --to-backlog`). An asserted [`Refuted`](Self::Refuted) is
+/// [`Confirmed`](Self::Confirmed) findings are actionable. An asserted [`Refuted`](Self::Refuted) is
 /// only STORED as `Refuted` when [`adjudicate`] finds both a machine probe
 /// result showing `not_reproduced` and a human sign-off (backlog 80a46e9f);
 /// the prompt-side burden of proof (every consumption path quoted — see the
@@ -80,7 +79,7 @@ impl AuditVerdict {
     }
 
     /// True only for [`Confirmed`](Self::Confirmed) — the single verdict that
-    /// makes a finding actionable work (bridged to the backlog).
+    /// makes a finding actionable work.
     pub fn is_actionable(&self) -> bool {
         matches!(self, Self::Confirmed)
     }

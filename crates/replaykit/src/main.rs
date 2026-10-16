@@ -4,7 +4,8 @@
 //! promotes a tracekit-recorded *run trace* into one. It distils a run's spans
 //! into a portable trajectory summary (ordered steps + a pinned `expect` block
 //! of phase set / error count / cost) and emits a golden whose `cmd` re-checks
-//! those invariants — so a regression surfaces as a failing golden in CI.
+//! those invariants — so a regression surfaces as a failing golden when the
+//! golden is run.
 //!
 //! Exit codes (mirrors evalkit/trajectoryeval's 0/1/2 gate policy):
 //!   0  — replay matched the pinned invariants (pass)

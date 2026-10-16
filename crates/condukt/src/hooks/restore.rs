@@ -8,7 +8,20 @@ use crate::store::repo_root;
 use std::path::PathBuf;
 
 pub fn run(cwd: &str) {
-    let cfg = Config::load();
+    // Silence here means "nothing to resume", so a configuration that cannot be
+    // loaded (config.toml unreadable/unparseable — the configured state_dir and
+    // worktree_base are unknown) is said out loud instead of reading the
+    // default stores and reporting whatever they happen to hold.
+    let cfg = match Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            println!(
+                "[condukt] Could not load condukt's configuration, so open runs and \
+                 orphan worktrees cannot be listed: {e}"
+            );
+            return;
+        }
+    };
     let cwd_path = if cwd.is_empty() {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     } else {

@@ -619,9 +619,8 @@ pub fn append_review_finding(cwd: &Path, finding: &ReviewFinding) -> Result<()> 
 /// 7f07228e). This entry point takes no verdict, and none of its producers
 /// runs an adversarial verifier — they record an observation that still needs
 /// one. Stamping it `Confirmed` (what [`ReviewFinding::new`] does) presented an
-/// unverified signal as established work, so `review-queue --to-backlog`
-/// bridged it as actionable. As `Unverified` the row stays visible on the
-/// review surface (rendered with an `UNVERIFIED` marker) and is NOT bridged.
+/// unverified signal as established work. As `Unverified` the row stays
+/// visible on the review surface, rendered with an `UNVERIFIED` marker.
 /// A verifier that has established a finding records it through the
 /// `record-finding` CLI, which takes and adjudicates an explicit verdict.
 #[allow(clippy::too_many_arguments)]
@@ -689,7 +688,7 @@ pub enum ReviewFindingScan {
 /// untrustworthy) from a clean, fully-parsed finding list. This is the
 /// sanctioned reader for the review-queue VERDICT path; other established
 /// consumers of `review_findings.jsonl` (`read_review_findings_all`,
-/// `compact`, `bridge`) keep using [`read_review_findings`] and are out of
+/// `compact`) keep using [`read_review_findings`] and are out of
 /// scope here. Reads via [`harness_core::boundary::read_to_string`] so the
 /// absent/opaque distinction is drawn by the shared boundary type, not
 /// re-derived locally.
@@ -730,217 +729,6 @@ pub fn scan_review_findings(cwd: &Path) -> ReviewFindingScan {
             ReviewFindingScan::Undetermined(reason.to_string())
         }
     }
-}
-
-/// One recorded bridge event: a finding-id that has already been forwarded to
-/// the backlog by `review-queue --to-backlog`. The stream is the idempotency
-/// key set — the backlog's own duplicate guard hashes on title+project, not on
-/// finding-id, so cross-round idempotency (the same finding re-recorded every
-/// audit round) is enforced here by finding-id.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BridgedFinding {
-    /// The finding-id that was forwarded to the backlog.
-    pub finding_id: String,
-    /// Unix timestamp when the bridge happened.
-    pub ts: i64,
-}
-
-/// Path to the bridged_findings.jsonl file (append-only): the set of finding-ids
-/// already forwarded to the backlog, used to make `review-queue --to-backlog`
-/// idempotent across audit rounds.
-pub fn bridged_findings_path(cwd: &Path) -> Result<PathBuf> {
-    Ok(storage_root(cwd)?.join("bridged_findings.jsonl"))
-}
-
-/// Append a bridged-finding record to bridged_findings.jsonl (one JSON line
-/// each). Called after a successful `backlog add` so the finding is never
-/// forwarded twice. Returns [`AppendOutcome`]: `Recorded` (written or already
-/// present), `SkippedContended`, or `SkippedUndetermined` when the existing
-/// ledger could not be read in full (the dedup cannot be answered, so the
-/// key is NOT appended; CA-overwatch-03). The caller must surface both skips.
-pub fn append_bridged_finding(cwd: &Path, finding_id: &str) -> Result<AppendOutcome> {
-    let path = bridged_findings_path(cwd)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    // Hold the store LeaseLock across a check-then-append so two concurrent
-    // `review-queue --to-backlog` runs cannot both observe the finding-id as
-    // absent and double-add it (check-then-append TOCTOU). Idempotent: re-check
-    // membership INSIDE the lock and skip if already present. Guarding it here
-    // (the shared append site) covers ALL callers. HARD-SKIP on contention: skip
-    // the append rather than proceed to an unlocked check-then-append that could
-    // double-forward the finding. The old fail-soft `acquire` left that window
-    // open.
-    let _lock = match LeaseLock::acquire_or_skip(cwd) {
-        Some(l) => l,
-        None => return Ok(AppendOutcome::SkippedContended),
-    };
-    // Dedup via the tri-state scan (CA-overwatch-03): an undetermined
-    // already-bridged set refuses the append rather than reading as "never
-    // bridged" and appending a duplicate key.
-    match ledger_contains::<BridgedFinding>(&path, "bridged_findings.jsonl", |r| {
-        r.finding_id == finding_id
-    }) {
-        Determination::Known(true) => return Ok(AppendOutcome::Recorded),
-        Determination::Known(false) => {}
-        Determination::Undetermined(why) => {
-            return Ok(AppendOutcome::SkippedUndetermined(format!(
-                "cannot tell whether finding {finding_id} is already bridged ({why}); bridge key NOT appended to avoid a duplicate row"
-            )))
-        }
-    }
-    // Test-only race widener (no-op in prod).
-    artificial_delay("OVERWATCH_TEST_BRIDGE_DELAY_MS");
-    let rec = BridgedFinding {
-        finding_id: finding_id.to_string(),
-        ts: now(),
-    };
-    let json = serde_json::to_string(&rec)?;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?
-        .write_all(format!("{}\n", json).as_bytes())?;
-    Ok(AppendOutcome::Recorded)
-}
-
-/// Read the set of already-bridged finding-ids from bridged_findings.jsonl,
-/// leniently: absent → `Ok(vec![])`, UNREADABLE → `Err` (never "nothing was
-/// ever bridged"), and an undecodable line is skipped — so the set may be SHORT,
-/// which for an idempotency key means "forward it again". Use
-/// [`scan_bridged_findings`] where that matters.
-pub fn read_bridged_findings(cwd: &Path) -> Result<Vec<String>> {
-    Ok(read_jsonl_best_effort::<BridgedFinding>(
-        &bridged_findings_path(cwd)?,
-        "bridged_findings.jsonl",
-    )?
-    .into_iter()
-    .map(|r| r.finding_id)
-    .collect())
-}
-
-/// Tri-state read of the bridged-finding idempotency ledger (see
-/// [`scan_jsonl`]). A never-written ledger genuinely holds no bridged ids
-/// (`Known(vec![])`); one that could not be read in full is `Undetermined(why)`
-/// rather than a short set that would re-forward findings already in the
-/// backlog.
-///
-/// DIRECTION (t3 judgement — this ledger is NOT in the same class as the
-/// finding/rollback/escalation ledgers, so it gets its own answer):
-///
-/// * collapsing it to EMPTY means "nothing was ever bridged" → every confirmed
-///   finding is forwarded AGAIN. The idempotency ledger exists precisely to
-///   stop that, so the collapse silently disables the guard it is. The damage
-///   is duplicate backlog tasks a human must reconcile by hand — and duplicates
-///   are not self-healing.
-/// * treating it as "assume everything is already bridged" means this run
-///   forwards NOTHING from the stream. Nothing is lost: the source ledgers are
-///   append-only and `--to-backlog` re-derives its rows every run, so the next
-///   run with a readable ledger forwards exactly the same items.
-///
-/// One direction needs a human to clean up, the other needs a re-run. So the
-/// consumer ([`crate::bridge`]) SKIPS the stream and says so loudly; it must
-/// never proceed with an empty already-bridged set.
-pub fn scan_bridged_findings(cwd: &Path) -> Result<Determination<Vec<String>>> {
-    Ok(
-        scan_jsonl::<BridgedFinding>(&bridged_findings_path(cwd)?, "bridged_findings.jsonl")
-            .map(|rows| rows.into_iter().map(|r| r.finding_id).collect()),
-    )
-}
-
-/// One record in the bridged-entries ledger: a non-finding review-queue entry
-/// (systemic / rollback / escalation) that has already been forwarded to the
-/// backlog. Kept in a SEPARATE file from [`BridgedFinding`] on purpose — the
-/// finding ledger (`bridged_findings.jsonl`) doubles as the review-metrics
-/// "resolved finding-id" source (see [`compact_review_findings`]), so its
-/// entries must stay bare finding-ids. The other three streams get their own
-/// composite-key ledger here rather than polluting that one.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BridgedEntry {
-    /// The idempotency key `<kind-tag>:<identifier>` that was forwarded.
-    pub key: String,
-    /// Unix timestamp when the bridge happened.
-    pub ts: i64,
-}
-
-/// Path to the bridged_entries.jsonl file (append-only): the set of composite
-/// `<kind-tag>:<identifier>` keys for non-finding review-queue entries already
-/// forwarded to the backlog, making that half of `review-queue --to-backlog`
-/// idempotent across runs. Distinct from [`bridged_findings_path`] so the
-/// finding-resolution logic that reads that file is unaffected.
-pub fn bridged_entries_path(cwd: &Path) -> Result<PathBuf> {
-    Ok(storage_root(cwd)?.join("bridged_entries.jsonl"))
-}
-
-/// Append a bridged-entry record to bridged_entries.jsonl (one JSON line each).
-/// Called after a successful `backlog add` for a non-finding stream so the
-/// entry is never forwarded twice. Same [`AppendOutcome`] contract as
-/// [`append_bridged_finding`].
-pub fn append_bridged_entry(cwd: &Path, key: &str) -> Result<AppendOutcome> {
-    let path = bridged_entries_path(cwd)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    // Same check-then-append TOCTOU guard as `append_bridged_finding`: hold the
-    // store LeaseLock and re-check membership inside it so two concurrent
-    // to-backlog runs cannot double-add the same `<kind>:<identifier>` key.
-    // HARD-SKIP on contention: skip the append rather than proceed to an
-    // unlocked check-then-append that could double-add. The old fail-soft
-    // `acquire` left that window open.
-    let _lock = match LeaseLock::acquire_or_skip(cwd) {
-        Some(l) => l,
-        None => return Ok(AppendOutcome::SkippedContended),
-    };
-    // Dedup via the tri-state scan (CA-overwatch-03 twin of
-    // `append_bridged_finding`).
-    match ledger_contains::<BridgedEntry>(&path, "bridged_entries.jsonl", |r| r.key == key) {
-        Determination::Known(true) => return Ok(AppendOutcome::Recorded),
-        Determination::Known(false) => {}
-        Determination::Undetermined(why) => {
-            return Ok(AppendOutcome::SkippedUndetermined(format!(
-                "cannot tell whether entry {key} is already bridged ({why}); bridge key NOT appended to avoid a duplicate row"
-            )))
-        }
-    }
-    // Test-only race widener (no-op in prod).
-    artificial_delay("OVERWATCH_TEST_BRIDGE_DELAY_MS");
-    let rec = BridgedEntry {
-        key: key.to_string(),
-        ts: now(),
-    };
-    let json = serde_json::to_string(&rec)?;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?
-        .write_all(format!("{}\n", json).as_bytes())?;
-    Ok(AppendOutcome::Recorded)
-}
-
-/// Read the set of already-bridged non-finding entry keys from
-/// bridged_entries.jsonl, leniently (same contract as [`read_bridged_findings`]:
-/// UNREADABLE → `Err`, an undecodable line skipped). Use [`scan_bridged_entries`]
-/// where a short set must not be mistaken for "never bridged".
-pub fn read_bridged_entries(cwd: &Path) -> Result<Vec<String>> {
-    Ok(read_jsonl_best_effort::<BridgedEntry>(
-        &bridged_entries_path(cwd)?,
-        "bridged_entries.jsonl",
-    )?
-    .into_iter()
-    .map(|r| r.key)
-    .collect())
-}
-
-/// Tri-state read of the bridged-entry idempotency ledger (see [`scan_jsonl`]).
-/// Same DIRECTION judgement as [`scan_bridged_findings`]: an undetermined
-/// already-bridged set must make the consumer SKIP the stream (re-runnable),
-/// never proceed as if nothing had ever been bridged (duplicate backlog tasks
-/// a human has to reconcile).
-pub fn scan_bridged_entries(cwd: &Path) -> Result<Determination<Vec<String>>> {
-    Ok(
-        scan_jsonl::<BridgedEntry>(&bridged_entries_path(cwd)?, "bridged_entries.jsonl")
-            .map(|rows| rows.into_iter().map(|r| r.key).collect()),
-    )
 }
 
 /// Path to the audit_rounds.jsonl file (append-only, Continuous-Audit round
@@ -1085,8 +873,7 @@ fn ledger_contains<T: serde::de::DeserializeOwned>(
 /// run and a manual `record-disposition`, or two reconcile runs) that both
 /// resolve the SAME finding_id must not double-row it. Guarding it HERE — the
 /// shared write site both callers funnel through — covers all callers
-/// automatically. Same check-then-append TOCTOU guard as
-/// [`append_bridged_finding`]: hold the store `LeaseLock` across the
+/// automatically. Check-then-append TOCTOU guard: hold the store `LeaseLock` across the
 /// read->check->append critical section and re-check for an existing
 /// disposition with this `finding_id` INSIDE the lock, skipping the append if
 /// one is already present. On lock contention the append is HARD-SKIPPED
@@ -1489,11 +1276,11 @@ pub fn prune_stale_changesets(cwd: &Path, now: i64) -> Result<usize> {
 }
 
 /// Path to the review_findings_archive.jsonl file (append-only, COLD store):
-/// where `compact_review_findings` moves resolved (bridged or dispositioned)
+/// where `compact_review_findings` moves dispositioned
 /// records out of the hot `review_findings.jsonl`. Mirrors
 /// [`review_findings_path`]. Kept private since the only reader that needs
 /// the archive is [`read_review_findings_all`] / [`compact_review_findings`]
-/// in this module — `review_queue.rs` / `bridge.rs` intentionally keep
+/// in this module — `review_queue.rs` intentionally keeps
 /// reading the hot file only (the bounded-read win).
 fn review_findings_archive_path(cwd: &Path) -> Result<PathBuf> {
     Ok(storage_root(cwd)?.join("review_findings_archive.jsonl"))
@@ -1603,8 +1390,7 @@ pub struct CompactionReport {
 }
 
 /// Compact the review-findings store: move every finding whose `finding_id`
-/// has been resolved (bridged to the backlog, per [`read_bridged_findings`],
-/// or dispositioned, per [`read_dispositions`]) out of the hot
+/// has been dispositioned (per [`read_dispositions`]) out of the hot
 /// `review_findings.jsonl` into the cold `review_findings_archive.jsonl`.
 /// NON-LOSSY by design (see module docs / the brief): records are MOVED, not
 /// deleted, so [`read_review_findings_all`] (the review-metrics latency
@@ -1671,15 +1457,15 @@ pub fn compact_review_findings(cwd: &Path) -> Result<CompactionReport> {
         }
     };
 
-    // The resolved-id join. An UNREADABLE bridged/disposition ledger is `Err`
+    // The resolved-id join. An UNREADABLE disposition ledger is `Err`
     // here (backlog e8a61ec3) and aborts before any write, rather than joining
     // against an empty set. An undecodable LINE is still skipped: that can only
     // SHRINK the resolved set, i.e. keep a finding in the hot store, never
     // archive one that is not resolved — the conservative direction.
-    let mut resolved_ids: BTreeSet<String> = read_bridged_findings(cwd)?.into_iter().collect();
-    for d in read_dispositions(cwd)? {
-        resolved_ids.insert(d.finding_id);
-    }
+    let resolved_ids: BTreeSet<String> = read_dispositions(cwd)?
+        .into_iter()
+        .map(|d| d.finding_id)
+        .collect();
 
     let (open, archived) = partition_findings(&findings, &resolved_ids);
 
@@ -1880,8 +1666,8 @@ pub fn append_merge_conflict_resolution(
 /// resolution LINE makes a conflict look STILL OPEN. That over-reports — a human is
 /// shown a blocked merge that may already be settled — and it never hides a
 /// blocked merge, so the collapse here falls on the conservative side. It is
-/// still not free: an over-reported conflict can be re-bridged into the backlog
-/// and re-held by a driver. So [`scan_open_merge_conflicts`] does treat this
+/// still not free: an over-reported conflict can be
+/// re-held by a driver. So [`scan_open_merge_conflicts`] does treat this
 /// ledger's answer as tri-state, keeps the entries VISIBLE when it is
 /// undetermined, and hands the caller a reason to say so — rather than either
 /// hiding the entries (the losing direction) or pretending the join was clean.
@@ -1909,7 +1695,7 @@ pub fn scan_merge_conflict_resolutions(
 /// merge is blocked" nor as "nothing is resolved" (backlog e8a61ec3). An
 /// undecodable LINE is still skipped, and the two streams then err in OPPOSITE
 /// directions — which is why [`scan_open_merge_conflicts`] exists and why
-/// anything that renders or drains this set (`review-queue`, `bridge`) calls
+/// anything that renders this set (`review-queue`) calls
 /// that instead:
 ///
 /// * a dropped ENTRY line is a blocked merge that vanishes (the losing
@@ -2543,49 +2329,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn bridged_entries_ledger_roundtrips_and_skips_corrupt_lines() {
-        let _guard = home_lock();
-        let prev_home = std::env::var_os("HOME");
-        let dir = std::env::temp_dir().join(format!(
-            "overwatch-store-test-entries-{}-{}",
-            std::process::id(),
-            now()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("HOME", &dir);
-
-        // Missing ledger => empty (fail-soft).
-        assert!(read_bridged_entries(&dir).unwrap().is_empty());
-
-        // Append two keys, then a hand-written corrupt line that must be skipped.
-        append_bridged_entry(&dir, "rollback:overwatch").unwrap();
-        append_bridged_entry(&dir, "systemic:blastguard:rm-rf").unwrap();
-        let path = bridged_entries_path(&dir).unwrap();
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap()
-            .write_all(b"not valid json\n")
-            .unwrap();
-
-        let keys = read_bridged_entries(&dir).unwrap();
-        assert_eq!(
-            keys,
-            vec!["rollback:overwatch", "systemic:blastguard:rm-rf"]
-        );
-
-        // The entries ledger is a SEPARATE file from bridged_findings.jsonl, so
-        // it must not disturb the finding-resolution source.
-        assert!(read_bridged_findings(&dir).unwrap().is_empty());
-
-        match prev_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
     // AXIS 2: a finding appended concurrently with `compact_review_findings`'s
     // read->rewrite must NOT be dropped. Compaction now holds the store
     // LeaseLock across its whole read->rewrite, so a lock-respecting concurrent
@@ -2609,10 +2352,10 @@ mod tests {
         std::env::set_var("HOME", &dir);
         std::env::set_var("OVERWATCH_TEST_COMPACT_DELAY_MS", "300");
 
-        // f1 stays open; f2 is resolved (bridged) so compaction archives it.
+        // f1 stays open; f2 is resolved (dispositioned) so compaction archives it.
         append_review_finding(&dir, &finding("f1", 1)).unwrap();
         append_review_finding(&dir, &finding("f2", 2)).unwrap();
-        append_bridged_finding(&dir, "f2").unwrap();
+        append_disposition(&dir, &disposition("f2")).unwrap();
 
         // Thread A: compact (locked read->rewrite, delayed).
         let dir_a = dir.clone();
@@ -2691,7 +2434,7 @@ mod tests {
         // Seed the hot store with a resolved finding so compaction would want
         // to archive it (and would touch the archive file) if it ran.
         append_review_finding(&dir, &finding("r1", 1)).unwrap();
-        append_bridged_finding(&dir, "r1").unwrap();
+        append_disposition(&dir, &disposition("r1")).unwrap();
 
         // Corrupt the archive with non-UTF-8 bytes: std::fs::read_to_string
         // returns Err(InvalidData) for this, which the shared boundary reader
@@ -2717,50 +2460,6 @@ mod tests {
             "the unreadable archive must survive untouched, not be overwritten"
         );
 
-        match prev_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    // AXIS 3: two concurrent `to-backlog` runs appending the SAME bridged
-    // finding-id must NOT double-add. `append_bridged_finding` now holds the
-    // store LeaseLock AND re-checks membership inside it, so exactly one record
-    // survives.
-    //
-    // RED (before the fix): the unlocked, non-idempotent append always writes,
-    // so both runs pass the (absent) check inside the widened window and TWO
-    // "x" lines land. GREEN: lock + in-lock recheck => exactly one.
-    #[test]
-    fn concurrent_bridged_finding_append_does_not_double_add() {
-        let _guard = home_lock();
-        let prev_home = std::env::var_os("HOME");
-        let dir = std::env::temp_dir().join(format!(
-            "overwatch-bridged-race-{}-{}",
-            std::process::id(),
-            now()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("HOME", &dir);
-        std::env::set_var("OVERWATCH_TEST_BRIDGE_DELAY_MS", "200");
-
-        // Two concurrent runs append the SAME finding-id "x".
-        let d1 = dir.clone();
-        let t1 = std::thread::spawn(move || append_bridged_finding(&d1, "x").unwrap());
-        let d2 = dir.clone();
-        let t2 = std::thread::spawn(move || append_bridged_finding(&d2, "x").unwrap());
-        t1.join().unwrap();
-        t2.join().unwrap();
-
-        let ids = read_bridged_findings(&dir).unwrap();
-        let count = ids.iter().filter(|id| id.as_str() == "x").count();
-        assert_eq!(
-            count, 1,
-            "bridged finding-id x must appear exactly once; got {ids:?}"
-        );
-
-        std::env::remove_var("OVERWATCH_TEST_BRIDGE_DELAY_MS");
         match prev_home {
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),
@@ -3226,79 +2925,6 @@ mod tests {
     }
 
     #[test]
-    fn bridged_findings_ledger_scan_is_tri_state() {
-        let _guard = home_lock();
-        let prev_home = std::env::var_os("HOME");
-
-        let dir = fresh_ledger_home("bridged-findings-absent");
-        assert_known_len(
-            scan_bridged_findings(&dir).unwrap(),
-            0,
-            "absent bridged_findings.jsonl",
-        );
-
-        let dir = fresh_ledger_home("bridged-findings-clean");
-        append_bridged_finding(&dir, "f-1").unwrap();
-        append_bridged_finding(&dir, "f-2").unwrap();
-        assert_known_len(
-            scan_bridged_findings(&dir).unwrap(),
-            2,
-            "clean bridged_findings.jsonl",
-        );
-
-        append_undecodable_line(&bridged_findings_path(&dir).unwrap());
-        assert_undetermined(
-            scan_bridged_findings(&dir).unwrap(),
-            "bridged_findings.jsonl, undecodable line",
-        );
-
-        let dir = fresh_ledger_home("bridged-findings-opaque");
-        write_unreadable(&bridged_findings_path(&dir).unwrap());
-        assert_undetermined(
-            scan_bridged_findings(&dir).unwrap(),
-            "unreadable bridged_findings.jsonl",
-        );
-
-        restore_home(prev_home);
-    }
-
-    #[test]
-    fn bridged_entries_ledger_scan_is_tri_state() {
-        let _guard = home_lock();
-        let prev_home = std::env::var_os("HOME");
-
-        let dir = fresh_ledger_home("bridged-entries-absent");
-        assert_known_len(
-            scan_bridged_entries(&dir).unwrap(),
-            0,
-            "absent bridged_entries.jsonl",
-        );
-
-        let dir = fresh_ledger_home("bridged-entries-clean");
-        append_bridged_entry(&dir, "systemic:sig").unwrap();
-        assert_known_len(
-            scan_bridged_entries(&dir).unwrap(),
-            1,
-            "clean bridged_entries.jsonl",
-        );
-
-        append_undecodable_line(&bridged_entries_path(&dir).unwrap());
-        assert_undetermined(
-            scan_bridged_entries(&dir).unwrap(),
-            "bridged_entries.jsonl, undecodable line",
-        );
-
-        let dir = fresh_ledger_home("bridged-entries-opaque");
-        write_unreadable(&bridged_entries_path(&dir).unwrap());
-        assert_undetermined(
-            scan_bridged_entries(&dir).unwrap(),
-            "unreadable bridged_entries.jsonl",
-        );
-
-        restore_home(prev_home);
-    }
-
-    #[test]
     fn dispositions_ledger_scan_is_tri_state() {
         let _guard = home_lock();
         let prev_home = std::env::var_os("HOME");
@@ -3621,7 +3247,7 @@ mod tests {
 
         let dir = fresh_ledger_home("compact-undecodable-archive");
         append_review_finding(&dir, &finding("r1", 1)).unwrap();
-        append_bridged_finding(&dir, "r1").unwrap();
+        append_disposition(&dir, &disposition("r1")).unwrap();
 
         let archive_path = review_findings_archive_path(&dir).unwrap();
         std::fs::create_dir_all(archive_path.parent().unwrap()).unwrap();
@@ -3663,7 +3289,7 @@ mod tests {
         let prev_home = std::env::var_os("HOME");
 
         let dir = fresh_ledger_home("compact-undecodable-hot");
-        // r1 stays open (never bridged/dispositioned), so compaction would
+        // r1 stays open (never dispositioned), so compaction would
         // keep it in the hot file if it saw it.
         append_review_finding(&dir, &finding("r1", 1)).unwrap();
 
@@ -3730,50 +3356,7 @@ mod tests {
         restore_home(prev_home);
     }
 
-    /// CA-overwatch-03: `append_bridged_finding`'s dedup check (`store.rs:725`,
-    /// `read_bridged_findings(cwd)?.iter().any(|id| id == finding_id)`) is the
-    /// same best-effort-read-then-append shape as CA-overwatch-01/02, applied
-    /// to `bridged_findings.jsonl`. A finding_id whose existing bridge record
-    /// has become undecodable is invisible to the dedup check, so a second
-    /// `review-queue --to-backlog` run appends a duplicate bridge record for
-    /// the same finding_id instead of recognizing it as already forwarded.
-    /// (Low severity per the audit: bridging is also gated upstream by
-    /// `scan_*` callers in `bridge.rs`, so this is a backstop, not the primary
-    /// defense -- but the dedup-then-append itself is still broken.) RED: the
-    /// duplicate gets appended.
-    #[test]
-    fn ca_overwatch_03_append_bridged_finding_duplicates_over_undecodable_prior_line() {
-        // CA-overwatch-03: dedup reads bridged_findings best-effort, so an undecodable prior line for the same finding_id does not block a duplicate append
-        let _guard = home_lock();
-        let prev_home = std::env::var_os("HOME");
-
-        let dir = fresh_ledger_home("bridge-dup-undecodable");
-        let path = bridged_findings_path(&dir).unwrap();
-        if let Some(p) = path.parent() {
-            std::fs::create_dir_all(p).unwrap();
-        }
-        // A line that is present, mentions finding_id "b1", but cannot be
-        // decoded as a `BridgedFinding`. `read_bridged_findings` drops it
-        // silently, so the dedup check below never sees that b1 was already
-        // bridged.
-        std::fs::write(&path, "{\"finding_id\":\"b1\",not-valid-json\n").unwrap();
-
-        append_bridged_finding(&dir, "b1").unwrap();
-
-        let raw = std::fs::read_to_string(&path).unwrap();
-        let b1_lines = raw.lines().filter(|l| l.contains("b1")).count();
-        assert_eq!(
-            b1_lines, 1,
-            "an undecodable prior line for finding_id b1 must not let a \
-             second b1 bridge record be appended as a duplicate row; raw file:\n{raw}"
-        );
-
-        restore_home(prev_home);
-    }
-
-    /// CA-overwatch-03 mirror twins of
-    /// `ca_overwatch_03_append_bridged_finding_duplicates_over_undecodable_prior_line`:
-    /// every other dedup-then-append writer must also refuse to append when an
+    /// CA-overwatch-03: every dedup-then-append writer must refuse to append when an
     /// undecodable prior line may hold the same key, and must SAY so (non-
     /// `Recorded` outcome / `Err`), never report a silent success.
     #[test]
@@ -3796,16 +3379,6 @@ mod tests {
             std::fs::write(p, line).unwrap();
         };
 
-        // append_bridged_entry
-        let p = bridged_entries_path(&dir).unwrap();
-        seed(&p, "{\"key\":\"systemic:e1\",not-valid-json\n");
-        let out = append_bridged_entry(&dir, "systemic:e1").unwrap();
-        assert!(
-            matches!(out, AppendOutcome::SkippedUndetermined(_)),
-            "bridged_entry: undetermined dedup must be reported, got {out:?}"
-        );
-        assert_eq!(count(&p, "systemic:e1"), 1, "bridged_entry duplicated");
-
         // append_merge_conflict (Result<()>: undetermined dedup is an Err)
         let p = merge_conflicts_path(&dir).unwrap();
         seed(&p, "{\"conflict_id\":\"c-9\",not-valid-json\n");
@@ -3827,7 +3400,7 @@ mod tests {
         );
         assert_eq!(count(&p, "c-8"), 1, "merge_conflict_resolution duplicated");
 
-        // append_disposition / append_bridged_finding report the refusal too
+        // append_disposition reports the refusal too
         // (the RED tests above pin only the no-duplicate half).
         let p = dispositions_path(&dir).unwrap();
         seed(&p, "{\"finding_id\":\"d9\",not-valid-json\n");
@@ -3836,23 +3409,16 @@ mod tests {
             matches!(out, AppendOutcome::SkippedUndetermined(_)),
             "disposition: got {out:?}"
         );
-        let p = bridged_findings_path(&dir).unwrap();
-        seed(&p, "{\"finding_id\":\"b9\",not-valid-json\n");
-        let out = append_bridged_finding(&dir, "b9").unwrap();
-        assert!(
-            matches!(out, AppendOutcome::SkippedUndetermined(_)),
-            "bridged_finding: got {out:?}"
-        );
 
         // Control: a fully readable ledger still appends (the fix must not
         // turn every append into a refusal).
-        let p = bridged_entries_path(&dir).unwrap();
+        let p = dispositions_path(&dir).unwrap();
         std::fs::remove_file(&p).unwrap();
         assert_eq!(
-            append_bridged_entry(&dir, "systemic:ok").unwrap(),
+            append_disposition(&dir, &disposition("ok")).unwrap(),
             AppendOutcome::Recorded
         );
-        assert_eq!(count(&p, "systemic:ok"), 1);
+        assert_eq!(count(&p, "\"ok\""), 1);
 
         restore_home(prev_home);
     }

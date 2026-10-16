@@ -112,10 +112,11 @@ pub struct TaskState {
     pub worktree: Option<String>,
     #[serde(default)]
     pub branch: Option<String>,
-    /// The git SHA recorded at the time the branch was first assigned.
-    /// Used by reconcile to detect force-push false-positives: we check
-    /// whether the *original* tip commit is an ancestor of the default branch,
-    /// rather than the current (possibly rewritten) branch ref.
+    /// The git SHA recorded at the time the branch was first assigned
+    /// (normally the fork point, since dispatch records it right after
+    /// `worktree create`). Reconcile requires it to be an ancestor of the
+    /// branch's current tip (the branch was not rewritten away from it); it is
+    /// NEVER by itself evidence that the task's work was merged.
     #[serde(default)]
     pub branch_sha: Option<String>,
     /// Unix timestamp (seconds) when this task's status was last changed.
@@ -929,15 +930,29 @@ pub struct ReconcileChange {
     pub reason: String,
 }
 
-/// Auto-detect tasks whose branches are already merged (or gone) and promote
-/// them to `verified`, clearing stale worktree references along the way.
+/// Auto-detect tasks whose OWN work has provably reached `default_branch` and
+/// promote them to `verified`, clearing stale worktree references along the way.
 ///
-/// A task is reconciled to `verified` when:
-/// 1. Its branch is an ancestor of `default_branch` (`git merge-base --is-ancestor`), OR
-/// 2. Its branch no longer exists AND its worktree is gone from disk.
+/// A task is promoted ONLY on positive evidence (backlog `41c837ab`). All of:
+/// 1. its status is `pending`, `running` or `done` — a `failed` task is an
+///    explicit verdict and is never promoted (reconcile recovers stale state
+///    after a crash; it does not overturn a verifier);
+/// 2. its branch still exists, and its tip has at least one commit beyond the
+///    branch's fork point (see [`branch_fork_point`]) — a branch still sitting
+///    on its fork point has no work of its own, and "the fork point is an
+///    ancestor of main" is true of every freshly created branch;
+/// 3. the recorded `branch_sha` (if any) is an ancestor of the tip — the
+///    branch was not rewritten away from where it was assigned;
+/// 4. the tip is an ancestor of `default_branch`, so every commit the branch
+///    added is contained in it.
 ///
-/// If the worktree is gone but the branch still exists (unmerged), only the
-/// worktree reference is cleared — the status is left as-is.
+/// Anything that cannot be determined — branch gone, fork point unknown, a git
+/// probe that neither answers yes nor no — leaves the status unchanged. A
+/// deleted branch with a deleted worktree is NOT evidence of a merge (a
+/// discarded or never-created branch looks the same).
+///
+/// If the worktree is gone and the task is not promoted, only the worktree
+/// reference is cleared — the status is left as-is.
 ///
 /// Returns (updated RunState, list of changes) so the caller can save and report.
 pub fn reconcile_run(
@@ -963,56 +978,26 @@ pub fn reconcile_run(
             .map(|p| !PathBuf::from(p).exists())
             .unwrap_or(true); // no worktree recorded → treat as gone
 
-        let branch_merged = t.branch.as_deref().map(|b| {
-            // Prefer the recorded SHA over the current branch ref so that a
-            // force-push that resets the branch to a commit already in the
-            // default branch does not produce a false positive. If branch_sha
-            // was recorded, we check whether that exact commit is an ancestor
-            // of the default branch; otherwise we fall back to the branch name
-            // (which may have been rewritten by a force-push).
-            let ref_to_check = t.branch_sha.as_deref().unwrap_or(b);
-            crate::worktree::git(
-                &repo,
-                &["merge-base", "--is-ancestor", ref_to_check, default_branch],
-            )
-            .is_ok()
-        });
+        let promotable = !matches!(t.status, Status::Failed);
+        let merged = promotable
+            && t.branch.as_deref().is_some_and(|b| {
+                own_work_merged(&repo, b, t.branch_sha.as_deref(), default_branch)
+            });
 
-        let branch_exists = t.branch.as_deref().map(|b| {
-            crate::worktree::git(
-                &repo,
-                &["rev-parse", "--verify", &format!("refs/heads/{b}")],
-            )
-            .is_ok()
-        });
-
-        let should_verify = match (branch_merged, branch_exists) {
-            (Some(true), _) => true, // merged: branch is an ancestor of default
-            (Some(false), Some(false)) if worktree_gone => true, // branch deleted + worktree gone
-            _ => false,
-        };
-
-        if should_verify {
-            let reason = match branch_merged {
-                Some(true) => format!(
-                    "branch '{}' is merged into '{default_branch}'",
-                    t.branch.as_deref().unwrap_or("?")
-                ),
-                _ => format!(
-                    "branch '{}' no longer exists and worktree is gone",
-                    t.branch.as_deref().unwrap_or("?")
-                ),
-            };
+        if merged {
             changes.push(ReconcileChange {
                 task_id: t.id.clone(),
                 old_status: t.status,
                 new_status: Status::Verified,
-                reason,
+                reason: format!(
+                    "branch '{}' has commits beyond its fork point and all of them are in '{default_branch}'",
+                    t.branch.as_deref().unwrap_or("?")
+                ),
             });
             t.status = Status::Verified;
             t.worktree = None; // clear stale reference
         } else if worktree_gone && t.worktree.is_some() {
-            // Worktree gone but branch exists/unknown — just clear the stale path.
+            // Not provably merged — just clear the stale path.
             changes.push(ReconcileChange {
                 task_id: t.id.clone(),
                 old_status: t.status,
@@ -1024,6 +1009,73 @@ pub fn reconcile_run(
     }
 
     Ok((run, changes))
+}
+
+/// `git merge-base --is-ancestor a b` as a three-valued answer: exit 0 →
+/// `Some(true)`, exit 1 → `Some(false)`, anything else (bad ref, timeout,
+/// spawn failure) → `None` (cannot determine).
+fn is_ancestor(repo: &Path, a: &str, b: &str) -> Option<bool> {
+    match crate::worktree::git_exit_code(repo, &["merge-base", "--is-ancestor", a, b]) {
+        Ok(0) => Some(true),
+        Ok(1) => Some(false),
+        _ => None,
+    }
+}
+
+/// The commit `branch` was created from, read from the branch's own reflog
+/// (its oldest entry: `worktree add -b` / `checkout -b` / `branch` all log the
+/// creation point there). `None` when there is no reflog for the branch or it
+/// cannot be read — the caller must then treat "has own work" as unknown.
+fn branch_fork_point(repo: &Path, branch: &str) -> Option<String> {
+    let out = crate::worktree::git(
+        repo,
+        &[
+            "reflog",
+            "show",
+            "--format=%H",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .ok()?;
+    out.lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty())
+        .map(str::to_string)
+}
+
+/// Positive evidence that `branch`'s own work reached `default_branch` (see
+/// [`reconcile_run`] for the rule). Every unknown answers `false`, which
+/// leaves the task's status unchanged.
+fn own_work_merged(
+    repo: &Path,
+    branch: &str,
+    branch_sha: Option<&str>,
+    default_branch: &str,
+) -> bool {
+    let Ok(tip) = crate::worktree::git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("refs/heads/{branch}^{{commit}}"),
+        ],
+    ) else {
+        return false; // branch gone or unreadable: no evidence either way
+    };
+    let tip = tip.trim();
+    let Some(fork) = branch_fork_point(repo, branch) else {
+        return false;
+    };
+    // Own work: the tip is NOT contained in the fork point.
+    if is_ancestor(repo, tip, &fork) != Some(false) {
+        return false;
+    }
+    if let Some(sha) = branch_sha {
+        if is_ancestor(repo, sha, tip) != Some(true) {
+            return false;
+        }
+    }
+    is_ancestor(repo, tip, default_branch) == Some(true)
 }
 
 // ── Cross-run duplicate-completion detection (§4.6c) ──────────────────────
@@ -2415,15 +2467,33 @@ pub fn records_for_run(
 /// output (`[{agent_id, agent_type, description, cost_usd, turns}, ...]`),
 /// return the `cost_usd` of the entry whose `agent_id` exactly matches
 /// `agent_id`. Injected-JSON so this is unit-testable without a real `gauge`
-/// binary. `None` on malformed JSON, an empty array, or no matching entry —
-/// never panics.
-fn parse_agent_cost(json: &str, agent_id: &str) -> Option<f64> {
-    let entries: Vec<serde_json::Value> = serde_json::from_str(json).ok()?;
-    entries
-        .iter()
-        .find(|e| e.get("agent_id").and_then(|v| v.as_str()) == Some(agent_id))
-        .and_then(|e| e.get("cost_usd"))
-        .and_then(|v| v.as_f64())
+/// binary. Never panics.
+///
+/// - `Known(Some(cost))` — a matching entry with a numeric `cost_usd`.
+/// - `Known(None)` — well-formed array (possibly empty) with no matching entry
+///   (or a match without a numeric `cost_usd`): genuinely "no data".
+/// - `Undetermined` — the output is not a JSON array of entries (malformed /
+///   empty / truncated stdout). A present-but-broken source is not "no data"
+///   (backlog 18ebbfe6).
+fn parse_agent_cost(json: &str, agent_id: &str) -> Determination<Option<f64>> {
+    parse_gauge_entries(json).map(|entries| {
+        entries
+            .iter()
+            .find(|e| e.get("agent_id").and_then(|v| v.as_str()) == Some(agent_id))
+            .and_then(|e| e.get("cost_usd"))
+            .and_then(|v| v.as_f64())
+    })
+}
+
+/// Parse `gauge subagents --json` stdout as an array of entries.
+/// Unparseable output is `Undetermined`, never an empty list (backlog 18ebbfe6).
+fn parse_gauge_entries(json: &str) -> Determination<Vec<serde_json::Value>> {
+    match serde_json::from_str::<Vec<serde_json::Value>>(json) {
+        Ok(entries) => Determination::Known(entries),
+        Err(e) => Determination::undetermined(format!(
+            "`gauge subagents --json` printed unparseable output: {e}"
+        )),
+    }
 }
 
 /// Run `gauge subagents --json` and return its stdout, in three answers.
@@ -2472,39 +2542,54 @@ fn gauge_subagents_json() -> Determination<Option<String>> {
 /// matching the SKILL.md prose used previously.
 ///
 /// `Known(Some(cost))` = matched. `Known(None)` = "no data": gauge is not
-/// installed, or its output is unparseable/empty or has no matching id — the
-/// caller may fall back to the manually recorded `cost_usd`. `Undetermined` =
-/// gauge could not be located or run (see [`gauge_subagents_json`]); the caller
-/// must NOT substitute the manual fallback as if gauge had nothing to say.
+/// installed, or its well-formed output has no matching id — the caller may
+/// fall back to the manually recorded `cost_usd`. `Undetermined` = gauge could
+/// not be located or run (see [`gauge_subagents_json`]), or it printed
+/// unparseable output (see [`parse_agent_cost`]); the caller must NOT
+/// substitute the manual fallback as if gauge had nothing to say.
 pub fn resolve_agent_cost(agent_id: &str) -> Determination<Option<f64>> {
-    gauge_subagents_json().map(|raw| raw.and_then(|raw| parse_agent_cost(&raw, agent_id)))
+    match gauge_subagents_json() {
+        Determination::Known(Some(raw)) => parse_agent_cost(&raw, agent_id),
+        Determination::Known(None) => Determination::Known(None),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
 }
 
 /// Pure core of [`resolve_agent_tokens`]: given the raw `gauge subagents --json`
 /// output (`[{agent_id, ..., tokens_input, tokens_output}, ...]`), return the
 /// `(tokens_input, tokens_output)` of the entry whose `agent_id` exactly
-/// matches. `None` on malformed JSON, an empty array, no matching entry, or a
-/// match missing either token field (older `gauge` predating this field) —
-/// never panics.
-fn parse_agent_tokens(json: &str, agent_id: &str) -> Option<(u64, u64)> {
-    let entries: Vec<serde_json::Value> = serde_json::from_str(json).ok()?;
-    let entry = entries
-        .iter()
-        .find(|e| e.get("agent_id").and_then(|v| v.as_str()) == Some(agent_id))?;
-    let input = entry.get("tokens_input")?.as_u64()?;
-    let output = entry.get("tokens_output")?.as_u64()?;
-    Some((input, output))
+/// matches. Never panics.
+///
+/// - `Known(None)` — well-formed array (possibly empty) with no matching
+///   entry, or a match missing either token field (older `gauge` predating
+///   this field): "no data".
+/// - `Undetermined` — the output is not a JSON array of entries (malformed /
+///   empty / truncated stdout); not "no data" (backlog 18ebbfe6).
+fn parse_agent_tokens(json: &str, agent_id: &str) -> Determination<Option<(u64, u64)>> {
+    parse_gauge_entries(json).map(|entries| {
+        let entry = entries
+            .iter()
+            .find(|e| e.get("agent_id").and_then(|v| v.as_str()) == Some(agent_id))?;
+        let input = entry.get("tokens_input")?.as_u64()?;
+        let output = entry.get("tokens_output")?.as_u64()?;
+        Some((input, output))
+    })
 }
 
 /// Resolve the real token usage of a Task-tool subagent by exact `agentId`
 /// match against `gauge subagents --json`, mirroring [`resolve_agent_cost`].
 ///
-/// `Known(None)` = "no data" (gauge not installed, unparseable/empty stdout, no
-/// matching id, or an older `gauge` without the token fields). `Undetermined` =
-/// gauge could not be located or run, kept distinct so the caller can surface
-/// it instead of recording "no tokens".
+/// `Known(None)` = "no data" (gauge not installed, no matching id in its
+/// well-formed output, or an older `gauge` without the token fields).
+/// `Undetermined` = gauge could not be located or run, or printed unparseable
+/// output — kept distinct so the caller can surface it instead of recording
+/// "no tokens".
 pub fn resolve_agent_tokens(agent_id: &str) -> Determination<Option<(u64, u64)>> {
-    gauge_subagents_json().map(|raw| raw.and_then(|raw| parse_agent_tokens(&raw, agent_id)))
+    match gauge_subagents_json() {
+        Determination::Known(Some(raw)) => parse_agent_tokens(&raw, agent_id),
+        Determination::Known(None) => Determination::Known(None),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
 }
 
 /// Run the project's test suite (from the repo root) and propagate its result.
@@ -2579,47 +2664,69 @@ fn run_command_capture(cmd_str: &str, cwd: &Path) -> (bool, String) {
 }
 
 /// Count failures in test output using common framework patterns.
-/// Falls back to 1 when failures exist but count can't be parsed.
+///
+/// * exit 0 → 0 (the test command reported success).
+/// * cargo: the `M failed` of EVERY `test result:` line is summed — a
+///   workspace / `--no-fail-fast` run prints one summary per test binary, and
+///   the first is often `test result: ok. ..; 0 failed`, which says nothing
+///   about the binaries after it.
+/// * pytest / jest summaries: `N failed` in a summary line (`== 7 failed in
+///   0.12s ==`, `7 failed in 0.12s`, `2 failed, 8 passed`), with or without a
+///   `passed` count.
+/// * jest: otherwise, the number of `FAIL <file>` lines.
+///
+/// A non-zero exit never yields 0: whatever was parsed (or nothing, for an
+/// unknown format) is floored at 1, so a failing run can never be read
+/// downstream (`loop_should_stop`) as "all tests pass".
 pub fn count_test_failures(output: &str, exit_ok: bool) -> usize {
     if exit_ok {
         return 0;
     }
-    // Cargo: "test result: FAILED. N passed; M failed"
+    count_failures_parsed(output).max(1)
+}
+
+/// The failure count the output itself states (0 when it states none).
+fn count_failures_parsed(output: &str) -> usize {
+    // Cargo: "test result: FAILED. N passed; M failed; ..." — one per binary.
+    let mut cargo_seen = false;
+    let mut cargo_failed = 0usize;
     for line in output.lines() {
         let l = line.trim();
-        if l.starts_with("test result: FAILED") || l.starts_with("test result: ok") {
-            // "N passed; M failed; ..."
-            for part in l.split(';') {
-                let p = part.trim();
-                if let Some(rest) = p.strip_suffix(" failed") {
-                    if let Ok(n) = rest.trim().parse::<usize>() {
-                        return n;
-                    }
+        if !l.starts_with("test result:") {
+            continue;
+        }
+        cargo_seen = true;
+        for part in l.split(';') {
+            if let Some(rest) = part.trim().strip_suffix(" failed") {
+                if let Some(n) = rest.split_whitespace().last().and_then(|w| w.parse().ok()) {
+                    cargo_failed = cargo_failed.saturating_add(n);
                 }
             }
         }
-        // pytest: "N failed, M passed"
-        if l.contains("failed") && l.contains("passed") {
-            let words: Vec<&str> = l.split_whitespace().collect();
-            for (i, w) in words.iter().enumerate() {
-                if (*w == "failed," || *w == "failed") && i > 0 {
-                    if let Ok(n) = words[i - 1].parse::<usize>() {
-                        return n;
-                    }
+    }
+    if cargo_seen {
+        return cargo_failed;
+    }
+    // pytest / jest summary: "N failed" where the line is recognisably a
+    // summary — it also reports `passed`, is a pytest `=====` banner, or
+    // starts with the count (`pytest -q`: "7 failed in 0.12s").
+    for line in output.lines() {
+        let l = line.trim();
+        let summary_shaped = l.contains("passed") || l.starts_with('=');
+        let words: Vec<&str> = l.split_whitespace().collect();
+        for (i, w) in words.iter().enumerate() {
+            if (*w == "failed," || *w == "failed") && i > 0 && (summary_shaped || i == 1) {
+                if let Ok(n) = words[i - 1].parse::<usize>() {
+                    return n;
                 }
             }
         }
     }
     // npm/jest: count lines starting with "FAIL "
-    let jest_fails = output
+    output
         .lines()
         .filter(|l| l.trim_start().starts_with("FAIL "))
-        .count();
-    if jest_fails > 0 {
-        return jest_fails;
-    }
-    // Unknown format but exit non-0: report as 1 so stop-detection can track it
-    1
+        .count()
 }
 
 /// Whether the loop should stop given previous and current failure counts.
@@ -5914,28 +6021,50 @@ mod tests {
             {"agent_id": "a1", "agent_type": "worker", "description": "x", "cost_usd": 1.23, "turns": 4},
             {"agent_id": "a2", "agent_type": "worker", "description": "y", "cost_usd": 9.99, "turns": 1}
         ]"#;
-        assert_eq!(parse_agent_cost(json, "a1"), Some(1.23));
-        assert_eq!(parse_agent_cost(json, "a2"), Some(9.99));
+        assert_eq!(
+            parse_agent_cost(json, "a1"),
+            Determination::Known(Some(1.23))
+        );
+        assert_eq!(
+            parse_agent_cost(json, "a2"),
+            Determination::Known(Some(9.99))
+        );
     }
 
     /// No entry has the given agent_id → None (caller falls back to cost_usd).
     #[test]
     fn parse_agent_cost_no_match_returns_none() {
         let json = r#"[{"agent_id": "other", "cost_usd": 5.0}]"#;
-        assert_eq!(parse_agent_cost(json, "a1"), None);
+        assert_eq!(parse_agent_cost(json, "a1"), Determination::Known(None));
     }
 
-    /// Malformed JSON never panics — returns None.
+    /// Malformed JSON never panics — and is `Undetermined`, NOT `Known(None)`
+    /// ("no data"): broken gauge output must not let the caller substitute the
+    /// manual cost (backlog 18ebbfe6).
     #[test]
-    fn parse_agent_cost_malformed_json_returns_none() {
-        assert_eq!(parse_agent_cost("not json", "a1"), None);
-        assert_eq!(parse_agent_cost("{", "a1"), None);
+    fn parse_agent_cost_malformed_json_is_undetermined() {
+        assert!(matches!(
+            parse_agent_cost("not json", "a1"),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            parse_agent_cost("{", "a1"),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            parse_agent_cost("", "a1"),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            parse_agent_cost("{}", "a1"),
+            Determination::Undetermined(_)
+        ));
     }
 
     /// An empty array (no subagents recorded yet) returns None, not a panic.
     #[test]
     fn parse_agent_cost_empty_array_returns_none() {
-        assert_eq!(parse_agent_cost("[]", "a1"), None);
+        assert_eq!(parse_agent_cost("[]", "a1"), Determination::Known(None));
     }
 
     /// Precedence: when the agent_id resolves to a real cost, that value must
@@ -5944,7 +6073,9 @@ mod tests {
     #[test]
     fn agent_cost_precedence_override_when_resolved() {
         let json = r#"[{"agent_id": "a1", "cost_usd": 2.5}]"#;
-        let resolved = parse_agent_cost(json, "a1");
+        let Determination::Known(resolved) = parse_agent_cost(json, "a1") else {
+            panic!("well-formed gauge output must be Known");
+        };
         let cost_usd = 0.0; // the SKILL.md-recorded fallback value
         assert_eq!(resolved.unwrap_or(cost_usd), 2.5);
     }
@@ -5954,7 +6085,9 @@ mod tests {
     #[test]
     fn agent_cost_precedence_falls_back_when_unresolved() {
         let json = r#"[{"agent_id": "other", "cost_usd": 9.0}]"#;
-        let resolved = parse_agent_cost(json, "a1");
+        let Determination::Known(resolved) = parse_agent_cost(json, "a1") else {
+            panic!("well-formed gauge output must be Known");
+        };
         let cost_usd = 5.5;
         assert_eq!(resolved.unwrap_or(cost_usd), 5.5);
     }
@@ -5966,15 +6099,21 @@ mod tests {
             {"agent_id": "a1", "cost_usd": 1.23, "turns": 4, "tokens_input": 100, "tokens_output": 200},
             {"agent_id": "a2", "cost_usd": 9.99, "turns": 1, "tokens_input": 5, "tokens_output": 6}
         ]"#;
-        assert_eq!(parse_agent_tokens(json, "a1"), Some((100, 200)));
-        assert_eq!(parse_agent_tokens(json, "a2"), Some((5, 6)));
+        assert_eq!(
+            parse_agent_tokens(json, "a1"),
+            Determination::Known(Some((100, 200)))
+        );
+        assert_eq!(
+            parse_agent_tokens(json, "a2"),
+            Determination::Known(Some((5, 6)))
+        );
     }
 
     /// No entry has the given agent_id → None (caller records no token fields).
     #[test]
     fn parse_agent_tokens_no_match_returns_none() {
         let json = r#"[{"agent_id": "other", "tokens_input": 1, "tokens_output": 2}]"#;
-        assert_eq!(parse_agent_tokens(json, "a1"), None);
+        assert_eq!(parse_agent_tokens(json, "a1"), Determination::Known(None));
     }
 
     /// An older `gauge` predating the token fields returns entries without
@@ -5982,20 +6121,35 @@ mod tests {
     #[test]
     fn parse_agent_tokens_missing_fields_returns_none() {
         let json = r#"[{"agent_id": "a1", "cost_usd": 1.0, "turns": 1}]"#;
-        assert_eq!(parse_agent_tokens(json, "a1"), None);
+        assert_eq!(parse_agent_tokens(json, "a1"), Determination::Known(None));
     }
 
-    /// Malformed JSON never panics — returns None.
+    /// Malformed JSON never panics — and is `Undetermined`, NOT `Known(None)`
+    /// ("no tokens") (backlog 18ebbfe6).
     #[test]
-    fn parse_agent_tokens_malformed_json_returns_none() {
-        assert_eq!(parse_agent_tokens("not json", "a1"), None);
-        assert_eq!(parse_agent_tokens("{", "a1"), None);
+    fn parse_agent_tokens_malformed_json_is_undetermined() {
+        assert!(matches!(
+            parse_agent_tokens("not json", "a1"),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            parse_agent_tokens("{", "a1"),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            parse_agent_tokens("", "a1"),
+            Determination::Undetermined(_)
+        ));
+        assert!(matches!(
+            parse_agent_tokens("{}", "a1"),
+            Determination::Undetermined(_)
+        ));
     }
 
     /// An empty array (no subagents recorded yet) returns None, not a panic.
     #[test]
     fn parse_agent_tokens_empty_array_returns_none() {
-        assert_eq!(parse_agent_tokens("[]", "a1"), None);
+        assert_eq!(parse_agent_tokens("[]", "a1"), Determination::Known(None));
     }
 
     #[cfg(unix)]

@@ -40,8 +40,8 @@ fn fx(tag: &str) -> Fx {
     std::fs::create_dir_all(&repo).unwrap();
     common::linked_checkout(&repo);
     // Close-evidence fixture: `add` lands `pending` only with a REPRODUCED
-    // repro test from a committed script (otherwise `unconfirmed`, which
-    // `next` never hands out — that would make every claim-based test here
+    // repro test from a committed script (otherwise `add` is refused and
+    // writes nothing, which would make every claim-based test here
     // vacuous). Commit one so `add` below files pending rows as before.
     std::fs::create_dir_all(repo.join("tests")).unwrap();
     std::fs::write(
@@ -176,7 +176,6 @@ fn edit_accepts_priority() {
 /// backlog 016c2562: a task tagged `wontfix` (human ruling: do not implement)
 /// is still handed out by `next --claim`; tags are ignored by selection.
 #[test]
-#[ignore = "backlog 016c2562: open defect, remove ignore when fixed"]
 fn next_claim_skips_wontfix_tagged_tasks() {
     let f = fx("016c2562");
     let wf = add(

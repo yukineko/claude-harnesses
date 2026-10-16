@@ -1,3 +1,4 @@
+mod audit_open;
 mod claim_ledger;
 mod closecmd;
 mod config;
@@ -74,39 +75,34 @@ enum Command {
         /// A committed test that REPRODUCES the finding (runner allowlist:
         /// `cargo test ...`, `pytest ...`, `python3 -m pytest ...`, `bash|sh
         /// <tracked script under a tests dir>`). It is run at HEAD before the
-        /// add: a behavioural FAILURE means reproduced and the task lands
-        /// `pending`; anything else (no repro test, exit 0 = not-reproduced,
-        /// or undetermined) lands `unconfirmed`, outside the workable queue.
-        /// The add itself always succeeds — a finding is never lost.
+        /// add: ONLY a behavioural FAILURE (reproduced) files the task, as
+        /// `pending`. Anything else (no repro test, exit 0 = not-reproduced,
+        /// or undetermined) files NO task, writes nothing, and exits 2.
         #[arg(long = "repro-test")]
         repro_test: Option<String>,
     },
 
-    /// Re-run a repro test for an `unconfirmed` finding. Promotes it to
-    /// `pending` only when the outcome is `reproduced`; the attempt is
-    /// recorded either way, and a non-reproduced/undetermined outcome exits
-    /// non-zero.
-    Confirm {
-        /// Task ID
-        id: String,
-
-        /// The repro test command (same allowlist as `add --repro-test`).
-        #[arg(long = "repro-test")]
-        repro_test: String,
-    },
-
-    /// Request / approve / withdraw / list human rulings for closes that no
-    /// executed test can justify (value judgments, genuinely untestable items).
-    Ruling {
-        #[command(subcommand)]
-        action: RulingAction,
-    },
-
     /// Read-only classification of every terminal row's closure evidence
-    /// (observed-f2p, doc-only, duplicate, ruling-approved, cited-only,
-    /// judgment, none) plus untestable reasons grouped by crate. Never
+    /// (observed-f2p, doc-only, duplicate, discard, cited-only, judgment,
+    /// none — plus the legacy class of rows closed by the removed human-approval
+    /// command) and the legacy untestable reasons grouped by crate. Never
     /// reopens anything; the store is not written.
     AuditClosures {
+        /// Emit JSON instead of the human report.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Does each OPEN queue row (pending / failed; a claimed row
+    /// is a leased pending row) carry a recorded reproducing test? Reads only
+    /// the repro recorded at add time — NO test is run, and closed
+    /// rows are not audited (their evidence was audited at close time by
+    /// done / cancel). Each row is checked ONCE: determined
+    /// results (has-test / no-test) go to an untracked ledger
+    /// ~/.backlog/audit-open/<project-slug>.json and the row is skipped on
+    /// later runs; undetermined is reported and re-examined next run. An
+    /// unreadable ledger fails the command and nothing counts as checked.
+    AuditOpen {
         /// Emit JSON instead of the human report.
         #[arg(long)]
         json: bool,
@@ -190,8 +186,8 @@ enum Command {
     /// --red-rev REV` (an executed committed test that FAILS behaviourally at
     /// REV and PASSES at HEAD; `--reason fixed|already-fixed|obsolete`),
     /// `--doc-only COMMIT` (an ancestor commit touching doc paths only), or
-    /// `--duplicate-of ID`. A bare `done ID` is refused. Judgment/untestable
-    /// closes go through `backlog ruling request` + a human `ruling approve`.
+    /// `--duplicate-of ID`. A bare `done ID` is refused. There is no
+    /// evidence-free close: an item no test reproduces is `cancel`led.
     Done {
         /// Task ID
         id: String,
@@ -230,7 +226,7 @@ enum Command {
 
     /// Close a task as "decided not to do it" (discard an item nothing
     /// demonstrates): terminal, never requeued, and not a claim of completion
-    /// (unlike `done`). Recorded as a `discard` closure; needs no test or ruling
+    /// (unlike `done`). Recorded as a `discard` closure; needs no test
     Cancel {
         /// Task ID
         id: String,
@@ -341,41 +337,6 @@ enum Command {
         #[command(subcommand)]
         action: DriverAction,
     },
-}
-
-#[derive(Subcommand)]
-enum RulingAction {
-    /// Put a task in `needs-ruling` (non-terminal, not workable).
-    Request {
-        /// Task ID
-        id: String,
-        /// judgment | untestable
-        #[arg(long)]
-        kind: String,
-        /// Why a judgment close is right (required for judgment).
-        #[arg(long)]
-        rationale: Option<String>,
-        /// Why no test can observe it (required for untestable).
-        #[arg(long = "untestable-reason")]
-        untestable_reason: Option<String>,
-    },
-    /// Close a needs-ruling task. Requires an interactive TTY on stdin and the
-    /// id typed back — a barrier against the non-interactive agent Bash tool,
-    /// NOT proof of identity. An LLM never runs this.
-    Approve {
-        /// Task ID
-        id: String,
-        /// Close as `cancelled` instead of `done`.
-        #[arg(long)]
-        cancel: bool,
-    },
-    /// Return a needs-ruling task to pending (evidence-gated `done` applies).
-    Withdraw {
-        /// Task ID
-        id: String,
-    },
-    /// List the tasks awaiting a ruling.
-    List,
 }
 
 #[derive(Subcommand)]
@@ -914,14 +875,30 @@ fn run(cli: Cli) -> Result<()> {
             // itself, so unit tests exercise it with fake closures only.
             let remote_url = git_remote_origin_url(&project);
             // The repro runs BEFORE the store lock is taken (a test can run
-            // for up to BACKLOG_TEST_TIMEOUT_SECS). Its outcome decides where
-            // the finding lands; it never decides WHETHER it lands.
+            // for up to BACKLOG_TEST_TIMEOUT_SECS). Its outcome decides
+            // WHETHER the finding is filed: only `reproduced` is
+            // (「testがないなら起票してはならない」).
             let repro = match &repro_test {
                 Some(cmd) => Some(evidence::run_repro(&std::env::current_dir()?, cmd, now)),
                 None => None,
             };
-            let intake = store::Intake::from_repro(repro);
-            let landed = intake.status;
+            let intake = match repro.clone().and_then(store::Intake::reproduced) {
+                Some(i) => i,
+                None => {
+                    // NOT filed, and nothing is written anywhere (user ruling
+                    // 2026-10-15: 「記録も残さない」).
+                    let why = match &repro {
+                        Some(r) => format!("repro outcome {}: {}", r.outcome, r.detail),
+                        None => "no --repro-test was given".to_string(),
+                    };
+                    eprintln!(
+                        "backlog add: REFUSED, nothing written ({why}). A task is filed only \
+                         when --repro-test FAILS behaviourally at HEAD: write the RED test and \
+                         re-run `backlog add ... --repro-test CMD`."
+                    );
+                    std::process::exit(2);
+                }
+            };
             let outcome = intake
                 .repro
                 .as_ref()
@@ -940,12 +917,8 @@ fn run(cli: Cli) -> Result<()> {
                 intake,
             )?;
             println!("added: {id}");
-            match outcome {
-                Some((o, d)) => eprintln!("repro: {o} ({d}); filed as {landed}"),
-                None => eprintln!(
-                    "repro: none given; filed as {landed} (suspicion, outside the workable \
-                     queue) — promote with `backlog confirm {id} --repro-test CMD`"
-                ),
+            if let Some((o, d)) = outcome {
+                eprintln!("repro: {o} ({d}); filed as pending");
             }
             // (f7b018f8) The store's own duplicate guard is an EXACT hashkey
             // match, so a differently-phrased filing of the same work is filed
@@ -1110,26 +1083,11 @@ fn run(cli: Cli) -> Result<()> {
                 println!("no tasks");
             } else {
                 let now = now_unix();
-                // Unconfirmed findings are SUSPICION, not queued work: they
-                // get their own section and count, never mixed into the rows
-                // a driver works from.
-                let (unconfirmed, tasks): (Vec<task::Task>, Vec<task::Task>) = tasks
-                    .into_iter()
-                    .partition(|t| t.status == task::STATUS_UNCONFIRMED);
                 println!(
                     "{:<10} {:<10} {:<12} {:<22} TITLE",
                     "ID", "PRIORITY", "STATUS", "EVIDENCE"
                 );
-                for t in tasks.iter().chain(unconfirmed.iter()) {
-                    if t.status == task::STATUS_UNCONFIRMED
-                        && unconfirmed.first().is_some_and(|u| u.id == t.id)
-                    {
-                        println!(
-                            "--- unconfirmed: {} finding(s) — suspicion, NOT in the workable \
-                             queue (promote with `backlog confirm ID --repro-test CMD`) ---",
-                            unconfirmed.len()
-                        );
-                    }
+                for t in tasks.iter() {
                     let priority_str = match t.priority() {
                         0 => "p0",
                         1 => "p1",
@@ -1139,7 +1097,7 @@ fn run(cli: Cli) -> Result<()> {
                     let status_str = if t.is_deferred(now) {
                         "deferred".to_string()
                     } else {
-                        t.status.clone()
+                        t.status.to_string()
                     };
                     // A task written while its project identity was
                     // UNDETERMINED is listed even when its (guessed) project
@@ -1377,36 +1335,11 @@ fn run(cli: Cli) -> Result<()> {
             mirror_close_for(&tasks_path, &id);
         }
 
-        Command::Confirm { id, repro_test } => {
-            let tasks_path = write_store_path("backlog confirm")?;
-            closecmd::confirm(&tasks_path, &id, &repro_test)?;
-        }
-
-        Command::Ruling { action } => {
-            // `ruling list` is a read; request / approve / withdraw write the
-            // store (closecmd -> store::update_task), so only they are guarded.
-            let tasks_path = match &action {
-                RulingAction::List => store_path()?,
-                RulingAction::Request { .. } => write_store_path("backlog ruling request")?,
-                RulingAction::Approve { .. } => write_store_path("backlog ruling approve")?,
-                RulingAction::Withdraw { .. } => write_store_path("backlog ruling withdraw")?,
-            };
-            match action {
-                RulingAction::Request {
-                    id,
-                    kind,
-                    rationale,
-                    untestable_reason,
-                } => {
-                    closecmd::ruling_request(&tasks_path, &id, &kind, rationale, untestable_reason)?
-                }
-                RulingAction::Approve { id, cancel } => {
-                    closecmd::ruling_approve(&tasks_path, &id, cancel)?;
-                    mirror_close_for(&tasks_path, &id);
-                }
-                RulingAction::Withdraw { id } => closecmd::ruling_withdraw(&tasks_path, &id)?,
-                RulingAction::List => closecmd::ruling_list(&tasks_path)?,
-            }
+        Command::AuditOpen { json } => {
+            let tasks_path = store_path()?;
+            let scope = read_project_scope(&location, None, false, "audit-open")?;
+            let identity = claim_identity(scope.as_deref())?;
+            audit_open::run(&tasks_path, &identity, json, now_unix())?;
         }
 
         Command::AuditClosures { json } => {
@@ -1646,7 +1579,7 @@ fn run(cli: Cli) -> Result<()> {
             // so `edit --status done|cancelled` can no longer finish work
             // locally while the issue stays open (the gap that once made this
             // arm call `mirror_close_for`). The verbs that CAN reach a terminal
-            // state — `done`, `cancel`, `ruling approve` — each mirror inline.
+            // state — `done`, `cancel` — each mirror inline.
             // Pinned by tests/mirror_gaps_after_0323.rs
             // (`edit_status_terminal_is_refused_and_leaves_store_and_issue_untouched`).
         }

@@ -12,7 +12,6 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 class AuditS03(unittest.TestCase):
-    @unittest.expectedFailure  # backlog ece51b35: open defect
     def test_precommit_family_inspects_backlog_conflict_markers(self):
         """No gate script or hook inspects a conflict-marked .backlog/*.toml."""
         hits = []

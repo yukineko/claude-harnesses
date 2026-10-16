@@ -8,6 +8,8 @@
 //! the exit code: a refusal that still wrote is the defect, and a non-zero exit
 //! alone cannot tell the two apart.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -111,7 +113,7 @@ fn fixture(seed: Option<&dyn Fn(&Path) -> String>) -> Fixture {
 
 fn seeded_task(project: &Path) -> String {
     format!(
-        "[[task]]\nid = \"seed0001\"\ntitle = \"seeded\"\nproject = \"{}\"\ntags = []\nstatus = \"pending\"\nnotes = \"\"\ncreated_at = 1000\nupdated_at = 1000\n\n",
+        "[[task]]\nid = \"seed0001\"\ntitle = \"seeded\"\nproject = \"{}\"\ntags = []\nstatus = \"pending\"\nnotes = \"\"\ncreated_at = 1000\nupdated_at = 1000\n[task.repro]\noutcome = \"reproduced\"\ncmd = \"cargo test -p fixture\"\nobserved_at = 1000\ndetail = \"fixture\"\n\n",
         project.display()
     )
 }
@@ -120,7 +122,7 @@ fn seeded_task(project: &Path) -> String {
 /// close-evidence form (a bare `done` is refused for missing evidence).
 fn seeded_two(project: &Path) -> String {
     format!(
-        "{}[[task]]\nid = \"seed0002\"\ntitle = \"other\"\nproject = \"{}\"\ntags = []\nstatus = \"pending\"\nnotes = \"\"\ncreated_at = 1000\nupdated_at = 1000\n\n",
+        "{}[[task]]\nid = \"seed0002\"\ntitle = \"other\"\nproject = \"{}\"\ntags = []\nstatus = \"pending\"\nnotes = \"\"\ncreated_at = 1000\nupdated_at = 1000\n[task.repro]\noutcome = \"reproduced\"\ncmd = \"cargo test -p fixture\"\nobserved_at = 1000\ndetail = \"fixture\"\n\n",
         seeded_task(project),
         project.display()
     )
@@ -189,6 +191,10 @@ fn add_from_primary_checkout_is_refused_and_writes_nothing() {
 #[test]
 fn add_from_linked_worktree_succeeds_and_lands_in_that_worktree() {
     let fx = fixture(None);
+    // `add` writes a task only for a reproduced finding (intake contract v2):
+    // commit a repro that exits 1 into the linked worktree (its own branch, so
+    // the primary tree stays untouched).
+    let repro = common::commit_repro(&fx.linked);
     let (code, out, err) = run(
         &fx.home,
         &fx.shim,
@@ -199,6 +205,8 @@ fn add_from_linked_worktree_succeeds_and_lands_in_that_worktree() {
             "from-wt",
             "--project",
             fx.linked.to_str().unwrap(),
+            "--repro-test",
+            repro,
         ],
     );
     assert_eq!(

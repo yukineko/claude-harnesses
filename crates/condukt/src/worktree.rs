@@ -904,10 +904,11 @@ fn git_try(dir: &Path, args: &[&str]) -> Result<(bool, String, String)> {
 }
 
 /// The outcome of [`merge`]. A blocked merge (a mid-flight runtime-overlap HOLD
-/// or a real 3-way conflict) is NOT a hard error — it is a hold-for-review
-/// (design 625aa170): the merge is skipped/recorded and the caller reports it
-/// and exits 0. Only a genuine git failure (a failed checkout, etc.) is an
-/// `Err`.
+/// or a recorded real 3-way conflict) is NOT a hard error — it is a
+/// hold-for-review (design 625aa170): the merge is skipped/recorded and the
+/// caller reports it and exits 0. A genuine git failure (a failed checkout,
+/// etc.) or a conflict that could NOT be recorded to the review surface is an
+/// `Err` (fail closed; 7fb00031).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MergeOutcome {
     /// The branch was merged into the default branch.
@@ -1049,6 +1050,42 @@ fn git_diff_range(repo: &Path, from: &str, to: &str) -> String {
     git(repo, &["diff", &format!("{from}...{to}")]).unwrap_or_default()
 }
 
+/// Abort an in-progress trial merge and say truthfully what state it left.
+/// `Ok(())` when no merge is in progress afterwards: either `git merge --abort`
+/// succeeded, or it failed AND a probe shows MERGE_HEAD absent (git refused the
+/// trial before creating merge state, so there is nothing to abort and the tree
+/// is untouched). A merge still in progress, or a probe that cannot be run or
+/// returns an unexpected status, is `Err(detail)` (cannot-determine stays
+/// fail-closed: the repo may be left mid-merge).
+fn abort_trial_merge(repo: &Path) -> std::result::Result<(), String> {
+    let detail = match git_try(repo, &["merge", "--abort"]) {
+        Ok((true, _, _)) => return Ok(()),
+        Ok((false, out, err)) => format!("{} {}", out.trim(), err.trim()).trim().to_string(),
+        Err(e) => format!("{e:#}"),
+    };
+    // `rev-parse -q --verify`: exit 0 = MERGE_HEAD present, 1 = absent.
+    match git_exit_code(repo, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]) {
+        Ok(1) => Ok(()),
+        Ok(0) => Err(format!("{detail}; MERGE_HEAD is still present")),
+        Ok(c) => Err(format!(
+            "{detail}; MERGE_HEAD probe returned unexpected status {c}"
+        )),
+        Err(e) => Err(format!("{detail}; MERGE_HEAD probe failed: {e:#}")),
+    }
+}
+
+/// Self-contained sentence describing the trial-merge state, for a fail-closed
+/// error.
+fn abort_state_phrase(r: &std::result::Result<(), String>) -> String {
+    match r {
+        Ok(()) => "The trial merge was aborted (no merge in progress).".to_string(),
+        Err(d) => format!(
+            "The trial merge could NOT be aborted ({d}); the repository may be left \
+             mid-merge - run `git merge --abort`."
+        ),
+    }
+}
+
 /// Merge `branch` into the configured default branch. Verifies the repo is
 /// actually on the default branch first (verify -> act).
 ///
@@ -1060,7 +1097,9 @@ fn git_diff_range(repo: &Path, from: &str, to: &str) -> String {
 ///    consensus review surface, abort the trial, and return
 ///    [`MergeOutcome::Conflict`] — the merge still stops (block PRESERVED) but
 ///    it is now visible/resolvable instead of a silent local-only degrade, and
-///    it is a hold-for-review (exit 0), not a hard error.
+///    it is a hold-for-review (exit 0), not a hard error. If the record itself
+///    cannot be written the trial is still aborted but `merge` returns `Err`
+///    (nothing is on the review surface, so `Conflict` would be a false claim).
 /// 3. **Clean**: abort the trial and perform the real merge → [`MergeOutcome::Merged`].
 pub fn merge(
     cfg: &Config,
@@ -1139,7 +1178,19 @@ pub fn merge(
     // the index BEFORE aborting (works whether the trial exited non-zero or left
     // CONFLICT markers with a zero exit).
     let (trial_ok, _, _trial_stderr) = git_try(repo, &["merge", "--no-commit", "--no-ff", branch])?;
-    let unmerged = git(repo, &["ls-files", "--unmerged"]).unwrap_or_default();
+    // A failed listing is cannot-determine, NOT "no conflicted files": abort the
+    // trial (leave no merge in progress) and refuse.
+    let unmerged = match git(repo, &["ls-files", "--unmerged"]) {
+        Ok(u) => u,
+        Err(e) => {
+            let aborted = abort_state_phrase(&abort_trial_merge(repo));
+            bail!(
+                "could not list unmerged paths after the trial merge of '{branch}' into \
+                 '{default_branch}' (`git ls-files --unmerged` failed: {e:#}). {aborted} \
+                 The merge was NOT performed and nothing was recorded."
+            );
+        }
+    };
     let mut conflicted = parse_unmerged_paths(&unmerged);
 
     if !trial_ok || !conflicted.is_empty() {
@@ -1150,21 +1201,28 @@ pub fn merge(
         if conflicted.is_empty() {
             // Trial failed before staging any index entries — fall back to the
             // symmetric name-only diff so the entry still names the files.
-            conflicted = git(
+            conflicted = match git(
                 repo,
                 &[
                     "diff",
                     "--name-only",
                     &format!("{default_branch}...{branch}"),
                 ],
-            )
-            .map(|s| {
-                s.lines()
+            ) {
+                Ok(s) => s
+                    .lines()
                     .map(|l| l.trim().to_string())
                     .filter(|l| !l.is_empty())
-                    .collect()
-            })
-            .unwrap_or_default();
+                    .collect(),
+                Err(e) => {
+                    let aborted = abort_state_phrase(&abort_trial_merge(repo));
+                    bail!(
+                        "could not list conflicted paths of '{branch}' vs '{default_branch}' \
+                         (`git diff --name-only` failed: {e:#}). {aborted} \
+                         The merge was NOT performed and nothing was recorded."
+                    );
+                }
+            };
         }
         let conflict_id = format!("{branch}/merge-conflict");
         let entry = overwatch::merge_conflict::MergeConflictEntry {
@@ -1185,12 +1243,27 @@ pub fn merge(
             ),
             ts: overwatch::store::now(),
         };
-        // Idempotent per conflict_id. Fail-soft on the write (recording must
-        // never break the turn); the abort below always runs.
-        if let Err(e) = overwatch::store::append_merge_conflict(repo, &entry) {
-            eprintln!("condukt: could not record merge conflict (continuing): {e}");
+        // Idempotent per conflict_id. The abort runs whether or not the record
+        // succeeds, so the repo is never left mid-merge. A failed write means the
+        // conflict is NOT on the review surface, so reporting `Conflict` (whose
+        // contract is "recorded") would be false: fail closed with an error.
+        let recorded = overwatch::store::append_merge_conflict(repo, &entry);
+        let aborted = abort_trial_merge(repo);
+        if let Err(e) = recorded {
+            let state = abort_state_phrase(&aborted);
+            bail!(
+                "could not record merge conflict '{conflict_id}': {e}; the merge of \
+                 '{branch}' into '{default_branch}' was NOT performed and \
+                 the conflict is NOT on the review surface (`overwatch review-queue`). {state}"
+            );
         }
-        let _ = git_try(repo, &["merge", "--abort"]);
+        if let Err(d) = aborted {
+            bail!(
+                "conflict '{conflict_id}' was recorded but the trial merge of '{branch}' could \
+                 NOT be aborted ({d}); the repository may be left mid-merge - run \
+                 `git merge --abort`."
+            );
+        }
         return Ok(MergeOutcome::Conflict(conflict_id));
     }
 

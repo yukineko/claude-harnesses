@@ -60,7 +60,7 @@ fn run_in(args: &[&str], cwd: &Path, home: &Path, stdin: &str) -> (i32, String, 
 }
 
 /// Close-evidence fixture: `add` lands `pending` only with a REPRODUCED repro
-/// test (otherwise `unconfirmed`, outside the workable queue and unclaimable).
+/// test (otherwise `add` is refused and writes nothing).
 /// The repro script is committed on main so both checkouts can run it.
 const REPRO: &str = "bash tests/repro_yes.sh";
 

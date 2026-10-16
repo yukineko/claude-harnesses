@@ -51,10 +51,15 @@ impl UndetRecord {
 /// These are two different questions and both matter: the ledger can hold a
 /// year of history while recording is currently off, and a reader told only the
 /// counts would draw the wrong conclusion from a flat tail.
-pub fn ledger_path(cwd: &Path) -> PathBuf {
+///
+/// `Undetermined` (forwarded from [`undetermined::default_sink_path`]) when no
+/// explicit sink is set and the project's main worktree root cannot be
+/// resolved: reading some per-worktree file instead would report its counts as
+/// the project's total.
+pub fn ledger_path(cwd: &Path) -> Determination<PathBuf> {
     match std::env::var(undetermined::SINK_ENV) {
         Ok(v) if !v.trim().is_empty() && !v.trim().eq_ignore_ascii_case("off") => {
-            PathBuf::from(v.trim())
+            Determination::Known(PathBuf::from(v.trim()))
         }
         _ => undetermined::default_sink_path(cwd),
     }
@@ -273,7 +278,13 @@ fn truncate(s: &str, n: usize) -> String {
 /// there is no shape of this function that quietly substitutes an empty history.
 pub fn run_cli(json: bool, window_days: Option<i64>) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
-    let path = ledger_path(&cwd);
+    let path = match ledger_path(&cwd).require() {
+        Required::Determined(p) => p,
+        Required::Blocked(v) => anyhow::bail!(
+            "cannot locate the undetermined-telemetry ledger: {}",
+            v.as_str()
+        ),
+    };
     let records = match load(&path).require() {
         Required::Determined(r) => r,
         Required::Blocked(v) => anyhow::bail!("cannot report undetermined metrics: {}", v.as_str()),
@@ -518,7 +529,7 @@ mod tests {
             (Some("  "), default.clone()),
             (
                 Some("/tmp/explicit.jsonl"),
-                PathBuf::from("/tmp/explicit.jsonl"),
+                Determination::Known(PathBuf::from("/tmp/explicit.jsonl")),
             ),
         ] {
             let prev = std::env::var_os(undetermined::SINK_ENV);
@@ -533,6 +544,27 @@ mod tests {
             }
             assert_eq!(got, want, "for {val:?}");
         }
+    }
+
+    #[test]
+    fn an_unresolvable_main_root_is_not_read_as_some_other_ledger() {
+        // backlog 814cfbbb: the default ledger keys on the MAIN worktree root.
+        // A `.git` FILE with no `gitdir:` line makes that root undeterminable;
+        // the reader must say so instead of falling back to a per-checkout
+        // path whose counts would be reported as the project's total.
+        let td = tempfile::tempdir().unwrap();
+        std::fs::write(td.path().join(".git"), "not a gitdir pointer\n").unwrap();
+        let _g = env_lock();
+        let prev = std::env::var_os(undetermined::SINK_ENV);
+        std::env::remove_var(undetermined::SINK_ENV);
+        let got = ledger_path(td.path());
+        if let Some(p) = prev {
+            std::env::set_var(undetermined::SINK_ENV, p);
+        }
+        assert!(
+            matches!(got, Determination::Undetermined(_)),
+            "expected Undetermined, got {got:?}"
+        );
     }
 
     /// The process-global env lock — deliberately the CRATE-WIDE

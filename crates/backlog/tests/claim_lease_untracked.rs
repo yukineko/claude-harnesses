@@ -181,7 +181,7 @@ fn fixture_with(tag: &str, seed: impl FnOnce(&Path, &Path)) -> Fixture {
 
     // Close-evidence (2026-10-01): `add` lands `pending` (the queue `next
     // --claim` hands out) only when a committed repro test REPRODUCES the
-    // finding; without one it lands `unconfirmed`. Commit a repro script
+    // finding; without one `add` is refused and writes nothing. Commit a repro script
     // (exit 1 = reproduced) so the fixture's adds can pass `--repro-test`
     // and exercise the same queue as before.
     std::fs::create_dir_all(a.join("tests")).unwrap();
@@ -364,7 +364,7 @@ fn legacy_tracked_claimed_row_without_lease_is_pending() {
             format!(
                 "[[task]]\nid = \"legacy01\"\ntitle = \"Legacy claimed\"\nproject = \"{}\"\n\
                  tags = [\"p0\"]\nstatus = \"claimed\"\nnotes = \"\"\ncreated_at = 1000\n\
-                 updated_at = {now}\n",
+                 updated_at = {now}\n[task.repro]\noutcome = \"reproduced\"\ncmd = \"cargo test -p fixture\"\nobserved_at = 1000\ndetail = \"fixture\"\n",
                 a.display()
             ),
         )
@@ -512,7 +512,17 @@ fn duplicate_add_of_a_leased_task_is_rejected() {
 
     for (name, cwd) in [("A", &f.a), ("B", &f.b)] {
         let (code, out, err) = run(
-            &["add", "--title", "First task", "--project", &project],
+            // The duplicate guard runs on the filed (reproduced) path only
+            // (intake contract v2), so the re-add carries a reproducing repro.
+            &[
+                "add",
+                "--title",
+                "First task",
+                "--project",
+                &project,
+                "--repro-test",
+                "bash tests/repro.sh",
+            ],
             cwd,
             &f.home,
         );

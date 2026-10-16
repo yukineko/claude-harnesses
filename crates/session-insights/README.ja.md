@@ -69,31 +69,17 @@ session a1b2c3d4  [2026-06-20T18:00:00+09:00]
 セッションをまたぐ永続キューは、独立した [`backlog`](../backlog) クレート（リポジトリ単位の `<repo root>/.backlog/tasks.toml`）が単一の正典として担う。SessionStart で pending タスクを注入するのも backlog 自身のフックだ。session-insights は独自の backlog ストアを持たず、旧 `session-insights backlog` サブコマンドと `<vault>/backlog.md` / `backlog.json` は削除済み。
 
 ```sh
-backlog add --title "darwin-x86_64 を x86 Mac で再ビルド" --project harness
+backlog add --title "darwin-x86_64 を x86 Mac で再ビルド" --project harness --repro-test "<cmd>"
 backlog list --project harness --status pending
 backlog done <id> --test "cargo test -p x" --red-rev <rev>   # 証跡つきで閉じる
 ```
 
-ストアへの書き込み（`add` / `done` など）は primary の作業ツリーでは拒否されるので、linked worktree から実行する。素の `backlog done <id>` は拒否される — 閉じるには証跡（`--test … --red-rev …`、`--doc-only <commit>`、`--duplicate-of <id>` のいずれか）が要る。また `--repro-test` を付けない `add` は `unconfirmed` として登録され、作業キューには入らない。詳細は backlog の README を参照。
-
-旧 `session-insights backlog` を使っていて state ディレクトリに `backlog.json` が残っている場合は、その open 項目を一度だけ、移行先リポジトリの linked worktree から標準 `backlog` に移せばよい（`backlog add` は同じ title+project の重複を拒否するため冪等）。移行した項目は repro テストを持たないので `unconfirmed` として登録される。
-
-```sh
-STATE_DIR="$HOME/.session-insights/state"
-BACKLOG_JSON="$STATE_DIR/backlog.json"
-if [ -s "$BACKLOG_JSON" ]; then
-  jq -r '.[] | select(.status=="open") | [.project, .text] | @tsv' "$BACKLOG_JSON" \
-    | while IFS=$'\t' read -r project text; do
-        [ -n "$text" ] && backlog add --title "$text" --project "${project:-default}"
-      done
-else
-  echo "no backlog.json to migrate (nothing to do)"
-fi
-```
-
-`backlog add` は重複、または cross-session claim 確認ができない場合に**拒否**する（非0 終了、理由は stderr。`--force` で強制追加）。上のループは拒否されても止まらない。`backlog.json` を削除する前に、open 項目がすべて移行できたこと（拒否メッセージが無く、`backlog list` に各項目が現れること）を必ず確認する。拒否された項目は `backlog.json` にしか存在しない。
-
-確認後は `backlog.json`（および session-insights が生成しなくなった `<vault>/backlog.md`）を削除してよい。
+ストアへの書き込み（`add` / `done` など）は primary の作業ツリーでは拒否される [test: crates/backlog/tests/store_worktree_boundary.rs::add_from_primary_checkout_is_refused_and_writes_nothing] [test: crates/backlog/tests/store_worktree_boundary.rs::done_from_primary_checkout_is_refused_and_file_unchanged]。
+linked worktree から実行すること。
+素の `backlog done <id>` は拒否される [test: crates/backlog/tests/closure_evidence.rs::bare_done_is_refused_and_status_unchanged]。
+閉じるには証跡（`--test … --red-rev …`、`--doc-only <commit>`、`--duplicate-of <id>` のいずれか）が要る [test: crates/backlog/tests/closure_evidence.rs::allowlisted_bash_script_with_red_rev_closes_and_records_closure] [test: crates/backlog/tests/doc_only_closure.rs::plain_docs_paths_are_accepted] [test: crates/backlog/tests/closure_evidence.rs::duplicate_of_pending_target_is_accepted]。
+再現する `--repro-test` の無い `add` は拒否され、store に何も書かない [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]。
+詳細は backlog の README を参照すること。
 
 ### Obsidian ログ（オプトイン）
 

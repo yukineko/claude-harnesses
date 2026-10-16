@@ -32,10 +32,9 @@
 #   * crates/overwatch/src/aggregate.rs `build` step 2 — `list --json` via
 #     `shell_soft`, which gates on `status.success()`; this is the measured
 #     "Backlog pending: 0" above.
-#   * crates/overwatch/src/bridge.rs                   — `add` (--to-backlog).
 #   * crates/harness-core/src/plugin_bin.rs `on_path` — `--version` as an
 #     installed-probe, reached via `plugin_bin::resolve("backlog")` (used by
-#     autoflow's `find_backlog_binary`, overwatch's bridge, condukt, …) only
+#     autoflow's `find_backlog_binary`, condukt, …) only
 #     when no plugin-cache copy exists; spawn success is the whole test.
 #   * crates/daily/src/main.rs                         — `lock status` as a
 #     driver-liveness probe.

@@ -85,6 +85,7 @@ SCANNERS = [
     "check-cross-crate-constants.py",
     "check-launcher-exec-bit.py",
     "check-clippy-lints.py",
+    "check-backlog-store.py",
     # check-test-weakening.py runs last: it fires from .githooks/commit-msg,
     # which git invokes only after pre-commit (and every scanner above) has
     # already succeeded — see commit-msg's own header for why it moved there.
@@ -974,13 +975,25 @@ class DenyNoVerify(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0)
 
-    def test_unparseable_payloads_are_allowed(self):
-        for payload in ("", "not json", "{", '{"tool_name": "Bash"}'):
+    def test_unparseable_payloads_are_refused(self):
+        """Spec inverted by user ruling 2026-10-14 (backlog bee1ccbc): an
+        unreadable payload is undetermined and resolves to refuse (exit 2,
+        CLAUDE.md 3). It was previously pinned to exit 0. Exactly 2: exit 1
+        (a crash) is an ALLOW to Claude Code."""
+        for payload in ("", "not json", "{", "[1, 2]", '"str"',
+                        '{"tool_name": "Bash", "tool_input": [1, 2]}',
+                        '{"tool_name": "Bash", "tool_input": "git commit -n"}'):
             with self.subTest(payload=payload):
                 proc = self.run_hook(payload)
                 self.assertEqual(
-                    proc.returncode, 0, "stderr:\n%s" % proc.stderr
+                    proc.returncode, 2, "stderr:\n%s" % proc.stderr
                 )
+
+    def test_missing_tool_input_is_allowed(self):
+        """Missing command (here: no tool_input at all) stays exit 0 by the
+        same user ruling 2026-10-14 (bee1ccbc); only unreadable payloads flip."""
+        proc = self.run_hook('{"tool_name": "Bash"}')
+        self.assertEqual(proc.returncode, 0, "stderr:\n%s" % proc.stderr)
 
     def test_non_string_command_is_allowed(self):
         proc = self.run_hook(
@@ -1338,15 +1351,12 @@ class KnownDefects(GateTestCase):
             h.pre_push().returncode, 0, "pre-push must refuse to send it"
         )
 
-    def test_DEFECT_a_non_dict_json_payload_crashes_the_deny_hook(self):
-        """DEFECT (severity: low).  The module docstring says an unparseable
-        payload exits 0.  A payload that PARSES but is not an object — `[]`,
-        `"x"`, `3` — reaches `payload.get(...)` and raises AttributeError, so
-        the hook dies with an unhandled traceback and exit 1.
-
-        Exit 1 is not a deny, so the bypass is not blocked either way; the cost
-        is a stack trace on every Bash call for as long as the malformed shape
-        persists, and a hook whose stated fail-open contract it does not meet.
+    def test_FIXED_a_non_dict_json_payload_is_refused_by_the_deny_hook(self):
+        """FIXED (backlog bee1ccbc, user ruling 2026-10-14) — inverted from
+        `test_DEFECT_a_non_dict_json_payload_crashes_the_deny_hook`, which
+        pinned exit 1 + Traceback.  Exit 1 is an ALLOW to Claude Code; a payload
+        that parses but is not an object is unreadable and now refuses with
+        exit 2 and no traceback (CLAUDE.md 3).
         """
         for payload in ("[]", '"a string"', "3", "null"):
             with self.subTest(payload=payload):
@@ -1356,10 +1366,8 @@ class KnownDefects(GateTestCase):
                     capture_output=True,
                     text=True,
                 )
-                self.assertEqual(
-                    proc.returncode, 1, "DEFECT PINNED: %r" % payload
-                )
-                self.assertIn("Traceback", proc.stderr)
+                self.assertEqual(proc.returncode, 2, "payload %r" % payload)
+                self.assertNotIn("Traceback", proc.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -2018,15 +2026,23 @@ class KnownDefectsDenyNoVerify(DenyNoVerify):
 # N. `git commit --amend` — the certificate binds (tree, HEAD), and an amend
 #    moves HEAD out from under a certificate that WAS honestly earned.
 #
-# This is a false POSITIVE, so it errs on the fail-closed side and is not
-# dangerous on its own. It matters because amend is a routine operation: every
-# amend puts an entry in the ledger, and a signal that fires on routine work
-# stops meaning "someone ran --no-verify". A ledger that cries wolf gets read as
-# noise, and then a real bypass is read as noise too.
+# This is a false POSITIVE that fails CLOSED, and it is the DOCUMENTED design:
+# `.githooks/pre-commit` (the comment above its certificate write) states that
+# an amend "is recorded as ungated. That is a false positive which fails
+# CLOSED, and one green pre-commit over a non-empty staged diff clears it".
 #
-# Filed as backlog 6267bfbe.
+# USER RULING 2026-10-15 (backlog 5d7867f0): keep that design. The earlier
+# class here (AmendIsNotABypass, c03c585d, backlog 6267bfbe) asserted the
+# opposite -- that a gated amend must leave the ledger empty -- and was red on
+# main. Every relaxation that would make it green is a carve-out in post-commit
+# that the ruling rejects (see class 12 below for why a one-sided carve-out
+# certifies content nobody inspected). The tests now pin the design in BOTH
+# halves: the amend IS recorded, and the documented exit (a green pre-commit
+# over a non-empty staged diff) really does clear it -- so a hook that recorded
+# amends and could never clear them, or cleared them without inspecting
+# anything, still fails here.
 # ---------------------------------------------------------------------------
-class AmendIsNotABypass(GateTestCase):
+class AmendIsRecordedFailClosed(GateTestCase):
     def test_amend_runs_every_gate(self):
         """Precondition for the test below: the amend really is inspected.
 
@@ -2052,17 +2068,9 @@ class AmendIsNotABypass(GateTestCase):
             h.ran(), SCANNERS, "every gate must have run for the amend itself"
         )
 
-    def test_amend_of_a_gated_commit_is_not_recorded_as_ungated(self):
-        """The content in an amended commit WAS inspected: pre-commit ran on it
-        and went green (pinned by the test above). Recording it as ungated
-        states the opposite of what was observed.
-
-        Mechanism: pre-commit certifies (tree, HEAD) where HEAD is the commit
-        being amended, C1. The commit git then writes replaces C1, so its parent
-        is C0 -- C1 is not among its parents, the certified HEAD does not match,
-        and post-commit concludes the content was never inspected.
-        """
-        h = self.harness()
+    def _gated_amend(self, h):
+        """Seed a gated commit C1, then amend it through the (green) gate.
+        Returns the commit the amend produced."""
         h.write("a.txt", "one\n")
         h.git("add", "-A")
         self.assertEqual(h.commit("first").returncode, 0)
@@ -2072,12 +2080,62 @@ class AmendIsNotABypass(GateTestCase):
         h.git("add", "-A")
         proc = h.commit("first", "--amend")
         self.assertEqual(proc.returncode, 0, proc.stderr)
+        return h.git("rev-parse", "HEAD").stdout.strip()
 
-        self.assertLedgerEmpty(
+    def test_amend_of_a_gated_commit_is_recorded_as_ungated(self):
+        """The documented fail-closed false positive (user ruling 2026-10-15).
+
+        Mechanism: pre-commit certifies (tree, HEAD) where HEAD is the commit
+        being amended, C1. The commit git then writes replaces C1, so its parent
+        is C0 -- C1 is not among its parents, the certified HEAD does not match,
+        and post-commit records the amend. That is the design: post-commit does
+        not trust any "this was an amend" signal to waive the parent match.
+        """
+        h = self.harness()
+        amended = self._gated_amend(h)
+        self.assertLedgerHas(
             h,
-            "the amend ran every gate and they went green, so the committed "
-            "content WAS inspected; the ledger must not claim it was not",
+            1,
+            "the amend re-parents away from the certified HEAD, so by design "
+            "(.githooks/pre-commit, user ruling 2026-10-15) it is recorded",
         )
+        self.assertEqual(
+            h.ledger_lines()[0].split("\t")[0],
+            amended,
+            "the ledger must name the commit the amend produced",
+        )
+
+    def test_next_green_precommit_over_a_staged_diff_clears_the_amend(self):
+        """The other half of the documented design: the false positive is
+        cleared by one green pre-commit over a NON-EMPTY staged diff, because
+        the amended commit is an ancestor of the HEAD that run judges against.
+        Without this half, recording amends would make the ledger unclearable
+        by ordinary work, which is not what the design promises.
+        """
+        h = self.harness()
+        amended = self._gated_amend(h)
+        self.assertLedgerHas(h, 1, "precondition: the amend was recorded")
+
+        # Control: an EMPTY staged diff inspected nothing and must keep it.
+        proc = h.pre_commit()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertLedgerHas(
+            h, 1, "an empty staged diff inspected nothing; the entry must stay"
+        )
+
+        h.write("b.txt", "next change\n")
+        h.git("add", "-A")
+        proc = h.pre_commit()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            h.git("merge-base", "--is-ancestor", amended, "HEAD", check=False).returncode,
+            0,
+            "precondition: the amended commit is an ancestor of the judged HEAD",
+        )
+        self.assertLedgerEmpty(
+            h, "a green pre-commit over a non-empty staged diff clears the amend"
+        )
+        self.assertIn("cleared 1 ungated commit(s)", proc.stderr)
 
 
 
@@ -2089,7 +2147,7 @@ class AmendIsNotABypass(GateTestCase):
 # against), so "this commit was gated" means: same tree, and the commit sits on
 # the certified HEAD.  An amend legitimately breaks the second half -- the
 # commit it replaces was the certified HEAD, and the replacement is a sibling of
-# it, not a child (see AmendIsNotABypass above) -- so any relaxation for amend
+# it, not a child (see AmendIsRecordedFailClosed above) -- so any relaxation for amend
 # has to answer TWO questions that are easy to conflate:
 #
 #     was this an amend at all?         -- the reflog's `commit (amend):` marker
@@ -2103,6 +2161,11 @@ class AmendIsNotABypass(GateTestCase):
 # "never inspected".  Each is GREEN against .githooks as it stands -- they are
 # not defect pins; they are the two observations that make a one-sided amend
 # carve-out (present or future) distinguishable from a two-sided one.
+#
+# Under the user ruling of 2026-10-15 (backlog 5d7867f0) there is NO amend
+# carve-out at all: every amend is recorded (class N above). These two tests
+# still hold under that design and are kept as the guard against a one-sided
+# carve-out being reintroduced.
 # ---------------------------------------------------------------------------
 class CertificateBindsTheDiffNotTheOperation(GateTestCase):
     def _certificate(self, h):

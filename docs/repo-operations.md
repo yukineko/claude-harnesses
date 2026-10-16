@@ -254,7 +254,6 @@ fallback は弱くない（この「弱くない」は仮定ではなく
 overwatch review-queue                 # 人間可読の統合リスト（新しい順）
 overwatch review-queue --json          # kind 判別子付きの構造化配列
 overwatch review-queue --since <ts> --limit <n>
-overwatch review-queue --to-backlog    # キュー全体を backlog に流し込む（discover→fix を閉じる）
 ```
 
 （`[escalation]` = condukt の blocked/GATED タスクが人間の回答待ちで滞留している事象も4本目のストリームとして統合表示される。）
@@ -264,12 +263,5 @@ overwatch review-queue --to-backlog    # キュー全体を backlog に流し込
   「そのソースは表示されない」として縮退する（判定を持たないから許される。冒頭「最上位の方針」を参照）。
 - ロールバック事象は `scripts/rollout-plugins.sh` の canary auto-rollback 時に
   `overwatch record-rollback` で追記される（fail-soft: 記録失敗はロールアウトを止めない）。
-- AI 指摘の永続ストア（`overwatch record-finding` の取り込み口）は Continuous-Audit ループ（別 backlog）が
-  埋めるまで通常は空で、その場合この行は出ない（graceful degrade）。
-- **`--to-backlog`（review-queue → backlog consolidation）**: レンダリングの代わりにキュー**全体**
-  （ai-finding / systemic / rollback / escalation の4種）を1件ずつ `backlog add` へ転送し、`/flow` が
-  自動修復できるようにする。冪等 — findings は `bridged_findings.jsonl`（bare finding-id。review-metrics の
-  「解消済み」判定源でもある）、他3ストリームは `bridged_entries.jsonl`（`<kind>:<identifier>`）で二重投入を防ぐ。
-  fail-soft: store 欠落 / backlog バイナリ不在 / `backlog add` 失敗はいずれも warn してスキップし、コマンドは常に成功する。
-  **cwd は linked worktree で実行する**（backlog 1e6f00ae: `backlog add` は primary〈main〉作業ツリーでは拒否されるため、
-  main から走らせると全件が「`backlog add` failed」の warn でスキップされる）。
+- AI 指摘の永続ストア（`overwatch record-finding` の取り込み口）が空なら ai-finding の行は出ず、
+  他のソースはそのまま表示される [test: crates/overwatch/tests/review_queue.rs::review_queue_degrades_gracefully_when_a_source_is_empty]。

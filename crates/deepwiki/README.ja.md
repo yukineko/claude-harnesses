@@ -1,58 +1,34 @@
-# deepwiki
-
-Claude Code 向けのリポジトリ**アーキテクチャ wiki** を生成し、新鮮に保つハーネス。`/deepwiki` コマンドで動く。
-
-## 目的
-
-deepwiki は、リポジトリの構造を簡潔かつソースリンク付きで記述した**アーキテクチャ wiki** を `.deepwiki/*.md` に生成し、コードと一緒にコミットして維持する。**Devin Wiki** に着想を得ており、オリエンテーションが必要になるたびにコードベース全体を読み直す代わりに、リポジトリの地図を一度書き出しておき、変更があった部分だけを更新する。
-
-責務は次の二つに分かれている。
-
-- バンドルされた **Rust スキャナ** が決定論的なマッピング（言語、トップレベルのレイアウト、エントリポイント、主要ファイル、README の検出）と、git に対する鮮度判定を担う。LLM は使わない。
-- **サブエージェント**が、その地図から `.deepwiki/overview.md` とモジュールごとのページを書く。重いリポジトリ読み込みをメインの会話の外に追い出すためである。
-
-**サブスクリプションネイティブ**な設計で、API キーは不要。
-
-## どうして必要か
-
-大きなリポジトリでは、現状を把握するためにコードベースを毎回読み直すコストが高く、メインの会話のコンテキストを圧迫する。かといって人手で書いたアーキテクチャドキュメントは、コードが動くとすぐに陳腐化し、どこが古いのか分からなくなる。
-
-deepwiki はこの二つの痛みを解く。
-
-- 地図づくりとページ生成を分離し、重い読み込みをサブエージェントに閉じ込めるので、メインの会話を汚さずにオリエンテーション資料が手に入る。
-- 鮮度を **git のコミットに対して**追跡する。後続の実行では `status` が `✅ fresh`（新鮮）か `⚠ stale`（陳腐）かを、変更されたソースファイルとともに報告する。更新は動いたサブシステムだけに絞られるため、wiki が黙って古くなることがない。
-
-## どう使うか
-
-スラッシュコマンド一発で起動する。
+存在しないファイル・シンボル・パスを捏造しない。実在する `path:line` を引用すること。[test: crates/deepwiki/tests/prose_claims.rs::claim_writer_forbids_invention]
 
 ```
 /deepwiki
 ```
 
-実行の流れは次のとおり。
+1. `deepwiki status` — wiki が現在のコミットに対して新鮮かどうかを判定する。[test: crates/deepwiki/tests/prose_claims.rs::claim_status_fresh_stale]
+2. `deepwiki scan` — Rust バイナリがリポジトリを地図化する（`--json` で機械可読な形式も出せる）。[test: crates/deepwiki/tests/prose_claims.rs::claim_scan_map]
+3. `deepwiki stamp` — 書いたページとともに HEAD を記録し、次回の実行が何が変わったかを判別できるようにする。[test: crates/deepwiki/tests/prose_claims.rs::claim_stamp_records] [test: crates/deepwiki/tests/prose_claims.rs::claim_status_fresh_stale]
 
-1. `deepwiki status` — wiki が現在のコミットに対して新鮮かどうかを判定する。「wiki がまだ無い」なら初回フルビルド、`✅ fresh` ならその旨を伝えて停止（強制リビルド指定が無い限り）、`⚠ stale` なら変更されたソースファイルに注目した差分更新になる。
-2. `deepwiki scan` — Rust バイナリが LLM を使わずにリポジトリを地図化する（`--json` で機械可読な形式も出せる）。
-3. **`deepwiki-writer` サブエージェント**が、その地図を `.deepwiki/overview.md` とモジュールごとのページに変換する。各記述は実在する `path:line` を引用し、存在しないファイルを捏造しない。
-4. `deepwiki stamp` — 書いたページとともに HEAD を記録し、次回の実行が何が変わったかを判別できるようにする。
+`status` は `✅ fresh` か `⚠ stale` を、変更されたソースファイルとともに報告する。[test: crates/deepwiki/tests/prose_claims.rs::claim_status_fresh_stale]
 
-### バイナリの主なサブコマンド
+wiki が無い場合、`status` は `no wiki yet` と報告する。[test: crates/deepwiki/tests/integration.rs::status_on_dir_without_wiki_reports_no_wiki]
 
 ```sh
-deepwiki scan            # リポジトリの地図を markdown で出力（--json で機械可読形式）
-deepwiki status          # wiki のビルドコミットに対する fresh / stale を判定
-deepwiki stamp PAGES…    # HEAD と書き出したページを記録（/deepwiki が呼ぶ）
-deepwiki init            # .deepwiki/ を作成
+deepwiki scan
+deepwiki status
+deepwiki stamp PAGES…
+deepwiki init
 ```
 
-全サブコマンドが `--root <dir>`（既定は cwd）を受け付ける。
+全サブコマンドが `--root <dir>`（既定は cwd）を受け付ける。[test: crates/deepwiki/tests/prose_claims.rs::claim_root_flag]
 
-### 構成
+- `commands/deepwiki.md` — `/deepwiki` のオーケストレーションコマンド。[test: crates/deepwiki/tests/prose_claims.rs::claim_command_file]
+- `agents/deepwiki-writer.md` — ページを書くサブエージェント。[test: crates/deepwiki/tests/prose_claims.rs::claim_writer_agent_file]
+- `bin/deepwiki`（ホストのバイナリを exec する、追跡されるランチャー）+ `bin/deepwiki-<os>-<arch>`（git 管理外）。[test: crates/deepwiki/tests/prose_claims.rs::claim_launcher_tracked_bins_ignored] [test: crates/deepwiki/tests/launcher_missing_binary.rs::control_launcher_still_execs_the_host_binary_when_it_is_present]
+- `.deepwiki/_meta.toml`（あなたのリポジトリ側）— `stamp` が書く鮮度スタンプ。[test: crates/deepwiki/tests/prose_claims.rs::claim_stamp_records]
 
-- `commands/deepwiki.md` — `/deepwiki` のオーケストレーションコマンド。
-- `agents/deepwiki-writer.md` — ページを書くサブエージェント。
-- `bin/deepwiki`（追跡されるランチャー）+ `bin/deepwiki-<os>-<arch>`（ローカルビルド、git 管理外）— スキャナ。
-- `.deepwiki/`（あなたのリポジトリ側）— 生成された wiki と、鮮度スタンプである `_meta.toml`。
+プラットフォーム別の `bin/deepwiki-<os>-<arch>` は**コミットされない**（`.gitignore` が `crates/*/bin/*-darwin-arm64`・`*-darwin-x86_64`・`*-linux-arm64`・`*-linux-x86_64` を無視する）。[test: crates/deepwiki/tests/prose_claims.rs::claim_launcher_tracked_bins_ignored] [test: crates/deepwiki/tests/prose_claims.rs::claim_platform_bins_untracked]
 
-プラットフォーム別の `bin/deepwiki-<os>-<arch>` は**コミットされない**（`.gitignore` が `crates/*/bin/*-<os>-<arch>` を無視する）。ローカル配備は `scripts/rollout-plugins.sh` がソースからビルドする（`cargo build --release -p deepwiki` / `cargo test -p deepwiki`）。crate の `Makefile`（`make bins`）は crate ローカルの `target/release/` からコピーするが、ワークスペースビルドはそこに出力しない。
+```sh
+cargo build --release -p deepwiki
+cargo test -p deepwiki
+```

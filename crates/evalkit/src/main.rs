@@ -3,12 +3,15 @@
 //! `evalkit run` discovers `evals/*.jsonl` golden cases and asserts over each
 //! subject — a `file`'s contents (catch a SKILL.md/prompt edit that drops an
 //! invariant) or a `cmd`'s stdout+exit (catch a CLI contract regression). It is
-//! the *offline* sibling of condukt's online Phase-6 verifier: deterministic,
-//! API-key-free, and meant to run as a CI gate and a `/flow` pre-release check.
+//! the *offline* sibling of condukt's online Phase-6 verifier: deterministic and
+//! API-key-free. No CI workflow and no hook runs it (pinned by
+//! `tests/prose_claims.rs::claim_no_ci_no_hook`); it is invoked by hand.
 //!
-//! Exit codes: `0` all passed, `1` a real regression, `2` harness error (no
-//! cases / unreadable eval files) — so CI distinguishes a regression from a
-//! misconfigured path.
+//! `run` exit codes: `0` all passed, `1` a real regression, `2` harness error
+//! (no cases / only draft cases / unreadable eval files) — so a caller can tell
+//! a regression from a misconfigured path. `canary` exits `1` by default when a
+//! golden's verdict was lost (regression / dropped / pass|fail→draft; `--report-only`
+//! makes that `0`) and `2` when either side is unreadable, empty, or all-draft.
 //!
 //! This is a plain CLI, not a lifecycle hook, so it does not wrap work in
 //! `run_hook`: a gate that swallowed its own failures and exited 0 would be
@@ -41,7 +44,8 @@ enum Command {
     /// List discovered cases without running them.
     List(RunArgs),
     /// Diff two `evalkit run --json` outputs (old vs new): pass-rate delta plus
-    /// regressions / fixes / added / dropped — the offline promptfoo side-by-side.
+    /// regressions / fixes / added / dropped / demoted — the offline promptfoo
+    /// side-by-side. Exits 1 when a golden's verdict was lost unless --report-only.
     Canary(CanaryArgs),
 }
 
@@ -72,9 +76,11 @@ struct CanaryArgs {
     /// Emit a machine-readable JSON summary instead of the human report.
     #[arg(long)]
     json: bool,
-    /// Exit 1 if any case regressed (pass → fail); otherwise the diff is informational.
+    /// Report only: exit 0 even when a golden's verdict was lost (regression,
+    /// dropped, or pass/fail → draft). Without it, any such loss exits 1. An empty
+    /// or all-draft side still exits 2.
     #[arg(long)]
-    fail_on_regression: bool,
+    report_only: bool,
 }
 
 fn main() {
@@ -82,7 +88,7 @@ fn main() {
     let code = match cli.command {
         Command::Run(a) => run::execute(a.dir, a.bin_dir, a.root, a.json, false),
         Command::List(a) => run::execute(a.dir, a.bin_dir, a.root, a.json, true),
-        Command::Canary(a) => canary::execute(a.baseline, a.current, a.json, a.fail_on_regression),
+        Command::Canary(a) => canary::execute(a.baseline, a.current, a.json, a.report_only),
     };
     exit(code);
 }

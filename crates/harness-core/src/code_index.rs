@@ -6,9 +6,16 @@
 //!     `(contents, file)` in → identical `Vec<Symbol>` out, every call. It
 //!     never panics on any input (fail-soft floor for pathological/garbled
 //!     source).
-//!   * `write_index`/`load_index` mirror the lessons/retrieval JSONL stores:
-//!     one JSON object per line, `load_index` is fail-soft (missing file →
-//!     empty Vec, corrupt/blank lines skipped, never panics).
+//!   * `write_index`/`load_index` use the lessons/retrieval JSONL shape (one
+//!     JSON object per line) but are **fail-loud**, unlike those stores:
+//!     `write_index`/`write_meta` return the IO error instead of dropping it,
+//!     and `load_index` is three-way — [`IndexLoadError::Absent`] (no file),
+//!     [`IndexLoadError::Unreadable`] (any other IO error, invalid UTF-8, or a
+//!     non-blank line that is not a symbol record), or the full symbol list.
+//!     A partially corrupt index is never served as a smaller valid one, and a
+//!     failed write is never reported as a build. [`load_index_checked`] adds
+//!     the build-meta symbol-count cross-check that catches a body truncated at
+//!     a line boundary.
 //!   * `search` is a deterministic **lexical** token-overlap ranking over the
 //!     symbol's name/kind/signature — the same lexical-only family as
 //!     `lessons::search` (Jaccard there; a simpler overlap count here, since
@@ -22,7 +29,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -166,48 +173,146 @@ pub fn extract_symbols(contents: &str, file: &str) -> Vec<Symbol> {
 
 /// Write `symbols` to `path` as one JSON object per line, overwriting any
 /// existing file (a full rebuild, not an append — matches how a code index is
-/// regenerated wholesale on each `build`). Fail-soft: creates the parent dir
-/// if needed; on any IO/serialize error the write is silently dropped/partial
-/// rather than panicking (mirrors `lessons`/`retrieval`'s fail-soft writes).
-pub fn write_index(path: &Path, symbols: &[Symbol]) {
+/// regenerated wholesale on each `build`). Creates the parent dir if needed.
+///
+/// Fail-loud: any create/serialize/write/flush error is returned. A caller that
+/// reports a build must not report one this function could not write.
+pub fn write_index(path: &Path, symbols: &[Symbol]) -> std::io::Result<()> {
     use std::io::Write;
 
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent)?;
     }
-
-    let Ok(mut file) = std::fs::File::create(path) else {
-        return;
-    };
-
+    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
     for s in symbols {
-        let Ok(json) = serde_json::to_string(s) else {
-            continue;
-        };
-        let _ = writeln!(file, "{}", json);
+        let json = serde_json::to_string(s).map_err(std::io::Error::other)?;
+        writeln!(file, "{json}")?;
+    }
+    file.flush()
+}
+
+/// Why a symbol index could not be loaded. Two distinct answers, neither of
+/// which is "zero symbols".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexLoadError {
+    /// No index file at the path: the index was never built.
+    Absent(PathBuf),
+    /// The index exists but cannot be trusted: an IO error other than
+    /// not-found, bytes that are not UTF-8, a non-blank line that is not a
+    /// symbol record, or (from [`load_index_checked`]) a body that disagrees
+    /// with its build meta. Carries the detail.
+    Unreadable(String),
+}
+
+impl std::fmt::Display for IndexLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IndexLoadError::Absent(p) => write!(f, "no symbol index at {}", p.display()),
+            IndexLoadError::Unreadable(why) => write!(f, "symbol index unreadable: {why}"),
+        }
     }
 }
 
-/// Load a symbol index from `path`. Fail-soft: a missing file returns an
-/// empty Vec, blank/corrupt lines are skipped, never panics.
-pub fn load_index(path: &Path) -> Vec<Symbol> {
-    let mut symbols = Vec::new();
-
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return symbols;
+/// Load a symbol index body from `path`, strictly.
+///
+/// * file not found → [`IndexLoadError::Absent`];
+/// * any other IO error (including invalid UTF-8 and a directory at `path`)
+///   → [`IndexLoadError::Unreadable`];
+/// * any non-blank line that does not parse as a [`Symbol`] →
+///   [`IndexLoadError::Unreadable`] naming the line — a partially corrupt index
+///   would otherwise be served as a smaller *valid* one, turning a lost symbol
+///   into a confident "not there";
+/// * otherwise every symbol, in file order. Blank lines are skipped. An empty
+///   body loads as `Ok(vec![])`; use [`load_index_checked`] when an empty body
+///   must be vouched for by the build meta.
+///
+/// Never panics.
+pub fn load_index(path: &Path) -> Result<Vec<Symbol>, IndexLoadError> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(IndexLoadError::Absent(path.to_path_buf()));
+        }
+        Err(e) => {
+            return Err(IndexLoadError::Unreadable(format!(
+                "cannot read {}: {e}",
+                path.display()
+            )));
+        }
     };
-
-    for line in contents.lines() {
+    let mut symbols = Vec::new();
+    for (i, line) in contents.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        if let Ok(s) = serde_json::from_str::<Symbol>(line) {
-            symbols.push(s);
+        match serde_json::from_str::<Symbol>(line) {
+            Ok(s) => symbols.push(s),
+            Err(e) => {
+                return Err(IndexLoadError::Unreadable(format!(
+                    "{} line {}: not a symbol record: {e}",
+                    path.display(),
+                    i + 1
+                )));
+            }
         }
     }
+    Ok(symbols)
+}
 
-    symbols
+/// [`load_index`] plus a cross-check against the build meta at `meta_path`.
+///
+/// On top of everything [`load_index`] rejects:
+/// * meta present but not readable as [`IndexMeta`] → `Unreadable`;
+/// * meta present and its `symbols` count differs from the number of records
+///   in the body → `Unreadable`, naming both counts (a body truncated at a line
+///   boundary still parses line by line, and would otherwise be served as
+///   complete);
+/// * an empty body is `Ok(vec![])` only when the meta records `symbols: 0`;
+///   with no meta the empty body is unvouched-for and `Unreadable`;
+/// * a non-empty body with **no** meta file is accepted: every line already
+///   parsed and there is no count to compare against (indexes built before the
+///   meta sidecar existed have none). This is the one case where truncation at
+///   a line boundary cannot be detected.
+///
+/// The body and meta are written separately, so a failed meta write after a
+/// successful body write leaves a stale meta that disagrees with the body and
+/// reads as `Unreadable` until the next successful build — a body and meta that
+/// disagree cannot be told apart from a truncated body.
+pub fn load_index_checked(body: &Path, meta_path: &Path) -> Result<Vec<Symbol>, IndexLoadError> {
+    let symbols = load_index(body)?;
+    let meta = match std::fs::read_to_string(meta_path) {
+        Ok(text) => match serde_json::from_str::<IndexMeta>(&text) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                return Err(IndexLoadError::Unreadable(format!(
+                    "build meta {} cannot be read as index meta: {e}",
+                    meta_path.display()
+                )));
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            return Err(IndexLoadError::Unreadable(format!(
+                "cannot read build meta {}: {e}",
+                meta_path.display()
+            )));
+        }
+    };
+    match meta {
+        Some(m) if m.symbols != symbols.len() => Err(IndexLoadError::Unreadable(format!(
+            "{} holds {} symbols but its build meta {} records {} (truncated index or stale meta; rebuild the index)",
+            body.display(),
+            symbols.len(),
+            meta_path.display(),
+            m.symbols
+        ))),
+        None if symbols.is_empty() => Err(IndexLoadError::Unreadable(format!(
+            "{} holds zero symbols and has no build meta recording an empty build",
+            body.display()
+        ))),
+        _ => Ok(symbols),
+    }
 }
 
 /// A cheap, deterministic **staleness fingerprint** over a set of source-file
@@ -246,9 +351,9 @@ pub fn fingerprint(entries: &[(String, u64, i64)]) -> String {
 /// Sidecar metadata written next to the JSONL index (as
 /// `.fugu/code-index.meta.json`), recording the staleness [`fingerprint`] plus
 /// a small summary of the last build. Kept in a **separate** file so the
-/// `.jsonl` body stays a pure one-[`Symbol`]-per-line store and [`load_index`]
-/// is unchanged (the `--if-stale` build path reads this, the symbol readers
-/// never see it).
+/// `.jsonl` body stays a pure one-[`Symbol`]-per-line store (the `--if-stale`
+/// build path reads this for freshness; [`load_index_checked`] reads its
+/// `symbols` count to detect a truncated body).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexMeta {
     /// The [`fingerprint`] of the source `.rs` set the index was last built
@@ -260,22 +365,21 @@ pub struct IndexMeta {
     pub symbols: usize,
 }
 
-/// Write `meta` to `path` as a single JSON object. Fail-soft: creates the
-/// parent dir if needed; any IO/serialize error is silently dropped rather
-/// than panicking (mirrors [`write_index`]).
-pub fn write_meta(path: &Path, meta: &IndexMeta) {
+/// Write `meta` to `path` as a single JSON object, creating the parent dir if
+/// needed. Fail-loud like [`write_index`]: any IO/serialize error is returned.
+pub fn write_meta(path: &Path, meta: &IndexMeta) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent)?;
     }
-    let Ok(json) = serde_json::to_string(meta) else {
-        return;
-    };
-    let _ = std::fs::write(path, json);
+    let json = serde_json::to_string(meta).map_err(std::io::Error::other)?;
+    std::fs::write(path, json)
 }
 
-/// Read the sidecar metadata from `path`. Fail-soft: a missing or
-/// corrupt/unparseable file returns `None`, never panics (mirrors
-/// [`load_index`]'s tolerance).
+/// Read the sidecar metadata from `path`. A missing or corrupt/unparseable
+/// file returns `None`, never panics. `None` is only safe as "not provably
+/// fresh" (every freshness caller rebuilds or reports undetermined on it); it
+/// must not be read as "no meta" when vouching for a body — that is what
+/// [`load_index_checked`] distinguishes.
 pub fn read_meta(path: &Path) -> Option<IndexMeta> {
     let contents = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&contents).ok()
@@ -527,16 +631,24 @@ macro_rules! my_macro {
     }
 
     #[test]
-    fn load_index_is_fail_soft_missing_and_corrupt() {
-        assert!(load_index(Path::new("/nonexistent/code-index.jsonl")).is_empty());
+    fn load_index_distinguishes_missing_from_corrupt() {
+        assert!(
+            matches!(
+                load_index(Path::new("/nonexistent/code-index.jsonl")),
+                Err(IndexLoadError::Absent(_))
+            ),
+            "a missing index is Absent, not an empty index"
+        );
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("code-index.jsonl");
         let valid = serde_json::to_string(&sym("foo", "fn", "a.rs", 1, "fn foo() {}")).unwrap();
         let content = format!("{valid}\n{{ not json\n\n{valid}\n");
         std::fs::write(&path, content).unwrap();
-        let loaded = load_index(&path);
-        assert_eq!(loaded.len(), 2, "corrupt/blank lines skipped, valid kept");
+        assert!(
+            matches!(load_index(&path), Err(IndexLoadError::Unreadable(_))),
+            "a corrupt line makes the index Unreadable, not a smaller valid index"
+        );
     }
 
     #[test]
@@ -544,8 +656,8 @@ macro_rules! my_macro {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("code-index.jsonl");
         let symbols = extract_symbols(SRC, "src/example.rs");
-        write_index(&path, &symbols);
-        let loaded = load_index(&path);
+        write_index(&path, &symbols).expect("write");
+        let loaded = load_index(&path).expect("load");
         assert_eq!(loaded, symbols);
     }
 
@@ -553,9 +665,9 @@ macro_rules! my_macro {
     fn write_index_rebuilds_rather_than_appends() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("code-index.jsonl");
-        write_index(&path, &[sym("a", "fn", "x.rs", 1, "fn a() {}")]);
-        write_index(&path, &[sym("b", "fn", "x.rs", 2, "fn b() {}")]);
-        let loaded = load_index(&path);
+        write_index(&path, &[sym("a", "fn", "x.rs", 1, "fn a() {}")]).expect("write a");
+        write_index(&path, &[sym("b", "fn", "x.rs", 2, "fn b() {}")]).expect("write b");
+        let loaded = load_index(&path).expect("load");
         assert_eq!(loaded.len(), 1, "a second write must overwrite, not append");
         assert_eq!(loaded[0].name, "b");
     }
@@ -639,7 +751,7 @@ macro_rules! my_macro {
             files: 42,
             symbols: 314,
         };
-        write_meta(&path, &meta);
+        write_meta(&path, &meta).expect("write meta");
         assert_eq!(read_meta(&path), Some(meta));
     }
 

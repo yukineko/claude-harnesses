@@ -82,6 +82,16 @@ class Fixture:
             "exit 0\n"
         )
         cargo.chmod(0o755)
+        # The fake artifacts above are text, not binaries. rebuild-plugins.sh
+        # refuses any artifact it cannot observe to be stripped (fail closed;
+        # pinned by scripts/tests/rebuild-ships-stripped-binaries.sh). Stand in
+        # for "cargo produced a stripped binary" the same way the cargo shim
+        # stands in for the build: nm / file report a stripped executable.
+        for tool, line in (("nm", "0000000100000000 T __mh_execute_header"),
+                           ("file", "ELF 64-bit LSB executable, stripped")):
+            stub = shim / tool
+            stub.write_text(f"#!/bin/sh\necho '{line}'\n")
+            stub.chmod(0o755)
 
         self.cache = self.tmp / "cache"
         for name, ver in PLUGINS.items():

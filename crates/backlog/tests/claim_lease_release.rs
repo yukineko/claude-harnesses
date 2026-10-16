@@ -193,7 +193,7 @@ fn fixture_with(tag: &str, seed: impl FnOnce(&Path, &Path)) -> Fixture {
 
     // Close-evidence (2026-10-01): `add` lands `pending` (the queue `next
     // --claim` hands out) only when a committed repro test REPRODUCES the
-    // finding; without one it lands `unconfirmed`. Commit a repro script
+    // finding; without one `add` is refused and writes nothing. Commit a repro script
     // (exit 1 = reproduced) so the fixture's adds can pass `--repro-test`
     // and exercise the same queue as before.
     std::fs::create_dir_all(a.join("tests")).unwrap();
@@ -491,7 +491,7 @@ fn reclaimed_old_failed_row_is_displayed_claimed() {
             format!(
                 "[[task]]\nid = \"oldfail1\"\ntitle = \"Old failure\"\nproject = \"{}\"\n\
                  tags = [\"p0\"]\nstatus = \"failed\"\nnotes = \"boom\"\ncreated_at = 1000\n\
-                 updated_at = 1000\ndefer_until = 1000\n",
+                 updated_at = 1000\ndefer_until = 1000\n[task.repro]\noutcome = \"reproduced\"\ncmd = \"cargo test -p fixture\"\nobserved_at = 1000\ndetail = \"fixture\"\n",
                 a.display()
             ),
         )

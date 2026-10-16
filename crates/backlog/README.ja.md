@@ -33,14 +33,12 @@ backlog はこの失敗モードを潰す。一度キューに積めば、
 
 | サブコマンド | 役割 |
 |---|---|
-| `add` | タスクを追加 (`--title`, `--project`, `--tag`, `--priority p0/p1/p2`, `--notes`, `--weight`, `--force`, `--repro-test`)。`--repro-test` 指定時は先に HEAD でテストを実行し、挙動として落ちれば `pending`、それ以外は `unconfirmed`（作業キュー外）で積む。add 自体は常に成功する |
-| `confirm <id> --repro-test CMD` | `unconfirmed` タスクの再現テストを再実行し、`reproduced` のときだけ `pending` に昇格。それ以外は試行を記録して非 0 終了 |
+| `add` | `--repro-test` のコミット済みテストが HEAD で落ちた時だけタスクを追加する [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome] |
 | `list` | store のタスク一覧。`--tag` / `--status`（`pending` / `done` / `failed` / `cancelled` / `claimed`。`claimed` は導出値）/ `--json`。repo store では `--project` は絞り込みではなく **assertion**（下の「スコープ」参照）|
-| `next` | 次の最高優先度の pending タスクを JSON で出力（`--claim` で予約。下記参照） |
+| `next` | reproduced な repro を持つ pending タスクのうち最高優先度のものを JSON で出力する（`--claim` で予約） [test: crates/backlog/tests/no_confirm_no_unproven.rs::next_hands_out_the_reproduced_row_over_a_repro_less_one] [test: crates/backlog/src/store.rs::next_returns_highest_priority] |
 | `done <id>` | タスクを**証拠付きで**完了マーク。`--test CMD --red-rev REV`（`--reason fixed\|already-fixed\|obsolete`）・`--doc-only COMMIT`・`--duplicate-of ID` のちょうど 1 つが必要。素の `done <id>` は拒否される |
 | `fail <id>` | タスクを失敗マーク (`--reason`)。再実行を 2 日先送りする |
-| `cancel <id> --reason R` | 「やらないと決めた」として閉じる。終端・再キューなし・`discard` closure として記録。テストも ruling も不要 |
-| `ruling {request,approve,withdraw,list}` | 実行テストで正当化できない close のための人間の裁定。`request` で `needs-ruling` に入れ、`approve` は対話 TTY と id の打ち返しを要求する |
+| `cancel <id> --reason R` | 「やらないと決めた」としてテスト無しで閉じ、`discard` closure として記録する [test: crates/backlog/tests/cancel_evidence.rs::cancel_pending_task_records_a_discard_closure_without_tty] |
 | `audit-closures` | 全終端行の closure 証拠を read-only で分類（`--json`）。store は書かない |
 | `overlap` | キュー中のタスクを宣言された `touched_files` scope でグループ化（advisory。未宣言は別に列挙） |
 | `edit <id>` | タスクの title / tags / notes / status を更新 |
@@ -53,11 +51,13 @@ backlog はこの失敗モードを潰す。一度キューに積めば、
 
 ### store 書き込みは linked worktree で
 
-`add` / `done` / `fail` / `edit` / `cancel` / `confirm` / `ruling request|approve|withdraw` / `sync --apply` は、store が git リポジトリの **primary（main）作業ツリー**内にある場合
-**拒否**される（非 0 終了・何も書かない）。main の作業ツリーは merge だけを受け取る（CLAUDE.md §8）ので、
-linked worktree（`git worktree add …`）から実行すること。git が checkout の種別を答えられない場合も拒否する。
-読み取り（`list` / `next` / `ruling list` / `audit-closures` / `--apply` なしの `sync`）はどこでも動き、`next --claim` も primary で許可される（リースは `~/.backlog/claims` に書き `tasks.toml` は書かないが、tasks-file ロックを取るため cwd の checkout に `.backlog/`〈無ければ〉と一時的な `.backlog/tasks.toml.lock` を作る。どちらも untracked なので `git status` は clean のまま）、git リポジトリ外の cwd は従来どおり。
-SessionStart フックは primary では requeue をスキップし、その旨を表示する。
+`add` / `done` / `fail` / `edit` / `cancel` / `sync --apply` は、store が git リポジトリの **primary（main）作業ツリー**内にある場合
+**拒否**される（非 0 終了・何も書かない） [test: crates/backlog/tests/store_worktree_boundary.rs::add_from_primary_checkout_is_refused_and_writes_nothing] [test: crates/backlog/tests/store_worktree_boundary.rs::done_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary_env.rs::fail_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary.rs::edit_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary_env.rs::cancel_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary.rs::sync_apply_from_primary_checkout_is_refused_and_creates_no_issue]。
+linked worktree から実行すること。
+git が checkout の種別を答えられない場合も拒否する [test: crates/backlog/tests/store_worktree_boundary_env.rs::add_where_dot_git_points_at_a_missing_gitdir_is_refused]。
+`list` は primary でも動く [test: crates/backlog/tests/store_worktree_boundary.rs::list_from_primary_checkout_still_works]。
+`next --claim` も primary で許可され、`git status` は clean のまま [test: crates/backlog/tests/store_worktree_boundary.rs::next_claim_from_primary_checkout_is_allowed_and_never_dirties_main]。
+SessionStart フックは primary では requeue をスキップし、その旨を表示する [test: crates/backlog/tests/store_boundary_hooks.rs::session_start_in_primary_skips_the_requeue_visibly_and_does_not_write]。
 
 ### slash command
 
@@ -73,8 +73,9 @@ SessionStart フックは primary では requeue をスキップし、その旨�
 
 ```sh
 cargo install --path .
-backlog add --title "Fix X" --project "$PWD" --priority p1   # 項目をキューに積む
-backlog list --status pending                                # キューを見る
+backlog add --title "Fix X" --project "$PWD" --priority p1 \
+  --repro-test "bash tests/repro_fix_x.sh"                  # コミット済みテストが HEAD で落ちた時だけ起票 [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome]
+backlog list --status pending
 backlog next                                                 # 次の項目をピック
 backlog done <id> --test "cargo test -p x" --red-rev <rev>  # 解決する（REV で RED・HEAD で GREEN を実測）
 backlog done <id> --doc-only <commit>                        # または doc だけの祖先 commit
@@ -87,6 +88,10 @@ backlog uninstall                                            # 再び除去す�
 ```
 
 > 補足: `backlog list` の status 語彙は `pending` であり `open` ではない。`list --status open` は何も表示しない。
+
+### テストが無ければ起票しない
+
+規則と根拠テストは [backlog スキルの「起票の基準」](skills/backlog/SKILL.md) を参照すること。
 
 ### 重複タスクの拒否 (content hashkey)
 

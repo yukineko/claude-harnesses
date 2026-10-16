@@ -91,9 +91,11 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    並列 run では**その worktree を消した時点で観測の文脈ごと消える**。落とした 1 件は誰にも見えず、
    余分な 1 件はキューの 1 行で済む。orchestrator は Phase 5/6 で worker と verifier の返り値を読んだら、
    `別件:` 行と verifier の reason 中の対象外の指摘を**Phase 7 の worktree 削除より前に**すべて
-   `backlog add` する。書く内容は: 逐語の観測・測定点 (rev と日付・どの task の worktree で見たか)・
-   判定できないときは (a) 実在の欠陥 / (b) 意図どおりの両方の読みと、それを見分ける方法。
-   起票は着手ではない。書いたら元の task に戻る。
+   **再現テスト（RED）を書いて** `backlog add --repro-test` で起票すること（テスト無し・再現しないものは拒否され store に何も書かれない [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]）。
+   テストが書けなければ Ask すること。
+   書く内容は逐語の観測・測定点 (rev と日付・どの task の worktree で見たか)・
+   判定できないときは (a) 実在の欠陥 / (b) 意図どおりの両方の読みと、それを見分ける方法とすること。
+   起票を着手として扱わないこと。書いたら元の task に戻ること。
 
 ## 手順
 
@@ -187,7 +189,7 @@ open run が 0 件かつ引数が「次は何をする」系のとき。**残タ
 
 ```bash
 # 1. バックログを確認
-BACKLOG=$(backlog list --status pending 2>/dev/null | head -10 || true)
+BACKLOG=$(backlog next)   # reproduced な repro を持つ最優先の 1 件を返し、store が読めなければ失敗する [test: crates/backlog/tests/no_confirm_no_unproven.rs::next_hands_out_the_reproduced_row_over_a_repro_less_one] [test: crates/backlog/tests/no_unconfirmed.rs::next_fails_closed_on_an_unconfirmed_row_in_tasks_toml]
 
 # 2. compass の gap を確認（charter があれば）
 COMPASS_GAP=$(compass gap 2>/dev/null | head -30 || true)
@@ -205,7 +207,7 @@ OPEN_HYPOS=$(hypothesis list --status open 2>/dev/null | head -10 || true)
 
 | 状態 | 対応 |
 |---|---|
-| バックログに pending 項目あり | 最優先の 1 件を課題文として Phase 0.5 へ進む |
+| `backlog next` が task を返した | その 1 件を課題文として Phase 0.5 へ進む（`next` は reproduced な repro の無い行を返さない [test: crates/backlog/tests/no_confirm_no_unproven.rs::next_hands_out_the_reproduced_row_over_a_repro_less_one]） |
 | compass gap が明確な next_action を示す | それを課題文として Phase 0.5 へ進む |
 | どちらもなく直近コミットから自明な続きがある | それを課題文として Phase 0.5 へ進む |
 | 判断できない・選択肢が複数ある | `AskUserQuestion` でユーザーに候補を提示して選ばせる |
@@ -849,22 +851,23 @@ condukt state check-oracle --run "$RID" --task "<id>"
 # → {"required":bool,"valid_fp_oracle":bool,"fallback":bool,"transition":"fail_to_pass|fail_to_fail|pass_to_pass|pass_to_fail","reason":"..."}
 ```
 これは advisory な信号で常に exit 0 (JSON を出すだけでそれ自体はゲートしない)。フィールドの意味:
-- `required`: タスクの `kind` が `fix`/`feature` (大小無視) かつ `reproduction_tests` を持つときのみ true。
+- `required`: タスクの `kind` が `fix`/`feature` (大小無視) なら true、それ以外は false [test: crates/condukt/src/oracle.rs::check_oracle_non_fix_feature_task_is_still_exempted]。
+  再現コマンドを宣言したかどうかは、この値を変えない [test: crates/condukt/src/oracle.rs::check_oracle_fix_or_feature_without_reproduction_tests_is_not_exempted]。
 - `valid_fp_oracle`: `tdd oracle --task <id>` の判定。RED→GREEN が `fail_to_pass` のときだけ true
   (`fail_to_fail`/`pass_to_pass`/`pass_to_fail` はすべて false)。
-- `fallback`: true なら「この判定は信用できない、または対象外」= 従来の検証ゲート
-  (`state check-criteria` → verifier agent) にそのまま委ねてよい、という意味。`tdd` が PATH に無い・
-  spawn 失敗・stdout が空/壊れている、または対象外タスク (kind が fix/feature でない、
-  `reproduction_tests` が無い) はすべて fail-soft に `fallback:true` へ degrade する (パニックしない、
-  ターンを壊さない)。
+- `fallback`: true のときだけ判定を従来の検証ゲート (`state check-criteria` → verifier agent) に委ねる [test: crates/condukt/src/state.rs::enforce_fp_gate_allows_on_fallback_even_if_required]。
+  kind が fix/feature でないタスクは true になる [test: crates/condukt/src/oracle.rs::not_required_falls_back_immediately]。
+  `tdd` が見つからない・起動できない・非0終了したときは判定不能として
+  `required:true, fallback:false, valid_fp_oracle:false` になり、従来ゲートには委ねない [test: crates/condukt/tests/drift_c4_oracle_doc.rs::binary_missing_tdd_blocks_regardless_of_reproduction_tests] [test: crates/condukt/src/oracle.rs::oracle_check_oracle_forwards_nonzero_exit_and_rejects]。
+  exit 0 なのに stdout が空または JSON でないときは true になる [test: crates/condukt/src/oracle.rs::exit_ok_empty_stdout_still_falls_back] [test: crates/condukt/src/oracle.rs::exit_ok_corrupt_stdout_still_falls_back]。
 - `transition` / `reason`: 判定の詳細 (ログ・カスケードエスカレーションの `failure_context` に転記してよい)。
 
 **実際の強制は `condukt state set --run $RID --task <id> --status verified` 自身が行う**: このコマンドは
 内部で上と同じ判定 (`check-oracle` 相当) を再実行し、`required:true, fallback:false,
-valid_fp_oracle:false` のときは昇格を**拒否**する (非0終了・理由を出力)。つまり `kind: fix/feature` かつ
-`reproduction_tests` を持つタスクは、`tdd` による本物の Fail→Pass 再現ができていない限り `verified` に
-できない。`fallback:true` (tdd 不在・対象外タスク等) のときは従来通り verifier agent の pass/fail 判定に
-すべて委ねる (legacy gate への degrade)。
+valid_fp_oracle:false` のときは昇格を**拒否**する (非0終了・理由を出力) [test: crates/condukt/tests/fp_oracle_e2e.rs::fix_task_without_valid_fail_to_pass_oracle_is_refused]。
+`tdd` が無い環境でもこの拒否は同じで、`kind: fix/feature` のタスクは本物の Fail→Pass 再現が
+記録されるまで `verified` にできない [test: crates/condukt/src/state.rs::enforce_fp_gate_rejects_undetermined_spawn_failure_verdict]。
+`fallback:true` (kind が fix/feature でないタスク等) のときは verifier agent の pass/fail 判定に委ねる [test: crates/condukt/tests/fp_oracle_e2e.rs::task_without_a_fix_or_feature_kind_verifies_unconditionally]。
 
 done の各タスクを `condukt-verifier` 相当で done_criteria 照合する。検証する子の **model は
 worker と必ず別モデルにする**（同一モデルだと generation と verification が同じ盲点を共有するため）。
@@ -1047,6 +1050,8 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
    # 渡さない**: condukt は明示した 0 をそのまま `--cost 0` として転送するが、fugu-router >= 0.1.41
    # は保存された 0 を duration と同じく **未計測** として読み戻す。したがって本当に $0 だった
    # コストを「計測値 0」として記録する手段は無い (0 は常に未計測扱い)。
+   # ただし gauge が JSON として読めない出力を返した場合は「データ無し」ではなく判定不能として扱い、
+   # 手動 --cost にはフォールバックせず episode を記録しない [test: crates/condukt/tests/backlog_18ebbfe6.rs::malformed_gauge_json_is_not_recorded_as_manual_cost]
    condukt state set --run "$RID" --task "<t.id>" --status verified \
      --model <worker に使ったモデル> --agent-id "<Task tool が返した agentId>"
    # fail 時も同様に --status failed --model <試したモデル> --agent-id <同上> を残す (失敗も学習信号)
@@ -1173,7 +1178,7 @@ fi
 ```
 condukt state gate --run $RID      # exit 0 まで完了宣言しない
 ```
-- gate FAIL の場合、**まず reconcile を試みる**（branch がマージ済みのタスクを自動 verified に昇格）:
+- gate FAIL の場合、**まず reconcile を試みる**（branch が fork point より先の commit を持ちそれがマージ済みのタスクだけを自動 verified に昇格する [test: crates/condukt/tests/backlog_41c837ab.rs::control_really_merged_task_is_still_promoted]。`failed` タスクは昇格しない [test: crates/condukt/tests/backlog_41c837ab.rs::failed_unmerged_task_is_not_promoted_to_verified_by_reconcile]）:
   ```
   condukt state reconcile --run $RID
   condukt state gate --run $RID    # 再チェック

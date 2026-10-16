@@ -1,157 +1,121 @@
-# trajectoryeval
+`trajectoryeval` is a trajectory-match verifier [test: crates/trajectoryeval/tests/integration.rs::help_describes_the_verifier].
 
-A **trajectory-match verifier** — the sibling of an output verifier.
-
-condukt's online verifier checks a task's **OUTPUT** (its `done_criteria`).
 `trajectoryeval` checks the **PATH** the worker took to get there: the ordered
-sequence of tool calls it made, against an *expected* trajectory spec. It is
-inspired by the trajectory matchers in
+sequence of tool calls it made, against an *expected* trajectory spec [test: crates/trajectoryeval/tests/integration.rs::check_matching_trajectory_passes_exit_zero] [test: crates/trajectoryeval/tests/integration.rs::check_deviating_trajectory_exits_one].
+
+[record: 2026-06-28 rev: c961b9c2] It is inspired by the trajectory matchers in
 [langchain-ai/agentevals](https://github.com/langchain-ai/agentevals).
 
-It is **subscription-native**: one bundled Rust binary, no API key, no network.
+`trajectoryeval check --expected <spec.json> --actual <actual.json> [--json]`
+compares an actual ordered tool sequence against an expected spec and reports
+`{ pass, missing, unexpected, out_of_order }` [test: crates/trajectoryeval/tests/prose_claims.rs::claim_check_json_flag].
+With `--json` it prints the serialized result as JSON instead of a human report [test: crates/trajectoryeval/tests/prose_claims.rs::claim_check_json_flag].
 
-## Subcommands
+`trajectoryeval tier --config <cfg.json> --flow <id> [...]` classifies a flow as **core** (business-critical) or **non-core** from a config
+allowlist [test: crates/trajectoryeval/src/tier.rs::tier_core_vs_non_core].
 
-### `trajectoryeval check --expected <spec.json> --actual <actual.json> [--json]`
-
-Compares an actual ordered tool sequence against an expected spec and reports
-`{ pass, missing, unexpected, out_of_order }` (human report, or `--json` for the
-serialized result).
-
-### `trajectoryeval tier --config <cfg.json> --flow <id> [...]`
-
-**Risk-tiered e2e verification.** A config-driven "core" flow allowlist
-classifies a flow as **core** (business-critical) or **non-core** and applies
-tier-appropriate verification. Classification, diff, and sampling are all
-deterministic pure functions (no LLM, no network, no clock).
-
-- **config** JSON:
+- The tier config is JSON of this shape [test: crates/trajectoryeval/tests/integration.rs::tier_core_flow_matching_snapshot_passes_exit_zero]:
   ```json
   { "core": ["checkout", "payment"],
     "diff_strategy": "structured_data",
     "sample_one_in": 20 }
   ```
-  `core` = the allowlist (exact-match). `diff_strategy` defaults to
-  `structured_data`. `sample_one_in` = sample non-core flows `1 in N` runs
-  (0 disables sampling → existence check only).
+  `core` = the allowlist (exact-match) [test: crates/trajectoryeval/tests/prose_claims.rs::claim_core_allowlist_exact_match]. `diff_strategy` defaults to
+  `structured_data` [test: crates/trajectoryeval/tests/prose_claims.rs::claim_diff_strategy_default_structured]. `sample_one_in` = sample non-core flows `1 in N` runs [test: crates/trajectoryeval/src/tier.rs::seeded_sampling_rate_is_approximately_one_in_n] [test: crates/trajectoryeval/src/tier.rs::sample_one_in_one_always_samples] [test: crates/trajectoryeval/tests/prose_claims.rs::claim_sampling_decision_reported].
+  `sample_one_in` 0 disables sampling → existence check only [test: crates/trajectoryeval/src/tier.rs::non_core_sampling_disabled_is_existence_only].
 
-- **core** flows: capture a snapshot and actually **diff** it every run
-  (`--baseline <base.json> --snapshot <snap.json>`). Because this repo has NO
-  deployed runtime UI, the primary always-available mechanism is a deterministic
-  **structured-data comparison** (normalized-shape JSON equality: object key
-  order is normalized/ignored, values and structure must match). Differences are
-  reported as JSON-pointer paths. A **perceptual-hash / screenshot** comparison
-  (`diff_strategy: "screenshot"`) is provided behind a trait/enum boundary but is
-  an honest **stub** (not implemented) — selecting it returns
-  `DiffOutcome::Stubbed` so a real implementation can be dropped in later without
-  changing the tiering logic.
+- A **core** flow diffs a snapshot against a baseline on every run
+  (`--baseline <base.json> --snapshot <snap.json>`) [test: crates/trajectoryeval/tests/integration.rs::tier_core_flow_matching_snapshot_passes_exit_zero] [test: crates/trajectoryeval/tests/integration.rs::tier_core_flow_mismatched_snapshot_exits_one].
+  The structured-data comparison is normalized-shape JSON equality: object key
+  order is normalized/ignored, values and structure must match [test: crates/trajectoryeval/src/tier.rs::structured_match_key_order_normalized] [test: crates/trajectoryeval/src/tier.rs::structured_mismatch_value] [test: crates/trajectoryeval/src/tier.rs::structured_mismatch_missing_key_and_len].
+  Differences are reported as `/`-joined paths [test: crates/trajectoryeval/src/tier.rs::structured_mismatch_value] [test: crates/trajectoryeval/src/tier.rs::structured_diff_is_deterministic_ordering].
+  Selecting `diff_strategy: "screenshot"` returns `DiffOutcome::Stubbed` (not
+  implemented) [test: crates/trajectoryeval/src/tier.rs::screenshot_strategy_is_stubbed].
 
-- **`diff_strategy: "fuzzy_hash"`** — a tolerance-based structured-data
-  comparison. It computes a deterministic drift distance
+- `diff_strategy: "fuzzy_hash"` is a tolerance-based structured-data
+  comparison [test: crates/trajectoryeval/src/tier.rs::fuzzy_diff_small_drift_under_threshold_is_match]. It computes a deterministic drift distance
   `distance_permille = round(1000 × differing leaves / total leaves)` and treats
-  `distance_permille <= threshold_permille` as a **match**; above that it returns
-  `DiffOutcome::DriftedBeyondThreshold` (distance + differing JSON-pointer paths),
-  which is a **needs-human** verdict (exit `3`), not a fail. `threshold_permille`
-  is a config key (default `0`, i.e. any drift escalates). Example:
+  `distance_permille <= threshold_permille` as a **match** [test: crates/trajectoryeval/src/tier.rs::fuzzy_diff_boundary_distance_equal_threshold_is_match] [test: crates/trajectoryeval/tests/prose_claims.rs::claim_fuzzy_distance_rounding]; above that it returns
+  `DiffOutcome::DriftedBeyondThreshold` (distance + differing `/`-joined paths) [test: crates/trajectoryeval/src/tier.rs::fuzzy_diff_drift_over_threshold_reports_distance_and_paths],
+  which is a **needs-human** verdict (exit `3`), not a fail [test: crates/trajectoryeval/src/tier.rs::verdict_for_diff_drifted_beyond_threshold_is_needs_human_not_fail] [test: crates/trajectoryeval/tests/integration.rs::tier_fuzzy_core_flow_drift_over_threshold_exits_three_needs_human]. `threshold_permille`
+  is a config key whose default is `0` [test: crates/trajectoryeval/tests/prose_claims.rs::claim_threshold_permille_default_zero].
   [`examples/tier-config-fuzzy.json`](examples/tier-config-fuzzy.json)
-  (`threshold_permille: 250`).
+  sets `threshold_permille: 250` [test: crates/trajectoryeval/tests/prose_claims.rs::claim_example_fuzzy_threshold_250].
 
-- **non-core** flows: a lightweight **existence check** (à la specguard
-  spec-audit — `--exists true|false`, default true) plus, when
+- A **non-core** flow gets a lightweight **existence check**
+  (`--exists true|false`) [test: crates/trajectoryeval/tests/integration.rs::tier_non_core_absent_flow_exits_one] plus, when
   `sample_one_in > 0`, a deterministic **seeded low-frequency sampling** decision
-  keyed by `(flow_id, --seed, --run-index)` (seedable, no unseeded randomness) —
-  same inputs always yield the same decision. The sampling decision is only
-  **reported** (`present (sampled this run)` vs `present (not sampled this run)`);
-  the CLI runs no extra check for a sampled flow, and both are a pass. Only
-  `--exists false` fails a non-core flow.
+  keyed by `(flow_id, --seed, --run-index)` — same inputs always yield the same decision [test: crates/trajectoryeval/src/tier.rs::seeded_sampling_is_reproducible] [test: crates/trajectoryeval/src/tier.rs::seeded_sampling_varies_by_run_index] [test: crates/trajectoryeval/tests/prose_claims.rs::claim_sampling_keyed_by_seed_and_flow].
+  The sampling decision is only
+  **reported** (`present (sampled this run)` vs `present (not sampled this run)`) [test: crates/trajectoryeval/tests/prose_claims.rs::claim_sampling_decision_reported].
+  Both are a pass [test: crates/trajectoryeval/src/tier.rs::verdict_for_non_core_never_needs_human]. Only
+  `--exists false` fails a non-core flow [test: crates/trajectoryeval/tests/integration.rs::tier_non_core_existing_flow_passes_exit_zero] [test: crates/trajectoryeval/tests/integration.rs::tier_non_core_absent_flow_exits_one] [test: crates/trajectoryeval/src/tier.rs::non_core_absent_fails_existence] [test: crates/trajectoryeval/src/tier.rs::verdict_for_non_core_never_needs_human].
 
 The CLI reports the core/non-core classification and the diff (match/mismatch)
 result, or the non-core existence/sampling decision, as a human report or with
-`--json`.
+`--json` [test: crates/trajectoryeval/tests/integration.rs::tier_core_flow_matching_snapshot_passes_exit_zero] [test: crates/trajectoryeval/tests/integration.rs::tier_non_core_existing_flow_passes_exit_zero] [test: crates/trajectoryeval/tests/integration.rs::tier_json_output_reports_verdict_field] [test: crates/trajectoryeval/tests/prose_claims.rs::claim_tier_json_report_core_and_non_core].
 
-- **exit codes**: `0` pass, `1` a real deviation (mismatch, or existence check
-  failed), `2` harness error (unreadable/unparseable input, or a core flow
-  without both `--baseline` and `--snapshot`), `3` **needs-human** — a core flow
+- `tier` exit code `0` is a pass [test: crates/trajectoryeval/tests/integration.rs::tier_core_flow_matching_snapshot_passes_exit_zero].
+- `tier` exit code `1` is a real deviation (mismatch, or existence check
+  failed) [test: crates/trajectoryeval/tests/integration.rs::tier_core_flow_mismatched_snapshot_exits_one] [test: crates/trajectoryeval/tests/integration.rs::tier_non_core_absent_flow_exits_one].
+- `tier` exit code `2` is a harness error (unreadable/unparseable input, or a core flow
+  without both `--baseline` and `--snapshot`) [test: crates/trajectoryeval/tests/prose_claims.rs::claim_tier_exit_two_harness_error].
+- `tier` exit code `3` is **needs-human** — a core flow
   used an unimplemented diff strategy (currently `screenshot`) or its
   `fuzzy_hash` drift exceeded `threshold_permille`, so no automated verdict could
-  be rendered. `3` is deliberately
-  distinct from `1`: an unimplemented strategy is a missing capability, not a
-  real regression, and must not silently gate every run red.
+  be rendered [test: crates/trajectoryeval/tests/integration.rs::tier_core_flow_screenshot_stub_is_needs_human_not_silently_red] [test: crates/trajectoryeval/tests/integration.rs::tier_fuzzy_core_flow_drift_over_threshold_exits_three_needs_human]. `3` is distinct
+  from `1` [test: crates/trajectoryeval/tests/integration.rs::tier_core_flow_screenshot_stub_is_needs_human_not_silently_red].
+  An unimplemented strategy must not silently gate a run red: it never exits `1`
+  or reports `result: fail` [test: crates/trajectoryeval/tests/integration.rs::tier_core_flow_screenshot_stub_is_needs_human_not_silently_red].
 
-- a runnable example config ships at
-  [`examples/tier-config.json`](examples/tier-config.json):
+- A runnable example config ships at
+  [`examples/tier-config.json`](examples/tier-config.json) [test: crates/trajectoryeval/tests/integration.rs::tier_core_flow_matching_snapshot_passes_exit_zero]:
   ```sh
   trajectoryeval tier --config examples/tier-config.json --flow checkout \
-    --baseline base.json --snapshot snap.json     # core flow → real diff
+    --baseline base.json --snapshot snap.json     # core flow → real diff [test: crates/trajectoryeval/tests/integration.rs::tier_core_flow_matching_snapshot_passes_exit_zero]
   trajectoryeval tier --config examples/tier-config.json --flow settings \
-    --exists true --seed 42 --run-index 3          # non-core → existence/sampling
+    --exists true --seed 42 --run-index 3          # non-core → existence check [test: crates/trajectoryeval/tests/integration.rs::tier_non_core_existing_flow_passes_exit_zero]
   ```
 
-- **expected** spec JSON:
+- The **expected** spec is JSON of this shape [test: crates/trajectoryeval/src/match_traj.rs::spec_deserializes_from_json]:
   ```json
   { "mode": "strict",
     "steps": [ { "tool": "Read" }, { "tool": "Edit", "optional": true } ] }
   ```
-  `mode` is required (`strict` / `unordered` / `subsequence`); `optional`
-  defaults to `false`; `steps` may be omitted and then defaults to empty — note
-  that an empty spec in `subsequence` mode passes for **any** actual trajectory.
-- **actual** JSON: an array of tool-name strings, e.g. `["Read", "Edit"]`
-  (pipe the output of `extract` straight in).
+  `mode` is required (`strict` / `unordered` / `subsequence`) [test: crates/trajectoryeval/tests/prose_claims.rs::claim_mode_required].
+  `optional` defaults to `false` [test: crates/trajectoryeval/src/match_traj.rs::step_optional_defaults_false].
+  `steps` may be omitted and then defaults to empty [test: crates/trajectoryeval/tests/prose_claims.rs::claim_steps_default_empty].
+- The **actual** JSON is an array of tool-name strings, for example `["Read", "Edit"]`
+  (pipe the output of `extract` straight in) [test: crates/trajectoryeval/tests/integration.rs::extract_then_check_pipeline_passes_on_matching_trajectory].
 
-### `trajectoryeval extract --transcript <jsonl>`
-
-Streams a Claude Code transcript **line-by-line** (it never loads the whole
-transcript into memory) and prints the ordered `tool_use` names as a JSON array
-on stdout — ready to feed into `check --actual`. Lines that are not valid JSON
-are **skipped silently**, so a truncated or wrong-format file can yield a short
-or empty array with exit `0`; only an unreadable file exits `2`.
-
-## Modes
+`trajectoryeval extract --transcript <jsonl>` reads a Claude Code transcript
+and prints the ordered `tool_use` names as a JSON array
+on stdout — ready to feed into `check --actual` [test: crates/trajectoryeval/src/extract.rs::extracts_tool_names_in_order] [test: crates/trajectoryeval/tests/integration.rs::extract_then_check_pipeline_passes_on_matching_trajectory]. An unreadable file exits `2` [test: crates/trajectoryeval/tests/prose_claims.rs::claim_extract_unreadable_exits_two].
 
 - **strict** — the actual sequence must equal the expected REQUIRED steps in
-  order. Optional steps may be absent, but if present must sit in their slot.
-  `missing` = required steps not matched; `unexpected` = actual tools with no
-  place in the expected order; `out_of_order` = the right set appeared but in the
-  wrong order.
-- **unordered** — order is ignored. `missing` = required expected tools absent
-  from actual (as a set); `unexpected` = actual tools not in the expected set;
-  `out_of_order` is always false.
+  order [test: crates/trajectoryeval/src/match_traj.rs::strict_exact_match_passes]. Optional steps may be absent, but if present must sit in their slot [test: crates/trajectoryeval/src/match_traj.rs::strict_optional_absent_passes] [test: crates/trajectoryeval/src/match_traj.rs::strict_optional_present_in_slot_passes] [test: crates/trajectoryeval/tests/prose_claims.rs::claim_strict_optional_out_of_slot_fails].
+  `missing` = required steps not matched [test: crates/trajectoryeval/src/match_traj.rs::strict_missing_required_step]; `unexpected` = actual tools with no
+  place in the expected order [test: crates/trajectoryeval/src/match_traj.rs::strict_extra_tool_is_unexpected]; `out_of_order` = the right set appeared but in the
+  wrong order [test: crates/trajectoryeval/src/match_traj.rs::strict_wrong_order_flags_out_of_order].
+- **unordered** — order is ignored [test: crates/trajectoryeval/src/match_traj.rs::unordered_ignores_order]. `missing` = required expected tools absent
+  from actual (as a set); `unexpected` = actual tools not in the expected set [test: crates/trajectoryeval/src/match_traj.rs::unordered_reports_missing_and_unexpected_sets];
+  `out_of_order` is always false [test: crates/trajectoryeval/src/match_traj.rs::unordered_ignores_order].
 - **subsequence** — the required steps must appear in `actual` in order but not
-  necessarily contiguously (other tools may interleave). `missing` = required
-  steps not found as an in-order subsequence; extras are allowed, so `unexpected`
-  stays empty; `out_of_order` is false.
+  necessarily contiguously (other tools may interleave) [test: crates/trajectoryeval/src/match_traj.rs::subsequence_interleaved_passes]. `missing` = required
+  steps not found as an in-order subsequence [test: crates/trajectoryeval/src/match_traj.rs::subsequence_out_of_order_is_missing_not_reorder]; extras are allowed, so `unexpected`
+  stays empty; `out_of_order` is false [test: crates/trajectoryeval/src/match_traj.rs::subsequence_interleaved_passes].
 
-In every mode: `pass = missing.is_empty() && unexpected.is_empty() && !out_of_order`.
+In every mode: `pass = missing.is_empty() && unexpected.is_empty() && !out_of_order` [test: crates/trajectoryeval/src/match_traj.rs::strict_exact_match_passes] [test: crates/trajectoryeval/src/match_traj.rs::strict_missing_required_step] [test: crates/trajectoryeval/src/match_traj.rs::strict_extra_tool_is_unexpected] [test: crates/trajectoryeval/src/match_traj.rs::strict_wrong_order_flags_out_of_order] [test: crates/trajectoryeval/src/match_traj.rs::unordered_ignores_order] [test: crates/trajectoryeval/src/match_traj.rs::unordered_reports_missing_and_unexpected_sets] [test: crates/trajectoryeval/src/match_traj.rs::subsequence_interleaved_passes] [test: crates/trajectoryeval/src/match_traj.rs::subsequence_out_of_order_is_missing_not_reorder].
 
-## Exit codes
+- `check` exit code `0`: trajectory matched the spec (pass) [test: crates/trajectoryeval/tests/integration.rs::check_matching_trajectory_passes_exit_zero].
+- `check` exit code `1`: a deviation (missing / unexpected / out-of-order steps) [test: crates/trajectoryeval/tests/integration.rs::check_deviating_trajectory_exits_one] [test: crates/trajectoryeval/tests/prose_claims.rs::claim_check_exit_one_unexpected_and_out_of_order].
+- `check` exit code `2`: harness error (unreadable or unparseable input) [test: crates/trajectoryeval/tests/integration.rs::check_unreadable_input_exits_two] [test: crates/trajectoryeval/tests/prose_claims.rs::claim_check_exit_two_unparseable].
 
-Mirrors the evalkit / schemaguard 0/1/2 gate policy, plus `3` for `tier`:
+This is a plain CLI **gate**, not a lifecycle hook [test: crates/trajectoryeval/tests/prose_claims.rs::claim_not_a_lifecycle_hook].
 
-| code | meaning |
-|------|---------|
-| `0`  | trajectory matched the spec (pass) |
-| `1`  | a deviation (missing / unexpected / out-of-order steps; `tier`: mismatch or absent) |
-| `2`  | harness error (unreadable or unparseable input) |
-| `3`  | `tier` only: needs-human (unimplemented diff strategy, or fuzzy drift beyond threshold) |
-
-This is a plain CLI **gate**, not a lifecycle hook.
-
-## Wired into condukt (Phase 6)
-
-`trajectoryeval` is not just a standalone binary — condukt's task schema carries an
-optional `expected_trajectory: {mode, steps:[{tool}]}` field (see
-`crates/condukt/src/model.rs`), which condukt-interpreter may fill in when a task's
-correctness depends on *how* it's done, not just the output. When a task declares it,
-condukt's Phase 6 (`crates/condukt/skills/condukt/SKILL.md`) runs `extract` on the
-worker sub-agent's transcript and feeds the result into `check` **alongside** the
-normal output verification — a second, path-based verifier dimension. If the
-`trajectoryeval` binary isn't on `PATH`, or the task has no `expected_trajectory`, or
-the worker transcript can't be resolved, this step is skipped entirely (fail-soft; it
-never blocks Phase 6). A trajectory deviation (exit `1`) does **not** override the
-output verdict — a task whose output satisfies `done_criteria` still gets `verified`,
-with the deviation recorded as a `reason` for HOTL visibility.
-
-## Example
+condukt's task schema carries an
+optional `expected_trajectory` field (see
+`crates/condukt/src/model.rs`) [test: crates/condukt/src/model.rs::task_with_expected_trajectory_round_trips] [test: crates/condukt/src/model.rs::task_without_expected_trajectory_defaults_none].
 
 ```sh
 trajectoryeval extract --transcript session.jsonl > actual.json

@@ -89,11 +89,22 @@ fn read_tasks_file(path: &Path) -> Result<Option<(String, Vec<Task>)>> {
                 .and_then(|sp| row_id_at(&text, sp.start))
                 .map(|id| format!(" (task {id})"))
                 .unwrap_or_default();
+            let at = e
+                .span()
+                .and_then(|sp| text.get(..sp.start.min(text.len())))
+                .map(|head| {
+                    let line = head.matches('\n').count() + 1;
+                    let col = head.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+                    format!(" at line {line}, column {col}")
+                })
+                .unwrap_or_default();
             // The deserialize error itself is the reason (for a removed status:
             // serde's "unknown variant `needs-ruling`, expected one of ...").
             let why = e.message().to_string();
-            return Err(anyhow::Error::new(e)
-                .context(format!("failed to parse {}{row}: {why}", path.display())));
+            return Err(anyhow::Error::new(e).context(format!(
+                "failed to parse {}{at}{row}: {why}",
+                path.display()
+            )));
         }
     };
     Ok(Some((text, file.task)))

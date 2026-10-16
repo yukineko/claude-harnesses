@@ -6510,6 +6510,13 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
         let _ = acc.record(depth_exhausted());
     }
 
+    // Memory rule: backticks in a double-quoted note / commit message are
+    // command-substituted and silently eaten. Recorded (not returned) so a
+    // Deny elsewhere on the segment still outranks this Ask.
+    if let Some(ask) = backtick_in_double_quoted_text(seg) {
+        let _ = acc.record(ask);
+    }
+
     // D3: analyse EVERY candidate command-word position; deny if ANY is
     // destructive. See `command_candidates`.
     for idx in command_candidates(&tokens) {
@@ -7618,6 +7625,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // scan for the `\;` form without depending on where the split fell.
         "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], depth, ctx),
         "rm" => analyze_rm(rest, ctx),
+        "gh" => analyze_gh(rest),
         "git" => {
             // daf7611b: `git -c core.pager="rm -rf ~/x" log` — command-valued
             // config set for this one command. Either side's Deny wins.
@@ -8958,6 +8966,129 @@ fn sets_hookspath_inline(globals: &[&str]) -> bool {
     })
 }
 
+/// One pathspec of `git checkout [<tree-ish>] -- <pathspec>`: Allow only when
+/// git reports nothing at or below it that the overwrite would destroy; Deny
+/// when it reports uncommitted changes; Ask whenever that cannot be observed.
+fn checkout_pathspec_verdict(ctx: &Ctx<'_>, op: &str) -> Decision {
+    let undetermined = |why: &str| {
+        Decision::ask(format!(
+            "git checkout -- `{op}` overwrites the file from git and would destroy any \
+uncommitted changes in it, and blastguard cannot tell whether it has any ({why})"
+        ))
+    };
+    let lexical = match ctx.scope.lexical_absolute(op, ctx.base_for("git")) {
+        Determination::Known(l) => l,
+        Determination::Undetermined(_) => return undetermined("not a placeable literal path"),
+    };
+    let Some(real) = ctx.scope.resolve(&lexical) else {
+        return undetermined("the path could not be resolved");
+    };
+    let Some(probe) = ctx.scope.git_tree_probe() else {
+        return undetermined("no git probe in this session model");
+    };
+    let facts = match probe(&real, &crate::deletion::build_candidates(&real)) {
+        Determination::Known(f) => f,
+        Determination::Undetermined(_) => return undetermined("git could not be asked"),
+    };
+    if facts.hidden_index_state {
+        return undetermined("an index entry is assume-unchanged / skip-worktree / unmerged");
+    }
+    if facts.status.iter().all(|(xy, _)| xy == "!!") {
+        return Decision::Allow;
+    }
+    let examples: Vec<String> = facts
+        .status
+        .iter()
+        .filter(|(xy, _)| xy != "!!")
+        .take(3)
+        .map(|(xy, p)| format!("`{p}` ({xy})"))
+        .collect();
+    Decision::deny(format!(
+        "git checkout -- `{op}` would destroy uncommitted changes (e.g. {}). Commit or stash \
+them first.",
+        examples.join(", ")
+    ))
+}
+
+/// GitHub Actions is banned in this repository: every `gh run …` and
+/// `gh workflow …` is denied. Other `gh` subcommands (`pr`, `issue`, …) are not
+/// this rule's concern.
+fn analyze_gh(rest: &[&str]) -> Decision {
+    // `-R/--repo <owner/repo>` is the one value-taking flag that may precede
+    // the subcommand; skip its value so it is not read as the subcommand.
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        if t == "-R" || t == "--repo" {
+            i += 2;
+            continue;
+        }
+        if t.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        break;
+    }
+    match rest.get(i).map(|t| normalized_command(t)) {
+        Some(sub) if sub == "run" || sub == "workflow" => Decision::deny(format!(
+            "`gh {sub}` operates GitHub Actions, which is banned in this repository"
+        )),
+        _ => Decision::Allow,
+    }
+}
+
+/// A backtick inside a DOUBLE-quoted argument of `backlog add|edit` or
+/// `git commit` is command substitution: the shell runs the span and replaces
+/// it with its (usually empty) output, so the stored note / commit message
+/// silently loses that text. Single-quoted backticks are literal and fine.
+fn backtick_in_double_quoted_text(seg: &str) -> Option<Decision> {
+    // Cheap pre-filter: without both characters there is nothing to find, and
+    // `command_candidates` below is too costly to run on every re-analysed
+    // segment (the D4 budget test measures it).
+    if !(seg.contains('`') && seg.contains('"')) {
+        return None;
+    }
+    let tokens: Vec<&str> = seg.split_whitespace().collect();
+    let target = command_candidates(&tokens).into_iter().find_map(|idx| {
+        let cmd = normalized_command(tokens[idx]);
+        let rest = &tokens[idx + 1..];
+        match cmd.as_str() {
+            "backlog" => rest
+                .iter()
+                .find(|t| !t.starts_with('-'))
+                .map(|t| normalized_command(t))
+                .filter(|s| s == "add" || s == "edit")
+                .map(|s| format!("backlog {s}")),
+            "git" => git_subcommand_index(rest)
+                .map(|i| normalized_command(rest[i]))
+                .filter(|s| s == "commit")
+                .map(|_| "git commit".to_string()),
+            _ => None,
+        }
+    })?;
+    let (mut in_s, mut in_d, mut escaped) = (false, false, false);
+    for c in seg.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' if !in_s => escaped = true,
+            '\'' if !in_d => in_s = !in_s,
+            '"' if !in_s => in_d = !in_d,
+            '`' if in_d => {
+                return Some(Decision::ask(format!(
+                    "a backtick inside a double-quoted argument of `{target}` is command \
+substitution: the shell runs that span and silently deletes it from the stored text. Use single \
+quotes (or escape the backtick) to keep it literal"
+                )));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn analyze_git(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     let idx = match git_subcommand_index(rest) {
         Some(i) => i,
@@ -9094,6 +9225,35 @@ fn analyze_git(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
 directory",
                     );
                 }
+            }
+            // Memory rule: `git checkout -- <file>` overwrites the file from
+            // the index/tree-ish and destroys its uncommitted changes. Judged by
+            // what it destroys: a file git reports clean is Allow, a file with
+            // uncommitted changes is Deny, and anything that cannot be probed
+            // (no git probe in this session model, a non-literal path, a
+            // `git -C`/`--git-dir`/`--work-tree` that moves the base) is Ask.
+            if let Some(pos) = rest.iter().position(|t| *t == "--") {
+                let moved_base = rest[..idx].iter().any(|t| {
+                    ["-C", "--git-dir", "--work-tree"]
+                        .iter()
+                        .any(|f| t == f || t.starts_with(&format!("{f}=")))
+                        || (t.starts_with("-C") && t.len() > 2)
+                });
+                let mut acc = VerdictAcc::default();
+                for op in &rest[pos + 1..] {
+                    let v = if moved_base {
+                        Decision::ask(format!(
+                            "git checkout -- `{op}`: the repository base is moved by a global \
+option, so blastguard cannot tell whether the file has uncommitted changes it would discard"
+                        ))
+                    } else {
+                        checkout_pathspec_verdict(ctx, op)
+                    };
+                    if let Some(deny) = acc.record(v) {
+                        return deny;
+                    }
+                }
+                return acc.finish();
             }
             Decision::Allow
         }

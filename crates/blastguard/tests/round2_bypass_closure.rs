@@ -376,6 +376,12 @@ fn git_checkout_dashdash_ordinary_path_stays_allowed_protected_denied() {
     // must NOT be denied (an over-block auditor caught round 1 blanket-denying
     // it — the friction that gets a gate turned off). It was reported RED
     // (deny) before this narrowing.
+    //
+    // Memory rule (bg-memrules): the narrowing is now judged by what the
+    // checkout destroys. In the hook (which attaches a git probe) a clean file
+    // is Allow and a dirty one Deny — see tests/memory_rules.rs. Here, with NO
+    // location model, dirtiness cannot be determined, so it is an Ask (still
+    // not a Deny: the over-block concern above holds for the interactive hook).
     for cmd in [
         "git checkout -- src/main.rs",
         "git checkout -- Cargo.toml",
@@ -383,7 +389,10 @@ fn git_checkout_dashdash_ordinary_path_stays_allowed_protected_denied() {
         "git checkout HEAD~1 -- src/main.rs",
         "git checkout HEAD -- README.md",
     ] {
-        assert_eq!(bash(cmd), Decision::Allow, "expected Allow for `{cmd}`");
+        assert!(
+            bash(cmd).is_ask(),
+            "expected Ask (undetermined) for `{cmd}`"
+        );
     }
     // The disarm cases the narrowing must NOT reopen: a checkout of a PROTECTED
     // pathspec still discards its uncommitted protected edits, and the

@@ -52231,3 +52231,62 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; fini
 rev = "1b3980736b649489a338c94ab1634fd6e08d93e8"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "b0c3d263"
+title = "check-closure-evidence.py は backlog CLI が書く closure 記録 (runner=cargo-test/pytest/script) を全件 block する — runner と command 先頭語の不一致"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+crates/backlog/src/evidence.rs:61-66 records the runner as cargo-test / pytest / script; scripts/check-closure-evidence.py:298 requires it to equal the first word of the command (cargo / python3 / bash). Replaying 6 recent closing commits in a scratch clone: all 6 blocked, 3 of them on this mismatch alone (the other 3 closed rows with no closure record, which is intended). Prerequisite for wiring the scanner into pre-commit (eca8dea7 stage B). Fix both sides together with a regression test that pushes a CLI-written closure through the gate.
+
+Observed 2026-10-03 by the eca8dea7 investigation (main 9ea5a326); raw logs scratchpad eca8dea7-run-*.log, proposal eca8dea7-proposal.md."""
+created_at = 1791034486
+updated_at = 1792157046
+weight = 0.0
+issue_number = 1226
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1226"
+issue_closed_at = 1792157047
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_b0c3d263.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003597
+detail = """
+exit 1: test/unittest.py\u001B[0m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_b0c3d263.py::\u001B[1mClosureRunnerLabel::test_cli_written_runner_label_is_accepted\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 2.06s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --color=no --runxfail scripts/test_backlog_b0c3d263.py"
+exit = 0
+passed = 2
+rev = "aa40bdebf8b6f9468b2b7cd6605b5961b004d7d8"
+observed_at = 1792157038
+output_digest = "sha256:faa66c69963344d918b421fb169bcacf3525832ff16a3ef78285abfc6fd69914"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-b0c3d263
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_b0c3d263.py ..                                      [100%]
+
+============================== 2 passed in 3.37s ===============================
+"""
+
+[task.closure.red]
+rev = "677b88987124e25f1f0b4cd920acee5d0822e46f"
+exit = 1
+kind = "behavioural"

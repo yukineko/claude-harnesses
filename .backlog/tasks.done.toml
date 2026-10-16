@@ -51988,3 +51988,63 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "e7ce35eabd0d7f1da8fa3e1677da6b2789091745"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "11be9484"
+title = "blastguard classify.rs が task の散文に detect を当て、破壊的コマンドを『記述する』散文や file 名で force-gate する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+crates/blastguard/src/classify.rs:213-219 runs detect::detect on title + done_criteria + file list. Seen again in batch 13: 73c2c089 stayed force-gated because its touched file is scripts/check-plugin-rollout.py (needle 'rollout'), and e033c406 because its prose quoted git config core.hooksPath. Not fixed by fa1fce21 (different root: prose is not shell). Needs a decision: condukt passes real commands separately, or a backtick-span extraction rule. Either moves the measured DENY 85 / ASK 101 distribution.
+
+Observed 2026-10-03 in flow batch 13 (run-20261003-155809-33509), base fbc3dac8 / main c0d4701c."""
+created_at = 1791018586
+updated_at = 1792155552
+weight = 0.0
+issue_number = 1159
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1159"
+issue_closed_at = 1792155553
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_11be9484 -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003592
+detail = """
+exit 101: c/.harness-worktrees/session-1a4ac77f/crates/overwatch)
+   Compiling blastguard v0.2.113 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.26s
+     Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-55b4c2d69dad1992)
+error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_11be9484 -- --include-ignored file_name_containing_a_deploy_needle"
+exit = 0
+passed = 1
+rev = "12bfc9707a4aa5a712d30007e890b7da64ea6196"
+observed_at = 1792155518
+output_digest = "sha256:0131bc29ea9c354717e2285e003d2d088905c76206823dc9718983fc5e059684"
+excerpt = """
+
+running 1 test
+test file_name_containing_a_deploy_needle_does_not_force_gate ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.02s
+
+   Compiling blastguard v0.2.131 (/Users/yuki/src/.harness-worktrees/fix-11be9484/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.83s
+     Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-27e56823383379b3)
+"""
+
+[task.closure.red]
+rev = "1b3980736b649489a338c94ab1634fd6e08d93e8"
+exit = 101
+kind = "behavioural"

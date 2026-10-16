@@ -153,7 +153,6 @@ impl Fixture {
 }
 
 #[test]
-#[ignore = "backlog cf70f785: RED repro"]
 fn verified_with_worktree_runs_oracle_in_the_passed_worktree() {
     let fx = Fixture::new("red");
     let wt = fx.setup("r1");

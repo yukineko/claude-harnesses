@@ -1952,3 +1952,30 @@ exit 101: es/overwatch)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.49s
      Running tests/heredoc_slash_literal_misparse.rs (target/debug/deps/heredoc_slash_literal_misparse-de50a0a88f2ca2e2)
 error: test failed, to rerun pass `-p blastguard --test heredoc_slash_literal_misparse`"""
+
+[[task]]
+id = "86e21645"
+title = "maintree guard refuses a fast-forward when the source branch is already gone"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "scripts/guard-maintree-bash.py integration_head() accepts a moved HEAD only if it is a merge commit or contained in a ref other than main. A ff whose source branch is deleted before PostToolUse (same call, or another session during an unrelated call) is refused. User ruling 2026-10-16: main reflog 'merge ...: Fast-forward' / 'merge ...' is integration evidence; 'commit:' still refused; unreadable reflog refused (undetermined). Controls in the same file must stay green."
+created_at = 1792155566
+updated_at = 1792155566
+weight = 0.0
+issue_number = 1374
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1374"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_guard_maintree_bash_ff_source_gone.py"
+rev = "7b8cc0b73eed33d76260918d6cf74021f3e97633"
+observed_at = 1792155566
+detail = """
+exit 1: nfo ============================
+FAILED scripts/test_guard_maintree_bash_ff_source_gone.py::FfSourceGoneAllowed::test_a_ff_and_branch_delete_in_same_call_is_allowed
+FAILED scripts/test_guard_maintree_bash_ff_source_gone.py::FfSourceGoneAllowed::test_b_other_session_ff_and_branch_delete_during_unrelated_call_is_allowed
+========================= 2 failed, 6 passed in 9.36s =========================="""

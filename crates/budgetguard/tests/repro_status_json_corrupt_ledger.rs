@@ -14,7 +14,11 @@ fn status_json_corrupt_ledger_is_not_zero_spend() {
     let cwd = base.join("cwd");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&cwd).unwrap();
-    std::fs::write(cwd.join("budgetguard.toml"), "[daily]\nwarn_usd = 5.0\nblock_usd = 10.0\n").unwrap();
+    std::fs::write(
+        cwd.join("budgetguard.toml"),
+        "[daily]\nwarn_usd = 5.0\nblock_usd = 10.0\n",
+    )
+    .unwrap();
     let state = home.join(".budgetguard/state");
     std::fs::create_dir_all(&state).unwrap();
     std::fs::write(state.join("ledger.json"), "{ corrupt").unwrap();
@@ -37,7 +41,8 @@ fn status_json_corrupt_ledger_is_not_zero_spend() {
     let _ = std::fs::remove_dir_all(&base);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let code = out.status.code();
-    let reads_as_headroom = stdout.contains("\"pressure\":false") && stdout.contains("\"day_usd\":0");
+    let reads_as_headroom =
+        stdout.contains("\"pressure\":false") && stdout.contains("\"day_usd\":0");
     assert!(
         code != Some(0) && !reads_as_headroom,
         "corrupt ledger reported as zero spend / no pressure. exit={code:?} stdout={stdout:?}"

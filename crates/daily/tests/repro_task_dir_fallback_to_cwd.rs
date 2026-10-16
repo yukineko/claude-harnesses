@@ -17,7 +17,12 @@ fn daily(home: &Path, cwd: &Path, args: &[&str], stdin: &str) -> (i32, String, S
         .stderr(Stdio::piped())
         .spawn()
         .expect("daily spawns");
-    child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
     (
         out.status.code().unwrap_or(-1),
@@ -35,11 +40,22 @@ fn missing_task_dir_does_not_run_in_cwd() {
     let (code, _, err) = daily(
         &home,
         &home,
-        &["add", "--name", "wheredir", "--command", "touch ran_in_cwd.marker", "--dir", "no-such-subdir"],
+        &[
+            "add",
+            "--name",
+            "wheredir",
+            "--command",
+            "touch ran_in_cwd.marker",
+            "--dir",
+            "no-such-subdir",
+        ],
         "",
     );
     assert_eq!(code, 0, "add failed: {err}");
-    let payload = format!(r#"{{"hook_event_name":"SessionStart","cwd":"{}"}}"#, home.display());
+    let payload = format!(
+        r#"{{"hook_event_name":"SessionStart","cwd":"{}"}}"#,
+        home.display()
+    );
     let (_, stdout, stderr) = daily(&home, &home, &["session-start"], &payload);
     assert!(
         !home.join("ran_in_cwd.marker").exists(),

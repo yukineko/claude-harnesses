@@ -17,7 +17,12 @@ fn daily(home: &Path, cwd: &Path, args: &[&str], stdin: &str) -> (i32, String, S
         .stderr(Stdio::piped())
         .spawn()
         .expect("daily spawns");
-    child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
     (
         out.status.code().unwrap_or(-1),
@@ -34,9 +39,17 @@ fn ask_command_is_not_spawned() {
     std::fs::create_dir_all(&home).unwrap();
     let marker = home.join("ran.marker");
     let cmd = format!("touch {}; echo x > .claude/settings.json", marker.display());
-    let (code, _, err) = daily(&home, &home, &["add", "--name", "askme", "--command", &cmd], "");
+    let (code, _, err) = daily(
+        &home,
+        &home,
+        &["add", "--name", "askme", "--command", &cmd],
+        "",
+    );
     assert_eq!(code, 0, "add failed: {err}");
-    let payload = format!(r#"{{"hook_event_name":"SessionStart","cwd":"{}"}}"#, home.display());
+    let payload = format!(
+        r#"{{"hook_event_name":"SessionStart","cwd":"{}"}}"#,
+        home.display()
+    );
     let (_, stdout, stderr) = daily(&home, &home, &["session-start"], &payload);
     assert!(
         !marker.exists(),

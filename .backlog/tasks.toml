@@ -513,38 +513,6 @@ exit 101: ompiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/sessi
 error: test failed, to rerun pass `-p blastguard --test worktree_protected_paths_adversarial`"""
 
 [[task]]
-id = "7e575392"
-title = "backlog sync has no reopen arm: a task moved back from done/cancelled to pending/needs-ruling leaves its GitHub issue closed"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-04 (worktree flow-issue-sync, base main 4027a8dc). Six issues were CLOSED while their tasks were active in .backlog/tasks.toml: #420 ae4543d5 needs-ruling, #427 e033c406 needs-ruling, #497 cc809395 pending, #633 29b08fc7 pending, #862 ee273b5e pending, #924 f036e218 pending. backlog sync --help lists arms both/create/close/body only; the dry run before the manual reopen did not list them (plan was 5 create + close #140). Reopened by hand with gh issue reopen. Consequence: the GitHub mirror reads as resolved while the work is open, the silent-means-fine reading CLAUDE.md section 1 forbids. Done criteria: sync plans a reopen action for any task in an active status whose linked issue is CLOSED, with a RED-first test against a fake gh."
-created_at = 1791047075
-updated_at = 1792003603
-weight = 0.0
-issue_number = 1275
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1275"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test backlog_7e575392 -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003602
-detail = """
-exit 101: failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.49s
-
-   Compiling backlog v0.3.46 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
-     Running tests/backlog_7e575392.rs (target/debug/deps/backlog_7e575392-a3ec624f5dfd0573)
-error: test failed, to rerun pass `-p backlog --test backlog_7e575392`"""
-
-[[task]]
 id = "2821738c"
 title = "condukt: state set --status cancelled performs the verified-to-cancelled transition that state cancel explicitly refuses"
 project = "/Users/yuki/src/harness"

@@ -42,3 +42,12 @@ Given verdicts (`--audits`) or the real overwatch violation stream (`--from-viol
 
 `download` is a no-op when the cache already exists, unless `--force` is given. [test: crates/benchkit/src/download.rs::existing_cache_is_a_noop] [test: crates/benchkit/tests/prose_claims.rs::claim_download_force_refetch].
 It shells out to `curl` with a hard timeout (`--max-time 120`) and lists no HTTP client crate in its `[dependencies]`. [test: crates/benchkit/tests/prose_claims.rs::claim_download_curl_timeout].
+
+<!-- record: 2026-07-08 rev: 999af47e -->
+- **Dataset:** SWE-bench Verified — a 500-task human-validated subset of
+  SWE-bench.
+- **Publisher:** Princeton NLP (`princeton-nlp/SWE-bench_Verified` on
+  HuggingFace, <https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified>).
+- **License:** the dataset is distributed under its upstream terms (MIT for the
+  SWE-bench tooling; the referenced repositories carry their own licenses).
+<!-- /record -->

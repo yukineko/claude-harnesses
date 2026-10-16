@@ -84,7 +84,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.32"
+version = "0.1.33"
 dependencies = [
  "clap",
  "harness-core",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "chrono",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.253"
+version = "0.7.256"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "evalkit"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "clap",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.55"
+version = "0.2.56"
 dependencies = [
  "anyhow",
  "chrono",
@@ -874,7 +874,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.68"
+version = "0.2.69"
 dependencies = [
  "anyhow",
  "clap",
@@ -1266,7 +1266,7 @@ dependencies = [
 
 [[package]]
 name = "ship"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "clap",
@@ -1368,7 +1368,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.40"
+version = "0.1.41"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1535,7 +1535,7 @@ dependencies = [
 
 [[package]]
 name = "trajectoryeval"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "anyhow",
  "clap",

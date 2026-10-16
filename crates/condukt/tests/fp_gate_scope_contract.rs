@@ -130,12 +130,17 @@ fn decomposition_json(task_id: &str, kind: Option<&str>) -> String {
 }
 
 /// Write a `<task>.<phase>.json` RED/GREEN proof artifact under `<dir>/.tdd/`.
+/// Both phases record the same `cmd`: `tdd oracle` only accepts a Fail→Pass
+/// whose RED and GREEN ran one and the same test command.
 fn write_proof(dir: &Path, task: &str, phase: &str, passed: bool) {
     let proof_dir = dir.join(".tdd");
     std::fs::create_dir_all(&proof_dir).expect("create proof dir");
     let path = proof_dir.join(format!("{task}.{phase}.json"));
-    std::fs::write(&path, serde_json::json!({ "passed": passed }).to_string())
-        .expect("write proof artifact");
+    std::fs::write(
+        &path,
+        serde_json::json!({ "passed": passed, "cmd": "cargo test" }).to_string(),
+    )
+    .expect("write proof artifact");
 }
 
 /// Seed a fresh isolated run.

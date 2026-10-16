@@ -28,7 +28,7 @@ finder (提案)  →  refute-verifier (反証で篩う)  →  verdict 三値
 
 overwatch バイナリをビルド済みにしておくこと。スクリプトが自動解決する (`OVERWATCH_BIN` / PATH / `target/{release,debug}`) [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_binary_resolution]。
 
-## 対象 crate (既定) [test: scripts/test_check_gate_crates_sync.py::test_current_repo_is_in_sync]
+## 対象 crate (既定)
 
 既定の target は GATE crates に audit 専用の backlog を加えた `blastguard,propguard,specguard,stuckguard,mutategate,overwatch,parallelguard,backlog` である [test: scripts/test_check_gate_crates_sync.py::test_current_repo_is_in_sync]。
 `--target` で上書きできる [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_target_override]。

@@ -267,43 +267,37 @@ fn an_uninterpretable_backlog_answer_is_no_longer_consulted() {
     );
 }
 
-/// Audit §4.5 (P-5), the one permissive-A path: a plugin-cache directory that
-/// cannot be listed is a failure to observe whether `backlog` is installed —
-/// not an observation that it isn't. Reading it as "not installed" skips the
-/// driver-liveness check entirely (`backlog_driver_active` returns false with no
-/// binary), so autoflow would start an unattended auto-loop that may be racing a
-/// live `/flow` driver. Cannot-determine must stand down instead.
+/// Audit §4.5 (P-5), re-anchored 2026-10-16: a plugin-cache directory that
+/// cannot be listed is a failure to observe whether `backlog` is installed.
+/// Silently standing down (empty stdout, exit 0) reads as "allow the stop",
+/// i.e. indistinguishable from a clean pass. Cannot-determine must BLOCK
+/// visibly and leave the phase untouched.
 #[cfg(unix)]
 #[test]
-fn unreadable_plugin_cache_stands_down_instead_of_auto_driving() {
+fn unreadable_plugin_cache_blocks_instead_of_silently_standing_down() {
     use std::os::unix::fs::PermissionsExt;
 
     let env = Env::new("cache-unreadable");
-    // Work is waiting, so a stand-down is observably different from "nothing
-    // to do": if autoflow proceeds, it blocks with the condukt continuation.
     env.write_run_state(r#"[{"id":"t1","status":"pending"}]"#);
 
     let cache = env.plugin_cache();
     std::fs::create_dir_all(&cache).unwrap();
-    // Executable but NOT readable: a cached binary could still be launched,
-    // only the listing is denied.
     std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o111)).unwrap();
 
     let (code, stdout, stderr) = env.stop();
 
-    // Restore before asserting so a failure can't leave an unreadable temp dir.
     std::fs::set_permissions(&cache, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     assert_eq!(code, 0, "a Stop hook always exits 0; stderr: {stderr}");
     assert!(
-        stdout.trim().is_empty(),
-        "could not determine whether a driver is active ⇒ stand down for this \
-         tick, but autoflow drove the queue anyway: {stdout:?}"
+        blocks(&stdout),
+        "could not determine whether a driver is active ⇒ must block visibly, \
+         not stay silent: {stdout:?}"
     );
     assert_eq!(
         env.phase().as_deref(),
         Some("record_requested"),
-        "standing down must leave the phase untouched for the next Stop"
+        "an undetermined liveness must leave the phase untouched for the next Stop"
     );
 }
 

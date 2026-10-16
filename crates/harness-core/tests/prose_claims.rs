@@ -40,9 +40,14 @@ fn crate_dir() -> PathBuf {
 /// return (exit code, stdout, stderr). The child branch of the test performs the
 /// process-exiting call.
 fn reexec(test_name: &str) -> (Option<i32>, String, String) {
+    // Isolated HOME: a hook-mode `run_guarded` panic writes its per-session
+    // consecutive-panic marker under `~/.harness/state/`, which must not land
+    // in the real home of whoever runs the suite.
+    let home = tempfile::tempdir().unwrap();
     let out = Command::new(std::env::current_exe().unwrap())
         .args([test_name, "--exact", "--nocapture", "--test-threads=1"])
         .env("PROSE_CLAIMS_CHILD", test_name)
+        .env("HOME", home.path())
         .output()
         .unwrap();
     (

@@ -60,7 +60,6 @@ class BacklogDf49f872(unittest.TestCase):
     def test_pre_commit_runs_projkey_store_classification(self):
         self.assertIn("pre-commit", invoking_hooks("check-projkey-store-classification.py"))
 
-    @unittest.expectedFailure  # backlog df49f872: the table has drifted; wiring needs it green
     def test_projkey_store_classification_is_green_on_this_tree(self):
         r = subprocess.run([sys.executable, "scripts/check-projkey-store-classification.py"],
                            cwd=REPO, capture_output=True, text=True)

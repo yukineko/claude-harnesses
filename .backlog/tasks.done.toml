@@ -52404,3 +52404,246 @@ scripts/test_guard_maintree_bash_ff_source_gone.py ........              [100%]
 rev = "a8ec7ac920e179d96dee7a336382423338ab55ee"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "2e7481d4"
+title = "evalkit: an all-draft run exits 0 having evaluated nothing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/evalkit/src/run.rs execute counts drafts in total so the no-cases exit-2 guard never fires; every outcome is skipped, failed==0, exit 0, output 0/1 passed. Test asserts non-zero exit when no case was evaluated."
+created_at = 1792155558
+updated_at = 1792157985
+weight = 0.0
+issue_number = 1370
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1370"
+issue_closed_at = 1792157988
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p evalkit --test repro_all_draft_run_exits_zero -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155558
+detail = """
+exit 101: d out; finished in 0.46s
+
+   Compiling evalkit v0.1.9 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.08s
+     Running tests/repro_all_draft_run_exits_zero.rs (target/debug/deps/repro_all_draft_run_exits_zero-2d4a512e0ca88a3b)
+error: test failed, to rerun pass `-p evalkit --test repro_all_draft_run_exits_zero`"""
+
+[task.closure]
+reason = "already-fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p evalkit --test repro_all_draft_run_exits_zero -- --ignored"
+exit = 0
+passed = 1
+rev = "347b5c7ddfcf1d3ee7b24de5a39a184af7ac1e4b"
+observed_at = 1792157956
+output_digest = "sha256:d05f3ed09da303dd73f1af33d1b184f500918b51b7e99e01a06c3290a593bb85"
+excerpt = """
+
+running 1 test
+test all_draft_run_does_not_exit_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/repro_all_draft_run_exits_zero.rs (target/debug/deps/repro_all_draft_run_exits_zero-d7aafc6289a37eda)
+"""
+
+[task.closure.red]
+rev = "a0d1fe3da187692e760ec865562bdf7fc26ceb98"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "cf70f785"
+title = "condukt state set --status verified --worktree W が F->P oracle を W ではなく以前記録された worktree (無ければ cwd) で走らせる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+crates/condukt/src/main.rs:4228-4234 resolves run_dir from rs.tasks[..].worktree (the PREVIOUSLY recorded worktree), falling back to cwd; the --worktree passed in the same call is not applied first. With no prior record it runs tdd oracle in the session cwd -> 'tdd oracle exited non-zero' although `tdd oracle --task <id>` in W exits 0. Workaround used: `state set --status done --worktree W --branch B` first. Fix: apply the call's --worktree before resolving run_dir, or refuse when they differ (fail-closed). Needs a cargo test RED first.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028023
+updated_at = 1792160217
+weight = 0.0
+issue_number = 1199
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1199"
+issue_closed_at = 1792160218
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_cf70f785 -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003550
+detail = """
+exit 101: ailed; 0 ignored; 0 measured; 1 filtered out; finished in 1.42s
+
+   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running tests/backlog_cf70f785.rs (target/debug/deps/backlog_cf70f785-1fe3a3c838c30663)
+error: test failed, to rerun pass `-p condukt --test backlog_cf70f785`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_cf70f785 -- --include-ignored"
+exit = 0
+passed = 2
+rev = "22d4f8d5c0f72c0e25773cbb14e01e87ea17ed01"
+observed_at = 1792160174
+output_digest = "sha256:84ec20d1ccf239169eb1d49f11ca0d43cf6a4bbaa1cc0e63f71e2c3f82bccbda"
+excerpt = """
+
+running 2 tests
+{"valid_fp_oracle":true,"transition":"fail_to_pass"}
+{"valid_fp_oracle":false,"transition":"unknown"}
+{"valid_fp_oracle":true,"transition":"fail_to_pass"}
+{"valid_fp_oracle":false,"transition":"unknown"}
+test verified_with_worktree_runs_oracle_in_the_passed_worktree ... ok
+test control_worktree_recorded_first_then_verified_passes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.66s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/backlog_cf70f785.rs (target/debug/deps/backlog_cf70f785-2dd2ee06ad200359)
+"""
+
+[task.closure.red]
+rev = "677b88987124e25f1f0b4cd920acee5d0822e46f"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "6ca3d71f"
+title = "check-projkey-store-classification.py が main で 6 件 red (count drift 2 / stale 1 / 未分類 call site 3)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Exit 1 with 6 findings at 9ea5a326: 2 count drifts, 1 stale table entry, 3 unclassified projkey call sites in crates/*/src that need a shared-vs-worktree-local ruling each. Runtime 3.9-9.9 s (over the ~2 s pre-commit budget). test_backlog_de721e5e_df49f872 holds 2 expectedFailure pins. Prerequisite for wiring (eca8dea7 stage B).
+
+Observed 2026-10-03 by the eca8dea7 investigation (main 9ea5a326); raw logs scratchpad eca8dea7-run-*.log, proposal eca8dea7-proposal.md."""
+created_at = 1791034488
+updated_at = 1792160517
+weight = 0.0
+issue_number = 1227
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1227"
+issue_closed_at = 1792160520
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_de721e5e_df49f872.py::BacklogDf49f872::test_projkey_store_classification_is_green_on_this_tree"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003579
+detail = """
+exit 1: st.py\u001B[0m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_de721e5e_df49f872.py::\u001B[1mBacklogDf49f872::test_projkey_store_classification_is_green_on_this_tree\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m============================== \u001B[31m\u001B[1m1 failed\u001B[0m\u001B[31m in 3.79s\u001B[0m\u001B[31m ===============================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --color=no --runxfail scripts/test_backlog_de721e5e_df49f872.py::BacklogDf49f872::test_projkey_store_classification_is_green_on_this_tree"
+exit = 0
+passed = 1
+rev = "a128738fdade3e8c6dd6a160e8956ea70d9c543f"
+observed_at = 1792160463
+output_digest = "sha256:667b02d997f0d01f53e6f66326b97329aa0023e8b1f0b401f49309513e55d484"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-6ca3d71f
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_backlog_de721e5e_df49f872.py .                              [100%]
+
+============================== 1 passed in 34.93s ==============================
+"""
+
+[task.closure.red]
+rev = "677b88987124e25f1f0b4cd920acee5d0822e46f"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "dc37a4da"
+title = "tdd oracle は RED と GREEN が別のテストコマンドで記録されていても fail_to_pass と認める"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+666b6704 verifier: the worker's RED was on scripts/test_check_unlisted_gates.py and the verifier's GREEN on scripts/test_check_unlisted_gates_verify.py; tdd oracle accepted the pair as valid fail_to_pass. It may not prove the same test went F->P. Reading (a): real gap, the oracle should require a GREEN for each RED command; (b): intended (task-level proof). Distinguish by the tdd README contract for fail_to_pass.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028024
+updated_at = 1792161300
+weight = 0.0
+issue_number = 1200
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1200"
+issue_closed_at = 1792161303
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_dc37a4da -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003587
+detail = """
+exit 101: 0.2.62 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/overwatch)
+   Compiling tdd v0.1.40 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.27s
+     Running tests/backlog_dc37a4da.rs (target/debug/deps/backlog_dc37a4da-b9b47eca998c8e64)
+error: test failed, to rerun pass `-p tdd --test backlog_dc37a4da`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test backlog_dc37a4da -- --include-ignored"
+exit = 0
+passed = 1
+rev = "c05b7fed81209ac6237b0930e4f027af1a038343"
+observed_at = 1792161194
+output_digest = "sha256:d05ad916883bea29c3d8965e991c2eb3c1d6f24b5a40b814027d833039259c66"
+excerpt = """
+
+running 1 test
+test oracle_rejects_red_and_green_recorded_with_different_test_commands ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s
+     Running tests/backlog_dc37a4da.rs (target/debug/deps/backlog_dc37a4da-2782c7b31c5d4451)
+"""
+
+[task.closure.red]
+rev = "677b88987124e25f1f0b4cd920acee5d0822e46f"
+exit = 101
+kind = "behavioural"

@@ -2899,3 +2899,56 @@ fn claim_n_plain_next_refuses_unresolved_identity() {
     let o = run_in(&home, &ok, &["next"]);
     assert_eq!(o.code, 0, "control must not be refused: {}", o.both());
 }
+
+/// SKILL.md: "repo root が上に無い cwd では `add` は拒否する（`~/.backlog`
+/// へフォールバックしない）". Unlike the project_scope test, this passes a
+/// complete `--repro-test` so the ONLY remaining reason to refuse is the
+/// missing repo -- and asserts that reason, so deleting the no-repo refusal
+/// cannot go unnoticed.
+#[test]
+fn claim_s_add_outside_repo_names_the_missing_repo() {
+    let td = tempfile::tempdir().unwrap();
+    let home = td.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    // orphan_dir asserts no `.git` exists at or above the cwd (non-vacuity).
+    let cwd = orphan_dir(&td, "orphan");
+    let before = snapshot(&home);
+    let o = run_in(
+        &home,
+        &cwd,
+        &[
+            "add",
+            "--title",
+            "outside any repo",
+            "--project",
+            &cwd.to_string_lossy(),
+            "--repro-test",
+            "bash tests/repro_yes.sh",
+        ],
+    );
+    assert_ne!(
+        o.code,
+        0,
+        "add outside any repo must be refused: {}",
+        o.both()
+    );
+    assert!(
+        o.stderr.contains("no git repo above"),
+        "the refusal reason must be the missing repo, got stderr: {:?}",
+        o.stderr
+    );
+    assert!(
+        o.stdout.trim().is_empty(),
+        "no row may be reported added, got stdout: {:?}",
+        o.stdout
+    );
+    assert!(
+        !home.join(".backlog").join("tasks.toml").exists(),
+        "add must not fall back to writing ~/.backlog/tasks.toml"
+    );
+    assert_eq!(
+        snapshot(&home),
+        before,
+        "$HOME must be left exactly as it was"
+    );
+}

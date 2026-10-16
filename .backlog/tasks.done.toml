@@ -52647,3 +52647,70 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "677b88987124e25f1f0b4cd920acee5d0822e46f"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "099a5cbb"
+title = "blastguard tests write into the live overwatch violation registry (HOME/env_clear do not isolate)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "overwatch",
+    "test-isolation",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Repro (commit 99cd73b1): crates/blastguard/tests/repro_live_registry_pollution.rs, tests env_clear_child_does_not_write_real_overwatch_registry and inherited_home_child_does_not_write_real_overwatch_registry; both RED. Path: blastguard main.rs record_violation -> overwatch store::append_violation(cwd) -> storage_root = harness_core::config::base_dir(overwatch) = home(); home() falls back to dirs::home_dir (real passwd home) when HOME is unset, so env_clear (ask_hardening_invariant.rs) does not isolate; most other blastguard tests inherit HOME. Canary false-halt evidence (2026-10-16 JST): rollout-plugins.sh --canary stage 12 ship 0.1.15 rolled back at ts 1792105431 (rollbacks.jsonl reason raw), raw observed_violations 5 vs threshold 2. The 5 counted events are all ts 1792105430, session_id _local, signature blastguard:unrecognised-wrapper, detail my-cleanup-wrapper = ask_hardening_invariant.rs fixture (5 tests). Source: session 1a4ac77f subagent agent-a8854e5 ran cargo test -p blastguard --no-fail-fast in worktree fix-11be9484 at 23:03:43Z; its output shows ask_hardening_invariant 5 passed. Subsequent _local burst 1792105436-1792105447 (mkfs, shred, rm-recursive, protected-path, write-empty-content, find-exec-shell, git-config-hookspath) is the rest of that suite. Measured observation (live harness-e77d23c7 violations.jsonl, 2026-10-16): 13666 of 19351 events (71%) have session_id _local; 930 contain my-cleanup-wrapper (186 runs of that one file). Not every _local event was verified to be test-originated. Also observed: ~2480 -tmpXXXX dirs in ~/.overwatch from some suite (not identified); overwatch own tests: 10 of 47 files set HOME, rest not audited. Do not fix by narrowing the canary gate."
+created_at = 1792106110
+updated_at = 1792188977
+weight = 0.0
+issue_number = 1363
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1363"
+issue_closed_at = 1792188980
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test repro_live_registry_pollution -- --ignored"
+rev = "99cd73b1030170e735c1c0fdc3eda5d46f630902"
+observed_at = 1792106110
+detail = """
+exit 101: al_overwatch_registry
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
+     Running tests/repro_live_registry_pollution.rs (target/debug/deps/repro_live_registry_pollution-6c44738a648c523b)
+error: test failed, to rerun pass `-p blastguard --test repro_live_registry_pollution`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test repro_live_registry_pollution -- --include-ignored"
+exit = 0
+passed = 2
+rev = "e5301bd9a3d1eb51c34e93da64b5ea5bc28f53d6"
+observed_at = 1792188937
+output_digest = "sha256:a6377784888ef23fb14d1dcddc8548150074c2a075ec6ba605c3ad4f8ab76c90"
+excerpt = """
+
+running 2 tests
+test env_clear_child_does_not_write_real_overwatch_registry ... ok
+test inherited_home_child_does_not_write_real_overwatch_registry ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
+
+   Compiling harness-core v0.2.58 (/Users/yuki/src/.harness-worktrees/fix-099a5cbb/crates/harness-core)
+   Compiling overwatch v0.2.72 (/Users/yuki/src/.harness-worktrees/fix-099a5cbb/crates/overwatch)
+   Compiling blastguard v0.2.134 (/Users/yuki/src/.harness-worktrees/fix-099a5cbb/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.06s
+     Running tests/repro_live_registry_pollution.rs (target/debug/deps/repro_live_registry_pollution-26683c542fc6dd38)
+"""
+
+[task.closure.red]
+rev = "063ea2dc77f2da7d881d7c671e858cbac819e998"
+exit = 101
+kind = "behavioural"

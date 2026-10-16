@@ -2718,36 +2718,3 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
      Running tests/repro_session_start_malformed_stdin.rs (target/debug/deps/repro_session_start_malformed_stdin-dd5d8838be6468d6)
 error: test failed, to rerun pass `-p backlog --test repro_session_start_malformed_stdin`"""
-
-[[task]]
-id = "bca9cabe"
-title = "propguard treats non-UTF-8 PROPGUARD_CRITERIA as unset and allows as no-criteria"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "derive.rs source_criteria uses if let Ok(v) = std::env::var, so a set but non-UTF-8 value is ignored; with no other criteria the stop is allowed while the UTF-8 control blocks. Expected: block. Test includes the UTF-8 control, ignored, RED under --ignored."
-created_at = 1792188689
-updated_at = 1792188689
-weight = 0.0
-issue_number = 1400
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1400"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p propguard --test repro_criteria_env_non_utf8 -- --ignored"
-rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
-observed_at = 1792188689
-detail = """
-exit 101: blocks_like_the_utf8_control
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.64s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
-     Running tests/repro_criteria_env_non_utf8.rs (target/debug/deps/repro_criteria_env_non_utf8-01145266f84a6c8a)
-error: test failed, to rerun pass `-p propguard --test repro_criteria_env_non_utf8`"""

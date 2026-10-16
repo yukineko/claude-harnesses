@@ -751,34 +751,6 @@ exit 101: .harness-worktrees/session-1a4ac77f/crates/harness-core)
 error: test failed, to rerun pass `-p stuckguard --test backlog_07bfdca0`"""
 
 [[task]]
-id = "26f6dd72"
-title = "test_check_launcher_exec_bit が launcher 39 件を期待し 40 件を見つけて RED (test_backlog_audit_b1_0 Backlog06a9d33f も同因)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. Red on base f51e281e too. A new launcher was added without updating the expected count, or the count is hardcoded. Reading (a) the pin should derive the count, (b) the 40th launcher is unintended. Also 1 failure each in test_backlog_53897d41 and test_check_projkey_store_classification (not investigated; check whether they share a cause)."
-created_at = 1791045934
-updated_at = 1791047343
-weight = 0.0
-issue_number = 1251
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1251"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest -q -x --tb=no -p no:cacheprovider scripts/test_check_launcher_exec_bit.py"
-rev = "0f8f7c19414c396ef0c5683c3b4ab5621439b89d"
-observed_at = 1791047339
-detail = """
-exit 1: ......................F
-=========================== short test summary info ============================
-FAILED scripts/test_check_launcher_exec_bit.py::RealRepoState::test_the_scope_finds_every_plugin_that_ships_a_binary
-!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
-1 failed, 22 passed in 2.46s"""
-
-[[task]]
 id = "69e34456"
 title = "python-only 本体で 4 suite が判定不能 (0c277117 / b63cbdf0 は FAILED だが test 名が読めない、1116bee1 / f6c60f58 は Ran 0 tests)"
 project = "/Users/yuki/src/harness"

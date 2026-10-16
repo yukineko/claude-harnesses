@@ -52647,3 +52647,41 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "677b88987124e25f1f0b4cd920acee5d0822e46f"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "a6ee76f7"
+title = "condukt autonomy_invariant askuserquestion_sites_match_frozen_allowlist が main で RED (overwatch SKILL.md の AskUserQuestion 数 allowlist 7 / 実測 2)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-16 by the cf70f785 worker on a tree branched from main a8ec7ac9-era: left 2 right 7 for crates/overwatch/skills/overwatch/SKILL.md. Likely introduced by ce76ce72 (prose-tests(overwatch)) which rewrote that SKILL.md. Readings: (a) ce76ce72 dropped AskUserQuestion gates that must stay (real regression: restore them); (b) the removal was intended and the frozen allowlist needs an acknowledged update (frozen test = human decision). Distinguish by diffing ce76ce72 on that SKILL.md for removed AskUserQuestion sites.
+Resolved by 171d5ef3 (condukt 0.7.255): reading (b). ce76ce72 consolidated the 5 per-command HOTL gates into one prohibition naming the same 5 commands (SKILL.md:10, heading :12, verified 2026-10-17); ASK_ALLOWLIST re-anchored 7->2 with test-weakening-justified ack. RED observed at 22d4f8d5 (left 2 right 7) in a detached worktree; done --red-rev is refused by design because F2P overlays HEAD's test file and the fix IS that test file."""
+created_at = 1792160219
+updated_at = 1792188579
+weight = 0.0
+issue_number = 1380
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1380"
+issue_closed_at = 1792188581
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test autonomy_invariant askuserquestion_sites_match_frozen_allowlist"
+rev = "22d4f8d5c0f72c0e25773cbb14e01e87ea17ed01"
+observed_at = 1792160219
+detail = """
+exit 101: ilures:
+    askuserquestion_sites_match_frozen_allowlist
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-1700c292e4735461)
+error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Resolved by 171d5ef3 (condukt 0.7.255): reading (b). ce76ce72 consolidated the 5 per-command HOTL gates into one prohibition naming the same 5 commands (SKILL.md:10, heading :12, verified 2026-10-17); ASK_ALLOWLIST re-anchored 7->2 with test-weakening-justified ack. RED observed at 22d4f8d5 (left 2 right 7) in a detached worktree; done --red-rev is refused by design because F2P overlays HEAD's test file and the fix IS that test file."

@@ -215,37 +215,6 @@ exit 1: 0m:354: XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.06s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "11be9484"
-title = "blastguard classify.rs が task の散文に detect を当て、破壊的コマンドを『記述する』散文や file 名で force-gate する"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-crates/blastguard/src/classify.rs:213-219 runs detect::detect on title + done_criteria + file list. Seen again in batch 13: 73c2c089 stayed force-gated because its touched file is scripts/check-plugin-rollout.py (needle 'rollout'), and e033c406 because its prose quoted git config core.hooksPath. Not fixed by fa1fce21 (different root: prose is not shell). Needs a decision: condukt passes real commands separately, or a backtick-span extraction rule. Either moves the measured DENY 85 / ASK 101 distribution.
-
-Observed 2026-10-03 in flow batch 13 (run-20261003-155809-33509), base fbc3dac8 / main c0d4701c."""
-created_at = 1791018586
-updated_at = 1792003597
-weight = 0.0
-issue_number = 1159
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1159"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_11be9484 -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003592
-detail = """
-exit 101: c/.harness-worktrees/session-1a4ac77f/crates/overwatch)
-   Compiling blastguard v0.2.113 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.26s
-     Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-55b4c2d69dad1992)
-error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
-
-[[task]]
 id = "d058b22a"
 title = "mutation-gate.sh validates MIN_KILL_RATE only after the full cargo-mutants run (late validation, not fail-open)"
 project = "/Users/yuki/src/harness"
@@ -1893,3 +1862,34 @@ test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
      Running tests/repro_live_registry_pollution.rs (target/debug/deps/repro_live_registry_pollution-6c44738a648c523b)
 error: test failed, to rerun pass `-p blastguard --test repro_live_registry_pollution`"""
+
+[[task]]
+id = "dc955812"
+title = "blastguard classify は backtick で引用されたコマンドを記述するだけの task 散文も force-gate する (11be9484 の散文側、ユーザー裁定 2026-10-16 で先送り)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "11be9484 split by user ruling 2026-10-16: the file-name half was fixed (blastguard 0.2.131); the prose half (a backtick-quoted command that the prose merely describes) still gates. Options from 11be9484: condukt passes real commands to classify separately (interface change; the repro test classifies joined text and would need rewriting with an ack), or a backtick-span rule (widest loosening: a task saying run rm -rf X would also pass). Needs a user design ruling before implementation."
+created_at = 1792155553
+updated_at = 1792155553
+weight = 0.0
+issue_number = 1368
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1368"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_11be9484 -- --ignored prose_describing_a_command_does_not_force_gate"
+rev = "12bfc9707a4aa5a712d30007e890b7da64ea6196"
+observed_at = 1792155553
+detail = """
+exit 101: failures:
+    prose_describing_a_command_does_not_force_gate
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-27e56823383379b3)
+error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""

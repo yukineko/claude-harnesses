@@ -1988,38 +1988,6 @@ exit 101: ltered out; finished in 1.25s
 error: test failed, to rerun pass `-p ship --test repro_script_failure_exits_zero`"""
 
 [[task]]
-id = "2e7481d4"
-title = "evalkit: an all-draft run exits 0 having evaluated nothing"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "crates/evalkit/src/run.rs execute counts drafts in total so the no-cases exit-2 guard never fires; every outcome is skipped, failed==0, exit 0, output 0/1 passed. Test asserts non-zero exit when no case was evaluated."
-created_at = 1792155558
-updated_at = 1792155558
-weight = 0.0
-issue_number = 1370
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1370"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p evalkit --test repro_all_draft_run_exits_zero -- --ignored"
-rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
-observed_at = 1792155558
-detail = """
-exit 101: d out; finished in 0.46s
-
-   Compiling evalkit v0.1.9 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/evalkit)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.08s
-     Running tests/repro_all_draft_run_exits_zero.rs (target/debug/deps/repro_all_draft_run_exits_zero-2d4a512e0ca88a3b)
-error: test failed, to rerun pass `-p evalkit --test repro_all_draft_run_exits_zero`"""
-
-[[task]]
 id = "bc29c30a"
 title = "evalkit: cmd case without assert.exit passes on a non-zero exit"
 project = "/Users/yuki/src/harness"

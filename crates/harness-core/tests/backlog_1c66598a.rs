@@ -79,7 +79,6 @@ fn files_under(dir: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-#[ignore = "backlog 1c66598a: open defect, remove ignore when fixed"]
 fn backlog_1c66598a_repeated_bounded_allow_is_not_silent() {
     let root = scratch();
     for d in ["home", "state", "data", "config", "cwd"] {

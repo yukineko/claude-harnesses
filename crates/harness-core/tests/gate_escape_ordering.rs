@@ -23,7 +23,7 @@
 //!
 //! (The `give-up` / `max_attempts` hatch legitimately sits *after* `evaluate()`;
 //! it is not an escape from a *crash* — the crash case is bounded instead by the
-//! `stop_hook_active` `BoundedAllow` in `run_guarded`, so it is intentionally
+//! consecutive-panic `BoundedAllow` in `run_guarded`, so it is intentionally
 //! excluded from this ordering check.)
 
 use std::path::PathBuf;

@@ -353,14 +353,19 @@ fn verify_command(task: &str) -> ! {
 /// report. A missing/corrupt proof yields `has_red/has_green=false`,
 /// `transition="unknown"`, `valid_fp_oracle=false`, exit 1. A proof that exists
 /// but cannot be read yields `transition="undetermined"`,
-/// `valid_fp_oracle=false`, exit 2 (see `transition::oracle_report`). Exit 0
-/// only for a valid Fail→Pass oracle.
+/// `valid_fp_oracle=false`, exit 2 (see `transition::oracle_report`). A
+/// Fail→Pass whose RED and GREEN proofs were not recorded with the same test
+/// command yields `transition="command_mismatch"`, exit 1 (see
+/// `transition::oracle_report_same_cmd`). Exit 0 only for a valid Fail→Pass
+/// oracle of one and the same command.
 fn oracle_command(task: &str) -> ! {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
     let pre = proof::read_passed(&root, &cfg, task, "red");
     let post = proof::read_passed(&root, &cfg, task, "green");
-    let (report, code) = transition::oracle_report(pre, post);
+    let red_cmd = proof::read_cmd(&root, &cfg, task, "red");
+    let green_cmd = proof::read_cmd(&root, &cfg, task, "green");
+    let (report, code) = transition::oracle_report_same_cmd(pre, post, red_cmd, green_cmd);
     println!("{report}");
     std::process::exit(code);
 }

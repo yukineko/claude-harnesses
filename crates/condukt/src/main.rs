@@ -4431,13 +4431,31 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         requires_fp_oracle,
                         reproduction_tests,
                     } => {
-                        // Resolve run_dir from `rs` (immutable read) into a
-                        // local *before* taking the `&mut` borrow below.
-                        let run_dir = rs
-                            .tasks
-                            .iter()
-                            .find(|s| s.id == task)
-                            .and_then(|s| s.worktree.as_deref())
+                        // Resolve run_dir into a local *before* taking the
+                        // `&mut` borrow below. A `--worktree W` passed in this
+                        // same call wins (backlog cf70f785): it is the worktree
+                        // this call records, so the oracle must judge the proofs
+                        // there, not in a previously recorded worktree or the
+                        // session cwd. The precedence mirrors the recording
+                        // below (`--clear-worktree` beats `--worktree`). Only
+                        // then fall back to the recorded worktree, then cwd.
+                        // A missing/unreadable dir is not papered over: the
+                        // `tdd` spawn fails there and `check_oracle` reports an
+                        // undetermined oracle, which `enforce_fp_gate` rejects
+                        // (pinned by `oracle::tests::
+                        // spawn_failure_is_undetermined_and_rejects`).
+                        let passed_worktree = if clear_worktree {
+                            None
+                        } else {
+                            worktree.as_deref()
+                        };
+                        let run_dir = passed_worktree
+                            .or_else(|| {
+                                rs.tasks
+                                    .iter()
+                                    .find(|s| s.id == task)
+                                    .and_then(|s| s.worktree.as_deref())
+                            })
                             .map(std::path::PathBuf::from)
                             .unwrap_or_else(|| cwd.to_path_buf());
                         let verdict = oracle::check_oracle(
@@ -6147,8 +6165,9 @@ type GaugeAccounting = (Option<f64>, Option<(u64, u64)>);
 /// `agent_id` `None` (the task recorded no agentId) → `Known((None, None))`:
 /// nothing to look up, the caller uses its manual fallback. Otherwise the
 /// two lookups' answers are combined; either one `Undetermined` makes the
-/// whole result `Undetermined` (gauge could not be located or run), which the
-/// caller must keep distinct from "no data".
+/// whole result `Undetermined` (gauge could not be located or run, or printed
+/// unparseable output — backlog 18ebbfe6), which the caller must keep distinct
+/// from "no data".
 fn gauge_accounting(agent_id: Option<&str>) -> Determination<GaugeAccounting> {
     let Some(id) = agent_id else {
         return Determination::Known((None, None));

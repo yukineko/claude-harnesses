@@ -596,6 +596,13 @@ specguard の forge は LLM が生成した `test_cmd` を `sh -c` に渡す前�
 `classify::classify`（risk / reversibility 判定）を使って、上流の LLM が
 誤ラベル付けした場合でも deploy・`git push`・release のような対外的で不可逆な
 アクションを GATED ゲートへ強制的に通す。
+タスク文中のファイル名の内側にだけ現れる deploy 語（例: `scripts/check-plugin-rollout.py`
+の `rollout`）では強制ゲートしない [test: crates/blastguard/src/classify.rs::deploy_needle_only_inside_a_touched_file_name_does_not_gate]。
+ファイルパス token とは `/` を含むか、
+`.py`/`.rs`/`.sh`/`.md`/`.toml` 等の既知拡張子で終わり、かつ `:` も `@` も含まない語のこと [test: crates/blastguard/src/classify.rs::file_path_token_rule_is_narrow]。
+先頭にあるもの・runner 語（`run`, `bash` 等）や shell 区切りの直後にあるもの・`./` で
+始まるものは従来どおり判定対象に残る [test: crates/blastguard/src/classify.rs::real_commands_containing_paths_still_gate]。
+backtick で引用されたものも判定対象に残る [test: crates/blastguard/src/classify.rs::backtick_quoted_command_prose_gates_exactly_as_before]。
 
 コマンド分類とは別に、**diff の内容そのもの**から意味的リスクを見る2つのモジュールも
 公開している。いずれも純粋・決定論・I/O なしで、command 分類が拾えない「無害な

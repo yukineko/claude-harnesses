@@ -258,6 +258,14 @@ def _clean_rel(p: str) -> str | None:
     return p
 
 
+RUNNER_PROGRAMS = {
+    "cargo": ("cargo",), "pytest": ("pytest", "python3"), "python3": ("python3",),
+    "bash": ("bash",), "sh": ("sh",),
+    # labels written by crates/backlog/src/evidence.rs Runner::label
+    "cargo-test": ("cargo",), "script": ("bash", "sh"),
+}
+
+
 def check_cmd(runner, cmd) -> tuple[list[str], list[str], list[str]]:
     """(argv, errors, index_paths_to_require)."""
     errs: list[str] = []
@@ -296,11 +304,16 @@ def check_cmd(runner, cmd) -> tuple[list[str], list[str], list[str]]:
         errs.append(
             f"closure.green.cmd {cmd!r}: runner outside the allowlist "
             "(cargo test / pytest / python3 -m pytest / bash|sh <tests/ script>)")
-    if runner != a0:
-        errs.append(f"closure.green.runner = {runner!r} does not match the command's program {a0!r}"
-                    if isinstance(runner, str) else "closure.green.runner is missing or not a string")
-    elif runner not in ("cargo", "pytest", "python3", "bash", "sh"):
+    # The backlog CLI records a runner LABEL (evidence.rs Runner::label); older
+    # records carry the command's first word. Each accepted runner maps to the
+    # first words it may pair with; anything else (unknown label, or a known
+    # label on the wrong command) is a mismatch and blocks.
+    if not isinstance(runner, str):
+        errs.append("closure.green.runner is missing or not a string")
+    elif runner not in RUNNER_PROGRAMS:
         errs.append(f"closure.green.runner = {runner!r} is outside the allowlist")
+    elif a0 not in RUNNER_PROGRAMS[runner]:
+        errs.append(f"closure.green.runner = {runner!r} does not match the command's program {a0!r}")
     return argv, errs, need
 
 

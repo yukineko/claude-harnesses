@@ -107,7 +107,6 @@ class ClosureRunnerLabel(unittest.TestCase):
             r = run_gate(build_repo(Path(t).resolve(), "python3"))
             self.assertEqual(r.returncode, 0, f"stdout={r.stdout}\nstderr={r.stderr}")
 
-    @unittest.expectedFailure
     def test_cli_written_runner_label_is_accepted(self):
         """backlog b0c3d263: open defect (RED observed). The CLI writes
         runner = "pytest" for `python3 -m pytest ...`; the gate must accept the
@@ -117,6 +116,13 @@ class ClosureRunnerLabel(unittest.TestCase):
             self.assertEqual(
                 r.returncode, 0,
                 f"gate blocked a CLI-shaped closure.\nstdout={r.stdout}\nstderr={r.stderr}")
+
+    def test_mismatched_runner_label_still_blocks(self):
+        """Control: a known label on the wrong command, and an unknown label, block."""
+        for bad in ("cargo-test", "script", "nonsense"):
+            with tempfile.TemporaryDirectory() as t:
+                r = run_gate(build_repo(Path(t).resolve(), bad))
+                self.assertNotEqual(r.returncode, 0, f"{bad} passed: {r.stdout}")
 
 
 if __name__ == "__main__":

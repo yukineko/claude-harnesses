@@ -711,3 +711,66 @@ def test_date_only_inline_marker_still_works_control(tmp_path):
     repo = make_repo(tmp_path, {"CLAUDE.md": "実測 2026-10-01 にゲートが X を通した。\n"})
     r = run(repo, "--all")
     assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+# machine-anchor headings ---------------------------------------------
+# A heading that a repo gate script parses as a machine anchor is structure,
+# not a claim -- but ONLY the exact (file, heading) pairs declared in
+# MACHINE_ANCHOR_HEADINGS. Every other heading is still a unit.
+CA_SKILL = "crates/overwatch/skills/continuous-audit/SKILL.md"
+CA_ANCHOR = "## 対象 crate (既定)"
+
+
+def test_declared_machine_anchor_heading_is_not_a_claim(tmp_path):
+    repo = make_repo(tmp_path, {CA_SKILL: CA_ANCHOR + "\n"})
+    r = run(repo, "--all")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+@pytest.mark.parametrize("rel,text", [
+    # same text, different covered file: not declared there
+    ("CLAUDE.md", CA_ANCHOR),
+    ("crates/overwatch/README.md", CA_ANCHOR),
+    # declared file, different heading: label headings stay flagged
+    (CA_SKILL, "## 対象 ファイル"),
+    # declared file, the anchor plus extra words: not the exact anchor
+    (CA_SKILL, "## 対象 crate (既定) は8個ある"),
+    # declared file, different heading level: not the anchor
+    (CA_SKILL, "### 対象 crate (既定)"),
+    # declared file, same words NOT as a heading: a sentence, not an anchor
+    (CA_SKILL, "対象 crate (既定)"),
+])
+def test_machine_anchor_exemption_is_exact_file_and_heading(tmp_path, rel, text):
+    repo = make_repo(tmp_path, {rel: text + "\n"})
+    r = run(repo, "--all")
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert "uncited-claim" in r.stdout, r.stdout
+
+
+def _load(path, name):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_every_declared_machine_anchor_is_really_parsed_by_its_script():
+    """The exemption is only principled while the declared parser really
+    anchors on the heading: in the REAL repo file, the parser must succeed with
+    the heading and fail (return None) once the heading line is removed."""
+    gate = _load(SCRIPT, "check_prose_tests")
+    repo = SCRIPT.parent.parent
+    assert gate.MACHINE_ANCHOR_HEADINGS, "no declaration to check"
+    for (rel, heading), (script, func) in gate.MACHINE_ANCHOR_HEADINGS.items():
+        parser = getattr(_load(repo / script, "anchor_parser"), func)
+        text = (repo / rel).read_text(encoding="utf-8")
+        lines = text.split("\n")
+        assert lines.count(heading) == 1, (rel, heading)
+        assert parser(text) is not None, (rel, heading, script, func)
+        without = "\n".join(l for l in lines if l != heading)
+        assert parser(without) is None, (rel, heading, script, func)
+
+
+if __name__ == "__main__":
+    sys.exit(pytest.main([__file__, "-q"]))

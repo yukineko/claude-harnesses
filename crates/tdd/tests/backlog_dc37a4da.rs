@@ -34,7 +34,6 @@ fn tdd(dir: &PathBuf, args: &[&str]) -> Output {
 }
 
 #[test]
-#[ignore = "backlog dc37a4da: RED repro"]
 fn oracle_rejects_red_and_green_recorded_with_different_test_commands() {
     let dir = unique_dir();
 

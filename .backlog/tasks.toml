@@ -1893,3 +1893,32 @@ test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
      Running tests/repro_live_registry_pollution.rs (target/debug/deps/repro_live_registry_pollution-6c44738a648c523b)
 error: test failed, to rerun pass `-p blastguard --test repro_live_registry_pollution`"""
+
+[[task]]
+id = "0d007aa5"
+title = "test-weakening ignores acks on MERGE_HEAD's side during a merge"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "check-test-weakening.py scan() diffs merge-base(main,HEAD)..worktree (includes MERGE_HEAD's changes) but acknowledgements() reads only merge_base..HEAD plus the pending msg, so main-side acks are invisible mid-merge. Observed on 96da33f6 and 99cd73b1. Repro scripts/test_test_weakening_merge_ack.py (45f62810)."
+created_at = 1792155730
+updated_at = 1792155730
+weight = 0.0
+issue_number = 1378
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1378"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_test_weakening_merge_ack.py::MergeMainIntoFeature::test_main_side_acked_removal_does_not_block_the_merge"
+rev = "854b0075a358b6d9fa9d07176a91b2ce0f16f4a4"
+observed_at = 1792155730
+detail = """
+exit 1: E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_test_weakening_merge_ack.py::MergeMainIntoFeature::test_main_side_acked_removal_does_not_block_the_merge
+============================== 1 failed in 1.35s ==============================="""

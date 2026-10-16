@@ -16,7 +16,11 @@ will actually contain, not the working tree. Each must:
 
   1. contain no conflict-marker line (`<<<<<<< `, `=======`, `>>>>>>> `, `|||||||`
      at the start of a line), and
-  2. parse as TOML (`tomllib`).
+  2. parse as TOML (`tomllib`), and
+  3. during a merge (MERGE_HEAD present), keep every task id that either side
+     added since the merge-base: an id added on HEAD or on a MERGE_HEAD but
+     absent from every indexed .backlog/*.toml means the resolution took one
+     side wholesale and dropped the other side's tasks (backlog 68fb7237).
 
 The whole store is checked, not just the staged diff: the index IS the commit,
 and a broken store is broken whether or not this commit is the one that
@@ -24,8 +28,9 @@ touched it.
 
 Exit codes (fail-closed: "cannot determine" resolves to the restricted side)
     0  every indexed .backlog/*.toml is clean TOML with no markers
-    1  at least one file has markers or does not parse
-    2  undetermined: git failed, a blob could not be read, or tomllib is missing
+    1  at least one file has markers, does not parse, or a merge dropped an id
+    2  undetermined: git failed, a blob could not be read or parsed on a merge
+       side, or tomllib is missing
 """
 from __future__ import annotations
 
@@ -46,6 +51,56 @@ def git(*args: str) -> bytes:
     return proc.stdout
 
 
+def task_ids(doc: dict) -> set[str]:
+    ids = set()
+    for value in doc.values():
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict) and isinstance(item.get("id"), str):
+                    ids.add(item["id"])
+    return ids
+
+
+def rev_ids(tomllib, rev: str, paths: list[str]) -> set[str]:
+    """Task ids across `paths` at commit `rev`; a path absent at `rev` adds none."""
+    present = set(
+        git("ls-tree", "-r", "-z", "--name-only", rev, "--", ".backlog").decode().split("\0")
+    )
+    ids = set()
+    for path in paths:
+        if path in present:
+            ids |= task_ids(tomllib.loads(git("show", f"{rev}:{path}").decode("utf-8")))
+    return ids
+
+
+def merge_heads() -> list[str]:
+    """The MERGE_HEAD commits, or [] when no merge is in progress."""
+    probe = subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"], capture_output=True, timeout=60
+    )
+    if probe.returncode != 0:
+        return []
+    path = git("rev-parse", "--git-path", "MERGE_HEAD").decode().strip()
+    with open(path, encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip()]
+
+
+def dropped_ids(tomllib, paths: list[str], indexed: set[str]) -> list[str]:
+    """Ids added since the merge-base on HEAD or a MERGE_HEAD but missing from the index."""
+    heads = merge_heads()
+    if not heads:
+        return []
+    sides = ["HEAD", *heads]
+    base = git("merge-base", "--octopus", *sides).decode().strip()
+    side_paths = sorted(set(paths) | {".backlog/tasks.toml", ".backlog/tasks.done.toml"})
+    base_ids = rev_ids(tomllib, base, side_paths)
+    out = []
+    for side in sides:
+        for tid in sorted(rev_ids(tomllib, side, side_paths) - base_ids - indexed):
+            out.append(f"merge drops task id {tid} added on {side} since merge-base {base[:8]}")
+    return out
+
+
 def main() -> int:
     try:
         import tomllib
@@ -60,6 +115,7 @@ def main() -> int:
     paths = [p for p in listing.decode().split("\0") if p.endswith(".toml")]
 
     bad = []
+    indexed_ids: set[str] = set()
     for path in paths:
         try:
             text = git("show", f":{path}").decode("utf-8")
@@ -72,9 +128,17 @@ def main() -> int:
             bad.append(f"{path}:{line}: conflict marker {m.group(0).strip()!r}")
             continue
         try:
-            tomllib.loads(text)
+            indexed_ids |= task_ids(tomllib.loads(text))
         except tomllib.TOMLDecodeError as e:
             bad.append(f"{path}: not valid TOML: {e}")
+
+    if not bad:
+        try:
+            bad.extend(dropped_ids(tomllib, paths, indexed_ids))
+        except (RuntimeError, OSError, subprocess.TimeoutExpired, UnicodeDecodeError,
+                tomllib.TOMLDecodeError) as e:
+            print(f"backlog-store: cannot compare the merge sides: {e}", file=sys.stderr)
+            return 2
 
     if bad:
         print("backlog-store: the backlog store about to be committed is broken:", file=sys.stderr)

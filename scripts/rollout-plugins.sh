@@ -236,9 +236,13 @@ fi
 # C:/tmp/condukt-build per .cargo/config.toml, $REPO/target/release/overwatch
 # does not exist, and `--plugin overwatch --canary --dry-run` exited 1).
 # Same technique as scripts/build-plugin-bin.sh. When cargo is absent or
-# metadata fails we keep the historical $REPO/target guess; an unresolvable
-# binary still returns 1, so the caller refuses the staged rollout rather than
-# proceeding ungated.
+# metadata fails we keep the historical $REPO/target guess (announced on
+# stderr for the failure). When cargo metadata SUCCEEDS but reports no
+# target_directory, the build dir is undetermined: this returns 1 instead of
+# guessing $REPO/target (backlog fb7c3d83, mirroring a0525604 in
+# rebuild-plugins.sh). A reported build dir is searched alone — $REPO/target
+# is never appended as a fallback to it. An unresolvable binary returns 1, so
+# the caller refuses the staged rollout rather than proceeding ungated.
 resolve_overwatch_bin() {
   if [ -n "${OVERWATCH_BIN:-}" ] && [ -x "${OVERWATCH_BIN}" ]; then
     echo "$OVERWATCH_BIN"; return 0
@@ -254,23 +258,28 @@ resolve_overwatch_bin() {
     # this is not what makes the lookup work here — but it keeps the resolved
     # path honest in the `using overwatch binary:` log line, and it stops the
     # doubling from reaching a host that does not collapse.
-    # The rc is captured, not swallowed: "cargo metadata failed" and "cargo
-    # metadata reported the default target dir" are different facts, and only
-    # the second one justifies proceeding in silence. Both still fall back to
-    # $REPO/target, but the failure says so, so a wrong overwatch binary is
+    # The rc is captured, not swallowed: "cargo metadata failed" is announced
+    # on stderr before the $REPO/target guess, so a wrong overwatch binary is
     # never selected without a word. `|| rc=$?` also keeps `set -e` from
-    # aborting the whole rollout on a metadata hiccup.
+    # aborting the whole rollout on a metadata hiccup. A SUCCESSFUL metadata
+    # with no target_directory is not a hiccup: it returns 1 (fb7c3d83).
     local meta rc=0
     meta="$(cd "$REPO" && cargo metadata --no-deps --format-version=1 2>/dev/null)" || rc=$?
     if [ "$rc" -ne 0 ]; then
       echo "rollout: cargo metadata failed (rc=$rc); falling back to \$REPO/target" >&2
+      tdir="$REPO/target"
     else
       tdir="$(printf '%s' "$meta" \
               | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' \
               | sed 's/\\\\/\\/g')"
+      if [ -z "$tdir" ]; then
+        echo "rollout: cargo metadata reported no \"target_directory\"; refusing to guess \$REPO/target" >&2
+        return 1
+      fi
     fi
+  else
+    tdir="$REPO/target"
   fi
-  tdir="${tdir:-$REPO/target}"
   # `.exe` is spelled out rather than left to [ -x ]: MSYS/Git Bash resolves it
   # only INCIDENTALLY (see rebuild-plugins.sh's EXT note), so a host without
   # that fallback would miss a perfectly good Windows build. It is listed AFTER
@@ -281,9 +290,7 @@ resolve_overwatch_bin() {
   # host on its own build, and Windows still resolves via the incidental
   # suffix fallback, with the explicit .exe entry as the backstop.
   for cand in "$tdir/release/overwatch" "$tdir/release/overwatch.exe" \
-              "$tdir/debug/overwatch" "$tdir/debug/overwatch.exe" \
-              "$REPO/target/release/overwatch" "$REPO/target/release/overwatch.exe" \
-              "$REPO/target/debug/overwatch" "$REPO/target/debug/overwatch.exe"; do
+              "$tdir/debug/overwatch" "$tdir/debug/overwatch.exe"; do
     [ -x "$cand" ] && { echo "$cand"; return 0; }
   done
   return 1

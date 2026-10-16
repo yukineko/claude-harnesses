@@ -13,10 +13,10 @@ for main of the form "merge ...: Fast-forward" or "merge ..." is integration
 evidence. A reflog "commit:" entry (a direct commit) is still refused. A reflog
 that cannot be read is undetermined and is refused (CLAUDE.md 3).
 
-Open defect -> the RED tests carry @unittest.expectedFailure. Run them as real
-tests with:
+Fixed (backlog 86e21645): test_a / test_b were RED under @unittest.expectedFailure
+and are now plain tests:
 
-    python3 -m pytest --runxfail scripts/test_guard_maintree_bash_ff_source_gone.py
+    python3 -m pytest scripts/test_guard_maintree_bash_ff_source_gone.py
 
 Written by an independent test author (CLAUDE.md 2.(a)); not by the implementer.
 """
@@ -67,9 +67,8 @@ class FfSourceGoneBase(ObserveGuardBase):
 
 
 class FfSourceGoneAllowed(FfSourceGoneBase):
-    """RED until the guard reads main's reflog as integration evidence."""
+    """Allowed because the guard reads main's reflog as integration evidence."""
 
-    @unittest.expectedFailure  # open defect: maintree guard ff with source branch gone
     def test_a_ff_and_branch_delete_in_same_call_is_allowed(self) -> None:
         tip = self._wt_commit()
         old = self._head()
@@ -81,7 +80,6 @@ class FfSourceGoneAllowed(FfSourceGoneBase):
         self.assertRegex(self._main_reflog_top(), r"^merge wtbranch: Fast-forward$")
         self.assert_allowed(self.post(tid, cmd))
 
-    @unittest.expectedFailure  # open defect: maintree guard ff with source branch gone
     def test_b_other_session_ff_and_branch_delete_during_unrelated_call_is_allowed(self) -> None:
         tip = self._wt_commit()
         old = self._head()

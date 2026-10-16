@@ -162,6 +162,41 @@ class MergeMainIntoFeature(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertIn(f"[ack] {TEST_PATH}: {KIND}", out)
 
+    def test_unresolvable_merge_head_contributes_no_acks(self) -> None:
+        """A MERGE_HEAD file that is present but does not resolve to a commit
+        (well-formed sha of a nonexistent object) contributes NO acks: main's
+        removal, acknowledged only in a commit no longer reachable from HEAD or
+        a resolvable MERGE_HEAD, still blocks the merge.
+
+        Anti-vacuity contrast: the identical scenario with an intact MERGE_HEAD
+        passes (test_main_side_acked_removal_does_not_block_the_merge), so the
+        block here is caused by the unresolvable MERGE_HEAD, not the fixture."""
+        r = self.make()
+        r.write(TEST_PATH, TESTS_WEAKENED)
+        r.commit("main: drop obsolete assert\n\n" + ACK)
+        self.feature_unrelated_commit(r)
+        self.merge_main_into_feature(r)
+
+        git_path = r.git("rev-parse", "--git-path", "MERGE_HEAD").stdout.strip()
+        merge_head_file = Path(git_path)
+        if not merge_head_file.is_absolute():
+            merge_head_file = r.root / merge_head_file
+        self.assertTrue(merge_head_file.is_file(), "fixture: MERGE_HEAD file must exist before corruption")
+        merge_head_file.write_text("d" * 40 + "\n", encoding="utf-8")
+
+        self.assertTrue(merge_head_file.is_file(), "fixture: MERGE_HEAD file must still be PRESENT")
+        self.assertNotEqual(
+            r.git("rev-parse", "--verify", "--quiet", "MERGE_HEAD^{commit}", check=False).returncode, 0,
+            "fixture: MERGE_HEAD must NOT resolve to a commit")
+        self.assertEqual((r.root / TEST_PATH).read_text(), TESTS_WEAKENED,
+                         "fixture: main's removal must be in the worktree")
+        log_head = r.git("log", "--format=%B", "HEAD").stdout
+        self.assertNotIn(ACK, log_head, "fixture: the ACK must not be reachable from HEAD")
+
+        rc, out = r.scan_like_commit_msg_hook("Merge branch 'main' into feature")
+        self.assertEqual(rc, 1, f"unresolvable MERGE_HEAD let the removal through:\n{out}")
+        self.assertIn(f"[BLOCK] {TEST_PATH}: {KIND}", out)
+
 
 if __name__ == "__main__":
     unittest.main()

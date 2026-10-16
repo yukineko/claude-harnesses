@@ -53,17 +53,23 @@ _HOOK = Path(
 EXPECTED_SCANNERS = [
     "check-prompt-injection.py",
     "check-fail-open.py",
+    "check-fail-open-diff.py",
     "check-doc-claims.py",
     "check-claudemd-claims.py",
+    "check-prose-tests.py",
+    "check-doc-duplication.py",
     "check-plugin-versions.py",
     "check-version-bumped.py",
     "check-hardcoded-secret.py",
     "check-raw-io-ratchet.py",
+    "check-fault-injection-adoption.py",
     "check-worktree-isolation.py",
     "check-gate-crates-sync.py",
+    "check-gate-protection.py",
     "check-cross-crate-constants.py",
     "check-launcher-exec-bit.py",
     "check-clippy-lints.py",
+    "check-backlog-store.py",
 ]
 
 # Label the hook prints for each scanner, used to check the message names the
@@ -71,17 +77,23 @@ EXPECTED_SCANNERS = [
 LABELS = {
     "check-prompt-injection.py": "injectguard",
     "check-fail-open.py": "fail-open-guard",
+    "check-fail-open-diff.py": "fail-open-diff",
     "check-doc-claims.py": "doc-claims",
     "check-claudemd-claims.py": "claudemd-claims",
+    "check-prose-tests.py": "prose-tests",
+    "check-doc-duplication.py": "doc-duplication",
     "check-plugin-versions.py": "version-lockstep",
     "check-version-bumped.py": "bump-on-change",
     "check-hardcoded-secret.py": "secret-guard",
     "check-raw-io-ratchet.py": "raw-io-ratchet",
+    "check-fault-injection-adoption.py": "fault-injection-adoption",
     "check-worktree-isolation.py": "worktree-isolation",
     "check-gate-crates-sync.py": "gate-crates-sync",
+    "check-gate-protection.py": "gate-protection",
     "check-cross-crate-constants.py": "crossx-constants",
     "check-launcher-exec-bit.py": "launcher-exec-bit",
     "check-clippy-lints.py": "clippy-lints",
+    "check-backlog-store.py": "backlog-store",
 }
 
 _STUB = """#!/usr/bin/env python3

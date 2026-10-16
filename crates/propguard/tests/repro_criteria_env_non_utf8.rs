@@ -1,9 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! RED repro (P1): a non-UTF-8 PROPGUARD_CRITERIA value is treated as unset
-//! (derive.rs `if let Ok(v) = std::env::var(..)`). With no other criteria
-//! source the stop is allowed as `no-criteria`, while the identical UTF-8 value
-//! blocks. A criteria source that is set but unreadable is configured-but-
-//! undetermined, not "not configured".
+//! Repro (P1, bca9cabe): a non-UTF-8 PROPGUARD_CRITERIA value used to be
+//! treated as unset, so with no other criteria source the stop was allowed as
+//! `no-criteria`. A criteria source that is set but unreadable is configured-
+//! but-undetermined, not "not configured": it must block like the UTF-8 control.
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -74,7 +73,6 @@ fn fixture(tag: &str) -> (PathBuf, PathBuf) {
 }
 
 #[test]
-#[ignore = "RED repro: propguard treats a non-UTF-8 PROPGUARD_CRITERIA as unset and allows as no-criteria"]
 fn non_utf8_criteria_env_blocks_like_the_utf8_control() {
     let (root, work) = fixture("p1");
     let home = root.join("home");

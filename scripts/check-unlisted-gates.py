@@ -24,6 +24,11 @@ Exactly what git would execute from this cwd:
     joined to the toplevel (git runs hooks from the toplevel of a non-bare
     checkout, so that is where a relative hooksPath resolves);
   * unset -> `<git common dir>/hooks`.
+`--hooks-dir DIR` (backlog 52f85060) replaces that resolution with DIR, read
+exactly as above; it exists so a scratch clone whose core.hooksPath is unset
+can be checked against its own `.githooks` without writing git config. A
+relative DIR resolves against the invoking cwd (not `--repo`). DIR missing, not
+a directory, or unstat-able is undetermined (exit 2), never an empty hook set.
 `pre-commit` in that directory must exist, be readable and be executable (git
 skips a non-executable hook), else the verdict is undetermined. Every OTHER
 standard git hook name present there (pre-push, commit-msg, ...) is read too, so
@@ -78,11 +83,19 @@ scanner reads as listed while no commit ever runs it. Closing this would need
 control-flow analysis of the hook; it is left open on purpose and stated here
 rather than implied away.
 
+Usage
+-----
+  check-unlisted-gates.py [--repo PATH] [--hooks-dir DIR]
+`--repo PATH` runs the check as if from PATH (default: cwd). `--hooks-dir DIR`
+reads hooks from DIR instead of the core.hooksPath resolution. Each option at
+most once; anything else is a usage error (exit 2).
+
 Exit codes
 ----------
   0  every gate scanner in scripts/ is invoked; prints one OK line with the count
   1  one or more scanners are not invoked by any active hook; each is named
-  2  undetermined: not a git work tree, hooksPath unreadable, active pre-commit
+  2  undetermined (or usage error): not a git work tree, hooksPath unreadable,
+     --hooks-dir missing / not a directory, active pre-commit
      missing/unreadable/not executable, a sibling hook unreadable, a hook body
      that cannot be parsed (unbalanced quoting / nesting, unterminated or
      unparseable heredoc), scripts/
@@ -492,15 +505,64 @@ def gate_scanners(scripts_dir):
     return out
 
 
-def main(argv):
-    cwd = os.getcwd()
-    if len(argv) == 2 and argv[0] == "--repo":
-        cwd = argv[1]
-    elif argv:
-        print("usage: %s [--repo PATH]" % NAME, file=sys.stderr)
-        return 2
+USAGE = "usage: %s [--repo PATH] [--hooks-dir DIR]" % NAME
+
+
+def parse_args(argv):
+    """Return (repo, hooks_dir); either may be None. Raise ValueError on misuse.
+
+    Each option takes exactly one value and may be given at most once; any
+    other argument is a usage error (exit 2, never a verdict).
+    """
+    opts = {"--repo": None, "--hooks-dir": None}
+    i = 0
+    while i < len(argv):
+        flag = argv[i]
+        if flag not in opts or opts[flag] is not None or i + 1 >= len(argv):
+            raise ValueError(flag)
+        val = argv[i + 1]
+        if not val:
+            raise ValueError(flag)
+        opts[flag] = val
+        i += 2
+    return opts["--repo"], opts["--hooks-dir"]
+
+
+def explicit_hook_dir(cwd, hooks_dir):
+    """Resolve --hooks-dir: toplevel from cwd, hook dir as given (no hooksPath).
+
+    A relative DIR is resolved against the invoking process's cwd (like any
+    other command-line path), not against --repo. A DIR that does not exist or
+    is not a directory is undetermined, never an empty (clean) hook set.
+    """
+    top = git(cwd, "rev-parse", "--show-toplevel")
+    if top.returncode != 0 or not top.stdout.strip():
+        raise Undetermined(
+            "git rev-parse --show-toplevel exited %d (not a work tree?): %s"
+            % (top.returncode, top.stderr.strip())
+        )
+    hook_dir = os.path.abspath(hooks_dir)
     try:
-        toplevel, hook_dir, how = resolve_hook_dir(cwd)
+        st = os.stat(hook_dir)
+    except OSError as e:
+        raise Undetermined("--hooks-dir %s cannot be stat'ed: %s" % (hook_dir, e))
+    if not stat.S_ISDIR(st.st_mode):
+        raise Undetermined("--hooks-dir %s is not a directory" % hook_dir)
+    return top.stdout.strip(), os.path.normpath(hook_dir), "--hooks-dir %s" % hooks_dir
+
+
+def main(argv):
+    try:
+        repo, hooks_dir = parse_args(argv)
+    except ValueError:
+        print(USAGE, file=sys.stderr)
+        return 2
+    cwd = repo if repo is not None else os.getcwd()
+    try:
+        if hooks_dir is not None:
+            toplevel, hook_dir, how = explicit_hook_dir(cwd, hooks_dir)
+        else:
+            toplevel, hook_dir, how = resolve_hook_dir(cwd)
         bodies = read_hooks(hook_dir)
         invoked = set()
         for hook_name, text in sorted(bodies.items()):

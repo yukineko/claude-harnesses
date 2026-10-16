@@ -28,12 +28,24 @@ ctxrot の Stop hook 各 `main.rs`）が通る panic barrier は fail-closed へ
 後者3つ=budgetguard/autoflow/ctxrotは判定〈`{"decision":"block"}` を実際に返す〉を持ちながら
 `harness_core::hook::run_hook`〈panic握り潰し→常時exit0〉経由のまま取り残されていたのを本節の是正として
 `harness_core::gate::run::run_guarded` へ移行）。gate 本体が panic した＝判定不能は block に
-解決する: `crates/harness-core/src/gate/run.rs:36`「**fail closed**: block the stop and surface the crash」。
-連続 2 回目の panic だけが `stop_hook_active` により bounded に allow へ落ちる。
-`docs/stop-gate-latency.md` の記述もこの移行に合わせて更新済み（旧「A gate that errors internally
-allows the stop」という一律の記述は撤去）。
+解決する: `crates/harness-core/src/gate/run.rs:186`「**fail closed**: block the stop and surface the crash」
+[test: crates/harness-core/tests/prose_claims.rs::claim_prohib_run_guarded_panic_carries_a_block_decision]。
+同一ゲート・同一セッションの連続 2 回目の panic だけが bounded に allow へ落ちる
+[test: crates/harness-core/tests/panic_bound_consecutive.rs::second_consecutive_panic_allows]。
+その allow には `stop_hook_active` に加え、直前の stop もそのゲートの panic だったことを示す
+per-gate・per-session marker が要り、別ゲートの block による re-entry 中の初回 panic や、
+panic しなかった run を挟んだ後の panic は block する
+[test: crates/harness-core/tests/panic_bound_consecutive.rs::first_panic_on_continuation_blocks]
+[test: crates/harness-core/tests/panic_bound_consecutive.rs::clean_run_resets_the_streak]。
+marker を読めない・書けない（またはセッション id が無い）ときの re-entry は `systemMessage` 付きの明示的な allow になり、
+chain 最初の stop は常に block する
+[test: crates/harness-core/tests/panic_bound_consecutive.rs::marker_io_failure_reentry_is_bounded_and_loud]
+[test: crates/harness-core/tests/panic_bound_consecutive.rs::marker_io_failure_first_stop_blocks]
+[test: crates/harness-core/tests/panic_bound_consecutive.rs::missing_session_id_is_undetermined]。
 （`crates/harness-core/src/hook.rs:245`「exits 0 so the turn is never broken」の `run_hook` は今も存在するが、
 判定を持たない純粋な observability hook（ctxrot の Guard/Rescue/Restore 等）専用の入口であり、
+[test: crates/harness-core/tests/prose_claims.rs::claim_prohib_run_hook_cannot_carry_a_verdict]
+[test: crates/harness-core/tests/prose_claims.rs::claim_prohib_run_guarded]
 下の carve-out の側に属する。判定を持つコードが `run_hook` を使っていないかは、新しい Stop hook を
 追加するたびに確認すること。）したがって:
 

@@ -1952,3 +1952,30 @@ exit 101: es/overwatch)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.49s
      Running tests/heredoc_slash_literal_misparse.rs (target/debug/deps/heredoc_slash_literal_misparse-de50a0a88f2ca2e2)
 error: test failed, to rerun pass `-p blastguard --test heredoc_slash_literal_misparse`"""
+
+[[task]]
+id = "9b3f98ec"
+title = "launcher missing-binary path allows a first failure on any stop_hook_active re-entry (not only a second consecutive one)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "launcher",
+    "p1",
+]
+touched_files = []
+status = "unconfirmed"
+notes = "The Stop-gate launchers crates/GATE/bin/GATE (donegate, reviewgate, propguard, tdd, budgetguard, autoflow, ctxrot) block on a missing binary only when stop_hook_active is false, and allow every payload with stop_hook_active true. That flag is set whenever ANY gate blocked the previous stop, so the first missing-binary failure of a gate during another gate's re-entry is allowed and the gate never ran. CLAUDE.md section 1 permits only a second consecutive failure of the SAME gate to allow; run_guarded implements that with a per-gate per-session marker. The launcher tests stop_gate_reentry_is_allowed_through_so_the_session_is_never_trapped pin the buggy behaviour and claim it is bounded exactly like run_guarded. precommit-audit has the same re-entry shortcut (exit 2 block vocabulary) and is not covered by the repro test. Repro: harness-core test backlog_launcher_reentry_first_failure (ignored), with a stop_hook_active false control per launcher."
+created_at = 1792156830
+updated_at = 1792156830
+weight = 0.0
+issue_number = 1379
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1379"
+rev = 0
+
+[task.repro]
+outcome = "undetermined"
+cmd = "cargo test -p harness-core --test backlog_launcher_reentry_first_failure -- --ignored"
+rev = "b887fd1e8d2e9b1fa7ac392fd0d211e4db68601f"
+observed_at = 1792156830
+detail = "the working tree has uncommitted changes outside .backlog (MM CLAUDE.md, M  Cargo.lock, M  crates/harness-core/Cargo.toml, M  crates/harness-core/src/gate/run.rs, M  crates/harness-core/tests/backlog_1c66598a.rs); tests must run against committed content — commit or stash them first"

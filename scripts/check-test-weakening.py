@@ -52,7 +52,8 @@ a blanket pass would reintroduce the very fail-open this gate exists to stop.
 
 Two consequences of that design, stated so they read as decisions:
 
-* The marker is read from `base..HEAD` commit messages AND, when `--pending-msg
+* The marker is read from `base..HEAD` commit messages, from `base..MERGE_HEAD`
+  while a merge is in progress (see `acknowledgements`), AND, when `--pending-msg
   FILE` is passed, from the message about to be written. Until 2026-07-30 only
   the former was read, which made the hatch unreachable exactly when it was
   needed: git runs `pre-commit` before any message exists, and on a branch's
@@ -1007,8 +1008,27 @@ def acknowledgements(repo: str, base_sha: str, pending_msg: str | None = None) -
     and the only way past a false positive is `--no-verify` — the bypass this
     repo has a separate hook to refuse. A gate whose documented remedy cannot be
     applied is not strict, it is broken.
+
+    During a merge (MERGE_HEAD present) the commits being merged in are also
+    read, as `base_sha..MERGE_HEAD`. The diff this gate scans runs from the
+    merge-base to the WORKTREE, and mid-merge the worktree already holds the
+    other side's changes, so those changes are charged to the merge commit.
+    Their acknowledgments live in the other side's own commit messages, which
+    `base_sha..HEAD` cannot reach (backlog 0d007aa5). The same exactness rules
+    apply; an unacknowledged removal from either side still blocks.
+
+    A MERGE_HEAD that does not resolve to a commit contributes NO extra acks:
+    the restrictive reading, so a broken merge state can only cause blocks,
+    never a pass. Only the first MERGE_HEAD line is honoured (`rev-parse`); the
+    extra heads of an octopus merge contribute no acks, which again can only
+    over-block. A MERGE_HEAD that resolves but whose log cannot be read raises
+    Undetermined like every other git failure here.
     """
     body = git(repo, "log", "--format=%B", f"{base_sha}..HEAD")
+    merge_head = git(repo, "rev-parse", "--verify", "--quiet", "MERGE_HEAD^{commit}",
+                     allow_fail=True).strip()
+    if merge_head:
+        body += "\n" + git(repo, "log", "--format=%B", f"{base_sha}..{merge_head}")
     if pending_msg is not None:
         try:
             with open(pending_msg, encoding="utf-8", errors="replace") as fh:

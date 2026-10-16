@@ -120,7 +120,6 @@ class MergeMainIntoFeature(unittest.TestCase):
         r.write("README", "feature work\n")
         r.commit("feature: unrelated change")
 
-    @unittest.expectedFailure
     def test_main_side_acked_removal_does_not_block_the_merge(self) -> None:
         r = self.make()
         r.write(TEST_PATH, TESTS_WEAKENED)

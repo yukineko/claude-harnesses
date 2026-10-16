@@ -490,36 +490,6 @@ exit 1: ::\u001B[1mMergeHeadShape::test_directory_merge_head_does_not_allow_a_ma
 \u001B[31m========================= \u001B[31m\u001B[1m2 failed\u001B[0m, \u001B[32m2 passed\u001B[0m\u001B[31m in 1.14s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "b0c3d263"
-title = "check-closure-evidence.py は backlog CLI が書く closure 記録 (runner=cargo-test/pytest/script) を全件 block する — runner と command 先頭語の不一致"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-crates/backlog/src/evidence.rs:61-66 records the runner as cargo-test / pytest / script; scripts/check-closure-evidence.py:298 requires it to equal the first word of the command (cargo / python3 / bash). Replaying 6 recent closing commits in a scratch clone: all 6 blocked, 3 of them on this mismatch alone (the other 3 closed rows with no closure record, which is intended). Prerequisite for wiring the scanner into pre-commit (eca8dea7 stage B). Fix both sides together with a regression test that pushes a CLI-written closure through the gate.
-
-Observed 2026-10-03 by the eca8dea7 investigation (main 9ea5a326); raw logs scratchpad eca8dea7-run-*.log, proposal eca8dea7-proposal.md."""
-created_at = 1791034486
-updated_at = 1792003600
-weight = 0.0
-issue_number = 1226
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1226"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_b0c3d263.py"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003597
-detail = """
-exit 1: test/unittest.py\u001B[0m:354: XFailed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_b0c3d263.py::\u001B[1mClosureRunnerLabel::test_cli_written_runner_label_is_accepted\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 2.06s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
 id = "6ca3d71f"
 title = "check-projkey-store-classification.py が main で 6 件 red (count drift 2 / stale 1 / 未分類 call site 3)"
 project = "/Users/yuki/src/harness"
@@ -1827,6 +1797,33 @@ exit 101: es/overwatch)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.49s
      Running tests/heredoc_slash_literal_misparse.rs (target/debug/deps/heredoc_slash_literal_misparse-de50a0a88f2ca2e2)
 error: test failed, to rerun pass `-p blastguard --test heredoc_slash_literal_misparse`"""
+
+[[task]]
+id = "86e21645"
+title = "maintree guard refuses a fast-forward when the source branch is already gone"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "scripts/guard-maintree-bash.py integration_head() accepts a moved HEAD only if it is a merge commit or contained in a ref other than main. A ff whose source branch is deleted before PostToolUse (same call, or another session during an unrelated call) is refused. User ruling 2026-10-16: main reflog 'merge ...: Fast-forward' / 'merge ...' is integration evidence; 'commit:' still refused; unreadable reflog refused (undetermined). Controls in the same file must stay green."
+created_at = 1792155566
+updated_at = 1792155566
+weight = 0.0
+issue_number = 1374
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1374"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_guard_maintree_bash_ff_source_gone.py"
+rev = "7b8cc0b73eed33d76260918d6cf74021f3e97633"
+observed_at = 1792155566
+detail = """
+exit 1: nfo ============================
+FAILED scripts/test_guard_maintree_bash_ff_source_gone.py::FfSourceGoneAllowed::test_a_ff_and_branch_delete_in_same_call_is_allowed
+FAILED scripts/test_guard_maintree_bash_ff_source_gone.py::FfSourceGoneAllowed::test_b_other_session_ff_and_branch_delete_during_unrelated_call_is_allowed
+========================= 2 failed, 6 passed in 9.36s =========================="""
 
 [[task]]
 id = "099a5cbb"

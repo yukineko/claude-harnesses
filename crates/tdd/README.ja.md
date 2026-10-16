@@ -40,11 +40,13 @@ harness の他のゲートに対する「test-first の兄弟」にあたる。`
 
 `tdd oracle --task <id>` はタスクの証跡から RED→GREEN の遷移を分類し、JSON レポート
 （`{"transition":"fail_to_pass","valid_fp_oracle":true,…}`）を出力する。有効な
-Fail→Pass のときだけ exit 0。証跡が無い/壊れている場合は `transition:"unknown"`（exit 1）、
+Fail→Pass のときだけ exit 0 [test: crates/tdd/tests/integration.rs::oracle_reports_valid_fail_to_pass_and_exits_zero]。有効とみなすのは RED と GREEN が同じテストコマンド（`cmd`）で
+記録された場合だけで、RED と異なるコマンドで GREEN を記録した場合（または `cmd` が記録されていない証跡）は
+`transition:"command_mismatch"`・`valid_fp_oracle:false`（exit 1）を報告する [test: crates/tdd/tests/backlog_dc37a4da.rs::oracle_rejects_red_and_green_recorded_with_different_test_commands] [test: crates/tdd/src/transition.rs::different_cmd_fail_to_pass_is_command_mismatch] [test: crates/tdd/src/transition.rs::absent_cmd_on_either_side_is_command_mismatch]。証跡が無い/壊れている場合は `transition:"unknown"`（exit 1） [test: crates/tdd/tests/integration.rs::oracle_missing_proofs_is_fail_soft_never_panics] [test: crates/tdd/src/transition.rs::oracle_report_missing_artifacts_are_unknown_and_invalid] [test: crates/tdd/src/proof.rs::read_passed_is_fail_soft]、
 証跡が存在するのに読めない場合は `transition:"undetermined"`・`valid_fp_oracle:false`
-（読み取りエラーを `"undetermined"` に記載、exit 2）を報告し、欠落や有効な証跡としては扱わない。`/tdd` skill 自体のフェーズには含まれず、`condukt` の
+（読み取りエラーを `"undetermined"` に記載、exit 2）を報告し、欠落や有効な証跡としては扱わない [test: crates/tdd/tests/integration.rs::oracle_unreadable_proof_exits_2_undetermined] [test: crates/tdd/src/transition.rs::oracle_report_undetermined_side_names_the_read_error]。`/tdd` skill 自体のフェーズには含まれず、`condukt` の
 Fail→Pass ゲート（`condukt state check-oracle`）が `fix`/`feature` タスクの RED/GREEN 証跡を
-決定論的に検証するために呼ぶ機械オラクルである。
+決定論的に検証するために呼ぶ機械オラクルである [test: crates/condukt/tests/fp_oracle_e2e.rs::fix_task_with_valid_fail_to_pass_oracle_is_verified] [test: crates/condukt/tests/fp_oracle_e2e.rs::fix_task_without_valid_fail_to_pass_oracle_is_refused]。
 
 ### サブコマンド
 

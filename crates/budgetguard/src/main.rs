@@ -75,6 +75,11 @@ enum Command {
     },
     /// Show the resolved config and today's spend.
     Status(StatusArgs),
+    /// Budget check for a driver loop (e.g. /flow): one JSON line on stdout;
+    /// exit 0 = within budget (or disabled), 1 = over the daily block limit,
+    /// 2 = undetermined (config/ledger/cwd unreadable). A caller must treat
+    /// every non-zero exit as over budget.
+    Check,
 }
 
 #[derive(Args)]
@@ -94,6 +99,7 @@ fn main() {
         Command::Uninstall { dry_run } => exit_on_err(install::uninstall(dry_run)),
         Command::Init { force } => exit_on_err(init(force)),
         Command::Status(args) => status(args),
+        Command::Check => check(),
     }
 }
 
@@ -214,6 +220,62 @@ fn init(force: bool) -> anyhow::Result<()> {
     std::fs::write(&path, template)?;
     eprintln!("wrote {}", path.display());
     Ok(())
+}
+
+/// Print one JSON line with `verdict: "undetermined"` and exit 2. An
+/// unmeasured spend must never be reported as headroom, so this carries no
+/// thresholds and no `pressure` key.
+fn check_undetermined(why: &str) -> ! {
+    println!(
+        "{}",
+        serde_json::json!({ "verdict": "undetermined", "error": why })
+    );
+    std::process::exit(2);
+}
+
+/// `budgetguard check`: the budget question a driver loop asks before each
+/// pick. Exit 0 = within (or disabled by the operator), exit 1 = over the
+/// daily block limit, exit 2 = undetermined. Unlike `status`, a corrupt or
+/// unreadable ledger is undetermined here, never 0.0 spend.
+fn check() {
+    if Config::disabled_env() {
+        println!("{}", serde_json::json!({ "verdict": "disabled" }));
+        return;
+    }
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => check_undetermined(&format!("could not resolve the current directory: {e}")),
+    };
+    let cfg = match Config::load_checked(&cwd) {
+        Determination::Known(cfg) => cfg,
+        Determination::Undetermined(why) => check_undetermined(why.as_str()),
+    };
+    if !cfg.enabled {
+        println!("{}", serde_json::json!({ "verdict": "disabled" }));
+        return;
+    }
+    let ledger = match harness_core::ledger::Ledger::load_checked(&cfg.state_dir) {
+        Ok(ledger) => ledger,
+        Err(e) => check_undetermined(&e.to_string()),
+    };
+    let day_usd = ledger.day_total(&today_str());
+    if !day_usd.is_finite() {
+        check_undetermined("today's ledger total is not a finite number");
+    }
+    let over = cfg.daily_block_usd > 0.0 && day_usd >= cfg.daily_block_usd;
+    println!(
+        "{}",
+        serde_json::json!({
+            "verdict": if over { "over" } else { "within" },
+            "day_usd": day_usd,
+            "daily_warn_usd": cfg.daily_warn_usd,
+            "daily_block_usd": cfg.daily_block_usd,
+            "pressure": gate::budget_pressure(day_usd, cfg.daily_warn_usd),
+        })
+    );
+    if over {
+        std::process::exit(1);
+    }
 }
 
 fn status(args: StatusArgs) {

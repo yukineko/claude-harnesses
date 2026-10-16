@@ -1,11 +1,3 @@
-# flow
-
-> 課題の供給（source）から解決手段の実行（executor）までを1本のループで貫く、Claude Code 向けの統合 driver（autopilot 層）。
-
-## 目的
-
-flow は、エージェントをセッションを通して生産的に保つための **2 つの直交した関心**——「次の課題を供給する」ことと「それを実行する」こと——を分離し、片方をもう片方へパイプする driver である。
-
 ```
 SOURCE（課題の供給）                          EXECUTOR（解決手段の実行）
   compass     … 次の右サイズの一手             ─┐
@@ -14,43 +6,11 @@ SOURCE（課題の供給）                          EXECUTOR（解決手段の�
   prompt      … ユーザー直の課題文             ─┘
 ```
 
-flow 自身は **新しい状態を一切持たない**。ループ制御——どの source を引くか、いつ実行するか、いつ止めるか——という判断は `/flow` skill の中の **LLM** が担い、状態維持・task 単位の claim・size routing・モデル選択は **既存のバイナリ**（`compass` / `backlog` / `condukt` / `fugu-router`）に委ねる。flow はそれら決定論レイヤを束ねるだけの薄い層である。
+キュー全体は**ロックしない**: 同じ project で複数セッションが同時に `/flow` を回してよい [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_loop_does_not_acquire_the_exclusive_project_lock] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::a_peer_driver_is_not_a_reason_to_stand_down]。
+排他は task 単位（選択と予約を同一クリティカルセクションで行う `backlog next --claim` と `condukt state claim-task`）で、各セッションは `backlog driver register` で非排他に driver 登録する [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_pick_reserves_the_task_instead_of_only_reading_it] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_per_task_claim_guards_are_retained] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_loop_does_not_acquire_the_exclusive_project_lock]。
 
-ハーネスの中での位置づけは次のとおり。
-
-| 関心 | 担い手 |
-|---|---|
-| これは何のためか・次の一手は何か | `compass` |
-| 確定済みのキューは何か | `backlog` |
-| build / 計測待ちの PDO 仮説は何か | `hypothesis` |
-| タスクを分割・スケジュール・実行・完了ゲート | `condukt` |
-| どの Claude tier が最も安く通すか | `fugu-router` |
-| **source → executor をループで束ね、止め時を判断する** | **`flow`** |
-
-flow は **`/backlog` の上位互換**である（複数 source と compass フォールバックを上乗せしたもの）。キュー全体は**ロックしない**: 同じ project で複数セッションが同時に `/flow` を回してよい。排他は task 単位（選択と予約を同一クリティカルセクションで行う `backlog next --claim` と `condukt state claim-task`）で、各セッションは `backlog driver register` で非排他に driver 登録する。
-
-## どうして必要か
-
-LLM 単体にセッション全体を「自走」させると、課題の選定と実行が混ざり、次のような失敗モードに陥る。
-
-- **盲目実行。** ゴールが陳腐・矛盾・抽象すぎる状態のまま compass 由来の一手を流すと、的外れな一手を量産する。flow は compass 由来の一手に charter の鮮度ゲート（`compass gap`）をかけ、一手が引けなければその場で charter を彫り直す（backlog item は起票時点で観測と done 条件を持つので、このゲートの対象外）。
-- **source と executor の混線。** 「次に何をやるか」と「それをどう実装するか」を同じ判断に押し込むと、優先順位付けが実装の都合に引きずられる。flow は供給（compass/backlog/hypothesis）と実行（condukt）を直交させ、それぞれ独立したストアに保つ。
-- **二重着手。** 複数セッションが同時に同じ課題を掴むと condukt run が衝突する。flow はキュー全体をロックせず（並走は許す）、`backlog next --claim` で選択と予約を同一クリティカルセクションで行う。誰かが明示的に `backlog lock acquire` した排他ロックが生きている場合だけ尊重し、見送り・待機・強制奪取を問う。さらに backlog item 単位でも `condukt state is-claimed`/`claim-task`/`release-task`/`heartbeat` を使い（`--run "flow-$CLAUDE_CODE_SESSION_ID"`）、同一タスクへの多重着手をピック時（claim-skip）と着手直前（TOCTOU ガード）の二段で防ぐ。
-- **build と validate の取り違え。** 仮説を「出荷した」だけで「検証済み」と扱うと、計測ループが閉じない。flow は出荷した仮説を `awaiting-measurement` に残し、次サイクルの measure step が観測値を添えて初めて validate/reject する（build ≠ validate）。
-- **止め時の喪失。** 連続失敗や予算超過に気づかず走り続けると無駄に消費する。flow は早期脱出条件を持ち、どの経路でも driver 登録の解除を必須にする。
-
-判断（どの source を引くか・実行・検証・止め時）は LLM、状態と claim とモデル選択は既存バイナリ、と割り切ることで、自走の利便を保ちつつ暴走を防ぐ。
-
-## どう使うか
-
-### 起動
-
-skill `/flow` でループを起動する。
-
-- 引数なし → source（measure step → backlog → backlog が空のときだけ compass）から優先度順に自動ピックし、condukt に流して検証・sink するループを回す。
-- 課題文を直接渡す（`/flow <課題文>`）→ source 選択を飛ばし、その課題を condukt に1件だけ流して終了する（明示課題は「今これをやれ」の意味）。
-
-ループの骨子は次のとおり。
+早期脱出・エラー時も、driver 登録の解除を飛ばしてはならない。
+盲目実行をしない。
 
 ```
 0. 引数分岐 — 課題文があれば condukt に直行（1 件だけ実行）
@@ -73,115 +33,44 @@ skill `/flow` でループを起動する。
      場合のみ lock release）+ overwatch end + サマリ報告 + pivot-check
 ```
 
-### PDO session anchor（`overwatch begin`/`end`）
+自律判定とゲートの振り分けは `skills/flow/SKILL.md` の Step 0.5 を正とする [test: crates/condukt/tests/autonomy_invariant.rs::invariant_prose_anchors_are_present]。
 
-Step 3-1 で課題文を組み立てた直後、**どの source を選んだか（compass 主筋 / measure step / backlog /
-open 仮説）に関わらず** `overwatch begin --key <pdo-unit-id> --title <title> [--scope <csv>]
-[--done-criteria <dc>]` を呼び、そのセッションの現在の責務を project-wide レジストリに登録する
-（`overwatch status` で可視。DESIGN §4.2）。これにより **condukt run を起こさない measure step でも**
-「今どのセッションが何を担当しているか」がレジストリに乗る。Step 4 で対応する
-`overwatch end --key <k> --status <done|abandoned>` を呼び anchor のライフサイクルを閉じる。
-バッチ（複数 backlog item）は item ごとに begin/end する。**fail-soft**: `overwatch` バイナリが
-無ければ両方 skip して続行する（既存の condukt/backlog/compass 欠落時と同じ方針＝turn を壊さない）。
+verdict が **auto**（exit 0）のとき、`condukt policy answer` は推奨オプションを自答し、`gate-decisions.jsonl` に記録する
+（`condukt policy answers` で後から監査可能） [test: crates/condukt/tests/policy_cli.rs::auto_verdict_self_answers_recommended_option_and_journals] [test: crates/condukt/tests/policy_cli.rs::answers_reader_replays_the_audit_trail]。
+auto の verdict では **Ask しない**こと。
 
-### 自律ゲート（`condukt policy answer`）
+**flow は hook を持たない [test: scripts/test_prose_flow_a.py::T::test_claim_layout_no_cargo_no_bin_no_hooks] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_no_hook_runs_flow]。`/flow` は明示的に起動したときだけ走る [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_no_hook_runs_flow] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_autoflow_has_no_sessionstart_and_no_proposal_strings] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_autoflow_stop_output_never_proposes_flow]。**
 
-ループ中、本来ならユーザーに `AskUserQuestion` で確認する箇所はすべて、まず**グローバルな自律スイッチ**を通す。
-
-```bash
-condukt state autonomy-check   # exit 0 = 自律 / exit 1（既定）= 非自律
-```
-
-- **非自律（既定・exit 1、または `answer` サブコマンド未対応）** — 変更なし。後方互換で
-  以下のゲートは従来どおり全てユーザーに確認する。
-- **自律（exit 0）** — 各ゲートは固有の risk × reversibility × confidence を添えて
-  `condukt policy answer` に通され、決定論的な verdict を返す:
-  - **auto（exit 0）** — 推奨オプションを自答し、`gate-decisions.jsonl` に記録する
-    （`condukt policy answers` で後から監査可能）。**Ask しない**。
-  - **escalate（exit 2）** — 従来どおり `AskUserQuestion`（pivot 判断は必ずここに落ちる＝
-    genuine な戦略判断は人間に残す）。
-  - **block（exit 3）** — 誰にも聞かず拒否して停止する。
-  - それ以外（不正入力・`answer` 未対応）は安全側にフォールバックして escalate 扱い。
-
-| ゲート | 典型 verdict | auto 時の既定 |
-|---|---|---|
-| 排他ロック保持中（Step 2。誰かが明示的に `backlog lock acquire` した場合のみ。driver の並走では発生しない） | auto | stand down（報告して clean exit。`--force` 自動奪取はしない） |
-| resume 選択（複数候補） | auto | 既存の優先度 pick 順 |
-| pivot-check（Step 4） | **escalate** | —（常に人間の判断） |
-| 循環ブレーカー trip（早期脱出） | auto | clean stop |
-
-自律モードでも、次の4つは常に人間で止まる: **(a)** worker blocked のエスカレーション、
-**(b)** deploy/push の GATED 承認、**(c)** pivot の判断、**(d)** `policy answer` 自体が
-escalate/block を返したゲート。
-
-早期脱出の詳細:
-
-| 状況 | 対応 |
-|---|---|
-| ユーザーが中断を指示 | 直ちに Step 4（driver 登録の解除）へ |
-| 循環ブレーカーが trip（`condukt circuit check` が毎イテレーション failure-streak上限・予算超過・no-progress stall を判定） | 決定論的に clean stop（人にも policy にも聞かない hard stop）。非自律での追加確認は `AskUserQuestion` フォールバックのみ |
-| budgetguard が予算超過を返す | ループ終了（予算軸は上の circuit check にも統合済み） |
-| compass フォールバックで charter を彫っても右サイズの一手が出ない / `sentinel` で離席 | ループを止め Step 4 へ（彫り直しを勝手に繰り返さない） |
-| `compass` バイナリ不在・呼び出し失敗 | 「仕事なし」にも「実行してよい」にも丸めず、報告して Step 4 へ |
-| `backlog next` が予期しないエラー | 報告して Step 4 へ |
-
-いずれの早期脱出でも driver 登録の解除は必ず行う。
-
-### SessionStart hook は廃止した（2026-08-20）
-
-**flow は hook を持たない。`/flow` は明示的に起動したときだけ走る。**
-
-0.2.6 までは `flow propose` という SessionStart hook があり、backlog に pending が
+[record: 2026-08-20 rev: 5289312f] 0.2.6 までは `flow propose` という SessionStart hook があり、backlog に pending が
 あれば「他の作業を始める前に、AskUserQuestion 1 回で `/flow` を開始するかユーザーに
-確認してください」というディレクティブを毎セッション注入していた。**ユーザーの指示で
+確認してください」というディレクティブを毎セッション注入しており、**ユーザーの指示で
 これを廃止した**（同時に autoflow 側の 2 経路 — SessionStart の
 「バックログに N 件…/flow で開始しますか？」と、Stop hook で毎ターン
 「/backlog を実行してください」と block していたアーム — も撤去）。
 
-理由は促しの情報量である。同じ要求が 2 プラグインから重複して出ており、しかも
-毎ターン繰り返されていた。繰り返しは検出ではない。キューを消化するかどうかは
-操作者の判断であり、`/flow` を打つという行為がその判断そのものである。
+flow は **skill のみのプラグイン**である [test: scripts/test_prose_flow_a.py::T::test_claim_layout_no_cargo_no_bin_no_hooks]。バイナリ・ランチャ・hook はいずれも無く、Cargo クレートでもない [test: scripts/test_prose_flow_a.py::T::test_claim_layout_no_cargo_no_bin_no_hooks] [test: scripts/test_prose_flow_a.py::T::test_claim_layout_not_a_workspace_member]。
 
-この結果、flow は **skill のみのプラグイン**になった（`scout` / `daily-report` と
-同じ形）。バイナリ・ランチャ・hook はいずれも無く、Cargo クレートでもない。
-`/flow` skill の中身（source→executor ループ）は一切変わっていない。
-
-### 導入
-
-Claude Code プラグインとして入れるのが推奨。hook・`/flow` skill・プリビルドバイナリを同梱し、**subscription で完結**する（API キー不要）。
+プラグインは `/flow` skill のみを同梱する [test: scripts/test_prose_flow_a.py::T::test_claim_layout_only_skill_is_flow]。
 
 ```text
 /plugin marketplace add yukineko/claude-harnesses
 /plugin install flow@yukineko
 ```
 
-> flow は source/executor（`compass` / `backlog` / `condukt`、任意で `fugu-router`）がインストールされていることを前提とする。単体で動くものではなく、それらを束ねる driver である。
-
-## プラットフォーム対応
-
-ビルドするものが無いので、プラットフォーム依存も無い。
-
-## プラグイン構成
-
 ```
-.claude-plugin/plugin.json     # プラグインマニフェスト
-skills/flow/SKILL.md           # /flow skill（source→executor ループを駆動）
+.claude-plugin/plugin.json     # プラグインマニフェスト [test: scripts/test_prose_flow_a.py::T::test_claim_layout_plugin_json_valid_name_flow_no_hooks] [test: scripts/test_prose_flow_a.py::T::test_claim_layout_readme_prose_and_fence_comments]
+skills/flow/SKILL.md           # /flow skill（source→executor ループを駆動） [test: scripts/test_prose_flow_a.py::T::test_claim_layout_only_skill_is_flow] [test: scripts/test_prose_flow_a.py::T::test_claim_layout_readme_prose_and_fence_comments]
 ```
 
-0.2.6 までは `hooks/hooks.json`・`bin/flow`（POSIX ランチャ）・`bin/flow-<os>-<arch>`・
-`src/main.rs`・`Cargo.toml` も同梱していた。すべて `flow propose` のためのもので、
-それが廃止されたので一緒に消えた。
+[record: 2026-08-20 rev: 5289312f] 0.2.6 までは `hooks/hooks.json`・`bin/flow`（POSIX ランチャ）・`bin/flow-<os>-<arch>`・
+`src/main.rs`・`Cargo.toml` も同梱しており、すべて `flow propose` のためのもので、それが廃止されたので一緒に消えた。
 
-## 開発
-
-Rust クレートではないので `cargo` は関わらない。`/flow` skill の
+Rust クレートではないので `cargo` は関わらない [test: scripts/test_prose_flow_a.py::T::test_claim_layout_no_cargo_no_bin_no_hooks] [test: scripts/test_prose_flow_a.py::T::test_claim_layout_not_a_workspace_member]。`/flow` skill の
 queue-driving 契約は `crates/integration-tests/tests/flow_skill_queue_contract.rs`
-がテキストとして pin している（`crates/flow/tests/` から移設）。
+がテキストとして pin している [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_loop_does_not_acquire_the_exclusive_project_lock] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_pick_reserves_the_task_instead_of_only_reading_it] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::a_peer_driver_is_not_a_reason_to_stand_down] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_per_task_claim_guards_are_retained] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::undetermined_liveness_is_not_read_as_free] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::every_claim_task_invocation_is_marked_stateless]。
 
 ```sh
 cargo test -p integration-tests --test flow_skill_queue_contract
 ```
 
-## ライセンス
-
-MIT
+MIT [test: scripts/test_prose_flow_a.py::T::test_claim_license_mit]

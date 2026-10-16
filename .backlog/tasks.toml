@@ -2082,37 +2082,6 @@ exit 101:
 error: test failed, to rerun pass `-p trajectoryeval --test repro_tier_exists_defaults_true`"""
 
 [[task]]
-id = "a6ee76f7"
-title = "condukt autonomy_invariant askuserquestion_sites_match_frozen_allowlist が main で RED (overwatch SKILL.md の AskUserQuestion 数 allowlist 7 / 実測 2)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-16 by the cf70f785 worker on a tree branched from main a8ec7ac9-era: left 2 right 7 for crates/overwatch/skills/overwatch/SKILL.md. Likely introduced by ce76ce72 (prose-tests(overwatch)) which rewrote that SKILL.md. Readings: (a) ce76ce72 dropped AskUserQuestion gates that must stay (real regression: restore them); (b) the removal was intended and the frozen allowlist needs an acknowledged update (frozen test = human decision). Distinguish by diffing ce76ce72 on that SKILL.md for removed AskUserQuestion sites."
-created_at = 1792160219
-updated_at = 1792160219
-weight = 0.0
-issue_number = 1380
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1380"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test autonomy_invariant askuserquestion_sites_match_frozen_allowlist"
-rev = "22d4f8d5c0f72c0e25773cbb14e01e87ea17ed01"
-observed_at = 1792160219
-detail = """
-exit 101: ilures:
-    askuserquestion_sites_match_frozen_allowlist
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.01s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
-     Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-1700c292e4735461)
-error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""
-
-[[task]]
 id = "5a4cd3ff"
 title = "budgetguard: unmeasurable transcript or malformed input silently allows the stop with limits armed"
 project = "/Users/yuki/src/harness"
@@ -2478,3 +2447,272 @@ exit 101: t` profile [unoptimized + debuginfo] target(s) in 0.84s
      Running tests/continuous_audit_script.rs (target/debug/deps/continuous_audit_script-04a3e58a24f9e27d)
      Running tests/repro_ca_script_test_passes_without_bash.rs (target/debug/deps/repro_ca_script_test_passes_without_bash-bca06b62996f6681)
 error: test failed, to rerun pass `-p overwatch --test repro_ca_script_test_passes_without_bash`"""
+
+[[task]]
+id = "50bceba2"
+title = "compass gap exits 0 with empty dod on an unparseable charter (unclosed front matter) - reads as no gap"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Found by prose-flow citation work (branch prose-flow 3b2228ac). A UTF-8 charter.md whose front matter does not parse makes compass gap exit 0 with dod=[] and measuring_stick empty, indistinguishable from a charter with no gap. Expected: non-zero exit (undetermined -> restrictive, CLAUDE.md 3). RED: scripts/test_prose_flow_b.py test_claim_compass_fail_detectable_garbage_charter (unittest.expectedFailure, fails under pytest --runxfail). Flip the expectedFailure when fixed."
+created_at = 1792187683
+updated_at = 1792187683
+weight = 0.0
+issue_number = 1383
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1383"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_prose_flow_b.py -k test_claim_compass_fail_detectable_garbage_charter -q"
+rev = "3b2228ace35777e08233ea8223a4ee45ea53ecad"
+observed_at = 1792187683
+detail = """
+exit 1:    ) -> None:
+        try:
+>           xfail(str(reason))
+E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_prose_flow_b.py::TestCompassFailDetectable::test_claim_compass_fail_detectable_garbage_charter
+1 failed, 36 deselected in 1.05s"""
+
+[[task]]
+id = "cccc9c43"
+title = "flow circuit check: failure_streak and budget axes are structurally dead (no state init for flow-SID run, no budget cap passed)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Found by prose-flow citation work (branch prose-flow 3b2228ac). /flow runs condukt circuit check --run flow-SID --session SID but never state-inits that run and passes no budget cap; item failures go to backlog fail which the circuit cannot see. After three failed items the exact SKILL command reports streak 0, budget_over_cap false, exit 0 - the breaker can never trip on those axes. RED: scripts/test_prose_flow_a.py test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead (unittest.expectedFailure, fails under pytest --runxfail). Flip the expectedFailure when fixed."
+created_at = 1792187754
+updated_at = 1792187754
+weight = 0.0
+issue_number = 1385
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1385"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_prose_flow_a.py -k test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead -q"
+rev = "3b2228ace35777e08233ea8223a4ee45ea53ecad"
+observed_at = 1792187754
+detail = """
+exit 1:  = "",
+    ) -> None:
+        try:
+>           xfail(str(reason))
+E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_prose_flow_a.py::T::test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead
+1 failed, 40 deselected in 2.49s"""
+
+[[task]]
+id = "08d44b5e"
+title = "reviewgate inject mode: changed unreviewed diff waived by repeat ledger after an already-reviewed allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "After block round 1 and an already-reviewed allow, editing the same file gives attempts=1 with a reason byte-identical to round 1. harness_core::repeat fingerprints the reason text, so emit_stop_block waives it with only a systemMessage while log.jsonl records blocked-inject. Expected: a changed diff is blocked. Test is ignored, runs RED under --ignored."
+created_at = 1792188666
+updated_at = 1792188666
+weight = 0.0
+issue_number = 1395
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1395"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test repro_inject_changed_diff_waived -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188666
+detail = """
+exit 101: d_not_waived
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.90s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/repro_inject_changed_diff_waived.rs (target/debug/deps/repro_inject_changed_diff_waived-194432cb329ee29c)
+error: test failed, to rerun pass `-p reviewgate --test repro_inject_changed_diff_waived`"""
+
+[[task]]
+id = "043c9f29"
+title = "reviewgate inject give-up allows with no visible signal"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "In inject mode, attempts over max_attempts returns Allow tag giveup (review.rs) with no stderr warning, no stdout message and no overwatch event, unlike the scan-failed and diff-failed giveups. Expected: a visible signal. Test ignored, RED under --ignored."
+created_at = 1792188671
+updated_at = 1792188671
+weight = 0.0
+issue_number = 1396
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1396"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test repro_inject_giveup_silent -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188671
+detail = """
+exit 101: ct_giveup_is_visibly_signalled
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.54s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/repro_inject_giveup_silent.rs (target/debug/deps/repro_inject_giveup_silent-0f4ecf6ef13bd9ca)
+error: test failed, to rerun pass `-p reviewgate --test repro_inject_giveup_silent`"""
+
+[[task]]
+id = "0ed931a2"
+title = "reviewgate allows a real change as empty-diff when the git diff driver prints nothing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "With .gitattributes diff=nop and diff.nop.command=true, git diff --name-only lists the file but the patch text is empty; evaluate logs empty-diff with files [] and allows. Expected: undetermined, not clean. Test ignored, RED under --ignored."
+created_at = 1792188676
+updated_at = 1792188676
+weight = 0.0
+issue_number = 1397
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1397"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test repro_diff_driver_empty -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188676
+detail = """
+exit 101: f_driver_change_is_not_allowed_as_empty
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/repro_diff_driver_empty.rs (target/debug/deps/repro_diff_driver_empty-3b98e5711e4fc904)
+error: test failed, to rerun pass `-p reviewgate --test repro_diff_driver_empty`"""
+
+[[task]]
+id = "ebc95a38"
+title = "backlog list --status <unknown> exits 0 with no tasks"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "An unknown status filter value only warns on stderr; stdout is no tasks and exit is 0, indistinguishable from an empty queue to scripts. Expected: non-zero exit. Test ignored, RED under --ignored."
+created_at = 1792188680
+updated_at = 1792188680
+weight = 0.0
+issue_number = 1398
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1398"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test repro_list_unknown_status_exit -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188680
+detail = """
+exit 101: _status_exits_nonzero
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/repro_list_unknown_status_exit.rs (target/debug/deps/repro_list_unknown_status_exit-1e80737b57a28b94)
+error: test failed, to rerun pass `-p backlog --test repro_list_unknown_status_exit`"""
+
+[[task]]
+id = "f580e5ef"
+title = "backlog session-start hook exits 0 with empty stdout on malformed stdin"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Malformed hook stdin is logged to stderr only; exit 0 and empty stdout read as nothing to inject. Expected: a visible failure. Existing test integration.rs::session_start_with_malformed_stdin_exits_zero pins the current behaviour and is the test that will flip when this is fixed. Test ignored, RED under --ignored."
+created_at = 1792188684
+updated_at = 1792188684
+weight = 0.0
+issue_number = 1399
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1399"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test repro_session_start_malformed_stdin -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188684
+detail = """
+exit 101: ailure
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/repro_session_start_malformed_stdin.rs (target/debug/deps/repro_session_start_malformed_stdin-dd5d8838be6468d6)
+error: test failed, to rerun pass `-p backlog --test repro_session_start_malformed_stdin`"""
+
+[[task]]
+id = "bca9cabe"
+title = "propguard treats non-UTF-8 PROPGUARD_CRITERIA as unset and allows as no-criteria"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "derive.rs source_criteria uses if let Ok(v) = std::env::var, so a set but non-UTF-8 value is ignored; with no other criteria the stop is allowed while the UTF-8 control blocks. Expected: block. Test includes the UTF-8 control, ignored, RED under --ignored."
+created_at = 1792188689
+updated_at = 1792188689
+weight = 0.0
+issue_number = 1400
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1400"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p propguard --test repro_criteria_env_non_utf8 -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188689
+detail = """
+exit 101: blocks_like_the_utf8_control
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/repro_criteria_env_non_utf8.rs (target/debug/deps/repro_criteria_env_non_utf8-01145266f84a6c8a)
+error: test failed, to rerun pass `-p propguard --test repro_criteria_env_non_utf8`"""

@@ -1,193 +1,113 @@
-# propguard
+On every `Stop`, propguard derives *semantic properties* (invariants) from the current task's `done_criteria` [test: crates/propguard/src/derive.rs::derives_matching_properties_from_criteria] [test: crates/propguard/src/derive.rs::derivation_is_capped_at_max] [test: crates/propguard/src/derive.rs::thin_criteria_are_padded_to_the_minimum] and checks the generated code against them before the agent is allowed to declare a turn done [test: crates/propguard/tests/integration.rs::with_criteria_inject_blocks_first_stop_but_exits_zero] [test: crates/propguard/tests/integration.rs::block_appends_propguard_signed_violation].
 
-A **property gate** for Claude Code. On every `Stop`, propguard derives 3–5
-*semantic properties* (invariants) from the current task's `done_criteria` and
-checks the generated code against them before the agent is allowed to declare a
-turn done. It is the "does the code hold the *invariants*?" complement to
-[tdd](https://github.com/yukineko/tdd)'s "do the concrete tests pass?".
+[record: 2026-07-01 rev: 10de5291] Property derivation follows **PGS** (Property-Generated Solver, [arXiv:2506.18315](https://arxiv.org/pdf/2506.18315)).
 
-`tdd` runs specific test cases; that proves examples but never *formalizes* the
-semantic invariants the code must satisfy. Following **PGS** (Property-Generated
-Solver, [arXiv:2506.18315](https://arxiv.org/pdf/2506.18315)), propguard turns
-free-text done_criteria into a small, checkable property set and blocks when
-fewer than a `threshold` of them hold.
+One Stop hook runs the bundled `propguard check` binary [test: crates/propguard/tests/prose_claims.rs::claim_one_stop_hook].
 
-It is subscription-native: one Stop hook plus a bundled Rust binary, **no API
-key**. The binary deterministically *derives* the properties and enforces the
-count→threshold block; the semantic *judgement* of whether each property holds is
-done either by the agent already running on your subscription (inject mode) or by
-a headless checker you configure (subprocess mode).
+The binary deterministically *derives* the properties and enforces the count→threshold block [test: crates/propguard/src/derive.rs::derivation_is_deterministic] [test: crates/propguard/src/gate.rs::below_threshold_is_the_single_comparison]; the semantic *judgement* of whether each property holds is done either by the agent already running on your subscription (inject mode) or by a headless checker you configure (subprocess mode) [test: crates/propguard/src/gate.rs::inject_mode_block_reason_states_that_propguard_itself_did_not_judge] [test: crates/propguard/tests/integration.rs::block_appends_propguard_signed_violation].
 
-## The derived properties
+Derivation is a deterministic rule set over a bilingual keyword taxonomy, capped at `max_properties` [test: crates/propguard/src/derive.rs::derivation_is_deterministic] [test: crates/propguard/src/derive.rs::japanese_criteria_derive_properties] [test: crates/propguard/src/derive.rs::derivation_is_capped_at_max].
 
-Derivation is a deterministic rule set over a bilingual keyword taxonomy, capped
-at 3–5. The catalog:
-
-| id | invariant |
+| id | invariant [test: crates/propguard/tests/prose_claims.rs::claim_catalog] |
 |----|-----------|
-| `error-path` | 失敗パスは panic せず Err/エラーを返す (error handling) |
-| `output-schema` | 出力スキーマ/フォーマットが安定している (schema stability) |
-| `determinism` | 決定論的: 同一入力は同一出力 (determinism) |
-| `idempotence` | 冪等: 複数回実行しても結果が変わらない (idempotence) |
-| `bounds-monotonicity` | 境界・単調性・閾値が守られる (bounds/monotonicity) |
-| `no-partial-write` | 部分書き込みが起きない (atomic / no-partial-write) |
+| `error-path` | 失敗パスは panic せず Err/エラーを返す (error handling) [test: crates/propguard/tests/prose_claims.rs::claim_catalog] |
+| `output-schema` | 出力スキーマ/フォーマットが安定している (schema stability) [test: crates/propguard/tests/prose_claims.rs::claim_catalog] |
+| `determinism` | 決定論的: 同一入力は同一出力を返す (determinism) [test: crates/propguard/tests/prose_claims.rs::claim_catalog] |
+| `idempotence` | 冪等: 複数回実行しても結果が変わらない (idempotence) [test: crates/propguard/tests/prose_claims.rs::claim_catalog] |
+| `bounds-monotonicity` | 境界・単調性・閾値が守られる (bounds/monotonicity) [test: crates/propguard/tests/prose_claims.rs::claim_catalog] |
+| `no-partial-write` | 部分書き込みが起きない (atomic / no-partial-write) [test: crates/propguard/tests/prose_claims.rs::claim_catalog] |
 
-Properties whose keywords appear in the done_criteria are surfaced first; if
-fewer than `min_properties` match, the set is padded with the baseline
-*universal* invariants (`error-path`, `output-schema`, `determinism`) that any
-generated code should satisfy. Preview the derivation offline:
+Properties whose keywords appear in the done_criteria are derived; if fewer than `min_properties` match, the set is padded with the baseline *universal* invariants (`error-path`, `output-schema`, `determinism`) [test: crates/propguard/src/derive.rs::derives_matching_properties_from_criteria] [test: crates/propguard/src/derive.rs::thin_criteria_are_padded_to_the_minimum].
+
+Preview the derivation offline [test: crates/propguard/tests/integration.rs::derive_subcommand_lists_properties]:
 
 ```
 propguard derive "must be idempotent, never panic, keep the output schema stable"
 ```
 
-## Where done_criteria comes from
+done_criteria is sourced, in priority order, from [test: crates/propguard/src/derive.rs::env_criteria_take_priority] [test: crates/propguard/tests/prose_claims.rs::claim_criteria_file_default]:
 
-Sourced, in priority order, from:
+1. the `PROPGUARD_CRITERIA` environment variable [test: crates/propguard/src/derive.rs::env_criteria_take_priority],
+2. a `criteria_file` (default `.propguard-criteria`) in the project root [test: crates/propguard/tests/prose_claims.rs::claim_criteria_file_default],
+3. the inline `done_criteria` value in `propguard.toml` [test: crates/propguard/src/derive.rs::inline_criteria_used_when_no_env_or_file].
 
-1. the `PROPGUARD_CRITERIA` environment variable,
-2. a `criteria_file` (default `.propguard-criteria`) in the project root —
-   condukt or the agent writes the current task's done_criteria there,
-3. the inline `done_criteria` value in `propguard.toml`.
+With no source found, **every stop is allowed** [test: crates/propguard/tests/integration.rs::no_criteria_allows_the_stop] [test: crates/propguard/src/derive.rs::no_criteria_source_is_none].
 
-With no source found, **every stop is allowed** — the gate never invents a
-finding.
+| mode | what it does [test: crates/propguard/src/config.rs::known_modes_parse_and_leave_config_valid] |
+|------|--------------|
+| `inject` | Blocks the stop once per new diff [test: crates/propguard/src/gate.rs::inject_first_pass_blocks_as_unverified] [test: crates/propguard/src/gate.rs::inject_block_arms_trust_after_one_block] and injects the **property checklist** [test: crates/propguard/src/gate.rs::inject_mode_block_reason_still_lists_the_derived_properties_and_target_files]; the checklist describes the checked files as uncommitted changes whose author propguard does not verify [test: crates/propguard/src/gate.rs::inject_mode_block_reason_describes_the_files_as_unattributed_uncommitted_changes]. |
+| `subprocess` | Runs `checker_cmd` (default `claude -p`) [test: crates/propguard/src/trust_worktree_tests.rs::linked_worktree_of_untrusted_main_still_ignores_project_config] as a checker that emits one `PROP <id>: PASS\|FAIL` line per property; propguard counts the PASSes [test: crates/propguard/src/gate.rs::parse_counts_only_explicit_pass] [test: crates/propguard/src/gate.rs::zero_exit_with_a_pass_line_still_parses_as_verified]. |
 
-## Two modes
+The default mode is `inject` [test: crates/propguard/tests/prose_claims.rs::claim_default_mode_inject].
 
-| mode | what it does | cost |
-|------|--------------|------|
-| `inject` (default) | Blocks the stop once per new diff and injects the **property checklist**; the running agent self-verifies its own code (the uncommitted changes in this working tree) against each property and fixes what fails before finishing. The checked set is the union from `git::changed_files`; propguard does not verify who authored each file, so changes by a human or another session can be included. | free (no extra process) |
-| `subprocess` | Runs `checker_cmd` (default `claude -p`) as an **independent** checker that emits one `PROP <id>: PASS\|FAIL` line per property; propguard counts the PASSes. | one headless check per round |
+At `gate::below_threshold` the stop is **blocked iff `satisfied < threshold`** [test: crates/propguard/src/gate.rs::below_threshold_is_the_single_comparison] [test: crates/propguard/src/gate.rs::below_threshold_blocks] [test: crates/propguard/src/gate.rs::at_threshold_allows_and_records_hash].
+In inject mode a new diff is *unverified*, so it blocks once to inject the checklist; on the next stop the same diff is allowed — *trust-after-one-block*: propguard does not observe whether the agent actually checked the properties, it only guarantees the checklist was shown once [test: crates/propguard/tests/prose_claims.rs::claim_already_verified] [test: crates/propguard/src/gate.rs::inject_mode_block_reason_states_that_propguard_itself_did_not_judge] [test: crates/propguard/src/gate.rs::inject_first_pass_blocks_as_unverified] [test: crates/propguard/src/gate.rs::inject_block_arms_trust_after_one_block].
+In subprocess mode the PASS count is compared directly [test: crates/propguard/src/gate.rs::subprocess_mode_block_reason_keeps_the_count_a_checker_actually_produced].
+The threshold is clamped to the number of properties actually derived [test: crates/propguard/src/gate.rs::effective_threshold_is_clamped_to_property_count].
 
-## The block threshold
+propguard hashes `(diff, properties)` [test: crates/propguard/tests/prose_claims.rs::claim_hash_diff_and_props].
+The hash is recorded on a subprocess PASS (`properties-satisfied`) or on inject mode's trust-after-one-block [test: crates/propguard/src/gate.rs::at_threshold_allows_and_records_hash] [test: crates/propguard/src/gate.rs::inject_block_arms_trust_after_one_block] [test: crates/propguard/src/gate.rs::subprocess_block_does_not_arm_already_verified].
+A stop matching a recorded hash is allowed (`already-verified`) [test: crates/propguard/tests/prose_claims.rs::claim_already_verified].
+A subprocess below-threshold result records no hash, so the checker re-runs on the next stop [test: crates/propguard/src/gate.rs::subprocess_block_does_not_arm_already_verified].
+Each blocked round counts toward `max_attempts` (default 2; the counter resets after `reset_after_secs` of idle, default 600) [test: crates/propguard/tests/prose_claims.rs::claim_max_attempts_defaults].
+Once exceeded, a below-threshold result is **allowed** with tag `giveup` (properties NOT satisfied) [test: crates/propguard/src/gate.rs::below_threshold_gives_up_after_max_attempts].
 
-The one enforcement point (`gate::below_threshold`): the stop is **blocked iff
-`satisfied < threshold`**. In inject mode a new diff is *unverified*
-(`satisfied = 0`), so it blocks once to inject the checklist; on the next stop
-the same diff (hashed together with its property set) is allowed —
-*trust-after-one-block*: propguard does not observe whether the agent actually
-checked the properties, it only guarantees the checklist was shown once.
-In subprocess mode the PASS count is compared directly. The threshold is clamped
-to the number of properties actually derived, so it can never be permanently
-unsatisfiable.
+- No git repo, nothing checkable, no done_criteria source configured at all → **allow** [test: crates/propguard/tests/git_probe_wiring.rs::genuine_non_repo_with_real_git_still_allows] [test: crates/propguard/src/gate.rs::a_genuinely_clean_repo_still_allows] [test: crates/propguard/tests/integration.rs::no_criteria_allows_the_stop].
+- A config file (`propguard.toml` / `~/.propguard/config.toml`) that exists but cannot be read or parsed → **block** (tag `config-unreadable`, no give-up) — it is never silently replaced by built-in defaults [test: crates/propguard/tests/prose_claims.rs::claim_no_giveup_config_errors] [test: crates/propguard/src/config.rs::ca_propguard_03_unreadable_or_unparseable_project_toml_blocks_fail_closed] [test: crates/propguard/src/gate.rs::config_load_error_blocks_fail_closed].
+- A config that parses but has an unrecognised `mode` value → **block** (tag `config-invalid`, no give-up) — it is not mapped to either mode [test: crates/propguard/tests/prose_claims.rs::claim_no_giveup_config_errors] [test: crates/propguard/tests/integration.rs::unknown_mode_blocks_config_invalid_naming_the_value] [test: crates/propguard/src/config.rs::unknown_mode_is_recorded_as_config_invalid_not_mapped] [test: crates/propguard/src/gate.rs::config_invalid_blocks_naming_the_value_and_known_mode_does_not].
+- A `criteria_file` that exists but cannot be read, with no inline `done_criteria` to fall back to → **block** (tag `criteria-unreadable`, no give-up) [test: crates/propguard/tests/prose_claims.rs::claim_no_giveup_config_errors] [test: crates/propguard/src/gate.rs::ca_propguard_01_unreadable_criteria_file_blocks_fail_closed] [test: crates/propguard/src/derive.rs::unreadable_criteria_file_falls_through_to_inline].
+- A `checker-error-giveup` is recorded in overwatch's violation ledger; when it recurs across sessions it escalates to a **block** (`checker-outage-systemic`), and an unreadable ledger blocks too (`checker-outage-undetermined`) [test: crates/propguard/tests/prose_claims.rs::claim_outage_ledger_e2e] [test: crates/propguard/src/gate.rs::escalate_giveup_systemic_becomes_block].
+  The escalation mapper (`gate::escalate_giveup_on_systemic`) also maps a systemic `git-scan-failed-giveup` or `diff-read-failed-giveup` to a block [test: crates/propguard/src/gate.rs::ca_propguard_02_git_scan_giveup_also_escalates_when_systemic] [test: crates/propguard/src/gate.rs::ca_propguard_02_diff_read_giveup_also_escalates_when_systemic] [test: crates/propguard/src/gate.rs::ca_propguard_02_outage_scan_covers_new_giveups_but_not_truncated].
+  `truncated-giveup` is not an outage and is not escalated [test: crates/propguard/src/gate.rs::ca_propguard_02_outage_scan_covers_new_giveups_but_not_truncated].
+- A checker that crashes / times out / emits unusable output → **block** (bounded), then give up [test: crates/propguard/src/gate.rs::shell_wrapped_timeout_kills_the_real_backgrounded_checker] [test: crates/propguard/src/gate.rs::checker_error_blocks_it_does_not_allow] [test: crates/propguard/src/gate.rs::checker_error_gives_up_after_max_attempts_but_never_traps] [test: crates/propguard/src/gate.rs::nonzero_exit_with_a_pass_line_on_stdout_is_an_error_not_a_verdict] [test: crates/propguard/src/gate.rs::parse_unrelated_output_is_error_not_all_pass].
+- A `git` command that errors inside a real repo (changed set undetermined) → **block** (bounded, tag `git-scan-failed`), then give up (`git-scan-failed-giveup`) [test: crates/propguard/src/gate.rs::failed_git_scan_blocks_it_does_not_allow] [test: crates/propguard/src/gate.rs::failed_git_scan_gives_up_after_max_attempts_but_never_traps] [test: crates/propguard/tests/git_probe_wiring.rs::unspawnable_git_in_a_repo_blocks_with_the_scan_failed_reason].
+- A truncated (too-large) diff has an unchecked tail → **block** (bounded), then give up [test: crates/propguard/src/gate.rs::truncated_diff_blocks_then_gives_up].
+- A diff that could not be **read** — any of `git diff`, `git diff --cached`, the untracked `ls-files`, or an untracked file's body failing to decode → **block** (bounded, tag `diff-read-failed`), then give up [test: crates/propguard/src/gate.rs::a_diff_that_could_not_be_read_blocks_it_does_not_allow_as_empty] [test: crates/propguard/src/gate.rs::a_partially_read_diff_is_not_handed_on_as_complete] [test: crates/propguard/src/gate.rs::an_untracked_file_whose_body_could_not_be_read_blocks_as_undetermined] [test: crates/propguard/src/git.rs::diff_text_with_an_unreadable_untracked_scan_is_undetermined_not_an_empty_diff] [test: crates/propguard/src/gate.rs::unreadable_diff_gives_up_after_max_attempts_but_never_traps].
+  This covers the partial case too: if one of those reads succeeds and another does not, the readable half is *not* handed onward as if it were the whole diff [test: crates/propguard/src/gate.rs::a_partially_read_diff_is_not_handed_on_as_complete] [test: crates/propguard/src/git.rs::diff_text_with_one_unreadable_subcommand_is_undetermined_not_a_partial_diff].
+  An unread diff is undetermined, never "empty ⇒ nothing changed" [test: crates/propguard/src/gate.rs::a_diff_that_could_not_be_read_blocks_it_does_not_allow_as_empty] [test: crates/propguard/src/git.rs::diff_text_of_an_undecodable_diff_is_undetermined_not_empty].
 
-## How it converges / stays safe
+The old shared `.propguard-skip` file in the project root no longer waves a stop through [test: crates/propguard/tests/session_scoped_skip.rs::an_unattributed_project_root_marker_no_longer_waves_a_propguard_stop_through].
+Escape hatches: `propguard skip --reason "<why>"` — one-shot, reason required, scoped to the session that issued it [test: crates/propguard/tests/session_scoped_skip.rs::a_skip_issued_by_another_session_does_not_wave_my_propguard_gate_through], and recorded in the gate log at both issue and consumption [test: crates/propguard/tests/prose_claims.rs::claim_skip_contract].
+Or `enabled = false` in the config [test: crates/propguard/tests/prose_claims.rs::claim_enabled_false], or `PROPGUARD_DISABLE=1` [test: crates/propguard/tests/integration.rs::disable_env_allows].
 
-propguard hashes `(diff, properties)`. The hash is recorded only on a
-subprocess PASS (`properties-satisfied`) or on inject mode's
-trust-after-one-block; a stop matching a recorded hash is allowed
-(`already-verified`). A subprocess below-threshold result records no hash, so the
-checker re-runs on the next stop. Each blocked round counts toward
-`max_attempts` (default 2; the counter resets after `reset_after_secs` of idle,
-default 600). Once exceeded, a below-threshold result is **allowed** with tag
-`giveup` (properties NOT satisfied) so the agent is never trapped. Fail-closed but bounded:
-
-- No git repo, nothing checkable, no done_criteria source configured at all →
-  **allow**.
-- A config file (`propguard.toml` / `~/.propguard/config.toml`) that exists but
-  cannot be read or parsed → **block** (tag `config-unreadable`, no give-up) — it
-  is never silently replaced by built-in defaults.
-- A config that parses but has an unrecognised `mode` value → **block** (tag
-  `config-invalid`, no give-up) — it is not mapped to either mode.
-- A `criteria_file` that exists but cannot be read, with no inline
-  `done_criteria` to fall back to → **block** (tag `criteria-unreadable`, no
-  give-up) — "configured but unreadable" is never reported as "not configured".
-- The outage give-ups (`checker-error-giveup`, `git-scan-failed-giveup`,
-  `diff-read-failed-giveup`) are recorded in overwatch's violation ledger; when
-  one recurs across tasks/sessions it escalates to a **block**
-  (`checker-outage-systemic`), and an unreadable ledger blocks too
-  (`checker-outage-undetermined`). `truncated-giveup` is not an outage and is not
-  escalated.
-- A checker that crashes / times out / emits unusable output → **block**
-  (bounded), then give up loudly — a broken checker never becomes a bypass.
-- A `git` command that errors inside a real repo (changed set undetermined) →
-  **block** (bounded, tag `git-scan-failed`), then give up loudly
-  (`git-scan-failed-giveup`).
-- A truncated (too-large) diff has an unchecked tail → **block** (bounded), then
-  give up loudly.
-- A diff that could not be **read** — any of `git diff`, `git diff --cached`,
-  the untracked `ls-files`, or an untracked file's body failing to run or to
-  decode → **block** (bounded, tag `diff-read-failed`), then give up loudly.
-  This covers the partial case too: if one of those reads succeeds and another
-  does not, the readable half is *not* handed onward as if it were the whole
-  diff. An unread diff is undetermined, never "empty ⇒ nothing changed".
-- A genuine harness panic → fail-closed **block** on the first stop (a crashed
-  gate cannot certify the stop is safe); only a second consecutive crash on the
-  post-block re-entry (`stop_hook_active`) is allowed through, bounding the
-  block to one occurrence so the session is never trapped.
-
-Escape hatches: `propguard skip --reason "<why>"` — one-shot, reason required,
-scoped to the session that issued it, and recorded in the gate log at both issue
-and consumption. Or `enabled = false` in the config, or `PROPGUARD_DISABLE=1`, effective only in the environment
-Claude Code itself was started with, since the hook inherits the app's
-environment rather than a tool call's. The old shared `.propguard-skip` file in
-the project root was removed: a one-shot marker in a shared tree is consumed by
-whichever session stops next (CLAUDE.md section 5).
-
-## Install
-
-### As a plugin (subscription, no build)
+## Install the plugin
 
 ```
 /plugin marketplace add yukineko/claude-harnesses
 /plugin install propguard@yukineko
 ```
 
-### From source
+## Install from source
 
 ```
 cargo build --release -p propguard
-./target/release/propguard install     # wires the Stop hook into ~/.claude/settings.json
-propguard init                         # writes a starter ./propguard.toml
+./target/release/propguard install     # wires the Stop hook into ~/.claude/settings.json [test: crates/propguard/tests/prose_claims.rs::claim_install_wires_stop]
+propguard init                         # writes a starter ./propguard.toml [test: crates/propguard/tests/prose_claims.rs::claim_init_starter]
 ```
 
-Other subcommands: `propguard uninstall` (remove the Stop hook), `propguard
---protects` (print what the gate protects, from what, and why). Session state
-lives under `~/.propguard/state` (config key `state_dir`; the
-`PROPGUARD_STATE_DIR` env var overrides it).
+`propguard uninstall` removes the Stop hook [test: crates/propguard/tests/prose_claims.rs::claim_uninstall_removes].
+`propguard --protects` prints what the gate protects, from what, and why [test: crates/propguard/tests/protection_contract.rs::protects_prints_three_labelled_nonempty_lines_and_exits_zero].
+Session state lives under `~/.propguard/state` (config key `state_dir`; the `PROPGUARD_STATE_DIR` env var overrides it) [test: crates/propguard/tests/prose_claims.rs::claim_state_dir].
 
-## Config
+See [`propguard.example.toml`](./propguard.example.toml) [test: crates/propguard/tests/prose_claims.rs::claim_example_toml].
+Key knobs: `mode`, `min_properties`/`max_properties` (`max_properties` is capped at 5; `min_properties` = 1 is accepted, not raised to 3), `threshold`, `max_attempts`, `reset_after_secs`, `min_changed_files`, `max_diff_bytes`, `criteria_file`, `include`/`exclude`, `enabled`, and (subprocess mode) `checker_cmd` / `checker_timeout_secs` [test: crates/propguard/tests/prose_claims.rs::claim_key_knobs].
+A project `propguard.toml` is honored only once the root is **trusted** [test: crates/propguard/src/trust_worktree_tests.rs::linked_worktree_of_untrusted_main_still_ignores_project_config] [test: crates/propguard/src/trust_worktree_tests.rs::trusted_plain_checkout_still_loads_project_config].
+Trust a root with `propguard trust` [test: crates/propguard/tests/prose_claims.rs::claim_trust_cmd].
 
-See [`propguard.example.toml`](./propguard.example.toml). Key knobs:
-`mode`, `min_properties`/`max_properties` (3–5), `threshold`, `max_attempts`,
-`reset_after_secs`, `min_changed_files`, `max_diff_bytes`, `criteria_file`,
-`include`/`exclude`, `enabled`, and (subprocess mode) `checker_cmd` /
-`checker_timeout_secs`. A
-project `propguard.toml` is honored only once the root is **trusted**
-(`propguard trust`), since `checker_cmd` runs as a subprocess.
+`propguard status` shows the resolved config and the properties derived for the current task [test: crates/propguard/tests/prose_claims.rs::claim_status_shows].
 
-`propguard status` shows the resolved config and the properties derived for the
-current task.
+In `subprocess` mode, `checker_cmd` runs as a real OS subprocess and is bounded by a timeout [test: crates/propguard/src/gate.rs::checker_stdout_flood_without_draining_stdin_does_not_hang] [test: crates/propguard/src/gate.rs::shell_wrapped_timeout_kills_the_real_backgrounded_checker]:
 
-### Checker subprocess timeout (`checker_timeout_secs`)
-
-In `subprocess` mode, `checker_cmd` runs as a real OS subprocess and is bounded
-by a timeout so a hung or slow checker can never trap the turn indefinitely:
-
-- **Default: 300 seconds.**
-- Configurable via the top-level `checker_timeout_secs` key in
-  `propguard.toml` (or `~/.propguard/config.toml`) — the same file as the
-  other subprocess-mode knobs (`checker_cmd`), not a separate `[check]`
-  section:
+- **Default: 300 seconds** [test: crates/propguard/src/config.rs::checker_timeout_secs_defaults_to_300].
+- Configurable via the top-level `checker_timeout_secs` key in `propguard.toml` (or `~/.propguard/config.toml`) [test: crates/propguard/tests/prose_claims.rs::claim_timeout_home_config] [test: crates/propguard/src/config.rs::checker_timeout_secs_load_from_toml_text_overrides_default]:
 
   ```toml
-  # subprocess mode only:
   checker_cmd = "claude -p"
-  checker_timeout_secs = 45   # override the 300s default
+  checker_timeout_secs = 45   # override the 300s default [test: crates/propguard/src/config.rs::checker_timeout_secs_is_overridable_from_file_config]
   ```
 
-- A value of `0` is sanitized back to the 300s default rather than disabling
-  the timeout — the timeout can never be turned into an unbounded wait. An
-  invalid/negative value fails TOML parsing, which makes the whole config
-  unreadable → **block** (`config-unreadable`), not a silent default.
-- **On timeout, propguard kills the checker's whole process tree**, not just
-  the immediate child: the checker is spawned in its own process group
-  (Unix), so a shell-wrapped `checker_cmd` (e.g. one containing `;`, `&&`, or
-  backgrounding a grandchild with `&`) is fully reaped via a single
-  group-kill — a backgrounded/exec'd descendant can't outlive the timeout and
-  keep running (or keep the stdout pipe open) after `run_checker` returns.
-  On non-Unix platforms, only the direct child can be killed (best-effort).
-- A timeout is reported as a checker `Error` (never silently "all pass") and
-  goes through the same fail-closed, bounded `max_attempts` give-up path as
-  any other checker failure (see "How it converges / stays safe" above).
+- A value of `0` is sanitized back to the 300s default rather than disabling the timeout [test: crates/propguard/src/config.rs::claim_timeout_zero_sanitized].
+  An invalid/negative value fails TOML parsing, which makes the whole config unreadable → **block** (`config-unreadable`), not a silent default [test: crates/propguard/tests/prose_claims.rs::claim_timeout_negative_blocks].
+- **On timeout, propguard kills the checker's backgrounded descendants too**, not just the immediate child: a grandchild that a shell-wrapped `checker_cmd` backgrounds with `&` does not outlive the timeout [test: crates/propguard/tests/prose_claims.rs::claim_timeout_kills_tree].
+  A descendant that keeps the stdout pipe open does not hang the stop [test: crates/propguard/src/gate.rs::lingering_stdout_holder_does_not_hang_the_read].
+- A timeout is reported as a checker `Error` (never silently "all pass") and goes through the same fail-closed, bounded `max_attempts` give-up path as any other checker failure [test: crates/propguard/src/gate.rs::shell_wrapped_timeout_kills_the_real_backgrounded_checker] [test: crates/propguard/src/gate.rs::checker_error_blocks_it_does_not_allow] [test: crates/propguard/src/gate.rs::checker_error_gives_up_after_max_attempts_but_never_traps].

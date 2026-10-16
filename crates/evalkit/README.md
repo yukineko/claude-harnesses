@@ -47,7 +47,7 @@ error (exit 2) [test: crates/evalkit/tests/prose_claims.rs::claim_parse_errors_e
 
 - `0` — all cases passed [test: crates/evalkit/tests/prose_claims.rs::claim_exit_codes_run]
 - `1` — a real regression (an assertion failed) [test: crates/evalkit/tests/prose_claims.rs::claim_exit_codes_run]
-- `2` — harness error (no cases found, unreadable eval file) [test: crates/evalkit/tests/prose_claims.rs::claim_exit_codes_run]
+- `2` — harness error (no cases found, unreadable eval file) [test: crates/evalkit/tests/prose_claims.rs::claim_exit_codes_run], or every case is a draft so nothing was checked [test: crates/evalkit/tests/canary_gate.rs::run_all_draft_exits_2]
 
 `--bin-dir DIR` is prepended to `PATH` for `cmd` cases [test: crates/evalkit/tests/prose_claims.rs::claim_bin_dir_path].
 
@@ -61,24 +61,26 @@ evalkit run --json > base.json
 evalkit run --json > head.json
 evalkit canary --baseline base.json --current head.json
 evalkit canary --baseline base.json --current head.json --json
-evalkit canary --baseline base.json --current head.json --fail-on-regression # exit 1 on any pass→fail [test: crates/evalkit/src/canary.rs::fail_on_regression_exit_policy].
+evalkit canary --baseline base.json --current head.json --report-only # always exit 0 unless the input is unusable [test: crates/evalkit/tests/canary_gate.rs::canary_report_only_exits_0_on_regression].
 ```
 
 It keys cases by their report label (the `case` field of `run --json`: `id`,
 or `id — describe` when `describe` is set — so editing a `describe` shows up as one
 dropped + one added) and classifies each as **regression** (pass→fail, neither side
-a draft) [test: crates/evalkit/src/canary.rs::skipped_transitions_are_not_regressions], **fix** (fail→pass), **added**, or **dropped**, and prints the pass-rate
+a draft) [test: crates/evalkit/src/canary.rs::skipped_transitions_are_not_regressions], **fix** (fail→pass), **added**, **dropped**, or **demoted** (pass→draft [test: crates/evalkit/tests/canary_gate.rs::canary_pass_to_draft_exits_1_and_reports_demoted] or fail→draft [test: crates/evalkit/tests/canary_gate.rs::canary_fail_to_draft_exits_1_and_reports_demoted]), and prints the pass-rate
 before → after with the delta [test: crates/evalkit/tests/prose_claims.rs::claim_canary_label_keys]. The pass-rate excludes drafts from the denominator;
 an all-draft or empty run counts as 0.0 [test: crates/evalkit/src/canary.rs::pass_rate_math_and_divide_by_zero].
 
 Read the `dropped` bucket yourself [test: crates/evalkit/tests/prose_claims.rs::claim_canary_dropped_bucket].
 
-- `0` — reported (or no regressions when `--fail-on-regression`) [test: crates/evalkit/src/canary.rs::fail_on_regression_exit_policy]
-- `1` — `--fail-on-regression` set **and** ≥1 pass→fail transition [test: crates/evalkit/src/canary.rs::fail_on_regression_exit_policy]
-- `2` — harness error (unreadable / unparseable result file) [test: crates/evalkit/tests/prose_claims.rs::claim_canary_exit2]
+- `0` — no golden's verdict was lost [test: crates/evalkit/tests/canary_gate.rs::canary_clean_diff_exits_0], or `--report-only` was given [test: crates/evalkit/tests/canary_gate.rs::canary_report_only_exits_0_on_regression] [test: crates/evalkit/tests/canary_gate.rs::canary_fail_to_draft_report_only_exits_0]
+- `1` — a golden's verdict was lost: a pass→fail regression [test: crates/evalkit/tests/canary_gate.rs::canary_default_exits_1_on_regression], a dropped golden [test: crates/evalkit/tests/canary_gate.rs::canary_dropped_golden_exits_1], a pass→draft demotion [test: crates/evalkit/tests/canary_gate.rs::canary_pass_to_draft_exits_1_and_reports_demoted], or a fail→draft demotion, which hides the failure [test: crates/evalkit/tests/canary_gate.rs::canary_fail_to_draft_exits_1_and_reports_demoted]
+- `2` — harness error (unreadable / unparseable result file) [test: crates/evalkit/tests/prose_claims.rs::claim_canary_exit2], or a side with no verdict-carrying case (all-draft [test: crates/evalkit/tests/canary_gate.rs::canary_all_draft_current_exits_2] or empty [test: crates/evalkit/tests/canary_gate.rs::canary_empty_current_exits_2])
 
-By default it is **informational** (exit 0) [test: crates/evalkit/src/canary.rs::fail_on_regression_exit_policy].
-Pass `--fail-on-regression` to exit 1 on any pass→fail transition [test: crates/evalkit/src/canary.rs::fail_on_regression_exit_policy].
+By default the canary **gates**: any lost golden exits 1 [test: crates/evalkit/src/canary.rs::default_gates_report_only_exit_policy].
+`--report-only` is the explicit opt-in that makes it informational (exit 0) [test: crates/evalkit/src/canary.rs::default_gates_report_only_exit_policy].
+`--report-only` does not soften exit 2: an all-draft side checked nothing [test: crates/evalkit/tests/canary_gate.rs::canary_all_draft_current_exits_2].
+The former `--fail-on-regression` flag is removed and is rejected [test: crates/evalkit/tests/canary_gate.rs::canary_rejects_removed_fail_on_regression_flag].
 
 - `evals/skill-invariants.jsonl` — hard rules pinned in plugin `SKILL.md`s [test: crates/evalkit/tests/prose_claims.rs::claim_evals_files].
 - `evals/cli-contracts.jsonl` — CLI output/exit contracts [test: crates/evalkit/tests/prose_claims.rs::claim_evals_files].

@@ -10,11 +10,13 @@
 - `subprocess` モードでは、レビュアーが LGTM と答えれば stop を通し [test: crates/reviewgate/tests/verdict_paths_p2_p8.rs::reviewer_that_prints_lgtm_is_allowed_and_clean]、報告された指摘はそのままブロック理由に描画される [test: crates/reviewgate/src/review.rs::subprocess_reason_still_lists_every_file_and_renders_the_findings_verbatim]。
 
 最後にレビューを強制したときと同じ diff の stop は通過させる（ログタグ `already-reviewed`） [test: crates/reviewgate/tests/prose_claims.rs::claim_inject_once_per_diff_state]。
-ブロックするラウンド数は `max_attempts` で上限がかかるため、エージェントが無限に閉じ込められることはない [test: crates/reviewgate/tests/verdict_paths_p2_p8.rs::inject_giveup_keeps_the_plain_giveup_tag]。
+`already-reviewed` で通過した後に diff が変わった場合は再びブロックし、以前のブロックの繰り返しとして waive しない [test: crates/reviewgate/tests/repro_inject_changed_diff_waived.rs::changed_diff_after_already_reviewed_is_blocked_not_waived]。
+ブロックするラウンド数は `max_attempts` で上限がかかるため、エージェントが無限に閉じ込められることはない [test: crates/reviewgate/tests/verdict_paths_p2_p8.rs::inject_giveup_keeps_the_plain_giveup_tag]。inject モードの give-up は最新の diff を未レビューのまま通すため、stderr と `systemMessage` で明示する [test: crates/reviewgate/tests/repro_inject_giveup_silent.rs::inject_giveup_is_visibly_signalled]。
 `max_attempts` のデフォルトは 2 [test: crates/reviewgate/tests/prose_claims.rs::claim_default_max_attempts_2]。
 
 レビュー対象がそもそも存在しない場合（git リポジトリでない・レビュー対象の変更が無い）は stop を**許可**する [test: crates/reviewgate/tests/git_probe_wiring.rs::genuine_non_repo_with_real_git_still_allows] [test: crates/reviewgate/tests/verdict_paths_p2_p8.rs::valid_include_that_excludes_the_change_allows_normally] [test: crates/reviewgate/tests/backlog_7d56f1e3_unknown_mode_blocks.rs::known_mode_on_clean_repo_allows]。
 判定できなかった場合は許可しない：git コマンドが実リポジトリ内で失敗した変更集合は *undetermined* であり、**ブロック**する（`max_attempts` で有界） [test: crates/reviewgate/tests/git_probe_wiring.rs::unspawnable_git_in_a_repo_blocks_the_stop] [test: crates/reviewgate/src/review.rs::failed_git_scan_blocks_it_does_not_allow] [test: crates/reviewgate/src/review.rs::failed_git_scan_gives_up_after_max_attempts_but_never_traps]。
+同様に、レビュー対象の変更があるのに diff 本文が空で返った場合（`.gitattributes` の diff ドライバが何も出力しない等）も「空の diff」ではなく *undetermined* であり、**ブロック**する（`max_attempts` で有界） [test: crates/reviewgate/tests/repro_diff_driver_empty.rs::silent_diff_driver_change_is_not_allowed_as_empty]。
 設定ファイルが読めない／parse できない場合もゲートは無効化されず、WARNING を出して組み込み既定値で動く [test: crates/reviewgate/tests/prose_claims.rs::claim_broken_config_still_gates]。
 `review` フックは `harness_core::gate::run::run_guarded` の下で走る [test: crates/reviewgate/tests/prose_claims.rs::claim_panic_fails_closed]：最初の stop での panic はブロック（**fail closed**）し、再入時（`stop_hook_active`）の panic だけが許可へ落ちるので、壊れた reviewgate が turn を永久に塞ぐことはない [test: crates/harness-core/src/gate/run.rs::guard_maps_panic_to_action] [test: crates/harness-core/src/gate/run.rs::fail_closed_block_json_is_a_block_decision]。
 ロックファイルはデフォルトで除外される [test: crates/reviewgate/src/review.rs::lockfile_excluded_by_default]。

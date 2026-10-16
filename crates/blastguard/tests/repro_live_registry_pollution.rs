@@ -153,13 +153,11 @@ fn assert_no_live_registry_write(clear_env: bool) {
 }
 
 #[test]
-#[ignore = "repro: live-registry pollution -- blastguard tests write into the real ~/.overwatch; run with --ignored"]
 fn env_clear_child_does_not_write_real_overwatch_registry() {
     assert_no_live_registry_write(true);
 }
 
 #[test]
-#[ignore = "repro: live-registry pollution -- blastguard tests write into the real ~/.overwatch; run with --ignored"]
 fn inherited_home_child_does_not_write_real_overwatch_registry() {
     assert_no_live_registry_write(false);
 }

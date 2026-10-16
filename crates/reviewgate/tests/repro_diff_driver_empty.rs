@@ -83,7 +83,6 @@ fn log_verdicts(home: &Path) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED repro: reviewgate allows a real change as empty-diff when the git diff driver prints nothing"]
 fn silent_diff_driver_change_is_not_allowed_as_empty() {
     let root = unique_dir("r3");
     let home = root.join("home");

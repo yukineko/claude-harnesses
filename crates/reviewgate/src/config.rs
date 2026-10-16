@@ -51,7 +51,8 @@ pub struct Config {
     pub enabled: bool,
     pub mode: Mode,
     /// After this many consecutive review rounds in one session (the diff kept
-    /// changing), give up and allow the stop so the agent isn't trapped.
+    /// changing), give up and allow the stop so the agent isn't trapped. The
+    /// give-up is announced (stderr + `systemMessage`), never silent.
     pub max_attempts: u32,
     /// The per-session counter resets if this many seconds pass between stops.
     pub reset_after_secs: i64,

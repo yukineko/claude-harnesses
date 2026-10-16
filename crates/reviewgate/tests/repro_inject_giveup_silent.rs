@@ -83,7 +83,6 @@ fn log_verdicts(home: &Path) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "RED repro: reviewgate inject giveup allows with no stderr/stdout signal"]
 fn inject_giveup_is_visibly_signalled() {
     let root = unique_dir("r2");
     let home = root.join("home");

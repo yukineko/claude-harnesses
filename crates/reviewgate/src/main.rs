@@ -271,6 +271,18 @@ fn review_run(hook: Option<HookInput>, interactive: bool) -> ! {
             }
             if interactive {
                 println!("reviewgate: allow ({tag})");
+            } else if tag == review::INJECT_GIVEUP_TAG {
+                // The give-up lets an unreviewed diff through; an empty stdout
+                // would read as "reviewed, nothing found". Announce it.
+                println!(
+                    "{}",
+                    json!({
+                        "systemMessage": format!(
+                            "reviewgate: {}",
+                            review::inject_giveup_message(cfg.max_attempts)
+                        )
+                    })
+                );
             }
             harness_core::hook_latency::record(
                 "reviewgate",

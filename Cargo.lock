@@ -164,7 +164,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "blastguard"
-version = "0.2.132"
+version = "0.2.134"
 dependencies = [
  "globset",
  "harness-core",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.56"
+version = "0.2.58"
 dependencies = [
  "anyhow",
  "chrono",
@@ -874,7 +874,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.70"
+version = "0.2.72"
 dependencies = [
  "anyhow",
  "clap",

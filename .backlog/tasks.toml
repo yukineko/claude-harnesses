@@ -866,38 +866,6 @@ note: no *-darwin-arm64 binaries found under /var/folders/0z/hjt9zjn12xs02k588ny
 FAIL: the refresh loop scanned no cache binary — assertions above are vacuous"""
 
 [[task]]
-id = "f597cbbd"
-title = "observing main-tree guard が他セッションの main への fast-forward merge を並行する無関係な Bash call に帰属させた"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """
-Observed 2026-10-04 (session 64554c4d, reported by its p1 driver sub-agent and re-checked): main carries two single-parent commits, 98312703 (2026-10-04 02:22:02 +0900, 'specguard: ack 5 gate files with no docs/specs coverage (unblock push)', parent 5af9693e) and dfd7357d (02:23:21, 'backlog: file 5 p2 spec-debt items for gate files acked in 98312703'), followed by f2e3e057 'Merge branch flow-orphan-issues'. The sub-agent also saw a staged .backlog/tasks.toml in main's tree at the time; by the time this was filed main's tree was clean. Neither commit came from session 64554c4d. The main-tree guard attributed the change to the sub-agent's call (whose commands all ran in the session-64554c4d worktree).
-Reading (a): another session committed directly in main's working tree, so scripts/check-worktree-isolation.py (pre-commit, blocks non-merge commits from main's tree) did not fire: bypassed, not wired, or the commit ran with a different hooksPath. (b): the commits were made in a worktree and reached main by a fast-forward merge, which leaves only single-parent commits on main; §8 is satisfied but history cannot show it.
-Distinguish: find the session whose transcript contains 'unblock push' / the commit hash and check its cwd at commit time; check the reflog of main (`git reflog show main` around 02:22) for 'commit' vs 'merge ... Fast-forward'. Also: the guard's attribution of a foreign mutation to whichever call happened to run next is a separate defect (false attribution).
-
-SETTLED 2026-10-04 right after filing: reading (b). `git reflog show main` shows 'dfd7357d main@{2026-10-04 02:23:55 +0900}: merge flow-specdoc: Fast-forward' — the two commits were made on branch flow-specdoc and fast-forwarded onto main; no §8 violation. What remains open is only the false attribution: the main-tree guard (observing guard) attributed main's change (the fast-forward / a transient staged .backlog/tasks.toml during it) to an unrelated concurrent Bash call of session 64554c4d's sub-agent."""
-created_at = 1791048270
-updated_at = 1792003562
-weight = 0.0
-issue_number = 1288
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1288"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_f597cbbd.py"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003559
-detail = """
-exit 1: \u001B[0m:354: XFailed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_f597cbbd.py::\u001B[1mForeignFastForwardDuringCall::test_ff_whose_branch_was_deleted_is_not_refused\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 1.44s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
 id = "fb7c3d83"
 title = "rollout-plugins.sh resolve_overwatch_bin keeps the $REPO/target fallback that a0525604 removed from rebuild-plugins.sh (mirror gap)"
 project = "/Users/yuki/src/harness"

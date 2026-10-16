@@ -729,6 +729,11 @@ def discover_python_suites(scripts_dir):
 
 _RAN_RE = re.compile(r"^Ran\s+(\d+)\s+tests?\s+in\b")
 _FAILNAME_RE = re.compile(r"^(?:FAIL|ERROR):\s+(?P<name>.+?)\s*$")
+# `FAILED (unexpected successes=N)` prints no FAIL:/ERROR: line, only
+# `UNEXPECTED SUCCESS: <name>` — an @expectedFailure pin whose defect no longer
+# reproduces. It is a red, and it is named with its kind so the reader can tell
+# "a test broke" from "a RED-marker is stale".
+_UNEXPECTED_SUCCESS_RE = re.compile(r"^UNEXPECTED SUCCESS:\s+(?P<name>.+?)\s*$")
 _IMPORT_FAILURE_MARKER = "unittest.loader._FailedTest"
 
 
@@ -755,6 +760,10 @@ def parse_unittest_output(text):
         m = _FAILNAME_RE.match(line)
         if m:
             failed_names.append(m.group("name"))
+            continue
+        m = _UNEXPECTED_SUCCESS_RE.match(line)
+        if m:
+            failed_names.append("%s [UNEXPECTED SUCCESS]" % m.group("name"))
 
     return UnittestParse(
         ran, outcome, tuple(failed_names), _IMPORT_FAILURE_MARKER in text
@@ -881,7 +890,8 @@ def python_suite_verdict(module, completed, parse):
                 (),
                 (
                     "%s reported FAILED but this gate could not extract a single "
-                    "FAIL:/ERROR: name from its output, so the red cannot be "
+                    "FAIL:/ERROR:/UNEXPECTED SUCCESS: name from its output, so "
+                    "the red cannot be "
                     "named. Undetermined rather than an unnamed red." % module,
                 ),
                 (),

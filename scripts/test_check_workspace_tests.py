@@ -588,6 +588,17 @@ class DiscoverPythonSuites(unittest.TestCase):
 # parse_unittest_output
 # ==========================================================================
 
+UNITTEST_UNEXPECTED_SUCCESS = """\
+.u
+======================================================================
+UNEXPECTED SUCCESS: test_pinned_defect (scripts.test_backlog_x.Pin.test_pinned_defect)
+----------------------------------------------------------------------
+Ran 2 tests in 0.002s
+
+FAILED (unexpected successes=1)
+"""
+
+
 class ParseUnittest(unittest.TestCase):
     def test_ok_run(self):
         p = cws.parse_unittest_output(UNITTEST_OK)
@@ -612,6 +623,17 @@ class ParseUnittest(unittest.TestCase):
         for needle in ("test_gate_crate_absent", "test_explicitly_false",
                        "test_absent_registry"):
             self.assertIn(needle, blob)
+
+    def test_unexpected_success_is_named(self):
+        """`FAILED (unexpected successes=N)` prints no FAIL:/ERROR: line; the
+        red is an @expectedFailure pin that no longer reproduces, and it must
+        be nameable rather than collapse to "FAILED with no name"."""
+        p = cws.parse_unittest_output(UNITTEST_UNEXPECTED_SUCCESS)
+        self.assertEqual(p.ran, 2)
+        self.assertEqual(p.outcome, "FAILED")
+        self.assertEqual(len(p.failed_names), 1, p.failed_names)
+        self.assertIn("test_pinned_defect", p.failed_names[0])
+        self.assertIn("UNEXPECTED SUCCESS", p.failed_names[0])
 
     def test_import_failure_is_flagged_not_counted_as_a_failing_test(self):
         p = cws.parse_unittest_output(UNITTEST_IMPORT_ERROR)
@@ -730,6 +752,16 @@ class PythonSuiteVerdict(_ReportAsserts):
         for needle in ("test_gate_crate_absent", "test_explicitly_false",
                        "test_absent_registry"):
             self.assertIn(needle, msg, "every failing name must be printed")
+
+    def test_unexpected_success_is_a_named_failure_not_clean(self):
+        p = cws.parse_unittest_output(UNITTEST_UNEXPECTED_SUCCESS)
+        r = cws.python_suite_verdict(
+            MOD, _completed(rc=1, out=UNITTEST_UNEXPECTED_SUCCESS), p
+        )
+        self.assert_only(r, "failures")
+        msg = self.joined(r)
+        self.assertIn("test_pinned_defect", msg)
+        self.assertIn("UNEXPECTED SUCCESS", msg)
 
     def test_ok_rc_zero_positive_count_is_clean(self):
         p = cws.parse_unittest_output(UNITTEST_OK)

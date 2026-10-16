@@ -744,15 +744,16 @@ JSON の `idle_source` が `session_flag`）。transcript が見つからない�
 - **ユーザーの課題から逸脱しない。着手した課題は、終わるまでそれだけをやる。**
   作業中に別の問題（より重要に見えるもの・途中で詰まった原因・気づいた欠陥）が現れても、
   **そこへ乗り換えない**。判定基準は常に「いまユーザーの prompt に忠実か」であり、
-  それが解決するまではその課題に注力する。見つけた別課題は**その場で再現テストを書いて `backlog add --repro-test` し、戻る**。
-  課題が完了してから、自律モードであれば次の backlog を処理する（＝順序であって、並行ではない）。
+  それが解決するまではその課題に注力すること。見つけた別課題は**その場で再現テストを書いて `backlog add --repro-test` し、戻る** [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome]。
+  課題が完了してから（並行ではなく順序として）、自律モードであれば次の backlog を処理すること。
+
   **Why**: 逸脱は個々の判断としては常に正当に見える（「これを直さないと進めない」「こちらの方が重要だ」）。
   だが逸脱が積み重なると、ユーザーから見て「結局いま何をしているのか」が失われ、
   最初の課題は未完のまま残る。実際に起きた形: rollout 中に見つけた別クレートの欠陥を追いかけ、
   rollout 自体は drift が残ったまま「完了」と報告されかけた。
   **逸脱してよい唯一の例外は、その問題を解決しないと元の課題が物理的に前に進まない場合**であり、
   そのときも「元の課題のために何を迂回しているか」を明示してから行い、済み次第すぐ戻る。
-- **気づいたことは常に起票する。起票するかどうかを判断しない。ただしテストが無ければ起票しない（2026-10-04 ユーザー裁定:
+- **気づいたことは常に起票すること。起票するかどうかを判断しない。ただしテストが無ければ起票しない（2026-10-04 ユーザー裁定:
   「testがないなら起票してはならない」）。**
   起票は **(1) 再現テスト（RED）を書いてコミット → (2) `backlog add --repro-test "<cmd>"`** の順で行うこと [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome]。
   `backlog add` は再現した時だけ task を書き、それ以外は拒否して store に何も書かない [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]。

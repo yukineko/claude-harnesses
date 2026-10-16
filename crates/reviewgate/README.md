@@ -118,14 +118,14 @@ clamped to 1, and `0` for `max_diff_bytes` / `reviewer_timeout_secs` falls back
 to the default.
 
 `mode` accepts `"inject"` or `"subprocess"` (aliases `reviewer` /
-`independent`). Any other value is **config-invalid**: it is not mapped to
+`independent`) [test: crates/reviewgate/tests/backlog_7d56f1e3_unknown_mode_blocks.rs::known_modes_do_not_produce_config_invalid]. Any other value is **config-invalid**: it is not mapped to
 either mode, and the stop is blocked (`config-invalid`, naming the value)
-— even when nothing is reviewable. Like every reviewgate block it goes through
+— even when nothing is reviewable [test: crates/reviewgate/tests/backlog_7d56f1e3_unknown_mode_blocks.rs::unknown_mode_blocks_config_invalid_on_clean_repo]. Like every reviewgate block it goes through
 the shared repeat ledger, so a second identical block in the same session is
 passed with a `systemMessage` that repeats the finding; the finding itself
-stays until you fix the file. `reviewgate status`
-shows the state; `reviewgate skip --reason ...` or `REVIEWGATE_DISABLE=1` are
-the escape hatches.
+stays until you fix the file [test: crates/harness-core/src/repeat.rs::second_occurrence_of_the_same_finding_yields]. `reviewgate status`
+shows the state [test: crates/reviewgate/tests/integration.rs::status_reports_resolved_config]; `reviewgate skip --reason` skips once for the
+issuing session only [test: crates/reviewgate/tests/session_scoped_skip.rs::a_skip_issued_by_another_session_does_not_wave_my_reviewgate_gate_through].
 
 ## Bundled agent
 

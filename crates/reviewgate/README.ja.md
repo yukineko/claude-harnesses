@@ -82,7 +82,7 @@ reviewgate install       # Stop フックを ~/.claude/settings.json に配線�
 
 主なフィールド：`mode`、`max_attempts`、`reset_after_secs`（既定 600。セッションごとの試行カウンタがこの無操作秒数でリセットされる）、`min_changed_files`、`max_diff_bytes`（既定 200000）、`include`/`exclude` の glob、`rubric`、`state_dir`、そして（subprocess 用の）`reviewer_cmd` / `reviewer_timeout_secs`（既定 300）。`max_attempts` / `min_changed_files` の `0` は 1 に clamp され、`max_diff_bytes` / `reviewer_timeout_secs` の `0` は既定値に戻る。
 
-`mode` に指定できるのは `"inject"` か `"subprocess"`（別名 `reviewer` / `independent`）。それ以外の値は **config-invalid** で、どちらのモードにも推測で割り当てず、（レビュー対象が無い場合も含め）stop を `config-invalid`（値を明示）でブロックする。他の reviewgate のブロックと同じく共有の repeat ledger を通るため、同一セッションで同じ指摘の2度目のブロックは指摘を繰り返す `systemMessage` 付きで通過する（指摘自体はファイルを直すまで残る）。状態は `reviewgate status` で確認でき、抜け道は `reviewgate skip --reason ...` か `REVIEWGATE_DISABLE=1`。
+`mode` に指定できるのは `"inject"` か `"subprocess"`（別名 `reviewer` / `independent`） [test: crates/reviewgate/tests/backlog_7d56f1e3_unknown_mode_blocks.rs::known_modes_do_not_produce_config_invalid]。それ以外の値は **config-invalid** で、どちらのモードにも推測で割り当てず、（レビュー対象が無い場合も含め）stop を `config-invalid`（値を明示）でブロックする [test: crates/reviewgate/tests/backlog_7d56f1e3_unknown_mode_blocks.rs::unknown_mode_blocks_config_invalid_on_clean_repo]。他の reviewgate のブロックと同じく共有の repeat ledger を通るため、同一セッションで同じ指摘の2度目のブロックは指摘を繰り返す `systemMessage` 付きで通過する（指摘自体はファイルを直すまで残る） [test: crates/harness-core/src/repeat.rs::second_occurrence_of_the_same_finding_yields]。状態は `reviewgate status` で確認できる [test: crates/reviewgate/tests/integration.rs::status_reports_resolved_config]。`reviewgate skip --reason` は発行したセッションだけを 1 回通す [test: crates/reviewgate/tests/session_scoped_skip.rs::a_skip_issued_by_another_session_does_not_wave_my_reviewgate_gate_through]。
 
 ### 同梱エージェント
 

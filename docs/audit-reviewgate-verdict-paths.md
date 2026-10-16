@@ -9,12 +9,12 @@
   ここに記す P（permissive）項目は**すべて未是正**である。「見つけたが直していない」ことを明記する。
 - **是正状況（2026-09-24 追記、reviewgate 0.1.28、branch `flow/fix-reviewgate-277440b1`）**: P2〜P8 は是正済み。
   回帰テストは `crates/reviewgate/tests/verdict_paths_p2_p8.rs`（実装者とは別の Agent が書き、未是正コードで RED を観測済み）。
-  P1 は同じ `DiffText::fetch_failed` 経路で塞がる（手動 probe で `git-scan-failed` の block を観測）。
+  P1 は同じ `DiffText::fetch_failed` 経路で塞がる（手動 probe で `git-scan-failed` の block を観測） [test: crates/reviewgate/tests/backlog_922f0a96_diff_fetch_failure_wiring.rs::content_fetch_failure_after_a_confirmed_change_blocks_not_allows]。
   **2026-10-14 追記**: P1 の専用回帰テストは `crates/reviewgate/tests/backlog_922f0a96_diff_fetch_failure_wiring.rs`
-  （偽 git shim を子プロセスの PATH に置く配線テスト。P1 と、`fetch_failed` 経路に限定した P2 の部分取得失敗を突く）。
-  是正前 rev `db9deefb` にテストを重ねて P1/P2 とも RED、現行で `evaluate()` の `fetch_failed` 分岐を削除する変異でも
-  P1/P2 とも RED、現行で GREEN を観測した（backlog `922f0a96`）。以下の本文は監査時点（`171062fc`）の記録である。是正で行が移動した引用だけは
-  現行コードの行番号へ付け替え、是正で消えた引用（旧 docstring）は `doc-claim-exempt` を付けて監査時点の記録として残した。
+  （偽 git shim を子プロセスの PATH に置く配線テスト [test: crates/reviewgate/tests/backlog_922f0a96_diff_fetch_failure_wiring.rs::content_fetch_failure_after_a_confirmed_change_blocks_not_allows]。P1 と、`fetch_failed` 経路に限定した P2 の部分取得失敗を突く [test: crates/reviewgate/tests/backlog_922f0a96_diff_fetch_failure_wiring.rs::partial_content_fetch_failure_blocks_not_certifies]）。
+  実測 2026-10-14: 是正前 rev `db9deefb` にテストを重ねて P1/P2 とも RED、現行で `evaluate()` の `fetch_failed` 分岐を削除する変異でも
+  P1/P2 とも RED、現行で GREEN を観測した（backlog `922f0a96`）。記録 2026-08-04 rev: 171062fc: 以下の本文は監査時点の記録である。
+  記録 2026-09-24 rev: efe6db14: 是正で行が移動した引用だけは現行コードの行番号へ付け替え、是正で消えた引用（旧 docstring）は `doc-claim-exempt` を付けて監査時点の記録として残した。
 - **位置づけ**: `docs/audit-blastguard-verdict-paths.md` / `docs/audit-budgetguard-verdict-paths.md` と
   同じフォーマット（P/R/D の 3 分類・逐語引用・実測・棄却候補にも同じ立証責任）に従う、
   compass charter DoD9（各 gate crate の verdict 経路の per-gate 監査）の 1 本。
@@ -664,7 +664,7 @@ $ grep -n 'giveup\|eprintln!' crates/reviewgate/src/review.rs
 | `REVIEWGATE_DISABLE=1` | 即 allow / exit 0（`crates/reviewgate/src/main.rs:161-167`） | `Config::disabled_env`。panic guard の**外側**ではなく `review_run` 内だが、config 読み込みより前に評価され常に到達可能 |
 | config `enabled = false` | 即 allow / exit 0（`crates/reviewgate/src/main.rs:170-176`） | operator の明示的意思 |
 | 設定ファイルが**存在しない** | `Config::default()`（armed） | `crates/reviewgate/src/config.rs:1-6`「Safe by default: … Installing the hook can never *trap* a turn on its own.」**不在は判定不能ではなく KNOWN な答え**。budgetguard 監査 §1 の carve-out と同じ線引き（**存在するのに読めない/解釈できない**場合だけが P7） | <!-- doc-claim-exempt: historical quote — the PRE-FIX run_reviewer docstring at audit point 171062fc. The P4 fix (reviewgate 0.1.28) removed the "empty = clean" sentence on purpose; this line records the state that was fixed. -->
-| `classify` の `LGTM` 前方一致 | `Clean`（`crates/reviewgate/src/review.rs:657-660`） | `crates/reviewgate/src/review.rs:598`「Output that is empty or starts with "LGTM" = clean.」＋ prompt（469 行）で reviewer に指示済み。classify_lgtm_is_clean（571 行）が固定 | **（2026-10-14 backlog d98465f9 で完全一致へ変更済み。前方一致は撤去）**
+| `classify` の `LGTM` 前方一致 | `Clean`（`crates/reviewgate/src/review.rs:657-660`） | `crates/reviewgate/src/review.rs:598`「Output that is empty or starts with "LGTM" = clean.」＋ prompt（469 行）で reviewer に指示済み。classify_lgtm_is_clean（571 行）が固定 | **（2026-10-14 backlog d98465f9 で完全一致へ変更済み。前方一致は撤去）** [test: crates/reviewgate/src/review.rs::lgtm_prefix_with_finding_is_not_clean]
 | stdout が空 ＝ `Clean` | — | **D 主張を §1 P4 で棄却した**（prompt は `LGTM` を要求しており、空は契約上の clean 合図ではない） |
 
 ---
@@ -711,7 +711,7 @@ CLAUDE.md 第6節に従い、**「経路を辿れなかった」を「経路が�
 
 | 候補 | 状態 | 根拠 |
 |---|---|---|
-| `classify` の `first.to_ascii_lowercase().starts_with("lgtm")`（`crates/reviewgate/src/review.rs:747`）が、"lgtm" で始まる**実所見**を Clean と誤分類しうる | **RECORDED, not asserted** | 前方一致であり `lgtm, but: high severity …` のような出力は Clean になる。prompt（`:469`）は「問題が無ければ `LGTM` **とだけ**」と指示しているので契約違反の出力ではあるが、LLM reviewer が前置きに "LGTM overall, but…" と書く実務的確率は無視できない。**実測していないので P に格上げしない**。是正するなら完全一致にすべき、という指摘のみ記録 | **→ 2026-10-14 修正済み（backlog d98465f9、`review.rs` の `backlog_repro_s08::lgtm_prefix_with_finding_is_not_clean` が固定）**
+| `classify` の `first.to_ascii_lowercase().starts_with("lgtm")`（`crates/reviewgate/src/review.rs:747`）が、"lgtm" で始まる**実所見**を Clean と誤分類しうる | **RECORDED, not asserted** | 前方一致であり `lgtm, but: high severity …` のような出力は Clean になる。prompt（`:469`）は「問題が無ければ `LGTM` **とだけ**」と指示しているので契約違反の出力ではあるが、LLM reviewer が前置きに "LGTM overall, but…" と書く実務的確率は無視できない。**実測していないので P に格上げしない**。是正するなら完全一致にすべき、という指摘のみ記録 | **→ 2026-10-14 修正済み（backlog d98465f9、`review.rs` の `backlog_repro_s08::lgtm_prefix_with_finding_is_not_clean` が固定）** [test: crates/reviewgate/src/review.rs::lgtm_prefix_with_finding_is_not_clean]
 | `hash_diff` の `DefaultHasher`（`crates/reviewgate/src/review.rs:85-89`）の衝突・std 更新による不安定性 | **棄却（restrictive 方向）** | 衝突すれば `already-reviewed` で誤 allow だが 64bit SipHash の偶発衝突は無視可能。std 更新でハッシュが変われば**過去の hash と一致しなくなる**＝もう一度 block する側に倒れる。`hash_is_stable_and_distinct`（`:582`）が同一プロセス内の安定性を固定 |
 | `state::save` / `append_jsonl` の書き込み失敗（`crates/reviewgate/src/main.rs:209-217`, `209-217`, `275`） | **棄却（restrictive 方向）** | `last_hash` を保存できなければ次の stop で `already-reviewed` が成立せず**再度 block**する。attempts を保存できなければ giveup までの猶予が増える |
 | `crates/reviewgate/src/main.rs:375`「std::env::current_dir().unwrap_or_else(」＝ 失敗時に Path::new(".") へ落ちる | **判定経路ではない（が §4-5 で別の欠陥あり）** | 下流消費者を列挙した: status は --json を持たず、grep -rn 'reviewgate status' に機械的消費者は無い（唯一の消費者は端末の人間）。ただし**人間が「ゲートは armed か」を判断する面**なので免責は狭い。`current_dir` 失敗そのものより、§4-5 の config 誤報のほうが実害が大きい |

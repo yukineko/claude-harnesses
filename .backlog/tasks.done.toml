@@ -54048,3 +54048,237 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "19c5321df3149c89a2e449a5606af52701894830"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "cedfa91e"
+title = "trajectoryeval: fuzzy_hash at default threshold 0 rounds real drift to match"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/trajectoryeval/src/tier.rs fuzzy_diff round-half-up: 1 changed leaf of 2001 gives distance 0, 0<=0 is Match, exit 0, contradicting the TierConfig doc that default 0 means any drift escalates. Test asserts non-zero exit."
+created_at = 1792155569
+updated_at = 1792236993
+weight = 0.0
+issue_number = 1373
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1373"
+issue_closed_at = 1792236996
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p trajectoryeval --test repro_fuzzy_hash_default_threshold_rounds_drift_away -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155569
+detail = """
+exit 101: worktrees/repro-failopens/crates/trajectoryeval)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.43s
+     Running tests/repro_fuzzy_hash_default_threshold_rounds_drift_away.rs (target/debug/deps/repro_fuzzy_hash_default_threshold_rounds_drift_away-96e836cb97e18345)
+error: test failed, to rerun pass `-p trajectoryeval --test repro_fuzzy_hash_default_threshold_rounds_drift_away`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p trajectoryeval --test repro_fuzzy_hash_default_threshold_rounds_drift_away"
+exit = 0
+passed = 1
+rev = "e4547e5bd96a288607a543d80232c9a0068872c7"
+observed_at = 1792236964
+output_digest = "sha256:edf4c4a9ae39a03f225ef07b88f4eb22e04f02aa807dafa7563ce83ad96f74bc"
+excerpt = """
+
+running 1 test
+test zero_tolerance_fuzzy_hash_does_not_pass_a_changed_leaf ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_fuzzy_hash_default_threshold_rounds_drift_away.rs (target/debug/deps/repro_fuzzy_hash_default_threshold_rounds_drift_away-e35357a5018d3536)
+"""
+
+[task.closure.red]
+rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "dc5c8b29"
+title = "trajectoryeval: empty subsequence spec passes any trajectory"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/trajectoryeval/src/match_traj.rs: spec with mode subsequence and no steps (serde default) requires nothing, reports nothing unexpected, check prints matched and exits 0. Test asserts non-zero."
+created_at = 1792155576
+updated_at = 1792237031
+weight = 0.0
+issue_number = 1375
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1375"
+issue_closed_at = 1792237034
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p trajectoryeval --test repro_empty_subsequence_spec_passes_anything -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155576
+detail = """
+exit 101: Users/yuki/src/.harness-worktrees/repro-failopens/crates/trajectoryeval)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/repro_empty_subsequence_spec_passes_anything.rs (target/debug/deps/repro_empty_subsequence_spec_passes_anything-a234c31cc429f706)
+error: test failed, to rerun pass `-p trajectoryeval --test repro_empty_subsequence_spec_passes_anything`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p trajectoryeval --test repro_empty_subsequence_spec_passes_anything"
+exit = 0
+passed = 1
+rev = "e4547e5bd96a288607a543d80232c9a0068872c7"
+observed_at = 1792236997
+output_digest = "sha256:b500df8f8c185ea4faa94897e9198cbaa2fbfde2c8a47cf4d14a62e0c1f70fbd"
+excerpt = """
+
+running 1 test
+test empty_subsequence_spec_does_not_exit_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/repro_empty_subsequence_spec_passes_anything.rs (target/debug/deps/repro_empty_subsequence_spec_passes_anything-e2c7ca75d063093f)
+"""
+
+[task.closure.red]
+rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "ceafad0e"
+title = "trajectoryeval: extract skips non-JSON lines, garbage transcript gives [] and exit 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/trajectoryeval/src/extract.rs extract_tools does Err(_) => continue per line; an entirely unparseable transcript prints [] with exit 0, indistinguishable from a session with no tool calls; main.rs reserves exit 2 for unparseable input. Test asserts non-zero."
+created_at = 1792155578
+updated_at = 1792237058
+weight = 0.0
+issue_number = 1376
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1376"
+issue_closed_at = 1792237061
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p trajectoryeval --test repro_extract_garbage_transcript_exits_zero -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155578
+detail = """
+exit 101:  (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/trajectoryeval)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests/repro_extract_garbage_transcript_exits_zero.rs (target/debug/deps/repro_extract_garbage_transcript_exits_zero-32e8bb2508edee0a)
+error: test failed, to rerun pass `-p trajectoryeval --test repro_extract_garbage_transcript_exits_zero`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p trajectoryeval --test repro_extract_garbage_transcript_exits_zero"
+exit = 0
+passed = 1
+rev = "e4547e5bd96a288607a543d80232c9a0068872c7"
+observed_at = 1792237035
+output_digest = "sha256:7411faad3572ed83da34649589327a84a923e9938f5708bdde910ac8516f9099"
+excerpt = """
+
+running 1 test
+test extract_of_unparseable_transcript_does_not_exit_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/repro_extract_garbage_transcript_exits_zero.rs (target/debug/deps/repro_extract_garbage_transcript_exits_zero-aa87b5788c639cc4)
+"""
+
+[task.closure.red]
+rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "331dd891"
+title = "trajectoryeval: tier --exists defaults true so an omitted existence input passes a non-core flow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/trajectoryeval/src/main.rs --exists default_value_t = true; non_core flow with no existence input gets existence present and exit 0. Test asserts non-zero when --exists is omitted."
+created_at = 1792155582
+updated_at = 1792237082
+weight = 0.0
+issue_number = 1377
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1377"
+issue_closed_at = 1792237084
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p trajectoryeval --test repro_tier_exists_defaults_true -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155582
+detail = """
+exit 101: 
+   Compiling trajectoryeval v0.1.14 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/trajectoryeval)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/repro_tier_exists_defaults_true.rs (target/debug/deps/repro_tier_exists_defaults_true-f4d6864a3f897651)
+error: test failed, to rerun pass `-p trajectoryeval --test repro_tier_exists_defaults_true`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p trajectoryeval --test repro_tier_exists_defaults_true"
+exit = 0
+passed = 1
+rev = "e4547e5bd96a288607a543d80232c9a0068872c7"
+observed_at = 1792237062
+output_digest = "sha256:67ae779af7986e48ec5a0c4b2e28d9d8f694cde62d8a03edd6e6c1c3047aa4c6"
+excerpt = """
+
+running 1 test
+test omitted_exists_does_not_pass_a_non_core_flow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/repro_tier_exists_defaults_true.rs (target/debug/deps/repro_tier_exists_defaults_true-b577b61ff0e0cf6e)
+"""
+
+[task.closure.red]
+rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
+exit = 101
+kind = "behavioural"

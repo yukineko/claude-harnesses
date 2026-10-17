@@ -14,27 +14,39 @@ use std::process::Command;
 use harness_core::verdict::Determination;
 
 /// Aggregated shipping-state detection results for a repo.
+///
+/// Every field is a [`Determination`]: `Undetermined` means the detection
+/// itself could not run (git failed, no upstream, unreadable `crates/`). It
+/// must never render the same as a clean `Known` value — it renders `[?]`,
+/// never `[x]`, and counts as unshipped work.
 #[derive(Debug, Clone)]
 pub struct ShipStatus {
-    pub uncommitted: bool,
-    pub unmerged_branches: Vec<String>,
-    pub leftover_worktrees: Vec<String>,
-    pub unpushed_count: usize,
-    /// `Undetermined` when the stale-crate scan itself could not run
-    /// (`crates/` exists but is unreadable) — must not render the same as a
-    /// clean `Known(vec![])`, or an incomplete scan reads as "nothing stale".
+    pub uncommitted: Determination<bool>,
+    pub unmerged_branches: Determination<Vec<String>>,
+    pub leftover_worktrees: Determination<Vec<String>>,
+    pub unpushed_count: Determination<usize>,
     pub stale_crates: Determination<Vec<String>>,
 }
 
 impl Default for ShipStatus {
+    /// The all-clean, fully-determined status (test fixture convenience).
     fn default() -> Self {
         ShipStatus {
-            uncommitted: false,
-            unmerged_branches: Vec::new(),
-            leftover_worktrees: Vec::new(),
-            unpushed_count: 0,
+            uncommitted: Determination::Known(false),
+            unmerged_branches: Determination::Known(Vec::new()),
+            leftover_worktrees: Determination::Known(Vec::new()),
+            unpushed_count: Determination::Known(0),
             stale_crates: Determination::Known(Vec::new()),
         }
+    }
+}
+
+/// True iff `d` is known-outstanding per `pending`, OR undetermined: a check
+/// that could not run resolves to the restrictive side (CLAUDE.md §3).
+fn outstanding_or_unknown<T>(d: &Determination<T>, pending: impl Fn(&T) -> bool) -> bool {
+    match d {
+        Determination::Known(v) => pending(v),
+        Determination::Undetermined(_) => true,
     }
 }
 
@@ -42,17 +54,16 @@ impl ShipStatus {
     /// True iff there is any unshipped work worth reminding the user about.
     ///
     /// Leftover worktrees are informational-only (not "unshipped work" per se)
-    /// so they don't affect this; they're still shown in the checklist. An
-    /// `Undetermined` stale-crate scan counts as unshipped work too — a
-    /// check that couldn't run is not evidence that everything is clean.
+    /// so a KNOWN list doesn't affect this; they're still shown in the
+    /// checklist. Any `Undetermined` detection (including leftover worktrees)
+    /// counts as unshipped work — a check that couldn't run is not evidence
+    /// that everything is clean.
     pub fn has_unshipped_work(&self) -> bool {
-        self.uncommitted
-            || !self.unmerged_branches.is_empty()
-            || self.unpushed_count > 0
-            || match &self.stale_crates {
-                Determination::Known(v) => !v.is_empty(),
-                Determination::Undetermined(_) => true,
-            }
+        outstanding_or_unknown(&self.uncommitted, |b| *b)
+            || outstanding_or_unknown(&self.unmerged_branches, |v| !v.is_empty())
+            || outstanding_or_unknown(&self.unpushed_count, |n| *n > 0)
+            || outstanding_or_unknown(&self.stale_crates, |v| !v.is_empty())
+            || outstanding_or_unknown(&self.leftover_worktrees, |_| false)
     }
 }
 
@@ -68,42 +79,50 @@ pub fn render(status: &ShipStatus) -> String {
     out.push_str("⚓ ship checklist\n");
 
     // uncommitted changes -> commit is gated
-    if status.uncommitted {
-        out.push_str(&format!(
+    match &status.uncommitted {
+        Determination::Known(true) => out.push_str(&format!(
             "  [ ] uncommitted changes present — commit ({GATED})\n"
-        ));
-    } else {
-        out.push_str("  [x] no uncommitted changes\n");
+        )),
+        Determination::Known(false) => out.push_str("  [x] no uncommitted changes\n"),
+        Determination::Undetermined(why) => out.push_str(&format!(
+            "  [?] uncommitted-changes check could not run: {why}\n"
+        )),
     }
 
     // unmerged condukt branches -> merge is gated
-    if status.unmerged_branches.is_empty() {
-        out.push_str("  [x] no unmerged condukt/* branches\n");
-    } else {
-        out.push_str(&format!(
+    match &status.unmerged_branches {
+        Determination::Known(v) if v.is_empty() => {
+            out.push_str("  [x] no unmerged condukt/* branches\n");
+        }
+        Determination::Known(v) => out.push_str(&format!(
             "  [ ] unmerged condukt/* branches: {} — merge ({GATED})\n",
-            status.unmerged_branches.join(", ")
-        ));
+            v.join(", ")
+        )),
+        Determination::Undetermined(why) => out.push_str(&format!(
+            "  [?] unmerged-condukt/*-branches check could not run: {why}\n"
+        )),
     }
 
     // leftover worktrees -> informational
-    if status.leftover_worktrees.is_empty() {
-        out.push_str("  [x] no leftover worktrees\n");
-    } else {
-        out.push_str(&format!(
-            "  [ ] leftover worktrees: {}\n",
-            status.leftover_worktrees.join(", ")
-        ));
+    match &status.leftover_worktrees {
+        Determination::Known(v) if v.is_empty() => out.push_str("  [x] no leftover worktrees\n"),
+        Determination::Known(v) => {
+            out.push_str(&format!("  [ ] leftover worktrees: {}\n", v.join(", ")));
+        }
+        Determination::Undetermined(why) => out.push_str(&format!(
+            "  [?] leftover-worktrees check could not run: {why}\n"
+        )),
     }
 
     // unpushed commits -> push is gated
-    if status.unpushed_count == 0 {
-        out.push_str("  [x] no unpushed commits\n");
-    } else {
-        out.push_str(&format!(
-            "  [ ] {} unpushed commit(s) — push ({GATED})\n",
-            status.unpushed_count
-        ));
+    match &status.unpushed_count {
+        Determination::Known(0) => out.push_str("  [x] no unpushed commits\n"),
+        Determination::Known(n) => {
+            out.push_str(&format!("  [ ] {n} unpushed commit(s) — push ({GATED})\n"))
+        }
+        Determination::Undetermined(why) => out.push_str(&format!(
+            "  [?] unpushed-commits check could not run: {why}\n"
+        )),
     }
 
     // stale crates -> the committed bin is older than its src.
@@ -135,25 +154,49 @@ pub fn render_gated_remaining(status: &ShipStatus) -> String {
     let mut out = String::new();
     let mut any = false;
 
-    if status.uncommitted {
-        out.push_str(&format!(
-            "  [ ] uncommitted changes present — commit ({GATED})\n"
-        ));
-        any = true;
+    match &status.uncommitted {
+        Determination::Known(false) => {}
+        Determination::Known(true) => {
+            out.push_str(&format!(
+                "  [ ] uncommitted changes present — commit ({GATED})\n"
+            ));
+            any = true;
+        }
+        Determination::Undetermined(why) => {
+            out.push_str(&format!(
+                "  [?] uncommitted-changes check could not run: {why}\n"
+            ));
+            any = true;
+        }
     }
-    if !status.unmerged_branches.is_empty() {
-        out.push_str(&format!(
-            "  [ ] unmerged condukt/* branches: {} — merge ({GATED})\n",
-            status.unmerged_branches.join(", ")
-        ));
-        any = true;
+    match &status.unmerged_branches {
+        Determination::Known(v) if v.is_empty() => {}
+        Determination::Known(v) => {
+            out.push_str(&format!(
+                "  [ ] unmerged condukt/* branches: {} — merge ({GATED})\n",
+                v.join(", ")
+            ));
+            any = true;
+        }
+        Determination::Undetermined(why) => {
+            out.push_str(&format!(
+                "  [?] unmerged-condukt/*-branches check could not run: {why}\n"
+            ));
+            any = true;
+        }
     }
-    if status.unpushed_count > 0 {
-        out.push_str(&format!(
-            "  [ ] {} unpushed commit(s) — push ({GATED})\n",
-            status.unpushed_count
-        ));
-        any = true;
+    match &status.unpushed_count {
+        Determination::Known(0) => {}
+        Determination::Known(n) => {
+            out.push_str(&format!("  [ ] {n} unpushed commit(s) — push ({GATED})\n"));
+            any = true;
+        }
+        Determination::Undetermined(why) => {
+            out.push_str(&format!(
+                "  [?] unpushed-commits check could not run: {why}\n"
+            ));
+            any = true;
+        }
     }
 
     if !any {
@@ -161,6 +204,15 @@ pub fn render_gated_remaining(status: &ShipStatus) -> String {
     }
 
     out
+}
+
+/// The outcome of a script that ran to completion. `succeeded` is the
+/// script's exit status, so a caller can turn a FAILED run into a non-zero
+/// exit instead of only printing the word FAILED.
+#[derive(Debug)]
+pub struct ScriptRun {
+    pub summary: String,
+    pub succeeded: bool,
 }
 
 /// Run the ONE auto-runnable safe step: `scripts/rebuild-plugins.sh --stage-repo`,
@@ -174,7 +226,7 @@ pub fn render_gated_remaining(status: &ShipStatus) -> String {
 /// binaries" item. Side effect: this dirties the working tree with the
 /// refreshed binary, which then surfaces as an `uncommitted changes — commit
 /// (GATED)` item on re-detect (the commit itself stays human-gated).
-pub fn run_safe(repo: &Path) -> Result<String, String> {
+pub fn run_safe(repo: &Path) -> Result<ScriptRun, String> {
     let script = repo.join("scripts").join("rebuild-plugins.sh");
     if !script.exists() {
         return Err(format!("script not found: {}", script.display()));
@@ -205,7 +257,10 @@ pub fn run_safe(repo: &Path) -> Result<String, String> {
         summary.push_str(&format!("--- stderr ---\n{stderr}\n"));
     }
 
-    Ok(summary)
+    Ok(ScriptRun {
+        summary,
+        succeeded: output.status.success(),
+    })
 }
 
 /// Run the heavier, explicit rollout step: `scripts/rollout-plugins.sh`,
@@ -221,7 +276,7 @@ pub fn run_safe(repo: &Path) -> Result<String, String> {
 /// (it runs rebuild-plugins.sh without `--stage-repo`), so it does NOT clear
 /// a "stale plugin binaries" item — that is committed-binary staleness, which
 /// `check --run-safe` refreshes (`--stage-repo`) and a GATED commit finalizes.
-pub fn rollout(repo: &Path) -> Result<String, String> {
+pub fn rollout(repo: &Path) -> Result<ScriptRun, String> {
     let script = repo.join("scripts").join("rollout-plugins.sh");
     if !script.exists() {
         return Err(format!("script not found: {}", script.display()));
@@ -251,7 +306,10 @@ pub fn rollout(repo: &Path) -> Result<String, String> {
         summary.push_str(&format!("--- stderr ---\n{stderr}\n"));
     }
 
-    Ok(summary)
+    Ok(ScriptRun {
+        summary,
+        succeeded: output.status.success(),
+    })
 }
 
 /// Build a concise SessionEnd reminder line for unshipped work. Returns None
@@ -262,17 +320,31 @@ pub fn session_end_reminder(status: &ShipStatus) -> Option<String> {
     }
 
     let mut parts = vec![];
-    if status.uncommitted {
-        parts.push("未コミットの変更".to_string());
+    match &status.uncommitted {
+        Determination::Known(true) => parts.push("未コミットの変更".to_string()),
+        Determination::Known(false) => {}
+        Determination::Undetermined(why) => {
+            parts.push(format!("未コミット変更の検査が未完了: {why}"));
+        }
     }
-    if !status.unmerged_branches.is_empty() {
-        parts.push(format!(
-            "未マージブランチ {}件",
-            status.unmerged_branches.len()
-        ));
+    match &status.unmerged_branches {
+        Determination::Known(v) if !v.is_empty() => {
+            parts.push(format!("未マージブランチ {}件", v.len()));
+        }
+        Determination::Known(_) => {}
+        Determination::Undetermined(why) => {
+            parts.push(format!("未マージブランチの検査が未完了: {why}"));
+        }
     }
-    if status.unpushed_count > 0 {
-        parts.push(format!("未pushコミット {}件", status.unpushed_count));
+    if let Determination::Undetermined(why) = &status.leftover_worktrees {
+        parts.push(format!("残存 worktree の検査が未完了: {why}"));
+    }
+    match &status.unpushed_count {
+        Determination::Known(0) => {}
+        Determination::Known(n) => parts.push(format!("未pushコミット {n}件")),
+        Determination::Undetermined(why) => {
+            parts.push(format!("未pushコミットの検査が未完了: {why}"));
+        }
     }
     match &status.stale_crates {
         Determination::Known(v) if !v.is_empty() => {
@@ -297,10 +369,10 @@ mod tests {
     #[test]
     fn render_marks_commit_merge_push_as_gated() {
         let status = ShipStatus {
-            uncommitted: true,
-            unmerged_branches: vec!["condukt/foo".to_string()],
-            leftover_worktrees: vec![],
-            unpushed_count: 2,
+            uncommitted: Determination::Known(true),
+            unmerged_branches: Determination::Known(vec!["condukt/foo".to_string()]),
+            leftover_worktrees: Determination::Known(vec![]),
+            unpushed_count: Determination::Known(2),
             stale_crates: Determination::Known(vec![]),
         };
         let out = render(&status);
@@ -357,7 +429,7 @@ mod tests {
     #[test]
     fn session_end_reminder_some_for_uncommitted() {
         let status = ShipStatus {
-            uncommitted: true,
+            uncommitted: Determination::Known(true),
             ..Default::default()
         };
         let reminder = session_end_reminder(&status);
@@ -369,7 +441,7 @@ mod tests {
     fn session_end_reminder_ignores_leftover_worktrees_only() {
         // leftover worktrees alone are informational, not "unshipped work"
         let status = ShipStatus {
-            leftover_worktrees: vec!["/tmp/some-worktree".to_string()],
+            leftover_worktrees: Determination::Known(vec!["/tmp/some-worktree".to_string()]),
             ..Default::default()
         };
         assert!(session_end_reminder(&status).is_none());
@@ -378,7 +450,7 @@ mod tests {
     #[test]
     fn render_gated_remaining_all_clear_when_nothing_gated() {
         let status = ShipStatus {
-            leftover_worktrees: vec!["/tmp/x".to_string()],
+            leftover_worktrees: Determination::Known(vec!["/tmp/x".to_string()]),
             stale_crates: Determination::Known(vec!["ship".to_string()]),
             ..Default::default()
         };

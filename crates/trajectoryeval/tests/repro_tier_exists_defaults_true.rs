@@ -12,7 +12,6 @@
 use std::process::Command;
 
 #[test]
-#[ignore = "RED repro: omitted --exists is treated as the flow existing"]
 fn omitted_exists_does_not_pass_a_non_core_flow() {
     let dir = std::env::temp_dir().join(format!(
         "trajectoryeval-repro-exists-{}",

@@ -41,7 +41,6 @@ fn git(dir: &std::path::Path, args: &[&str]) {
 }
 
 #[test]
-#[ignore = "RED repro: git errors resolve to clean in ship"]
 fn no_upstream_is_not_reported_as_no_unpushed_commits() {
     let repo = tempfile::TempDir::new().unwrap();
     let p = repo.path();
@@ -58,7 +57,6 @@ fn no_upstream_is_not_reported_as_no_unpushed_commits() {
 }
 
 #[test]
-#[ignore = "RED repro: git errors resolve to clean in ship"]
 fn broken_git_dir_is_not_reported_as_all_clean() {
     let repo = tempfile::TempDir::new().unwrap();
     let p = repo.path();

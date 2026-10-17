@@ -75,7 +75,7 @@ fn claim_core_allowlist_exact_match() {
     assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
     assert!(r.stdout.contains("tier: core"), "{}", r.stdout);
     for f in ["checkout2", "Checkout", "check"] {
-        let r = tier(&["--config", &cfg, "--flow", f]);
+        let r = tier(&["--config", &cfg, "--flow", f, "--exists", "true"]);
         assert_eq!(r.code, 0, "{f}: {}{}", r.stdout, r.stderr);
         assert!(r.stdout.contains("tier: non-core"), "{f}: {}", r.stdout);
     }
@@ -199,6 +199,8 @@ fn claim_sampling_decision_reported() {
             &cfg2,
             "--flow",
             "nc",
+            "--exists",
+            "true",
             "--seed",
             "7",
             "--run-index",
@@ -214,7 +216,16 @@ fn claim_sampling_decision_reported() {
     assert!(sampled && skipped, "both outcomes must occur over 64 runs");
     for i in 0..8u32 {
         let idx = i.to_string();
-        let r = tier(&["--config", &cfg1, "--flow", "nc", "--run-index", &idx]);
+        let r = tier(&[
+            "--config",
+            &cfg1,
+            "--flow",
+            "nc",
+            "--exists",
+            "true",
+            "--run-index",
+            &idx,
+        ]);
         assert_eq!(r.code, 0);
         assert!(
             r.stdout.contains("present (sampled this run)"),
@@ -457,7 +468,9 @@ fn claim_tier_json_report_core_and_non_core() {
     let dir = unique_dir();
     let cfg = write(&dir, "c.json", r#"{"core":["c"]}"#);
     let snap = write(&dir, "s.json", r#"{"a":1}"#);
-    let r = tier(&["--config", &cfg, "--flow", "n", "--json"]);
+    let r = tier(&[
+        "--config", &cfg, "--flow", "n", "--exists", "true", "--json",
+    ]);
     assert_eq!(r.code, 0, "{}{}", r.stdout, r.stderr);
     let v: serde_json::Value = serde_json::from_str(r.stdout.trim()).unwrap();
     assert_eq!(v["tier"], serde_json::json!("noncore"));
@@ -477,7 +490,7 @@ fn claim_tier_json_report_core_and_non_core() {
     let v: serde_json::Value = serde_json::from_str(r.stdout.trim()).unwrap();
     assert_eq!(v["tier"], serde_json::json!("core"));
     assert_eq!(v["diff"]["kind"], serde_json::json!("match"));
-    let r = tier(&["--config", &cfg, "--flow", "n"]);
+    let r = tier(&["--config", &cfg, "--flow", "n", "--exists", "true"]);
     assert!(r.stdout.contains("tier: non-core"), "{}", r.stdout);
 }
 
@@ -492,6 +505,8 @@ fn claim_sampling_keyed_by_seed_and_flow() {
             &cfg,
             "--flow",
             flow,
+            "--exists",
+            "true",
             "--seed",
             &s,
             "--run-index",

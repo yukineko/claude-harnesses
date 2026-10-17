@@ -22,8 +22,8 @@
 //!
 //! Mirrors `escalate.rs`: a single project-scoped JSON file at
 //! `<state_dir>/<project-key>/precedents.json`, atomic writes (temp +
-//! rename), fail-soft reads (missing/corrupt file => empty registry, never an
-//! error/panic).
+//! rename); a missing file reads as an empty registry, a corrupt or unreadable
+//! one is an `Err` (never read as empty, never overwritten).
 //!
 //! # Determinism
 //!
@@ -34,7 +34,7 @@
 //! layer, never read inside these functions.
 
 use crate::config::Config;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use harness_core::hash::Fnv1a64;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -209,12 +209,16 @@ fn precedents_path(cfg: &Config, cwd: &Path) -> Result<PathBuf> {
     Ok(crate::state::project_state_dir(cfg, cwd)?.join(FILE))
 }
 
-/// Fail-soft load: a missing or corrupt registry is treated as empty rather
-/// than breaking the caller (mirrors `escalate.rs::load`).
-fn load(path: &Path) -> Registry {
+/// Load a registry. A missing file (io `NotFound`) is a legitimate empty
+/// registry; any other read error or a parse failure is an `Err` naming the
+/// path (mirrors `escalate.rs::load`), so a corrupt store is never read as
+/// "no precedents" and `record_precedent` never overwrites it.
+fn load(path: &Path) -> Result<Registry> {
     match std::fs::read_to_string(path) {
-        Ok(txt) => serde_json::from_str(&txt).unwrap_or_default(),
-        Err(_) => Registry::default(),
+        Ok(txt) => serde_json::from_str(&txt)
+            .with_context(|| format!("parsing precedent registry {}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Registry::default()),
+        Err(e) => Err(e).with_context(|| format!("reading precedent registry {}", path.display())),
     }
 }
 
@@ -232,7 +236,7 @@ fn save(path: &Path, reg: &Registry) -> Result<()> {
 
 /// Ratify (record) a new precedent from a declared `files`/`symbols` shape
 /// and persist it. Returns the stored record (with its derived fingerprint).
-/// Atomic write; fail-soft load. `now` is the ratification timestamp (unix
+/// Atomic write; a corrupt store is an `Err` (never overwritten). `now` is the ratification timestamp (unix
 /// seconds) injected by the CLI layer — never read from wall-clock here.
 /// Always written to the CANONICAL store, under the `__precedents__` lock
 /// (the file is shared by every checkout of the repo); `Err` when the main
@@ -256,7 +260,7 @@ pub fn record_precedent(
         );
     };
     let path = precedents_path(cfg, cwd)?;
-    let mut reg = load(&path);
+    let mut reg = load(&path)?;
 
     let rec = Precedent {
         fingerprint: structural_fingerprint(files, symbols),
@@ -273,12 +277,12 @@ pub fn record_precedent(
 /// Load ALL ratified precedents for this project: the canonical store, then a
 /// store a pre-`43393ce2` condukt left under this checkout's own per-checkout
 /// key (so precedents ratified from a linked worktree are not lost by the
-/// re-keying). A missing or corrupt store contributes nothing; an
-/// undeterminable main worktree root is an `Err`.
+/// re-keying). A missing store contributes nothing; a corrupt or
+/// unreadable store, or an undeterminable main worktree root, is an `Err`.
 pub fn load_precedents(cfg: &Config, cwd: &Path) -> Result<Vec<Precedent>> {
     let mut all = Vec::new();
     for dir in crate::state::project_state_dirs(cfg, cwd)? {
-        all.extend(load(&dir.join(FILE)).precedents);
+        all.extend(load(&dir.join(FILE))?.precedents);
     }
     Ok(all)
 }
@@ -561,19 +565,23 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_store_is_treated_as_empty() {
+    fn corrupt_store_is_an_error_not_an_empty_registry() {
+        // backlog dfaa609a: a corrupt store must surface as an error on read,
+        // and record must refuse to overwrite it with a fresh registry.
         let tmp_dir = make_tmp_dir("corrupt");
         let tmp = tmp_dir.path();
         let cfg = make_cfg(tmp);
         let path = precedents_path(&cfg, tmp).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, b"not json at all {{{").unwrap();
-        assert!(load_precedents(&cfg, tmp).unwrap().is_empty());
-        // Fail-soft: record still succeeds (registry read as empty then
-        // overwritten with a fresh valid one).
-        let rec = record_precedent(&cfg, tmp, &v(&["a.rs"]), &v(&["foo"]), "n", 1).unwrap();
-        let all = load_precedents(&cfg, tmp).unwrap();
-        assert_eq!(all, vec![rec]);
+        let garbage = b"not json at all {{{";
+        std::fs::write(&path, garbage).unwrap();
+        assert!(load_precedents(&cfg, tmp).is_err());
+        assert!(record_precedent(&cfg, tmp, &v(&["a.rs"]), &v(&["foo"]), "n", 1).is_err());
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            garbage,
+            "corrupt store was overwritten"
+        );
     }
 
     #[test]

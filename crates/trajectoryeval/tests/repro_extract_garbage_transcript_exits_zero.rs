@@ -13,7 +13,6 @@
 use std::process::Command;
 
 #[test]
-#[ignore = "RED repro: extract skips unparseable lines and exits 0 with []"]
 fn extract_of_unparseable_transcript_does_not_exit_zero() {
     let dir = std::env::temp_dir().join(format!(
         "trajectoryeval-repro-extract-{}",

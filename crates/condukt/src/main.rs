@@ -298,7 +298,8 @@ enum Command {
     /// questions in a per-project persistent store, so a blocked or GATED task
     /// records "I need a human answer for X" and keeps going instead of blocking
     /// inline on an AskUserQuestion. Backed by
-    /// `<state_dir>/<project-key>/escalations.json` (atomic writes, fail-soft).
+    /// `<state_dir>/<project-key>/escalations.json` (atomic writes; a missing
+    /// file is empty, an unreadable or corrupt one is an error).
     Escalate {
         #[command(subcommand)]
         action: EscalateAction,
@@ -307,7 +308,8 @@ enum Command {
     /// (Google LSC "reviewed-once-applied-broadly"): ratify a change's
     /// declared shape (touched files + target symbols) as routine, list what
     /// is ratified, or check whether a candidate shape matches. Backed by
-    /// `<state_dir>/<project-key>/precedents.json` (atomic writes, fail-soft).
+    /// `<state_dir>/<project-key>/precedents.json` (atomic writes; a missing
+    /// file is empty, an unreadable or corrupt one is an error).
     Precedent {
         #[command(subcommand)]
         action: PrecedentAction,
@@ -3266,8 +3268,8 @@ fn gather_review_order_diff_from_git(cwd: &Path, base: &str, head: &str) -> Stri
 }
 
 /// `condukt escalate add|list|resolve` — the durable async escalation channel.
-/// Deterministic store I/O; fail-soft (missing/corrupt store = empty). The
-/// created-at timestamp uses wall-clock seconds (observability only; it never
+/// Deterministic store I/O; a missing store is empty, an unreadable or
+/// corrupt store is an error (never overwritten). The created-at timestamp uses wall-clock seconds (observability only; it never
 /// feeds the deterministic record id).
 fn run_escalate(cfg: &Config, cwd: &Path, action: EscalateAction) -> Result<()> {
     match action {
@@ -3346,8 +3348,9 @@ fn parse_csv_list(raw: &str) -> Vec<String> {
 }
 
 /// `condukt precedent ratify|list|check` — the precedent store backing
-/// `review-brief`'s novelty/precedent downgrade. Deterministic store I/O;
-/// fail-soft (missing/corrupt store = empty). `ratify`'s timestamp uses the
+/// `review-brief`'s novelty/precedent downgrade. Deterministic store I/O; a
+/// missing store is empty, an unreadable or corrupt store is an error (never
+/// overwritten). `ratify`'s timestamp uses the
 /// same wall-clock-seconds source as `escalate add` (observability only; the
 /// fingerprint/match logic never reads wall-clock).
 fn run_precedent(cfg: &Config, cwd: &Path, action: PrecedentAction) -> Result<()> {

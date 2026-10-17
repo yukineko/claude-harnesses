@@ -44,6 +44,19 @@ pub struct Spec {
     pub steps: Vec<Step>,
 }
 
+impl Spec {
+    /// True when the spec cannot reject any trajectory: a `subsequence` spec
+    /// with no required step (no steps, or only optional ones) requires
+    /// nothing and reports no extras, so every `actual` would "pass". Such a
+    /// spec is a spec error, not a satisfied check — the CLI refuses it
+    /// (exit 2) instead of evaluating it (CLAUDE.md §3: an empty set is not
+    /// a pass). `strict`/`unordered` are unaffected: with no steps they still
+    /// reject any tool call as unexpected.
+    pub fn constrains_nothing(&self) -> bool {
+        self.mode == Mode::Subsequence && self.steps.iter().all(|s| s.optional)
+    }
+}
+
 /// The verdict of comparing an actual trajectory against a [`Spec`].
 ///
 /// `pass = missing.is_empty() && unexpected.is_empty() && !out_of_order` in every mode.

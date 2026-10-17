@@ -34,7 +34,8 @@ allowlist [test: crates/trajectoryeval/src/tier.rs::tier_core_vs_non_core].
 
 - `diff_strategy: "fuzzy_hash"` is a tolerance-based structured-data
   comparison [test: crates/trajectoryeval/src/tier.rs::fuzzy_diff_small_drift_under_threshold_is_match]. It computes a deterministic drift distance
-  `distance_permille = round(1000 × differing leaves / total leaves)` and treats
+  `distance_permille = round(1000 × differing leaves / total leaves)` (floored at
+  `1` whenever any leaf differs, so real drift never rounds to `0`) [test: crates/trajectoryeval/tests/repro_fuzzy_hash_default_threshold_rounds_drift_away.rs::zero_tolerance_fuzzy_hash_does_not_pass_a_changed_leaf] and treats
   `distance_permille <= threshold_permille` as a **match** [test: crates/trajectoryeval/src/tier.rs::fuzzy_diff_boundary_distance_equal_threshold_is_match] [test: crates/trajectoryeval/tests/prose_claims.rs::claim_fuzzy_distance_rounding]; above that it returns
   `DiffOutcome::DriftedBeyondThreshold` (distance + differing `/`-joined paths) [test: crates/trajectoryeval/src/tier.rs::fuzzy_diff_drift_over_threshold_reports_distance_and_paths],
   which is a **needs-human** verdict (exit `3`), not a fail [test: crates/trajectoryeval/src/tier.rs::verdict_for_diff_drifted_beyond_threshold_is_needs_human_not_fail] [test: crates/trajectoryeval/tests/integration.rs::tier_fuzzy_core_flow_drift_over_threshold_exits_three_needs_human]. `threshold_permille`
@@ -43,7 +44,8 @@ allowlist [test: crates/trajectoryeval/src/tier.rs::tier_core_vs_non_core].
   sets `threshold_permille: 250` [test: crates/trajectoryeval/tests/prose_claims.rs::claim_example_fuzzy_threshold_250].
 
 - A **non-core** flow gets a lightweight **existence check**
-  (`--exists true|false`) [test: crates/trajectoryeval/tests/integration.rs::tier_non_core_absent_flow_exits_one] plus, when
+  (`--exists true|false`) [test: crates/trajectoryeval/tests/integration.rs::tier_non_core_absent_flow_exits_one]; `--exists` has no default, and omitting it for a
+  non-core flow is a harness error (exit `2`) [test: crates/trajectoryeval/tests/repro_tier_exists_defaults_true.rs::omitted_exists_does_not_pass_a_non_core_flow] plus, when
   `sample_one_in > 0`, a deterministic **seeded low-frequency sampling** decision
   keyed by `(flow_id, --seed, --run-index)` — same inputs always yield the same decision [test: crates/trajectoryeval/src/tier.rs::seeded_sampling_is_reproducible] [test: crates/trajectoryeval/src/tier.rs::seeded_sampling_varies_by_run_index] [test: crates/trajectoryeval/tests/prose_claims.rs::claim_sampling_keyed_by_seed_and_flow].
   The sampling decision is only
@@ -91,6 +93,8 @@ result, or the non-core existence/sampling decision, as a human report or with
 `trajectoryeval extract --transcript <jsonl>` reads a Claude Code transcript
 and prints the ordered `tool_use` names as a JSON array
 on stdout — ready to feed into `check --actual` [test: crates/trajectoryeval/src/extract.rs::extracts_tool_names_in_order] [test: crates/trajectoryeval/tests/integration.rs::extract_then_check_pipeline_passes_on_matching_trajectory]. An unreadable file exits `2` [test: crates/trajectoryeval/tests/prose_claims.rs::claim_extract_unreadable_exits_two].
+A line that is not valid JSON, or a transcript with no events, also exits `2` —
+it is never skipped into an empty trajectory [test: crates/trajectoryeval/src/extract.rs::unparseable_line_is_invalid_data_not_skipped] [test: crates/trajectoryeval/tests/repro_extract_garbage_transcript_exits_zero.rs::extract_of_unparseable_transcript_does_not_exit_zero].
 
 - **strict** — the actual sequence must equal the expected REQUIRED steps in
   order [test: crates/trajectoryeval/src/match_traj.rs::strict_exact_match_passes]. Optional steps may be absent, but if present must sit in their slot [test: crates/trajectoryeval/src/match_traj.rs::strict_optional_absent_passes] [test: crates/trajectoryeval/src/match_traj.rs::strict_optional_present_in_slot_passes] [test: crates/trajectoryeval/tests/prose_claims.rs::claim_strict_optional_out_of_slot_fails].
@@ -104,6 +108,8 @@ on stdout — ready to feed into `check --actual` [test: crates/trajectoryeval/s
   necessarily contiguously (other tools may interleave) [test: crates/trajectoryeval/src/match_traj.rs::subsequence_interleaved_passes]. `missing` = required
   steps not found as an in-order subsequence [test: crates/trajectoryeval/src/match_traj.rs::subsequence_out_of_order_is_missing_not_reorder]; extras are allowed, so `unexpected`
   stays empty; `out_of_order` is false [test: crates/trajectoryeval/src/match_traj.rs::subsequence_interleaved_passes].
+  A `subsequence` spec with no required step constrains nothing, so `check`
+  refuses it with exit `2` instead of passing [test: crates/trajectoryeval/tests/repro_empty_subsequence_spec_passes_anything.rs::empty_subsequence_spec_does_not_exit_zero].
 
 In every mode: `pass = missing.is_empty() && unexpected.is_empty() && !out_of_order` [test: crates/trajectoryeval/src/match_traj.rs::strict_exact_match_passes] [test: crates/trajectoryeval/src/match_traj.rs::strict_missing_required_step] [test: crates/trajectoryeval/src/match_traj.rs::strict_extra_tool_is_unexpected] [test: crates/trajectoryeval/src/match_traj.rs::strict_wrong_order_flags_out_of_order] [test: crates/trajectoryeval/src/match_traj.rs::unordered_ignores_order] [test: crates/trajectoryeval/src/match_traj.rs::unordered_reports_missing_and_unexpected_sets] [test: crates/trajectoryeval/src/match_traj.rs::subsequence_interleaved_passes] [test: crates/trajectoryeval/src/match_traj.rs::subsequence_out_of_order_is_missing_not_reorder].
 

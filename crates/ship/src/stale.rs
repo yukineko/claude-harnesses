@@ -3,21 +3,27 @@ use std::path::Path;
 
 use harness_core::verdict::Determination;
 
-/// Find crate names whose src/ is newer than their bin/<name>-linux-x86_64 binary.
+/// Find crate names whose src/ is newer than ANY of their per-platform binaries.
 ///
-/// For each `crates/<name>` directory that has BOTH a `src/` dir and a `bin/<name>-linux-x86_64` file,
-/// returns `<name>` if the newest mtime under `src/` is more recent than the mtime of the binary.
-/// Skips crates missing either `src/` or the binary.
+/// For each `crates/<name>` directory that has a `src/` dir and at least one
+/// platform binary `bin/<name>-<platform>` (e.g. `-linux-x86_64`,
+/// `-darwin-arm64`; the bare launcher `bin/<name>` is not a platform binary),
+/// returns `<name>` if the newest mtime under `src/` is more recent than the
+/// mtime of any one of those binaries. A crate with no `src/` or no platform
+/// binary at all is a legitimate absence and is skipped.
 ///
 /// A missing `crates/` dir is a legitimate absence (not this repo layout) and
 /// yields `Known(vec![])`; any OTHER `read_dir` error (permission denied, IO)
 /// is a cannot-determine — it must not be silently read as "nothing stale",
-/// so it comes back `Undetermined` instead.
+/// so it comes back `Undetermined` instead. The same holds per crate: a crate
+/// that has `src/` and a platform binary but whose mtimes (or bin/ listing)
+/// cannot be read makes the whole result `Undetermined`.
 #[allow(dead_code)]
 pub fn stale_crates(repo: &Path) -> Determination<Vec<String>> {
     let crates_dir = repo.join("crates");
 
     let mut stale = vec![];
+    let mut undetermined: Vec<String> = vec![];
 
     let entries = match fs::read_dir(&crates_dir) {
         Ok(e) => e,
@@ -30,36 +36,75 @@ pub fn stale_crates(repo: &Path) -> Determination<Vec<String>> {
         let path = entry.path();
         if path.is_dir() {
             if let Some(crate_name) = path.file_name().and_then(|n| n.to_str()) {
-                if let Some(true) = check_stale_crate(&path, crate_name) {
-                    stale.push(crate_name.to_string());
+                match check_stale_crate(&path, crate_name) {
+                    Ok(Some(true)) => stale.push(crate_name.to_string()),
+                    Ok(_) => {}
+                    Err(why) => undetermined.push(format!("{crate_name}: {why}")),
                 }
             }
         }
     }
 
-    Determination::Known(stale)
+    if undetermined.is_empty() {
+        Determination::Known(stale)
+    } else {
+        Determination::undetermined(format!(
+            "cannot read mtimes for: {} (stale so far: [{}])",
+            undetermined.join("; "),
+            stale.join(", ")
+        ))
+    }
 }
 
 /// Check if a single crate is stale.
-/// Returns Some(true) if stale, Some(false) if not stale, None if check couldn't be performed.
+///
+/// `Ok(Some(true))` stale (src newer than any platform binary), `Ok(Some(false))`
+/// fresh, `Ok(None)` skipped (no `src/` or no platform binary: legitimate
+/// absence), `Err(why)` the check could not be performed (IO error).
 #[allow(dead_code)]
-fn check_stale_crate(crate_path: &Path, crate_name: &str) -> Option<bool> {
+fn check_stale_crate(crate_path: &Path, crate_name: &str) -> Result<Option<bool>, String> {
     let src_dir = crate_path.join("src");
-    let bin_file = crate_path.join(format!("bin/{}-linux-x86_64", crate_name));
+    let bin_dir = crate_path.join("bin");
 
-    // Both src/ and bin must exist
-    if !src_dir.exists() || !bin_file.exists() {
-        return None;
+    if !src_dir.exists() {
+        return Ok(None);
     }
 
-    // Get the newest mtime in src/
-    let newest_src_mtime = get_newest_mtime_in_dir(&src_dir).ok()?;
+    // Platform binaries: files named `<name>-*` in bin/ (not the bare launcher).
+    let prefix = format!("{crate_name}-");
+    let rd = match fs::read_dir(&bin_dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", bin_dir.display())),
+    };
+    let mut bins = vec![];
+    for entry in rd {
+        let entry = entry.map_err(|e| format!("{}: {e}", bin_dir.display()))?;
+        let is_platform = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with(&prefix));
+        if is_platform && entry.path().is_file() {
+            bins.push(entry.path());
+        }
+    }
+    if bins.is_empty() {
+        return Ok(None);
+    }
 
-    // Get the mtime of the binary
-    let bin_mtime = fs::metadata(&bin_file).ok()?.modified().ok()?;
+    let newest_src_mtime =
+        get_newest_mtime_in_dir(&src_dir).map_err(|e| format!("{}: {e}", src_dir.display()))?;
 
-    // Return true if src is newer than bin
-    Some(newest_src_mtime > bin_mtime)
+    let mut stale = false;
+    for bin in &bins {
+        let bin_mtime = fs::metadata(bin)
+            .and_then(|m| m.modified())
+            .map_err(|e| format!("{}: {e}", bin.display()))?;
+        if newest_src_mtime > bin_mtime {
+            stale = true;
+        }
+    }
+    Ok(Some(stale))
 }
 
 /// Get the newest mtime of any file in a directory (recursively).

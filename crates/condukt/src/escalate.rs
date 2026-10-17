@@ -449,17 +449,25 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_store_is_treated_as_empty() {
+    fn corrupt_store_is_an_error_not_an_empty_registry() {
+        // backlog dfaa609a: "could not read the registry" is not "nothing is
+        // waiting on a human". A corrupt store must surface as an error on
+        // read, and a mutating call must refuse to overwrite it.
         let tmp_dir = make_tmp_dir("corrupt");
         let tmp = tmp_dir.path();
         let cfg = make_cfg(tmp);
         let path = escalations_path(&cfg, tmp).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, b"not json at all {{{").unwrap();
-        // Fail-soft: add still succeeds (registry read as empty then written).
-        let rec = add_escalation(&cfg, tmp, "runA", "t1", "Q", &opts(&["a"]), 0, 1).unwrap();
-        let got = get_escalation(&cfg, tmp, &rec.id).unwrap();
-        assert!(got.is_some());
+        let garbage = b"not json at all {{{";
+        std::fs::write(&path, garbage).unwrap();
+        assert!(list_escalations(&cfg, tmp, "runA").is_err());
+        assert!(get_escalation(&cfg, tmp, "whatever").is_err());
+        assert!(add_escalation(&cfg, tmp, "runA", "t1", "Q", &opts(&["a"]), 0, 1).is_err());
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            garbage,
+            "corrupt store was overwritten"
+        );
     }
 
     #[test]

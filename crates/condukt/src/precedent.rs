@@ -565,19 +565,23 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_store_is_treated_as_empty() {
+    fn corrupt_store_is_an_error_not_an_empty_registry() {
+        // backlog dfaa609a: a corrupt store must surface as an error on read,
+        // and record must refuse to overwrite it with a fresh registry.
         let tmp_dir = make_tmp_dir("corrupt");
         let tmp = tmp_dir.path();
         let cfg = make_cfg(tmp);
         let path = precedents_path(&cfg, tmp).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, b"not json at all {{{").unwrap();
-        assert!(load_precedents(&cfg, tmp).unwrap().is_empty());
-        // Fail-soft: record still succeeds (registry read as empty then
-        // overwritten with a fresh valid one).
-        let rec = record_precedent(&cfg, tmp, &v(&["a.rs"]), &v(&["foo"]), "n", 1).unwrap();
-        let all = load_precedents(&cfg, tmp).unwrap();
-        assert_eq!(all, vec![rec]);
+        let garbage = b"not json at all {{{";
+        std::fs::write(&path, garbage).unwrap();
+        assert!(load_precedents(&cfg, tmp).is_err());
+        assert!(record_precedent(&cfg, tmp, &v(&["a.rs"]), &v(&["foo"]), "n", 1).is_err());
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            garbage,
+            "corrupt store was overwritten"
+        );
     }
 
     #[test]

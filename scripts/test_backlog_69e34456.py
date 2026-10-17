@@ -32,7 +32,10 @@ GATE_PATH = SRC / "scripts" / "check-workspace-tests.py"
 def _load_gate():
     spec = importlib.util.spec_from_file_location("check_workspace_tests", GATE_PATH)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    exec(  # noqa: S102 -- source-text load, see test_check_fail_open.py (05726f9f)
+        compile(spec.loader.get_source(spec.name), spec.origin, "exec", dont_inherit=True),
+        mod.__dict__,
+    )
     return mod
 
 

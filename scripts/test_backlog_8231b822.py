@@ -95,7 +95,6 @@ class FailedDriverMerge(unittest.TestCase):
             self.assertIn("not found", r.stdout + r.stderr)
             self.assertEqual((repo / ".backlog" / "tasks.toml").read_text(), ours)
 
-    @unittest.expectedFailure
     def test_committing_the_failed_driver_result_is_refused(self):
         """backlog 8231b822: open defect (RED observed). Theirs' change to
         aaaa0001 is silently discarded; the store gate must refuse it."""

@@ -30,9 +30,9 @@
 //! an id found only there is resolved in place; new records always go to the
 //! canonical file. Read-modify-writes hold the `__escalations__` lock, since
 //! the file is now shared by every checkout. Writes are atomic (temp + rename).
-//! A missing or corrupt file is treated as an empty registry; an
+//! A missing file is an empty registry; an unreadable or corrupt file, an
 //! undeterminable main worktree root, or a lock that cannot be acquired, is an
-//! `Err`. The module never panics.
+//! `Err` (a corrupt store is never overwritten). The module never panics.
 //!
 //! # Determinism
 //!

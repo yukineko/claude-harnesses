@@ -13,7 +13,6 @@
 use std::process::Command;
 
 #[test]
-#[ignore = "RED repro: empty subsequence spec passes any trajectory"]
 fn empty_subsequence_spec_does_not_exit_zero() {
     let dir =
         std::env::temp_dir().join(format!("trajectoryeval-repro-empty-{}", std::process::id()));

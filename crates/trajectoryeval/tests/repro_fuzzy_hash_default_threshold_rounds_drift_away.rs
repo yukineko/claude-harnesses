@@ -14,7 +14,6 @@
 use std::process::Command;
 
 #[test]
-#[ignore = "RED repro: fuzzy_hash default threshold 0 rounds 1/2001 drift to match"]
 fn zero_tolerance_fuzzy_hash_does_not_pass_a_changed_leaf() {
     let dir =
         std::env::temp_dir().join(format!("trajectoryeval-repro-fuzzy-{}", std::process::id()));

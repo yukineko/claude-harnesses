@@ -53865,3 +53865,186 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "5effbe63c2dc31e9efb8bbeb02603efa3a4049c7"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "b1a27409"
+title = "ship: SessionEnd reminder suppressed whenever stdout is piped (always, under the real hook)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/ship/src/main.rs session_end prints only if !is_headless(), and is_headless is !stdout.is_terminal(); Claude Code captures hook stdout so the unshipped-work reminder never appears. Test pipes stdout with an uncommitted file present and asserts a non-empty reminder."
+created_at = 1792155547
+updated_at = 1792236121
+weight = 0.0
+issue_number = 1366
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1366"
+issue_closed_at = 1792236124
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_session_end_suppressed_when_piped -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155547
+detail = """
+exit 101: 0.85s
+
+   Compiling ship v0.1.16 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/repro_session_end_suppressed_when_piped.rs (target/debug/deps/repro_session_end_suppressed_when_piped-3e3f6ea64fa26443)
+error: test failed, to rerun pass `-p ship --test repro_session_end_suppressed_when_piped`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p ship --test repro_session_end_suppressed_when_piped"
+exit = 0
+passed = 1
+rev = "4a617762ba3ed18a340e0387a12b161b1cba1906"
+observed_at = 1792236109
+output_digest = "sha256:188fcdcdb1a0078bc00b1bb60bba844342c453f327773299a3700cfa0cf59daa"
+excerpt = """
+
+running 1 test
+test session_end_emits_reminder_for_unshipped_work_when_piped ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/repro_session_end_suppressed_when_piped.rs (target/debug/deps/repro_session_end_suppressed_when_piped-c8606d3836c81122)
+"""
+
+[task.closure.red]
+rev = "19c5321df3149c89a2e449a5606af52701894830"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "77483c04"
+title = "ship: git errors in src/git.rs resolve to clean (no upstream gives 0 unpushed, failed git gives no uncommitted)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/ship/src/git.rs: uncommitted_changes false on Err and ignores exit status; unmerged_condukt_branches/leftover_worktrees empty vec; unpushed_count returns 0 when both upstream and origin/main fail. Checklist then prints [x]. Existing unit test test_unpushed_count_no_upstream pins the 0 and encodes the fail-open as spec; NOT edited here, owner must revisit it when fixing. Tests assert no [x] line when git could not answer."
+created_at = 1792155551
+updated_at = 1792236138
+weight = 0.0
+issue_number = 1367
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1367"
+issue_closed_at = 1792236142
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_git_errors_resolve_clean -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155551
+detail = """
+exit 101:  filtered out; finished in 0.45s
+
+   Compiling ship v0.1.16 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/repro_git_errors_resolve_clean.rs (target/debug/deps/repro_git_errors_resolve_clean-5502a19c7f138336)
+error: test failed, to rerun pass `-p ship --test repro_git_errors_resolve_clean`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p ship --test repro_git_errors_resolve_clean"
+exit = 0
+passed = 2
+rev = "4a617762ba3ed18a340e0387a12b161b1cba1906"
+observed_at = 1792236124
+output_digest = "sha256:7b03ce962ea2aea33b13b8e623208818cb0278b8a9030b86400416aa019030b8"
+excerpt = """
+
+running 2 tests
+test broken_git_dir_is_not_reported_as_all_clean ... ok
+test no_upstream_is_not_reported_as_no_unpushed_commits ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/repro_git_errors_resolve_clean.rs (target/debug/deps/repro_git_errors_resolve_clean-18a3eb7333da3d3d)
+"""
+
+[task.closure.red]
+rev = "19c5321df3149c89a2e449a5606af52701894830"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "96bfbac6"
+title = "ship: failed or missing rebuild/rollout script still exits 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/ship/src/main.rs check --run-safe and rollout print the FAILED summary (checklist.rs run_safe/rollout return Ok) or eprintln on Err, never setting an exit code. Tests assert non-zero exit for a failing script and a missing script."
+created_at = 1792155554
+updated_at = 1792236155
+weight = 0.0
+issue_number = 1369
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1369"
+issue_closed_at = 1792236158
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_script_failure_exits_zero -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155554
+detail = """
+exit 101: ltered out; finished in 1.25s
+
+   Compiling ship v0.1.16 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running tests/repro_script_failure_exits_zero.rs (target/debug/deps/repro_script_failure_exits_zero-43ee4a53c79a23fe)
+error: test failed, to rerun pass `-p ship --test repro_script_failure_exits_zero`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p ship --test repro_script_failure_exits_zero"
+exit = 0
+passed = 3
+rev = "4a617762ba3ed18a340e0387a12b161b1cba1906"
+observed_at = 1792236142
+output_digest = "sha256:4fa0905592794db37446ca42d23495c5209a7a12c57ba12774e6c6c5bde3d080"
+excerpt = """
+
+running 3 tests
+test rollout_script_missing_exits_nonzero ... ok
+test rollout_script_failure_exits_nonzero ... ok
+test run_safe_script_failure_exits_nonzero ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.91s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_script_failure_exits_zero.rs (target/debug/deps/repro_script_failure_exits_zero-579870aea61c9636)
+"""
+
+[task.closure.red]
+rev = "19c5321df3149c89a2e449a5606af52701894830"
+exit = 101
+kind = "behavioural"

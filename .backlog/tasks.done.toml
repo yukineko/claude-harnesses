@@ -54282,3 +54282,124 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "bc29c30a"
+title = "evalkit: cmd case without assert.exit passes on a non-zero exit"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/evalkit/src/run.rs check_exit returns early when assert.exit is None and other checks look at stdout only; a command exiting 101 with empty stdout satisfies not_contains and is reported ok. Test asserts non-zero overall exit."
+created_at = 1792155563
+updated_at = 1792236993
+weight = 0.0
+issue_number = 1371
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1371"
+issue_closed_at = 1792236996
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p evalkit --test repro_cmd_case_ignores_exit_status -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155563
+detail = """
+exit 101: hed in 0.41s
+
+   Compiling evalkit v0.1.9 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/repro_cmd_case_ignores_exit_status.rs (target/debug/deps/repro_cmd_case_ignores_exit_status-f42af028fb2a0991)
+error: test failed, to rerun pass `-p evalkit --test repro_cmd_case_ignores_exit_status`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p evalkit --test repro_cmd_case_ignores_exit_status"
+exit = 0
+passed = 1
+rev = "99a1d7f0e728d3be37fab1d617be568056b4c0c7"
+observed_at = 1792236964
+output_digest = "sha256:65759e14bd5168004b13e5bea3b0318c72f45c0698c60962d9ac0c89970bf51b"
+excerpt = """
+
+running 1 test
+test crashing_cmd_without_exit_assertion_is_not_a_pass ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/repro_cmd_case_ignores_exit_status.rs (target/debug/deps/repro_cmd_case_ignores_exit_status-1c8ab1a8f0fd8ef0)
+"""
+
+[task.closure.red]
+rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "72564611"
+title = "evalkit: empty assert passes vacuously"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/evalkit/src/case.rs documents empty Assert as acquisition-only and validate does not reject it; run.rs check_assert loops over empty vectors so zero assertions is ok and exit 0. Note the doc comment states this as intended; the fix must change that prose in the same commit. Test asserts non-zero."
+created_at = 1792155566
+updated_at = 1792237033
+weight = 0.0
+issue_number = 1372
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1372"
+issue_closed_at = 1792237036
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p evalkit --test repro_empty_assert_passes_vacuously -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155566
+detail = """
+exit 101:  in 0.42s
+
+   Compiling evalkit v0.1.9 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/repro_empty_assert_passes_vacuously.rs (target/debug/deps/repro_empty_assert_passes_vacuously-4385305a027c1005)
+error: test failed, to rerun pass `-p evalkit --test repro_empty_assert_passes_vacuously`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p evalkit --test repro_empty_assert_passes_vacuously"
+exit = 0
+passed = 1
+rev = "99a1d7f0e728d3be37fab1d617be568056b4c0c7"
+observed_at = 1792236997
+output_digest = "sha256:67a7bf0b71c38302774070739091932729d26b57791e31e3119ca761be5fdc2e"
+excerpt = """
+
+running 1 test
+test case_with_no_assertions_is_not_a_pass ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.02s
+
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/repro_empty_assert_passes_vacuously.rs (target/debug/deps/repro_empty_assert_passes_vacuously-3848efbd9bef16a3)
+"""
+
+[task.closure.red]
+rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
+exit = 101
+kind = "behavioural"

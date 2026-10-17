@@ -860,38 +860,6 @@ exit 1: e414e.py::\u001B[1mLockfileOnlyChange::test_cargo_lock_only_change_is_no
 \u001B[31m========================= \u001B[31m\u001B[1m2 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.58s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "dfaa609a"
-title = "condukt escalate.rs and precedent.rs load() turn a corrupt registry file into an empty one (unwrap_or_default): an unparseable escalations.json reads as no open escalations"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Side finding of the 43393ce2 worker (pre-existing). Also load_replan_records/load_run_policy_records map any read error, not only ENOENT, to an empty Vec."
-created_at = 1791051846
-updated_at = 1792003559
-weight = 0.0
-issue_number = 1307
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1307"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_dfaa609a -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003557
-detail = """
-exit 101: ailed; 0 ignored; 0 measured; 1 filtered out; finished in 0.74s
-
-   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
-     Running tests/backlog_dfaa609a.rs (target/debug/deps/backlog_dfaa609a-1ce31e01939f749d)
-error: test failed, to rerun pass `-p condukt --test backlog_dfaa609a`"""
-
-[[task]]
 id = "416d6fbf"
 title = "condukt RunState::save writes <run_id>.json without safe_session while run_path/run_dir sanitise, so an id rewritten by safe_session saves and loads from different paths"
 project = "/Users/yuki/src/harness"

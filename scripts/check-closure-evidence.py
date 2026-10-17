@@ -431,7 +431,7 @@ def is_test_path(p: str) -> bool:
 def staged_test_paths() -> list[str]:
     """Test files the red tree gets from the index (the test is the one being
     committed; the code is the red rev's). Mirrors the backlog CLI's overlay of
-    test files onto the detached red worktree."""
+    test files onto the detached red worktree (narrowed to the named ones by the caller)."""
     out = _git_ok(["ls-files", "-z", "--full-name"], "list index")
     return [p for p in out.split("\0") if p and is_test_path(p)]
 
@@ -535,7 +535,11 @@ def check_f2p(row: dict, cl: dict, ctx: Ctx) -> list[str]:
         return errs  # do not spend a test run on a closure that is already refused
     # ---- re-run: red at red.rev (+ staged tests), green on the staged tree
     red_dir = ctx.newdir("red")
-    materialize(red_dir, red["rev"], staged_test_paths())
+    # Mirrors the backlog CLI (evidence.rs `narrow_to_named`): overlay only the
+    # test files the cmd names; nothing named (cargo, a pytest dir) = all.
+    staged = staged_test_paths()
+    named = [p for p in staged if p in set(need)]
+    materialize(red_dir, red["rev"], named or staged)
     rc, out = run_test(argv, red_dir, ctx.repo_root)
     why = behavioural_red(argv, rc, out)
     if why:

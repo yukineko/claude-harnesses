@@ -454,8 +454,8 @@ pub struct F2p {
 }
 
 /// Run the F2P protocol: GREEN at HEAD in the (clean) working tree, RED at
-/// `red_rev` in a detached temp worktree with the test files overlaid from
-/// HEAD. Every failure to observe either side refuses with its cause.
+/// `red_rev` in a detached temp worktree with the test files the argv names
+/// overlaid from HEAD. Every failure to observe either side refuses with its cause.
 pub fn run_f2p(root: &Path, cmd: &TestCmd, red_rev: &str, now: i64) -> Result<F2p, String> {
     let timeout = test_timeout()?;
     let head = head_commit(root)?;
@@ -631,6 +631,44 @@ fn is_test_path(p: &str) -> bool {
         || base == "conftest.py"
 }
 
+/// Narrow `files` (HEAD's test files) to the ones the argv itself names, so a
+/// fix that lives in some OTHER test file is not smuggled into the RED
+/// worktree. Script: the script only. Pytest: each non-option argument, cut at
+/// `::`, as a file or a directory prefix. Cargo, or a pytest argv naming
+/// nothing that matches: unchanged (the whole set, which can only make a pass
+/// more likely, i.e. refuse, never accept).
+fn narrow_to_named(cmd: &TestCmd, files: Vec<String>) -> Vec<String> {
+    match cmd.runner {
+        Runner::Script => cmd.script.iter().cloned().collect(),
+        Runner::Pytest => {
+            let named: Vec<String> = cmd
+                .argv
+                .iter()
+                .filter(|a| !a.starts_with('-'))
+                .map(|a| a.split("::").next().unwrap_or(a))
+                .map(|a| a.strip_prefix("./").unwrap_or(a).trim_end_matches('/'))
+                .filter(|a| !a.is_empty())
+                .map(str::to_string)
+                .collect();
+            let picked: Vec<String> = files
+                .iter()
+                .filter(|f| {
+                    named
+                        .iter()
+                        .any(|n| *f == n || f.starts_with(&format!("{n}/")))
+                })
+                .cloned()
+                .collect();
+            if picked.is_empty() {
+                files
+            } else {
+                picked
+            }
+        }
+        Runner::CargoTest => files,
+    }
+}
+
 /// The test files of HEAD (see [`is_test_path`]), plus the script itself.
 fn head_test_files(root: &Path, head: &str, cmd: &TestCmd) -> Result<Vec<String>, String> {
     let s = git_ok(root, &["ls-tree", "-r", "-z", "--name-only", head])?;
@@ -654,7 +692,7 @@ fn run_in_temp_worktree(
     cmd: &TestCmd,
     timeout: Duration,
 ) -> Result<Determination<RunResult>, String> {
-    let files = head_test_files(root, head, cmd)?;
+    let files = narrow_to_named(cmd, head_test_files(root, head, cmd)?);
     let mut wt = TempWorktree::create(root, red)?;
     for chunk in files.chunks(200) {
         let mut args: Vec<&str> = vec!["checkout", head, "--"];

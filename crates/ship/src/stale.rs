@@ -6,8 +6,9 @@ use harness_core::verdict::Determination;
 /// Find crate names whose src/ is newer than ANY of their per-platform binaries.
 ///
 /// For each `crates/<name>` directory that has a `src/` dir and at least one
-/// platform binary `bin/<name>-<platform>` (e.g. `-linux-x86_64`,
-/// `-darwin-arm64`; the bare launcher `bin/<name>` is not a platform binary),
+/// platform binary — any regular file in `bin/` named `<name>-*` (e.g.
+/// `-linux-x86_64`, `-darwin-arm64`; the suffix is not checked, so any other
+/// `<name>-*` file counts too; the bare launcher `bin/<name>` does not),
 /// returns `<name>` if the newest mtime under `src/` is more recent than the
 /// mtime of any one of those binaries. A crate with no `src/` or no platform
 /// binary at all is a legitimate absence and is skipped.

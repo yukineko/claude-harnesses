@@ -53628,3 +53628,62 @@ scripts/test_backlog_fb7c3d83.py ...                                     [100%]
 rev = "54325ea802a8828ce6bf2e3db47d1bfd6c723dd2"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "11d63017"
+title = "test_backlog_63e2690d.py and test_backlog_69e34456.py call exec_module directly (StaticAllScripts red)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1792207777
+updated_at = 1792231432
+weight = 0.0
+issue_number = 1417
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1417"
+issue_closed_at = 1792231435
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_verifier_05726f9f.py::StaticAllScripts"
+rev = "c2c5507715c03cdd36adae82ab2d58ad816e2dc3"
+observed_at = 1792207777
+detail = """
+exit 1: acklog_63e2690d.py:27', 'test_backlog_69e34456.py:35']
+E       + []
+
+scripts/test_verifier_05726f9f.py:26: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_verifier_05726f9f.py::StaticAllScripts::test_no_pyc_trusting_loader_calls_anywhere_under_scripts
+========================= 1 failed, 1 passed in 0.50s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_verifier_05726f9f.py::StaticAllScripts"
+exit = 0
+passed = 2
+rev = "eccdb87d087ff97db4aa54ee91e82142db82c968"
+observed_at = 1792231429
+output_digest = "sha256:d5c0307567179ab2e59379433782dda2ac83ee7f9568ae788a6923736f91b9a5"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-11d63017
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_verifier_05726f9f.py ..                                     [100%]
+
+============================== 2 passed in 0.44s ===============================
+"""
+
+[task.closure.red]
+rev = "aef95fc0fe2042a0c772ddb14cff3824d566df58"
+exit = 1
+kind = "behavioural"

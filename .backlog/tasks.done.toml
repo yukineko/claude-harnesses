@@ -53570,3 +53570,61 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "54325ea802a8828ce6bf2e3db47d1bfd6c723dd2"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "fb7c3d83"
+title = "rollout-plugins.sh resolve_overwatch_bin keeps the $REPO/target fallback that a0525604 removed from rebuild-plugins.sh (mirror gap)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scripts",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = 'From the a0525604 verifier 2026-10-04: scripts/rollout-plugins.sh around :266 has tdir="${tdir:-$REPO/target}", the same fallback for cargo metadata that succeeds with no target_directory. a0525604 (merged cc256dbd) made rebuild-plugins.sh exit 1 in that case. The verifier notes an unresolved binary there still returns 1, so check whether the fallback can pick a stale overwatch binary under $REPO/target before deciding severity. Needs its own RED test.'
+created_at = 1791048915
+updated_at = 1792193299
+weight = 0.0
+issue_number = 1290
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1290"
+issue_closed_at = 1792193301
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_fb7c3d83.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003605
+detail = """
+exit 1: data_without_target_directory_does_not_guess_repo_target\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_fb7c3d83.py::\u001B[1mResolveOverwatchBinTargetFallback::test_reported_dir_without_binary_does_not_fall_back_to_repo_target\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m2 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 1.34s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_fb7c3d83.py"
+exit = 0
+passed = 3
+rev = "2f3b191c6a81a9b1069ac3fa140f74cbe7256df6"
+observed_at = 1792193291
+output_digest = "sha256:a8e8f28053b39745fb4d6c2ae88bbe205ad09ecbc572f11aca5cf3d8dc7dfe4d"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-fb7c3d83
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_backlog_fb7c3d83.py ...                                     [100%]
+
+============================== 3 passed in 1.53s ===============================
+"""
+
+[task.closure.red]
+rev = "54325ea802a8828ce6bf2e3db47d1bfd6c723dd2"
+exit = 1
+kind = "behavioural"

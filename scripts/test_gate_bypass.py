@@ -507,7 +507,7 @@ class GreenRunClearsTheLedger(GateTestCase):
         h.commit("bypassed", "--no-verify")
         self.assertLedgerHas(h, 1)
 
-        h.set_stub("check-doc-claims.py", 1)
+        h.set_stub("check-doc-duplication.py", 1)
         h.write("a.txt", "more\n")
         h.git("add", "-A")
         proc = h.commit("attempt")

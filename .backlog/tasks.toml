@@ -804,35 +804,6 @@ note: no *-darwin-arm64 binaries found under /var/folders/0z/hjt9zjn12xs02k588ny
 FAIL: the refresh loop scanned no cache binary — assertions above are vacuous"""
 
 [[task]]
-id = "fb7c3d83"
-title = "rollout-plugins.sh resolve_overwatch_bin keeps the $REPO/target fallback that a0525604 removed from rebuild-plugins.sh (mirror gap)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scripts",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = 'From the a0525604 verifier 2026-10-04: scripts/rollout-plugins.sh around :266 has tdir="${tdir:-$REPO/target}", the same fallback for cargo metadata that succeeds with no target_directory. a0525604 (merged cc256dbd) made rebuild-plugins.sh exit 1 in that case. The verifier notes an unresolved binary there still returns 1, so check whether the fallback can pick a stale overwatch binary under $REPO/target before deciding severity. Needs its own RED test.'
-created_at = 1791048915
-updated_at = 1792003607
-weight = 0.0
-issue_number = 1290
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1290"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_fb7c3d83.py"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003605
-detail = """
-exit 1: data_without_target_directory_does_not_guess_repo_target\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_fb7c3d83.py::\u001B[1mResolveOverwatchBinTargetFallback::test_reported_dir_without_binary_does_not_fall_back_to_repo_target\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m2 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 1.34s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
 id = "8231b822"
 title = "backlog merge driver is configured as bare 'backlog' which is not on PATH: every task-store merge conflicts with NO markers, so git add silently keeps only our side"
 project = "/Users/yuki/src/harness"

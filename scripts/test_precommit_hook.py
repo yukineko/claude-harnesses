@@ -54,9 +54,6 @@ EXPECTED_SCANNERS = [
     "check-prompt-injection.py",
     "check-fail-open.py",
     "check-fail-open-diff.py",
-    "check-doc-claims.py",
-    "check-claudemd-claims.py",
-    "check-prose-tests.py",
     "check-doc-duplication.py",
     "check-plugin-versions.py",
     "check-version-bumped.py",
@@ -78,9 +75,6 @@ LABELS = {
     "check-prompt-injection.py": "injectguard",
     "check-fail-open.py": "fail-open-guard",
     "check-fail-open-diff.py": "fail-open-diff",
-    "check-doc-claims.py": "doc-claims",
-    "check-claudemd-claims.py": "claudemd-claims",
-    "check-prose-tests.py": "prose-tests",
     "check-doc-duplication.py": "doc-duplication",
     "check-plugin-versions.py": "version-lockstep",
     "check-version-bumped.py": "bump-on-change",
@@ -315,7 +309,7 @@ class UndeterminedBlocksAndIsNamed(HookTestCase):
                 self.assertBlocked(proc, "when %s exits 2" % scanner)
 
     def test_exit_two_stderr_says_undetermined(self):
-        scanner = "check-doc-claims.py"
+        scanner = "check-doc-duplication.py"
         h = self.harness(exits={scanner: 2})
         proc = h.run()
         self.assertBlocked(proc)
@@ -326,7 +320,7 @@ class UndeterminedBlocksAndIsNamed(HookTestCase):
 
     def test_exit_one_is_not_labelled_undetermined(self):
         """The distinction must go both ways, or it carries no information."""
-        h = self.harness(exits={"check-doc-claims.py": 1})
+        h = self.harness(exits={"check-doc-duplication.py": 1})
         proc = h.run()
         self.assertBlocked(proc)
         self.assertNotIn("UNDETERMINED", proc.stderr)
@@ -383,13 +377,13 @@ class EveryScannerIsRun(HookTestCase):
 
     def test_multiple_failures_are_all_reported(self):
         h = self.harness(
-            exits={"check-prompt-injection.py": 1, "check-doc-claims.py": 2}
+            exits={"check-prompt-injection.py": 1, "check-doc-duplication.py": 2}
         )
         proc = h.run()
         self.assertBlocked(proc)
         self.assertEqual(h.ran(), EXPECTED_SCANNERS)
         self.assertIn("injectguard", proc.stderr)
-        self.assertIn("doc-claims", proc.stderr)
+        self.assertIn("doc-duplication", proc.stderr)
         self.assertIn("UNDETERMINED", proc.stderr)
 
     def test_hook_source_invokes_exactly_the_expected_scanner_list(self):

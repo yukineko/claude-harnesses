@@ -5,6 +5,9 @@ spec, while the code has no such cap: continuation is progress-based
 (`stuck_threshold`), and the same README's own line 21 says so. A reader is
 told a runaway cap exists that the code does not have (CLAUDE.md section 4).
 
+The README no longer states the cap, so the prose test is a plain regression
+test (no expectedFailure): it fails if the count-cap wording comes back.
+
 Control (anti-vacuity): the code really has stuck_threshold and really has no
 count cap, so the prose is wrong rather than the code.
 """
@@ -24,7 +27,6 @@ class AutoflowCountCapProse(unittest.TestCase):
         self.assertIn("stuck_threshold", code)
         self.assertIsNone(re.search(r"max_backlog_prompts|max_auto|auto_cap|MAX_AUTO|max_blocks", code))
 
-    @unittest.expectedFailure  # backlog b63cbdf0: open defect, remove when fixed
     def test_readme_ja_does_not_state_a_count_cap(self):
         t = README_JA.read_text(encoding="utf-8")
         bad = [l.strip()[:160] for l in t.splitlines()

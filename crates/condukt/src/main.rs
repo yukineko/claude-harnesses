@@ -1227,12 +1227,16 @@ enum StateAction {
         task: String,
     },
     /// Deterministically ask `tdd oracle` whether a fix/feature task's RED→GREEN
-    /// proofs form a valid Fail→Pass reproduction oracle. Fail-soft: no `tdd` on
-    /// PATH, a spawn failure, a gone worktree, or corrupt/missing stdout all
-    /// degrade to `fallback:true` ("use the legacy gate instead") rather than
-    /// panicking. Tasks that don't require an oracle (not fix/feature, or no
-    /// `reproduction_tests`) also report `required:false, fallback:true`.
-    /// Always prints JSON and exits 0 — this is an advisory signal, not a gate.
+    /// proofs form a valid Fail→Pass reproduction oracle. Not fail-soft for an
+    /// undetermined oracle: when `tdd` cannot be located, cannot be spawned (not
+    /// installed, not executable, a gone worktree) or exits non-zero (including
+    /// missing or unreadable proofs), it reports `required:true, fallback:false,
+    /// valid_fp_oracle:false`, which `state set --status verified` refuses. Only
+    /// tasks whose kind is not fix/feature report `required:false,
+    /// fallback:true` (a fix/feature task without `reproduction_tests` still
+    /// consults `tdd`); an exit-0 `tdd` with empty or non-JSON stdout also
+    /// reports `fallback:true`, which the real `tdd` never produces. Always
+    /// prints JSON and exits 0 — the refusal is enforced by `state set`.
     CheckOracle {
         #[arg(long)]
         run: String,

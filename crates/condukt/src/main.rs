@@ -3655,7 +3655,17 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
             println!("{}", path.display());
         }
         WtAction::Merge { branch, run, task } => {
-            match worktree::merge(cfg, &repo, &branch, &cfg.default_branch)? {
+            // A half-given identity is cannot-determine, not "no identity".
+            let cli_task = match (run.as_deref(), task.as_deref()) {
+                (Some(r), Some(t)) => Some((r, t)),
+                (None, None) => None,
+                _ => bail!(
+                    "merge-task-undetermined: --run and --task must be given together; \
+                     refusing to merge '{branch}' ('{}' untouched)",
+                    cfg.default_branch
+                ),
+            };
+            match worktree::merge(cfg, &repo, &branch, &cfg.default_branch, cli_task)? {
                 worktree::MergeOutcome::Merged => {
                     println!("merged '{}' into {}", branch, cfg.default_branch);
                     // Stamp the MERGE phase timestamp on the owning task, if the

@@ -79,10 +79,23 @@ impl Fx {
         // (backlog 51595c41); record the one `worktree create` would have.
         let base_sha = git(&repo, &["rev-parse", "HEAD"]);
         git(&repo, &["config", "branch.feat.conduktBase", &base_sha]);
+        // ...and the task identity it records, which every landed commit must
+        // carry as a `Condukt-Task:` trailer.
+        git(&repo, &["config", "branch.feat.conduktTask", "r/t"]);
         git(&repo, &["checkout", "-q", "-b", "feat"]);
         std::fs::write(repo.join("b.txt"), "b\n").unwrap();
         git(&repo, &["add", "."]);
-        git(&repo, &["commit", "-q", "-m", "feat"]);
+        git(
+            &repo,
+            &[
+                "commit",
+                "-q",
+                "-m",
+                "feat",
+                "--trailer",
+                "Condukt-Task: r/t",
+            ],
+        );
         git(&repo, &["checkout", "-q", "main"]);
 
         let script = format!(

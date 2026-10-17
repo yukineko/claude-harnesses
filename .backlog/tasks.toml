@@ -2696,3 +2696,33 @@ scripts/test_backlog_audit_b1_0.py:96: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_every_scripts_suite_has_a_main_guard_calling_unittest_main
 1 failed in 0.28s"""
+
+[[task]]
+id = "11d63017"
+title = "test_backlog_63e2690d.py and test_backlog_69e34456.py call exec_module directly (StaticAllScripts red)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1792207777
+updated_at = 1792207777
+weight = 0.0
+issue_number = 1417
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1417"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_verifier_05726f9f.py::StaticAllScripts"
+rev = "c2c5507715c03cdd36adae82ab2d58ad816e2dc3"
+observed_at = 1792207777
+detail = """
+exit 1: acklog_63e2690d.py:27', 'test_backlog_69e34456.py:35']
+E       + []
+
+scripts/test_verifier_05726f9f.py:26: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_verifier_05726f9f.py::StaticAllScripts::test_no_pyc_trusting_loader_calls_anywhere_under_scripts
+========================= 1 failed, 1 passed in 0.50s =========================="""

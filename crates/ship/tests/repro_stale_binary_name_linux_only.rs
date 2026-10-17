@@ -15,7 +15,6 @@ use std::process::Command;
 use std::time::{Duration, SystemTime};
 
 #[test]
-#[ignore = "RED repro: stale check only knows linux-x86_64 binary names"]
 fn stale_darwin_arm64_binary_is_not_reported_clean() {
     let repo = tempfile::TempDir::new().unwrap();
     let p = repo.path();

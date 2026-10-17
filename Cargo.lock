@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "evalkit"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "anyhow",
  "clap",

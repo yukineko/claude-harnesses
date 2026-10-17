@@ -12,7 +12,6 @@
 use std::process::Command;
 
 #[test]
-#[ignore = "RED repro: cmd case passes on non-zero exit when assert.exit is omitted"]
 fn crashing_cmd_without_exit_assertion_is_not_a_pass() {
     let dir = std::env::temp_dir().join(format!("evalkit-repro-exit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

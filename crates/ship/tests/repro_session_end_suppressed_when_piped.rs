@@ -14,7 +14,6 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 #[test]
-#[ignore = "RED repro: SessionEnd reminder suppressed when stdout is piped"]
 fn session_end_emits_reminder_for_unshipped_work_when_piped() {
     let repo = tempfile::TempDir::new().unwrap();
     let p = repo.path();

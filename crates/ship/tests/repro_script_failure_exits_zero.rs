@@ -45,7 +45,6 @@ fn run(args: &[&str], dir: &std::path::Path) -> (Option<i32>, String) {
 }
 
 #[test]
-#[ignore = "RED repro: ship exits 0 when its script failed"]
 fn run_safe_script_failure_exits_nonzero() {
     let repo = repo_with_script("rebuild-plugins.sh", "#!/bin/sh\necho boom >&2\nexit 1\n");
     let (c, out) = run(&["check", "--run-safe"], repo.path());
@@ -61,7 +60,6 @@ fn run_safe_script_failure_exits_nonzero() {
 }
 
 #[test]
-#[ignore = "RED repro: ship exits 0 when its script failed"]
 fn rollout_script_failure_exits_nonzero() {
     let repo = repo_with_script("rollout-plugins.sh", "#!/bin/sh\necho boom >&2\nexit 1\n");
     let (c, out) = run(&["rollout"], repo.path());
@@ -77,7 +75,6 @@ fn rollout_script_failure_exits_nonzero() {
 }
 
 #[test]
-#[ignore = "RED repro: ship exits 0 when its script failed"]
 fn rollout_script_missing_exits_nonzero() {
     let repo = tempfile::TempDir::new().unwrap();
     git_init(repo.path());

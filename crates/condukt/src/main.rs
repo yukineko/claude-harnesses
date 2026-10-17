@@ -298,7 +298,8 @@ enum Command {
     /// questions in a per-project persistent store, so a blocked or GATED task
     /// records "I need a human answer for X" and keeps going instead of blocking
     /// inline on an AskUserQuestion. Backed by
-    /// `<state_dir>/<project-key>/escalations.json` (atomic writes, fail-soft).
+    /// `<state_dir>/<project-key>/escalations.json` (atomic writes; a missing
+    /// file is empty, an unreadable or corrupt one is an error).
     Escalate {
         #[command(subcommand)]
         action: EscalateAction,
@@ -307,7 +308,8 @@ enum Command {
     /// (Google LSC "reviewed-once-applied-broadly"): ratify a change's
     /// declared shape (touched files + target symbols) as routine, list what
     /// is ratified, or check whether a candidate shape matches. Backed by
-    /// `<state_dir>/<project-key>/precedents.json` (atomic writes, fail-soft).
+    /// `<state_dir>/<project-key>/precedents.json` (atomic writes; a missing
+    /// file is empty, an unreadable or corrupt one is an error).
     Precedent {
         #[command(subcommand)]
         action: PrecedentAction,

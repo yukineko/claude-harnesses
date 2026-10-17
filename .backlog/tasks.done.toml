@@ -53687,3 +53687,181 @@ scripts/test_verifier_05726f9f.py ..                                     [100%]
 rev = "aef95fc0fe2042a0c772ddb14cff3824d566df58"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "8231b822"
+title = "backlog merge driver is configured as bare 'backlog' which is not on PATH: every task-store merge conflicts with NO markers, so git add silently keeps only our side"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 (session 64554c4d), several times: git config merge.backlog.driver = 'backlog merge-driver %O %A %B' (f769c750, 867dde4b); git merge prints 'backlog merge-driver .merge_file_X ...: backlog: command not found' and marks .backlog/tasks.toml / tasks.done.toml UU, but the working file holds OUR side verbatim with no conflict markers (it parses as valid TOML). A git add + commit then silently discards the other side's backlog changes; I did exactly that once in the session worktree (commit 2fb2c4cb, reset before it left the branch). Fail-open: a failed merge driver looks like a clean resolution. Also, git ran the merge with uncommitted changes to those files present and did not refuse. Fix directions: resolve the driver binary via an absolute plugin-cache path or a repo-local wrapper that exits non-zero loudly; write markers (or a sentinel line that breaks TOML) when the driver can't run; a pre-commit check that a merge commit's task-store files contain every id present on both parents unless closed."
+created_at = 1791049229
+updated_at = 1792235170
+weight = 0.0
+issue_number = 1293
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1293"
+issue_closed_at = 1792235171
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_8231b822.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003603
+detail = """
+exit 1: test.py\u001B[0m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_8231b822.py::\u001B[1mFailedDriverMerge::test_committing_the_failed_driver_result_is_refused\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.91s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_8231b822.py"
+exit = 0
+passed = 2
+rev = "d7e04a89a57e76929f5b1b3a74f185c8a02aad0c"
+observed_at = 1792235166
+output_digest = "sha256:a92d73ca459ab1692f7e82e942d273c2c5470c4740b3ba08d10b419bf971ca11"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-6d32fd65
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_8231b822.py ..                                      [100%]
+
+============================== 2 passed in 0.97s ===============================
+"""
+
+[task.closure.red]
+rev = "5effbe63c2dc31e9efb8bbeb02603efa3a4049c7"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "0805b07a"
+title = "condukt state set --status running skips recording --worktree when the task's files are claimed by another live run, so the later verified transition runs the F->P oracle in the wrong cwd and refuses; check-oracle doc says no tdd on PATH degrades to fallback:true but it returns fallback:false 'exited non-zero'"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 in the p1 loop: runs run-20261004-024204-44254 (486e83ca) and run-20261004-024816-76469 (55f55932) printed 'task skipped — N file(s) already claimed by a live run' on state set running, leaving worktree=None. state set verified then refused: 'no valid fail-to-pass reproduction oracle (tdd oracle exited non-zero ...)'. With tdd absent from PATH check-oracle printed fallback:false although its help says a missing tdd degrades to fallback:true. Recording the worktree via state set --status done --worktree then verified worked for 55f55932. 486e83ca's worktree was already removed so its run stays done/unverified (backlog item closed with test evidence)."
+created_at = 1791051845
+updated_at = 1792235201
+weight = 0.0
+issue_number = 1306
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1306"
+issue_closed_at = 1792235202
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_0805b07a -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003553
+detail = """
+exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+
+   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_0805b07a.rs (target/debug/deps/backlog_0805b07a-7cf7cba88d214b74)
+error: test failed, to rerun pass `-p condukt --test backlog_0805b07a`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_0805b07a"
+exit = 0
+passed = 1
+rev = "d7e04a89a57e76929f5b1b3a74f185c8a02aad0c"
+observed_at = 1792235171
+output_digest = "sha256:1c06f700969e3dbbcf4793b8a0b9faa486b6528008da2fa9ca6dab8b293ed129"
+excerpt = """
+
+running 1 test
+test check_oracle_help_matches_behaviour_when_tdd_is_missing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
+
+   Compiling condukt v0.7.261 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.36s
+     Running tests/backlog_0805b07a.rs (target/debug/deps/backlog_0805b07a-97b35b6aa3517de6)
+"""
+
+[task.closure.red]
+rev = "5effbe63c2dc31e9efb8bbeb02603efa3a4049c7"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "f39a48f4"
+title = "ship: stale-binary check only knows linux-x86_64 names, never fires on darwin-arm64"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/ship/src/stale.rs check_stale_crate builds bin/NAME-linux-x86_64 and returns None when absent, so a stale darwin-arm64 binary is reported as no stale plugin binaries. Test asserts a darwin-arm64 binary older than src is not reported clean."
+created_at = 1792155523
+updated_at = 1792235215
+weight = 0.0
+issue_number = 1365
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1365"
+issue_closed_at = 1792235217
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_stale_binary_name_linux_only -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155523
+detail = """
+exit 101: t; finished in 0.66s
+
+   Compiling ship v0.1.16 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.94s
+     Running tests/repro_stale_binary_name_linux_only.rs (target/debug/deps/repro_stale_binary_name_linux_only-6771d7908d466a39)
+error: test failed, to rerun pass `-p ship --test repro_stale_binary_name_linux_only`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p ship --test repro_stale_binary_name_linux_only"
+exit = 0
+passed = 1
+rev = "d7e04a89a57e76929f5b1b3a74f185c8a02aad0c"
+observed_at = 1792235202
+output_digest = "sha256:2f888c3d7144c0e7fed9bb4785ba4ebcbdcf63af674144e8998e4d58e88eba87"
+excerpt = """
+
+running 1 test
+test stale_darwin_arm64_binary_is_not_reported_clean ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+   Compiling ship v0.1.18 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/repro_stale_binary_name_linux_only.rs (target/debug/deps/repro_stale_binary_name_linux_only-49bee7a1919a3a50)
+"""
+
+[task.closure.red]
+rev = "5effbe63c2dc31e9efb8bbeb02603efa3a4049c7"
+exit = 101
+kind = "behavioural"

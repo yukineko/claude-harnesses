@@ -804,36 +804,6 @@ note: no *-darwin-arm64 binaries found under /var/folders/0z/hjt9zjn12xs02k588ny
 FAIL: the refresh loop scanned no cache binary — assertions above are vacuous"""
 
 [[task]]
-id = "8231b822"
-title = "backlog merge driver is configured as bare 'backlog' which is not on PATH: every task-store merge conflicts with NO markers, so git add silently keeps only our side"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-04 (session 64554c4d), several times: git config merge.backlog.driver = 'backlog merge-driver %O %A %B' (f769c750, 867dde4b); git merge prints 'backlog merge-driver .merge_file_X ...: backlog: command not found' and marks .backlog/tasks.toml / tasks.done.toml UU, but the working file holds OUR side verbatim with no conflict markers (it parses as valid TOML). A git add + commit then silently discards the other side's backlog changes; I did exactly that once in the session worktree (commit 2fb2c4cb, reset before it left the branch). Fail-open: a failed merge driver looks like a clean resolution. Also, git ran the merge with uncommitted changes to those files present and did not refuse. Fix directions: resolve the driver binary via an absolute plugin-cache path or a repo-local wrapper that exits non-zero loudly; write markers (or a sentinel line that breaks TOML) when the driver can't run; a pre-commit check that a merge commit's task-store files contain every id present on both parents unless closed."
-created_at = 1791049229
-updated_at = 1792003604
-weight = 0.0
-issue_number = 1293
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1293"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_8231b822.py"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003603
-detail = """
-exit 1: test.py\u001B[0m:354: XFailed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_8231b822.py::\u001B[1mFailedDriverMerge::test_committing_the_failed_driver_result_is_refused\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.91s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
 id = "6b5971e4"
 title = "guard-maintree-bash refuses git merge --abort on main as a non-integration modification"
 project = "/Users/yuki/src/harness"
@@ -888,35 +858,6 @@ detail = """
 exit 1: e414e.py::\u001B[1mLockfileOnlyChange::test_cargo_lock_only_change_is_not_nothing_to_lint\u001B[0m - _pytest.outcomes.XFailed
 \u001B[31mFAILED\u001B[0m scripts/test_backlog_495e414e.py::\u001B[1mLockfileOnlyChange::test_root_manifest_only_change_is_not_nothing_to_lint\u001B[0m - _pytest.outcomes.XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m2 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.58s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
-id = "0805b07a"
-title = "condukt state set --status running skips recording --worktree when the task's files are claimed by another live run, so the later verified transition runs the F->P oracle in the wrong cwd and refuses; check-oracle doc says no tdd on PATH degrades to fallback:true but it returns fallback:false 'exited non-zero'"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-04 in the p1 loop: runs run-20261004-024204-44254 (486e83ca) and run-20261004-024816-76469 (55f55932) printed 'task skipped — N file(s) already claimed by a live run' on state set running, leaving worktree=None. state set verified then refused: 'no valid fail-to-pass reproduction oracle (tdd oracle exited non-zero ...)'. With tdd absent from PATH check-oracle printed fallback:false although its help says a missing tdd degrades to fallback:true. Recording the worktree via state set --status done --worktree then verified worked for 55f55932. 486e83ca's worktree was already removed so its run stays done/unverified (backlog item closed with test evidence)."
-created_at = 1791051845
-updated_at = 1792003555
-weight = 0.0
-issue_number = 1306
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1306"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_0805b07a -- --ignored"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003553
-detail = """
-exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
-
-   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
-     Running tests/backlog_0805b07a.rs (target/debug/deps/backlog_0805b07a-7cf7cba88d214b74)
-error: test failed, to rerun pass `-p condukt --test backlog_0805b07a`"""
 
 [[task]]
 id = "dfaa609a"
@@ -1452,38 +1393,6 @@ exit 101: esult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered o
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
      Running tests/backlog_launcher_reentry_first_failure.rs (target/debug/deps/backlog_launcher_reentry_first_failure-bdbc63c80997c99c)
 error: test failed, to rerun pass `-p harness-core --test backlog_launcher_reentry_first_failure`"""
-
-[[task]]
-id = "f39a48f4"
-title = "ship: stale-binary check only knows linux-x86_64 names, never fires on darwin-arm64"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "crates/ship/src/stale.rs check_stale_crate builds bin/NAME-linux-x86_64 and returns None when absent, so a stale darwin-arm64 binary is reported as no stale plugin binaries. Test asserts a darwin-arm64 binary older than src is not reported clean."
-created_at = 1792155523
-updated_at = 1792155523
-weight = 0.0
-issue_number = 1365
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1365"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p ship --test repro_stale_binary_name_linux_only -- --ignored"
-rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
-observed_at = 1792155523
-detail = """
-exit 101: t; finished in 0.66s
-
-   Compiling ship v0.1.16 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/ship)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.94s
-     Running tests/repro_stale_binary_name_linux_only.rs (target/debug/deps/repro_stale_binary_name_linux_only-6771d7908d466a39)
-error: test failed, to rerun pass `-p ship --test repro_stale_binary_name_linux_only`"""
 
 [[task]]
 id = "b1a27409"

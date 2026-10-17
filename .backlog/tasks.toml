@@ -661,60 +661,6 @@ FAILED scripts/test_backlog_63e2690d.py::CommentIgnoreIsNotAnAttribute::test_new
 ============================== 1 failed in 0.61s ==============================="""
 
 [[task]]
-id = "07bfdca0"
-title = "stuckguard の anchor heartbeat テストが process-wide HOME/PATH を書き換えるため並列実行で間欠的に落ちる"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-04 by the 6108a7fa worker (run-20261004-013009-74262, base main 4027a8dc, branch commit 048365e0). anchor::backlog_c397cd15::heartbeat_reaches_overwatch_that_is_only_in_the_plugin_cache (crates/stuckguard/src/anchor.rs ~690-736) sets process-wide HOME/PATH; failed 2/8 runs on unmodified base, 1/5 with the change, always passes alone or --test-threads=1. (a) real test-isolation defect; (b) intended serial test missing a guard. Distinguish: grep for a serial mutex in that module."
-created_at = 1791045505
-updated_at = 1792005355
-weight = 0.0
-issue_number = 1237
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1237"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p stuckguard --test backlog_07bfdca0 -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005348
-detail = """
-exit 101: .harness-worktrees/session-1a4ac77f/crates/harness-core)
-   Compiling stuckguard v0.1.42 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/stuckguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.40s
-     Running tests/backlog_07bfdca0.rs (target/debug/deps/backlog_07bfdca0-6f51abf2ce9bf2e4)
-error: test failed, to rerun pass `-p stuckguard --test backlog_07bfdca0`"""
-
-[[task]]
-id = "69e34456"
-title = "python-only 本体で 4 suite が判定不能 (0c277117 / b63cbdf0 は FAILED だが test 名が読めない、1116bee1 / f6c60f58 は Ran 0 tests)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. test_backlog_0c277117 and test_backlog_b63cbdf0: FAILED but check-workspace-tests could not parse a test name. test_backlog_1116bee1 and test_backlog_f6c60f58: Ran 0 tests. Each is either a broken suite or a parser gap in check-workspace-tests.py; distinguish by running each with `python3 -m unittest -v scripts.<module>`."
-created_at = 1791045938
-updated_at = 1792003584
-weight = 0.0
-issue_number = 1252
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1252"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_69e34456.py"
-rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
-observed_at = 1792003584
-detail = """
-exit 1: m scripts/test_backlog_69e34456.py::\u001B[1mWorkspacePythonBodySuites::test_b63cbdf0_suite_verdict_is_clean\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_69e34456.py::\u001B[1mWorkspacePythonBodySuites::test_f6c60f58_suite_verdict_is_clean\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m============================== \u001B[31m\u001B[1m4 failed\u001B[0m\u001B[31m in 0.25s\u001B[0m\u001B[31m ===============================\u001B[0m"""
-
-[[task]]
 id = "d38c195b"
 title = ".githooks/pre-push の rc=1 分岐が orphan cache dir finding にも『roll it out』の advisory を出す"
 project = "/Users/yuki/src/harness"

@@ -1363,38 +1363,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; 
 error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
 
 [[task]]
-id = "9b3f98ec"
-title = "launcher missing-binary path allows a first failure on any stop_hook_active re-entry (not only a second consecutive one)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "launcher",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "The Stop-gate launchers crates/GATE/bin/GATE (donegate, reviewgate, propguard, tdd, budgetguard, autoflow, ctxrot) block on a missing binary only when stop_hook_active is false, and allow every payload with stop_hook_active true. That flag is set whenever ANY gate blocked the previous stop, so the first missing-binary failure of a gate during another gate's re-entry is allowed and the gate never ran. CLAUDE.md section 1 permits only a second consecutive failure of the SAME gate to allow; run_guarded implements that with a per-gate per-session marker. The launcher tests stop_gate_reentry_is_allowed_through_so_the_session_is_never_trapped pin the buggy behaviour and claim it is bounded exactly like run_guarded. precommit-audit has the same re-entry shortcut (exit 2 block vocabulary) and is not covered by the repro test. Repro: harness-core test backlog_launcher_reentry_first_failure (ignored), with a stop_hook_active false control per launcher."
-created_at = 1792156830
-updated_at = 1792158094
-weight = 0.0
-issue_number = 1379
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1379"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p harness-core --test backlog_launcher_reentry_first_failure -- --ignored"
-rev = "ae9f443aa29ee6b99ee96d528364c9ceda0acf13"
-observed_at = 1792158093
-detail = """
-exit 101: esult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
-     Running tests/backlog_launcher_reentry_first_failure.rs (target/debug/deps/backlog_launcher_reentry_first_failure-bdbc63c80997c99c)
-error: test failed, to rerun pass `-p harness-core --test backlog_launcher_reentry_first_failure`"""
-
-[[task]]
 id = "5a4cd3ff"
 title = "budgetguard: unmeasurable transcript or malformed input silently allows the stop with limits armed"
 project = "/Users/yuki/src/harness"

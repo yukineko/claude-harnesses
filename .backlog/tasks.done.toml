@@ -54403,3 +54403,63 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "9b3f98ec"
+title = "launcher missing-binary path allows a first failure on any stop_hook_active re-entry (not only a second consecutive one)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "launcher",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "The Stop-gate launchers crates/GATE/bin/GATE (donegate, reviewgate, propguard, tdd, budgetguard, autoflow, ctxrot) block on a missing binary only when stop_hook_active is false, and allow every payload with stop_hook_active true. That flag is set whenever ANY gate blocked the previous stop, so the first missing-binary failure of a gate during another gate's re-entry is allowed and the gate never ran. CLAUDE.md section 1 permits only a second consecutive failure of the SAME gate to allow; run_guarded implements that with a per-gate per-session marker. The launcher tests stop_gate_reentry_is_allowed_through_so_the_session_is_never_trapped pin the buggy behaviour and claim it is bounded exactly like run_guarded. precommit-audit has the same re-entry shortcut (exit 2 block vocabulary) and is not covered by the repro test. Repro: harness-core test backlog_launcher_reentry_first_failure (ignored), with a stop_hook_active false control per launcher."
+created_at = 1792156830
+updated_at = 1792293141
+weight = 0.0
+issue_number = 1379
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1379"
+issue_closed_at = 1792293144
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test backlog_launcher_reentry_first_failure -- --ignored"
+rev = "ae9f443aa29ee6b99ee96d528364c9ceda0acf13"
+observed_at = 1792158093
+detail = """
+exit 101: esult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running tests/backlog_launcher_reentry_first_failure.rs (target/debug/deps/backlog_launcher_reentry_first_failure-bdbc63c80997c99c)
+error: test failed, to rerun pass `-p harness-core --test backlog_launcher_reentry_first_failure`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_launcher_reentry_first_failure"
+exit = 0
+passed = 1
+rev = "4a5222de5ae33b4bcd70879c154ffbcf63ba591a"
+observed_at = 1792293129
+output_digest = "sha256:191f21488d5cba4bce6c9e434042bafde173eeb34d4e3ce463efb88a80905417"
+excerpt = """
+
+running 1 test
+test first_missing_binary_failure_blocks_even_on_a_stop_hook_active_reentry ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_launcher_reentry_first_failure.rs (target/debug/deps/backlog_launcher_reentry_first_failure-48309103361a33e7)
+"""
+
+[task.closure.red]
+rev = "f1f3c73db9910ea01a6c2e0bfb1350f541cfd41f"
+exit = 101
+kind = "behavioural"

@@ -88,7 +88,6 @@ fn is_block(r: &Run) -> bool {
 }
 
 #[test]
-#[ignore = "backlog 9b3f98ec: open defect, remove ignore when fixed"]
 fn first_missing_binary_failure_blocks_even_on_a_stop_hook_active_reentry() {
     let mut failures = Vec::new();
     for (i, (gate, sub)) in STOP_GATES.iter().enumerate() {

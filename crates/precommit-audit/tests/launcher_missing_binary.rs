@@ -14,9 +14,12 @@
 //! had just FAILED to scan as clean" (src/main.rs comment).
 //!
 //! A missing binary is the same cannot-determine as that caught panic, so the
-//! launcher mirrors `blocking_exit_for_mode` byte-for-byte, including the
-//! `stop_hook_active` recursion guard the binary applies at src/main.rs:206
-//! (`if hook.stop_hook_active { exit(0) }`), so the block stays bounded.
+//! launcher mirrors `blocking_exit_for_mode`. The bound is NOT the binary's
+//! bare `stop_hook_active` guard (another gate's block sets that flag): like
+//! `run_guarded`, only this gate's SECOND CONSECUTIVE failure in the session (a
+//! per-gate, per-session marker under `$HOME/.harness/state/panic-markers/`) is
+//! allowed through; a re-entry with an undetermined streak is a loud
+//! `systemMessage` allow.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -49,6 +52,15 @@ fn host_binary_name() -> String {
 }
 
 fn run(args: &[&str], stdin: &str) -> Run {
+    let home = tempfile::tempdir().expect("home tempdir");
+    run_in(home.path(), args, stdin)
+}
+
+/// Same, but with an explicit `HOME` so several launcher runs can share one
+/// failure-streak marker store. `HOME` is always a tempdir and
+/// `CLAUDE_CODE_SESSION_ID` is always removed, so a test never writes a marker
+/// into the real home nor keys on the live session.
+fn run_in(home: &std::path::Path, args: &[&str], stdin: &str) -> Run {
     let dir = tempfile::tempdir().expect("tempdir");
     let launcher = dir.path().join("precommit-audit");
     std::fs::copy(launcher_src(), &launcher).expect("copy launcher");
@@ -56,6 +68,8 @@ fn run(args: &[&str], stdin: &str) -> Run {
     let mut child = Command::new("sh")
         .arg(&launcher)
         .args(args)
+        .env("HOME", home)
+        .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("AUDIT_MODE")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -101,18 +115,87 @@ fn default_mode_is_stop_and_still_blocks() {
     assert_eq!(r.code, 2, "default mode is stop: {r:?}");
 }
 
-/// Bounded exactly like `run`'s recursion guard at src/main.rs:206.
+// ------------------------------------------------- failure-streak (9b3f98ec)
+
+/// A re-entry (`stop_hook_active:true`) is set by ANY gate's block, so on its
+/// own it says nothing about THIS gate. Only this gate's second consecutive
+/// failure in the session may be allowed.
+fn ev(active: bool, sid: Option<&str>) -> String {
+    match sid {
+        Some(s) => format!(r#"{{"session_id":"{s}","stop_hook_active":{active}}}"#),
+        None => format!(r#"{{"stop_hook_active":{active}}}"#),
+    }
+}
+
+fn assert_blocks(r: &Run, what: &str) {
+    assert_eq!(r.code, 2, "{what}: {r:?}");
+    assert!(
+        !r.stderr.trim().is_empty(),
+        "block reason rides stderr: {r:?}"
+    );
+}
+
+fn assert_plain_allow(r: &Run, what: &str) {
+    assert_eq!(r.code, 0, "{what}: {r:?}");
+    assert!(
+        r.stdout.trim().is_empty(),
+        "{what}: allow carries no stdout: {r:?}"
+    );
+    assert!(
+        !r.stderr.trim().is_empty(),
+        "{what}: allowing silently would hide that the gate has NOT run: {r:?}",
+    );
+}
+
+fn assert_loud_allow(r: &Run, what: &str) {
+    assert_eq!(r.code, 0, "{what}: {r:?}");
+    let v: serde_json::Value = serde_json::from_str(r.stdout.trim())
+        .unwrap_or_else(|e| panic!("{what}: stdout must be one JSON object ({e}): {r:?}"));
+    assert!(v.get("decision").is_none(), "{what}: no decision key: {v}");
+    let msg = v["systemMessage"].as_str().unwrap_or_default();
+    assert!(
+        msg.contains("precommit-audit") && msg.contains("NOT"),
+        "{what}: systemMessage must name the gate and say it did NOT check: {v}",
+    );
+}
+
+/// Fresh session (another gate's block caused the re-entry; this gate has not
+/// failed before) -> block, not allow.
+#[test]
+fn stop_reentry_in_a_fresh_session_blocks() {
+    let r = run(&["--mode", "stop"], &ev(true, Some("fresh-s")));
+    assert_blocks(
+        &r,
+        "first failure of this gate must block even on a re-entry",
+    );
+}
+
+/// The "never trapped" bound: first stop blocks, the re-entry after it (same
+/// session, same HOME) is allowed with empty stdout, and the streak continues.
 #[test]
 fn stop_reentry_is_allowed_through_so_the_session_is_never_trapped() {
-    let r = run(
-        &["--mode", "stop"],
-        r#"{"session_id":"s1","stop_hook_active":true}"#,
-    );
-    assert_eq!(
-        r.code, 0,
-        "post-block re-entry must not trap the turn: {r:?}"
-    );
-    assert!(!r.stderr.trim().is_empty(), "never silent: {r:?}");
+    let home = tempfile::tempdir().expect("home");
+    let r1 = run_in(home.path(), &["--mode", "stop"], &ev(false, Some("s1")));
+    assert_blocks(&r1, "first stop");
+    let r2 = run_in(home.path(), &["--mode", "stop"], &ev(true, Some("s1")));
+    assert_plain_allow(&r2, "second consecutive failure");
+    let r3 = run_in(home.path(), &["--mode", "stop"], &ev(true, Some("s1")));
+    assert_plain_allow(&r3, "streak continues");
+    // a different session in the same HOME has its own (empty) streak
+    let r4 = run_in(home.path(), &["--mode", "stop"], &ev(true, Some("other")));
+    assert_blocks(&r4, "markers are per session");
+}
+
+/// No session id at all (payload without `session_id`, env removed): a
+/// re-entry's streak is undetermined -> loud allow; the same payload as a first
+/// stop still blocks.
+#[test]
+fn stop_reentry_without_session_id_is_a_loud_allow_but_first_stop_still_blocks() {
+    let home = tempfile::tempdir().expect("home");
+    let r = run_in(home.path(), &["--mode", "stop"], &ev(true, None));
+    assert_loud_allow(&r, "undetermined streak");
+    let r = run_in(home.path(), &["--mode", "stop"], &ev(false, None));
+    assert_blocks(&r, "first stop without a session id");
 }
 
 /// The git pre-commit invocation aborts the commit with 1, not 2.

@@ -20,9 +20,13 @@
 #                                 not a verdict about the call; deny would be
 #                                 unescapable, allow would be a lie)
 #     toolguard   PostToolUse  -> additionalContext marking the output UNMEASURED
-#     stop        Stop         -> {"decision":"block"} on the first stop, bounded
-#                                 by stop_hook_active exactly like
-#                                 harness_core::gate::run's panic barrier
+#     stop        Stop         -> {"decision":"block"} on this gate's FIRST
+#                                 failure in a session (also on a
+#                                 stop_hook_active re-entry caused by another
+#                                 gate), bounded exactly like
+#                                 harness_core::gate::run's panic barrier: only
+#                                 its SECOND CONSECUTIVE failure in the session
+#                                 is allowed (see `streak_decide` below)
 #     statusline  statusLine   -> an explicit `unknown` band (a blank bar reads
 #                                 as headroom — CLAUDE.md §1, commit 3b1eb24)
 #
@@ -64,6 +68,87 @@ echo "ctxrot: no bundled binary for $os-$arch ($binary). Build it with scripts/b
 
 fix="Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the ctxrot hooks."
 
+# ---- missing-binary failure streak, bounded exactly like run_guarded --------
+# `stop_hook_active` is set whenever ANY Stop hook blocked the previous stop, so
+# on its own it says nothing about THIS gate (backlog 9b3f98ec). Only a SECOND
+# CONSECUTIVE failure of THIS gate in THIS session may allow (CLAUDE.md §1). The
+# streak is the same per-gate, per-session marker run_guarded keeps for panics
+# (crates/harness-core/src/gate/run.rs `PanicMarker`):
+#   $HOME/.harness/state/panic-markers/<gate>/<session>.panic
+# read-and-cleared on every stop and re-written when this stop fails. Sharing the
+# path means a run of the real binary (run_guarded clears it up front) resets the
+# streak, and a missing binary followed by a panic counts as consecutive. The
+# decision table mirrors run_guarded's `decide`:
+#   first stop of a chain              -> record, block (whatever the record did)
+#   re-entry, previous stop failed     -> record, allow (stderr only)
+#   re-entry, previous stop did not    -> record; block, or loud allow if the
+#                                         record failed (a block that cannot be
+#                                         recorded could never be bounded)
+#   re-entry, streak undetermined (no usable session id, HOME unset, marker not
+#   clearable)                         -> loud allow: systemMessage on stdout
+# Sets $streak (block|allow|loud) and $streak_why.
+streak_record() {
+  [ -n "$streak_marker" ] || return 1
+  mkdir -p "$streak_dir" 2>/dev/null || return 1
+  printf 'missing-binary\n' > "$streak_marker" 2>/dev/null
+}
+streak_decide() {
+  # $1 = Stop payload, $2 = yes when stop_hook_active is true, $3 = gate name
+  streak_why=""
+  streak_marker=""
+  streak_dir=""
+  if printf '%s' "$1" | grep -q '"session_id"'; then
+    streak_sid="$(printf '%s' "$1" | tr -d '\n' | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p')"
+  else
+    streak_sid="${CLAUDE_CODE_SESSION_ID:-}"
+  fi
+  case "$streak_sid" in
+    ''|.|..|_local|*/*|*\\*) streak_sid="" ;;
+  esac
+  if [ -z "$streak_sid" ]; then
+    streak_why="no usable session id, so this gate's previous-stop failure cannot be looked up"
+  elif [ -z "${HOME:-}" ]; then
+    streak_why="HOME is unset, so the failure-streak marker cannot be located"
+  else
+    streak_dir="$HOME/.harness/state/panic-markers/$3"
+    streak_marker="$streak_dir/$streak_sid.panic"
+  fi
+  streak_prev=no
+  if [ -z "$streak_marker" ]; then
+    streak_prev=undetermined
+  elif [ -e "$streak_marker" ] || [ -L "$streak_marker" ]; then
+    if rm -f "$streak_marker" 2>/dev/null && ! [ -e "$streak_marker" ] && ! [ -L "$streak_marker" ]; then
+      streak_prev=yes
+    else
+      streak_prev=undetermined
+      streak_why="the failure-streak marker exists but could not be cleared"
+      streak_marker=""
+    fi
+  fi
+  if [ "$2" != yes ]; then
+    streak_record || echo "$3: failure-streak marker not recorded; the next re-entry cannot see it." >&2
+    streak=block
+    return 0
+  fi
+  case "$streak_prev" in
+    yes)
+      streak_record || echo "$3: failure-streak marker not recorded." >&2
+      streak=allow
+      ;;
+    no)
+      if streak_record; then
+        streak=block
+      else
+        streak=loud
+        streak_why="this first failure on a re-entry could not be recorded, so a block here could never be bounded"
+      fi
+      ;;
+    *)
+      streak=loud
+      ;;
+  esac
+}
+
 case "${1:-}" in
   preguard)
     # PreToolUse: staying silent IS granting the call. We cannot say the load
@@ -84,19 +169,33 @@ case "${1:-}" in
   stop)
     # Stop: read the event ourselves (no binary will). Empty stdin = a manual
     # run with no live turn -> report an error, do not fabricate a decision
-    # (mirrors PanicAction::InteractiveError). A real stop blocks once, then
-    # the post-block re-entry (stop_hook_active) is allowed through so a
-    # missing binary can never trap the session (PanicAction::BoundedAllow).
+    # (mirrors PanicAction::InteractiveError). A real stop blocks on this
+    # gate's first failure in the session; only its second consecutive failure
+    # is allowed through (PanicAction::BoundedAllow), so a missing binary can
+    # never trap the session — see `streak_decide`.
     payload="$(cat)"
     if [ -z "$(printf '%s' "$payload" | tr -d '[:space:]')" ]; then
       exit 1
     fi
+    reentry=no
     if printf '%s' "$payload" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
-      echo "ctxrot: stop re-entry with no binary — allowing this stop (a fail-closed block was already surfaced once; the budget check still has NOT run)." >&2
-      exit 0
+      reentry=yes
     fi
+    streak_decide "$payload" "$reentry" ctxrot
+    case "$streak" in
+      allow)
+        echo "ctxrot: no binary again on this gate's consecutive stop — allowing this stop (the fail-closed block was already surfaced for this gate's previous stop in this session; the budget check still has NOT run)." >&2
+        exit 0
+        ;;
+      loud)
+        echo "ctxrot: stop re-entry with no binary and an undetermined failure streak ($streak_why) — allowing loudly." >&2
+        printf '{"systemMessage":"%s"}\n' \
+          "ctxrot stop did not run on a stop re-entry (no bundled binary for $os-$arch) and did NOT check this stop. Whether its previous stop also failed could not be determined ($streak_why), and blocking without that record could loop forever, so this stop is allowed. Treat this stop as unchecked by ctxrot. $fix"
+        exit 0
+        ;;
+    esac
     printf '{"decision":"block","reason":"%s"}\n' \
-      "ctxrot stop did not run: no bundled binary for $os-$arch, so the context-budget check did not execute and this stop cannot be certified (blocked fail-closed, once — the next stop is allowed through). $fix"
+      "ctxrot stop did not run: no bundled binary for $os-$arch, so the context-budget check did not execute and this stop cannot be certified (blocked fail-closed — only if ctxrot also finds no binary on its very next stop in this session is that stop allowed through). $fix"
     exit 0
     ;;
   statusline)

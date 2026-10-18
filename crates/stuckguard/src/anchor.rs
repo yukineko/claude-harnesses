@@ -453,7 +453,7 @@ mod tests {
     /// Run `f` with `HOME` pointed at `home` and `PATH` overridden to
     /// [`PATH_WITHOUT_OVERWATCH`], restoring both afterward. Serialized by
     /// [`ENV_LOCK`].
-    fn with_env<T>(home: &std::path::Path, f: impl FnOnce() -> T) -> T {
+    pub(super) fn with_env<T>(home: &std::path::Path, f: impl FnOnce() -> T) -> T {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev_home = std::env::var("HOME").ok();
         let prev_path = std::env::var("PATH").ok();
@@ -704,25 +704,20 @@ mod backlog_c397cd15 {
         .unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        let old_home = std::env::var_os("HOME");
-        let old_path = std::env::var_os("PATH");
-        std::env::set_var("HOME", &t);
-        std::env::set_var("PATH", "/usr/bin:/bin");
-        // Precondition: the LOOKUP side does find the cache install.
-        let resolved = resolve_overwatch_binary();
-        heartbeat_piggyback(&SessionAnchor {
-            key: "K-probe".to_string(),
-            run_id: String::new(),
-            scope: vec![],
+        // backlog 07bfdca0: HOME/PATH are process-global, so the override goes
+        // through the `tests` module's `with_env` (same `ENV_LOCK` as every
+        // other HOME/PATH-mutating test here, PATH = `/usr/bin:/bin`) instead
+        // of an unlocked set_var that raced them under the parallel runner.
+        let resolved = super::tests::with_env(&t, || {
+            // Precondition: the LOOKUP side does find the cache install.
+            let resolved = resolve_overwatch_binary();
+            heartbeat_piggyback(&SessionAnchor {
+                key: "K-probe".to_string(),
+                run_id: String::new(),
+                scope: vec![],
+            });
+            resolved
         });
-        match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        match old_path {
-            Some(v) => std::env::set_var("PATH", v),
-            None => std::env::remove_var("PATH"),
-        }
         let got = std::fs::read_to_string(&log).unwrap_or_default();
         let _ = std::fs::remove_dir_all(&t);
         assert!(

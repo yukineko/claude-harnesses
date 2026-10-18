@@ -27,6 +27,23 @@
 //! own phantom block silently waves through the other session's real one
 //! (CLAUDE.md 第5節).
 //!
+//! # 2026-10-17 USER RULING — supersedes the subtraction rule below
+//!
+//! The user ruled on 2026-10-17 that reviewgate (and tdd) scope to the files
+//! THIS session wrote: an Edit/Write/MultiEdit/NotebookEdit `file_path` (parent
+//! transcript or `<stem>/subagents/*.jsonl` sidechain) OR a path (absolute or
+//! repo-relative) mentioned in a Bash tool_use `command`. A changed file that is
+//! not attributed that way is EXCLUDED, whether or not any peer transcript
+//! claims it. The old rule `changed - (peers - mine)` ("unattributed stays in")
+//! and the "Why the first row is a subtraction" argument below are historical;
+//! the `Known` row is now `changed ∩ mine` where `mine` includes Bash mentions,
+//! which is what answers the `sed -i` measurement quoted below. The
+//! `Undetermined` row is unchanged (whole checkout, disclosed). Residual hole
+//! accepted by the ruling: writes by commands that never name the path
+//! (`cargo fmt`, globs, scripts) are not attributed. The new contract is pinned
+//! in `session_scope_own.rs`; the tests here that asserted the old rule were
+//! updated to it.
+//!
 //! # What is pinned here, and at what altitude
 //!
 //! These are BEHAVIOURAL tests driven through the `reviewgate review` binary
@@ -48,7 +65,7 @@
 //!
 //! | transcript answer | review set | reason must say |
 //! |---|---|---|
-//! | `Known(mine)` | `changed − (peers − mine)` | how many were excluded, and which |
+//! | `Known(mine)` | (2026-10-17) `changed ∩ mine`, Bash mentions count; was `changed − (peers − mine)` | how many were excluded, and which |
 //! | `Undetermined`  | **the full `changed` set — no narrowing** | attribution was undetermined |
 //!
 //! The `Undetermined` row is the fail-closed one (CLAUDE.md 第3節): narrowing on
@@ -492,15 +509,15 @@ fn a_file_this_session_only_read_is_not_attributed_to_it() {
     );
 }
 
-/// PASSING CONTROL — the same rule pointed at the PEER's transcript.
+/// 2026-10-17 CONTRACT (was `a_file_a_peer_only_read_is_not_excluded`, which
+/// pinned "unattributed stays in" and is superseded).
 ///
-/// A peer that merely `Read` a file has not claimed it, so the file is
-/// unattributed and stays in. An implementation that treated any `file_path` in
-/// a peer transcript as a claim would drop files nobody wrote — and it would
-/// drop the most-read files first, which are the ones most likely to be edited
-/// by the shell.
+/// A peer that merely `Read` a file has not claimed it, and this session did not
+/// write it either. Under the user's scope-to-own ruling it is unattributed and
+/// therefore EXCLUDED. What this still guards: a peer's Read must not be
+/// mistaken for THIS session's footprint (which would put it back in).
 #[test]
-fn a_file_a_peer_only_read_is_not_excluded() {
+fn a_file_a_peer_only_read_is_excluded_as_unattributed() {
     if !git_available() {
         eprintln!("skipping: git not available");
         return;
@@ -517,26 +534,21 @@ fn a_file_a_peer_only_read_is_not_excluded() {
     assert_eq!(o.decision, "block");
     assert_eq!(
         o.log_files,
-        vec!["mine.rs".to_string(), "nobodys.rs".to_string()],
-        "a peer's Read is not a peer's edit; nobodys.rs is unattributed and \
-         unattributed stays in the review set"
+        vec!["mine.rs".to_string()],
+        "2026-10-17 ruling: nobodys.rs is not attributed to this session (no \
+         Edit/Write/Bash mention), so it is excluded even though no peer wrote it"
     );
 }
 
-/// PASSING CONTROL — **the property the intersection rule got wrong.**
-///
-/// Same dirty tree as `peer_written_file_is_excluded_from_the_review_set`, with
-/// the one difference that decides the answer: no other session's transcript
-/// claims `unowned.rs`. Nobody's footprint mentions it, which is precisely what
-/// this session's own `sed -i` edits look like (module docstring, measured), so
-/// it must be reviewed. Excluding it is the fail-open the intersection rule
-/// shipped: had every changed file looked like this, `reviewable_files` would
-/// come back empty and `evaluate` would `allow("no-reviewable-changes")`.
+/// 2026-10-17 CONTRACT (was `an_unattributed_file_stays_in_the_review_set`,
+/// superseded). The user ruled that a file with no Edit/Write/Bash attribution
+/// to this session is excluded; the residual hole (a `cargo fmt`/glob/script
+/// write that never names the path) is accepted explicitly.
 ///
 /// Asserting the block as well as the file list is what distinguishes "reviewed
-/// both" from "the gate went dark and reviewed neither".
+/// mine.rs only" from "the gate went dark and reviewed nothing".
 #[test]
-fn an_unattributed_file_stays_in_the_review_set() {
+fn an_unattributed_file_is_excluded_from_the_review_set() {
     if !git_available() {
         eprintln!("skipping: git not available");
         return;
@@ -545,7 +557,7 @@ fn an_unattributed_file_stays_in_the_review_set() {
     f.dirty("mine.rs", "fn mine() {}\n");
     f.dirty("unowned.rs", "fn unowned() {}\n");
     let tp = f.transcript(&[f.abs("mine.rs")], &[]);
-    // Deliberately NO peer transcript: an exclusion needs positive evidence.
+    // Deliberately NO peer transcript: the new rule needs no peer evidence.
     assert!(
         std::fs::read_dir(f.slug_dir())
             .expect("slug dir")
@@ -558,15 +570,13 @@ fn an_unattributed_file_stays_in_the_review_set() {
 
     assert_eq!(
         o.decision, "block",
-        "an unattributed change is still a change to review; an allow here \
-         means the gate went dark on a file this session may well have written \
-         through the shell"
+        "mine.rs is this session's own change and must still be reviewed"
     );
     assert_eq!(
         o.log_files,
-        vec!["mine.rs".to_string(), "unowned.rs".to_string()],
-        "absence from every footprint is UNKNOWN, not `not mine` — measured: a \
-         `sed -i` edit this session really made appears in no footprint at all"
+        vec!["mine.rs".to_string()],
+        "2026-10-17 ruling: unowned.rs is attributed to no one in this session's \
+         transcript and is excluded"
     );
 }
 

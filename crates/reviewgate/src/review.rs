@@ -139,17 +139,22 @@ fn now() -> i64 {
 /// A working tree carries no session identity, so `git diff --name-only` in a
 /// shared checkout answers for EVERY concurrent session (backlog `1e44bfd9`,
 /// observed 2026-07-21 session c6a1fdbf and 2026-07-23 session 143f3d21). The
-/// session's own transcript is the artefact that does carry identity — but it
-/// records only `Edit`/`Write` blocks, so a `sed -i` edit appears in NO
-/// footprint (measured, see `harness_core::attribution`). A file is therefore
-/// dropped only when a *peer's* transcript positively claims it; absence of
-/// evidence keeps it. Because even that can fail to be computed, the type is
-/// three-valued in the shape 第3節 requires.
+/// session's own transcript is the artefact that does carry identity.
+///
+/// Since the user's 2026-10-17 ruling (「検証テストの範囲は書いた文だけでいい」)
+/// reviewgate reviews only what THIS session wrote:
+/// `harness_core::attribution::attribute_own_writes` keeps a changed file iff
+/// the transcript (parent + subagent sidechains) shows an `Edit`/`Write`/
+/// `MultiEdit`/`NotebookEdit` of it, or a `Bash` command naming its path.
+/// Everything else is excluded and NAMED in the note. Residual hole: a file
+/// written by a command that never names it (`cargo fmt`, a glob, a script) is
+/// excluded too — which is why the exclusion list is always printed. Because
+/// attribution can fail to be computed, the type is three-valued in the shape
+/// 第3節 requires, and the failure reviews the whole checkout.
 enum Attribution {
-    /// The transcript was read. `keep` is what still gets reviewed — this
-    /// session's edits plus everything unattributed; `excluded` is the narrow
-    /// set another session claims, kept so the exclusion can be NAMED rather
-    /// than silently applied.
+    /// The transcript was read. `keep` is what still gets reviewed — the files
+    /// this session's transcript shows it writing; `excluded` is everything
+    /// else, kept so the exclusion can be NAMED rather than silently applied.
     Narrowed {
         keep: Vec<String>,
         excluded: Vec<String>,
@@ -161,14 +166,14 @@ enum Attribution {
     Undetermined { why: String },
 }
 
-/// Split `changed` into "review it" and "another session positively owns it".
+/// Split `changed` into "this session wrote it" and "not attributed to this
+/// session".
 ///
-/// The split itself is `harness_core::attribution` — `precommit-audit` needs
-/// exactly the same rule from a different entry point (a session id rather than
-/// a `transcript_path`), and a second copy of a rule whose failure mode is
-/// permissive would drift. What stays here is only the rendering of the note.
+/// The split itself is `harness_core::attribution::attribute_own_writes`,
+/// shared with `tdd` so the two Stop gates cannot drift apart. What stays here
+/// is only the rendering of the note.
 fn attribute(root: &Path, transcript_path: &str, changed: &[String]) -> Attribution {
-    match harness_core::attribution::attribute_from_transcript(root, transcript_path, changed) {
+    match harness_core::attribution::attribute_own_writes(root, transcript_path, changed) {
         harness_core::attribution::Attribution::Narrowed { keep, excluded } => {
             Attribution::Narrowed { keep, excluded }
         }
@@ -188,8 +193,11 @@ fn attribution_note(a: &Attribution) -> Option<String> {
     match a {
         Attribution::Narrowed { excluded, .. } if excluded.is_empty() => None,
         Attribution::Narrowed { keep, excluded } => Some(format!(
-            "⚖ 帰属: 変更 {total} 件のうち {n} 件は別セッションの transcript に編集記録があり\
-             本セッションには無いため、レビュー対象から除外しました: {list}",
+            "⚖ 帰属: 変更 {total} 件のうち {n} 件は本セッションの transcript に書き込みの記録\
+             （Edit/Write/MultiEdit/NotebookEdit、またはそのパスを名指しした Bash コマンド）が無く、\
+             本セッションに帰属しない (not attributed to this session) ため、レビュー対象から除外しました: \
+             {list}。パスを名指ししないコマンド（cargo fmt・glob・スクリプト等）で自分が書いたファイルが\
+             含まれていれば、それは除外されています。",
             total = keep.len() + excluded.len(),
             n = excluded.len(),
             list = excluded.join(", "),
@@ -657,9 +665,11 @@ fn inject_reason(cfg: &Config, files: &[String], attempt: u32) -> String {
         "🔍 reviewgate: 完了前に、この作業ツリーの未コミット変更をコードレビューしてください \
          (round {attempt}/{max}).\n\n\
          レビュー対象 — この作業ツリーの未コミット変更 ({n} files):\n{list}\n\
-         この一覧は未コミット変更（unstaged / staged の差分と追跡外ファイル）の和集合であり、\
-         reviewgate は各ファイルの作成者を検証していません。あなたが触っていないファイル\
-         （人間の編集や、併走する別セッションの変更）が混じっている可能性があります。\
+         この一覧は未コミット変更（unstaged / staged の差分と追跡外ファイル）のうち、本セッションの \
+         transcript に書き込みの記録（Edit/Write 等、またはそのパスを名指しした Bash コマンド）が\
+         あるものです。帰属が判定不能なときは絞り込まずに全件を載せています（末尾の「⚖ 帰属」行を参照）。\
+         帰属は transcript の記録からの推定であり、reviewgate は各ファイルの作成者を厳密には検証していません。\
+         あなたが触っていないファイル（人間の編集や、併走する別セッションの変更）が混じっている可能性があります。\
          あなたが書いたものではないと判断したファイルは、その旨を述べてレビュー対象から外して\
          構いません。\n\n\
          `git diff` で差分を確認し、次の観点でレビューしてください:\n{rubric}\n\n\
@@ -678,14 +688,16 @@ fn inject_reason(cfg: &Config, files: &[String], attempt: u32) -> String {
 
 /// subprocess mode: inject the independent reviewer's findings.
 ///
-/// Same unattributed list as [`inject_reason`], from the same
-/// [`crate::git::changed_files`] call, so it gets the same honest label. The
+/// Same list as [`inject_reason`] (the uncommitted files attributed to this
+/// session, or all of them when attribution was undetermined — the appended
+/// `⚖ 帰属` note says which), so it gets the same honest label. The
 /// findings themselves ARE a measurement (a reviewer really ran and really
 /// emitted them) and are reported as such.
 fn subprocess_reason(files: &[String], findings: &str, attempt: u32, max: u32) -> String {
     format!(
         "🔍 reviewgate: 独立レビュアーが変更に問題を指摘しました (round {attempt}/{max}).\n\n\
-         レビュー対象 — この作業ツリーの未コミット変更 ({n} files。作成者は検証していません): \
+         レビュー対象 — この作業ツリーの未コミット変更のうち本セッションに帰属したもの \
+         ({n} files。帰属は transcript からの推定で、作成者は厳密には検証していません。末尾の「⚖ 帰属」行を参照): \
          \n{list}\n\
          --- 指摘 ---\n{findings}\n\
          ------------\n\n\

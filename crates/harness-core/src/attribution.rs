@@ -67,11 +67,26 @@
 //! command lines; a heuristic there would fail permissively in a *new* way. The
 //! honest state is: narrowed, bounded, and disclosed — never silently widened.
 //!
-//! Lives here rather than in one gate because two gates need it —
-//! `reviewgate` (Stop hook, which receives `transcript_path` directly) and
-//! `precommit-audit` (a pre-commit hook, which receives only
-//! `CLAUDE_CODE_SESSION_ID` and must locate the transcript itself). Two copies
-//! of this rule would drift, and the direction they drift in is permissive.
+//! # Two rules, chosen per consumer
+//!
+//! The subtraction rule above ([`attribute_from_transcript`] /
+//! [`attribute_from_session`]) is what `precommit-audit` (a pre-commit hook,
+//! which receives only `CLAUDE_CODE_SESSION_ID` and must locate the transcript
+//! itself) uses.
+//!
+//! The Stop gates `tdd` and `reviewgate` use [`attribute_own_writes`] instead:
+//! on 2026-10-17 the user ruled that those gates judge only what the stopping
+//! session wrote (「検証テストの範囲は書いた文だけでいい」). That rule IS the
+//! intersection the measurement above warns about, narrowed only partly: it
+//! also credits files a `Bash` command of the session names, which covers the
+//! `sed -i` / heredoc half, and it reads subagent sidechains strictly. What it
+//! cannot see — writes by commands that never name the file — is excluded, and
+//! that residual hole is stated on the function and must be surfaced by the
+//! callers (they list the excluded files). It is a deliberate, user-chosen
+//! trade, not a claim that the hole is closed.
+//!
+//! Both live here because more than one gate needs each; copies of a rule
+//! whose failure mode is permissive drift in the permissive direction.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -84,9 +99,12 @@ use crate::verdict::Determination;
 pub enum Attribution {
     /// This session's footprint was read.
     ///
-    /// `keep` is what the gate must still act on: files this session is known
-    /// to have edited **plus** files no transcript claims at all. `excluded` is
-    /// the narrow set positively attributed to a different session, kept as a
+    /// `keep` is what the gate must still act on. Under the subtraction rule
+    /// ([`attribute_from_transcript`]) that is files this session is known to
+    /// have edited **plus** files no transcript claims at all, and `excluded`
+    /// is the narrow set positively attributed to a different session. Under
+    /// [`attribute_own_writes`] `keep` is only what this session's transcript
+    /// shows it writing, and `excluded` is everything else. Either way it is kept as a
     /// list so the exclusion can be NAMED rather than silently applied — an
     /// exclusion nobody is told about is the same defect as an inclusion nobody
     /// is told about.
@@ -219,6 +237,104 @@ pub fn attribute_from_transcript(
         _ => BTreeSet::new(),
     };
     attribute_with_footprints(root, mine, &peers, changed)
+}
+
+/// Scope `changed` to **what this session wrote** — the Stop-gate rule chosen
+/// by the user on 2026-10-17 (「検証テストの範囲は書いた文だけでいい」) for `tdd` and
+/// `reviewgate`. It supersedes, for those two gates, the subtraction rule of
+/// [`attribute_from_transcript`] (which `precommit-audit` still uses).
+///
+/// A changed file is kept iff this session's transcript (parent **and** every
+/// subagent sidechain) shows it being written:
+///
+/// * an `Edit` / `Write` / `MultiEdit` / `NotebookEdit` tool_use names it, or
+/// * a `Bash` tool_use command line contains its absolute path (as `root`
+///   spells it, or canonicalised), its repo-relative path, or its path
+///   relative to the `cwd` that transcript line recorded. This is a substring
+///   test, so it OVER-attributes (`src/a.rs` also matches a mention of
+///   `crates/x/src/a.rs`, and a mere `cat` of a file counts as writing it);
+///   over-attribution keeps more files in the gate, the restrictive side.
+///
+/// Every other changed file goes to `excluded` — no peer evidence is needed.
+///
+/// # Fail-closed
+///
+/// If the parent transcript, any sidechain, or the sidechain directory listing
+/// cannot be read, the answer is `Undetermined` and the caller judges the whole
+/// checkout. Unlike the subtraction rule, a missing sidechain here would turn a
+/// subagent-written file into "not mine", so sidechains are read strictly.
+///
+/// # Residual hole — disclosed, not closed
+///
+/// A write made by a command that never names the file — `cargo fmt`, a code
+/// generator, a script, a shell glob (`sed -i … src/*.rs`), `git checkout` /
+/// `git stash pop` of other paths — is attributed to nobody and is EXCLUDED.
+/// Callers must list `excluded` visibly so such a file can be noticed; they
+/// must not drop the list silently.
+pub fn attribute_own_writes(root: &Path, transcript_path: &str, changed: &[String]) -> Attribution {
+    let undetermined = |why: String| Attribution::Undetermined { why };
+    let mut edited = match crate::transcript::files_edited_by_session(transcript_path) {
+        Determination::Known(v) => v,
+        Determination::Undetermined(why) => return undetermined(why.as_str().to_string()),
+    };
+    let mut bash = match crate::transcript::bash_commands_by_session(transcript_path) {
+        Determination::Known(v) => v,
+        Determination::Undetermined(why) => return undetermined(why.as_str().to_string()),
+    };
+    let sides = match crate::transcript::subagent_transcripts_strict(Path::new(transcript_path)) {
+        Determination::Known(v) => v,
+        Determination::Undetermined(why) => return undetermined(why.as_str().to_string()),
+    };
+    for side in sides {
+        let s = side.to_string_lossy();
+        match crate::transcript::files_edited_by_session(&s) {
+            Determination::Known(v) => edited.extend(v),
+            Determination::Undetermined(why) => {
+                return undetermined(format!("subagent transcript: {}", why.as_str()))
+            }
+        }
+        match crate::transcript::bash_commands_by_session(&s) {
+            Determination::Known(v) => bash.extend(v),
+            Determination::Undetermined(why) => {
+                return undetermined(format!("subagent transcript: {}", why.as_str()))
+            }
+        }
+    }
+    let edited = resolved(&edited);
+    let canon_root = resolve(root);
+
+    let mut keep = Vec::new();
+    let mut excluded = Vec::new();
+    for c in changed {
+        let joined = root.join(c);
+        let abs = resolve(&joined);
+        let mut needles: Vec<String> = vec![
+            c.clone(),
+            joined.to_string_lossy().into_owned(),
+            abs.to_string_lossy().into_owned(),
+            canon_root.join(c).to_string_lossy().into_owned(),
+        ];
+        needles.retain(|n| !n.is_empty());
+        let named = |call: &crate::transcript::BashCall| {
+            if needles.iter().any(|n| call.command.contains(n.as_str())) {
+                return true;
+            }
+            // A path relative to the directory the command ran in.
+            call.cwd.as_deref().is_some_and(|cwd| {
+                let cwd = resolve(Path::new(cwd));
+                abs.strip_prefix(&cwd).ok().is_some_and(|rel| {
+                    let rel = rel.to_string_lossy();
+                    !rel.is_empty() && call.command.contains(rel.as_ref())
+                })
+            })
+        };
+        if edited.contains(&abs) || bash.iter().any(named) {
+            keep.push(c.clone());
+        } else {
+            excluded.push(c.clone());
+        }
+    }
+    Attribution::Narrowed { keep, excluded }
 }
 
 /// Split `changed` for a caller that knows only a **session id** — a pre-commit

@@ -267,7 +267,13 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
-    let verdict = gate::evaluate(&cfg, &root);
+    // Scoped to what this session wrote (the Stop payload's transcript); an
+    // undetermined attribution scans the whole checkout. The note is printed
+    // on every run, allowing ones included, so an exclusion is never silent.
+    let verdict = gate::evaluate(&cfg, &root, &input.transcript_path);
+    if let Some(note) = gate::attribution_note(&verdict) {
+        eprintln!("{note}");
+    }
 
     if !verdict.blocks(&cfg) {
         state::reset(&cfg.state_dir, &session);
@@ -426,7 +432,12 @@ fn status() {
     println!("state_dir:     {}", cfg.state_dir.display());
     println!("strict_separation: {}", cfg.strict_separation);
     println!();
-    let verdict = gate::evaluate(&cfg, &root);
+    // A manual run has no transcript: attribution is undetermined and the
+    // whole checkout is scanned (and the note says so).
+    let verdict = gate::evaluate(&cfg, &root, "");
+    if let Some(note) = gate::attribution_note(&verdict) {
+        println!("{note}");
+    }
     println!("{}", gate::human_report(&verdict, &cfg));
 }
 

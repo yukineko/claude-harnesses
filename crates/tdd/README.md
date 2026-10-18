@@ -27,9 +27,26 @@ Code subscription.
 
 On each stop `tdd gate`:
 
-1. reads the hook JSON from stdin (`session_id`, `cwd`);
+1. reads the hook JSON from stdin (`session_id`, `cwd`, `transcript_path`);
 2. loads `./tdd.toml` (or `~/.tdd/config.toml`, or language-aware defaults);
-3. asks `git` what changed and which lines were **added**;
+3. asks `git` what changed and which lines were **added**, then keeps only the
+   files **this session wrote**: a file counts as this session's when its
+   transcript (or a subagent's sidechain transcript) records an
+   `Edit`/`Write`/`MultiEdit`/`NotebookEdit` of it, or a `Bash` command naming
+   its path (`harness_core::attribution::attribute_own_writes`, shared with
+   reviewgate). Other uncommitted files — e.g. a concurrent session's — are
+   excluded and named on stderr and in the block reason as "not attributed to
+   this session"
+   [test: crates/tdd/tests/session_scope_own.rs::foreign_only_does_not_block]
+   [test: crates/tdd/tests/session_scope_own.rs::own_bash_relative_path_still_blocks]
+   [test: crates/tdd/tests/session_scope_own.rs::subagent_sidechain_edit_counts_as_own].
+   If the transcript is missing or unreadable, attribution is undetermined and
+   the **whole checkout** is scanned, with the reason saying authorship was not
+   verified
+   [test: crates/tdd/tests/session_scope_own.rs::unreadable_transcript_judges_whole_checkout_and_says_so]
+   [test: crates/tdd/tests/session_scope_own.rs::empty_transcript_path_judges_whole_checkout_and_says_so].
+   Known gap: a file written by a command that never names it (`cargo fmt`, a
+   shell glob, a script) is excluded too;
 4. counts *added implementation lines* (impl-glob files, minus test files and
    inline test markers) and looks for **test evidence** (an added `#[test]` /
    `def test_` / `func Test…` / `it(...)`, or a changed file under `tests/`);

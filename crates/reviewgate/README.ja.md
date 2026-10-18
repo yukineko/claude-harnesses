@@ -5,7 +5,7 @@
 - `inject` は `mode` のデフォルト [test: crates/reviewgate/tests/prose_claims.rs::claim_default_mode_inject]。
 - `inject` モードでは、セッション内でレビュー対象の変更がある最初の stop をブロックする [test: crates/reviewgate/tests/prose_claims.rs::claim_inject_once_per_diff_state]。
 - 注入する理由文はレビュー用の**ルーブリック**をそのまま含み、ファイル一覧を示してレビューを求める [test: crates/reviewgate/src/review.rs::inject_reason_still_lists_the_files_carries_the_rubric_and_asks_for_a_review]。
-- 注入する理由文は、一覧を作業ツリーの未コミット変更として記述し、作成者は検証していないと明記する [test: crates/reviewgate/src/review.rs::inject_reason_describes_the_files_as_unattributed_uncommitted_changes]。
+- 注入する理由文は、一覧を作業ツリーの未コミット変更として記述し、セッション帰属は transcript からの推定であって作成者は厳密には検証していないと明記する [test: crates/reviewgate/src/review.rs::inject_reason_describes_the_files_as_unattributed_uncommitted_changes]。
 - `subprocess` モードは `reviewer_cmd`（デフォルト `claude -p`）をレビュアーとして走らせる [test: crates/reviewgate/src/config.rs::project_reviewer_cmd_is_gated_behind_trust] [test: crates/reviewgate/tests/verdict_paths_p2_p8.rs::reviewer_that_prints_lgtm_is_allowed_and_clean]。
 - `subprocess` モードでは、レビュアーが LGTM と答えれば stop を通し [test: crates/reviewgate/tests/verdict_paths_p2_p8.rs::reviewer_that_prints_lgtm_is_allowed_and_clean]、報告された指摘はそのままブロック理由に描画される [test: crates/reviewgate/src/review.rs::subprocess_reason_still_lists_every_file_and_renders_the_findings_verbatim]。
 
@@ -22,7 +22,8 @@
 ロックファイルはデフォルトで除外される [test: crates/reviewgate/src/review.rs::lockfile_excluded_by_default]。
 `node_modules`・`target`・生成物はデフォルトで除外される [test: crates/reviewgate/tests/prose_claims.rs::claim_default_excludes]。
 
-**誰の変更か**：変更集合はセッション帰属（`harness_core::attribution`、hook 入力の `transcript_path` を読む）で絞り込まれる：別セッションの transcript が主張し本セッションの transcript が主張しないファイルは除外される [test: crates/reviewgate/tests/session_attribution.rs::peer_written_file_is_excluded_from_the_review_set]。
+**誰の変更か**：レビューするのは**本セッションが書いたファイルだけ**（`harness_core::attribution::attribute_own_writes`、hook 入力の `transcript_path` を読む。tdd と共有）：本セッションの transcript かサブエージェントの sidechain に `Edit`/`Write`/`MultiEdit`/`NotebookEdit` の記録があるファイル、またはそのパスを名指しした `Bash` コマンドがあるファイルを残し、それ以外の変更ファイルは本セッションに帰属しないものとして除外する [test: crates/reviewgate/tests/session_scope_own.rs::foreign_only_does_not_block] [test: crates/reviewgate/tests/session_scope_own.rs::own_edit_reviews_only_own_file_and_names_the_excluded_one] [test: crates/reviewgate/tests/session_scope_own.rs::own_bash_relative_path_is_reviewed] [test: crates/reviewgate/tests/session_attribution.rs::an_unattributed_file_is_excluded_from_the_review_set]。
+既知の穴: パスを名指ししないコマンド（`cargo fmt`・シェルの glob・スクリプト）で書いたファイルも除外される。
 その除外はブロック理由に追記される [test: crates/reviewgate/tests/session_attribution.rs::peer_written_file_is_excluded_from_the_review_set]。
 その除外は stderr に出力される [test: crates/reviewgate/tests/prose_claims.rs::claim_attribution_exclusion_stderr]。
 帰属が判定不能（transcript が無い／読めない）なら変更ファイルを全件レビューする [test: crates/reviewgate/tests/session_attribution.rs::unreadable_transcript_does_not_narrow_the_review_set] [test: crates/reviewgate/tests/session_attribution.rs::empty_transcript_path_does_not_narrow_the_review_set]。

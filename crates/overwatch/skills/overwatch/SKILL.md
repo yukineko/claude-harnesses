@@ -13,24 +13,24 @@ caller 側は exit code を必ず確認し、非 0 なら決して先に進ん�
 
 #### `overwatch pause --run <run-id>`
 
-指定した run の一時停止を condukt に委譲する [test: crates/overwatch/src/control.rs::pause_cmd_builds_expected_argv] [test: crates/overwatch/tests/prose_claims.rs::claim_rd_pause_resume_delegate_condukt]。
+指定した run の一時停止を condukt に委譲する（condukt が失敗したら非 0 で終了する） [test: crates/overwatch/src/control.rs::pause_cmd_builds_expected_argv] [test: crates/overwatch/tests/prose_claims.rs::claim_rd_pause_resume_delegate_condukt]。
 
 #### `overwatch resume --run <run-id>`
 
-一時停止状態の run の再開を condukt に委譲する [test: crates/overwatch/src/control.rs::resume_cmd_builds_expected_argv] [test: crates/overwatch/tests/prose_claims.rs::claim_rd_pause_resume_delegate_condukt]。
+一時停止状態の run の再開を condukt に委譲する（condukt が失敗したら非 0 で終了する） [test: crates/overwatch/src/control.rs::resume_cmd_builds_expected_argv] [test: crates/overwatch/tests/prose_claims.rs::claim_rd_pause_resume_delegate_condukt]。
 
 #### `overwatch reassign --key <key> --to <session-id>`
 
-既存のリース（`--key <key>`）を解放し、`reassign to=<session-id>` イベントを記録する（`--to` 側に lease は作らない）。 [test: crates/overwatch/tests/prose_claims.rs::claim_sk_reassign_changes_holder]
+既存のリース（`--key <key>`）を解放し（key が未保持・ロック不成立・lease root 解決不能のときは何も記録せず非 0 で終了する）、`reassign to=<session-id>` イベントを記録する（`--to` 側に lease は作らない）。 [test: crates/overwatch/tests/prose_claims.rs::claim_sk_reassign_changes_holder]
 
 #### `overwatch reap`
 
 ハートビート TTL を超過した dead lease を削除し、キーを解放する。 [test: crates/overwatch/tests/prose_claims.rs::claim_sk_reap_removes_stale]
 
-#### `overwatch end --key <key>`
+#### `overwatch end --key <key> --status <done|abandoned>`
 
 解放できたときだけ exit 0 + `released lease <key>` [test: crates/overwatch/tests/prose_claims.rs::claim_sk_end_release_message] [test: crates/overwatch/tests/prose_claims.rs::claim_sk_end_nonzero_when_not_released]。
-key に lease が無い（未 begin・解放済み・stale reap 済み）ときと、lease ロックが取れず判定不能のときは非 0（いずれも「解放した」ではない）。 [test: crates/overwatch/tests/prose_claims.rs::claim_sk_end_nonzero_when_not_released]
+`--status` は `done` か `abandoned` のみ。それ以外は非 0 で拒否され lease は保持されたまま。key に lease が無い（未 begin・解放済み・stale reap 済み）ときと、lease ロックが取れず判定不能のときは非 0（いずれも「解放した」ではない）。 [test: crates/overwatch/tests/prose_claims.rs::claim_sk_end_nonzero_when_not_released]
 
 
 ```bash

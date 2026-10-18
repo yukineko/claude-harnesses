@@ -11,7 +11,6 @@ fn bin() -> PathBuf {
 }
 
 #[test]
-#[ignore = "repro: reassign of an unheld key exits 0; remove ignore when fixed"]
 fn reassign_of_unheld_key_must_be_nonzero() {
     let t = std::env::temp_dir().join(format!("ow-repro-reassign-unheld-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&t);

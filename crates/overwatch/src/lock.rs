@@ -112,6 +112,33 @@ fn read_info(path: &Path) -> Option<LockInfo> {
     serde_json::from_str(&txt).ok()
 }
 
+/// Why [`LeaseLock::acquire_strict`] did not return a held guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LockError {
+    /// The lock path could not be resolved (e.g. unparseable `.git` file), so
+    /// the lease root is UNDETERMINED. No lock was attempted; nothing is known
+    /// about contention.
+    PathUndetermined(String),
+    /// A lock path exists but the lock was not taken: a live peer held it for
+    /// the whole deadline, or acquisition hit an I/O error (the underlying
+    /// acquire does not distinguish the two).
+    NotAcquired,
+}
+
+impl std::fmt::Display for LockError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LockError::PathUndetermined(e) => write!(
+                f,
+                "could not resolve the lease root / lock path ({e}); lock state undetermined"
+            ),
+            LockError::NotAcquired => write!(f, "could not take the lease lock (contended)"),
+        }
+    }
+}
+
+impl std::error::Error for LockError {}
+
 impl LeaseLock {
     /// Default bounded wait before degrading to unlocked. Generous enough that
     /// a normal `begin()` RMW cycle (a few file ops) always releases well
@@ -171,16 +198,26 @@ impl LeaseLock {
     /// `record_changeset_and_detect`, `mark_*_merged`, `prune_stale_changesets`,
     /// the review-findings compaction), plus `audit_round_cli::close_at`.
     pub fn acquire_or_skip(cwd: &Path) -> Option<Self> {
+        Self::acquire_strict(cwd).ok()
+    }
+
+    /// Like [`LeaseLock::acquire_or_skip`] but keeps the two failure causes
+    /// apart: [`LockError::PathUndetermined`] (the project root / lock path
+    /// could not be resolved, so no lock was ever attempted) versus
+    /// [`LockError::NotAcquired`] (a lock path exists but the lock was not
+    /// taken). Callers that report the outcome must not name the first as the
+    /// second.
+    pub fn acquire_strict(cwd: &Path) -> Result<Self, LockError> {
         let path = match lock_path(cwd) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!(
                     "overwatch: could not resolve lease lock path ({e}); skipping (treat as held)"
                 );
-                return None;
+                return Err(LockError::PathUndetermined(e.to_string()));
             }
         };
-        Self::acquire_or_skip_at(path, Self::DEADLINE)
+        Self::acquire_or_skip_at(path, Self::DEADLINE).ok_or(LockError::NotAcquired)
     }
 
     /// Deadline-parameterized [`LeaseLock::acquire_or_skip`]. The hard-skip

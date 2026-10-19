@@ -1679,42 +1679,6 @@ FAILED scripts/test_prose_flow_b.py::TestCompassFailDetectable::test_claim_compa
 1 failed, 36 deselected in 1.05s"""
 
 [[task]]
-id = "cccc9c43"
-title = "flow circuit check: failure_streak and budget axes are structurally dead (no state init for flow-SID run, no budget cap passed)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Found by prose-flow citation work (branch prose-flow 3b2228ac). /flow runs condukt circuit check --run flow-SID --session SID but never state-inits that run and passes no budget cap; item failures go to backlog fail which the circuit cannot see. After three failed items the exact SKILL command reports streak 0, budget_over_cap false, exit 0 - the breaker can never trip on those axes. RED: scripts/test_prose_flow_a.py test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead (unittest.expectedFailure, fails under pytest --runxfail). Flip the expectedFailure when fixed."
-created_at = 1792187754
-updated_at = 1792187754
-weight = 0.0
-issue_number = 1385
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1385"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_prose_flow_a.py -k test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead -q"
-rev = "3b2228ace35777e08233ea8223a4ee45ea53ecad"
-observed_at = 1792187754
-detail = """
-exit 1:  = "",
-    ) -> None:
-        try:
->           xfail(str(reason))
-E           _pytest.outcomes.XFailed
-
-../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
-=========================== short test summary info ============================
-FAILED scripts/test_prose_flow_a.py::T::test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead
-1 failed, 40 deselected in 2.49s"""
-
-[[task]]
 id = "2756b4a6"
 title = "daily: run_task spawns a command blastguard answers Ask for (matches only Deny)"
 project = "/Users/yuki/src/harness"
@@ -2084,37 +2048,6 @@ exit 101:    Compiling backlog v0.3.51 (/Users/yuki/src/.harness-worktrees/repro
 error: test failed, to rerun pass `-p backlog --test repro_exclusive_lock_ignored_by_claim`"""
 
 [[task]]
-id = "40dde238"
-title = "condukt: state release-task ignores --run and releases another run's claim"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "StateAction::ReleaseTask calls claim::release_tasks which removes entries regardless of holder run (documented as caller owns hashkey identity) while --run is required and the message says released for run X. Observed: run-B released run-A's claim."
-created_at = 1792189441
-updated_at = 1792189441
-weight = 0.0
-issue_number = 1413
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1413"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test repro_release_task_ignores_run -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189441
-detail = """
-exit 101: crates/blastguard)
-   Compiling condukt v0.7.257 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.54s
-     Running tests/repro_release_task_ignores_run.rs (target/debug/deps/repro_release_task_ignores_run-9b8a3d7e09614f87)
-error: test failed, to rerun pass `-p condukt --test repro_release_task_ignores_run`"""
-
-[[task]]
 id = "956d2c7a"
 title = "hypothesis: list --status bogus exits 0 with an empty listing"
 project = "/Users/yuki/src/harness"
@@ -2206,3 +2139,33 @@ scripts/test_backlog_audit_b1_0.py:96: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_every_scripts_suite_has_a_main_guard_calling_unittest_main
 1 failed in 0.28s"""
+
+[[task]]
+id = "6d43d9c5"
+title = "condukt circuit check with HOME unset exits on config.toml unreadable before printing the idle_unmeasured JSON"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-19 on unmodified main 51376c9c: test_claim_circuit_idle_home_unset_trips_unmeasured fails with JSONDecodeError on empty stdout. Manual run with env -i: stderr says config.toml unreadable: Not a directory (os error 20) under /dev/null/HOME-unset.harness-state-dir-undetermined/.condukt/config.toml, refusing to run on built-in defaults; exit 1. Verdict is restrictive (exit 1) but the documented idle_unmeasured JSON with HOME unset in idle_unknown_reason is never emitted, so the SKILL claim it pins is false."
+created_at = 1792420983
+updated_at = 1792420983
+weight = 0.0
+issue_number = 1419
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1419"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_prose_flow_a.py -k test_claim_circuit_idle_home_unset_trips_unmeasured -q"
+rev = "994a8695f61704dae98e463a4444ea1ecfda7a4c"
+observed_at = 1792420983
+detail = """
+exit 1:  s, err.value) from None
+E           json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+../../../.pyenv/versions/3.12.11/lib/python3.12/json/decoder.py:356: JSONDecodeError
+=========================== short test summary info ============================
+FAILED scripts/test_prose_flow_a.py::T::test_claim_circuit_idle_home_unset_trips_unmeasured
+1 failed, 40 deselected in 1.06s"""

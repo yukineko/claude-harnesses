@@ -1252,3 +1252,31 @@ exit 101:    Compiling overwatch v0.2.84 (/Users/yuki/src/.harness-worktrees/ses
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
      Running tests/repro_spec_load_leases_corrupt_claim.rs (target/debug/deps/repro_spec_load_leases_corrupt_claim-7a40ca8a777e1295)
 error: test failed, to rerun pass `-p overwatch --test repro_spec_load_leases_corrupt_claim`"""
+
+[[task]]
+id = "dacb9dc1"
+title = "test_backlog_6267bfbe_36c936bc: expectedFailure test_ff_onto_merge_gated_in_other_worktree_is_not_recorded now passes (Unexpected success), suite red"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-20 at 3f4ad6e7 (main 23eb74b3 plus a test-only commit) while running gate-bypass consumer suites for 860c43db: python3 -m pytest scripts/test_backlog_6267bfbe_36c936bc.py reports 1 failed (Unexpected success). Either the defect was fixed and the marker must be removed, or the test no longer observes the defect. Not investigated (out of scope of 860c43db)."
+created_at = 1792426751
+updated_at = 1792426751
+weight = 0.0
+issue_number = 1428
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1428"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_backlog_6267bfbe_36c936bc.py"
+rev = "ce7deadcd7ddc8cb9fad70ddcfe5f0b0b61c90ac"
+observed_at = 1792426751
+detail = """
+exit 1: tForwardOntoGatedMerge.test_ff_onto_merge_gated_in_other_worktree_is_not_recorded _
+Unexpected success
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_6267bfbe_36c936bc.py::FastForwardOntoGatedMerge::test_ff_onto_merge_gated_in_other_worktree_is_not_recorded
+========================= 1 failed, 1 passed in 1.98s =========================="""

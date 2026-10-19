@@ -149,7 +149,11 @@ fn append_to_absent_system_file_through_escaping_symlink_is_not_allowed() {
         .proj
         .join("esc")
         .join(ABSENT_SYSTEM_FILE.trim_start_matches('/'));
-    assert!(!through.exists(), "fixture: {} must not exist", through.display());
+    assert!(
+        !through.exists(),
+        "fixture: {} must not exist",
+        through.display()
+    );
     let cmd = format!("echo x >> {}", through.display());
     let out = f.verdict(&cmd);
     assert!(
@@ -168,7 +172,10 @@ fn control_new_file_inside_the_project_stays_allowed() {
         format!("echo x >> {}/new.log", f.proj.display()),
     ] {
         let out = f.verdict(&cmd);
-        assert!(out.trim().is_empty(), "`{cmd}` must stay Allow; got {out:?}");
+        assert!(
+            out.trim().is_empty(),
+            "`{cmd}` must stay Allow; got {out:?}"
+        );
     }
 }
 

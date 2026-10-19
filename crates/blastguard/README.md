@@ -124,7 +124,10 @@ stay allowed.
 
 The detector only **denies** *clearly* destructive, hard-to-undo patterns, and
 stays out of the way of ordinary work: a single non-recursive `rm file.txt`,
-appends (`>>`), and fd redirects (`2>&1`, `>&2`) are all allowed.
+appends (`>>`), and fd redirects (`2>&1`, `>&2`) are all allowed. (Exception:
+a non-recursive `rm` whose operand is a `.git` entry is denied — in a linked
+worktree that is the `gitdir:` file, and removing it severs the checkout;
+backlog eba15868.)
 
 **Ambiguity does not fall through to allow.** This paragraph used to say it did,
 which was the pre-`Ask` two-valued behaviour and the opposite of what ships:

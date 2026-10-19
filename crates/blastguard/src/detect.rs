@@ -1222,6 +1222,23 @@ fn analyze_unlink_rmdir(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     Decision::Allow
 }
 
+/// Deny for a single-file delete whose operand IS a `.git` entry (not a path
+/// below one): in a linked worktree that entry is the `gitdir:` file, and
+/// removing it disconnects the work tree from its repository (backlog
+/// eba15868). `None` for every other operand.
+fn dotgit_link_deny(action: &str, operand: &str) -> Option<Decision> {
+    let norm = exclude::normalize(operand);
+    let norm = norm.trim_end_matches('/');
+    if norm == ".git" || norm.ends_with("/.git") {
+        Some(Decision::deny(format!(
+            "{action} {operand} removes a `.git` entry — in a linked worktree that is the \
+`gitdir:` file connecting the checkout to its repository, so blastguard refuses"
+        )))
+    } else {
+        None
+    }
+}
+
 /// The OUTPUT file of a `sort` command (`-o FILE`, `-oFILE`, `--output=FILE`,
 /// `--output FILE`, or a clustered `-bo FILE`), if one is present.
 ///
@@ -8295,6 +8312,15 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     }
 
     if !recursive && !wildcard {
+        // Backlog eba15868: ONE file can still be the whole checkout. A linked
+        // worktree's `.git` is a `gitdir:` FILE, so `rm <wt>/.git` succeeds
+        // without `-r` and severs the work tree from its repository — while
+        // `Write`/`>` onto the same path is already refused as git internals.
+        // Only the recursive arm below has a deletion classifier for `.git`
+        // directories, so the non-recursive arm answers here.
+        if let Some(deny) = operands.iter().find_map(|o| dotgit_link_deny("rm", o)) {
+            return deny;
+        }
         // Single, non-recursive rm of named files — below the destructive bar.
         return Decision::Allow;
     }

@@ -43,7 +43,9 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
 
 通常作業の邪魔をしないよう、明確に無害な形は通す — 非再帰の `rm file.txt`、追記
 （`>>`）、fd リダイレクト（`2>&1`, `>&2`）、`/dev/null` 等への切り詰めリダイレクト
-はいずれも allow である。
+はいずれも allow である（例外: オペランドが `.git` そのものである非再帰 `rm` は
+deny — linked worktree ではそれが `gitdir:` ファイルで、消すと checkout が repo から
+切り離される。backlog eba15868）。
 
 **ただし「曖昧なものは allow」ではない。** この段落はかつて「設計は意図的に保守的で
 あり、曖昧なものはすべて allow に倒す」と書いていたが、それは `Ask` 導入前の二値時代の

@@ -34,9 +34,11 @@ pause/resume/reassign の制御面は下流（condukt）へ委譲するが、人
 - **fail-soft 集約** — `aggregate::build` は infallible。台帳ロード失敗、下流バイナリ（backlog/hypothesis/
   condukt/compass）の欠落や非ゼロ終了はすべて `shell_soft` が `None` を返して該当セクションを省くだけで、
   turn を落とさない。
-- **制御面 fail-soft & 監査必須** — `control::{pause,resume,reassign}` は下流 condukt が無い/非ゼロでも
+- **制御面は fail-closed & 監査必須** — `control::{pause,resume}` は下流 condukt が無い/非ゼロでも
   panic せず（`run_fail_soft`）、成否にかかわらず `record_control_event` で overwatch 台帳へ `running`
-  イベント（`title = "control:…"`）を必ず追記する。HOTL 承認自体はバイナリでなく skill が担う。
+  イベント（`title = "control:…"`、`ok=true|false`）を追記したうえで、失敗時は非 0 で終了する。
+  `reassign` は lease lock が取れない・root 解決不能・キー未保持のとき何も記録せず非 0 で終了する。
+  HOTL 承認自体はバイナリでなく skill が担う。
 - **決定論的順序** — `LeaseRegistry` は `BTreeMap`。`roster_from_leases` は session_id でソートされ、
   出力・シリアライズは決定論的。
 
@@ -65,17 +67,18 @@ CLI は `clap` の `Command` enum（`main.rs`）で定義。ledger/lease 系は�
   （fail-soft）。§4.3 の ctxrot anchor 再注入の read path。`--json` で `Lease` を JSON、無指定なら
   `<key> — <title>` を印字する。
 - **`run --key [--note]`** — 保持中 lease の `heartbeat_at` を更新し `Running` イベント（note を status に）を
-  追記。**キー未保持でも fail-soft**（派生 id でイベントのみ記録）。
-- **`heartbeat --key`** — lease があれば TTL リセットし `{"refreshed":1}`、無ければ `{"refreshed":0}`。
-- **`end --key --status`** — `Ended` イベント（終端 status）を記録してから lease を remove。未保持でも
-  イベントは記録（fail-soft）。
-- **`reap`** — stale lease を全削除し `{"reaped":N}` を出力。
+  追記。キー未保持のときは派生 id でイベントのみ記録する。lease lock が取れない・lease root が解決できないときは何も書かず非 0 で終了する。
+- **`heartbeat --key`** — lease があれば TTL リセットし `{"refreshed":1}`、無ければ `{"refreshed":0}`。lease lock が取れない・lease root が解決できないときは非 0 で終了する。
+- **`end --key --status`** — `--status` は `done` か `abandoned` のみ（それ以外は非 0 で拒否し lease は保持のまま）。
+  `Ended` イベント（終端 status）を記録してから lease を remove。キー未保持・lock 不成立・root 解決不能は
+  何も書かず非 0 で終了する。
+- **`reap`** — stale lease を全削除し `{"reaped":N}` を出力。lock 不成立・root 解決不能は非 0。
 - **`status [--json]`** — `aggregate::build` の `ProgressView` を人間可読 5 セクション（Sessions / PDO
   hypotheses / Backlog / Condukt runs / Compass gap）または pretty JSON で表示（`render::status`）。
   SessionStart / Stop フックの注入先。
 - **`sessions [--json]`** — per-session lease roster のみを表示（`render::sessions`）。
-- **`pause --run` / `resume --run`** — `condukt state pause|resume --run <id>` へ委譲（`control`）。
-- **`reassign --key --to`** — 現 lease を release（load→remove→save）し、新保有者 `to` を監査イベントに記録。
+- **`pause --run` / `resume --run`** — `condukt state pause|resume --run <id>` へ委譲（`control`）。condukt が失敗したら非 0 で終了する。
+- **`reassign --key --to`** — 現 lease を release（load→remove→save）し、新保有者 `to` を監査イベントに記録。キー未保持・lock 不成立・root 解決不能は非 0。
 
 ## module 責務
 
@@ -98,7 +101,7 @@ CLI は `clap` の `Command` enum（`main.rs`）で定義。ledger/lease 系は�
   `HypoBuckets`/`RunRow`）、純パーサ（`roster_from_leases`/`parse_backlog`/`bucket_hypotheses`/
   `parse_condukt_runs`）、fail-soft シェル（`shell_soft`）、`build`（infallible 集約）。
 - **`render`** — `ProgressView` の人間可読 / JSON 整形（`status`/`sessions` と各 `format_*`）。
-- **`control`** — 制御面。純 argv ビルダ（`pause_cmd`/`resume_cmd`）、fail-soft 実行（`run_fail_soft`）、
+- **`control`** — 制御面。純 argv ビルダ（`pause_cmd`/`resume_cmd`）、argv 実行（`run_fail_soft`。成否を bool で返し、呼び出し側が失敗を非 0 終了に写す）、
   監査追記（`record_control_event`）、`pause`/`resume`/`reassign`。HOTL 承認は skill 側。
 - **`lib`** — テスト・他クレート向けに `event`/`store` を re-export する薄い公開面。
 

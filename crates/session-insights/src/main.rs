@@ -313,18 +313,18 @@ fn report(session: Option<String>, all: bool, context: bool) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
     if all {
-        let sessions = match metrics::load_all(&cfg) {
-            harness_core::verdict::Determination::Known(s) => s,
+        let loaded = match metrics::load_all(&cfg) {
+            harness_core::verdict::Determination::Known(l) => l,
             harness_core::verdict::Determination::Undetermined(why) => {
                 eprintln!("unknown — session store could not be read: {why}");
                 std::process::exit(1);
             }
         };
-        if sessions.is_empty() {
+        if loaded.sessions.is_empty() && loaded.unreadable.is_empty() {
             println!("(no sessions recorded yet)");
             return;
         }
-        for s in &sessions {
+        for s in &loaded.sessions {
             println!(
                 "{}  {:<14} {:>2} turns  {:>3} tools  size {:<2} {:<8} {}",
                 metrics::short(&s.session_id),
@@ -335,6 +335,12 @@ fn report(session: Option<String>, all: bool, context: bool) {
                 s.category(),
                 s.last_at.chars().take(19).collect::<String>(),
             );
+        }
+        // The readable sessions are still listed, but the list is PARTIAL:
+        // say so and exit 1 so no caller reads it as the complete set.
+        if !loaded.unreadable.is_empty() {
+            eprintln!("incomplete — {}", loaded.unreadable_summary());
+            std::process::exit(1);
         }
         return;
     }
@@ -413,8 +419,16 @@ fn status() {
     println!("record_dir:      {}", cfg.record_dir);
     println!("state_dir:       {}", cfg.state_dir.display());
     match metrics::load_all(&cfg) {
-        harness_core::verdict::Determination::Known(s) => {
-            println!("sessions:        {}", s.len());
+        harness_core::verdict::Determination::Known(l) if l.unreadable.is_empty() => {
+            println!("sessions:        {}", l.sessions.len());
+        }
+        harness_core::verdict::Determination::Known(l) => {
+            println!(
+                "sessions:        {} readable + {} unreadable (incomplete — see stderr)",
+                l.sessions.len(),
+                l.unreadable.len()
+            );
+            eprintln!("session-insights: {}", l.unreadable_summary());
         }
         harness_core::verdict::Determination::Undetermined(why) => {
             println!("sessions:        unknown — store could not be read: {why}");

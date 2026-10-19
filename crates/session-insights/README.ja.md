@@ -34,7 +34,7 @@ session a1b2c3d4  [2026-06-20T18:00:00+09:00]
   top tools: Edit 18, Bash 12, Read 9, Write 5, Grep 3
 ```
 
-セッションストアが読めない場合、`report` は「セッション無し」とは表示せず、stderr に `unknown — session store could not be read: …` を出して exit 1 で終わる [test: crates/session-insights/tests/prose_claims.rs::claim_report_unreadable_store_exits_1]。
+セッションストアが読めない場合、`report` は「セッション無し」とは表示せず、stderr に `unknown — session store could not be read: …` を出して exit 1 で終わる [test: crates/session-insights/tests/prose_claims.rs::claim_report_unreadable_store_exits_1]。個々のセッションファイルが読めない・パースできない場合も黙って飛ばさない。`report --all` は読めたセッションを一覧したうえで、読めなかったファイルを stderr に `incomplete — ` に続けて列挙し exit 1 する [test: crates/session-insights/tests/repro_report_all_skips_corrupt_session.rs::report_all_does_not_present_partial_list_as_complete]。`report`（最新）と `report --session` は、読めないファイルが答えでありうるとき `unknown` として exit 1 する [test: crates/session-insights/src/metrics.rs::tests::latest_with_a_corrupt_file_is_undetermined] [test: crates/session-insights/src/metrics.rs::tests::find_is_undetermined_only_for_a_matching_corrupt_file]。
 
 記録ノートの数値ブロック（`## 数値サマリ` / `## コスト`）は同梱バイナリが充填し、`## 完了サマリ` / `## 認知の変化 / 修正された理解` / `## つまずき / 学び` / `## 振り返り / 確立した方針` / `## 自己批判 / 確信度` / `## 注意点 / 落とし穴` / `## 残課題` / `## 要追跡 / あとで確認` / `## 関連` の散文節は `<!-- fill: … -->` プレースホルダのまま残る [test: crates/session-insights/src/record.rs::skeleton_has_all_sections_and_placeholders] [test: crates/session-insights/tests/prose_claims.rs::claim_skeleton_prose_sections_placeholders]。
 

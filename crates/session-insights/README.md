@@ -21,6 +21,11 @@ session-insights report --context # also join context-governor ledger health [te
 
 If the session store cannot be read, `report` prints `unknown — session store could
 not be read: …` to stderr and exits 1 (it does not print "no sessions") [test: crates/session-insights/tests/prose_claims.rs::claim_report_unreadable_store_exits_1].
+A single session file that cannot be read or parsed is not skipped silently:
+`report --all` still lists the readable sessions, then names the unreadable
+file(s) on stderr after `incomplete — ` and exits 1 [test: crates/session-insights/tests/repro_report_all_skips_corrupt_session.rs::report_all_does_not_present_partial_list_as_complete];
+`report` (latest) and `report --session` exit 1 as `unknown` when an unreadable
+file could be the answer [test: crates/session-insights/src/metrics.rs::tests::latest_with_a_corrupt_file_is_undetermined] [test: crates/session-insights/src/metrics.rs::tests::find_is_undetermined_only_for_a_matching_corrupt_file].
 
 ```
 session a1b2c3d4  [2026-06-20T18:00:00+09:00]

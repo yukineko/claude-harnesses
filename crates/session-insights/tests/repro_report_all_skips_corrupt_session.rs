@@ -35,7 +35,6 @@ fn home(tag: &str) -> std::path::PathBuf {
 }
 
 #[test]
-#[ignore = "RED repro: report --all hides a corrupt session file"]
 fn report_all_does_not_present_partial_list_as_complete() {
     let h = home("corrupt");
     let payload = r#"{"hook_event_name":"PostToolUse","session_id":"good-one","tool_name":"Read","tool_input":{"file_path":"a.rs"}}"#;

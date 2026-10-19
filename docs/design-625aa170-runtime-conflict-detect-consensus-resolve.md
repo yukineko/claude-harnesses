@@ -37,8 +37,12 @@ conflict-hardening batch (schedule.rs twins fc03d26d, worktree repo-lock c701e75
   literal paths → plain set intersection, no glob). Append one `RuntimeConflictEvent
   { run_id, task_key_a, task_key_b, overlapping_files, base_ref, session_id, ts, detail }` per overlap,
   then upsert+save (temp+rename).
-- Fully fail-soft (missing worktree / git fail / empty diff / lock timeout / write error → silent
-  no-op, exit code + schedule gating untouched). Observational.
+- Missing worktree / git fail / empty diff → no-op (nothing recorded, no hold, exit code +
+  schedule gating untouched). A lock timeout or registry read/write failure is NOT a no-op: the
+  overlap is undetermined (unchecked, not absent), so it places a RuntimeOverlap hold
+  `<task_key>/runtime-overlap-unchecked` (`OverlapCheck::UncheckedHeld`, backlog 08494f63); if
+  that hold (or a positive-overlap hold) cannot be enqueued, `state set --status done` exits 1
+  (backlog 452f3705).
 - Cleanup: mark `merged=true`/delete on branch land — hook merge-success (main.rs:3024-3033 run_pr Poll;
   main.rs:2695 run_worktree Merge) + reconcile.rs. Lease-liveness filter ages out crashed runs.
 
@@ -102,8 +106,11 @@ root marketplace.json demotes every task to serial. Net order: (T1→T3) and (T2
    sibling `[runtime-overlap]` kind in review_queue). T5's `resolve-merge` clears the hold then
    proceeds. This unifies A→B into one gate→review→resolve loop. Consequence: T2 now also depends on
    T3 (needs the review surface to enqueue), and the merge-hold check lands in the condukt merge path.
-   Keep the gate fail-soft on the DETECTION side (compute-overlap errors never hold), but the HOLD
-   itself is a real block (conservative: if overlap is detected, do not silently merge).
+   On the DETECTION side, missing-worktree / git-fail / empty-diff stay no-ops, but a lock timeout
+   or registry read/write failure is undetermined and places a RuntimeOverlap hold
+   `<task_key>/runtime-overlap-unchecked` (UncheckedHeld); if that hold cannot be enqueued,
+   `state set --status done` exits 1. The HOLD itself is a real block (conservative: if overlap is
+   detected — or could not be checked — do not silently merge).
    NOTE: mitigate false positives — a detected same-file overlap that git would merge cleanly should
    still be gated per this decision, but the review entry should carry both diffs so the resolver can
    fast-approve a clean merge; do not hard-fail the run (block == hold-for-review, not error).

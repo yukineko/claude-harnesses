@@ -205,6 +205,14 @@ RS_EMPTY_VALUE_LINE = re.compile(
 # How far a block-bodied arm's body is followed before giving up (a bounded
 # brace match; a longer body is not this idiom).
 ARM_BLOCK_WINDOW = 12
+# A top-level body statement that RECORDS the undetermined state into a
+# caller-visible collection named for it (`undetermined.push("git log");`,
+# `undetermined_sources.insert(..)`), the ruled exemption in
+# `_block_yields_empty`. Single-line arms (`=> Vec::new(),`) have no such
+# statement and stay flagged.
+RS_RECORDS_UNDETERMINED = re.compile(
+    r"^\s*\w*undetermined\w*\s*\.\s*(?:push|insert|extend)\s*\(", re.IGNORECASE
+)
 
 # The EXTENSION-TRAIT form of the same erasure (backlog f12c2168, user ruling
 # 2026-10-02: ADVISORY only). `Required` deliberately has no `unwrap_or_default`
@@ -443,22 +451,35 @@ def _code_of(line: str) -> str:
 def _block_yields_empty(code: list[str], idx: int) -> bool:
     """True when the block opened at the end of `code[idx]` (a block-bodied
     undetermined arm) has a TOP-LEVEL body line that is nothing but an empty
-    value — its tail expression or a `return` of one. Brace-matched and bounded
-    by ARM_BLOCK_WINDOW; a body longer than the window is not inspected past it
-    (a lexical limit, not a verdict that the rest is clean)."""
+    value — its tail expression or a `return` of one — AND no top-level body
+    line RECORDS the undetermined state (RS_RECORDS_UNDETERMINED). Brace-matched
+    and bounded by ARM_BLOCK_WINDOW; a body longer than the window is not
+    inspected past it (a lexical limit, not a verdict that the rest is clean).
+
+    The recording exemption (user ruling 2026-10-19): an arm such as
+    `Undetermined(why) => { undetermined.push("git log"); None }` hands the
+    undetermined state to the caller instead of erasing it, so it is not an
+    empty fallback. Only a mutation of an `undetermined`-named binding counts;
+    logging `why` does not. Still lexical: whether the caller then READS that
+    list is not traced here."""
     depth = 1
+    yields_empty = False
+    records = False
     for j in range(idx + 1, min(len(code), idx + 1 + ARM_BLOCK_WINDOW)):
         body = code[j]
-        if depth == 1 and RS_EMPTY_VALUE_LINE.match(body):
-            return True
+        if depth == 1:
+            if RS_EMPTY_VALUE_LINE.match(body):
+                yields_empty = True
+            if RS_RECORDS_UNDETERMINED.search(body):
+                records = True
         for ch in _strip_for_braces(body):
             if ch == "{":
                 depth += 1
             elif ch == "}":
                 depth -= 1
         if depth <= 0:
-            return False
-    return False
+            break
+    return yields_empty and not records
 
 
 def _prev_code_line(code: list[str], idx: int) -> str:

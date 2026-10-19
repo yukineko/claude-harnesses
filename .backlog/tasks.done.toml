@@ -56883,3 +56883,59 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; fin
 rev = "59b9fa02a46c695fc66f4227045f70891c474c6e"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "b85f6d5d"
+title = "blastguard: a '//' literal inside a quoted python heredoc is misparsed and denied"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1792086412
+updated_at = 1792428181
+weight = 0.0
+issue_number = 1362
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1362"
+issue_closed_at = 1792428184
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_slash_literal_misparse -- --ignored"
+rev = "4c9a42be8b24c5a75e2312765378d124836468f5"
+observed_at = 1792086412
+detail = """
+exit 101: es/overwatch)
+   Compiling blastguard v0.2.130 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.49s
+     Running tests/heredoc_slash_literal_misparse.rs (target/debug/deps/heredoc_slash_literal_misparse-de50a0a88f2ca2e2)
+error: test failed, to rerun pass `-p blastguard --test heredoc_slash_literal_misparse`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test heredoc_slash_literal_misparse slash_string_literal_in_python_heredoc_is_not_a_write_target -- --include-ignored"
+exit = 0
+passed = 1
+rev = "6b95013d1a672eaaa4e6e0d996eb312fa85eb16b"
+observed_at = 1792428148
+output_digest = "sha256:b9ef848648dc565378fb3f30f0af31706d0133117bc755167ca56e42ed0c1ba5"
+excerpt = """
+
+running 1 test
+test slash_string_literal_in_python_heredoc_is_not_a_write_target ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.82s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/heredoc_slash_literal_misparse.rs (target/debug/deps/heredoc_slash_literal_misparse-48d557d0e6c23d72)
+"""
+
+[task.closure.red]
+rev = "59b9fa02a46c695fc66f4227045f70891c474c6e"
+exit = 101
+kind = "behavioural"

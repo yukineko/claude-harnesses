@@ -1242,3 +1242,31 @@ exit 101: viewgate v0.1.40 (/home/hiroyuki_nakayama/src/.claude-harnesses-worktr
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.74s
      Running tests/audit_rows_save_fail_install_home.rs (target/debug/deps/audit_rows_save_fail_install_home-94ce47eebcf70dd6)
 error: test failed, to rerun pass `-p reviewgate --test audit_rows_save_fail_install_home`"""
+
+[[task]]
+id = "bc6508e7"
+title = "reviewgate install_with_unresolvable_home test requires Linux unshare and fails on macOS"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1792429752
+updated_at = 1792429752
+weight = 0.0
+issue_number = 1429
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1429"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test audit_rows_save_fail_install_home install_with_unresolvable_home_writes_to_cwd_and_succeeds"
+rev = "caa78b02fe76894db2e549a199336730d2fc9c2b"
+observed_at = 1792429752
+detail = """
+exit 101: tch)
+   Compiling reviewgate v0.1.45 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/reviewgate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.62s
+     Running tests/audit_rows_save_fail_install_home.rs (target/debug/deps/audit_rows_save_fail_install_home-8c6a47333d40b1a2)
+error: test failed, to rerun pass `-p reviewgate --test audit_rows_save_fail_install_home`"""

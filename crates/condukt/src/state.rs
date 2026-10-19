@@ -467,29 +467,26 @@ fn run_exists_in(dir: &Path, run_id: &str) -> Result<bool> {
 /// resolves to the run's existing dir (canonical, or the legacy dir of the
 /// worktree `cwd` is in) is not a shadow and is left as it was.
 ///
-/// Every linked worktree is listed with `git worktree list --porcelain`; a
-/// listing that fails is an `Err` (it could not be told whether a legacy run
-/// would be hidden), except outside a git repository, where there are no
-/// linked worktrees to hold one.
+/// The linked worktrees are read from the repository's own records
+/// ([`linked_worktree_paths`]); a record that cannot be read is an `Err` (it
+/// could not be told whether a legacy run would be hidden). Outside a git
+/// repository there are no linked worktrees to hold one.
 pub fn ensure_init_does_not_shadow_legacy(cfg: &Config, cwd: &Path, run_id: &str) -> Result<()> {
     let canonical = project_dir(cfg, cwd)?;
     if run_dir(cfg, cwd, run_id)? != canonical || run_exists_in(&canonical, run_id)? {
         return Ok(());
     }
     let root = project_root(cwd)?;
-    if !observed_exists(&root.join(".git"))? {
-        return Ok(());
-    }
-    let listing =
-        worktree::git(&root, &["worktree", "list", "--porcelain"]).with_context(|| {
-            format!(
-                "refusing to init run '{run_id}': could not list the linked worktrees of {} to \
+    let paths = linked_worktree_paths(&root).with_context(|| {
+        format!(
+            "refusing to init run '{run_id}': could not list the linked worktrees of {} to \
              check that no legacy run with this id would be hidden",
-                root.display()
-            )
-        })?;
-    for path in listing.lines().filter_map(|l| l.strip_prefix("worktree ")) {
-        let dir = cfg.state_dir.join(project_key(Path::new(path)));
+            root.display()
+        )
+    })?;
+    for wt in &paths {
+        let path = wt.display();
+        let dir = cfg.state_dir.join(project_key(wt));
         if dir != canonical && run_exists_in(&dir, run_id)? {
             bail!(
                 "refusing to init run '{run_id}': a legacy run with this id lives under the \
@@ -500,6 +497,51 @@ pub fn ensure_init_does_not_shadow_legacy(cfg: &Config, cwd: &Path, run_id: &str
         }
     }
     Ok(())
+}
+
+/// The linked worktrees of the repository whose main worktree is `root`.
+///
+/// With `<root>/.git` a directory, read from git's own records without
+/// spawning git (so `state init` keeps working where no `git` is on PATH):
+/// each `<root>/.git/worktrees/<name>/gitdir` names `<worktree>/.git`. No
+/// `worktrees` dir is a real "none"; any other read failure is an `Err`. With
+/// `.git` absent there is no repository and so none. Any other `.git` shape (a
+/// gitfile) falls back to `git worktree list --porcelain`, whose failure is an
+/// `Err`.
+fn linked_worktree_paths(root: &Path) -> Result<Vec<PathBuf>> {
+    let dot_git = root.join(".git");
+    let meta = match std::fs::symlink_metadata(&dot_git) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", dot_git.display())),
+    };
+    if !meta.is_dir() {
+        let listing = worktree::git(root, &["worktree", "list", "--porcelain"])?;
+        return Ok(listing
+            .lines()
+            .filter_map(|l| l.strip_prefix("worktree "))
+            .map(PathBuf::from)
+            .collect());
+    }
+    let records = dot_git.join("worktrees");
+    let entries = match std::fs::read_dir(&records) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", records.display())),
+    };
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = entry.with_context(|| format!("reading an entry of {}", records.display()))?;
+        let gitdir_file = entry.path().join("gitdir");
+        let gitdir = std::fs::read_to_string(&gitdir_file)
+            .with_context(|| format!("reading {}", gitdir_file.display()))?;
+        let gitdir = PathBuf::from(gitdir.trim());
+        let wt = gitdir
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("{} names no worktree", gitdir_file.display()))?;
+        out.push(wt.to_path_buf());
+    }
+    Ok(out)
 }
 
 /// The CANONICAL per-project state directory (`<state_dir>/<project-key of the

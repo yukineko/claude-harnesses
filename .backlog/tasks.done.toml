@@ -55886,3 +55886,63 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "956d2c7a"
+title = "hypothesis: list --status bogus exits 0 with an empty listing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "The help says an unrecognised value matches nothing; an empty result with exit 0 is indistinguishable from no hypotheses with that valid status."
+created_at = 1792189461
+updated_at = 1792424133
+weight = 0.0
+issue_number = 1414
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1414"
+issue_closed_at = 1792424137
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p hypothesis --test repro_list_unknown_status_exit0 -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189461
+detail = """
+exit 101: n 0.54s
+
+   Compiling hypothesis v0.1.20 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/hypothesis)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.11s
+     Running tests/repro_list_unknown_status_exit0.rs (target/debug/deps/repro_list_unknown_status_exit0-241834bd146fc682)
+error: test failed, to rerun pass `-p hypothesis --test repro_list_unknown_status_exit0`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p hypothesis --test repro_list_unknown_status_exit0"
+exit = 0
+passed = 1
+rev = "494c925e98d8fdef854d0e8fcaa11a84ddc6d852"
+observed_at = 1792424099
+output_digest = "sha256:053b0c47c3a9887852cd2a830e85af5b883ab6637e19a3e138ed5d71740fc55b"
+excerpt = """
+
+running 1 test
+test list_with_unknown_status_is_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/repro_list_unknown_status_exit0.rs (target/debug/deps/repro_list_unknown_status_exit0-bd80187f8e191fa9)
+"""
+
+[task.closure.red]
+rev = "87b8032b00813c9ab6405750f6ed829205163b8a"
+exit = 101
+kind = "behavioural"

@@ -1168,12 +1168,29 @@ pub fn release_files(cfg: &Config, cwd: &Path, run_id: &str, files: &[String]) -
     Ok(removed)
 }
 
-/// Release specific task `hashkeys` from the task-claim table (call when a task
-/// reaches a terminal status). Removes the entries regardless of which run holds
-/// them — the caller owns hashkey identity. Returns the count removed.
-// Wired into the CLI by the follow-up task.
-#[allow(dead_code)]
-pub fn release_tasks(cfg: &Config, cwd: &Path, hashkeys: &[String]) -> Result<usize> {
+/// What [`release_tasks`] did: how many of `run_id`'s own claims it removed,
+/// and which requested hashkeys it REFUSED because another run holds them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TaskRelease {
+    /// Claims held by the releasing run that were removed.
+    pub released: usize,
+    /// `(hashkey, holder_run)` for every requested hashkey held by a
+    /// DIFFERENT run. These are left in place (backlog 40dde238).
+    pub held_by_other: Vec<(String, String)>,
+}
+
+/// Release specific task `hashkeys` held by `run_id` from the task-claim table
+/// (call when a task reaches a terminal status). Only entries whose holder is
+/// `run_id` are removed; a hashkey held by another run is left in place and
+/// reported in [`TaskRelease::held_by_other`] — one run must never free a claim
+/// another run is relying on (backlog 40dde238). A hashkey nobody holds is a
+/// no-op (idempotent release).
+pub fn release_tasks(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+    hashkeys: &[String],
+) -> Result<TaskRelease> {
     let (root, path) = match claim_paths(cfg, cwd) {
         Determination::Known(p) => p,
         Determination::Undetermined(why) => {
@@ -1188,15 +1205,28 @@ pub fn release_tasks(cfg: &Config, cwd: &Path, hashkeys: &[String]) -> Result<us
     // could clobber concurrent claims. Safe: a stale claim ages out via TTL.
     let _lock = match RunLock::acquire_or_skip_in_project(cfg, &root, CLAIMS_LOCK_KEY) {
         Some(l) => l,
-        None => return Ok(0),
+        None => return Ok(TaskRelease::default()),
     };
     // Saves the registry back — see release_run.
     let mut reg = load_or_refuse(&path, "release these task claims")?;
+    let held_by_other: Vec<(String, String)> = hashkeys
+        .iter()
+        .filter_map(|k| {
+            reg.task_claims
+                .get(k)
+                .filter(|c| c.run_id != run_id)
+                .map(|c| (k.clone(), c.run_id.clone()))
+        })
+        .collect();
     let before = reg.task_claims.len();
-    reg.task_claims.retain(|k, _| !hashkeys.contains(k));
-    let removed = before - reg.task_claims.len();
+    reg.task_claims
+        .retain(|k, c| !(c.run_id == run_id && hashkeys.contains(k)));
+    let released = before - reg.task_claims.len();
     save(&path, &reg)?;
-    Ok(removed)
+    Ok(TaskRelease {
+        released,
+        held_by_other,
+    })
 }
 
 /// Refresh the heartbeat of every file held by `run_id` — the "keep writing to
@@ -2397,7 +2427,7 @@ mod tests {
             "release_files"
         );
         assert!(
-            release_tasks(&cfg, tmp, &files(&["hk1"])).is_err(),
+            release_tasks(&cfg, tmp, "r", &files(&["hk1"])).is_err(),
             "release_tasks"
         );
         assert!(heartbeat(&cfg, tmp, "runA", 100).is_err(), "heartbeat");
@@ -2536,8 +2566,9 @@ mod tests {
         let tmp = tmp_dir.path();
         let cfg = make_cfg(tmp);
         claim_tasks(&cfg, tmp, &files(&["hk-1"]), "runA", None, 100, None, false).unwrap();
-        let n = release_tasks(&cfg, tmp, &files(&["hk-1"])).unwrap();
-        assert_eq!(n, 1);
+        let n = release_tasks(&cfg, tmp, "runA", &files(&["hk-1"])).unwrap();
+        assert_eq!(n.released, 1);
+        assert!(n.held_by_other.is_empty());
         // Now runB can take it.
         let out =
             claim_tasks(&cfg, tmp, &files(&["hk-1"]), "runB", None, 101, None, false).unwrap();

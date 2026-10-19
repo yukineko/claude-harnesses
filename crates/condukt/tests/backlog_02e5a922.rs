@@ -7,7 +7,15 @@
 //! A diff larger than the pipe buffer blocks git on write, so git never exits,
 //! the 45s timeout fires, and `diffrisk_record::worktree_diff` retries the next
 //! fallback form — the same deadlock again. The task's diff is then reported
-//! as "NOT INSPECTED (no-diff)" although it is a large, real diff.
+//! as "NOT INSPECTED (no-diff)" although it is a large, real diff. (Fixed by
+//! c00c3506, 0.7.269.)
+//!
+//! Second cause, measured 2026-10-20 at 59b9fa02 (this test still took 318s
+//! with no git child alive; `sample` put the time in
+//! `harness_core::callgraph::enumerate_callers` under
+//! `record_post_execution_diff_risk`): the caller scan re-extracted symbols and
+//! rescanned every line once per changed name — 8000 names here. Fixed by the
+//! single-pass scan in harness-core 0.2.62.
 //!
 //! Pinned: with a ~400 KB committed diff, `state set --status done` returns
 //! well inside one git timeout, and does not call the diff "no-diff".
@@ -48,7 +56,6 @@ fn condukt(cwd: &Path, home: &Path, args: &[&str]) -> Output {
 }
 
 #[test]
-#[ignore = "backlog 02e5a922: RED repro"]
 fn state_set_done_on_a_large_diff_does_not_stall_on_the_git_pipe() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");

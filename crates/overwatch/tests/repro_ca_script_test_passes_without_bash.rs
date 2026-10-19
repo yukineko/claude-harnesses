@@ -42,7 +42,6 @@ fn sibling_test_binary() -> PathBuf {
 }
 
 #[test]
-#[ignore = "repro: continuous_audit_script_behaves passes when bash cannot spawn; remove ignore when fixed"]
 fn script_test_must_not_pass_when_bash_is_unavailable() {
     let bin = sibling_test_binary();
     let empty = std::env::temp_dir().join(format!("ow-repro-nobash-{}", std::process::id()));

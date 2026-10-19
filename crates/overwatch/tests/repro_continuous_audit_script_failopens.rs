@@ -47,7 +47,6 @@ fn run(script: &PathBuf, home: &PathBuf, ow_bin: Option<&str>, args: &[&str]) ->
 }
 
 #[test]
-#[ignore = "repro: continuous-audit.sh exits 0 when the overwatch binary is missing; remove ignore when fixed"]
 fn missing_overwatch_binary_must_not_exit_zero() {
     let (t, script) = sandboxed_script("nobin");
     let home = t.join("home");
@@ -66,7 +65,6 @@ fn missing_overwatch_binary_must_not_exit_zero() {
 }
 
 #[test]
-#[ignore = "repro: continuous-audit.sh exits 0 when --round is missing; remove ignore when fixed"]
 fn missing_round_must_not_exit_zero() {
     let (t, script) = sandboxed_script("noround");
     let home = t.join("home");
@@ -86,7 +84,6 @@ fn missing_round_must_not_exit_zero() {
 }
 
 #[test]
-#[ignore = "repro: continuous-audit.sh swallows record-finding failure and prints PASS; remove ignore when fixed"]
 fn record_finding_failure_must_not_exit_zero() {
     let (t, script) = sandboxed_script("recfail");
     let home = t.join("home");

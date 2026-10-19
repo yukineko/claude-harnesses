@@ -27,8 +27,7 @@ fn repo_root() -> PathBuf {
 #[test]
 fn continuous_audit_script_behaves() {
     if Command::new("bash").arg("--version").output().is_err() {
-        eprintln!("skipping: bash not available");
-        return;
+        panic!("bash not available (required to run continuous_audit_script tests)");
     }
     let repo = repo_root();
     let script = repo.join("scripts/tests/continuous-audit.sh");

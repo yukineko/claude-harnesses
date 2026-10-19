@@ -56693,3 +56693,62 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; fini
 rev = "efc304feb57287d7141e26c3f5928d43df6253b5"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "860c43db"
+title = "gate-bypass: a ledger entry whose object is missing blocks every push forever (report as unreachable, user ruling 2026-10-20)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "gate-bypass",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-20: .git/gate-bypassed holds b77286119dc345a3cd5a1aa455db1942b6499087 (donegate 0.1.36 fix, object pruned; same fix landed gated as 33a6c46b). gate-bypass.py raises Undetermined on a missing object (a7bf3cca rule), and pre-commit clears only ancestors of HEAD, so the entry blocks every push forever. User ruling 2026-10-20: ゲートを直す - a commit with no content cannot leave this machine, treat it as unreachable (listed, not blocking, never removed). Only well-formed full-length id + definitively missing object changes; malformed/abbreviated/blob/git-error stay undetermined. RED test committed at 3f4ad6e7."
+created_at = 1792426288
+updated_at = 1792426734
+weight = 0.0
+issue_number = 1427
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1427"
+issue_closed_at = 1792426737
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_gate_bypass.py -k MissingObjectLedgerEntries"
+rev = "3f4ad6e7c1322856df0e537a4184c53344c21d8d"
+observed_at = 1792426288
+detail = """
+exit 1: gate_bypass.py::MissingObjectLedgerEntries::test_missing_object_only_entry_exits_zero
+FAILED scripts/test_gate_bypass.py::MissingObjectLedgerEntries::test_missing_object_only_entry_lets_pre_push_through
+FAILED scripts/test_gate_bypass.py::MissingObjectLedgerEntries::test_missing_object_plus_reachable_ungated_exits_one
+================= 4 failed, 7 passed, 148 deselected in 14.53s ================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_gate_bypass.py -k MissingObjectLedgerEntries"
+exit = 0
+passed = 11
+rev = "27b5ebfc94ed7d6dca0548f9bc863ebc5fc58c55"
+observed_at = 1792426700
+output_digest = "sha256:c396c1ddcc7430c89b2663f6cec48622bc0781b02d7f7c24978bd9458f73fe75"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/gate-bypass-missing-obj
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 159 items / 148 deselected / 11 selected
+
+scripts/test_gate_bypass.py ...........                                  [100%]
+
+===================== 11 passed, 148 deselected in 16.69s ======================
+"""
+
+[task.closure.red]
+rev = "3f4ad6e7c1322856df0e537a4184c53344c21d8d"
+exit = 1
+kind = "behavioural"

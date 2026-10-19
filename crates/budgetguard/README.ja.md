@@ -33,13 +33,14 @@
   一度ブロックされた後、停止を許される [test: crates/budgetguard/tests/prose_claims.rs::claim_reentry_allowed]。
 - `BUDGETGUARD_DISABLE=1` ならフックは no-op になる (設定ファイルが parse できない場合も同じ) [test: crates/budgetguard/tests/prose_claims.rs::claim_disable_env]。
 - 設定で `enabled = false` ならフックは no-op になる [test: crates/budgetguard/tests/prose_claims.rs::claim_example_toml]。
-- [record: 2026-10-16 rev: 1a84e601] session と daily の `block_usd` を設定した状態で、ビルドしたバイナリは、存在しない `transcript_path`、ディレクトリである `transcript_path`、JSON でない stdin、空の `session_id` のいずれでも exit 0・判定なし (stderr も無出力) で終了した — これらは報告されない fail-open の経路であり、意図した許可規則ではない。
 
 *判定不能* は予算内として**扱わない** [test: crates/budgetguard/src/gate.rs::an_undetermined_config_blocks_despite_zero_default_limits] [test: crates/budgetguard/src/gate.rs::a_contended_ledger_lock_makes_the_day_undetermined_and_blocks]:
 
 - 存在するが読めない／parse できない設定ファイル → 上限が何であれ**ブロック** (`config-undetermined`) [test: crates/budgetguard/src/gate.rs::an_undetermined_config_blocks_despite_zero_default_limits] [test: crates/budgetguard/src/config.rs::an_unparseable_config_is_undetermined_not_an_unconfigured_gate] [test: crates/budgetguard/src/config.rs::an_unreadable_config_is_undetermined_not_an_unconfigured_gate] [test: crates/budgetguard/tests/price_config_residual_00880b3d.rs::control_unparseable_config_blocks_naming_the_file]。
 - セッション支出を測定できない (sub-agent のトランスクリプトが読めない、料金不明のモデルがある等) → block 上限が 1 つでも
   あれば**ブロック**、無く warn 上限があれば**警告** [test: crates/budgetguard/src/gate.rs::unreadable_subagents_dir_is_undetermined_and_blocks_when_a_limit_is_armed] [test: crates/budgetguard/tests/prose_claims.rs::claim_session_undetermined_warn_only] [test: crates/budgetguard/tests/prose_claims.rs::claim_session_undetermined_daily_arms]。
+  存在しない／ディレクトリである `transcript_path`、`session_id` か `transcript_path` が空の Stop payload もこれに含まれる [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::a_nonexistent_transcript_with_limits_armed_is_not_silently_allowed] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::b_directory_transcript_with_limits_armed_is_not_silently_allowed] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::d_empty_session_or_transcript_with_limits_armed_is_not_silently_allowed]。
+- stdin がそもそも hook payload でない場合、上限が 1 つでもあれば stderr に理由を出し exit 1 (block を bound する `stop_hook_active` が無いため) [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::c_non_json_stdin_with_limits_armed_is_not_silently_allowed]。
 - 日次合計を測定できない (台帳ロックを他セッションが保持、または `ledger.json` が破損 — 破損ファイルは
   そのまま保存される) → *日次*上限に従って block/warn [test: crates/budgetguard/src/gate.rs::a_contended_ledger_lock_makes_the_day_undetermined_and_blocks] [test: crates/budgetguard/src/gate.rs::a_corrupt_ledger_makes_the_day_undetermined_and_blocks] [test: crates/budgetguard/tests/prose_claims.rs::claim_day_undetermined_warn_only]。
   セッション自身の block 上限を既に超えていれば
@@ -84,7 +85,8 @@ budgetguard gate           # Stop フック (stdin の JSON を読み、判定�
 budgetguard status         # 解決済みの設定 + 今日の支出 [test: crates/budgetguard/tests/integration.rs::status_prints_spend_summary]
 budgetguard status --json  # 機械可読な予算プレッシャー [test: crates/budgetguard/tests/prose_claims.rs::claim_status_json_fields]:
                            #   {day_usd, daily_warn_usd, daily_block_usd, pressure} [test: crates/budgetguard/tests/prose_claims.rs::claim_status_json_fields]。
-                           #   設定が読めなければ {error, undetermined:true} を出し exit 2 [test: crates/budgetguard/tests/prose_claims.rs::claim_status_json_fields] [test: crates/budgetguard/tests/prose_claims.rs::claim_status_json_unreadable]
+                           #   設定が読めなければ {error, undetermined:true} を出し exit 2 [test: crates/budgetguard/tests/prose_claims.rs::claim_status_json_fields] [test: crates/budgetguard/tests/prose_claims.rs::claim_status_json_unreadable]。
+                           #   ledger.json が破損していても同じ [test: crates/budgetguard/tests/repro_status_json_corrupt_ledger.rs::status_json_corrupt_ledger_is_not_zero_spend]
 budgetguard init [--force]          # 雛形の budgetguard.toml を書き出す [test: crates/budgetguard/tests/prose_claims.rs::claim_init_writes_starter]。--force が無ければ既存ファイルは変更しない [test: crates/budgetguard/tests/prose_claims.rs::claim_init_writes_starter]
 budgetguard install [--dry-run]     # フックを ~/.claude/settings.json にマージする [test: crates/budgetguard/tests/prose_claims.rs::claim_install_merges_stop_hook]
 budgetguard uninstall [--dry-run]   # フックを取り除く [test: crates/budgetguard/tests/prose_claims.rs::claim_install_merges_stop_hook]

@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.41"
+version = "0.1.42"
 dependencies = [
  "anyhow",
  "chrono",

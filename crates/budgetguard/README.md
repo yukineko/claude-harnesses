@@ -31,7 +31,6 @@ Allowed (exit 0, no decision) [test: crates/budgetguard/tests/prose_claims.rs::c
   an over-budget session is blocked once, then allowed to stop [test: crates/budgetguard/tests/prose_claims.rs::claim_reentry_allowed].
 - `BUDGETGUARD_DISABLE=1` → hook is a no-op, even when the config file cannot be parsed [test: crates/budgetguard/tests/prose_claims.rs::claim_disable_env].
 - `enabled = false` in the config → hook is a no-op [test: crates/budgetguard/tests/prose_claims.rs::claim_example_toml].
-- [record: 2026-10-16 rev: 1a84e601] With session and daily `block_usd` armed, a probe of the built binary also exited 0 with no decision (and nothing on stderr) for a `transcript_path` that does not exist, a `transcript_path` that is a directory, stdin that is not JSON, and an empty `session_id`; these are unreported fail-open paths, not intended allow rules.
 
 *Cannot determine* is **not** treated as within budget [test: crates/budgetguard/src/gate.rs::an_undetermined_config_blocks_despite_zero_default_limits] [test: crates/budgetguard/src/gate.rs::a_contended_ledger_lock_makes_the_day_undetermined_and_blocks]:
 
@@ -40,6 +39,10 @@ Allowed (exit 0, no decision) [test: crates/budgetguard/tests/prose_claims.rs::c
 - Session spend that cannot be measured (for example a sub-agent transcript that
   could not be read, or a model with no known rate) → **block** if any block limit is armed, else **warn** if
   any warn limit is armed [test: crates/budgetguard/src/gate.rs::unreadable_subagents_dir_is_undetermined_and_blocks_when_a_limit_is_armed] [test: crates/budgetguard/tests/prose_claims.rs::claim_session_undetermined_warn_only] [test: crates/budgetguard/tests/prose_claims.rs::claim_session_undetermined_daily_arms].
+  This includes a `transcript_path` that does not exist or is a directory, and
+  a Stop payload whose `session_id` or `transcript_path` is empty [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::a_nonexistent_transcript_with_limits_armed_is_not_silently_allowed] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::b_directory_transcript_with_limits_armed_is_not_silently_allowed] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::d_empty_session_or_transcript_with_limits_armed_is_not_silently_allowed].
+- stdin that is not a hook payload at all, with any limit armed → stderr reason
+  and exit 1 (there is no `stop_hook_active` to bound a block with) [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::c_non_json_stdin_with_limits_armed_is_not_silently_allowed].
 - A day total that cannot be measured (ledger lock held by another session, or
   a corrupt `ledger.json`, which is preserved untouched) → block/warn per the
   armed *daily* limits; a session already over its own block limit still gets
@@ -87,7 +90,8 @@ budgetguard status         # resolved config + today's spend [test: crates/budge
 budgetguard status --json  # machine-readable budget pressure [test: crates/budgetguard/tests/prose_claims.rs::claim_status_json_fields]:
                            #   {day_usd, daily_warn_usd, daily_block_usd, pressure};
                            #   an unreadable config prints {error, undetermined:true}
-                           #   and exits 2 [test: crates/budgetguard/tests/prose_claims.rs::claim_status_json_fields] [test: crates/budgetguard/tests/prose_claims.rs::claim_status_json_unreadable]
+                           #   and exits 2 [test: crates/budgetguard/tests/prose_claims.rs::claim_status_json_fields] [test: crates/budgetguard/tests/prose_claims.rs::claim_status_json_unreadable];
+                           #   so does a corrupt ledger.json [test: crates/budgetguard/tests/repro_status_json_corrupt_ledger.rs::status_json_corrupt_ledger_is_not_zero_spend]
 budgetguard init [--force]          # write a starter budgetguard.toml; without --force an existing file is left unchanged [test: crates/budgetguard/tests/prose_claims.rs::claim_init_writes_starter]
 budgetguard install [--dry-run]     # merge the hook into ~/.claude/settings.json [test: crates/budgetguard/tests/prose_claims.rs::claim_install_merges_stop_hook]
 budgetguard uninstall [--dry-run]   # remove it [test: crates/budgetguard/tests/prose_claims.rs::claim_install_merges_stop_hook]

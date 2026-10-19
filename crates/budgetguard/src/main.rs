@@ -18,10 +18,17 @@
 //! * a day total that could not be serialized against other sessions
 //!   blocks/warns per the armed DAILY limits (`gate::day_undetermined_verdict`).
 //!
+//! * an unreadable transcript (missing, a directory) or a Stop payload with an
+//!   empty `session_id`/`transcript_path` is an unmeasurable session spend and
+//!   blocks/warns per the armed limits;
+//! * stdin that is not a hook payload at all exits 1 with a stderr reason
+//!   whenever a limit is armed (`gate_unparseable_input`).
+//!
 //! Three things still exit 0, and each is a KNOWN answer rather than a
-//! give-up: no config file at all (the operator configured nothing), no
-//! transcript data to price, and `BUDGETGUARD_DISABLE=1` (the operator's
-//! explicit escape hatch, checked before the panic guard so it stays reachable).
+//! give-up: no limit armed (no config file, or every limit 0), a readable
+//! transcript with nothing to price, and `BUDGETGUARD_DISABLE=1` (the
+//! operator's explicit escape hatch, checked before the panic guard so it
+//! stays reachable).
 //!
 //! `clippy::panic` (along with `unwrap_used`/`expect_used`) is now enforced via
 //! this crate's `[lints] workspace = true` in `Cargo.toml`, which inherits the
@@ -134,11 +141,8 @@ fn gate_command() -> ! {
 
 fn gate_run(hook: Option<harness_core::hook::HookInput>) {
     let Some(input) = hook else {
-        return;
+        gate_unparseable_input();
     };
-    if input.transcript_path.is_empty() || input.session_id.is_empty() {
-        return;
-    }
     // Recursion guard: when this Stop fires because a previous Stop hook already
     // blocked (`stop_hook_active`), do not block again. An over-budget session
     // would otherwise re-block on every re-entry and trap the turn — the user
@@ -153,8 +157,25 @@ fn gate_run(hook: Option<harness_core::hook::HookInput>) {
             if !cfg.enabled {
                 return;
             }
-            let today = today_str();
-            gate::evaluate(&cfg, &input.session_id, &input.transcript_path, &today)
+            if input.transcript_path.is_empty() || input.session_id.is_empty() {
+                // Without a session id and a transcript there is no spend to
+                // measure. That is not "within budget": with a limit armed it
+                // blocks/warns like any other unmeasured spend; with every
+                // limit at 0 there is nothing to gate and it allows
+                // (backlog 5a4cd3ff).
+                Some(gate::GateResult {
+                    session_usd: None,
+                    day_usd: None,
+                    cache: None,
+                    verdict: gate::undetermined_verdict(
+                        &cfg,
+                        "the Stop payload carries an empty session_id or transcript_path",
+                    ),
+                })
+            } else {
+                let today = today_str();
+                gate::evaluate(&cfg, &input.session_id, &input.transcript_path, &today)
+            }
         }
         // A config file exists but could not be read or parsed. Which limits the
         // operator armed is exactly what is unknown, so there is no headroom to
@@ -167,6 +188,35 @@ fn gate_run(hook: Option<harness_core::hook::HookInput>) {
         emit_violation(&cwd, &input.session_id, check_kind);
     }
     gate::emit_and_exit(result);
+}
+
+/// stdin did not parse as a hook payload (a manual run, or a malformed
+/// payload). There is no session to measure and no `stop_hook_active` to bound
+/// a block with, so this follows the panic barrier's convention for a run with
+/// no parseable payload (`run_guarded`'s interactive mode): with a limit armed,
+/// or a config that cannot be read, it reports on stderr and exits 1 — never a
+/// silent exit 0. With every limit at 0 (or the gate disabled in config) there
+/// is nothing to gate, which is a known answer, so it exits 0 (backlog 5a4cd3ff).
+fn gate_unparseable_input() -> ! {
+    let why = match std::env::current_dir() {
+        Err(e) => format!("could not resolve the current directory to load the config: {e}"),
+        Ok(cwd) => match Config::load_checked(&cwd) {
+            Determination::Known(cfg) => {
+                if !cfg.enabled {
+                    std::process::exit(0);
+                }
+                match gate::undetermined_verdict(&cfg, "stdin is not a Stop hook payload") {
+                    gate::Verdict::Allow => std::process::exit(0),
+                    gate::Verdict::Warn(_) | gate::Verdict::Block(..) => {
+                        "a budget limit is armed and this run's spend is unmeasured".to_string()
+                    }
+                }
+            }
+            Determination::Undetermined(why) => why.as_str().to_string(),
+        },
+    };
+    eprintln!("budgetguard: stdin is not a Stop hook payload; spend not checked: {why}");
+    std::process::exit(1);
 }
 
 /// Record a fleet-level violation for a blocking Stop, for cross-gate
@@ -235,8 +285,8 @@ fn check_undetermined(why: &str) -> ! {
 
 /// `budgetguard check`: the budget question a driver loop asks before each
 /// pick. Exit 0 = within (or disabled by the operator), exit 1 = over the
-/// daily block limit, exit 2 = undetermined. Unlike `status`, a corrupt or
-/// unreadable ledger is undetermined here, never 0.0 spend.
+/// daily block limit, exit 2 = undetermined. A corrupt or unreadable ledger
+/// is undetermined here (as in `status`), never 0.0 spend.
 fn check() {
     if Config::disabled_env() {
         println!("{}", serde_json::json!({ "verdict": "disabled" }));
@@ -278,6 +328,20 @@ fn check() {
     }
 }
 
+/// `status` could not determine today's spend: print no `day_usd` and no
+/// `pressure` (either would read as a measured value) and exit 2.
+fn status_undetermined(args: &StatusArgs, why: &str) -> ! {
+    if args.json {
+        println!(
+            "{}",
+            serde_json::json!({ "error": why, "undetermined": true })
+        );
+    } else {
+        eprintln!("budgetguard: today's spend is undetermined: {why}");
+    }
+    std::process::exit(2);
+}
+
 fn status(args: StatusArgs) {
     // Falling back to "." on an unreadable cwd would silently report a
     // DIFFERENT project's config as if it were this one's.
@@ -306,8 +370,18 @@ fn status(args: StatusArgs) {
         }
     };
     let today = today_str();
-    let ledger = harness_core::ledger::Ledger::load(&cfg.state_dir);
-    let day_usd = ledger.day_total(&today);
+    // `load_checked`, not the lenient `load`: a corrupt or unreadable ledger
+    // is an unmeasured day total, and printing it as `day_usd: 0` /
+    // `pressure: false` would tell a downstream router there is headroom
+    // (backlog c1174e86). Same contract as `check`, exit 2.
+    let day_usd = match harness_core::ledger::Ledger::load_checked(&cfg.state_dir)
+        .map_err(|e| e.to_string())
+        .map(|ledger| ledger.day_total(&today))
+    {
+        Ok(day_usd) if day_usd.is_finite() => day_usd,
+        Ok(_) => status_undetermined(&args, "today's ledger total is not a finite number"),
+        Err(why) => status_undetermined(&args, &why),
+    };
 
     if args.json {
         let pressure = gate::budget_pressure(day_usd, cfg.daily_warn_usd);

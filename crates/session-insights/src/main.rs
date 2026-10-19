@@ -5,7 +5,10 @@
 //! vault). `report` prints the rollup: a size class (XS–XL), a work category, the
 //! turn/tool/file counts, and the top tools — the deterministic, no-API-key
 //! analogue of Devin's Session Insights. Recording only ever writes to its own
-//! state (and, opt-in, the vault); it never blocks a turn and always exits 0.
+//! state (and, opt-in, the vault); the hooks never block a turn and always exit
+//! 0. A hook payload that is empty or unparseable is still not dropped silently:
+//! every hook says on stderr that the event was NOT recorded (and `stop` also
+//! emits a `systemMessage`).
 
 mod config;
 mod context;
@@ -113,6 +116,10 @@ fn record() {
     }
     let raw = read_stdin();
     let Some(input) = HookInput::parse(&raw) else {
+        // Not a verdict, so no block — but the dropped event is disclosed: a
+        // silent return made "payload unreadable, tool call NOT counted"
+        // indistinguishable from "counted".
+        eprintln!("{}", unparseable_payload_message("record", &raw));
         return;
     };
     let root = input.cwd_or_current();
@@ -133,6 +140,12 @@ fn stop() {
     }
     let raw = read_stdin();
     let Some(input) = HookInput::parse(&raw) else {
+        // Same disclosure as `record`, plus a `systemMessage` (the channel the
+        // user actually sees for a Stop hook — the launcher's missing-binary
+        // fallback uses it for the same reason). No block: no verdict here.
+        let msg = unparseable_payload_message("stop", &raw);
+        eprintln!("{msg}");
+        println!("{}", serde_json::json!({ "systemMessage": msg }));
         return;
     };
     let root = input.cwd_or_current();
@@ -152,6 +165,23 @@ fn stop() {
     }
 }
 
+/// The diagnostic for a hook payload that is empty or not a JSON hook input.
+fn unparseable_payload_message(hook: &str, raw: &str) -> String {
+    let what = if raw.trim().is_empty() {
+        "an empty payload".to_string()
+    } else {
+        format!("an unparseable payload ({} bytes)", raw.len())
+    };
+    let lost = match hook {
+        "stop" => "this turn was NOT counted and no session note was written",
+        "sessionend" => "the record note (when `record` is on) was NOT updated",
+        _ => "this tool call was NOT counted",
+    };
+    format!(
+        "session-insights {hook}: received {what}; {lost}, so the session metrics are incomplete."
+    )
+}
+
 /// SessionEnd hook: write/update the AEGIS-style record note. Uses the
 /// harness-core HookInput because it carries `transcript_path` (the local
 /// `model::HookInput` does not). No-op when disabled or no transcript/vault.
@@ -161,6 +191,8 @@ fn sessionend() {
     }
     let raw = read_stdin_if_piped();
     let Some(input) = harness_core::hook::HookInput::parse(&raw) else {
+        // SessionEnd discards stdout; stderr is the only channel.
+        eprintln!("{}", unparseable_payload_message("sessionend", &raw));
         return;
     };
     let root = input.cwd_or_current();

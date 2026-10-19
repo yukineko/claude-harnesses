@@ -3,6 +3,9 @@
 - **PostToolUse** records each tool call (per-tool counts, distinct files touched) — subcommand `record` [test: crates/session-insights/tests/prose_claims.rs::claim_posttooluse_records_tool_and_files].
 - **Stop** counts a turn; if `obsidian_log = true` also (re)writes the dated `sessions/` note, and if `record = true` refreshes the `/record` note — subcommand `stop` [test: crates/session-insights/tests/prose_claims.rs::claim_stop_counts_turn] [test: crates/session-insights/tests/prose_claims.rs::claim_stop_writes_session_note_when_obsidian_log] [test: crates/session-insights/tests/prose_claims.rs::claim_stop_refreshes_record_when_record_true].
 - **SessionEnd** is opt-in (`record = true`) and writes/updates the `/record` note — subcommand `sessionend` [test: crates/session-insights/tests/prose_claims.rs::claim_sessionend_writes_record_only_when_record_true].
+- The hooks never block and exit 0, but an empty or unparseable payload is not
+  dropped silently: each hook says on stderr that the event was NOT recorded [test: crates/session-insights/tests/repro_hooks_garbage_payload_silent.rs::garbage_payload_is_reported_on_stderr] [test: crates/session-insights/tests/integration.rs::sessionend_hook_garbage_payload_is_reported_on_stderr],
+  and `stop` also emits a `systemMessage` [test: crates/session-insights/tests/integration.rs::stop_hook_garbage_payload_emits_system_message].
 - **size**: XS / S / M / L / XL by total tool events (thresholds configurable) [test: crates/session-insights/tests/prose_claims.rs::claim_size_thresholds_default_boundaries] [test: crates/session-insights/tests/prose_claims.rs::claim_size_thresholds_configurable]
 - **category**: `coding` (Edit/Write/MultiEdit/NotebookEdit), `ops` (Bash), `research`
   (Read/Grep/Glob/WebFetch/WebSearch) when that group is at least half of the categorized

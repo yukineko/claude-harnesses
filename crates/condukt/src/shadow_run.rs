@@ -55,8 +55,36 @@ pub struct ShadowOutcome {
     pub title: String,
     pub model: String,
     pub pass: bool,
-    pub cost_usd: f64,
-    pub duration_secs: f64,
+    /// Measured cost; `None` = unmeasured (no `--cost` is forwarded).
+    pub cost_usd: Option<f64>,
+    /// Measured duration; `None` = unmeasured (no `--duration` is forwarded).
+    pub duration_secs: Option<f64>,
+}
+
+/// A supplied `--cost` must be a finite, non-negative USD amount; `None`
+/// (flag omitted) is "unmeasured" and passes through as `None`. Mirrors
+/// `fugu-router record`'s own validation (backlog `e44e233f`).
+pub fn validate_cost(cost: Option<f64>) -> Result<Option<f64>> {
+    match cost {
+        Some(c) if c.is_finite() && c >= 0.0 => Ok(Some(c)),
+        Some(c) => anyhow::bail!(
+            "--cost must be a finite, non-negative USD amount (got {c}); omit --cost to record the cost as unmeasured"
+        ),
+        None => Ok(None),
+    }
+}
+
+/// A supplied `--duration` must be a finite, positive number of seconds;
+/// `None` (flag omitted) is "unmeasured". `0` is refused rather than recorded,
+/// because it is not a measurement (backlog `e44e233f`).
+pub fn validate_duration(duration: Option<f64>) -> Result<Option<f64>> {
+    match duration {
+        Some(d) if d.is_finite() && d > 0.0 => Ok(Some(d)),
+        Some(d) => anyhow::bail!(
+            "--duration must be a finite, positive number of seconds (got {d}); omit --duration to record the duration as unmeasured"
+        ),
+        None => Ok(None),
+    }
 }
 
 /// Which branch a `finish` must force-delete for the shadow worktree at
@@ -172,9 +200,14 @@ fn record_to_fugu_router(outcome: &ShadowOutcome, fugu_bin: &Path) -> bool {
         .args(["--files", ""])
         .args(["--class", "shadow-run"])
         .args(["--model", &outcome.model])
-        .args(["--status", if outcome.pass { "verified" } else { "failed" }])
-        .args(["--cost", &outcome.cost_usd.to_string()])
-        .args(["--duration", &outcome.duration_secs.to_string()]);
+        .args(["--status", if outcome.pass { "verified" } else { "failed" }]);
+    // Unmeasured values are forwarded by OMISSION, never as an invented 0.
+    if let Some(c) = outcome.cost_usd {
+        cmd.args(["--cost", &c.to_string()]);
+    }
+    if let Some(d) = outcome.duration_secs {
+        cmd.args(["--duration", &d.to_string()]);
+    }
     match cmd.status() {
         Ok(status) => status.success(),
         Err(_) => false, // fugu_bin not spawnable → nothing recorded
@@ -273,8 +306,8 @@ mod tests {
             title: "t1 shadow attempt".to_string(),
             model: "opus".to_string(),
             pass: true,
-            cost_usd: 0.42,
-            duration_secs: 12.5,
+            cost_usd: Some(0.42),
+            duration_secs: Some(12.5),
         };
         // Explicit nonexistent binary: this test must never reach a real
         // fugu-router (or the user's real ~/.fugu-router store).

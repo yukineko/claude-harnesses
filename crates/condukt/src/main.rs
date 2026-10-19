@@ -465,10 +465,19 @@ enum ShadowRunAction {
         model: String,
         #[arg(long)]
         pass: bool,
+        /// Measured USD cost of the shadow attempt. OMIT it when no cost was
+        /// measured: the outcome is then recorded with the cost unmeasured
+        /// (`fugu-router record` gets no `--cost`), never with an invented
+        /// value. A supplied value must be finite and non-negative, or the
+        /// command is refused before anything is discarded (backlog `e44e233f`).
         #[arg(long)]
-        cost: f64,
+        cost: Option<f64>,
+        /// Measured wall-clock duration (seconds) of the shadow attempt. OMIT
+        /// it when not measured (recorded as unmeasured, never as 0). A
+        /// supplied value must be a finite positive number, or the command is
+        /// refused before anything is discarded (backlog `e44e233f`).
         #[arg(long)]
-        duration: f64,
+        duration: Option<f64>,
     },
 }
 
@@ -2768,13 +2777,18 @@ fn run_shadow_run(cfg: &Config, cwd: &Path, action: ShadowRunAction) -> Result<(
             cost,
             duration,
         } => {
+            // Validate the optional measurements BEFORE anything is discarded:
+            // an invalid supplied value is refused outright (omitting the flag
+            // is the only way to say "unmeasured").
+            let cost_usd = shadow_run::validate_cost(cost)?;
+            let duration_secs = shadow_run::validate_duration(duration)?;
             let repo = worktree::toplevel(cwd)?;
             let outcome = shadow_run::ShadowOutcome {
                 title,
                 model,
                 pass,
-                cost_usd: cost,
-                duration_secs: duration,
+                cost_usd,
+                duration_secs,
             };
             // Resolve fugu-router (plugin cache first, `$PATH` second). The
             // worktree is discarded regardless; only recording depends on it.

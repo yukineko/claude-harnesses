@@ -99,7 +99,7 @@ UNVERIFIED も同じ id を使い回すこと。
 
 verifier の REFUTED を捨ててはならない。
 
-スクリプトの exit 0 を、全 finding が review-queue に記録された証拠とみなさないこと。
+スクリプトが非 0 で終わったら、その round は記録されていない（overwatch バイナリが見つからない・`--dry-run` 以外で `--round` が無い・`record-finding` が失敗した）。PASS 行が出ていないなら記録済みとみなさないこと。exit 0 でも metrics / reconcile などの報告系呼び出しは WARNING を出して続行しているので、stderr の WARNING は読むこと。
 
 CONFIRMED subset と round metrics を `scripts/continuous-audit.sh` に渡すこと [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves]。
 
@@ -128,7 +128,6 @@ scripts/continuous-audit.sh --round <round-id> --dry-run
 - UNVERIFIED は `--confirmed` 件数に含めないこと [test: crates/overwatch/src/audit_round.rs::round_records_unverified_count_separately_from_confirmed]。
 - `--finder-model` と `--verifier-model` の両方を常に渡すこと [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_script_forwards_model_flags]。
   片方でも省略すると diversity は「未検査」であって「充足」ではないので、overwatch は review-queue に `audit-round-model-unchecked-<round>` の警告 finding を記録する [test: crates/overwatch/tests/audit_round.rs::distinct_finder_verifier_model_records_no_collision_finding] [test: crates/overwatch/tests/repro_audit_round_omitted_models_counted_clean.rs::omitted_models_must_not_be_indistinguishable_from_verified_distinct]。
-- overwatch バイナリが見つからない・`--round` が無い (dry-run 以外)・`record-finding` が失敗した場合、スクリプトは非 0 で終了し PASS を出さない [test: crates/overwatch/tests/repro_continuous_audit_script_failopens.rs::missing_overwatch_binary_must_not_exit_zero] [test: crates/overwatch/tests/repro_continuous_audit_script_failopens.rs::missing_round_must_not_exit_zero] [test: crates/overwatch/tests/repro_continuous_audit_script_failopens.rs::record_finding_failure_must_not_exit_zero]。
 - `--new-findings` / `--confirmed` / `--unverified` / `--regression-tests-added` は
   **round ledger にそのまま記録される件数** [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_unverified_count_flag]。`--finding` / `--unverified-finding` エントリは
   review-queue に流す subset (件数入力とは独立) [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_finding_entries_independent_of_counts]。

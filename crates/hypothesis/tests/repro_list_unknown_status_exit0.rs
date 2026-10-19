@@ -5,7 +5,6 @@
 use std::process::Command;
 
 #[test]
-#[ignore = "RED repro: hypothesis list --status bogus exits 0"]
 fn list_with_unknown_status_is_rejected() {
     let home = std::env::temp_dir().join(format!("hyp-bogus-status-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);

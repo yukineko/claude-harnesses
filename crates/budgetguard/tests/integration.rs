@@ -2,8 +2,8 @@
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end tests: drive the real built `budgetguard` binary and assert on
-//! exit code + stdout. `budgetguard gate` is a Stop hook — harness errors always
-//! exit 0 (never break the turn). The rest is a subcommand CLI.
+//! exit code + stdout. `budgetguard gate` is a Stop hook; with no limit armed it
+//! has nothing to gate and exits 0. The rest is a subcommand CLI.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -82,8 +82,10 @@ fn status_json_emits_machine_readable_pressure() {
 
 #[test]
 fn gate_with_empty_fields_exits_zero() {
-    // A valid Stop payload but with empty transcript_path/session_id → the gate
-    // returns early. The invariant is exit 0, never blocking the turn.
+    // A valid Stop payload with empty transcript_path/session_id and NO limit
+    // armed (no config): there is nothing to gate, so exit 0 with no decision.
+    // With a limit armed the same payload blocks; see
+    // tests/repro_unmeasurable_transcript_allows.rs.
     let home = temp_home("gate-valid");
     let payload = r#"{"hook_event_name":"Stop","session_id":"","transcript_path":""}"#;
     let (code, stdout) = run(&["gate"], payload, &home);
@@ -93,7 +95,9 @@ fn gate_with_empty_fields_exits_zero() {
 
 #[test]
 fn gate_with_malformed_stdin_exits_zero() {
-    // Fail-soft invariant: unparseable stdin → early return, never breaks a turn.
+    // Unparseable stdin with NO limit armed (no config): nothing to gate, so
+    // exit 0. With a limit armed it exits 1 with a stderr reason; see
+    // tests/repro_unmeasurable_transcript_allows.rs.
     let home = temp_home("gate-bad");
     let (code, stdout) = run(&["gate"], "not json", &home);
     assert_eq!(code, 0, "malformed stdin must still exit 0");

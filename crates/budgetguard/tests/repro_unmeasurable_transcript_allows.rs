@@ -81,7 +81,6 @@ fn assert_not_silently_allowed(case: &str, code: i32, stdout: &str, stderr: &str
 }
 
 #[test]
-#[ignore = "RED repro: armed limits + nonexistent transcript_path -> exit 0, no decision (silent allow)"]
 fn a_nonexistent_transcript_with_limits_armed_is_not_silently_allowed() {
     let home = temp_home("a");
     let payload = serde_json::json!({
@@ -96,7 +95,6 @@ fn a_nonexistent_transcript_with_limits_armed_is_not_silently_allowed() {
 }
 
 #[test]
-#[ignore = "RED repro: armed limits + transcript_path is a directory -> exit 0, no decision (silent allow)"]
 fn b_directory_transcript_with_limits_armed_is_not_silently_allowed() {
     let home = temp_home("b");
     let dir = home.join("a-directory");
@@ -113,7 +111,6 @@ fn b_directory_transcript_with_limits_armed_is_not_silently_allowed() {
 }
 
 #[test]
-#[ignore = "RED repro: armed limits + non-JSON stdin -> exit 0, no decision (silent allow)"]
 fn c_non_json_stdin_with_limits_armed_is_not_silently_allowed() {
     let home = temp_home("c");
     let (code, stdout, stderr) = gate("not json", &home);
@@ -121,7 +118,6 @@ fn c_non_json_stdin_with_limits_armed_is_not_silently_allowed() {
 }
 
 #[test]
-#[ignore = "RED repro: armed limits + empty session_id/transcript_path -> exit 0, no decision (silent allow)"]
 fn d_empty_session_or_transcript_with_limits_armed_is_not_silently_allowed() {
     let home = temp_home("d");
     let payload = serde_json::json!({

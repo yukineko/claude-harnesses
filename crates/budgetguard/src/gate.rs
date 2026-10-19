@@ -18,8 +18,10 @@
 //!   is present but does not parse, via [`day_undetermined_verdict`].
 //!
 //! Only two paths still exit 0 silently, and both are KNOWN answers rather than
-//! give-ups: no transcript data at all to price, and a config that is genuinely
-//! absent (see `config::Config::load_checked`).
+//! give-ups: a transcript that was read and holds nothing to price, and a
+//! config that is genuinely absent (see `config::Config::load_checked`). A
+//! transcript that could not be read (missing, a directory, unopenable) is not
+//! "nothing to price"; it is an undetermined session cost.
 //!
 //! Alongside the budget verdict this gate also carries a cache-hit health
 //! ([`crate::cache`]). It is advisory — a cold cache costs money but violates no
@@ -99,8 +101,8 @@ fn evaluate_with_store(
     // slip over budget. So a stale/missing/empty record falls back to the
     // accurate, timely `estimate_transcript_cost` (the pre-existing behavior).
     let session_usd = match session_cost(cfg, gauge_state_dir, session_id, transcript_path) {
-        // Cost measured. (`Known(None)` = no transcript data at all — nothing to
-        // price, which is the pre-existing "allow silently" path.)
+        // Cost measured. (`Known(None)` = the transcript was read and holds
+        // nothing to price; an unreadable transcript is `Undetermined`.)
         Determination::Known(Some(usd)) => usd,
         Determination::Known(None) => return None,
         Determination::Undetermined(why) => {
@@ -280,7 +282,7 @@ pub fn config_undetermined_result(why: &str) -> GateResult {
 ///   → `Allow`. There is no threshold an under-count could hide a crossing of,
 ///   so this is not the undetermined answer collapsing into a pass; it is the
 ///   gate being disabled.
-fn undetermined_verdict(cfg: &Config, why: &str) -> Verdict {
+pub fn undetermined_verdict(cfg: &Config, why: &str) -> Verdict {
     let msg = format!(
         "budgetguard: このセッションの費用を測定できませんでした（{why}）。\n\
          未計測の支出は $0 ではありません。作業を保存し、コミットして終了してください。"
@@ -303,10 +305,12 @@ fn undetermined_verdict(cfg: &Config, why: &str) -> Verdict {
 /// Three answers, not two:
 ///
 /// * `Known(Some(usd))` — the cost was measured.
-/// * `Known(None)` — there is nothing to price (empty/unreadable transcript and
-///   no usable record). Same fail-soft data-error path as before: the caller
-///   allows the stop, because no spend was observed *and none was missed*.
-/// * `Undetermined(why)` — a spend source could not be read, or a model with
+/// * `Known(None)` — there is nothing to price: the transcript is a readable
+///   regular file that holds no turns, and there is no usable record. The
+///   caller allows the stop, because no spend was observed *and none was
+///   missed*.
+/// * `Undetermined(why)` — a spend source could not be read (including the
+///   transcript itself: missing, a directory, or unopenable), or a model with
 ///   usage has no known rate (backlog ff98fed0: an unrecognized model id is
 ///   not $0), so any number here would be an under-count (see
 ///   [`TranscriptCostEstimate::complete_cost`], [`pricing::rate_for`]). The
@@ -330,11 +334,35 @@ fn session_cost(
         }
     }
     match estimate_transcript_cost(transcript_path, &cfg.price_overrides) {
-        None => Determination::Known(None),
+        // `estimate_transcript_cost` returns `None` both for a transcript that
+        // was read and holds nothing to price (a KNOWN zero) and for one that
+        // could not be read at all (missing path, a directory, unreadable). The
+        // second is not "no spend": the spend source was never observed, so it
+        // is `Undetermined` (backlog 5a4cd3ff).
+        None => match transcript_readable(transcript_path) {
+            Ok(()) => Determination::Known(None),
+            Err(why) => Determination::undetermined(why),
+        },
         // `complete_cost` refuses to hand over a cost whose sub-agent spend was
         // not readable — exactly the under-count this gate must not allow.
         Some(est) => est.complete_cost().map(Some),
     }
+}
+
+/// `Ok(())` when `transcript_path` names a regular file this process can open
+/// for reading; otherwise the reason it cannot be read. Used to tell "read,
+/// nothing to price" apart from "never read".
+fn transcript_readable(transcript_path: &str) -> Result<(), String> {
+    let meta = std::fs::metadata(transcript_path)
+        .map_err(|e| format!("transcript {transcript_path:?} cannot be read: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!(
+            "transcript {transcript_path:?} is not a regular file"
+        ));
+    }
+    std::fs::File::open(transcript_path)
+        .map(|_| ())
+        .map_err(|e| format!("transcript {transcript_path:?} cannot be opened: {e}"))
 }
 
 /// A gauge record "covers the current turn" when it was written at/after the
@@ -428,7 +456,9 @@ pub fn block_check_kind(result: &Option<GateResult>) -> Option<&'static str> {
 pub fn emit_and_exit(result: Option<GateResult>) -> ! {
     match result {
         None => {
-            // Data error or no transcript yet — allow silently.
+            // The transcript was read and holds nothing to price: a known
+            // zero, so the stop is allowed. (An unreadable transcript never
+            // reaches here; `session_cost` reports it as `Undetermined`.)
             std::process::exit(0);
         }
         Some(r) => {

@@ -54754,3 +54754,182 @@ excerpt = """
 rev = "51376c9c6a506418ab08829ae513beca29b90c80"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "5a4cd3ff"
+title = "budgetguard: unmeasurable transcript or malformed input silently allows the stop with limits armed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "With session/daily block limits armed, budgetguard gate exits 0 with no decision and empty stderr for: (a) transcript_path does not exist, (b) transcript_path is a directory, (c) stdin is not JSON, (d) session_id or transcript_path empty. Path: crates/budgetguard/src/main.rs gate_run returns early on hook None (line ~118) and on empty session_id/transcript_path (~121); crates/budgetguard/src/gate.rs session_cost maps estimate_transcript_cost None to Determination::Known(None) (~333), and evaluate returns None for it (~100) so emit_and_exit(None) exits 0 silently. Cannot-determine must resolve to block/undetermined when limits are armed. The existing tests crates/budgetguard/tests/integration.rs gate_with_malformed_stdin_exits_zero and gate_with_empty_fields_exits_zero pin the allow and must flip with the fix. Repro commit 154e2e47 on branch repro-budgetguard."
+created_at = 1792160293
+updated_at = 1792419889
+weight = 0.0
+issue_number = 1381
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1381"
+issue_closed_at = 1792419893
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p budgetguard --test repro_unmeasurable_transcript_allows -- --ignored"
+rev = "154e2e477dffa557e9d17658b0827ceeed6abc32"
+observed_at = 1792160293
+detail = """
+exit 101: iling budgetguard v0.1.37 (/Users/yuki/src/.harness-worktrees/repro-budgetguard/crates/budgetguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.45s
+     Running tests/repro_unmeasurable_transcript_allows.rs (target/debug/deps/repro_unmeasurable_transcript_allows-935612ff7a986657)
+error: test failed, to rerun pass `-p budgetguard --test repro_unmeasurable_transcript_allows`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p budgetguard --test repro_unmeasurable_transcript_allows"
+exit = 0
+passed = 4
+rev = "9f0e41477ffc9de38535c68609f8d3d4e049898d"
+observed_at = 1792419872
+output_digest = "sha256:8d77bb4333c9c5575dae8cde776db138e5b4712051264d626bee074533a83789"
+excerpt = """
+
+running 4 tests
+test c_non_json_stdin_with_limits_armed_is_not_silently_allowed ... ok
+test a_nonexistent_transcript_with_limits_armed_is_not_silently_allowed ... ok
+test b_directory_transcript_with_limits_armed_is_not_silently_allowed ... ok
+test d_empty_session_or_transcript_with_limits_armed_is_not_silently_allowed ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+   Compiling budgetguard v0.1.42 (/Users/yuki/src/.harness-worktrees/bg-failopen/crates/budgetguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/repro_unmeasurable_transcript_allows.rs (target/debug/deps/repro_unmeasurable_transcript_allows-a8403ce1d7fb774e)
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "c1174e86"
+title = "budgetguard: status --json reads a corrupt ledger as day_usd 0 and pressure false"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "main.rs status uses lenient Ledger::load (unwrap_or_default) so a corrupt ledger prints zero spend and no pressure with exit 0; check already uses load_checked and exits 2."
+created_at = 1792189420
+updated_at = 1792419913
+weight = 0.0
+issue_number = 1410
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1410"
+issue_closed_at = 1792419916
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p budgetguard --test repro_status_json_corrupt_ledger -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189420
+detail = """
+exit 101: h)
+   Compiling budgetguard v0.1.39 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/budgetguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.14s
+     Running tests/repro_status_json_corrupt_ledger.rs (target/debug/deps/repro_status_json_corrupt_ledger-702f571d4ccb3933)
+error: test failed, to rerun pass `-p budgetguard --test repro_status_json_corrupt_ledger`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p budgetguard --test repro_status_json_corrupt_ledger"
+exit = 0
+passed = 1
+rev = "9f0e41477ffc9de38535c68609f8d3d4e049898d"
+observed_at = 1792419893
+output_digest = "sha256:ec84cfe21c86fea3bb7736b2d39654be16ecfb7a8592d290e149fcb16c8e9498"
+excerpt = """
+
+running 1 test
+test status_json_corrupt_ledger_is_not_zero_spend ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+   Compiling budgetguard v0.1.42 (/Users/yuki/src/.harness-worktrees/bg-failopen/crates/budgetguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.77s
+     Running tests/repro_status_json_corrupt_ledger.rs (target/debug/deps/repro_status_json_corrupt_ledger-c5722c9308ce8374)
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "50bceba2"
+title = "compass gap exits 0 with empty dod on an unparseable charter (unclosed front matter) - reads as no gap"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Found by prose-flow citation work (branch prose-flow 3b2228ac). A UTF-8 charter.md whose front matter does not parse makes compass gap exit 0 with dod=[] and measuring_stick empty, indistinguishable from a charter with no gap. Expected: non-zero exit (undetermined -> restrictive, CLAUDE.md 3). RED: scripts/test_prose_flow_b.py test_claim_compass_fail_detectable_garbage_charter (unittest.expectedFailure, fails under pytest --runxfail). Flip the expectedFailure when fixed."
+created_at = 1792187683
+updated_at = 1792419653
+weight = 0.0
+issue_number = 1383
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1383"
+issue_closed_at = 1792419656
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_prose_flow_b.py -k test_claim_compass_fail_detectable_garbage_charter -q"
+rev = "3b2228ace35777e08233ea8223a4ee45ea53ecad"
+observed_at = 1792187683
+detail = """
+exit 1:    ) -> None:
+        try:
+>           xfail(str(reason))
+E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_prose_flow_b.py::TestCompassFailDetectable::test_claim_compass_fail_detectable_garbage_charter
+1 failed, 36 deselected in 1.05s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_prose_flow_b.py -k test_claim_compass_fail_detectable_garbage_charter -q"
+exit = 0
+passed = 1
+rev = "00bbef50fa9870d7fc4115bb68ac366f26da6592"
+observed_at = 1792419633
+output_digest = "sha256:9295a65f019a62f92cd768b3455770bda5c7a3fa0dd8bf110355a846dfad7bad"
+excerpt = """
+.                                                                        [100%]
+1 passed, 45 deselected in 0.58s
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 1
+kind = "behavioural"

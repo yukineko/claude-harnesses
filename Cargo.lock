@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.41"
+version = "0.1.42"
 dependencies = [
  "anyhow",
  "chrono",
@@ -292,7 +292,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "compass"
-version = "0.1.23"
+version = "0.1.24"
 dependencies = [
  "anyhow",
  "clap",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.267"
+version = "0.7.268"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -883,7 +883,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.74"
+version = "0.2.77"
 dependencies = [
  "anyhow",
  "clap",

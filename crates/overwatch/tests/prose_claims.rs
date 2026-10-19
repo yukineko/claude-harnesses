@@ -617,14 +617,14 @@ fn claim_rd_run_records_heartbeat_event() {
 fn claim_rd_end_releases_lease_records_status() {
     let sb = Sb::new();
     sb.ok(&["begin", "--key", "K", "--title", "t", "--session", "A"]);
-    let o = sb.ok(&["end", "--key", "K", "--status", "blocked-ish"]);
+    let o = sb.ok(&["end", "--key", "K", "--status", "abandoned"]);
     assert!(sb.leases().get("K").is_none());
     assert!(out(&o).contains("released lease K"));
     let ev = sb.events();
     let last = ev.last().unwrap();
     assert_eq!(last["kind"], json!("ended"));
     assert_eq!(last["key"], json!("K"));
-    assert_eq!(last["status"], json!("blocked-ish"));
+    assert_eq!(last["status"], json!("abandoned"));
 }
 
 #[test]

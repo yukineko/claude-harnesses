@@ -1277,36 +1277,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; 
 error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
 
 [[task]]
-id = "5a4cd3ff"
-title = "budgetguard: unmeasurable transcript or malformed input silently allows the stop with limits armed"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "With session/daily block limits armed, budgetguard gate exits 0 with no decision and empty stderr for: (a) transcript_path does not exist, (b) transcript_path is a directory, (c) stdin is not JSON, (d) session_id or transcript_path empty. Path: crates/budgetguard/src/main.rs gate_run returns early on hook None (line ~118) and on empty session_id/transcript_path (~121); crates/budgetguard/src/gate.rs session_cost maps estimate_transcript_cost None to Determination::Known(None) (~333), and evaluate returns None for it (~100) so emit_and_exit(None) exits 0 silently. Cannot-determine must resolve to block/undetermined when limits are armed. The existing tests crates/budgetguard/tests/integration.rs gate_with_malformed_stdin_exits_zero and gate_with_empty_fields_exits_zero pin the allow and must flip with the fix. Repro commit 154e2e47 on branch repro-budgetguard."
-created_at = 1792160293
-updated_at = 1792160293
-weight = 0.0
-issue_number = 1381
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1381"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p budgetguard --test repro_unmeasurable_transcript_allows -- --ignored"
-rev = "154e2e477dffa557e9d17658b0827ceeed6abc32"
-observed_at = 1792160293
-detail = """
-exit 101: iling budgetguard v0.1.37 (/Users/yuki/src/.harness-worktrees/repro-budgetguard/crates/budgetguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.45s
-     Running tests/repro_unmeasurable_transcript_allows.rs (target/debug/deps/repro_unmeasurable_transcript_allows-935612ff7a986657)
-error: test failed, to rerun pass `-p budgetguard --test repro_unmeasurable_transcript_allows`"""
-
-[[task]]
 id = "94520dbb"
 title = "overwatch: begin reports lock_contended when the project root is unresolvable"
 project = "/Users/yuki/src/harness"
@@ -1644,41 +1614,6 @@ exit 101: t` profile [unoptimized + debuginfo] target(s) in 0.84s
 error: test failed, to rerun pass `-p overwatch --test repro_ca_script_test_passes_without_bash`"""
 
 [[task]]
-id = "50bceba2"
-title = "compass gap exits 0 with empty dod on an unparseable charter (unclosed front matter) - reads as no gap"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Found by prose-flow citation work (branch prose-flow 3b2228ac). A UTF-8 charter.md whose front matter does not parse makes compass gap exit 0 with dod=[] and measuring_stick empty, indistinguishable from a charter with no gap. Expected: non-zero exit (undetermined -> restrictive, CLAUDE.md 3). RED: scripts/test_prose_flow_b.py test_claim_compass_fail_detectable_garbage_charter (unittest.expectedFailure, fails under pytest --runxfail). Flip the expectedFailure when fixed."
-created_at = 1792187683
-updated_at = 1792187683
-weight = 0.0
-issue_number = 1383
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1383"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_prose_flow_b.py -k test_claim_compass_fail_detectable_garbage_charter -q"
-rev = "3b2228ace35777e08233ea8223a4ee45ea53ecad"
-observed_at = 1792187683
-detail = """
-exit 1:    ) -> None:
-        try:
->           xfail(str(reason))
-E           _pytest.outcomes.XFailed
-
-../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
-=========================== short test summary info ============================
-FAILED scripts/test_prose_flow_b.py::TestCompassFailDetectable::test_claim_compass_fail_detectable_garbage_charter
-1 failed, 36 deselected in 1.05s"""
-
-[[task]]
 id = "2756b4a6"
 title = "daily: run_task spawns a command blastguard answers Ask for (matches only Deny)"
 project = "/Users/yuki/src/harness"
@@ -1957,37 +1892,6 @@ exit 101: piling session-insights v0.2.28 (/Users/yuki/src/.harness-worktrees/re
 error: test failed, to rerun pass `-p session-insights --test repro_record_now_exit0_no_note`"""
 
 [[task]]
-id = "c1174e86"
-title = "budgetguard: status --json reads a corrupt ledger as day_usd 0 and pressure false"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "main.rs status uses lenient Ledger::load (unwrap_or_default) so a corrupt ledger prints zero spend and no pressure with exit 0; check already uses load_checked and exits 2."
-created_at = 1792189420
-updated_at = 1792189420
-weight = 0.0
-issue_number = 1410
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1410"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p budgetguard --test repro_status_json_corrupt_ledger -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189420
-detail = """
-exit 101: h)
-   Compiling budgetguard v0.1.39 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/budgetguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.14s
-     Running tests/repro_status_json_corrupt_ledger.rs (target/debug/deps/repro_status_json_corrupt_ledger-702f571d4ccb3933)
-error: test failed, to rerun pass `-p budgetguard --test repro_status_json_corrupt_ledger`"""
-
-[[task]]
 id = "6bb90ca6"
 title = "propguard: unsearchable repo root reads as NotRepo (git_probe relies on Path::exists) and the Stop gate allows"
 project = "/Users/yuki/src/harness"
@@ -2169,3 +2073,36 @@ E           json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char
 =========================== short test summary info ============================
 FAILED scripts/test_prose_flow_a.py::T::test_claim_circuit_idle_home_unset_trips_unmeasured
 1 failed, 40 deselected in 1.06s"""
+
+[[task]]
+id = "c00c3506"
+title = "condukt git runner deadlocks on output over the 64 KiB pipe buffer, so diff-risk journals no-diff for large diffs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "worktree.rs run_git_bounded_with waits for child exit (wait_timeout) before read_bounded drains stdout. Output above the pipe buffer (65536 on macOS) blocks git; it is killed at GIT_TIMEOUT 45s. diffrisk_record::worktree_diff then falls back to git diff HEAD (empty on a clean committed tree) and journals no-diff. Observed 2026-10-19 at 51376c9c: run-20261018-190327-19056 t1 diff was 66752 bytes, state set done printed diff-risk NOT INSPECTED (no-diff); run-20261017-125123-30672 t3 had the same outcome. Possibly also the cause of the 45s condukt worktree merge timeout on 2026-10-18 (not verified). Fix direction: drain stdout/stderr concurrently while waiting."
+created_at = 1792419616
+updated_at = 1792419616
+weight = 0.0
+issue_number = 1418
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1418"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --bin condukt large_output_tests -- --ignored"
+rev = "827928c42b31b913f065b7b9888636bf3f09bb01"
+observed_at = 1792419616
+detail = """
+exit 101: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 912 filtered out; finished in 5.14s
+
+   Compiling condukt v0.7.267 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.06s
+     Running unittests src/main.rs (target/debug/deps/condukt-562e2d25402bd49f)
+error: test failed, to rerun pass `-p condukt --bin condukt`"""

@@ -1,6 +1,6 @@
 /// Lease lifecycle management.
 use crate::event::LifecycleEvent;
-use crate::lock::LeaseLock;
+use crate::lock::{LeaseLock, LockError};
 use crate::store;
 use anyhow::Result;
 use serde_json::json;
@@ -114,6 +114,24 @@ fn scopes_overlap(a: &[String], b: &[String]) -> harness_core::verdict::Determin
     }
 }
 
+/// Terminal statuses `overwatch end --status` accepts (the vocabulary the flow
+/// skill documents: `done` for a successful close, `abandoned` for a release
+/// without completion). Anything else is rejected before the lease is touched.
+const END_STATUSES: [&str; 2] = ["done", "abandoned"];
+
+/// Take the lease lock or fail with a typed, command-named error. Contention
+/// and an undetermined root are reported as different facts; neither is `Ok`.
+pub(crate) fn lock_or_bail(cwd: &std::path::Path, cmd: &str) -> Result<LeaseLock> {
+    LeaseLock::acquire_strict(cwd).map_err(|e| match e {
+        LockError::PathUndetermined(_) => {
+            anyhow::anyhow!("overwatch {cmd}: {e}; nothing was done (undetermined)")
+        }
+        LockError::NotAcquired => {
+            anyhow::anyhow!("overwatch {cmd}: {e}; nothing was done (skipped)")
+        }
+    })
+}
+
 /// Begin a new lease for a task. If a live lease from another session already holds the key,
 /// print a skip JSON to stdout and exit with code 1.
 ///
@@ -143,16 +161,21 @@ pub fn begin(
     // Hold the lease-registry lock across the whole load->check->save cycle so
     // two sessions racing begin() for the same key can never both pass the
     // is_held_by_other check before either saves (TOCTOU double-claim).
-    // HARD-SKIP on contention: rather than proceed to an unlocked load->check->
-    // save (which under a timed-out contention is exactly what lets two writers
-    // both claim the key), signal a skip like the held-by-other path. The old
-    // fail-soft `acquire` returned an UNLOCKED guard here, leaving the
-    // double-claim window open in production.
-    let lock = match LeaseLock::acquire_or_skip(&cwd) {
-        Some(l) => l,
-        None => {
+    // FAIL CLOSED on contention: rather than proceed to an unlocked load, check
+    // and save (which under a timed-out contention is exactly what lets two
+    // writers both claim the key), signal a skip (exit 1) like the
+    // held-by-other path. An unresolvable root is reported separately as
+    // undetermined (non-zero), never as contention.
+    let lock = match LeaseLock::acquire_strict(&cwd) {
+        Ok(l) => l,
+        Err(LockError::NotAcquired) => {
             println!("{}", json!({ "skipped": true, "reason": "lock_contended" }));
             std::process::exit(1);
+        }
+        // The root could not be resolved: no lock was attempted, so this is
+        // NOT contention. Report the undetermined state and exit non-zero.
+        Err(e @ LockError::PathUndetermined(_)) => {
+            anyhow::bail!("overwatch begin: {e}; no lease was claimed (undetermined)");
         }
     };
 
@@ -274,14 +297,10 @@ pub fn run(key: &str, note: Option<&str>) -> Result<()> {
     // Hold the lease-registry lock across the whole load->mutate->save cycle,
     // exactly as begin() does, so a concurrent mutator can never interleave on a
     // stale pre-begin snapshot and clobber a just-committed claim (TOCTOU).
-    // HARD-SKIP on contention: rather than proceed to an unlocked
-    // load->mutate->save that could clobber a concurrently-committed claim,
-    // skip this mutation (never-break-a-turn). The old fail-soft `acquire`
-    // returned an unlocked guard here, leaving that double-write window open.
-    let _lock = match LeaseLock::acquire_or_skip(&cwd) {
-        Some(l) => l,
-        None => return Ok(()),
-    };
+    // FAIL CLOSED on contention or an unresolvable root: rather than proceed
+    // to an unlocked load, mutate and save that could clobber a
+    // concurrently-committed claim, record nothing and exit non-zero.
+    let _lock = lock_or_bail(&cwd, "run")?;
 
     // Load leases
     let mut leases = store::load_leases(&cwd)?;
@@ -320,28 +339,35 @@ pub fn run(key: &str, note: Option<&str>) -> Result<()> {
 
 /// End a lease and release it.
 ///
+/// `status` must be `done` or `abandoned`; any other value is rejected
+/// (`Err`) before the lease is touched, leaving it held.
+///
 /// Three outcomes, never collapsed (backlog 3b056c02 / 6a9eb1ed): a held
 /// lease is released -> `Ok` and `released lease <key>` on stdout; no lease
 /// under `key` -> `Err` ("not released"), nothing is written; the lease lock
 /// cannot be taken -> `Err` (undetermined, the lease is untouched). A write
 /// that did nothing must not exit 0 — callers record a 0 as "released".
 pub fn end(key: &str, status: &str) -> Result<()> {
+    if !END_STATUSES.contains(&status) {
+        anyhow::bail!(
+            "overwatch end: unknown --status `{status}` (accepted: {}); lease `{key}` was NOT released",
+            END_STATUSES.join("|")
+        );
+    }
     let cwd = std::env::current_dir()?;
     let now = store::now();
 
     // Hold the lease-registry lock across the whole load->mutate->save cycle,
     // exactly as begin() does, so a concurrent begin() can never have its fresh
     // claim clobbered by this end() saving a stale pre-begin snapshot (TOCTOU).
-    // HARD-SKIP on contention: skip rather than proceed to an unlocked
-    // load->mutate->save, and REPORT the skip as a failure — the lease is
+    // FAIL CLOSED on contention: skip rather than proceed to an unlocked
+    // load, mutate and save, and REPORT the skip as a failure — the lease is
     // still held (it ages out via the stale reap), so this is not a release.
-    let _lock = match LeaseLock::acquire_or_skip(&cwd) {
-        Some(l) => l,
-        None => anyhow::bail!(
-            "overwatch end: could not take the lease lock; lease `{key}` was NOT released \
-             (undetermined — it remains held until released or reaped)"
-        ),
-    };
+    let _lock = lock_or_bail(&cwd, "end").map_err(|e| {
+        anyhow::anyhow!(
+            "{e}; lease `{key}` was NOT released (it remains held until released or reaped)"
+        )
+    })?;
 
     // Load leases
     let mut leases = store::load_leases(&cwd)?;
@@ -389,17 +415,11 @@ pub fn heartbeat(key: &str) -> Result<()> {
 
     // Hold the lease-registry lock across the whole load->mutate->save cycle,
     // exactly as begin() does, so a concurrent mutator cannot interleave on a
-    // stale snapshot and clobber a just-committed claim (TOCTOU). HARD-SKIP on
-    // contention: skip rather than proceed to an unlocked load->mutate->save. A
-    // single missed heartbeat is safe — the lease only ages out after the full
-    // stale-TTL of silence. The old fail-soft `acquire` left that window open.
-    let _lock = match LeaseLock::acquire_or_skip(&cwd) {
-        Some(l) => l,
-        None => {
-            println!("{{\"refreshed\": 0}}");
-            return Ok(());
-        }
-    };
+    // stale snapshot and clobber a just-committed claim (TOCTOU). FAIL CLOSED on
+    // contention or an unresolvable root: exit non-zero rather than proceed
+    // unlocked or print `refreshed: 0` as if the call had run. The caller
+    // (e.g. stuckguard's piggyback) decides whether a missed heartbeat matters.
+    let _lock = lock_or_bail(&cwd, "heartbeat")?;
 
     // Load leases
     let mut leases = store::load_leases(&cwd)?;
@@ -471,16 +491,9 @@ pub fn reap() -> Result<()> {
     // Hold the lease-registry lock across the whole load->mutate->save cycle,
     // exactly as begin() does, so a concurrent begin() can never have its fresh
     // claim clobbered by this reap() saving a stale pre-begin snapshot (TOCTOU).
-    // HARD-SKIP on contention: skip rather than proceed to an unlocked
-    // load->reap->save. Reaping is housekeeping — a skipped pass runs again on
-    // the next call. The old fail-soft `acquire` left that window open.
-    let _lock = match LeaseLock::acquire_or_skip(&cwd) {
-        Some(l) => l,
-        None => {
-            println!("{{\"reaped\": 0}}");
-            return Ok(());
-        }
-    };
+    // FAIL CLOSED on contention or an unresolvable root: exit non-zero rather
+    // than proceed unlocked or print `reaped: 0` as if a pass had run.
+    let _lock = lock_or_bail(&cwd, "reap")?;
 
     // Load and reap
     let mut leases = store::load_leases(&cwd)?;

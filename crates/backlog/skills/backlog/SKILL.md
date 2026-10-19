@@ -56,6 +56,7 @@ backlog lock release --project <path>
 - `audit-open` はテストを実行しない [test: crates/backlog/tests/audit_open_once.rs::no_test_is_executed]。
 - 判定済みは `~/.backlog/audit-open/<project-slug>.json` に記録され、以後読み飛ばす [test: crates/backlog/tests/audit_open_once.rs::first_run_ledger_records_has_and_no_test_but_not_undetermined] [test: crates/backlog/tests/audit_open_once.rs::row_checked_as_no_test_stays_skipped_after_repro_added]。
 - undetermined の行は次回また見る [test: crates/backlog/tests/audit_open_once.rs::second_run_skips_checked_and_reexamines_undetermined]。
+- 記録が読めなければ失敗する [test: crates/backlog/tests/audit_open_once.rs::garbage_ledger_is_undetermined_human] [test: crates/backlog/tests/audit_open_once.rs::garbage_ledger_is_undetermined_json]。
 - `cancel` は空でない `--reason` が要る [test: crates/backlog/tests/cancel_evidence.rs::cancel_with_empty_or_whitespace_reason_is_refused]。
 - `edit --status done|cancelled` は拒否される [test: crates/backlog/tests/closure_evidence.rs::edit_status_done_is_refused] [test: crates/backlog/tests/closure_evidence.rs::edit_status_cancelled_is_refused]。
 

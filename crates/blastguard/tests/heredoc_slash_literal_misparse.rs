@@ -108,8 +108,21 @@ fn assert_not_denied_for_slash(command: &str) {
     );
 }
 
+/// Restrictive controls for the fix (`names_unwritable_directory`): a write
+/// call that CAN land in a directory (`shutil.copy2`) still has its directory
+/// literal judged, and an existing unrecoverable FILE is still a write target.
 #[test]
-#[ignore = "RED: heredoc-body string literal slash-slash misparsed as write target `//`; remove ignore when fixed"]
+fn control_directory_capable_copy_and_existing_file_stay_denied() {
+    for cmd in [
+        "python3 - <<'EOF'\nimport shutil\nshutil.copy2('a', '//')\nEOF",
+        "python3 - <<'EOF'\nopen('/etc/hosts','w').write('x')\nEOF",
+    ] {
+        let (decision, reason) = verdict(cmd);
+        assert_eq!(decision, "deny", "{cmd:?} must stay Deny; reason={reason}");
+    }
+}
+
+#[test]
 fn slash_string_literal_in_python_heredoc_is_not_a_write_target() {
     let dir = repo_tests_dir("red");
     assert_not_denied_for_slash(&script(&dir, "//"));

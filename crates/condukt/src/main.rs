@@ -34,7 +34,6 @@ mod policy;
 mod pr;
 mod precedent;
 mod replan;
-mod repo_commit;
 mod review_brief;
 mod review_order;
 mod review_worthiness;
@@ -120,12 +119,6 @@ enum Command {
     Worktree {
         #[command(subcommand)]
         action: WtAction,
-    },
-    /// Mutations of the PRIMARY working tree (the shared one), serialized on the
-    /// repo-scoped primary lock.
-    Repo {
-        #[command(subcommand)]
-        action: RepoAction,
     },
     /// Run-state tracking and the completion gate.
     State {
@@ -566,33 +559,6 @@ enum EscalateAction {
         /// The chosen option (should be one of the recorded options).
         #[arg(long)]
         choice: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum RepoAction {
-    /// Stage the named paths and commit them in the working tree you run it
-    /// from (cwd's toplevel; never the main tree: CLAUDE.md §8), with `lock::REPO_PRIMARY_LOCK_KEY` held (keyed on that checkout)
-    /// across the whole read-modify-write, so concurrent condukt executions
-    /// sharing that worktree's index can never interleave content in it.
-    ///
-    /// NOT required by the `/condukt` skill any more: single-worktree mode and
-    /// the small-task fast path were retired (2026-10-03, backlog 5e5cf0a9) and
-    /// every task commits in its own worktree. Kept for callers that share one
-    /// worktree's index: raw `git add ... && git commit` holds no lock there.
-    ///
-    /// Restrictive on every cannot-determine: no `--path`, a widening pathspec
-    /// (`.`, a glob, `:` magic), foreign content already staged in the shared
-    /// index, an unheld lock, or a failing `git` all refuse with a non-zero exit
-    /// and leave HEAD where it was.
-    Commit {
-        /// A file this task owns (repeatable). Explicit paths only — never `-A`,
-        /// `.` or a glob, so a peer's edits cannot ride along.
-        #[arg(long = "path")]
-        paths: Vec<String>,
-        /// Commit message.
-        #[arg(long, short = 'm')]
-        message: String,
     },
 }
 
@@ -2195,7 +2161,6 @@ fn run_user(cmd: Command) -> Result<()> {
             }
         }
         Command::Worktree { action } => run_worktree(&cfg, &cwd, action)?,
-        Command::Repo { action } => run_repo(&cfg, &cwd, action)?,
         Command::State { action } => run_state(&cfg, &cwd, action)?,
         Command::Verify { action } => match action {
             VerifyAction::Digest { file } => {
@@ -3693,20 +3658,6 @@ fn run_policy(cfg: &Config, action: PolicyAction) -> ! {
     }
 }
 
-/// Primary-working-tree mutators. `cwd` may be anywhere inside the repo; the
-/// repo toplevel is resolved so the lock is keyed per repo, exactly like the
-/// other primary-repo mutators.
-fn run_repo(cfg: &Config, cwd: &Path, action: RepoAction) -> Result<()> {
-    let repo = worktree::toplevel(cwd)?;
-    match action {
-        RepoAction::Commit { paths, message } => {
-            let sha = repo_commit::commit(cfg, &repo, &paths, &message)?;
-            println!("{}", serde_json::json!({ "commit": sha, "paths": paths }));
-        }
-    }
-    Ok(())
-}
-
 fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
     let repo = worktree::toplevel(cwd)?;
     match action {
@@ -3854,18 +3805,14 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                 );
                 return Ok(());
             }
-            // The SAME repo-scoped lock the `reconcile` arm takes, for the same
-            // reason it takes it: the report must not be computed while a peer
-            // is adding or removing worktrees underneath it. A torn read here
-            // is not a harmless stale print — it is either offering a worktree
-            // that has just been removed, or failing to mention one that has
-            // just appeared, and both are answers about liveness that were
-            // never actually observed. This command writes nothing, so the lock
-            // is taken purely for a coherent read; refusing when it is
-            // contended (`?`) is right for a print-only discovery command —
-            // "run it again when the repo is quiet" costs nothing and leaves
-            // nothing half-done.
-            let _repo_lock = lock::acquire_repo_primary(cfg, &repo)?;
+            // Deliberately NOT under the repo-primary lock (user ruling
+            // 2026-10-13): this command writes nothing and has no caller that
+            // acts on its output, so waiting out (and then refusing on) a peer's
+            // merge/prune bought nothing. A report computed while a peer adds or
+            // removes a worktree may be momentarily stale; it is a discovery
+            // print, re-run it to refresh. `reconcile` still takes the lock
+            // because `--preserve` writes refs. Pinned by
+            // tests/resume_candidates_no_repo_lock.rs.
             // `preserve: false` — preservation writes refs into the repo, which
             // a print-only command must never do.
             let report = wt_reconcile::reconcile(cfg, cwd, &repo, false)?;
@@ -4697,6 +4644,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // Only fire on the
             // Running/Pending→Done edge so a re-run of `set --status done` does
             // not double-record.
+            let mut overlap_hold_missing = false;
             if st == state::Status::Done && prior_status != state::Status::Done {
                 if let Some(t) = rs.tasks.iter().find(|t| t.id == task) {
                     let session = session_id_from_env().unwrap_or_default();
@@ -4752,13 +4700,16 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                     // Mid-flight runtime-conflict detection (design 625aa170 A):
                     // record this task's ACTUAL changed-file set into the
                     // overwatch project-global registry and, on a detected
-                    // overlap with another in-flight worktree, set a merge-hold
-                    // (an open RuntimeOverlap entry in the consensus review
+                    // overlap with another in-flight worktree — or when that
+                    // check could NOT run (backlog 08494f63: unchecked is
+                    // undetermined, not "no overlap") — set a merge-hold (an
+                    // open RuntimeOverlap entry in the consensus review
                     // surface). The condukt merge path checks the hold and skips
-                    // the merge until it is resolved. Fully fail-soft on the
-                    // compute side (only a positive detection holds); never
-                    // changes the exit code here.
-                    if runtime_conflict::record_and_check_actual_overlap(
+                    // the merge until it is resolved. A hold that was needed but
+                    // could NOT be enqueued leaves the merge UNHELD: that is
+                    // named on stderr and moves the exit code (at the end of this
+                    // arm, after the claim upkeep), never reported as held.
+                    match runtime_conflict::record_and_check_actual_overlap(
                         cfg,
                         cwd,
                         &run,
@@ -4766,10 +4717,29 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         state::now_secs(),
                         &session,
                     ) {
-                        eprintln!(
+                        runtime_conflict::OverlapCheck::NotRecorded
+                        | runtime_conflict::OverlapCheck::NoOverlap => {}
+                        runtime_conflict::OverlapCheck::Held => eprintln!(
                             "condukt: runtime overlap detected for task '{}' — merge held for review (overwatch review-queue [merge-conflict])",
                             t.id
-                        );
+                        ),
+                        runtime_conflict::OverlapCheck::UncheckedHeld(why) => eprintln!(
+                            "condukt: runtime-overlap check could NOT run for task '{}' ({why}) — this is UNCHECKED, not \"no overlap\"; merge held for review (overwatch review-queue [merge-conflict])",
+                            t.id
+                        ),
+                        runtime_conflict::OverlapCheck::HoldNotEnqueued { unchecked, why } => {
+                            eprintln!(
+                                "condukt: merge-hold for task '{}' (run '{run}') could NOT be enqueued ({why}).\n  consequence: the merge is NOT held although {} — do not merge this task's branch \
+                                 until the overlap has been reviewed (`overwatch review-queue`, `active_changesets.json`).",
+                                t.id,
+                                if unchecked {
+                                    "its overlap with in-flight peers was never checked"
+                                } else {
+                                    "an overlap with an in-flight peer WAS detected"
+                                }
+                            );
+                            overlap_hold_missing = true;
+                        }
                     }
                 }
             }
@@ -4901,8 +4871,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
             // Deliberately LAST in the arm: the heartbeat upkeep above must still
             // run and still report, so the exit carries the undetermined release
-            // without suppressing the other half of the same block.
-            if claim_release_undetermined {
+            // (or the un-enqueued merge-hold, backlog 452f3705) without
+            // suppressing the other half of the same block.
+            if claim_release_undetermined || overlap_hold_missing {
                 std::process::exit(1);
             }
         }

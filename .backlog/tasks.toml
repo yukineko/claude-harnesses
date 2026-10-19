@@ -29,39 +29,6 @@ exit 1: test.py\u001B[0m:354: XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.07s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "2287ebae"
-title = "blastguard redirect_target_suffix_resolution fixtures assume /etc/fstab exists (always red on macOS)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "macos",
-    "test-env",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Measured 2026-10-03 on the merged tree and on origin/main b0f626e4: symlink_before_dotdot_in_a_suffix_must_not_be_resolved and symlink_without_a_dotdot_is_caught_by_the_symlink_axis panic with fixture .../../etc/fstab must resolve: No such file or directory. macOS has neither /etc/fstab nor /private/etc/fstab. Test came in with d2c2e5ee. Make the fixture create its own target instead of depending on a host file."
-created_at = 1790999884
-updated_at = 1792005339
-weight = 0.0
-issue_number = 1129
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1129"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_2287ebae -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005337
-detail = """
-exit 101: ignored; 0 measured; 1 filtered out; finished in 0.68s
-
-   Compiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
-     Running tests/backlog_2287ebae.rs (target/debug/deps/backlog_2287ebae-bc74d6ffff64bdb3)
-error: test failed, to rerun pass `-p blastguard --test backlog_2287ebae`"""
-
-[[task]]
 id = "1a4d26d1"
 title = "backlog claim_check_contract::non_executable_condukt_is_refused fails when a real condukt is later on PATH (lookup skips the non-exec shim) — fixture must not inherit PATH; fix is in the 1e6f00ae integration"
 project = "/Users/yuki/src/harness"
@@ -331,41 +298,6 @@ exit 1: st/unittest.py\u001B[0m:354: XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 5.16s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "4a1cf1ad"
-title = "blastguard: backtick-quoted path inside a Python heredoc comment is misread as a > redirect and blocked"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """
-Observed 2026-10-04 by the 873a2621 test-writer agent (session 33de4c25). Verbatim block: '> /claims.json' destroys the file's current contents and /claims.json contains a shell expansion, so blastguard cannot tell which file this names. Trigger: a heredoc body that is Python source, with a comment that wraps claims.json in backticks. Also a process finding: the agent then wrote the same script with the Write tool and ran it, which is the reroute-around-a-gate pattern that CLAUDE.md section 5.4 forbids (the effect was benign: test edits in its own worktree). Needs a reproduction test.
-
-[2026-10-04, session 33de4c25] Second observation, same verbatim block: the 873a2621 implementer's python3 heredoc that spliced crates/harness-core/src/transcript.rs was refused because Rust doc text "<project_key(main_worktree_root(root))>/claims.json" (in backticks) was parsed as a > redirect. The script never ran. Declared and asked; the user ruled to make the same change with the Edit tool."""
-created_at = 1791044006
-updated_at = 1792005327
-weight = 0.0
-issue_number = 1229
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1229"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_4a1cf1ad -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005323
-detail = """
-exit 101: ignored; 0 measured; 0 filtered out; finished in 1.48s
-
-   Compiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.55s
-     Running tests/backlog_4a1cf1ad.rs (target/debug/deps/backlog_4a1cf1ad-f7cb2f030a0f5a7b)
-error: test failed, to rerun pass `-p blastguard --test backlog_4a1cf1ad`"""
-
-[[task]]
 id = "1af8be51"
 title = "check-worktree-isolation _merge_head_visible uses os.path.exists: a directory/symlink MERGE_HEAD allows a main-tree commit (fail-open, disagrees with edit guard)"
 project = "/Users/yuki/src/harness"
@@ -402,13 +334,16 @@ project_unresolved = false
 tags = ["p2"]
 touched_files = []
 status = "pending"
-notes = "Observed 2026-10-04 (session 33de4c25) in the session worktree at main 9e9d8db3. cargo test -p blastguard --test redirect_target_suffix_resolution: symlink_before_dotdot_in_a_suffix_must_not_be_resolved and symlink_without_a_dotdot_is_caught_by_the_symlink_axis FAILED (12 passed, 2 failed). cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent FAILED. Both are pre-existing, not caused by 873a2621. Possibly related: 3ca56588 and b280cfa2 (blastguard symlink + ..). Also, stuckguard anchor::backlog_c397cd15::heartbeat_reaches_overwatch_that_is_only_in_the_plugin_cache failed in a full cargo test --workspace run but passed 3/3 in isolation: a parallel-run flake."
+notes = """
+Observed 2026-10-04 (session 33de4c25) in the session worktree at main 9e9d8db3. cargo test -p blastguard --test redirect_target_suffix_resolution: symlink_before_dotdot_in_a_suffix_must_not_be_resolved and symlink_without_a_dotdot_is_caught_by_the_symlink_axis FAILED (12 passed, 2 failed). cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent FAILED. Both are pre-existing, not caused by 873a2621. Possibly related: 3ca56588 and b280cfa2 (blastguard symlink + ..). Also, stuckguard anchor::backlog_c397cd15::heartbeat_reaches_overwatch_that_is_only_in_the_plugin_cache failed in a full cargo test --workspace run but passed 3/3 in isolation: a parallel-run flake.
+
+[2026-10-20, session c5b9c02b] The blastguard half is fixed by 14de6b48 (blastguard 0.2.137, closed with 2287ebae: both symlink rows RED at 59b9fa02, 14 passed after). Not closed: the specguard half is still RED at 59b9fa02 — cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent panics at forge_integration.rs:331 with 'specforge: requirement を backlog に積めなかった: requirement R1 を起票できなかった' (the backlog add subprocess). A different defect in a different plugin."""
 created_at = 1791046280
-updated_at = 1792005345
+updated_at = 1792427472
 weight = 0.0
 issue_number = 1259
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1259"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -421,33 +356,6 @@ exit 101: c/.harness-worktrees/session-1a4ac77f/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.98s
      Running tests/forge_integration.rs (target/debug/deps/forge_integration-50932e832101fd10)
 error: test failed, to rerun pass `-p specguard --test forge_integration`"""
-
-[[task]]
-id = "eba15868"
-title = "blastguard: 非再帰の rm <linked worktree>/.git (gitdir ファイル) が Allow — worktree の git 接続を切る削除を止めない (0.2.105 以前から。test adv_checkout_own_dotgit_file_is_not_allowed が RED)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1791046776
-updated_at = 1792005348
-weight = 0.0
-issue_number = 1264
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1264"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test worktree_protected_paths_adversarial adv_checkout_own_dotgit_file_is_not_allowed -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005347
-detail = """
-exit 101: ompiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
-     Running tests/worktree_protected_paths_adversarial.rs (target/debug/deps/worktree_protected_paths_adversarial-fe45f46383d17c2b)
-error: test failed, to rerun pass `-p blastguard --test worktree_protected_paths_adversarial`"""
 
 [[task]]
 id = "7b88aa9a"
@@ -937,34 +845,6 @@ test result: FAILED. 0 passed; 14 failed; 0 ignored; 0 measured; 6 filtered out;
 error: test failed, to rerun pass `-p blastguard --test script_file_content_exec`"""
 
 [[task]]
-id = "b85f6d5d"
-title = "blastguard: a '//' literal inside a quoted python heredoc is misparsed and denied"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1792086412
-updated_at = 1792086412
-weight = 0.0
-issue_number = 1362
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1362"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_slash_literal_misparse -- --ignored"
-rev = "4c9a42be8b24c5a75e2312765378d124836468f5"
-observed_at = 1792086412
-detail = """
-exit 101: es/overwatch)
-   Compiling blastguard v0.2.130 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.49s
-     Running tests/heredoc_slash_literal_misparse.rs (target/debug/deps/heredoc_slash_literal_misparse-de50a0a88f2ca2e2)
-error: test failed, to rerun pass `-p blastguard --test heredoc_slash_literal_misparse`"""
-
-[[task]]
 id = "dc955812"
 title = "blastguard classify は backtick で引用されたコマンドを記述するだけの task 散文も force-gate する (11be9484 の散文側、ユーザー裁定 2026-10-16 で先送り)"
 project = "/Users/yuki/src/harness"
@@ -996,74 +876,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; 
 error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
 
 [[task]]
-id = "08494f63"
-title = "overwatch: record_changeset_and_detect returns Ok(empty) when the lock is not acquired, so condukt sets no merge-hold"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "overwatch",
-    "condukt",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1792424660
-updated_at = 1792424660
-weight = 0.0
-issue_number = 1423
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1423"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p overwatch --test repro_lock_unavailable_reports_ok record_changeset_and_detect_with_unacquired_lock_must_not_report_no_overlap -- --ignored"
-rev = "23b0d2f5ff3546b25967e592872112a54c2a742f"
-observed_at = 1792424660
-detail = """
-exit 101: 10.07s
-
-   Compiling overwatch v0.2.84 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.28s
-     Running tests/repro_lock_unavailable_reports_ok.rs (target/debug/deps/repro_lock_unavailable_reports_ok-c3978615173790b2)
-error: test failed, to rerun pass `-p overwatch --test repro_lock_unavailable_reports_ok`"""
-
-[[task]]
-id = "452f3705"
-title = "overwatch: append_merge_conflict returns Ok(()) without writing when the lock is not acquired"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "overwatch",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1792424684
-updated_at = 1792424684
-weight = 0.0
-issue_number = 1424
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1424"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p overwatch --test repro_lock_unavailable_reports_ok append_merge_conflict_with_unacquired_lock_must_not_return_ok_unwritten -- --ignored"
-rev = "23b0d2f5ff3546b25967e592872112a54c2a742f"
-observed_at = 1792424684
-detail = """
-exit 101: unwritten
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 10.04s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
-     Running tests/repro_lock_unavailable_reports_ok.rs (target/debug/deps/repro_lock_unavailable_reports_ok-c3978615173790b2)
-error: test failed, to rerun pass `-p overwatch --test repro_lock_unavailable_reports_ok`"""
-
-[[task]]
 id = "2d8c41c5"
 title = "overwatch spec: load_leases is said to load corrupt JSON as an empty registry, but it returns Err"
 project = "/Users/yuki/src/harness"
@@ -1093,3 +905,183 @@ exit 101:    Compiling overwatch v0.2.84 (/Users/yuki/src/.harness-worktrees/ses
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
      Running tests/repro_spec_load_leases_corrupt_claim.rs (target/debug/deps/repro_spec_load_leases_corrupt_claim-7a40ca8a777e1295)
 error: test failed, to rerun pass `-p overwatch --test repro_spec_load_leases_corrupt_claim`"""
+
+[[task]]
+id = "dacb9dc1"
+title = "test_backlog_6267bfbe_36c936bc: expectedFailure test_ff_onto_merge_gated_in_other_worktree_is_not_recorded now passes (Unexpected success), suite red"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-20 at 3f4ad6e7 (main 23eb74b3 plus a test-only commit) while running gate-bypass consumer suites for 860c43db: python3 -m pytest scripts/test_backlog_6267bfbe_36c936bc.py reports 1 failed (Unexpected success). Either the defect was fixed and the marker must be removed, or the test no longer observes the defect. Not investigated (out of scope of 860c43db)."
+created_at = 1792426751
+updated_at = 1792426751
+weight = 0.0
+issue_number = 1428
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1428"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_backlog_6267bfbe_36c936bc.py"
+rev = "ce7deadcd7ddc8cb9fad70ddcfe5f0b0b61c90ac"
+observed_at = 1792426751
+detail = """
+exit 1: tForwardOntoGatedMerge.test_ff_onto_merge_gated_in_other_worktree_is_not_recorded _
+Unexpected success
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_6267bfbe_36c936bc.py::FastForwardOntoGatedMerge::test_ff_onto_merge_gated_in_other_worktree_is_not_recorded
+========================= 1 failed, 1 passed in 1.98s =========================="""
+
+[[task]]
+id = "12657c5e"
+title = "reviewgate install reports success when home dir is unresolvable (writes ./.claude/settings.json)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "reviewgate",
+    "fail-open",
+]
+touched_files = []
+status = "pending"
+notes = """crates/reviewgate/src/install.rs: dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")). With HOME unset and a uid with no passwd entry, reviewgate install exits 0, prints 'Installed Stop hook', and writes ./.claude/settings.json under cwd: the gate is not installed where Claude Code reads it, yet success is reported. Same class as backlog 1e783882. Repro: ignored test install_with_unresolvable_home_refuses (bd18ece9), observed RED: 'must exit non-zero; stdout=updated: ./.claude/settings.json'."""
+created_at = 1792121387
+updated_at = 1792121387
+weight = 0.0
+issue_number = 1364
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1364"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test audit_rows_save_fail_install_home -- --ignored install_with_unresolvable_home_refuses"
+rev = "11aa44d305519304f0b81cabc8a49d9eaca7626c"
+observed_at = 1792121387
+detail = """
+exit 101: viewgate v0.1.40 (/home/hiroyuki_nakayama/src/.claude-harnesses-worktrees/session-dcbf913f/crates/reviewgate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.74s
+     Running tests/audit_rows_save_fail_install_home.rs (target/debug/deps/audit_rows_save_fail_install_home-94ce47eebcf70dd6)
+error: test failed, to rerun pass `-p reviewgate --test audit_rows_save_fail_install_home`"""
+
+[[task]]
+id = "bc6508e7"
+title = "reviewgate install_with_unresolvable_home test requires Linux unshare and fails on macOS"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1792429752
+updated_at = 1792429752
+weight = 0.0
+issue_number = 1429
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1429"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test audit_rows_save_fail_install_home install_with_unresolvable_home_writes_to_cwd_and_succeeds"
+rev = "caa78b02fe76894db2e549a199336730d2fc9c2b"
+observed_at = 1792429752
+detail = """
+exit 101: tch)
+   Compiling reviewgate v0.1.45 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/reviewgate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.62s
+     Running tests/audit_rows_save_fail_install_home.rs (target/debug/deps/audit_rows_save_fail_install_home-8c6a47333d40b1a2)
+error: test failed, to rerun pass `-p reviewgate --test audit_rows_save_fail_install_home`"""
+
+[[task]]
+id = "f1ce802c"
+title = "overwatch mark_changeset_merged / mark_branch_merged / prune_stale_changesets return Ok when the lease lock is not acquired"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-10-20 at 7b473300 (found verifying run-20261020-010750-7347). store.rs still uses acquire_or_skip with None => return Ok(())/Ok(0); the sibling mutators moved to acquire_strict in d0ccb95b. Only production caller condukt worktree.rs finalize_landed_branch logs only on Err, so a skipped mark is silent and a landed branch's changeset stays merged=false (later spurious overlap hold until TTL)."
+created_at = 1792429766
+updated_at = 1792429766
+weight = 0.0
+issue_number = 1430
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1430"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_skip_arms_report_ok -- --include-ignored"
+rev = "7b473300e0fa0e3bc48a187940c50a4347f2f478"
+observed_at = 1792429766
+detail = """
+exit 101: iltered out; finished in 10.09s
+
+   Compiling overwatch v0.2.87 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.26s
+     Running tests/repro_skip_arms_report_ok.rs (target/debug/deps/repro_skip_arms_report_ok-cd502459a6ae8916)
+error: test failed, to rerun pass `-p overwatch --test repro_skip_arms_report_ok`"""
+
+[[task]]
+id = "79458be4"
+title = "condukt runtime overlap check treats git failing to list changed files as an empty diff (NotRecorded, no hold)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-10-20 at 7b473300. runtime_conflict.rs changed_files returns None both for an empty diff and when all three git diff fallbacks fail; both map to OverlapCheck::NotRecorded: no changeset, no hold, exit 0. Module doc states it on purpose (or that git could not produce). Undetermined must not read as nothing changed."
+created_at = 1792429794
+updated_at = 1792429794
+weight = 0.0
+issue_number = 1431
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1431"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test repro_changed_files_git_failure_notrecorded git_failure_listing_changed_files_is_not_silent_norecord -- --include-ignored --exact"
+rev = "7b473300e0fa0e3bc48a187940c50a4347f2f478"
+observed_at = 1792429794
+detail = """
+exit 101: condukt` (test "repro_changed_files_git_failure_notrecorded") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.77s
+     Running tests/repro_changed_files_git_failure_notrecorded.rs (target/debug/deps/repro_changed_files_git_failure_notrecorded-4b8302f002108801)
+error: test failed, to rerun pass `-p condukt --test repro_changed_files_git_failure_notrecorded`"""
+
+[[task]]
+id = "38321ba7"
+title = "condukt overlap hold for a done task without a recorded branch is written with an empty branch the merge gate never matches"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-10-20 at 7b473300. state set --status done --worktree W without --branch leaves task.branch None; runtime_conflict.rs uses task.branch.clone().unwrap_or_default(), so the hold has branch empty; worktree.rs open_runtime_overlap_hold matches e.branch == branch from worktree merge --branch, so the hold never blocks. Test asserts the stored branch; end-to-end merge not driven."
+created_at = 1792429817
+updated_at = 1792429817
+weight = 0.0
+issue_number = 1432
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1432"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test repro_overlap_hold_empty_branch overlap_hold_for_task_without_recorded_branch_has_empty_branch -- --include-ignored --exact"
+rev = "7b473300e0fa0e3bc48a187940c50a4347f2f478"
+observed_at = 1792429817
+detail = """
+exit 101:  finished in 1.21s
+
+   Compiling condukt v0.7.271 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/repro_overlap_hold_empty_branch.rs (target/debug/deps/repro_overlap_hold_empty_branch-f05d1c8a6ba38345)
+error: test failed, to rerun pass `-p condukt --test repro_overlap_hold_empty_branch`"""

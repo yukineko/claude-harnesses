@@ -65,7 +65,7 @@ overwatch begin --key "hypothesis-v2.3"
 
 - **exit 0**: Lease 取得成功（同じセッションが既に保持していた場合は refresh、`claimed_at` は維持） [test: crates/overwatch/tests/prose_claims.rs::claim_rd_begin_exit0_refresh_keeps_claimed_at]。
 - **exit 1** + JSON `{ "skipped": true, "holder": { "session_id", "run_id", "heartbeat_at" } }`: このキーについて、別の live セッションが lease を保持中 [test: crates/overwatch/tests/prose_claims.rs::claim_rd_begin_held_key_exit1_skip_json]。**決して先に進んではいけない**。
-- **exit 1** + JSON `{ "skipped": true, "reason": "lock_contended" }`: lease レジストリのロックが取れず、キーが空いているかを確認していない [test: crates/overwatch/tests/prose_claims.rs::claim_rd_begin_held_key_exit1_skip_json]。後で再試行すること。**先に進んではいけない**。
+- **exit 1** + JSON `{ "skipped": true, "reason": "lock_contended" }`: 待機中ずっと live な相手が lease レジストリのロックを保持しており、キーが空いているかを確認していない [test: crates/overwatch/tests/prose_claims.rs::claim_rd_begin_held_key_exit1_skip_json]。後で再試行すること。**先に進んではいけない**。ロックの I/O 失敗（ロックディレクトリを作成・書き込みできない）は `lock_contended` としては報告せず、stderr に undetermined エラーを出して非 0 で終了する [test: crates/overwatch/tests/repro_lock_io_failure_reported_as_contended.rs::begin_with_uncreatable_lock_dir_must_not_claim_lock_contended]。
 
 exit code を確認し、非 0 なら処理をスキップすること。
 

@@ -67,7 +67,7 @@ overwatch begin --key "hypothesis-v2.3"
 
 - **exit 0**: Lease acquired (or refreshed, if the same session already held it — `claimed_at` is kept). [test: crates/overwatch/tests/prose_claims.rs::claim_rd_begin_exit0_refresh_keeps_claimed_at]
 - **exit 1** + JSON `{ "skipped": true, "holder": { "session_id", "run_id", "heartbeat_at" } }`: Lease is held by another live session [test: crates/overwatch/tests/prose_claims.rs::claim_rd_begin_held_key_exit1_skip_json]. Do NOT proceed.
-- **exit 1** + JSON `{ "skipped": true, "reason": "lock_contended" }`: the lease-registry lock could not be taken, so whether the key is free was not checked [test: crates/overwatch/tests/prose_claims.rs::claim_rd_begin_held_key_exit1_skip_json]. Do NOT proceed (retry later).
+- **exit 1** + JSON `{ "skipped": true, "reason": "lock_contended" }`: a live peer held the lease-registry lock for the whole wait, so whether the key is free was not checked [test: crates/overwatch/tests/prose_claims.rs::claim_rd_begin_held_key_exit1_skip_json]. Do NOT proceed (retry later). A lock I/O failure (the lock dir cannot be created or written) is NOT reported as `lock_contended`: it exits non-zero with an undetermined error on stderr [test: crates/overwatch/tests/repro_lock_io_failure_reported_as_contended.rs::begin_with_uncreatable_lock_dir_must_not_claim_lock_contended].
 
 Check the exit code and skip if it is non-zero.
 

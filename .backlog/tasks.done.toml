@@ -56752,3 +56752,64 @@ scripts/test_gate_bypass.py ...........                                  [100%]
 rev = "3f4ad6e7c1322856df0e537a4184c53344c21d8d"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "50f89600"
+title = "overwatch: lock I/O failure is reported as lock_contended (begin, resolve-merge-conflict, record-disposition)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1792424696
+updated_at = 1792426596
+weight = 0.0
+issue_number = 1425
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1425"
+issue_closed_at = 1792426598
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_lock_io_failure_reported_as_contended -- --ignored"
+rev = "23b0d2f5ff3546b25967e592872112a54c2a742f"
+observed_at = 1792424696
+detail = """
+exit 101: h v0.2.84 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s
+     Running tests/repro_lock_io_failure_reported_as_contended.rs (target/debug/deps/repro_lock_io_failure_reported_as_contended-ae1efb03ba9c1b30)
+error: test failed, to rerun pass `-p overwatch --test repro_lock_io_failure_reported_as_contended`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_lock_io_failure_reported_as_contended"
+exit = 0
+passed = 3
+rev = "5159ed4c3452656dfd39d4311d35afa668c513e8"
+observed_at = 1792426573
+output_digest = "sha256:98163c2ddc92de148d87df478024fe7a675a3c693c534a320c64470f1c20c712"
+excerpt = """
+
+running 3 tests
+test begin_with_uncreatable_lock_dir_must_not_claim_lock_contended ... ok
+test resolve_merge_conflict_with_unwritable_lock_dir_must_not_claim_lock_contended ... ok
+test record_disposition_with_unwritable_lock_dir_must_not_claim_lock_contended ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+
+   Compiling overwatch v0.2.85 (/Users/yuki/src/.harness-worktrees/ow-lockio-50f89600/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.50s
+     Running tests/repro_lock_io_failure_reported_as_contended.rs (target/debug/deps/repro_lock_io_failure_reported_as_contended-0276432797d0d34d)
+"""
+
+[task.closure.red]
+rev = "23eb74b3e9f003a4dcf85d2018e681326598f2e5"
+exit = 101
+kind = "behavioural"

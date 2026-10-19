@@ -123,10 +123,16 @@ pub enum LockError {
     /// the lease root is UNDETERMINED. No lock was attempted; nothing is known
     /// about contention.
     PathUndetermined(String),
-    /// A lock path exists but the lock was not taken: a live peer held it for
-    /// the whole deadline, or acquisition hit an I/O error (the underlying
-    /// acquire does not distinguish the two).
+    /// A lock path exists but a peer held the lock for the whole deadline
+    /// (genuine contention, or a holder whose liveness could not be
+    /// determined). Retrying later may succeed.
     NotAcquired,
+    /// Acquisition hit an I/O failure (the lock dir could not be created, the
+    /// temp lock could not be created/written, or the publish link failed for
+    /// a reason other than "already exists"). No peer is known to hold
+    /// anything; the lock dir is unusable, so this is NOT contention and a
+    /// retry will not clear it. The payload is the failure.
+    Io(String),
 }
 
 impl std::fmt::Display for LockError {
@@ -137,6 +143,10 @@ impl std::fmt::Display for LockError {
                 "could not resolve the lease root / lock path ({e}); lock state undetermined"
             ),
             LockError::NotAcquired => write!(f, "could not take the lease lock (contended)"),
+            LockError::Io(e) => write!(
+                f,
+                "could not take the lease lock: I/O failure ({e}); lock state undetermined"
+            ),
         }
     }
 }
@@ -186,7 +196,10 @@ impl LeaseLock {
     /// Returns `true` when this guard genuinely holds the lock. A `false` here
     /// means the lock degraded to unlocked (fail-soft after a timeout or I/O
     /// error) and any RMW performed under it may race — the caller should treat
-    /// that as unsafe to mutate.
+    /// that as unsafe to mutate. Test-only: production callers use
+    /// [`LeaseLock::acquire_strict`] / [`LeaseLock::acquire_or_skip`], which
+    /// never hand back an unheld guard.
+    #[cfg(test)]
     pub fn held(&self) -> bool {
         self.path.is_some()
     }
@@ -209,13 +222,27 @@ impl LeaseLock {
         Self::acquire_strict(cwd).ok()
     }
 
-    /// Like [`LeaseLock::acquire_or_skip`] but keeps the two failure causes
+    /// Like [`LeaseLock::acquire_or_skip`] but keeps the three failure causes
     /// apart: [`LockError::PathUndetermined`] (the project root / lock path
-    /// could not be resolved, so no lock was ever attempted) versus
-    /// [`LockError::NotAcquired`] (a lock path exists but the lock was not
-    /// taken). Callers that report the outcome must not name the first as the
-    /// second.
+    /// could not be resolved, so no lock was ever attempted),
+    /// [`LockError::NotAcquired`] (a peer held the lock for the whole
+    /// deadline) and [`LockError::Io`] (acquisition hit an I/O failure; no peer
+    /// is known to hold anything). Callers that report the outcome must not
+    /// name an undetermined path or an I/O failure as contention.
     pub fn acquire_strict(cwd: &Path) -> Result<Self, LockError> {
+        Self::acquire_strict_with_deadline(cwd, Self::DEADLINE)
+    }
+
+    /// Deadline-parameterized [`LeaseLock::acquire_strict`]. The hard-skip
+    /// check-then-append paths ([`crate::store::append_disposition`],
+    /// [`crate::store::append_merge_conflict_resolution`]) call this so both
+    /// production (the 10s default) and the wedged-holder regression test (a
+    /// short deadline) drive the SAME code, and so they can report contention
+    /// and an undetermined lock (path / I/O failure) as different outcomes.
+    pub(crate) fn acquire_strict_with_deadline(
+        cwd: &Path,
+        deadline: Duration,
+    ) -> Result<Self, LockError> {
         let path = match lock_path(cwd) {
             Ok(p) => p,
             Err(e) => {
@@ -223,31 +250,15 @@ impl LeaseLock {
                 return Err(LockError::PathUndetermined(e.to_string()));
             }
         };
-        Self::acquire_or_skip_at(path, Self::DEADLINE).ok_or(LockError::NotAcquired)
-    }
-
-    /// Deadline-parameterized [`LeaseLock::acquire_or_skip`]. The hard-skip
-    /// check-then-append path ([`crate::store::append_disposition`]) delegates
-    /// here so both production (the 10s default) and its wedged-holder
-    /// regression test (a short deadline) drive the SAME skip-on-contention
-    /// code. Same mapping (an unheld guard maps to `None`).
-    pub(crate) fn acquire_or_skip_with_deadline(cwd: &Path, deadline: Duration) -> Option<Self> {
-        let path = match lock_path(cwd) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!(
-                    "overwatch: could not resolve lease lock path ({e}); skipping (treat as held)"
-                );
-                return None;
-            }
-        };
-        Self::acquire_or_skip_at(path, deadline)
+        Self::try_acquire_at(path, deadline)
     }
 
     /// Core of [`LeaseLock::acquire_or_skip`] against an explicit lock `path`:
     /// runs the same acquire and maps the unheld guard to
-    /// `None`. Shared by the public API and the tests (which drive it with a
-    /// short deadline against a self-contained temp path).
+    /// `None`. Test-only: the tests drive it with a short deadline against a
+    /// self-contained temp path (the public API goes through
+    /// [`LeaseLock::try_acquire_at`] via [`LeaseLock::acquire_strict`]).
+    #[cfg(test)]
     fn acquire_or_skip_at(path: PathBuf, deadline: Duration) -> Option<Self> {
         let guard = Self::acquire_at(path, deadline);
         if guard.held() {
@@ -262,15 +273,26 @@ impl LeaseLock {
     /// [`LeaseLock::acquire_with_deadline`] so tests can exercise the hard-link
     /// publish/reap/contend behavior directly against a self-contained temp
     /// path, without racing every other test in this binary that also sandboxes
-    /// the process-global `$HOME` env var.
+    /// the process-global `$HOME` env var. Collapses every failure to an unheld
+    /// guard; [`LeaseLock::try_acquire_at`] keeps the cause.
     fn acquire_at(path: PathBuf, deadline: Duration) -> Self {
+        Self::try_acquire_at(path, deadline).unwrap_or(LeaseLock { path: None })
+    }
+
+    /// [`LeaseLock::acquire_at`] with the failure cause kept:
+    /// [`LockError::NotAcquired`] ONLY when a peer held the lock past
+    /// `deadline`; every I/O failure is [`LockError::Io`], never contention.
+    fn try_acquire_at(path: PathBuf, deadline: Duration) -> Result<Self, LockError> {
+        fn io_fail(msg: String) -> LockError {
+            eprintln!("overwatch: {msg}; lock not acquired");
+            LockError::Io(msg)
+        }
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!(
-                    "overwatch: could not create lock dir {} ({e}); lock not acquired",
+                return Err(io_fail(format!(
+                    "could not create lock dir {} ({e})",
                     parent.display()
-                );
-                return LeaseLock { path: None };
+                )));
             }
         }
 
@@ -281,10 +303,8 @@ impl LeaseLock {
             pid: std::process::id(),
             acquired_at: now_unix(),
         };
-        let json = match serde_json::to_string(&info) {
-            Ok(j) => j,
-            Err(_) => return LeaseLock { path: None },
-        };
+        let json = serde_json::to_string(&info)
+            .map_err(|e| io_fail(format!("could not encode lock info ({e})")))?;
         let tmp_path = path.with_extension(format!(
             "lock.tmp.{}.{}.{}",
             std::process::id(),
@@ -299,16 +319,14 @@ impl LeaseLock {
                 .open(&tmp_path)
             {
                 Ok(mut f) => {
-                    if f.write_all(json.as_bytes()).is_err() {
+                    if let Err(e) = f.write_all(json.as_bytes()) {
                         let _ = std::fs::remove_file(&tmp_path);
-                        eprintln!("overwatch: could not write temp lock; lock not acquired");
-                        return LeaseLock { path: None };
+                        return Err(io_fail(format!("could not write temp lock ({e})")));
                     }
                     f.sync_all().ok();
                 }
                 Err(e) => {
-                    eprintln!("overwatch: could not create temp lock ({e}); lock not acquired");
-                    return LeaseLock { path: None };
+                    return Err(io_fail(format!("could not create temp lock ({e})")));
                 }
             }
         }
@@ -317,7 +335,7 @@ impl LeaseLock {
         let start = Instant::now();
         loop {
             match std::fs::hard_link(&tmp_path, &path) {
-                Ok(()) => return LeaseLock { path: Some(path) },
+                Ok(()) => return Ok(LeaseLock { path: Some(path) }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     // Someone holds the lock. Reap it only if we can positively
                     // confirm the owner pid is gone; otherwise wait for release.
@@ -342,7 +360,7 @@ impl LeaseLock {
                                      lock not acquired",
                                     deadline
                                 );
-                                return LeaseLock { path: None };
+                                return Err(LockError::NotAcquired);
                             }
                             std::thread::sleep(Duration::from_millis(10));
                             continue;
@@ -350,11 +368,10 @@ impl LeaseLock {
                     }
                 }
                 Err(e) => {
-                    eprintln!(
-                        "overwatch: could not publish lock {} ({e}); lock not acquired",
+                    return Err(io_fail(format!(
+                        "could not publish lock {} ({e})",
                         path.display()
-                    );
-                    return LeaseLock { path: None };
+                    )));
                 }
             }
         }

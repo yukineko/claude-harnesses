@@ -123,7 +123,7 @@ const END_STATUSES: [&str; 2] = ["done", "abandoned"];
 /// and an undetermined root are reported as different facts; neither is `Ok`.
 pub(crate) fn lock_or_bail(cwd: &std::path::Path, cmd: &str) -> Result<LeaseLock> {
     LeaseLock::acquire_strict(cwd).map_err(|e| match e {
-        LockError::PathUndetermined(_) => {
+        LockError::PathUndetermined(_) | LockError::Io(_) => {
             anyhow::anyhow!("overwatch {cmd}: {e}; nothing was done (undetermined)")
         }
         LockError::NotAcquired => {
@@ -164,17 +164,18 @@ pub fn begin(
     // FAIL CLOSED on contention: rather than proceed to an unlocked load, check
     // and save (which under a timed-out contention is exactly what lets two
     // writers both claim the key), signal a skip (exit 1) like the
-    // held-by-other path. An unresolvable root is reported separately as
-    // undetermined (non-zero), never as contention.
+    // held-by-other path. An unresolvable root or a lock I/O failure is
+    // reported separately as undetermined (non-zero), never as contention.
     let lock = match LeaseLock::acquire_strict(&cwd) {
         Ok(l) => l,
         Err(LockError::NotAcquired) => {
             println!("{}", json!({ "skipped": true, "reason": "lock_contended" }));
             std::process::exit(1);
         }
-        // The root could not be resolved: no lock was attempted, so this is
-        // NOT contention. Report the undetermined state and exit non-zero.
-        Err(e @ LockError::PathUndetermined(_)) => {
+        // The root could not be resolved (no lock was attempted), or the lock
+        // dir is unusable (I/O failure, no peer holds anything): NOT
+        // contention. Report the undetermined state and exit non-zero.
+        Err(e @ (LockError::PathUndetermined(_) | LockError::Io(_))) => {
             anyhow::bail!("overwatch begin: {e}; no lease was claimed (undetermined)");
         }
     };

@@ -5,7 +5,7 @@ use crate::changeset::{
 };
 use crate::disposition::Disposition;
 use crate::event::LifecycleEvent;
-use crate::lock::LeaseLock;
+use crate::lock::{LeaseLock, LockError};
 use crate::merge_conflict::{MergeConflictEntry, MergeConflictResolution};
 use crate::review_finding::{AuditVerdict, ReviewFinding};
 use crate::rollback::RollbackEvent;
@@ -852,6 +852,20 @@ pub enum AppendOutcome {
     SkippedUndetermined(String),
 }
 
+/// Map a failed strict lock acquire to the not-persisted [`AppendOutcome`]:
+/// only genuine contention ([`LockError::NotAcquired`]) is
+/// [`AppendOutcome::SkippedContended`]; an unresolvable lock path or a lock I/O
+/// failure is [`AppendOutcome::SkippedUndetermined`] — no peer is known to hold
+/// anything, so "contended, retry shortly" would misstate the cause.
+fn lock_failure_outcome(e: LockError) -> AppendOutcome {
+    match e {
+        LockError::NotAcquired => AppendOutcome::SkippedContended,
+        LockError::PathUndetermined(_) | LockError::Io(_) => {
+            AppendOutcome::SkippedUndetermined(format!("{e}; nothing was persisted"))
+        }
+    }
+}
+
 /// Answer "is there already a record matching `pred` in this ledger?" from the
 /// tri-state [`scan_jsonl`], for the dedup-then-append writers below.
 ///
@@ -877,7 +891,9 @@ fn ledger_contains<T: serde::de::DeserializeOwned>(
 /// read->check->append critical section and re-check for an existing
 /// disposition with this `finding_id` INSIDE the lock, skipping the append if
 /// one is already present. On lock contention the append is HARD-SKIPPED
-/// ([`AppendOutcome::SkippedContended`]). The dedup reads the ledger via the
+/// ([`AppendOutcome::SkippedContended`]); a lock I/O failure or unresolvable
+/// lock path is [`AppendOutcome::SkippedUndetermined`], never "contended".
+/// The dedup reads the ledger via the
 /// tri-state [`scan_dispositions`] path: an unreadable ledger or a corrupt
 /// existing line makes the dedup undetermined and the append is REFUSED
 /// ([`AppendOutcome::SkippedUndetermined`]) — it is never treated as "no prior
@@ -957,13 +973,9 @@ fn append_disposition_detailed_with_deadline(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let _lock = match LeaseLock::acquire_or_skip_with_deadline(cwd, deadline) {
-        Some(l) => l,
-        None => {
-            return Ok(DispositionAppend::NotPersisted(
-                AppendOutcome::SkippedContended,
-            ))
-        }
+    let _lock = match LeaseLock::acquire_strict_with_deadline(cwd, deadline) {
+        Ok(l) => l,
+        Err(e) => return Ok(DispositionAppend::NotPersisted(lock_failure_outcome(e))),
     };
     // Dedup via the tri-state scan (CA-overwatch-02): the best-effort
     // `read_dispositions` dropped an unreadable ledger / undecodable line, so a
@@ -1608,6 +1620,8 @@ pub fn scan_merge_conflicts(cwd: &Path) -> Result<Determination<Vec<MergeConflic
 /// [`append_disposition`]: hold the store `LeaseLock`, re-check for an existing
 /// resolution of this `conflict_id` INSIDE the lock, skip if present. On lock
 /// contention the append is HARD-SKIPPED ([`AppendOutcome::SkippedContended`]);
+/// a lock I/O failure or unresolvable lock path is
+/// [`AppendOutcome::SkippedUndetermined`], never "contended";
 /// an unreadable / partially-undecodable resolution ledger makes the dedup
 /// undetermined and the append is REFUSED
 /// ([`AppendOutcome::SkippedUndetermined`]), never appended as a duplicate.
@@ -1627,9 +1641,9 @@ pub fn append_merge_conflict_resolution(
     // HARD-SKIP on contention: skip the append rather than proceed to an
     // unlocked check-then-append that could double-row the resolution. The old
     // fail-soft `acquire` left that window open.
-    let _lock = match LeaseLock::acquire_or_skip(cwd) {
-        Some(l) => l,
-        None => return Ok(AppendOutcome::SkippedContended),
+    let _lock = match LeaseLock::acquire_strict(cwd) {
+        Ok(l) => l,
+        Err(e) => return Ok(lock_failure_outcome(e)),
     };
     // Dedup via the tri-state scan (CA-overwatch-03 twin).
     match ledger_contains::<MergeConflictResolution>(
@@ -2026,7 +2040,7 @@ mod tests {
     // an unlocked check-then-append that could double-row the disposition. RED
     // with the old fail-soft `acquire`: it hands back an unlocked guard, the
     // append proceeds, and dispositions.jsonl gains a line. GREEN with
-    // `acquire_or_skip_with_deadline`.
+    // `acquire_strict_with_deadline`.
     #[test]
     fn contended_store_lock_makes_append_disposition_skip_not_double_write() {
         use crate::disposition::{Disposition, DispositionVerdict};

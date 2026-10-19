@@ -1212,3 +1212,35 @@ Unexpected success
 =========================== short test summary info ============================
 FAILED scripts/test_backlog_6267bfbe_36c936bc.py::FastForwardOntoGatedMerge::test_ff_onto_merge_gated_in_other_worktree_is_not_recorded
 ========================= 1 failed, 1 passed in 1.98s =========================="""
+
+[[task]]
+id = "2dc70bc5"
+title = "blastguard の truncating-redirect Deny 理由が「this gate does not refuse or ask about」と判定と矛盾する文言を出す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-20 verbatim block: '> /Users/yuki/src/.harness-worktrees/bg-p1-c5b9/crates/blastguard/src/detect.rs' destroys the file's current contents and it is inside a git work tree, which this gate does not refuse or ask about. The gate refused while the reason says it does not refuse (CLAUDE.md 4: prose contradicting behaviour). Source: Recovery::RecoverableFromGit.describe() in crates/blastguard/src/reversible.rs is appended by the redirect Deny in crates/blastguard/src/detect.rs (format at the 'destroys the file's current contents' site) when the target is recoverable but neither confined nor a recognised worktree checkout. Repro: crates/blastguard/tests/deny_reason_contradicts_verdict.rs (ignored)."
+created_at = 1792431180
+updated_at = 1792431180
+weight = 0.0
+issue_number = 1433
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1433"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test deny_reason_contradicts_verdict -- --include-ignored"
+rev = "c40e3bf5a479e87ab1ff9a3b40bbca1b612cd0b5"
+observed_at = 1792431180
+detail = """
+exit 101: finished in 0.07s
+
+   Compiling blastguard v0.2.142 (/Users/yuki/src/.harness-worktrees/cmd-dc95/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running tests/deny_reason_contradicts_verdict.rs (target/debug/deps/deny_reason_contradicts_verdict-e176126693fb9e65)
+error: test failed, to rerun pass `-p blastguard --test deny_reason_contradicts_verdict`"""

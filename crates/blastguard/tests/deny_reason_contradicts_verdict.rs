@@ -24,7 +24,7 @@ fn identity(p: &str) -> Option<String> {
 }
 
 #[test]
-#[ignore = "open defect: refusal reason claims the gate does not refuse (backlog ticket filed from this commit)"]
+#[ignore = "backlog 2dc70bc5: open defect, remove ignore when fixed"]
 fn refusal_reason_does_not_claim_the_gate_does_not_refuse() {
     let session = std::env::temp_dir().join(format!("bg-reason-{}", std::process::id()));
     std::fs::create_dir_all(&session).expect("create session dir");

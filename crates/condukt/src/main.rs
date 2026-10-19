@@ -1186,8 +1186,10 @@ enum StateAction {
     ///
     /// * 3 — at least one task is UNOBSERVABLE: a durable progress signal could
     ///   not be read at all (no `updated_at`, an unreadable worktree HEAD, a
-    ///   task with no worktree). The engine tried to look and could not; no
-    ///   re-run fixes that on its own.
+    ///   task with no worktree), or a confirmed-stalled task's worktree
+    ///   dirtiness could not be read by the uncommitted-work veto (backlog
+    ///   `d65110df`; dirtiness is a veto, not a progress signal). The engine
+    ///   tried to look and could not; no re-run fixes that on its own.
     /// * 0 — nothing was unobservable. Tasks that were confirmed stuck have been
     ///   abandoned (zero of them is still exit 0). This includes the case where
     ///   the only undetermined tasks are AWAITING-SAMPLE: every signal read
@@ -5351,7 +5353,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 .collect();
             if !unobservable.is_empty() {
                 eprintln!(
-                    "{} task(s) UNDETERMINED (unobservable): a durable progress signal could not be read — neither stuck nor healthy, and must not be read as clean:",
+                    "{} task(s) UNDETERMINED (unobservable): an observation the verdict needs could not be read — a durable progress signal, or a stalled task's worktree dirtiness for the uncommitted-work veto (each task's reason names which) — neither stuck nor healthy, and must not be read as clean:",
                     unobservable.len()
                 );
                 for u in &unobservable {

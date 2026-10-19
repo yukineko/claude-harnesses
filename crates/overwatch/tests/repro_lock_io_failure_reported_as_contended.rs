@@ -89,7 +89,6 @@ fn assert_not_contended(what: &str, out: &Output) {
 }
 
 #[test]
-#[ignore = "repro: begin reports lock_contended when the lock dir cannot be created (I/O failure); remove ignore when fixed"]
 fn begin_with_uncreatable_lock_dir_must_not_claim_lock_contended() {
     let (t, home, cwd) = sandbox("begin");
     // HOME/.overwatch is a regular FILE, so the store dir can never be created.
@@ -104,7 +103,6 @@ fn begin_with_uncreatable_lock_dir_must_not_claim_lock_contended() {
 }
 
 #[test]
-#[ignore = "repro: resolve-merge-conflict reports lock_contended when the lock file cannot be created (I/O failure); remove ignore when fixed"]
 fn resolve_merge_conflict_with_unwritable_lock_dir_must_not_claim_lock_contended() {
     let (t, home, cwd) = sandbox("resolve");
     let dir = make_store_dir_unwritable(&home, &cwd);
@@ -119,7 +117,6 @@ fn resolve_merge_conflict_with_unwritable_lock_dir_must_not_claim_lock_contended
 }
 
 #[test]
-#[ignore = "repro: record-disposition reports lock_contended when the lock file cannot be created (I/O failure); remove ignore when fixed"]
 fn record_disposition_with_unwritable_lock_dir_must_not_claim_lock_contended() {
     let (t, home, cwd) = sandbox("disp");
     let dir = make_store_dir_unwritable(&home, &cwd);

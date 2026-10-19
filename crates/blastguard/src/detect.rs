@@ -5245,6 +5245,28 @@ const INTERPRETER_WRITE_CALLS: &[&str] = &[
     ",'wb'",
 ];
 
+/// True when `candidate` names an EXISTING DIRECTORY and nothing in `payload`
+/// can write into a directory operand — so the literal cannot be what the
+/// program's write call overwrites.
+///
+/// Backlog b85f6d5d: `l.startswith('//')` beside `open(p,'w')` was denied as
+/// "it writes `//`", because `//` is `/` to the probe and `/` is in no work
+/// tree. `open(dir, 'w')`, `os.truncate(dir)`, `copyfile(_, dir)` and
+/// `writeFileSync(dir)` all fail on a directory (EISDIR), so a directory
+/// literal is not their target. `shutil.copy2(src, dir)` DOES write into a
+/// directory (`dir/<basename>`), so when the program spells it this answers
+/// `false` and the literal is probed exactly as before. A path whose kind
+/// cannot be read (`metadata` fails, relative with no base) is also `false`:
+/// unknown stays on the probing side.
+fn names_unwritable_directory(candidate: &str, payload: &str, base: Option<&str>) -> bool {
+    if payload.to_ascii_lowercase().contains("shutil.copy2(") {
+        return false;
+    }
+    crate::reversible::resolve(candidate, base)
+        .and_then(|p| std::fs::metadata(p).ok())
+        .is_some_and(|m| m.is_dir())
+}
+
 /// The overwrite-shaped call in `payload`, if any. Case-folded for the same
 /// reason as [`interpreter_destructive_call`].
 fn interpreter_write_call(payload: &str) -> Option<&'static str> {
@@ -5793,7 +5815,11 @@ path — changing it changes which hooks and gates run, and blastguard will not 
                 // is exactly the waste the ruling names. Gated on the literal
                 // looking like a path, and capped, because each probe spawns
                 // git and this runs inside a PreToolUse hook.
-                if write_call.is_some() && probed < MAX_RECOVERY_PROBES && candidate.contains('/') {
+                if write_call.is_some()
+                    && probed < MAX_RECOVERY_PROBES
+                    && candidate.contains('/')
+                    && !names_unwritable_directory(candidate, payload, ctx.raw_base.as_deref())
+                {
                     probed += 1;
                     let recovery = crate::reversible::probe(candidate, ctx.raw_base.as_deref());
                     if let crate::reversible::Recovery::Unrecoverable(why) = &recovery {

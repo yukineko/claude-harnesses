@@ -54933,3 +54933,596 @@ excerpt = """
 rev = "51376c9c6a506418ab08829ae513beca29b90c80"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "df9e188b"
+title = "overwatch: end --status bogus is accepted and the lease released"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "lease::end records the free-text status in an Ended event without validating it."
+created_at = 1792189470
+updated_at = 1792422370
+weight = 0.0
+issue_number = 1415
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1415"
+issue_closed_at = 1792422373
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_end_unknown_status_accepted -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189470
+detail = """
+exit 101: 65s
+
+   Compiling overwatch v0.2.71 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.15s
+     Running tests/repro_end_unknown_status_accepted.rs (target/debug/deps/repro_end_unknown_status_accepted-cc9a6f175075906b)
+error: test failed, to rerun pass `-p overwatch --test repro_end_unknown_status_accepted`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_end_unknown_status_accepted"
+exit = 0
+passed = 1
+rev = "c8fb81e6329d732bdd03cc1f81866babfb7663fb"
+observed_at = 1792422352
+output_digest = "sha256:179f83da71cffc3d458b25216cb85b95166202ae28f28af6a357e2f96e1a444f"
+excerpt = """
+
+running 1 test
+test end_with_unknown_status_is_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/repro_end_unknown_status_accepted.rs (target/debug/deps/repro_end_unknown_status_accepted-b9ebcc5383a687b0)
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "94520dbb"
+title = "overwatch: begin reports lock_contended when the project root is unresolvable"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "lease.rs begin(): LeaseLock::acquire_or_skip returns None also when lock_path fails (lock.rs acquire_or_skip, Err arm), and begin prints reason lock_contended. With a .git FILE containing garbage no lock exists anywhere; the true condition is undetermined root. The test asserts stdout does not claim lock_contended while a control shows no .lock file under HOME. RED observed: stdout={reason:lock_contended,skipped:true}, stderr names gitfile-unparseable."
+created_at = 1792187682
+updated_at = 1792422405
+weight = 0.0
+issue_number = 1382
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1382"
+issue_closed_at = 1792422410
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_begin_unresolvable_root_lock_contended -- --ignored"
+rev = "87b0070ed0dd341f43f07aea4532497ac1168a30"
+observed_at = 1792187682
+detail = """
+exit 101: 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/repro_begin_unresolvable_root_lock_contended.rs (target/debug/deps/repro_begin_unresolvable_root_lock_contended-39512df536390604)
+error: test failed, to rerun pass `-p overwatch --test repro_begin_unresolvable_root_lock_contended`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_begin_unresolvable_root_lock_contended"
+exit = 0
+passed = 1
+rev = "c8fb81e6329d732bdd03cc1f81866babfb7663fb"
+observed_at = 1792422390
+output_digest = "sha256:4d7b668cdbb51a68fd1994bd5c8a609db132c9594d8f2e0377003e6a6fc8d7ce"
+excerpt = """
+
+running 1 test
+test begin_on_unresolvable_root_must_not_claim_lock_contended ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_begin_unresolvable_root_lock_contended.rs (target/debug/deps/repro_begin_unresolvable_root_lock_contended-477b1ec967f09b56)
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "2eadf6e1"
+title = "overwatch: heartbeat/run/reap/reassign exit 0 on an unresolvable project root"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "lease.rs heartbeat/run/reap and control.rs reassign take the acquire_or_skip None arm (also hit when lock_path is Err) and return Ok(()), printing refreshed 0 / reaped 0 / nothing. end already bails non-zero in the same setup. Tests assert non-zero exit for each of the four; control asserts end is non-zero. RED observed: each exited 0."
+created_at = 1792187755
+updated_at = 1792422425
+weight = 0.0
+issue_number = 1384
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1384"
+issue_closed_at = 1792422429
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_mutators_unresolvable_root_exit_zero -- --ignored"
+rev = "87b0070ed0dd341f43f07aea4532497ac1168a30"
+observed_at = 1792187755
+detail = """
+exit 101: ch v0.2.70 (/Users/yuki/src/.harness-worktrees/repro-ow-failopens/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running tests/repro_mutators_unresolvable_root_exit_zero.rs (target/debug/deps/repro_mutators_unresolvable_root_exit_zero-75d955e3508810f0)
+error: test failed, to rerun pass `-p overwatch --test repro_mutators_unresolvable_root_exit_zero`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_mutators_unresolvable_root_exit_zero"
+exit = 0
+passed = 5
+rev = "c8fb81e6329d732bdd03cc1f81866babfb7663fb"
+observed_at = 1792422410
+output_digest = "sha256:5187a241fd657909bf25687ae85dde3c082f80c4f5f48e564b0f18d00d5df897"
+excerpt = """
+
+running 5 tests
+test control_end_is_nonzero_on_unresolvable_root ... ok
+test run_on_unresolvable_root_must_be_nonzero ... ok
+test reassign_on_unresolvable_root_must_be_nonzero ... ok
+test reap_on_unresolvable_root_must_be_nonzero ... ok
+test heartbeat_on_unresolvable_root_must_be_nonzero ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_mutators_unresolvable_root_exit_zero.rs (target/debug/deps/repro_mutators_unresolvable_root_exit_zero-f8326bf3ba9593b6)
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "2c861ea1"
+title = "overwatch: run exits 0 under real lease-lock contention"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "lease.rs run(): None => return Ok(()) on acquire_or_skip contention; nothing recorded, exit 0, while begin exits 1 and end bails. Test holds the lock with a live pid and asserts non-zero. RED observed: run exited 0 after the 10s deadline, stderr 'proceeding unlocked'."
+created_at = 1792187759
+updated_at = 1792422465
+weight = 0.0
+issue_number = 1386
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1386"
+issue_closed_at = 1792422468
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_run_lock_contended_exit_zero -- --ignored"
+rev = "87b0070ed0dd341f43f07aea4532497ac1168a30"
+observed_at = 1792187759
+detail = """
+exit 101: 9s
+
+   Compiling overwatch v0.2.70 (/Users/yuki/src/.harness-worktrees/repro-ow-failopens/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running tests/repro_run_lock_contended_exit_zero.rs (target/debug/deps/repro_run_lock_contended_exit_zero-494ea22a6ff50047)
+error: test failed, to rerun pass `-p overwatch --test repro_run_lock_contended_exit_zero`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_run_lock_contended_exit_zero"
+exit = 0
+passed = 1
+rev = "c8fb81e6329d732bdd03cc1f81866babfb7663fb"
+observed_at = 1792422429
+output_digest = "sha256:cfe598a9eb0a1097f808a461e8265527567b41553008229b72b8cc183e53e539"
+excerpt = """
+
+running 1 test
+test run_under_real_lock_contention_must_be_nonzero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_run_lock_contended_exit_zero.rs (target/debug/deps/repro_run_lock_contended_exit_zero-7ee92d70c09ecd35)
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "17df39aa"
+title = "overwatch: pause/resume exit 0 when condukt fails"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "control.rs pause/resume: run_fail_soft returns false, only recorded as ok=false in the ledger, then Ok(()). Test puts a stub condukt that exits 1 first on PATH and asserts non-zero. RED observed: exit 0, stdout control_note 'condukt exited 1'."
+created_at = 1792187783
+updated_at = 1792422491
+weight = 0.0
+issue_number = 1387
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1387"
+issue_closed_at = 1792422494
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_pause_resume_condukt_failure_exit_zero -- --ignored"
+rev = "87b0070ed0dd341f43f07aea4532497ac1168a30"
+observed_at = 1792187783
+detail = """
+exit 101: 2.70 (/Users/yuki/src/.harness-worktrees/repro-ow-failopens/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/repro_pause_resume_condukt_failure_exit_zero.rs (target/debug/deps/repro_pause_resume_condukt_failure_exit_zero-b4ef3cff6052c77b)
+error: test failed, to rerun pass `-p overwatch --test repro_pause_resume_condukt_failure_exit_zero`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_pause_resume_condukt_failure_exit_zero"
+exit = 0
+passed = 2
+rev = "c8fb81e6329d732bdd03cc1f81866babfb7663fb"
+observed_at = 1792422469
+output_digest = "sha256:481ce61e1fe0bb54f5bab720ad5e6b1e0c4841db1a0739265a418ac899f1f1ff"
+excerpt = """
+
+running 2 tests
+test resume_must_be_nonzero_when_condukt_fails ... ok
+test pause_must_be_nonzero_when_condukt_fails ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/repro_pause_resume_condukt_failure_exit_zero.rs (target/debug/deps/repro_pause_resume_condukt_failure_exit_zero-1728732eff4ead6c)
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "05586a36"
+title = "overwatch: reassign of an unheld key exits 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "control.rs reassign: key not held prints 'recording intent anyway' and returns Ok; nothing reassigned. end of an unheld key bails non-zero (control in test). RED observed: exit 0."
+created_at = 1792187793
+updated_at = 1792422511
+weight = 0.0
+issue_number = 1390
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1390"
+issue_closed_at = 1792422514
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_reassign_unheld_key_exit_zero -- --ignored"
+rev = "87b0070ed0dd341f43f07aea4532497ac1168a30"
+observed_at = 1792187793
+detail = """
+exit 101: 
+   Compiling overwatch v0.2.70 (/Users/yuki/src/.harness-worktrees/repro-ow-failopens/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.42s
+     Running tests/repro_reassign_unheld_key_exit_zero.rs (target/debug/deps/repro_reassign_unheld_key_exit_zero-7032a17f1c9c84aa)
+error: test failed, to rerun pass `-p overwatch --test repro_reassign_unheld_key_exit_zero`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_reassign_unheld_key_exit_zero"
+exit = 0
+passed = 1
+rev = "c8fb81e6329d732bdd03cc1f81866babfb7663fb"
+observed_at = 1792422495
+output_digest = "sha256:0125f01db99d07735e95d7fa2708553a345223a20b91d156a48a0724c2a2db0b"
+excerpt = """
+
+running 1 test
+test reassign_of_unheld_key_must_be_nonzero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_reassign_unheld_key_exit_zero.rs (target/debug/deps/repro_reassign_unheld_key_exit_zero-3e81389502130177)
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "f9cf5bd2"
+title = "overwatch: continuous-audit.sh exits 0 when the overwatch binary or --round is missing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "scripts/continuous-audit.sh: binary-lookup else branch prints 'nothing recorded (fail-soft)' and exit 0; missing --round does [ DRY_RUN -eq 1 ] || exit 0. Tests run a sandboxed copy of the script and assert non-zero. RED observed for both."
+created_at = 1792187787
+updated_at = 1792422529
+weight = 0.0
+issue_number = 1388
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1388"
+issue_closed_at = 1792422532
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_continuous_audit_script_failopens -- --ignored missing_"
+rev = "87b0070ed0dd341f43f07aea4532497ac1168a30"
+observed_at = 1792187787
+detail = """
+exit 101: g overwatch v0.2.70 (/Users/yuki/src/.harness-worktrees/repro-ow-failopens/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests/repro_continuous_audit_script_failopens.rs (target/debug/deps/repro_continuous_audit_script_failopens-3b38ef99cd2ced41)
+error: test failed, to rerun pass `-p overwatch --test repro_continuous_audit_script_failopens`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_continuous_audit_script_failopens -- missing_"
+exit = 0
+passed = 2
+rev = "c8fb81e6329d732bdd03cc1f81866babfb7663fb"
+observed_at = 1792422514
+output_digest = "sha256:33d99cf0f689f44231746ddf74730fd313907997a896b22c76dbc0914dfb4042"
+excerpt = """
+
+running 2 tests
+test missing_overwatch_binary_must_not_exit_zero ... ok
+test missing_round_must_not_exit_zero ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_continuous_audit_script_failopens.rs (target/debug/deps/repro_continuous_audit_script_failopens-8c592833a4adee3c)
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "ce5b50b9"
+title = "overwatch: continuous-audit.sh swallows record-finding failure and prints PASS"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "scripts/continuous-audit.sh record_findings_with_verdict calls run_ow, which maps any non-zero to 'continuing, fail-soft'; script ends PASS and exit 0 though a CONFIRMED finding was never stored. Test uses a stub OVERWATCH_BIN failing record-finding. RED observed: exit 0 with PASS printed."
+created_at = 1792187791
+updated_at = 1792422547
+weight = 0.0
+issue_number = 1389
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1389"
+issue_closed_at = 1792422550
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_continuous_audit_script_failopens -- --ignored record_finding_failure"
+rev = "87b0070ed0dd341f43f07aea4532497ac1168a30"
+observed_at = 1792187791
+detail = """
+exit 101: esult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.34s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/repro_continuous_audit_script_failopens.rs (target/debug/deps/repro_continuous_audit_script_failopens-3b38ef99cd2ced41)
+error: test failed, to rerun pass `-p overwatch --test repro_continuous_audit_script_failopens`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_continuous_audit_script_failopens -- record_finding_failure"
+exit = 0
+passed = 1
+rev = "c8fb81e6329d732bdd03cc1f81866babfb7663fb"
+observed_at = 1792422533
+output_digest = "sha256:18e94e4b228d16611a2a124b5358d1a0b33997ff3e4dd06ac47fc0ba3a3e7867"
+excerpt = """
+
+running 1 test
+test record_finding_failure_must_not_exit_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.17s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_continuous_audit_script_failopens.rs (target/debug/deps/repro_continuous_audit_script_failopens-8c592833a4adee3c)
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "589a8bff"
+title = "overwatch: reconcile-fixed exits 0 outside a git repo"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "reconcile-fixed cannot read git history outside a repo yet prints commits_scanned 0 and exits 0, indistinguishable from nothing to reconcile. Pinning test that will flip: reconcile_fixed.rs::reconcile_fixed_fail_soft_when_not_a_git_repo. New test asserts non-zero. RED observed: exit 0."
+created_at = 1792187817
+updated_at = 1792422567
+weight = 0.0
+issue_number = 1392
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1392"
+issue_closed_at = 1792422570
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_reconcile_fixed_not_a_git_repo_exit_zero -- --ignored"
+rev = "87b0070ed0dd341f43f07aea4532497ac1168a30"
+observed_at = 1792187817
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/repro-ow-failopens/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.67s
+     Running tests/repro_reconcile_fixed_not_a_git_repo_exit_zero.rs (target/debug/deps/repro_reconcile_fixed_not_a_git_repo_exit_zero-cb8f4bec2dc513be)
+error: test failed, to rerun pass `-p overwatch --test repro_reconcile_fixed_not_a_git_repo_exit_zero`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_reconcile_fixed_not_a_git_repo_exit_zero"
+exit = 0
+passed = 1
+rev = "c8fb81e6329d732bdd03cc1f81866babfb7663fb"
+observed_at = 1792422550
+output_digest = "sha256:411474c9f3608c77725e200cd476c0f5ec3899c71160191db5bd0075eea52a6a"
+excerpt = """
+
+running 1 test
+test reconcile_fixed_outside_git_repo_must_be_nonzero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_reconcile_fixed_not_a_git_repo_exit_zero.rs (target/debug/deps/repro_reconcile_fixed_not_a_git_repo_exit_zero-eb976522f3ea74a6)
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "a1acaca5"
+title = "overwatch: audit-round with omitted finder/verifier models is counted clean"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "audit_round_cli.rs model_collision_finding returns None for omitted models; no trace that diversity was unchecked in record output, audit-metrics or review-queue. Pinning test whose omitted-models half will flip: audit_round.rs::distinct_finder_verifier_model_records_no_collision_finding (its distinct-model half stays correct). New test accepts non-zero exit, a diversity mention, or a model finding in the queue. RED observed: none of them."
+created_at = 1792187820
+updated_at = 1792422586
+weight = 0.0
+issue_number = 1393
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1393"
+issue_closed_at = 1792422589
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_audit_round_omitted_models_counted_clean -- --ignored"
+rev = "87b0070ed0dd341f43f07aea4532497ac1168a30"
+observed_at = 1792187820
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/repro-ow-failopens/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running tests/repro_audit_round_omitted_models_counted_clean.rs (target/debug/deps/repro_audit_round_omitted_models_counted_clean-1988b45240ecc67c)
+error: test failed, to rerun pass `-p overwatch --test repro_audit_round_omitted_models_counted_clean`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_audit_round_omitted_models_counted_clean"
+exit = 0
+passed = 1
+rev = "c8fb81e6329d732bdd03cc1f81866babfb7663fb"
+observed_at = 1792422570
+output_digest = "sha256:7839704c965e5cf0fc68de57f6c0d53329155ced3e83656f220730ddabd4208e"
+excerpt = """
+
+running 1 test
+test omitted_models_must_not_be_indistinguishable_from_verified_distinct ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/repro_audit_round_omitted_models_counted_clean.rs (target/debug/deps/repro_audit_round_omitted_models_counted_clean-a1c663102596c229)
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 101
+kind = "behavioural"

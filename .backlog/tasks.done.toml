@@ -55646,3 +55646,63 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "8e749f85"
+title = "daily: install is unimplemented but exits 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Cmd::Install prints not yet implemented and calls exit(0), so a caller scripting the install sees success while nothing was installed."
+created_at = 1792189390
+updated_at = 1792423463
+weight = 0.0
+issue_number = 1403
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1403"
+issue_closed_at = 1792423466
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p daily --test repro_install_unimplemented_exit0 -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189390
+detail = """
+exit 101: inished in 0.37s
+
+   Compiling daily v0.3.19 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/daily)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/repro_install_unimplemented_exit0.rs (target/debug/deps/repro_install_unimplemented_exit0-e125b7539c8d6b17)
+error: test failed, to rerun pass `-p daily --test repro_install_unimplemented_exit0`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p daily --test repro_install_unimplemented_exit0"
+exit = 0
+passed = 1
+rev = "156c9ea372d22133ca42124fb040d06303f32b3f"
+observed_at = 1792423447
+output_digest = "sha256:13dc3c08c786c1468e97d7d88dc6ab6dd1a57f7e5e40aa6a62b26444a543b5ce"
+excerpt = """
+
+running 1 test
+test unimplemented_install_does_not_exit_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_install_unimplemented_exit0.rs (target/debug/deps/repro_install_unimplemented_exit0-44b2f6261542f096)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
+kind = "behavioural"

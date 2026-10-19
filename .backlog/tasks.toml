@@ -1339,38 +1339,6 @@ exit 101: t` profile [unoptimized + debuginfo] target(s) in 0.84s
 error: test failed, to rerun pass `-p overwatch --test repro_ca_script_test_passes_without_bash`"""
 
 [[task]]
-id = "8e749f85"
-title = "daily: install is unimplemented but exits 0"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Cmd::Install prints not yet implemented and calls exit(0), so a caller scripting the install sees success while nothing was installed."
-created_at = 1792189390
-updated_at = 1792189390
-weight = 0.0
-issue_number = 1403
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1403"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p daily --test repro_install_unimplemented_exit0 -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189390
-detail = """
-exit 101: inished in 0.37s
-
-   Compiling daily v0.3.19 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/daily)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
-     Running tests/repro_install_unimplemented_exit0.rs (target/debug/deps/repro_install_unimplemented_exit0-e125b7539c8d6b17)
-error: test failed, to rerun pass `-p daily --test repro_install_unimplemented_exit0`"""
-
-[[task]]
 id = "f1f06417"
 title = "daily: unparseable ~/.daily/config.toml falls back to defaults and the built-in security task runs"
 project = "/Users/yuki/src/harness"

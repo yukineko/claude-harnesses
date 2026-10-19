@@ -112,8 +112,9 @@ pub enum Attribution {
         keep: Vec<String>,
         excluded: Vec<String>,
     },
-    /// This session's own footprint could not be read. **Do not narrow.**
-    /// Report the reason and keep the full set.
+    /// This session's own footprint could not be read, or (subtraction rule)
+    /// peer liveness could not be decided. **Do not narrow.** Report the
+    /// reason and keep the full set.
     Undetermined { why: String },
 }
 
@@ -149,9 +150,9 @@ fn resolved(paths: &BTreeSet<String>) -> BTreeSet<PathBuf> {
 /// footprints. Pure apart from `canonicalize`, so the rule itself is testable
 /// without a transcript on disk.
 ///
-/// `peers` is deliberately a plain set rather than a `Determination`: see
-/// [`crate::transcript::peer_edit_footprint_in`] for why a failure to read peer
-/// transcripts is already the restrictive answer.
+/// `peers` is an already-`Known` peer footprint: a caller holding an
+/// `Undetermined` one must not call this, but return
+/// `Attribution::Undetermined` itself (as [`attribute_from_transcript`] does).
 pub fn attribute_with_footprints(
     root: &Path,
     mine: Determination<BTreeSet<String>>,
@@ -203,8 +204,10 @@ pub fn attribute_with_footprints(
 ///
 /// A transcript there is only a peer's FOOTPRINT. Whether its session is a peer
 /// at all is decided by condukt's claim registry for the repository at `root`
-/// (a live heartbeat), and an unreadable registry yields no peers — see
-/// [`crate::transcript::peer_edit_footprint_in`].
+/// (a live heartbeat). An unreadable or unparseable registry is
+/// `Attribution::Undetermined` (nothing narrowed, reason surfaced), not a
+/// `Narrowed` with no exclusions — see
+/// [`crate::transcript::peer_edit_footprint_in`] (backlog `eef58891`).
 pub fn attribute_from_transcript(
     root: &Path,
     transcript_path: &str,
@@ -234,7 +237,19 @@ pub fn attribute_from_transcript(
                 root,
             )
         }
-        _ => BTreeSet::new(),
+        _ => Determination::known(BTreeSet::new()),
+    };
+    // Peer liveness could not be decided (claim registry unreadable or
+    // unparseable): do not narrow, and say why (backlog eef58891). An empty
+    // peer set here would produce a `Narrowed` that reads as "checked: no
+    // peers", indistinguishable from a real observation.
+    let peers = match peers {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Attribution::Undetermined {
+                why: format!("peer liveness: {}", why.as_str()),
+            }
+        }
     };
     attribute_with_footprints(root, mine, &peers, changed)
 }

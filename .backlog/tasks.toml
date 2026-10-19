@@ -124,38 +124,6 @@ exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
 error: test failed, to rerun pass `-p backlog --test backlog_eb1ac319`"""
 
 [[task]]
-id = "4adebd79"
-title = "primary_tree NoRepo verdict trusts Path::exists for .git (broken symlink / unstatable reads as no repo)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "worktree-hygiene",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = 'From the 1e6f00ae verifier (2026-10-03, main b6263d7b). When git fails AND dot_git_present is false, classify returns NoRepo, which is allowed (primary_tree.rs:143,156). Path::exists returns false for a broken .git symlink or a .git it cannot stat, so a primary checkout whose .git is unreadable could be classed NoRepo instead of Undetermined. UNVERIFIED: no test ran. Use symlink_metadata to distinguish "absent" from "present but unreadable", the latter being Undetermined.'
-created_at = 1791002395
-updated_at = 1792005436
-weight = 0.0
-issue_number = 1136
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1136"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p harness-core --test backlog_4adebd79 -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005432
-detail = """
-exit 101: ed; 0 measured; 1 filtered out; finished in 0.02s
-
-   Compiling harness-core v0.2.53 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.10s
-     Running tests/backlog_4adebd79.rs (target/debug/deps/backlog_4adebd79-bde9c0a746bf619f)
-error: test failed, to rerun pass `-p harness-core --test backlog_4adebd79`"""
-
-[[task]]
 id = "a57e299b"
 title = "scripts/test_backlog_audit_b1_0.py RealRepoState expects 39 binary-shipping plugins but the repo has 40"
 project = "/Users/yuki/src/harness"
@@ -1400,39 +1368,6 @@ exit 101: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 912 filtered out; f
 error: test failed, to rerun pass `-p condukt --bin condukt`"""
 
 [[task]]
-id = "eef58891"
-title = "check-fail-open ALLOWLIST holds a transcript.rs undetermined-arm entry while test_undetermined_arm_allowlist_is_empty requires none"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "RED on main 54cfe981 and on this branch: the 2026-10-02 ruling test (ALLOWLIST holds no undetermined-arm-empty-fallback entry) contradicts the entry added by 42b5b567 on 2026-10-04 (harness-core transcript.rs peer_edit_footprint_for, user-approved). Two user rulings conflict; a human must pick which one stands."
-created_at = 1792422665
-updated_at = 1792422665
-weight = 0.0
-issue_number = 1420
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1420"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_check_fail_open.py -k test_undetermined_arm_allowlist_is_empty"
-rev = "1a3812a7e7a9094c5e0af28f800b6aac7d62728e"
-observed_at = 1792422665
-detail = """
-exit 1: ed; allowlisting "
-E       -             'user-approved 2026-10-04'}]
-
-scripts/test_check_fail_open.py:763: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_check_fail_open.py::UndeterminedArmSpellingsRemaining::test_undetermined_arm_allowlist_is_empty
-======================= 1 failed, 74 deselected in 0.06s ======================="""
-
-[[task]]
 id = "321acfbb"
 title = "overwatch: repro_ca_script picks its sibling test binary by file-name order, so it measures stale builds"
 project = "/Users/yuki/src/harness"
@@ -1463,3 +1398,132 @@ exit 101: lt: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out;
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
      Running tests/repro_ca_script_test_passes_without_bash.rs (target/debug/deps/repro_ca_script_test_passes_without_bash-d33201fccfbfcc25)
 error: test failed, to rerun pass `-p overwatch --test repro_ca_script_test_passes_without_bash`"""
+
+[[task]]
+id = "08494f63"
+title = "overwatch: record_changeset_and_detect returns Ok(empty) when the lock is not acquired, so condukt sets no merge-hold"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "condukt",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1792424660
+updated_at = 1792424660
+weight = 0.0
+issue_number = 1423
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1423"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_lock_unavailable_reports_ok record_changeset_and_detect_with_unacquired_lock_must_not_report_no_overlap -- --ignored"
+rev = "23b0d2f5ff3546b25967e592872112a54c2a742f"
+observed_at = 1792424660
+detail = """
+exit 101: 10.07s
+
+   Compiling overwatch v0.2.84 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.28s
+     Running tests/repro_lock_unavailable_reports_ok.rs (target/debug/deps/repro_lock_unavailable_reports_ok-c3978615173790b2)
+error: test failed, to rerun pass `-p overwatch --test repro_lock_unavailable_reports_ok`"""
+
+[[task]]
+id = "452f3705"
+title = "overwatch: append_merge_conflict returns Ok(()) without writing when the lock is not acquired"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1792424684
+updated_at = 1792424684
+weight = 0.0
+issue_number = 1424
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1424"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_lock_unavailable_reports_ok append_merge_conflict_with_unacquired_lock_must_not_return_ok_unwritten -- --ignored"
+rev = "23b0d2f5ff3546b25967e592872112a54c2a742f"
+observed_at = 1792424684
+detail = """
+exit 101: unwritten
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 10.04s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/repro_lock_unavailable_reports_ok.rs (target/debug/deps/repro_lock_unavailable_reports_ok-c3978615173790b2)
+error: test failed, to rerun pass `-p overwatch --test repro_lock_unavailable_reports_ok`"""
+
+[[task]]
+id = "50f89600"
+title = "overwatch: lock I/O failure is reported as lock_contended (begin, resolve-merge-conflict, record-disposition)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1792424696
+updated_at = 1792424696
+weight = 0.0
+issue_number = 1425
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1425"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_lock_io_failure_reported_as_contended -- --ignored"
+rev = "23b0d2f5ff3546b25967e592872112a54c2a742f"
+observed_at = 1792424696
+detail = """
+exit 101: h v0.2.84 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s
+     Running tests/repro_lock_io_failure_reported_as_contended.rs (target/debug/deps/repro_lock_io_failure_reported_as_contended-ae1efb03ba9c1b30)
+error: test failed, to rerun pass `-p overwatch --test repro_lock_io_failure_reported_as_contended`"""
+
+[[task]]
+id = "2d8c41c5"
+title = "overwatch spec: load_leases is said to load corrupt JSON as an empty registry, but it returns Err"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "docs",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1792424700
+updated_at = 1792424700
+weight = 0.0
+issue_number = 1426
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1426"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_spec_load_leases_corrupt_claim -- --ignored"
+rev = "23b0d2f5ff3546b25967e592872112a54c2a742f"
+observed_at = 1792424700
+detail = """
+exit 101:    Compiling overwatch v0.2.84 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests/repro_spec_load_leases_corrupt_claim.rs (target/debug/deps/repro_spec_load_leases_corrupt_claim-7a40ca8a777e1295)
+error: test failed, to rerun pass `-p overwatch --test repro_spec_load_leases_corrupt_claim`"""

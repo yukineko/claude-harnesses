@@ -125,11 +125,26 @@ impl Drop for Fixture {
 
 const FILE: &str = "/work/peer_edited.rs";
 
-fn both(fx: &Fixture) -> [std::collections::BTreeSet<String>; 2] {
+fn both_raw(fx: &Fixture) -> [Determination<std::collections::BTreeSet<String>>; 2] {
     [
         peer_edit_footprint_in(&fx.projects, "me"),
         peer_edit_footprint_within(&fx.projects, "me", WINDOW),
     ]
+}
+
+/// The peer footprints when liveness WAS determined. Since backlog eef58891 the
+/// entry points return a `Determination`; these tests have a readable registry
+/// (or none), so `Undetermined` here is itself a failure.
+fn both(fx: &Fixture) -> [std::collections::BTreeSet<String>; 2] {
+    both_raw(fx).map(|d| match d {
+        Determination::Known(v) => v,
+        Determination::Undetermined(why) => {
+            panic!(
+                "registry readable, yet liveness Undetermined: {}",
+                why.as_str()
+            )
+        }
+    })
 }
 
 /// (b) positive control: fresh transcript + live registry entry -> peer.
@@ -193,9 +208,12 @@ fn corrupt_registry_yields_no_exclusion() {
     let fx = Fixture::new();
     transcript(&fx.projects, "peer-live", FILE);
     fx.write_registry("{ this is not json");
-    for fp in both(&fx) {
+    // Re-anchored (backlog eef58891, user ruling 2026-10-20): "cannot determine
+    // liveness" is now carried as `Undetermined` (callers exclude nothing and
+    // surface the reason) instead of an empty set.
+    for fp in both_raw(&fx) {
         assert!(
-            fp.is_empty(),
+            matches!(fp, Determination::Undetermined(_)),
             "an unparseable registry is 'cannot determine liveness' -> no exclusion; got {fp:?}"
         );
     }
@@ -207,9 +225,10 @@ fn unreadable_registry_yields_no_exclusion() {
     let fx = Fixture::new();
     transcript(&fx.projects, "peer-live", FILE);
     fx.write_unreadable_registry();
-    for fp in both(&fx) {
+    // Re-anchored (backlog eef58891): see corrupt_registry_yields_no_exclusion.
+    for fp in both_raw(&fx) {
         assert!(
-            fp.is_empty(),
+            matches!(fp, Determination::Undetermined(_)),
             "an unreadable registry must not be read as 'live peer'; got {fp:?}"
         );
     }

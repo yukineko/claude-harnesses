@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.42"
+version = "0.1.43"
 dependencies = [
  "anyhow",
  "chrono",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.267"
+version = "0.7.268"
 dependencies = [
  "anyhow",
  "blastguard",

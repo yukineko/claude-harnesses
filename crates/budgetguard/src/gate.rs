@@ -277,11 +277,10 @@ pub fn config_undetermined_result(why: &str) -> GateResult {
 ///   does not continue past it on an assumption.
 /// * otherwise a **warn** limit configured → `Warn`. The operator asked to be
 ///   told about spend, so they are told that spend is unknown.
-/// * every limit `0.0` (the gate is switched off — `verdict` already returns
-///   `Allow` for *any* cost in that config, see `zero_threshold_means_disabled`)
-///   → `Allow`. There is no threshold an under-count could hide a crossing of,
-///   so this is not the undetermined answer collapsing into a pass; it is the
-///   gate being disabled.
+/// * every limit `0.0` → `Allow`. `Config::load_checked` never hands an
+///   enabled gate an all-zero config (unset limits are derived from the ledger
+///   or defaulted, user ruling 2026-10-19), so this arm is reached only by a
+///   `Config` built directly, e.g. in unit tests.
 pub fn undetermined_verdict(cfg: &Config, why: &str) -> Verdict {
     let msg = format!(
         "budgetguard: このセッションの費用を測定できませんでした（{why}）。\n\
@@ -586,6 +585,10 @@ mod tests {
     #[test]
     fn zero_threshold_means_disabled() {
         let c = cfg(0.0, 0.0, 0.0, 0.0);
+        // `verdict` itself reads a 0 limit as "that axis is off". A loaded
+        // config never reaches it with EVERY limit 0 while enabled: unset
+        // limits are derived or defaulted in `Config::load_checked` (see
+        // config.rs `an_absent_config_with_no_history_gets_the_default_limits`).
         // Even a large cost is allowed when every limit is 0 (disabled).
         assert!(matches!(verdict(&c, 999.0, 999.0), Verdict::Allow));
     }

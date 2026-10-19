@@ -25,14 +25,28 @@
 
 ブロックした Stop は overwatch の violation event も記録する [test: crates/budgetguard/tests/prose_claims.rs::claim_block_records_violation]。
 
+### 上限が設定されていないとき
+
+上限 `0` はその軸だけを無効にする [test: crates/budgetguard/src/gate.rs::zero_threshold_means_disabled] [test: crates/budgetguard/src/config.rs::one_set_limit_keeps_the_others_off]。上限が**1つも**無い場合
+(設定ファイルが無い、または `[session]` / `[daily]` の warn/block 上限がすべて `0`) は「上限なし」ではなく、budgetguard が上限を決める:
+
+- **derived (経験値)**: 台帳に過去 7 日以上 (今日を除く) あれば、その履歴から外れ値を Tukey 法で除いて決める
+  (Q1/Q3 は線形補間、fence = Q3 + 1.5 × IQR)。日次 block = 日次合計の fence、日次 warn = fence 以下の日の p90 [test: crates/budgetguard/src/config.rs::derive_limits_uses_the_tukey_fence_and_ignores_today] [test: crates/budgetguard/src/config.rs::an_absent_config_with_history_derives_its_limits] [test: crates/budgetguard/tests/unset_limits_are_derived.rs::absent_config_with_history_gate_blocks_over_the_derived_daily_limit] [test: crates/budgetguard/tests/unset_limits_are_derived.rs::all_zero_config_with_history_gate_blocks_over_the_derived_daily_limit]。
+- **default (既定値)**: 履歴が足りなければ組み込みの値 — 日次 warn $1336 / block $1871
+  (2026-10-19 にメンテナの台帳から同じ方法で算出) [test: crates/budgetguard/src/config.rs::derive_limits_needs_seven_past_days] [test: crates/budgetguard/src/config.rs::an_absent_config_with_no_history_gets_the_default_limits] [test: crates/budgetguard/tests/unset_limits_are_derived.rs::absent_config_no_history_check_reports_default_limits]。
+- **セッション軸**には warn も block も自動設定しない。セッションの fence (過去の各セッション記録に対する Tukey fence、既定値 $306) は
+  `check` / `status --json` の `session_fence_usd` として情報表示だけされる [test: crates/budgetguard/tests/unset_limits_are_derived.rs::absent_config_derives_no_session_warning_but_reports_the_fence]。セッションの warn/block は設定で明示したときだけ効く。
+- 存在するが読めない／parse できない台帳、または有限でない・負のコストを含む台帳は**判定不能**: gate はブロックし、
+  `check`/`status` は exit 2。既定値で黙って置き換えない [test: crates/budgetguard/src/config.rs::an_absent_config_with_a_corrupt_ledger_is_undetermined] [test: crates/budgetguard/src/config.rs::derive_limits_rejects_a_non_finite_cost] [test: crates/budgetguard/tests/unset_limits_are_derived.rs::absent_config_corrupt_ledger_is_undetermined_everywhere]。
+
+`check` と `status --json` は上限の出どころを `limits_source` (`config` | `derived` | `default`) で報告する [test: crates/budgetguard/tests/unset_limits_are_derived.rs::absent_config_with_history_check_reports_derived_limits] [test: crates/budgetguard/tests/unset_limits_are_derived.rs::control_one_configured_axis_reports_config_and_keeps_others_off]。
+
 許可されるもの (exit 0、判定なし) [test: crates/budgetguard/tests/prose_claims.rs::claim_reentry_allowed] [test: crates/budgetguard/tests/prose_claims.rs::claim_disable_env]:
 
-- 設定ファイルが無い、または `[session]` / `[daily]` の上限がすべて `0` なら、すべての Stop を許可する
-  (上限 0 は「上限なし」) [test: crates/budgetguard/src/config.rs::an_absent_config_is_known_default_not_undetermined] [test: crates/budgetguard/src/gate.rs::zero_threshold_means_disabled]。
 - `stop_hook_active` 付きの再入 (前の Stop フックが既にブロックした) — 予算超過のセッションは
   一度ブロックされた後、停止を許される [test: crates/budgetguard/tests/prose_claims.rs::claim_reentry_allowed]。
 - `BUDGETGUARD_DISABLE=1` ならフックは no-op になる (設定ファイルが parse できない場合も同じ) [test: crates/budgetguard/tests/prose_claims.rs::claim_disable_env]。
-- 設定で `enabled = false` ならフックは no-op になる [test: crates/budgetguard/tests/prose_claims.rs::claim_example_toml]。
+- 設定で `enabled = false` なら、parse できる Stop payload に対してフックは no-op になる (parse できない stdin はブロック) [test: crates/budgetguard/tests/prose_claims.rs::claim_example_toml]。
 
 *判定不能* は予算内として**扱わない** [test: crates/budgetguard/src/gate.rs::an_undetermined_config_blocks_despite_zero_default_limits] [test: crates/budgetguard/src/gate.rs::a_contended_ledger_lock_makes_the_day_undetermined_and_blocks]:
 
@@ -40,7 +54,7 @@
 - セッション支出を測定できない (sub-agent のトランスクリプトが読めない、料金不明のモデルがある等) → block 上限が 1 つでも
   あれば**ブロック**、無く warn 上限があれば**警告** [test: crates/budgetguard/src/gate.rs::unreadable_subagents_dir_is_undetermined_and_blocks_when_a_limit_is_armed] [test: crates/budgetguard/tests/prose_claims.rs::claim_session_undetermined_warn_only] [test: crates/budgetguard/tests/prose_claims.rs::claim_session_undetermined_daily_arms]。
   存在しない／ディレクトリである `transcript_path`、`session_id` か `transcript_path` が空の Stop payload もこれに含まれる [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::a_nonexistent_transcript_with_limits_armed_is_not_silently_allowed] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::b_directory_transcript_with_limits_armed_is_not_silently_allowed] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::d_empty_session_or_transcript_with_limits_armed_is_not_silently_allowed]。
-- stdin がそもそも hook payload でない場合、上限が 1 つでもあれば stderr に理由を出し exit 1 (block を bound する `stop_hook_active` が無いため) [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::c_non_json_stdin_with_limits_armed_is_not_silently_allowed]。
+- stdin がそもそも hook payload でない場合、上限の有無に関わらず常に**ブロック** (stdout に `{"decision":"block"}`、exit 0)。入力を処理できないためであり、exit 1 は Claude Code では stop を通す non-blocking error になる。`enabled = false` でもブロックする。ブロックには上限があり、連続 3 回までブロックし、4 回目は gate が諦めた旨の `systemMessage` を出して通す。連続回数は `CLAUDE_CODE_SESSION_ID` ごと (無ければ 1 つの共通キー) に `<state_dir>/unparseable-streak/` へ記録し、parse できた Stop でリセットする。記録を読み書きできないときは明示的なメッセージ付きで通す [test: crates/budgetguard/tests/unparseable_retry_bound.rs::blocks_three_times_then_allows_the_fourth_with_a_session] [test: crates/budgetguard/tests/unparseable_retry_bound.rs::blocks_three_times_then_allows_the_fourth_without_a_session] [test: crates/budgetguard/tests/unparseable_retry_bound.rs::a_parsed_stop_resets_the_streak] [test: crates/budgetguard/tests/unparseable_retry_bound.rs::an_unusable_marker_allows_loudly]。`BUDGETGUARD_DISABLE=1` なら完全に迂回する [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::c2_non_json_stdin_with_block_limit_blocks_the_stop] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::c3_non_json_stdin_with_warn_only_limit_blocks_the_stop] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::c4_non_json_stdin_with_unreadable_config_blocks_the_stop] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::c5_non_json_stdin_with_no_limit_blocks_the_stop]。
 - 日次合計を測定できない (台帳ロックを他セッションが保持、または `ledger.json` が破損 — 破損ファイルは
   そのまま保存される) → *日次*上限に従って block/warn [test: crates/budgetguard/src/gate.rs::a_contended_ledger_lock_makes_the_day_undetermined_and_blocks] [test: crates/budgetguard/src/gate.rs::a_corrupt_ledger_makes_the_day_undetermined_and_blocks] [test: crates/budgetguard/tests/prose_claims.rs::claim_day_undetermined_warn_only]。
   セッション自身の block 上限を既に超えていれば

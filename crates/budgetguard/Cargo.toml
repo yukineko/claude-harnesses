@@ -3,7 +3,7 @@
 # stable since 1.89; backlog 2ae3fa29).
 rust-version = "1.89"
 name = "budgetguard"
-version = "0.1.42"
+version = "0.1.43"
 edition = "2021"
 description = "Real-time cost budget gate for Claude Code. On Stop it reads the session transcript, computes the USD cost, and blocks the turn if session or daily limits are exceeded — feeding the overage back so the agent winds down gracefully."
 license = "MIT"

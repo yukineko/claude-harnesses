@@ -330,7 +330,10 @@ enum Command {
     /// section that selects it, so several sessions can drive one project's
     /// queue concurrently. Use `driver register` to announce that you are
     /// driving (non-exclusive); take this lock only when you genuinely need to
-    /// exclude every other session from a project.
+    /// exclude every other session from a project. While it is held (active
+    /// or heartbeat-stale), `next --claim` from any other session, or from a
+    /// claimer without CLAUDE_CODE_SESSION_ID, is refused with a non-zero exit;
+    /// an unreadable lock file refuses every claim.
     Lock {
         #[command(subcommand)]
         action: LockAction,
@@ -1210,6 +1213,17 @@ fn run(cli: Cli) -> Result<()> {
                 let session_id = std::env::var("CLAUDE_CODE_SESSION_ID")
                     .ok()
                     .filter(|s| !s.trim().is_empty());
+                // `lock acquire` excludes every other session from the
+                // project (backlog 60b59f75): a lock held by another session
+                // (or an unreadable lock) refuses the claim, non-zero with the
+                // reason, never `no pending tasks`.
+                if let Err(why) = lock::claim_permitted(&identity, session_id.as_deref()) {
+                    return Err(anyhow::anyhow!(
+                        "backlog next --claim REFUSED to claim (this is NOT \"no pending \
+                         tasks\" — nothing was claimed and the queue was not judged empty): \
+                         {why}"
+                    ));
+                }
                 let claimed = claim_ledger::claim_next(
                     &tasks_path,
                     tag.as_deref(),

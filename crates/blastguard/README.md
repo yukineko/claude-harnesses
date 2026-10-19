@@ -242,8 +242,13 @@ exempt config file is no longer a flat deny. In order (`src/detect.rs`, the
 truncating-redirect arm; `src/reversible.rs` `probe`):
 
 1. A protected gate/config path → `ask`; a target inside a system directory →
-   `deny`.
-2. The target **does not exist** → allowed (no prior bytes to destroy).
+   `deny`. The system-directory check is made on the text **and** on where the
+   kernel really lands it (deepest existing ancestor canonicalised, so
+   `<proj>/esc/etc/new.conf` with `esc -> /` is `/etc/new.conf`; backlog
+   2287ebae). The `>>` append loop makes the same two checks.
+2. The target **does not exist** → allowed (no prior bytes to destroy) —
+   unless its real landing could not be resolved (e.g. an unsearchable
+   ancestor), which is an `ask`.
 3. The target is inside a git work tree whose `git status` answered **and** it
    lies inside this session's safe roots (or a linked worktree checkout under
    a worktree storage root) → allowed, unattended. By operator ruling

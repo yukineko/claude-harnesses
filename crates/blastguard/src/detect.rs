@@ -720,6 +720,84 @@ $PATH), so whether the old bytes were recoverable does not make it safe"
     )))
 }
 
+/// Where `target` REALLY lands to the kernel: its deepest existing ancestor
+/// canonicalised (symlinks resolved), with the not-yet-existing tail appended.
+///
+/// Backlog 2287ebae: [`system_path_block`] judges the LEXICAL path, so
+/// `: > <proj>/esc/etc/new.conf` with `esc -> /` was Allow — the file does not
+/// exist (recoverability says `NothingToDestroy`) and the text names no system
+/// directory, yet the kernel creates `/etc/new.conf`. The literal spelling of
+/// the same file is Deny.
+///
+/// `None` = not a path this can place (an unexpanded `$`/backtick target, or a
+/// relative one with no known base) — the caller's existing rules for those
+/// stand. `Undetermined` = the filesystem could not answer (EACCES on an
+/// ancestor, …); the caller must NOT read that as "not a system directory".
+fn real_landing(target: &str, base: Option<&str>) -> Option<Determination<String>> {
+    if target.contains('$') || target.contains('`') {
+        return None;
+    }
+    let path = crate::reversible::resolve(target, base)?;
+    let mut existing: &std::path::Path = path.as_path();
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    loop {
+        match std::fs::canonicalize(existing) {
+            Ok(mut real) => {
+                for comp in tail.iter().rev() {
+                    real.push(comp);
+                }
+                return Some(Determination::Known(real.display().to_string()));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                match (existing.parent(), existing.file_name()) {
+                    (Some(parent), Some(name)) => {
+                        tail.push(name);
+                        existing = parent;
+                    }
+                    _ => {
+                        return Some(Determination::undetermined(format!(
+                            "no ancestor of `{target}` could be resolved"
+                        )))
+                    }
+                }
+            }
+            Err(e) => {
+                return Some(Determination::undetermined(format!(
+                    "`{}` could not be resolved ({e}), so where `{target}` really lands is unknown",
+                    existing.display()
+                )))
+            }
+        }
+    }
+}
+
+/// [`system_path_block`] applied to the path the kernel will really write
+/// ([`real_landing`]) instead of the text. `Err(reason)` when the real landing
+/// could not be determined.
+fn real_system_path_block(
+    action: &str,
+    target: &str,
+    ctx: &Ctx,
+) -> Result<Option<Decision>, String> {
+    match real_landing(target, ctx.raw_base.as_deref()) {
+        None => Ok(None),
+        // macOS: the writable data volume is mounted at `/` through firmlinks,
+        // and some of its symlinks (`/home -> /System/Volumes/Data/home`)
+        // canonicalise to the volume's own path. That prefix is NOT the sealed
+        // `/System`; the path below it is what the root view shows, so it is
+        // judged as such (`/System/Volumes/Data/private/etc/x` is still
+        // `/private/etc/x`, a system directory).
+        Some(Determination::Known(real)) => {
+            let rooted = match real.strip_prefix("/System/Volumes/Data/") {
+                Some(rest) => format!("/{rest}"),
+                None => real,
+            };
+            Ok(system_path_block(action, &rooted, ctx))
+        }
+        Some(Determination::Undetermined(u)) => Err(u.to_string()),
+    }
+}
+
 /// Deny reason for an operation that DISARMS a protected gate/hook/policy path
 /// without writing a single byte to it, or `None` when the target is not one.
 ///
@@ -1661,6 +1739,14 @@ primitive, not a filesystem path",
             if let Some(deny) = system_path_block("redirect", &target, ctx) {
                 return deny;
             }
+            // The same axis on the path the kernel really writes (2287ebae):
+            // a symlink in the text can land a NEW file in `/etc` that the
+            // lexical check above never sees.
+            let landing_undetermined = match real_system_path_block("redirect", &target, ctx) {
+                Ok(Some(deny)) => return deny,
+                Ok(None) => None,
+                Err(why) => Some(why),
+            };
             // RECOVERABILITY runs FIRST (operator ruling 2026-09-09). The two
             // verdicts this precedes — the confined ask and the flat deny —
             // fired 63 times across 25 transcripts, and neither had ever asked
@@ -1700,7 +1786,19 @@ primitive, not a filesystem path",
                 // Gating this on confinement was wrong and regressed
                 // `bg2_system_dir_rule_does_not_swallow_ordinary_absent_targets`
                 // — the location question only arises once there are bytes.
-                crate::reversible::Recovery::NothingToDestroy => true,
+                // ...unless where it really lands could not be determined: then
+                // the system-directory axis above did not actually look, and
+                // "could not check" is not "clean" (CLAUDE.md §3).
+                crate::reversible::Recovery::NothingToDestroy => {
+                    if let Some(why) = &landing_undetermined {
+                        line_level_asks.push(Decision::ask(format!(
+                            "'> {target}' creates a file, and {why} — blastguard cannot tell \
+whether it lands in a system directory"
+                        )));
+                        continue;
+                    }
+                    true
+                }
                 // THIS is the whose-tree case. Any git-tracked file in ANY
                 // checkout on the machine probes as restorable, so before this
                 // gate `echo x > <other project>/CLAUDE.md` was silently
@@ -1820,6 +1918,16 @@ primitive, not a filesystem path",
         // whole payload.
         if let Some(deny) = system_path_block("append redirect", &target, ctx) {
             return deny;
+        }
+        // ...and on the path the kernel really writes (2287ebae): a symlink in
+        // the text hides the system directory from the lexical check.
+        match real_system_path_block("append redirect", &target, ctx) {
+            Ok(Some(deny)) => return deny,
+            Ok(None) => {}
+            Err(why) => line_level_asks.push(Decision::ask(format!(
+                "'>> {target}' appends to a path whose real location is unknown ({why}) — \
+blastguard cannot tell whether it lands in a system directory"
+            ))),
         }
         // A target that is STILL an expansion after resolution names no path
         // either axis above could place, so both answered "not mine" without

@@ -17,7 +17,8 @@
 //! This file pins the second reason without depending on any host file: it
 //! names a file under `/etc` that the test first proves absent.
 //!
-//! Repro: `cargo test -p blastguard --test backlog_2287ebae -- --ignored`
+//! Repro: `cargo test -p blastguard --test backlog_2287ebae` (was `#[ignore]`d
+//! RED until the redirect axes judged the real landing, `detect::real_landing`).
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
@@ -115,7 +116,6 @@ fn controls_literal_absent_system_file_and_existing_file_through_symlink_are_ref
 
 /// THE DEFECT: a new file in `/etc` named through an escaping symlink is Allow.
 #[test]
-#[ignore = "backlog 2287ebae: RED repro"]
 fn absent_system_file_through_escaping_symlink_is_not_allowed() {
     let f = Fx::new("hazard");
     let through = f
@@ -138,5 +138,61 @@ fn absent_system_file_through_escaping_symlink_is_not_allowed() {
         !out.trim().is_empty(),
         "`{cmd}` creates {ABSENT_SYSTEM_FILE} through a symlink; the literal \
          spelling is refused, so this must NOT be Allow; got empty output (= Allow)"
+    );
+}
+
+/// The APPEND twin: `>>` through the same symlink creates the same new file.
+#[test]
+fn append_to_absent_system_file_through_escaping_symlink_is_not_allowed() {
+    let f = Fx::new("append");
+    let through = f
+        .proj
+        .join("esc")
+        .join(ABSENT_SYSTEM_FILE.trim_start_matches('/'));
+    assert!(!through.exists(), "fixture: {} must not exist", through.display());
+    let cmd = format!("echo x >> {}", through.display());
+    let out = f.verdict(&cmd);
+    assert!(
+        !out.trim().is_empty(),
+        "`{cmd}` appends a new {ABSENT_SYSTEM_FILE} through a symlink; got Allow"
+    );
+}
+
+/// Control: an ordinary new file inside the project (no symlink) stays Allow,
+/// so the rows above are not passing because every new file is now refused.
+#[test]
+fn control_new_file_inside_the_project_stays_allowed() {
+    let f = Fx::new("ordinary");
+    for cmd in [
+        format!(": > {}/new.log", f.proj.display()),
+        format!("echo x >> {}/new.log", f.proj.display()),
+    ] {
+        let out = f.verdict(&cmd);
+        assert!(out.trim().is_empty(), "`{cmd}` must stay Allow; got {out:?}");
+    }
+}
+
+/// Undetermined real landing: an ancestor that cannot be searched means the
+/// kernel's answer is unknown, which must not read as "not a system directory".
+#[test]
+fn unresolvable_real_landing_is_not_allowed() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let f = Fx::new("locked");
+    let locked = f.proj.join("locked");
+    std::fs::create_dir_all(locked.join("sub")).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let probe = std::fs::canonicalize(locked.join("sub/new.log"));
+    let cmd = format!(": > {}/sub/new.log", locked.display());
+    let out = f.verdict(&cmd);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let kind = probe.as_ref().err().map(std::io::Error::kind);
+    assert_eq!(
+        kind,
+        Some(std::io::ErrorKind::PermissionDenied),
+        "fixture: the locked ancestor must make resolution fail with EACCES (running as root?)"
+    );
+    assert!(
+        !out.trim().is_empty(),
+        "`{cmd}`: where it lands could not be resolved; got Allow"
     );
 }

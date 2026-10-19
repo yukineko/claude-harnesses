@@ -493,10 +493,15 @@ impl RunState {
     }
 
     pub fn save(&self, cfg: &Config, cwd: &Path) -> Result<PathBuf> {
-        let dir = run_dir(cfg, cwd, &self.run_id)?;
-        std::fs::create_dir_all(&dir)
+        // The same path `load` reads (backlog 416d6fbf): writing the RAW id
+        // made a run whose id `safe_session` rewrites unreadable by that id,
+        // and let a crafted id escape the project dir on write.
+        let path = run_path(cfg, cwd, &self.run_id)?;
+        let dir = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("run-state path {} has no parent", path.display()))?;
+        std::fs::create_dir_all(dir)
             .with_context(|| format!("creating state dir {}", dir.display()))?;
-        let path = dir.join(format!("{}.json", self.run_id));
         let tmp_path = unique_tmp(&path, "json");
         let json = serde_json::to_string_pretty(self)?;
         std::fs::write(&tmp_path, &json)
@@ -671,10 +676,15 @@ fn runs_in_dir(dir: &Path) -> Vec<RunState> {
 
 // ── Decomposition sidecar ──────────────────────────────────────────────────
 
-/// `<run_dir>/<run>.decomposition.json` (see [`run_dir`] for which dir). `Err`
-/// when the main worktree root cannot be determined.
+/// `<run_dir>/<safe_session(run)>.decomposition.json` (see [`run_dir`] for
+/// which dir). The id is sanitised exactly as [`run_path`] and [`run_dir`]'s
+/// existence probe do (backlog 416d6fbf), so writer and readers address one
+/// file. `Err` when the main worktree root cannot be determined.
 pub fn decomposition_path(cfg: &Config, cwd: &Path, run_id: &str) -> Result<PathBuf> {
-    Ok(run_dir(cfg, cwd, run_id)?.join(format!("{run_id}.decomposition.json")))
+    Ok(run_dir(cfg, cwd, run_id)?.join(format!(
+        "{}.decomposition.json",
+        harness_core::store::safe_session(run_id)
+    )))
 }
 
 /// Persist the raw decomposition JSON alongside the run state.

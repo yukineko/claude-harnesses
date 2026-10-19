@@ -1245,36 +1245,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; 
 error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
 
 [[task]]
-id = "60b59f75"
-title = "backlog: held exclusive lock does not stop next --claim from another session"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "lock acquire is documented as the way to exclude every other session from a project, but next --claim never reads the exclusive lock. Observed: session-B was handed a task while session-A held the lock."
-created_at = 1792189431
-updated_at = 1792189431
-weight = 0.0
-issue_number = 1412
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1412"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test repro_exclusive_lock_ignored_by_claim -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189431
-detail = """
-exit 101:    Compiling backlog v0.3.51 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.02s
-     Running tests/repro_exclusive_lock_ignored_by_claim.rs (target/debug/deps/repro_exclusive_lock_ignored_by_claim-995b323a548366e5)
-error: test failed, to rerun pass `-p backlog --test repro_exclusive_lock_ignored_by_claim`"""
-
-[[task]]
 id = "6d43d9c5"
 title = "condukt circuit check with HOME unset exits on config.toml unreadable before printing the idle_unmeasured JSON"
 project = "/Users/yuki/src/harness"

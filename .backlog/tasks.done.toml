@@ -55526,3 +55526,65 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "51376c9c6a506418ab08829ae513beca29b90c80"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "eef58891"
+title = "check-fail-open ALLOWLIST holds a transcript.rs undetermined-arm entry while test_undetermined_arm_allowlist_is_empty requires none"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "RED on main 54cfe981 and on this branch: the 2026-10-02 ruling test (ALLOWLIST holds no undetermined-arm-empty-fallback entry) contradicts the entry added by 42b5b567 on 2026-10-04 (harness-core transcript.rs peer_edit_footprint_for, user-approved). Two user rulings conflict; a human must pick which one stands."
+created_at = 1792422665
+updated_at = 1792424356
+weight = 0.0
+issue_number = 1420
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1420"
+issue_closed_at = 1792424361
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_fail_open.py -k test_undetermined_arm_allowlist_is_empty"
+rev = "1a3812a7e7a9094c5e0af28f800b6aac7d62728e"
+observed_at = 1792422665
+detail = """
+exit 1: ed; allowlisting "
+E       -             'user-approved 2026-10-04'}]
+
+scripts/test_check_fail_open.py:763: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_fail_open.py::UndeterminedArmSpellingsRemaining::test_undetermined_arm_allowlist_is_empty
+======================= 1 failed, 74 deselected in 0.06s ======================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_check_fail_open.py -k test_undetermined_arm_allowlist_is_empty"
+exit = 0
+passed = 1
+rev = "d9faa3a46fed62e02155e7a8cd62c1c4522a8339"
+observed_at = 1792424348
+output_digest = "sha256:45c42626226b1cac6d04486b87ca88d18950869b59f5f9a4b1a8d28d7b041ece"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/eef58891
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 75 items / 74 deselected / 1 selected
+
+scripts/test_check_fail_open.py .                                        [100%]
+
+======================= 1 passed, 74 deselected in 0.17s =======================
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 1
+kind = "behavioural"

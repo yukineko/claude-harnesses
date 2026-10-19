@@ -27,7 +27,7 @@
 use anyhow::{bail, Result};
 
 use crate::config::Config;
-use crate::store::{project_key, repo_root};
+use crate::store::project_key;
 use harness_core::verdict::{Determination, Required};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -73,11 +73,7 @@ impl Drop for RunLock {
 /// single primary repo's default branch — `worktree::merge` (checkout
 /// default_branch + merge) and `git worktree prune` — serializes on it instead
 /// of racing on `main` (which today is only serialized by the upstream flow
-/// backlog lock). NOTE: `repo_commit::commit` also uses this KEY but takes it
-/// through `RunLock::acquire_or_skip` (keyed on the current checkout via
-/// `repo_root`), NOT [`acquire_repo_primary`]; so it serializes commits that
-/// share one worktree index and does not contend with merge/prune on main,
-/// which touch a different index. Mirrors
+/// backlog lock). Mirrors
 /// `claim::CLAIMS_LOCK_KEY`; it never names a real run so cannot collide with one.
 ///
 /// The fixed key alone is not sufficient for that "ONE per-repo lock": the
@@ -232,11 +228,13 @@ fn pid_alive_with_env_path(pid: u32, child_path: Option<&std::ffi::OsStr>) -> De
 
 /// Lock file path keyed by the CHECKOUT (`repo_root(cwd)`) and a sanitised
 /// key, so unrelated keys and unrelated checkouts never share a lock. Used only
-/// by [`RunLock::acquire_or_skip`] (`repo_commit`'s per-index lock). It is NOT
-/// the run-state lock any more: that sits beside the run's state file in
-/// `state::run_dir` (see [`RunLock::acquire_run_state_or_skip`]).
+/// by [`RunLock::acquire_or_skip`], which is test-only since its one production
+/// caller (`repo_commit`'s per-index lock) was removed. It is NOT the run-state
+/// lock any more: that sits beside the run's state file in `state::run_dir`
+/// (see [`RunLock::acquire_run_state_or_skip`]).
+#[cfg(test)]
 fn lock_path(cfg: &Config, cwd: &Path, run_id: &str) -> PathBuf {
-    lock_path_in_project(cfg, &repo_root(cwd), run_id)
+    lock_path_in_project(cfg, &crate::store::repo_root(cwd), run_id)
 }
 
 /// Lock file path for a run under an ALREADY-RESOLVED project root.
@@ -314,10 +312,11 @@ impl RunLock {
     /// under pathological contention is what lets two timed-out writers both
     /// proceed and double-write (last-writer-wins). Never panics.
     /// Waits up to [`RunLock::DEADLINE`]. Keyed by `repo_root(cwd)` — the
-    /// CHECKOUT — which is what `repo_commit::commit` (the one production
-    /// caller) wants: it serializes commits into one checkout's index. Run
-    /// state is NOT locked through here any more; see
-    /// [`RunLock::acquire_run_state_or_skip`].
+    /// CHECKOUT. Its one production caller was `repo_commit::commit`, removed
+    /// together with `condukt repo commit`, so it is compiled for tests only. Run state is NOT locked through here; see
+    /// [`RunLock::acquire_run_state_or_skip`]. Primary-repo mutators in
+    /// `worktree`/`main` lock via [`acquire_repo_primary`].
+    #[cfg(test)]
     pub fn acquire_or_skip(cfg: &Config, cwd: &Path, run_id: &str) -> Option<Self> {
         Self::acquire_or_skip_at(lock_path(cfg, cwd, run_id), Self::DEADLINE)
     }
@@ -925,9 +924,8 @@ mod tests {
     // add` gives the main tree a `.git` DIRECTORY and the linked worktree a
     // `.git` FILE; both share ONE git index, ONE `.git/worktrees` admin dir and
     // ONE default branch, which is exactly what every holder of this lock
-    // mutates (`worktree::merge`'s checkout+merge and `git worktree prune`;
-    // `repo commit` is NOT one of them: it locks per checkout, see
-    // `REPO_PRIMARY_LOCK_KEY`). So a mutator whose cwd is the main tree and a
+    // mutates (`worktree::merge`'s checkout+merge and `git worktree prune`).
+    // So a mutator whose cwd is the main tree and a
     // mutator whose cwd is a linked worktree of the SAME repo must contend the
     // SAME lock file, and the second must be REFUSED while the first holds it.
     //

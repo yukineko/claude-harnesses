@@ -56813,3 +56813,31 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "23eb74b3e9f003a4dcf85d2018e681326598f2e5"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "dd5e1475"
+title = "condukt worktree::tests flake under parallel test threads (create_* tests fail randomly)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "test",
+    "flaky",
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-14: cargo test -p condukt --bin condukt failed 2/4 runs on origin/main 0f0f6016 (create_still_rejects_branch_live_in_another_worktree) and 2/4 on merge aa74a9ee (same test, and create_prunes_stale_registration_and_recreates_branch). Earlier runs also hit create_loud_fails_when_parent_dir_uncreatable and create_namespaced_without_a_run_is_byte_identical_to_legacy_create. The worktree:: subset passes 62/62 with --test-threads=1. Pre-existing, not caused by the merge. Likely shared process state (cwd/PATH/env or git config) between parallel tests; worktree.rs already has PATH_ENV_LOCK, so some test probably mutates shared state without taking that lock. Not root-caused; no committed repro test (non-deterministic).
+status 'unconfirmed' was removed by origin backlog 0.3.58 and this flake has no committed repro test (user ruling 2026-10-04: testがないなら起票してはならない); cancelled after the 51376c9c integration merge (48335620), observations kept in notes"""
+created_at = 1791959258
+updated_at = 1792376387
+weight = 0.0
+issue_number = 1350
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1350"
+issue_closed_at = 1792376392
+rev = 1
+
+[task.closure]
+reason = "discard"
+discard_reason = "status 'unconfirmed' was removed by origin backlog 0.3.58 and this flake has no committed repro test (user ruling 2026-10-04: testがないなら起票してはならない); cancelled after the 51376c9c integration merge (48335620), observations kept in notes"

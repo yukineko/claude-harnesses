@@ -1400,3 +1400,33 @@ Unexpected success
 =========================== short test summary info ============================
 FAILED scripts/test_backlog_6267bfbe_36c936bc.py::FastForwardOntoGatedMerge::test_ff_onto_merge_gated_in_other_worktree_is_not_recorded
 ========================= 1 failed, 1 passed in 1.98s =========================="""
+
+[[task]]
+id = "12657c5e"
+title = "reviewgate install reports success when home dir is unresolvable (writes ./.claude/settings.json)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "reviewgate",
+    "fail-open",
+]
+touched_files = []
+status = "pending"
+notes = """crates/reviewgate/src/install.rs: dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")). With HOME unset and a uid with no passwd entry, reviewgate install exits 0, prints 'Installed Stop hook', and writes ./.claude/settings.json under cwd: the gate is not installed where Claude Code reads it, yet success is reported. Same class as backlog 1e783882. Repro: ignored test install_with_unresolvable_home_refuses (bd18ece9), observed RED: 'must exit non-zero; stdout=updated: ./.claude/settings.json'."""
+created_at = 1792121387
+updated_at = 1792121387
+weight = 0.0
+issue_number = 1364
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1364"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test audit_rows_save_fail_install_home -- --ignored install_with_unresolvable_home_refuses"
+rev = "11aa44d305519304f0b81cabc8a49d9eaca7626c"
+observed_at = 1792121387
+detail = """
+exit 101: viewgate v0.1.40 (/home/hiroyuki_nakayama/src/.claude-harnesses-worktrees/session-dcbf913f/crates/reviewgate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.74s
+     Running tests/audit_rows_save_fail_install_home.rs (target/debug/deps/audit_rows_save_fail_install_home-94ce47eebcf70dd6)
+error: test failed, to rerun pass `-p reviewgate --test audit_rows_save_fail_install_home`"""

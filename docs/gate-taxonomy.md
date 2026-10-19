@@ -33,9 +33,10 @@
 
 ### スクリプトゲート（`scripts/check-*.py`。pre-commit / pre-push / CI で駆動）
 
+<!-- record: 2026-10-16 rev: 36b019f7 -->
 | ゲート (スクリプト) | 分類 | トリガー種別 | 分類理由 |
 |---|---|---|---|
-| `check-prompt-injection.py`（injectguard） | 実装正しさ（是正済み。旧: 総合判断） | pre-commit（advisory。旧 CI `injectguard.yml` は GitHub Actions 禁止〈CLAUDE.md 第7節〉で撤去済み） | 正規表現によるパターン走査＋近傍行/見出しの決定論的ウィンドウ判定（`DEFENSE_WINDOW`）のみで判定する。LLM 呼び出し・主観評価は一切なく、`check-fail-open.py`（実装正しさ）と同一手法（receiver-aware パターン照合）。旧分類理由「文脈判断を伴う複合判定」は実装のアルゴリズム的性質（決定論的固定ロジック）を「複合判断」という言葉で holistic 側に誤誘導していたため是正した（詳細は下記「階層混在監査」節） |
+| `check-prompt-injection.py`（injectguard） | 実装正しさ（是正済み。旧: 総合判断） | pre-commit（旧 CI `injectguard.yml` は GitHub Actions 禁止〈CLAUDE.md 第7節〉で撤去済み） | 正規表現によるパターン走査＋近傍行/見出しの決定論的ウィンドウ判定（`DEFENSE_WINDOW`）のみで判定する。LLM 呼び出し・主観評価は一切なく、`check-fail-open.py`（実装正しさ）と同一手法（receiver-aware パターン照合）。旧分類理由「文脈判断を伴う複合判定」は実装のアルゴリズム的性質（決定論的固定ロジック）を「複合判断」という言葉で holistic 側に誤誘導していたため是正した（詳細は下記「階層混在監査」節） |
 | `check-fail-open.py`（fail-open-guard） | 実装正しさ | pre-commit（旧 CI `fail-open.yml` は GHA 禁止で撤去済み） | 既知のコードパターン（swallow-and-allow 等の構文形）を機械的に検出する静的解析 |
 | `check-doc-claims.py`（doc-claims） | 実装正しさ | pre-commit（旧 CI `doc-claims.yml` は GHA 禁止で撤去済み） | ドキュメント中の `path:line` 引用が実際のファイル内容と一致するかを機械照合する |
 | `check-test-weakening.py`（test-weakening） | テスト適合性 | pre-commit（旧 CI `test-weakening.yml` は GHA 禁止で撤去済み） | 同一 commit 内で実装とテストが変化した際、テスト側のアサーション削除等の「弱体化」を検出する |
@@ -47,6 +48,7 @@
 | `check-cross-crate-constants.py`（crossx-constants） | 実装正しさ | pre-commit（2026-09-08 に配線） | 「lib target が無いので link できず手で写した」定数が、正典の宣言とずれていないかを機械照合する。テーブル駆動で、現在の登録は driver registry の stale TTL 1 件（正典 `crates/backlog/src/lock.rs` の `LOCK_STALE_TTL_SECS`、写しは `crates/condukt/src/wt_reconcile.rs` の `DRIVER_STALE_TTL_SECS`）。**rename を「ドリフト無し」と読まない**のが要点で、0 ヒットも複数ヒットも判定不能として block する。ドリフトは非対称で、危険側（condukt が短い＝live な worktree を dead と判定する）を作るのは「reap を急がない」という安全に見える編集である（backlog 6e30b6fc） |
 | `check-closure-evidence.py`（closure-evidence） | テスト適合性 | pre-commit（**未配線**: 2026-10-01 時点で `.githooks/pre-commit` への `run check-closure-evidence.py closure-evidence` 行は未着地。`.githooks/` は権限設定で編集が拒否されるため、人間が追記するまでどの hook からも実行されない＝dark） | `.backlog/tasks.toml` / `tasks.done.toml` を HEAD と INDEX で比較し、新たに terminal（done/cancelled）になった行・closure が変わった行だけを判定する（無変更の legacy 行は対象外）。`[task.closure]` の構造・rev の実在と祖先関係・テストスクリプトの index 収録・doc-only 述語（backlog と同一）・TTY ruling 記録を検査したうえで、記録されたテストを**再実行**する（red.rev + index のテストで挙動的に fail、staged tree で pass かつ 0 passed でない）。判定不能（git/parse/subprocess 失敗・timeout）は block。bypass flag / env は無い |
 | `check-plugin-rollout.py` | 実装正しさ | pre-push（advisory。旧 CI `gate-crates-sync.yml` は GHA 禁止で撤去済み） | source version と registry version の文字列比較のみの機械判定。「意図的に parked」という第3状態を `scripts/parked-plugins.json` で宣言でき、宣言済み plugin の rollout/enablement 所見は red ではなく「PARKED ON PURPOSE」として（抑止した所見を逐語表示したうえで）報告される（backlog a6f165cd） |
+<!-- /record -->
 
 ## トリガー種別の凡例
 
@@ -64,9 +66,11 @@
   この行はかつて「push 自体は止めない設計（fail-soft）」と書いていたが、bypass ledger 以降の実装と
   食い違っていた（CLAUDE.md 第4節: 散文が実装と食い違ったら散文を直す）。chronically-red CI の
   チェックは GitHub Actions 禁止（CLAUDE.md 第7節）に伴い撤去済みで、もう存在しない。
+<!-- record: 2026-10-16 rev: 36b019f7 -->
 - **CI** — **存在しない**。かつては GitHub Actions ワークフローが pre-commit と同じスクリプトを再実行していたが、
   CLAUDE.md 第7節の GitHub Actions 全面禁止で撤去した（`.github/` はこの repo に無い）。ゲートの実体は
   local の pre-commit / pre-push だけである（backlog 864eb3e8）。
+<!-- /record -->
 
 ## 備考
 

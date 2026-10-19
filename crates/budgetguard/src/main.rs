@@ -21,14 +21,19 @@
 //! * an unreadable transcript (missing, a directory) or a Stop payload with an
 //!   empty `session_id`/`transcript_path` is an unmeasurable session spend and
 //!   blocks/warns per the armed limits;
-//! * stdin that is not a hook payload at all exits 1 with a stderr reason
-//!   whenever a limit is armed (`gate_unparseable_input`).
+//! * stdin that is not a hook payload at all blocks the stop
+//!   (`{"decision":"block"}`) in every case, limit armed or not, at most 3
+//!   consecutive times; the 4th is allowed with a loud `systemMessage`
+//!   (`gate_unparseable_input`, `streak`);
+//! * no limit configured (no config file, or every USD limit 0) is not "no
+//!   limit": the limits are derived from the ledger history or set to the
+//!   built-in defaults (`config::Config::load_checked`), and a ledger that
+//!   cannot be read for that is a config-undetermined block.
 //!
-//! Three things still exit 0, and each is a KNOWN answer rather than a
-//! give-up: no limit armed (no config file, or every limit 0), a readable
-//! transcript with nothing to price, and `BUDGETGUARD_DISABLE=1` (the
-//! operator's explicit escape hatch, checked before the panic guard so it
-//! stays reachable).
+//! Three things still allow, and each is a KNOWN answer rather than a
+//! give-up: a readable transcript with nothing to price, `enabled = false` in
+//! the config, and `BUDGETGUARD_DISABLE=1` (the operator's explicit escape
+//! hatch, checked before the panic guard so it stays reachable).
 //!
 //! `clippy::panic` (along with `unwrap_used`/`expect_used`) is now enforced via
 //! this crate's `[lints] workspace = true` in `Cargo.toml`, which inherits the
@@ -42,6 +47,7 @@ mod config;
 mod gate;
 mod install;
 mod lock;
+mod streak;
 
 use clap::{Args, Parser, Subcommand};
 
@@ -133,6 +139,13 @@ fn gate_command() -> ! {
     let hook = harness_core::hook::HookInput::parse(&raw);
     let interactive = hook.is_none();
     let stop_hook_active = hook.as_ref().is_some_and(|h| h.stop_hook_active);
+    if let Some(h) = &hook {
+        // A parsed stop ends any unparseable-stdin streak (see `streak`).
+        streak::clear(
+            &streak_state_dir(&h.cwd_or_current()),
+            session_env().as_deref(),
+        );
+    }
     harness_core::gate::run::run_guarded("budgetguard", interactive, stop_hook_active, move || {
         gate_run(hook)
     });
@@ -159,10 +172,10 @@ fn gate_run(hook: Option<harness_core::hook::HookInput>) {
             }
             if input.transcript_path.is_empty() || input.session_id.is_empty() {
                 // Without a session id and a transcript there is no spend to
-                // measure. That is not "within budget": with a limit armed it
-                // blocks/warns like any other unmeasured spend; with every
-                // limit at 0 there is nothing to gate and it allows
-                // (backlog 5a4cd3ff).
+                // measure. That is not "within budget": it blocks/warns per
+                // the armed limits like any other unmeasured spend (backlog
+                // 5a4cd3ff). An enabled config always has a limit armed here:
+                // unset limits were derived or defaulted by `load_checked`.
                 Some(gate::GateResult {
                     session_usd: None,
                     day_usd: None,
@@ -190,33 +203,71 @@ fn gate_run(hook: Option<harness_core::hook::HookInput>) {
     gate::emit_and_exit(result);
 }
 
-/// stdin did not parse as a hook payload (a manual run, or a malformed
-/// payload). There is no session to measure and no `stop_hook_active` to bound
-/// a block with, so this follows the panic barrier's convention for a run with
-/// no parseable payload (`run_guarded`'s interactive mode): with a limit armed,
-/// or a config that cannot be read, it reports on stderr and exits 1 — never a
-/// silent exit 0. With every limit at 0 (or the gate disabled in config) there
-/// is nothing to gate, which is a known answer, so it exits 0 (backlog 5a4cd3ff).
+/// stdin did not parse as a hook payload (a malformed payload, or a manual
+/// run). The gate cannot process its input, so it BLOCKS the stop in every
+/// case — with or without a limit armed, whatever the config says (user
+/// rulings 2026-10-19: 「それは止めるで判断していい。読めないならエラー」 and
+/// 「処理できないならエラーでいい」). It is not an exit 1: Claude Code treats a
+/// non-zero exit other than 2 as a non-blocking error and lets the stop
+/// through. The block is a `{"decision":"block","reason":...}` line on stdout
+/// with exit 0, printed directly rather than through the repeat ledger's
+/// second-occurrence waiver, because this block has its own bound: at most
+/// [`streak::MAX_BLOCKS`] consecutive unparseable stops block, then one is
+/// allowed with a loud `systemMessage` (user ruling 「retry3回でぬけだす」; see
+/// `streak`). `BUDGETGUARD_DISABLE=1`, checked before stdin is read, bypasses
+/// it entirely.
 fn gate_unparseable_input() -> ! {
-    let why = match std::env::current_dir() {
-        Err(e) => format!("could not resolve the current directory to load the config: {e}"),
-        Ok(cwd) => match Config::load_checked(&cwd) {
-            Determination::Known(cfg) => {
-                if !cfg.enabled {
-                    std::process::exit(0);
-                }
-                match gate::undetermined_verdict(&cfg, "stdin is not a Stop hook payload") {
-                    gate::Verdict::Allow => std::process::exit(0),
-                    gate::Verdict::Warn(_) | gate::Verdict::Block(..) => {
-                        "a budget limit is armed and this run's spend is unmeasured".to_string()
-                    }
-                }
-            }
-            Determination::Undetermined(why) => why.as_str().to_string(),
-        },
+    let session = session_env();
+    let state_dir = streak_state_dir(&std::env::current_dir().unwrap_or_default());
+    let out = match streak::on_unparseable(&state_dir, session.as_deref()) {
+        streak::Action::Block(n) => {
+            let reason = format!(
+                "budgetguard: stdin is not a Stop hook payload (it could not be parsed as \
+                 JSON), so this stop's spend could not be checked at all. The stop is \
+                 blocked because the gate cannot process its input; it is not a budget \
+                 verdict (unreadable stop {n} of {max}; after {max} in a row the next one \
+                 is let through). Set BUDGETGUARD_DISABLE=1 to bypass budgetguard \
+                 explicitly.",
+                max = streak::MAX_BLOCKS
+            );
+            eprintln!("{reason}");
+            serde_json::json!({ "decision": "block", "reason": reason })
+        }
+        streak::Action::GiveUp => serde_json::json!({
+            "systemMessage": format!(
+                "budgetguard: the Stop hook input was unreadable (not JSON) {max} times in a \
+                 row; the gate gave up after {max} retries and let this stop through \
+                 UNCHECKED. This stop's spend was not checked.",
+                max = streak::MAX_BLOCKS
+            )
+        }),
+        streak::Action::MarkerUnusable(why) => serde_json::json!({
+            "systemMessage": format!(
+                "budgetguard: the Stop hook input was unreadable (not JSON), and the retry \
+                 counter that bounds this block could not be used ({why}), so this stop was \
+                 let through UNCHECKED. This stop's spend was not checked."
+            )
+        }),
     };
-    eprintln!("budgetguard: stdin is not a Stop hook payload; spend not checked: {why}");
-    std::process::exit(1);
+    println!("{out}");
+    std::process::exit(0);
+}
+
+/// `CLAUDE_CODE_SESSION_ID`, when set and non-empty: the streak key.
+fn session_env() -> Option<String> {
+    std::env::var("CLAUDE_CODE_SESSION_ID")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// budgetguard's state_dir for the streak marker: the config's when it loads,
+/// else the default. The marker only bounds a block, so which of the two it
+/// lands in changes no budget verdict.
+fn streak_state_dir(cwd: &std::path::Path) -> std::path::PathBuf {
+    match Config::load_checked(cwd) {
+        Determination::Known(cfg) => cfg.state_dir,
+        Determination::Undetermined(_) => config::base_dir().join("state"),
+    }
 }
 
 /// Record a fleet-level violation for a blocking Stop, for cross-gate
@@ -313,18 +364,36 @@ fn check() {
         check_undetermined("today's ledger total is not a finite number");
     }
     let over = cfg.daily_block_usd > 0.0 && day_usd >= cfg.daily_block_usd;
-    println!(
-        "{}",
-        serde_json::json!({
-            "verdict": if over { "over" } else { "within" },
-            "day_usd": day_usd,
-            "daily_warn_usd": cfg.daily_warn_usd,
-            "daily_block_usd": cfg.daily_block_usd,
-            "pressure": gate::budget_pressure(day_usd, cfg.daily_warn_usd),
-        })
-    );
+    let mut out = serde_json::json!({
+        "verdict": if over { "over" } else { "within" },
+        "day_usd": day_usd,
+        "daily_warn_usd": cfg.daily_warn_usd,
+        "daily_block_usd": cfg.daily_block_usd,
+        "limits_source": cfg.limits_source.as_str(),
+        "pressure": gate::budget_pressure(day_usd, cfg.daily_warn_usd),
+    });
+    add_session_info(&mut out, &cfg, &ledger);
+    println!("{out}");
     if over {
         std::process::exit(1);
+    }
+}
+
+/// Session figures for `check` / `status --json`, information only (user
+/// ruling 2026-10-19 「警告はださなくていい、結果がみたいだけ」): the session
+/// Tukey fence when the limits were derived or defaulted, and this session's
+/// last recorded spend (`CLAUDE_CODE_SESSION_ID`) when the ledger has one. A
+/// key is omitted, never printed as 0, when the figure is not known.
+fn add_session_info(
+    out: &mut serde_json::Value,
+    cfg: &Config,
+    ledger: &harness_core::ledger::Ledger,
+) {
+    if let Some(fence) = cfg.session_fence_usd {
+        out["session_fence_usd"] = serde_json::json!(fence);
+    }
+    if let Some(usd) = session_env().and_then(|s| ledger.session_cost(&s)) {
+        out["session_usd"] = serde_json::json!(usd);
     }
 }
 
@@ -374,31 +443,37 @@ fn status(args: StatusArgs) {
     // is an unmeasured day total, and printing it as `day_usd: 0` /
     // `pressure: false` would tell a downstream router there is headroom
     // (backlog c1174e86). Same contract as `check`, exit 2.
-    let day_usd = match harness_core::ledger::Ledger::load_checked(&cfg.state_dir)
-        .map_err(|e| e.to_string())
-        .map(|ledger| ledger.day_total(&today))
-    {
-        Ok(day_usd) if day_usd.is_finite() => day_usd,
-        Ok(_) => status_undetermined(&args, "today's ledger total is not a finite number"),
-        Err(why) => status_undetermined(&args, &why),
+    let ledger = match harness_core::ledger::Ledger::load_checked(&cfg.state_dir) {
+        Ok(ledger) => ledger,
+        Err(e) => status_undetermined(&args, &e.to_string()),
     };
+    let day_usd = ledger.day_total(&today);
+    if !day_usd.is_finite() {
+        status_undetermined(&args, "today's ledger total is not a finite number");
+    }
 
     if args.json {
         let pressure = gate::budget_pressure(day_usd, cfg.daily_warn_usd);
-        println!(
-            "{}",
-            serde_json::json!({
-                "day_usd": day_usd,
-                "daily_warn_usd": cfg.daily_warn_usd,
-                "daily_block_usd": cfg.daily_block_usd,
-                "pressure": pressure,
-            })
-        );
+        let mut out = serde_json::json!({
+            "day_usd": day_usd,
+            "daily_warn_usd": cfg.daily_warn_usd,
+            "daily_block_usd": cfg.daily_block_usd,
+            "session_warn_usd": cfg.session_warn_usd,
+            "session_block_usd": cfg.session_block_usd,
+            "limits_source": cfg.limits_source.as_str(),
+            "pressure": pressure,
+        });
+        add_session_info(&mut out, &cfg, &ledger);
+        println!("{out}");
         return;
     }
 
     println!("enabled:            {}", cfg.enabled);
     println!("state_dir:          {}", cfg.state_dir.display());
+    println!("limits_source:      {}", cfg.limits_source.as_str());
+    if let Some(fence) = cfg.session_fence_usd {
+        println!("session fence:      {fence:.2} (information only)");
+    }
     println!();
     println!("session.warn_usd:   {:.2}", cfg.session_warn_usd);
     println!("session.block_usd:  {:.2}", cfg.session_block_usd);

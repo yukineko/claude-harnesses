@@ -191,14 +191,19 @@ fn check_missing_ledger_is_within_with_zero_spend() {
     assert_eq!(j["pressure"], false);
 }
 
+/// CONTRACT CHANGE (user ruling 2026-10-19, 「設定上限をきめて、決められないなら
+/// その値にする」): this used to pin `daily_warn_usd`/`daily_block_usd` = 0 for
+/// no config at all. With no config and no ledger history the built-in
+/// default limits apply, reported as `limits_source: "default"`.
 #[test]
-fn check_no_config_at_all_is_within_not_disabled() {
+fn check_no_config_at_all_is_within_the_default_limits() {
     let fx = fixture("nocfg");
     let (code, out, j) = run_check(&fx, false);
     assert_eq!(j["verdict"], "within", "stdout: {out}");
     assert_eq!(code, 0, "stdout: {out}");
-    assert_eq!(j["daily_warn_usd"], 0.0);
-    assert_eq!(j["daily_block_usd"], 0.0);
+    assert_eq!(j["limits_source"], "default", "stdout: {out}");
+    assert_eq!(j["daily_warn_usd"], 1336.0);
+    assert_eq!(j["daily_block_usd"], 1871.0);
     assert_eq!(j["pressure"], false);
 }
 

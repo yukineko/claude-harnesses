@@ -19,9 +19,10 @@
 //! "Not silently allowed" is asserted as: stdout carries a block decision OR
 //! the exit status is non-zero. Exit 0 with empty stdout is the bug.
 //!
-//! The existing `integration.rs` tests `gate_with_malformed_stdin_exits_zero`
-//! and `gate_with_empty_fields_exits_zero` pin the allow for (c)/(d) without
-//! arming limits; they must flip with the fix.
+//! The `integration.rs` tests that pinned the allow for (c)/(d) without a
+//! config were flipped by user ruling 2026-10-19 (now
+//! `gate_with_malformed_stdin_blocks_even_with_no_limit` and
+//! `gate_with_empty_fields_and_no_config_blocks`).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -115,6 +116,75 @@ fn c_non_json_stdin_with_limits_armed_is_not_silently_allowed() {
     let home = temp_home("c");
     let (code, stdout, stderr) = gate("not json", &home);
     assert_not_silently_allowed("(c) non-JSON stdin", code, &stdout, &stderr);
+}
+
+/// User ruling (2026-10-19): 「それは止めるで判断していい。読めないならエラー」.
+/// Non-JSON stdin with a limit armed must BLOCK the stop, not merely exit
+/// non-zero: Claude Code treats exit 1 as a non-blocking error and lets the
+/// stop through. The block uses the gate's own Stop protocol — a
+/// `{"decision":"block","reason":...}` line on stdout with exit 0.
+fn assert_blocks_stop(case: &str, code: i32, stdout: &str, stderr: &str) {
+    let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+        panic!("{case}: stdout is not a JSON decision ({e}); exit {code}, stdout {stdout:?}, stderr {stderr:?}")
+    });
+    assert_eq!(
+        v["decision"], "block",
+        "{case}: unparseable stdin must block the stop; got exit {code}, stdout {stdout:?}, stderr {stderr:?}"
+    );
+    assert!(
+        v["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("Stop hook payload")),
+        "{case}: the block reason must say the payload was unreadable: {v}"
+    );
+    assert_eq!(
+        code, 0,
+        "{case}: a Stop block decision is read only on exit 0"
+    );
+}
+
+#[test]
+fn c2_non_json_stdin_with_block_limit_blocks_the_stop() {
+    let home = temp_home("c2");
+    let (code, stdout, stderr) = gate("not json", &home);
+    assert_blocks_stop("(c2) non-JSON stdin, block limit", code, &stdout, &stderr);
+}
+
+#[test]
+fn c3_non_json_stdin_with_warn_only_limit_blocks_the_stop() {
+    let home = temp_home("c3");
+    std::fs::write(home.join("budgetguard.toml"), "[session]\nwarn_usd = 1.0\n").unwrap();
+    let (code, stdout, stderr) = gate("not json", &home);
+    assert_blocks_stop(
+        "(c3) non-JSON stdin, warn-only limit",
+        code,
+        &stdout,
+        &stderr,
+    );
+}
+
+#[test]
+fn c4_non_json_stdin_with_unreadable_config_blocks_the_stop() {
+    let home = temp_home("c4");
+    std::fs::write(home.join("budgetguard.toml"), "this is not toml\n").unwrap();
+    let (code, stdout, stderr) = gate("not json", &home);
+    assert_blocks_stop(
+        "(c4) non-JSON stdin, unreadable config",
+        code,
+        &stdout,
+        &stderr,
+    );
+}
+
+/// Second user ruling (2026-10-19): 「あとはこれによってでる問題によっては変更するが、
+/// 処理できないならエラーでいい」 — unparseable stdin blocks in ALL cases,
+/// including when no limit is armed (no config file at all).
+#[test]
+fn c5_non_json_stdin_with_no_limit_blocks_the_stop() {
+    let home = temp_home("c5");
+    std::fs::remove_file(home.join("budgetguard.toml")).unwrap();
+    let (code, stdout, stderr) = gate("not json", &home);
+    assert_blocks_stop("(c5) non-JSON stdin, no limit", code, &stdout, &stderr);
 }
 
 #[test]

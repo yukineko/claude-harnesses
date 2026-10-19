@@ -23,14 +23,38 @@ warning when nothing louder is being said [test: crates/budgetguard/tests/prose_
 
 A blocking stop also records an overwatch violation event [test: crates/budgetguard/tests/prose_claims.rs::claim_block_records_violation].
 
+### Limits when none is configured
+
+A limit of `0` turns off that one axis [test: crates/budgetguard/src/gate.rs::zero_threshold_means_disabled] [test: crates/budgetguard/src/config.rs::one_set_limit_keeps_the_others_off]. A gate with **no** limit at all
+(no config file, or every `[session]` / `[daily]` warn/block limit `0`) is not
+"no limit". budgetguard sets the limits itself:
+
+- **derived**: if the ledger holds at least 7 past days (today is excluded),
+  the limits come from that history, with Tukey outlier removal (Q1/Q3 by
+  linear interpolation, fence = Q3 + 1.5 × IQR). Daily block = the fence over
+  per-day totals. Daily warn = p90 of the days at or below the fence [test: crates/budgetguard/src/config.rs::derive_limits_uses_the_tukey_fence_and_ignores_today] [test: crates/budgetguard/src/config.rs::an_absent_config_with_history_derives_its_limits] [test: crates/budgetguard/tests/unset_limits_are_derived.rs::absent_config_with_history_gate_blocks_over_the_derived_daily_limit] [test: crates/budgetguard/tests/unset_limits_are_derived.rs::all_zero_config_with_history_gate_blocks_over_the_derived_daily_limit];
+- **default**: with a shorter history, the built-in limits apply: daily warn
+  $1336 / block $1871. These were computed on 2026-10-19 from the
+  maintainer's ledger with the same method [test: crates/budgetguard/src/config.rs::derive_limits_needs_seven_past_days] [test: crates/budgetguard/src/config.rs::an_absent_config_with_no_history_gets_the_default_limits] [test: crates/budgetguard/tests/unset_limits_are_derived.rs::absent_config_no_history_check_reports_default_limits];
+- the **session axis** gets no derived warn and no derived block. The session
+  fence (the Tukey fence over every past per-session entry; the default is
+  $306) is reported as `session_fence_usd` by `check` / `status --json`, for
+  information only [test: crates/budgetguard/tests/unset_limits_are_derived.rs::absent_config_derives_no_session_warning_but_reports_the_fence]. A session
+  warn/block applies only when the config sets one;
+- a ledger that exists but cannot be read or parsed, or that holds a
+  non-finite or negative cost, is **undetermined**: the gate blocks and
+  `check`/`status` exit 2. It is never silently replaced by the defaults [test: crates/budgetguard/src/config.rs::an_absent_config_with_a_corrupt_ledger_is_undetermined] [test: crates/budgetguard/src/config.rs::derive_limits_rejects_a_non_finite_cost] [test: crates/budgetguard/tests/unset_limits_are_derived.rs::absent_config_corrupt_ledger_is_undetermined_everywhere].
+
+`check` and `status --json` report where the limits came from as
+`limits_source`: `config` | `derived` | `default` [test: crates/budgetguard/tests/unset_limits_are_derived.rs::absent_config_with_history_check_reports_derived_limits] [test: crates/budgetguard/tests/unset_limits_are_derived.rs::control_one_configured_axis_reports_config_and_keeps_others_off].
+
 Allowed (exit 0, no decision) [test: crates/budgetguard/tests/prose_claims.rs::claim_reentry_allowed] [test: crates/budgetguard/tests/prose_claims.rs::claim_disable_env]:
 
-- No config file at all, or `[session]` / `[daily]` limits all `0` → every
-  stop is allowed (a limit of 0 means "no limit") [test: crates/budgetguard/src/config.rs::an_absent_config_is_known_default_not_undetermined] [test: crates/budgetguard/src/gate.rs::zero_threshold_means_disabled].
 - A re-entry with `stop_hook_active` (a previous Stop hook already blocked) —
   an over-budget session is blocked once, then allowed to stop [test: crates/budgetguard/tests/prose_claims.rs::claim_reentry_allowed].
 - `BUDGETGUARD_DISABLE=1` → hook is a no-op, even when the config file cannot be parsed [test: crates/budgetguard/tests/prose_claims.rs::claim_disable_env].
-- `enabled = false` in the config → hook is a no-op [test: crates/budgetguard/tests/prose_claims.rs::claim_example_toml].
+- `enabled = false` in the config → hook is a no-op for a parseable Stop
+  payload (unparseable stdin still blocks) [test: crates/budgetguard/tests/prose_claims.rs::claim_example_toml].
 
 *Cannot determine* is **not** treated as within budget [test: crates/budgetguard/src/gate.rs::an_undetermined_config_blocks_despite_zero_default_limits] [test: crates/budgetguard/src/gate.rs::a_contended_ledger_lock_makes_the_day_undetermined_and_blocks]:
 
@@ -41,8 +65,15 @@ Allowed (exit 0, no decision) [test: crates/budgetguard/tests/prose_claims.rs::c
   any warn limit is armed [test: crates/budgetguard/src/gate.rs::unreadable_subagents_dir_is_undetermined_and_blocks_when_a_limit_is_armed] [test: crates/budgetguard/tests/prose_claims.rs::claim_session_undetermined_warn_only] [test: crates/budgetguard/tests/prose_claims.rs::claim_session_undetermined_daily_arms].
   This includes a `transcript_path` that does not exist or is a directory, and
   a Stop payload whose `session_id` or `transcript_path` is empty [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::a_nonexistent_transcript_with_limits_armed_is_not_silently_allowed] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::b_directory_transcript_with_limits_armed_is_not_silently_allowed] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::d_empty_session_or_transcript_with_limits_armed_is_not_silently_allowed].
-- stdin that is not a hook payload at all, with any limit armed → stderr reason
-  and exit 1 (there is no `stop_hook_active` to bound a block with) [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::c_non_json_stdin_with_limits_armed_is_not_silently_allowed].
+- stdin that is not a hook payload at all → **block** (`{"decision":"block"}` on
+  stdout, exit 0) in every case, with or without a limit armed: the gate cannot
+  process its input, and an exit 1 would be a non-blocking error that lets the
+  stop through. This holds even with `enabled = false`. The block is bounded:
+  at most 3 consecutive unparseable stops block, and the 4th is allowed with
+  a loud `systemMessage` saying the gate gave up. The streak is kept per
+  `CLAUDE_CODE_SESSION_ID` (or under one global key) in
+  `<state_dir>/unparseable-streak/`, and a parsed stop resets it. A marker that
+  cannot be read or written allows the stop loudly [test: crates/budgetguard/tests/unparseable_retry_bound.rs::blocks_three_times_then_allows_the_fourth_with_a_session] [test: crates/budgetguard/tests/unparseable_retry_bound.rs::blocks_three_times_then_allows_the_fourth_without_a_session] [test: crates/budgetguard/tests/unparseable_retry_bound.rs::a_parsed_stop_resets_the_streak] [test: crates/budgetguard/tests/unparseable_retry_bound.rs::an_unusable_marker_allows_loudly]. `BUDGETGUARD_DISABLE=1` bypasses it entirely [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::c2_non_json_stdin_with_block_limit_blocks_the_stop] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::c3_non_json_stdin_with_warn_only_limit_blocks_the_stop] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::c4_non_json_stdin_with_unreadable_config_blocks_the_stop] [test: crates/budgetguard/tests/repro_unmeasurable_transcript_allows.rs::c5_non_json_stdin_with_no_limit_blocks_the_stop].
 - A day total that cannot be measured (ledger lock held by another session, or
   a corrupt `ledger.json`, which is preserved untouched) → block/warn per the
   armed *daily* limits; a session already over its own block limit still gets

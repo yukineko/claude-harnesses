@@ -1617,36 +1617,6 @@ exit 101: piling session-insights v0.2.28 (/Users/yuki/src/.harness-worktrees/re
 error: test failed, to rerun pass `-p session-insights --test repro_record_now_exit0_no_note`"""
 
 [[task]]
-id = "6bb90ca6"
-title = "propguard: unsearchable repo root reads as NotRepo (git_probe relies on Path::exists) and the Stop gate allows"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "harness-core git_probe::dot_git_present uses Path::exists; when the repo root is mode 000 both the stat and git chdir fail, so probe_repo returns NotRepo and propguard allows no-git instead of Undetermined."
-created_at = 1792189426
-updated_at = 1792189426
-weight = 0.0
-issue_number = 1411
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1411"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p propguard --test repro_git_probe_unreadable_ancestor -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189426
-detail = """
-exit 101:    Compiling propguard v0.1.60 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/propguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.76s
-     Running tests/repro_git_probe_unreadable_ancestor.rs (target/debug/deps/repro_git_probe_unreadable_ancestor-ba9ef126602973c1)
-error: test failed, to rerun pass `-p propguard --test repro_git_probe_unreadable_ancestor`"""
-
-[[task]]
 id = "60b59f75"
 title = "backlog: held exclusive lock does not stop next --claim from another session"
 project = "/Users/yuki/src/harness"

@@ -55526,3 +55526,64 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "51376c9c6a506418ab08829ae513beca29b90c80"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "6bb90ca6"
+title = "propguard: unsearchable repo root reads as NotRepo (git_probe relies on Path::exists) and the Stop gate allows"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "harness-core git_probe::dot_git_present uses Path::exists; when the repo root is mode 000 both the stat and git chdir fail, so probe_repo returns NotRepo and propguard allows no-git instead of Undetermined."
+created_at = 1792189426
+updated_at = 1792423790
+weight = 0.0
+issue_number = 1411
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1411"
+issue_closed_at = 1792423792
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p propguard --test repro_git_probe_unreadable_ancestor -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189426
+detail = """
+exit 101:    Compiling propguard v0.1.60 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/propguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.76s
+     Running tests/repro_git_probe_unreadable_ancestor.rs (target/debug/deps/repro_git_probe_unreadable_ancestor-ba9ef126602973c1)
+error: test failed, to rerun pass `-p propguard --test repro_git_probe_unreadable_ancestor`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p propguard --test repro_git_probe_unreadable_ancestor"
+exit = 0
+passed = 1
+rev = "abfc3f22a91f85ae161145974805aa75527dc15d"
+observed_at = 1792423773
+output_digest = "sha256:59749f356274fcb8840ca3f97f520e7451cb5cbc817d1c4e9411d72b75985446"
+excerpt = """
+
+running 1 test
+test unsearchable_repo_root_does_not_read_as_not_a_repo ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
+   Compiling harness-core v0.2.60 (/Users/yuki/src/.harness-worktrees/p1-propguard-probe/crates/harness-core)
+   Compiling overwatch v0.2.81 (/Users/yuki/src/.harness-worktrees/p1-propguard-probe/crates/overwatch)
+   Compiling propguard v0.1.66 (/Users/yuki/src/.harness-worktrees/p1-propguard-probe/crates/propguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.99s
+     Running tests/repro_git_probe_unreadable_ancestor.rs (target/debug/deps/repro_git_probe_unreadable_ancestor-89db5fcdd7df4c9f)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
+kind = "behavioural"

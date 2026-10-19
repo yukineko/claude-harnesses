@@ -57185,3 +57185,62 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; fini
 rev = "23b0d2f5ff3546b25967e592872112a54c2a742f"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "dc955812"
+title = "blastguard classify は backtick で引用されたコマンドを記述するだけの task 散文も force-gate する (11be9484 の散文側、ユーザー裁定 2026-10-16 で先送り)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "11be9484 split by user ruling 2026-10-16: the file-name half was fixed (blastguard 0.2.131); the prose half (a backtick-quoted command that the prose merely describes) still gates. Options from 11be9484: condukt passes real commands to classify separately (interface change; the repro test classifies joined text and would need rewriting with an ack), or a backtick-span rule (widest loosening: a task saying run rm -rf X would also pass). Needs a user design ruling before implementation."
+created_at = 1792155553
+updated_at = 1792431297
+weight = 0.0
+issue_number = 1368
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1368"
+issue_closed_at = 1792431301
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_11be9484 -- --ignored prose_describing_a_command_does_not_force_gate"
+rev = "12bfc9707a4aa5a712d30007e890b7da64ea6196"
+observed_at = 1792155553
+detail = """
+exit 101: failures:
+    prose_describing_a_command_does_not_force_gate
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-27e56823383379b3)
+error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_11be9484 prose_describing_a_command_does_not_force_gate"
+exit = 0
+passed = 1
+rev = "0790a9396e62bb7b862239a5039e25c49ef8471a"
+observed_at = 1792431282
+output_digest = "sha256:77bd21b5177371fec3dab9125e5b65e260afece25db91f5fee3b313346b9ba54"
+excerpt = """
+
+running 1 test
+test prose_describing_a_command_does_not_force_gate ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-9f569728775e3035)
+"""
+
+[task.closure.red]
+rev = "e5dd8e49686e2c345d6f1c565149d15ddf4c7d92"
+exit = 101
+kind = "behavioural"

@@ -153,8 +153,10 @@ impl LeaseLock {
     /// to release. Reaps a stale lock whose owner pid is gone. Never fails: on
     /// timeout it logs and returns an unlocked guard (fail-soft).
     ///
-    /// `#[allow(dead_code)]`: every production lease/store mutator migrated to
-    /// the hard-skip [`LeaseLock::acquire_or_skip`] — proceeding under an
+    /// `#[allow(dead_code)]`: every production mutator migrated off this
+    /// wait-variant — the `store::` mutators to the hard-skip
+    /// [`LeaseLock::acquire_or_skip`], the lease/control mutators to the
+    /// fail-closed [`LeaseLock::acquire_strict`] — proceeding under an
     /// UNLOCKED guard on timeout was exactly the double-claim/double-write window
     /// that closed. This wait-variant is retained as the concurrency and
     /// wedged-holder tests' live lock (a genuinely-held guard); the bin target
@@ -197,7 +199,7 @@ impl LeaseLock {
     /// timed-out writers both proceed and double-claim (last-writer-wins).
     /// Never panics. Uses the same [`LeaseLock::DEADLINE`] as
     /// [`LeaseLock::acquire`]. Live callers: the `store::` registry /
-    /// check-then-append mutators (`append_disposition`, `append_merge_*`,
+    /// check-then-append mutators (`append_merge_*`,
     /// `record_changeset_and_detect`, `mark_*_merged`, `prune_stale_changesets`,
     /// the review-findings compaction) and `audit_round_cli::close_at`. The
     /// `lease::{begin, run, end, heartbeat, reap}` mutators and

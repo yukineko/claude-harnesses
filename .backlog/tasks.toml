@@ -298,41 +298,6 @@ exit 1: st/unittest.py\u001B[0m:354: XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 5.16s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "4a1cf1ad"
-title = "blastguard: backtick-quoted path inside a Python heredoc comment is misread as a > redirect and blocked"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """
-Observed 2026-10-04 by the 873a2621 test-writer agent (session 33de4c25). Verbatim block: '> /claims.json' destroys the file's current contents and /claims.json contains a shell expansion, so blastguard cannot tell which file this names. Trigger: a heredoc body that is Python source, with a comment that wraps claims.json in backticks. Also a process finding: the agent then wrote the same script with the Write tool and ran it, which is the reroute-around-a-gate pattern that CLAUDE.md section 5.4 forbids (the effect was benign: test edits in its own worktree). Needs a reproduction test.
-
-[2026-10-04, session 33de4c25] Second observation, same verbatim block: the 873a2621 implementer's python3 heredoc that spliced crates/harness-core/src/transcript.rs was refused because Rust doc text "<project_key(main_worktree_root(root))>/claims.json" (in backticks) was parsed as a > redirect. The script never ran. Declared and asked; the user ruled to make the same change with the Edit tool."""
-created_at = 1791044006
-updated_at = 1792005327
-weight = 0.0
-issue_number = 1229
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1229"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_4a1cf1ad -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005323
-detail = """
-exit 101: ignored; 0 measured; 0 filtered out; finished in 1.48s
-
-   Compiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.55s
-     Running tests/backlog_4a1cf1ad.rs (target/debug/deps/backlog_4a1cf1ad-f7cb2f030a0f5a7b)
-error: test failed, to rerun pass `-p blastguard --test backlog_4a1cf1ad`"""
-
-[[task]]
 id = "1af8be51"
 title = "check-worktree-isolation _merge_head_visible uses os.path.exists: a directory/symlink MERGE_HEAD allows a main-tree commit (fail-open, disagrees with edit guard)"
 project = "/Users/yuki/src/harness"

@@ -56939,3 +56939,66 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; fini
 rev = "59b9fa02a46c695fc66f4227045f70891c474c6e"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "4a1cf1ad"
+title = "blastguard: backtick-quoted path inside a Python heredoc comment is misread as a > redirect and blocked"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-10-04 by the 873a2621 test-writer agent (session 33de4c25). Verbatim block: '> /claims.json' destroys the file's current contents and /claims.json contains a shell expansion, so blastguard cannot tell which file this names. Trigger: a heredoc body that is Python source, with a comment that wraps claims.json in backticks. Also a process finding: the agent then wrote the same script with the Write tool and ran it, which is the reroute-around-a-gate pattern that CLAUDE.md section 5.4 forbids (the effect was benign: test edits in its own worktree). Needs a reproduction test.
+
+[2026-10-04, session 33de4c25] Second observation, same verbatim block: the 873a2621 implementer's python3 heredoc that spliced crates/harness-core/src/transcript.rs was refused because Rust doc text "<project_key(main_worktree_root(root))>/claims.json" (in backticks) was parsed as a > redirect. The script never ran. Declared and asked; the user ruled to make the same change with the Edit tool."""
+created_at = 1791044006
+updated_at = 1792428624
+weight = 0.0
+issue_number = 1229
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1229"
+issue_closed_at = 1792428627
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_4a1cf1ad -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005323
+detail = """
+exit 101: ignored; 0 measured; 0 filtered out; finished in 1.48s
+
+   Compiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.55s
+     Running tests/backlog_4a1cf1ad.rs (target/debug/deps/backlog_4a1cf1ad-f7cb2f030a0f5a7b)
+error: test failed, to rerun pass `-p blastguard --test backlog_4a1cf1ad`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_4a1cf1ad backtick_claims_json_in_quoted_python_heredoc_is_not_denied -- --include-ignored"
+exit = 0
+passed = 1
+rev = "8334be0d6c88078dac276f07b214e5e6971f12da"
+observed_at = 1792428605
+output_digest = "sha256:a133d2c3555ac9696297b1d3f9edf0c79acedbad8688e863eb1243277e97c35d"
+excerpt = """
+
+running 1 test
+test backtick_claims_json_in_quoted_python_heredoc_is_not_denied ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.43s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_4a1cf1ad.rs (target/debug/deps/backlog_4a1cf1ad-9bcc7942258e413d)
+"""
+
+[task.closure.red]
+rev = "59b9fa02a46c695fc66f4227045f70891c474c6e"
+exit = 101
+kind = "behavioural"

@@ -4597,6 +4597,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // Only fire on the
             // Running/Pending→Done edge so a re-run of `set --status done` does
             // not double-record.
+            let mut overlap_hold_missing = false;
             if st == state::Status::Done && prior_status != state::Status::Done {
                 if let Some(t) = rs.tasks.iter().find(|t| t.id == task) {
                     let session = session_id_from_env().unwrap_or_default();
@@ -4652,13 +4653,16 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                     // Mid-flight runtime-conflict detection (design 625aa170 A):
                     // record this task's ACTUAL changed-file set into the
                     // overwatch project-global registry and, on a detected
-                    // overlap with another in-flight worktree, set a merge-hold
-                    // (an open RuntimeOverlap entry in the consensus review
+                    // overlap with another in-flight worktree — or when that
+                    // check could NOT run (backlog 08494f63: unchecked is
+                    // undetermined, not "no overlap") — set a merge-hold (an
+                    // open RuntimeOverlap entry in the consensus review
                     // surface). The condukt merge path checks the hold and skips
-                    // the merge until it is resolved. Fully fail-soft on the
-                    // compute side (only a positive detection holds); never
-                    // changes the exit code here.
-                    if runtime_conflict::record_and_check_actual_overlap(
+                    // the merge until it is resolved. A hold that was needed but
+                    // could NOT be enqueued leaves the merge UNHELD: that is
+                    // named on stderr and moves the exit code (at the end of this
+                    // arm, after the claim upkeep), never reported as held.
+                    match runtime_conflict::record_and_check_actual_overlap(
                         cfg,
                         cwd,
                         &run,
@@ -4666,10 +4670,29 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         state::now_secs(),
                         &session,
                     ) {
-                        eprintln!(
+                        runtime_conflict::OverlapCheck::NotRecorded
+                        | runtime_conflict::OverlapCheck::NoOverlap => {}
+                        runtime_conflict::OverlapCheck::Held => eprintln!(
                             "condukt: runtime overlap detected for task '{}' — merge held for review (overwatch review-queue [merge-conflict])",
                             t.id
-                        );
+                        ),
+                        runtime_conflict::OverlapCheck::UncheckedHeld(why) => eprintln!(
+                            "condukt: runtime-overlap check could NOT run for task '{}' ({why}) — this is UNCHECKED, not \"no overlap\"; merge held for review (overwatch review-queue [merge-conflict])",
+                            t.id
+                        ),
+                        runtime_conflict::OverlapCheck::HoldNotEnqueued { unchecked, why } => {
+                            eprintln!(
+                                "condukt: merge-hold for task '{}' (run '{run}') could NOT be enqueued ({why}).\n  consequence: the merge is NOT held although {} — do not merge this task's branch \
+                                 until the overlap has been reviewed (`overwatch review-queue`, `active_changesets.json`).",
+                                t.id,
+                                if unchecked {
+                                    "its overlap with in-flight peers was never checked"
+                                } else {
+                                    "an overlap with an in-flight peer WAS detected"
+                                }
+                            );
+                            overlap_hold_missing = true;
+                        }
                     }
                 }
             }
@@ -4801,8 +4824,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
             // Deliberately LAST in the arm: the heartbeat upkeep above must still
             // run and still report, so the exit carries the undetermined release
-            // without suppressing the other half of the same block.
-            if claim_release_undetermined {
+            // (or the un-enqueued merge-hold, backlog 452f3705) without
+            // suppressing the other half of the same block.
+            if claim_release_undetermined || overlap_hold_missing {
                 std::process::exit(1);
             }
         }

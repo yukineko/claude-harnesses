@@ -18,15 +18,30 @@
 //!    merge; `resolve-merge` clears it (records a resolution → the entry leaves
 //!    the open set) then proceeds.
 //!
-//! ## Fail-soft contract (asymmetric — this is the important nuance)
+//! ## Contract (asymmetric — this is the important nuance)
 //!
-//! The DETECTION/compute side is fully fail-soft: a missing/absent worktree, a
-//! `git` failure, an empty diff, a lock timeout, or a write error all degrade to
-//! "no overlap detected" (`false`), never holding a merge on a compute error and
-//! never changing the exit code. The HOLD itself, once a POSITIVE overlap is
-//! detected, is a real block (a hold-for-review, NOT a hard run error): the
-//! merge is skipped until the entry is resolved. Returns `true` iff a hold was
-//! set (a real overlap was detected), for the caller to log / observe.
+//! Inputs that leave NOTHING to record — no worktree recorded on the task, an
+//! unresolvable base, or a changed-file listing that is empty or that `git`
+//! could not produce — return [`OverlapCheck::NotRecorded`]: no changeset is
+//! registered and no hold is set. Once a changeset IS submitted to the
+//! registry, the answer is three-valued (backlog 08494f63):
+//!
+//! * the registry recorded and cross-checked it and found no overlap →
+//!   [`OverlapCheck::NoOverlap`] (the only "no overlap" answer);
+//! * it found a POSITIVE overlap → a merge-hold is enqueued
+//!   ([`OverlapCheck::Held`]);
+//! * the record/cross-check itself FAILED (lease lock not acquired, corrupt or
+//!   unreadable registry, write error) → the overlap is UNCHECKED, not absent,
+//!   so a merge-hold is enqueued for it too ([`OverlapCheck::UncheckedHeld`]);
+//!   resolving that hold (`resolve-merge`) is the human's decision to merge
+//!   without the check.
+//!
+//! A hold is a hold-for-review (NOT a hard run error): the merge is skipped
+//! until the entry is resolved. If a needed hold could not be enqueued (the
+//! review-surface append returned `Err`, e.g. the same lock is still
+//! contended), the merge is NOT held: that is reported as
+//! [`OverlapCheck::HoldNotEnqueued`], never as "held", and the caller names it
+//! on stderr and exits non-zero.
 
 use crate::config::Config;
 use crate::state::TaskState;
@@ -96,10 +111,28 @@ fn diff_text(worktree: &Path, base: &str) -> String {
         .unwrap_or_default()
 }
 
+/// What [`record_and_check_actual_overlap`] established. See the module docs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OverlapCheck {
+    /// Nothing was submitted to the registry (no worktree / base / changed
+    /// files), so no overlap check ran and no hold was set.
+    NotRecorded,
+    /// Recorded and cross-checked: no overlap with any in-flight peer.
+    NoOverlap,
+    /// A positive overlap was detected and the merge-hold was enqueued.
+    Held,
+    /// The overlap check could NOT run (`why`); a merge-hold was enqueued so
+    /// the merge does not proceed unchecked.
+    UncheckedHeld(String),
+    /// A hold was needed (positive overlap, or `unchecked` = the check could
+    /// not run) but enqueueing it FAILED (`why`): the merge is NOT held.
+    HoldNotEnqueued { unchecked: bool, why: String },
+}
+
 /// Record this task's actual changeset and, on a detected mid-flight overlap
-/// with another in-flight worktree, set a merge-hold (decision A). Returns
-/// `true` iff a hold was set. Fully fail-soft on the compute side (see module
-/// docs); a positive detection is the only path that holds.
+/// with another in-flight worktree — or when the overlap check itself could
+/// not run — set a merge-hold (decision A; backlog 08494f63). See
+/// [`OverlapCheck`] and the module docs for the full contract.
 ///
 /// `cwd` is condukt's invocation cwd (the MAIN repo), NOT the task worktree:
 /// the overwatch registry is keyed by the project (repo-root → project-key), so
@@ -112,18 +145,18 @@ pub(crate) fn record_and_check_actual_overlap(
     task: &TaskState,
     now: i64,
     session_id: &str,
-) -> bool {
+) -> OverlapCheck {
     let worktree = match task.worktree.as_deref() {
         Some(w) => Path::new(w),
-        None => return false,
+        None => return OverlapCheck::NotRecorded,
     };
     let base = match frozen_base(worktree, &cfg.default_branch) {
         Some(b) => b,
-        None => return false,
+        None => return OverlapCheck::NotRecorded,
     };
     let files = match changed_files(worktree, &base) {
         Some(f) => f,
-        None => return false,
+        None => return OverlapCheck::NotRecorded,
     };
 
     let repo = crate::worktree::toplevel(cwd).unwrap_or_else(|_| cwd.to_path_buf());
@@ -139,18 +172,42 @@ pub(crate) fn record_and_check_actual_overlap(
         &files,
         now,
     );
+    let diff_theirs = || truncate_diff(&diff_text(worktree, &changeset.base_ref), DIFF_BYTE_CAP);
 
-    // Shared-registry RMW + cross-check. Fail-soft: an Err (lock/write failure)
-    // degrades to "no overlap" — a COMPUTE error never holds a merge.
+    // Shared-registry RMW + cross-check. An `Err` (lock not acquired, corrupt
+    // registry, write failure) means the overlap was NOT checked — it is
+    // undetermined, not "no overlap" — so it holds the merge like a positive
+    // detection does (backlog 08494f63).
     let events = match overwatch::store::record_changeset_and_detect(&repo, &changeset) {
         Ok(evs) => evs,
         Err(e) => {
-            eprintln!("condukt: runtime-conflict detection failed (continuing, no hold): {e}");
-            return false;
+            let why = format!("{e:#}");
+            let entry = MergeConflictEntry {
+                conflict_id: format!("{task_key}/runtime-overlap-unchecked"),
+                origin: ConflictOrigin::RuntimeOverlap,
+                run_id: run_id.to_string(),
+                branch,
+                default_branch: cfg.default_branch.clone(),
+                base_ref: base,
+                // Every file this task changed: none of them was cross-checked.
+                conflicted_files: files.clone(),
+                diff_theirs: diff_theirs(),
+                diff_ours: format!(
+                    "mid-flight overlap check NOT performed (undetermined, not absent): {why}"
+                ),
+                ts: now,
+            };
+            return match overwatch::store::append_merge_conflict(&repo, &entry) {
+                Ok(()) => OverlapCheck::UncheckedHeld(why),
+                Err(e2) => OverlapCheck::HoldNotEnqueued {
+                    unchecked: true,
+                    why: format!("overlap check failed: {why}; hold enqueue failed: {e2:#}"),
+                },
+            };
         }
     };
     if events.is_empty() {
-        return false;
+        return OverlapCheck::NoOverlap;
     }
 
     // POSITIVE detection → set the merge-hold by enqueuing an open
@@ -175,7 +232,7 @@ pub(crate) fn record_and_check_actual_overlap(
         // "theirs" = this task's actual diff (byte-bounded); "ours" = a note of
         // the in-flight peer(s) it overlaps (their worktrees are elsewhere, so a
         // full diff isn't available here — the resolver has enough to act).
-        diff_theirs: truncate_diff(&diff_text(worktree, &changeset.base_ref), DIFF_BYTE_CAP),
+        diff_theirs: diff_theirs(),
         diff_ours: format!(
             "mid-flight overlap with in-flight peer task(s): {}",
             peers.join(", ")
@@ -183,12 +240,16 @@ pub(crate) fn record_and_check_actual_overlap(
         ts: now,
     };
     // Idempotent per conflict_id (append_merge_conflict re-checks membership).
-    // Fail-soft on the write: a failed enqueue is logged; the runtime_conflicts
-    // event is already recorded, so the overlap is not lost.
-    if let Err(e) = overwatch::store::append_merge_conflict(&repo, &entry) {
-        eprintln!("condukt: could not enqueue runtime-overlap merge-hold (continuing): {e}");
+    // A failed enqueue means NO hold is on the review surface, so the merge is
+    // not held: report that, never "held" (backlog 452f3705). The
+    // runtime_conflicts event itself was already recorded by the call above.
+    match overwatch::store::append_merge_conflict(&repo, &entry) {
+        Ok(()) => OverlapCheck::Held,
+        Err(e) => OverlapCheck::HoldNotEnqueued {
+            unchecked: false,
+            why: format!("overlap detected; hold enqueue failed: {e:#}"),
+        },
     }
-    true
 }
 
 #[cfg(test)]
@@ -202,29 +263,145 @@ mod tests {
             id: "t1".to_string(),
             ..Default::default()
         };
-        // No worktree recorded → immediate false, no panic, no hold.
-        assert!(!record_and_check_actual_overlap(
-            &cfg,
-            Path::new("/tmp"),
-            "run-x",
-            &task,
-            0,
-            "sess"
-        ));
-        // A worktree path that does not exist → also false (changed_files None).
+        // No worktree recorded → nothing submitted, no panic, no hold.
+        assert_eq!(
+            record_and_check_actual_overlap(&cfg, Path::new("/tmp"), "run-x", &task, 0, "sess"),
+            OverlapCheck::NotRecorded
+        );
+        // A worktree path that does not exist → also not recorded.
         let task = TaskState {
             id: "t1".to_string(),
             worktree: Some("/definitely/not/a/real/worktree/xyzzy".to_string()),
             ..Default::default()
         };
-        assert!(!record_and_check_actual_overlap(
-            &cfg,
-            Path::new("/tmp"),
-            "run-x",
-            &task,
-            0,
-            "sess"
-        ));
+        assert_eq!(
+            record_and_check_actual_overlap(&cfg, Path::new("/tmp"), "run-x", &task, 0, "sess"),
+            OverlapCheck::NotRecorded
+        );
+    }
+
+    /// Pin `HOME` (the overwatch storage root) to `home` for the closure,
+    /// serialized with every other HOME-mutating test in this crate.
+    fn with_home<R>(home: &Path, f: impl FnOnce() -> R) -> R {
+        let _g = crate::env_lock::HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let prev = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        let out = f();
+        match prev {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        out
+    }
+
+    /// A repo on `main` with one commit, then branch `feat` checked out with a
+    /// committed `feat.txt` — so the task's actual diff vs main is non-empty.
+    fn repo_with_feat_branch(dir: &Path) {
+        let g = |args: &[&str]| crate::worktree::git(dir, args).unwrap();
+        g(&["init", "-b", "main"]);
+        g(&["config", "user.email", "test@example.com"]);
+        g(&["config", "user.name", "Test"]);
+        std::fs::write(dir.join("base.txt"), "base\n").unwrap();
+        g(&["add", "."]);
+        g(&["commit", "-m", "init"]);
+        g(&["checkout", "-b", "feat"]);
+        std::fs::write(dir.join("feat.txt"), "feat\n").unwrap();
+        g(&["add", "."]);
+        g(&["commit", "-m", "feat"]);
+    }
+
+    /// 08494f63: when the overlap check could NOT run (the registry RMW
+    /// errored — here a corrupt `active_changesets.json`), the task's merge
+    /// must be HELD, not waved through as "no overlap". Observed via the same
+    /// open-hold ledger the merge gate reads.
+    #[test]
+    fn unchecked_overlap_holds_the_merge() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        repo_with_feat_branch(&repo);
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let cfg = Config::without_config_file();
+        let task = TaskState {
+            id: "t1".to_string(),
+            worktree: Some(repo.to_string_lossy().into_owned()),
+            branch: Some("feat".to_string()),
+            ..Default::default()
+        };
+        let held = with_home(&home, || {
+            let reg = overwatch::store::active_changesets_path(&repo).unwrap();
+            std::fs::create_dir_all(reg.parent().unwrap()).unwrap();
+            std::fs::write(&reg, "{not json").unwrap();
+            let r = record_and_check_actual_overlap(&cfg, &repo, "run-x", &task, 1, "sess");
+            assert!(
+                matches!(r, OverlapCheck::UncheckedHeld(_)),
+                "corrupt registry must be reported as an unchecked, HELD overlap; got {r:?}"
+            );
+            let scan = overwatch::store::scan_open_merge_conflicts(&repo).unwrap();
+            match scan.open {
+                harness_core::verdict::Determination::Known(open) => open.into_iter().any(|e| {
+                    e.branch == "feat"
+                        && matches!(
+                            e.origin,
+                            overwatch::merge_conflict::ConflictOrigin::RuntimeOverlap
+                        )
+                }),
+                harness_core::verdict::Determination::Undetermined(why) => {
+                    panic!("hold ledger unreadable: {}", why.as_str())
+                }
+            }
+        });
+        assert!(
+            held,
+            "an UNCHECKED overlap (registry corrupt) must enqueue a merge-hold for 'feat'; \
+             none was found, so the merge would proceed unchecked"
+        );
+    }
+
+    /// 08494f63 + 452f3705: with the overwatch lease lock held by a live peer
+    /// for the whole deadline, neither the record nor the hold enqueue can run.
+    /// That must come back as `HoldNotEnqueued { unchecked: true }` (the caller
+    /// then exits non-zero), never `NoOverlap` / `Held`.
+    #[test]
+    fn contended_lock_reports_hold_not_enqueued() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        repo_with_feat_branch(&repo);
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let cfg = Config::without_config_file();
+        let task = TaskState {
+            id: "t1".to_string(),
+            worktree: Some(repo.to_string_lossy().into_owned()),
+            branch: Some("feat".to_string()),
+            ..Default::default()
+        };
+        let out = with_home(&home, || {
+            let lock = overwatch::store::leases_path(&repo)
+                .unwrap()
+                .with_extension("lock");
+            std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+            std::fs::write(
+                &lock,
+                format!(
+                    "{{\"pid\":{},\"acquired_at\":{}}}",
+                    std::process::id(),
+                    overwatch::store::now()
+                ),
+            )
+            .unwrap();
+            let out = record_and_check_actual_overlap(&cfg, &repo, "run-x", &task, 1, "sess");
+            let _ = std::fs::remove_file(&lock);
+            out
+        });
+        assert!(
+            matches!(out, OverlapCheck::HoldNotEnqueued { unchecked: true, .. }),
+            "a contended lock must report an UNCHECKED overlap whose hold was not enqueued, got {out:?}"
+        );
     }
 
     #[test]

@@ -450,35 +450,6 @@ exit 101: ompiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/sessi
 error: test failed, to rerun pass `-p blastguard --test worktree_protected_paths_adversarial`"""
 
 [[task]]
-id = "2821738c"
-title = "condukt: state set --status cancelled performs the verified-to-cancelled transition that state cancel explicitly refuses"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Issue summary: observed 2026-08-14 at ee214481. condukt state cancel refuses a verified task (exit 1), but condukt state set --status cancelled performs the same transition (exit 0). The guard that verified is terminal is enforced on one of two paths (gate-crate mirror-gap class). verified feeds the completion gate and the fugu-router learning signal, so it can be rewritten without doing the work. To determine: enumerate every transition state set allows that the dedicated subcommand refuses; route both through one shared validator; keep a legitimate, explicit path for coordinator reclassification. recreated 2026-10-04 from issue #345; original task lost (cause unidentified, see backlog 68fb7237)"
-created_at = 1791048119
-updated_at = 1791049880
-weight = 0.0
-issue_number = 345
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/345"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_2821738c -- --ignored state_set_cancelled_refuses_verified_like_state_cancel"
-rev = "3be54fd6902dc0386ab26750b77fda2d79326082"
-observed_at = 1791049870
-detail = """
-exit 101: failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.97s
-
-   Compiling condukt v0.7.213 (/Users/yuki/src/.harness-worktrees/flow-repro-mine/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.15s
-     Running tests/backlog_2821738c.rs (target/debug/deps/backlog_2821738c-1cc3210b895c23f1)
-error: test failed, to rerun pass `-p condukt --test backlog_2821738c`"""
-
-[[task]]
 id = "7b88aa9a"
 title = "docs/DESIGN-spec-loop.md is stale: it asserts no ratified-spec-to-backlog path exists, but forge/queue.rs implements one"
 project = "/Users/yuki/src/harness"
@@ -743,67 +714,6 @@ exit 1: e414e.py::\u001B[1mLockfileOnlyChange::test_cargo_lock_only_change_is_no
 \u001B[31m========================= \u001B[31m\u001B[1m2 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.58s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "416d6fbf"
-title = "condukt RunState::save writes <run_id>.json without safe_session while run_path/run_dir sanitise, so an id rewritten by safe_session saves and loads from different paths"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Side finding of the 43393ce2 worker (pre-existing)."
-created_at = 1791051848
-updated_at = 1792005382
-weight = 0.0
-issue_number = 1308
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1308"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_416d6fbf -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005381
-detail = """
-exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
-
-   Compiling condukt v0.7.245 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
-     Running tests/backlog_416d6fbf.rs (target/debug/deps/backlog_416d6fbf-c67b77195dc3c275)
-error: test failed, to rerun pass `-p condukt --test backlog_416d6fbf`"""
-
-[[task]]
-id = "50158d9d"
-title = "condukt worktree merge accepts a conduktBase read from global/system gitconfig, not only the repo-local branch record"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "verifier side finding on 51595c41 (merge 8730b720): the base is read via git config without --local, so a branch.<b>.conduktBase in ~/.gitconfig is honoured as if worktree create had recorded it. Unverified whether reachable in practice; needs a repro test."
-created_at = 1791053141
-updated_at = 1792005385
-weight = 0.0
-issue_number = 1314
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1314"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_50158d9d -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005383
-detail = """
-exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
-
-   Compiling condukt v0.7.245 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
-     Running tests/backlog_50158d9d.rs (target/debug/deps/backlog_50158d9d-1c6a1a661fc753b7)
-error: test failed, to rerun pass `-p condukt --test backlog_50158d9d`"""
-
-[[task]]
 id = "135af7af"
 title = "condukt merge-base gate does not cover a feature branch merged INTO a task branch after create"
 project = "/Users/yuki/src/harness"
@@ -834,38 +744,6 @@ exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 2.54s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
      Running tests/backlog_135af7af.rs (target/debug/deps/backlog_135af7af-55e9e6a8b6ac4792)
 error: test failed, to rerun pass `-p condukt --test backlog_135af7af`"""
-
-[[task]]
-id = "d87b4305"
-title = "condukt state init in the main tree with a legacy run id shadows the legacy run"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "verifier side finding on 43393ce2 (merge bc90c229): run_dir prefers the canonical dir, so creating a canonical run with the same id as a legacy (session-root-keyed) run hides the legacy one."
-created_at = 1791053147
-updated_at = 1792005739
-weight = 0.0
-issue_number = 1318
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1318"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_d87b4305 -- --ignored"
-rev = "a156090ef563e091c421fc24ad96d8d0ec000d67"
-observed_at = 1792005737
-detail = """
-exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s
-
-   Compiling condukt v0.7.246 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
-     Running tests/backlog_d87b4305.rs (target/debug/deps/backlog_d87b4305-77c9b90e5fa71d38)
-error: test failed, to rerun pass `-p condukt --test backlog_d87b4305`"""
 
 [[task]]
 id = "1eae7cb9"
@@ -929,70 +807,6 @@ exit 101: failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.55s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.30s
      Running tests/backlog_e3ca0b92.rs (target/debug/deps/backlog_e3ca0b92-e3d2d46030ea7aad)
 error: test failed, to rerun pass `-p compass --test backlog_e3ca0b92`"""
-
-[[task]]
-id = "860efdd6"
-title = "condukt abandon exit-3 stderr header says a durable progress signal could not be read, but it now also covers uncommitted-work-undetermined entries"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Verifier side finding on d65110df (b0c7b6fe): main.rs exit-3 header wording contradicts the uncommitted_work_keep_reason docstring, which says dirtiness is not a progress signal. Per-task reason is correct; header prose is not (section 4)."
-created_at = 1791054768
-updated_at = 1792005737
-weight = 0.0
-issue_number = 1327
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1327"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_860efdd6 -- --ignored"
-rev = "a156090ef563e091c421fc24ad96d8d0ec000d67"
-observed_at = 1792005734
-detail = """
-exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 1.53s
-
-   Compiling condukt v0.7.246 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
-     Running tests/backlog_860efdd6.rs (target/debug/deps/backlog_860efdd6-656dba2b29966a2a)
-error: test failed, to rerun pass `-p condukt --test backlog_860efdd6`"""
-
-[[task]]
-id = "4e560a64"
-title = "condukt is_dirty / HEAD read on a recorded worktree whose .git was deleted silently reads the enclosing parent repository"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Verifier side finding on d65110df, untested: if a task worktree path loses its .git but sits inside another git repo, git status and rev-parse run against the parent repo and return a confident answer about the wrong tree. Needs a repro test."
-created_at = 1791054771
-updated_at = 1792005733
-weight = 0.0
-issue_number = 1329
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1329"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_4e560a64 -- --ignored"
-rev = "a156090ef563e091c421fc24ad96d8d0ec000d67"
-observed_at = 1792005730
-detail = """
-exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 1.76s
-
-   Compiling condukt v0.7.246 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s
-     Running tests/backlog_4e560a64.rs (target/debug/deps/backlog_4e560a64-0909021c640d250c)
-error: test failed, to rerun pass `-p condukt --test backlog_4e560a64`"""
 
 [[task]]
 id = "e44e233f"
@@ -1180,36 +994,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
      Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-27e56823383379b3)
 error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
-
-[[task]]
-id = "6d43d9c5"
-title = "condukt circuit check with HOME unset exits on config.toml unreadable before printing the idle_unmeasured JSON"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-19 on unmodified main 51376c9c: test_claim_circuit_idle_home_unset_trips_unmeasured fails with JSONDecodeError on empty stdout. Manual run with env -i: stderr says config.toml unreadable: Not a directory (os error 20) under /dev/null/HOME-unset.harness-state-dir-undetermined/.condukt/config.toml, refusing to run on built-in defaults; exit 1. Verdict is restrictive (exit 1) but the documented idle_unmeasured JSON with HOME unset in idle_unknown_reason is never emitted, so the SKILL claim it pins is false."
-created_at = 1792420983
-updated_at = 1792420983
-weight = 0.0
-issue_number = 1419
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1419"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_prose_flow_a.py -k test_claim_circuit_idle_home_unset_trips_unmeasured -q"
-rev = "994a8695f61704dae98e463a4444ea1ecfda7a4c"
-observed_at = 1792420983
-detail = """
-exit 1:  s, err.value) from None
-E           json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
-
-../../../.pyenv/versions/3.12.11/lib/python3.12/json/decoder.py:356: JSONDecodeError
-=========================== short test summary info ============================
-FAILED scripts/test_prose_flow_a.py::T::test_claim_circuit_idle_home_unset_trips_unmeasured
-1 failed, 40 deselected in 1.06s"""
 
 [[task]]
 id = "08494f63"

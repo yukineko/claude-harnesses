@@ -2126,10 +2126,46 @@ fn refuse_undetermined_config(cmd: &Command, err: &str) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&out)?);
         std::process::exit(1);
     }
+    let cfg_path = config::base_dir().join("config.toml");
+    // `circuit check` keeps its documented stdout contract even here (backlog
+    // 6d43d9c5): a trip verdict JSON, exit 1. Nothing was measured without the
+    // config — the idle axis included — so the reason is `idle_unmeasured`,
+    // and the streak/budget signals are `null` (unmeasured), never 0/false.
+    if let Command::Circuit {
+        action:
+            CircuitAction::Check {
+                streak_cap,
+                idle_ttl_secs,
+                ..
+            },
+    } = cmd
+    {
+        let why = if cfg_path.starts_with(harness_core::config::UNDETERMINED_HOME) {
+            format!(
+                "HOME unset: the condukt config and the session transcript cannot be \
+                 located ({err})"
+            )
+        } else {
+            format!("config undetermined: {err} ({})", cfg_path.display())
+        };
+        let out = serde_json::json!({
+            "verdict": "trip",
+            "reason": "idle_unmeasured",
+            "streak": serde_json::Value::Null,
+            "streak_cap": streak_cap,
+            "budget_over_cap": serde_json::Value::Null,
+            "idle_secs": serde_json::Value::Null,
+            "idle_unknown_reason": why,
+            "idle_ttl_secs": idle_ttl_secs,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        eprintln!("condukt circuit check: {why}; tripping");
+        std::process::exit(1);
+    }
     bail!(
         "{err} ({}): refusing to run on built-in defaults, which would silently drop \
          the configured settings; fix or remove the file",
-        config::base_dir().join("config.toml").display()
+        cfg_path.display()
     )
 }
 

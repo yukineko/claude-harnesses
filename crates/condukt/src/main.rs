@@ -4385,6 +4385,14 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             let mut rs = state::RunState::load(cfg, cwd, &run)?;
             let st: state::Status = status.parse()?;
 
+            // Same transition validator as `state cancel` (backlog 2821738c):
+            // checked before anything is claimed, gated or written.
+            if st == state::Status::Cancelled {
+                if let Some(t) = rs.tasks.iter().find(|t| t.id == task) {
+                    state::ensure_cancellable(&task, t.status)?;
+                }
+            }
+
             // Cross-session claim guard (PDO collision): before marking a task
             // RUNNING, claim the files it will touch. If a live holder from
             // ANOTHER run owns any of them, hard-skip — its work is already in
@@ -5389,9 +5397,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 .iter_mut()
                 .find(|t| t.id == task)
                 .ok_or_else(|| anyhow!("no task '{task}' in run '{run}'"))?;
-            if t.status == state::Status::Verified {
-                bail!("task '{task}' is already verified and cannot be cancelled");
-            }
+            state::ensure_cancellable(&task, t.status)?;
             if t.status == state::Status::Cancelled {
                 eprintln!("task '{task}' is already cancelled");
                 return Ok(());

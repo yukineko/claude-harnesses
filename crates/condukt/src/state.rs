@@ -68,6 +68,20 @@ pub enum Status {
     Discarded,
 }
 
+/// The one validator for a transition INTO [`Status::Cancelled`], shared by
+/// `state cancel` and `state set --status cancelled` (backlog 2821738c: only
+/// `state cancel` refused a verified task, so `state set` rewrote a verified —
+/// gate- and learning-signal-bearing — outcome without the work being undone).
+/// A verified task is not cancellable by either route; reclassifying a
+/// verified result stays possible only through the explicit
+/// `state set --status failed` path, which triggers the auto-rollback.
+pub fn ensure_cancellable(task: &str, from: Status) -> Result<()> {
+    if from == Status::Verified {
+        bail!("task '{task}' is already verified and cannot be cancelled");
+    }
+    Ok(())
+}
+
 impl std::str::FromStr for Status {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {

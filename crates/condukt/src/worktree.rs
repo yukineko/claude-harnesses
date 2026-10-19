@@ -806,7 +806,8 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
 /// (backlog 51595c41).
 ///
 /// Storage choice: `branch.<name>.conduktBase` in the repository's COMMON git
-/// config. It is written by plain `git config` (no `--worktree`), so it lands
+/// config, written and read with `git config --local` (never `--worktree`,
+/// and never the global/system files — backlog 50158d9d), so it lands
 /// in the shared `config` file that every linked worktree and the primary tree
 /// read; it survives across processes; and git itself scopes it to the branch
 /// — `git branch -D` drops the `branch.<name>` section and `git branch -m`
@@ -820,9 +821,9 @@ fn creation_base_key(branch: &str) -> String {
 /// it back (an unobserved write is not an observation).
 fn record_creation_base(repo: &Path, branch: &str, base: &str) -> Result<()> {
     let key = creation_base_key(branch);
-    git(repo, &["config", "--replace-all", &key, base])
+    git(repo, &["config", "--local", "--replace-all", &key, base])
         .with_context(|| format!("could not record creation base of '{branch}' in git config"))?;
-    let back = git(repo, &["config", "--get", &key]).unwrap_or_default();
+    let back = git(repo, &["config", "--local", "--get", &key]).unwrap_or_default();
     if back.trim() != base {
         bail!(
             "creation base of '{branch}' could not be read back from git config \
@@ -848,9 +849,12 @@ pub const TASK_TRAILER: &str = "Condukt-Task";
 /// reading it back.
 fn record_task_identity(repo: &Path, branch: &str, identity: &str) -> Result<()> {
     let key = task_identity_key(branch);
-    git(repo, &["config", "--replace-all", &key, identity])
-        .with_context(|| format!("could not record task identity of '{branch}' in git config"))?;
-    let back = git(repo, &["config", "--get", &key]).unwrap_or_default();
+    git(
+        repo,
+        &["config", "--local", "--replace-all", &key, identity],
+    )
+    .with_context(|| format!("could not record task identity of '{branch}' in git config"))?;
+    let back = git(repo, &["config", "--local", "--get", &key]).unwrap_or_default();
     if back.trim() != identity {
         bail!(
             "task identity of '{branch}' could not be read back from git config \
@@ -893,7 +897,9 @@ fn ensure_commits_carry_task_trailer(
 ) -> Result<String> {
     let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
     let key = task_identity_key(short);
-    let (found, value, err) = git_try(repo, &["config", "--get", &key])?;
+    // `--local`: only the repository's own record counts, never a value in
+    // the global/system gitconfig (backlog 50158d9d, twin of the base read).
+    let (found, value, err) = git_try(repo, &["config", "--local", "--get", &key])?;
     let recorded = value.trim();
     let recorded = (found && !recorded.is_empty()).then(|| recorded.to_string());
     let cli = cli_task.map(|(r, t)| format!("{r}/{t}"));
@@ -990,7 +996,10 @@ fn ensure_base_on_default_branch(
          hand if that history is meant to land, or re-run the task from the default branch";
     let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
     let key = creation_base_key(short);
-    let (found, value, err) = git_try(repo, &["config", "--get", &key])?;
+    // `--local` (backlog 50158d9d): the record is what `worktree create`
+    // wrote into the repository's config. A `conduktBase` in the user's
+    // global or system gitconfig is not that record and must not be honoured.
+    let (found, value, err) = git_try(repo, &["config", "--local", "--get", &key])?;
     let base = value.trim();
     if !found || base.is_empty() {
         bail!(
@@ -3371,8 +3380,44 @@ pub(crate) fn repo_git_common_dir(repo: &Path) -> Option<PathBuf> {
     .and_then(|p| p.canonicalize().ok())
 }
 
-/// Does a worktree have uncommitted changes (tracked or untracked)?
+/// `Ok(())` only when `path` is the top of its OWN git worktree, i.e. `git
+/// rev-parse --show-toplevel` run there names `path` itself (backlog
+/// 4e560a64). A recorded worktree that lost its `.git` but sits inside another
+/// repository would otherwise have every git query walk up and answer, with
+/// full confidence, about the ENCLOSING repository. Any other answer —
+/// including git failing or a path that does not canonicalize — is an `Err`:
+/// which tree a reading would describe could not be established.
+pub fn ensure_own_worktree(path: &Path) -> Result<()> {
+    let top = git(path, &["rev-parse", "--show-toplevel"]).map_err(|e| {
+        anyhow!(
+            "could not resolve the git worktree of {}: {e}",
+            path.display()
+        )
+    })?;
+    let want = path
+        .canonicalize()
+        .with_context(|| format!("canonicalizing {}", path.display()))?;
+    let got = Path::new(top.trim())
+        .canonicalize()
+        .with_context(|| format!("canonicalizing git toplevel {top:?}"))?;
+    if want != got {
+        bail!(
+            "{} is not the top of its own git worktree (git resolved it to {}): its .git \
+             is missing or it is a subdirectory, so a git reading there would describe a \
+             different tree",
+            path.display(),
+            got.display()
+        );
+    }
+    Ok(())
+}
+
+/// Does a worktree have uncommitted changes (tracked or untracked)? `Err` when
+/// `path` is not the top of its own worktree ([`ensure_own_worktree`]), so the
+/// enclosing repository's status is never reported as this worktree's.
 pub fn is_dirty(path: &Path) -> Result<bool> {
+    ensure_own_worktree(path)
+        .map_err(|e| anyhow!("status check failed for {}: {e}", path.display()))?;
     let status = git(path, &["status", "--porcelain"])
         .map_err(|e| anyhow!("status check failed for {}: {e}", path.display()))?;
     Ok(!status.trim().is_empty())

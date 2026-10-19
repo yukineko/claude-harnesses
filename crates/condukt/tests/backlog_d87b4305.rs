@@ -121,7 +121,6 @@ fn legacy_run(repo: &Path, wt: &Path, home: &Path, run: &str, goal: &str) {
 }
 
 #[test]
-#[ignore = "backlog d87b4305: RED repro"]
 fn d87b4305_canonical_init_does_not_shadow_legacy_run() {
     let (repo, wt, home) = repo_with_worktree("d87b");
     legacy_run(&repo, &wt, &home, "dup-run", "legacy-goal");

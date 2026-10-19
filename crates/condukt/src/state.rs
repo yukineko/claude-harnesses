@@ -68,6 +68,20 @@ pub enum Status {
     Discarded,
 }
 
+/// The one validator for a transition INTO [`Status::Cancelled`], shared by
+/// `state cancel` and `state set --status cancelled` (backlog 2821738c: only
+/// `state cancel` refused a verified task, so `state set` rewrote a verified —
+/// gate- and learning-signal-bearing — outcome without the work being undone).
+/// A verified task is not cancellable by either route; reclassifying a
+/// verified result stays possible only through the explicit
+/// `state set --status failed` path, which triggers the auto-rollback.
+pub fn ensure_cancellable(task: &str, from: Status) -> Result<()> {
+    if from == Status::Verified {
+        bail!("task '{task}' is already verified and cannot be cancelled");
+    }
+    Ok(())
+}
+
 impl std::str::FromStr for Status {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
@@ -429,18 +443,105 @@ pub fn run_dir(cfg: &Config, cwd: &Path, run_id: &str) -> Result<PathBuf> {
     let Some(legacy) = legacy_project_dir(cfg, cwd)? else {
         return Ok(canonical);
     };
-    let safe = harness_core::store::safe_session(run_id);
-    let has_run = |dir: &Path| -> Result<bool> {
-        Ok(observed_exists(&dir.join(format!("{safe}.json")))?
-            || observed_exists(&dir.join(format!("{safe}.decomposition.json")))?)
-    };
-    if has_run(&canonical)? {
+    if run_exists_in(&canonical, run_id)? {
         return Ok(canonical);
     }
-    if has_run(&legacy)? {
+    if run_exists_in(&legacy, run_id)? {
         return Ok(legacy);
     }
     Ok(canonical)
+}
+
+/// Whether `dir` holds run `run_id` (its state file or its decomposition, see
+/// [`run_dir`]). An existence probe that errors is an `Err`, not "absent".
+fn run_exists_in(dir: &Path, run_id: &str) -> Result<bool> {
+    let safe = harness_core::store::safe_session(run_id);
+    Ok(observed_exists(&dir.join(format!("{safe}.json")))?
+        || observed_exists(&dir.join(format!("{safe}.decomposition.json")))?)
+}
+
+/// Refuse a `state init --run <id>` that would create a CANONICAL run with the
+/// id of a LEGACY run living under some linked worktree's per-checkout key
+/// (backlog d87b4305). [`run_dir`] prefers the canonical dir, so the new run
+/// would silently hide the legacy one from its own worktree. A re-init that
+/// resolves to the run's existing dir (canonical, or the legacy dir of the
+/// worktree `cwd` is in) is not a shadow and is left as it was.
+///
+/// The linked worktrees are read from the repository's own records
+/// ([`linked_worktree_paths`]); a record that cannot be read is an `Err` (it
+/// could not be told whether a legacy run would be hidden). Outside a git
+/// repository there are no linked worktrees to hold one.
+pub fn ensure_init_does_not_shadow_legacy(cfg: &Config, cwd: &Path, run_id: &str) -> Result<()> {
+    let canonical = project_dir(cfg, cwd)?;
+    if run_dir(cfg, cwd, run_id)? != canonical || run_exists_in(&canonical, run_id)? {
+        return Ok(());
+    }
+    let root = project_root(cwd)?;
+    let paths = linked_worktree_paths(&root).with_context(|| {
+        format!(
+            "refusing to init run '{run_id}': could not list the linked worktrees of {} to \
+             check that no legacy run with this id would be hidden",
+            root.display()
+        )
+    })?;
+    for wt in &paths {
+        let path = wt.display();
+        let dir = cfg.state_dir.join(project_key(wt));
+        if dir != canonical && run_exists_in(&dir, run_id)? {
+            bail!(
+                "refusing to init run '{run_id}': a legacy run with this id lives under the \
+                 per-checkout state of worktree {path} ({}); a canonical run with the same \
+                 id would hide it from that worktree. Pick another --run id",
+                dir.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The linked worktrees of the repository whose main worktree is `root`.
+///
+/// With `<root>/.git` a directory, read from git's own records without
+/// spawning git (so `state init` keeps working where no `git` is on PATH):
+/// each `<root>/.git/worktrees/<name>/gitdir` names `<worktree>/.git`. No
+/// `worktrees` dir is a real "none"; any other read failure is an `Err`. With
+/// `.git` absent there is no repository and so none. Any other `.git` shape (a
+/// gitfile) falls back to `git worktree list --porcelain`, whose failure is an
+/// `Err`.
+fn linked_worktree_paths(root: &Path) -> Result<Vec<PathBuf>> {
+    let dot_git = root.join(".git");
+    let meta = match std::fs::symlink_metadata(&dot_git) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", dot_git.display())),
+    };
+    if !meta.is_dir() {
+        let listing = worktree::git(root, &["worktree", "list", "--porcelain"])?;
+        return Ok(listing
+            .lines()
+            .filter_map(|l| l.strip_prefix("worktree "))
+            .map(PathBuf::from)
+            .collect());
+    }
+    let records = dot_git.join("worktrees");
+    let entries = match std::fs::read_dir(&records) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", records.display())),
+    };
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = entry.with_context(|| format!("reading an entry of {}", records.display()))?;
+        let gitdir_file = entry.path().join("gitdir");
+        let gitdir = std::fs::read_to_string(&gitdir_file)
+            .with_context(|| format!("reading {}", gitdir_file.display()))?;
+        let gitdir = PathBuf::from(gitdir.trim());
+        let wt = gitdir
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("{} names no worktree", gitdir_file.display()))?;
+        out.push(wt.to_path_buf());
+    }
+    Ok(out)
 }
 
 /// The CANONICAL per-project state directory (`<state_dir>/<project-key of the
@@ -479,10 +580,15 @@ impl RunState {
     }
 
     pub fn save(&self, cfg: &Config, cwd: &Path) -> Result<PathBuf> {
-        let dir = run_dir(cfg, cwd, &self.run_id)?;
-        std::fs::create_dir_all(&dir)
+        // The same path `load` reads (backlog 416d6fbf): writing the RAW id
+        // made a run whose id `safe_session` rewrites unreadable by that id,
+        // and let a crafted id escape the project dir on write.
+        let path = run_path(cfg, cwd, &self.run_id)?;
+        let dir = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("run-state path {} has no parent", path.display()))?;
+        std::fs::create_dir_all(dir)
             .with_context(|| format!("creating state dir {}", dir.display()))?;
-        let path = dir.join(format!("{}.json", self.run_id));
         let tmp_path = unique_tmp(&path, "json");
         let json = serde_json::to_string_pretty(self)?;
         std::fs::write(&tmp_path, &json)
@@ -657,10 +763,15 @@ fn runs_in_dir(dir: &Path) -> Vec<RunState> {
 
 // ── Decomposition sidecar ──────────────────────────────────────────────────
 
-/// `<run_dir>/<run>.decomposition.json` (see [`run_dir`] for which dir). `Err`
-/// when the main worktree root cannot be determined.
+/// `<run_dir>/<safe_session(run)>.decomposition.json` (see [`run_dir`] for
+/// which dir). The id is sanitised exactly as [`run_path`] and [`run_dir`]'s
+/// existence probe do (backlog 416d6fbf), so writer and readers address one
+/// file. `Err` when the main worktree root cannot be determined.
 pub fn decomposition_path(cfg: &Config, cwd: &Path, run_id: &str) -> Result<PathBuf> {
-    Ok(run_dir(cfg, cwd, run_id)?.join(format!("{run_id}.decomposition.json")))
+    Ok(run_dir(cfg, cwd, run_id)?.join(format!(
+        "{}.decomposition.json",
+        harness_core::store::safe_session(run_id)
+    )))
 }
 
 /// Persist the raw decomposition JSON alongside the run state.

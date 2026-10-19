@@ -43,7 +43,6 @@ fn condukt(repo: &Path, home: &Path, args: &[&str]) -> Output {
 }
 
 #[test]
-#[ignore = "backlog 135af7af: RED repro"]
 fn feature_branch_merged_into_task_branch_after_create_does_not_silently_land_in_main() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");

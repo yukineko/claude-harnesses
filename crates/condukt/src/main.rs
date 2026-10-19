@@ -1152,8 +1152,10 @@ enum StateAction {
     ///
     /// * 3 — at least one task is UNOBSERVABLE: a durable progress signal could
     ///   not be read at all (no `updated_at`, an unreadable worktree HEAD, a
-    ///   task with no worktree). The engine tried to look and could not; no
-    ///   re-run fixes that on its own.
+    ///   task with no worktree), or a confirmed-stalled task's worktree
+    ///   dirtiness could not be read by the uncommitted-work veto (backlog
+    ///   `d65110df`; dirtiness is a veto, not a progress signal). The engine
+    ///   tried to look and could not; no re-run fixes that on its own.
     /// * 0 — nothing was unobservable. Tasks that were confirmed stuck have been
     ///   abandoned (zero of them is still exit 0). This includes the case where
     ///   the only undetermined tasks are AWAITING-SAMPLE: every signal read
@@ -2090,10 +2092,46 @@ fn refuse_undetermined_config(cmd: &Command, err: &str) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&out)?);
         std::process::exit(1);
     }
+    let cfg_path = config::base_dir().join("config.toml");
+    // `circuit check` keeps its documented stdout contract even here (backlog
+    // 6d43d9c5): a trip verdict JSON, exit 1. Nothing was measured without the
+    // config — the idle axis included — so the reason is `idle_unmeasured`,
+    // and the streak/budget signals are `null` (unmeasured), never 0/false.
+    if let Command::Circuit {
+        action:
+            CircuitAction::Check {
+                streak_cap,
+                idle_ttl_secs,
+                ..
+            },
+    } = cmd
+    {
+        let why = if cfg_path.starts_with(harness_core::config::UNDETERMINED_HOME) {
+            format!(
+                "HOME unset: the condukt config and the session transcript cannot be \
+                 located ({err})"
+            )
+        } else {
+            format!("config undetermined: {err} ({})", cfg_path.display())
+        };
+        let out = serde_json::json!({
+            "verdict": "trip",
+            "reason": "idle_unmeasured",
+            "streak": serde_json::Value::Null,
+            "streak_cap": streak_cap,
+            "budget_over_cap": serde_json::Value::Null,
+            "idle_secs": serde_json::Value::Null,
+            "idle_unknown_reason": why,
+            "idle_ttl_secs": idle_ttl_secs,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        eprintln!("condukt circuit check: {why}; tripping");
+        std::process::exit(1);
+    }
     bail!(
         "{err} ({}): refusing to run on built-in defaults, which would silently drop \
          the configured settings; fix or remove the file",
-        config::base_dir().join("config.toml").display()
+        cfg_path.display()
     )
 }
 
@@ -4256,6 +4294,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 bail!("invalid decomposition:\n  - {}", errs.join("\n  - "));
             }
             let run_id = run.unwrap_or_else(default_run_id);
+            state::ensure_init_does_not_shadow_legacy(cfg, cwd, &run_id)?;
             let resolved_label = label.or_else(resolve_label);
             let tasks = dec
                 .tasks
@@ -4331,6 +4370,14 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             };
             let mut rs = state::RunState::load(cfg, cwd, &run)?;
             let st: state::Status = status.parse()?;
+
+            // Same transition validator as `state cancel` (backlog 2821738c):
+            // checked before anything is claimed, gated or written.
+            if st == state::Status::Cancelled {
+                if let Some(t) = rs.tasks.iter().find(|t| t.id == task) {
+                    state::ensure_cancellable(&task, t.status)?;
+                }
+            }
 
             // Cross-session claim guard (PDO collision): before marking a task
             // RUNNING, claim the files it will touch. If a live holder from
@@ -5313,7 +5360,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 .collect();
             if !unobservable.is_empty() {
                 eprintln!(
-                    "{} task(s) UNDETERMINED (unobservable): a durable progress signal could not be read — neither stuck nor healthy, and must not be read as clean:",
+                    "{} task(s) UNDETERMINED (unobservable): an observation the verdict needs could not be read — a durable progress signal, or a stalled task's worktree dirtiness for the uncommitted-work veto (each task's reason names which) — neither stuck nor healthy, and must not be read as clean:",
                     unobservable.len()
                 );
                 for u in &unobservable {
@@ -5360,9 +5407,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 .iter_mut()
                 .find(|t| t.id == task)
                 .ok_or_else(|| anyhow!("no task '{task}' in run '{run}'"))?;
-            if t.status == state::Status::Verified {
-                bail!("task '{task}' is already verified and cannot be cancelled");
-            }
+            state::ensure_cancellable(&task, t.status)?;
             if t.status == state::Status::Cancelled {
                 eprintln!("task '{task}' is already cancelled");
                 return Ok(());

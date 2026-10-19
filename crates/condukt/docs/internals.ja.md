@@ -599,10 +599,12 @@ cancelled (terminal) ← AskUserQuestion でユーザーがキャンセル
    ```json
    { "required": true, "valid_fp_oracle": false, "fallback": false, "transition": "fail_to_fail", "reason": "..." }
    ```
-   - `required`: `requires_fp_oracle()` が true かつタスクに `reproduction_tests` が設定されているときのみ true。
-   - `fallback`: `tdd` が PATH に無い・spawn 失敗・stdout が空または JSON として壊れている・対象外タスク
-     （`kind` が fix/feature でない、`reproduction_tests` が無い）のいずれかで true になります（fail-soft:
-     パニックしない、非 0 終了しない）。
+   - `required`: `requires_fp_oracle()` が true（`kind` が fix/feature）なら、`reproduction_tests` の宣言有無に
+     かかわらず true。
+   - `fallback`: true になるのは対象外タスク（`kind` が fix/feature でない）だけです。`tdd` が無い・spawn 失敗・
+     非 0 終了・exit 0 なのに stdout が空/JSON として壊れている・`transition:"unknown"` はいずれも
+     `fallback:false, valid_fp_oracle:false` ＝判定不能で、下の gate が拒否します（backlog `2becbabe`）。
+     コマンド自体はパニックせず常に exit 0 です。
    - `valid_fp_oracle`: `fallback:false` のときのみ信頼できる、`tdd oracle` の実際の判定
      （`transition == "fail_to_pass"` のときだけ true）。
 

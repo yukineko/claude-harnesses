@@ -42,7 +42,6 @@ fn repo(base: &Path) -> PathBuf {
 }
 
 #[test]
-#[ignore = "backlog 416d6fbf: RED repro"]
 fn a_run_created_with_a_sanitised_id_is_readable_by_that_id() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = repo(tmp.path());

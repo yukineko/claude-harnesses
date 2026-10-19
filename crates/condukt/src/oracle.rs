@@ -11,15 +11,15 @@
 //!   merely did not *declare* `reproduction_tests` is NOT in this bucket: it
 //!   still consults `tdd`.)
 //!
-//!   [`verdict_from_oracle_output`] also returns `fallback:true` for an
-//!   exit-0 run whose stdout is empty or not JSON, and [`verdict_from_oracle`]
-//!   for `transition:"unknown"`. **The real `tdd` never takes those paths**:
-//!   `tdd oracle` exits 0 only for a valid Fail→Pass oracle and then always
-//!   prints well-formed JSON with `transition:"fail_to_pass"`; every other
-//!   outcome (missing proofs = `"unknown"`, exit 1; unreadable proofs =
-//!   `"undetermined"`, exit 2) exits non-zero and is rejected below. Those
-//!   branches are reachable only from a `tdd` that breaks that exit protocol.
-//!   Their unit tests pin the pure functions, not the gate path.
+//!   An exit-0 run whose stdout is empty or not JSON, or that reports
+//!   `transition:"unknown"`, is NOT in this bucket (backlog 2becbabe): nothing
+//!   was established, so [`verdict_from_oracle_output`] /
+//!   [`verdict_from_oracle`] return `fallback:false` and the gate Rejects. The
+//!   real `tdd` never takes those paths (`tdd oracle` exits 0 only for a valid
+//!   Fail→Pass oracle and then prints well-formed JSON; missing proofs =
+//!   `"unknown"` exits 1, unreadable proofs = `"undetermined"` exits 2), so
+//!   they matter only for a `tdd` or wrapper that breaks that exit protocol —
+//!   which must not be granted Allow for doing so.
 //!
 //!   In particular, a fix/feature task with **no recorded proofs is
 //!   rejected**, not degraded to the legacy gate.
@@ -64,38 +64,30 @@ pub fn interpret_oracle_stdout(stdout: &str) -> (bool, Option<String>) {
 /// Only reached from [`verdict_from_oracle_output`] after `tdd oracle` exited 0
 /// with well-formed JSON stdout.
 ///
-/// As a pure function it maps `transition == "unknown"` (incomplete proof pair:
-/// missing RED or GREEN artifact) to `fallback: true`, and every other
-/// non-valid transition (`fail_to_fail` / `pass_to_pass` / `pass_to_fail`) to
-/// `fallback: false`.
+/// Every non-valid result maps to `fallback: false` (Reject in
+/// `state::enforce_fp_gate`): `transition == "unknown"` (incomplete proof
+/// pair: missing RED or GREEN artifact) as well as a complete wrong-direction
+/// transition (`fail_to_fail` / `pass_to_pass` / `pass_to_fail`).
 ///
-/// **The `"unknown"` → `fallback: true` arm is unreachable through
-/// [`check_oracle`] against the real `tdd`.** `tdd oracle` (crates/tdd
-/// `oracle_command`) exits 1 whenever the transition is `"unknown"` — it exits
-/// 0 only for a valid Fail→Pass oracle — and [`verdict_from_oracle_output`]
-/// turns any non-zero exit into `fallback: false` before calling this
-/// function. So on the gate path a task with no (or incomplete) proofs is
-/// **rejected** by `state::enforce_fp_gate`; it does NOT degrade to the legacy
-/// `done_criteria` gate. (Backlog b209f2d9 / 69bed43e originally added this
-/// arm to make no-proofs degrade; the later fail-closed fix for non-zero exits
-/// (f650ddd5) superseded that on the live path, and backlog e5174b6a ruled
-/// that Reject is the intended contract.) The arm is reachable only from a
-/// `tdd` that breaks the exit protocol by exiting 0 with `"unknown"`.
-///
-/// The unit tests on this function pin the pure mapping, not gate behaviour.
+/// `"unknown"` used to map to `fallback: true` (b209f2d9 / 69bed43e: degrade
+/// to the legacy `done_criteria` gate). The fail-closed fix for non-zero exits
+/// (f650ddd5) already made that unreachable with the real `tdd` (it exits 1
+/// for `"unknown"`), backlog e5174b6a ruled Reject the intended contract, and
+/// backlog 2becbabe closed the remaining arm: a `tdd` that exits 0 with
+/// `"unknown"` established nothing, so it Rejects too.
 pub fn verdict_from_oracle(valid: bool, transition: Option<&str>) -> serde_json::Value {
-    // "unknown" == incomplete proofs. Unreachable on the gate path with the
-    // real `tdd` (it exits 1 for "unknown", which is rejected upstream — see
-    // the doc above). (A valid FailToPass is never "unknown", so the `!valid`
-    // guard is belt-and-suspenders.)
+    // "unknown" == incomplete proofs: nothing established, so Reject-shaped.
+    // (A valid FailToPass is never "unknown", so the `!valid` guard is
+    // belt-and-suspenders.)
     let is_unknown = transition == Some("unknown");
     if is_unknown && !valid {
         return serde_json::json!({
             "required": true,
             "valid_fp_oracle": false,
-            "fallback": true,
+            "fallback": false,
             "transition": "unknown",
-            "reason": "no valid Fail→Pass proofs recorded (oracle could not be generated) — degrade to legacy done_criteria gate",
+            "reason": "no valid Fail→Pass proofs recorded (tdd oracle reported transition \
+                       \"unknown\") — the F→P oracle could not be determined, so this blocks",
         });
     }
     serde_json::json!({
@@ -122,13 +114,10 @@ pub fn verdict_from_oracle(valid: bool, transition: Option<&str>) -> serde_json:
 /// real tdd proofs can exist for a task that never declared them.
 ///
 /// Always returns a JSON object with a `fallback` bool. `true` means "the
-/// oracle check does not apply — defer to the legacy gate". Against the real
-/// `tdd` the only source of `true` is `!requires_oracle`: the other
-/// `fallback: true` arms in [`verdict_from_oracle_output`] /
-/// [`verdict_from_oracle`] need `tdd oracle` to exit 0 without a valid oracle,
-/// which the real `tdd` never does (it exits 1 for `"unknown"`, 2 for
-/// `"undetermined"`). A fix/feature task without valid proofs is therefore
-/// rejected, not degraded.
+/// oracle check does not apply — defer to the legacy gate", and its ONLY
+/// source is `!requires_oracle` (backlog 2becbabe removed the exit-0
+/// empty / non-JSON / `"unknown"` arms). A fix/feature task without valid
+/// proofs is therefore rejected, not degraded.
 ///
 /// `false` means the gate must decide on this verdict rather than defer, and it
 /// arises three ways that are **not** interchangeable:
@@ -297,28 +286,26 @@ pub fn verdict_from_oracle_output(stdout: &str, exit_ok: bool) -> serde_json::Va
                        determined, which is not the same as it being unavailable",
         });
     }
-    // The two `fallback: true` arms below (empty stdout, non-JSON stdout) are
-    // unreachable with the real `tdd`: it exits 0 only for a valid Fail→Pass
-    // oracle and then always prints well-formed JSON. They fire only for a
-    // `tdd` that breaks that exit protocol (backlog e5174b6a).
+    // Exit 0 with empty or non-JSON stdout: unreachable with the real `tdd`
+    // (it exits 0 only for a valid Fail→Pass oracle and then always prints
+    // well-formed JSON), so only a `tdd`/wrapper that breaks the exit protocol
+    // gets here. Nothing was established, so Reject-shaped (backlog 2becbabe).
     if stdout.trim().is_empty() {
         return serde_json::json!({
             "required": true,
             "valid_fp_oracle": false,
-            "fallback": true,
-            "reason": "tdd oracle produced no stdout",
+            "fallback": false,
+            "reason": "tdd oracle exited 0 but produced no stdout — the F→P oracle could \
+                       not be determined, so this blocks",
         });
     }
-    // Confirm the stdout is well-formed JSON before trusting the verdict;
-    // `interpret_oracle_stdout` already defaults missing fields to false/None;
-    // this arm returns `fallback: true` for corrupt/non-JSON stdout on an
-    // exit-0 run (unreachable with the real `tdd`, see above).
     if serde_json::from_str::<serde_json::Value>(stdout).is_err() {
         return serde_json::json!({
             "required": true,
             "valid_fp_oracle": false,
-            "fallback": true,
-            "reason": "could not parse tdd oracle stdout as JSON",
+            "fallback": false,
+            "reason": "could not parse tdd oracle stdout as JSON — the F→P oracle could \
+                       not be determined, so this blocks",
         });
     }
     let (valid, transition) = interpret_oracle_stdout(stdout);
@@ -468,30 +455,24 @@ mod tests {
         assert_eq!(transition, None);
     }
 
-    // --- verdict_from_oracle: unknown (no proofs) → fallback, not reject ------
+    // --- verdict_from_oracle: unknown (no proofs) → reject, not fallback ------
 
-    /// THE FIX (b209f2d9): a `tdd oracle` verdict of `transition:"unknown"`
-    /// (incomplete proofs = oracle could-not-be-generated) must degrade to the
-    /// legacy gate (`fallback:true`), which `enforce_fp_gate` then Allows —
-    /// rather than being treated as a definitive invalid-oracle reject.
-    ///
-    /// NOTE (backlog e5174b6a): this pins the PURE function only. Through
-    /// `check_oracle` the real `tdd` exits 1 for `"unknown"`, which is rejected
-    /// before `verdict_from_oracle` runs, so a no-proofs task is Rejected on
-    /// the gate path. This test does not prove gate behaviour.
+    /// CONTRACT CHANGE (backlog 2becbabe; was b209f2d9's "unknown degrades to
+    /// fallback:true / Allow(None)"): a `transition:"unknown"` verdict
+    /// established no oracle, so it must be Reject-shaped (`fallback:false`)
+    /// even when a protocol-breaking `tdd` delivers it with exit 0.
     #[test]
-    fn unknown_transition_degrades_to_fallback_not_reject() {
+    fn unknown_transition_rejects_not_fallback() {
         let v = verdict_from_oracle(false, Some("unknown"));
         assert_eq!(v["required"], true);
         assert_eq!(v["valid_fp_oracle"], false);
         assert_eq!(
-            v["fallback"], true,
-            "no-proofs unknown must fall back, got: {v}"
+            v["fallback"], false,
+            "no-proofs unknown must not fall back, got: {v}"
         );
-        // And the gate must Allow (degrade to done_criteria), never Reject.
         assert!(matches!(
             crate::state::enforce_fp_gate(&v),
-            crate::state::FpGateDecision::Allow(None)
+            crate::state::FpGateDecision::Reject
         ));
     }
 
@@ -623,34 +604,37 @@ mod tests {
         );
     }
 
-    // --- Case 4: non-regression — exit 0 behaviour is unchanged -------------
+    // --- Case 4: exit 0 without a parseable verdict is undetermined ----------
+    //
+    // CONTRACT CHANGE (backlog 2becbabe): these two used to pin
+    // `fallback:true` / `Allow(None)`. Exit 0 with nothing to read established
+    // nothing, so it Rejects like a non-zero exit.
 
-    /// exit 0 + empty/whitespace stdout keeps the existing "no stdout"
-    /// fallback (Allow(None)).
+    /// exit 0 + empty/whitespace stdout Rejects.
     #[test]
-    fn exit_ok_empty_stdout_still_falls_back() {
+    fn exit_ok_empty_stdout_rejects() {
         for s in ["", "   \n"] {
             let v = verdict_from_oracle_output(s, true);
             assert_eq!(v["required"], true, "stdout {s:?} → {v}");
-            assert_eq!(v["fallback"], true, "stdout {s:?} → {v}");
+            assert_eq!(v["fallback"], false, "stdout {s:?} → {v}");
             assert_eq!(v["valid_fp_oracle"], false, "stdout {s:?} → {v}");
             assert!(matches!(
                 crate::state::enforce_fp_gate(&v),
-                crate::state::FpGateDecision::Allow(None)
+                crate::state::FpGateDecision::Reject
             ));
         }
     }
 
-    /// exit 0 + corrupt stdout keeps the existing parse-failure fallback.
+    /// exit 0 + corrupt stdout Rejects.
     #[test]
-    fn exit_ok_corrupt_stdout_still_falls_back() {
+    fn exit_ok_corrupt_stdout_rejects() {
         let v = verdict_from_oracle_output("not json", true);
         assert_eq!(v["required"], true, "{v}");
-        assert_eq!(v["fallback"], true, "{v}");
+        assert_eq!(v["fallback"], false, "{v}");
         assert_eq!(v["valid_fp_oracle"], false, "{v}");
         assert!(matches!(
             crate::state::enforce_fp_gate(&v),
-            crate::state::FpGateDecision::Allow(None)
+            crate::state::FpGateDecision::Reject
         ));
     }
 
@@ -880,8 +864,8 @@ mod tests {
     // `check_oracle(true, None, <task>, <fresh dir with no recorded proofs>)`
     // returns `required == true` in BOTH possible worlds —
     //   (a) `tdd` is on PATH but finds no proofs for `<task>` in the dir →
-    //       `verdict_from_oracle_output`'s "unknown transition" fallback,
-    //       which is `required:true, fallback:true`, or
+    //       the "unknown transition" (exit 1) reject, which is
+    //       `required:true, fallback:false`, or
     //   (b) `tdd` is not on PATH / not spawnable → the spawn-`Err` branch,
     //       `required:true, fallback:false`.
     // Today's short-circuit returns `required:false` unconditionally in this

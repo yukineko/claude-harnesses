@@ -69,10 +69,10 @@ fn run_git_bounded_with(
 ) -> Result<GitOutput> {
     // Every real git spawn in this crate funnels through here. It takes
     // PATH_ENV_LOCK's read side, which used to exclude the PATH-mutating tests
-    // in oracle.rs / main.rs / lock.rs (reproduced: repo_commit.rs's
-    // git-spawning tests flaked when a PATH mutator ran concurrently). Since
-    // backlog 7c798579 nothing takes the write side at all — tests pass a
-    // custom PATH to their own child instead, pinned by
+    // in oracle.rs / main.rs / lock.rs (reproduced: the since-removed
+    // repo_commit.rs's git-spawning tests flaked when a PATH mutator ran
+    // concurrently). Since backlog 7c798579 nothing takes the write side at
+    // all — tests pass a custom PATH to their own child instead, pinned by
     // `oracle::tests::condukt_never_mutates_process_path` — so this read lock
     // is always uncontended, in tests and production alike. Kept rather than
     // removed; see `env_lock`'s doc comment.
@@ -272,7 +272,7 @@ fn git_output_to_result(
     // can carry a semantically meaningful LEADING space on its first line —
     // the "not staged" status column of the first entry. A blanket `.trim()`
     // eats that byte (it sits at position 0 of the whole blob), which made
-    // `repo_commit::staged_paths` misread an ordinary unstaged edit as
+    // the since-removed `repo_commit::staged_paths` misread an ordinary unstaged edit as
     // staged. Only the trailing newline(s) `git` always appends need
     // stripping.
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
@@ -1284,8 +1284,9 @@ pub fn merge(
     //
     // Cannot-acquire REFUSES (`?`): this path checks out `default_branch` in the
     // SHARED primary working tree and commits a merge onto it. Unlocked, it can
-    // interleave with a peer's `repo commit` staging into the same index, with
-    // another run's merge, or with a `worktree prune`. An unheld lock is
+    // interleave with another run's merge (measured 2026-10-13: concurrent
+    // unlocked merges of NON-conflicting branches were recorded as conflicts
+    // and left the shared tree dirty) or with a `worktree prune`. An unheld lock is
     // cannot-determine and resolves to the restrictive side. Refusing costs
     // nothing here: it happens before any git mutation, so the merge is simply
     // retryable.
@@ -2874,8 +2875,8 @@ mod worktree_remove_tests {
     }
 
     /// `merge` checks out the default branch and commits a merge onto it in the
-    /// PRIMARY working tree. Running that unlocked can interleave with a peer
-    /// `repo commit`'s staging or another run's merge/prune. Cannot-acquire must
+    /// PRIMARY working tree. Running that unlocked can interleave with another
+    /// run's merge/prune. Cannot-acquire must
     /// therefore REFUSE — and refuse BEFORE any git mutation.
     #[test]
     fn merge_refuses_when_repo_primary_lock_cannot_be_acquired() {

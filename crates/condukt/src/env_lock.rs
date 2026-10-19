@@ -28,8 +28,9 @@
 //!   `PATH` (to make `fugu-router` unresolvable), without taking any lock.
 //! - Tests that never mutate `PATH` themselves but spawn a real `git` and
 //!   depend on it being resolvable — e.g.
-//!   `repo_commit::tests::first_unstaged_modification_is_not_misread_as_staged`,
-//!   via `worktree::git`. If one of these runs while a mutator has PATH
+//!   `repo_commit::tests::first_unstaged_modification_is_not_misread_as_staged`
+//!   (that module has since been removed), via `worktree::git`. If one of
+//!   these runs while a mutator has PATH
 //!   pointed at a directory that doesn't contain `git` (oracle.rs's
 //!   `check_oracle_with_no_tdd_on_path`, or main.rs's filtered-PATH test),
 //!   the spawn transiently fails for a reason that has nothing to do with

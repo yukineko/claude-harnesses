@@ -1277,36 +1277,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; 
 error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
 
 [[task]]
-id = "5a4cd3ff"
-title = "budgetguard: unmeasurable transcript or malformed input silently allows the stop with limits armed"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "With session/daily block limits armed, budgetguard gate exits 0 with no decision and empty stderr for: (a) transcript_path does not exist, (b) transcript_path is a directory, (c) stdin is not JSON, (d) session_id or transcript_path empty. Path: crates/budgetguard/src/main.rs gate_run returns early on hook None (line ~118) and on empty session_id/transcript_path (~121); crates/budgetguard/src/gate.rs session_cost maps estimate_transcript_cost None to Determination::Known(None) (~333), and evaluate returns None for it (~100) so emit_and_exit(None) exits 0 silently. Cannot-determine must resolve to block/undetermined when limits are armed. The existing tests crates/budgetguard/tests/integration.rs gate_with_malformed_stdin_exits_zero and gate_with_empty_fields_exits_zero pin the allow and must flip with the fix. Repro commit 154e2e47 on branch repro-budgetguard."
-created_at = 1792160293
-updated_at = 1792160293
-weight = 0.0
-issue_number = 1381
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1381"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p budgetguard --test repro_unmeasurable_transcript_allows -- --ignored"
-rev = "154e2e477dffa557e9d17658b0827ceeed6abc32"
-observed_at = 1792160293
-detail = """
-exit 101: iling budgetguard v0.1.37 (/Users/yuki/src/.harness-worktrees/repro-budgetguard/crates/budgetguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.45s
-     Running tests/repro_unmeasurable_transcript_allows.rs (target/debug/deps/repro_unmeasurable_transcript_allows-935612ff7a986657)
-error: test failed, to rerun pass `-p budgetguard --test repro_unmeasurable_transcript_allows`"""
-
-[[task]]
 id = "94520dbb"
 title = "overwatch: begin reports lock_contended when the project root is unresolvable"
 project = "/Users/yuki/src/harness"
@@ -1991,37 +1961,6 @@ exit 101: piling session-insights v0.2.28 (/Users/yuki/src/.harness-worktrees/re
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
      Running tests/repro_record_now_exit0_no_note.rs (target/debug/deps/repro_record_now_exit0_no_note-18084f1ef0564d72)
 error: test failed, to rerun pass `-p session-insights --test repro_record_now_exit0_no_note`"""
-
-[[task]]
-id = "c1174e86"
-title = "budgetguard: status --json reads a corrupt ledger as day_usd 0 and pressure false"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "main.rs status uses lenient Ledger::load (unwrap_or_default) so a corrupt ledger prints zero spend and no pressure with exit 0; check already uses load_checked and exits 2."
-created_at = 1792189420
-updated_at = 1792189420
-weight = 0.0
-issue_number = 1410
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1410"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p budgetguard --test repro_status_json_corrupt_ledger -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189420
-detail = """
-exit 101: h)
-   Compiling budgetguard v0.1.39 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/budgetguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.14s
-     Running tests/repro_status_json_corrupt_ledger.rs (target/debug/deps/repro_status_json_corrupt_ledger-702f571d4ccb3933)
-error: test failed, to rerun pass `-p budgetguard --test repro_status_json_corrupt_ledger`"""
 
 [[task]]
 id = "6bb90ca6"

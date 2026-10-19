@@ -56455,3 +56455,76 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "c00c3506"
+title = "condukt git runner deadlocks on output over the 64 KiB pipe buffer, so diff-risk journals no-diff for large diffs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "worktree.rs run_git_bounded_with waits for child exit (wait_timeout) before read_bounded drains stdout. Output above the pipe buffer (65536 on macOS) blocks git; it is killed at GIT_TIMEOUT 45s. diffrisk_record::worktree_diff then falls back to git diff HEAD (empty on a clean committed tree) and journals no-diff. Observed 2026-10-19 at 51376c9c: run-20261018-190327-19056 t1 diff was 66752 bytes, state set done printed diff-risk NOT INSPECTED (no-diff); run-20261017-125123-30672 t3 had the same outcome. Possibly also the cause of the 45s condukt worktree merge timeout on 2026-10-18 (not verified). Fix direction: drain stdout/stderr concurrently while waiting."
+created_at = 1792419616
+updated_at = 1792425500
+weight = 0.0
+issue_number = 1418
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1418"
+issue_closed_at = 1792425503
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --bin condukt large_output_tests -- --ignored"
+rev = "827928c42b31b913f065b7b9888636bf3f09bb01"
+observed_at = 1792419616
+detail = """
+exit 101: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 912 filtered out; finished in 5.14s
+
+   Compiling condukt v0.7.267 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.06s
+     Running unittests src/main.rs (target/debug/deps/condukt-562e2d25402bd49f)
+error: test failed, to rerun pass `-p condukt --bin condukt`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --bin condukt large_output_tests -- --include-ignored"
+exit = 0
+passed = 1
+rev = "bcb1da8d665ff6468764164a2eba7c6b474210ef"
+observed_at = 1792425456
+output_digest = "sha256:aa8dd177bcda01aa4e8529406c8eff048f955282688e93daa119443ee2ab7094"
+excerpt = """
+
+running 1 test
+test worktree::large_output_tests::output_larger_than_pipe_buffer_is_read_not_timed_out ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 912 filtered out; finished in 0.16s
+
+   Compiling aho-corasick v1.1.4
+   Compiling bstr v1.12.2
+   Compiling log v0.4.33
+   Compiling shlex v1.3.0
+   Compiling regex-automata v0.4.14
+   Compiling regex v1.12.4
+   Compiling globset v0.4.18
+   Compiling harness-core v0.2.61 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/harness-core)
+   Compiling overwatch v0.2.84 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/overwatch)
+   Compiling schemaguard v0.1.20 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/schemaguard)
+   Compiling blastguard v0.2.135 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/blastguard)
+   Compiling condukt v0.7.269 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.77s
+     Running unittests src/main.rs (target/debug/deps/condukt-6d8f44fb9e24d426)
+"""
+
+[task.closure.red]
+rev = "87b8032b00813c9ab6405750f6ed829205163b8a"
+exit = 101
+kind = "behavioural"

@@ -10,8 +10,9 @@
 //! assertions; this test invokes it with the freshly built binary pinned via
 //! OVERWATCH_BIN and forwards its verdict.
 //!
-//! Fail-soft: if `bash` isn't available the test skips rather than failing —
-//! the shell contract only applies where the shell runs.
+//! If `bash` cannot be spawned the test FAILS (panics) rather than skipping:
+//! a skip would be reported as a pass, and the shell contract would then be
+//! "verified" on a machine that never ran it (backlog 73e49761).
 
 use std::path::PathBuf;
 use std::process::Command;

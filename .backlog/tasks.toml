@@ -1180,3 +1180,68 @@ scripts/test_design_625aa170_lock_fn_claim.py:44: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_design_625aa170_lock_fn_claim.py::T::test_doc_named_lock_fn_is_the_one_record_changeset_and_detect_calls
 ============================== 1 failed in 0.04s ==============================="""
+
+[[task]]
+id = "4493142a"
+title = "backlog lock release deletes another session's exclusive lock without any ownership check"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed live 2026-10-20: lock acquire refused to reap d52fbfce's stale lock, then lock release --project (no session id) removed it. main.rs LockAction::Release takes no caller; lock::release_at remove_file with no holder check. Repro at feab5559."
+created_at = 1792444756
+updated_at = 1792444756
+weight = 0.0
+issue_number = 1437
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1437"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test lock_status_release_ownership release_by_non_holder_does_not_delete_the_lock -- --include-ignored --exact"
+rev = "feab5559a088a9a7e31dc27a876d1990099268c1"
+observed_at = 1792444756
+detail = """
+exit 101: ed out; finished in 0.67s
+
+   Compiling backlog v0.3.63 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.97s
+     Running tests/lock_status_release_ownership.rs (target/debug/deps/lock_status_release_ownership-8556bfdc3992614d)
+error: test failed, to rerun pass `-p backlog --test lock_status_release_ownership`"""
+
+[[task]]
+id = "28a16afd"
+title = "backlog lock status hides a heartbeat-stale exclusive lock that next --claim still honours"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed live 2026-10-20: next --claim refused on d52fbfce's exclusive lock (heartbeat 2026-07-28) while lock status printed kind driver-presence with no holder. Fresh locks are shown; only stale ones are hidden. Repro at feab5559."
+created_at = 1792444763
+updated_at = 1792444763
+weight = 0.0
+issue_number = 1438
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1438"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test lock_status_release_ownership status_reports_exclusive_lock_held_by_another_session -- --include-ignored --exact"
+rev = "feab5559a088a9a7e31dc27a876d1990099268c1"
+observed_at = 1792444763
+detail = """
+exit 101: _held_by_another_session
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.55s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/lock_status_release_ownership.rs (target/debug/deps/lock_status_release_ownership-8556bfdc3992614d)
+error: test failed, to rerun pass `-p backlog --test lock_status_release_ownership`"""

@@ -5,12 +5,12 @@
 //! cannot be resolved (a broken symlink) therefore reads as "no repo here"
 //! instead of Undetermined, and the store write is allowed.
 //!
-//! RED repro: cargo test -p harness-core --test backlog_4adebd79 -- --ignored
+//! Fixed by abfc3f22 (`dot_git_present` uses `symlink_metadata`).
+//! Repro: cargo test -p harness-core --test backlog_4adebd79
 
 use harness_core::primary_tree::{classify, refuse_if_primary, TreeKind};
 
 #[test]
-#[ignore = "backlog 4adebd79: RED repro"]
 fn present_but_unresolvable_dot_git_is_not_no_repo() {
     let t = tempfile::tempdir().unwrap();
     let dir = t.path().canonicalize().unwrap();

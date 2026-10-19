@@ -137,6 +137,11 @@ pub struct RedRun {
     pub rev: String,
     pub exit: i32,
     pub kind: String,
+    /// The HEAD test files overlaid onto `rev` when `done --red-overlay`
+    /// narrowed the overlay (sorted, deduplicated). Absent = the default
+    /// overlay (every HEAD test file, or the files a pytest argv names).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<Vec<String>>,
 }
 
 /// Outcomes of a finding's repro test (`add --repro-test` / `confirm`).

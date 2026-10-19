@@ -49,8 +49,42 @@ fn verdict(command: &str) -> (String, String) {
 /// Measured at 0.2.127: the deny fires when the backticked span in a python
 /// COMMENT contains `)>` (e.g. `<k(r)>/claims.json`); the same text inside a
 /// string literal gets Ask, and `<k>/claims.json` is allowed.
+/// Restrictive controls for the fix (`interpreter_program_body_segments`):
+/// the downgrade is Ask carrying the R2 marker, never Allow; and it does not
+/// reach a body the SHELL parses (unquoted delimiter, shell consumer), code
+/// after the closing delimiter, or a definite target.
 #[test]
-#[ignore = "backlog 4a1cf1ad: RED repro"]
+fn controls_downgrade_is_ask_and_stays_inside_interpreter_program_text() {
+    let downgraded = "python3 - <<'PY'\n# writes `<k(r)>/claims.json`\nprint(1)\nPY";
+    let (d, r) = verdict(downgraded);
+    assert_eq!(d, "ask", "downgraded case must be Ask, not {d}: {r}");
+    assert!(
+        r.contains("Recommended: do not run this."),
+        "the Ask must carry the R2 marker: {r}"
+    );
+    for cmd in [
+        "python3 - <<PY\n# writes `<k(r)>/claims.json`\nPY",
+        "bash <<'EOF'\necho hi > `x`\nEOF",
+        "python3 - <<'PY'\nprint(1)\nPY\necho hi > `x`",
+        "python3 - <<'PY'\n# writes `<k(r)>/claims.json`\nPY\necho hi >/claims.json`x`",
+        "python3 - <<'PY'\n# a(b)> /etc/hosts\nPY",
+        // No closing delimiter line: where the body ends was not observed, so
+        // nothing is downgraded (restrictive on doubt).
+        "python3 - <<'PY'\n# writes `<k(r)>/claims.json`",
+        // A `;` after the opener: the rest of that LINE is shell code.
+        "python3 - <<'PY'; echo hi > `x`\nprint(1)\nPY",
+    ] {
+        let (d, r) = verdict(cmd);
+        assert_eq!(
+            d,
+            "deny",
+            "{:?} must stay Deny; reason={r}",
+            cmd.replace('\n', "\\n")
+        );
+    }
+}
+
+#[test]
 fn backtick_claims_json_in_quoted_python_heredoc_is_not_denied() {
     let cases = [
         "python3 - <<'EOF'\n# state lives in `<state_dir>/claims.json`\nprint(1)\nEOF",

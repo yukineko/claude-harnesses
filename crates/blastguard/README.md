@@ -56,7 +56,13 @@ audited (`analyze_code_interpreter` / `interpreter_code_verdict` in
 embedded shell line is destructive, is a deny; one that names a protected
 gate/config path is an ask; a benign program such as `python3 -c "print(1)"`
 is allowed (0.2.59). Running a script **file** (`python3 app.py`,
-`python3 -m …`) is not judged.
+`python3 -m …`) is not judged. A `>` in program text whose "target" cannot be
+determined (`print(1 > 0)`, a backticked `` `<k(r)>/x.json` `` in a comment) is
+an `ask` marked "Recommended: do not run this." — never a deny, never an allow
+(user ruling R2, 2026-10-14). Since 0.2.140 this also holds for the line-level
+redirect scan over the body of a quoted-delimiter here-document fed to a
+non-shell interpreter (`python3 - <<'PY'`), when that body is closed by its
+delimiter line (backlog 4a1cf1ad).
 
 ### File operations
 
@@ -124,7 +130,10 @@ stay allowed.
 
 The detector only **denies** *clearly* destructive, hard-to-undo patterns, and
 stays out of the way of ordinary work: a single non-recursive `rm file.txt`,
-appends (`>>`), and fd redirects (`2>&1`, `>&2`) are all allowed.
+appends (`>>`), and fd redirects (`2>&1`, `>&2`) are all allowed. (Exception:
+a non-recursive `rm` whose operand is a `.git` entry is denied — in a linked
+worktree that is the `gitdir:` file, and removing it severs the checkout;
+backlog eba15868.)
 
 **Ambiguity does not fall through to allow.** This paragraph used to say it did,
 which was the pre-`Ask` two-valued behaviour and the opposite of what ships:
@@ -242,8 +251,13 @@ exempt config file is no longer a flat deny. In order (`src/detect.rs`, the
 truncating-redirect arm; `src/reversible.rs` `probe`):
 
 1. A protected gate/config path → `ask`; a target inside a system directory →
-   `deny`.
-2. The target **does not exist** → allowed (no prior bytes to destroy).
+   `deny`. The system-directory check is made on the text **and** on where the
+   kernel really lands it (deepest existing ancestor canonicalised, so
+   `<proj>/esc/etc/new.conf` with `esc -> /` is `/etc/new.conf`; backlog
+   2287ebae). The `>>` append loop makes the same two checks.
+2. The target **does not exist** → allowed (no prior bytes to destroy) —
+   unless its real landing could not be resolved (e.g. an unsearchable
+   ancestor), which is an `ask`.
 3. The target is inside a git work tree whose `git status` answered **and** it
    lies inside this session's safe roots (or a linked worktree checkout under
    a worktree storage root) → allowed, unattended. By operator ruling

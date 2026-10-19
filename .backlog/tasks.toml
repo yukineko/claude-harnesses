@@ -29,39 +29,6 @@ exit 1: test.py\u001B[0m:354: XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.07s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "2287ebae"
-title = "blastguard redirect_target_suffix_resolution fixtures assume /etc/fstab exists (always red on macOS)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "macos",
-    "test-env",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Measured 2026-10-03 on the merged tree and on origin/main b0f626e4: symlink_before_dotdot_in_a_suffix_must_not_be_resolved and symlink_without_a_dotdot_is_caught_by_the_symlink_axis panic with fixture .../../etc/fstab must resolve: No such file or directory. macOS has neither /etc/fstab nor /private/etc/fstab. Test came in with d2c2e5ee. Make the fixture create its own target instead of depending on a host file."
-created_at = 1790999884
-updated_at = 1792005339
-weight = 0.0
-issue_number = 1129
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1129"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_2287ebae -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005337
-detail = """
-exit 101: ignored; 0 measured; 1 filtered out; finished in 0.68s
-
-   Compiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
-     Running tests/backlog_2287ebae.rs (target/debug/deps/backlog_2287ebae-bc74d6ffff64bdb3)
-error: test failed, to rerun pass `-p blastguard --test backlog_2287ebae`"""
-
-[[task]]
 id = "1a4d26d1"
 title = "backlog claim_check_contract::non_executable_condukt_is_refused fails when a real condukt is later on PATH (lookup skips the non-exec shim) — fixture must not inherit PATH; fix is in the 1e6f00ae integration"
 project = "/Users/yuki/src/harness"
@@ -331,41 +298,6 @@ exit 1: st/unittest.py\u001B[0m:354: XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 5.16s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "4a1cf1ad"
-title = "blastguard: backtick-quoted path inside a Python heredoc comment is misread as a > redirect and blocked"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """
-Observed 2026-10-04 by the 873a2621 test-writer agent (session 33de4c25). Verbatim block: '> /claims.json' destroys the file's current contents and /claims.json contains a shell expansion, so blastguard cannot tell which file this names. Trigger: a heredoc body that is Python source, with a comment that wraps claims.json in backticks. Also a process finding: the agent then wrote the same script with the Write tool and ran it, which is the reroute-around-a-gate pattern that CLAUDE.md section 5.4 forbids (the effect was benign: test edits in its own worktree). Needs a reproduction test.
-
-[2026-10-04, session 33de4c25] Second observation, same verbatim block: the 873a2621 implementer's python3 heredoc that spliced crates/harness-core/src/transcript.rs was refused because Rust doc text "<project_key(main_worktree_root(root))>/claims.json" (in backticks) was parsed as a > redirect. The script never ran. Declared and asked; the user ruled to make the same change with the Edit tool."""
-created_at = 1791044006
-updated_at = 1792005327
-weight = 0.0
-issue_number = 1229
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1229"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_4a1cf1ad -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005323
-detail = """
-exit 101: ignored; 0 measured; 0 filtered out; finished in 1.48s
-
-   Compiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.55s
-     Running tests/backlog_4a1cf1ad.rs (target/debug/deps/backlog_4a1cf1ad-f7cb2f030a0f5a7b)
-error: test failed, to rerun pass `-p blastguard --test backlog_4a1cf1ad`"""
-
-[[task]]
 id = "1af8be51"
 title = "check-worktree-isolation _merge_head_visible uses os.path.exists: a directory/symlink MERGE_HEAD allows a main-tree commit (fail-open, disagrees with edit guard)"
 project = "/Users/yuki/src/harness"
@@ -402,13 +334,16 @@ project_unresolved = false
 tags = ["p2"]
 touched_files = []
 status = "pending"
-notes = "Observed 2026-10-04 (session 33de4c25) in the session worktree at main 9e9d8db3. cargo test -p blastguard --test redirect_target_suffix_resolution: symlink_before_dotdot_in_a_suffix_must_not_be_resolved and symlink_without_a_dotdot_is_caught_by_the_symlink_axis FAILED (12 passed, 2 failed). cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent FAILED. Both are pre-existing, not caused by 873a2621. Possibly related: 3ca56588 and b280cfa2 (blastguard symlink + ..). Also, stuckguard anchor::backlog_c397cd15::heartbeat_reaches_overwatch_that_is_only_in_the_plugin_cache failed in a full cargo test --workspace run but passed 3/3 in isolation: a parallel-run flake."
+notes = """
+Observed 2026-10-04 (session 33de4c25) in the session worktree at main 9e9d8db3. cargo test -p blastguard --test redirect_target_suffix_resolution: symlink_before_dotdot_in_a_suffix_must_not_be_resolved and symlink_without_a_dotdot_is_caught_by_the_symlink_axis FAILED (12 passed, 2 failed). cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent FAILED. Both are pre-existing, not caused by 873a2621. Possibly related: 3ca56588 and b280cfa2 (blastguard symlink + ..). Also, stuckguard anchor::backlog_c397cd15::heartbeat_reaches_overwatch_that_is_only_in_the_plugin_cache failed in a full cargo test --workspace run but passed 3/3 in isolation: a parallel-run flake.
+
+[2026-10-20, session c5b9c02b] The blastguard half is fixed by 14de6b48 (blastguard 0.2.137, closed with 2287ebae: both symlink rows RED at 59b9fa02, 14 passed after). Not closed: the specguard half is still RED at 59b9fa02 — cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent panics at forge_integration.rs:331 with 'specforge: requirement を backlog に積めなかった: requirement R1 を起票できなかった' (the backlog add subprocess). A different defect in a different plugin."""
 created_at = 1791046280
-updated_at = 1792005345
+updated_at = 1792427472
 weight = 0.0
 issue_number = 1259
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1259"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -452,33 +387,6 @@ exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/schemaguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.53s
      Running tests/backlog_2becbabe.rs (target/debug/deps/backlog_2becbabe-ae3d580f97b3cb62)
 error: test failed, to rerun pass `-p condukt --test backlog_2becbabe`"""
-
-[[task]]
-id = "eba15868"
-title = "blastguard: 非再帰の rm <linked worktree>/.git (gitdir ファイル) が Allow — worktree の git 接続を切る削除を止めない (0.2.105 以前から。test adv_checkout_own_dotgit_file_is_not_allowed が RED)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1791046776
-updated_at = 1792005348
-weight = 0.0
-issue_number = 1264
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1264"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test worktree_protected_paths_adversarial adv_checkout_own_dotgit_file_is_not_allowed -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005347
-detail = """
-exit 101: ompiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
-     Running tests/worktree_protected_paths_adversarial.rs (target/debug/deps/worktree_protected_paths_adversarial-fe45f46383d17c2b)
-error: test failed, to rerun pass `-p blastguard --test worktree_protected_paths_adversarial`"""
 
 [[task]]
 id = "2821738c"
@@ -1186,34 +1094,6 @@ test result: FAILED. 0 passed; 14 failed; 0 ignored; 0 measured; 6 filtered out;
 error: test failed, to rerun pass `-p blastguard --test script_file_content_exec`"""
 
 [[task]]
-id = "b85f6d5d"
-title = "blastguard: a '//' literal inside a quoted python heredoc is misparsed and denied"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1792086412
-updated_at = 1792086412
-weight = 0.0
-issue_number = 1362
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1362"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_slash_literal_misparse -- --ignored"
-rev = "4c9a42be8b24c5a75e2312765378d124836468f5"
-observed_at = 1792086412
-detail = """
-exit 101: es/overwatch)
-   Compiling blastguard v0.2.130 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.49s
-     Running tests/heredoc_slash_literal_misparse.rs (target/debug/deps/heredoc_slash_literal_misparse-de50a0a88f2ca2e2)
-error: test failed, to rerun pass `-p blastguard --test heredoc_slash_literal_misparse`"""
-
-[[task]]
 id = "dc955812"
 title = "blastguard classify は backtick で引用されたコマンドを記述するだけの task 散文も force-gate する (11be9484 の散文側、ユーザー裁定 2026-10-16 で先送り)"
 project = "/Users/yuki/src/harness"
@@ -1273,74 +1153,6 @@ E           json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char
 =========================== short test summary info ============================
 FAILED scripts/test_prose_flow_a.py::T::test_claim_circuit_idle_home_unset_trips_unmeasured
 1 failed, 40 deselected in 1.06s"""
-
-[[task]]
-id = "08494f63"
-title = "overwatch: record_changeset_and_detect returns Ok(empty) when the lock is not acquired, so condukt sets no merge-hold"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "overwatch",
-    "condukt",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1792424660
-updated_at = 1792424660
-weight = 0.0
-issue_number = 1423
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1423"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p overwatch --test repro_lock_unavailable_reports_ok record_changeset_and_detect_with_unacquired_lock_must_not_report_no_overlap -- --ignored"
-rev = "23b0d2f5ff3546b25967e592872112a54c2a742f"
-observed_at = 1792424660
-detail = """
-exit 101: 10.07s
-
-   Compiling overwatch v0.2.84 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.28s
-     Running tests/repro_lock_unavailable_reports_ok.rs (target/debug/deps/repro_lock_unavailable_reports_ok-c3978615173790b2)
-error: test failed, to rerun pass `-p overwatch --test repro_lock_unavailable_reports_ok`"""
-
-[[task]]
-id = "452f3705"
-title = "overwatch: append_merge_conflict returns Ok(()) without writing when the lock is not acquired"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "overwatch",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1792424684
-updated_at = 1792424684
-weight = 0.0
-issue_number = 1424
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1424"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p overwatch --test repro_lock_unavailable_reports_ok append_merge_conflict_with_unacquired_lock_must_not_return_ok_unwritten -- --ignored"
-rev = "23b0d2f5ff3546b25967e592872112a54c2a742f"
-observed_at = 1792424684
-detail = """
-exit 101: unwritten
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 10.04s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
-     Running tests/repro_lock_unavailable_reports_ok.rs (target/debug/deps/repro_lock_unavailable_reports_ok-c3978615173790b2)
-error: test failed, to rerun pass `-p overwatch --test repro_lock_unavailable_reports_ok`"""
 
 [[task]]
 id = "2d8c41c5"

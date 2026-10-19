@@ -1466,37 +1466,6 @@ exit 101: .52s
 error: test failed, to rerun pass `-p daily --test repro_unparseable_config_runs_default`"""
 
 [[task]]
-id = "10f339ee"
-title = "tdd: Stop hook allows the stop on malformed stdin even in a violating repo"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "gate_command treats unparseable stdin as interactive: in a repo with implementation and no test the verdict is a violation but it is printed to stderr with exit 1 and no decision:block on stdout, which Claude Code reads as a non-blocking error. integration.rs gate_malformed_stdin_allows_the_stop pins only the empty-cwd case and is untouched."
-created_at = 1792189395
-updated_at = 1792189395
-weight = 0.0
-issue_number = 1405
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1405"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test repro_gate_malformed_stdin_allows -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189395
-detail = """
-exit 101: dings/crates/overwatch)
-   Compiling tdd v0.1.42 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/tdd)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.77s
-     Running tests/repro_gate_malformed_stdin_allows.rs (target/debug/deps/repro_gate_malformed_stdin_allows-a9977a41a6860119)
-error: test failed, to rerun pass `-p tdd --test repro_gate_malformed_stdin_allows`"""
-
-[[task]]
 id = "fa377dbe"
 title = "session-insights: unparseable config silently ignored (no stderr, defaults used)"
 project = "/Users/yuki/src/harness"

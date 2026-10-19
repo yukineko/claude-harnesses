@@ -55526,3 +55526,62 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "51376c9c6a506418ab08829ae513beca29b90c80"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "10f339ee"
+title = "tdd: Stop hook allows the stop on malformed stdin even in a violating repo"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "gate_command treats unparseable stdin as interactive: in a repo with implementation and no test the verdict is a violation but it is printed to stderr with exit 1 and no decision:block on stdout, which Claude Code reads as a non-blocking error. integration.rs gate_malformed_stdin_allows_the_stop pins only the empty-cwd case and is untouched."
+created_at = 1792189395
+updated_at = 1792423302
+weight = 0.0
+issue_number = 1405
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1405"
+issue_closed_at = 1792423306
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test repro_gate_malformed_stdin_allows -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189395
+detail = """
+exit 101: dings/crates/overwatch)
+   Compiling tdd v0.1.42 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.77s
+     Running tests/repro_gate_malformed_stdin_allows.rs (target/debug/deps/repro_gate_malformed_stdin_allows-a9977a41a6860119)
+error: test failed, to rerun pass `-p tdd --test repro_gate_malformed_stdin_allows`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test repro_gate_malformed_stdin_allows"
+exit = 0
+passed = 1
+rev = "1a646c97770b0b84ee169cf0b2eddab01f009734"
+observed_at = 1792423287
+output_digest = "sha256:0964447c6c3e6a32532baa1f60ec95aa4a5b77cc11e752f2ae878c3ad4662982"
+excerpt = """
+
+running 1 test
+test malformed_stdin_in_violating_repo_does_not_allow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/repro_gate_malformed_stdin_allows.rs (target/debug/deps/repro_gate_malformed_stdin_allows-5f4dda6a40b22dca)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
+kind = "behavioural"

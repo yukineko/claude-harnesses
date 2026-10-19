@@ -120,26 +120,15 @@ pub enum ReconcileRange {
     LastN(usize),
 }
 
-/// Run `git log` over `range` and parse it into `CommitRef`s. Fail-soft: ANY
-/// failure (git not installed, cwd not a repo, non-zero exit, non-utf8
-/// output) yields an empty vec rather than an `Err` — a git-level failure
-/// means "0 commits scanned", never a panic or a propagated error, and on its
-/// own it does not make [`run`] exit non-zero.
+/// Run `git log` over `range` and parse it into `CommitRef`s.
 ///
-/// This sentence used to end "so `reconcile-fixed` always exits 0", which
-/// stopped being true when the STORE reads became tri-state: an unreadable
-/// findings or disposition ledger now exits 3. The scope of this fail-soft is
-/// the GIT read only.
-///
-/// **Known, unfixed here:** this is still a two-valued read. "git is not
-/// installed / this is not a repo" and "the range genuinely holds no commit"
-/// both arrive as `Vec::new()`, and the caller states the result as a count
-/// ("scanned 0 commit(s)") rather than as "nothing to do" — which is why it
-/// was judged the conservative side and left alone. It is nonetheless the one
-/// remaining input to the reconcile decision that cannot say "I could not
-/// look"; `reconcile_fixed_fail_soft_when_not_a_git_repo` pins the CURRENT
-/// behaviour, not a claim that the behaviour is right.
-fn git_log_commits(cwd: &Path, range: &ReconcileRange) -> Vec<CommitRef> {
+/// Tri-state: ANY git-level failure (git not installed, cwd not a repo, an
+/// unknown ref, non-zero exit, non-utf8 output) is `Undetermined`, never
+/// `Known(vec![])`. This used to return an empty vec, which `reconcile-fixed`
+/// rendered as `commits_scanned: 0, reconciled: []` at exit 0 — exactly what
+/// "scanned the history and found nothing to reconcile" looks like, although
+/// the history was never read (backlog 589a8bff).
+fn git_log_commits(cwd: &Path, range: &ReconcileRange) -> Determination<Vec<CommitRef>> {
     let mut cmd = Command::new("git");
     cmd.current_dir(cwd)
         .arg("log")
@@ -155,16 +144,43 @@ fn git_log_commits(cwd: &Path, range: &ReconcileRange) -> Vec<CommitRef> {
             cmd.arg(format!("-n{n}"));
         }
     }
-    let Ok(out) = cmd.output() else {
-        return Vec::new();
+    let out = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => return Determination::undetermined(format!("could not run git log: {e}")),
     };
     if !out.status.success() {
-        return Vec::new();
+        return Determination::undetermined(format!(
+            "git log exited {:?}: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
-    let Ok(text) = String::from_utf8(out.stdout) else {
-        return Vec::new();
-    };
-    parse_git_log(&text)
+    match String::from_utf8(out.stdout) {
+        Ok(text) => Determination::known(parse_git_log(&text)),
+        Err(_) => Determination::undetermined("git log output is not valid UTF-8"),
+    }
+}
+
+/// Resolve [`git_log_commits`] for a caller: `Some(commits)` when the history
+/// was read, else `None` after announcing why on stderr and naming `git log`
+/// in `undetermined`.
+fn read_commits(
+    cwd: &Path,
+    range: &ReconcileRange,
+    undetermined: &mut Vec<&'static str>,
+) -> Option<Vec<CommitRef>> {
+    match git_log_commits(cwd, range) {
+        Determination::Known(c) => Some(c),
+        Determination::Undetermined(why) => {
+            eprintln!(
+                "overwatch: WARNING — the git history could not be read ({why:?}); NO \
+                 commit was scanned, so no fix commit could be matched to a finding. This \
+                 is NOT a report that nothing needed reconciling."
+            );
+            undetermined.push("git log");
+            None
+        }
+    }
 }
 
 /// Parse `git log --pretty=format:%H%x1f%B%x1e` output (`\x1f`-separated
@@ -263,17 +279,21 @@ fn reconcile_inputs(
 ///
 /// Tri-state: an unreadable ledger is `Undetermined`, NOT `Known(0)`. A zero
 /// here is rendered as "no stale finding" (the warning line is suppressed), so
-/// collapsing the two would turn a broken store into an all-clear.
+/// collapsing the two would turn a broken store into an all-clear. The same
+/// holds for the GIT read: an unreadable history (not a repo, git missing) is
+/// `Undetermined`, not "no commits" — outside a repository the count used to
+/// be `Known(0)` (pinned by
+/// `tests/repro_review_metrics_stale_count_not_a_git_repo.rs`).
 pub fn stale_undisposed_count(cwd: &Path, range: ReconcileRange) -> Determination<usize> {
-    let commits = git_log_commits(cwd, &range);
     let mut undetermined: Vec<&'static str> = Vec::new();
-    match reconcile_inputs(cwd, &mut undetermined) {
-        Some((known_finding_ids, already_disposed)) => Determination::known(
+    let commits = read_commits(cwd, &range, &mut undetermined);
+    match (commits, reconcile_inputs(cwd, &mut undetermined)) {
+        (Some(commits), Some((known_finding_ids, already_disposed))) => Determination::known(
             compute_reconcile_dispositions(&commits, &known_finding_ids, &already_disposed, 0)
                 .len(),
         ),
-        None => Determination::undetermined(format!(
-            "the stale-undisposed count joins ledgers that could not be read: {}",
+        _ => Determination::undetermined(format!(
+            "the stale-undisposed count joins inputs that could not be read: {}",
             undetermined.join(", ")
         )),
     }
@@ -281,44 +301,48 @@ pub fn stale_undisposed_count(cwd: &Path, range: ReconcileRange) -> Determinatio
 
 /// CLI entry point for `overwatch reconcile-fixed`.
 ///
-/// Fail-soft on GIT: a git failure degrades to "0 commits scanned", which the
-/// output states as the count it is. NOT fail-soft on the STORE: an unreadable
-/// findings or disposition ledger writes nothing, is announced, and returns
-/// [`SourceHealth::SomeUndetermined`] (exit 3) rather than reporting
-/// "0 finding(s) reconciled".
+/// Neither input is fail-soft: an unreadable git history (not a repo, git
+/// missing, unknown ref) or an unreadable findings / disposition ledger writes
+/// nothing, is announced, and returns [`SourceHealth::SomeUndetermined`]
+/// (exit 3) rather than reporting "0 finding(s) reconciled".
 pub fn run(range: ReconcileRange, dry_run: bool, json: bool) -> Result<SourceHealth> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
 
-    let commits = git_log_commits(&cwd, &range);
     let mut undetermined: Vec<&'static str> = Vec::new();
-    let (known_finding_ids, already_disposed) = match reconcile_inputs(&cwd, &mut undetermined) {
-        Some(inputs) => inputs,
-        None => {
-            if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "commits_scanned": commits.len(),
-                        // Not "reconciled: []" alone: with a non-empty
-                        // `undetermined_sources` the empty list means "could
-                        // not tell", not "nothing to do".
-                        "reconciled": Vec::<String>::new(),
-                        "dry_run": dry_run,
-                        "undetermined_sources": undetermined,
-                    }))?
-                );
-            } else {
-                println!(
-                    "reconcile-fixed: scanned {} commit(s), NOTHING was reconciled — {} could \
-                     not be read (this is NOT a report that no finding needed reconciling)",
-                    commits.len(),
+    let commits = read_commits(&cwd, &range, &mut undetermined);
+    let (commits, (known_finding_ids, already_disposed)) =
+        match (commits, reconcile_inputs(&cwd, &mut undetermined)) {
+            (Some(c), Some(inputs)) => (c, inputs),
+            (commits, _) => {
+                let commits_scanned = commits.map(|c| c.len());
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            // `null` when the git history itself was unreadable:
+                            // no count was observed, so none is reported.
+                            "commits_scanned": commits_scanned,
+                            // Not "reconciled: []" alone: with a non-empty
+                            // `undetermined_sources` the empty list means "could
+                            // not tell", not "nothing to do".
+                            "reconciled": Vec::<String>::new(),
+                            "dry_run": dry_run,
+                            "undetermined_sources": undetermined,
+                        }))?
+                    );
+                } else {
+                    let scanned = commits_scanned
+                        .map_or_else(|| "UNKNOWN (unreadable)".to_string(), |n| n.to_string());
+                    println!(
+                    "reconcile-fixed: scanned {scanned} commit(s), NOTHING was reconciled — {} \
+                     could not be read (this is NOT a report that no finding needed reconciling)",
                     undetermined.join(", ")
                 );
+                }
+                return Ok(SourceHealth::SomeUndetermined);
             }
-            return Ok(SourceHealth::SomeUndetermined);
-        }
-    };
+        };
 
     let new_dispositions =
         compute_reconcile_dispositions(&commits, &known_finding_ids, &already_disposed, now);

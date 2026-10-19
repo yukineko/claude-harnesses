@@ -19,9 +19,11 @@
 # It then prints the finding list + `overwatch audit-metrics`.
 #
 # This is OPT-IN tooling. It is NOT wired into any always-on gate and does NOT
-# change condukt/rollout behavior. Nothing is auto-installed. Everything is
-# fail-soft (a store-write failure never breaks the loop — overwatch's
-# never-break-a-turn invariant).
+# change condukt/rollout behavior. Nothing is auto-installed. Recording is NOT
+# fail-soft: a missing overwatch binary, a missing --round (outside --dry-run),
+# a failed record-finding, or a refused `audit-round record` exits non-zero and
+# never prints PASS. Only the reporting calls afterwards (reconcile-fixed,
+# audit-metrics) are fail-soft — they cost visibility, not the record.
 #
 # --------------------------------------------------------------------------
 # USAGE
@@ -65,7 +67,7 @@
 # used. When BOTH are given and are the SAME model, overwatch DETERMINISTICALLY
 # enforces the finder!=verifier MUST (model diversity): a high-severity warning
 # finding is recorded into the review queue (fail-soft — the round is still
-# recorded and the loop is never broken). Omit both for the original behavior.
+# recorded). Omitting either records an "unchecked diversity" warning finding.
 #
 # --------------------------------------------------------------------------
 # OPT-IN AUTOMATION TEMPLATES (nothing below is installed by this script)
@@ -114,7 +116,7 @@ declare -a FINDINGS=()
 declare -a UNVERIFIED_FINDINGS=()
 
 usage() {
-  sed -n '2,79p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,81p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -148,13 +150,15 @@ elif [ -x "$REPO/target/debug/overwatch" ]; then
   OW="$REPO/target/debug/overwatch"
 else
   echo "continuous-audit: overwatch binary not found (build with: cargo build -p overwatch)" >&2
-  echo "continuous-audit: nothing recorded (fail-soft)" >&2
-  exit 0   # fail-soft: never hard-fail the caller
+  echo "continuous-audit: NOTHING was recorded" >&2
+  # Not exit 0: a round that could not be recorded is not a recorded round.
+  exit 1
 fi
 
 if [ -z "$ROUND" ]; then
   echo "continuous-audit: --round <round-id> is required (or --dry-run to preview)" >&2
-  [ "$DRY_RUN" -eq 1 ] || exit 0
+  # Usage error unless previewing: nothing was recorded, so never exit 0.
+  [ "$DRY_RUN" -eq 1 ] || exit 2
   ROUND="(dry-run)"
 fi
 
@@ -205,6 +209,20 @@ run_ow() {
   fi
 }
 
+# required-write wrapper: the call IS what this script exists to do (storing a
+# CONFIRMED / UNVERIFIED finding), so its failure stops the run. Routing it
+# through run_ow printed "PASS: round recorded" over a finding that was never
+# stored.
+run_ow_required() {
+  if ! "$OW" "$@"; then
+    echo >&2
+    echo "continuous-audit: overwatch $1 failed (exit non-zero); the finding was NOT stored." >&2
+    echo "  The round was NOT recorded. Findings recorded before this one were not rolled" >&2
+    echo "  back; re-run once the reported condition is fixed." >&2
+    exit 1
+  fi
+}
+
 # verdict-bearing wrapper: a non-zero exit is the answer, so it stops the run.
 run_ow_gate() {
   if ! "$OW" "$@"; then
@@ -252,7 +270,7 @@ record_findings_with_verdict() {
     [ -n "${fsev:-}" ] && args+=(--severity "$fsev")
     [ -n "${ffile:-}" ] && args+=(--file "$ffile")
     [ -n "${frationale:-}" ] && args+=(--rationale "$frationale")
-    run_ow "${args[@]}"
+    run_ow_required "${args[@]}"
   done
 }
 
@@ -270,8 +288,8 @@ fi
 # --- record the round metrics into the convergence ledger --------------------
 # When both --finder-model and --verifier-model are supplied, they are forwarded
 # so overwatch can DETERMINISTICALLY enforce the finder!=verifier MUST (a same-
-# model pair records a high-severity warning finding; fail-soft, never aborts).
-# Omit both to keep the original, unchecked behavior (backward compatible).
+# model pair records a high-severity warning finding; it does not abort).
+# Omitting either records a medium "unchecked diversity" warning finding.
 round_args=(audit-round record
   --round "$ROUND"
   --target "$TARGET"

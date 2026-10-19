@@ -10,8 +10,9 @@
 //! assertions; this test invokes it with the freshly built binary pinned via
 //! OVERWATCH_BIN and forwards its verdict.
 //!
-//! Fail-soft: if `bash` isn't available the test skips rather than failing —
-//! the shell contract only applies where the shell runs.
+//! If `bash` cannot be spawned the test FAILS (undetermined). It used to
+//! return early and pass, reporting "the script was not checked" as "the
+//! script behaves" (backlog 73e49761).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -26,9 +27,8 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn continuous_audit_script_behaves() {
-    if Command::new("bash").arg("--version").output().is_err() {
-        eprintln!("skipping: bash not available");
-        return;
+    if let Err(e) = Command::new("bash").arg("--version").output() {
+        panic!("UNDETERMINED: bash could not be spawned ({e}); the script was NOT checked");
     }
     let repo = repo_root();
     let script = repo.join("scripts/tests/continuous-audit.sh");

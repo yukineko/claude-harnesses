@@ -287,6 +287,41 @@ pub fn closure_incomplete(confirmed: u64, regression_tests_added: u64) -> bool {
     regression_tests_added < confirmed
 }
 
+/// The three answers to "did this round satisfy finder != verifier?".
+/// `Unchecked` is NOT `Distinct`: a round recorded without one or both model
+/// names never had its diversity checked, and folding it into "no collision"
+/// made it indistinguishable from a verified-distinct round (backlog a1acaca5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelDiversity {
+    /// Both models supplied and canonically different.
+    Distinct,
+    /// Both models supplied and canonically the same (MUST violated).
+    Collision,
+    /// One or both models missing / blank: diversity could not be checked.
+    Unchecked,
+}
+
+/// Tri-state diversity decision. Pure and side-effect free.
+pub fn model_diversity(finder: Option<&str>, verifier: Option<&str>) -> ModelDiversity {
+    match (finder, verifier) {
+        (Some(f), Some(v)) if !f.trim().is_empty() && !v.trim().is_empty() => {
+            if same_model(f, v) {
+                ModelDiversity::Collision
+            } else {
+                ModelDiversity::Distinct
+            }
+        }
+        _ => ModelDiversity::Unchecked,
+    }
+}
+
+/// Deterministic finding-id for an "unchecked model diversity" warning,
+/// derived from the round id (idempotent key), parallel to
+/// [`model_collision_finding_id`].
+pub fn model_unchecked_finding_id(round: &str) -> String {
+    format!("audit-round-model-unchecked-{}", round.trim())
+}
+
 /// Deterministic finding-id for a finder==verifier model-collision warning,
 /// derived from the round id so re-recording the same round yields the SAME id
 /// (idempotent key). Pure and side-effect free.

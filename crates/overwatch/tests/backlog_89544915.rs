@@ -40,7 +40,36 @@ fn sandbox(tag: &str) -> (PathBuf, PathBuf) {
     let work = base.join("work");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&work).unwrap();
+    git_repo_with_one_commit(&work);
     (home, work)
+}
+
+/// `review-metrics` reads the git history for its stale-undisposed count; an
+/// unreadable history (not a repo, or an unborn branch) is UNDETERMINED and
+/// exits 3. These tests are about the metrics, so the sandbox is a real repo.
+fn git_repo_with_one_commit(work: &Path) {
+    for args in [
+        &["init", "-q"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ][..],
+    ] {
+        let ok = Command::new("git")
+            .args(args)
+            .current_dir(work)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "sandbox setup: git {args:?} failed");
+    }
 }
 
 fn ow_raw(home: &Path, work: &Path, args: &[&str]) -> Output {

@@ -36,6 +36,12 @@ struct Sandbox {
     work: PathBuf,
 }
 
+/// True for the `audit-round-model-unchecked-<round>` warning finding that
+/// `audit-round record` adds when a model name is missing.
+fn is_model_unchecked(id: Option<&str>) -> bool {
+    id.is_some_and(|s| s.starts_with("audit-round-model-unchecked-"))
+}
+
 fn sandbox() -> Sandbox {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
@@ -464,6 +470,10 @@ fn claim_ca_finding_flags_repeat_and_format() {
         .findings()
         .into_iter()
         .filter(|f| f["source"] == "continuous-audit")
+        // No --finder-model / --verifier-model here, so the round also records
+        // an `audit-round-model-unchecked-*` warning (backlog a1acaca5). This
+        // test counts the --finding / --unverified-finding entries only.
+        .filter(|f| !is_model_unchecked(f["finding_id"].as_str()))
         .collect();
     assert_eq!(rows.len(), 4, "{rows:?}");
     // Repeated flags: 2 confirmed + 2 unverified rows.
@@ -649,6 +659,9 @@ fn claim_ca_finding_entries_independent_of_counts() {
         sb.queue()
             .into_iter()
             .filter(|r| r["kind"] == "ai-finding")
+            // Exclude the round's model-unchecked warning (see
+            // `is_model_unchecked`): only --finding entries are counted.
+            .filter(|r| !is_model_unchecked(r["identifier"].as_str()))
             .count()
     };
     // counts > entries

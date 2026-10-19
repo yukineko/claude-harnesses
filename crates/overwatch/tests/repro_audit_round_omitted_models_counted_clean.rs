@@ -21,7 +21,6 @@ use serde_json::Value;
 use std::process::Command;
 
 #[test]
-#[ignore = "repro: round with omitted finder/verifier models is silently counted clean; remove ignore when fixed"]
 fn omitted_models_must_not_be_indistinguishable_from_verified_distinct() {
     let t = std::env::temp_dir().join(format!("ow-repro-audit-models-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&t);

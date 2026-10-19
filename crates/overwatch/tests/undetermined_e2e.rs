@@ -57,7 +57,37 @@ fn make_sandbox(tag: &str) -> (PathBuf, PathBuf) {
     let work = base.join("work");
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&work).unwrap();
+    git_repo_with_one_commit(&work);
     (home, work)
+}
+
+/// `review-metrics` / `reconcile-fixed` read the git history; an unreadable
+/// history (not a repo, or an unborn branch) is itself UNDETERMINED (exit 3).
+/// These tests isolate the LEDGER inputs, so the sandbox is a real repo and
+/// git is never the undetermined source.
+fn git_repo_with_one_commit(work: &Path) {
+    for args in [
+        &["init", "-q"][..],
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ][..],
+    ] {
+        let ok = Command::new("git")
+            .args(args)
+            .current_dir(work)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "sandbox setup: git {args:?} failed");
+    }
 }
 
 fn overwatch_bin() -> &'static str {

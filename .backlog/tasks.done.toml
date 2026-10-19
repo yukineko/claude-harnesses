@@ -56392,3 +56392,108 @@ FAILED scripts/test_check_prose_tests_uncovered_explicit_paths.py::UncoveredExpl
 reason = "discard"
 discard_reason = "check-prose-tests.py and its tests were deleted in c2c55077 (user ruling 2026-10-17); scripts/test_check_prose_tests_uncovered_explicit_paths.py does not exist at 87b8032b, so the repro cannot run (pytest: file or directory not found). Nothing left to fix."
 
+[[task]]
+id = "73e49761"
+title = "overwatch: continuous_audit_script_behaves passes when bash cannot spawn"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "tests/continuous_audit_script.rs:28-31 returns early (passes) if bash cannot be spawned. Test runs the built test binary with PATH empty and asserts it does not pass. RED observed: 1 passed. Repro needs both --test targets so the sibling binary is built."
+created_at = 1792187823
+updated_at = 1792425502
+weight = 0.0
+issue_number = 1394
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1394"
+issue_closed_at = 1792425503
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test continuous_audit_script --test repro_ca_script_test_passes_without_bash -- --ignored"
+rev = "87b0070ed0dd341f43f07aea4532497ac1168a30"
+observed_at = 1792187823
+detail = """
+exit 101: t` profile [unoptimized + debuginfo] target(s) in 0.84s
+     Running tests/continuous_audit_script.rs (target/debug/deps/continuous_audit_script-04a3e58a24f9e27d)
+     Running tests/repro_ca_script_test_passes_without_bash.rs (target/debug/deps/repro_ca_script_test_passes_without_bash-bca06b62996f6681)
+error: test failed, to rerun pass `-p overwatch --test repro_ca_script_test_passes_without_bash`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/f2p_73e49761.sh"
+exit = 0
+passed = 1
+rev = "ef2c6c99395d02d5c4400ec82bf0ec7a5437f48b"
+observed_at = 1792425486
+output_digest = "sha256:f1b2478bf7d420b7d073ae6b1b0791a00234219db0d55ea976dd43f94e79ef01"
+excerpt = """
+ok: the test refuses to pass without bash (exit 101)
+1 passed
+"""
+
+[task.closure.red]
+rev = "7146b301243676541dabf7d31780f8c08e58d97d"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "321acfbb"
+title = "overwatch: repro_ca_script picks its sibling test binary by file-name order, so it measures stale builds"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1792423961
+updated_at = 1792425530
+weight = 0.0
+issue_number = 1422
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1422"
+issue_closed_at = 1792425532
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_ca_script_test_passes_without_bash pick_sibling -- --ignored"
+rev = "efc304feb57287d7141e26c3f5928d43df6253b5"
+observed_at = 1792423961
+detail = """
+exit 101: lt: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/repro_ca_script_test_passes_without_bash.rs (target/debug/deps/repro_ca_script_test_passes_without_bash-d33201fccfbfcc25)
+error: test failed, to rerun pass `-p overwatch --test repro_ca_script_test_passes_without_bash`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/f2p_321acfbb.sh"
+exit = 0
+passed = 2
+rev = "ef2c6c99395d02d5c4400ec82bf0ec7a5437f48b"
+observed_at = 1792425505
+output_digest = "sha256:34d4b671c7da2392892eb65601c6f0ff8550fb7694e36d5e20c6b222f2357bfe"
+excerpt = """
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+1 passed
+"""
+
+[task.closure.red]
+rev = "efc304feb57287d7141e26c3f5928d43df6253b5"
+exit = 1
+kind = "behavioural"

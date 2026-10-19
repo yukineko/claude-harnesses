@@ -19,8 +19,11 @@
 //! acquired within the deadline the acquire reports "not held" (logged) and
 //! never panics. What the caller does then differs by entry point: the strict
 //! callers (`acquire_strict`, used by the `lease` mutators and
-//! `control::reassign`) FAIL CLOSED with a non-zero exit, `acquire_or_skip`
-//! callers (the `store::` mutators) skip their read-modify-write, and only the
+//! `control::reassign`) FAIL CLOSED with a non-zero exit, the
+//! `store::record_changeset_and_detect` / `store::append_merge_conflict`
+//! mutators also call `acquire_strict` and return `Err` (never a success-shaped
+//! `Ok`), the remaining `acquire_or_skip` callers (the other `store::`
+//! mutators) skip their read-modify-write, and only the
 //! test-only wait variant `acquire` proceeds unlocked.
 
 use crate::store;
@@ -199,12 +202,15 @@ impl LeaseLock {
     /// timed-out writers both proceed and double-claim (last-writer-wins).
     /// Never panics. Uses the same [`LeaseLock::DEADLINE`] as
     /// [`LeaseLock::acquire`]. Live callers: the `store::` registry /
-    /// check-then-append mutators (`append_merge_*`,
-    /// `record_changeset_and_detect`, `mark_*_merged`, `prune_stale_changesets`,
+    /// check-then-append mutators (`append_merge_conflict_resolution`,
+    /// `mark_*_merged`, `prune_stale_changesets`,
     /// the review-findings compaction) and `audit_round_cli::close_at`. The
     /// `lease::{begin, run, end, heartbeat, reap}` mutators and
     /// `control::reassign` use [`LeaseLock::acquire_strict`] (via
-    /// `lease::lock_or_bail`) instead, so they can tell the two failures apart.
+    /// `lease::lock_or_bail`) instead, so they can tell the two failures apart;
+    /// `store::record_changeset_and_detect` and `store::append_merge_conflict`
+    /// call [`LeaseLock::acquire_strict`] directly and return `Err` on either
+    /// failure (they must not report success for a skipped mutation).
     pub fn acquire_or_skip(cwd: &Path) -> Option<Self> {
         Self::acquire_strict(cwd).ok()
     }

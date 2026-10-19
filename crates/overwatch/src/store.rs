@@ -1046,9 +1046,9 @@ pub fn runtime_conflicts_path(cwd: &Path) -> Result<PathBuf> {
 ///
 /// So only an absent file yields `Ok(ChangesetRegistry::default())`; unreadable
 /// or corrupt yields `Err`, aborting the mutator before it can write anything
-/// back. Callers that must not fail on detection already treat an `Err` as "no
-/// overlap detected" (only a POSITIVE detection holds a merge) — and now do so
-/// without clobbering the registry on the way.
+/// back. Through [`record_changeset_and_detect`] that `Err` reaches condukt's
+/// detection hook, which treats it as an UNCHECKED overlap and holds the merge
+/// (backlog 08494f63) — never as "no overlap detected".
 pub fn load_active_changesets(cwd: &Path) -> Result<ChangesetRegistry> {
     let path = active_changesets_path(cwd)?;
     match harness_core::boundary::read_to_string(&path) {
@@ -1129,23 +1129,28 @@ pub fn scan_runtime_conflicts(cwd: &Path) -> Result<Determination<Vec<RuntimeCon
 /// each event -> upsert this changeset -> save. Returns the events so the
 /// caller (condukt's detection hook) can set a merge-hold when non-empty.
 ///
-/// Fail-soft on the detection side: the caller wraps this so a lock timeout /
-/// write error degrades to "no overlap detected" and never holds a merge on a
-/// compute error (only a POSITIVE detection holds). The `LeaseLock` never
-/// panics; a write error propagates as `Err` for the caller to swallow.
+/// `Ok(events)` means the changeset WAS recorded and cross-checked: an empty
+/// vec is a genuine "no overlap". Anything that prevented the check — the
+/// `LeaseLock` not acquired (contended, or its path unresolvable), an unreadable/corrupt registry, a
+/// write error — is `Err` (backlog 08494f63): the overlap is then UNCHECKED,
+/// not absent, and the caller (condukt's `runtime_conflict`) holds the merge
+/// on it rather than reading it as "no overlap". The `LeaseLock` never panics.
 pub fn record_changeset_and_detect(
     cwd: &Path,
     changeset: &ActualChangeset,
 ) -> Result<Vec<RuntimeConflictEvent>> {
-    // HARD-SKIP on contention: skip the record+detect rather than proceed to an
-    // unlocked load->save that could clobber a peer's changeset. Returning no
-    // events matches the caller's documented degrade ("no overlap detected" — a
-    // positive detection is the only thing that holds a merge), so a contended
-    // pass never spuriously holds. The old fail-soft `acquire` left that window
-    // open.
-    let _lock = match LeaseLock::acquire_or_skip(cwd) {
-        Some(l) => l,
-        None => return Ok(Vec::new()),
+    // On contention, do NOT proceed to an unlocked load->save that could clobber
+    // a peer's changeset — and do NOT report "no overlap" either: nothing was
+    // recorded or cross-checked, so the answer is undetermined and is an `Err`
+    // (backlog 08494f63; it used to be `Ok(vec![])`, which let the merge
+    // proceed unchecked).
+    let _lock = match LeaseLock::acquire_strict(cwd) {
+        Ok(l) => l,
+        Err(e) => anyhow::bail!(
+            "overwatch lease-registry lock not acquired ({e}); changeset {} was NOT \
+             recorded or cross-checked for overlap — overlap is undetermined, not absent",
+            changeset.task_key
+        ),
     };
     // Test-only race widener (no-op in prod): widen the load->save window so the
     // concurrency regression test can reliably interleave two writers.
@@ -1545,19 +1550,26 @@ pub fn merge_conflict_resolutions_path(cwd: &Path) -> Result<PathBuf> {
 /// under `LeaseLock` (same TOCTOU guard as `append_disposition`). If the
 /// existing ledger cannot be read in full (unreadable / undecodable line) the
 /// dedup is undetermined and this returns `Err` WITHOUT appending
-/// (CA-overwatch-03), rather than double-rowing the entry. Callers warn on
-/// `Err`.
+/// (CA-overwatch-03), rather than double-rowing the entry. If the `LeaseLock`
+/// cannot be acquired (contended, or its path unresolvable) nothing is written and this also returns
+/// `Err` (backlog 452f3705) — `Ok(())` always means the entry is on the ledger
+/// (freshly appended or already present). Callers must treat `Err` as "the
+/// blocked merge is NOT on the review surface".
 pub fn append_merge_conflict(cwd: &Path, entry: &MergeConflictEntry) -> Result<()> {
     let path = merge_conflicts_path(cwd)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // HARD-SKIP on contention: skip the append rather than proceed to an
-    // unlocked check-then-append that could double-row the blocked merge. The
-    // old fail-soft `acquire` left that window open.
-    let _lock = match LeaseLock::acquire_or_skip(cwd) {
-        Some(l) => l,
-        None => return Ok(()),
+    // On contention, do NOT proceed to an unlocked check-then-append that could
+    // double-row the blocked merge — and do NOT report success: nothing was
+    // written, so this is an `Err` (backlog 452f3705; it used to be `Ok(())`).
+    let _lock = match LeaseLock::acquire_strict(cwd) {
+        Ok(l) => l,
+        Err(e) => anyhow::bail!(
+            "overwatch lease-registry lock not acquired ({e}); merge conflict {} was NOT \
+             recorded",
+            entry.conflict_id
+        ),
     };
     // Dedup via the tri-state scan (CA-overwatch-03 twin): an undetermined
     // dedup is an ERROR, not a silent `Ok(())` — the callers (condukt) warn

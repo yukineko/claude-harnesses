@@ -64,7 +64,6 @@ fn hold_lock(cwd: &Path) -> PathBuf {
 }
 
 #[test]
-#[ignore = "repro: record_changeset_and_detect returns Ok(empty)=no overlap when lock not acquired; remove ignore when fixed"]
 fn record_changeset_and_detect_with_unacquired_lock_must_not_report_no_overlap() {
     let cwd = git_repo("rcd");
     let lock = hold_lock(&cwd);
@@ -88,7 +87,6 @@ fn record_changeset_and_detect_with_unacquired_lock_must_not_report_no_overlap()
 }
 
 #[test]
-#[ignore = "repro: append_merge_conflict returns Ok(()) with nothing written when lock not acquired; remove ignore when fixed"]
 fn append_merge_conflict_with_unacquired_lock_must_not_return_ok_unwritten() {
     let cwd = git_repo("amc");
     let lock = hold_lock(&cwd);

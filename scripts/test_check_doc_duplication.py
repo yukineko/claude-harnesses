@@ -5,13 +5,14 @@ Contract: the spec in the task (exit 0 clean / 1 findings / 2 undetermined).
 Every test runs the gate as a subprocess, with cwd inside a throwaway git repo.
 DUPGATE_SCRIPT overrides the script under test (used to prove the suite can go RED).
 """
+import inspect
 import os
 import pathlib
 import re
 import subprocess
 import sys
-
-import pytest
+import tempfile
+import unittest
 
 SCRIPT = pathlib.Path(os.environ.get(
     "DUPGATE_SCRIPT",
@@ -611,3 +612,52 @@ def test_copy_within_the_same_file_passes(tmp_path):
     assert r.returncode == 0, (r.stdout, r.stderr)
     r = run(repo, "--all")
     assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+# unittest adapter ---------------------------------------------------------
+# The suites under scripts/ are run as `python3 -m unittest scripts.<module>`
+# (check-workspace-tests.py) or directly as `python3 scripts/<file>.py`. Plain
+# pytest-style functions are invisible to both: unittest reports `Ran 0 tests`
+# and the direct form exits 0 having run nothing (backlog da6ec3f8). This
+# wraps every module-level test_* function into a TestCase method, providing
+# the only fixture the suite uses (tmp_path) from a fresh temporary directory.
+# A test asking for any other fixture is a construction error raised at
+# import, never a silently skipped test.
+
+
+def _adapt(fn):
+    params = list(inspect.signature(fn).parameters)
+    unknown = [p for p in params if p != "tmp_path"]
+    if unknown:
+        raise TypeError("%s asks for fixture(s) %r the unittest adapter cannot provide"
+                        % (fn.__name__, unknown))
+
+    def method(self):
+        if not params:
+            fn()
+            return
+        with tempfile.TemporaryDirectory() as d:
+            fn(pathlib.Path(d))
+
+    method.__name__ = fn.__name__
+    method.__doc__ = fn.__doc__
+    return method
+
+
+class DocDuplicationSuite(unittest.TestCase):
+    # pytest already collects the module-level functions; __test__ = False keeps
+    # it from running every test a second time through this class. unittest
+    # ignores the attribute.
+    __test__ = False
+
+
+for _name, _fn in list(globals().items()):
+    if _name.startswith("test_") and inspect.isfunction(_fn):
+        setattr(DocDuplicationSuite, _name, _adapt(_fn))
+# the loop variable would otherwise stay bound to the last global (the class
+# itself), and unittest would load every test a second time through it.
+del _name, _fn
+
+
+if __name__ == "__main__":
+    unittest.main()

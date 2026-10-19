@@ -249,7 +249,9 @@ fn a_transcript_older_than_the_window_is_not_a_peer() {
     );
     age_by(&stale, WINDOW + HOUR);
 
-    let peers = peer_edit_footprint_within(&projects, "me", WINDOW);
+    let peers = peer_edit_footprint_within(&projects, "me", WINDOW)
+        .require()
+        .expect("liveness must be Known for this fixture (eef58891)");
 
     assert!(
         peers.contains(&fresh_file),

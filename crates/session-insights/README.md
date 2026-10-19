@@ -3,6 +3,9 @@
 - **PostToolUse** records each tool call (per-tool counts, distinct files touched) — subcommand `record` [test: crates/session-insights/tests/prose_claims.rs::claim_posttooluse_records_tool_and_files].
 - **Stop** counts a turn; if `obsidian_log = true` also (re)writes the dated `sessions/` note, and if `record = true` refreshes the `/record` note — subcommand `stop` [test: crates/session-insights/tests/prose_claims.rs::claim_stop_counts_turn] [test: crates/session-insights/tests/prose_claims.rs::claim_stop_writes_session_note_when_obsidian_log] [test: crates/session-insights/tests/prose_claims.rs::claim_stop_refreshes_record_when_record_true].
 - **SessionEnd** is opt-in (`record = true`) and writes/updates the `/record` note — subcommand `sessionend` [test: crates/session-insights/tests/prose_claims.rs::claim_sessionend_writes_record_only_when_record_true].
+- The hooks never block and exit 0, but an empty or unparseable payload is not
+  dropped silently: each hook says on stderr that the event was NOT recorded [test: crates/session-insights/tests/repro_hooks_garbage_payload_silent.rs::garbage_payload_is_reported_on_stderr] [test: crates/session-insights/tests/integration.rs::sessionend_hook_garbage_payload_is_reported_on_stderr],
+  and `stop` also emits a `systemMessage` [test: crates/session-insights/tests/integration.rs::stop_hook_garbage_payload_emits_system_message].
 - **size**: XS / S / M / L / XL by total tool events (thresholds configurable) [test: crates/session-insights/tests/prose_claims.rs::claim_size_thresholds_default_boundaries] [test: crates/session-insights/tests/prose_claims.rs::claim_size_thresholds_configurable]
 - **category**: `coding` (Edit/Write/MultiEdit/NotebookEdit), `ops` (Bash), `research`
   (Read/Grep/Glob/WebFetch/WebSearch) when that group is at least half of the categorized
@@ -18,6 +21,11 @@ session-insights report --context # also join context-governor ledger health [te
 
 If the session store cannot be read, `report` prints `unknown — session store could
 not be read: …` to stderr and exits 1 (it does not print "no sessions") [test: crates/session-insights/tests/prose_claims.rs::claim_report_unreadable_store_exits_1].
+A single session file that cannot be read or parsed is not skipped silently:
+`report --all` still lists the readable sessions, then names the unreadable
+file(s) on stderr after `incomplete — ` and exits 1 [test: crates/session-insights/tests/repro_report_all_skips_corrupt_session.rs::report_all_does_not_present_partial_list_as_complete];
+`report` (latest) and `report --session` exit 1 as `unknown` when an unreadable
+file could be the answer [test: crates/session-insights/src/metrics.rs::tests::latest_with_a_corrupt_file_is_undetermined] [test: crates/session-insights/src/metrics.rs::tests::find_is_undetermined_only_for_a_matching_corrupt_file].
 
 ```
 session a1b2c3d4  [2026-06-20T18:00:00+09:00]
@@ -31,7 +39,9 @@ Set `record = true` (and point `obsidian_vault` at your vault) [test: crates/ses
 on SessionEnd — and on demand via `record-now`, which writes even when
 `record = false` — session-insights writes a
 Markdown note to `<vault>/<record_dir>/<date>-<project>-<id>.md`, only if the
-vault directory already exists [test: crates/session-insights/tests/prose_claims.rs::claim_record_note_path_and_vault_required] [test: crates/session-insights/tests/prose_claims.rs::claim_stop_refreshes_record_when_record_true] [test: crates/session-insights/tests/prose_claims.rs::claim_sessionend_writes_record_only_when_record_true]. The deterministic `## 数値サマリ` and `## コスト`
+vault directory already exists [test: crates/session-insights/tests/prose_claims.rs::claim_record_note_path_and_vault_required] [test: crates/session-insights/tests/prose_claims.rs::claim_stop_refreshes_record_when_record_true] [test: crates/session-insights/tests/prose_claims.rs::claim_sessionend_writes_record_only_when_record_true].
+When `record-now` writes no note it prints nothing on stdout, says why on
+stderr, and exits 1 [test: crates/session-insights/tests/repro_record_now_exit0_no_note.rs::record_now_without_vault_does_not_exit_zero]. The deterministic `## 数値サマリ` and `## コスト`
 blocks (fenced by machine-owned `<!-- si:numeric:* -->` / `<!-- si:cost:* -->`
 markers) are filled by the binary; the prose sections stay as `<!-- fill: … -->`
 placeholders [test: crates/session-insights/src/record.rs::skeleton_has_all_sections_and_placeholders] [test: crates/session-insights/tests/prose_claims.rs::claim_skeleton_prose_sections_placeholders].
@@ -90,6 +100,9 @@ foreign hook groups [test: crates/session-insights/tests/prose_claims.rs::claim_
 
 Drop `./session-insights.toml` (project) or `~/.session-insights/config.toml`
 (global); the first that exists wins [test: crates/session-insights/tests/prose_claims.rs::claim_config_lookup_order].
+A chosen file that cannot be read or parsed, or a `size_thresholds` that is not
+exactly 4 entries, is not silently replaced by defaults: the problem is written
+to stderr on every load, and `status` marks the config INVALID and exits 1 [test: crates/session-insights/tests/repro_config_invalid_silently_ignored.rs::invalid_config_is_not_silently_defaulted].
 
 - `enabled` — master switch for the hooks; default `true` [test: crates/session-insights/tests/prose_claims.rs::claim_config_defaults_values] [test: crates/session-insights/tests/prose_claims.rs::claim_config_defaults_enabled_false_is_noop]
 - `size_thresholds` — `[S, M, L, XL]` lower bounds by tool events; default `[5, 15, 40, 100]` [test: crates/session-insights/tests/prose_claims.rs::claim_size_thresholds_default_boundaries] [test: crates/session-insights/tests/prose_claims.rs::claim_size_thresholds_configurable]

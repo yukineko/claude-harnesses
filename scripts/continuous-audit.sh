@@ -19,9 +19,11 @@
 # It then prints the finding list + `overwatch audit-metrics`.
 #
 # This is OPT-IN tooling. It is NOT wired into any always-on gate and does NOT
-# change condukt/rollout behavior. Nothing is auto-installed. Everything is
-# fail-soft (a store-write failure never breaks the loop — overwatch's
-# never-break-a-turn invariant).
+# change condukt/rollout behavior. Nothing is auto-installed. It exits
+# non-zero when it cannot record a round: the overwatch binary is not found,
+# --round is missing outside --dry-run, or any `record-finding` call fails (no
+# PASS line is printed then). Only REPORTING calls (metrics, reconcile,
+# bridging; see run_ow below) continue past a failure, with a WARNING.
 #
 # --------------------------------------------------------------------------
 # USAGE

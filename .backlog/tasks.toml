@@ -1612,3 +1612,35 @@ scripts/test_check_fail_open.py:763: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_check_fail_open.py::UndeterminedArmSpellingsRemaining::test_undetermined_arm_allowlist_is_empty
 ======================= 1 failed, 74 deselected in 0.06s ======================="""
+
+[[task]]
+id = "321acfbb"
+title = "overwatch: repro_ca_script picks its sibling test binary by file-name order, so it measures stale builds"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1792423961
+updated_at = 1792423961
+weight = 0.0
+issue_number = 1422
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1422"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_ca_script_test_passes_without_bash pick_sibling -- --ignored"
+rev = "efc304feb57287d7141e26c3f5928d43df6253b5"
+observed_at = 1792423961
+detail = """
+exit 101: lt: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/repro_ca_script_test_passes_without_bash.rs (target/debug/deps/repro_ca_script_test_passes_without_bash-d33201fccfbfcc25)
+error: test failed, to rerun pass `-p overwatch --test repro_ca_script_test_passes_without_bash`"""

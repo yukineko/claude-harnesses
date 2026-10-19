@@ -145,8 +145,9 @@ dir = "tools"             # optional; must resolve to the session cwd or below �
   `security` task runs; register **one or more** and only those run (add `security`
   yourself if you still want it).
 - Each `name` must be unique — it is the per-task daily state key.
-- An **unparseable** config is ignored with a stderr warning and treated as the default
-  (enabled, nothing registered → the built-in `security` task runs).
+- An **unparseable** config is **not** treated as the default: `session-start` runs no
+  task at all and injects a `systemMessage` + `additionalContext` saying the config is
+  unparseable and today's task status is UNKNOWN; `daily list` and `daily add` exit 1.
 
 ## Registering tasks
 

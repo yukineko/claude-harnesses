@@ -122,22 +122,22 @@ impl Default for Config {
     }
 }
 
-/// Parse config TOML text. Malformed TOML falls back to the default (enabled,
-/// no tasks) so a broken config never breaks a turn — the error goes to stderr.
-fn parse_config(text: &str) -> Config {
-    match toml::from_str::<Config>(text) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("daily: ignoring unparseable ~/.daily/config.toml: {e}");
-            Config::default()
-        }
-    }
+/// Parse config TOML text. Malformed TOML is an `Err` carrying the parse
+/// error, NOT the default config: the default (enabled, no tasks) runs the
+/// built-in security task, so substituting it would run a task the user's
+/// config may have replaced or disabled (`enabled = false`). Every caller
+/// refuses to act on an unparseable config.
+fn parse_config(text: &str) -> Result<Config, String> {
+    toml::from_str::<Config>(text).map_err(|e| e.to_string())
 }
 
-fn load_config() -> Config {
+/// Load `~/.daily/config.toml`. A missing/unreadable file yields the default
+/// (a read error other than NotFound is tracked separately as backlog
+/// d3245d99); a file that exists but does not parse is an `Err`.
+fn load_config() -> Result<Config, String> {
     match std::fs::read_to_string(config_path()) {
         Ok(text) => parse_config(&text),
-        Err(_) => Config::default(),
+        Err(_) => Ok(Config::default()),
     }
 }
 
@@ -168,7 +168,24 @@ fn session_start_cmd() -> ! {
         let raw = read_stdin();
         let input = HookInput::parse(&raw).unwrap_or_default();
 
-        let config = load_config();
+        let config = match load_config() {
+            Ok(c) => c,
+            Err(e) => {
+                // We cannot tell what the user registered (or whether daily is
+                // enabled at all), so run nothing and say so — the day's task
+                // status is UNKNOWN, not "nothing due".
+                let msg = format!(
+                    "⚠️ daily: ~/.daily/config.toml is unparseable ({}); no daily task ran — today's task status is UNKNOWN until the config is fixed",
+                    first_line(&e)
+                );
+                eprintln!("{msg}");
+                println!(
+                    "{}",
+                    json!({ "systemMessage": msg, "additionalContext": msg })
+                );
+                return;
+            }
+        };
         if !config.enabled {
             return;
         }
@@ -577,7 +594,13 @@ fn report_cmd(date: Option<&str>, last: Option<usize>) -> ! {
 // ─────────────────────────── list / add ────────────────────────────────────
 
 fn list_cmd() -> ! {
-    let config = load_config();
+    let config = match load_config() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("daily list: ~/.daily/config.toml is unparseable ({e}); registered tasks are UNKNOWN");
+            std::process::exit(1);
+        }
+    };
     let tasks = effective_tasks(&config);
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let state_dir = daily_state_dir();
@@ -619,7 +642,18 @@ fn add_cmd(name: &str, command: &str, dir: Option<&str>) -> ! {
 
     // Reject a duplicate name so two tasks can't share one daily state key.
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let config = parse_config(&existing);
+    // An unparseable config means the duplicate check cannot be performed, and
+    // appending to it would leave it just as broken: refuse.
+    let config = match parse_config(&existing) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "daily add: {} is unparseable ({e}); fix it before registering a task",
+                path.display()
+            );
+            std::process::exit(1);
+        }
+    };
     if config.task.iter().any(|t| t.name == name) {
         eprintln!("daily add: a task named '{name}' is already registered");
         std::process::exit(1);
@@ -735,14 +769,14 @@ mod tests {
 
     #[test]
     fn parse_config_reads_enabled_false() {
-        let c = parse_config("enabled = false\n");
+        let c = parse_config("enabled = false\n").unwrap();
         assert!(!c.enabled);
     }
 
     #[test]
     fn parse_config_missing_enabled_defaults_true() {
         // A config that only registers a task is still enabled.
-        let c = parse_config("[[task]]\nname = \"x\"\ncommand = \"echo hi\"\n");
+        let c = parse_config("[[task]]\nname = \"x\"\ncommand = \"echo hi\"\n").unwrap();
         assert!(c.enabled);
         assert_eq!(c.task.len(), 1);
         assert_eq!(c.task[0].name, "x");
@@ -762,16 +796,19 @@ name = \"b\"
 command = \"cmd-b\"
 dir = \"/repo\"
 ";
-        let c = parse_config(text);
+        let c = parse_config(text).unwrap();
         assert_eq!(c.task.len(), 2);
         assert_eq!(c.task[1].dir.as_deref(), Some("/repo"));
     }
 
+    /// Contract change (backlog f1f06417): malformed TOML used to fall back to
+    /// `Config::default()`, which runs the built-in security task. It is now an
+    /// `Err`, and every caller refuses to act on it.
     #[test]
-    fn parse_config_malformed_falls_back_to_default() {
+    fn parse_config_malformed_is_an_error_not_the_default() {
         let c = parse_config("this is not = valid toml ][");
-        assert!(c.enabled);
-        assert!(c.task.is_empty());
+        assert!(c.is_err(), "malformed config must not parse: {c:?}");
+        assert!(!c.unwrap_err().is_empty(), "the error carries a reason");
     }
 
     #[test]
@@ -784,7 +821,7 @@ dir = \"/repo\"
 
     #[test]
     fn effective_tasks_uses_registered_when_present() {
-        let c = parse_config("[[task]]\nname = \"only\"\ncommand = \"true\"\n");
+        let c = parse_config("[[task]]\nname = \"only\"\ncommand = \"true\"\n").unwrap();
         let tasks = effective_tasks(&c);
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].name, "only");
@@ -857,7 +894,7 @@ dir = \"/repo\"
     fn render_task_block_round_trips_through_parser() {
         let block = render_task_block("deploy check", "sh -c \"echo \\\"hi\\\"\"", Some("/a/b"));
         // Appended to an existing config, the block must parse back cleanly.
-        let c = parse_config(&format!("enabled = true\n{block}"));
+        let c = parse_config(&format!("enabled = true\n{block}")).unwrap();
         assert!(c.enabled);
         assert_eq!(c.task.len(), 1);
         assert_eq!(c.task[0].name, "deploy check");
@@ -874,10 +911,10 @@ dir = \"/repo\"
     fn config_skip_when_driver_active_defaults_true() {
         assert!(Config::default().skip_when_driver_active);
         // Omitted in config → still defaults true.
-        let c = parse_config("[[task]]\nname = \"x\"\ncommand = \"true\"\n");
+        let c = parse_config("[[task]]\nname = \"x\"\ncommand = \"true\"\n").unwrap();
         assert!(c.skip_when_driver_active);
         // Explicitly disabled.
-        let c = parse_config("skip_when_driver_active = false\n");
+        let c = parse_config("skip_when_driver_active = false\n").unwrap();
         assert!(!c.skip_when_driver_active);
     }
 

@@ -135,4 +135,4 @@ dir = "tools"             # 任意。セッションの cwd かその配下に�
 - `enabled` は省略時 **true**。`enabled = false` でランナー全体を停止できる。
 - `[[task]]` が登録タスク。**1 つも登録しなければ**組み込みの `security` タスクが走り、**1 つ以上登録すれば**それらだけが走る（security も欲しければ自分で追加する）。
 - 各 `name` は一意でなければならない（タスク毎の日次状態キーになるため）。
-- **パースできない** config は stderr に警告を出して無視され、既定（有効・登録なし → 組み込みの `security` タスクが走る）として扱われる。
+- **パースできない** config は既定として扱われ**ない**: `session-start` はタスクを一切実行せず、config がパースできず当日のタスク状態は UNKNOWN である旨を `systemMessage` + `additionalContext` で出す。`daily list` / `daily add` は exit 1 する。

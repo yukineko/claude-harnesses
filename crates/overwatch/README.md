@@ -1,4 +1,4 @@
-Do not treat exit 0 from any command other than begin and end as proof that the action happened.
+Every mutating command (begin, run, end, heartbeat, reap, reassign, pause, resume) exits non-zero when the action did not happen: lease lock contended, lease root unresolvable, key not held (end, reassign), unknown `end --status`, or condukt failing (pause, resume). Exit 0 from `heartbeat`/`reap` still only means the call ran; read the printed `refreshed`/`reaped` count to see what changed.
 
 Do NOT proceed when begin exits 1 with skip JSON (another session has this key).
 
@@ -41,7 +41,7 @@ overwatch sessions [--json]                 # only the Sessions roster: sessions
 overwatch pause --run <id>                  # delegate to `condukt state pause --run <id>` and record a control event [test: crates/overwatch/tests/prose_claims.rs::claim_rd_pause_resume_delegate_condukt]
 overwatch resume --run <id>                 # delegate to `condukt state resume --run <id>` and record a control event [test: crates/overwatch/tests/prose_claims.rs::claim_rd_pause_resume_delegate_condukt]
 overwatch reassign --key <k> --to <sid>     # RELEASE the lease on <k> and record a "reassign to=<sid>" event (does not create a lease for <sid>) [test: crates/overwatch/tests/prose_claims.rs::claim_rd_reassign_releases_lease_no_new_lease]
-overwatch end --key <k> --status <s>        # release a lease, recording its terminal status [test: crates/overwatch/tests/prose_claims.rs::claim_rd_end_releases_lease_records_status]
+overwatch end --key <k> --status <done|abandoned>   # release a lease, recording its terminal status (any other status is rejected, non-zero, lease stays held) [test: crates/overwatch/tests/prose_claims.rs::claim_rd_end_releases_lease_records_status]
 overwatch reap                              # drop stale leases (no heartbeat within TTL); prints {"reaped": N} [test: crates/overwatch/tests/prose_claims.rs::claim_rd_reap_drops_stale_prints_count]
 overwatch heartbeat --key <k>               # refresh heartbeat_at for a key; prints {"refreshed": 0|1} [test: crates/overwatch/tests/prose_claims.rs::claim_rd_heartbeat_refreshes_prints_count]
 overwatch --protects                        # print what this gate protects, from what, and on what grounds [test: crates/overwatch/tests/protects_flag.rs::protects_prints_three_labelled_nonempty_lines_and_exits_zero]
@@ -51,7 +51,7 @@ Session id resolution for `begin`/`run`: `--session`, else `$CLAUDE_CODE_SESSION
 
 The run id comes from `$OVERWATCH_RUN_ID`, else a timestamp-based `run-…` id. [test: crates/overwatch/tests/prose_claims.rs::claim_rd_run_id_resolution]
 
-`end` exits non-zero and leaves the lease NOT released when the lease lock is contended [test: crates/overwatch/tests/prose_claims.rs::claim_sk_end_nonzero_when_not_released].
+`run`, `heartbeat`, `reap`, `reassign` and `end` exit non-zero when the lease lock is contended or the lease root cannot be resolved (nothing is written); `end` additionally leaves the lease NOT released. `reassign` of a key nobody holds, and `pause`/`resume` when `condukt` fails, also exit non-zero. [test: crates/overwatch/tests/repro_mutators_unresolvable_root_exit_zero.rs::heartbeat_on_unresolvable_root_must_be_nonzero] [test: crates/overwatch/tests/repro_run_lock_contended_exit_zero.rs::run_under_real_lock_contention_must_be_nonzero] [test: crates/overwatch/tests/repro_reassign_unheld_key_exit_zero.rs::reassign_of_unheld_key_must_be_nonzero] [test: crates/overwatch/tests/repro_pause_resume_condukt_failure_exit_zero.rs::pause_must_be_nonzero_when_condukt_fails] [test: crates/overwatch/tests/repro_end_unknown_status_accepted.rs::end_with_unknown_status_is_rejected]. [test: crates/overwatch/tests/prose_claims.rs::claim_sk_end_nonzero_when_not_released].
 
 `end` exits non-zero ("nothing was released") when the key is not held. [test: crates/overwatch/tests/prose_claims.rs::claim_rd_end_unheld_key_nonzero]
 

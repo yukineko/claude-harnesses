@@ -15,7 +15,6 @@ fn run(home: &TempDir, project: &TempDir, args: &[&str]) -> Output {
 }
 
 #[test]
-#[ignore = "RED repro: overwatch end accepts an unknown --status"]
 fn end_with_unknown_status_is_rejected() {
     let home = TempDir::new().unwrap();
     let project = TempDir::new().unwrap();

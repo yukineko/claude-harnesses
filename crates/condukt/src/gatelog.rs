@@ -27,6 +27,7 @@
 //! code, but **never silent** — a lost record is reported on stderr.
 
 use crate::policy::Decision;
+use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -261,6 +262,91 @@ pub fn append_circuit(dir: &Path, run_id: &str, entry: &CircuitRecord) {
 #[allow(dead_code)]
 pub fn load_circuit_records(dir: &Path, run_id: &str) -> Vec<CircuitRecord> {
     load_journal(&circuit_log_path(dir, run_id), "circuit log")
+}
+
+// ── Item-outcome journal of a stateless run (backlog cccc9c43) ──────────────
+//
+// A stateless driver (`/flow`, run id `flow-<SID>`) never writes run state, so
+// the circuit breaker has no task statuses to count a failure streak from.
+// `condukt state release-task` is the one condukt call such a driver makes once
+// per finished item, so it records the item's outcome here, and
+// `condukt circuit check` counts the trailing non-`done` outcomes when the run
+// has no run state. Unlike the circuit journal above this one is NOT
+// best-effort: a lost record would silently shorten the streak, so the write
+// is strict and the read is tri-state.
+
+/// The outcome a caller declared when releasing a finished item.
+pub const RELEASE_OUTCOME_DONE: &str = "done";
+/// The item was sunk as a failure (`backlog fail`).
+pub const RELEASE_OUTCOME_FAILED: &str = "failed";
+/// No outcome was declared. Counted as NOT done by the circuit breaker: an
+/// item whose success nobody asserted is not evidence of progress.
+pub const RELEASE_OUTCOME_UNSPECIFIED: &str = "unspecified";
+
+/// One released item of a stateless run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReleaseRecord {
+    /// The task hashkey that was released.
+    pub hashkey: String,
+    /// `"done"`, `"failed"` or `"unspecified"`.
+    pub outcome: String,
+    /// Unix seconds when the release was recorded.
+    pub released_at: i64,
+}
+
+/// Path of the per-run item-outcome log (JSONL) inside `dir`.
+pub fn release_log_path(dir: &Path, run_id: &str) -> PathBuf {
+    dir.join(format!(
+        "{}.release-log.jsonl",
+        harness_core::store::safe_session(run_id)
+    ))
+}
+
+/// Append one item outcome. STRICT: the error is returned, not swallowed, so the
+/// caller can refuse to report a release the circuit breaker will never see.
+pub fn append_release(dir: &Path, run_id: &str, entry: &ReleaseRecord) -> std::io::Result<()> {
+    let line = serde_json::to_string(entry).map_err(std::io::Error::other)?;
+    harness_core::append::append_line(&release_log_path(dir, run_id), &line)
+}
+
+/// The trailing consecutive non-`done` outcomes in the run's item-outcome log.
+/// Missing file → `Known(0)` (no item has finished yet). An unreadable file or
+/// ANY unparseable line → `Undetermined`: a skipped line could be the failure
+/// that completes the streak, so the count is not known.
+pub fn release_failure_streak(dir: &Path, run_id: &str) -> Determination<u32> {
+    let path = release_log_path(dir, run_id);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Determination::known(0),
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "item-outcome log {} unreadable: {e}",
+                path.display()
+            ))
+        }
+    };
+    let mut records = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<ReleaseRecord>(line) {
+            Ok(r) => records.push(r),
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "item-outcome log {} line {} unparseable: {e}",
+                    path.display(),
+                    n + 1
+                ))
+            }
+        }
+    }
+    let streak = records
+        .iter()
+        .rev()
+        .take_while(|r| r.outcome != RELEASE_OUTCOME_DONE)
+        .count();
+    Determination::known(u32::try_from(streak).unwrap_or(u32::MAX))
 }
 
 // ── Gate-exec verdict journal ───────────────────────────────────────────────

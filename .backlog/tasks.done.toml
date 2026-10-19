@@ -54638,6 +54638,124 @@ exit = 101
 kind = "behavioural"
 
 [[task]]
+id = "40dde238"
+title = "condukt: state release-task ignores --run and releases another run's claim"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "StateAction::ReleaseTask calls claim::release_tasks which removes entries regardless of holder run (documented as caller owns hashkey identity) while --run is required and the message says released for run X. Observed: run-B released run-A's claim."
+created_at = 1792189441
+updated_at = 1792420922
+weight = 0.0
+issue_number = 1413
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1413"
+issue_closed_at = 1792420925
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test repro_release_task_ignores_run -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189441
+detail = """
+exit 101: crates/blastguard)
+   Compiling condukt v0.7.257 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.54s
+     Running tests/repro_release_task_ignores_run.rs (target/debug/deps/repro_release_task_ignores_run-9b8a3d7e09614f87)
+error: test failed, to rerun pass `-p condukt --test repro_release_task_ignores_run`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test repro_release_task_ignores_run"
+exit = 0
+passed = 1
+rev = "994a8695f61704dae98e463a4444ea1ecfda7a4c"
+observed_at = 1792420895
+output_digest = "sha256:7b2c74109baf22d7d442342e934005c4725764105d75e1365432b05a18a72639"
+excerpt = """
+
+running 1 test
+test release_task_by_another_run_does_not_release_the_holders_claim ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.91s
+
+   Compiling condukt v0.7.267 (/Users/yuki/src/.harness-worktrees/fix-cccc-40dd/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.19s
+     Running tests/repro_release_task_ignores_run.rs (target/debug/deps/repro_release_task_ignores_run-ae2f4fcfc1a28d5c)
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "cccc9c43"
+title = "flow circuit check: failure_streak and budget axes are structurally dead (no state init for flow-SID run, no budget cap passed)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Found by prose-flow citation work (branch prose-flow 3b2228ac). /flow runs condukt circuit check --run flow-SID --session SID but never state-inits that run and passes no budget cap; item failures go to backlog fail which the circuit cannot see. After three failed items the exact SKILL command reports streak 0, budget_over_cap false, exit 0 - the breaker can never trip on those axes. RED: scripts/test_prose_flow_a.py test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead (unittest.expectedFailure, fails under pytest --runxfail). Flip the expectedFailure when fixed."
+created_at = 1792187754
+updated_at = 1792420956
+weight = 0.0
+issue_number = 1385
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1385"
+issue_closed_at = 1792420959
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_prose_flow_a.py -k test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead -q"
+rev = "3b2228ace35777e08233ea8223a4ee45ea53ecad"
+observed_at = 1792187754
+detail = """
+exit 1:  = "",
+    ) -> None:
+        try:
+>           xfail(str(reason))
+E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_prose_flow_a.py::T::test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead
+1 failed, 40 deselected in 2.49s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_prose_flow_a.py -k test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead -q"
+exit = 0
+passed = 1
+rev = "994a8695f61704dae98e463a4444ea1ecfda7a4c"
+observed_at = 1792420925
+output_digest = "sha256:b8d07d227ea066a031a64aa38553fde07107792f751d6b141ff14702767661e3"
+excerpt = """
+.                                                                        [100%]
+1 passed, 40 deselected in 1.08s
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 1
+kind = "behavioural"
+
+[[task]]
 id = "5a4cd3ff"
 title = "budgetguard: unmeasurable transcript or malformed input silently allows the stop with limits armed"
 project = "/Users/yuki/src/harness"

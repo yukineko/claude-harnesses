@@ -162,7 +162,8 @@ enum Command {
     },
     /// Deterministic CIRCUIT-BREAKER stop-condition gate: gather the three
     /// signals (consecutive-failure streak, budget-over-cap, idle/stall) for a
-    /// run — all FAIL-SOFT — run the pure `decide_circuit` core, print the
+    /// run — an uncountable streak or unmeasurable idle trips; budget is
+    /// opt-in — run the pure `decide_circuit` core, print the
     /// verdict + signals as JSON, journal it, and EXIT NONZERO when the breaker
     /// trips. The flow/condukt loops consult this each iteration
     /// (`if ! condukt circuit check --run RID; then stop; fi`).
@@ -884,6 +885,15 @@ enum LessonsAction {
 /// The two durable positions of the shared autonomy switch. Two values, not a
 /// bool, so `autonomy-set` rejects anything else at the CLI boundary instead of
 /// writing a file that would later read back as `Undetermined`.
+/// The outcome a stateless driver declares when releasing a finished item
+/// (`state release-task --outcome`). Omitted = unspecified, which the circuit
+/// breaker counts as NOT done.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum ReleaseOutcome {
+    Done,
+    Failed,
+}
+
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 enum AutonomySwitch {
     On,
@@ -1088,8 +1098,13 @@ enum StateAction {
         #[arg(long)]
         stateless: bool,
     },
-    /// Release task hashkeys from the task-claim registry (call when a task
-    /// reaches a terminal status). Prints the number of claims released.
+    /// Release task hashkeys held by `--run` from the task-claim registry (call
+    /// when a task reaches a terminal status). Prints the number of claims
+    /// released. A hashkey held by a DIFFERENT run is not released: it is named
+    /// on stderr and the command exits 1. Every call first appends each
+    /// hashkey's outcome to the run's item-outcome log, which `circuit check`
+    /// reads as the failure streak of a run without run state; if that record
+    /// cannot be written nothing is released and the command fails.
     ReleaseTask {
         #[arg(long)]
         run: String,
@@ -1097,6 +1112,11 @@ enum StateAction {
         /// An empty or whitespace-only hashkey is rejected as a usage error (exit 2).
         #[arg(long, required = true, value_parser = parse_task_hashkey)]
         hashkey: Vec<String>,
+        /// The item's outcome: `done` (resets the circuit breaker's failure
+        /// streak) or `failed`. Omitted → recorded as `unspecified`, which the
+        /// breaker counts as a failure: an unasserted success is not progress.
+        #[arg(long, value_enum)]
+        outcome: Option<ReleaseOutcome>,
     },
     /// Exit 0 if a live claim (from any run) holds the given task hashkey, else
     /// exit 1. Prints a small JSON `{hashkey, claimed, holder_run}` for humans,
@@ -1730,7 +1750,8 @@ enum RunPolicyAction {
 
 #[derive(Subcommand)]
 enum CircuitAction {
-    /// Gather the streak/budget/stall signals for a run (all FAIL-SOFT), run the
+    /// Gather the streak/budget/stall signals for a run (an uncountable streak
+    /// or unmeasurable idle trips; budget is opt-in), run the
     /// deterministic `decide_circuit` core, print the verdict + gathered signals
     /// as JSON on stdout, append the same record to the run's append-only
     /// circuit-verdict journal (fail-soft), and EXIT 1 when the breaker trips /
@@ -4951,9 +4972,46 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 std::process::exit(1);
             }
         }
-        StateAction::ReleaseTask { run, hashkey } => {
-            let n = claim::release_tasks(cfg, cwd, &hashkey)?;
-            eprintln!("released {n} task claim(s) for run '{run}'");
+        StateAction::ReleaseTask {
+            run,
+            hashkey,
+            outcome,
+        } => {
+            // Record the outcome FIRST (backlog cccc9c43): a release the circuit
+            // breaker cannot see would silently shorten the failure streak, so a
+            // failed write releases nothing and fails loudly.
+            let outcome = match outcome {
+                Some(ReleaseOutcome::Done) => gatelog::RELEASE_OUTCOME_DONE,
+                Some(ReleaseOutcome::Failed) => gatelog::RELEASE_OUTCOME_FAILED,
+                None => gatelog::RELEASE_OUTCOME_UNSPECIFIED,
+            };
+            let dir = state::run_dir(cfg, cwd, &run)?;
+            let now = state::now_secs();
+            for hk in &hashkey {
+                let rec = gatelog::ReleaseRecord {
+                    hashkey: hk.clone(),
+                    outcome: outcome.to_string(),
+                    released_at: now,
+                };
+                gatelog::append_release(&dir, &run, &rec).with_context(|| {
+                    format!(
+                        "recording the outcome of {hk} for run '{run}' failed; nothing released"
+                    )
+                })?;
+            }
+            let out = claim::release_tasks(cfg, cwd, &run, &hashkey)?;
+            eprintln!(
+                "released {} task claim(s) for run '{run}' (outcome: {outcome})",
+                out.released
+            );
+            if !out.held_by_other.is_empty() {
+                for (hk, holder) in &out.held_by_other {
+                    eprintln!(
+                        "condukt state release-task: NOT released {hk}: held by run '{holder}', not '{run}'"
+                    );
+                }
+                std::process::exit(1);
+            }
         }
         StateAction::IsClaimed { hashkey } => {
             // Exit codes are the contract: 0 = claimed, 1 = NOT claimed (stdout

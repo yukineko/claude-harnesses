@@ -835,15 +835,15 @@ class T(unittest.TestCase):
         return [l for l in fence_with("condukt circuit check", lang="bash").splitlines()
                 if l.startswith("condukt circuit check")][0].split("#")[0].strip()
 
-    @unittest.expectedFailure
     def test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead(self):
-        """FINDING (expected failure = the fail-closed property does NOT hold today).
+        """Regression (backlog cccc9c43, was an expected failure).
         /flow runs `condukt circuit check --run flow-$SID --session $SID`: it never runs
-        `state init` for that run and passes no --budget-cap-usd. Item failures are recorded
-        with `backlog fail`, which the circuit cannot see, so the failure-streak axis is
-        structurally 0 and the budget axis is disabled. Property wanted: after three failed
-        items the exact SKILL command can trip on failure_streak. Observed: streak 0,
-        budget_over_cap false, exit 0 (see the assertion message)."""
+        `state init` for that run and passes no --budget-cap-usd. The streak used to be
+        structurally 0 because `backlog fail` is invisible to the circuit. Now
+        `state release-task` records each item's outcome (no `--outcome done` = not done)
+        and the circuit counts that log for a run without run state, so after three
+        failed items the exact SKILL command trips on failure_streak. The budget axis
+        stays disabled for /flow (asserted below)."""
         cmd = self._circuit_cmd()
         self._fresh_session()
         self.assertNotIn("--budget-cap-usd", cmd)

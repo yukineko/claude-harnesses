@@ -29,39 +29,6 @@ exit 1: test.py\u001B[0m:354: XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.07s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "2287ebae"
-title = "blastguard redirect_target_suffix_resolution fixtures assume /etc/fstab exists (always red on macOS)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "macos",
-    "test-env",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Measured 2026-10-03 on the merged tree and on origin/main b0f626e4: symlink_before_dotdot_in_a_suffix_must_not_be_resolved and symlink_without_a_dotdot_is_caught_by_the_symlink_axis panic with fixture .../../etc/fstab must resolve: No such file or directory. macOS has neither /etc/fstab nor /private/etc/fstab. Test came in with d2c2e5ee. Make the fixture create its own target instead of depending on a host file."
-created_at = 1790999884
-updated_at = 1792005339
-weight = 0.0
-issue_number = 1129
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1129"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_2287ebae -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005337
-detail = """
-exit 101: ignored; 0 measured; 1 filtered out; finished in 0.68s
-
-   Compiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
-     Running tests/backlog_2287ebae.rs (target/debug/deps/backlog_2287ebae-bc74d6ffff64bdb3)
-error: test failed, to rerun pass `-p blastguard --test backlog_2287ebae`"""
-
-[[task]]
 id = "1a4d26d1"
 title = "backlog claim_check_contract::non_executable_condukt_is_refused fails when a real condukt is later on PATH (lookup skips the non-exec shim) — fixture must not inherit PATH; fix is in the 1e6f00ae integration"
 project = "/Users/yuki/src/harness"
@@ -402,13 +369,16 @@ project_unresolved = false
 tags = ["p2"]
 touched_files = []
 status = "pending"
-notes = "Observed 2026-10-04 (session 33de4c25) in the session worktree at main 9e9d8db3. cargo test -p blastguard --test redirect_target_suffix_resolution: symlink_before_dotdot_in_a_suffix_must_not_be_resolved and symlink_without_a_dotdot_is_caught_by_the_symlink_axis FAILED (12 passed, 2 failed). cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent FAILED. Both are pre-existing, not caused by 873a2621. Possibly related: 3ca56588 and b280cfa2 (blastguard symlink + ..). Also, stuckguard anchor::backlog_c397cd15::heartbeat_reaches_overwatch_that_is_only_in_the_plugin_cache failed in a full cargo test --workspace run but passed 3/3 in isolation: a parallel-run flake."
+notes = """
+Observed 2026-10-04 (session 33de4c25) in the session worktree at main 9e9d8db3. cargo test -p blastguard --test redirect_target_suffix_resolution: symlink_before_dotdot_in_a_suffix_must_not_be_resolved and symlink_without_a_dotdot_is_caught_by_the_symlink_axis FAILED (12 passed, 2 failed). cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent FAILED. Both are pre-existing, not caused by 873a2621. Possibly related: 3ca56588 and b280cfa2 (blastguard symlink + ..). Also, stuckguard anchor::backlog_c397cd15::heartbeat_reaches_overwatch_that_is_only_in_the_plugin_cache failed in a full cargo test --workspace run but passed 3/3 in isolation: a parallel-run flake.
+
+[2026-10-20, session c5b9c02b] The blastguard half is fixed by 14de6b48 (blastguard 0.2.137, closed with 2287ebae: both symlink rows RED at 59b9fa02, 14 passed after). Not closed: the specguard half is still RED at 59b9fa02 — cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent panics at forge_integration.rs:331 with 'specforge: requirement を backlog に積めなかった: requirement R1 を起票できなかった' (the backlog add subprocess). A different defect in a different plugin."""
 created_at = 1791046280
-updated_at = 1792005345
+updated_at = 1792427472
 weight = 0.0
 issue_number = 1259
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1259"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"

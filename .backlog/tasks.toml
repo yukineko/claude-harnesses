@@ -124,38 +124,6 @@ exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
 error: test failed, to rerun pass `-p backlog --test backlog_eb1ac319`"""
 
 [[task]]
-id = "4adebd79"
-title = "primary_tree NoRepo verdict trusts Path::exists for .git (broken symlink / unstatable reads as no repo)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "worktree-hygiene",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = 'From the 1e6f00ae verifier (2026-10-03, main b6263d7b). When git fails AND dot_git_present is false, classify returns NoRepo, which is allowed (primary_tree.rs:143,156). Path::exists returns false for a broken .git symlink or a .git it cannot stat, so a primary checkout whose .git is unreadable could be classed NoRepo instead of Undetermined. UNVERIFIED: no test ran. Use symlink_metadata to distinguish "absent" from "present but unreadable", the latter being Undetermined.'
-created_at = 1791002395
-updated_at = 1792005436
-weight = 0.0
-issue_number = 1136
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1136"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p harness-core --test backlog_4adebd79 -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005432
-detail = """
-exit 101: ed; 0 measured; 1 filtered out; finished in 0.02s
-
-   Compiling harness-core v0.2.53 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.10s
-     Running tests/backlog_4adebd79.rs (target/debug/deps/backlog_4adebd79-bde9c0a746bf619f)
-error: test failed, to rerun pass `-p harness-core --test backlog_4adebd79`"""
-
-[[task]]
 id = "a57e299b"
 title = "scripts/test_backlog_audit_b1_0.py RealRepoState expects 39 binary-shipping plugins but the repo has 40"
 project = "/Users/yuki/src/harness"

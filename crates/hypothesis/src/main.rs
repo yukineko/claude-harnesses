@@ -162,8 +162,14 @@ enum Command {
     /// List hypotheses
     List {
         /// Filter by lifecycle status: open | awaiting-measurement | validated |
-        /// rejected. Omit to list all. An unrecognised value matches nothing.
-        #[arg(long, value_name = "open|awaiting-measurement|validated|rejected")]
+        /// rejected. Omit to list all. An unrecognised value is rejected with a
+        /// non-zero exit (it used to match nothing and exit 0, which was
+        /// indistinguishable from "no hypotheses have that valid status").
+        #[arg(
+            long,
+            value_name = "open|awaiting-measurement|validated|rejected",
+            value_parser = ["open", "awaiting-measurement", "validated", "rejected"]
+        )]
         status: Option<String>,
         /// Emit a JSON array instead of the plain-text listing. Each element
         /// has a `status` field using the same hyphenated vocabulary as

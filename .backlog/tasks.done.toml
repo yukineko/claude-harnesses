@@ -55946,3 +55946,64 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "87b8032b00813c9ab6405750f6ed829205163b8a"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "4adebd79"
+title = "primary_tree NoRepo verdict trusts Path::exists for .git (broken symlink / unstatable reads as no repo)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = 'From the 1e6f00ae verifier (2026-10-03, main b6263d7b). When git fails AND dot_git_present is false, classify returns NoRepo, which is allowed (primary_tree.rs:143,156). Path::exists returns false for a broken .git symlink or a .git it cannot stat, so a primary checkout whose .git is unreadable could be classed NoRepo instead of Undetermined. UNVERIFIED: no test ran. Use symlink_metadata to distinguish "absent" from "present but unreadable", the latter being Undetermined.'
+created_at = 1791002395
+updated_at = 1792424595
+weight = 0.0
+issue_number = 1136
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1136"
+issue_closed_at = 1792424598
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test backlog_4adebd79 -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005432
+detail = """
+exit 101: ed; 0 measured; 1 filtered out; finished in 0.02s
+
+   Compiling harness-core v0.2.53 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.10s
+     Running tests/backlog_4adebd79.rs (target/debug/deps/backlog_4adebd79-bde9c0a746bf619f)
+error: test failed, to rerun pass `-p harness-core --test backlog_4adebd79`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_4adebd79"
+exit = 0
+passed = 2
+rev = "5466f8ccd65996a609fcdc1e378cc0d1f7f1f922"
+observed_at = 1792424576
+output_digest = "sha256:f8ca81b1418357c9eee0edab20a2883c439444cdb2739a38b65f5d3e4789b74e"
+excerpt = """
+
+running 2 tests
+test control_absent_dot_git_is_no_repo ... ok
+test present_but_unresolvable_dot_git_is_not_no_repo ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_4adebd79.rs (target/debug/deps/backlog_4adebd79-ca969222a497a24f)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
+kind = "behavioural"

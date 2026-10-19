@@ -55528,65 +55528,235 @@ exit = 101
 kind = "behavioural"
 
 [[task]]
-id = "eef58891"
-title = "check-fail-open ALLOWLIST holds a transcript.rs undetermined-arm entry while test_undetermined_arm_allowlist_is_empty requires none"
+id = "fa377dbe"
+title = "session-insights: unparseable config silently ignored (no stderr, defaults used)"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = [
     "fail-open",
-    "p2",
+    "p1",
 ]
 touched_files = []
 status = "done"
-notes = "RED on main 54cfe981 and on this branch: the 2026-10-02 ruling test (ALLOWLIST holds no undetermined-arm-empty-fallback entry) contradicts the entry added by 42b5b567 on 2026-10-04 (harness-core transcript.rs peer_edit_footprint_for, user-approved). Two user rulings conflict; a human must pick which one stands."
-created_at = 1792422665
-updated_at = 1792424356
+notes = "Config::load in config.rs ignores a toml parse error and a size_thresholds array of the wrong length with no diagnostic; status shows defaults as if configured. Observed for the unparseable case."
+created_at = 1792189401
+updated_at = 1792424298
 weight = 0.0
-issue_number = 1420
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1420"
-issue_closed_at = 1792424361
+issue_number = 1406
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1406"
+issue_closed_at = 1792424301
 rev = 1
 
 [task.repro]
 outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_check_fail_open.py -k test_undetermined_arm_allowlist_is_empty"
-rev = "1a3812a7e7a9094c5e0af28f800b6aac7d62728e"
-observed_at = 1792422665
+cmd = "cargo test -p session-insights --test repro_config_invalid_silently_ignored -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189401
 detail = """
-exit 1: ed; allowlisting "
-E       -             'user-approved 2026-10-04'}]
-
-scripts/test_check_fail_open.py:763: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_check_fail_open.py::UndeterminedArmSpellingsRemaining::test_undetermined_arm_allowlist_is_empty
-======================= 1 failed, 74 deselected in 0.06s ======================="""
+exit 101: ts v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s
+     Running tests/repro_config_invalid_silently_ignored.rs (target/debug/deps/repro_config_invalid_silently_ignored-15eb11370ba23000)
+error: test failed, to rerun pass `-p session-insights --test repro_config_invalid_silently_ignored`"""
 
 [task.closure]
 reason = "fixed"
 
 [task.closure.green]
-runner = "pytest"
-cmd = "python3 -m pytest scripts/test_check_fail_open.py -k test_undetermined_arm_allowlist_is_empty"
+runner = "cargo-test"
+cmd = "cargo test -p session-insights --test repro_config_invalid_silently_ignored"
 exit = 0
 passed = 1
-rev = "d9faa3a46fed62e02155e7a8cd62c1c4522a8339"
-observed_at = 1792424348
-output_digest = "sha256:45c42626226b1cac6d04486b87ca88d18950869b59f5f9a4b1a8d28d7b041ece"
+rev = "b89dfa075a952d575173698c417076d916576cef"
+observed_at = 1792424275
+output_digest = "sha256:66f27d86c9bcec6924d2310266de2ff68d2dad6c7228ab89cd62a46c41589eb9"
 excerpt = """
-============================= test session starts ==============================
-platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
-rootdir: /Users/yuki/src/.harness-worktrees/eef58891
-plugins: anyio-4.9.0, langsmith-0.4.8
-collected 75 items / 74 deselected / 1 selected
 
-scripts/test_check_fail_open.py .                                        [100%]
+running 1 test
+test invalid_config_is_not_silently_defaulted ... ok
 
-======================= 1 passed, 74 deselected in 0.17s =======================
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+     Running tests/repro_config_invalid_silently_ignored.rs (target/debug/deps/repro_config_invalid_silently_ignored-d75d3d4fe7c40586)
 """
 
 [task.closure.red]
 rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
-exit = 1
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "b3c1daae"
+title = "session-insights: record and stop hooks drop an unparseable payload with exit 0 and no stderr"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "record() returns silently when HookInput::parse fails; integration.rs record_hook_survives_garbage_stdin pins only exit 0."
+created_at = 1792189404
+updated_at = 1792424331
+weight = 0.0
+issue_number = 1407
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1407"
+issue_closed_at = 1792424334
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p session-insights --test repro_hooks_garbage_payload_silent -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189404
+detail = """
+exit 101: on-insights v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running tests/repro_hooks_garbage_payload_silent.rs (target/debug/deps/repro_hooks_garbage_payload_silent-c2bb45392650717b)
+error: test failed, to rerun pass `-p session-insights --test repro_hooks_garbage_payload_silent`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p session-insights --test repro_hooks_garbage_payload_silent"
+exit = 0
+passed = 1
+rev = "b89dfa075a952d575173698c417076d916576cef"
+observed_at = 1792424302
+output_digest = "sha256:7246ada945d5b950b1d9ede6b4f9a07f51de74d21c05bf17d35b9e6c93925e30"
+excerpt = """
+
+running 1 test
+test garbage_payload_is_reported_on_stderr ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/repro_hooks_garbage_payload_silent.rs (target/debug/deps/repro_hooks_garbage_payload_silent-ba8480ab46ef7d68)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "d49f1bc2"
+title = "session-insights: report --all silently skips a corrupt session json and presents a partial list as complete"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "metrics::load_all drops any <sid>.json that fails to read or parse with no diagnostic."
+created_at = 1792189407
+updated_at = 1792424383
+weight = 0.0
+issue_number = 1408
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1408"
+issue_closed_at = 1792424388
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p session-insights --test repro_report_all_skips_corrupt_session -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189407
+detail = """
+exit 101: v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/repro_report_all_skips_corrupt_session.rs (target/debug/deps/repro_report_all_skips_corrupt_session-86afd5a78a11f590)
+error: test failed, to rerun pass `-p session-insights --test repro_report_all_skips_corrupt_session`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p session-insights --test repro_report_all_skips_corrupt_session"
+exit = 0
+passed = 1
+rev = "b89dfa075a952d575173698c417076d916576cef"
+observed_at = 1792424336
+output_digest = "sha256:6c4831daad779d9c1701ebc4453ffaf19db3e544dd3339688fe54e02aee79217"
+excerpt = """
+
+running 1 test
+test report_all_does_not_present_partial_list_as_complete ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/repro_report_all_skips_corrupt_session.rs (target/debug/deps/repro_report_all_skips_corrupt_session-2768f5ec095bde1d)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "5fd42034"
+title = "session-insights: record-now exits 0 with empty stdout when no note was written (vault missing)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "record_now prints a message to stderr but exits 0 and prints no path, so a caller reading stdout and the exit code sees success."
+created_at = 1792189409
+updated_at = 1792424427
+weight = 0.0
+issue_number = 1409
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1409"
+issue_closed_at = 1792424430
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p session-insights --test repro_record_now_exit0_no_note -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189409
+detail = """
+exit 101: piling session-insights v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running tests/repro_record_now_exit0_no_note.rs (target/debug/deps/repro_record_now_exit0_no_note-18084f1ef0564d72)
+error: test failed, to rerun pass `-p session-insights --test repro_record_now_exit0_no_note`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p session-insights --test repro_record_now_exit0_no_note"
+exit = 0
+passed = 1
+rev = "b89dfa075a952d575173698c417076d916576cef"
+observed_at = 1792424389
+output_digest = "sha256:f44d0f8e426002d03eea1550518da376f75e1b34049b4e7e70904739dac2a521"
+excerpt = """
+
+running 1 test
+test record_now_without_vault_does_not_exit_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.57s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/repro_record_now_exit0_no_note.rs (target/debug/deps/repro_record_now_exit0_no_note-a2ffd376b817ec37)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
 kind = "behavioural"
 
 [[task]]
@@ -56010,299 +56180,6 @@ exit = 101
 kind = "behavioural"
 
 [[task]]
-id = "4adebd79"
-title = "primary_tree NoRepo verdict trusts Path::exists for .git (broken symlink / unstatable reads as no repo)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "worktree-hygiene",
-    "p2",
-]
-touched_files = []
-status = "done"
-notes = 'From the 1e6f00ae verifier (2026-10-03, main b6263d7b). When git fails AND dot_git_present is false, classify returns NoRepo, which is allowed (primary_tree.rs:143,156). Path::exists returns false for a broken .git symlink or a .git it cannot stat, so a primary checkout whose .git is unreadable could be classed NoRepo instead of Undetermined. UNVERIFIED: no test ran. Use symlink_metadata to distinguish "absent" from "present but unreadable", the latter being Undetermined.'
-created_at = 1791002395
-updated_at = 1792424595
-weight = 0.0
-issue_number = 1136
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1136"
-issue_closed_at = 1792424598
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p harness-core --test backlog_4adebd79 -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005432
-detail = """
-exit 101: ed; 0 measured; 1 filtered out; finished in 0.02s
-
-   Compiling harness-core v0.2.53 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.10s
-     Running tests/backlog_4adebd79.rs (target/debug/deps/backlog_4adebd79-bde9c0a746bf619f)
-error: test failed, to rerun pass `-p harness-core --test backlog_4adebd79`"""
-
-[task.closure]
-reason = "fixed"
-
-[task.closure.green]
-runner = "cargo-test"
-cmd = "cargo test -p harness-core --test backlog_4adebd79"
-exit = 0
-passed = 2
-rev = "5466f8ccd65996a609fcdc1e378cc0d1f7f1f922"
-observed_at = 1792424576
-output_digest = "sha256:f8ca81b1418357c9eee0edab20a2883c439444cdb2739a38b65f5d3e4789b74e"
-excerpt = """
-
-running 2 tests
-test control_absent_dot_git_is_no_repo ... ok
-test present_but_unresolvable_dot_git_is_not_no_repo ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running tests/backlog_4adebd79.rs (target/debug/deps/backlog_4adebd79-ca969222a497a24f)
-"""
-
-[task.closure.red]
-rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
-exit = 101
-kind = "behavioural"
-
-[[task]]
-id = "fa377dbe"
-title = "session-insights: unparseable config silently ignored (no stderr, defaults used)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "done"
-notes = "Config::load in config.rs ignores a toml parse error and a size_thresholds array of the wrong length with no diagnostic; status shows defaults as if configured. Observed for the unparseable case."
-created_at = 1792189401
-updated_at = 1792424298
-weight = 0.0
-issue_number = 1406
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1406"
-issue_closed_at = 1792424301
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p session-insights --test repro_config_invalid_silently_ignored -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189401
-detail = """
-exit 101: ts v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s
-     Running tests/repro_config_invalid_silently_ignored.rs (target/debug/deps/repro_config_invalid_silently_ignored-15eb11370ba23000)
-error: test failed, to rerun pass `-p session-insights --test repro_config_invalid_silently_ignored`"""
-
-[task.closure]
-reason = "fixed"
-
-[task.closure.green]
-runner = "cargo-test"
-cmd = "cargo test -p session-insights --test repro_config_invalid_silently_ignored"
-exit = 0
-passed = 1
-rev = "b89dfa075a952d575173698c417076d916576cef"
-observed_at = 1792424275
-output_digest = "sha256:66f27d86c9bcec6924d2310266de2ff68d2dad6c7228ab89cd62a46c41589eb9"
-excerpt = """
-
-running 1 test
-test invalid_config_is_not_silently_defaulted ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
-     Running tests/repro_config_invalid_silently_ignored.rs (target/debug/deps/repro_config_invalid_silently_ignored-d75d3d4fe7c40586)
-"""
-
-[task.closure.red]
-rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
-exit = 101
-kind = "behavioural"
-
-[[task]]
-id = "b3c1daae"
-title = "session-insights: record and stop hooks drop an unparseable payload with exit 0 and no stderr"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "done"
-notes = "record() returns silently when HookInput::parse fails; integration.rs record_hook_survives_garbage_stdin pins only exit 0."
-created_at = 1792189404
-updated_at = 1792424331
-weight = 0.0
-issue_number = 1407
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1407"
-issue_closed_at = 1792424334
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p session-insights --test repro_hooks_garbage_payload_silent -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189404
-detail = """
-exit 101: on-insights v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
-     Running tests/repro_hooks_garbage_payload_silent.rs (target/debug/deps/repro_hooks_garbage_payload_silent-c2bb45392650717b)
-error: test failed, to rerun pass `-p session-insights --test repro_hooks_garbage_payload_silent`"""
-
-[task.closure]
-reason = "fixed"
-
-[task.closure.green]
-runner = "cargo-test"
-cmd = "cargo test -p session-insights --test repro_hooks_garbage_payload_silent"
-exit = 0
-passed = 1
-rev = "b89dfa075a952d575173698c417076d916576cef"
-observed_at = 1792424302
-output_digest = "sha256:7246ada945d5b950b1d9ede6b4f9a07f51de74d21c05bf17d35b9e6c93925e30"
-excerpt = """
-
-running 1 test
-test garbage_payload_is_reported_on_stderr ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
-     Running tests/repro_hooks_garbage_payload_silent.rs (target/debug/deps/repro_hooks_garbage_payload_silent-ba8480ab46ef7d68)
-"""
-
-[task.closure.red]
-rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
-exit = 101
-kind = "behavioural"
-
-[[task]]
-id = "d49f1bc2"
-title = "session-insights: report --all silently skips a corrupt session json and presents a partial list as complete"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "done"
-notes = "metrics::load_all drops any <sid>.json that fails to read or parse with no diagnostic."
-created_at = 1792189407
-updated_at = 1792424383
-weight = 0.0
-issue_number = 1408
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1408"
-issue_closed_at = 1792424388
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p session-insights --test repro_report_all_skips_corrupt_session -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189407
-detail = """
-exit 101: v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
-     Running tests/repro_report_all_skips_corrupt_session.rs (target/debug/deps/repro_report_all_skips_corrupt_session-86afd5a78a11f590)
-error: test failed, to rerun pass `-p session-insights --test repro_report_all_skips_corrupt_session`"""
-
-[task.closure]
-reason = "fixed"
-
-[task.closure.green]
-runner = "cargo-test"
-cmd = "cargo test -p session-insights --test repro_report_all_skips_corrupt_session"
-exit = 0
-passed = 1
-rev = "b89dfa075a952d575173698c417076d916576cef"
-observed_at = 1792424336
-output_digest = "sha256:6c4831daad779d9c1701ebc4453ffaf19db3e544dd3339688fe54e02aee79217"
-excerpt = """
-
-running 1 test
-test report_all_does_not_present_partial_list_as_complete ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
-     Running tests/repro_report_all_skips_corrupt_session.rs (target/debug/deps/repro_report_all_skips_corrupt_session-2768f5ec095bde1d)
-"""
-
-[task.closure.red]
-rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
-exit = 101
-kind = "behavioural"
-
-[[task]]
-id = "5fd42034"
-title = "session-insights: record-now exits 0 with empty stdout when no note was written (vault missing)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "done"
-notes = "record_now prints a message to stderr but exits 0 and prints no path, so a caller reading stdout and the exit code sees success."
-created_at = 1792189409
-updated_at = 1792424427
-weight = 0.0
-issue_number = 1409
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1409"
-issue_closed_at = 1792424430
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p session-insights --test repro_record_now_exit0_no_note -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189409
-detail = """
-exit 101: piling session-insights v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
-     Running tests/repro_record_now_exit0_no_note.rs (target/debug/deps/repro_record_now_exit0_no_note-18084f1ef0564d72)
-error: test failed, to rerun pass `-p session-insights --test repro_record_now_exit0_no_note`"""
-
-[task.closure]
-reason = "fixed"
-
-[task.closure.green]
-runner = "cargo-test"
-cmd = "cargo test -p session-insights --test repro_record_now_exit0_no_note"
-exit = 0
-passed = 1
-rev = "b89dfa075a952d575173698c417076d916576cef"
-observed_at = 1792424389
-output_digest = "sha256:f44d0f8e426002d03eea1550518da376f75e1b34049b4e7e70904739dac2a521"
-excerpt = """
-
-running 1 test
-test record_now_without_vault_does_not_exit_zero ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.57s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
-     Running tests/repro_record_now_exit0_no_note.rs (target/debug/deps/repro_record_now_exit0_no_note-a2ffd376b817ec37)
-"""
-
-[task.closure.red]
-rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
-exit = 101
-kind = "behavioural"
-
-[[task]]
 id = "da6ec3f8"
 title = "6 pytest-style scripts/ suites lack the unittest.main() __main__ guard, so a direct python3 run executes no test (test_check_doc_claims_quote_attach/record_rev/record_unwrapped, test_check_doc_duplication, test_check_prose_tests, test_check_prose_tests_record_rev)"
 project = "/Users/yuki/src/harness"
@@ -56391,3 +56268,190 @@ FAILED scripts/test_check_prose_tests_uncovered_explicit_paths.py::UncoveredExpl
 [task.closure]
 reason = "discard"
 discard_reason = "check-prose-tests.py and its tests were deleted in c2c55077 (user ruling 2026-10-17); scripts/test_check_prose_tests_uncovered_explicit_paths.py does not exist at 87b8032b, so the repro cannot run (pytest: file or directory not found). Nothing left to fix."
+
+[[task]]
+id = "563d2680"
+title = "backlog: F2P cannot prove a fix that lives in a test file (HEAD test overlay copies the fix into the RED tree)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "fail-open",
+]
+touched_files = []
+status = "done"
+notes = "run_in_temp_worktree overlays every HEAD test file (cargo runner) onto --red-rev, so when the fix is itself a test file (overwatch 73e49761: tests/continuous_audit_script.rs return to panic) the RED tree already holds the fix and no command is RED. The refusal says the test PASSES at --red-rev without mentioning the overlay. Fixture repro: crates/backlog/tests/f2p_red_overlay.rs."
+created_at = 1792423551
+updated_at = 1792424845
+weight = 0.0
+issue_number = 1421
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1421"
+issue_closed_at = 1792424848
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test f2p_red_overlay"
+rev = "173a32dd9fd325236b4d3478f27286f8ea43a816"
+observed_at = 1792423551
+detail = """
+exit 101: failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.43s
+
+   Compiling backlog v0.3.59 (/Users/yuki/src/.harness-worktrees/backlog-f2p-overlay/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/f2p_red_overlay.rs (target/debug/deps/f2p_red_overlay-d33e1e1bab620128)
+error: test failed, to rerun pass `-p backlog --test f2p_red_overlay`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test f2p_red_overlay"
+exit = 0
+passed = 5
+rev = "de2c30cd6f5cf25dad1b8001e7f27cc69b575dca"
+observed_at = 1792424827
+output_digest = "sha256:28b92162f4399aba3b7d0e809405da9c56d1f90b7327e2fd8a1f1828a2ccf463"
+excerpt = """
+
+running 5 tests
+test red_overlay_cannot_widen_a_narrowed_pytest_overlay ... ok
+test repro_only_overlay_still_refuses_a_test_green_at_red_rev ... ok
+test default_overlay_refusal_names_the_head_test_overlay ... ok
+test red_overlay_paths_must_be_head_test_files_in_the_default_overlay ... ok
+test fix_in_a_test_file_closes_with_a_repro_only_overlay ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.76s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/f2p_red_overlay.rs (target/debug/deps/f2p_red_overlay-be79aec26cc105f6)
+"""
+
+[task.closure.red]
+rev = "173a32dd9fd325236b4d3478f27286f8ea43a816"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "eef58891"
+title = "check-fail-open ALLOWLIST holds a transcript.rs undetermined-arm entry while test_undetermined_arm_allowlist_is_empty requires none"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "RED on main 54cfe981 and on this branch: the 2026-10-02 ruling test (ALLOWLIST holds no undetermined-arm-empty-fallback entry) contradicts the entry added by 42b5b567 on 2026-10-04 (harness-core transcript.rs peer_edit_footprint_for, user-approved). Two user rulings conflict; a human must pick which one stands."
+created_at = 1792422665
+updated_at = 1792424356
+weight = 0.0
+issue_number = 1420
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1420"
+issue_closed_at = 1792424361
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_fail_open.py -k test_undetermined_arm_allowlist_is_empty"
+rev = "1a3812a7e7a9094c5e0af28f800b6aac7d62728e"
+observed_at = 1792422665
+detail = """
+exit 1: ed; allowlisting "
+E       -             'user-approved 2026-10-04'}]
+
+scripts/test_check_fail_open.py:763: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_fail_open.py::UndeterminedArmSpellingsRemaining::test_undetermined_arm_allowlist_is_empty
+======================= 1 failed, 74 deselected in 0.06s ======================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_check_fail_open.py -k test_undetermined_arm_allowlist_is_empty"
+exit = 0
+passed = 1
+rev = "d9faa3a46fed62e02155e7a8cd62c1c4522a8339"
+observed_at = 1792424348
+output_digest = "sha256:45c42626226b1cac6d04486b87ca88d18950869b59f5f9a4b1a8d28d7b041ece"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/eef58891
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 75 items / 74 deselected / 1 selected
+
+scripts/test_check_fail_open.py .                                        [100%]
+
+======================= 1 passed, 74 deselected in 0.17s =======================
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "4adebd79"
+title = "primary_tree NoRepo verdict trusts Path::exists for .git (broken symlink / unstatable reads as no repo)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "worktree-hygiene",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = 'From the 1e6f00ae verifier (2026-10-03, main b6263d7b). When git fails AND dot_git_present is false, classify returns NoRepo, which is allowed (primary_tree.rs:143,156). Path::exists returns false for a broken .git symlink or a .git it cannot stat, so a primary checkout whose .git is unreadable could be classed NoRepo instead of Undetermined. UNVERIFIED: no test ran. Use symlink_metadata to distinguish "absent" from "present but unreadable", the latter being Undetermined.'
+created_at = 1791002395
+updated_at = 1792424595
+weight = 0.0
+issue_number = 1136
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1136"
+issue_closed_at = 1792424598
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test backlog_4adebd79 -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005432
+detail = """
+exit 101: ed; 0 measured; 1 filtered out; finished in 0.02s
+
+   Compiling harness-core v0.2.53 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.10s
+     Running tests/backlog_4adebd79.rs (target/debug/deps/backlog_4adebd79-bde9c0a746bf619f)
+error: test failed, to rerun pass `-p harness-core --test backlog_4adebd79`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_4adebd79"
+exit = 0
+passed = 2
+rev = "5466f8ccd65996a609fcdc1e378cc0d1f7f1f922"
+observed_at = 1792424576
+output_digest = "sha256:f8ca81b1418357c9eee0edab20a2883c439444cdb2739a38b65f5d3e4789b74e"
+excerpt = """
+
+running 2 tests
+test control_absent_dot_git_is_no_repo ... ok
+test present_but_unresolvable_dot_git_is_not_no_repo ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_4adebd79.rs (target/debug/deps/backlog_4adebd79-ca969222a497a24f)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
+kind = "behavioural"

@@ -531,15 +531,31 @@ def check_f2p(row: dict, cl: dict, ctx: Ctx) -> list[str]:
     if red.get("kind") != "behavioural":
         errs.append(f"closure.red.kind = {red.get('kind')!r} (only a \"behavioural\" RED is accepted)")
     errs += check_rev("closure.red.rev", red.get("rev"), ctx.parents)
-    if errs:
-        return errs  # do not spend a test run on a closure that is already refused
-    # ---- re-run: red at red.rev (+ staged tests), green on the staged tree
-    red_dir = ctx.newdir("red")
     # Mirrors the backlog CLI (evidence.rs `narrow_to_named`): overlay only the
     # test files the cmd names; nothing named (cargo, a pytest dir) = all.
     staged = staged_test_paths()
     named = [p for p in staged if p in set(need)]
-    materialize(red_dir, red["rev"], named or staged)
+    overlay = named or staged
+    # `done --red-overlay` (evidence.rs `narrowed_overlay`) records a narrowed
+    # overlay as closure.red.overlay: a non-empty list that may only NARROW the
+    # default overlay above. Anything else blocks; absent = the default.
+    if "overlay" in red:
+        ro = red["overlay"]
+        if (not isinstance(ro, list) or not ro
+                or not all(isinstance(p, str) and p for p in ro)):
+            errs.append(f"closure.red.overlay = {ro!r} is not a non-empty list of paths")
+        else:
+            outside = [p for p in ro if p not in set(overlay)]
+            if outside:
+                errs.append(f"closure.red.overlay names {outside!r}, which the default overlay for "
+                            "this command does not contain (an overlay may only narrow, never widen)")
+            else:
+                overlay = list(ro)
+    if errs:
+        return errs  # do not spend a test run on a closure that is already refused
+    # ---- re-run: red at red.rev (+ staged tests), green on the staged tree
+    red_dir = ctx.newdir("red")
+    materialize(red_dir, red["rev"], overlay)
     rc, out = run_test(argv, red_dir, ctx.repo_root)
     why = behavioural_red(argv, rc, out)
     if why:

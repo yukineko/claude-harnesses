@@ -90,6 +90,9 @@ foreign hook groups [test: crates/session-insights/tests/prose_claims.rs::claim_
 
 Drop `./session-insights.toml` (project) or `~/.session-insights/config.toml`
 (global); the first that exists wins [test: crates/session-insights/tests/prose_claims.rs::claim_config_lookup_order].
+A chosen file that cannot be read or parsed, or a `size_thresholds` that is not
+exactly 4 entries, is not silently replaced by defaults: the problem is written
+to stderr on every load, and `status` marks the config INVALID and exits 1 [test: crates/session-insights/tests/repro_config_invalid_silently_ignored.rs::invalid_config_is_not_silently_defaulted].
 
 - `enabled` — master switch for the hooks; default `true` [test: crates/session-insights/tests/prose_claims.rs::claim_config_defaults_values] [test: crates/session-insights/tests/prose_claims.rs::claim_config_defaults_enabled_false_is_noop]
 - `size_thresholds` — `[S, M, L, XL]` lower bounds by tool events; default `[5, 15, 40, 100]` [test: crates/session-insights/tests/prose_claims.rs::claim_size_thresholds_default_boundaries] [test: crates/session-insights/tests/prose_claims.rs::claim_size_thresholds_configurable]

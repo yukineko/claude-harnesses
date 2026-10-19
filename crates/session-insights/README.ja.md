@@ -69,7 +69,7 @@ session-insights uninstall
 
 `install` / `uninstall` は冪等で、`settings.json` をバックアップし、他プラグインのフックグループを保持する [test: crates/session-insights/tests/prose_claims.rs::claim_install_idempotent_backup_foreign]。
 
-`./session-insights.toml`（プロジェクト）または `~/.session-insights/config.toml`（グローバル）を置く [test: crates/session-insights/tests/prose_claims.rs::claim_config_lookup_order]。最初に見つかったものが優先される [test: crates/session-insights/tests/prose_claims.rs::claim_config_lookup_order]。
+`./session-insights.toml`（プロジェクト）または `~/.session-insights/config.toml`（グローバル）を置く [test: crates/session-insights/tests/prose_claims.rs::claim_config_lookup_order]。最初に見つかったものが優先される [test: crates/session-insights/tests/prose_claims.rs::claim_config_lookup_order]。選ばれたファイルが読めない・パースできない、または `size_thresholds` が 4 要素でない場合は黙って既定値に置き換えず、読み込みのたびに stderr へ出し、`status` は config を INVALID と表示して exit 1 する [test: crates/session-insights/tests/repro_config_invalid_silently_ignored.rs::invalid_config_is_not_silently_defaulted]。
 
 - `enabled` — フック全体の有効/無効; 既定値 `true` [test: crates/session-insights/tests/prose_claims.rs::claim_config_defaults_values] [test: crates/session-insights/tests/prose_claims.rs::claim_config_defaults_enabled_false_is_noop]
 - `size_thresholds` — `[S, M, L, XL]` のツールイベント数の下限; 既定値 `[5, 15, 40, 100]` [test: crates/session-insights/tests/prose_claims.rs::claim_size_thresholds_default_boundaries] [test: crates/session-insights/tests/prose_claims.rs::claim_size_thresholds_configurable]

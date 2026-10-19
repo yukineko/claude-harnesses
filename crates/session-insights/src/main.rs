@@ -350,7 +350,13 @@ fn init() -> anyhow::Result<()> {
 
 fn status() {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
+    // A config that could not be read/parsed (or has a malformed field) is
+    // reported on stderr and makes `status` exit 1: the values printed below
+    // are then (partly) defaults, NOT the configured ones.
+    let (cfg, problems) = Config::load_checked(&root);
+    for p in &problems {
+        eprintln!("session-insights: {p}");
+    }
     let src = if Config::project_path(&root).exists() {
         Config::project_path(&root)
     } else if Config::home_path().exists() {
@@ -358,7 +364,14 @@ fn status() {
     } else {
         Path::new("(defaults — no config file)").to_path_buf()
     };
-    println!("config:          {}", src.display());
+    if problems.is_empty() {
+        println!("config:          {}", src.display());
+    } else {
+        println!(
+            "config:          {} (INVALID — defaults substituted, see stderr)",
+            src.display()
+        );
+    }
     println!("enabled:         {}", cfg.enabled);
     println!("ignore_tools:    {}", cfg.ignore_tools.join(", "));
     println!("size_thresholds: {:?} (S,M,L,XL)", cfg.size_thresholds);
@@ -374,5 +387,8 @@ fn status() {
         harness_core::verdict::Determination::Undetermined(why) => {
             println!("sessions:        unknown — store could not be read: {why}");
         }
+    }
+    if !problems.is_empty() {
+        std::process::exit(1);
     }
 }

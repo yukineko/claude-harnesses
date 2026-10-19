@@ -20,7 +20,20 @@ fn sibling_test_binary() -> PathBuf {
         .parent()
         .unwrap()
         .to_path_buf();
-    let mut found: Vec<PathBuf> = std::fs::read_dir(&dir)
+    let picked = pick_sibling(&dir);
+    assert!(
+        picked.is_some(),
+        "UNDETERMINED: sibling test binary continuous_audit_script-* not built in {} \
+         (run with --test continuous_audit_script as well)",
+        dir.display()
+    );
+    picked.unwrap()
+}
+
+/// Choose the `continuous_audit_script-<hash>` test binary to run. `target/`
+/// keeps every build that ever happened, so several can coexist.
+fn pick_sibling(dir: &std::path::Path) -> Option<PathBuf> {
+    let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap()
         .flatten()
         .map(|e| e.path())
@@ -31,14 +44,39 @@ fn sibling_test_binary() -> PathBuf {
                     .is_some_and(|n| n.starts_with("continuous_audit_script-"))
         })
         .collect();
-    assert!(
-        !found.is_empty(),
-        "UNDETERMINED: sibling test binary continuous_audit_script-* not built in {} \
-         (run with --test continuous_audit_script as well)",
-        dir.display()
-    );
     found.sort();
-    found.pop().unwrap()
+    found.pop()
+}
+
+/// Repro: with an older build whose hash sorts LAST next to the build cargo
+/// just made, the picker must return the current (newest) build. Picking by
+/// file name makes the repro measure arbitrary stale code: it passed at the
+/// pre-fix rev 7146b301 and failed at the fixed HEAD (backlog 73e49761 could
+/// not be closed on 2026-10-20).
+#[test]
+#[ignore = "repro: pick_sibling selects by file-name order, not the current build; remove ignore when fixed"]
+fn pick_sibling_returns_the_newest_build_not_the_last_name() {
+    let dir = std::env::temp_dir().join(format!("ow-repro-pick-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let stale = dir.join("continuous_audit_script-ffffffffffffffff");
+    let current = dir.join("continuous_audit_script-0000000000000000");
+    std::fs::write(&stale, b"stale").unwrap();
+    std::fs::write(&current, b"current").unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+    std::fs::File::options()
+        .write(true)
+        .open(&stale)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    let picked = pick_sibling(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        picked.as_deref(),
+        Some(current.as_path()),
+        "picked a stale build by name order instead of the newest build"
+    );
 }
 
 #[test]

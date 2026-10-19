@@ -1339,38 +1339,6 @@ exit 101: t` profile [unoptimized + debuginfo] target(s) in 0.84s
 error: test failed, to rerun pass `-p overwatch --test repro_ca_script_test_passes_without_bash`"""
 
 [[task]]
-id = "f1f06417"
-title = "daily: unparseable ~/.daily/config.toml falls back to defaults and the built-in security task runs"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "parse_config maps a parse error to Config::default() with only a stderr warning; session-start then runs the default cargo deny task. Unreadable config is separate (d3245d99)."
-created_at = 1792189392
-updated_at = 1792189392
-weight = 0.0
-issue_number = 1404
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1404"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p daily --test repro_unparseable_config_runs_default -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189392
-detail = """
-exit 101: .52s
-
-   Compiling daily v0.3.19 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/daily)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
-     Running tests/repro_unparseable_config_runs_default.rs (target/debug/deps/repro_unparseable_config_runs_default-d0b08d3affe3351f)
-error: test failed, to rerun pass `-p daily --test repro_unparseable_config_runs_default`"""
-
-[[task]]
 id = "10f339ee"
 title = "tdd: Stop hook allows the stop on malformed stdin even in a violating repo"
 project = "/Users/yuki/src/harness"

@@ -55706,3 +55706,63 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "f1f06417"
+title = "daily: unparseable ~/.daily/config.toml falls back to defaults and the built-in security task runs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "parse_config maps a parse error to Config::default() with only a stderr warning; session-start then runs the default cargo deny task. Unreadable config is separate (d3245d99)."
+created_at = 1792189392
+updated_at = 1792423610
+weight = 0.0
+issue_number = 1404
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1404"
+issue_closed_at = 1792423613
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p daily --test repro_unparseable_config_runs_default -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189392
+detail = """
+exit 101: .52s
+
+   Compiling daily v0.3.19 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/daily)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/repro_unparseable_config_runs_default.rs (target/debug/deps/repro_unparseable_config_runs_default-d0b08d3affe3351f)
+error: test failed, to rerun pass `-p daily --test repro_unparseable_config_runs_default`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p daily --test repro_unparseable_config_runs_default"
+exit = 0
+passed = 1
+rev = "62d469fdc23e850502fa1f141851cf16073801ee"
+observed_at = 1792423587
+output_digest = "sha256:0467a38d01bdffb4b2a07173b8635b3b8efad88034b4212829a24eac31a4b2f4"
+excerpt = """
+
+running 1 test
+test unparseable_config_does_not_run_default_task ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_unparseable_config_runs_default.rs (target/debug/deps/repro_unparseable_config_runs_default-3d8eb18624499a37)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
+kind = "behavioural"

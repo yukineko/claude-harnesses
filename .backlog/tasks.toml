@@ -1339,37 +1339,6 @@ exit 101: t` profile [unoptimized + debuginfo] target(s) in 0.84s
 error: test failed, to rerun pass `-p overwatch --test repro_ca_script_test_passes_without_bash`"""
 
 [[task]]
-id = "2756b4a6"
-title = "daily: run_task spawns a command blastguard answers Ask for (matches only Deny)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "run_task in crates/daily/src/main.rs matches only Decision::Deny, so an Ask (refusal to guess) command is still handed to sh -c. Observed: a task writing .claude/settings.json by redirect ran."
-created_at = 1792189369
-updated_at = 1792189369
-weight = 0.0
-issue_number = 1401
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1401"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p daily --test repro_ask_command_still_spawned -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189369
-detail = """
-exit 101: ings/crates/blastguard)
-   Compiling daily v0.3.19 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/daily)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.82s
-     Running tests/repro_ask_command_still_spawned.rs (target/debug/deps/repro_ask_command_still_spawned-8cc5ada547cb7a4f)
-error: test failed, to rerun pass `-p daily --test repro_ask_command_still_spawned`"""
-
-[[task]]
 id = "24a169f4"
 title = "daily: task dir that is missing or outside the session cwd is silently ignored; task runs in cwd"
 project = "/Users/yuki/src/harness"

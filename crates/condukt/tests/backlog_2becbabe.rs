@@ -128,19 +128,16 @@ fn assert_not_fallback(tag: &str, body: &str) {
 }
 
 #[test]
-#[ignore = "backlog 2becbabe: RED repro"]
 fn exit0_empty_stdout_is_not_fallback() {
     assert_not_fallback("empty", "exit 0");
 }
 
 #[test]
-#[ignore = "backlog 2becbabe: RED repro"]
 fn exit0_garbled_stdout_is_not_fallback() {
     assert_not_fallback("garbled", "echo 'not json {'; exit 0");
 }
 
 #[test]
-#[ignore = "backlog 2becbabe: RED repro"]
 fn exit0_unknown_transition_is_not_fallback() {
     assert_not_fallback(
         "unknown",

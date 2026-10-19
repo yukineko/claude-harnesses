@@ -22,10 +22,10 @@ injected as `additionalContext` for the agent — **non-blocking** (it never bre
 Before spawning, `task.command` is checked against the same `blastguard` detector
 the PreToolUse hook uses. A command blastguard **denies** (destructive) is refused —
 never spawned — and reported as `name (blocked: <reason>)` in the summary/report
-instead of running. **Only a `Deny` verdict blocks**: a command for which blastguard
-returns `Ask` (a construct it cannot analyse) is *not* refused here — `daily` does not
-harden `Ask` to `Deny` (`run_task` in `src/main.rs` matches only `Decision::Deny`), so
-such a command is spawned like any other.
+instead of running. An `Ask` verdict (a construct blastguard cannot analyse and
+refuses to guess about) blocks too: no human is present at SessionStart to answer it,
+so `run_task` in `src/main.rs` hardens `Ask` to `Deny` (`Decision::hardened`) and the
+command is reported as `name (blocked: <reason>)` without being spawned.
 
 With **no tasks registered**, a built-in default `security` task runs, preserving the
 original behavior:

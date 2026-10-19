@@ -23,7 +23,7 @@
 - spawn 前に blastguard が拒否した → `name (blocked: <理由>)`
 - 当日実行すべきものが無い → 沈黙する
 
-spawn の前に、`task.command` は PreToolUse フックと同じ `blastguard` 検出器にかけられる。blastguard が **Deny**（破壊的）と判定したコマンドは spawn されず、`name (blocked: <理由>)` として要約／レポートに記録される。**ブロックするのは `Deny` だけ**である: blastguard が `Ask`（解析できない構文）を返したコマンドは、ここでは拒否されない — `daily` は `Ask` を `Deny` に硬化しない（`src/main.rs` の `run_task` は `Decision::Deny` しか見ていない）ため、そのようなコマンドは通常どおり spawn される。
+spawn の前に、`task.command` は PreToolUse フックと同じ `blastguard` 検出器にかけられる。blastguard が **Deny**（破壊的）と判定したコマンドは spawn されず、`name (blocked: <理由>)` として要約／レポートに記録される。blastguard が `Ask`（解析できない構文で、推測を拒否した）を返したコマンドも拒否される: SessionStart にはそれに答える人間がいないため、`src/main.rs` の `run_task` は `Ask` を `Deny` に硬化（`Decision::hardened`）し、そのコマンドは spawn されずに `name (blocked: <理由>)` として記録される。
 
 各タスクは `dir`（無ければセッションの `cwd`）で実行される。`dir` は正規化され、セッションの `cwd` 自身かその**配下**でなければならない: 存在しない・正規化できない・セッション `cwd` の外に解決される（`../../etc` や別の場所の絶対パス等）`dir` は**黙って無視され**、セッションの `cwd` で実行される。また `$CARGO_HOME/bin` を `PATH` の先頭に足して実行される（`~/.cargo/bin` が PATH に無くても `cargo-deny` 等の cargo サブコマンドが解決できる）。デフォルトの security タスクを機能させるには `cargo-deny` を別途インストールする必要がある（`cargo install cargo-deny`）。
 

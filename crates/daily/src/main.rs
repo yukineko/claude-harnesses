@@ -358,10 +358,15 @@ fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> PathBuf {
 /// blastguard detector the PreToolUse hook uses (mirroring condukt's
 /// `run_check`). A flagged command is refused fail-closed (never spawned)
 /// rather than silently run.
+///
+/// No human is present at SessionStart to answer a blastguard `Ask` (a
+/// construct it could not analyse and refuses to guess about), so the verdict
+/// is [`hardened`](blastguard::model::Decision::hardened): `Ask` collapses to
+/// `Deny` and the command is refused exactly like a destructive one.
 fn run_task(task: &Task, cwd: &Path) -> Outcome {
     let input = serde_json::json!({ "command": task.command });
     if let blastguard::model::Decision::Deny(reason) =
-        blastguard::detect::detect("Bash", Some(&input))
+        blastguard::detect::detect("Bash", Some(&input)).hardened()
     {
         return Outcome::Blocked(reason);
     }

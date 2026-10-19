@@ -56,7 +56,13 @@ audited (`analyze_code_interpreter` / `interpreter_code_verdict` in
 embedded shell line is destructive, is a deny; one that names a protected
 gate/config path is an ask; a benign program such as `python3 -c "print(1)"`
 is allowed (0.2.59). Running a script **file** (`python3 app.py`,
-`python3 -m …`) is not judged.
+`python3 -m …`) is not judged. A `>` in program text whose "target" cannot be
+determined (`print(1 > 0)`, a backticked `` `<k(r)>/x.json` `` in a comment) is
+an `ask` marked "Recommended: do not run this." — never a deny, never an allow
+(user ruling R2, 2026-10-14). Since 0.2.140 this also holds for the line-level
+redirect scan over the body of a quoted-delimiter here-document fed to a
+non-shell interpreter (`python3 - <<'PY'`), when that body is closed by its
+delimiter line (backlog 4a1cf1ad).
 
 ### File operations
 

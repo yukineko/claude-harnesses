@@ -1721,6 +1721,9 @@ primitive, not a filesystem path",
     // The cwd in force before each segment, so a RELATIVE redirect target can
     // be judged where it actually lands (f1c170ab). See `place_redirect_target`.
     let seg_cwds = segment_cwd_states(cmd);
+    // Which segments are interpreter program text (4a1cf1ad); see
+    // `interpreter_program_body_segments`.
+    let program_body = interpreter_program_body_segments(cmd);
     for (occurrence, raw_target) in redirect_targets(cmd).into_iter().enumerate() {
         let seg_idx = redirect_segments
             .as_ref()
@@ -1891,6 +1894,21 @@ whether it lands in a system directory"
                     sink.borrow_mut().push(reason);
                     continue;
                 }
+            }
+            // The same ruling at LINE level (4a1cf1ad): this `>` sits in the
+            // body of a quoted here-document handed to a code interpreter, so
+            // it is program text the shell never parses. Ask with the marker,
+            // never Allow; a Deny elsewhere on the line still wins.
+            if matches!(recovery, crate::reversible::Recovery::Undetermined(_))
+                && redirect_target_undeterminable(&target, ctx.raw_base.as_deref())
+                && seg_idx.is_some_and(|i| program_body.get(i) == Some(&true))
+            {
+                line_level_asks.push(recommend_against(Decision::ask(format!(
+                    "the body of a quoted here-document fed to a code interpreter contains a `>` \
+that a shell would read as a redirect whose target cannot be determined ({reason}); the shell \
+does not parse that body, but blastguard cannot show the program does not use it as one."
+                ))));
+                continue;
             }
             return Decision::deny(reason);
         }
@@ -3268,6 +3286,63 @@ fn here_document_layout(segs: &[SeparatedSegment]) -> (Vec<bool>, Option<usize>)
         }
     }
     (is_body, opener_idx)
+}
+
+/// Per segment of [`split_segments_with_separators`]`(cmd)`: true when the
+/// segment is a BODY line of a QUOTED-delimiter here-document whose opener
+/// segment hands it to a non-shell code interpreter (`python3 - <<'PY'`).
+///
+/// Backlog 4a1cf1ad: the line-level redirect scan read such a body as shell,
+/// so a `>` in a Python comment (`# writes \`<k(r)>/claims.json\``) was a
+/// truncating redirect with an undeterminable target and was DENIED — before
+/// [`interpreter_code_verdict`] could apply user ruling R2 (2026-10-14: an
+/// undeterminable `>` in program text is an Ask carrying [`RECOMMEND_NO`],
+/// never Deny and never Allow). With a quoted delimiter the shell does not
+/// parse the body at all.
+///
+/// Restrictive on every doubt: an opener segment that opens more than one
+/// here-document, an unquoted delimiter, or a command word that is not plainly
+/// a code interpreter (a shell, `env`, `sudo`, an assignment, …) marks nothing.
+fn interpreter_program_body_segments(cmd: &str) -> Vec<bool> {
+    let segs = split_segments_with_separators(cmd);
+    let mut out = vec![false; segs.len()];
+    let mut idx = 0;
+    while idx < segs.len() {
+        let openers = here_document_openers(&segs[idx].text);
+        if openers.is_empty() {
+            idx += 1;
+            continue;
+        }
+        // Only a NEWLINE ends the opener's line; anything after a `;`/`&&`/`|`
+        // on that line is shell code, so such a line marks nothing.
+        let program_text = openers.len() == 1
+            && segs[idx].ends_at_newline
+            && here_document_delimiter_is_quoted(&segs[idx].text)
+            && segs[idx]
+                .text
+                .split_whitespace()
+                .next()
+                .is_some_and(|w| is_code_interpreter(basename(w)) && !is_shell(basename(w)));
+        let opener = &openers[0];
+        let mut body = idx + 1;
+        while body < segs.len() && !segment_closes_here_document(&segs[body].text, opener) {
+            body += 1;
+        }
+        // Marked only when the body is CLOSED by its delimiter line and no
+        // body segment spans a newline (an unbalanced quote in the body, e.g.
+        // a Python `# don't`, merges lines and can bury the delimiter).
+        let closed = body < segs.len();
+        let clean = segs[idx + 1..body.min(segs.len())]
+            .iter()
+            .all(|s| !s.text.contains('\n'));
+        if program_text && closed && clean {
+            for flag in &mut out[idx + 1..body] {
+                *flag = true;
+            }
+        }
+        idx = body + 1;
+    }
+    out
 }
 
 /// The command with the BODY of its here-document removed, when — and only

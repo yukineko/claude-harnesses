@@ -31,9 +31,11 @@ fn sibling_test_binary() -> PathBuf {
 }
 
 /// Choose the `continuous_audit_script-<hash>` test binary to run. `target/`
-/// keeps every build that ever happened, so several can coexist.
+/// keeps every build that ever happened, so several can coexist; the one cargo
+/// just built for this run is the newest, so pick by mtime, never by name (the
+/// hash in the name says nothing about which build is current).
 fn pick_sibling(dir: &std::path::Path) -> Option<PathBuf> {
-    let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+    let found: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap()
         .flatten()
         .map(|e| e.path())
@@ -44,8 +46,9 @@ fn pick_sibling(dir: &std::path::Path) -> Option<PathBuf> {
                     .is_some_and(|n| n.starts_with("continuous_audit_script-"))
         })
         .collect();
-    found.sort();
-    found.pop()
+    found
+        .into_iter()
+        .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).unwrap())
 }
 
 /// Repro: with an older build whose hash sorts LAST next to the build cargo
@@ -54,7 +57,6 @@ fn pick_sibling(dir: &std::path::Path) -> Option<PathBuf> {
 /// pre-fix rev 7146b301 and failed at the fixed HEAD (backlog 73e49761 could
 /// not be closed on 2026-10-20).
 #[test]
-#[ignore = "repro: pick_sibling selects by file-name order, not the current build; remove ignore when fixed"]
 fn pick_sibling_returns_the_newest_build_not_the_last_name() {
     let dir = std::env::temp_dir().join(format!("ow-repro-pick-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

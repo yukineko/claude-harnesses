@@ -56754,3 +56754,127 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "23eb74b3e9f003a4dcf85d2018e681326598f2e5"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "2becbabe"
+title = "condukt oracle: exit-0 tdd with empty/garbled stdout, and the unknown transition, map to fallback:true (Allow) — latent fail-open, unreachable with today's tdd"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Found 2026-10-04 by the e5174b6a implementer (session 33de4c25). The branches in verdict_from_oracle_output (empty or non-JSON stdout with exit 0) and in verdict_from_oracle (unknown) return fallback:true. Real tdd exits 1 for unknown, so the gate path does not reach them today (e28ac2a9 documents this). A tdd or wrapper that exits 0 with bad stdout would get Allow. Section 3 says to turn these into Reject or delete them. That changes gate behaviour, so it needs a repro test with a fake tdd (exit 0, empty stdout) asserting Reject."
+created_at = 1791046569
+updated_at = 1792428187
+weight = 0.0
+issue_number = 1262
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1262"
+issue_closed_at = 1792428191
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_2becbabe -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005372
+detail = """
+exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/schemaguard)
+   Compiling condukt v0.7.245 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.53s
+     Running tests/backlog_2becbabe.rs (target/debug/deps/backlog_2becbabe-ae3d580f97b3cb62)
+error: test failed, to rerun pass `-p condukt --test backlog_2becbabe`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_2becbabe"
+exit = 0
+passed = 4
+rev = "3a7987605b0853b800caacaa2df72da5f2c28555"
+observed_at = 1792428145
+output_digest = "sha256:bd4ba7236ceca082fa0c63726225c535eb88d139df9afe37ad9dc93075610932"
+excerpt = """
+
+running 4 tests
+test exit0_garbled_stdout_is_not_fallback ... ok
+test control_fake_tdd_is_consulted ... ok
+test exit0_unknown_transition_is_not_fallback ... ok
+test exit0_empty_stdout_is_not_fallback ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.42s
+
+   Compiling condukt v0.7.271 (/Users/yuki/src/.harness-worktrees/p1-condukt/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.25s
+     Running tests/backlog_2becbabe.rs (target/debug/deps/backlog_2becbabe-804fc3ea46adbd78)
+"""
+
+[task.closure.red]
+rev = "59b9fa02a46c695fc66f4227045f70891c474c6e"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "02e5a922"
+title = "condukt state set --status done took over 2 minutes on a 20-file two-crate diff, spawning git diff children one after another"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 with condukt 0.7.220: state set --run run-20261004-035627-41010 --task 55fb3861 --status done --worktree <wt> --branch <br> ran >140s; ps showed successive children 'git diff c4928d36...HEAD' (likely diffrisk caller-site scan). Exit 0. No progress output, so a caller cannot tell slow from hung. Needs a timing measurement and a repro."
+created_at = 1791055143
+updated_at = 1792428451
+weight = 0.0
+issue_number = 1335
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1335"
+issue_closed_at = 1792428453
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_02e5a922 -- --ignored"
+rev = "a156090ef563e091c421fc24ad96d8d0ec000d67"
+observed_at = 1792005629
+detail = """
+exit 101: iled; 0 ignored; 0 measured; 0 filtered out; finished in 91.39s
+
+   Compiling condukt v0.7.246 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.54s
+     Running tests/backlog_02e5a922.rs (target/debug/deps/backlog_02e5a922-1741df0bb7a0e84f)
+error: test failed, to rerun pass `-p condukt --test backlog_02e5a922`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_02e5a922"
+exit = 0
+passed = 1
+rev = "3a7987605b0853b800caacaa2df72da5f2c28555"
+observed_at = 1792428191
+output_digest = "sha256:e1a9b9dcfb65401b68e475c605108887b3fc256222645a28d55ada9caa7df3b5"
+excerpt = """
+
+running 1 test
+test state_set_done_on_a_large_diff_does_not_stall_on_the_git_pipe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s
+
+   Compiling condukt v0.7.271 (/Users/yuki/src/.harness-worktrees/p1-condukt/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/backlog_02e5a922.rs (target/debug/deps/backlog_02e5a922-de02e2d394ba8bcc)
+"""
+
+[task.closure.red]
+rev = "59b9fa02a46c695fc66f4227045f70891c474c6e"
+exit = 101
+kind = "behavioural"

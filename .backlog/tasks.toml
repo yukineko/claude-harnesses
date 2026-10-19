@@ -423,37 +423,6 @@ exit 101: c/.harness-worktrees/session-1a4ac77f/crates/blastguard)
 error: test failed, to rerun pass `-p specguard --test forge_integration`"""
 
 [[task]]
-id = "2becbabe"
-title = "condukt oracle: exit-0 tdd with empty/garbled stdout, and the unknown transition, map to fallback:true (Allow) — latent fail-open, unreachable with today's tdd"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Found 2026-10-04 by the e5174b6a implementer (session 33de4c25). The branches in verdict_from_oracle_output (empty or non-JSON stdout with exit 0) and in verdict_from_oracle (unknown) return fallback:true. Real tdd exits 1 for unknown, so the gate path does not reach them today (e28ac2a9 documents this). A tdd or wrapper that exits 0 with bad stdout would get Allow. Section 3 says to turn these into Reject or delete them. That changes gate behaviour, so it needs a repro test with a fake tdd (exit 0, empty stdout) asserting Reject."
-created_at = 1791046569
-updated_at = 1792005380
-weight = 0.0
-issue_number = 1262
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1262"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_2becbabe -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005372
-detail = """
-exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/schemaguard)
-   Compiling condukt v0.7.245 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.53s
-     Running tests/backlog_2becbabe.rs (target/debug/deps/backlog_2becbabe-ae3d580f97b3cb62)
-error: test failed, to rerun pass `-p condukt --test backlog_2becbabe`"""
-
-[[task]]
 id = "eba15868"
 title = "blastguard: 非再帰の rm <linked worktree>/.git (gitdir ファイル) が Allow — worktree の git 接続を切る削除を止めない (0.2.105 以前から。test adv_checkout_own_dotgit_file_is_not_allowed が RED)"
 project = "/Users/yuki/src/harness"
@@ -1087,38 +1056,6 @@ exit 101: rness-worktrees/session-1a4ac77f/crates/harness-core)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.65s
      Running tests/backlog_60ecd6ff.rs (target/debug/deps/backlog_60ecd6ff-27a0fe0afe73f3fe)
 error: test failed, to rerun pass `-p fugu-router --test backlog_60ecd6ff`"""
-
-[[task]]
-id = "02e5a922"
-title = "condukt state set --status done took over 2 minutes on a 20-file two-crate diff, spawning git diff children one after another"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-04 with condukt 0.7.220: state set --run run-20261004-035627-41010 --task 55fb3861 --status done --worktree <wt> --branch <br> ran >140s; ps showed successive children 'git diff c4928d36...HEAD' (likely diffrisk caller-site scan). Exit 0. No progress output, so a caller cannot tell slow from hung. Needs a timing measurement and a repro."
-created_at = 1791055143
-updated_at = 1792005726
-weight = 0.0
-issue_number = 1335
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1335"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_02e5a922 -- --ignored"
-rev = "a156090ef563e091c421fc24ad96d8d0ec000d67"
-observed_at = 1792005629
-detail = """
-exit 101: iled; 0 ignored; 0 measured; 0 filtered out; finished in 91.39s
-
-   Compiling condukt v0.7.246 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.54s
-     Running tests/backlog_02e5a922.rs (target/debug/deps/backlog_02e5a922-1741df0bb7a0e84f)
-error: test failed, to rerun pass `-p condukt --test backlog_02e5a922`"""
 
 [[task]]
 id = "4fc130d3"

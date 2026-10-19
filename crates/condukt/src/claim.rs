@@ -815,7 +815,7 @@ fn run_worktree_head_signal(run: &crate::state::RunState) -> Determination<Vec<u
             }
             Ok(_) => {}
         }
-        match progress::git_head_signal(path) {
+        match crate::worktree::own_worktree_head_signal(path) {
             Determination::Known(sha) => heads.push((task_id, sha)),
             // Fail-closed: the directory is THERE but git refused, so one
             // unreadable worktree HEAD makes the run-scoped signal unreadable,

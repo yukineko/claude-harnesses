@@ -3412,6 +3412,24 @@ pub fn ensure_own_worktree(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// A recorded worktree's git HEAD as a durable progress signal, refused
+/// (`Undetermined`) unless `path` is the top of its OWN worktree
+/// ([`ensure_own_worktree`]). Without the check, `git rev-parse HEAD` run in a
+/// worktree that lost its `.git` but sits inside another repository walks up
+/// and returns the ENCLOSING repository's HEAD — a confident `Known` reading
+/// about the wrong tree (backlog 4e560a64, HEAD-read half). Every condukt
+/// read of a recorded worktree's HEAD goes through here, never through
+/// [`harness_core::progress::git_head_signal`] directly.
+pub fn own_worktree_head_signal(path: &Path) -> Determination<Vec<u8>> {
+    if let Err(e) = ensure_own_worktree(path) {
+        return Determination::undetermined(format!(
+            "HEAD read refused for {}: {e}",
+            path.display()
+        ));
+    }
+    harness_core::progress::git_head_signal(path)
+}
+
 /// Does a worktree have uncommitted changes (tracked or untracked)? `Err` when
 /// `path` is not the top of its own worktree ([`ensure_own_worktree`]), so the
 /// enclosing repository's status is never reported as this worktree's.

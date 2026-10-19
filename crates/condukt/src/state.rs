@@ -1919,7 +1919,7 @@ fn task_progress(
     now: i64,
 ) -> (Vec<SignalSample>, Determination<progress::Liveness>) {
     let head = match t.worktree.as_deref() {
-        Some(wt) => progress::git_head_signal(Path::new(wt)),
+        Some(wt) => crate::worktree::own_worktree_head_signal(Path::new(wt)),
         None => Determination::undetermined(
             "task has no worktree — no task-scoped progress signal exists for it",
         ),

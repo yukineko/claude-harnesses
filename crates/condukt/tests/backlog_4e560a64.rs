@@ -185,19 +185,19 @@ fn running_task_past_ttl(fx: &Fixture) -> (String, PathBuf) {
     (rid, wt)
 }
 
-/// The two `--all-stuck` invocations the multi-sample engine needs, returning
-/// the SECOND one's output (the one whose verdict is `Known(Stalled)` and thus
-/// the only one in which the guard under test can fire).
+/// The FIRST of the two `--all-stuck` invocations the multi-sample engine
+/// needs. It is required to succeed: it runs while the worktree is still
+/// HEAD-readable (its own `.git` intact), so its verdict is an in-progress
+/// `AwaitingSample`, which is not an exit-3 failure.
 ///
-/// The second call's exit status is deliberately NOT asserted here: it is the
-/// property under test and each caller pins it explicitly (backlog `d65110df`:
-/// an observed-dirty keep exits 0, a cannot-determine keep exits 3). The first
-/// call is still required to succeed — every fixture is HEAD-readable, so its
-/// verdict is an in-progress `AwaitingSample`, which is not an exit-3 failure.
-fn abandon_all_stuck_twice(fx: &Fixture, rid: &str) -> std::process::Output {
+/// The second call is made by the test itself, AFTER the worktree has lost its
+/// `.git`, and its exit status is deliberately NOT asserted: since the
+/// HEAD-read half of 4e560a64 a worktree that is not the top of its own git
+/// worktree has an unreadable (refused) HEAD signal, so taking BOTH samples on
+/// the gitless worktree would make the first one exit 3 as well.
+fn abandon_all_stuck_first(fx: &Fixture, rid: &str) {
     let a1 = fx.condukt(&["state", "abandon", "--run", rid, "--all-stuck"]);
     assert!(a1.status.success(), "abandon #1 failed: {a1:?}");
-    fx.condukt(&["state", "abandon", "--run", rid, "--all-stuck"])
 }
 
 fn stderr_of(out: &std::process::Output) -> String {
@@ -214,6 +214,9 @@ fn stderr_of(out: &std::process::Output) -> String {
 fn dirtiness_of_a_gitless_worktree_is_not_read_from_the_enclosing_repo() {
     let fx = Fixture::new("b4e560a64");
     let (rid, wt) = running_task_past_ttl(&fx);
+
+    // First sample while the worktree is still its own git worktree.
+    abandon_all_stuck_first(&fx, &rid);
 
     // The worktree loses its own .git; $HOME becomes the enclosing repo, with
     // the worktree's files committed there and `.condukt/` left untracked.
@@ -237,7 +240,7 @@ fn dirtiness_of_a_gitless_worktree_is_not_read_from_the_enclosing_repo() {
         "precondition: parent dirty outside the worktree: {whole:?}"
     );
 
-    let a2 = abandon_all_stuck_twice(&fx, &rid);
+    let a2 = fx.condukt(&["state", "abandon", "--run", &rid, "--all-stuck"]);
     let err = stderr_of(&a2);
     let wrong = format!("worktree {} has uncommitted changes", wt.display());
     assert!(

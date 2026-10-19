@@ -32,7 +32,6 @@ fn daily(home: &Path, cwd: &Path, args: &[&str], stdin: &str) -> (i32, String, S
 }
 
 #[test]
-#[ignore = "RED repro: daily runs the task in cwd when its dir is missing"]
 fn missing_task_dir_does_not_run_in_cwd() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");

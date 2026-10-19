@@ -622,38 +622,6 @@ exit 1: e414e.py::\u001B[1mLockfileOnlyChange::test_cargo_lock_only_change_is_no
 \u001B[31m========================= \u001B[31m\u001B[1m2 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.58s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "135af7af"
-title = "condukt merge-base gate does not cover a feature branch merged INTO a task branch after create"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "verifier side finding on 51595c41: the gate checks only the recorded creation base; commits from an off-default feature branch merged into the task branch later still ride onto default_branch. Scope question: is this in the ticket's threat model."
-created_at = 1791053146
-updated_at = 1792005730
-weight = 0.0
-issue_number = 1317
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1317"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_135af7af -- --ignored"
-rev = "a156090ef563e091c421fc24ad96d8d0ec000d67"
-observed_at = 1792005726
-detail = """
-exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 2.54s
-
-   Compiling condukt v0.7.246 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
-     Running tests/backlog_135af7af.rs (target/debug/deps/backlog_135af7af-55e9e6a8b6ac4792)
-error: test failed, to rerun pass `-p condukt --test backlog_135af7af`"""
-
-[[task]]
 id = "1eae7cb9"
 title = "autoflow still keys its state off repo_root rather than the main worktree root"
 project = "/Users/yuki/src/harness"

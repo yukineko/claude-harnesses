@@ -274,8 +274,9 @@ fn find_transcript(session_id: &str) -> String {
 }
 
 /// On-demand record-note generation for the `/record` command. Resolves the
-/// session id, discovers the transcript, (re)writes the note, prints its path.
-/// Always exits 0 (the command layer handles the prose).
+/// session id, discovers the transcript, (re)writes the note, prints its path
+/// and exits 0. When no note was written (vault missing, or the write failed)
+/// it prints nothing on stdout, says why on stderr, and exits 1.
 fn record_now(session_arg: Option<String>) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let mut cfg = Config::load(&root);
@@ -302,10 +303,22 @@ fn record_now(session_arg: Option<String>) {
     let turns_fallback = turns_fallback(&transcript);
     match record::write_from_session(&cfg, &s, &transcript, turns_fallback) {
         Some(p) => println!("{}", p.display()),
-        None => eprintln!(
-            "no record note written (Obsidian vault not found: {})",
-            cfg.obsidian_vault.display()
-        ),
+        None => {
+            if cfg.obsidian_vault.is_dir() {
+                eprintln!(
+                    "no record note written (could not write under {})",
+                    cfg.obsidian_vault.join(&cfg.record_dir).display()
+                );
+            } else {
+                eprintln!(
+                    "no record note written (Obsidian vault not found: {})",
+                    cfg.obsidian_vault.display()
+                );
+            }
+            // The verb's job did not happen: exit 0 with empty stdout would
+            // read as success to any caller checking the exit code.
+            std::process::exit(1);
+        }
     }
 }
 

@@ -35,7 +35,6 @@ fn home(tag: &str) -> std::path::PathBuf {
 }
 
 #[test]
-#[ignore = "RED repro: record-now exits 0 when it wrote no note"]
 fn record_now_without_vault_does_not_exit_zero() {
     let h = home("recnow");
     let (code, stdout, stderr) = run3(&h, &["record-now", "--session", "s1"], "");

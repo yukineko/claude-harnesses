@@ -39,7 +39,9 @@ Set `record = true` (and point `obsidian_vault` at your vault) [test: crates/ses
 on SessionEnd — and on demand via `record-now`, which writes even when
 `record = false` — session-insights writes a
 Markdown note to `<vault>/<record_dir>/<date>-<project>-<id>.md`, only if the
-vault directory already exists [test: crates/session-insights/tests/prose_claims.rs::claim_record_note_path_and_vault_required] [test: crates/session-insights/tests/prose_claims.rs::claim_stop_refreshes_record_when_record_true] [test: crates/session-insights/tests/prose_claims.rs::claim_sessionend_writes_record_only_when_record_true]. The deterministic `## 数値サマリ` and `## コスト`
+vault directory already exists [test: crates/session-insights/tests/prose_claims.rs::claim_record_note_path_and_vault_required] [test: crates/session-insights/tests/prose_claims.rs::claim_stop_refreshes_record_when_record_true] [test: crates/session-insights/tests/prose_claims.rs::claim_sessionend_writes_record_only_when_record_true].
+When `record-now` writes no note it prints nothing on stdout, says why on
+stderr, and exits 1 [test: crates/session-insights/tests/repro_record_now_exit0_no_note.rs::record_now_without_vault_does_not_exit_zero]. The deterministic `## 数値サマリ` and `## コスト`
 blocks (fenced by machine-owned `<!-- si:numeric:* -->` / `<!-- si:cost:* -->`
 markers) are filled by the binary; the prose sections stay as `<!-- fill: … -->`
 placeholders [test: crates/session-insights/src/record.rs::skeleton_has_all_sections_and_placeholders] [test: crates/session-insights/tests/prose_claims.rs::claim_skeleton_prose_sections_placeholders].

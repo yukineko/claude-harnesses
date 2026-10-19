@@ -198,6 +198,45 @@ fn record_hook_survives_garbage_stdin() {
     );
 }
 
+/// The Stop hook's user-visible channel is a `systemMessage`; an unparseable
+/// payload must surface there, not only on stderr.
+#[test]
+fn stop_hook_garbage_payload_emits_system_message() {
+    let (code, stdout) = run(&["stop"], "not json");
+    assert_eq!(code, 0, "stop must not block");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {stdout:?}"));
+    let msg = v["systemMessage"].as_str().unwrap_or_default();
+    assert!(msg.contains("NOT counted"), "systemMessage: {msg:?}");
+}
+
+/// SessionEnd discards stdout, so an unparseable payload must be on stderr.
+#[test]
+fn sessionend_hook_garbage_payload_is_reported_on_stderr() {
+    let home = temp_home();
+    let out = Command::new(env!("CARGO_BIN_EXE_session-insights"))
+        .arg("sessionend")
+        .current_dir(&home)
+        .env("HOME", &home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut c| {
+            if let Some(mut si) = c.stdin.take() {
+                let _ = si.write_all(b"not json");
+            }
+            c.wait_with_output()
+        })
+        .expect("binary runs");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        stderr.contains("sessionend") && stderr.contains("NOT updated"),
+        "stderr: {stderr:?}"
+    );
+}
+
 #[test]
 fn stop_hook_survives_empty_stdin() {
     let (code, _stdout) = run(&["stop"], "");

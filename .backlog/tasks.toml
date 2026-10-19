@@ -1245,38 +1245,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; 
 error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
 
 [[task]]
-id = "a5bd2aac"
-title = "check-prose-tests.py exits 0 when no explicit path is a covered path"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "scripts/check-prose-tests.py main(): explicit files are filtered by is_covered; if none survive zero files are checked and it returns 0, while --all with nothing to scan is exit 2. Test (pytest expectedFailure; run with --runxfail) asserts exit 2. RED observed: '0 != 2 ... checked NOTHING yet exited 0'."
-created_at = 1792187813
-updated_at = 1792187813
-weight = 0.0
-issue_number = 1391
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1391"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_check_prose_tests_uncovered_explicit_paths.py"
-rev = "87b0070ed0dd341f43f07aea4532497ac1168a30"
-observed_at = 1792187813
-detail = """
-exit 1: utcomes.XFailed
-
-../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
-=========================== short test summary info ============================
-FAILED scripts/test_check_prose_tests_uncovered_explicit_paths.py::UncoveredExplicitPaths::test_explicit_uncovered_path_is_undetermined_not_clean
-========================= 1 failed, 1 passed in 0.16s =========================="""
-
-[[task]]
 id = "73e49761"
 title = "overwatch: continuous_audit_script_behaves passes when bash cannot spawn"
 project = "/Users/yuki/src/harness"
@@ -1307,126 +1275,6 @@ exit 101: t` profile [unoptimized + debuginfo] target(s) in 0.84s
 error: test failed, to rerun pass `-p overwatch --test repro_ca_script_test_passes_without_bash`"""
 
 [[task]]
-id = "fa377dbe"
-title = "session-insights: unparseable config silently ignored (no stderr, defaults used)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Config::load in config.rs ignores a toml parse error and a size_thresholds array of the wrong length with no diagnostic; status shows defaults as if configured. Observed for the unparseable case."
-created_at = 1792189401
-updated_at = 1792189401
-weight = 0.0
-issue_number = 1406
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1406"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p session-insights --test repro_config_invalid_silently_ignored -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189401
-detail = """
-exit 101: ts v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s
-     Running tests/repro_config_invalid_silently_ignored.rs (target/debug/deps/repro_config_invalid_silently_ignored-15eb11370ba23000)
-error: test failed, to rerun pass `-p session-insights --test repro_config_invalid_silently_ignored`"""
-
-[[task]]
-id = "b3c1daae"
-title = "session-insights: record and stop hooks drop an unparseable payload with exit 0 and no stderr"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "record() returns silently when HookInput::parse fails; integration.rs record_hook_survives_garbage_stdin pins only exit 0."
-created_at = 1792189404
-updated_at = 1792189404
-weight = 0.0
-issue_number = 1407
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1407"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p session-insights --test repro_hooks_garbage_payload_silent -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189404
-detail = """
-exit 101: on-insights v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
-     Running tests/repro_hooks_garbage_payload_silent.rs (target/debug/deps/repro_hooks_garbage_payload_silent-c2bb45392650717b)
-error: test failed, to rerun pass `-p session-insights --test repro_hooks_garbage_payload_silent`"""
-
-[[task]]
-id = "d49f1bc2"
-title = "session-insights: report --all silently skips a corrupt session json and presents a partial list as complete"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "metrics::load_all drops any <sid>.json that fails to read or parse with no diagnostic."
-created_at = 1792189407
-updated_at = 1792189407
-weight = 0.0
-issue_number = 1408
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1408"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p session-insights --test repro_report_all_skips_corrupt_session -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189407
-detail = """
-exit 101: v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
-     Running tests/repro_report_all_skips_corrupt_session.rs (target/debug/deps/repro_report_all_skips_corrupt_session-86afd5a78a11f590)
-error: test failed, to rerun pass `-p session-insights --test repro_report_all_skips_corrupt_session`"""
-
-[[task]]
-id = "5fd42034"
-title = "session-insights: record-now exits 0 with empty stdout when no note was written (vault missing)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "record_now prints a message to stderr but exits 0 and prints no path, so a caller reading stdout and the exit code sees success."
-created_at = 1792189409
-updated_at = 1792189409
-weight = 0.0
-issue_number = 1409
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1409"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p session-insights --test repro_record_now_exit0_no_note -- --ignored"
-rev = "89b172c459b46e679f51f80ee67c9324193beba1"
-observed_at = 1792189409
-detail = """
-exit 101: piling session-insights v0.2.28 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/session-insights)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
-     Running tests/repro_record_now_exit0_no_note.rs (target/debug/deps/repro_record_now_exit0_no_note-18084f1ef0564d72)
-error: test failed, to rerun pass `-p session-insights --test repro_record_now_exit0_no_note`"""
-
-[[task]]
 id = "60b59f75"
 title = "backlog: held exclusive lock does not stop next --claim from another session"
 project = "/Users/yuki/src/harness"
@@ -1455,35 +1303,6 @@ exit 101:    Compiling backlog v0.3.51 (/Users/yuki/src/.harness-worktrees/repro
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.02s
      Running tests/repro_exclusive_lock_ignored_by_claim.rs (target/debug/deps/repro_exclusive_lock_ignored_by_claim-995b323a548366e5)
 error: test failed, to rerun pass `-p backlog --test repro_exclusive_lock_ignored_by_claim`"""
-
-[[task]]
-id = "da6ec3f8"
-title = "6 pytest-style scripts/ suites lack the unittest.main() __main__ guard, so a direct python3 run executes no test (test_check_doc_claims_quote_attach/record_rev/record_unwrapped, test_check_doc_duplication, test_check_prose_tests, test_check_prose_tests_record_rev)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-17 by the 26f6dd72 and 396b6089 workers: test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_every_scripts_suite_has_a_main_guard_calling_unittest_main and test_backlog_s05_repros.py::DirectInvocation::test_every_scripts_test_file_has_a_main_guard_that_runs_unittest both fail with Lists differ listing these 6 files. Fails with the fixes stashed, so pre-existing. Readings: (a) the suites must gain the guard (or become unittest-based); (b) pytest-style suites should be exempted by the checker. Distinguish by whether check-workspace-tests.py invokes suites directly via python3."
-created_at = 1792191089
-updated_at = 1792191089
-weight = 0.0
-issue_number = 1416
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1416"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --color=no -q -p no:cacheprovider scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_every_scripts_suite_has_a_main_guard_calling_unittest_main"
-rev = "b410d1d2ae79d480bf41377c09b9db9fa34daf36"
-observed_at = 1792191089
-detail = """
-exit 1: se_tests_record_rev.py'] : 06a9d33f: these suites run ZERO tests and exit 0 when invoked directly
-
-scripts/test_backlog_audit_b1_0.py:96: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_every_scripts_suite_has_a_main_guard_calling_unittest_main
-1 failed in 0.28s"""
 
 [[task]]
 id = "6d43d9c5"

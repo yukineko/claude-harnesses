@@ -2369,8 +2369,10 @@ class CertificateBindsTheDiffNotTheOperation(GateTestCase):
 #   2. present in the object store, reachable from no ref -> NOT outstanding;
 #      exit 0 when it is the only entry; still LISTED as unreachable in the
 #      human and --json output; NOT removed from the ledger file
-#   3. reachability cannot be determined (git fails, malformed sha, object
-#      missing) -> never exit 0
+#   3. reachability cannot be determined (git fails, malformed sha) -> never
+#      exit 0. A full-length id whose object is definitively MISSING was in
+#      this list until the 2026-10-20 user ruling (backlog 860c43db); it is
+#      now listed as unreachable — see MissingObjectLedgerEntries below.
 #   4. made reachable again -> outstanding again
 #   5. one reachable + one unreachable -> exit 1
 # ---------------------------------------------------------------------------
@@ -2527,17 +2529,25 @@ class UnreachableLedgerEntries(GateTestCase):
         self.assertIn(sha, self._ledger_shas(h))
 
     # --- 3. undetermined is never clean -------------------------------------
-    def test_missing_commit_object_is_not_clean(self):
+    def test_missing_commit_object_is_unreachable_not_undetermined(self):
+        """CONTRACT CHANGE (user ruling 2026-10-20, backlog 860c43db): this
+        test used to assert a missing object is never clean (a7bf3cca). The
+        ruling reclassified a full-length id whose object is definitively
+        missing as unreachable: listed, never removed, not blocking. The
+        abbreviated-id, malformed-id, blob and failing-git cases stay
+        undetermined (MissingObjectLedgerEntries controls)."""
         h = self.harness()
         ghost = "0123456789abcdef0123456789abcdef01234567"
         self.assertNotEqual(h.git("cat-file", "-e", ghost, check=False).returncode, 0,
                             "anti-vacuity: the object must really be absent")
         h.ledger.write_text(ghost + "\tghost\n")
         proc = h.gate_bypass()
-        self.assertIn(proc.returncode, (1, 2), self._out(proc))
+        self.assertEqual(proc.returncode, 0, self._out(proc))
         proc = h.gate_bypass("--json")
-        self.assertIn(proc.returncode, (1, 2), self._out(proc))
-        self.assertNotEqual(json.loads(proc.stdout)["verdict"], "clean")
+        self.assertEqual(proc.returncode, 0, self._out(proc))
+        payload = json.loads(proc.stdout)
+        self.assertEqual([e["commit"] for e in payload["unreachable"]], [ghost], payload)
+        self.assertEqual(payload["entries"], [], payload)
 
     def test_malformed_sha_is_not_clean(self):
         h = self.harness()

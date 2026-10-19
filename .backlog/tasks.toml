@@ -1402,3 +1402,33 @@ exit 101:    Compiling overwatch v0.2.84 (/Users/yuki/src/.harness-worktrees/ses
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
      Running tests/repro_spec_load_leases_corrupt_claim.rs (target/debug/deps/repro_spec_load_leases_corrupt_claim-7a40ca8a777e1295)
 error: test failed, to rerun pass `-p overwatch --test repro_spec_load_leases_corrupt_claim`"""
+
+[[task]]
+id = "860c43db"
+title = "gate-bypass: a ledger entry whose object is missing blocks every push forever (report as unreachable, user ruling 2026-10-20)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "gate-bypass",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-20: .git/gate-bypassed holds b77286119dc345a3cd5a1aa455db1942b6499087 (donegate 0.1.36 fix, object pruned; same fix landed gated as 33a6c46b). gate-bypass.py raises Undetermined on a missing object (a7bf3cca rule), and pre-commit clears only ancestors of HEAD, so the entry blocks every push forever. User ruling 2026-10-20: ゲートを直す - a commit with no content cannot leave this machine, treat it as unreachable (listed, not blocking, never removed). Only well-formed full-length id + definitively missing object changes; malformed/abbreviated/blob/git-error stay undetermined. RED test committed at 3f4ad6e7."
+created_at = 1792426288
+updated_at = 1792426288
+weight = 0.0
+issue_number = 1427
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1427"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_gate_bypass.py -k MissingObjectLedgerEntries"
+rev = "3f4ad6e7c1322856df0e537a4184c53344c21d8d"
+observed_at = 1792426288
+detail = """
+exit 1: gate_bypass.py::MissingObjectLedgerEntries::test_missing_object_only_entry_exits_zero
+FAILED scripts/test_gate_bypass.py::MissingObjectLedgerEntries::test_missing_object_only_entry_lets_pre_push_through
+FAILED scripts/test_gate_bypass.py::MissingObjectLedgerEntries::test_missing_object_plus_reachable_ungated_exits_one
+================= 4 failed, 7 passed, 148 deselected in 14.53s ================="""

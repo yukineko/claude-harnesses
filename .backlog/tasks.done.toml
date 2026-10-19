@@ -55587,3 +55587,302 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "10f339ee"
+title = "tdd: Stop hook allows the stop on malformed stdin even in a violating repo"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "gate_command treats unparseable stdin as interactive: in a repo with implementation and no test the verdict is a violation but it is printed to stderr with exit 1 and no decision:block on stdout, which Claude Code reads as a non-blocking error. integration.rs gate_malformed_stdin_allows_the_stop pins only the empty-cwd case and is untouched."
+created_at = 1792189395
+updated_at = 1792423302
+weight = 0.0
+issue_number = 1405
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1405"
+issue_closed_at = 1792423306
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test repro_gate_malformed_stdin_allows -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189395
+detail = """
+exit 101: dings/crates/overwatch)
+   Compiling tdd v0.1.42 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.77s
+     Running tests/repro_gate_malformed_stdin_allows.rs (target/debug/deps/repro_gate_malformed_stdin_allows-a9977a41a6860119)
+error: test failed, to rerun pass `-p tdd --test repro_gate_malformed_stdin_allows`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test repro_gate_malformed_stdin_allows"
+exit = 0
+passed = 1
+rev = "1a646c97770b0b84ee169cf0b2eddab01f009734"
+observed_at = 1792423287
+output_digest = "sha256:0964447c6c3e6a32532baa1f60ec95aa4a5b77cc11e752f2ae878c3ad4662982"
+excerpt = """
+
+running 1 test
+test malformed_stdin_in_violating_repo_does_not_allow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/repro_gate_malformed_stdin_allows.rs (target/debug/deps/repro_gate_malformed_stdin_allows-5f4dda6a40b22dca)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "2756b4a6"
+title = "daily: run_task spawns a command blastguard answers Ask for (matches only Deny)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "run_task in crates/daily/src/main.rs matches only Decision::Deny, so an Ask (refusal to guess) command is still handed to sh -c. Observed: a task writing .claude/settings.json by redirect ran."
+created_at = 1792189369
+updated_at = 1792423228
+weight = 0.0
+issue_number = 1401
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1401"
+issue_closed_at = 1792423231
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p daily --test repro_ask_command_still_spawned -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189369
+detail = """
+exit 101: ings/crates/blastguard)
+   Compiling daily v0.3.19 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/daily)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.82s
+     Running tests/repro_ask_command_still_spawned.rs (target/debug/deps/repro_ask_command_still_spawned-8cc5ada547cb7a4f)
+error: test failed, to rerun pass `-p daily --test repro_ask_command_still_spawned`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p daily --test repro_ask_command_still_spawned"
+exit = 0
+passed = 1
+rev = "23cbd5a215a70b51b2e7ce5c91684279f2144a56"
+observed_at = 1792423210
+output_digest = "sha256:3478237c909127b9036200c4a0cc36368b410cd0da541e65a53ee27b9eac38bb"
+excerpt = """
+
+running 1 test
+test ask_command_is_not_spawned ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_ask_command_still_spawned.rs (target/debug/deps/repro_ask_command_still_spawned-d0e9a2bf372409f1)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "24a169f4"
+title = "daily: task dir that is missing or outside the session cwd is silently ignored; task runs in cwd"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "resolve_task_dir falls back to the session cwd on any failure with no diagnostic; existing resolve_task_dir_rejects_* unit tests pin the fallback. Observed: a task with dir=no-such-subdir ran in cwd."
+created_at = 1792189387
+updated_at = 1792423372
+weight = 0.0
+issue_number = 1402
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1402"
+issue_closed_at = 1792423375
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p daily --test repro_task_dir_fallback_to_cwd -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189387
+detail = """
+exit 101: ed out; finished in 0.49s
+
+   Compiling daily v0.3.19 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/daily)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/repro_task_dir_fallback_to_cwd.rs (target/debug/deps/repro_task_dir_fallback_to_cwd-bf99acc1057dc582)
+error: test failed, to rerun pass `-p daily --test repro_task_dir_fallback_to_cwd`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p daily --test repro_task_dir_fallback_to_cwd"
+exit = 0
+passed = 1
+rev = "2d3de1ae535d496b9cd315aae07c2e5e352e9bd2"
+observed_at = 1792423357
+output_digest = "sha256:6ca0aaef5b797dca6820866c518674223f81a691227403ac85651877cf9ac6b2"
+excerpt = """
+
+running 1 test
+test missing_task_dir_does_not_run_in_cwd ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+   Compiling daily v0.3.22 (/Users/yuki/src/.harness-worktrees/daily-failopen-p1/crates/daily)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running tests/repro_task_dir_fallback_to_cwd.rs (target/debug/deps/repro_task_dir_fallback_to_cwd-aa9afc08cd7a8933)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "8e749f85"
+title = "daily: install is unimplemented but exits 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Cmd::Install prints not yet implemented and calls exit(0), so a caller scripting the install sees success while nothing was installed."
+created_at = 1792189390
+updated_at = 1792423463
+weight = 0.0
+issue_number = 1403
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1403"
+issue_closed_at = 1792423466
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p daily --test repro_install_unimplemented_exit0 -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189390
+detail = """
+exit 101: inished in 0.37s
+
+   Compiling daily v0.3.19 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/daily)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/repro_install_unimplemented_exit0.rs (target/debug/deps/repro_install_unimplemented_exit0-e125b7539c8d6b17)
+error: test failed, to rerun pass `-p daily --test repro_install_unimplemented_exit0`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p daily --test repro_install_unimplemented_exit0"
+exit = 0
+passed = 1
+rev = "156c9ea372d22133ca42124fb040d06303f32b3f"
+observed_at = 1792423447
+output_digest = "sha256:13dc3c08c786c1468e97d7d88dc6ab6dd1a57f7e5e40aa6a62b26444a543b5ce"
+excerpt = """
+
+running 1 test
+test unimplemented_install_does_not_exit_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_install_unimplemented_exit0.rs (target/debug/deps/repro_install_unimplemented_exit0-44b2f6261542f096)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "f1f06417"
+title = "daily: unparseable ~/.daily/config.toml falls back to defaults and the built-in security task runs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "parse_config maps a parse error to Config::default() with only a stderr warning; session-start then runs the default cargo deny task. Unreadable config is separate (d3245d99)."
+created_at = 1792189392
+updated_at = 1792423610
+weight = 0.0
+issue_number = 1404
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1404"
+issue_closed_at = 1792423613
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p daily --test repro_unparseable_config_runs_default -- --ignored"
+rev = "89b172c459b46e679f51f80ee67c9324193beba1"
+observed_at = 1792189392
+detail = """
+exit 101: .52s
+
+   Compiling daily v0.3.19 (/Users/yuki/src/.harness-worktrees/repro-held-findings/crates/daily)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/repro_unparseable_config_runs_default.rs (target/debug/deps/repro_unparseable_config_runs_default-d0b08d3affe3351f)
+error: test failed, to rerun pass `-p daily --test repro_unparseable_config_runs_default`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p daily --test repro_unparseable_config_runs_default"
+exit = 0
+passed = 1
+rev = "62d469fdc23e850502fa1f141851cf16073801ee"
+observed_at = 1792423587
+output_digest = "sha256:0467a38d01bdffb4b2a07173b8635b3b8efad88034b4212829a24eac31a4b2f4"
+excerpt = """
+
+running 1 test
+test unparseable_config_does_not_run_default_task ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_unparseable_config_runs_default.rs (target/debug/deps/repro_unparseable_config_runs_default-3d8eb18624499a37)
+"""
+
+[task.closure.red]
+rev = "19d5ea8a790c8387faecaca5ecced8e64585b874"
+exit = 101
+kind = "behavioural"

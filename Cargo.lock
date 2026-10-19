@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "daily"
-version = "0.3.20"
+version = "0.3.24"
 dependencies = [
  "blastguard",
  "chrono",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "chrono",

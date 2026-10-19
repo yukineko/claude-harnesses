@@ -57,9 +57,11 @@ fn help_describes_the_gate() {
 
 #[test]
 fn gate_malformed_stdin_allows_the_stop() {
-    // The load-bearing invariant: a harness-level error (garbage stdin) must
-    // never trap a turn. `gate` treats unparseable input as interactive and the
-    // empty isolated cwd has no config, so it allows the stop with exit 0.
+    // Garbage stdin is evaluated in hook mode against the process cwd (backlog
+    // 10f339ee; the violating-repo case is pinned by
+    // tests/repro_gate_malformed_stdin_allows.rs). Here the isolated cwd is
+    // empty — nothing changed, nothing to block — so the stop is allowed with
+    // exit 0.
     let (code, _stdout) = run(&["gate"], "not json");
     assert_eq!(code, 0, "gate must allow the stop on malformed stdin");
 }

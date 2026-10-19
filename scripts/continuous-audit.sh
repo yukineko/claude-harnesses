@@ -19,9 +19,11 @@
 # It then prints the finding list + `overwatch audit-metrics`.
 #
 # This is OPT-IN tooling. It is NOT wired into any always-on gate and does NOT
-# change condukt/rollout behavior. Nothing is auto-installed. Everything is
-# fail-soft (a store-write failure never breaks the loop — overwatch's
-# never-break-a-turn invariant).
+# change condukt/rollout behavior. Nothing is auto-installed. It exits
+# non-zero when it cannot record a round: the overwatch binary is not found,
+# --round is missing outside --dry-run, or any `record-finding` call fails (no
+# PASS line is printed then). Only REPORTING calls (metrics, reconcile,
+# bridging; see run_ow below) continue past a failure, with a WARNING.
 #
 # --------------------------------------------------------------------------
 # USAGE
@@ -148,13 +150,12 @@ elif [ -x "$REPO/target/debug/overwatch" ]; then
   OW="$REPO/target/debug/overwatch"
 else
   echo "continuous-audit: overwatch binary not found (build with: cargo build -p overwatch)" >&2
-  echo "continuous-audit: nothing recorded (fail-soft)" >&2
-  exit 0   # fail-soft: never hard-fail the caller
+  exit 1
 fi
 
 if [ -z "$ROUND" ]; then
   echo "continuous-audit: --round <round-id> is required (or --dry-run to preview)" >&2
-  [ "$DRY_RUN" -eq 1 ] || exit 0
+  [ "$DRY_RUN" -eq 1 ] || exit 1
   ROUND="(dry-run)"
 fi
 
@@ -252,7 +253,7 @@ record_findings_with_verdict() {
     [ -n "${fsev:-}" ] && args+=(--severity "$fsev")
     [ -n "${ffile:-}" ] && args+=(--file "$ffile")
     [ -n "${frationale:-}" ] && args+=(--rationale "$frationale")
-    run_ow "${args[@]}"
+    run_ow_gate "${args[@]}"
   done
 }
 

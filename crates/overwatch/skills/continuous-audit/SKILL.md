@@ -99,7 +99,7 @@ UNVERIFIED も同じ id を使い回すこと。
 
 verifier の REFUTED を捨ててはならない。
 
-スクリプトの exit 0 を、全 finding が review-queue に記録された証拠とみなさないこと。
+スクリプトが非 0 で終わったら、その round は記録されていない（overwatch バイナリが見つからない・`--dry-run` 以外で `--round` が無い・`record-finding` が失敗した）。PASS 行が出ていないなら記録済みとみなさないこと。exit 0 でも metrics / reconcile などの報告系呼び出しは WARNING を出して続行しているので、stderr の WARNING は読むこと。
 
 CONFIRMED subset と round metrics を `scripts/continuous-audit.sh` に渡すこと [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves]。
 

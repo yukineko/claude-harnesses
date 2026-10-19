@@ -54636,3 +54636,60 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "5effbe63c2dc31e9efb8bbeb02603efa3a4049c7"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "50bceba2"
+title = "compass gap exits 0 with empty dod on an unparseable charter (unclosed front matter) - reads as no gap"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Found by prose-flow citation work (branch prose-flow 3b2228ac). A UTF-8 charter.md whose front matter does not parse makes compass gap exit 0 with dod=[] and measuring_stick empty, indistinguishable from a charter with no gap. Expected: non-zero exit (undetermined -> restrictive, CLAUDE.md 3). RED: scripts/test_prose_flow_b.py test_claim_compass_fail_detectable_garbage_charter (unittest.expectedFailure, fails under pytest --runxfail). Flip the expectedFailure when fixed."
+created_at = 1792187683
+updated_at = 1792419653
+weight = 0.0
+issue_number = 1383
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1383"
+issue_closed_at = 1792419656
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_prose_flow_b.py -k test_claim_compass_fail_detectable_garbage_charter -q"
+rev = "3b2228ace35777e08233ea8223a4ee45ea53ecad"
+observed_at = 1792187683
+detail = """
+exit 1:    ) -> None:
+        try:
+>           xfail(str(reason))
+E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_prose_flow_b.py::TestCompassFailDetectable::test_claim_compass_fail_detectable_garbage_charter
+1 failed, 36 deselected in 1.05s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_prose_flow_b.py -k test_claim_compass_fail_detectable_garbage_charter -q"
+exit = 0
+passed = 1
+rev = "00bbef50fa9870d7fc4115bb68ac366f26da6592"
+observed_at = 1792419633
+output_digest = "sha256:9295a65f019a62f92cd768b3455770bda5c7a3fa0dd8bf110355a846dfad7bad"
+excerpt = """
+.                                                                        [100%]
+1 passed, 45 deselected in 0.58s
+"""
+
+[task.closure.red]
+rev = "51376c9c6a506418ab08829ae513beca29b90c80"
+exit = 1
+kind = "behavioural"

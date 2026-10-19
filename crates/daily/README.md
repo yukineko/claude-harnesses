@@ -52,7 +52,8 @@ that ran today (both successes and failures):
 Each task runs in its `dir` (or the session `cwd`). `dir` is canonicalized and must be
 the session `cwd` or a directory **under** it: a `dir` that does not exist, cannot be
 canonicalized, or resolves outside the session `cwd` (e.g. `../../etc`, or an absolute
-path elsewhere) is **silently ignored** and the task runs in the session `cwd` instead.
+path elsewhere) is **refused**: the task is not spawned (it is never run in the session
+`cwd` as a substitute) and is reported as `name (blocked: task dir … )`.
 `$CARGO_HOME/bin` is prepended to `PATH`, so `cargo` subcommands like `cargo-deny` resolve even when `~/.cargo/bin` isn't
 on the ambient PATH. `cargo-deny` must still be installed separately
 (`cargo install cargo-deny`) for the default security task to do anything.
@@ -135,7 +136,7 @@ command = "cargo deny check advisories bans sources licenses"
 [[task]]
 name = "notes-sync"
 command = "git -C ~/notes pull --ff-only"
-dir = "tools"             # optional; must resolve to the session cwd or below — else ignored (runs in the session cwd)
+dir = "tools"             # optional; must resolve to the session cwd or below — else the task is refused (blocked)
 ```
 
 - `enabled` defaults to **true** when omitted; set `enabled = false` to turn the runner

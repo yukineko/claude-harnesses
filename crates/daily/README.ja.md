@@ -25,7 +25,7 @@
 
 spawn の前に、`task.command` は PreToolUse フックと同じ `blastguard` 検出器にかけられる。blastguard が **Deny**（破壊的）と判定したコマンドは spawn されず、`name (blocked: <理由>)` として要約／レポートに記録される。blastguard が `Ask`（解析できない構文で、推測を拒否した）を返したコマンドも拒否される: SessionStart にはそれに答える人間がいないため、`src/main.rs` の `run_task` は `Ask` を `Deny` に硬化（`Decision::hardened`）し、そのコマンドは spawn されずに `name (blocked: <理由>)` として記録される。
 
-各タスクは `dir`（無ければセッションの `cwd`）で実行される。`dir` は正規化され、セッションの `cwd` 自身かその**配下**でなければならない: 存在しない・正規化できない・セッション `cwd` の外に解決される（`../../etc` や別の場所の絶対パス等）`dir` は**黙って無視され**、セッションの `cwd` で実行される。また `$CARGO_HOME/bin` を `PATH` の先頭に足して実行される（`~/.cargo/bin` が PATH に無くても `cargo-deny` 等の cargo サブコマンドが解決できる）。デフォルトの security タスクを機能させるには `cargo-deny` を別途インストールする必要がある（`cargo install cargo-deny`）。
+各タスクは `dir`（無ければセッションの `cwd`）で実行される。`dir` は正規化され、セッションの `cwd` 自身かその**配下**でなければならない: 存在しない・正規化できない・セッション `cwd` の外に解決される（`../../etc` や別の場所の絶対パス等）`dir` を持つタスクは**拒否される**: spawn されず（代わりにセッションの `cwd` で実行されることもない）、`name (blocked: task dir …)` として記録される。また `$CARGO_HOME/bin` を `PATH` の先頭に足して実行される（`~/.cargo/bin` が PATH に無くても `cargo-deny` 等の cargo サブコマンドが解決できる）。デフォルトの security タスクを機能させるには `cargo-deny` を別途インストールする必要がある（`cargo install cargo-deny`）。
 
 実行結果は `additionalContext` としてエージェントに渡される**非ブロッキング**な情報であり、ターンを中断させることはない。また **subscription-native**（サブスクリプション完結）であり、API キーは不要、マシン外に何も送らない。フックは LLM を呼ばない決定論的バイナリである。
 
@@ -129,7 +129,7 @@ command = "cargo deny check advisories bans sources licenses"
 [[task]]
 name = "notes-sync"
 command = "git -C ~/notes pull --ff-only"
-dir = "tools"             # 任意。セッションの cwd かその配下に解決される必要がある（外れると無視され cwd で実行）
+dir = "tools"             # 任意。セッションの cwd かその配下に解決される必要がある（外れるとタスクは拒否され blocked になる）
 ```
 
 - `enabled` は省略時 **true**。`enabled = false` でランナー全体を停止できる。

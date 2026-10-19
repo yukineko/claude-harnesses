@@ -301,7 +301,8 @@ enum Outcome {
     Failed { code: Option<i32>, brief: String },
     /// The command could not be spawned at all (e.g. `sh` missing).
     SpawnError(String),
-    /// blastguard refused the command before it was ever spawned (fail-closed).
+    /// Refused before it was ever spawned (fail-closed): blastguard flagged the
+    /// command, or the task's `dir` could not be honoured.
     Blocked(String),
 }
 
@@ -313,9 +314,14 @@ enum Outcome {
 /// able to point a subprocess's working directory outside the project root.
 /// We `canonicalize()` both the root and the candidate dir (resolving `..`,
 /// symlinks, and relative segments) and require the candidate to be the root
-/// or a descendant of it. Any failure (missing dir, canonicalize error,
-/// escape) falls back to `cwd` itself rather than trusting the raw path.
-fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> PathBuf {
+/// or a descendant of it.
+///
+/// Any failure to honour an explicit `dir` (missing dir, canonicalize error,
+/// escape, or an un-canonicalizable root) is an `Err` carrying the reason: the
+/// task asked to run *somewhere specific*, and running it in the session cwd
+/// instead would execute it in a place the user never chose. The caller
+/// refuses the task (reported as `blocked`) rather than substituting `cwd`.
+fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> Result<PathBuf, String> {
     let Some(raw) = task_dir else {
         // Canonicalize the default too. Every other exit from this function
         // returns a canonical path, and a return value whose meaning depends on
@@ -323,9 +329,10 @@ fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> PathBuf {
         // `starts_with` against another canonical path. On macOS the difference
         // is real and routine: `/var/...` vs `/private/var/...` for the same
         // directory, which is exactly what made this fail on macos-14 while
-        // passing on ubuntu. Falls back to the raw cwd when canonicalization is
-        // impossible, matching the `Err` arm below.
-        return cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        // passing on ubuntu. With no `dir` requested, the session cwd IS the
+        // requested place, so when canonicalization is impossible the raw cwd
+        // is still the right answer (no override is being dropped).
+        return Ok(cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()));
     };
 
     let candidate = if Path::new(raw).is_absolute() {
@@ -334,18 +341,21 @@ fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> PathBuf {
         cwd.join(raw)
     };
 
-    let root_canon = match cwd.canonicalize() {
-        Ok(p) => p,
-        // Can't establish a trusted root at all — refuse the override and
-        // fall back to the (uncanonicalized) cwd rather than the candidate.
-        Err(_) => return cwd.to_path_buf(),
-    };
+    let root_canon = cwd.canonicalize().map_err(|e| {
+        format!(
+            "task dir `{raw}`: cannot canonicalize the session cwd {} ({e})",
+            cwd.display()
+        )
+    })?;
 
     match candidate.canonicalize() {
-        Ok(candidate_canon) if candidate_canon.starts_with(&root_canon) => candidate_canon,
-        // Either the dir doesn't exist, canonicalize failed, or it resolved
-        // outside the project root (e.g. `../../etc`) — reject and fall back.
-        _ => root_canon,
+        Ok(candidate_canon) if candidate_canon.starts_with(&root_canon) => Ok(candidate_canon),
+        Ok(candidate_canon) => Err(format!(
+            "task dir `{raw}` resolves to {} outside the session cwd {}",
+            candidate_canon.display(),
+            root_canon.display()
+        )),
+        Err(e) => Err(format!("task dir `{raw}` is unusable ({e})")),
     }
 }
 
@@ -371,7 +381,10 @@ fn run_task(task: &Task, cwd: &Path) -> Outcome {
         return Outcome::Blocked(reason);
     }
 
-    let dir = resolve_task_dir(task.dir.as_deref(), cwd);
+    let dir = match resolve_task_dir(task.dir.as_deref(), cwd) {
+        Ok(d) => d,
+        Err(reason) => return Outcome::Blocked(reason),
+    };
 
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(&task.command).current_dir(&dir);
@@ -1030,7 +1043,7 @@ dir = \"/repo\"
     fn resolve_task_dir_defaults_to_cwd_when_unset() {
         let root = tempfile::tempdir().unwrap();
         let resolved = resolve_task_dir(None, root.path());
-        assert_eq!(resolved, root.path().canonicalize().unwrap());
+        assert_eq!(resolved, Ok(root.path().canonicalize().unwrap()));
     }
 
     #[test]
@@ -1039,35 +1052,56 @@ dir = \"/repo\"
         let sub = root.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
         let resolved = resolve_task_dir(Some("sub"), root.path());
-        assert_eq!(resolved, sub.canonicalize().unwrap());
+        assert_eq!(resolved, Ok(sub.canonicalize().unwrap()));
     }
+
+    // Contract change (backlog 24a169f4): the three rejection cases below used
+    // to pin a silent fallback to the session cwd. A rejected `dir` is now an
+    // `Err`, so the task is refused instead of running somewhere unrequested.
 
     #[test]
     fn resolve_task_dir_rejects_parent_traversal_escape() {
         let root = tempfile::tempdir().unwrap();
-        let root_canon = root.path().canonicalize().unwrap();
         // e.g. `../../etc` — escapes the project root via `..` traversal.
         let resolved = resolve_task_dir(Some("../../etc"), root.path());
-        // Rejected: falls back to the (canonicalized) root, never `/etc`.
-        assert_eq!(resolved, root_canon);
-        assert!(!resolved.ends_with("etc"));
+        assert!(resolved.is_err(), "escape must be rejected: {resolved:?}");
+        // The refusal names the offending dir, so the blocked report says why.
+        let err = resolved.unwrap_err();
+        assert!(err.contains("../../etc"), "got: {err}");
     }
 
     #[test]
     fn resolve_task_dir_rejects_absolute_escape_outside_root() {
         let root = tempfile::tempdir().unwrap();
-        let root_canon = root.path().canonicalize().unwrap();
         // An absolute path outside the root must also be rejected.
         let resolved = resolve_task_dir(Some("/etc"), root.path());
-        assert_eq!(resolved, root_canon);
+        let err = resolved.expect_err("absolute escape must be rejected");
+        assert!(err.contains("outside the session cwd"), "got: {err}");
     }
 
     #[test]
     fn resolve_task_dir_rejects_nonexistent_dir() {
         let root = tempfile::tempdir().unwrap();
-        let root_canon = root.path().canonicalize().unwrap();
         let resolved = resolve_task_dir(Some("does-not-exist"), root.path());
-        assert_eq!(resolved, root_canon);
+        let err = resolved.expect_err("missing dir must be rejected");
+        assert!(err.contains("does-not-exist"), "got: {err}");
+    }
+
+    /// A task whose `dir` cannot be honoured is refused, never spawned.
+    #[test]
+    fn run_task_blocks_when_dir_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let task = Task {
+            name: "nodir".to_string(),
+            command: "touch spawned.marker".to_string(),
+            dir: Some("no-such-subdir".to_string()),
+        };
+        let outcome = run_task(&task, tmp.path());
+        assert!(
+            matches!(outcome, Outcome::Blocked(_)),
+            "expected Blocked, got {outcome:?}"
+        );
+        assert!(!tmp.path().join("spawned.marker").exists());
     }
 
     /// A destructive task.command (rm -rf) must be refused by blastguard before

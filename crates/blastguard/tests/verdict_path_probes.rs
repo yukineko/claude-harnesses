@@ -10,8 +10,7 @@
 //! re-raised by the next reader of the same code.
 //!
 //! The census listed 120 permissive-or-collapsing terminals in this crate's
-//! production code (method and full table in
-//! `docs/audit-blastguard-verdict-paths.md`). Most are "checked, found no
+//! production code. Most are "checked, found no
 //! hazard" — a determination, not a failure to make one. Three looked like
 //! "could not determine, answered fine". Measured 2026-08-02 against 0.2.38:
 //!

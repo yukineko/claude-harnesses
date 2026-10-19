@@ -200,6 +200,15 @@ enum Command {
         #[arg(long = "red-rev")]
         red_rev: Option<String>,
 
+        /// Narrow the RED run's overlay to this HEAD test file (repeatable).
+        /// By default the RED worktree at --red-rev gets every HEAD test file
+        /// (cargo) or the named ones (pytest); when the fix itself lives in a
+        /// test file, that copies the fix in. Name only the repro side here.
+        /// Each path must already be in the default overlay (narrow, never
+        /// widen); the narrowed set is recorded as closure.red.overlay.
+        #[arg(long = "red-overlay")]
+        red_overlay: Vec<String>,
+
         /// fixed (default) | already-fixed | obsolete
         #[arg(long)]
         reason: Option<String>,
@@ -1313,6 +1322,7 @@ fn run(cli: Cli) -> Result<()> {
             id,
             test,
             red_rev,
+            red_overlay,
             reason,
             duplicate_of,
             doc_only,
@@ -1324,6 +1334,7 @@ fn run(cli: Cli) -> Result<()> {
                     id: id.clone(),
                     test,
                     red_rev,
+                    red_overlay,
                     reason,
                     duplicate_of,
                     doc_only,

@@ -37,7 +37,7 @@ ZERO40=0000000000000000000000000000000000000000
 
 # ---------------------------------------------------------------- fixtures
 reset_vars() {
-  unset DISCARD_REASON G_RUNNER G_CMD G_EXIT G_PASSED G_REV R_REV R_EXIT R_KIND NO_RED NO_GREEN \
+  unset DISCARD_REASON G_RUNNER G_CMD G_EXIT G_PASSED G_REV R_REV R_EXIT R_KIND R_OVERLAY NO_RED NO_GREEN \
         FORGED_RED DOC_FILE DOC_COMMIT_SRC R_REV_NONANC NO_FEATURE DUP_OF STATUS RK_BY RK_AT RK_VIA NO_TEST_STAGE
 }
 
@@ -93,6 +93,7 @@ closure_f2p() { # $1 = green rev default, $2 = red rev default
     echo "rev = \"${R_REV:-$2}\""
     echo "exit = ${R_EXIT:-1}"
     echo "kind = \"${R_KIND:-behavioural}\""
+    [ -z "${R_OVERLAY:-}" ] || echo "overlay = ${R_OVERLAY}"
   fi
 }
 
@@ -133,6 +134,27 @@ stage_f2p() {
   [ -n "${NO_TEST_STAGE:-}" ] || paths="$paths tests/t.sh"
   [ -f "$D/feature.txt" ] && [ -z "${FORGED_RED:-}" ] && paths="$paths feature.txt"
   ( cd "$D" && git add $paths ) || exit 1
+}
+
+# The fix lives in a TEST file (tests/subject.txt, buggy at the red rev,
+# fixed in the index); the repro tests/t.sh passes iff it reads `fixed`.
+# A script runner's default overlay is the script alone, so the red tree keeps
+# the buggy subject; R_OVERLAY pins the closure.red.overlay shape checks
+# (narrowed overlay accepted, widened / empty / non-list blocked).
+stage_fix_in_test_file() {
+  new_repo
+  echo buggy >"$D/tests/subject.txt"
+  ( cd "$D" && git add tests/subject.txt && git commit -q -m "subject test (buggy)" ) || exit 1
+  local red; red="$(git -C "$D" rev-parse HEAD)"
+  echo fixed >"$D/tests/subject.txt"
+  cat >"$D/tests/t.sh" <<'T'
+#!/usr/bin/env bash
+if grep -q '^fixed$' tests/subject.txt; then echo "test result: ok. 1 passed; 0 failed"; exit 0; fi
+echo "test result: FAILED. 0 passed; 1 failed"; exit 1
+T
+  chmod +x "$D/tests/t.sh"
+  closure_f2p "$red" "$red" | stage_done_row done
+  ( cd "$D" && git add .backlog/tasks.toml .backlog/tasks.done.toml tests/t.sh tests/subject.txt ) || exit 1
 }
 
 stage_doc_only() { # DOC_FILE (default docs/x.md)
@@ -225,6 +247,10 @@ case_; stage_discard; expect "P9 cancelled with discard closure + non-empty disc
 case_; DISCARD_REASON="no evidence, speculation only"; stage_discard; expect "P10 cancelled discard with a different non-empty reason" pass
 case_; G_RUNNER=script; stage_f2p; expect "P11 CLI runner label script for bash tests/t.sh (backlog b0c3d263)" pass
 case_; G_RUNNER=sh; G_CMD="sh tests/t.sh"; stage_f2p; expect "P12 legacy first-word runner sh for sh tests/t.sh" pass
+case_; R_OVERLAY='["tests/t.sh"]'; stage_fix_in_test_file; expect "P13 fix in a test file, red.overlay = the repro only" pass
+case_; R_OVERLAY='["tests/t.sh", "tests/subject.txt"]'; stage_fix_in_test_file; expect "B39 red.overlay widens the default overlay (copies the fixed subject in)" block
+case_; R_OVERLAY='[]'; stage_fix_in_test_file; expect "B40 red.overlay is an empty list" block
+case_; R_OVERLAY='"tests/t.sh"'; stage_fix_in_test_file; expect "B41 red.overlay is not a list" block
 
 # ---------------------------------------------------------------- BLOCK: no / malformed evidence
 case_; new_repo

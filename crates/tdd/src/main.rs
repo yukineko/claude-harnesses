@@ -210,9 +210,35 @@ fn skip_cmd(reason: &str) -> anyhow::Result<()> {
 /// bounded to one block via `stop_hook_active`) and is surfaced (exit 1) in
 /// manual CLI mode. Real `process::exit` calls inside `gate_run` terminate
 /// directly, so only genuine panics ever reach the guard.
+///
+/// # Unparseable stdin is NOT manual CLI mode
+///
+/// Only an EMPTY stdin means a human ran `tdd gate` by hand. A non-empty stdin
+/// that does not parse is a Stop hook payload the gate could not read, and
+/// treating it as manual mode reported a violation on stderr with exit 1 —
+/// which Claude Code reads as a non-blocking error, i.e. the stop was ALLOWED
+/// in a repo the gate itself judged violating (backlog 10f339ee). Such a run is
+/// handled in hook mode: the repo is the process cwd (where Claude Code runs
+/// the hook), the session is `CLAUDE_CODE_SESSION_ID` when set, and a
+/// violation emits `decision:block`. It is bounded by the gate's existing
+/// per-session attempt counter (`max_attempts`, default 3) and its give-up,
+/// exactly like a parsed payload — no separate retry mechanism.
 fn gate_command() -> ! {
     let raw = read_stdin();
-    let hook = HookInput::parse(&raw);
+    let hook = HookInput::parse(&raw).or_else(|| {
+        if raw.trim().is_empty() {
+            None
+        } else {
+            eprintln!(
+                "tdd: stdin is not a Stop hook payload (unparseable); evaluating the \
+                 current directory in hook mode"
+            );
+            Some(HookInput {
+                session_id: harness_core::repeat::session_id(),
+                ..HookInput::default()
+            })
+        }
+    });
     let interactive = hook.is_none();
     // On a post-block re-entry Claude Code sets stop_hook_active; the panic guard
     // uses it to bound a fail-closed block to a single occurrence (no turn-trap).

@@ -16,6 +16,12 @@ fn run_gate(cwd: &Path, home: &Path, path: &Path, payload: &str) -> (i32, String
         .current_dir(cwd)
         .env("HOME", home)
         .env("PATH", path)
+        // Hermetic session: without this the parent's CLAUDE_CODE_SESSION_ID
+        // leaks in, and the repeat ledger (keyed on that env var) sees the
+        // control's block and the malformed run's block as the same session
+        // while the attempt counter (keyed on the payload) does not. Pinning it
+        // to the control payload's session models one real session.
+        .env("CLAUDE_CODE_SESSION_ID", "mal-ctl")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -33,7 +39,6 @@ fn run_gate(cwd: &Path, home: &Path, path: &Path, payload: &str) -> (i32, String
 }
 
 #[test]
-#[ignore = "RED repro: tdd gate allows the stop on malformed stdin in a violating repo"]
 fn malformed_stdin_in_violating_repo_does_not_allow() {
     let root = std::env::temp_dir().join(format!("tdd-malformed-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);

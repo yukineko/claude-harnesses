@@ -23,9 +23,9 @@
 - spawn 前に blastguard が拒否した → `name (blocked: <理由>)`
 - 当日実行すべきものが無い → 沈黙する
 
-spawn の前に、`task.command` は PreToolUse フックと同じ `blastguard` 検出器にかけられる。blastguard が **Deny**（破壊的）と判定したコマンドは spawn されず、`name (blocked: <理由>)` として要約／レポートに記録される。**ブロックするのは `Deny` だけ**である: blastguard が `Ask`（解析できない構文）を返したコマンドは、ここでは拒否されない — `daily` は `Ask` を `Deny` に硬化しない（`src/main.rs` の `run_task` は `Decision::Deny` しか見ていない）ため、そのようなコマンドは通常どおり spawn される。
+spawn の前に、`task.command` は PreToolUse フックと同じ `blastguard` 検出器にかけられる。blastguard が **Deny**（破壊的）と判定したコマンドは spawn されず、`name (blocked: <理由>)` として要約／レポートに記録される。blastguard が `Ask`（解析できない構文で、推測を拒否した）を返したコマンドも拒否される: SessionStart にはそれに答える人間がいないため、`src/main.rs` の `run_task` は `Ask` を `Deny` に硬化（`Decision::hardened`）し、そのコマンドは spawn されずに `name (blocked: <理由>)` として記録される。
 
-各タスクは `dir`（無ければセッションの `cwd`）で実行される。`dir` は正規化され、セッションの `cwd` 自身かその**配下**でなければならない: 存在しない・正規化できない・セッション `cwd` の外に解決される（`../../etc` や別の場所の絶対パス等）`dir` は**黙って無視され**、セッションの `cwd` で実行される。また `$CARGO_HOME/bin` を `PATH` の先頭に足して実行される（`~/.cargo/bin` が PATH に無くても `cargo-deny` 等の cargo サブコマンドが解決できる）。デフォルトの security タスクを機能させるには `cargo-deny` を別途インストールする必要がある（`cargo install cargo-deny`）。
+各タスクは `dir`（無ければセッションの `cwd`）で実行される。`dir` は正規化され、セッションの `cwd` 自身かその**配下**でなければならない: 存在しない・正規化できない・セッション `cwd` の外に解決される（`../../etc` や別の場所の絶対パス等）`dir` を持つタスクは**拒否される**: spawn されず（代わりにセッションの `cwd` で実行されることもない）、`name (blocked: task dir …)` として記録される。また `$CARGO_HOME/bin` を `PATH` の先頭に足して実行される（`~/.cargo/bin` が PATH に無くても `cargo-deny` 等の cargo サブコマンドが解決できる）。デフォルトの security タスクを機能させるには `cargo-deny` を別途インストールする必要がある（`cargo install cargo-deny`）。
 
 実行結果は `additionalContext` としてエージェントに渡される**非ブロッキング**な情報であり、ターンを中断させることはない。また **subscription-native**（サブスクリプション完結）であり、API キーは不要、マシン外に何も送らない。フックは LLM を呼ばない決定論的バイナリである。
 
@@ -102,7 +102,7 @@ daily list     # 登録タスクと「今日実行済みか」を表示
 | `daily list` | 登録タスクと当日実行済みかを表示する |
 | `daily report [--date <d>] [--last <n>]` | 過去の実行結果レポートを表示する（既定は今日） |
 | `daily add --name <n> --command <c> [--dir <d>]` | `~/.daily/config.toml` に日次タスクを登録する |
-| `daily install` | （未実装 — 通知を出して exit 0）フックを `~/.claude/settings.json` に追加する。現状は手動配線が必要 |
+| `daily install` | （未実装 — 何もインストールせず、通知を出して exit 1）フックを `~/.claude/settings.json` に追加する。現状は手動配線が必要 |
 
 ### プラグインとしての導入（推奨）
 
@@ -129,10 +129,10 @@ command = "cargo deny check advisories bans sources licenses"
 [[task]]
 name = "notes-sync"
 command = "git -C ~/notes pull --ff-only"
-dir = "tools"             # 任意。セッションの cwd かその配下に解決される必要がある（外れると無視され cwd で実行）
+dir = "tools"             # 任意。セッションの cwd かその配下に解決される必要がある（外れるとタスクは拒否され blocked になる）
 ```
 
 - `enabled` は省略時 **true**。`enabled = false` でランナー全体を停止できる。
 - `[[task]]` が登録タスク。**1 つも登録しなければ**組み込みの `security` タスクが走り、**1 つ以上登録すれば**それらだけが走る（security も欲しければ自分で追加する）。
 - 各 `name` は一意でなければならない（タスク毎の日次状態キーになるため）。
-- **パースできない** config は stderr に警告を出して無視され、既定（有効・登録なし → 組み込みの `security` タスクが走る）として扱われる。
+- **パースできない** config は既定として扱われ**ない**: `session-start` はタスクを一切実行せず、config がパースできず当日のタスク状態は UNKNOWN である旨を `systemMessage` + `additionalContext` で出す。`daily list` / `daily add` は exit 1 する。

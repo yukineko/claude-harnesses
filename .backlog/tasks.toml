@@ -1022,3 +1022,162 @@ exit 101:  finished in 1.21s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
      Running tests/repro_overlap_hold_empty_branch.rs (target/debug/deps/repro_overlap_hold_empty_branch-f05d1c8a6ba38345)
 error: test failed, to rerun pass `-p condukt --test repro_overlap_hold_empty_branch`"""
+
+[[task]]
+id = "a87134cd"
+title = "a live session's leases other than its newest are never heartbeated and get reaped after the TTL"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "stuckguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed live 2026-10-20: session 6d32fd65 held 3ee0b6deb25e59ed and 9d9efd09e429cfd1 (same claimed_at); ~48 min later end of 3ee0b6 said no lease held, 9d9efd09 ended fine. stuckguard anchor.rs heartbeat_piggyback runs overwatch lease --session (pick_session_lease = max_by_key claimed_at, ONE lease) then heartbeat --key; the rest age past LEASE_TTL_SECS 1800 and reap_stale drops them, so another session can claim the same work. Repro at 7708e03e."
+created_at = 1792435460
+updated_at = 1792435460
+weight = 0.0
+issue_number = 1434
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1434"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_session_heartbeat_refreshes_one_lease session_heartbeat_piggyback_refreshes_all_session_leases -- --include-ignored --exact"
+rev = "7708e03eea25f0f5ef37951f1e74003532250b35"
+observed_at = 1792435460
+detail = """
+exit 101: h v0.2.88 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.30s
+     Running tests/repro_session_heartbeat_refreshes_one_lease.rs (target/debug/deps/repro_session_heartbeat_refreshes_one_lease-e08cd9410ed6ee8f)
+error: test failed, to rerun pass `-p overwatch --test repro_session_heartbeat_refreshes_one_lease`"""
+
+[[task]]
+id = "3fb912d6"
+title = "overwatch reap_stale drops a stale lease without appending any event"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "events.jsonl at ~/.overwatch/harness-e77d23c7 has 258 started vs 193 ended and no reap event kind (2026-10-20). Every mutator calls store::reap_stale, which retains silently, so a vanished lease is indistinguishable from never begun in the ledger. Repro at 7708e03e."
+created_at = 1792435469
+updated_at = 1792435469
+weight = 0.0
+issue_number = 1435
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1435"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_session_heartbeat_refreshes_one_lease stale_lease_reap_by_a_mutator_is_not_silent -- --include-ignored --exact"
+rev = "7708e03eea25f0f5ef37951f1e74003532250b35"
+observed_at = 1792435469
+detail = """
+exit 101: D. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/repro_session_heartbeat_refreshes_one_lease.rs (target/debug/deps/repro_session_heartbeat_refreshes_one_lease-e08cd9410ed6ee8f)
+error: test failed, to rerun pass `-p overwatch --test repro_session_heartbeat_refreshes_one_lease`"""
+
+[[task]]
+id = "ba45d1b4"
+title = "design-625aa170 doc says the overlap cross-check runs under LeaseLock::acquire; the code calls acquire_strict"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "docs/design-625aa170-runtime-conflict-detect-consensus-resolve.md:33 vs crates/overwatch/src/store.rs record_changeset_and_detect after d0ccb95b. Repro at 7708e03e."
+created_at = 1792435473
+updated_at = 1792435473
+weight = 0.0
+issue_number = 1436
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1436"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_design_625aa170_lock_fn_claim.py"
+rev = "7708e03eea25f0f5ef37951f1e74003532250b35"
+observed_at = 1792435473
+detail = """
+exit 1: _and_detect calls LeaseLock::['acquire_strict']
+
+scripts/test_design_625aa170_lock_fn_claim.py:44: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_design_625aa170_lock_fn_claim.py::T::test_doc_named_lock_fn_is_the_one_record_changeset_and_detect_calls
+============================== 1 failed in 0.04s ==============================="""
+
+[[task]]
+id = "4493142a"
+title = "backlog lock release deletes another session's exclusive lock without any ownership check"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed live 2026-10-20: lock acquire refused to reap d52fbfce's stale lock, then lock release --project (no session id) removed it. main.rs LockAction::Release takes no caller; lock::release_at remove_file with no holder check. Repro at feab5559."
+created_at = 1792444756
+updated_at = 1792444756
+weight = 0.0
+issue_number = 1437
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1437"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test lock_status_release_ownership release_by_non_holder_does_not_delete_the_lock -- --include-ignored --exact"
+rev = "feab5559a088a9a7e31dc27a876d1990099268c1"
+observed_at = 1792444756
+detail = """
+exit 101: ed out; finished in 0.67s
+
+   Compiling backlog v0.3.63 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.97s
+     Running tests/lock_status_release_ownership.rs (target/debug/deps/lock_status_release_ownership-8556bfdc3992614d)
+error: test failed, to rerun pass `-p backlog --test lock_status_release_ownership`"""
+
+[[task]]
+id = "28a16afd"
+title = "backlog lock status hides a heartbeat-stale exclusive lock that next --claim still honours"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed live 2026-10-20: next --claim refused on d52fbfce's exclusive lock (heartbeat 2026-07-28) while lock status printed kind driver-presence with no holder. Fresh locks are shown; only stale ones are hidden. Repro at feab5559."
+created_at = 1792444763
+updated_at = 1792444763
+weight = 0.0
+issue_number = 1438
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1438"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test lock_status_release_ownership status_reports_exclusive_lock_held_by_another_session -- --include-ignored --exact"
+rev = "feab5559a088a9a7e31dc27a876d1990099268c1"
+observed_at = 1792444763
+detail = """
+exit 101: _held_by_another_session
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.55s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/lock_status_release_ownership.rs (target/debug/deps/lock_status_release_ownership-8556bfdc3992614d)
+error: test failed, to rerun pass `-p backlog --test lock_status_release_ownership`"""

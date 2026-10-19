@@ -25,7 +25,8 @@ conflict-hardening batch (schedule.rs twins fc03d26d, worktree repo-lock c701e75
 ## (A) Mid-flight runtime conflict detection
 - Fire a sibling of the diff-risk hook at main.rs:3386 (`state set --status done`, post-worker-commit
   pre-merge): `runtime_conflict::record_and_check_actual_overlap(...)`. Worktree still on disk →
-  `git diff --name-only <base>...HEAD` = ACTUAL changed set (reuse three-dot base + fail-soft cascade).
+  `git diff --name-only <base>...HEAD` = ACTUAL changed set (reuse three-dot base + fallback cascade;
+  if EVERY fallback fails the set is undetermined, not empty — see below).
 - New overwatch type `ActualChangeset { task_key, run_id, session_id, branch, base_ref (frozen SHA),
   head_sha, files (normalized repo-relative), ts, merged }`, stored in NEW registry
   `active_changesets.json` (BTreeMap by task_key) + append-only `runtime_conflicts.jsonl`. New module
@@ -37,12 +38,20 @@ conflict-hardening batch (schedule.rs twins fc03d26d, worktree repo-lock c701e75
   literal paths → plain set intersection, no glob). Append one `RuntimeConflictEvent
   { run_id, task_key_a, task_key_b, overlapping_files, base_ref, session_id, ts, detail }` per overlap,
   then upsert+save (temp+rename).
-- Missing worktree / git fail / empty diff → no-op (nothing recorded, no hold, exit code +
-  schedule gating untouched). A lock timeout or registry read/write failure is NOT a no-op: the
-  overlap is undetermined (unchecked, not absent), so it places a RuntimeOverlap hold
-  `<task_key>/runtime-overlap-unchecked` (`OverlapCheck::UncheckedHeld`, backlog 08494f63); if
-  that hold (or a positive-overlap hold) cannot be enqueued, `state set --status done` exits 1
-  (backlog 452f3705).
+- Missing worktree / unresolvable base / genuinely empty diff → no-op (`OverlapCheck::NotRecorded`:
+  nothing recorded, no hold, exit code + schedule gating untouched). A git failure listing the
+  changed files (every diff fallback fails) is NOT a no-op (backlog 79458be4): the changes are
+  unknown, so the overlap is undetermined and it places the same `<task_key>/runtime-overlap-unchecked`
+  hold as below (no changeset is registered — there is no file set to register). A lock timeout
+  or registry read/write failure is likewise NOT a no-op: the overlap is undetermined (unchecked,
+  not absent), so it places a RuntimeOverlap hold `<task_key>/runtime-overlap-unchecked`
+  (`OverlapCheck::UncheckedHeld`, backlog 08494f63); if that hold (or a positive-overlap hold)
+  cannot be enqueued, `state set --status done` exits 1 (backlog 452f3705).
+- Hold branch (backlog 38321ba7): the merge gate matches a hold by `entry.branch == <merged branch>`,
+  so a hold is never written with an empty branch. The branch is the task's recorded `branch`, else
+  the branch checked out in the task worktree (`git symbolic-ref --short -q HEAD`); if neither yields
+  one (detached HEAD, git failure) the hold is NOT written and is reported as not enqueued
+  (`OverlapCheck::HoldNotEnqueued`, `state set --status done` exits 1).
 - Cleanup: mark `merged=true`/delete on branch land — hook merge-success (main.rs:3024-3033 run_pr Poll;
   main.rs:2695 run_worktree Merge) + reconcile.rs. Lease-liveness filter ages out crashed runs.
 
@@ -72,7 +81,8 @@ conflict-hardening batch (schedule.rs twins fc03d26d, worktree repo-lock c701e75
 - **T1** overwatch changeset registry + runtime-conflict stream — changeset.rs(new), store.rs, lib.rs.
   RED: append/read round-trip + pure overlap() intersection + concurrent double-write serialized (LeaseLock).
 - **T2** condukt detection hook — runtime_conflict.rs(new), main.rs. RED: two worktrees edit an
-  UNDECLARED shared file, both →done → exactly one event names that file; missing-worktree/git-fail = no-op. (dep T1)
+  UNDECLARED shared file, both →done → exactly one event names that file; missing-worktree = no-op
+  (git-fail was originally a no-op too; superseded by backlog 79458be4 — it now holds). (dep T1)
 - **T3** overwatch merge-conflict store + review-queue kind + resolve CLI — merge_conflict.rs(new),
   review_queue.rs, store.rs, main.rs. RED: open entry shows as `[merge-conflict]` High in
   review-queue --json; resolve writes Resolution and leaves open set; concurrent resolves no double-write. (dep T1, shares store.rs → serialized)
@@ -106,8 +116,9 @@ root marketplace.json demotes every task to serial. Net order: (T1→T3) and (T2
    sibling `[runtime-overlap]` kind in review_queue). T5's `resolve-merge` clears the hold then
    proceeds. This unifies A→B into one gate→review→resolve loop. Consequence: T2 now also depends on
    T3 (needs the review surface to enqueue), and the merge-hold check lands in the condukt merge path.
-   On the DETECTION side, missing-worktree / git-fail / empty-diff stay no-ops, but a lock timeout
-   or registry read/write failure is undetermined and places a RuntimeOverlap hold
+   On the DETECTION side, missing-worktree / genuinely-empty-diff stay no-ops, but a git failure
+   listing the changed files (backlog 79458be4), a lock timeout, or a registry read/write failure
+   is undetermined and places a RuntimeOverlap hold
    `<task_key>/runtime-overlap-unchecked` (UncheckedHeld); if that hold cannot be enqueued,
    `state set --status done` exits 1. The HOLD itself is a real block (conservative: if overlap is
    detected — or could not be checked — do not silently merge).

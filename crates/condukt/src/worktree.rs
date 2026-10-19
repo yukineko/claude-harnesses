@@ -99,10 +99,18 @@ fn run_git_bounded_with(
         .spawn()
         .with_context(|| format!("failed to spawn git {:?}", args))?;
 
+    // Drain both pipes CONCURRENTLY with the wait. Waiting for exit first and
+    // reading afterwards deadlocks as soon as git writes more than the OS pipe
+    // buffer (64 KiB on macOS): git blocks on the full pipe, never exits, and
+    // is killed at the timeout — which callers then saw as "no output"
+    // (backlog c00c3506: a 66 KB task diff journaled as `no-diff`).
+    let stdout_rx = spawn_reader(child.stdout.take());
+    let stderr_rx = spawn_reader(child.stderr.take());
+
     match child.wait_timeout(timeout) {
         Ok(Some(status)) => {
-            let stdout = read_bounded(child.stdout.take(), timeout);
-            let stderr = read_bounded(child.stderr.take(), timeout);
+            let stdout = read_bounded(stdout_rx, timeout);
+            let stderr = read_bounded(stderr_rx, timeout);
             Ok(GitOutput {
                 status: Some(status),
                 stdout,
@@ -141,23 +149,31 @@ fn kill_tree(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
-/// Bounded stream read: never block past `timeout` even if some lingering
-/// process keeps the pipe's write end open after the immediate child exits.
-fn read_bounded<R: std::io::Read + Send + 'static>(
+/// Start draining `stream` on a background thread immediately (before the
+/// child is waited on), so a child that writes more than the pipe buffer is
+/// never blocked on a full pipe. The collected bytes are delivered on the
+/// returned channel once the write end closes.
+fn spawn_reader<R: std::io::Read + Send + 'static>(
     stream: Option<R>,
-    timeout: Duration,
-) -> Vec<u8> {
-    use std::sync::mpsc;
-    let Some(mut s) = stream else {
-        return Vec::new();
-    };
-    let (tx, rx) = mpsc::channel();
+) -> Option<std::sync::mpsc::Receiver<Vec<u8>>> {
+    let mut s = stream?;
+    let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut out = Vec::new();
         let _ = s.read_to_end(&mut out);
         let _ = tx.send(out);
     });
-    rx.recv_timeout(timeout).unwrap_or_default()
+    Some(rx)
+}
+
+/// Bounded collection of a [`spawn_reader`] result: never block past `timeout`
+/// even if some lingering process keeps the pipe's write end open after the
+/// immediate child exits.
+fn read_bounded(rx: Option<std::sync::mpsc::Receiver<Vec<u8>>>, timeout: Duration) -> Vec<u8> {
+    match rx {
+        Some(rx) => rx.recv_timeout(timeout).unwrap_or_default(),
+        None => Vec::new(),
+    }
 }
 
 /// Run `git` with args in `dir`, returning trimmed stdout. On failure the error
@@ -4658,14 +4674,13 @@ mod large_output_tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// Repro (pipe deadlock): `run_git_bounded_with` waits for git to EXIT
-    /// before draining stdout, so a git command whose output exceeds the OS
+    /// Regression (backlog c00c3506, pipe deadlock): `run_git_bounded_with`
+    /// used to wait for git to EXIT before draining stdout, so a git command whose output exceeds the OS
     /// pipe buffer (64 KiB on macOS) blocks writing, never exits, and is killed
     /// at the timeout. Observed 2026-10-19 at 51376c9c: a 66,752-byte task diff
     /// made `diffrisk_record::worktree_diff` fall through to `git diff HEAD`
     /// (empty) and journal `no-diff` for a branch that had a real commit.
     #[test]
-    #[ignore = "repro: git output larger than the pipe buffer times out (pipe deadlock)"]
     fn output_larger_than_pipe_buffer_is_read_not_timed_out() {
         let tmp = TempDir::new().expect("tempdir");
         let repo = tmp.path();

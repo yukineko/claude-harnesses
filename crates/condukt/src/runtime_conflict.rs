@@ -21,10 +21,20 @@
 //! ## Contract (asymmetric — this is the important nuance)
 //!
 //! Inputs that leave NOTHING to record — no worktree recorded on the task, an
-//! unresolvable base, or a changed-file listing that is empty or that `git`
-//! could not produce — return [`OverlapCheck::NotRecorded`]: no changeset is
-//! registered and no hold is set. Once a changeset IS submitted to the
-//! registry, the answer is three-valued (backlog 08494f63):
+//! unresolvable base, or a GENUINELY empty changed-file listing (git succeeded
+//! and listed no file) — return [`OverlapCheck::NotRecorded`]: no changeset is
+//! registered and no hold is set.
+//!
+//! A changed-file listing that `git` could NOT produce (every diff fallback
+//! failed) is NOT an empty diff: the task's changes are unknown, so its overlap
+//! with in-flight peers is undetermined. It is handled like an unchecked
+//! overlap (backlog 79458be4): nothing is registered (there is no file set to
+//! register) but the `<task_key>/runtime-overlap-unchecked` merge-hold is
+//! enqueued ([`OverlapCheck::UncheckedHeld`]), or
+//! [`OverlapCheck::HoldNotEnqueued`] is returned if that enqueue fails.
+//!
+//! Once a changeset IS submitted to the registry, the answer is three-valued
+//! (backlog 08494f63):
 //!
 //! * the registry recorded and cross-checked it and found no overlap →
 //!   [`OverlapCheck::NoOverlap`] (the only "no overlap" answer);
@@ -42,6 +52,17 @@
 //! contended), the merge is NOT held: that is reported as
 //! [`OverlapCheck::HoldNotEnqueued`], never as "held", and the caller names it
 //! on stderr and exits non-zero.
+//!
+//! ## The hold's branch (backlog 38321ba7)
+//!
+//! The merge gate (`worktree::open_runtime_overlap_hold`) finds a hold by
+//! `entry.branch == <branch being merged>`, so a hold written with an empty
+//! branch can never be matched and holds nothing. The branch is therefore the
+//! task's recorded `branch`, or — when none was recorded — the branch checked
+//! out in the task worktree (`git symbolic-ref --short -q HEAD`). If neither
+//! yields a branch (detached HEAD, git failure), a needed hold is NOT written
+//! and the result is [`OverlapCheck::HoldNotEnqueued`] (state set exits
+//! non-zero); an empty-branch hold is never written.
 
 use crate::config::Config;
 use crate::state::TaskState;
@@ -76,28 +97,84 @@ fn head_sha(worktree: &Path) -> String {
 }
 
 /// The ACTUAL changed files (repo-relative) of the worktree vs `base`, via
-/// `git diff --name-only <base>...HEAD` with the same fail-soft cascade as the
-/// diff-risk hook. `None` when there is no worktree, git fails, or the set is
-/// empty — every one of which the caller degrades to "record nothing".
-fn changed_files(worktree: &Path, base: &str) -> Option<Vec<String>> {
+/// `git diff --name-only <base>...HEAD` with the same fallback cascade as the
+/// diff-risk hook. Three answers (backlog 79458be4):
+///
+/// * `Absent` — the worktree directory does not exist (nothing to inspect);
+/// * `Undetermined(why)` — EVERY diff fallback failed: the changed set is
+///   unknown, which is NOT the same as empty;
+/// * `Known(files)` — git listed the files; `files` may be genuinely empty.
+fn changed_files(worktree: &Path, base: &str) -> ChangedFiles {
     if !worktree.exists() {
-        return None;
+        return ChangedFiles::Absent;
     }
     let spec = format!("{base}...HEAD");
     let out = crate::worktree::git(worktree, &["diff", "--name-only", &spec])
         .or_else(|_| crate::worktree::git(worktree, &["diff", "--name-only", base]))
-        .or_else(|_| crate::worktree::git(worktree, &["diff", "--name-only", "HEAD"]))
-        .ok()?;
-    let files: Vec<String> = out
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .map(|l| l.to_string())
-        .collect();
-    if files.is_empty() {
-        None
-    } else {
-        Some(files)
+        .or_else(|_| crate::worktree::git(worktree, &["diff", "--name-only", "HEAD"]));
+    match out {
+        Ok(out) => ChangedFiles::Known(
+            out.lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .map(|l| l.to_string())
+                .collect(),
+        ),
+        Err(e) => ChangedFiles::Undetermined(format!("{e:#}")),
+    }
+}
+
+/// The result of [`changed_files`]. See its docs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChangedFiles {
+    Absent,
+    Undetermined(String),
+    Known(Vec<String>),
+}
+
+/// The branch a hold for `task` must carry so the merge gate can match it
+/// (backlog 38321ba7): the task's recorded branch, else the branch checked out
+/// in its worktree. `None` when neither is available (no recorded branch and a
+/// detached HEAD / git failure) — the caller must then NOT write a hold.
+fn hold_branch(task: &TaskState, worktree: &Path) -> Option<String> {
+    if let Some(b) = task.branch.as_deref().map(str::trim) {
+        if !b.is_empty() {
+            return Some(b.to_string());
+        }
+    }
+    crate::worktree::git(worktree, &["symbolic-ref", "--short", "-q", "HEAD"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Enqueue `entry` (its `branch` set from `branch`) as an open merge-hold.
+/// `on_ok` is the answer when it lands. A missing branch or an append error
+/// both mean NO matchable hold exists, so both return `HoldNotEnqueued`.
+fn enqueue_hold(
+    repo: &Path,
+    mut entry: MergeConflictEntry,
+    branch: Option<&str>,
+    unchecked: bool,
+    context: &str,
+    on_ok: OverlapCheck,
+) -> OverlapCheck {
+    let Some(branch) = branch else {
+        return OverlapCheck::HoldNotEnqueued {
+            unchecked,
+            why: format!(
+                "{context}; hold NOT written: the task has no recorded branch and none could be \
+                 derived from its worktree, so the merge gate could never match the hold"
+            ),
+        };
+    };
+    entry.branch = branch.to_string();
+    match overwatch::store::append_merge_conflict(repo, &entry) {
+        Ok(()) => on_ok,
+        Err(e) => OverlapCheck::HoldNotEnqueued {
+            unchecked,
+            why: format!("{context}; hold enqueue failed: {e:#}"),
+        },
     }
 }
 
@@ -114,8 +191,10 @@ fn diff_text(worktree: &Path, base: &str) -> String {
 /// What [`record_and_check_actual_overlap`] established. See the module docs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum OverlapCheck {
-    /// Nothing was submitted to the registry (no worktree / base / changed
-    /// files), so no overlap check ran and no hold was set.
+    /// Nothing was submitted to the registry (no worktree / base, or a
+    /// genuinely empty changed-file listing), so no overlap check ran and no
+    /// hold was set. NOT returned when git could not list the changed files —
+    /// that is undetermined and holds the merge (backlog 79458be4).
     NotRecorded,
     /// Recorded and cross-checked: no overlap with any in-flight peer.
     NoOverlap,
@@ -154,19 +233,52 @@ pub(crate) fn record_and_check_actual_overlap(
         Some(b) => b,
         None => return OverlapCheck::NotRecorded,
     };
-    let files = match changed_files(worktree, &base) {
-        Some(f) => f,
-        None => return OverlapCheck::NotRecorded,
-    };
-
     let repo = crate::worktree::toplevel(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     let task_key = format!("{run_id}/{}", task.id);
-    let branch = task.branch.clone().unwrap_or_default();
+    let branch = hold_branch(task, worktree);
+    let unchecked_entry = |files: Vec<String>, diff_theirs: String, why: &str| {
+        MergeConflictEntry {
+            conflict_id: format!("{task_key}/runtime-overlap-unchecked"),
+            origin: ConflictOrigin::RuntimeOverlap,
+            run_id: run_id.to_string(),
+            // Set by `enqueue_hold` (never written empty).
+            branch: String::new(),
+            default_branch: cfg.default_branch.clone(),
+            base_ref: base.clone(),
+            conflicted_files: files,
+            diff_theirs,
+            diff_ours: format!(
+                "mid-flight overlap check NOT performed (undetermined, not absent): {why}"
+            ),
+            ts: now,
+        }
+    };
+
+    let files = match changed_files(worktree, &base) {
+        ChangedFiles::Known(f) if !f.is_empty() => f,
+        // Genuinely nothing to record.
+        ChangedFiles::Known(_) | ChangedFiles::Absent => return OverlapCheck::NotRecorded,
+        // git could not list the changes: the overlap is undetermined, not
+        // absent — hold the merge like an unchecked overlap (backlog 79458be4).
+        ChangedFiles::Undetermined(e) => {
+            let why = format!("git could not list the task's changed files: {e}");
+            let entry = unchecked_entry(Vec::new(), String::new(), &why);
+            return enqueue_hold(
+                &repo,
+                entry,
+                branch.as_deref(),
+                true,
+                &format!("overlap check failed: {why}"),
+                OverlapCheck::UncheckedHeld(why.clone()),
+            );
+        }
+    };
+
     let changeset = ActualChangeset::new(
         task_key.clone(),
         run_id.to_string(),
         session_id.to_string(),
-        branch.clone(),
+        branch.clone().unwrap_or_default(),
         base.clone(),
         head_sha(worktree),
         &files,
@@ -182,28 +294,16 @@ pub(crate) fn record_and_check_actual_overlap(
         Ok(evs) => evs,
         Err(e) => {
             let why = format!("{e:#}");
-            let entry = MergeConflictEntry {
-                conflict_id: format!("{task_key}/runtime-overlap-unchecked"),
-                origin: ConflictOrigin::RuntimeOverlap,
-                run_id: run_id.to_string(),
-                branch,
-                default_branch: cfg.default_branch.clone(),
-                base_ref: base,
-                // Every file this task changed: none of them was cross-checked.
-                conflicted_files: files.clone(),
-                diff_theirs: diff_theirs(),
-                diff_ours: format!(
-                    "mid-flight overlap check NOT performed (undetermined, not absent): {why}"
-                ),
-                ts: now,
-            };
-            return match overwatch::store::append_merge_conflict(&repo, &entry) {
-                Ok(()) => OverlapCheck::UncheckedHeld(why),
-                Err(e2) => OverlapCheck::HoldNotEnqueued {
-                    unchecked: true,
-                    why: format!("overlap check failed: {why}; hold enqueue failed: {e2:#}"),
-                },
-            };
+            // Every file this task changed: none of them was cross-checked.
+            let entry = unchecked_entry(files.clone(), diff_theirs(), &why);
+            return enqueue_hold(
+                &repo,
+                entry,
+                branch.as_deref(),
+                true,
+                &format!("overlap check failed: {why}"),
+                OverlapCheck::UncheckedHeld(why.clone()),
+            );
         }
     };
     if events.is_empty() {
@@ -225,9 +325,10 @@ pub(crate) fn record_and_check_actual_overlap(
         conflict_id: format!("{task_key}/runtime-overlap"),
         origin: ConflictOrigin::RuntimeOverlap,
         run_id: run_id.to_string(),
-        branch,
+        // Set by `enqueue_hold` (never written empty).
+        branch: String::new(),
         default_branch: cfg.default_branch.clone(),
-        base_ref: base,
+        base_ref: base.clone(),
         conflicted_files: overlapping.into_iter().collect(),
         // "theirs" = this task's actual diff (byte-bounded); "ours" = a note of
         // the in-flight peer(s) it overlaps (their worktrees are elsewhere, so a
@@ -243,13 +344,15 @@ pub(crate) fn record_and_check_actual_overlap(
     // A failed enqueue means NO hold is on the review surface, so the merge is
     // not held: report that, never "held" (backlog 452f3705). The
     // runtime_conflicts event itself was already recorded by the call above.
-    match overwatch::store::append_merge_conflict(&repo, &entry) {
-        Ok(()) => OverlapCheck::Held,
-        Err(e) => OverlapCheck::HoldNotEnqueued {
-            unchecked: false,
-            why: format!("overlap detected; hold enqueue failed: {e:#}"),
-        },
-    }
+    // A hold without a determinable branch is likewise not a hold (38321ba7).
+    enqueue_hold(
+        &repo,
+        entry,
+        branch.as_deref(),
+        false,
+        "overlap detected",
+        OverlapCheck::Held,
+    )
 }
 
 #[cfg(test)]
@@ -405,7 +508,101 @@ mod tests {
     }
 
     #[test]
-    fn changed_files_none_on_missing_worktree() {
-        assert!(changed_files(Path::new("/definitely/not/a/dir/xyzzy"), "main").is_none());
+    fn changed_files_absent_on_missing_worktree() {
+        assert_eq!(
+            changed_files(Path::new("/definitely/not/a/dir/xyzzy"), "main"),
+            ChangedFiles::Absent
+        );
+    }
+
+    /// 79458be4: a genuinely empty diff is `Known(empty)` and records nothing
+    /// (no hold) — distinct from a git failure.
+    #[test]
+    fn genuinely_empty_diff_records_nothing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        repo_with_feat_branch(&repo);
+        crate::worktree::git(&repo, &["checkout", "-q", "main"]).unwrap();
+        crate::worktree::git(&repo, &["checkout", "-q", "-b", "empty"]).unwrap();
+        assert_eq!(
+            changed_files(&repo, "main"),
+            ChangedFiles::Known(Vec::new())
+        );
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let cfg = Config::without_config_file();
+        let task = TaskState {
+            id: "t1".to_string(),
+            worktree: Some(repo.to_string_lossy().into_owned()),
+            branch: Some("empty".to_string()),
+            ..Default::default()
+        };
+        let (r, has_hold) = with_home(&home, || {
+            let r = record_and_check_actual_overlap(&cfg, &repo, "run-x", &task, 1, "sess");
+            let p = overwatch::store::merge_conflicts_path(&repo).unwrap();
+            (r, p.exists())
+        });
+        assert_eq!(r, OverlapCheck::NotRecorded);
+        assert!(!has_hold, "a genuinely empty diff must not write a hold");
+    }
+
+    /// 38321ba7: with no recorded branch the hold branch is derived from the
+    /// worktree; a detached HEAD yields none (so no hold may be written).
+    #[test]
+    fn hold_branch_derives_from_worktree_or_none() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        repo_with_feat_branch(&repo);
+        let mut task = TaskState {
+            id: "t1".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(hold_branch(&task, &repo).as_deref(), Some("feat"));
+        task.branch = Some("recorded".to_string());
+        assert_eq!(hold_branch(&task, &repo).as_deref(), Some("recorded"));
+        task.branch = Some(String::new());
+        crate::worktree::git(&repo, &["checkout", "-q", "--detach"]).unwrap();
+        assert_eq!(hold_branch(&task, &repo), None);
+    }
+
+    /// 38321ba7: an unchecked overlap for a task with no determinable branch
+    /// (detached HEAD, none recorded) must NOT write a hold and must report
+    /// `HoldNotEnqueued` — never an empty-branch hold reported as held.
+    #[test]
+    fn no_determinable_branch_is_hold_not_enqueued() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        repo_with_feat_branch(&repo);
+        crate::worktree::git(&repo, &["checkout", "-q", "--detach"]).unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let cfg = Config::without_config_file();
+        let task = TaskState {
+            id: "t1".to_string(),
+            worktree: Some(repo.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let (r, holds) = with_home(&home, || {
+            let reg = overwatch::store::active_changesets_path(&repo).unwrap();
+            std::fs::create_dir_all(reg.parent().unwrap()).unwrap();
+            std::fs::write(&reg, "{not json").unwrap();
+            let r = record_and_check_actual_overlap(&cfg, &repo, "run-x", &task, 1, "sess");
+            let p = overwatch::store::merge_conflicts_path(&repo).unwrap();
+            (r, std::fs::read_to_string(p).unwrap_or_default())
+        });
+        assert!(
+            matches!(
+                r,
+                OverlapCheck::HoldNotEnqueued {
+                    unchecked: true,
+                    ..
+                }
+            ),
+            "no determinable branch must be HoldNotEnqueued, got {r:?}"
+        );
+        assert!(holds.is_empty(), "no hold may be written: {holds}");
     }
 }

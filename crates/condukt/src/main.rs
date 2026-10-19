@@ -4309,6 +4309,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 bail!("invalid decomposition:\n  - {}", errs.join("\n  - "));
             }
             let run_id = run.unwrap_or_else(default_run_id);
+            state::ensure_init_does_not_shadow_legacy(cfg, cwd, &run_id)?;
             let resolved_label = label.or_else(resolve_label);
             let tasks = dec
                 .tasks

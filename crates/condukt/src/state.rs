@@ -443,18 +443,63 @@ pub fn run_dir(cfg: &Config, cwd: &Path, run_id: &str) -> Result<PathBuf> {
     let Some(legacy) = legacy_project_dir(cfg, cwd)? else {
         return Ok(canonical);
     };
-    let safe = harness_core::store::safe_session(run_id);
-    let has_run = |dir: &Path| -> Result<bool> {
-        Ok(observed_exists(&dir.join(format!("{safe}.json")))?
-            || observed_exists(&dir.join(format!("{safe}.decomposition.json")))?)
-    };
-    if has_run(&canonical)? {
+    if run_exists_in(&canonical, run_id)? {
         return Ok(canonical);
     }
-    if has_run(&legacy)? {
+    if run_exists_in(&legacy, run_id)? {
         return Ok(legacy);
     }
     Ok(canonical)
+}
+
+/// Whether `dir` holds run `run_id` (its state file or its decomposition, see
+/// [`run_dir`]). An existence probe that errors is an `Err`, not "absent".
+fn run_exists_in(dir: &Path, run_id: &str) -> Result<bool> {
+    let safe = harness_core::store::safe_session(run_id);
+    Ok(observed_exists(&dir.join(format!("{safe}.json")))?
+        || observed_exists(&dir.join(format!("{safe}.decomposition.json")))?)
+}
+
+/// Refuse a `state init --run <id>` that would create a CANONICAL run with the
+/// id of a LEGACY run living under some linked worktree's per-checkout key
+/// (backlog d87b4305). [`run_dir`] prefers the canonical dir, so the new run
+/// would silently hide the legacy one from its own worktree. A re-init that
+/// resolves to the run's existing dir (canonical, or the legacy dir of the
+/// worktree `cwd` is in) is not a shadow and is left as it was.
+///
+/// Every linked worktree is listed with `git worktree list --porcelain`; a
+/// listing that fails is an `Err` (it could not be told whether a legacy run
+/// would be hidden), except outside a git repository, where there are no
+/// linked worktrees to hold one.
+pub fn ensure_init_does_not_shadow_legacy(cfg: &Config, cwd: &Path, run_id: &str) -> Result<()> {
+    let canonical = project_dir(cfg, cwd)?;
+    if run_dir(cfg, cwd, run_id)? != canonical || run_exists_in(&canonical, run_id)? {
+        return Ok(());
+    }
+    let root = project_root(cwd)?;
+    if !observed_exists(&root.join(".git"))? {
+        return Ok(());
+    }
+    let listing =
+        worktree::git(&root, &["worktree", "list", "--porcelain"]).with_context(|| {
+            format!(
+                "refusing to init run '{run_id}': could not list the linked worktrees of {} to \
+             check that no legacy run with this id would be hidden",
+                root.display()
+            )
+        })?;
+    for path in listing.lines().filter_map(|l| l.strip_prefix("worktree ")) {
+        let dir = cfg.state_dir.join(project_key(Path::new(path)));
+        if dir != canonical && run_exists_in(&dir, run_id)? {
+            bail!(
+                "refusing to init run '{run_id}': a legacy run with this id lives under the \
+                 per-checkout state of worktree {path} ({}); a canonical run with the same \
+                 id would hide it from that worktree. Pick another --run id",
+                dir.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// The CANONICAL per-project state directory (`<state_dir>/<project-key of the

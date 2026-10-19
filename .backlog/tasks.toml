@@ -424,33 +424,6 @@ exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/schemaguard)
 error: test failed, to rerun pass `-p condukt --test backlog_2becbabe`"""
 
 [[task]]
-id = "eba15868"
-title = "blastguard: 非再帰の rm <linked worktree>/.git (gitdir ファイル) が Allow — worktree の git 接続を切る削除を止めない (0.2.105 以前から。test adv_checkout_own_dotgit_file_is_not_allowed が RED)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1791046776
-updated_at = 1792005348
-weight = 0.0
-issue_number = 1264
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1264"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test worktree_protected_paths_adversarial adv_checkout_own_dotgit_file_is_not_allowed -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005347
-detail = """
-exit 101: ompiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
-     Running tests/worktree_protected_paths_adversarial.rs (target/debug/deps/worktree_protected_paths_adversarial-fe45f46383d17c2b)
-error: test failed, to rerun pass `-p blastguard --test worktree_protected_paths_adversarial`"""
-
-[[task]]
 id = "2821738c"
 title = "condukt: state set --status cancelled performs the verified-to-cancelled transition that state cancel explicitly refuses"
 project = "/Users/yuki/src/harness"

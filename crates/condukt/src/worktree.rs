@@ -4652,3 +4652,40 @@ mod backlog_09d17bb6 {
         );
     }
 }
+
+#[cfg(test)]
+mod large_output_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Repro (pipe deadlock): `run_git_bounded_with` waits for git to EXIT
+    /// before draining stdout, so a git command whose output exceeds the OS
+    /// pipe buffer (64 KiB on macOS) blocks writing, never exits, and is killed
+    /// at the timeout. Observed 2026-10-19 at 51376c9c: a 66,752-byte task diff
+    /// made `diffrisk_record::worktree_diff` fall through to `git diff HEAD`
+    /// (empty) and journal `no-diff` for a branch that had a real commit.
+    #[test]
+    #[ignore = "repro: git output larger than the pipe buffer times out (pipe deadlock)"]
+    fn output_larger_than_pipe_buffer_is_read_not_timed_out() {
+        let tmp = TempDir::new().expect("tempdir");
+        let repo = tmp.path();
+        git(repo, &["init", "-b", "main"]).unwrap();
+        git(repo, &["config", "user.email", "test@example.com"]).unwrap();
+        git(repo, &["config", "user.name", "Test"]).unwrap();
+        let big = "x".repeat(199_999) + "\n";
+        std::fs::write(repo.join("big.txt"), &big).unwrap();
+        git(repo, &["add", "."]).unwrap();
+        git(repo, &["commit", "-m", "big"]).unwrap();
+
+        let out = run_git_bounded_with(
+            Path::new("git"),
+            repo,
+            &["show", "HEAD:big.txt"],
+            Duration::from_secs(5),
+            &[],
+        )
+        .unwrap();
+        assert!(!out.timed_out, "git show of a 200 KB blob timed out");
+        assert_eq!(out.stdout.len(), big.len(), "stdout truncated");
+    }
+}

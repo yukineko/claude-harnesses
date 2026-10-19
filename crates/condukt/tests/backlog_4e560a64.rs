@@ -211,7 +211,6 @@ fn stderr_of(out: &std::process::Output) -> String {
 /// is reported as "worktree <wt> has uncommitted changes" — a confident answer
 /// about the wrong tree. The worktree path itself holds no uncommitted change.
 #[test]
-#[ignore = "backlog 4e560a64: RED repro"]
 fn dirtiness_of_a_gitless_worktree_is_not_read_from_the_enclosing_repo() {
     let fx = Fixture::new("b4e560a64");
     let (rid, wt) = running_task_past_ttl(&fx);

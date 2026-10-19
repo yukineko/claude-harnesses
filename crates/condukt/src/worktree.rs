@@ -3379,8 +3379,44 @@ pub(crate) fn repo_git_common_dir(repo: &Path) -> Option<PathBuf> {
     .and_then(|p| p.canonicalize().ok())
 }
 
-/// Does a worktree have uncommitted changes (tracked or untracked)?
+/// `Ok(())` only when `path` is the top of its OWN git worktree, i.e. `git
+/// rev-parse --show-toplevel` run there names `path` itself (backlog
+/// 4e560a64). A recorded worktree that lost its `.git` but sits inside another
+/// repository would otherwise have every git query walk up and answer, with
+/// full confidence, about the ENCLOSING repository. Any other answer —
+/// including git failing or a path that does not canonicalize — is an `Err`:
+/// which tree a reading would describe could not be established.
+pub fn ensure_own_worktree(path: &Path) -> Result<()> {
+    let top = git(path, &["rev-parse", "--show-toplevel"]).map_err(|e| {
+        anyhow!(
+            "could not resolve the git worktree of {}: {e}",
+            path.display()
+        )
+    })?;
+    let want = path
+        .canonicalize()
+        .with_context(|| format!("canonicalizing {}", path.display()))?;
+    let got = Path::new(top.trim())
+        .canonicalize()
+        .with_context(|| format!("canonicalizing git toplevel {top:?}"))?;
+    if want != got {
+        bail!(
+            "{} is not the top of its own git worktree (git resolved it to {}): its .git \
+             is missing or it is a subdirectory, so a git reading there would describe a \
+             different tree",
+            path.display(),
+            got.display()
+        );
+    }
+    Ok(())
+}
+
+/// Does a worktree have uncommitted changes (tracked or untracked)? `Err` when
+/// `path` is not the top of its own worktree ([`ensure_own_worktree`]), so the
+/// enclosing repository's status is never reported as this worktree's.
 pub fn is_dirty(path: &Path) -> Result<bool> {
+    ensure_own_worktree(path)
+        .map_err(|e| anyhow!("status check failed for {}: {e}", path.display()))?;
     let status = git(path, &["status", "--porcelain"])
         .map_err(|e| anyhow!("status check failed for {}: {e}", path.display()))?;
     Ok(!status.trim().is_empty())

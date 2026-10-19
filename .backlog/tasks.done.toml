@@ -57815,3 +57815,63 @@ scripts/test_prose_flow_a.py .                                           [100%]
 rev = "59b9fa02a46c695fc66f4227045f70891c474c6e"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "e44e233f"
+title = "condukt shadow-run finish requires --cost and --duration, so a caller with no measurement must invent values (and --duration 0 is rejected by fugu-router record)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Worker side finding on 55fb3861: ShadowRunAction::Finish in crates/condukt/src/main.rs and shadow_run.rs record_to_fugu_router always forward both. Same fabricated-measurement class as 55fb3861."
+created_at = 1791055121
+updated_at = 1792435962
+weight = 0.0
+issue_number = 1331
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1331"
+issue_closed_at = 1792435966
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_e44e233f -- --ignored"
+rev = "a156090ef563e091c421fc24ad96d8d0ec000d67"
+observed_at = 1792005739
+detail = """
+exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+   Compiling condukt v0.7.246 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/backlog_e44e233f.rs (target/debug/deps/backlog_e44e233f-69f72ce70e090d27)
+error: test failed, to rerun pass `-p condukt --test backlog_e44e233f`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_e44e233f"
+exit = 0
+passed = 1
+rev = "a5e1ec80eaf118201c171592a9b7abcfcbd9ce5e"
+observed_at = 1792435935
+output_digest = "sha256:d4c378c184e025d60959b1a7318859d1d5018f4d443c02dabfa7980106af9772"
+excerpt = """
+
+running 1 test
+test shadow_run_finish_does_not_require_unmeasured_cost_and_duration ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_e44e233f.rs (target/debug/deps/backlog_e44e233f-d5e4285b4d0895fb)
+"""
+
+[task.closure.red]
+rev = "ff1e6188e377b54da1351f253aee8493cab5301f"
+exit = 101
+kind = "behavioural"

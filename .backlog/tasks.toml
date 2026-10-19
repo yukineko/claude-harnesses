@@ -717,38 +717,6 @@ exit 101: failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.55s
 error: test failed, to rerun pass `-p compass --test backlog_e3ca0b92`"""
 
 [[task]]
-id = "e44e233f"
-title = "condukt shadow-run finish requires --cost and --duration, so a caller with no measurement must invent values (and --duration 0 is rejected by fugu-router record)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Worker side finding on 55fb3861: ShadowRunAction::Finish in crates/condukt/src/main.rs and shadow_run.rs record_to_fugu_router always forward both. Same fabricated-measurement class as 55fb3861."
-created_at = 1791055121
-updated_at = 1792005741
-weight = 0.0
-issue_number = 1331
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1331"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_e44e233f -- --ignored"
-rev = "a156090ef563e091c421fc24ad96d8d0ec000d67"
-observed_at = 1792005739
-detail = """
-exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
-
-   Compiling condukt v0.7.246 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
-     Running tests/backlog_e44e233f.rs (target/debug/deps/backlog_e44e233f-69f72ce70e090d27)
-error: test failed, to rerun pass `-p condukt --test backlog_e44e233f`"""
-
-[[task]]
 id = "60ecd6ff"
 title = "fugu-router delegation-stats avg_duration_secs prints 0.0 when there are no duration samples"
 project = "/Users/yuki/src/harness"

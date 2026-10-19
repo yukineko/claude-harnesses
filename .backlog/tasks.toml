@@ -1433,38 +1433,6 @@ FAILED scripts/test_check_fail_open.py::UndeterminedArmSpellingsRemaining::test_
 ======================= 1 failed, 74 deselected in 0.06s ======================="""
 
 [[task]]
-id = "563d2680"
-title = "backlog: F2P cannot prove a fix that lives in a test file (HEAD test overlay copies the fix into the RED tree)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "fail-open",
-]
-touched_files = []
-status = "pending"
-notes = "run_in_temp_worktree overlays every HEAD test file (cargo runner) onto --red-rev, so when the fix is itself a test file (overwatch 73e49761: tests/continuous_audit_script.rs return to panic) the RED tree already holds the fix and no command is RED. The refusal says the test PASSES at --red-rev without mentioning the overlay. Fixture repro: crates/backlog/tests/f2p_red_overlay.rs."
-created_at = 1792423551
-updated_at = 1792423551
-weight = 0.0
-issue_number = 1421
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1421"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test f2p_red_overlay"
-rev = "173a32dd9fd325236b4d3478f27286f8ea43a816"
-observed_at = 1792423551
-detail = """
-exit 101: failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.43s
-
-   Compiling backlog v0.3.59 (/Users/yuki/src/.harness-worktrees/backlog-f2p-overlay/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
-     Running tests/f2p_red_overlay.rs (target/debug/deps/f2p_red_overlay-d33e1e1bab620128)
-error: test failed, to rerun pass `-p backlog --test f2p_red_overlay`"""
-
-[[task]]
 id = "321acfbb"
 title = "overwatch: repro_ca_script picks its sibling test binary by file-name order, so it measures stale builds"
 project = "/Users/yuki/src/harness"

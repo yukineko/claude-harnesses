@@ -56268,3 +56268,67 @@ FAILED scripts/test_check_prose_tests_uncovered_explicit_paths.py::UncoveredExpl
 [task.closure]
 reason = "discard"
 discard_reason = "check-prose-tests.py and its tests were deleted in c2c55077 (user ruling 2026-10-17); scripts/test_check_prose_tests_uncovered_explicit_paths.py does not exist at 87b8032b, so the repro cannot run (pytest: file or directory not found). Nothing left to fix."
+
+[[task]]
+id = "563d2680"
+title = "backlog: F2P cannot prove a fix that lives in a test file (HEAD test overlay copies the fix into the RED tree)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "fail-open",
+]
+touched_files = []
+status = "done"
+notes = "run_in_temp_worktree overlays every HEAD test file (cargo runner) onto --red-rev, so when the fix is itself a test file (overwatch 73e49761: tests/continuous_audit_script.rs return to panic) the RED tree already holds the fix and no command is RED. The refusal says the test PASSES at --red-rev without mentioning the overlay. Fixture repro: crates/backlog/tests/f2p_red_overlay.rs."
+created_at = 1792423551
+updated_at = 1792424845
+weight = 0.0
+issue_number = 1421
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1421"
+issue_closed_at = 1792424848
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test f2p_red_overlay"
+rev = "173a32dd9fd325236b4d3478f27286f8ea43a816"
+observed_at = 1792423551
+detail = """
+exit 101: failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.43s
+
+   Compiling backlog v0.3.59 (/Users/yuki/src/.harness-worktrees/backlog-f2p-overlay/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/f2p_red_overlay.rs (target/debug/deps/f2p_red_overlay-d33e1e1bab620128)
+error: test failed, to rerun pass `-p backlog --test f2p_red_overlay`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test f2p_red_overlay"
+exit = 0
+passed = 5
+rev = "de2c30cd6f5cf25dad1b8001e7f27cc69b575dca"
+observed_at = 1792424827
+output_digest = "sha256:28b92162f4399aba3b7d0e809405da9c56d1f90b7327e2fd8a1f1828a2ccf463"
+excerpt = """
+
+running 5 tests
+test red_overlay_cannot_widen_a_narrowed_pytest_overlay ... ok
+test repro_only_overlay_still_refuses_a_test_green_at_red_rev ... ok
+test default_overlay_refusal_names_the_head_test_overlay ... ok
+test red_overlay_paths_must_be_head_test_files_in_the_default_overlay ... ok
+test fix_in_a_test_file_closes_with_a_repro_only_overlay ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.76s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/f2p_red_overlay.rs (target/debug/deps/f2p_red_overlay-be79aec26cc105f6)
+"""
+
+[task.closure.red]
+rev = "173a32dd9fd325236b4d3478f27286f8ea43a816"
+exit = 101
+kind = "behavioural"

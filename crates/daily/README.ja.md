@@ -102,7 +102,7 @@ daily list     # 登録タスクと「今日実行済みか」を表示
 | `daily list` | 登録タスクと当日実行済みかを表示する |
 | `daily report [--date <d>] [--last <n>]` | 過去の実行結果レポートを表示する（既定は今日） |
 | `daily add --name <n> --command <c> [--dir <d>]` | `~/.daily/config.toml` に日次タスクを登録する |
-| `daily install` | （未実装 — 通知を出して exit 0）フックを `~/.claude/settings.json` に追加する。現状は手動配線が必要 |
+| `daily install` | （未実装 — 何もインストールせず、通知を出して exit 1）フックを `~/.claude/settings.json` に追加する。現状は手動配線が必要 |
 
 ### プラグインとしての導入（推奨）
 

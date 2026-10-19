@@ -62,7 +62,7 @@ enum Cmd {
         #[arg(long)]
         dir: Option<String>,
     },
-    /// Install the SessionStart hook into ~/.claude/settings.json (not yet implemented).
+    /// Install the SessionStart hook into ~/.claude/settings.json (not yet implemented; exits 1).
     Install,
 }
 
@@ -74,8 +74,10 @@ fn main() {
         Cmd::Report { date, last } => report_cmd(date.as_deref(), last),
         Cmd::Add { name, command, dir } => add_cmd(&name, &command, dir.as_deref()),
         Cmd::Install => {
-            eprintln!("daily install: not yet implemented — add the hook manually to ~/.claude/settings.json");
-            std::process::exit(0);
+            // Nothing is installed, so this must not report success: a caller
+            // scripting the install would otherwise believe the hook is wired.
+            eprintln!("daily install: not yet implemented — nothing was installed; add the hook manually to ~/.claude/settings.json");
+            std::process::exit(1);
         }
     }
 }

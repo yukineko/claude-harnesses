@@ -169,7 +169,7 @@ a duplicate name.
 | `daily list` | show registered tasks + whether each already ran today |
 | `daily report [--date <d>] [--last <n>]` | show the results report of past runs (today by default) |
 | `daily add --name <n> --command <c> [--dir <d>]` | register a new daily task in `~/.daily/config.toml` |
-| `daily install` | (not yet implemented — prints a notice and exits 0) — add the hook to `~/.claude/settings.json` manually |
+| `daily install` | (not yet implemented — installs nothing, prints a notice and exits 1) — add the hook to `~/.claude/settings.json` manually |
 
 ## Install
 

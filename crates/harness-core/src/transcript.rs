@@ -749,6 +749,129 @@ pub fn files_edited_by_session(path: &str) -> Determination<BTreeSet<String>> {
     Determination::Known(out)
 }
 
+/// One `Bash` tool_use recorded in a transcript: the command line, and the
+/// `cwd` the transcript line carried (if any), so a relative path in the
+/// command can be resolved against the directory it ran in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BashCall {
+    pub command: String,
+    pub cwd: Option<String>,
+}
+
+/// Every `Bash` tool_use command recorded in the transcript at `path`.
+///
+/// Exists for [`crate::attribution::attribute_own_writes`]: an edit made
+/// through the shell (`sed -i`, a heredoc, `cp`) leaves no `Edit`/`Write`
+/// block, so the only trace of it in the transcript is the command line.
+///
+/// Same failure contract as [`files_edited_by_session`]: an empty
+/// `path`, an unopenable file, or an IO error part-way through is
+/// `Undetermined` (never `Known(empty)`, which a caller scoping to "what I
+/// wrote" would read as "I ran no commands"); a torn / non-JSON line is
+/// skipped. Prefilter: a line that can hold a `Bash` tool name must contain
+/// `Bash` or a `\u` escape (see the reasoning in [`files_edited_by_session`]).
+pub fn bash_commands_by_session(path: &str) -> Determination<Vec<BashCall>> {
+    if path.trim().is_empty() {
+        return Determination::undetermined(
+            "transcript_path is empty: the hook payload carried no transcript to read, so this \
+             session's shell commands were not observed",
+        );
+    }
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "cannot open transcript {path}: {e} — the shell commands were not observed"
+            ))
+        }
+    };
+    let mut out = Vec::new();
+    for line in BufReader::new(file).lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "transcript {path} became unreadable part-way through: {e} — the shell \
+                     command list is partial, not empty"
+                ))
+            }
+        };
+        if !line.contains("Bash") && !line.contains("\\u") {
+            continue;
+        }
+        let o = match serde_json::from_str::<Value>(&line) {
+            Ok(o) => o,
+            Err(_) => continue,
+        };
+        let content = match o.get("message").and_then(|m| m.get("content")) {
+            Some(Value::Array(c)) => c,
+            _ => continue,
+        };
+        let cwd = o.get("cwd").and_then(Value::as_str).map(str::to_string);
+        for block in content {
+            if block.get("type").and_then(Value::as_str) != Some("tool_use")
+                || block.get("name").and_then(Value::as_str) != Some("Bash")
+            {
+                continue;
+            }
+            if let Some(cmd) = block
+                .get("input")
+                .and_then(|i| i.get("command"))
+                .and_then(Value::as_str)
+            {
+                out.push(BashCall {
+                    command: cmd.to_string(),
+                    cwd: cwd.clone(),
+                });
+            }
+        }
+    }
+    Determination::Known(out)
+}
+
+/// The subagent sidechain transcripts of `transcript_path`, **strictly**: a
+/// missing `subagents` directory is `Known(empty)` (the session spawned none),
+/// but any other failure to list it is `Undetermined`.
+///
+/// [`subagent_transcripts`] swallows that failure because its callers only
+/// ever *add* credit from sidechains. A caller that judges ONLY what the
+/// session is credited with (see [`crate::attribution::attribute_own_writes`])
+/// cannot: there a missing sidechain turns a subagent-written file into "not
+/// mine" and drops it from the gate.
+pub fn subagent_transcripts_strict(transcript_path: &Path) -> Determination<Vec<PathBuf>> {
+    let (Some(dir), Some(stem)) = (transcript_path.parent(), transcript_path.file_stem()) else {
+        return Determination::known(Vec::new());
+    };
+    let sidechains = dir.join(stem).join("subagents");
+    match std::fs::read_dir(&sidechains) {
+        Ok(entries) => {
+            let mut v = Vec::new();
+            for e in entries {
+                match e {
+                    Ok(e) => {
+                        let p = e.path();
+                        if p.extension().is_some_and(|x| x == "jsonl") {
+                            v.push(p);
+                        }
+                    }
+                    Err(err) => {
+                        return Determination::undetermined(format!(
+                            "subagent transcripts in {} could not be listed: {err}",
+                            sidechains.display()
+                        ))
+                    }
+                }
+            }
+            Determination::Known(v)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Determination::known(Vec::new()),
+        Err(e) => Determination::undetermined(format!(
+            "subagent transcripts in {} could not be listed: {e}",
+            sidechains.display()
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

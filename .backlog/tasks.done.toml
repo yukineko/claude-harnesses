@@ -52171,3 +52171,2468 @@ scripts/test_backlog_0e4cfde5.py ...                                     [100%]
 rev = "efa0d8560350698275ccfe569fa71e68f0ea3304"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "11be9484"
+title = "blastguard classify.rs が task の散文に detect を当て、破壊的コマンドを『記述する』散文や file 名で force-gate する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+crates/blastguard/src/classify.rs:213-219 runs detect::detect on title + done_criteria + file list. Seen again in batch 13: 73c2c089 stayed force-gated because its touched file is scripts/check-plugin-rollout.py (needle 'rollout'), and e033c406 because its prose quoted git config core.hooksPath. Not fixed by fa1fce21 (different root: prose is not shell). Needs a decision: condukt passes real commands separately, or a backtick-span extraction rule. Either moves the measured DENY 85 / ASK 101 distribution.
+
+Observed 2026-10-03 in flow batch 13 (run-20261003-155809-33509), base fbc3dac8 / main c0d4701c."""
+created_at = 1791018586
+updated_at = 1792155552
+weight = 0.0
+issue_number = 1159
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1159"
+issue_closed_at = 1792155553
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_11be9484 -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003592
+detail = """
+exit 101: c/.harness-worktrees/session-1a4ac77f/crates/overwatch)
+   Compiling blastguard v0.2.113 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.26s
+     Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-55b4c2d69dad1992)
+error: test failed, to rerun pass `-p blastguard --test backlog_11be9484`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_11be9484 -- --include-ignored file_name_containing_a_deploy_needle"
+exit = 0
+passed = 1
+rev = "12bfc9707a4aa5a712d30007e890b7da64ea6196"
+observed_at = 1792155518
+output_digest = "sha256:0131bc29ea9c354717e2285e003d2d088905c76206823dc9718983fc5e059684"
+excerpt = """
+
+running 1 test
+test file_name_containing_a_deploy_needle_does_not_force_gate ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.02s
+
+   Compiling blastguard v0.2.131 (/Users/yuki/src/.harness-worktrees/fix-11be9484/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.83s
+     Running tests/backlog_11be9484.rs (target/debug/deps/backlog_11be9484-27e56823383379b3)
+"""
+
+[task.closure.red]
+rev = "1b3980736b649489a338c94ab1634fd6e08d93e8"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "b0c3d263"
+title = "check-closure-evidence.py は backlog CLI が書く closure 記録 (runner=cargo-test/pytest/script) を全件 block する — runner と command 先頭語の不一致"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+crates/backlog/src/evidence.rs:61-66 records the runner as cargo-test / pytest / script; scripts/check-closure-evidence.py:298 requires it to equal the first word of the command (cargo / python3 / bash). Replaying 6 recent closing commits in a scratch clone: all 6 blocked, 3 of them on this mismatch alone (the other 3 closed rows with no closure record, which is intended). Prerequisite for wiring the scanner into pre-commit (eca8dea7 stage B). Fix both sides together with a regression test that pushes a CLI-written closure through the gate.
+
+Observed 2026-10-03 by the eca8dea7 investigation (main 9ea5a326); raw logs scratchpad eca8dea7-run-*.log, proposal eca8dea7-proposal.md."""
+created_at = 1791034486
+updated_at = 1792157046
+weight = 0.0
+issue_number = 1226
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1226"
+issue_closed_at = 1792157047
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_b0c3d263.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003597
+detail = """
+exit 1: test/unittest.py\u001B[0m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_b0c3d263.py::\u001B[1mClosureRunnerLabel::test_cli_written_runner_label_is_accepted\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 2.06s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --color=no --runxfail scripts/test_backlog_b0c3d263.py"
+exit = 0
+passed = 2
+rev = "aa40bdebf8b6f9468b2b7cd6605b5961b004d7d8"
+observed_at = 1792157038
+output_digest = "sha256:faa66c69963344d918b421fb169bcacf3525832ff16a3ef78285abfc6fd69914"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-b0c3d263
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_b0c3d263.py ..                                      [100%]
+
+============================== 2 passed in 3.37s ===============================
+"""
+
+[task.closure.red]
+rev = "677b88987124e25f1f0b4cd920acee5d0822e46f"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "0d007aa5"
+title = "test-weakening ignores acks on MERGE_HEAD's side during a merge"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "check-test-weakening.py scan() diffs merge-base(main,HEAD)..worktree (includes MERGE_HEAD's changes) but acknowledgements() reads only merge_base..HEAD plus the pending msg, so main-side acks are invisible mid-merge. Observed on 96da33f6 and 99cd73b1. Repro scripts/test_test_weakening_merge_ack.py (45f62810)."
+created_at = 1792155730
+updated_at = 1792160984
+weight = 0.0
+issue_number = 1378
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1378"
+issue_closed_at = 1792160987
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_test_weakening_merge_ack.py::MergeMainIntoFeature::test_main_side_acked_removal_does_not_block_the_merge"
+rev = "854b0075a358b6d9fa9d07176a91b2ce0f16f4a4"
+observed_at = 1792155730
+detail = """
+exit 1: E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_test_weakening_merge_ack.py::MergeMainIntoFeature::test_main_side_acked_removal_does_not_block_the_merge
+============================== 1 failed in 1.35s ==============================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_test_weakening_merge_ack.py"
+exit = 0
+passed = 5
+rev = "e3b57715ffea4ff7bb7389366fab4ef7a1d7d1eb"
+observed_at = 1792160968
+output_digest = "sha256:eca9b8fd1278f68c36b77271be666d4d28c39d1c002d86f5b85ad33086bde4d0"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-gate-attrib
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 5 items
+
+scripts/test_test_weakening_merge_ack.py .....                           [100%]
+
+============================== 5 passed in 5.54s ===============================
+"""
+
+[task.closure.red]
+rev = "677b88987124e25f1f0b4cd920acee5d0822e46f"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "86e21645"
+title = "maintree guard refuses a fast-forward when the source branch is already gone"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "scripts/guard-maintree-bash.py integration_head() accepts a moved HEAD only if it is a merge commit or contained in a ref other than main. A ff whose source branch is deleted before PostToolUse (same call, or another session during an unrelated call) is refused. User ruling 2026-10-16: main reflog 'merge ...: Fast-forward' / 'merge ...' is integration evidence; 'commit:' still refused; unreadable reflog refused (undetermined). Controls in the same file must stay green."
+created_at = 1792155566
+updated_at = 1792161021
+weight = 0.0
+issue_number = 1374
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1374"
+issue_closed_at = 1792161026
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_guard_maintree_bash_ff_source_gone.py"
+rev = "7b8cc0b73eed33d76260918d6cf74021f3e97633"
+observed_at = 1792155566
+detail = """
+exit 1: nfo ============================
+FAILED scripts/test_guard_maintree_bash_ff_source_gone.py::FfSourceGoneAllowed::test_a_ff_and_branch_delete_in_same_call_is_allowed
+FAILED scripts/test_guard_maintree_bash_ff_source_gone.py::FfSourceGoneAllowed::test_b_other_session_ff_and_branch_delete_during_unrelated_call_is_allowed
+========================= 2 failed, 6 passed in 9.36s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_guard_maintree_bash_ff_source_gone.py"
+exit = 0
+passed = 8
+rev = "e3b57715ffea4ff7bb7389366fab4ef7a1d7d1eb"
+observed_at = 1792160991
+output_digest = "sha256:87bdba6ed312f33263d7f1cb89bfa22b19f6ff27931181759ca5cd9f7d12e2bf"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-gate-attrib
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 8 items
+
+scripts/test_guard_maintree_bash_ff_source_gone.py ........              [100%]
+
+============================== 8 passed in 11.60s ==============================
+"""
+
+[task.closure.red]
+rev = "a8ec7ac920e179d96dee7a336382423338ab55ee"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "2e7481d4"
+title = "evalkit: an all-draft run exits 0 having evaluated nothing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/evalkit/src/run.rs execute counts drafts in total so the no-cases exit-2 guard never fires; every outcome is skipped, failed==0, exit 0, output 0/1 passed. Test asserts non-zero exit when no case was evaluated."
+created_at = 1792155558
+updated_at = 1792157985
+weight = 0.0
+issue_number = 1370
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1370"
+issue_closed_at = 1792157988
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p evalkit --test repro_all_draft_run_exits_zero -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155558
+detail = """
+exit 101: d out; finished in 0.46s
+
+   Compiling evalkit v0.1.9 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.08s
+     Running tests/repro_all_draft_run_exits_zero.rs (target/debug/deps/repro_all_draft_run_exits_zero-2d4a512e0ca88a3b)
+error: test failed, to rerun pass `-p evalkit --test repro_all_draft_run_exits_zero`"""
+
+[task.closure]
+reason = "already-fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p evalkit --test repro_all_draft_run_exits_zero -- --ignored"
+exit = 0
+passed = 1
+rev = "347b5c7ddfcf1d3ee7b24de5a39a184af7ac1e4b"
+observed_at = 1792157956
+output_digest = "sha256:d05f3ed09da303dd73f1af33d1b184f500918b51b7e99e01a06c3290a593bb85"
+excerpt = """
+
+running 1 test
+test all_draft_run_does_not_exit_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/repro_all_draft_run_exits_zero.rs (target/debug/deps/repro_all_draft_run_exits_zero-d7aafc6289a37eda)
+"""
+
+[task.closure.red]
+rev = "a0d1fe3da187692e760ec865562bdf7fc26ceb98"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "cf70f785"
+title = "condukt state set --status verified --worktree W が F->P oracle を W ではなく以前記録された worktree (無ければ cwd) で走らせる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+crates/condukt/src/main.rs:4228-4234 resolves run_dir from rs.tasks[..].worktree (the PREVIOUSLY recorded worktree), falling back to cwd; the --worktree passed in the same call is not applied first. With no prior record it runs tdd oracle in the session cwd -> 'tdd oracle exited non-zero' although `tdd oracle --task <id>` in W exits 0. Workaround used: `state set --status done --worktree W --branch B` first. Fix: apply the call's --worktree before resolving run_dir, or refuse when they differ (fail-closed). Needs a cargo test RED first.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028023
+updated_at = 1792160217
+weight = 0.0
+issue_number = 1199
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1199"
+issue_closed_at = 1792160218
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_cf70f785 -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003550
+detail = """
+exit 101: ailed; 0 ignored; 0 measured; 1 filtered out; finished in 1.42s
+
+   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running tests/backlog_cf70f785.rs (target/debug/deps/backlog_cf70f785-1fe3a3c838c30663)
+error: test failed, to rerun pass `-p condukt --test backlog_cf70f785`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_cf70f785 -- --include-ignored"
+exit = 0
+passed = 2
+rev = "22d4f8d5c0f72c0e25773cbb14e01e87ea17ed01"
+observed_at = 1792160174
+output_digest = "sha256:84ec20d1ccf239169eb1d49f11ca0d43cf6a4bbaa1cc0e63f71e2c3f82bccbda"
+excerpt = """
+
+running 2 tests
+{"valid_fp_oracle":true,"transition":"fail_to_pass"}
+{"valid_fp_oracle":false,"transition":"unknown"}
+{"valid_fp_oracle":true,"transition":"fail_to_pass"}
+{"valid_fp_oracle":false,"transition":"unknown"}
+test verified_with_worktree_runs_oracle_in_the_passed_worktree ... ok
+test control_worktree_recorded_first_then_verified_passes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.66s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/backlog_cf70f785.rs (target/debug/deps/backlog_cf70f785-2dd2ee06ad200359)
+"""
+
+[task.closure.red]
+rev = "677b88987124e25f1f0b4cd920acee5d0822e46f"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "6ca3d71f"
+title = "check-projkey-store-classification.py が main で 6 件 red (count drift 2 / stale 1 / 未分類 call site 3)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Exit 1 with 6 findings at 9ea5a326: 2 count drifts, 1 stale table entry, 3 unclassified projkey call sites in crates/*/src that need a shared-vs-worktree-local ruling each. Runtime 3.9-9.9 s (over the ~2 s pre-commit budget). test_backlog_de721e5e_df49f872 holds 2 expectedFailure pins. Prerequisite for wiring (eca8dea7 stage B).
+
+Observed 2026-10-03 by the eca8dea7 investigation (main 9ea5a326); raw logs scratchpad eca8dea7-run-*.log, proposal eca8dea7-proposal.md."""
+created_at = 1791034488
+updated_at = 1792160517
+weight = 0.0
+issue_number = 1227
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1227"
+issue_closed_at = 1792160520
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_de721e5e_df49f872.py::BacklogDf49f872::test_projkey_store_classification_is_green_on_this_tree"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003579
+detail = """
+exit 1: st.py\u001B[0m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_de721e5e_df49f872.py::\u001B[1mBacklogDf49f872::test_projkey_store_classification_is_green_on_this_tree\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m============================== \u001B[31m\u001B[1m1 failed\u001B[0m\u001B[31m in 3.79s\u001B[0m\u001B[31m ===============================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --color=no --runxfail scripts/test_backlog_de721e5e_df49f872.py::BacklogDf49f872::test_projkey_store_classification_is_green_on_this_tree"
+exit = 0
+passed = 1
+rev = "a128738fdade3e8c6dd6a160e8956ea70d9c543f"
+observed_at = 1792160463
+output_digest = "sha256:667b02d997f0d01f53e6f66326b97329aa0023e8b1f0b401f49309513e55d484"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-6ca3d71f
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_backlog_de721e5e_df49f872.py .                              [100%]
+
+============================== 1 passed in 34.93s ==============================
+"""
+
+[task.closure.red]
+rev = "677b88987124e25f1f0b4cd920acee5d0822e46f"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "dc37a4da"
+title = "tdd oracle は RED と GREEN が別のテストコマンドで記録されていても fail_to_pass と認める"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+666b6704 verifier: the worker's RED was on scripts/test_check_unlisted_gates.py and the verifier's GREEN on scripts/test_check_unlisted_gates_verify.py; tdd oracle accepted the pair as valid fail_to_pass. It may not prove the same test went F->P. Reading (a): real gap, the oracle should require a GREEN for each RED command; (b): intended (task-level proof). Distinguish by the tdd README contract for fail_to_pass.
+
+Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
+created_at = 1791028024
+updated_at = 1792161300
+weight = 0.0
+issue_number = 1200
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1200"
+issue_closed_at = 1792161303
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test backlog_dc37a4da -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003587
+detail = """
+exit 101: 0.2.62 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/overwatch)
+   Compiling tdd v0.1.40 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.27s
+     Running tests/backlog_dc37a4da.rs (target/debug/deps/backlog_dc37a4da-b9b47eca998c8e64)
+error: test failed, to rerun pass `-p tdd --test backlog_dc37a4da`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test backlog_dc37a4da -- --include-ignored"
+exit = 0
+passed = 1
+rev = "c05b7fed81209ac6237b0930e4f027af1a038343"
+observed_at = 1792161194
+output_digest = "sha256:d05ad916883bea29c3d8965e991c2eb3c1d6f24b5a40b814027d833039259c66"
+excerpt = """
+
+running 1 test
+test oracle_rejects_red_and_green_recorded_with_different_test_commands ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s
+     Running tests/backlog_dc37a4da.rs (target/debug/deps/backlog_dc37a4da-2782c7b31c5d4451)
+"""
+
+[task.closure.red]
+rev = "677b88987124e25f1f0b4cd920acee5d0822e46f"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "ebc95a38"
+title = "backlog list --status <unknown> exits 0 with no tasks"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "An unknown status filter value only warns on stderr; stdout is no tasks and exit is 0, indistinguishable from an empty queue to scripts. Expected: non-zero exit. Test ignored, RED under --ignored."
+created_at = 1792188680
+updated_at = 1792189555
+weight = 0.0
+issue_number = 1398
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1398"
+issue_closed_at = 1792189557
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test repro_list_unknown_status_exit -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188680
+detail = """
+exit 101: _status_exits_nonzero
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/repro_list_unknown_status_exit.rs (target/debug/deps/repro_list_unknown_status_exit-1e80737b57a28b94)
+error: test failed, to rerun pass `-p backlog --test repro_list_unknown_status_exit`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test repro_list_unknown_status_exit"
+exit = 0
+passed = 1
+rev = "58837f2a5dfe154bc98846d55dc18e9155a19bdb"
+observed_at = 1792189529
+output_digest = "sha256:88d1df44c3175042e304cbb20925d7a0ba81f24d8d068be04fef398a6017f144"
+excerpt = """
+
+running 1 test
+test list_with_unknown_status_exits_nonzero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/repro_list_unknown_status_exit.rs (target/debug/deps/repro_list_unknown_status_exit-9eced6ce60c48df8)
+"""
+
+[task.closure.red]
+rev = "6b64a13e646e92a6f1c1d97290687f65531f5444"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "f580e5ef"
+title = "backlog session-start hook exits 0 with empty stdout on malformed stdin"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Malformed hook stdin is logged to stderr only; exit 0 and empty stdout read as nothing to inject. Expected: a visible failure. Existing test integration.rs::session_start_with_malformed_stdin_exits_zero pins the current behaviour and is the test that will flip when this is fixed. Test ignored, RED under --ignored."
+created_at = 1792188684
+updated_at = 1792189577
+weight = 0.0
+issue_number = 1399
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1399"
+issue_closed_at = 1792189580
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test repro_session_start_malformed_stdin -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188684
+detail = """
+exit 101: ailure
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/repro_session_start_malformed_stdin.rs (target/debug/deps/repro_session_start_malformed_stdin-dd5d8838be6468d6)
+error: test failed, to rerun pass `-p backlog --test repro_session_start_malformed_stdin`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test repro_session_start_malformed_stdin"
+exit = 0
+passed = 1
+rev = "58837f2a5dfe154bc98846d55dc18e9155a19bdb"
+observed_at = 1792189558
+output_digest = "sha256:e316a8a815ac88ca8f37fb37775188740d98ad3752c82804459f9be646162a7d"
+excerpt = """
+
+running 1 test
+test session_start_malformed_stdin_is_a_visible_failure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_session_start_malformed_stdin.rs (target/debug/deps/repro_session_start_malformed_stdin-7b6cfa2964510295)
+"""
+
+[task.closure.red]
+rev = "6b64a13e646e92a6f1c1d97290687f65531f5444"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "099a5cbb"
+title = "blastguard tests write into the live overwatch violation registry (HOME/env_clear do not isolate)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "overwatch",
+    "test-isolation",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Repro (commit 99cd73b1): crates/blastguard/tests/repro_live_registry_pollution.rs, tests env_clear_child_does_not_write_real_overwatch_registry and inherited_home_child_does_not_write_real_overwatch_registry; both RED. Path: blastguard main.rs record_violation -> overwatch store::append_violation(cwd) -> storage_root = harness_core::config::base_dir(overwatch) = home(); home() falls back to dirs::home_dir (real passwd home) when HOME is unset, so env_clear (ask_hardening_invariant.rs) does not isolate; most other blastguard tests inherit HOME. Canary false-halt evidence (2026-10-16 JST): rollout-plugins.sh --canary stage 12 ship 0.1.15 rolled back at ts 1792105431 (rollbacks.jsonl reason raw), raw observed_violations 5 vs threshold 2. The 5 counted events are all ts 1792105430, session_id _local, signature blastguard:unrecognised-wrapper, detail my-cleanup-wrapper = ask_hardening_invariant.rs fixture (5 tests). Source: session 1a4ac77f subagent agent-a8854e5 ran cargo test -p blastguard --no-fail-fast in worktree fix-11be9484 at 23:03:43Z; its output shows ask_hardening_invariant 5 passed. Subsequent _local burst 1792105436-1792105447 (mkfs, shred, rm-recursive, protected-path, write-empty-content, find-exec-shell, git-config-hookspath) is the rest of that suite. Measured observation (live harness-e77d23c7 violations.jsonl, 2026-10-16): 13666 of 19351 events (71%) have session_id _local; 930 contain my-cleanup-wrapper (186 runs of that one file). Not every _local event was verified to be test-originated. Also observed: ~2480 -tmpXXXX dirs in ~/.overwatch from some suite (not identified); overwatch own tests: 10 of 47 files set HOME, rest not audited. Do not fix by narrowing the canary gate."
+created_at = 1792106110
+updated_at = 1792188977
+weight = 0.0
+issue_number = 1363
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1363"
+issue_closed_at = 1792188980
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test repro_live_registry_pollution -- --ignored"
+rev = "99cd73b1030170e735c1c0fdc3eda5d46f630902"
+observed_at = 1792106110
+detail = """
+exit 101: al_overwatch_registry
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
+     Running tests/repro_live_registry_pollution.rs (target/debug/deps/repro_live_registry_pollution-6c44738a648c523b)
+error: test failed, to rerun pass `-p blastguard --test repro_live_registry_pollution`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test repro_live_registry_pollution -- --include-ignored"
+exit = 0
+passed = 2
+rev = "e5301bd9a3d1eb51c34e93da64b5ea5bc28f53d6"
+observed_at = 1792188937
+output_digest = "sha256:a6377784888ef23fb14d1dcddc8548150074c2a075ec6ba605c3ad4f8ab76c90"
+excerpt = """
+
+running 2 tests
+test env_clear_child_does_not_write_real_overwatch_registry ... ok
+test inherited_home_child_does_not_write_real_overwatch_registry ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.21s
+
+   Compiling harness-core v0.2.58 (/Users/yuki/src/.harness-worktrees/fix-099a5cbb/crates/harness-core)
+   Compiling overwatch v0.2.72 (/Users/yuki/src/.harness-worktrees/fix-099a5cbb/crates/overwatch)
+   Compiling blastguard v0.2.134 (/Users/yuki/src/.harness-worktrees/fix-099a5cbb/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.06s
+     Running tests/repro_live_registry_pollution.rs (target/debug/deps/repro_live_registry_pollution-26683c542fc6dd38)
+"""
+
+[task.closure.red]
+rev = "063ea2dc77f2da7d881d7c671e858cbac819e998"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "08d44b5e"
+title = "reviewgate inject mode: changed unreviewed diff waived by repeat ledger after an already-reviewed allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "After block round 1 and an already-reviewed allow, editing the same file gives attempts=1 with a reason byte-identical to round 1. harness_core::repeat fingerprints the reason text, so emit_stop_block waives it with only a systemMessage while log.jsonl records blocked-inject. Expected: a changed diff is blocked. Test is ignored, runs RED under --ignored."
+created_at = 1792188666
+updated_at = 1792189611
+weight = 0.0
+issue_number = 1395
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1395"
+issue_closed_at = 1792189613
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test repro_inject_changed_diff_waived -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188666
+detail = """
+exit 101: d_not_waived
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.90s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/repro_inject_changed_diff_waived.rs (target/debug/deps/repro_inject_changed_diff_waived-194432cb329ee29c)
+error: test failed, to rerun pass `-p reviewgate --test repro_inject_changed_diff_waived`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p reviewgate --test repro_inject_changed_diff_waived"
+exit = 0
+passed = 1
+rev = "7b91335591a5bee1c725313fa39094862bf407d3"
+observed_at = 1792189585
+output_digest = "sha256:ed289e0781b3b72a6d80255b19e176bb2c7bfd521703e25836f14bd6de20b94d"
+excerpt = """
+
+running 1 test
+test changed_diff_after_already_reviewed_is_blocked_not_waived ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/repro_inject_changed_diff_waived.rs (target/debug/deps/repro_inject_changed_diff_waived-1e67c260a41feb00)
+"""
+
+[task.closure.red]
+rev = "6b64a13e646e92a6f1c1d97290687f65531f5444"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "043c9f29"
+title = "reviewgate inject give-up allows with no visible signal"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "In inject mode, attempts over max_attempts returns Allow tag giveup (review.rs) with no stderr warning, no stdout message and no overwatch event, unlike the scan-failed and diff-failed giveups. Expected: a visible signal. Test ignored, RED under --ignored."
+created_at = 1792188671
+updated_at = 1792189639
+weight = 0.0
+issue_number = 1396
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1396"
+issue_closed_at = 1792189642
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test repro_inject_giveup_silent -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188671
+detail = """
+exit 101: ct_giveup_is_visibly_signalled
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.54s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/repro_inject_giveup_silent.rs (target/debug/deps/repro_inject_giveup_silent-0f4ecf6ef13bd9ca)
+error: test failed, to rerun pass `-p reviewgate --test repro_inject_giveup_silent`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p reviewgate --test repro_inject_giveup_silent"
+exit = 0
+passed = 1
+rev = "7b91335591a5bee1c725313fa39094862bf407d3"
+observed_at = 1792189619
+output_digest = "sha256:af99f1eeee4442317edad0e08b8cc939bb8b05da1f2134e914e219d5a98df902"
+excerpt = """
+
+running 1 test
+test inject_giveup_is_visibly_signalled ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.62s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/repro_inject_giveup_silent.rs (target/debug/deps/repro_inject_giveup_silent-6ee1672dd0d22af2)
+"""
+
+[task.closure.red]
+rev = "6b64a13e646e92a6f1c1d97290687f65531f5444"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "0ed931a2"
+title = "reviewgate allows a real change as empty-diff when the git diff driver prints nothing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "With .gitattributes diff=nop and diff.nop.command=true, git diff --name-only lists the file but the patch text is empty; evaluate logs empty-diff with files [] and allows. Expected: undetermined, not clean. Test ignored, RED under --ignored."
+created_at = 1792188676
+updated_at = 1792189661
+weight = 0.0
+issue_number = 1397
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1397"
+issue_closed_at = 1792189663
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test repro_diff_driver_empty -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188676
+detail = """
+exit 101: f_driver_change_is_not_allowed_as_empty
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/repro_diff_driver_empty.rs (target/debug/deps/repro_diff_driver_empty-3b98e5711e4fc904)
+error: test failed, to rerun pass `-p reviewgate --test repro_diff_driver_empty`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p reviewgate --test repro_diff_driver_empty"
+exit = 0
+passed = 1
+rev = "7b91335591a5bee1c725313fa39094862bf407d3"
+observed_at = 1792189643
+output_digest = "sha256:f84ef35dabfa4ee8e9d041de6c93bdcdd42d32eaa8abb25b21178ee3831c759a"
+excerpt = """
+
+running 1 test
+test silent_diff_driver_change_is_not_allowed_as_empty ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_diff_driver_empty.rs (target/debug/deps/repro_diff_driver_empty-39aa278f19a6b69e)
+"""
+
+[task.closure.red]
+rev = "6b64a13e646e92a6f1c1d97290687f65531f5444"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "bca9cabe"
+title = "propguard treats non-UTF-8 PROPGUARD_CRITERIA as unset and allows as no-criteria"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "derive.rs source_criteria uses if let Ok(v) = std::env::var, so a set but non-UTF-8 value is ignored; with no other criteria the stop is allowed while the UTF-8 control blocks. Expected: block. Test includes the UTF-8 control, ignored, RED under --ignored."
+created_at = 1792188689
+updated_at = 1792189331
+weight = 0.0
+issue_number = 1400
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1400"
+issue_closed_at = 1792189334
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p propguard --test repro_criteria_env_non_utf8 -- --ignored"
+rev = "ebae261ac55190c16a1bd391b2a18dc3d7ae2a21"
+observed_at = 1792188689
+detail = """
+exit 101: blocks_like_the_utf8_control
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.15s
+     Running tests/repro_criteria_env_non_utf8.rs (target/debug/deps/repro_criteria_env_non_utf8-01145266f84a6c8a)
+error: test failed, to rerun pass `-p propguard --test repro_criteria_env_non_utf8`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p propguard --test repro_criteria_env_non_utf8 -- --include-ignored"
+exit = 0
+passed = 1
+rev = "89cea71f805808214335b44c82d968886a3b8f17"
+observed_at = 1792189304
+output_digest = "sha256:dcb2f0940577660e7b978c7fd31b74e9ab8804c80a0c223bad5920bbfb39d6bb"
+excerpt = """
+
+running 1 test
+test non_utf8_criteria_env_blocks_like_the_utf8_control ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/repro_criteria_env_non_utf8.rs (target/debug/deps/repro_criteria_env_non_utf8-fc733650cc5e3429)
+"""
+
+[task.closure.red]
+rev = "6b64a13e646e92a6f1c1d97290687f65531f5444"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "a6ee76f7"
+title = "condukt autonomy_invariant askuserquestion_sites_match_frozen_allowlist が main で RED (overwatch SKILL.md の AskUserQuestion 数 allowlist 7 / 実測 2)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-16 by the cf70f785 worker on a tree branched from main a8ec7ac9-era: left 2 right 7 for crates/overwatch/skills/overwatch/SKILL.md. Likely introduced by ce76ce72 (prose-tests(overwatch)) which rewrote that SKILL.md. Readings: (a) ce76ce72 dropped AskUserQuestion gates that must stay (real regression: restore them); (b) the removal was intended and the frozen allowlist needs an acknowledged update (frozen test = human decision). Distinguish by diffing ce76ce72 on that SKILL.md for removed AskUserQuestion sites.
+Resolved by 171d5ef3 (condukt 0.7.255): reading (b). ce76ce72 consolidated the 5 per-command HOTL gates into one prohibition naming the same 5 commands (SKILL.md:10, heading :12, verified 2026-10-17); ASK_ALLOWLIST re-anchored 7->2 with test-weakening-justified ack. RED observed at 22d4f8d5 (left 2 right 7) in a detached worktree; done --red-rev is refused by design because F2P overlays HEAD's test file and the fix IS that test file."""
+created_at = 1792160219
+updated_at = 1792188579
+weight = 0.0
+issue_number = 1380
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1380"
+issue_closed_at = 1792188581
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test autonomy_invariant askuserquestion_sites_match_frozen_allowlist"
+rev = "22d4f8d5c0f72c0e25773cbb14e01e87ea17ed01"
+observed_at = 1792160219
+detail = """
+exit 101: ilures:
+    askuserquestion_sites_match_frozen_allowlist
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-1700c292e4735461)
+error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Resolved by 171d5ef3 (condukt 0.7.255): reading (b). ce76ce72 consolidated the 5 per-command HOTL gates into one prohibition naming the same 5 commands (SKILL.md:10, heading :12, verified 2026-10-17); ASK_ALLOWLIST re-anchored 7->2 with test-weakening-justified ack. RED observed at 22d4f8d5 (left 2 right 7) in a detached worktree; done --red-rev is refused by design because F2P overlays HEAD's test file and the fix IS that test file."
+
+[[task]]
+id = "f3416715"
+title = "scripts.test_prepush_hook の 5 テストが main 4027a8dc で落ちている"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04 by the 5461ba1c worker (run-20261004-013009-74262, base main 4027a8dc). Failing identically before and after the 5461ba1c change: test_clean_ledger_allows, test_missing_rollout_script_is_silent, test_rollout_drift_is_advisory, test_rollout_enablement_is_advisory, test_rollout_unverifiable_is_advisory. (a) the suite pins pre-push behaviour that a recent .githooks/pre-push edit changed (e.g. chronic-red-CI removal or a new blocking check); (b) the hook is wrong. Distinguish: run `python3 -m unittest scripts.test_prepush_hook -v` and diff the asserted strings against .githooks/pre-push at HEAD.
+Fixed by 7f4f204c (branch fix-hookfixture-drift 5b912d86): fixture drift, not a hook bug — hook test fixtures lacked gates added to .githooks (pre-commit SCANNERS now derived from the hook's run lines; frozen EXPECTED_SCANNERS extended by 6 gates each checked against .githooks/pre-commit:228-251; pre-push fixture init commit stubs scripts/check-compile-fail.py). RED observed 2026-10-17 at d5e60474: test_prepush_hook 5 failed, test_precommit_hook 2 failed, test_gate_bypass 63 failed, test_p0_gate_undetermined 4 failed. GREEN after: 11 / 16 / 148 / 19 passed. backlog done refuses by design: F2P overlays HEAD's test files and the fix IS those test files."""
+created_at = 1791045588
+updated_at = 1792190115
+weight = 0.0
+issue_number = 1243
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1243"
+issue_closed_at = 1792190116
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_prepush_hook.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003564
+detail = """
+exit 1: tionError: 1 != 0 : push must be ALLOWED (hook exit 0) rollout enablem...
+\u001B[31mFAILED\u001B[0m scripts/test_prepush_hook.py::\u001B[1mRolloutAdvisoryNeverBlocks::test_rollout_unverifiable_is_advisory\u001B[0m - AssertionError: 1 != 0 : push must be ALLOWED (hook exit 0) rollout unverif...
+\u001B[31m========================= \u001B[31m\u001B[1m5 failed\u001B[0m, \u001B[32m6 passed\u001B[0m\u001B[31m in 4.18s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Fixed by 7f4f204c (branch fix-hookfixture-drift 5b912d86): fixture drift, not a hook bug — hook test fixtures lacked gates added to .githooks (pre-commit SCANNERS now derived from the hook's run lines; frozen EXPECTED_SCANNERS extended by 6 gates each checked against .githooks/pre-commit:228-251; pre-push fixture init commit stubs scripts/check-compile-fail.py). RED observed 2026-10-17 at d5e60474: test_prepush_hook 5 failed, test_precommit_hook 2 failed, test_gate_bypass 63 failed, test_p0_gate_undetermined 4 failed. GREEN after: 11 / 16 / 148 / 19 passed. backlog done refuses by design: F2P overlays HEAD's test files and the fix IS those test files."
+
+[[task]]
+id = "6cb94bff"
+title = "scripts/test_prepush_hook.py 4 件 / test_precommit_hook.py 2 件が RED (hook と fixture の drift)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. test_precommit_hook EveryScannerIsRun and CleanTreePasses fail because the expected scanner list no longer matches .githooks/pre-commit (worker re-checked directly). test_prepush_hook 4 failures not investigated. Stage A (eca8dea7-githooks.patch) moves the scanner list again; fix these together with or after stage A is applied.
+Fixed by 7f4f204c (branch fix-hookfixture-drift 5b912d86): fixture drift, not a hook bug — hook test fixtures lacked gates added to .githooks (pre-commit SCANNERS now derived from the hook's run lines; frozen EXPECTED_SCANNERS extended by 6 gates each checked against .githooks/pre-commit:228-251; pre-push fixture init commit stubs scripts/check-compile-fail.py). RED observed 2026-10-17 at d5e60474: test_prepush_hook 5 failed, test_precommit_hook 2 failed, test_gate_bypass 63 failed, test_p0_gate_undetermined 4 failed. GREEN after: 11 / 16 / 148 / 19 passed. backlog done refuses by design: F2P overlays HEAD's test files and the fix IS those test files."""
+created_at = 1791045928
+updated_at = 1792190117
+weight = 0.0
+issue_number = 1250
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1250"
+issue_closed_at = 1792190120
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q -x --tb=no -p no:cacheprovider scripts/test_precommit_hook.py"
+rev = "0f8f7c19414c396ef0c5683c3b4ab5621439b89d"
+observed_at = 1791047336
+detail = """
+exit 1: F
+=========================== short test summary info ============================
+FAILED scripts/test_precommit_hook.py::CleanTreePasses::test_all_scanners_clean_exits_zero
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed in 0.89s"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Fixed by 7f4f204c (branch fix-hookfixture-drift 5b912d86): fixture drift, not a hook bug — hook test fixtures lacked gates added to .githooks (pre-commit SCANNERS now derived from the hook's run lines; frozen EXPECTED_SCANNERS extended by 6 gates each checked against .githooks/pre-commit:228-251; pre-push fixture init commit stubs scripts/check-compile-fail.py). RED observed 2026-10-17 at d5e60474: test_prepush_hook 5 failed, test_precommit_hook 2 failed, test_gate_bypass 63 failed, test_p0_gate_undetermined 4 failed. GREEN after: 11 / 16 / 148 / 19 passed. backlog done refuses by design: F2P overlays HEAD's test files and the fix IS those test files."
+
+[[task]]
+id = "a70d83f7"
+title = "scripts/test_gate_bypass.py が 46 件 RED (python-only 本体の最大の赤)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. 46 failing tests in test_gate_bypass. Cause not investigated. Re-measure first with `python3 -m unittest scripts.test_gate_bypass`; reading (a) real gate-bypass.py regression, (b) test fixture drift vs current hooks.
+Fixed by 7f4f204c (branch fix-hookfixture-drift 5b912d86): fixture drift, not a hook bug — hook test fixtures lacked gates added to .githooks (pre-commit SCANNERS now derived from the hook's run lines; frozen EXPECTED_SCANNERS extended by 6 gates each checked against .githooks/pre-commit:228-251; pre-push fixture init commit stubs scripts/check-compile-fail.py). RED observed 2026-10-17 at d5e60474: test_prepush_hook 5 failed, test_precommit_hook 2 failed, test_gate_bypass 63 failed, test_p0_gate_undetermined 4 failed. GREEN after: 11 / 16 / 148 / 19 passed. backlog done refuses by design: F2P overlays HEAD's test files and the fix IS those test files."""
+created_at = 1791045920
+updated_at = 1792190120
+weight = 0.0
+issue_number = 1248
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1248"
+issue_closed_at = 1792190123
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q -x --tb=no -p no:cacheprovider scripts/test_gate_bypass.py"
+rev = "0f8f7c19414c396ef0c5683c3b4ab5621439b89d"
+observed_at = 1791047313
+detail = """
+exit 1: F
+=========================== short test summary info ============================
+FAILED scripts/test_gate_bypass.py::PlainCommitIsClean::test_blocked_precommit_certifies_nothing
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed in 1.29s"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Fixed by 7f4f204c (branch fix-hookfixture-drift 5b912d86): fixture drift, not a hook bug — hook test fixtures lacked gates added to .githooks (pre-commit SCANNERS now derived from the hook's run lines; frozen EXPECTED_SCANNERS extended by 6 gates each checked against .githooks/pre-commit:228-251; pre-push fixture init commit stubs scripts/check-compile-fail.py). RED observed 2026-10-17 at d5e60474: test_prepush_hook 5 failed, test_precommit_hook 2 failed, test_gate_bypass 63 failed, test_p0_gate_undetermined 4 failed. GREEN after: 11 / 16 / 148 / 19 passed. backlog done refuses by design: F2P overlays HEAD's test files and the fix IS those test files."
+
+[[task]]
+id = "d3716b21"
+title = "scripts/test_p0_gate_undetermined.py が 4 件 RED"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. 4 failing tests. Cause not investigated. Re-measure with `python3 -m unittest scripts.test_p0_gate_undetermined`.
+Fixed by 7f4f204c (branch fix-hookfixture-drift 5b912d86): fixture drift, not a hook bug — hook test fixtures lacked gates added to .githooks (pre-commit SCANNERS now derived from the hook's run lines; frozen EXPECTED_SCANNERS extended by 6 gates each checked against .githooks/pre-commit:228-251; pre-push fixture init commit stubs scripts/check-compile-fail.py). RED observed 2026-10-17 at d5e60474: test_prepush_hook 5 failed, test_precommit_hook 2 failed, test_gate_bypass 63 failed, test_p0_gate_undetermined 4 failed. GREEN after: 11 / 16 / 148 / 19 passed. backlog done refuses by design: F2P overlays HEAD's test files and the fix IS those test files."""
+created_at = 1791045924
+updated_at = 1792190123
+weight = 0.0
+issue_number = 1249
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1249"
+issue_closed_at = 1792190128
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q -x --tb=no -p no:cacheprovider scripts/test_p0_gate_undetermined.py"
+rev = "0f8f7c19414c396ef0c5683c3b4ab5621439b89d"
+observed_at = 1791047325
+detail = """
+exit 1: ...............F
+=========================== short test summary info ============================
+FAILED scripts/test_p0_gate_undetermined.py::LedgerClearedOnlyByInspection::test_control_empty_diff_run_is_green_and_ledger_empty_stays_empty
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 15 passed, 10 subtests passed in 7.81s"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Fixed by 7f4f204c (branch fix-hookfixture-drift 5b912d86): fixture drift, not a hook bug — hook test fixtures lacked gates added to .githooks (pre-commit SCANNERS now derived from the hook's run lines; frozen EXPECTED_SCANNERS extended by 6 gates each checked against .githooks/pre-commit:228-251; pre-push fixture init commit stubs scripts/check-compile-fail.py). RED observed 2026-10-17 at d5e60474: test_prepush_hook 5 failed, test_precommit_hook 2 failed, test_gate_bypass 63 failed, test_p0_gate_undetermined 4 failed. GREEN after: 11 / 16 / 148 / 19 passed. backlog done refuses by design: F2P overlays HEAD's test files and the fix IS those test files."
+
+[[task]]
+id = "52f85060"
+title = "check-unlisted-gates.py に hook dir を core.hooksPath 以外で指定する手段が無く、scratch clone を CLI で検査できない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. `--repo <clone>` gives UNDETERMINED rc 2 when core.hooksPath is unset in the clone; setting hooksPath in the clone is refused by guard-maintree-bash. A --hooks-dir option would make the clone check possible."
+created_at = 1791045944
+updated_at = 1792190537
+weight = 0.0
+issue_number = 1254
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1254"
+issue_closed_at = 1792190538
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_52f85060.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003586
+detail = """
+exit 1: test.py\u001B[0m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_52f85060.py::\u001B[1mHooksDirOption::test_hooks_dir_option_checks_a_clone_without_hookspath\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.46s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --color=no --runxfail -q -p no:cacheprovider scripts/test_backlog_52f85060.py"
+exit = 0
+passed = 2
+rev = "5128ee6c558f569c24abf94726cc072f9f2e6818"
+observed_at = 1792190531
+output_digest = "sha256:c178449272bb51b7cf4ea950c6169cee3d94d323b8186f6cd7eca96df22dc4a9"
+excerpt = """
+..                                                                       [100%]
+2 passed in 0.63s
+"""
+
+[task.closure.red]
+rev = "2ac122ac4c733fd8d082714cf5e5d323cdc82bb3"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "396b6089"
+title = "check-plugin-versions.py は crates/ 不在で FileNotFoundError traceback (exit 1) になり、判定不能の exit 2 を返さない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. Still blocks (non-zero), but the documented 'cannot determine' code is not produced; found by the eca8dea7 worker while mutating it for the replacement test test_f6919056_plugin_versions_without_crates_dir_is_not_ok."
+created_at = 1791045941
+updated_at = 1792190775
+weight = 0.0
+issue_number = 1253
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1253"
+issue_closed_at = 1792190776
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_396b6089.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003585
+detail = """
+exit 1: ed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_396b6089.py::\u001B[1mPluginVersionsWithoutCratesDir::test_missing_crates_dir_is_undetermined_exit_2_not_traceback\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.19s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --color=no --runxfail -q -p no:cacheprovider scripts/test_backlog_396b6089.py"
+exit = 0
+passed = 2
+rev = "66f3ef7f25396cf1aae48ac32ccd30cc887093bd"
+observed_at = 1792190771
+output_digest = "sha256:0a97b591ab7ce9644866a9aea8e19c37ff6647585418c546d0481e0cb92bfbc7"
+excerpt = """
+..                                                                       [100%]
+2 passed in 0.14s
+"""
+
+[task.closure.red]
+rev = "2ac122ac4c733fd8d082714cf5e5d323cdc82bb3"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "26f6dd72"
+title = "test_check_launcher_exec_bit が launcher 39 件を期待し 40 件を見つけて RED (test_backlog_audit_b1_0 Backlog06a9d33f も同因)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. Red on base f51e281e too. A new launcher was added without updating the expected count, or the count is hardcoded. Reading (a) the pin should derive the count, (b) the 40th launcher is unintended. Also 1 failure each in test_backlog_53897d41 and test_check_projkey_store_classification (not investigated; check whether they share a cause).
+Fixed by branch fix-26f6dd72 162389a6 (test-only): the pinned 39 was stale after jev (f56497bf) became the 42nd plugin; specforge (0eb9996e) is intended. Expected launcher set now derived from each plugin crate's Cargo.toml bin targets (independent of the checker), asserted as exact list + count. RED: old test at 2ac122ac '40 != 39'; GREEN: 23 passed. New assertion's kill shown by a LAUNCHER_RE scope-shrink mutation (went red). backlog done refuses by design: the fix IS the test file (F2P overlays HEAD tests). The 06a9d33f half (test_a_direct_run_reports_a_nonzero_test_count) also passes now; the remaining main-guard failure in test_backlog_audit_b1_0 is a different cause, filed separately."""
+created_at = 1791045934
+updated_at = 1792190799
+weight = 0.0
+issue_number = 1251
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1251"
+issue_closed_at = 1792190802
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q -x --tb=no -p no:cacheprovider scripts/test_check_launcher_exec_bit.py"
+rev = "0f8f7c19414c396ef0c5683c3b4ab5621439b89d"
+observed_at = 1791047339
+detail = """
+exit 1: ......................F
+=========================== short test summary info ============================
+FAILED scripts/test_check_launcher_exec_bit.py::RealRepoState::test_the_scope_finds_every_plugin_that_ships_a_binary
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 22 passed in 2.46s"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "Fixed by branch fix-26f6dd72 162389a6 (test-only): the pinned 39 was stale after jev (f56497bf) became the 42nd plugin; specforge (0eb9996e) is intended. Expected launcher set now derived from each plugin crate's Cargo.toml bin targets (independent of the checker), asserted as exact list + count. RED: old test at 2ac122ac '40 != 39'; GREEN: 23 passed. New assertion's kill shown by a LAUNCHER_RE scope-shrink mutation (went red). backlog done refuses by design: the fix IS the test file (F2P overlays HEAD tests). The 06a9d33f half (test_a_direct_run_reports_a_nonzero_test_count) also passes now; the remaining main-guard failure in test_backlog_audit_b1_0 is a different cause, filed separately."
+
+[[task]]
+id = "f597cbbd"
+title = "observing main-tree guard が他セッションの main への fast-forward merge を並行する無関係な Bash call に帰属させた"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-10-04 (session 64554c4d, reported by its p1 driver sub-agent and re-checked): main carries two single-parent commits, 98312703 (2026-10-04 02:22:02 +0900, 'specguard: ack 5 gate files with no docs/specs coverage (unblock push)', parent 5af9693e) and dfd7357d (02:23:21, 'backlog: file 5 p2 spec-debt items for gate files acked in 98312703'), followed by f2e3e057 'Merge branch flow-orphan-issues'. The sub-agent also saw a staged .backlog/tasks.toml in main's tree at the time; by the time this was filed main's tree was clean. Neither commit came from session 64554c4d. The main-tree guard attributed the change to the sub-agent's call (whose commands all ran in the session-64554c4d worktree).
+Reading (a): another session committed directly in main's working tree, so scripts/check-worktree-isolation.py (pre-commit, blocks non-merge commits from main's tree) did not fire: bypassed, not wired, or the commit ran with a different hooksPath. (b): the commits were made in a worktree and reached main by a fast-forward merge, which leaves only single-parent commits on main; §8 is satisfied but history cannot show it.
+Distinguish: find the session whose transcript contains 'unblock push' / the commit hash and check its cwd at commit time; check the reflog of main (`git reflog show main` around 02:22) for 'commit' vs 'merge ... Fast-forward'. Also: the guard's attribution of a foreign mutation to whichever call happened to run next is a separate defect (false attribution).
+
+SETTLED 2026-10-04 right after filing: reading (b). `git reflog show main` shows 'dfd7357d main@{2026-10-04 02:23:55 +0900}: merge flow-specdoc: Fast-forward' — the two commits were made on branch flow-specdoc and fast-forwarded onto main; no §8 violation. What remains open is only the false attribution: the main-tree guard (observing guard) attributed main's change (the fast-forward / a transient staged .backlog/tasks.toml during it) to an unrelated concurrent Bash call of session 64554c4d's sub-agent."""
+created_at = 1791048270
+updated_at = 1792192708
+weight = 0.0
+issue_number = 1288
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1288"
+issue_closed_at = 1792192709
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_f597cbbd.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003559
+detail = """
+exit 1: \u001B[0m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_f597cbbd.py::\u001B[1mForeignFastForwardDuringCall::test_ff_whose_branch_was_deleted_is_not_refused\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 1.44s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_f597cbbd.py"
+exit = 0
+passed = 2
+rev = "75b00795b574b1dce8da00732c3605dd19970ad9"
+observed_at = 1792192695
+output_digest = "sha256:554f78f87153ef17ab7870e88eaceb41d336627d993f3d8c97bba8cb9d44d45d"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-f597cbbd
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_f597cbbd.py ..                                      [100%]
+
+============================== 2 passed in 1.79s ===============================
+"""
+
+[task.closure.red]
+rev = "caad9a023d7da7b66ebcd3d6e4bd958fe067145a"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "68fb7237"
+title = "merging .backlog/tasks.toml by taking one side wholesale drops tasks added on the other side, leaving their GitHub issues open and orphaned"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 (worktree flow-issue-sync, base main 4027a8dc). Merge e672436b (Merge branch 'session-c6ed7cfd', 2026-10-02 05:17, merge-base 8f50bc4d) resolved a conflict in .backlog/tasks.toml by keeping ^1 wholesale: 10 tasks added on ^2 since the merge-base (dc272b08 e481be8f b645e787 41c98767 7905a60b 23f9b548 0bd2402a 3a56ac96 e3acc324 e3403964, issues #977 #978 #984 #986 #987 #988 #990 #991 #992 #997) are present in e672436b^2 and absent from e672436b in both tasks.toml and tasks.done.toml. The follow-up merge 71e024a5 (parents e672436b 31229785) also lacks all 10 (71e024a5^2 has 10, result 0), though relative to its own merge-base it added only 1 new id and kept it. The tasks were never closed anywhere in history (only ever status pending in tasks.toml), so their issues stayed open with no backing task. Restored verbatim from 31229785 in branch flow-issue-sync. A further 17 open issues (#238 #249 #345-#348 #356-#361 #404 #670 #1048-#1050) have NO task block in any reachable commit, reflog-only commit, unreachable blob, any .harness-worktrees store, or the home store; the mechanism that lost them is unidentified (candidates: sync ran in a worktree whose store write was never committed, or another wholesale resolution before the issue_number was committed). Done criteria: a merge of .backlog/*.toml that drops an id present on either side since the merge-base is refused (merge driver or pre-commit check), with a RED-first test on a fixture merge reproducing e672436b."
+created_at = 1791047071
+updated_at = 1792192650
+weight = 0.0
+issue_number = 1274
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1274"
+issue_closed_at = 1792192651
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_68fb7237.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003600
+detail = """
+exit 1: m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_68fb7237.py::\u001B[1mWholesaleSideMerge::test_ours_wholesale_resolution_dropping_theirs_id_is_refused\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.75s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_68fb7237.py"
+exit = 0
+passed = 2
+rev = "3e64b70a99c7b0ea6964bf09e993c814a59ef8ae"
+observed_at = 1792192639
+output_digest = "sha256:4407fd14abaed87375e67cdb45327b24f3e938b3b1d3e729055cea1c1623a948"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-68fb7237
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_68fb7237.py ..                                      [100%]
+
+============================== 2 passed in 1.57s ===============================
+"""
+
+[task.closure.red]
+rev = "54325ea802a8828ce6bf2e3db47d1bfd6c723dd2"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "7e575392"
+title = "backlog sync has no reopen arm: a task moved back from done/cancelled to pending/needs-ruling leaves its GitHub issue closed"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 (worktree flow-issue-sync, base main 4027a8dc). Six issues were CLOSED while their tasks were active in .backlog/tasks.toml: #420 ae4543d5 needs-ruling, #427 e033c406 needs-ruling, #497 cc809395 pending, #633 29b08fc7 pending, #862 ee273b5e pending, #924 f036e218 pending. backlog sync --help lists arms both/create/close/body only; the dry run before the manual reopen did not list them (plan was 5 create + close #140). Reopened by hand with gh issue reopen. Consequence: the GitHub mirror reads as resolved while the work is open, the silent-means-fine reading CLAUDE.md section 1 forbids. Done criteria: sync plans a reopen action for any task in an active status whose linked issue is CLOSED, with a RED-first test against a fake gh."
+created_at = 1791047075
+updated_at = 1792192817
+weight = 0.0
+issue_number = 1275
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1275"
+issue_closed_at = 1792192818
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_7e575392 -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003602
+detail = """
+exit 101: failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.49s
+
+   Compiling backlog v0.3.46 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/backlog_7e575392.rs (target/debug/deps/backlog_7e575392-a3ec624f5dfd0573)
+error: test failed, to rerun pass `-p backlog --test backlog_7e575392`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_7e575392"
+exit = 0
+passed = 2
+rev = "fbb045ada5a428143647a2dfde8c42d571e2fc42"
+observed_at = 1792192794
+output_digest = "sha256:78f28610c1d9c237548281628ad7b2c15716e8f974a9883c2aba1314170f4ada"
+excerpt = """
+
+running 2 tests
+test control_dry_run_plans_the_unmirrored_create ... ok
+test active_task_with_closed_issue_is_planned_for_reopen ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/backlog_7e575392.rs (target/debug/deps/backlog_7e575392-63a2b6189169ebb2)
+"""
+
+[task.closure.red]
+rev = "54325ea802a8828ce6bf2e3db47d1bfd6c723dd2"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "fb7c3d83"
+title = "rollout-plugins.sh resolve_overwatch_bin keeps the $REPO/target fallback that a0525604 removed from rebuild-plugins.sh (mirror gap)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scripts",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = 'From the a0525604 verifier 2026-10-04: scripts/rollout-plugins.sh around :266 has tdir="${tdir:-$REPO/target}", the same fallback for cargo metadata that succeeds with no target_directory. a0525604 (merged cc256dbd) made rebuild-plugins.sh exit 1 in that case. The verifier notes an unresolved binary there still returns 1, so check whether the fallback can pick a stale overwatch binary under $REPO/target before deciding severity. Needs its own RED test.'
+created_at = 1791048915
+updated_at = 1792193299
+weight = 0.0
+issue_number = 1290
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1290"
+issue_closed_at = 1792193301
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_fb7c3d83.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003605
+detail = """
+exit 1: data_without_target_directory_does_not_guess_repo_target\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_fb7c3d83.py::\u001B[1mResolveOverwatchBinTargetFallback::test_reported_dir_without_binary_does_not_fall_back_to_repo_target\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m2 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 1.34s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_fb7c3d83.py"
+exit = 0
+passed = 3
+rev = "2f3b191c6a81a9b1069ac3fa140f74cbe7256df6"
+observed_at = 1792193291
+output_digest = "sha256:a8e8f28053b39745fb4d6c2ae88bbe205ad09ecbc572f11aca5cf3d8dc7dfe4d"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-fb7c3d83
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_backlog_fb7c3d83.py ...                                     [100%]
+
+============================== 3 passed in 1.53s ===============================
+"""
+
+[task.closure.red]
+rev = "54325ea802a8828ce6bf2e3db47d1bfd6c723dd2"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "11d63017"
+title = "test_backlog_63e2690d.py and test_backlog_69e34456.py call exec_module directly (StaticAllScripts red)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1792207777
+updated_at = 1792231432
+weight = 0.0
+issue_number = 1417
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1417"
+issue_closed_at = 1792231435
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_verifier_05726f9f.py::StaticAllScripts"
+rev = "c2c5507715c03cdd36adae82ab2d58ad816e2dc3"
+observed_at = 1792207777
+detail = """
+exit 1: acklog_63e2690d.py:27', 'test_backlog_69e34456.py:35']
+E       + []
+
+scripts/test_verifier_05726f9f.py:26: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_verifier_05726f9f.py::StaticAllScripts::test_no_pyc_trusting_loader_calls_anywhere_under_scripts
+========================= 1 failed, 1 passed in 0.50s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_verifier_05726f9f.py::StaticAllScripts"
+exit = 0
+passed = 2
+rev = "eccdb87d087ff97db4aa54ee91e82142db82c968"
+observed_at = 1792231429
+output_digest = "sha256:d5c0307567179ab2e59379433782dda2ac83ee7f9568ae788a6923736f91b9a5"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-11d63017
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_verifier_05726f9f.py ..                                     [100%]
+
+============================== 2 passed in 0.44s ===============================
+"""
+
+[task.closure.red]
+rev = "aef95fc0fe2042a0c772ddb14cff3824d566df58"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "8231b822"
+title = "backlog merge driver is configured as bare 'backlog' which is not on PATH: every task-store merge conflicts with NO markers, so git add silently keeps only our side"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 (session 64554c4d), several times: git config merge.backlog.driver = 'backlog merge-driver %O %A %B' (f769c750, 867dde4b); git merge prints 'backlog merge-driver .merge_file_X ...: backlog: command not found' and marks .backlog/tasks.toml / tasks.done.toml UU, but the working file holds OUR side verbatim with no conflict markers (it parses as valid TOML). A git add + commit then silently discards the other side's backlog changes; I did exactly that once in the session worktree (commit 2fb2c4cb, reset before it left the branch). Fail-open: a failed merge driver looks like a clean resolution. Also, git ran the merge with uncommitted changes to those files present and did not refuse. Fix directions: resolve the driver binary via an absolute plugin-cache path or a repo-local wrapper that exits non-zero loudly; write markers (or a sentinel line that breaks TOML) when the driver can't run; a pre-commit check that a merge commit's task-store files contain every id present on both parents unless closed."
+created_at = 1791049229
+updated_at = 1792235170
+weight = 0.0
+issue_number = 1293
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1293"
+issue_closed_at = 1792235171
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_8231b822.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003603
+detail = """
+exit 1: test.py\u001B[0m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_8231b822.py::\u001B[1mFailedDriverMerge::test_committing_the_failed_driver_result_is_refused\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.91s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_8231b822.py"
+exit = 0
+passed = 2
+rev = "d7e04a89a57e76929f5b1b3a74f185c8a02aad0c"
+observed_at = 1792235166
+output_digest = "sha256:a92d73ca459ab1692f7e82e942d273c2c5470c4740b3ba08d10b419bf971ca11"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-6d32fd65
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_8231b822.py ..                                      [100%]
+
+============================== 2 passed in 0.97s ===============================
+"""
+
+[task.closure.red]
+rev = "5effbe63c2dc31e9efb8bbeb02603efa3a4049c7"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "0805b07a"
+title = "condukt state set --status running skips recording --worktree when the task's files are claimed by another live run, so the later verified transition runs the F->P oracle in the wrong cwd and refuses; check-oracle doc says no tdd on PATH degrades to fallback:true but it returns fallback:false 'exited non-zero'"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 in the p1 loop: runs run-20261004-024204-44254 (486e83ca) and run-20261004-024816-76469 (55f55932) printed 'task skipped — N file(s) already claimed by a live run' on state set running, leaving worktree=None. state set verified then refused: 'no valid fail-to-pass reproduction oracle (tdd oracle exited non-zero ...)'. With tdd absent from PATH check-oracle printed fallback:false although its help says a missing tdd degrades to fallback:true. Recording the worktree via state set --status done --worktree then verified worked for 55f55932. 486e83ca's worktree was already removed so its run stays done/unverified (backlog item closed with test evidence)."
+created_at = 1791051845
+updated_at = 1792235201
+weight = 0.0
+issue_number = 1306
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1306"
+issue_closed_at = 1792235202
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_0805b07a -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003553
+detail = """
+exit 101: ailed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+
+   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/backlog_0805b07a.rs (target/debug/deps/backlog_0805b07a-7cf7cba88d214b74)
+error: test failed, to rerun pass `-p condukt --test backlog_0805b07a`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_0805b07a"
+exit = 0
+passed = 1
+rev = "d7e04a89a57e76929f5b1b3a74f185c8a02aad0c"
+observed_at = 1792235171
+output_digest = "sha256:1c06f700969e3dbbcf4793b8a0b9faa486b6528008da2fa9ca6dab8b293ed129"
+excerpt = """
+
+running 1 test
+test check_oracle_help_matches_behaviour_when_tdd_is_missing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
+
+   Compiling condukt v0.7.261 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.36s
+     Running tests/backlog_0805b07a.rs (target/debug/deps/backlog_0805b07a-97b35b6aa3517de6)
+"""
+
+[task.closure.red]
+rev = "5effbe63c2dc31e9efb8bbeb02603efa3a4049c7"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "f39a48f4"
+title = "ship: stale-binary check only knows linux-x86_64 names, never fires on darwin-arm64"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/ship/src/stale.rs check_stale_crate builds bin/NAME-linux-x86_64 and returns None when absent, so a stale darwin-arm64 binary is reported as no stale plugin binaries. Test asserts a darwin-arm64 binary older than src is not reported clean."
+created_at = 1792155523
+updated_at = 1792235215
+weight = 0.0
+issue_number = 1365
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1365"
+issue_closed_at = 1792235217
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_stale_binary_name_linux_only -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155523
+detail = """
+exit 101: t; finished in 0.66s
+
+   Compiling ship v0.1.16 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.94s
+     Running tests/repro_stale_binary_name_linux_only.rs (target/debug/deps/repro_stale_binary_name_linux_only-6771d7908d466a39)
+error: test failed, to rerun pass `-p ship --test repro_stale_binary_name_linux_only`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p ship --test repro_stale_binary_name_linux_only"
+exit = 0
+passed = 1
+rev = "d7e04a89a57e76929f5b1b3a74f185c8a02aad0c"
+observed_at = 1792235202
+output_digest = "sha256:2f888c3d7144c0e7fed9bb4785ba4ebcbdcf63af674144e8998e4d58e88eba87"
+excerpt = """
+
+running 1 test
+test stale_darwin_arm64_binary_is_not_reported_clean ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+   Compiling ship v0.1.18 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/repro_stale_binary_name_linux_only.rs (target/debug/deps/repro_stale_binary_name_linux_only-49bee7a1919a3a50)
+"""
+
+[task.closure.red]
+rev = "5effbe63c2dc31e9efb8bbeb02603efa3a4049c7"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "b1a27409"
+title = "ship: SessionEnd reminder suppressed whenever stdout is piped (always, under the real hook)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/ship/src/main.rs session_end prints only if !is_headless(), and is_headless is !stdout.is_terminal(); Claude Code captures hook stdout so the unshipped-work reminder never appears. Test pipes stdout with an uncommitted file present and asserts a non-empty reminder."
+created_at = 1792155547
+updated_at = 1792236121
+weight = 0.0
+issue_number = 1366
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1366"
+issue_closed_at = 1792236124
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_session_end_suppressed_when_piped -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155547
+detail = """
+exit 101: 0.85s
+
+   Compiling ship v0.1.16 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/repro_session_end_suppressed_when_piped.rs (target/debug/deps/repro_session_end_suppressed_when_piped-3e3f6ea64fa26443)
+error: test failed, to rerun pass `-p ship --test repro_session_end_suppressed_when_piped`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p ship --test repro_session_end_suppressed_when_piped"
+exit = 0
+passed = 1
+rev = "4a617762ba3ed18a340e0387a12b161b1cba1906"
+observed_at = 1792236109
+output_digest = "sha256:188fcdcdb1a0078bc00b1bb60bba844342c453f327773299a3700cfa0cf59daa"
+excerpt = """
+
+running 1 test
+test session_end_emits_reminder_for_unshipped_work_when_piped ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/repro_session_end_suppressed_when_piped.rs (target/debug/deps/repro_session_end_suppressed_when_piped-c8606d3836c81122)
+"""
+
+[task.closure.red]
+rev = "19c5321df3149c89a2e449a5606af52701894830"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "77483c04"
+title = "ship: git errors in src/git.rs resolve to clean (no upstream gives 0 unpushed, failed git gives no uncommitted)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/ship/src/git.rs: uncommitted_changes false on Err and ignores exit status; unmerged_condukt_branches/leftover_worktrees empty vec; unpushed_count returns 0 when both upstream and origin/main fail. Checklist then prints [x]. Existing unit test test_unpushed_count_no_upstream pins the 0 and encodes the fail-open as spec; NOT edited here, owner must revisit it when fixing. Tests assert no [x] line when git could not answer."
+created_at = 1792155551
+updated_at = 1792236138
+weight = 0.0
+issue_number = 1367
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1367"
+issue_closed_at = 1792236142
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_git_errors_resolve_clean -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155551
+detail = """
+exit 101:  filtered out; finished in 0.45s
+
+   Compiling ship v0.1.16 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/repro_git_errors_resolve_clean.rs (target/debug/deps/repro_git_errors_resolve_clean-5502a19c7f138336)
+error: test failed, to rerun pass `-p ship --test repro_git_errors_resolve_clean`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p ship --test repro_git_errors_resolve_clean"
+exit = 0
+passed = 2
+rev = "4a617762ba3ed18a340e0387a12b161b1cba1906"
+observed_at = 1792236124
+output_digest = "sha256:7b03ce962ea2aea33b13b8e623208818cb0278b8a9030b86400416aa019030b8"
+excerpt = """
+
+running 2 tests
+test broken_git_dir_is_not_reported_as_all_clean ... ok
+test no_upstream_is_not_reported_as_no_unpushed_commits ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/repro_git_errors_resolve_clean.rs (target/debug/deps/repro_git_errors_resolve_clean-18a3eb7333da3d3d)
+"""
+
+[task.closure.red]
+rev = "19c5321df3149c89a2e449a5606af52701894830"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "96bfbac6"
+title = "ship: failed or missing rebuild/rollout script still exits 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/ship/src/main.rs check --run-safe and rollout print the FAILED summary (checklist.rs run_safe/rollout return Ok) or eprintln on Err, never setting an exit code. Tests assert non-zero exit for a failing script and a missing script."
+created_at = 1792155554
+updated_at = 1792236155
+weight = 0.0
+issue_number = 1369
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1369"
+issue_closed_at = 1792236158
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_script_failure_exits_zero -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155554
+detail = """
+exit 101: ltered out; finished in 1.25s
+
+   Compiling ship v0.1.16 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running tests/repro_script_failure_exits_zero.rs (target/debug/deps/repro_script_failure_exits_zero-43ee4a53c79a23fe)
+error: test failed, to rerun pass `-p ship --test repro_script_failure_exits_zero`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p ship --test repro_script_failure_exits_zero"
+exit = 0
+passed = 3
+rev = "4a617762ba3ed18a340e0387a12b161b1cba1906"
+observed_at = 1792236142
+output_digest = "sha256:4fa0905592794db37446ca42d23495c5209a7a12c57ba12774e6c6c5bde3d080"
+excerpt = """
+
+running 3 tests
+test rollout_script_missing_exits_nonzero ... ok
+test rollout_script_failure_exits_nonzero ... ok
+test run_safe_script_failure_exits_nonzero ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.91s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_script_failure_exits_zero.rs (target/debug/deps/repro_script_failure_exits_zero-579870aea61c9636)
+"""
+
+[task.closure.red]
+rev = "19c5321df3149c89a2e449a5606af52701894830"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "cedfa91e"
+title = "trajectoryeval: fuzzy_hash at default threshold 0 rounds real drift to match"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/trajectoryeval/src/tier.rs fuzzy_diff round-half-up: 1 changed leaf of 2001 gives distance 0, 0<=0 is Match, exit 0, contradicting the TierConfig doc that default 0 means any drift escalates. Test asserts non-zero exit."
+created_at = 1792155569
+updated_at = 1792236993
+weight = 0.0
+issue_number = 1373
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1373"
+issue_closed_at = 1792236996
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p trajectoryeval --test repro_fuzzy_hash_default_threshold_rounds_drift_away -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155569
+detail = """
+exit 101: worktrees/repro-failopens/crates/trajectoryeval)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.43s
+     Running tests/repro_fuzzy_hash_default_threshold_rounds_drift_away.rs (target/debug/deps/repro_fuzzy_hash_default_threshold_rounds_drift_away-96e836cb97e18345)
+error: test failed, to rerun pass `-p trajectoryeval --test repro_fuzzy_hash_default_threshold_rounds_drift_away`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p trajectoryeval --test repro_fuzzy_hash_default_threshold_rounds_drift_away"
+exit = 0
+passed = 1
+rev = "e4547e5bd96a288607a543d80232c9a0068872c7"
+observed_at = 1792236964
+output_digest = "sha256:edf4c4a9ae39a03f225ef07b88f4eb22e04f02aa807dafa7563ce83ad96f74bc"
+excerpt = """
+
+running 1 test
+test zero_tolerance_fuzzy_hash_does_not_pass_a_changed_leaf ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_fuzzy_hash_default_threshold_rounds_drift_away.rs (target/debug/deps/repro_fuzzy_hash_default_threshold_rounds_drift_away-e35357a5018d3536)
+"""
+
+[task.closure.red]
+rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "dc5c8b29"
+title = "trajectoryeval: empty subsequence spec passes any trajectory"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/trajectoryeval/src/match_traj.rs: spec with mode subsequence and no steps (serde default) requires nothing, reports nothing unexpected, check prints matched and exits 0. Test asserts non-zero."
+created_at = 1792155576
+updated_at = 1792237031
+weight = 0.0
+issue_number = 1375
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1375"
+issue_closed_at = 1792237034
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p trajectoryeval --test repro_empty_subsequence_spec_passes_anything -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155576
+detail = """
+exit 101: Users/yuki/src/.harness-worktrees/repro-failopens/crates/trajectoryeval)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/repro_empty_subsequence_spec_passes_anything.rs (target/debug/deps/repro_empty_subsequence_spec_passes_anything-a234c31cc429f706)
+error: test failed, to rerun pass `-p trajectoryeval --test repro_empty_subsequence_spec_passes_anything`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p trajectoryeval --test repro_empty_subsequence_spec_passes_anything"
+exit = 0
+passed = 1
+rev = "e4547e5bd96a288607a543d80232c9a0068872c7"
+observed_at = 1792236997
+output_digest = "sha256:b500df8f8c185ea4faa94897e9198cbaa2fbfde2c8a47cf4d14a62e0c1f70fbd"
+excerpt = """
+
+running 1 test
+test empty_subsequence_spec_does_not_exit_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/repro_empty_subsequence_spec_passes_anything.rs (target/debug/deps/repro_empty_subsequence_spec_passes_anything-e2c7ca75d063093f)
+"""
+
+[task.closure.red]
+rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "ceafad0e"
+title = "trajectoryeval: extract skips non-JSON lines, garbage transcript gives [] and exit 0"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/trajectoryeval/src/extract.rs extract_tools does Err(_) => continue per line; an entirely unparseable transcript prints [] with exit 0, indistinguishable from a session with no tool calls; main.rs reserves exit 2 for unparseable input. Test asserts non-zero."
+created_at = 1792155578
+updated_at = 1792237058
+weight = 0.0
+issue_number = 1376
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1376"
+issue_closed_at = 1792237061
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p trajectoryeval --test repro_extract_garbage_transcript_exits_zero -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155578
+detail = """
+exit 101:  (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/trajectoryeval)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests/repro_extract_garbage_transcript_exits_zero.rs (target/debug/deps/repro_extract_garbage_transcript_exits_zero-32e8bb2508edee0a)
+error: test failed, to rerun pass `-p trajectoryeval --test repro_extract_garbage_transcript_exits_zero`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p trajectoryeval --test repro_extract_garbage_transcript_exits_zero"
+exit = 0
+passed = 1
+rev = "e4547e5bd96a288607a543d80232c9a0068872c7"
+observed_at = 1792237035
+output_digest = "sha256:7411faad3572ed83da34649589327a84a923e9938f5708bdde910ac8516f9099"
+excerpt = """
+
+running 1 test
+test extract_of_unparseable_transcript_does_not_exit_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/repro_extract_garbage_transcript_exits_zero.rs (target/debug/deps/repro_extract_garbage_transcript_exits_zero-aa87b5788c639cc4)
+"""
+
+[task.closure.red]
+rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "331dd891"
+title = "trajectoryeval: tier --exists defaults true so an omitted existence input passes a non-core flow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/trajectoryeval/src/main.rs --exists default_value_t = true; non_core flow with no existence input gets existence present and exit 0. Test asserts non-zero when --exists is omitted."
+created_at = 1792155582
+updated_at = 1792237082
+weight = 0.0
+issue_number = 1377
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1377"
+issue_closed_at = 1792237084
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p trajectoryeval --test repro_tier_exists_defaults_true -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155582
+detail = """
+exit 101: 
+   Compiling trajectoryeval v0.1.14 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/trajectoryeval)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/repro_tier_exists_defaults_true.rs (target/debug/deps/repro_tier_exists_defaults_true-f4d6864a3f897651)
+error: test failed, to rerun pass `-p trajectoryeval --test repro_tier_exists_defaults_true`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p trajectoryeval --test repro_tier_exists_defaults_true"
+exit = 0
+passed = 1
+rev = "e4547e5bd96a288607a543d80232c9a0068872c7"
+observed_at = 1792237062
+output_digest = "sha256:67ae779af7986e48ec5a0c4b2e28d9d8f694cde62d8a03edd6e6c1c3047aa4c6"
+excerpt = """
+
+running 1 test
+test omitted_exists_does_not_pass_a_non_core_flow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/repro_tier_exists_defaults_true.rs (target/debug/deps/repro_tier_exists_defaults_true-b577b61ff0e0cf6e)
+"""
+
+[task.closure.red]
+rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "bc29c30a"
+title = "evalkit: cmd case without assert.exit passes on a non-zero exit"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/evalkit/src/run.rs check_exit returns early when assert.exit is None and other checks look at stdout only; a command exiting 101 with empty stdout satisfies not_contains and is reported ok. Test asserts non-zero overall exit."
+created_at = 1792155563
+updated_at = 1792236993
+weight = 0.0
+issue_number = 1371
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1371"
+issue_closed_at = 1792236996
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p evalkit --test repro_cmd_case_ignores_exit_status -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155563
+detail = """
+exit 101: hed in 0.41s
+
+   Compiling evalkit v0.1.9 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/repro_cmd_case_ignores_exit_status.rs (target/debug/deps/repro_cmd_case_ignores_exit_status-f42af028fb2a0991)
+error: test failed, to rerun pass `-p evalkit --test repro_cmd_case_ignores_exit_status`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p evalkit --test repro_cmd_case_ignores_exit_status"
+exit = 0
+passed = 1
+rev = "99a1d7f0e728d3be37fab1d617be568056b4c0c7"
+observed_at = 1792236964
+output_digest = "sha256:65759e14bd5168004b13e5bea3b0318c72f45c0698c60962d9ac0c89970bf51b"
+excerpt = """
+
+running 1 test
+test crashing_cmd_without_exit_assertion_is_not_a_pass ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/repro_cmd_case_ignores_exit_status.rs (target/debug/deps/repro_cmd_case_ignores_exit_status-1c8ab1a8f0fd8ef0)
+"""
+
+[task.closure.red]
+rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "72564611"
+title = "evalkit: empty assert passes vacuously"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "crates/evalkit/src/case.rs documents empty Assert as acquisition-only and validate does not reject it; run.rs check_assert loops over empty vectors so zero assertions is ok and exit 0. Note the doc comment states this as intended; the fix must change that prose in the same commit. Test asserts non-zero."
+created_at = 1792155566
+updated_at = 1792237033
+weight = 0.0
+issue_number = 1372
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1372"
+issue_closed_at = 1792237036
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p evalkit --test repro_empty_assert_passes_vacuously -- --ignored"
+rev = "21afd7c4a1f923636c9dd34c4448e0bb228dc65d"
+observed_at = 1792155566
+detail = """
+exit 101:  in 0.42s
+
+   Compiling evalkit v0.1.9 (/Users/yuki/src/.harness-worktrees/repro-failopens/crates/evalkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/repro_empty_assert_passes_vacuously.rs (target/debug/deps/repro_empty_assert_passes_vacuously-4385305a027c1005)
+error: test failed, to rerun pass `-p evalkit --test repro_empty_assert_passes_vacuously`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p evalkit --test repro_empty_assert_passes_vacuously"
+exit = 0
+passed = 1
+rev = "99a1d7f0e728d3be37fab1d617be568056b4c0c7"
+observed_at = 1792236997
+output_digest = "sha256:67a7bf0b71c38302774070739091932729d26b57791e31e3119ca761be5fdc2e"
+excerpt = """
+
+running 1 test
+test case_with_no_assertions_is_not_a_pass ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.02s
+
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/repro_empty_assert_passes_vacuously.rs (target/debug/deps/repro_empty_assert_passes_vacuously-3848efbd9bef16a3)
+"""
+
+[task.closure.red]
+rev = "c968c95e2c0af04f489e15c1453813a5c817ac80"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "9b3f98ec"
+title = "launcher missing-binary path allows a first failure on any stop_hook_active re-entry (not only a second consecutive one)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "launcher",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "The Stop-gate launchers crates/GATE/bin/GATE (donegate, reviewgate, propguard, tdd, budgetguard, autoflow, ctxrot) block on a missing binary only when stop_hook_active is false, and allow every payload with stop_hook_active true. That flag is set whenever ANY gate blocked the previous stop, so the first missing-binary failure of a gate during another gate's re-entry is allowed and the gate never ran. CLAUDE.md section 1 permits only a second consecutive failure of the SAME gate to allow; run_guarded implements that with a per-gate per-session marker. The launcher tests stop_gate_reentry_is_allowed_through_so_the_session_is_never_trapped pin the buggy behaviour and claim it is bounded exactly like run_guarded. precommit-audit has the same re-entry shortcut (exit 2 block vocabulary) and is not covered by the repro test. Repro: harness-core test backlog_launcher_reentry_first_failure (ignored), with a stop_hook_active false control per launcher."
+created_at = 1792156830
+updated_at = 1792293141
+weight = 0.0
+issue_number = 1379
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1379"
+issue_closed_at = 1792293144
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test backlog_launcher_reentry_first_failure -- --ignored"
+rev = "ae9f443aa29ee6b99ee96d528364c9ceda0acf13"
+observed_at = 1792158093
+detail = """
+exit 101: esult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running tests/backlog_launcher_reentry_first_failure.rs (target/debug/deps/backlog_launcher_reentry_first_failure-bdbc63c80997c99c)
+error: test failed, to rerun pass `-p harness-core --test backlog_launcher_reentry_first_failure`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_launcher_reentry_first_failure"
+exit = 0
+passed = 1
+rev = "4a5222de5ae33b4bcd70879c154ffbcf63ba591a"
+observed_at = 1792293129
+output_digest = "sha256:191f21488d5cba4bce6c9e434042bafde173eeb34d4e3ce463efb88a80905417"
+excerpt = """
+
+running 1 test
+test first_missing_binary_failure_blocks_even_on_a_stop_hook_active_reentry ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_launcher_reentry_first_failure.rs (target/debug/deps/backlog_launcher_reentry_first_failure-48309103361a33e7)
+"""
+
+[task.closure.red]
+rev = "f1f3c73db9910ea01a6c2e0bfb1350f541cfd41f"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "07bfdca0"
+title = "stuckguard の anchor heartbeat テストが process-wide HOME/PATH を書き換えるため並列実行で間欠的に落ちる"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 by the 6108a7fa worker (run-20261004-013009-74262, base main 4027a8dc, branch commit 048365e0). anchor::backlog_c397cd15::heartbeat_reaches_overwatch_that_is_only_in_the_plugin_cache (crates/stuckguard/src/anchor.rs ~690-736) sets process-wide HOME/PATH; failed 2/8 runs on unmodified base, 1/5 with the change, always passes alone or --test-threads=1. (a) real test-isolation defect; (b) intended serial test missing a guard. Distinguish: grep for a serial mutex in that module."
+created_at = 1791045505
+updated_at = 1792238530
+weight = 0.0
+issue_number = 1237
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1237"
+issue_closed_at = 1792238533
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p stuckguard --test backlog_07bfdca0 -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005348
+detail = """
+exit 101: .harness-worktrees/session-1a4ac77f/crates/harness-core)
+   Compiling stuckguard v0.1.42 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/stuckguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.40s
+     Running tests/backlog_07bfdca0.rs (target/debug/deps/backlog_07bfdca0-6f51abf2ce9bf2e4)
+error: test failed, to rerun pass `-p stuckguard --test backlog_07bfdca0`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p stuckguard --test backlog_07bfdca0 -- --ignored"
+exit = 0
+passed = 1
+rev = "9198fc6b809beaf811fe0930dad0a6f05d849dde"
+observed_at = 1792238494
+output_digest = "sha256:b300789ea0388b963d0638a67f6e45a086fee77c46365984d75ea5c924d01275"
+excerpt = """
+
+running 1 test
+test anchor_unit_tests_are_deterministic_under_the_parallel_runner ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.25s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_07bfdca0.rs (target/debug/deps/backlog_07bfdca0-06e84e7ad2554eb1)
+"""
+
+[task.closure.red]
+rev = "19c5321df3149c89a2e449a5606af52701894830"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "69e34456"
+title = "python-only 本体で 4 suite が判定不能 (0c277117 / b63cbdf0 は FAILED だが test 名が読めない、1116bee1 / f6c60f58 は Ran 0 tests)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-04 by the eca8dea7 worker: one run of `python3 scripts/check-workspace-tests.py --python-only` on branch run-20261004-011114-7349/eca8dea7 (base f51e281e) took 1055 s over 153 suites and exited 4. Full log: session 64554c4d scratchpad eca8dea7-w-pyonly-worktree.log. None of the red files is in that branch's diff. USER RULING 2026-10-04: fix the reds first; the --python-only pre-push patch (scratchpad eca8dea7-workspace-prepush.patch) is applied only after the body is green. test_backlog_0c277117 and test_backlog_b63cbdf0: FAILED but check-workspace-tests could not parse a test name. test_backlog_1116bee1 and test_backlog_f6c60f58: Ran 0 tests. Each is either a broken suite or a parser gap in check-workspace-tests.py; distinguish by running each with `python3 -m unittest -v scripts.<module>`."
+created_at = 1791045938
+updated_at = 1792242157
+weight = 0.0
+issue_number = 1252
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1252"
+issue_closed_at = 1792242158
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_69e34456.py"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003584
+detail = """
+exit 1: m scripts/test_backlog_69e34456.py::\u001B[1mWorkspacePythonBodySuites::test_b63cbdf0_suite_verdict_is_clean\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_69e34456.py::\u001B[1mWorkspacePythonBodySuites::test_f6c60f58_suite_verdict_is_clean\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m============================== \u001B[31m\u001B[1m4 failed\u001B[0m\u001B[31m in 0.25s\u001B[0m\u001B[31m ===============================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_69e34456.py"
+exit = 0
+passed = 4
+rev = "9198fc6b809beaf811fe0930dad0a6f05d849dde"
+observed_at = 1792241363
+output_digest = "sha256:880ed5c0a73ed9316eb3d8d6b333d9a6d1bb40f4ff0b1803cda0d37eea07eec1"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/sg-69e3
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 4 items
+
+scripts/test_backlog_69e34456.py ....                                    [100%]
+
+======================== 4 passed in 514.00s (0:08:33) =========================
+"""
+
+[task.closure.red]
+rev = "19c5321df3149c89a2e449a5606af52701894830"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "dfaa609a"
+title = "condukt escalate.rs and precedent.rs load() turn a corrupt registry file into an empty one (unwrap_or_default): an unparseable escalations.json reads as no open escalations"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Side finding of the 43393ce2 worker (pre-existing). Also load_replan_records/load_run_policy_records map any read error, not only ENOENT, to an empty Vec."
+created_at = 1791051846
+updated_at = 1792237484
+weight = 0.0
+issue_number = 1307
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1307"
+issue_closed_at = 1792237484
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_dfaa609a -- --ignored"
+rev = "732c89916583cb6fca66214b2ea9f998846c5a1a"
+observed_at = 1792003557
+detail = """
+exit 101: ailed; 0 ignored; 0 measured; 1 filtered out; finished in 0.74s
+
+   Compiling condukt v0.7.243 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests/backlog_dfaa609a.rs (target/debug/deps/backlog_dfaa609a-1ce31e01939f749d)
+error: test failed, to rerun pass `-p condukt --test backlog_dfaa609a`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_dfaa609a"
+exit = 0
+passed = 2
+rev = "d60936d3f47169e56141c9f9d5d67243c2df3095"
+observed_at = 1792237430
+output_digest = "sha256:6dae96a2a6068514adab226cdbe2ec9f9e3d5ec151eba085cb8252e46d3a9554"
+excerpt = """
+
+running 2 tests
+test corrupt_escalations_store_is_not_reported_as_no_open_escalations ... ok
+test control_intact_store_lists_the_open_escalation ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.70s
+
+   Compiling condukt v0.7.266 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.61s
+     Running tests/backlog_dfaa609a.rs (target/debug/deps/backlog_dfaa609a-7f737dd9aa04c4b2)
+"""
+
+[task.closure.red]
+rev = "5effbe63c2dc31e9efb8bbeb02603efa3a4049c7"
+exit = 101
+kind = "behavioural"

@@ -89,7 +89,7 @@ symbol = "main_worktree_root"
 count = 1
 scope = "shared"
 kind = "store-key"
-evidence = "claim_project_root() — the cross-session claim registry (claims.json) must answer 'taken' when two sessions in DIFFERENT worktrees of one repo collide, so it is keyed by main_worktree_root, not repo_root. This is the one call site where the shared identity is already used."
+evidence = "claim_project_root() — the cross-session claim registry (claims.json) must answer 'taken' when two sessions in DIFFERENT worktrees of one repo collide, so it is keyed by main_worktree_root, not repo_root. (Other stores have since been re-keyed the same way; see the lock.rs, state.rs, transcript.rs and overwatch store.rs main_worktree_root rows.)"
 
 [[consumer]]
 file = "crates/condukt/src/claim.rs"
@@ -102,26 +102,10 @@ evidence = "project_dir(cfg, project_root) turns the already-resolved MAIN workt
 [[consumer]]
 file = "crates/condukt/src/claim.rs"
 symbol = "repo_root"
-count = 2
+count = 3
 scope = "worktree-local"
 kind = "test"
-evidence = "Two fixture preconditions (`assert_eq!(repo_root(tmp), tmp)` and the same for a nested worktree) that deliberately PIN the per-checkout behaviour of repo_root. They key no store; changing them to a shared root would destroy what they check."
-
-[[consumer]]
-file = "crates/condukt/src/escalate.rs"
-symbol = "project_key"
-count = 1
-scope = "shared"
-kind = "store-key"
-evidence = "escalations_path() = `<state_dir>/<project-key>/escalations.json`. An escalation queue that a second worktree cannot see is not a queue; overwatch/src/review_escalation.rs re-derives this exact path to read it. Still keyed off repo_root today (backlog 43393ce2)."
-
-[[consumer]]
-file = "crates/condukt/src/escalate.rs"
-symbol = "repo_root"
-count = 1
-scope = "shared"
-kind = "store-key"
-evidence = "The inner half of escalations_path()'s `project_key(&repo_root(cwd))`."
+evidence = "Three fixture preconditions (`assert_eq!(repo_root(tmp), tmp)`, the same for a nested worktree `wt`, and `assert_eq!(repo_root(&live), live)` in claim_with_one_absent_and_one_advancing_worktree_is_not_reaped) that deliberately PIN the per-checkout behaviour of repo_root so each worktree's HEAD is a signal the test controls. They key no store; changing them to a shared root would destroy what they check."
 
 [[consumer]]
 file = "crates/condukt/src/hooks/restore.rs"
@@ -133,59 +117,43 @@ evidence = "Passed to wt_reconcile::reportable_unregistered_dirs(&repo, ...), wh
 
 [[consumer]]
 file = "crates/condukt/src/lock.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "repo_primary_project_root() keys `<state_dir>/<project-key>/__repo_primary__.lock`, the lock acquire_repo_primary() takes around worktree::merge / git worktree prune. It protects the ONE git index / .git/worktrees admin dir / default branch every linked worktree shares, so every checkout must address one lock file; Undetermined is an Err with no repo_root fallback."
+
+[[consumer]]
+file = "crates/condukt/src/lock.rs"
 symbol = "project_key"
 count = 2
 scope = "shared"
-kind = "store-key"
-evidence = "lock_path_in_project() names `<state_dir>/<project-key>/<run>.lock`, plus one test asserting that path. A lock must sit beside the store it serialises: its doc comment already records that the claim registry must NOT go through lock_path, because a shared claims.json read-modify-written under two different lock files is an unserialised race."
+kind = "mixed"
+evidence = "lock_path_in_project() names `<state_dir>/<project-key>/<run>.lock` for an ALREADY-RESOLVED root; it is called with the main worktree root (repo-primary lock, claim registry lock: shared) and, via lock_path(), with repo_root (repo_commit's per-index lock: worktree-local). The second call is the test acquire_repo_primary_is_held_and_repo_scoped anchoring the expected path on a literal cwd with no .git. Restrictive reading of the set: shared."
 
 [[consumer]]
 file = "crates/condukt/src/lock.rs"
 symbol = "repo_root"
-count = 2
-scope = "shared"
+count = 1
+scope = "worktree-local"
 kind = "store-key"
-evidence = "lock_path() = lock_path_in_project(cfg, &repo_root(cwd), run_id), plus the matching test. Same store, same identity requirement."
+evidence = "lock_path() = lock_path_in_project(cfg, &repo_root(cwd), run_id), used only by RunLock::acquire_or_skip, whose one production caller is repo_commit::commit (`condukt repo commit`). That lock serialises staging+commit into ONE checkout's index; every linked worktree has its own index, so a per-checkout lock file is the correct granularity (repo_commit.rs module doc: it deliberately does not contend with merge/prune on main). Run state no longer goes through here (acquire_run_state_or_skip uses state::run_dir), and the repo-primary lock uses main_worktree_root."
 
 [[consumer]]
-file = "crates/condukt/src/main.rs"
-symbol = "project_key"
+file = "crates/condukt/src/state.rs"
+symbol = "main_worktree_root"
 count = 1
 scope = "shared"
 kind = "store-key"
-evidence = "`cfg.state_dir.join(store::project_key(&store::repo_root(&cwd)))` resolves the run-state dir that editgate consults; it must be the directory CheckOracle wrote, so both must agree on one identity per project."
-
-[[consumer]]
-file = "crates/condukt/src/main.rs"
-symbol = "repo_root"
-count = 1
-scope = "shared"
-kind = "store-key"
-evidence = "The inner half of the same expression. Reached through the `crate::store` re-export (store.rs:9), not the fully qualified path."
-
-[[consumer]]
-file = "crates/condukt/src/precedent.rs"
-symbol = "project_key"
-count = 1
-scope = "shared"
-kind = "store-key"
-evidence = "precedents_path() = `<state_dir>/<project-key>/precedents.json`, beside escalations.json/claims.json. Precedents exist to be reused across runs and sessions, which under CLAUDE.md §8 means across worktrees."
-
-[[consumer]]
-file = "crates/condukt/src/precedent.rs"
-symbol = "repo_root"
-count = 1
-scope = "shared"
-kind = "store-key"
-evidence = "The inner half of precedents_path()'s `project_key(&repo_root(cwd))`."
+evidence = "project_root() — the root every per-project condukt state file (run state, escalations.json, precedents.json via project_state_dir) is keyed by since backlog 43393ce2/4708069b. Undetermined is an Err naming the cwd; there is no fallback to the per-checkout key."
 
 [[consumer]]
 file = "crates/condukt/src/state.rs"
 symbol = "project_key"
-count = 1
+count = 4
 scope = "shared"
-kind = "store-key"
-evidence = "project_dir() = `<state_dir>/<project-key>` — the run-state directory autoflow/src/condukt.rs reads back. Two crates deriving one directory is exactly why projkey exists (see its module doc)."
+kind = "mixed"
+evidence = "NOT one kind: project_dir() = `<state_dir>/<project-key of project_root()>` is the canonical shared run-state dir (store-key, shared); legacy_project_dir() = `<state_dir>/<project-key of repo_root(cwd)>` addresses the PRE-43393ce2 per-checkout dir, read and written back only for runs that already live there (store-key, per-checkout by purpose); the other two are the canonical/legacy expectations in run_dir_is_canonical_for_new_runs_and_write_back_for_legacy_ones (test). Restrictive reading of the set: shared."
 
 [[consumer]]
 file = "crates/condukt/src/state.rs"
@@ -193,7 +161,7 @@ symbol = "repo_root"
 count = 8
 scope = "shared"
 kind = "mixed"
-evidence = "NOT one kind: line 332 keys project_dir (store-key); 793/980/2036/2300/2427 are git -C / test-command loci where the current checkout is the right answer (tree-locus); 3260/3269 are fixture preconditions pinning per-checkout behaviour (test). Because the set is mixed, scope records the RESTRICTIVE member (the store key), not an average. Splitting this row needs per-line granularity the checker does not have; recorded here rather than resolved silently."
+evidence = "NOT one kind: legacy_project_dir() keys the legacy per-checkout state dir (store-key, deliberately per-checkout: it exists to find runs written before the 43393ce2 re-keying); reconcile_run, discard_experiment (fallback after worktree::toplevel), gate_reasons, run_tests and run_cycle use it as a git -C / test-command locus (tree-locus); the two fixture preconditions in probe_fixture pin per-checkout behaviour (test). The canonical project_dir no longer goes through repo_root (see the main_worktree_root row). scope keeps the RESTRICTIVE reading of a mixed set, not an average; whether the whole set may be reclassified worktree-local is a human call, not made here. Splitting this row needs per-line granularity the checker does not have."
 
 # ── harness-core ───────────────────────────────────────────────────────────
 
@@ -230,6 +198,22 @@ kind = "definition-site"
 evidence = "Step 1 of main_worktree_root(): `let root = repo_root(cwd)` is the starting point from which the linked-worktree indirection is followed to the SHARED root. Removing it would remove the only path to the shared identity."
 
 [[consumer]]
+file = "crates/harness-core/src/transcript.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "live_claim_sessions() reads condukt's cross-session claim registry `~/.condukt/state/<project-key of main_worktree_root(root)>/claims.json` to learn which peer sessions are live. It must address the same file condukt/src/claim.rs writes (also keyed by main_worktree_root), so every linked worktree sees one registry; Undetermined is forwarded verbatim, no repo_root fallback."
+
+[[consumer]]
+file = "crates/harness-core/src/transcript.rs"
+symbol = "project_key"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "Turns live_claim_sessions()'s already-resolved MAIN worktree root into the claims.json directory key; same store and identity requirement as the main_worktree_root row above."
+
+[[consumer]]
 file = "crates/harness-core/src/undetermined.rs"
 symbol = "project_key"
 count = 1
@@ -249,19 +233,19 @@ evidence = "The inner half of default_sink_path()'s key derivation (backlog 814c
 
 [[consumer]]
 file = "crates/overwatch/src/store.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "storage_root() resolves the MAIN worktree root (user ruling 2026-09-29) so a lease begun in a linked worktree is visible to `overwatch status` run from the main checkout. Undetermined is an Err; falling back to repo_root would re-open the per-worktree partition."
+
+[[consumer]]
+file = "crates/overwatch/src/store.rs"
 symbol = "project_key"
 count = 1
 scope = "shared"
 kind = "store-key"
-evidence = "storage_root() = `~/.overwatch/<project-key>/overwatch/`, holding leases.json. A lease registry exists to make two sessions collide; per-worktree partitioning makes every lease look free."
-
-[[consumer]]
-file = "crates/overwatch/src/store.rs"
-symbol = "repo_root"
-count = 1
-scope = "shared"
-kind = "store-key"
-evidence = "The inner half of storage_root()'s key derivation."
+evidence = "storage_root() = `~/.overwatch/<project-key of main_worktree_root(cwd)>/overwatch/`, holding leases.json. A lease registry exists to make two sessions collide; per-worktree partitioning makes every lease look free."
 
 [[consumer]]
 file = "crates/overwatch/src/review_escalation.rs"
@@ -269,7 +253,7 @@ symbol = "project_key"
 count = 1
 scope = "shared"
 kind = "store-key"
-evidence = "condukt_escalations_path() re-derives condukt's escalations.json path from another crate. It is correct exactly when it matches crates/condukt/src/escalate.rs; both must therefore move together to the shared identity."
+evidence = "condukt_escalations_path() re-derives condukt's escalations.json path from another crate. It is correct exactly when it matches crates/condukt/src/escalate.rs. It NO LONGER matches: escalate.rs now goes through state::project_state_dir (main_worktree_root), while this still keys off repo_root, so from a linked worktree it reads a different (legacy per-checkout) file. Scope shared records the contract; the call site is out of step with it."
 
 [[consumer]]
 file = "crates/overwatch/src/review_escalation.rs"

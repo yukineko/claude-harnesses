@@ -134,7 +134,6 @@ else:
 
 class _Base(unittest.TestCase):
     PROBES = (
-        "measure_doc_drift",
         "measure_audit_convergence",
         "measure_open_review_queue",
         "measure_stale_undisposed",
@@ -144,7 +143,6 @@ class _Base(unittest.TestCase):
     def setUp(self):
         self._saved = {n: getattr(ra, n) for n in self.PROBES}
         self._saved["_head_rev"] = ra._head_rev
-        ra.measure_doc_drift = lambda: M(0)
         ra.measure_audit_convergence = lambda: M(1)
         ra.measure_open_review_queue = lambda: M(0)
         ra.measure_stale_undisposed = lambda: M(0)
@@ -262,11 +260,11 @@ class T4_ClosesOnMeasuredOk(_Base):
     def test_only_the_ok_dimension_closes(self):
         """Control: a breached sibling dimension's finding stays open."""
         ra.measure_audit_convergence = lambda: M(0)
-        ra.measure_doc_drift = lambda: M(10_000)  # breach too
+        ra.measure_open_review_queue = lambda: M(10_000)  # breach too
         self.run_main(NOW)
         both = sorted(self.findings())
         self.assertEqual(len(both), 2, both)
-        self.clean()  # convergence ok, doc-drift still breached
+        self.clean()  # convergence ok, review queue still breached
         rc, rec, txt = self.run_json(NOW + DAY)
         closed = [d["finding_id"] for d in self.disps()]
         self.assertEqual(len(closed), 1, closed)

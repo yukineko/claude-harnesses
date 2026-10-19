@@ -291,7 +291,8 @@ enum Command {
     /// questions in a per-project persistent store, so a blocked or GATED task
     /// records "I need a human answer for X" and keeps going instead of blocking
     /// inline on an AskUserQuestion. Backed by
-    /// `<state_dir>/<project-key>/escalations.json` (atomic writes, fail-soft).
+    /// `<state_dir>/<project-key>/escalations.json` (atomic writes; a missing
+    /// file is empty, an unreadable or corrupt one is an error).
     Escalate {
         #[command(subcommand)]
         action: EscalateAction,
@@ -300,7 +301,8 @@ enum Command {
     /// (Google LSC "reviewed-once-applied-broadly"): ratify a change's
     /// declared shape (touched files + target symbols) as routine, list what
     /// is ratified, or check whether a candidate shape matches. Backed by
-    /// `<state_dir>/<project-key>/precedents.json` (atomic writes, fail-soft).
+    /// `<state_dir>/<project-key>/precedents.json` (atomic writes; a missing
+    /// file is empty, an unreadable or corrupt one is an error).
     Precedent {
         #[command(subcommand)]
         action: PrecedentAction,
@@ -1193,12 +1195,16 @@ enum StateAction {
         task: String,
     },
     /// Deterministically ask `tdd oracle` whether a fix/feature task's RED→GREEN
-    /// proofs form a valid Fail→Pass reproduction oracle. Fail-soft: no `tdd` on
-    /// PATH, a spawn failure, a gone worktree, or corrupt/missing stdout all
-    /// degrade to `fallback:true` ("use the legacy gate instead") rather than
-    /// panicking. Tasks that don't require an oracle (not fix/feature, or no
-    /// `reproduction_tests`) also report `required:false, fallback:true`.
-    /// Always prints JSON and exits 0 — this is an advisory signal, not a gate.
+    /// proofs form a valid Fail→Pass reproduction oracle. Not fail-soft for an
+    /// undetermined oracle: when `tdd` cannot be located, cannot be spawned (not
+    /// installed, not executable, a gone worktree) or exits non-zero (including
+    /// missing or unreadable proofs), it reports `required:true, fallback:false,
+    /// valid_fp_oracle:false`, which `state set --status verified` refuses. Only
+    /// tasks whose kind is not fix/feature report `required:false,
+    /// fallback:true` (a fix/feature task without `reproduction_tests` still
+    /// consults `tdd`); an exit-0 `tdd` with empty or non-JSON stdout also
+    /// reports `fallback:true`, which the real `tdd` never produces. Always
+    /// prints JSON and exits 0 — the refusal is enforced by `state set`.
     CheckOracle {
         #[arg(long)]
         run: String,
@@ -3227,8 +3233,8 @@ fn gather_review_order_diff_from_git(cwd: &Path, base: &str, head: &str) -> Stri
 }
 
 /// `condukt escalate add|list|resolve` — the durable async escalation channel.
-/// Deterministic store I/O; fail-soft (missing/corrupt store = empty). The
-/// created-at timestamp uses wall-clock seconds (observability only; it never
+/// Deterministic store I/O; a missing store is empty, an unreadable or
+/// corrupt store is an error (never overwritten). The created-at timestamp uses wall-clock seconds (observability only; it never
 /// feeds the deterministic record id).
 fn run_escalate(cfg: &Config, cwd: &Path, action: EscalateAction) -> Result<()> {
     match action {
@@ -3307,8 +3313,9 @@ fn parse_csv_list(raw: &str) -> Vec<String> {
 }
 
 /// `condukt precedent ratify|list|check` — the precedent store backing
-/// `review-brief`'s novelty/precedent downgrade. Deterministic store I/O;
-/// fail-soft (missing/corrupt store = empty). `ratify`'s timestamp uses the
+/// `review-brief`'s novelty/precedent downgrade. Deterministic store I/O; a
+/// missing store is empty, an unreadable or corrupt store is an error (never
+/// overwritten). `ratify`'s timestamp uses the
 /// same wall-clock-seconds source as `escalate add` (observability only; the
 /// fingerprint/match logic never reads wall-clock).
 fn run_precedent(cfg: &Config, cwd: &Path, action: PrecedentAction) -> Result<()> {
@@ -3606,7 +3613,17 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
             println!("{}", path.display());
         }
         WtAction::Merge { branch, run, task } => {
-            match worktree::merge(cfg, &repo, &branch, &cfg.default_branch)? {
+            // A half-given identity is cannot-determine, not "no identity".
+            let cli_task = match (run.as_deref(), task.as_deref()) {
+                (Some(r), Some(t)) => Some((r, t)),
+                (None, None) => None,
+                _ => bail!(
+                    "merge-task-undetermined: --run and --task must be given together; \
+                     refusing to merge '{branch}' ('{}' untouched)",
+                    cfg.default_branch
+                ),
+            };
+            match worktree::merge(cfg, &repo, &branch, &cfg.default_branch, cli_task)? {
                 worktree::MergeOutcome::Merged => {
                     println!("merged '{}' into {}", branch, cfg.default_branch);
                     // Stamp the MERGE phase timestamp on the owning task, if the
@@ -4378,13 +4395,31 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         requires_fp_oracle,
                         reproduction_tests,
                     } => {
-                        // Resolve run_dir from `rs` (immutable read) into a
-                        // local *before* taking the `&mut` borrow below.
-                        let run_dir = rs
-                            .tasks
-                            .iter()
-                            .find(|s| s.id == task)
-                            .and_then(|s| s.worktree.as_deref())
+                        // Resolve run_dir into a local *before* taking the
+                        // `&mut` borrow below. A `--worktree W` passed in this
+                        // same call wins (backlog cf70f785): it is the worktree
+                        // this call records, so the oracle must judge the proofs
+                        // there, not in a previously recorded worktree or the
+                        // session cwd. The precedence mirrors the recording
+                        // below (`--clear-worktree` beats `--worktree`). Only
+                        // then fall back to the recorded worktree, then cwd.
+                        // A missing/unreadable dir is not papered over: the
+                        // `tdd` spawn fails there and `check_oracle` reports an
+                        // undetermined oracle, which `enforce_fp_gate` rejects
+                        // (pinned by `oracle::tests::
+                        // spawn_failure_is_undetermined_and_rejects`).
+                        let passed_worktree = if clear_worktree {
+                            None
+                        } else {
+                            worktree.as_deref()
+                        };
+                        let run_dir = passed_worktree
+                            .or_else(|| {
+                                rs.tasks
+                                    .iter()
+                                    .find(|s| s.id == task)
+                                    .and_then(|s| s.worktree.as_deref())
+                            })
                             .map(std::path::PathBuf::from)
                             .unwrap_or_else(|| cwd.to_path_buf());
                         let verdict = oracle::check_oracle(

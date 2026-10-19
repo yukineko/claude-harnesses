@@ -26,36 +26,44 @@ use harness_core::verdict::Determination;
 
 use crate::backlog::{find_backlog_binary, repo_project_path};
 
-/// True if another live session is currently driving the queue for the project
+/// Whether another live session is currently driving the queue for the project
 /// rooted at `cwd`.
 ///
-/// **Cannot-determine resolves to `true` (stand down).** The two answers are
-/// not symmetric: `false` starts an *unattended* auto-loop on top of whatever
-/// is already running, while `true` costs one skipped tick (the Stop hook fires
-/// again next turn). So a `backlog` invocation that fails to run, exits
-/// non-zero, or prints something we cannot interpret is treated as "a driver
-/// may be active".
+/// * `Known(true)` — `backlog lock status` positively reported a live driver.
+///   The caller stands down silently: that is an observation, not a guess.
+/// * `Known(false)` — positively observed idle (`none`, or only a stale
+///   holder/registration), or `backlog` observably not installed (no queue, no
+///   registry, no `/flow` driver to collide with).
+/// * `Undetermined` — every failure to observe: the plugin-cache scan could not
+///   tell whether backlog is installed, `backlog` could not be spawned, exited
+///   non-zero, printed output that cannot be interpreted, or explicitly reported
+///   that it could not read its own registry.
 ///
-/// The one deliberate exception is `backlog` not being installed at all. That
-/// is an observation, not a failure to observe: with no `backlog` binary there
-/// is no queue, no registry, and no `/flow` or `/backlog` driver to collide
-/// with — and the auto-loop this guards would have nothing to double-drive.
-/// Treating it as "active" would permanently disable autoflow on machines that
-/// never had backlog, which is restriction without a hazard.
+/// `Undetermined` used to collapse into `true`, and the caller then stood down
+/// *silently* — stdout empty, exit 0, which Claude Code reads as "allow the
+/// stop", byte-identical to a clean pass. The user ruled that a fail-open, so
+/// the third answer is now returned to the caller, which surfaces it (a block,
+/// bounded by `stop_hook_active`) instead of picking a side quietly.
+pub fn backlog_driver_active(cwd: &Path) -> Determination<bool> {
+    match lock_status_stdout(cwd) {
+        Determination::Known(None) => Determination::Known(false),
+        Determination::Known(Some(stdout)) => driver_active_from_status(&stdout),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
+}
+
+/// Run `backlog lock status --project <p>` for `cwd`'s project.
 ///
-/// That exception covers only the *observed* absence. `find_backlog_binary`
-/// separately reports `Undetermined` when it could not tell whether backlog is
-/// installed (an unreadable plugin-cache directory), and that lands on the
-/// stand-down side with every other failure to observe — the cannot-determine
-/// rule above admits no carve-out it has not actually observed.
-pub fn backlog_driver_active(cwd: &Path) -> bool {
+/// `Known(None)` is the observation that backlog is not installed;
+/// `Known(Some(stdout))` is the stdout of a run that exited 0; anything else
+/// (an undeterminable install, a spawn failure, a non-zero exit) is
+/// `Undetermined`. The exit status is part of the answer: a checker that
+/// failed is not a checker that reported "idle".
+fn lock_status_stdout(cwd: &Path) -> Determination<Option<String>> {
     let binary = match find_backlog_binary() {
         Determination::Known(Some(b)) => b,
-        // Observed: no backlog ⇒ no queue ⇒ no driver to collide with.
-        Determination::Known(None) => return false,
-        // Could not tell whether backlog exists ⇒ could not tell whether a
-        // driver is running. Stand down, exactly like the `_ => true` below.
-        Determination::Undetermined(_) => return true,
+        Determination::Known(None) => return Determination::Known(None),
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
     let project = repo_project_path(cwd);
     match Command::new(&binary)
@@ -63,79 +71,116 @@ pub fn backlog_driver_active(cwd: &Path) -> bool {
         .output()
     {
         Ok(out) if out.status.success() => {
-            driver_active_from_status(&String::from_utf8_lossy(&out.stdout))
+            Determination::Known(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
         }
-        // Spawned but failed, or could not be spawned: we did not get an
-        // answer. Stand down rather than assume the coast is clear.
-        _ => true,
+        Ok(out) => Determination::undetermined(format!(
+            "`backlog lock status --project {project}` が失敗しました ({}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
+        Err(e) => Determination::undetermined(format!(
+            "`backlog lock status` を起動できませんでした ({}): {e}",
+            binary.display()
+        )),
     }
 }
 
 /// Interpret `backlog lock status --project <p>` stdout.
 ///
-/// * `none` → nothing is driving. This is the ONLY output that means "free":
+/// * `none` → `Known(false)`. This is the ONLY bare output that means "free":
 ///   backlog prints it as a positive observation, never as a fallback.
 /// * a JSON object with a truthy `stale` field → only a dead holder or dead
-///   registration remains → not active.
-/// * any other JSON object → a live driver (this covers both an exclusive lock
-///   holder and one-or-more registered drivers, and the explicitly
-///   `undetermined` object backlog emits when it could not read its registry).
-/// * anything else (empty, non-JSON) → we cannot interpret the answer, so we
-///   report active and stand down.
+///   registration remains → `Known(false)`.
+/// * the explicit `{"undetermined": true, ...}` object backlog emits when it
+///   could not read its registry → `Undetermined` (backlog itself says it does
+///   not know; reading that as either answer would be a guess).
+/// * any other JSON object → a live driver → `Known(true)` (an exclusive lock
+///   holder or one-or-more registered drivers).
+/// * anything else (empty, non-JSON, JSON that is not an object) →
+///   `Undetermined`.
 ///
-/// `daily` carries the identical parser for the identical CLI contract.
-fn driver_active_from_status(stdout: &str) -> bool {
+/// `daily` carries a parser for the same CLI contract.
+fn driver_active_from_status(stdout: &str) -> Determination<bool> {
     let trimmed = stdout.trim();
     if trimmed == "none" {
-        return false;
+        return Determination::Known(false);
     }
-    match parse_status_json(stdout) {
-        None => true,
-        Some(v) => !v.get("stale").and_then(|s| s.as_bool()).unwrap_or(false),
+    let v = match parse_status_json(stdout) {
+        Some(v) if v.is_object() => v,
+        _ => {
+            return Determination::undetermined(format!(
+                "`backlog lock status` の出力を解釈できません: {:?}",
+                truncate(trimmed)
+            ))
+        }
+    };
+    if v.get("undetermined").and_then(|u| u.as_bool()) == Some(true) {
+        return Determination::undetermined(format!(
+            "backlog が driver の登録状況を判定できないと報告しました: {}",
+            v.get("reason")
+                .and_then(|r| r.as_str())
+                .unwrap_or("(理由なし)")
+        ));
     }
+    Determination::Known(!v.get("stale").and_then(|s| s.as_bool()).unwrap_or(false))
 }
 
-/// True if *this* session is driving `project`'s queue — i.e. a `/flow` (or
+fn truncate(s: &str) -> String {
+    s.chars().take(200).collect()
+}
+
+/// Whether *this* session is driving `project`'s queue — i.e. a `/flow` (or
 /// `/backlog`) loop is running from within this very Claude session. Used by
-/// the PreCompact hook to decide whether to drop a resume-flow marker: we only
-/// auto-resume `/flow` after a `/compact` when the flow loop was actually
-/// running in this session, for this project.
+/// the PreCompact hook to decide whether to drop a resume-flow marker.
 ///
 /// Since a project can now have several concurrent drivers, "this session" is
 /// matched against the top-level `session_id` (the exclusive-lock holder, or
 /// the most recently heartbeated driver) AND against every entry of the
-/// `drivers` array — otherwise a session that is genuinely driving would be
-/// missed whenever another driver happened to have heartbeated more recently.
+/// `drivers` array.
 ///
-/// An empty `session_id`, an unreadable status, or no match all read as `false`
-/// — not resuming is the conservative outcome here (a false positive would
-/// inject a "keep driving" instruction into a session that is not driving).
-/// Note the direction is the OPPOSITE of `backlog_driver_active`'s for the same
-/// undetermined input, and deliberately so: there, not knowing means "someone
-/// may be driving" (stand down); here, not knowing means "we cannot show this
-/// session is driving", and the restrictive answer is to write no marker.
-pub fn this_session_holds_lock(session_id: &str, cwd: &Path) -> bool {
+/// `Known(false)` is returned only for an observation (backlog not installed,
+/// `none`, a stale record, or a readable status that does not name this
+/// session). A failure to observe is `Undetermined`; the caller writes no
+/// marker (a false "keep driving" injection is the worse error) but says so
+/// visibly instead of staying silent. An empty `session_id` cannot be matched at
+/// all, so it is `Undetermined` too.
+pub fn this_session_holds_lock(session_id: &str, cwd: &Path) -> Determination<bool> {
     if session_id.is_empty() {
-        return false;
+        return Determination::undetermined(
+            "session id が無いため、このセッションが driver かどうかを照合できません",
+        );
     }
-    let binary = match find_backlog_binary() {
-        Determination::Known(Some(b)) => b,
-        // Not installed, or we could not tell — either way nothing proves this
-        // session is driving, so don't resume.
-        Determination::Known(None) | Determination::Undetermined(_) => return false,
+    let stdout = match lock_status_stdout(cwd) {
+        Determination::Known(None) => return Determination::Known(false),
+        Determination::Known(Some(stdout)) => stdout,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
-    let project = repo_project_path(cwd);
-    match Command::new(&binary)
-        .args(["lock", "status", "--project", &project])
-        .output()
-    {
-        Ok(out) if out.status.success() => {
-            holds_lock_from_status(&String::from_utf8_lossy(&out.stdout), session_id)
+    let trimmed = stdout.trim();
+    if trimmed == "none" {
+        return Determination::Known(false);
+    }
+    match parse_status_json(&stdout) {
+        Some(v) if v.is_object() => {
+            if v.get("undetermined").and_then(|u| u.as_bool()) == Some(true) {
+                return Determination::undetermined(format!(
+                    "backlog が driver の登録状況を判定できないと報告しました: {}",
+                    v.get("reason")
+                        .and_then(|r| r.as_str())
+                        .unwrap_or("(理由なし)")
+                ));
+            }
+            Determination::Known(holds_lock_from_status(&stdout, session_id))
         }
-        _ => false,
+        _ => Determination::undetermined(format!(
+            "`backlog lock status` の出力を解釈できません: {:?}",
+            truncate(trimmed)
+        )),
     }
 }
 
+/// Match `session_id` against an already-parsed, interpretable status object.
+/// Callers that need to distinguish "unreadable" from "not this session" go
+/// through [`this_session_holds_lock`], which checks interpretability first.
 fn holds_lock_from_status(stdout: &str, session_id: &str) -> bool {
     let Some(v) = parse_status_json(stdout) else {
         return false;
@@ -156,8 +201,8 @@ fn holds_lock_from_status(stdout: &str, session_id: &str) -> bool {
         })
 }
 
-/// Parse `backlog lock status` stdout into the lock's JSON object, or `None`
-/// for `none`/empty/unparseable output (all read as "no lock to reason about").
+/// Parse `backlog lock status` stdout into JSON, or `None` for
+/// `none`/empty/unparseable output. Callers decide what `None` means.
 fn parse_status_json(stdout: &str) -> Option<serde_json::Value> {
     let trimmed = stdout.trim();
     if trimmed.is_empty() || trimmed == "none" {
@@ -169,42 +214,69 @@ fn parse_status_json(stdout: &str) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use harness_core::verdict::Determination;
 
     /// `none` is backlog's positive observation that nothing is driving — the
     /// only output that means "free".
     #[test]
     fn driver_active_from_status_none_is_inactive() {
-        assert!(!driver_active_from_status("none"));
-        assert!(!driver_active_from_status("  none\n"));
+        assert!(matches!(
+            driver_active_from_status("none"),
+            Determination::Known(false)
+        ));
+        assert!(matches!(
+            driver_active_from_status("  none\n"),
+            Determination::Known(false)
+        ));
     }
 
     /// §3: output we cannot interpret is a failure to observe, not an
-    /// observation that nobody is driving. It must stand autoflow down —
-    /// standing down costs one skipped tick, proceeding starts an unattended
-    /// loop on top of a live driver.
+    /// observation that nobody is driving, and not an observation that someone
+    /// is: it is `Undetermined`.
     #[test]
-    fn driver_active_from_status_uninterpretable_output_stands_down() {
+    fn driver_active_from_status_uninterpretable_output_is_undetermined() {
         assert!(
-            driver_active_from_status(""),
+            matches!(
+                driver_active_from_status(""),
+                Determination::Undetermined(_)
+            ),
             "empty stdout is not an observation of an idle queue"
         );
         assert!(
-            driver_active_from_status("not json"),
+            matches!(
+                driver_active_from_status("not json"),
+                Determination::Undetermined(_)
+            ),
             "unparseable stdout is not an observation of an idle queue"
+        );
+        assert!(
+            matches!(
+                driver_active_from_status(
+                    r#"{"kind":"undetermined","undetermined":true,"reason":"registry unreadable"}"#
+                ),
+                Determination::Undetermined(_)
+            ),
+            "backlog's explicit undetermined object is not a live driver"
         );
     }
 
     #[test]
     fn driver_active_from_status_active_lock_is_active() {
-        assert!(driver_active_from_status(
-            r#"{"session_id":"x","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":0}"#
+        assert!(matches!(
+            driver_active_from_status(
+                r#"{"session_id":"x","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":0}"#
+            ),
+            Determination::Known(true)
         ));
     }
 
     #[test]
     fn driver_active_from_status_stale_lock_is_inactive() {
-        assert!(!driver_active_from_status(
-            r#"{"session_id":"x","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":0,"stale":true}"#
+        assert!(matches!(
+            driver_active_from_status(
+                r#"{"session_id":"x","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":0,"stale":true}"#
+            ),
+            Determination::Known(false)
         ));
     }
 
@@ -213,27 +285,27 @@ mod tests {
     /// `drivers` array. One or many, autoflow must stand down.
     #[test]
     fn driver_active_from_status_registered_drivers_are_active() {
-        assert!(driver_active_from_status(
-            r#"{"kind":"driver-presence","session_id":"a","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":9,"driver_count":1,"drivers":[{"session_id":"a"}]}"#
+        assert!(matches!(
+            driver_active_from_status(
+                r#"{"kind":"driver-presence","session_id":"a","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":9,"driver_count":1,"drivers":[{"session_id":"a"}]}"#
+            ),
+            Determination::Known(true)
         ));
-        assert!(driver_active_from_status(
-            r#"{"kind":"driver-presence","session_id":"b","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":9,"driver_count":2,"drivers":[{"session_id":"a"},{"session_id":"b"}]}"#
-        ));
-    }
-
-    /// backlog says so explicitly when it could not read its registry. That
-    /// object deliberately carries no `stale` field, so it reads as active.
-    #[test]
-    fn driver_active_from_status_undetermined_object_is_active() {
-        assert!(driver_active_from_status(
-            r#"{"kind":"undetermined","undetermined":true,"reason":"registry unreadable"}"#
+        assert!(matches!(
+            driver_active_from_status(
+                r#"{"kind":"driver-presence","session_id":"b","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":9,"driver_count":2,"drivers":[{"session_id":"a"},{"session_id":"b"}]}"#
+            ),
+            Determination::Known(true)
         ));
     }
 
     #[test]
     fn driver_active_from_status_stale_registration_is_inactive() {
-        assert!(!driver_active_from_status(
-            r#"{"kind":"driver-presence","session_id":"ghost","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":0,"stale":true,"driver_count":0,"drivers":[]}"#
+        assert!(matches!(
+            driver_active_from_status(
+                r#"{"kind":"driver-presence","session_id":"ghost","pid":1,"project":"/p","acquired_at":0,"heartbeat_at":0,"stale":true,"driver_count":0,"drivers":[]}"#
+            ),
+            Determination::Known(false)
         ));
     }
 
@@ -286,7 +358,30 @@ mod tests {
     }
 
     #[test]
-    fn empty_session_id_never_holds_lock() {
-        assert!(!this_session_holds_lock("", Path::new("/p")));
+    fn empty_session_id_is_undetermined_never_known_true() {
+        let r = this_session_holds_lock("", Path::new("/p"));
+        assert!(
+            !matches!(r, Determination::Known(true)),
+            "an empty session never counts as holding the lock"
+        );
+        assert!(
+            matches!(r, Determination::Undetermined(_)),
+            "an unmatchable session is not an observation that it lacks the lock"
+        );
+    }
+
+    /// Valid JSON that is not an object is not a lock record: it must not
+    /// read as a live driver.
+    #[test]
+    fn driver_active_from_status_non_object_json_is_undetermined() {
+        for input in ["42", r#""x""#, "[]"] {
+            assert!(
+                matches!(
+                    driver_active_from_status(input),
+                    Determination::Undetermined(_)
+                ),
+                "{input} must be Undetermined"
+            );
+        }
     }
 }

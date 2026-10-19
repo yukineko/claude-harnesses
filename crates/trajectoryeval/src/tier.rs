@@ -252,7 +252,8 @@ fn count_leaves_pair(a: &serde_json::Value, b: &serde_json::Value) -> usize {
 ///
 /// Computes a deterministic `distance_permille` — `round(1000 * differing /
 /// total)` (differing leaf count over total leaf count, rounded half-up as
-/// integer arithmetic; 0 when `total` is 0) — and returns
+/// integer arithmetic), floored at 1 whenever any leaf differs so real drift
+/// never rounds to 0; 0 only when nothing differs — and returns
 /// [`DiffOutcome::Match`] when `distance_permille <= threshold_permille`,
 /// else [`DiffOutcome::DriftedBeyondThreshold`] with the distance and the
 /// sorted list of differing JSON-pointer paths. Pure and deterministic: same
@@ -268,11 +269,19 @@ pub fn fuzzy_diff(
 
     let total = count_leaves_pair(baseline, snapshot) as u64;
     let differing = paths.len() as u64;
-    // Round-half-up integer division; `checked_div` naturally covers the
-    // `total == 0` case (distance is 0 when there is nothing to compare).
-    let distance_permille: u32 = ((1000 * differing) + total.checked_div(2).unwrap_or(0))
+    // Round-half-up integer division; `checked_div` covers `total == 0`
+    // (which only happens with `differing == 0`).
+    let rounded = ((1000 * differing) + total.checked_div(2).unwrap_or(0))
         .checked_div(total)
-        .unwrap_or(0) as u32;
+        .unwrap_or(0);
+    // Any real drift is at least 1 permille: rounding alone mapped 1 changed
+    // leaf of 2001 to 0, which the default zero tolerance then counted as a
+    // Match — contradicting "threshold 0 = any drift escalates" (CLAUDE.md §3).
+    let distance_permille: u32 = if differing > 0 {
+        rounded.max(1) as u32
+    } else {
+        0
+    };
 
     if distance_permille <= threshold_permille {
         DiffOutcome::Match

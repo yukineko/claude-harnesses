@@ -3,8 +3,10 @@
 //! A transcript is JSONL: one JSON object per line, each a transcript event. We
 //! STREAM it line-by-line (the harness has a hard rule against loading a whole
 //! transcript into memory) and collect, in order, the `name` of every
-//! `type == "tool_use"` content block. Parsing is defensive: a line that doesn't
-//! parse, or a missing field, is skipped — never a panic.
+//! `type == "tool_use"` content block. A missing field is tolerated (that event
+//! contributes nothing), but a line that doesn't parse as JSON, or a transcript
+//! with no events at all, is an `InvalidData` error — never a silent skip and
+//! never a panic.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -18,17 +20,31 @@ pub fn extract_tools(path: &Path) -> std::io::Result<Vec<String>> {
     let reader = BufReader::new(file);
 
     let mut tools = Vec::new();
-    for line in reader.lines() {
+    let mut events = 0usize;
+    for (idx, line) in reader.lines().enumerate() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        // Defensive: skip lines that aren't valid JSON.
-        let value: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+        // A line that isn't valid JSON is an unparseable transcript, not an
+        // event to skip: skipping could drop a tool_use and make the extracted
+        // trajectory look cleaner than the session was (CLAUDE.md §3).
+        let value: Value = serde_json::from_str(&line).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("line {} is not valid JSON: {}", idx + 1, e),
+            )
+        })?;
+        events += 1;
         collect_from_event(&value, &mut tools);
+    }
+    // No event at all is not "a session with no tool calls" — it is no
+    // transcript. Report it rather than emitting an empty trajectory.
+    if events == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "transcript contains no JSON events",
+        ));
     }
     Ok(tools)
 }
@@ -89,8 +105,6 @@ mod tests {
         .unwrap();
         // line 3: top-level content shape with one tool_use
         writeln!(f, r#"{{"content":[{{"type":"tool_use","name":"Bash"}}]}}"#).unwrap();
-        // line 4: garbage that must be skipped, not panic
-        writeln!(f, "not json at all").unwrap();
         f.flush().unwrap();
         drop(f);
 
@@ -101,6 +115,22 @@ mod tests {
         );
 
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn unparseable_line_is_invalid_data_not_skipped() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "trajectoryeval-garbage-line-{}.jsonl",
+            std::process::id()
+        ));
+        let mut f = File::create(&path).unwrap();
+        writeln!(f, r#"{{"content":[{{"type":"tool_use","name":"Bash"}}]}}"#).unwrap();
+        writeln!(f, "not json at all").unwrap();
+        drop(f);
+        let err = extract_tools(&path).unwrap_err();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]

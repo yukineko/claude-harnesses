@@ -7,19 +7,23 @@
 //! test" — the latter is an absence the gate never checked (CLAUDE.md §4).
 //! The verdict drives whether the Stop hook blocks.
 //!
-//! **The same limit applies on the other axis: authorship.** The scan is
-//! `git status --porcelain` plus `git diff -U0` / `git diff --cached -U0` /
-//! `git ls-files --others` (see [`crate::git`]) — commands that answer for the
-//! whole checkout and carry no session identity. So `Fields::impl_files` is
-//! every uncommitted implementation file, not "the files you wrote": in a
-//! shared checkout it can hold a human's edit or a concurrent session's change
-//! (CLAUDE.md §8 documents that this is measured, not hypothetical). tdd does
-//! not narrow it — narrowing on a footprint the transcript may not carry would
-//! drop real work and let untested code through — so it must instead SAY so,
-//! exactly as the sibling gates do (`reviewgate::review::inject_reason`,
-//! `propguard::gate::block_reason`). "N implementation lines added, write a
-//! test" addressed to the agent is a claim about who added them, and that is
-//! the second absence this module may not assert.
+//! **The other axis is authorship.** The scan is `git status --porcelain` plus
+//! `git diff -U0` / `git diff --cached -U0` / `git ls-files --others` (see
+//! [`crate::git`]) — commands that answer for the whole checkout and carry no
+//! session identity. Since the user's 2026-10-17 ruling
+//! (「検証テストの範囲は書いた文だけでいい」) [`evaluate`] narrows that scan to
+//! the files the stopping session wrote, using the Stop payload's
+//! `transcript_path` and the rule shared with reviewgate
+//! (`harness_core::attribution::attribute_own_writes`: an
+//! `Edit`/`Write`/`MultiEdit`/`NotebookEdit` of the file in the transcript or
+//! its subagent sidechains, or a `Bash` command naming its path). Files not
+//! attributed are excluded and NAMED ([`attribution_note`], and the block
+//! reason). Residual hole, stated rather than hidden: a file this session
+//! wrote through a command that never names it (`cargo fmt`, a glob, a script)
+//! is excluded too. When attribution is undetermined (no / unreadable
+//! transcript, a manual run) the whole checkout is scanned and the message
+//! says authorship was NOT verified — undetermined is never read as "this
+//! session wrote nothing" (CLAUDE.md §3).
 
 use std::path::Path;
 
@@ -77,6 +81,32 @@ pub type Scan = Determination<Option<Fields>>;
 /// travels through the shared [`Verdict`] rather than a private bool.
 pub struct Report {
     pub scan: Scan,
+    /// Whose changes `scan` covers — see [`Authorship`].
+    pub authorship: Authorship,
+}
+
+/// Whether the scan was scoped to the stopping session's own writes.
+///
+/// * `Attributed { excluded }` — the session transcript was read, and `scan`
+///   covers only the uncommitted files it shows this session writing
+///   (`harness_core::attribution::attribute_own_writes`). `excluded` is every
+///   other uncommitted file, kept so the exclusion can be NAMED.
+/// * `Unverified { why }` — attribution was undetermined (no transcript, an
+///   unreadable one, a manual run). `scan` covers the WHOLE checkout, exactly
+///   as before scoping existed; `why` is said in the message. Undetermined is
+///   never read as "this session wrote nothing" (CLAUDE.md §3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Authorship {
+    Attributed { excluded: Vec<String> },
+    Unverified { why: String },
+}
+
+impl Authorship {
+    fn not_attempted() -> Self {
+        Authorship::Unverified {
+            why: "session attribution was not applied to this scan".to_string(),
+        }
+    }
 }
 
 impl Report {
@@ -159,6 +189,7 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
             scan: Determination::undetermined(
                 "a `git` command failed while scanning the changeset",
             ),
+            authorship: Authorship::not_attempted(),
         };
     }
 
@@ -167,6 +198,7 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
         // allow the stop exactly as before.
         return Report {
             scan: Determination::known(None),
+            authorship: Authorship::not_attempted(),
         };
     };
 
@@ -220,16 +252,99 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
             test_file_changed,
             impl_files,
         })),
+        authorship: Authorship::not_attempted(),
     }
 }
 
 /// Run the gate against a real project root. The `Failed` arm (via `classify`)
 /// fails the gate closed instead of collapsing an errored git command into an
 /// empty, allow-shaped scan.
-pub fn evaluate(cfg: &Config, root: &Path) -> Report {
+///
+/// `transcript_path` is the Stop payload's transcript (empty for a manual
+/// run). The scan is narrowed to what this session wrote — see
+/// [`scope_to_session`] — before it is classified.
+pub fn evaluate(cfg: &Config, root: &Path, transcript_path: &str) -> Report {
     let changed = git::changed_files(root);
     let added = git::added_lines(root);
-    classify(cfg, &changed, &added)
+    let (changed, added, authorship) = scope_to_session(root, transcript_path, changed, added);
+    let mut report = classify(cfg, &changed, &added);
+    report.authorship = authorship;
+    report
+}
+
+/// Narrow a successful scan to the files the stopping session wrote (user
+/// ruling 2026-10-17, 「検証テストの範囲は書いた文だけでいい」), via the rule
+/// shared with reviewgate: `harness_core::attribution::attribute_own_writes`.
+///
+/// The universe attributed is `changed ∪ files of added lines`: `git status`
+/// collapses an untracked directory to `dir/`, while `added_lines` lists the
+/// files inside it, so attributing only `changed` would drop every line of a
+/// new directory. Both sides are filtered by the same kept set, so test
+/// evidence from another session's file no longer counts either.
+///
+/// A `Failed` / `NotRepo` scan passes through untouched (there is nothing to
+/// attribute, and `classify` already decides those). Undetermined attribution
+/// passes the WHOLE scan through and records why.
+pub fn scope_to_session(
+    root: &Path,
+    transcript_path: &str,
+    changed: ChangeScan,
+    added: AddedScan,
+) -> (ChangeScan, AddedScan, Authorship) {
+    let (ChangeScan::Files(files), AddedScan::Lines(lines)) = (&changed, &added) else {
+        return (changed, added, Authorship::not_attempted());
+    };
+    let mut universe: Vec<String> = files.clone();
+    for l in lines {
+        if !universe.contains(&l.file) {
+            universe.push(l.file.clone());
+        }
+    }
+    universe.sort();
+    match harness_core::attribution::attribute_own_writes(root, transcript_path, &universe) {
+        harness_core::attribution::Attribution::Narrowed { keep, excluded } => {
+            let keep: std::collections::BTreeSet<String> = keep.into_iter().collect();
+            let files = files
+                .iter()
+                .filter(|f| keep.contains(*f))
+                .cloned()
+                .collect();
+            let lines = lines
+                .iter()
+                .filter(|l| keep.contains(&l.file))
+                .cloned()
+                .collect();
+            (
+                ChangeScan::Files(files),
+                AddedScan::Lines(lines),
+                Authorship::Attributed { excluded },
+            )
+        }
+        harness_core::attribution::Attribution::Undetermined { why } => {
+            (changed, added, Authorship::Unverified { why })
+        }
+    }
+}
+
+/// The stderr line that makes the exclusion visible on EVERY run, including
+/// the allowing one — an exclusion that only surfaces when the gate blocks is
+/// invisible exactly when it silenced the gate. `None` when nothing was
+/// excluded and attribution succeeded.
+pub fn attribution_note(v: &Report) -> Option<String> {
+    match &v.authorship {
+        Authorship::Attributed { excluded } if excluded.is_empty() => None,
+        Authorship::Attributed { excluded } => Some(format!(
+            "tdd: {} uncommitted file(s) not attributed to this session were excluded from the \
+             scan (no Edit/Write/MultiEdit/NotebookEdit of them and no Bash command naming them \
+             in this session's transcript): {}",
+            excluded.len(),
+            excluded.join(", ")
+        )),
+        Authorship::Unverified { why } => Some(format!(
+            "tdd: session attribution undetermined ({why}) — scanning the whole checkout, not \
+             only this session's changes"
+        )),
+    }
 }
 
 /// A stable short discriminator for a blocking report, for cross-gate
@@ -262,28 +377,70 @@ pub fn block_reason(v: &Report, attempt: u32, max: u32) -> String {
         // Neither reachable in practice (a non-blocking report never reaches
         // `block_reason`), but resolved to the same loud message rather than an
         // empty string, since an empty block reason would be worse than either.
-        Determination::Known(None) => generic_block_reason(0, &[], attempt, max),
-        Determination::Known(Some(f)) => {
-            generic_block_reason(f.added_impl_lines, &f.impl_files, attempt, max)
-        }
+        Determination::Known(None) => generic_block_reason(0, &[], &v.authorship, attempt, max),
+        Determination::Known(Some(f)) => generic_block_reason(
+            f.added_impl_lines,
+            &f.impl_files,
+            &v.authorship,
+            attempt,
+            max,
+        ),
     }
 }
 
 /// The model-facing block reason. It states two scope limits, and they are
 /// **different claims that do not substitute for each other**: what tdd looked
 /// at (the uncommitted changes — already-committed tests were not consulted)
-/// and *whose* changes those are (unknown — authorship was never verified; see
-/// the module docs). Neither is decoration: this string is the only thing the
-/// agent reads, and both absences are ones the gate did not check.
+/// and *whose* changes those are (see [`Authorship`]: either the files this
+/// session's transcript shows it writing — inferred, not verified — with the
+/// excluded rest named, or, when attribution was undetermined, the whole
+/// checkout with authorship NOT verified). Neither is decoration: this string
+/// is the only thing the agent reads.
 ///
 /// The blocking predicate is untouched by either sentence — [`Report::blocks`]
-/// still decides, and the whole unattributed set is still counted.
+/// decides over whatever `scan` holds.
 fn generic_block_reason(
     added_impl_lines: usize,
     impl_files: &[String],
+    authorship: &Authorship,
     attempt: u32,
     max: u32,
 ) -> String {
+    let whose = match authorship {
+        Authorship::Attributed { excluded } => {
+            let ex = if excluded.is_empty() {
+                String::new()
+            } else {
+                let shown: Vec<&str> = excluded.iter().take(12).map(String::as_str).collect();
+                let more = if excluded.len() > shown.len() {
+                    format!(" (+{} more)", excluded.len() - shown.len())
+                } else {
+                    String::new()
+                };
+                format!(
+                    " {} uncommitted file(s) not attributed to this session were excluded: {}{more}. \
+                     A file you wrote through a command that never named it (cargo fmt, a glob, a \
+                     script) is among the excluded ones, not counted above.",
+                    excluded.len(),
+                    shown.join(", ")
+                )
+            };
+            format!(
+                "Whose changes: only the uncommitted files this session's transcript shows it \
+                 writing (an Edit/Write/MultiEdit/NotebookEdit of the file, including by its \
+                 subagents, or a Bash command naming its path). That attribution is inferred from \
+                 the transcript, not verified authorship.{ex}"
+            )
+        }
+        Authorship::Unverified { why } => format!(
+            "Authorship was NOT verified: session attribution was undetermined ({why}), so tdd \
+             fell back to `git status` / `git diff` / `git ls-files` over the whole checkout, and \
+             none of those carries session identity. The files listed above are simply everything \
+             uncommitted — they may include a human's edits or a concurrent session's changes as \
+             well as your own. If a listed file is not yours, say so and take the one-shot skip \
+             below."
+        ),
+    };
     let sample = if impl_files.is_empty() {
         String::new()
     } else {
@@ -297,11 +454,7 @@ fn generic_block_reason(
          untracked files, all relative to HEAD. tdd did NOT read already-committed tests, so this \
          is \"no test in the uncommitted changes\", not \"this change has no test\". If the test \
          covering this change is already committed, say so and take the one-shot skip below.\n\n\
-         Authorship was NOT verified. tdd's scan is `git status` / `git diff` / `git ls-files` \
-         over the whole checkout, and none of those carries session identity, so the files \
-         listed above are simply everything uncommitted — they may include a human's edits or \
-         a concurrent session's changes as well as your own. tdd did not check who wrote them. \
-         If a listed file is not yours, say so and take the one-shot skip below.\n\n\
+         {whose}\n\n\
          Add a test that exercises this change (a `#[test]`, `def test_…`, `func Test…`, \
          `it(...)`, or a file under tests/), then finish. Prefer test-first: run \
          `tdd red --task <id>` to capture the failing test before you implement, and \
@@ -777,6 +930,7 @@ mod tests {
                 test_file_changed: false,
                 impl_files: vec!["src/foo.rs".to_string(), "src/bar.rs".to_string()],
             })),
+            authorship: Authorship::not_attempted(),
         }
     }
 
@@ -790,6 +944,7 @@ mod tests {
                 test_file_changed: false,
                 impl_files: vec!["src/foo.rs".to_string()],
             })),
+            authorship: Authorship::not_attempted(),
         }
     }
 
@@ -1085,6 +1240,7 @@ mod tests {
                 test_file_changed: false,
                 impl_files: vec!["src/foo.rs".to_string(), ".githooks/pre-push".to_string()],
             })),
+            authorship: Authorship::not_attempted(),
         }
     }
 
@@ -1294,6 +1450,7 @@ mod tests {
                 test_file_changed: true,
                 impl_files: vec!["src/foo.rs".to_string()],
             })),
+            authorship: Authorship::not_attempted(),
         };
         let out = human_report(&report, &cfg);
         assert!(

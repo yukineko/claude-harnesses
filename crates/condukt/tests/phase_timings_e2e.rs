@@ -263,7 +263,18 @@ fn phase_successful_merge_stamps_merge_completed() {
     run_git(&fx.repo, &["checkout", "-q", "-b", "condukt/runM-t1"]);
     std::fs::write(fx.repo.join("d.txt"), "work\n").unwrap();
     run_git(&fx.repo, &["add", "."]);
-    run_git(&fx.repo, &["commit", "-q", "-m", "task work"]);
+    // The task's commit carries the trailer `--run runM --task t1` names.
+    run_git(
+        &fx.repo,
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "task work",
+            "--trailer",
+            "Condukt-Task: runM/t1",
+        ],
+    );
     run_git(&fx.repo, &["checkout", "-q", "main"]);
 
     let before = fx.read_state("runM");

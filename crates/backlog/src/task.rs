@@ -384,15 +384,15 @@ impl Task {
 /// `next --claim`) excludes every task carrying it (backlog 016c2562).
 pub const TAG_WONTFIX: &str = "wontfix";
 
-/// Returns a warning message when `status` is `Some` but not a recognised value,
+/// Returns an error message when `status` is `Some` but not a recognised value,
 /// else `None`. Centralised here (next to `STATUSES`) so the `--status` filter in
-/// `main` can warn loudly — a typo'd status silently matched nothing ("no
-/// tasks"), indistinguishable from a genuinely empty queue. The message names the
-/// offending value and lists the valid ones.
+/// `main` can refuse it with a non-zero exit — a typo'd status used to silently
+/// match nothing ("no tasks"), indistinguishable from a genuinely empty queue.
+/// The message names the offending value and lists the valid ones.
 pub fn status_warning(status: Option<&str>) -> Option<String> {
     match status {
         Some(s) if s.parse::<Status>().is_err() => Some(format!(
-            "warning: unknown status '{s}'; valid values are {}",
+            "unknown status '{s}'; valid values are {}",
             join_statuses(&FILTER_STATUSES)
         )),
         _ => None,

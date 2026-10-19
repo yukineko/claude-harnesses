@@ -4,8 +4,12 @@ Cargo.lock.bak
 .DS_Store
 
 # machine-local cargo overrides (e.g. target-dir redirect for a full C: drive
-# under WSL) — not something every contributor's machine needs
-/.cargo/
+# under WSL) — not something every contributor's machine needs. Put those in
+# $CARGO_HOME/config.toml or CARGO_TARGET_DIR instead: /.cargo/config.toml
+# itself is TRACKED, because its [env] HARNESS_SANDBOX_HOME is what keeps every
+# `cargo test` from writing into the real user's state (backlog 099a5cbb).
+/.cargo/*
+!/.cargo/config.toml
 
 # precommit-audit runtime telemetry (append-only, machine-local)
 .claude/audit-log.jsonl

@@ -1,13 +1,9 @@
 ---
 name: flow
-description: 課題の供給（compass の次の一手 / backlog のキュー）から解決手段の実行（condukt、fugu-router がモデル選択）までを1本のループで貫く統合 driver。source→executor を束ねる「フレームワーク層」。**ユーザーが明示的に起動したときだけ走る**（2026-08-20 に SessionStart の自動提案を廃止したため、こちらから提案することはしない）。判定（どの source を引くか・止め時）は LLM、状態維持・task 単位の claim・モデル選択は既存バイナリ（compass/backlog/condukt/fugu-router）が担う。同じ project を複数セッションが同時に回せる（キュー全体はロックしない）。
+description: **ユーザーが明示的に起動したときだけ走る**（SessionStart の自動提案を廃止したため、こちらから提案することはしない） [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_no_hook_runs_flow] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_autoflow_has_no_sessionstart_and_no_proposal_strings] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_autoflow_stop_output_never_proposes_flow] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_docs_say_explicit_invocation_only]。課題の供給（compass の次の一手 / backlog のキュー）から解決手段の実行までを1本のループで回したいときに使うこと。
 argument-hint: "[任意: 直接の課題文。省略時は compass→backlog から自動でピック]"
-allowed-tools: Task, AskUserQuestion, Bash(backlog:*), Bash(compass:*), Bash(condukt:*), Bash(fugu-router:*), Bash(hypothesis:*), Bash(overwatch:*), Bash(git:*), Read
+allowed-tools: Task, AskUserQuestion, Bash(backlog:*), Bash(compass:*), Bash(condukt:*), Bash(fugu-router:*), Bash(hypothesis:*), Bash(overwatch:*), Bash(budgetguard:*), Bash(specguard:*), Bash(specforge:*), Bash(jq:*), Bash(printf:*), Bash(git:*), Read
 ---
-
-# /flow — 統合 source→executor driver
-
-`/flow` は **課題の供給 → 解決手段の実行** を1本のループで回す。
 
 ```
 SOURCE（課題の供給。上から順に引く）   EXECUTOR（解決手段の実行）
@@ -17,119 +13,76 @@ SOURCE（課題の供給。上から順に引く）   EXECUTOR（解決手段の
   prompt     … ユーザー直の課題文      ─┘
                                      │
   specforge  … spec-gap の戻り経路   ◀┘  正典が無い課題は実装フェーズへ通さず
-       └──▶ ratify ──▶ backlog ──▶ (次の周回で flow が拾う)
+       └──▶ ratify（exit 9 なら人間へ返す）
 ```
 
-> **4番目の source は「戻り経路」**（`specs/spec-loop.toml` R4）。他の3つが課題を*供給*するのに対し、
-> これは executor へ渡す前に **source へ差し戻す辺**である。正典（spec）が無いと分かった課題を
-> condukt へ盲目投入せず `specforge` へ戻し、draft → ratify が通れば要件が backlog に積まれ、
-> 次の周回で拾われる。詳細は Step 3-1.5。
+## 自分から提案しない
 
-> `hypothesis` は PDO discovery の出力（検証したい仮説）を実行へ繋ぐ source。**2 相**で扱う:
-> ① **open** な仮説 → **RAT ゲート**（Step 3-1 の 4）を先に通す: 未テストの高リスク×弱証拠 assumption
->    （leap of faith）があれば、full build ではなく**その assumption だけを de-risk する最小実験**に落とす。
->    leap of faith が無ければ「その仮説を検証する実験」として condukt に流す（build）。完了すると condukt が
->    gate PASS 時に `awaiting-measurement`（出荷済み・未計測）へ遷移させる。
-> ② **awaiting-measurement** な仮説 → **measure step**（Step 3-1 の 1）で観測値を回収し、
->    **計測した証拠を添えて** validate/reject して閉じる（出荷だけでは validate しない＝build ≠ validate）。
-
-**役割分担（外さない）**: ループ制御（どの source を引くか・実行・検証・止め時の判定）は **この skill（LLM）**。
-状態維持・task 単位の claim・size routing・モデル選択は **既存バイナリ**（`compass` / `backlog` / `condukt` / `fugu-router`）。
-この skill は新しい状態を持たず、**既存の決定論レイヤを束ねるだけ**。
-
-## compass ／ flow ／ scout — どれから始めるか
-
-三つの統合 source/driver があります。以下の表で状況に応じて選んでください：
-
-| **状況** | **使うSKILL** | **役割** |
-|---------|-------------|--------|
-| **ゴール（北極星）が不明・矛盾・陳腐化している** | `/compass` | 再オリエンテーション → charter を彫り直す → gap と右サイズの一手を出す |
-| **課題が決まっており、それを今すぐ実行・処理し続けたい** | `/flow` | source（compass/backlog/hypothesis）から課題を自動ピック → condukt へ流す → 検証→書き戻す（統合ドライバー） |
-| **「今のプロジェクトに何が足りない？」を広く洗い出したい** | `/scout` | 5つのレンズ（課題・セキュリティ・業界標準・不足施策・堅牢性）で多角監査 → 施策を生成 → backlog に積む |
-
-**進め方の典型例**:
-- 最初は `/compass` で north_star を彫る → `/flow` で自動実行 → 並行で `/scout` で施策を洗い出す
-- または `/scout` で施策を見つけて backlog に積む → `/flow` で順序に従って処理
-- 「次に何をすればいいか分からない」なら → `/compass pivot-check` で方向判断
-
-## いつ使うか（/flow について）
-
-- 「次の課題を自分で選んで実行し続けてほしい」とユーザーが言ったとき（`/flow`）。
-- `$ARGUMENTS` に課題文を直接渡せば、source 選択を飛ばしてその課題を condukt に流す。
-
-**自分から `/flow` を提案してはならない。** 0.2.6 までは SessionStart hook が
+**自分から `/flow` を提案してはならない [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_no_hook_runs_flow] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_autoflow_has_no_sessionstart_and_no_proposal_strings] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_autoflow_stop_output_never_proposes_flow]。** [record: 2026-08-20 rev: 5289312f] 0.2.6 までは SessionStart hook が
 「開いている仕事があれば AskUserQuestion で `/flow` を確認せよ」というディレクティブを
-注入していたが（L2: propose-then-confirm）、**2026-08-20 にユーザーの指示で廃止した**
-（autoflow 側の同種の 2 経路も同時に撤去）。backlog に pending が積まれていることは
-それ自体では起動理由にならない。廃止したディレクティブを推測で再現するのは、
-撤去そのものを無効化する行為である。
+注入していたが（L2: propose-then-confirm）、ユーザーの指示で廃止した
+（autoflow 側の同種の 2 経路も同時に撤去）。backlog に pending が積まれていることだけを理由に起動してはならない。
+廃止したディレクティブを推測で再現してはならない。
 
-## 競合しない理由（重要）
+### Step 0 — 引数があれば課題文へ直行すること
 
-- **source と executor は直交**し、state ディレクトリも別（compass / backlog / condukt はそれぞれ独立ストア）。
-- **同じ project のキューを複数の `/flow` が同時に回してよい**。排他は **task 単位**で取る
-  （`backlog next --claim` が選択と予約を同一クリティカルセクションで行い、`condukt state claim-task` が
-  クロスセッションの最終ガード）。**キュー全体のロックは取らない** — それは 2 本目のセッションを
-  丸ごと締め出す過剰な直列化だった。分離するのは worktree/index であり、統合で決着させる。
-- `/backlog` と併走しても同様に task 単位で分かれる。**`/flow` は `/backlog` の上位互換**（compass ゲート＋複数 source を足したもの）。
-- compass は **ゲート兼優先順位付け**、backlog は **確定キュー**、condukt は **executor** という分担を崩さない。
-
----
-
-## 手順
-
-### Step 0 — 引数分岐
-
-`$ARGUMENTS` に課題文があれば → **Step 3（その課題文で condukt 実行）へ直行**。ループはせず1件だけ実行して終了（明示課題は「今これをやれ」の意味）。
-引数が空なら → Step 1 へ（source から自動ピックするループ）。
-
-**どちらの経路でも、着手した課題が終わるまでそれだけをやる**（「ハードルール」の逸脱禁止・常時起票を参照）。
-途中で見つけた別の問題は再現テスト（RED）を書いて `backlog add --repro-test "<cmd>"` で起票し、**その課題に戻ること** [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome]。
 乗り換えはしない。
+
+`$ARGUMENTS` に課題文があれば Step 3（その課題文で condukt 実行）へ直行せよ [test: scripts/test_prose_flow_a.py::T::test_claim_frontmatter_declares_args_and_tools]。ループはせず1件だけ実行して終了せよ。
+引数が空なら Step 1 へ進むこと。
+
+どちらの経路でも、着手した課題が終わるまでそれだけをやること。
+途中で見つけた別の問題は再現テスト（RED）を書いて `backlog add --repro-test "<cmd>"` で起票し、**その課題に戻ること** [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome]。
 テスト無しの `backlog add` は拒否され store に何も書かれない [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere]。
 下の「常時起票」を参照すること。
 
-### Step 0.5 — 自律ゲート（`condukt policy answer` で per-gate graded 判定）
+### Step 0.5 — 自律モードでは人間への問い合わせをゲート単位で判定に通すこと
+
+自律モードでも、budgetguard の予算超過による早期脱出（Step 4）を省いてはならない [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_over_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_ledger_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_config_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_missing_binary_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_prose_nonzero_goes_to_step_4]。
 
 ループ中に人間へ問い合わせる（`AskUserQuestion`）箇所は、**自律モードでは各ゲート固有の
 risk×reversibility×confidence を `condukt policy answer` に渡し、決定論的 verdict に従って
-自答／エスカレート／拒否する**（グローバル一括の縮退ではなく**ゲート単位**の graded 判定。
-condukt / scout と**同一**の shim。5f7d706b で出荷済み）。
+自答／エスカレート／拒否する** [test: crates/condukt/tests/policy_cli.rs::auto_verdict_self_answers_recommended_option_and_journals] [test: crates/condukt/tests/policy_cli.rs::escalate_verdict_falls_through_but_is_still_journaled] [test: crates/condukt/tests/policy_cli.rs::block_verdict_is_a_hard_stop_exit_3]。
 
-まず**グローバルな自律スイッチ**で「そもそも縮退してよいか」を確認する（非自律の既定は従来どおり全 Ask）:
+まず `condukt state autonomy-check` で、そもそも縮退してよいかを確認せよ [test: crates/condukt/tests/autonomy_invariant.rs::autonomy_check_true_config_exits_zero_and_prints_true] [test: crates/condukt/tests/autonomy_invariant.rs::autonomy_check_missing_config_defaults_to_not_autonomous]。
 
 ```bash
-condukt state autonomy-check   # exit 0 + {"autonomous":true} → 自律 / exit 1 + {"autonomous":false} → 非自律
+condukt state autonomy-check   # exit 0 + {"autonomous":true} → 自律 / exit 1 + {"autonomous":false} → 非自律 [test: crates/condukt/tests/autonomy_invariant.rs::autonomy_check_true_config_exits_zero_and_prints_true] [test: crates/condukt/tests/autonomy_invariant.rs::autonomy_check_false_config_exits_one_and_prints_false]
 ```
 
-- **exit 1（非自律・既定）** → **従来どおり全ゲートで `AskUserQuestion`**（後方互換。挙動を一切変えない）。
-- `autonomy-check` が存在しない版（`exit 127` / "unknown subcommand"）→ **非自律とみなす**（安全側フォールバック＝全 Ask）。
-- **exit 0（autonomous）** → 各ゲートを次の **policy-answer routing** に通す（縮退の既定を hardcode せず、verdict で決める）:
+- **exit 1（非自律・既定）** → 従来どおり全ゲートで `AskUserQuestion` を出せ [test: crates/condukt/tests/autonomy_invariant.rs::autonomy_check_false_config_exits_one_and_prints_false] [test: crates/condukt/tests/autonomy_invariant.rs::autonomy_check_missing_config_defaults_to_not_autonomous]。
+- `autonomy-check` が存在しない版や、exit 0 以外で終わる場合（存在しない版は unrecognized subcommand で exit 2 になる）→ **非自律とみなす**（安全側フォールバック＝全 Ask） [test: scripts/test_prose_flow_a.py::T::test_claim_autonomy_unknown_subcommand_never_exits_zero]。
+- **exit 0（autonomous）** なら各ゲートを次の `condukt policy answer` に通せ [test: crates/condukt/tests/autonomy_invariant.rs::autonomy_check_true_config_exits_zero_and_prints_true]。
 
 ```bash
-# 各 human gate はまずこの shim を通す。exit code で 自答 / 従来 Ask / 拒否 を分岐する。
+# 各 human gate はまずこの shim を通すこと。exit code で 自答 / 従来 Ask / 拒否 を分岐する [test: crates/condukt/tests/policy_cli.rs::auto_verdict_self_answers_recommended_option_and_journals] [test: crates/condukt/tests/policy_cli.rs::escalate_verdict_falls_through_but_is_still_journaled] [test: crates/condukt/tests/policy_cli.rs::block_verdict_is_a_hard_stop_exit_3]
 OUT=$(condukt policy answer \
         --risk <low|medium|high> --reversible <low|medium|high> --confidence <low|medium|high> \
         --question "<質問文>" --option "<A>" --option "<B>" --recommend <既定 index> 2>/dev/null)
 case $? in
-  0) CHOSEN=$(printf '%s' "$OUT" | jq -r '.chosen') ;;  # auto: 自答。CHOSEN を採用し Ask しない（自答は監査ログに追記される）
-  2) : ;;  # escalate: 従来どおり AskUserQuestion（＝残す唯一の 質疑 channel）
-  3) : ;;  # block: 実行を拒否して停止（人にも聞かない hard stop）
-  *) : ;;  # 1(不正入力)/127/旧バイナリ（`answer` 無しの clap exit 2 も case 2 に落ちて安全）→ 安全側 = AskUserQuestion
+  0) CHOSEN=$(printf '%s' "$OUT" | jq -r '.chosen') ;;  # auto なら CHOSEN を採用し Ask しない。自答は監査ログに追記される [test: crates/condukt/tests/policy_cli.rs::auto_verdict_self_answers_recommended_option_and_journals]
+  2) : ;;  # escalate なら従来どおり AskUserQuestion を出せ [test: crates/condukt/tests/policy_cli.rs::escalate_verdict_falls_through_but_is_still_journaled]
+  3) : ;;  # block なら実行を拒否して停止し、人にも聞かない [test: crates/condukt/tests/policy_cli.rs::block_verdict_is_a_hard_stop_exit_3]
+  *) : ;;  # 上記以外（1=不正入力 / 127 など）は安全側 = AskUserQuestion を出せ [test: crates/condukt/tests/policy_cli.rs::unparseable_level_exits_1_without_panic]
 esac
 ```
 
-- **exit 0（auto）** → stdout（`{"answered":true,"policy":"auto","chosen":"..","recommend_index":N}`）の `chosen` を採用し、**Ask しない**。
-  この自答は `gate-decisions.jsonl` に追記され、**`condukt policy answers` で後から監査できる**（撤去したゲートの review surface）。
-- **exit 2（escalate）** → **従来どおり `AskUserQuestion`**。旧バイナリが `answer` を持たない場合の clap `exit 2` もここに落ちる＝**フェイルセーフ**。
-- **exit 3（block）** → 実行を拒否して停止する。
-- **その他（exit 1 不正入力 / exit 127）** → 安全側にフォールバックして `AskUserQuestion` を出す（never break a turn）。
+- **exit 0（auto）** → stdout（`{"answered":true,"policy":"auto","chosen":"..."}`）の `chosen` を採用し、**Ask しない** [test: crates/condukt/tests/gate_decision_journaling.rs::control_auto_still_journals_the_chosen_option_and_prints_its_json]。
+  この自答は `gate-decisions.jsonl` に追記され、**`condukt policy answers` で後から監査できる** [test: crates/condukt/tests/policy_cli.rs::answers_reader_replays_the_audit_trail]。
+- **exit 2（escalate）** → 従来どおり `AskUserQuestion` を出せ [test: crates/condukt/tests/policy_cli.rs::escalate_verdict_falls_through_but_is_still_journaled] [test: crates/condukt/tests/autonomy_invariant.rs::policy_answer_baseline_escalates_the_ambiguous_middle]。
+- **exit 3（block）** → 実行を拒否して停止する [test: crates/condukt/tests/policy_cli.rs::block_verdict_is_a_hard_stop_exit_3]。
+- **その他（exit 1 不正入力 / exit 127 など）** → 安全側にフォールバックして `AskUserQuestion` を出せ [test: crates/condukt/tests/policy_cli.rs::unparseable_level_exits_1_without_panic] [test: crates/condukt/tests/policy_cli.rs::recommend_index_out_of_range_exits_1]。
 
-#### 権限認可（YES/NO）と 判断要求（Ask）を分ける — `--approval`
+#### 権限認可と判断要求（Ask）を分けること
 
-**ユーザー常設許諾（2026-08-07）**: 自律走行中の**「進めてよいか」という YES/NO の権限認可は
-事前に許諾済み**であり、二度と人間に聞かない。聞いてよいのは**人間に選択・設計判断を求める Ask** だけである。
-この 2 種を混同しないために、**権限認可のゲートには `--approval` を付ける**:
+自律走行中の「進めてよいか」という YES・NO の権限認可は、二度と人間に聞いてはならない。
+判断要求（人間に選択・設計判断を求める Ask）のゲートに `--approval` を付けてはならない [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_approval_flag_is_exactly_what_erases_the_question] [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_no_approval_on_judgment_gates_in_skill_text]。迷ったときも付けてはならない。
+verdict をこの skill の中で hardcode してはならない。
+
+[record: 2026-08-07 rev: 056c51dc] ユーザー常設許諾: 自律走行中の「進めてよいか」という YES/NO の権限認可は事前に許諾済み。
+
+人間に聞くのは、選択・設計判断を求める Ask だけにすること。
+権限認可のゲート（はい/いいえで答えられ、答えが「はい」だと分かっているもの）には `--approval` を付けること [test: crates/condukt/tests/autonomy_invariant.rs::policy_answer_approval_self_answers_when_autonomous]。
 
 ```bash
 condukt policy answer --approval \
@@ -137,353 +90,228 @@ condukt policy answer --approval \
   --question "<進めてよいか>" --option "<進む>" --option "<やめる>" --recommend 0
 ```
 
-`--approval` は policy engine で**唯一の下向き clamp**（`escalate` → `auto`）であり、次の 4 点で狭く縛られている
-（すべて `crates/condukt/tests/autonomy_invariant.rs` の 1d 節が binary 境界で機械検査する）:
+1. **`block` は絶対に緩まない** — risk=high かつ reversible=low の hard stop は `--approval` を付けても block のまま [test: crates/condukt/tests/autonomy_invariant.rs::policy_answer_approval_never_relaxes_the_irreversible_block] [test: crates/condukt/src/policy.rs::approval_clamps_escalate_to_auto_and_never_relaxes_block]。
+2. **非自律モードでは完全に不活性** — 自律判定はバイナリ側が行うので、`--approval` を付けても非自律なら escalate のまま [test: crates/condukt/tests/autonomy_invariant.rs::policy_answer_approval_is_inert_when_not_autonomous]。
+3. **callsite ごとの opt-in** — `--approval` を付けなかったゲートは自律でも escalate する [test: crates/condukt/tests/autonomy_invariant.rs::policy_answer_baseline_escalates_the_ambiguous_middle]。
+4. **`--untestable` / `--conflict` が常に優先** — `--approval` と併記しても escalate する [test: crates/condukt/tests/autonomy_invariant.rs::policy_answer_untestable_beats_approval] [test: crates/condukt/tests/autonomy_invariant.rs::policy_answer_conflict_beats_approval]。
 
-1. **`block` は絶対に緩めない。** risk=high かつ reversible=low の hard stop は `--approval` を付けても block のまま。
-   「もう許可を聞くな」は「取り返しのつかないことをやれ」ではない。
-2. **非自律モードでは完全に不活性。** 自律判定は **skill の散文ではなくバイナリ側**（`policy_is_autonomous`）が行うので、
-   skill が autonomy-check を忘れても合意ゲートは消えない。
-3. **callsite ごとの opt-in。** 付けなかったゲートは従来どおり escalate する。下表の「判断要求」行には**付けない**。
-4. **`--untestable` / `--conflict`（上向き clamp）が常に優先。** 常設許諾は §2 の「測れないなら人に聞く」も
-   merge conflict の pick-a-side も**上書きしない**。
-
-**実際に流れを止めるのは deterministic gate の側である** — blastguard / donegate /
-pre-commit・pre-push フック。`--approval` はそれらに一切触れない（層が違う）。ユーザーの
-「blastguard とかで止められない限り」はこの構造を指している: **人間への YES/NO は消え、機械の判定は残る。**
-
-各ゲートに与える risk/reversibility/confidence と既定（`--recommend`）:
-
-| human gate | 種別 | risk | reversible | confidence | `--approval` | 典型 verdict | 自答時の既定（recommend） |
+| human gate | 種別 | risk | reversible | confidence | `--approval` | 典型 verdict | 自答時の既定（recommend） | [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_header_and_rows_present] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_rows_verdicts]
 |---|---|---|---|---|---|---|---|
-| **排他ロック競合**（Step 2・他セッションが明示的に `lock acquire` 済み。driver の並走では発生しない） | 権限認可 | low | high | high | 付ける | auto | **stand down**（報告して clean exit。`--force` 自動奪取はしない） |
-| **resume 選択**（複数候補） | 権限認可 | low | high | high | 付ける | auto | 3-1 の優先度 pick 規則の先頭 |
-| **deploy/push の GATED 承認**（3-3 sink・Step 4） | 権限認可 | medium | medium | medium | **付ける** | auto（常設許諾） | **承認して進む**（block を返した場合のみ停止） |
-| **condukt Phase 3 の合意**（「この schedule で進む?」） | 権限認可 | schedule 由来 | high | schedule 由来 | **付ける** | auto | 提示した schedule のまま進む |
-| **pivot-check**（Step 4・`pivot`） | **判断要求** | medium | high | low | 付けない | **escalate** | —（genuine な戦略判断なので人に聞く。既定案＝継続/persevere） |
-| **worker が blocked**（condukt Phase 5） | **判断要求** | medium | medium | low | 付けない | **escalate** | —（実装が詰まった＝人間の判断が要る） |
-| **spec-gap divert**（3-1.5・open_questions / confidence:low / brief verdict=not-covered） | **判断要求** | medium | high | low | 付けない | **escalate** | —（「正典が無いまま実装させるか」は設計判断。3値は R4 の acceptance が固定） |
-| **merge conflict の pick-a-side** | **判断要求** | — | — | — | `--conflict` | **escalate** | —（自動 pick は last-writer-wins） |
-| **測れない決定**（CLAUDE.md §2） | **判断要求** | — | — | — | `--untestable` | **escalate** | —（測れないという事実こそ人間が知るべき情報） |
-| **charter 彫り直し**（3-1 の 3・backlog が一手も出さず charter からも一手が引けない） | **判断要求** | — | — | — | 付けない | **人に聞く（自答しない）** | —（ゴールの中身を決めるのは人間。2026-10-01 のユーザー裁定・ec878b2a） |
-| **循環ブレーカー trip**（早期脱出・`condukt circuit check`） | 決定論 stop | — | — | — | — | **人にも policy にも聞かない clean stop** | —（ループを止め Step 4 へ） |
+| **排他ロック競合**（Step 2・他セッションが明示的に `lock acquire` 済み。driver の並走では発生しない） | 権限認可 | low | high | high | 付ける | auto | **stand down**（報告して clean exit。`--force` 自動奪取はしない） | [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_header_and_rows_present] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_rows_verdicts] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_auto_picks_the_recommended_option]
+| **resume 選択**（複数候補） | 権限認可 | low | high | high | 付ける | auto | 3-1 の優先度 pick 規則の先頭 | [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_header_and_rows_present] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_rows_verdicts]
+| **deploy/push の GATED 承認**（3-3 sink・Step 4） | 権限認可 | medium | medium | medium | **付ける** | auto（常設許諾） | **承認して進む**（block を返した場合のみ停止） | [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_header_and_rows_present] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_rows_verdicts] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_block_is_never_relaxed_by_approval]
+| **condukt Phase 3 の合意**（「この schedule で進む?」） | 権限認可 | schedule 由来 | high | schedule 由来 | **付ける** | auto | 提示した schedule のまま進む | [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_header_and_rows_present] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_rows_verdicts] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_phase3_every_combination_auto_with_approval]
+| **pivot-check**（Step 4・`pivot`） | **判断要求** | medium | high | low | 付けない | **escalate** | —（genuine な戦略判断なので人に聞く。既定案＝継続/persevere） | [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_header_and_rows_present] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_rows_verdicts] [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_pivot_gate_no_approval_escalates_and_recommends_continue]
+| **worker が blocked**（condukt Phase 5） | **判断要求** | medium | medium | low | 付けない | **escalate** | —（実装が詰まった＝人間の判断が要る） | [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_header_and_rows_present] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_rows_verdicts]
+| **spec-gap divert**（3-1.5・open_questions / confidence:low / brief verdict=not-covered） | **判断要求** | medium | high | low | 付けない | **escalate** | —（「正典が無いまま実装させるか」は設計判断。3値は R4 の acceptance が固定） | [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_header_and_rows_present] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_rows_verdicts] [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_divert_command_as_written_escalates_and_is_journaled]
+| **merge conflict の pick-a-side** | **判断要求** | — | — | — | `--conflict` | **escalate** | —（自動 pick は last-writer-wins） | [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_header_and_rows_present] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_rows_verdicts] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_conflict_and_untestable_escalate_even_with_approval]
+| **測れない決定**（CLAUDE.md §2） | **判断要求** | — | — | — | `--untestable` | **escalate** | —（測れないという事実こそ人間が知るべき情報） | [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_header_and_rows_present] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_rows_verdicts] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_conflict_and_untestable_escalate_even_with_approval]
+| **charter 彫り直し**（3-1 の 3・backlog が一手も出さず charter からも一手が引けない） | **判断要求** | — | — | — | 付けない | **人に聞く（自答しない）** | —（ゴールの中身を決めるのは人間） [record: 2026-10-01 rev: 9e3c987d] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_charter_recarve_is_never_self_answered] |
+| **循環ブレーカー trip**（早期脱出・`condukt circuit check`） | 決定論 stop | — | — | — | — | **人にも policy にも聞かない clean stop** | —（ループを止め Step 4 へ） | [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_header_and_rows_present] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_rows_verdicts] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_circuit_trip_exits_nonzero]
 
-> **種別の見分け方**: 「はい/いいえで答えられ、答えが『はい』だと分かっているもの」＝**権限認可**（`--approval`）。
-> 「どちらを選ぶべきか／これは正しいのか、を人間に問うもの」＝**判断要求**（付けない）。
-> 迷ったら**付けない**（＝従来どおり聞く）。付け忘れは冗長な質問で済むが、付け間違いは判断の消失になる。
->
-> verdict は `policy::decide`（`risk − reversible − confidence` の決定論スコア: `≤ -2`→auto /
-> `≥ 1`→block / それ以外→escalate。ただし risk=high かつ reversible=low は無条件 block）と
-> `policy::decide_approval` が確定するので、ここで挙動を hardcode しない。
+### Step 1 — ここで compass / charter を引いてはならない
 
-**安全不変条件（自律でも残す停止）**: 自律モードで残る human stop は **(a) worker が blocked**、
-**(b) pivot**（genuine な戦略判断）、**(c) merge conflict の pick-a-side と §2 の測れない決定**、
-**(d) spec-gap divert**（3-1.5。「正典が無いまま実装させるか」は設計判断であり、
-risk medium / reversible high / confidence low ＝ pivot と同じプロファイルで escalate する）、
-**(e) charter 彫り直し中の問い**（3-1 の 3。backlog が空で charter から一手が引けないとき。
-charter を彫る問いはゴールの中身を人間に決めてもらう判断要求であり、2026-10-01 のユーザー裁定
-〈ec878b2a〉で自律モードでも残すと確定した）、
-および **policy answer が block を返したゲート**。**deploy/push の GATED 承認は 2026-08-07 の常設許諾により
-auto へ移した**（block が返れば止まる。実際の防護は blastguard 等の deterministic gate が担う）。
-その他の routine な human gate も policy-answer の auto で自答され Yes/No は消える（**全件が
-`gate-decisions.jsonl` に残り `condukt policy answers` で監査できる** — ゲートは削除ではなく記録付きで自答される）。
-**budgetguard の予算超過による早期脱出（Step 4）はどのモードでも維持**する。
+引数なしの `/flow` では、compass / charter を先に引いてはいけない [test: scripts/test_prose_flow_a.py::T::test_claim_step1_order_backlog_before_compass]。この Step で `compass gap` を実行してはならない [test: scripts/test_prose_flow_a.py::T::test_claim_step1_order_backlog_before_compass]。
+確定キューである backlog を先に処理し、backlog が一手も出さなかったときだけ charter 側へ降りること。
+Step 2（driver 登録）→ Step 3-1 へ進むこと。
 
-### Step 1 — compass ゲートは**ここでは引かない**（backlog 優先。2026-09-23 のユーザー裁定）
+### Step 2 — driver を非排他に登録すること
 
-**引数なしの `/flow` では、compass / charter を先に引いてはいけない。** 確定キューである
-backlog を先に処理し、**backlog が一手も出さなかったときだけ** charter 側へ降りる。
-したがってこの Step では `compass gap` を実行せず、そのまま **Step 2（driver 登録）→
-Step 3-1** へ進む。compass の実行点は **3-1 の 3（backlog フォールバック）** に移動した。
+キュー全体をロックしない [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_loop_does_not_acquire_the_exclusive_project_lock]。
+登録と解除を飛ばしてはならない。
+同じ project のキューは複数セッションが同時に回してよい [test: crates/backlog/tests/concurrent_drivers.rs::two_concurrent_driver_processes_get_disjoint_tasks]。
+task 単位の排他は `backlog next --claim` が選択と予約を同一クリティカルセクションで行うことで保証される [test: crates/backlog/tests/concurrent_drivers.rs::two_concurrent_driver_processes_get_disjoint_tasks]。
 
-**Why**（裁定の理由を残す。次の著者が「先に引く」へ戻さないため）:
-
-- backlog は**既に裁定済みの仕事**である。charter を先に引くと、積まれている確定仕事を
-  差し置いて「今いちばん大きな gap」が毎周回で割り込み、**キューが減らない**。
-  ユーザーから見た症状は「backlog に pending が何百件あるのに別のことを始める」。
-- 「盲目実行の防止」という元の目的は backlog には元々かかっていない。backlog item は
-  起票時点で観測と done 条件を持つので、charter の鮮度は**その item を実行してよいかの
-  判定材料ではない**。charter ゲートが本当に守っているのは **compass 由来の一手**であり、
-  その経路では**今も同じ強さでかかる**（3-1 の 3 を参照）。ゲートを外したのではなく、
-  **ゲートを本来の対象だけに絞った**。
-- **引数ありの `/flow <課題>` はこの裁定の対象外**（Step 0 のとおり課題文へ直行する）。
-
-> compass は「ONE に絞り残りは parked」が思想であり、それ自体は変わらない。変わったのは
-> **compass を引く順番**だけで、「最優先 source」ではなく **backlog が枯れたときの供給源**になった。
-
-### Step 2 — driver 登録（**排他ではない**）
-
-**キュー全体をロックしない。** 同じ project のキューは複数セッションが同時に回してよい。
-必要なのは **task 単位の排他**だけで、それは `backlog next --claim`（選択と予約が同一クリティカル
-セクション）と `condukt state claim-task` が既に保証している。**セッション丸ごとの直列化は過剰**であり、
-2 本目の `/flow` がキュー全体から締め出される原因だった（「同一 task の排他は当然だが、全部 lock は論外」）。
-
-自分が driver であることを **非排他** に登録する（他の driver が居ても**絶対に失敗しない**）:
+自分が driver であることを非排他に登録せよ（他の driver が居ても失敗しない） [test: crates/backlog/tests/concurrent_drivers.rs::lock_status_answers_liveness_for_zero_one_and_many_drivers]。
 
 ```bash
 backlog driver register --session-id "$CLAUDE_CODE_SESSION_ID" --project "$PWD"
-backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drivers[] に全員が並ぶ）
+backlog lock status --project "$PWD"   # 参考: いま誰が driver か（drivers[] に全員が並ぶ） [test: crates/backlog/tests/concurrent_drivers.rs::lock_status_answers_liveness_for_zero_one_and_many_drivers]
 ```
 
-> 登録は **project ごと** にスコープされる（`~/.backlog/drivers/<project のハッシュ>/<session>.driver`）。
-> `--project` を付けずに `backlog lock status` を呼ぶと **全 project 横断**で「どこかで driver が
-> 動いているか」を返す（`daily` の起動判定専用）。`/flow` は**必ず `--project "$PWD"`** を付ける。
-> 登録は `autoflow`（Stop hook の自動ループ停止）と `daily`（当日実行のスキップ）が読む
-> 「この project で driver が動いているか」シグナルでもあるので、**登録と解除は飛ばさない**。
+> 登録は project ごとにスコープされる（`~/.backlog/drivers/<project のハッシュ>/<session>.driver`） [test: crates/backlog/tests/concurrent_drivers.rs::another_projects_driver_does_not_make_my_project_look_busy] [test: crates/backlog/tests/concurrent_drivers.rs::a_stale_driver_registration_is_reaped_like_a_stale_lock]。
+> `--project` を付けずに `backlog lock status` を呼ぶと全 project 横断で driver の有無を返す [test: crates/backlog/tests/concurrent_drivers.rs::another_projects_driver_does_not_make_my_project_look_busy]。
+> `/flow` は必ず `--project "$PWD"` を付けること [test: crates/backlog/tests/concurrent_drivers.rs::another_projects_driver_does_not_make_my_project_look_busy]。
 
-- **他セッションが driver として登録済みでも、見送らない**。並走して構わない
-  （task の重複着手は `next --claim` と `claim-task` が防ぐ）。**待つのは解ではない。**
-- **例外 — 誰かが明示的に排他ロックを取っている場合**（`backlog lock status` の `kind` が
-  `exclusive-lock` で `stale` でない）: これは人間が「全セッションを締め出す」意図で
-  `backlog lock acquire` を打った状態なので尊重する。**Step 0.5 の policy-answer routing** に通す
-  （権限認可なので `--approval` を付ける。`--risk low --reversible high --confidence high`、
-  `--question "他セッションが排他ロック中。どうする?"`、
-  `--option "stand down" --option "wait" --option "force-steal" --recommend 0` → 既定 verdict は auto）:
-  - **auto（exit 0）** → `chosen`（＝stand down）を採用: 自動奪取はせず「排他ロック保持中のため見送り」と
-    報告して**clean exit**。自答は監査ログに残る。
-  - **escalate（exit 2）／ 非自律・旧バイナリ・不正入力のフォールバック** → 従来どおり
-    `AskUserQuestion`（待機 / 強制奪取 `--force` / 中止）。`--force` は **生きている保有者からも奪取**する
-    （`backlog lock acquire --force ...`）。
-- `kind` が `undetermined`（backlog が registry を読めなかった）→ **「driver 不在」とは読まない**。
-  安全側に倒し、理由を報告して見送る。
-- stale な登録・ロックは次の `register`／`acquire` が**自動で reap** する（TTL 30 分・heartbeat 基準）。
+- 他セッションが driver として登録済みでも、見送らない [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::a_peer_driver_is_not_a_reason_to_stand_down]。並走して構わない [test: crates/backlog/tests/concurrent_drivers.rs::two_concurrent_driver_processes_get_disjoint_tasks]。待つのは解ではない [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::a_peer_driver_is_not_a_reason_to_stand_down]。
+- **例外 — 誰かが明示的に排他ロックを取っている場合**（`backlog lock status` の `kind` が `exclusive-lock` で `stale` でない）は尊重し、Step 0.5 の policy-answer routing に通せ [test: crates/backlog/src/liveness.rs::an_active_exclusive_lock_still_wins_and_keeps_its_shape] [test: crates/backlog/tests/lock_heartbeat_ttl.rs::heartbeat_refreshes_a_ttl_exceeded_lock_and_keeps_it_from_being_stolen]。
+  権限認可なので `--approval` を付け、`--risk low --reversible high --confidence high` で渡せ（既定 verdict は auto） [test: crates/condukt/src/policy.rs::anchor_auto_trivially_safe_and_reversible] [test: crates/condukt/src/policy.rs::approval_clamps_escalate_to_auto_and_never_relaxes_block]。
+  - auto（exit 0）でも自動奪取はしない。`chosen`（＝stand down）を採用し、「排他ロック保持中のため見送り」と報告して clean exit せよ [test: crates/condukt/tests/gate_decision_journaling.rs::control_auto_still_journals_the_chosen_option_and_prints_its_json]。自答は監査ログに残る [test: crates/condukt/tests/policy_cli.rs::auto_verdict_self_answers_recommended_option_and_journals]。
+  - escalate（exit 2）なら従来どおり
+    `AskUserQuestion`（待機 / 強制奪取 `--force` / 中止）を出せ [test: crates/condukt/tests/policy_cli.rs::escalate_verdict_falls_through_but_is_still_journaled]。
+    `--force` は進捗に関わらず排他ロックを奪取する（`backlog lock acquire --force ...`） [test: crates/backlog/tests/lock_heartbeat_ttl.rs::ttl_exceeded_lock_with_unconfirmable_progress_is_not_reaped_but_force_wins]。
+- `backlog lock status` が `undetermined`（registry を読めなかった）を返したら「driver 不在」とは読まない [test: crates/backlog/tests/concurrent_drivers.rs::an_unreadable_registry_does_not_report_none] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::undetermined_liveness_is_not_read_as_free]。安全側に倒し、理由を報告して見送ること。
+- stale な driver 登録は次の `register` が自動で reap する（TTL 1800 秒・heartbeat 基準） [test: crates/backlog/tests/concurrent_drivers.rs::a_stale_driver_registration_is_reaped_like_a_stale_lock]。TTL 超過の排他ロックは進捗の停止が確認できたときだけ reap され、確認できなければ `--force` だけが奪取する [test: crates/backlog/tests/lock_heartbeat_ttl.rs::ttl_exceeded_lock_with_unconfirmable_progress_is_not_reaped_but_force_wins] [test: crates/backlog/tests/lock_heartbeat_ttl.rs::frozen_signals_across_the_window_are_confirmed_stalled_and_reaped]。
 
-### Step 3 — 実行ループ（繰り返し）
+### Step 3 — 実行ループを回すこと
 
-「source が尽きる / 予算超過 / ユーザー中断」まで以下を繰り返す。
+「source が尽きる / 予算超過 / ユーザー中断」まで以下を繰り返すこと。
 
 > cwd は常にこのセッションの **linked worktree** にすること。
 > `backlog`（add / done / fail / edit / cancel / `sync --apply`）と `compass`（charter --write / gap --write / outcome / opportunity add / evaluate）の **store 書き込みは、main（primary checkout）の作業ツリー内では拒否される**（非 0 終了・何も書かない） [test: crates/backlog/tests/store_worktree_boundary.rs::add_from_primary_checkout_is_refused_and_writes_nothing] [test: crates/backlog/tests/store_worktree_boundary.rs::done_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary_env.rs::fail_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary.rs::edit_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary_env.rs::cancel_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/backlog/tests/store_worktree_boundary.rs::sync_apply_from_primary_checkout_is_refused_and_creates_no_issue] [test: crates/compass/tests/store_worktree_boundary.rs::charter_write_from_primary_checkout_is_refused_and_writes_nothing] [test: crates/compass/tests/store_worktree_boundary.rs::gap_write_from_primary_checkout_is_refused_and_charter_unchanged] [test: crates/compass/tests/store_worktree_boundary.rs::outcome_from_primary_checkout_is_refused_and_writes_nothing] [test: crates/compass/tests/store_worktree_boundary.rs::opportunity_add_from_primary_checkout_is_refused_and_writes_nothing] [test: crates/compass/tests/store_worktree_boundary.rs::evaluate_from_primary_checkout_is_refused_and_writes_nothing]。
-> 判定不能（git が答えない）も拒否に倒れる。したがって以下の `backlog` / `compass` はすべて
-> **セッションの worktree を cwd にして**実行する（`git worktree add …` で作った linked worktree）。
-> 読み取り（list / next（--claim なし）/ pivot-check / `compass charter`（--write なし）/ `compass gap`
-> （--write なし））は main からでも動く。
+> 判定不能（git が答えない）も拒否に倒れる [test: crates/backlog/tests/store_worktree_boundary_env.rs::add_where_dot_git_points_at_a_missing_gitdir_is_refused]。
+> 以下の `backlog` / `compass` はすべて、セッションの worktree を cwd にして実行せよ（`git worktree add …` で作った linked worktree） [test: crates/backlog/tests/store_worktree_boundary.rs::add_from_linked_worktree_succeeds_and_lands_in_that_worktree] [test: crates/compass/tests/store_worktree_boundary.rs::charter_write_from_linked_worktree_succeeds_there_only]。
+> 読み取り（list / pivot-check / `compass charter`（--write なし））は main からでも動く [test: crates/backlog/tests/store_worktree_boundary.rs::list_from_primary_checkout_still_works] [test: crates/compass/tests/store_worktree_boundary.rs::pivot_check_from_primary_checkout_still_works_and_creates_nothing] [test: crates/compass/tests/store_worktree_boundary.rs::charter_show_from_primary_checkout_still_works]。
+> `next`（--claim なし）と `compass gap`（--write なし）も main からでも動く [test: scripts/test_prose_flow_b.py::TestMainReads::test_claim_main_reads_backlog_next] [test: scripts/test_prose_flow_b.py::TestMainReads::test_claim_main_reads_compass_gap]。
 
-#### 3-1. 次のタスクを優先度順にピック
+#### 3-1. 次のタスクを優先度順にピックすること
 
-> **順序は backlog 優先**（2026-09-23 のユーザー裁定）。compass / charter は **1 と 2 が
-> どちらも一手を出さなかったときのフォールバック**であり、先頭では引かない（Step 1 を参照）。
+予算を判定できないまま、または予算超過のままピックしてはならない [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_over_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_ledger_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_config_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_missing_binary_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_prose_nonzero_goes_to_step_4]。各サイクルのピックの前に次を実行すること [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_3_1_block_contains_check_command] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_frontmatter_allows_budgetguard]。
+```bash
+budgetguard check   # stdout は JSON 1 行 [test: crates/budgetguard/tests/check_contract.rs::check_within_budget_exits_0_with_verdict_within] [test: crates/budgetguard/tests/check_contract.rs::check_corrupt_ledger_is_undetermined_exit_2]。exit 0 = 予算内 / exit 1 = 予算超過 / exit 2 = 判定不能 [test: crates/budgetguard/tests/check_contract.rs::check_within_budget_exits_0_with_verdict_within] [test: crates/budgetguard/tests/check_contract.rs::check_at_or_over_block_threshold_exits_1_with_verdict_over] [test: crates/budgetguard/tests/check_contract.rs::check_corrupt_ledger_is_undetermined_exit_2] [test: crates/budgetguard/tests/check_contract.rs::check_corrupt_config_is_undetermined_exit_2]
+```
+exit 0 以外（exit 1・exit 2・`budgetguard` 不在・起動失敗）なら予算超過とみなし、ピックせず Step 4 へ進むこと（早期脱出条件） [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_over_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_ledger_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_config_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_missing_binary_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_prose_nonzero_goes_to_step_4]。
 
-1. **measure step（計測ループを閉じる / build ≠ validate）** — 新規 build より**先に**、出荷済み・未計測の仮説を回収する:
+compass / charter を先頭で引いてはならない。1 と 2 がどちらも一手を出さなかったときのフォールバックとしてだけ引くこと。
+出荷しただけで仮説を validate してはならない（build ≠ validate） [test: crates/hypothesis/src/store.rs::test_validate_requires_evidence]。
+
+1. measure step として、新規 build より先に、出荷済み・未計測の仮説を回収せよ。
    ```bash
-   hypothesis list --status awaiting-measurement   # condukt が merge 時に遷移させた「出荷済み・未計測」
+   hypothesis list --status awaiting-measurement   # 出荷済み・未計測（awaiting-measurement）の仮説を列挙する [test: crates/hypothesis/tests/integration.rs::list_json_uses_hyphenated_status_vocabulary] [test: crates/hypothesis/src/store.rs::test_list_status_filter]
    ```
-   - 各 awaiting-measurement 仮説について、**計測信号が今観測可能か**を判定する:
-     - **観測可能** → これは **condukt build ではなく measure タスク**。実験で観測した成果を集め、
-       そのまま 3-3 の sink で `hypothesis validate/reject --evidence` して**仮説を閉じる**
-       （この 1 件はここで完了。condukt は起動しない）。3-2 を飛ばして 3-3（measure 由来）へ。
-     - **まだ観測不能**（データ蓄積待ち等）→ awaiting-measurement のまま残し、
-       「計測待ち（まだ観測不能）」として報告し次の候補へ進む（ここで無限ループしない）。
-   - `hypothesis` バイナリが無い / 0 件なら skip。
-2. measure 対象（今観測可能なもの）が無ければ **backlog**（確定キュー）。**これが引数なし `/flow` の主経路である。**
-   backlog に **複数の ready 課題がある場合は、順列（1件ずつ）ではなく 1 回の condukt run に束ねて並列処理**する。
-   **並列/直列の判定は flow がするのではなく、condukt の決定論スケジューラ（`schedule.rs`）に委譲**する
-   ＝ flow は独立候補を「束ねて渡すだけ」で、ファイル競合・`Serial`/`Gated` クラス・shared-glob・依存層は
-   condukt が判定し、非衝突タスクだけを並列バッチに、衝突・危険なものは自動で直列に落とす
-   （**「並列が危険/高コストなら直列」はこの層で保証**される＝conservative: 迷えば直列）。
+   - 各 awaiting-measurement 仮説について、計測信号が今観測可能かを判定せよ。
+     - 観測可能な場合、condukt を起動しない。実験で観測した成果を集め、3-3 の sink で `hypothesis validate/reject --evidence` して仮説を閉じよ（3-2 は飛ばす） [test: crates/hypothesis/src/store.rs::test_awaiting_measurement_can_still_validate]。
+     - まだ観測不能（データ蓄積待ち等）な場合、ここで無限ループしない。awaiting-measurement のまま残し、「計測待ち（まだ観測不能）」として報告して次の候補へ進むこと。
+   - awaiting-measurement の仮説が 0 件なら次の候補へ進むこと。
+2. measure 対象（今観測可能なもの）が無ければ backlog（確定キュー）を引くこと。
+   backlog に複数の ready 課題がある場合は、順列（1件ずつ）ではなく 1 回の condukt run に束ねて並列処理せよ。
+   並列・直列の判定を flow 側でしてはならない。独立候補を束ねて渡すだけにすること。
+   ファイル競合・shared-glob・依存層は condukt が判定し、非衝突タスクだけを並列バッチに、衝突したものは直列に落とす [test: crates/condukt/src/schedule.rs::shared_file_demotes_both_off_the_parallel_track] [test: crates/condukt/src/schedule.rs::shared_glob_demotes_to_serial] [test: crates/condukt/src/schedule.rs::deps_create_ordered_layers]。
+   Gated クラスのタスクは単独で隔離され、バッチに入らない [test: crates/condukt/tests/autonomy_invariant.rs::gated_task_is_isolated_and_never_batched]。
 
-   a. **バッチを取り出す**（**1 件ずつ `--claim` で予約**しながら最大 N 件。**cwd = このセッションの linked worktree**。
-      `--claim` の lease は repo 外の `~/.backlog/claims` に書かれ main でも拒否はされないが、worktree で打つ）:
+   （a）`backlog list` で覗いて上位 N 件を自分のものと決めてはいけない [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_pick_reserves_the_task_instead_of_only_reading_it]。バッチは 1 件ずつ `--claim` で予約しながら最大 N 件取り出し、cwd はこのセッションの linked worktree にすること [test: crates/backlog/tests/store_worktree_boundary.rs::next_claim_from_linked_worktree_succeeds_and_records_a_lease] [test: crates/backlog/tests/concurrent_drivers.rs::two_concurrent_driver_processes_get_disjoint_tasks]。
+      `--claim` の lease は repo 外の `~/.backlog/claims` に書かれ、main からでも拒否されない [test: crates/backlog/tests/store_worktree_boundary.rs::next_claim_from_primary_checkout_is_allowed_and_never_dirties_main]。
       ```bash
-      backlog next --claim --project "$PWD"   # 選択と予約が同一クリティカルセクション。N 回繰り返す
+      backlog next --claim --project "$PWD"   # 選択と予約を同一クリティカルセクションで行う [test: crates/backlog/tests/concurrent_drivers.rs::two_concurrent_driver_processes_get_disjoint_tasks]。N 回繰り返すこと。
       ```
-      **`backlog list` で覗いて上位 N 件を自分のものと決めてはいけない**。`list` は純粋な read なので、
-      並走している別セッションと**同じ task を掴む**。`next --claim` は選んだ task を、選択と同じ
-      クリティカルセクション（project 全体の claim ledger ロック → tasks-file ロック）の中で
-      untracked な claim ledger（`~/.backlog/claims/<project-slug>.json`）に lease として記録するため、
-      **どの checkout からでも 2 つの driver が同じ task を受け取ることは無い**
-      （逆に、これがあるからキュー全体をロックする必要が無い）。トラックされた `.backlog/tasks.toml` は
-      書かれない（worktree は汚れない）。`claimed` は ledger から導出される表示上のステータスで、
-      `list` は lease 中の task を `claimed` と表示し、素の `next` はそれを返さない。
-      - 出力が `no pending tasks` になるまで、または **N 件**（既定 N=condukt の `max_parallel`。
-        無指定なら **4**）に達するまで繰り返す。
-      - 各件の `id` / `title` / `notes` / **`hashkey`**（`next --claim` の出力にも含まれる）を控える
-        （sink で **id ごとに** `done`/`fail` する、および claim の解放に必須）。1 件だけなら従来どおり
-        単一課題として扱う（N=1）。
-      - `next --claim` は**ロックを取れなかったとき何も返さない**（fail-closed な decline）ので、
-        `no pending tasks` が返っても即座に「キューが空」と断定せず、1 度は取り直す。
-      **claim-skip ゲート（多重着手の防止）**: 予約した各 item について
-      `condukt state is-claimed --hashkey <hashkey>` を実行する。**exit 0（他セッションが既に claim 中）
-      → その item は諦めて次候補へ**。lease は ledger にしか無いので `backlog edit <id> --status pending`
-      では解放されない（store 上は既に pending）。lease は `CLAIM_STALE_SECS`＝1 時間で自動的に
-      除外をやめ、それまでは他の driver にも配られない。
-      判定は 3 値: **exit 0 → claim 済み、その item はスキップ**／**exit 1 かつ stdout が `"claimed": false`
-      → claim なし、ピック続行**／**それ以外（`condukt` が無い・exit 3＝claim registry を読めない・exit 1 だが
-      `claimed:false` が無い・起動失敗・タイムアウト）→ 判定不能。claim 済みとみなしてその item をスキップし、
-      理由（exit code / stderr）を報告する**。「判定不能」を「claim なし」として続行してはならない。
-   b. **コスト/危険ゲート（直列フォールバック）** — 次のどれかに該当する候補は**バッチから外して 1 件ずつ直列**に回す（安全側）:
-      - budgetguard が予算逼迫を示す → バッチ幅を絞る（極端なら N=1＝従来の直列に縮退）。
-      - notes から明らかに **相互依存**／同一領域・同一ファイルを触る／deploy・push（Gated 相当）を含むと読める。
-      判断に迷うものは**バッチに入れてよい**（condukt が衝突を検出して自動で直列化するため二重の安全網になる）。
-   c. **backlog に積む側**（このループが `backlog add` する場合。**cwd = このセッションの linked worktree**＝main では拒否される）— compass opportunity 由来なら **その weight を供給**する
-      こと（weight が compass→backlog→flow と流れ、影響度の高い機会が先頭に来て同じ並列バッチに乗りやすくなる）:
+      `next --claim` は選んだ task を untracked な claim ledger に lease として記録するため、どの checkout からでも 2 つの driver が同じ task を受け取ることは無い [test: crates/backlog/tests/cross_checkout_claim.rs::two_checkouts_of_the_same_project_never_claim_the_same_task]。
+      トラックされた `.backlog/tasks.toml` は書かれない [test: crates/backlog/tests/claim_lease_untracked.rs::claim_does_not_dirty_the_tracked_store_and_is_visible_across_worktrees]。
+      `list` は lease 中の task を `claimed` と表示する [test: crates/backlog/tests/claim_lease_untracked.rs::claim_does_not_dirty_the_tracked_store_and_is_visible_across_worktrees]。素の `next` はそれを返さない [test: crates/backlog/tests/claim_lease_untracked.rs::plain_next_skips_a_leased_task_in_every_checkout]。
+      - 出力が `no pending tasks` になるまで、または N 件（既定 N=condukt の `max_parallel` で、無指定なら 4）に達するまで繰り返すこと [test: scripts/test_prose_flow_a.py::T::test_claim_max_parallel_default_is_four_when_unset]。
+      - 各件の `id` / `title` / `notes` / `hashkey` を控えること（`hashkey` は `next --claim` の出力に含まれる） [test: crates/backlog/tests/concurrent_drivers.rs::two_concurrent_driver_processes_get_disjoint_tasks]。N=1 の場合は従来どおり単一課題として扱うこと。
+      - `no pending tasks` が返っても即座に「キューが空」と断定してはならない [test: crates/backlog/tests/cross_checkout_claim.rs::an_unreadable_ledger_refuses_the_claim_instead_of_answering_empty]。1 度は取り直すこと。`next --claim` は台帳を読めなかったとき非 0 で終了し、stdout には何も出さない [test: crates/backlog/tests/cross_checkout_claim.rs::an_unreadable_ledger_refuses_the_claim_instead_of_answering_empty]。
+      「判定不能」を「claim なし」として続行してはならない。予約した各 item について `condukt state is-claimed --hashkey <hashkey>` を実行せよ（claim-skip ゲート） [test: crates/condukt/tests/is_claimed_exit_contract.rs::claimed_hashkey_exits_0_with_claimed_true]。
+      判定は 3 値: exit 0 は claim 済みなのでその item をスキップする [test: crates/condukt/tests/is_claimed_exit_contract.rs::claimed_hashkey_exits_0_with_claimed_true]。exit 1 かつ stdout が `"claimed": false` なら claim なしなのでピックを続行する [test: crates/condukt/tests/is_claimed_exit_contract.rs::clean_empty_registry_exits_1_with_claimed_false]。それ以外（`condukt` が無い・exit 3＝claim registry を読めない・起動失敗・タイムアウト）は判定不能なので、claim 済みとみなしてその item をスキップし、理由（exit code / stderr）を報告すること [test: crates/condukt/tests/is_claimed_exit_contract.rs::corrupt_registry_exits_3_not_1]。
+      lease は保持者の heartbeat が続く間は 1 時間（`CLAIM_STALE_SECS`）を過ぎても除外し続け [test: crates/backlog/tests/verifier_486e83ca.rs::verifier_live_holder_keeps_lease_past_window]、heartbeat が止まって `CLAIM_STALE_SECS` を過ぎると除外をやめる [test: crates/backlog/tests/verifier_486e83ca.rs::verifier_dead_holder_is_reclaimable] [test: crates/backlog/tests/claim_lease_untracked.rs::stale_lease_releases_the_task]。
+   （b）予算逼迫、相互依存、同一領域・同一ファイルへの接触、deploy・push（Gated 相当）のいずれかが読み取れる候補は、バッチから外して 1 件ずつ直列に回すこと。
+      - 3-1 冒頭の `budgetguard check` が exit 0 でも JSON の `pressure` が `true`（当日支出が `daily.warn_usd` 以上）なら予算逼迫なので、バッチ幅を N=1 に縮退して従来の直列にすること [test: crates/budgetguard/tests/check_contract.rs::check_between_warn_and_block_is_within_with_pressure_true] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_pressure_line_mentions_pressure_and_n1]。
+      判断に迷うものはバッチに入れてよい（condukt が衝突を検出して直列化する） [test: crates/condukt/src/schedule.rs::shared_file_demotes_both_off_the_parallel_track]。
+   （c）このループが `backlog add` する場合、cwd はこのセッションの linked worktree にすること（main では拒否される [test: crates/backlog/tests/store_worktree_boundary.rs::add_from_primary_checkout_is_refused_and_writes_nothing]）。compass opportunity 由来ならその weight を供給すること。
       ```bash
-      W=$(compass gap | jq -r '.opportunities[0].weight // empty')   # active outcome の最重要 opportunity の weight
+      W=$(compass gap | jq -r '.opportunities[0].weight // empty')
       backlog add --title "<課題>" --project "$PWD" --priority p1 --weight "${W:-0}" \
         --repro-test "<その課題を再現するコミット済みテスト>"   # 再現しなければ拒否され store に何も書かれない [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]
       ```
-      weight 無指定は既定 0.0＝従来の (priority, created_at) 順（後方互換）。weight は順序を変えるだけで priority は上書きしない。
+      weight は同じ priority 内の順序だけを変え、priority は上書きしない [test: crates/backlog/src/store.rs::priority_dominates_weight] [test: crates/backlog/src/store.rs::next_orders_by_weight_desc_within_priority]。weight が同じなら従来の created_at 順になる [test: crates/backlog/src/store.rs::equal_weight_falls_back_to_created_at]。
+      weight 無指定は既定 0.0 である [test: scripts/test_prose_flow_b.py::TestWeightDefault::test_claim_weight_default]。
       クロスプロジェクトで繰り返し検出される作業種別は `docs/backlog-tag-taxonomy.md` の規約タグ（例:
-      `worktree-hygiene` / `deploy-verify` / `network-infra`）も併せて付ける。
-3. **backlog が一手も出さなかったときだけ compass / charter を引く（自動実行する）。**
-   `backlog next --claim` が（1 度取り直したうえで）`no pending tasks` を返し、measure 対象も無い —
-   このときに限り、ここで初めて charter 側へ降りる:
+      `worktree-hygiene` / `deploy-verify` / `network-infra`）も併せて付ける [test: scripts/test_prose_flow_b.py::TestTagTaxonomy::test_claim_tag_taxonomy]。
+3. backlog が（1 度取り直したうえで）一手も出さず、measure 対象も無いときだけ compass / charter を引くこと。
    ```bash
-   compass gap     # ゴール−現状の gap と候補の一手を出す
+   compass gap     # dod / measuring_stick / last_outcome / opportunities などを JSON で出す [test: scripts/test_prose_flow_b.py::TestGapRoute::test_claim_gap_route_gap_keys]
    ```
-   - **charter が鮮明で右サイズの一手が引ける** → その一手を `to_condukt` として採用し、6 へ進む
-     （以降は backlog 由来と同じ扱い。sink は 3-3 の compass 由来＝`compass outcome` を使う）。
-   - **charter が陳腐・矛盾・抽象すぎて一手が引けない** → **`/compass` を案内して停止するのではなく、
-     その場で charter を彫り直す**（＝「backlog が無ければ自動で charter を実行する」の実体）。
+   - **charter が鮮明で右サイズの一手が引ける**なら、`compass gap` の `opportunities` と `dod` からその一手を選び、6 へ進むこと [test: scripts/test_prose_flow_b.py::TestGapRoute::test_claim_gap_route_gap_keys]。
+     以降は backlog 由来と同じ扱いとし、sink には 3-3 の compass 由来（`compass outcome`）を使うこと [test: scripts/test_prose_flow_b.py::TestCompassOutcome::test_claim_compass_outcome]。
+   - charter が陳腐・矛盾・抽象すぎて一手が引けない場合、`/compass` を案内して停止してはならない [test: scripts/test_prose_flow_b.py::TestCarveSentinel::test_claim_carve_sentinel] [test: scripts/test_prose_flow_b.py::TestMainReads::test_claim_main_reads_compass_gap]。
+     その場で charter を彫り直すこと。
      `compass` skill の Step 1〜5（`compass evaluate` → C3–C5 の自己判定 → 未解決の問いを
-     `AskUserQuestion` で 1 問ずつ詰める → `compass charter --write` → `compass gap --write`）を回し、
-     彫り直した charter から一手を引いて 6 へ進む。
-     - **この carve 中の `AskUserQuestion` は残す。** charter を彫る問いは「どちらを選ぶべきか」を
-       人間に尋ねる**判断要求**であって権限認可ではないので、`--approval` を付けてはならない
-       （Step 0.5 の表の見分け方に従う）。自動化されたのは**「charter を引きに行く」という動作**で
-       あって、**ゴールの中身を人間の代わりに決めること**ではない。
-     - 人間が離席して `sentinel` に落ちた場合は、分かっている範囲で charter を保存し、
-       残りを保留に流して**ループを終える**（Step 4 へ）。彫れないまま実装へ進まない。
-   - **`compass` バイナリが無い / 呼び出しが失敗した** → charter の状態を**観測できなかった**のであって
-     「一手が無い」ではない。ここで condukt へ流さず、その事実を報告して Step 4 へ抜ける
-     （判定不能を「仕事なし」にも「実行してよい」にも丸めない。CLAUDE.md 3）。
+     `AskUserQuestion` で 1 問ずつ詰める → `compass charter --write` → `compass gap --write "<gap>"`）を回し、
+     彫り直した charter から一手を引いて 6 へ進むこと [test: scripts/test_prose_flow_b.py::TestCarveSentinel::test_claim_carve_sentinel] [test: scripts/test_prose_flow_b.py::TestCarveSentinel::test_claim_carve_sentinel_bare_gap_write_is_usage_error]。
+     - この carve 中の `AskUserQuestion` を省いてはならない [test: scripts/test_prose_flow_a.py::T::test_claim_frontmatter_declares_args_and_tools]。charter を彫る問いは「どちらを選ぶべきか」を
+       人間に尋ねる判断要求であって権限認可ではないので、`--approval` を付けてはならない [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_approval_flag_is_exactly_what_erases_the_question] [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_no_approval_on_judgment_gates_in_skill_text]。
+     - 彫れないまま実装へ進んではならない。人間が離席して `sentinel` に落ちた場合は、分かっている範囲で charter を保存し、
+       残りを保留に流してループを終えること（Step 4 へ） [test: scripts/test_prose_flow_b.py::TestCarveSentinel::test_claim_carve_sentinel] [test: scripts/test_prose_flow_b.py::TestCarveSentinel::test_claim_carve_sentinel_no_defer_stays_open]。
+   - `compass` バイナリが無い / 呼び出しが失敗した場合、ここで condukt へ流してはならない [test: scripts/test_prose_flow_b.py::TestCompassFailDetectable::test_claim_compass_fail_detectable_no_charter] [test: scripts/test_prose_flow_b.py::TestCompassFailDetectable::test_claim_compass_fail_detectable_unreadable_charter]。
+     判定不能を「仕事なし」にも「実行してよい」にも丸めてはならない。charter の状態を観測できなかった事実を報告して Step 4 へ抜けること。
 
-   > **なぜ compass を先頭から降ろしたのに、ゲート自体は残すのか。** charter の鮮度ゲートが
-   > 守っているのは **compass 由来の一手**（ゴールからの差分として導かれた、まだ誰も裁定していない
-   > 仕事）であって、起票時に観測と done 条件を持った backlog item ではない。順序を変えても
-   > この経路のゲートは**一切緩んでいない** — 緩んだと読めたらそれは実装のバグである。
-
-4. **`open` 仮説（新規 discovery）は、ユーザーが明示的にそれを回せと言ったときだけ**引く。
-   **backlog が空になったことを理由に自動でここへ降りてはいけない** — それは「仕事が無いので
-   仕事を作る」であり、下の 5 の停止判定に反する。自動ループでは open 仮説は
-   **残課題として報告するだけ**にして 5 へ進む。明示指示がある場合のみ以下を使う:
+4. backlog が空になったことを理由に自動で open 仮説（新規 discovery）へ降りてはいけない。
+   自動ループでは open 仮説は残課題として報告するだけにして 5 へ進むこと。
+   open 仮説は、ユーザーが明示的にそれを回せと言ったときだけ引くこと。明示指示がある場合のみ以下を使うこと。
    ```bash
-   hypothesis list --status open    # confidence 降順（同点 created_at 昇順）でソート済み。空なら次へ
+   hypothesis list --status open    # confidence 降順（同点 created_at 昇順）でソート済み [test: crates/hypothesis/src/store.rs::list_sorts_by_confidence_descending] [test: crates/hypothesis/src/store.rs::list_confidence_tiebreak_by_created_at]。空なら次へ進むこと。
    ```
-   **`list --status open` は confidence 降順で並ぶ**ので、**先頭（最高 confidence ＝ 最も検証価値が高い仮説）から順にピック**する
-   （挿入順ではなくスコア順で discovery を駆動する。各行頭の `(conf X.XX)` が検証優先度）。
-   open な仮説があれば、**full build に直行する前に RAT ゲート（riskiest-assumption test）を通す**:
+   `list --status open` の先頭（最高 confidence）から順にピックすること [test: crates/hypothesis/src/store.rs::list_sorts_by_confidence_descending]。
+   open な仮説があれば、full build に直行する前に RAT ゲート（riskiest-assumption test）を通すこと。
    ```bash
-   RAT=$(hypothesis rat <hid>)      # 未テストの最重要×弱証拠 assumption（leap of faith）を 1 行返す
+   RAT=$(hypothesis rat <hid>)      # 未テストの最重要×弱証拠 assumption（leap of faith）を返す [test: crates/hypothesis/src/store.rs::test_assumptions_persist_and_rat_selection]
    ```
-   - `RAT` が**非空**（高リスク・未テストの leap of faith がある）→ 課題文は **full build ではなく、
-     その assumption だけを検証する最小 de-risk 実験**にする（"<assumption text> が成り立つかを最小コストで測る実験"）。
-     `RAT` 行頭の index を控え、3-3 の sink で `hypothesis tested <hid> <index>` を呼んで計測ループを閉じる。
-   - `RAT` が**空**（高リスクの未テスト assumption が無い＝既に de-risk 済み）→ 従来どおり
-     その**仮説を検証する実験**（full build）を課題文にする。
-   いずれも仮説 ID を控える。`hypothesis` バイナリが無い / 0 件 / `rat` 未対応なら従来どおり full build に流す。
-5. **停止判定 — 仕事が無いなら繰り返さない。** 継続してよいのは次の 3 つが**実際に一手を出したとき**だけ:
-   **(i) backlog の pending**（3-1 の 2。主経路）、**(ii) measure step**（3-1 の 1 で
-   **今observable**な awaiting-measurement 仮説）、**(iii) compass 主筋**（3-1 の 3 の
-   フォールバックで実際に引けた `to_condukt`）。
-   この 3 つがどれも空なら → **ループを抜けて Step 4 へ**。
-
-   **順序が変わっても停止条件の集合は変わらない**（3 つのまま）。変わったのは**引く順番**だけで、
-   「backlog が空だから止まる」わけではない — backlog が空でも compass が一手を出せば継続する。
-   逆に compass が一手を出せない（charter を彫っても右サイズが無い・`sentinel`・compass 不在）なら、
-   そこで止まるのが正しい。
-
-   **`open` 仮説だけを根拠にループを継続してはいけない**（3-1 の 4 は上の 3 つが空のときの
-   継続理由にならない）。open 仮説は「これから作れる仕事」であって「積まれている仕事」ではないので、
-   これを継続条件に入れると**キューが空でもループが永久に新しい仕事を発明し続ける**。
-   残っている open 仮説と、まだ観測不能な awaiting-measurement は、**残課題として報告するだけ**にして
-   ループは終える。
-
-   **Why**: 停止条件が 4 source の AND だった頃は、backlog が空でも compass と open 仮説が
-   一手を出し続ける限り回り続けた。ユーザーから見ると「有効な backlog が無いのに繰り返している」
-   状態になる。自律モードで求められているのは「**タスクがある限り続ける**」であって
-   「**タスクを作り続ける**」ではない。逆に、pending が残っているのに早期に止めるのも同じくらい悪い
-   （自律モードが仕事を放置する）ので、**上の 3 つのどれかが一手を出す限りは止めない**こと。
-
-   **空を「空」と断定する前に一度取り直す**: `backlog next --claim` はロックを取れなかったとき
-   fail-closed に何も返さない（＝「キューが空」ではなく「今は取れない」）。`no pending tasks` が
-   返っても 1 度は取り直してから停止判定する。
-6. ピックしたタスクを**課題文**に組み立てる:
-   - **単一課題**（compass 主筋 / measure / hypothesis / 単発 backlog）→ タイトル＋ notes（仕様・制約・参照ファイル）で従来どおり 1 課題文。
-   - **backlog バッチ（3 の a/b で複数残った場合）→ 1 つの課題文に、各 backlog item を「独立した top-level タスク」として列挙**する。
-     各項目に **id・タイトル・notes・（分かるなら）触るファイル/領域**を明記し、「**これらは互いに独立。非衝突なものは並列に、
-     衝突・共有リソースを触るものは直列に scheduleしてよい**」と condukt に明示する（分解時に item 境界を保てるよう、
-     item 単位で done_criteria を切ってもらう）。**item id ↔ condukt タスク**の対応を控える（sink で id ごとに書き戻すため）。
-     並列上限は condukt の `max_parallel`（既定 4）が実効的に効くので flow 側で待ち合わせ制御はしない。
-7. **overwatch に anchor を登録**（課題文を組み立てた直後、選んだ source 種別によらず必ず）— これにより
-   condukt run を起こさない measure step でも「今どのセッションが何を担当しているか」が project-wide
-   レジストリ（`overwatch status`）に乗る:
+   - `RAT` が非空（高リスク・未テストの leap of faith がある）なら、課題文は full build ではなく、
+     その assumption だけを検証する最小 de-risk 実験にすること（"<assumption text> が成り立つかを最小コストで測る実験"） [test: scripts/test_prose_flow_b.py::TestRat::test_claim_rat]。
+     `RAT` 行頭の index を控え、3-3 の sink で `hypothesis tested <hid> <index>` を呼んで計測ループを閉じること [test: scripts/test_prose_flow_b.py::TestRat::test_claim_rat] [test: scripts/test_prose_flow_b.py::TestRat::test_claim_rat_tested_out_of_range_fails]。
+   - `RAT` が空（高リスクの未テスト assumption が無い＝既に de-risk 済み）なら、従来どおり
+     その仮説を検証する実験（full build）を課題文にすること [test: crates/hypothesis/src/hypothesis.rs::riskiest_assumption_none_when_all_derisked]。
+   いずれも仮説 ID を控えること。
+5. 停止判定では、仕事が無いのに繰り返してはならない。下記の 3 つのどれかが一手を出す限り止めてはならない（pending が残っているのに早期に止めてはならない）。
+   open 仮説だけを根拠にループを継続してはいけない。
+   継続してよいのは、(i) backlog の pending（3-1 の 2）、(ii) measure step（3-1 の 1 で今観測可能な awaiting-measurement 仮説）、(iii) compass 主筋（3-1 の 3 のフォールバックで実際に引けた compass の一手）のどれかが実際に一手を出したときだけにすること。
+   この 3 つがどれも空ならループを抜けて Step 4 へ進むこと。
+   残っている open 仮説と、まだ観測不能な awaiting-measurement は、残課題として報告するだけにしてループを終えること。
+6. ピックしたタスクを課題文に組み立てること。
+   - flow 側で並列上限の待ち合わせ制御をしてはならない。
+   - 単一課題（compass 主筋 / measure / hypothesis / 単発 backlog）は、タイトル＋ notes（仕様・制約・参照ファイル）で 1 課題文にすること。
+   - backlog バッチ（3 の a・b で複数残った場合）は、1 つの課題文に、各 backlog item を「独立した top-level タスク」として列挙すること。
+     各項目に id・タイトル・notes・（分かるなら）触るファイルや領域を明記し、「これらは互いに独立であり、非衝突なものは並列に、
+     衝突・共有リソースを触るものは直列に scheduleしてよい」と condukt に明示すること。
+     item 単位で done_criteria を切ってもらい、item id ↔ condukt タスクの対応を控えること。
+7. 課題文を組み立てた直後、選んだ source 種別によらず必ず overwatch に anchor を登録せよ。
    ```bash
    overwatch begin --key "<pdo-unit-id>" --title "<task title>" \
      --scope "<touched_files をカンマ区切り、不明なら省略>" \
      --done-criteria "<done_criteria>"
    ```
    - `<pdo-unit-id>` は backlog なら `hashkey`、compass 主筋 / measure / hypothesis なら move / 仮説 ID など
-     その PDO 単位を一意に指す文字列。**この key は Step 4 の `overwatch end` で解放するため控えておく**。
-   - `--scope` は分かるなら condukt の `touched_files` と同じ語彙（カンマ区切り）で渡す。調査・carve ループ中など
-     scope が未確定なら**省略**する（空 scope は「重なり無し」ではなく `scope_undeclared` として報告される。
-     自分の scope が空なら全 peer が `scope_undeclared` に並ぶ＝衝突を判定できていない、の意味）。
-   - **バッチ（複数 backlog item）なら item ごとに `overwatch begin` を呼ぶ**（key = 各 item の `hashkey`）。
-   - **fail-soft**: `overwatch` バイナリが無い / 呼び出し失敗時は skip して続行する（既存の
-     `backlog`/`condukt`/`compass` 欠落時と同じ方針＝turn を壊さない）。
+     その PDO 単位を一意に指す文字列にすること [test: scripts/test_prose_flow_b.py::TestOverwatchBegin::test_claim_overwatch_begin]。この key は Step 4 の `overwatch end` で解放するため控えておくこと [test: crates/overwatch/tests/backlog_s04_audit.rs::s3b056c02_end_of_missing_key_is_distinguishable_from_release]。
+   - `--scope` は分かるなら condukt の `touched_files` と同じ語彙（カンマ区切り）で渡すこと [test: scripts/test_prose_flow_b.py::TestOverwatchBegin::test_claim_overwatch_begin] [test: scripts/test_prose_flow_b.py::TestOverwatchBegin::test_claim_overwatch_begin_overlap_is_reported_for_shared_scope]。調査・carve ループ中など
+     scope が未確定なら省略すること。
+     空 scope は「重なり無し」ではなく `scope_undeclared` として報告される [test: scripts/test_prose_flow_b.py::TestOverwatchBegin::test_claim_overwatch_begin]。
+   - バッチ（複数 backlog item）なら item ごとに `overwatch begin` を呼ぶこと（key = 各 item の `hashkey`） [test: scripts/test_prose_flow_b.py::TestOverwatchBegin::test_claim_overwatch_begin]。
 
-8. **選択を shared discovery store に記録**（未選択は `discovered` で次サイクルへ。バッチなら選んだ各 item を記録）:
+8. 選択を shared discovery store に記録せよ（バッチなら選んだ各 item を記録すること）。`select` は既に記録された行だけを selected にするので、先に `record` すること [test: crates/compass/tests/discovery.rs::dod3_select_flips_only_matching_row_to_selected]。
    ```bash
+   compass discovery record --session-id "<SESSION_ID>" --title "<選んだタスクのタイトル>"
    compass discovery select --session-id "<SESSION_ID>" --title "<選んだタスクのタイトル>"
    ```
-   - 失敗時は fail-soft（compass 欠如 / 呼び出し失敗時も続行）。
 
-9. **着手前に claim する（TOCTOU の最終ガード）** — 選んだタスク（バッチなら各 item）について:
+9. 着手前に、選んだタスク（バッチなら各 item）を claim せよ（TOCTOU の最終ガード） [test: crates/condukt/tests/claim_registry_e2e.rs::running_a_task_claims_and_a_conflicting_run_is_hard_skipped_then_released]。
    ```bash
    condukt state claim-task --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CODE_SESSION_ID" \
      --stateless --title "<title>" --hashkey <hashkey>
    ```
-   **`--stateless` は必須**（backlog 9b7cb342）。`/flow` は `condukt state init` を呼ばないので
-   `flow-<SESSION_ID>` の run state が存在しない。マーク無しの claim は run state 不在を「判定不能」として
-   永久に保持するため、このセッションが死ぬと claim が回収されずキューを塞ぐ。`--stateless` を付けると
-   condukt は owning session の transcript だけで生死を判定し、凍結していれば回収する。
-   **exit 1（別セッションが直前に claim 済み＝スキップされた）→ その item は諦めて 3-1 に戻り次候補へ**
-   （3-1 の claim-skip ゲートと 3-2 の condukt 起動の間の隙間を塞ぐ最終ガード）。
-   `condukt` が無い/失敗した場合は fail-soft（従来どおり実行を続行）。
+   `--stateless` を必ず付けること [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::every_claim_task_invocation_is_marked_stateless]。
+   `--stateless` を付けると condukt は owning session の transcript だけで生死を判定し、凍結していれば回収する [test: crates/condukt/src/claim.rs::stateless_marked_frozen_transcript_stale_heartbeat_is_reaped]。
+   マーク無しの claim は run state 不在を「判定不能」として永久に保持する [test: crates/condukt/src/claim.rs::stateless_unmarked_missing_run_state_is_kept]。
+   exit 1（別セッションが直前に claim 済み＝スキップされた）ならその item は諦めて 3-1 に戻り次候補へ進むこと。
 
-#### 3-1.5. spec-gap ゲート — 正典が無い課題を condukt へ盲目投入しない（4番目の source）
+#### 3-1.5. 正典が無い課題は、condukt の実装フェーズへ進めず spec 起こしへ戻すこと
 
-**`/flow` の4番目の source は「戻り経路」である。** 課題に正典（spec）が無いと分かったら、
-そのまま condukt の実装フェーズへ進めず **`specforge` へ戻す**。specforge が draft し ratify すると、
-その要件が backlog に積まれ、次の周回で `/flow` がそれを拾う。source が1本増えるのではなく、
-**executor へ渡す前に source へ差し戻す辺が1本増える**。
+正典（spec）が無いと分かった課題を、そのまま condukt の実装フェーズへ進めてはならない。specforge へ戻すこと。
 
-**trigger は3つ**（どれか1つで発火。`specs/spec-loop.toml` の R4-flow-spec-gap-source が正典）:
 
-| trigger | 取得点 | 取得方法 |
-|---|---|---|
-| 1. condukt interpreter が `open_questions` を出した | condukt Phase 1 の直後 | 3-2 の起動条件（下記） |
-| 2. task が `confidence: low` を持つ | condukt Phase 1 の Decomposition | 3-2 の起動条件（下記） |
-| 3. specguard brief が `verdict=not-covered` を返した | flow のプリフライト（condukt 起動前） | 下記 |
+次の3つのどれか1つが立ったら、divert するか否かを下の合意ゲートに通すこと。
 
-##### trigger 3 — プリフライト（決定論。condukt を起こす前に測る）
+- trigger 1: condukt-researcher の research brief が `open_questions` を出したとき [test: scripts/test_prose_flow_a.py::T::test_claim_decomp_fields_open_questions_is_the_researcher_field_not_the_interpreters]。3-2 の起動条件に従うこと。
+- trigger 2: task が `confidence: low` を持つとき [test: scripts/test_prose_flow_a.py::T::test_claim_decomp_fields_engine_accepts_open_questions_and_confidence_low]。condukt Phase 1 の Decomposition で取得し、3-2 の起動条件に従うこと。
+- trigger 3: specguard brief が `verdict=not-covered` を返したとき [test: crates/specguard/tests/integration.rs::brief_json_verdict_field_reaches_all_three_states]。condukt 起動前の flow のプリフライトで取得すること。
+
+##### trigger 3 は condukt を起こす前にプリフライトで測ること
 
 ```bash
 BRIEF=$(specguard brief --json "<課題文の要約>" 2>/dev/null); rc=$?
 ```
 
-`specguard brief --json` は **三値**（`covered` / `not-covered` / `undetermined`）を返し、
-**exit code にも同じ三値を載せる**（0=判定できた / 10=`undetermined`）。分岐は次のとおり:
+`specguard brief --json` は三値（`covered` / `not-covered` / `undetermined`）を返し、exit code でも `undetermined`（10）と判定できた場合（0）を区別する [test: crates/specguard/tests/integration.rs::brief_json_verdict_field_reaches_all_three_states]。
 
-- **rc=0 かつ `verdict` が `covered`** → 正典がある。divert せず 3-2 へ進む。
-- **rc=0 かつ `verdict` が `not-covered`** → **divert 候補**。下の合意ゲートへ。
-- **それ以外すべて**（rc=10 / `specguard` 不在 / 出力が読めない / `verdict` フィールドが無い）
-  → **`undetermined` として扱い、divert しない**。`not-covered` へ丸めてはならない。
-  代わりに「正典の有無を観測できなかった」ことを**残課題として人間に surface** し、
-  その課題自体は通常どおり 3-2 へ進める。
+- 判定不能を `not-covered` へ丸めてはならない [test: crates/specguard/tests/integration.rs::brief_json_unobservable_store_states_are_undetermined_never_not_covered]。
+- divert は書き込み側の動作なので、判定不能で divert を起こしてはならない。
+- rc=0 かつ `verdict` が `covered` なら、divert せず 3-2 へ進むこと [test: crates/specguard/tests/integration.rs::brief_json_verdict_field_reaches_all_three_states]。
+- rc=0 かつ `verdict` が `not-covered` なら、divert 候補として下の合意ゲートへ進むこと [test: crates/specguard/tests/integration.rs::brief_json_verdict_field_reaches_all_three_states]。
+- それ以外すべて（rc=10 / specguard 不在 / 出力が読めない / verdict フィールドが無い）は `undetermined` として扱い、divert しないこと [test: crates/specguard/tests/integration.rs::brief_json_unobservable_store_states_are_undetermined_never_not_covered] [test: crates/specguard/tests/integration.rs::brief_json_verdict_field_reaches_all_three_states]。
+- 代わりに「正典の有無を観測できなかった」ことを残課題として人間に surface し、その課題自体は通常どおり 3-2 へ進めること。
 
-> **なぜ undetermined を not-covered へ落としてはいけないか。** `not-covered` は specforge に
-> **新しい spec を書かせる**。判定不能をそこへ流すと「読めなかった」が「仕様が無い」に化け、
-> 既に正典がある領域に二重の spec を起こす。これは CLAUDE.md 第3節が禁じる置換そのもので、
-> `crates/blastguard/src/model.rs` が二値型の欠陥として名指ししている形である。
-> **fail-safe の向きに注意**: ここでの安全側は「divert しない」であって「divert する」ではない。
-> divert は書き込み側の動作なので、判定不能で起こしてはならない。
+##### 合意ゲートに素の `AskUserQuestion` を使ってはならない [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_divert_command_as_written_escalates_and_is_journaled]。`condukt policy answer` を通すこと
 
-##### 合意ゲート（`condukt policy answer` 経由。素の `AskUserQuestion` は使わない）
-
-trigger 1/2/3 のいずれかが立ったら、**divert するか否か**を Step 0.5 の policy-answer routing に通す。
-これは**判断要求**なので **`--approval` を付けない**（付けると権限認可に化けて自答され、
-「仕様が無いまま実装させるか」という設計判断が消える）:
+判断要求なので `--approval` を付けてはならない [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_approval_flag_is_exactly_what_erases_the_question] [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_no_approval_on_judgment_gates_in_skill_text] [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_divert_command_as_written_escalates_and_is_journaled]。
+trigger 1・2・3 のいずれかが立ったら、divert するか否かを Step 0.5 の policy-answer routing に通すこと。
 
 ```bash
 condukt policy answer \
@@ -492,269 +320,205 @@ condukt policy answer \
   --option "specforge へ divert して spec を起こす" --option "このまま condukt で実装する" --recommend 0
 ```
 
-risk/reversible/confidence の3値は R4 の acceptance が指定した固定値であり、ここで変えない。
-既定 verdict は **escalate**（`medium − high − low` は auto の閾値に届かない）。exit code の扱いは
-Step 0.5 の表に従う（escalate と各フォールバックは人間へ、block は停止）。**この経路を通さず
-素の `AskUserQuestion` を直接出すことは禁止** — 通さないと自答も escalate も
-`gate-decisions.jsonl` に残らず、`condukt policy answers` で後から監査できなくなる。
-ゲートを消すのではなく、記録を伴って通すことがここの要件である。
+risk・reversible・confidence の3値は固定値であり、ここで変えてはならない。
+既定 verdict は **escalate**（`medium − high − low` は auto の閾値に届かない） [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_divert_command_as_written_escalates_and_is_journaled]。exit code の扱いは
+Step 0.5 の表に従うこと。この経路を通さず
+素の `AskUserQuestion` を直接出すことは禁止 [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_divert_command_as_written_escalates_and_is_journaled]。
 
-##### divert したときにやること
+##### divert したら次の手順を踏むこと
 
-**この起動形は実測で通したものである**（2026-09-07、specguard 0.2.54、使い捨て git repo で
-draft→ratify→backlog を通しで実行）。`specforge draft` に課題文を**位置引数で渡すことはできない**
-（`error: unexpected argument`）。`--req <file>` か **stdin** で渡し、`--id` は必須。
-`ratify` も `--reason` が必須である（無いと clap が required-argument エラーで落ちる）:
+- divert 回数を数えて止めるカウンタを足してはならない。
+- 元の課題を `backlog fail` にしてはいけない [test: scripts/test_prose_flow_b.py::TestFailVsPending::test_claim_fail_vs_pending_fail_withdraws_task]。
+- `specforge draft` に課題文を位置引数で渡してはならない（`error: unexpected argument`） [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_positional_arg_rejected]。
+- `backlog list --status pending` はピックに使ってはいけない [test: scripts/test_prose_flow_b.py::TestListPure::test_claim_list_pure]。ピックは常に `next --claim` で行うこと [test: scripts/test_prose_flow_b.py::TestListPure::test_claim_list_pure]。
+- 差し戻し先が未設定の repo でこの経路を踏んだら、divert を強行せず人間へ返すこと。
+- 課題文は `--req <file>` か stdin で渡し、`--id` を必ず付けること [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_draft_requires_id] [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_draft_via_req_file_and_stdin]。`ratify` には `--reason` を必ず付けること [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_requires_reason]。
+- 元の課題は `fail` せず pending のまま残すこと [test: scripts/test_prose_flow_b.py::TestFailVsPending::test_claim_fail_vs_pending_fail_withdraws_task]。`backlog edit <id> --status pending` は lease を解放せず、`fail` 済みの task の defer も解かない [test: scripts/test_prose_flow_b.py::TestFailVsPending::test_claim_fail_vs_pending_edit_pending_keeps_task_deferred]。このセッションが `backlog driver heartbeat` を続ける間、divert した課題の lease は失効せず、他の driver には配られない [test: crates/backlog/tests/verifier_486e83ca.rs::verifier_live_holder_keeps_lease_past_window]。heartbeat が止まって `CLAIM_STALE_SECS`（1 時間）を過ぎると再び配られる [test: crates/backlog/tests/verifier_486e83ca.rs::verifier_dead_holder_is_reclaimable]。
+- `ratify` が通らなければ（contract floor 違反で非0終了）、specforge が出す理由を添えて人間へ返すこと [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_refuses_contract_violation_and_queues_nothing]。
+- `ratify` は spec を批准したあと、要件ごとに `backlog add` を呼ぶ [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_queues_one_item_per_requirement]。
+- 本物の `backlog` はこの `add` を `--repro-test` 無しとして拒否するので、`ratify` は exit 9 で終了し、backlog には何も積まれない [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_with_real_backlog_exits_9_and_files_nothing]。
+- `ratify` が exit 9 なら、spec 由来の要件が queue されなかったことを人間へ返すこと [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_with_real_backlog_exits_9_and_files_nothing]。
+- `ratify` は contract floor 違反（`Spec::contract_violations()` が非空）の spec の批准を拒否し、非0で終了する [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_refuses_contract_violation_and_queues_nothing]。
+
+[record: 2026-09-07 rev: a81444b7] この起動形は実測で通した（specguard 0.2.54、使い捨て git repo で draft→ratify→backlog を通しで実行し、`ratify` が `backlog: 3 件を起票 / 0 件は起票済み (計 3 requirement)` を出力し、直後の確認用の `backlog list --status pending`（ピックに使ってはいけない純粋な read）に `[r4demo:R1]`〜`[r4demo:R3]` の3件が `p1 / pending` で並んだ）。
 
 ```bash
-# 課題文はファイル経由か stdin。--id は必須（spec は <spec_dir>/<id>.toml になる）。
 printf '%s\n' "<課題文>" > "$req"
-specforge draft --id <spec id> --title "<課題タイトル>" --req "$req"   # 正規化 + rigor ゲート
+specforge draft --id <spec id> --title "<課題タイトル>" --req "$req"
 
-# 人間の合意儀式。--reason は必須。通れば要件ごとに backlog item を自動 queue する。
 specforge ratify --id <spec id> --reason "<なぜこの spec を受け入れるか>"
 ```
 
-`specforge` は `specforge.toml` が無いと **exit 2 で拒否する**（存在しない project を推測で
-でっち上げない fail-closed。repo root の `specforge.toml` がその設定）。差し戻し先が未設定の repo で
-この経路を踏んだら、それは「spec が無い」ではなく「**spec loop が配線されていない**」であり、
-divert を強行せず人間へ返すこと。
+`specforge` は `specforge.toml` が無いと exit 2 で拒否する [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_without_config_exits_2]。
 
-- `ratify` が通れば、その spec 由来の項目が backlog に現れ、**flow は次の周回でそれを拾う**
-  （3-1 の 2 が通常どおり `next --claim` する）。これは散文ではなく**実測**である
-  （2026-09-07、使い捨て git repo。`ratify` が
-  `backlog: 3 件を起票 / 0 件は起票済み (計 3 requirement)` を出力し、直後の
-  `backlog list --status pending`（**確認のための純粋な read であって、ピックに使ってはいけない**。
-  ピックは常に `next --claim`）に `[r4demo:R1]`〜`[r4demo:R3]` の3件が `p1 / pending` で並んだ。
-  実 repo の `.backlog/tasks.toml` は無変更で、`r4demo` の grep は 0 ヒット）。
-- 元の課題は `backlog fail <id> --reason ...` **ではなく pending に戻す**
-  （`backlog edit <id> --status pending`）。spec 由来の要件が先に処理され、元の課題は
-  正典を得た状態で再度回ってくる。**`fail` にしてはいけない** — spec が無かったことは
-  その課題の失敗ではないし、`fail` はキューから落ちるので次の周回で拾われなくなる。
-- `ratify` が**通らなければ**（contract floor 違反で非0終了）、それは仕様が実行可能でないということ。
-  specforge が非0で理由を出すので、**その理由を添えて人間へ返す**（R0 の停止基準）。
-- **divert 回数を数えて止めるカウンタを足してはならない。** ループの停止は R0 の
-  ratify contract floor（`Spec::contract_violations()` が空）で決まる。回数はプロキシであり、
-  「その spec が実行可能になったか」という本当に知りたいことを測っていない
-  （backlog 09148819 の notes が 2026-07-31 にこの案を明示的に RETRACT している）。
+#### 3-2. 課題文を condukt で実行すること
 
-#### 3-2. condukt で実行（fugu-router がモデル選択）
-
-課題文を `/condukt` に渡す。condukt が分解 JSON を出したら、`fugu-router` が各タスクの `suggested_model` を実績から上書きする（併用時）:
+- 分解を止めてはならない。止めるのは実装フェーズだけにすること。
+- 1 セッション内で複数の condukt run を並走させてはならない。
+- 課題文を `/condukt` に渡すこと [test: scripts/test_prose_flow_a.py::T::test_claim_frontmatter_declares_args_and_tools]。condukt が分解 JSON を出したら、`fugu-router route` が各タスクの `suggested_model` を実績から（Thompson sampling による確率的な選択で）上書きする（併用時） [test: scripts/test_prose_flow_a.py::T::test_claim_condukt_fugu_route_rewrites_suggested_model_from_episodes]:
 
 ```
 /condukt <課題文>
 ```
 
-- `/condukt` は **`Task` ツールで非同期起動**（オーケストレーション継続のため）。
-- **spec-gap trigger 1/2 は Phase 1 の出力から取る（3-1.5 の続き）**: 課題文に
-  「**Decomposition（Phase 1〜2）まで進んだ時点で、いずれかのタスクに `open_questions` 相当が
-  出たか、`confidence` が `low` のものがあれば、Phase 5（実装）へ進まずその事実を報告して停止せよ**」
-  を明記して渡す。停止して戻ってきたら **3-1.5 の合意ゲート**へ入り、divert が選ばれたら
-  specforge へ、選ばれなければ同じ Decomposition のまま `/condukt` を実装フェーズから再開させる。
-  **止めるのは実装フェーズであって分解ではない** — R4 の acceptance が「condukt 実装フェーズへ
-  進まず」と書いているのは、trigger 1/2 の観測点が Phase 1 の出力そのものだからである
-  （分解を止めると trigger が取れない）。
-- compass 由来の一手なら、`north_star / current_gap / measuring_stick` を文脈として課題文に添える。
-- **backlog バッチは 1 回の `/condukt` 呼び出し**（1 セッション内で複数 condukt run を並走させない＝
-  worktree / merge 競合を増やさない。別セッションの `/flow` と並走するのは前提どおり問題ない）。並列化は condukt 内部（Phase 5 の worktree 並列 + schedule.rs のバッチ）が担う。
-- **verify も自動で並列化される**: condukt の Phase 6 は worker 完了ごとに即 verifier を起動し待ち合わせしない
-  （pipeline 検証）。バッチで複数 item を渡せば、その検証も item 横断で並列に走る＝別途 flow 側で verify を並列化する必要はない。
+- `/condukt` は `Task` ツールで非同期起動すること [test: scripts/test_prose_flow_a.py::T::test_claim_frontmatter_declares_args_and_tools]。
+- spec-gap の trigger 1 は condukt-researcher の research brief から、trigger 2 は Phase 1 の Decomposition から取ること（3-1.5 の続き） [test: scripts/test_prose_flow_a.py::T::test_claim_decomp_fields_open_questions_is_the_researcher_field_not_the_interpreters] [test: scripts/test_prose_flow_a.py::T::test_claim_decomp_fields_engine_accepts_open_questions_and_confidence_low]。課題文に「**research brief に `open_questions` が出たか、Decomposition（Phase 1〜2）のいずれかのタスクの `confidence` が `low` なら、Phase 5（実装）へ進まずその事実を報告して停止せよ**」を明記して渡すこと [test: scripts/test_prose_flow_a.py::T::test_claim_decomp_fields_open_questions_is_the_researcher_field_not_the_interpreters] [test: scripts/test_prose_flow_a.py::T::test_claim_decomp_fields_engine_accepts_open_questions_and_confidence_low]。
+- 停止して戻ってきたら 3-1.5 の合意ゲートへ入り、divert が選ばれたら specforge へ、選ばれなければ同じ Decomposition のまま `/condukt` を実装フェーズから再開させること [test: scripts/test_prose_flow_a.py::T::test_claim_frontmatter_declares_args_and_tools] [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_divert_command_as_written_escalates_and_is_journaled]。
+- compass 由来の一手なら、`compass gap` の `measuring_stick` と `dod` を文脈として課題文に添えること [test: scripts/test_prose_flow_b.py::TestGapRoute::test_claim_gap_route_gap_keys]。
+- backlog バッチは 1 回の `/condukt` 呼び出しに束ねること [test: scripts/test_prose_flow_a.py::T::test_claim_frontmatter_declares_args_and_tools]。並列か直列かの実判定は condukt の `schedule.rs` が担う [test: crates/condukt/tests/schedule_conflict_capstone_e2e.rs::conflicting_pairs_are_forced_serial_and_independent_pair_stays_parallel]。
 
-**delegation戦略（fork既定バイアス）**: この `/condukt` 呼び出しは既定で `fork`（subagent_type の一種。
-親会話の context を丸ごと継承し、prompt cache も共有する）に包んで実行する。例外は「タスクが xs 級・単発
-ファイルで、ユーザーが経過を対話的に見たいと明示した場合」のみ直接（inline）実行。fork は main の context
-肥大を防ぐ一方でタダではないため、既定バイアスは固定ルールに留め、状況ごとの自動判定はしない
-（`docs/design-delegation-strategy-measurement.md` 参照）。
-
-**手動記録 + 自己検証（計測ループを回すための最小限の運用。記録漏れを決定論的に検知する）**:
-condukt 実行が完了したら（fork/inline いずれでも）、観測できた cost_usd・duration_secs を
-`fugu-router record` に `--delegation` を添えて記録し、直後に `audit-recent` で**その記録が
-実際にストアへ着地したか**を自己検証する（「記録したつもり」を防ぐ。LLM の自己申告だけに
-頼らない）:
+condukt 実行が完了したら、観測できた cost_usd・duration_secs を `fugu-router record` に `--delegation` を添えて記録し、直後に `audit-recent` でその記録が実際にストアへ着地したかを自己検証すること [test: scripts/test_prose_flow_a.py::T::test_claim_fugu_audit_record_then_audit_found]。
 ```bash
 fugu-router record --title "<task title>" --class "flow-delegation" \
   --model <suggested_model> --status <verified|failed> \
   --cost <observed_cost_usd> --duration <observed_duration_secs> \
   --delegation <fork|inline>
 
-# 直近60秒以内に flow-delegation クラスの episode が実際に記録されたかを検証する。
 fugu-router audit-recent --class "flow-delegation" --within 60
 ```
-- **exit 0（found:true）** → 記録が確認できた。通常どおり次のサイクルへ進む。
-- **exit 1（found:false）** → 記録漏れ。`fugu-router record` をもう一度試みる（`fugu-router`
-  バイナリ不在・ストア書き込み失敗等が原因なら、ユーザーに「delegation 記録に失敗した」と
-  明示的に警告してから続行する。ここで condukt/flow のループ自体は止めない — 記録は計測目的の
-  補助シグナルであり、これが失敗しても本来のタスク実行結果には影響しない）。
+- `audit-recent` が exit 0（found:true）なら記録が確認できたので、通常どおり次のサイクルへ進むこと [test: scripts/test_prose_flow_a.py::T::test_claim_fugu_audit_record_then_audit_found]。
+- `audit-recent` が exit 1（found:false）なら記録漏れなので、`fugu-router record` をもう一度試みること [test: scripts/test_prose_flow_a.py::T::test_claim_fugu_audit_record_then_audit_found] [test: scripts/test_prose_flow_a.py::T::test_claim_fugu_audit_other_class_does_not_satisfy_the_audit]。再試行でも記録できなければ、ユーザーに「delegation 記録に失敗した」と明示的に警告すること。
 
-これは自動比較ではなく手動の実績記録＋その自己検証。狙いは「等価なタスクの fork 実行/inline
-実行の実績を、時間をかけて `fugu-router` の Episode ストアに貯める」こと。十分件数が貯まれば、
-次の一手として `fugu-router route`/`decide_bandit` に delegation 軸を組み込む判断ができる
-（今回はスコープ外。計測が先＝ build ≠ validate）。
+#### 3-3. 検証が通ったら結果を source に書き戻すこと
 
-#### 3-3. 検証 → sink（結果の書き戻し）
+- バッチ全体を一括で成功扱いにも失敗扱いにもしてはならない。
+- 新規 experiment の出荷直後に、この場で `hypothesis validate` / `hypothesis reject` してはならない [test: crates/hypothesis/src/store.rs::test_validate_requires_evidence]。
 
-condukt の完了ゲートを通ったら結果を source に書き戻す（**`backlog done` / `backlog fail` / `compass outcome` は
-cwd = このセッションの linked worktree で実行**する。main の作業ツリーでは store 書き込みが拒否される）:
+condukt の完了ゲートを通ったら結果を source に書き戻すこと。`backlog done` / `compass outcome` は cwd = このセッションの linked worktree で実行すること [test: crates/backlog/tests/store_worktree_boundary.rs::done_from_linked_worktree_succeeds_and_marks_done_there] [test: crates/compass/tests/store_worktree_boundary.rs::outcome_from_linked_worktree_succeeds_there_only]。`backlog fail` も同様に cwd = このセッションの linked worktree で実行すること [test: crates/backlog/tests/store_worktree_boundary_env.rs::fail_from_primary_checkout_is_refused_and_file_unchanged]。main の作業ツリーでは `backlog done` / `compass outcome` の store 書き込みが拒否される [test: crates/backlog/tests/store_worktree_boundary.rs::done_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/compass/tests/store_worktree_boundary.rs::outcome_from_primary_checkout_is_refused_and_writes_nothing]。
 
-**バッチ（複数 backlog item を 1 run に束ねた場合）は item ごとに個別 sink する**: condukt の完了ゲートは
-タスク単位なので、6 で控えた **item id ↔ condukt タスク**の対応を使い、**通ったタスクの item は `done`、
-blocked/失敗の item は `fail`** と書き分ける（**部分成功をそのまま反映**＝一部が失敗しても通った分は done にする。
-バッチ全体を一括で成功/失敗扱いにしない）。以下は 1 item あたりの sink:
+バッチ（複数 backlog item を 1 run に束ねた場合）は item ごとに個別 sink すること。6 で控えた item id と condukt タスクの対応を使い、通ったタスクの item は `done`、blocked/失敗の item は `fail` と書き分けること（部分成功をそのまま反映し、一部が失敗しても通った分は done にする） [test: scripts/test_prose_flow_b.py::TestFailVsPending::test_claim_fail_vs_pending_done_closes_only_that_id] [test: scripts/test_prose_flow_b.py::TestFailVsPending::test_claim_fail_vs_pending_fail_withdraws_task]。
 
-- **成功**:
-  - backlog 由来 → `backlog done <id>`（バッチなら通った各 item の id について実行）
-  - compass 由来 → 完了した move を **measuring_stick で判定**し、その verdict を記録する（＝計測ループを閉じる）:
+- 成功したら次のとおり sink すること。
+  - backlog 由来なら、その item の再現テストを証拠にして `backlog done <id> --test "<再現テストのコマンド>" --red-rev <修正前の rev>` を実行すること（バッチなら通った各 item の id について実行） [test: crates/backlog/tests/closure_evidence.rs::allowlisted_bash_script_with_red_rev_closes_and_records_closure] [test: crates/backlog/tests/store_worktree_boundary.rs::done_from_linked_worktree_succeeds_and_marks_done_there]。
+    素の `backlog done <id>` は拒否され、status は変わらない [test: crates/backlog/tests/closure_evidence.rs::bare_done_is_refused_and_status_unchanged]。
+  - compass 由来なら、完了した move を measuring_stick で判定し、その verdict を記録すること。
     ```bash
     compass outcome --verdict <forward|unchanged|backward> --evidence "<観測した成果>"
     ```
-    verdict は move の diff・テスト結果・gap への接近度から **driver(LLM) が判定**する（前進=forward / 不変=unchanged / 後退=backward）。
-    `--evidence` は計測値（テスト数・ベンチ・観測した挙動）を必須とする＝出荷だけでは記録しない（build ≠ validate）。
-    記録後 `compass gap` を取り直すと `last_outcome` が次サイクルに反映される（人手の別コマンド不要＝sink の一部として自動記録）。
-  - hypothesis 由来（**新規 experiment の build が完了**）→ condukt は gate PASS 時に linked_hypotheses を
-    **`awaiting-measurement`（出荷済み・未計測）へ遷移済み**。**出荷しただけでは validate しない**ので、
-    flow はこの場で validate/reject せず、仮説を awaiting-measurement に残す。閉じるのは**次サイクルの
-    measure step（3-1 の 1）**が観測値を添えて行う（build ≠ validate）。「計測待ち N 件」を残課題として報告する。
-  - measure step 由来（**3-1 の 1 で観測値を回収した awaiting-measurement 仮説**）→ 観測した成果を添えて閉じる:
+    verdict は forward（前進）・unchanged（不変）・backward（後退）のいずれかとし、move の diff・テスト結果・gap への接近度から driver(LLM) が判定すること。
+    `--evidence` には計測値（テスト数・ベンチ・観測した挙動）を必ず渡すこと [test: scripts/test_prose_flow_b.py::TestCompassOutcome::test_claim_compass_outcome]。
+    記録後 `compass gap` を取り直すと `last_outcome` が次サイクルに反映される [test: scripts/test_prose_flow_b.py::TestCompassOutcome::test_claim_compass_outcome]。
+  - hypothesis 由来（新規 experiment の build が完了）なら、linked_hypotheses を `awaiting-measurement`（出荷済み・未計測）へ遷移させるのは `condukt state gate` 自体ではなく、condukt skill が gate PASS 後に実行するブロックである [test: scripts/test_prose_flow_a.py::T::test_claim_linked_hypotheses_gate_pass_alone_does_not_transition_the_binary] [test: scripts/test_prose_flow_a.py::T::test_claim_linked_hypotheses_condukt_skill_block_moves_them_to_awaiting_measurement]。仮説は awaiting-measurement に残すこと。
+    閉じるのは次サイクルの measure step（3-1 の 1）が観測値を添えて行うこと。「計測待ち N 件」を残課題として報告すること。
+  - measure step 由来（3-1 の 1 で観測値を回収した awaiting-measurement 仮説）なら、観測した成果を添えて閉じること。反証なら `hypothesis reject <id> --reason "<反証内容>"` を使うこと [test: crates/hypothesis/src/store.rs::test_reject_with_run_id]:
     ```bash
-    hypothesis validate <id> --run <RID> --evidence "<観測した成果>"   # 反証なら reject <id> --reason "<反証内容>"
+    hypothesis validate <id> --run <RID> --evidence "<観測した成果>"
     ```
-    これで awaiting-measurement → validated / rejected に遷移し、計測ループが閉じる
-    （`validate`/`reject` は証拠必須なので、観測値の無い「出荷だけ」では status を変えられない）。
-  - fugu-router 併用時 → 検証結果（どのモデルが通ったか・コスト）を `record` で書き戻して方策を更新。
-- **失敗**（blocked / needs-serial 等）:
-  - backlog 由来 → `backlog fail <id> --reason "<概要>"`、スキップして次へ（バッチなら**失敗した item だけ** fail、他は上記どおり done）。
-  - ユーザーに失敗を通知するが、ループは続行。
+    これで awaiting-measurement から validated / rejected に遷移する [test: crates/hypothesis/src/store.rs::test_awaiting_measurement_can_still_validate]。
+    `hypothesis validate` / `hypothesis reject` は証拠を必須とし、観測値の無い「出荷だけ」では status を変えられない [test: crates/hypothesis/src/store.rs::test_validate_requires_evidence]。
+  - fugu-router 併用時は、検証結果（どのモデルが通ったか・コスト）を `fugu-router record` で書き戻すこと [test: crates/fugu-router/tests/backlog_c6ae7851.rs::backlog_c6ae7851_control_record_writes_the_store]。
+- 失敗（blocked / needs-serial 等）したら次のとおり sink すること。
+  - backlog 由来なら `backlog fail <id> --reason "<概要>"` を実行し、スキップして次へ進むこと（バッチなら失敗した item だけ fail、他は上記どおり done） [test: scripts/test_prose_flow_b.py::TestFailVsPending::test_claim_fail_vs_pending_fail_withdraws_task]。
+  - ユーザーに失敗を通知し、ループは続行すること。
 
-**claim の解放（成功/失敗どちらの sink でも必須）**: `backlog done`/`backlog fail` の直後（または中断時）に、
-その item の claim を解放する:
+sink が成功でも失敗でも、`backlog done` / `backlog fail` の直後（または中断時）に、その item の claim を解放すること [test: scripts/test_prose_flow_a.py::T::test_claim_release_task_releases_only_that_hashkey]。
 ```bash
 condukt state release-task --run "flow-$CLAUDE_CODE_SESSION_ID" --hashkey <hashkey>
 ```
-他セッションが同じタスクを取れるようにするため。**バッチなら item ごとに release** する（6/a で控えた
-`hashkey` を使う）。`condukt` が無い/失敗した場合は fail-soft（release できなくても TTL で自動 reap されるため
-ループは続行する）。
+バッチなら item ごとに release すること（6/a で控えた `hashkey` を使う） [test: scripts/test_prose_flow_a.py::T::test_claim_release_task_releases_only_that_hashkey]。
 
-#### 3-4. ループ継続判定
+#### 3-4. ループを継続してよいか判定すること
 
-3-1 に戻る前に、保持中の claim を live に保つため定期的に heartbeat する:
+3-1 に戻る前に、保持中の claim を live に保つため定期的に heartbeat すること [test: crates/condukt/tests/backlog_audit_s01.rs::control_task_claims_survive_a_heartbeat]:
 ```bash
 condukt state heartbeat --run "flow-$CLAUDE_CODE_SESSION_ID"
 ```
-（heartbeat が途切れた claim は TTL で自動 reap されるため、長時間のループでは各サイクルで呼ぶのが安全）。
-`condukt` が無い/失敗した場合は fail-soft（従来どおりループを続行）。
+長時間のループでは各サイクルで呼ぶこと。
 
-**Step 2 で登録した driver 自体も同じサイクルで heartbeat する**（`condukt state heartbeat` は
-claim registry 用で、driver 登録の生存とは別物）:
+Step 2 で登録した driver 自体も同じサイクルで heartbeat すること [test: crates/backlog/tests/verifier_486e83ca.rs::verifier_live_holder_keeps_lease_past_window]:
 ```bash
 backlog driver heartbeat --session-id "$CLAUDE_CODE_SESSION_ID" --project "$PWD"
 ```
-driver 登録の staleness は heartbeat_at ベースの TTL（既定30分）で判定される。呼ばないと登録が
-stale として reap され、**その project で driver が動いていないと見なされて `autoflow` の自動ループや
-`daily` が動き出す**（＝二重駆動）。`backlog` が無い/失敗した場合は fail-soft（ループは続行）。
+driver 登録の staleness は heartbeat_at ベースの TTL（既定30分）で判定され、TTL を超えた登録は stale として reap される [test: crates/backlog/tests/concurrent_drivers.rs::a_stale_driver_registration_is_reaped_like_a_stale_lock]。
 
-続けて **決定論の循環ブレーカー**を1本のコマンドで判定する（cost・failure-streak・stall を集約。詳細は「早期脱出」）:
+続けて決定論の循環ブレーカーを1本のコマンドで判定すること [test: crates/condukt/tests/backlog_audit_v11.rs::backlog_9eeffa69_flow_skill_passes_session_to_circuit_check]:
 ```bash
-condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CODE_SESSION_ID"   # trip なら nonzero、continue なら exit 0
+condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CODE_SESSION_ID"   # trip なら nonzero [test: crates/condukt/src/circuit.rs::failure_streak_over_cap_trips_with_nonzero_exit]、continue なら exit 0 [test: crates/condukt/src/circuit.rs::healthy_run_continues_with_zero_exit]
 ```
-**nonzero（trip）なら人にも policy にも聞かず即 Step 4 へ**（stop 理由 slug は JSONL に記録）。exit 0 なら 3-1 に戻る。
-`condukt` が無い/失敗する版では fail-soft で従来の散文フォールバック（下記早期脱出表）に落ちる。
+nonzero（trip）なら人にも policy にも聞かず即 Step 4 へ進むこと。stop 理由 slug は JSONL に記録される [test: crates/condukt/src/circuit.rs::failure_streak_over_cap_trips_with_nonzero_exit]。exit 0 なら 3-1 に戻ること。
 
-3-1 に戻る。早期脱出条件（下記）に当たれば Step 4 へ。
+3-1 に戻ること。早期脱出条件に当たれば Step 4 へ進むこと。
 
-### Step 4 — driver 登録の解除とサマリ
+### Step 4 — driver 登録を解除してサマリを報告すること
 
-source が尽きた / ユーザー中断 / 予算超過のいずれかで（**ここでも cwd = このセッションの linked worktree**。
-Step 4 で `backlog` / `compass` が store を書く操作を打つ場合は main の作業ツリーでは拒否される）:
+早期脱出時も driver 登録の解除を飛ばしてはならない。
+
+source が尽きた / ユーザー中断 / 予算超過のいずれかで、次の解除を実行すること。ここでも cwd = このセッションの linked worktree にすること。main の作業ツリーでは `backlog` / `compass` の store 書き込みが拒否される [test: crates/backlog/tests/store_worktree_boundary.rs::done_from_primary_checkout_is_refused_and_file_unchanged] [test: crates/compass/tests/store_worktree_boundary.rs::outcome_from_primary_checkout_is_refused_and_writes_nothing]:
 
 ```bash
 backlog driver unregister --session-id "$CLAUDE_CODE_SESSION_ID" --project "$PWD"
 ```
 
-**早期脱出時も解除は必須**（解除しないと `autoflow` / `daily` が最大 30 分「driver 稼働中」と
-読み続ける。TTL で最終的には reap されるが、その間は無駄に止まる）。
-Step 2 で例外的に `backlog lock acquire` した場合のみ `backlog lock release --project "$PWD"` も打つ。
+Step 2 で例外的に `backlog lock acquire` した場合のみ `backlog lock release --project "$PWD"` も打つこと [test: scripts/test_prose_flow_b.py::TestLockRelease::test_claim_lock_release]。
 
-**overwatch anchor の解放（Step 3-1 の 7 で登録した各 anchor のライフサイクルを閉じる）**: 3-1 で
-`overwatch begin` した各 `<pdo-unit-id>` について、対応する `end` を呼ぶ:
+3-1 で `overwatch begin` した各 `<pdo-unit-id>` について、対応する `end` を呼ぶこと [test: crates/overwatch/tests/backlog_s04_audit.rs::s3b056c02_end_of_missing_key_is_distinguishable_from_release]:
 ```bash
 overwatch end --key "<pdo-unit-id>" --status "<done|abandoned>"
 ```
-- `--status` は sink の結果を反映する（成功で閉じたなら `done`、失敗・未完で手放すなら `abandoned`）。
-- **バッチなら item ごとに `overwatch end`**（begin と同じ key＝各 item の `hashkey` を使う）。
-- **fail-soft**: `overwatch` バイナリが無い / 呼び出し失敗時は skip する（既存の driver unregister /
-  claim 解放と同じ方針＝解放できなくても TTL で自動 reap されるため turn を壊さない）。
+- `--status` は sink の結果を反映すること（成功で閉じたなら `done`、失敗・未完で手放すなら `abandoned`） [test: scripts/test_prose_flow_b.py::TestOverwatchEnd::test_claim_overwatch_end]。
+- バッチなら item ごとに `overwatch end` を呼ぶこと（begin と同じ key＝各 item の `hashkey` を使う） [test: scripts/test_prose_flow_b.py::TestOverwatchEnd::test_claim_overwatch_end] [test: scripts/test_prose_flow_b.py::TestOverwatchEnd::test_claim_overwatch_end_unknown_key_is_distinguishable]。
 
-最後に「処理件数・成功・失敗・残キュー・次に取り直した gap」を報告する。
+最後に「処理件数・成功・失敗・残キュー・次に取り直した gap」を報告すること。
 
-#### pivot-check（ループ終端の方向判断）
+#### ループ終端で方向判断を行うこと
 
-driver 登録の解除直後、ループを正常終了した場合（中断・エラー以外）は以下を実行する:
+勝手に `/compass` を起動してはならない（彫り直しは保留する） [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_pivot_gate_no_approval_escalates_and_recommends_continue]。
+
+driver 登録の解除直後、ループを正常終了した場合（中断・エラー以外）は以下を実行すること。
 
 ```bash
-compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"threshold":N,"reason":"…"}
+compass pivot-check   # {"recommendation":"persevere"|"pivot","streak":N,"threshold":N,"reason":"…"} [test: scripts/test_prose_flow_b.py::TestPivotCheckShape::test_claim_pivot_check_shape]
 ```
 
-- **`persevere`** → そのまま継続。「次の gap を取り直す」と報告する。
-- **`pivot`** → **Step 0.5 の policy-answer routing** に通す（`--risk medium --reversible high --confidence low`
-  ＝ streak 閾値超えは genuine な戦略判断なので既定 verdict は **escalate**。
-  `--question "pivot 兆候。north_star を彫り直す?" --option "再オリエンテーション" --option "継続" --recommend 1`）:
-  - **escalate（exit 2）／ 非自律・フォールバック** → `reason`（streak 長・対象 verdict 列）を引用してユーザーに提示し、
-    **north_star を彫り直す（再オリエンテーション）か否か**を問う（`AskUserQuestion`）。「再オリエンテーション」なら
-    `/compass` を案内して終了、「継続」なら通常どおり報告して終了。
-  - **auto（exit 0）** → `chosen`（既定案＝継続/persevere）を採用: `reason` を報告に引用しつつループは止めず
-    「次の gap を取り直す」で継続する（彫り直しは保留＝勝手に `/compass` しない）。自答は監査ログに残る。
-  pivot 判定は `compass outcome` を積み重ねることで精度が上がるため、outcomes が 0 件なら pivot-check はスキップしてよい。
+- `persevere` ならそのまま継続し、「次の gap を取り直す」と報告すること [test: crates/compass/tests/integration.rs::pivot_check_emits_persevere_with_no_outcomes]。
+- `pivot` なら Step 0.5 の policy-answer routing に通すこと（`--risk medium --reversible high --confidence low`、既定 verdict は escalate、
+  `--question "pivot 兆候: north_star を彫り直す?" --option "再オリエンテーション" --option "継続" --recommend 1`） [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_pivot_gate_no_approval_escalates_and_recommends_continue]。
+  - escalate（exit 2）／ 非自律・フォールバックなら、`reason`（streak 長・対象 verdict 列）を引用してユーザーに提示し、
+    north_star を彫り直す（再オリエンテーション）か否かを問うこと（`AskUserQuestion`）、「再オリエンテーション」なら
+    `/compass` を案内して終了し、「継続」なら通常どおり報告して終了すること [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_pivot_gate_no_approval_escalates_and_recommends_continue] [test: scripts/test_prose_flow_b.py::TestPivotCheckShape::test_claim_pivot_check_shape] [test: scripts/test_prose_flow_a.py::T::test_claim_frontmatter_declares_args_and_tools]。
+  - auto（exit 0）なら `chosen`（既定案＝継続/persevere）を採用し、`reason` を報告に引用しつつループは止めず「次の gap を取り直す」で継続すること [test: crates/condukt/tests/policy_cli.rs::auto_verdict_self_answers_recommended_option_and_journals]。自答は監査ログに残る [test: crates/condukt/tests/policy_cli.rs::auto_verdict_self_answers_recommended_option_and_journals]。
+- outcomes が 0 件なら pivot-check はスキップしてよい [test: crates/compass/tests/integration.rs::pivot_check_emits_persevere_with_no_outcomes]。
 
-## 早期脱出
+## 早期脱出条件に当たったらループを止めること
 
-**決定論的な循環ブレーカー（cost・failure-streak・stall を1本のゲートに consolidate）**: ループの各イテレーション
-（3-4 の継続判定の一部）で `condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CODE_SESSION_ID"` を実行する。この 1 コマンドが
-**failure-streak がキャップ（既定 3）到達・予算超過・no-progress TTL（既定 1800 秒）超過**の3条件を決定論で判定し、
-どれかが成立すれば **nonzero で trip** する（成立しなければ exit 0＝continue）。trip を観測したら **人にも policy にも
-聞かず即 clean stop** して Step 4 へ（停止理由 slug は JSONL に記録され後から可観測）。信号採取の縮退は軸ごとに違う:
-failure-streak は run state が読めなければ 0（`/flow` は run state を書かないので、この軸は `/flow` では常に 0）、
-予算軸は `--budget-cap-usd` を渡さない限り無効（上のコマンドは渡していない）で、渡した場合も budgetguard の ledger が
-無い/読めない/壊れているときは当日使用額 0 として非 trip に倒れる。一方 **idle 軸は fail-closed**: 測れない idle は
-`idle_unmeasured` で **trip する**。`/flow` には run state が無いため、idle は live な stateless claim があればその所有
-session の transcript の mtime から、claim が無ければ（3-4 は sink が claim を全解放した直後に走るので通常こちら）
-`--session` で渡した session の transcript の mtime から測る（`--run` がちょうど `flow-<SESSION>` のときだけ有効。
-JSON の `idle_source` が `session_flag`）。transcript が見つからない・HOME 未設定・mtime が読めない・claim registry が
-読めない場合は `idle_unmeasured` で trip する。`--session` を付け忘れると毎バッチ後に trip する。
-`condukt` が無い/失敗する版では従来の下表フォールバックに落ちる。
-これで「連続失敗 3 件」という散文だった停止条件が **1つの決定論ゲート**に集約される（散文が唯一の停止機構ではなくなる）。
+- 予算の判定不能（`budgetguard check` の exit 0 以外）を予算内として続行してはならない [test: crates/budgetguard/tests/check_contract.rs::check_corrupt_ledger_is_undetermined_exit_2] [test: crates/budgetguard/tests/check_contract.rs::check_unreadable_ledger_is_undetermined_exit_2] [test: crates/budgetguard/tests/check_contract.rs::check_corrupt_config_is_undetermined_exit_2] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_ledger_is_nonzero]。
+- `--session` を付け忘れてはならない [test: crates/condukt/tests/backlog_audit_v11.rs::backlog_9eeffa69_flow_skill_passes_session_to_circuit_check]。付け忘れると毎バッチ後に trip する [test: crates/condukt/tests/circuit_session_idle_e2e.rs::no_session_flag_trips_unmeasured_control]。
+- 彫り直しを勝手に繰り返してはならない。
+- 「仕事なし」にも「実行してよい」にも丸めてはならない。
 
-| 状況 | 対応 |
-|---|---|
-| ユーザーが中断を指示 | 直ちに Step 4（driver 登録の解除）へ |
-| 循環ブレーカーが trip（下記のとおり毎イテレーション `condukt circuit check --run RID` を実行し **nonzero**＝failure-streak がキャップ到達・予算超過・no-progress stall のいずれか） | **決定論的に clean stop**（ループを止め Step 4 へ。人にも policy にも聞かない hard stop。停止理由は verdict の JSONL に記録される）。非自律で追加確認を入れたい場合の**フォールバックのみ** `AskUserQuestion`「続行 / 中止」 |
-| budgetguard が予算超過を返す | ループ終了（Step 4）。残キューはそのまま次セッションへ（予算軸は上の circuit check にも consolidate 済み） |
-| compass フォールバック（3-1 の 3）で charter を彫っても右サイズの一手が出ない / `sentinel` で離席 | ループを止め Step 4 へ（backlog も measure も空なので継続理由が無い）。**彫り直しを勝手に繰り返さない** |
-| `compass` バイナリ不在・呼び出し失敗（charter の状態を観測できなかった） | 「仕事なし」にも「実行してよい」にも丸めず、その事実を報告して Step 4 へ |
-| `backlog next` が予期しないエラー | 報告して Step 4 へ |
+ループの各イテレーション（3-4 の継続判定の一部）で `condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CODE_SESSION_ID"` を実行すること [test: crates/condukt/tests/backlog_audit_v11.rs::backlog_9eeffa69_flow_skill_passes_session_to_circuit_check]。
+trip しなければ exit 0（continue）になる [test: crates/condukt/src/circuit.rs::healthy_run_continues_with_zero_exit]。
+trip を観測したら人にも policy にも聞かず即 clean stop して Step 4 へ進むこと。停止理由 slug は JSONL に記録される [test: crates/condukt/src/circuit.rs::failure_streak_over_cap_trips_with_nonzero_exit]。
+idle 軸は fail-closed で、測れない idle は `idle_unmeasured` で trip する [test: crates/condukt/src/circuit.rs::unmeasurable_idle_trips_instead_of_continuing]。
+idle は live な stateless claim があれば、その所有 session の transcript の mtime から測る [test: crates/condukt/tests/circuit_stateless_idle_e2e.rs::stateless_claim_with_stale_transcript_trips_on_stall]。
+claim が無ければ、`--session` で渡した session の transcript の mtime から測る [test: crates/condukt/tests/circuit_session_idle_e2e.rs::session_flag_stale_transcript_trips_on_idle_not_unmeasured]。
+これは `--run` がちょうど `flow-<SESSION>` のときだけ有効である [test: crates/condukt/tests/circuit_session_idle_e2e.rs::session_flag_run_id_mismatch_trips_unmeasured]。
+JSON の `idle_source` が `session_flag` になる [test: scripts/test_prose_flow_a.py::T::test_claim_circuit_idle_source_is_session_flag_with_fresh_transcript]。
+transcript が見つからない場合は `idle_unmeasured` で trip する [test: crates/condukt/tests/circuit_session_idle_e2e.rs::session_flag_missing_transcript_trips_unmeasured]。
+HOME 未設定・claim registry が読めない場合も `idle_unmeasured` で trip する [test: scripts/test_prose_flow_a.py::T::test_claim_circuit_idle_home_unset_trips_unmeasured] [test: scripts/test_prose_flow_a.py::T::test_claim_circuit_idle_unreadable_claim_registry_trips_unmeasured]。
 
-## ハードルール
+- ユーザーが中断を指示したら、直ちに Step 4（driver 登録の解除）へ進むこと。
+- 循環ブレーカーが trip（毎イテレーション `condukt circuit check --run RID` を実行し nonzero）したら、決定論的に clean stop すること（ループを止めて Step 4 へ進み、人にも policy にも聞かない hard stop）[test: scripts/test_prose_flow_a.py::T::test_claim_circuit_idle_missing_transcript_trips_unmeasured] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_circuit_trip_exits_nonzero]。
+  非自律で追加確認を入れたい場合のフォールバックのみ `AskUserQuestion`「続行 / 中止」を使うこと [test: scripts/test_prose_flow_a.py::T::test_claim_frontmatter_declares_args_and_tools] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_circuit_trip_exits_nonzero]。
+- `budgetguard check` が exit 0 以外（exit 1＝予算超過、exit 2＝判定不能、`budgetguard` 不在・起動失敗を含む）を返したら、予算超過とみなしてループ終了（Step 4）とし、残キューはそのまま次セッションへ引き継ぐこと [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_over_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_ledger_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_corrupt_config_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_missing_binary_is_nonzero] [test: scripts/test_prose_flow_b.py::TestBudgetCheck::test_claim_budget_prose_nonzero_goes_to_step_4]。
+- compass フォールバック（3-1 の 3）で charter を彫っても右サイズの一手が出ない、または `sentinel` で離席なら、ループを止め Step 4 へ進むこと [test: scripts/test_prose_flow_b.py::TestCarveSentinel::test_claim_carve_sentinel]。
+- `compass` バイナリ不在・呼び出し失敗（charter の状態を観測できなかった）なら、その事実を報告して Step 4 へ進むこと [test: scripts/test_prose_flow_b.py::TestCompassFailDetectable::test_claim_compass_fail_detectable_no_charter] [test: scripts/test_prose_flow_b.py::TestCompassFailDetectable::test_claim_compass_fail_detectable_unreadable_charter]。
+- `backlog next` が予期しないエラーなら、報告して Step 4 へ進むこと [test: scripts/test_prose_flow_b.py::TestBacklogNextError::test_claim_backlog_next_error]。
 
-- **仕事が無いのに繰り返さない（停止条件は backlog pending / measure / compass 主筋 の 3 つだけ）。**
-  この 3 つがどれも一手を出さないなら Step 4 へ抜ける。**`open` 仮説は継続理由にならない** —
-  それは「積まれている仕事」ではなく「これから作れる仕事」なので、継続条件に入れると
-  キューが空でもループが永久に新しい仕事を発明し続ける。残った open 仮説と観測不能な
-  awaiting-measurement は**報告するだけ**。逆に pending が残っているのに早期に止めるのも同じくらい悪い
-  （自律モードが仕事を放置する）ので、3 つのどれかが一手を出す限りは止めない。詳細は Step 3-1 の 5。
-- **ユーザーの課題から逸脱しない。着手した課題は、終わるまでそれだけをやる。**
-  作業中に別の問題（より重要に見えるもの・途中で詰まった原因・気づいた欠陥）が現れても、
-  **そこへ乗り換えない**。判定基準は常に「いまユーザーの prompt に忠実か」であり、
-  それが解決するまではその課題に注力すること。見つけた別課題は**その場で再現テストを書いて `backlog add --repro-test` し、戻る** [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome]。
-  課題が完了してから（並行ではなく順序として）、自律モードであれば次の backlog を処理すること。
+## 次のハードルールを守ること
 
-  **Why**: 逸脱は個々の判断としては常に正当に見える（「これを直さないと進めない」「こちらの方が重要だ」）。
-  だが逸脱が積み重なると、ユーザーから見て「結局いま何をしているのか」が失われ、
-  最初の課題は未完のまま残る。実際に起きた形: rollout 中に見つけた別クレートの欠陥を追いかけ、
-  rollout 自体は drift が残ったまま「完了」と報告されかけた。
-  **逸脱してよい唯一の例外は、その問題を解決しないと元の課題が物理的に前に進まない場合**であり、
-  そのときも「元の課題のために何を迂回しているか」を明示してから行い、済み次第すぐ戻る。
-- **気づいたことは常に起票すること。起票するかどうかを判断しない。ただしテストが無ければ起票しない（2026-10-04 ユーザー裁定:
-  「testがないなら起票してはならない」）。**
+- 停止条件は backlog pending・measure・compass 主筋 の 3 つだけとし、仕事が無いのに繰り返してはならない。
+  この 3 つがどれも一手を出さないなら Step 4 へ抜けること。`open` 仮説を継続理由にしてはならない [test: scripts/test_prose_flow_b.py::TestHypStatus::test_claim_hyp_status]。
+  残った `open` 仮説と観測不能な awaiting-measurement は報告するだけにすること [test: scripts/test_prose_flow_b.py::TestHypStatus::test_claim_hyp_status]。
+  pending が残っているのに早期に止めてはならない。3 つのどれかが一手を出す限りは止めないこと。詳細は Step 3-1 の 5 を見ること。
+- ユーザーの課題から逸脱してはならない。着手した課題は、終わるまでそれだけをやること。
+  作業中に別の問題（より重要に見えるもの・途中で詰まった原因・気づいた欠陥）が現れても、そこへ乗り換えてはならない。
+  判定基準は常に「いまユーザーの prompt に忠実か」とし、それが解決するまではその課題に注力すること。
+  見つけた別課題は、その場で再現テストを書いて `backlog add --repro-test` し、戻ること [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome]。
+  課題が完了してから、自律モードであれば次の backlog を処理すること。別課題を並行して処理してはならない。
+  逸脱してよい唯一の例外は、その問題を解決しないと元の課題が物理的に前に進まない場合であり、そのときも「元の課題のために何を迂回しているか」を明示してから行い、済み次第すぐ戻ること。
+- テストが無ければ起票してはならない（2026-10-04 ユーザー裁定:
+  「testがないなら起票してはならない」）。気づいたことは、起票するかどうかを判断せず常に起票すること。
   起票は **(1) 再現テスト（RED）を書いてコミット → (2) `backlog add --repro-test "<cmd>"`** の順で行うこと [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome]。
   `backlog add` は再現した時だけ task を書き、それ以外は拒否して store に何も書かない [test: crates/backlog/tests/repro_evidence.rs::reproduced_lands_pending_and_records_outcome] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]。
   テストが書けないなら Ask すること。
@@ -763,34 +527,29 @@ JSON の `idle_source` が `session_flag`）。transcript が見つからない�
   **起票の中身**には逐語の実測値・測定点（rev と日付）・判定不能なら**両方の読み**（(a) 実在の欠陥 / (b) 意図的な仕様）と、
   **どちらかを見分ける方法**を書くこと。
   起票を着手として扱わず、書いたら元の課題へ戻ること。
-- **source/executor の役割を混ぜない**: 課題の選定は compass/backlog、実行は condukt。`/flow` 自身は判定とループだけ。
-- **キューを独占しない**: `/flow` は同じ project で並走してよい（排他は task 単位＝`next --claim` +
-  `condukt state claim-task`）。他セッションが driver 登録済みでも見送らない。**待つのは解ではない。**
-  ただし `backlog list` で覗いて上位 N 件を自分のものと決めるのは禁止（純粋 read なので重複着手する）。
-- **並列は「バッチを 1 condukt run に束ねる」で実現**（複数 condukt run を並走させない）: backlog に複数 ready 課題が
-  あれば順列ではなく 1 回の condukt run に束ねて渡し、**並列/直列の実判定は condukt の `schedule.rs`（ファイル競合・
-  Serial/Gated・shared-glob・依存層）に委譲**する。flow 自身は独立候補を束ねるだけで、危険/高コストなら condukt が
-  自動で直列化する（conservative＝迷えば直列）。予算逼迫や明白な相互依存が読めるときは flow 側でバッチ幅を絞る（極端は N=1）。
-- **盲目実行しない**: compass 由来の一手は、charter が鮮明でない限り condukt へ流さない
-  （彫り直してから引く。3-1 の 3）。**backlog はこのゲートの対象ではない** — 確定キューの item は
-  起票時に観測と done 条件を持っており、charter の鮮度はその item を実行してよいかの判定材料ではない
-  （2026-09-23 の裁定。順序を変えただけでゲートは緩めていない）。
-- **driver 登録の解除を絶対に飛ばさない**（早期脱出・エラー時も）。解除漏れは `autoflow` /
-  `daily` を最大 30 分止める。
-- **自律モードでは human gate を `condukt policy answer` に通す（Step 0.5）**: `autonomy-check` exit 0 のとき、
+- source と executor の役割を混ぜてはならない。課題の選定は compass と backlog、実行は condukt に任せ、flow 自身は判定とループだけを担うこと。
+- キューを独占してはならない。`backlog list` で覗いて上位 N 件を自分のものと決めるのは、純粋 read で重複着手するため禁止 [test: scripts/test_prose_flow_b.py::TestListPure::test_claim_list_pure]。
+  待つのは解ではないので、他セッションが driver 登録済みでも見送ってはならない。
+  `/flow` は同じ project で並走してよい（排他は task 単位＝`next --claim` + `condukt state claim-task`）[test: crates/backlog/tests/concurrent_drivers.rs::two_concurrent_driver_processes_get_disjoint_tasks]。
+- 複数 condukt run を並走させてはならない。並列はバッチを 1 condukt run に束ねて実現すること。
+  backlog に複数 ready 課題があれば順列ではなく 1 回の condukt run に束ねて渡し、並列か直列かの実判定は condukt の `schedule.rs` に委譲すること [test: crates/condukt/tests/schedule_conflict_capstone_e2e.rs::conflicting_pairs_are_forced_serial_and_independent_pair_stays_parallel]。
+  flow 自身は独立候補を束ねるだけにし、予算逼迫や明白な相互依存が読めるときは flow 側でバッチ幅を絞ること。極端な場合は N=1 にすること。
+- 盲目実行してはならない。compass 由来の一手は、charter が鮮明でない限り condukt へ流してはならない（3-1 の 3 のとおり、彫り直してから引くこと）。
+  backlog の item には、この charter 鮮度ゲートを適用しないこと。
+- 早期脱出・エラー時も、driver 登録の解除を絶対に飛ばしてはならない。
+- Step 0.5 のとおり、自律モードでは human gate を `condukt policy answer` に通すこと [test: crates/condukt/tests/policy_cli.rs::auto_verdict_self_answers_recommended_option_and_journals]。`autonomy-check` が exit 0 のとき [test: crates/condukt/tests/autonomy_single_switch.rs::a1_switch_file_on_makes_autonomy_check_pass_with_switch_file_source]、
   各ゲートを per-gate の risk×reversible×confidence で `policy answer` に掛け、
-  **auto は自答（Ask 撤去・監査ログに追記）／ escalate は従来 Ask（残す 質疑）／ block は拒否**。
-  なお **failure-streak/予算/stall の早期脱出は policy answer ではなく決定論の `condukt circuit check` に集約**されており、
-  trip すれば人にも policy にも聞かず clean stop する（上記「早期脱出」）。
-- **YES/NO の権限認可には `--approval` を付け、判断を求める Ask には付けない（Step 0.5 の表）**。
-  権限認可（排他ロック競合＝stand down、resume＝優先 pick 先頭、**deploy/push の GATED 承認**、
-  condukt Phase 3 の合意）は 2026-08-07 の常設許諾により auto で消える。
-  判断要求（**pivot** / **worker blocked** / merge conflict の pick-a-side / §2 の測れない決定 /
-  **spec-gap divert** / **charter 彫り直し中の問い**）は escalate のまま残す
-  （charter 彫り直しの問いも自答せず人に聞く）。**迷ったら `--approval` を付けない** —
-  付け忘れは冗長な質問で済むが、付け間違いは人間の判断を消す。
-  自律で残る停止は **(a) worker blocked** **(b) pivot** **(c) conflict/untestable の判断要求**
-  **(d) spec-gap divert（3-1.5）** **(e) charter 彫り直し中の問い（3-1 の 3）** **(f) budgetguard 早期脱出**、
-  および policy が **block** を返したゲート。
-  exit 1（既定・非自律）は**従来どおり全 Ask を維持**（後方互換。`--approval` もそこでは不活性）。
-  存在しない版（exit 127）は非自律とみなす。
+  auto は自答（Ask 撤去・監査ログに追記）[test: crates/condukt/tests/policy_cli.rs::auto_verdict_self_answers_recommended_option_and_journals]、escalate は従来 Ask（残す質疑）[test: crates/condukt/tests/policy_cli.rs::escalate_verdict_falls_through_but_is_still_journaled]、block は拒否として扱うこと [test: crates/condukt/tests/policy_cli.rs::block_verdict_is_a_hard_stop_exit_3]。
+  早期脱出は policy answer に通さず、決定論の `condukt circuit check` が trip すれば人にも policy にも聞かず clean stop すること（上記「早期脱出」）[test: scripts/test_prose_flow_a.py::T::test_claim_circuit_idle_missing_transcript_trips_unmeasured]。
+- 判断を求める Ask には、迷ったときも `--approval` を付けてはならない [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_approval_flag_is_exactly_what_erases_the_question] [test: scripts/test_prose_flow_a.py::T::test_claim_judgment_no_approval_on_judgment_gates_in_skill_text]。
+  判断要求（pivot / worker blocked / merge conflict の pick-a-side / §2 の測れない決定 /
+  spec-gap divert / charter 彫り直し中の問い）は `--approval` を付けず、escalate のまま残すこと [test: crates/condukt/tests/autonomy_invariant.rs::policy_answer_baseline_escalates_the_ambiguous_middle]。
+  charter 彫り直しの問いを自答してはならない。人に聞くこと。
+  YES/NO の権限認可（排他ロック競合＝stand down、resume＝優先 pick 先頭、deploy/push の GATED 承認、
+  condukt Phase 3 の合意）には `--approval` を付けること [test: crates/condukt/tests/autonomy_invariant.rs::policy_answer_approval_self_answers_when_autonomous]。常設許諾（2026-08-07）により auto で自答される [test: crates/condukt/tests/autonomy_invariant.rs::policy_answer_approval_self_answers_when_autonomous]。
+  常設許諾は block を緩めない [test: crates/condukt/tests/autonomy_invariant.rs::policy_answer_approval_never_relaxes_the_irreversible_block]。
+  `--approval` は非自律では不活性である [test: crates/condukt/tests/autonomy_invariant.rs::policy_answer_approval_is_inert_when_not_autonomous]。
+  自律でも escalate のまま残るのは (a) worker blocked (b) pivot (c) conflict/untestable の判断要求
+  (d) spec-gap divert（3-1.5） (e) charter 彫り直し中の問い（3-1 の 3）であり、policy が block を返したゲートも止まる [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_rows_verdicts] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_conflict_and_untestable_escalate_even_with_approval] [test: scripts/test_prose_flow_a.py::T::test_claim_policy_table_block_is_never_relaxed_by_approval]。
+  exit 1（既定・非自律）は従来どおり全 Ask を維持すること。
+  `autonomy-check` が exit 0 以外なら非自律とみなすこと [test: scripts/test_prose_flow_a.py::T::test_claim_autonomy_unknown_subcommand_never_exits_zero]。

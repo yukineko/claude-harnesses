@@ -89,11 +89,22 @@ fn read_tasks_file(path: &Path) -> Result<Option<(String, Vec<Task>)>> {
                 .and_then(|sp| row_id_at(&text, sp.start))
                 .map(|id| format!(" (task {id})"))
                 .unwrap_or_default();
+            let at = e
+                .span()
+                .and_then(|sp| text.get(..sp.start.min(text.len())))
+                .map(|head| {
+                    let line = head.matches('\n').count() + 1;
+                    let col = head.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+                    format!(" at line {line}, column {col}")
+                })
+                .unwrap_or_default();
             // The deserialize error itself is the reason (for a removed status:
             // serde's "unknown variant `needs-ruling`, expected one of ...").
             let why = e.message().to_string();
-            return Err(anyhow::Error::new(e)
-                .context(format!("failed to parse {}{row}: {why}", path.display())));
+            return Err(anyhow::Error::new(e).context(format!(
+                "failed to parse {}{at}{row}: {why}",
+                path.display()
+            )));
         }
     };
     Ok(Some((text, file.task)))
@@ -1837,6 +1848,10 @@ pub enum SyncAction {
         /// next run — the restrictive side (CLAUDE.md §3).
         rev: u64,
     },
+    /// Live work (`pending` / `failed`) whose issue is recorded CLOSED — e.g.
+    /// the row was closed and synced, then came back to the active store
+    /// (backlog 7e575392). The mirror must read "open" while the work is open.
+    Reopen { id: String, number: u64 },
 }
 
 impl SyncAction {
@@ -1845,7 +1860,8 @@ impl SyncAction {
         match self {
             SyncAction::Create { id, .. }
             | SyncAction::Close { id, .. }
-            | SyncAction::UpdateBody { id, .. } => id,
+            | SyncAction::UpdateBody { id, .. }
+            | SyncAction::Reopen { id, .. } => id,
         }
     }
 }
@@ -1874,6 +1890,9 @@ impl SyncAction {
 ///   task that HAS an `issue_number` and has NO `issue_closed_at`. `failed` is
 ///   excluded on purpose: a failed task is unfinished work that will be
 ///   retried, so its issue must stay open.
+/// - **Reopen** for a `pending` / `failed` task that HAS an `issue_number` and
+///   HAS an `issue_closed_at` (backlog 7e575392): active work behind an issue
+///   recorded closed.
 ///
 /// Order follows the store's own task order, so the plan is deterministic for
 /// a given file rather than depending on hash iteration.
@@ -1897,6 +1916,10 @@ pub fn sync_plan(tasks: &[Task]) -> Vec<SyncAction> {
                 number: n,
                 reason: crate::github::CloseReason::NotPlanned,
                 comment: build_close_comment(t, crate::github::CloseReason::NotPlanned),
+            }),
+            (STATUS_PENDING | STATUS_FAILED, Some(n), Some(_)) => plan.push(SyncAction::Reopen {
+                id: t.id.clone(),
+                number: n,
             }),
             (STATUS_PENDING | STATUS_FAILED, Some(n), None) if body_is_stale(t) => {
                 plan.push(SyncAction::UpdateBody {
@@ -2057,10 +2080,14 @@ impl SyncOnly {
         match (self, action) {
             (SyncOnly::Both, SyncAction::Create { .. })
             | (SyncOnly::Both, SyncAction::Close { .. })
+            | (SyncOnly::Both, SyncAction::Reopen { .. })
             | (SyncOnly::Create, SyncAction::Create { .. })
             | (SyncOnly::Close, SyncAction::Close { .. })
             | (SyncOnly::Body, SyncAction::UpdateBody { .. }) => true,
-            (SyncOnly::Both, SyncAction::UpdateBody { .. })
+            (SyncOnly::Create, SyncAction::Reopen { .. })
+            | (SyncOnly::Close, SyncAction::Reopen { .. })
+            | (SyncOnly::Body, SyncAction::Reopen { .. })
+            | (SyncOnly::Both, SyncAction::UpdateBody { .. })
             | (SyncOnly::Create, SyncAction::Close { .. })
             | (SyncOnly::Create, SyncAction::UpdateBody { .. })
             | (SyncOnly::Close, SyncAction::Create { .. })
@@ -2171,6 +2198,10 @@ pub enum SyncOutcome {
         /// See that field for why.
         synced_rev: u64,
     },
+    /// GitHub accepted a `gh issue reopen` for this task.
+    Reopened {
+        id: String,
+    },
 }
 
 impl SyncOutcome {
@@ -2179,6 +2210,7 @@ impl SyncOutcome {
         match self {
             SyncOutcome::Created { id, .. }
             | SyncOutcome::Closed { id }
+            | SyncOutcome::Reopened { id }
             | SyncOutcome::BodySynced { id, .. } => id,
         }
     }
@@ -2217,6 +2249,9 @@ pub fn record_sync_outcomes(path: &Path, outcomes: &[SyncOutcome], now: i64) -> 
                 }
                 SyncOutcome::Closed { .. } => {
                     task.issue_closed_at = Some(now);
+                }
+                SyncOutcome::Reopened { .. } => {
+                    task.issue_closed_at = None;
                 }
                 // The PLANNED rev, never the task's current one: the stamp
                 // records which revision was pushed. A task edited between the

@@ -777,13 +777,17 @@ pub fn record_replan_decision(
 /// Load all replan decision records for a run. Missing file → empty vec.
 /// Fail-soft: malformed lines are skipped rather than erroring or panicking,
 /// mirroring `open_runs`/`all_runs`'s tolerance of unparseable state files.
-/// `Err` only when the main worktree root (so the log's dir) cannot be
-/// determined.
+/// `Err` when the main worktree root (so the log's dir) cannot be
+/// determined, or when the log exists but cannot be read (only `NotFound`
+/// means empty).
 pub fn load_replan_records(cfg: &Config, cwd: &Path, run_id: &str) -> Result<Vec<ReplanLogRecord>> {
     let path = replan_log_path(cfg, cwd, run_id)?;
     let txt = match std::fs::read_to_string(&path) {
         Ok(t) => t,
-        Err(_) => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(e).with_context(|| format!("reading {}", path.display()));
+        }
     };
     Ok(txt
         .lines()
@@ -874,8 +878,9 @@ pub fn record_run_policy_decision(
 /// Load all RUN-POLICY decision records for a run. Missing file → empty vec.
 /// Fail-soft: malformed lines are skipped rather than erroring or panicking,
 /// mirroring `open_runs`/`all_runs`'s tolerance of unparseable state files.
-/// `Err` only when the main worktree root (so the log's dir) cannot be
-/// determined.
+/// `Err` when the main worktree root (so the log's dir) cannot be
+/// determined, or when the log exists but cannot be read (only `NotFound`
+/// means empty).
 pub fn load_run_policy_records(
     cfg: &Config,
     cwd: &Path,
@@ -884,7 +889,10 @@ pub fn load_run_policy_records(
     let path = run_policy_log_path(cfg, cwd, run_id)?;
     let txt = match std::fs::read_to_string(&path) {
         Ok(t) => t,
-        Err(_) => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(e).with_context(|| format!("reading {}", path.display()));
+        }
     };
     Ok(txt
         .lines()

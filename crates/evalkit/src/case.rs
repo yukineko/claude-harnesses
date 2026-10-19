@@ -39,11 +39,14 @@ pub struct Case {
     pub draft: bool,
 }
 
-/// Assertions over a subject's text. All are optional; an empty `Assert`
-/// asserts only that the subject could be acquired (file readable / cmd ran).
+/// Assertions over a subject's text. Each field is optional, but a non-draft
+/// case must carry at least one: an empty `Assert` asserts nothing, so the
+/// runner fails it rather than reporting a vacuous pass. Independently of the
+/// assertions, a `cmd` subject must exit `0` unless `exit` names another code.
 #[derive(Debug, Deserialize, Default)]
 pub struct Assert {
-    /// Expected process exit code. Only meaningful for `cmd` cases.
+    /// Expected process exit code. Only meaningful for `cmd` cases. When
+    /// omitted, a `cmd` case still fails on any non-zero exit.
     #[serde(default)]
     pub exit: Option<i32>,
     /// Substrings that MUST be present in the subject.

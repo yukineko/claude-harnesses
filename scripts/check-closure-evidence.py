@@ -51,7 +51,12 @@ Evidence classes (every class present is validated; at least one is required)
 Runner allowlist (same rule as the backlog CLI): `cargo test ...`,
 `pytest ...`, `python3 -m pytest ...`, `bash|sh <script under a tests/ dir>`.
 The command is split on whitespace and exec'd as argv — never through a shell —
-and a command containing any shell metacharacter is refused. Timeout:
+and a command containing any shell metacharacter is refused.
+closure.green.runner must name the command's shape: the CLI's label
+(`cargo-test` for `cargo test`, `pytest` for `pytest`/`python3 -m pytest`,
+`script` for `bash|sh <script>`) or the command's own program (`cargo`,
+`pytest`, `python3`, `bash`, `sh`). A label for a different shape or an
+unknown runner blocks. Timeout:
 BACKLOG_TEST_TIMEOUT_SECS, clamped to 1..7200, default 1800.
 
 Exit codes: 0 nothing to judge or every judged row holds / 1 a judged row lacks
@@ -258,6 +263,21 @@ def _clean_rel(p: str) -> str | None:
     return p
 
 
+# Accepted `closure.green.runner` values and the command shapes each admits.
+# The first three are the backlog CLI's `Runner::label` vocabulary
+# (crates/backlog/src/evidence.rs) and must be changed together with it; the
+# rest are the legacy form where the runner is the command's own program.
+RUNNER_SHAPES = {
+    "cargo-test": "cargo test ...",
+    "pytest": "pytest ... / python3 -m pytest ...",
+    "script": "bash|sh <tests/ script>",
+    "cargo": "cargo test ...",
+    "python3": "python3 -m pytest ...",
+    "bash": "bash <tests/ script>",
+    "sh": "sh <tests/ script>",
+}
+
+
 def check_cmd(runner, cmd) -> tuple[list[str], list[str], list[str]]:
     """(argv, errors, index_paths_to_require)."""
     errs: list[str] = []
@@ -269,9 +289,13 @@ def check_cmd(runner, cmd) -> tuple[list[str], list[str], list[str]]:
     argv = cmd.split()
     need: list[str] = []
     a0 = argv[0]
+    # The runner LABEL the backlog CLI records for this command shape
+    # (crates/backlog/src/evidence.rs `Runner::label`); None = no allowlisted shape.
+    label: str | None = None
     if a0 == "cargo" and len(argv) >= 2 and argv[1] == "test":
-        pass
+        label = "cargo-test"
     elif a0 == "pytest" or (a0 == "python3" and argv[1:3] == ["-m", "pytest"]):
+        label = "pytest"
         start = 1 if a0 == "pytest" else 3
         for a in argv[start:]:
             if a.startswith("-"):
@@ -282,6 +306,7 @@ def check_cmd(runner, cmd) -> tuple[list[str], list[str], list[str]]:
             elif p.endswith(".py"):
                 need.append(p)
     elif a0 in ("bash", "sh"):
+        label = "script"
         if len(argv) < 2:
             errs.append(f"closure.green.cmd {cmd!r}: {a0} needs a script path")
         else:
@@ -296,11 +321,19 @@ def check_cmd(runner, cmd) -> tuple[list[str], list[str], list[str]]:
         errs.append(
             f"closure.green.cmd {cmd!r}: runner outside the allowlist "
             "(cargo test / pytest / python3 -m pytest / bash|sh <tests/ script>)")
-    if runner != a0:
-        errs.append(f"closure.green.runner = {runner!r} does not match the command's program {a0!r}"
-                    if isinstance(runner, str) else "closure.green.runner is missing or not a string")
-    elif runner not in ("cargo", "pytest", "python3", "bash", "sh"):
-        errs.append(f"closure.green.runner = {runner!r} is outside the allowlist")
+    # The recorded runner must name THIS command's shape: either the CLI's
+    # label for it (cargo-test / pytest / script, what `backlog close` writes)
+    # or the command's own program (the legacy hand-written form). Anything
+    # else (a label for a different shape, an unknown runner, a non-string)
+    # blocks. A command outside the allowlist has no acceptable runner at all.
+    if not isinstance(runner, str):
+        errs.append("closure.green.runner is missing or not a string")
+    elif runner not in RUNNER_SHAPES:
+        errs.append(f"closure.green.runner = {runner!r} is outside the allowlist "
+                    f"({' / '.join(RUNNER_SHAPES)})")
+    elif label is None or runner not in (label, a0):
+        errs.append(f"closure.green.runner = {runner!r} does not match the command {cmd!r} "
+                    f"(runner {runner!r} admits {RUNNER_SHAPES[runner]})")
     return argv, errs, need
 
 
@@ -398,7 +431,7 @@ def is_test_path(p: str) -> bool:
 def staged_test_paths() -> list[str]:
     """Test files the red tree gets from the index (the test is the one being
     committed; the code is the red rev's). Mirrors the backlog CLI's overlay of
-    test files onto the detached red worktree."""
+    test files onto the detached red worktree (narrowed to the named ones by the caller)."""
     out = _git_ok(["ls-files", "-z", "--full-name"], "list index")
     return [p for p in out.split("\0") if p and is_test_path(p)]
 
@@ -502,7 +535,11 @@ def check_f2p(row: dict, cl: dict, ctx: Ctx) -> list[str]:
         return errs  # do not spend a test run on a closure that is already refused
     # ---- re-run: red at red.rev (+ staged tests), green on the staged tree
     red_dir = ctx.newdir("red")
-    materialize(red_dir, red["rev"], staged_test_paths())
+    # Mirrors the backlog CLI (evidence.rs `narrow_to_named`): overlay only the
+    # test files the cmd names; nothing named (cargo, a pytest dir) = all.
+    staged = staged_test_paths()
+    named = [p for p in staged if p in set(need)]
+    materialize(red_dir, red["rev"], named or staged)
     rc, out = run_test(argv, red_dir, ctx.repo_root)
     why = behavioural_red(argv, rc, out)
     if why:

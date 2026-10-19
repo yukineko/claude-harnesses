@@ -160,6 +160,16 @@ class HookHarness:
             rollout.write_text(_ROLLOUT_STUB.format(code=rollout_exit))
             rollout.chmod(0o755)
 
+        # The hook BLOCKS any pushed commit whose TREE lacks
+        # scripts/check-compile-fail.py (backlog 034b6620, d257e44d), running
+        # the committed copy from a detached checkout of that commit. Like
+        # cargo, the trybuild contracts are not this suite's subject, so the
+        # init commit carries a stub that passes; the hook's own fail-closed
+        # branch for an absent script is untouched.
+        compile_fail = scripts / "check-compile-fail.py"
+        compile_fail.write_text("#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n")
+        compile_fail.chmod(0o755)
+
         (self.root / "f.txt").write_text("hi\n")
         subprocess.run([git, "-C", str(self.root), "add", "-A"], check=True, capture_output=True)
         subprocess.run(

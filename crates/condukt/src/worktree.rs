@@ -416,12 +416,24 @@ pub fn create_namespaced(
             // form (create() re-validates the spliced result regardless).
             validate_topic(topic)?;
             validate_branch(branch)?;
-            create(
+            let ns_branch = namespaced_branch(run, branch);
+            let path = create(
                 repo,
                 worktree_base,
                 &namespaced_topic(run, topic),
-                &namespaced_branch(run, branch),
-            )
+                &ns_branch,
+            )?;
+            // The task identity every commit on this branch must carry as a
+            // `Condukt-Task:` trailer (checked by `merge`). Without it the
+            // branch cannot be integrated, so a failed record rolls the
+            // worktree back rather than returning a branch nobody can merge.
+            if let Err(e) = record_task_identity(repo, &ns_branch, &format!("{run}/{topic}")) {
+                let path_str = path.to_string_lossy().to_string();
+                let _ = git_try(repo, &["worktree", "remove", "--force", "--", &path_str]);
+                let _ = git_try(repo, &["branch", "-D", &ns_branch]);
+                return Err(e);
+            }
+            Ok(path)
         }
     }
 }
@@ -805,9 +817,145 @@ fn record_creation_base(repo: &Path, branch: &str, base: &str) -> Result<()> {
     Ok(())
 }
 
+/// Git config key holding the `<run-id>/<task-id>` identity of a condukt task
+/// branch, written by [`create_namespaced`] next to [`creation_base_key`] (same
+/// storage rationale). Workers read it to stamp their commits with the
+/// [`TASK_TRAILER`] trailer; `merge` reads it to know which value to demand.
+fn task_identity_key(branch: &str) -> String {
+    format!("branch.{branch}.conduktTask")
+}
+
+/// The commit trailer key every task-branch commit must carry.
+pub const TASK_TRAILER: &str = "Condukt-Task";
+
+/// Durably record `identity` (`<run>/<task>`) for `branch`, verified by
+/// reading it back.
+fn record_task_identity(repo: &Path, branch: &str, identity: &str) -> Result<()> {
+    let key = task_identity_key(branch);
+    git(repo, &["config", "--replace-all", &key, identity])
+        .with_context(|| format!("could not record task identity of '{branch}' in git config"))?;
+    let back = git(repo, &["config", "--get", &key]).unwrap_or_default();
+    if back.trim() != identity {
+        bail!(
+            "task identity of '{branch}' could not be read back from git config \
+             ({key} = {back:?}, expected {identity}); refusing to return a task branch \
+             `condukt worktree merge` could not verify"
+        );
+    }
+    Ok(())
+}
+
+/// Refuse to integrate `branch` unless EVERY commit the merge would newly land
+/// on `default_branch` (`<base>..<tip>` minus what `default_branch` already
+/// has) carries a `Condukt-Task: <run>/<task>` trailer naming this task, and
+/// only that task.
+///
+/// Parallel sessions share one git identity, so authorship cannot tell a
+/// task's own commits from a foreign session's commit made on the same branch;
+/// the trailer is the only per-task mark. The expected identity is the
+/// `conduktTask` record written at create time; a caller-supplied
+/// `--run/--task` must agree with it, and stands in for it only when no
+/// record exists. Every non-determination refuses: no identity, a half-given
+/// `--run/--task`, a disagreeing pair, an unreadable log, a malformed record.
+///
+/// Merge commits are not exempt. condukt itself never commits on a task
+/// branch — [`merge`] and [`resolve_merge`] create their merge commit on
+/// `default_branch` — so any merge commit in the range was made by someone in
+/// the worktree (e.g. `git merge main` to resolve a conflict) and must carry
+/// the trailer like any other commit. Commits merged in from `default_branch`
+/// are already on it and so are outside the range.
+///
+/// An empty range lands nothing, so there is nothing that could be foreign and
+/// the check passes; the returned tip is what the caller must merge (pinned,
+/// so a commit arriving after the check is not merged unchecked).
+fn ensure_commits_carry_task_trailer(
+    repo: &Path,
+    branch: &str,
+    default_branch: &str,
+    base: &str,
+    cli_task: Option<(&str, &str)>,
+) -> Result<String> {
+    let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
+    let key = task_identity_key(short);
+    let (found, value, err) = git_try(repo, &["config", "--get", &key])?;
+    let recorded = value.trim();
+    let recorded = (found && !recorded.is_empty()).then(|| recorded.to_string());
+    let cli = cli_task.map(|(r, t)| format!("{r}/{t}"));
+    let identity = match (recorded, cli) {
+        (Some(rec), Some(cli)) if rec != cli => bail!(
+            "merge-task-mismatch: '{branch}' is recorded as task '{rec}' ({key}) but the \
+             merge was asked for task '{cli}'; refusing to merge ('{default_branch}' untouched)"
+        ),
+        (Some(rec), _) => rec,
+        (None, Some(cli)) => cli,
+        (None, None) => bail!(
+            "merge-task-undetermined: '{branch}' has no recorded task identity ({key}{}) and \
+             no --run/--task was given; cannot tell which commits belong to the task, \
+             refusing to merge ('{default_branch}' untouched)",
+            if err.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {}", err.trim())
+            }
+        ),
+    };
+
+    let tip = git(
+        repo,
+        &["rev-parse", "--verify", &format!("{branch}^{{commit}}")],
+    )
+    .with_context(|| format!("could not resolve '{branch}' to a commit"))?
+    .trim()
+    .to_string();
+    let fmt = format!(
+        "--format=%H%x1f%(trailers:key={TASK_TRAILER},valueonly,unfold,separator=%x1f)%x1e"
+    );
+    let log =
+        git(repo, &["log", &fmt, &tip, "--not", base, default_branch]).with_context(|| {
+            format!(
+                "merge-task-undetermined: could not list the commits of '{branch}' not on \
+             '{default_branch}'; refusing to merge ('{default_branch}' untouched)"
+            )
+        })?;
+    let mut offending = Vec::new();
+    for rec in log.split('\x1e') {
+        let rec = rec.trim_matches(|c| c == '\n' || c == '\r');
+        if rec.is_empty() {
+            continue;
+        }
+        let mut fields = rec.split('\x1f');
+        let sha = fields.next().unwrap_or("").trim();
+        if sha.len() != 40 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+            bail!(
+                "merge-task-undetermined: unparseable `git log` record {rec:?} for '{branch}'; \
+                 refusing to merge ('{default_branch}' untouched)"
+            );
+        }
+        let values: Vec<&str> = fields.map(str::trim).filter(|v| !v.is_empty()).collect();
+        if values.is_empty() || values.iter().any(|v| *v != identity) {
+            let got = if values.is_empty() {
+                "no trailer".to_string()
+            } else {
+                values.join(", ")
+            };
+            offending.push(format!("{sha} ({got})"));
+        }
+    }
+    if !offending.is_empty() {
+        bail!(
+            "merge-task-trailer-missing: {} commit(s) on '{branch}' do not carry \
+             `{TASK_TRAILER}: {identity}` and may not belong to this task (a parallel session \
+             shares the git identity); refusing to merge ('{default_branch}' untouched):\n  {}",
+            offending.len(),
+            offending.join("\n  ")
+        );
+    }
+    Ok(tip)
+}
+
 /// Refuse to integrate `branch` into `default_branch` unless the branch's
 /// recorded creation base is already an ancestor of `default_branch`
-/// (backlog 51595c41).
+/// (backlog 51595c41). Returns the verified base.
 ///
 /// `create` cuts the task branch from whatever HEAD the primary tree is on;
 /// `merge` always integrates into `default_branch`. A run started on a feature
@@ -816,7 +964,11 @@ fn record_creation_base(repo: &Path, branch: &str, base: &str) -> Result<()> {
 /// (e.g. a branch cut by an older binary or by hand), an unreadable config, a
 /// record that does not name a commit, a failed ancestry probe — refuses too:
 /// "could not tell" is not "the base is on the default branch".
-fn ensure_base_on_default_branch(repo: &Path, branch: &str, default_branch: &str) -> Result<()> {
+fn ensure_base_on_default_branch(
+    repo: &Path,
+    branch: &str,
+    default_branch: &str,
+) -> Result<String> {
     const HOW: &str = "condukt integrates a task branch only into the default branch and only \
          when the branch was cut from it; review `git log <default>..<branch>` and merge by \
          hand if that history is meant to land, or re-run the task from the default branch";
@@ -854,7 +1006,7 @@ fn ensure_base_on_default_branch(repo: &Path, branch: &str, default_branch: &str
     // `--is-ancestor` exits 0 for yes, 1 for no; any other code (or a timeout,
     // surfaced as `Err` by `?`) is undetermined and refuses as well.
     match git_exit_code(repo, &["merge-base", "--is-ancestor", base, default_branch])? {
-        0 => Ok(()),
+        0 => Ok(base.to_string()),
         1 => bail!(
             "merge-base-not-on-default-branch: '{branch}' was cut from {base}, which is not \
              on '{default_branch}'; merging it would carry that commit's history into \
@@ -1106,6 +1258,7 @@ pub fn merge(
     repo: &Path,
     branch: &str,
     default_branch: &str,
+    cli_task: Option<(&str, &str)>,
 ) -> Result<MergeOutcome> {
     // Serialize with every other primary-repo default-branch mutator (another
     // condukt run's merge / main-tree commit / `git worktree prune`) on ONE
@@ -1154,7 +1307,13 @@ pub fn merge(
     // ── Creation base must be on the default branch (backlog 51595c41) ──────
     // Before any checkout or review-surface write, so a refusal leaves
     // `default_branch` and the primary tree exactly as they were.
-    ensure_base_on_default_branch(repo, branch, default_branch)?;
+    let base = ensure_base_on_default_branch(repo, branch, default_branch)?;
+
+    // ── Every landed commit must carry this task's trailer ──────────────────
+    // `tip` is the verified commit; the trial and the real merge below merge
+    // exactly it, so a commit added to the branch after this check is not
+    // carried along unchecked.
+    let tip = ensure_commits_carry_task_trailer(repo, branch, default_branch, &base, cli_task)?;
 
     // ── Pre-merge hold gate (decision A) ─────────────────────────────────────
     // A detected mid-flight actual-diff overlap HOLDS this branch for review.
@@ -1177,7 +1336,7 @@ pub fn merge(
     // fails immediately when conflicts exist. Capture the conflicted paths from
     // the index BEFORE aborting (works whether the trial exited non-zero or left
     // CONFLICT markers with a zero exit).
-    let (trial_ok, _, _trial_stderr) = git_try(repo, &["merge", "--no-commit", "--no-ff", branch])?;
+    let (trial_ok, _, _trial_stderr) = git_try(repo, &["merge", "--no-commit", "--no-ff", &tip])?;
     // A failed listing is cannot-determine, NOT "no conflicted files": abort the
     // trial (leave no merge in progress) and refuse.
     let unmerged = match git(repo, &["ls-files", "--unmerged"]) {
@@ -1271,8 +1430,18 @@ pub fn merge(
     git_try(repo, &["merge", "--abort"])
         .with_context(|| "could not abort trial merge before real merge")?;
 
-    git(repo, &["merge", "--no-edit", branch])
-        .with_context(|| format!("merge of {branch} into {default_branch} failed"))?;
+    let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
+    git(
+        repo,
+        &[
+            "merge",
+            "--no-edit",
+            "-m",
+            &format!("Merge branch '{short}'"),
+            &tip,
+        ],
+    )
+    .with_context(|| format!("merge of {branch} into {default_branch} failed"))?;
     finalize_landed_branch(repo, branch);
     Ok(MergeOutcome::Merged)
 }
@@ -1377,7 +1546,11 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
 
     // Same gate as `merge` (backlog 51595c41): a runtime-overlap hold reaches
     // here without ever passing through `merge`, so the twin must check too.
-    ensure_base_on_default_branch(repo, branch, default_branch)?;
+    // Same for the task trailer: commits may have landed on the branch since
+    // the merge was held. Identity comes from the create-time record only, and
+    // the strategies below merge the verified `tip`, not the branch name.
+    let base = ensure_base_on_default_branch(repo, branch, default_branch)?;
+    let tip = ensure_commits_carry_task_trailer(repo, branch, default_branch, &base, None)?;
 
     git(repo, &["checkout", default_branch])
         .with_context(|| format!("could not checkout {default_branch} before resolve-merge"))?;
@@ -1386,19 +1559,29 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
         bail!("expected to be on '{default_branch}' but on '{current}'; aborting resolve-merge");
     }
 
+    let msg = format!(
+        "Merge branch '{}'",
+        branch.strip_prefix("refs/heads/").unwrap_or(branch)
+    );
     match resolution.choice {
         ResolveChoice::Ours => {
             // Keep our side; still record the merge so the branch is considered
             // merged and leaves the in-flight set.
-            git(repo, &["merge", "-s", "ours", "--no-edit", branch]).with_context(|| {
-                format!("`merge -s ours` of {branch} into {default_branch} failed")
-            })?;
+            git(
+                repo,
+                &["merge", "-s", "ours", "--no-edit", "-m", &msg, &tip],
+            )
+            .with_context(|| format!("`merge -s ours` of {branch} into {default_branch} failed"))?;
             finalize_landed_branch(repo, branch);
             Ok(ResolveOutcome::Reconciled(ResolveChoice::Ours))
         }
         ResolveChoice::Theirs => {
             // Favor the branch on conflicting hunks.
-            git(repo, &["merge", "-X", "theirs", "--no-edit", branch]).with_context(|| {
+            git(
+                repo,
+                &["merge", "-X", "theirs", "--no-edit", "-m", &msg, &tip],
+            )
+            .with_context(|| {
                 format!("`merge -X theirs` of {branch} into {default_branch} failed")
             })?;
             finalize_landed_branch(repo, branch);
@@ -1408,7 +1591,7 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
             // Materialize the merge. If the branch merges cleanly (e.g. a worker
             // already resolved it on the branch), commit and report Reconciled;
             // otherwise leave the markers in place for a human/worker to finish.
-            let (ok, _, _) = git_try(repo, &["merge", "--no-edit", branch])?;
+            let (ok, _, _) = git_try(repo, &["merge", "--no-edit", "-m", &msg, &tip])?;
             let unmerged = git(repo, &["ls-files", "--unmerged"]).unwrap_or_default();
             let pending = parse_unmerged_paths(&unmerged);
             if ok && pending.is_empty() {
@@ -1511,6 +1694,19 @@ mod worktree_remove_tests {
         let base = git(repo, &["rev-parse", "HEAD"]).unwrap();
         git(repo, &["checkout", "-b", branch]).unwrap();
         record_creation_base(repo, branch, &base).unwrap();
+        // Like `create_namespaced`: the task identity `merge` demands as a
+        // `Condukt-Task:` trailer on every landed commit.
+        record_task_identity(repo, branch, FIXTURE_TASK).unwrap();
+    }
+
+    /// The `<run>/<task>` identity fixture task branches are recorded under.
+    const FIXTURE_TASK: &str = "runT/t1";
+
+    /// Commit the staged changes in `dir` as the fixture task's own work
+    /// (carrying the `Condukt-Task:` trailer, as the worker instructions say).
+    fn commit_task(dir: &Path, msg: &str) {
+        let trailer = format!("{TASK_TRAILER}: {FIXTURE_TASK}");
+        git(dir, &["commit", "-m", msg, "--trailer", &trailer]).unwrap();
     }
 
     /// Create a branch from HEAD, write `content` to `file`, commit and return.
@@ -1518,7 +1714,7 @@ mod worktree_remove_tests {
         cut_branch(repo, branch);
         fs::write(repo.join(file), content).unwrap();
         git(repo, &["add", "."]).unwrap();
-        git(repo, &["commit", "-m", &format!("add {file} on {branch}")]).unwrap();
+        commit_task(repo, &format!("add {file} on {branch}"));
         git(repo, &["checkout", "main"]).unwrap();
     }
 
@@ -1531,7 +1727,7 @@ mod worktree_remove_tests {
         let home = tmp.path().join("home-clean");
         fs::create_dir_all(&home).unwrap();
         let outcome = with_home(&home, || {
-            merge(&cfg, &repo, "feat", "main").expect("clean merge should succeed")
+            merge(&cfg, &repo, "feat", "main", None).expect("clean merge should succeed")
         });
         assert_eq!(
             outcome,
@@ -1558,7 +1754,7 @@ mod worktree_remove_tests {
         let result = with_home(&home, || {
             let ledger = overwatch::store::merge_conflicts_path(&repo).expect("ledger path");
             fs::create_dir_all(&ledger).expect("make the ledger path an unreadable directory");
-            merge(&cfg, &repo, "feat-unreadable", "main")
+            merge(&cfg, &repo, "feat-unreadable", "main", None)
         });
         assert!(
             !matches!(result, Ok(MergeOutcome::Merged)),
@@ -1578,7 +1774,7 @@ mod worktree_remove_tests {
         let cfg = test_cfg(&repo);
         let home = tmp.path().join("home-readable");
         fs::create_dir_all(&home).unwrap();
-        let result = with_home(&home, || merge(&cfg, &repo, "feat-readable", "main"));
+        let result = with_home(&home, || merge(&cfg, &repo, "feat-readable", "main", None));
         assert_eq!(result.expect("clean merge"), MergeOutcome::Merged);
         assert!(repo.join("feat.txt").exists());
     }
@@ -1593,7 +1789,13 @@ mod worktree_remove_tests {
         let home = tmp.path().join("home-missing-branch");
         fs::create_dir_all(&home).unwrap();
         let (result, open) = with_home(&home, || {
-            let result = merge(&cfg, &repo, "condukt/no-such-run/no-such-task", "main");
+            let result = merge(
+                &cfg,
+                &repo,
+                "condukt/no-such-run/no-such-task",
+                "main",
+                None,
+            );
             let open = overwatch::store::open_merge_conflicts(&repo)
                 .expect("the review surface must be readable in the sandbox");
             (result, open)
@@ -1629,7 +1831,7 @@ mod worktree_remove_tests {
         let home = tmp.path().join("home-empty-branch");
         fs::create_dir_all(&home).unwrap();
         let (result, open) = with_home(&home, || {
-            let result = merge(&cfg, &repo, "", "main");
+            let result = merge(&cfg, &repo, "", "main", None);
             let open = overwatch::store::open_merge_conflicts(&repo)
                 .expect("the review surface must be readable in the sandbox");
             (result, open)
@@ -1668,7 +1870,7 @@ mod worktree_remove_tests {
         cut_branch(&repo, "conflict-branch");
         fs::write(repo.join(conflict_file), "line1\nbranch version\nline3\n").unwrap();
         git(&repo, &["add", "."]).unwrap();
-        git(&repo, &["commit", "-m", "branch edit"]).unwrap();
+        commit_task(&repo, "branch edit");
 
         // Main: modify line2 differently → creates a real conflict
         git(&repo, &["checkout", "main"]).unwrap();
@@ -1680,7 +1882,7 @@ mod worktree_remove_tests {
         let home = tmp.path().join("home-conflict");
         fs::create_dir_all(&home).unwrap();
         let (outcome, open) = with_home(&home, || {
-            let outcome = merge(&cfg, &repo, "conflict-branch", "main")
+            let outcome = merge(&cfg, &repo, "conflict-branch", "main", None)
                 .expect("a held conflict is a hold-for-review, not a hard error");
             // Read back the recorded entries under the sandboxed HOME.
             let open = overwatch::store::open_merge_conflicts(&repo).unwrap_or_default();
@@ -1736,7 +1938,7 @@ mod worktree_remove_tests {
         cut_branch(&repo, "conflict-branch");
         fs::write(repo.join(conflict_file), "line1\nbranch version\nline3\n").unwrap();
         git(&repo, &["add", "."]).unwrap();
-        git(&repo, &["commit", "-m", "branch edit"]).unwrap();
+        commit_task(&repo, "branch edit");
 
         git(&repo, &["checkout", "main"]).unwrap();
         fs::write(repo.join(conflict_file), "line1\nmain version\nline3\n").unwrap();
@@ -1811,10 +2013,12 @@ mod worktree_remove_tests {
             );
             fs::write(wt.join("t.txt"), "t\n").unwrap();
             git(&wt, &["add", "."]).unwrap();
-            git(&wt, &["commit", "-m", "task"]).unwrap();
+            commit_task(&wt, "task");
             let cfg = test_cfg(&repo);
+            // Legacy `create` (no run) records no task identity, so the merge
+            // names it explicitly.
             assert_eq!(
-                merge(&cfg, &repo, "task1", "main").unwrap(),
+                merge(&cfg, &repo, "task1", "main", Some(("runT", "t1"))).unwrap(),
                 MergeOutcome::Merged,
                 "a branch cut from main must still merge (happy path unchanged)"
             );
@@ -1834,7 +2038,7 @@ mod worktree_remove_tests {
             git(&repo, &["checkout", "main"]).unwrap();
             let before = git(&repo, &["rev-parse", "main"]).unwrap();
             let cfg = test_cfg(&repo);
-            let err = merge(&cfg, &repo, "legacy", "main")
+            let err = merge(&cfg, &repo, "legacy", "main", None)
                 .expect_err("no recorded base is undetermined and must refuse");
             let msg = format!("{err:#}");
             assert!(msg.contains("merge-base-unrecorded"), "got: {msg}");
@@ -1863,7 +2067,7 @@ mod worktree_remove_tests {
             .unwrap();
             let before = git(&repo, &["rev-parse", "main"]).unwrap();
             let cfg = test_cfg(&repo);
-            let err = merge(&cfg, &repo, "feat", "main")
+            let err = merge(&cfg, &repo, "feat", "main", None)
                 .expect_err("an unresolvable recorded base must refuse");
             assert!(
                 format!("{err:#}").contains("merge-base-unrecorded"),
@@ -2048,7 +2252,7 @@ mod worktree_remove_tests {
                 crate::state::now_secs(),
             )
             .unwrap();
-            merge(&cfg, &repo, "feat", "main")
+            merge(&cfg, &repo, "feat", "main", None)
                 .expect("a held overlap is a hold-for-review, not a hard error")
         });
 
@@ -2081,7 +2285,7 @@ mod worktree_remove_tests {
         let outcome = with_home(&home, || {
             // Hold placed by "deadrun"; that run holds NO claim → not live.
             seed_runtime_overlap_hold(&repo, "deadrun", "feat");
-            merge(&cfg, &repo, "feat", "main")
+            merge(&cfg, &repo, "feat", "main", None)
                 .expect("a filtered stale hold must let the merge proceed, not error")
         });
 
@@ -2124,7 +2328,7 @@ mod worktree_remove_tests {
                 stale_at,
             )
             .unwrap();
-            merge(&cfg, &repo, "feat", "main")
+            merge(&cfg, &repo, "feat", "main", None)
                 .expect("a filtered TTL-expired hold must let the merge proceed, not error")
         });
 
@@ -2175,7 +2379,7 @@ mod worktree_remove_tests {
                 },
             );
             overwatch::store::save_leases(&repo, &leases).unwrap();
-            merge(&cfg, &repo, "feat", "main")
+            merge(&cfg, &repo, "feat", "main", None)
                 .expect("a hold with no condukt-registry liveness must merge, not error")
         });
 
@@ -2214,7 +2418,7 @@ mod worktree_remove_tests {
             let reg = crate::claim::registry_path_for_test(&cfg, &repo);
             fs::create_dir_all(reg.parent().unwrap()).unwrap();
             fs::write(&reg, b"{ not valid json ]]").unwrap();
-            merge(&cfg, &repo, "feat", "main")
+            merge(&cfg, &repo, "feat", "main", None)
                 .expect("an undetermined-liveness hold is a hold-for-review, not a hard error")
         });
 
@@ -2264,7 +2468,7 @@ mod worktree_remove_tests {
             // t1 lands cleanly. The #1 cleanup wiring must mark t1's changeset
             // merged so it stops counting as in-flight.
             assert_eq!(
-                merge(&cfg, &repo, "feat1", "main").unwrap(),
+                merge(&cfg, &repo, "feat1", "main", None).unwrap(),
                 MergeOutcome::Merged,
                 "t1 must merge cleanly"
             );
@@ -2308,7 +2512,7 @@ mod worktree_remove_tests {
             // A real clean-merging feat2 branch; with no hold it must merge.
             make_branch(&repo, "feat2", "feat2.txt", "t2 content\n");
             assert_eq!(
-                merge(&cfg, &repo, "feat2", "main").unwrap(),
+                merge(&cfg, &repo, "feat2", "main", None).unwrap(),
                 MergeOutcome::Merged,
                 "a landed peer must NOT spuriously hold t2's merge"
             );
@@ -2669,7 +2873,7 @@ mod worktree_remove_tests {
 
         let home = tmp.path().join("home-merge-refuse");
         fs::create_dir_all(&home).unwrap();
-        let err = with_home(&home, || merge(&cfg, &repo, "feat", "main"))
+        let err = with_home(&home, || merge(&cfg, &repo, "feat", "main", None))
             .expect_err("merge must REFUSE when the repo-primary lock cannot be acquired");
         let msg = format!("{err:#}");
         assert!(

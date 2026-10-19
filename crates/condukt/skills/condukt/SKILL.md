@@ -1212,8 +1212,11 @@ condukt state gate --run $RID      # exit 0 まで完了宣言しない
 - **merge pre-flight 衝突への対処**: `condukt worktree merge` が merge pre-flight で衝突を検出した
   場合は以下の手順で対処する:
   1. 衝突しているタスク (branch) を特定する。衝突 branch が複数ある場合は 1 つずつ処理する。
-  2. 衝突が軽微で自動解消可能な場合: worktree 内に移動して `git merge main` → 手動でコンフリクト
-     マーカーを解消 → commit してから再度 `condukt worktree merge` を実行する。
+  2. 衝突が軽微で自動解消可能な場合: worktree 内に移動して `git merge --no-commit main` → 手動で
+     コンフリクトマーカーを解消して `git add` → task trailer 付きで確定する
+     `git commit --no-edit --trailer "Condukt-Task: $TASK_ID"` (`TASK_ID` は
+     `TASK_ID=$(git config --get "branch.$(git branch --show-current).conduktTask")` で読む。
+     trailer の無い merge commit は `condukt worktree merge` が拒否する) → 再度 `condukt worktree merge` を実行する。
   3. 衝突が大きく再実装が必要な場合: タスクを `failed` に set し、Phase 6 カスケードエスカレーション
      を経て新しい worktree で再実装する。再実装 worker には衝突の詳細を `failure_context.reason` に
      含めて渡す。

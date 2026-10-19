@@ -68,24 +68,33 @@ HOOKS = (
     "commit-msg",
 )
 
-SCANNERS = [
-    "check-prompt-injection.py",
-    "check-fail-open.py",
-    "check-fail-open-diff.py",
-    "check-doc-claims.py",
-    "check-claudemd-claims.py",
-    "check-plugin-versions.py",
-    "check-version-bumped.py",
-    "check-hardcoded-secret.py",
-    "check-raw-io-ratchet.py",
-    "check-fault-injection-adoption.py",
-    "check-worktree-isolation.py",
-    "check-gate-crates-sync.py",
-    "check-gate-protection.py",
-    "check-cross-crate-constants.py",
-    "check-launcher-exec-bit.py",
-    "check-clippy-lints.py",
-    "check-backlog-store.py",
+def _precommit_scanners():
+    """The scanners .githooks/pre-commit invokes, in order, read from the
+    `run <scanner> <label>` lines of the hook under test.
+
+    Derived rather than hand-copied: this harness needs every scanner the hook
+    asks for to EXIST as a stub (the hook correctly blocks on a missing one),
+    and the hand-kept copy drifted (check-prose-tests.py and
+    check-doc-duplication.py were added to the hook but not here, so every
+    seed commit was blocked). Whether the hook still runs the RIGHT list is
+    pinned separately by the frozen EXPECTED_SCANNERS in
+    scripts/test_precommit_hook.py; this derivation does not replace that.
+
+    An empty result would turn every `ran() == SCANNERS` assertion below into
+    a comparison of two empty lists, so it raises instead of returning [].
+    """
+    hook = _HOOKS_DIR / "pre-commit"
+    found = [
+        line.split()[1]
+        for line in hook.read_text().splitlines()
+        if line.startswith("run ") and len(line.split()) >= 2
+    ]
+    if not found:
+        raise RuntimeError("no `run <scanner>` lines found in %s" % hook)
+    return found
+
+
+SCANNERS = _precommit_scanners() + [
     # check-test-weakening.py runs last: it fires from .githooks/commit-msg,
     # which git invokes only after pre-commit (and every scanner above) has
     # already succeeded — see commit-msg's own header for why it moved there.
@@ -498,7 +507,7 @@ class GreenRunClearsTheLedger(GateTestCase):
         h.commit("bypassed", "--no-verify")
         self.assertLedgerHas(h, 1)
 
-        h.set_stub("check-doc-claims.py", 1)
+        h.set_stub("check-doc-duplication.py", 1)
         h.write("a.txt", "more\n")
         h.git("add", "-A")
         proc = h.commit("attempt")

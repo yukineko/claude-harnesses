@@ -267,7 +267,13 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
-    let verdict = gate::evaluate(&cfg, &root);
+    // Scoped to what this session wrote (the Stop payload's transcript); an
+    // undetermined attribution scans the whole checkout. The note is printed
+    // on every run, allowing ones included, so an exclusion is never silent.
+    let verdict = gate::evaluate(&cfg, &root, &input.transcript_path);
+    if let Some(note) = gate::attribution_note(&verdict) {
+        eprintln!("{note}");
+    }
 
     if !verdict.blocks(&cfg) {
         state::reset(&cfg.state_dir, &session);
@@ -353,14 +359,19 @@ fn verify_command(task: &str) -> ! {
 /// report. A missing/corrupt proof yields `has_red/has_green=false`,
 /// `transition="unknown"`, `valid_fp_oracle=false`, exit 1. A proof that exists
 /// but cannot be read yields `transition="undetermined"`,
-/// `valid_fp_oracle=false`, exit 2 (see `transition::oracle_report`). Exit 0
-/// only for a valid Fail→Pass oracle.
+/// `valid_fp_oracle=false`, exit 2 (see `transition::oracle_report`). A
+/// Fail→Pass whose RED and GREEN proofs were not recorded with the same test
+/// command yields `transition="command_mismatch"`, exit 1 (see
+/// `transition::oracle_report_same_cmd`). Exit 0 only for a valid Fail→Pass
+/// oracle of one and the same command.
 fn oracle_command(task: &str) -> ! {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
     let pre = proof::read_passed(&root, &cfg, task, "red");
     let post = proof::read_passed(&root, &cfg, task, "green");
-    let (report, code) = transition::oracle_report(pre, post);
+    let red_cmd = proof::read_cmd(&root, &cfg, task, "red");
+    let green_cmd = proof::read_cmd(&root, &cfg, task, "green");
+    let (report, code) = transition::oracle_report_same_cmd(pre, post, red_cmd, green_cmd);
     println!("{report}");
     std::process::exit(code);
 }
@@ -421,7 +432,12 @@ fn status() {
     println!("state_dir:     {}", cfg.state_dir.display());
     println!("strict_separation: {}", cfg.strict_separation);
     println!();
-    let verdict = gate::evaluate(&cfg, &root);
+    // A manual run has no transcript: attribution is undetermined and the
+    // whole checkout is scanned (and the note says so).
+    let verdict = gate::evaluate(&cfg, &root, "");
+    if let Some(note) = gate::attribution_note(&verdict) {
+        println!("{note}");
+    }
     println!("{}", gate::human_report(&verdict, &cfg));
 }
 

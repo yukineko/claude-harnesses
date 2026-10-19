@@ -46,8 +46,19 @@ fn run_with_shim(fail_probe: bool) -> (std::process::Output, PathBuf, tempfile::
     run_git(&repo, &["commit", "-q", "-m", "init"]);
     run_git(&repo, &["checkout", "-q", "-b", "feat"]);
     run_git(&repo, &["config", "branch.feat.conduktBase", "main"]);
+    run_git(&repo, &["config", "branch.feat.conduktTask", "r/t"]);
     std::fs::write(repo.join("f.txt"), "theirs\n").unwrap();
-    run_git(&repo, &["commit", "-q", "-am", "theirs"]);
+    run_git(
+        &repo,
+        &[
+            "commit",
+            "-q",
+            "-am",
+            "theirs",
+            "--trailer",
+            "Condukt-Task: r/t",
+        ],
+    );
     run_git(&repo, &["checkout", "-q", "main"]);
     std::fs::write(repo.join("f.txt"), "ours\n").unwrap();
     run_git(&repo, &["commit", "-q", "-am", "ours"]);

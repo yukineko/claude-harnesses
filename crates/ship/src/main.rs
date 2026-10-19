@@ -69,8 +69,9 @@ fn main() {
 }
 
 /// Resolve the repo root: walk up from the current dir to the git toplevel.
-/// Falls back to the current dir if that fails (fail-soft; detections
-/// themselves are fail-soft too).
+/// Falls back to the current dir if that fails; the detections then run
+/// there, and any git call that fails reports `Undetermined` (`[?]`), never
+/// clean.
 fn resolve_repo_root(start: &Path) -> PathBuf {
     let output = Command::new("git")
         .arg("rev-parse")
@@ -101,6 +102,22 @@ fn detect(repo: &Path) -> ShipStatus {
     }
 }
 
+/// Print a script's outcome; `true` iff it ran and exited successfully. A
+/// missing/unspawnable script or a non-zero exit is a failure the caller turns
+/// into a non-zero process exit — printing FAILED alone leaves `$?` at 0.
+fn report_script(label: &str, result: Result<checklist::ScriptRun, String>) -> bool {
+    match result {
+        Ok(run) => {
+            print!("{}", run.summary);
+            run.succeeded
+        }
+        Err(e) => {
+            eprintln!("[{label}] error: {e}");
+            false
+        }
+    }
+}
+
 fn check(run_safe: bool) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let repo = resolve_repo_root(&cwd);
@@ -110,10 +127,7 @@ fn check(run_safe: bool) {
 
     if run_safe {
         println!();
-        match checklist::run_safe(&repo) {
-            Ok(summary) => print!("{summary}"),
-            Err(e) => eprintln!("[run-safe] error: {e}"),
-        }
+        let ok = report_script("run-safe", checklist::run_safe(&repo));
 
         // Re-detect (rebuild may have changed stale-crate state) and reprint
         // the remaining GATED items.
@@ -121,6 +135,10 @@ fn check(run_safe: bool) {
         println!();
         println!("remaining GATED items:");
         print!("{}", checklist::render_gated_remaining(&status));
+
+        if !ok {
+            std::process::exit(1);
+        }
     }
 }
 
@@ -128,9 +146,8 @@ fn rollout() {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let repo = resolve_repo_root(&cwd);
 
-    match checklist::rollout(&repo) {
-        Ok(summary) => print!("{summary}"),
-        Err(e) => eprintln!("[rollout] error: {e}"),
+    if !report_script("rollout", checklist::rollout(&repo)) {
+        std::process::exit(1);
     }
 }
 
@@ -143,11 +160,10 @@ fn session_end() {
     let repo = resolve_repo_root(&cwd);
     let status = detect(&repo);
 
+    // Always print when there is unshipped work. Claude Code captures hook
+    // stdout (a pipe, never a terminal), so gating on a TTY would make the
+    // reminder unreachable on the real hook path.
     if let Some(reminder) = checklist::session_end_reminder(&status) {
-        // Only surface the reminder on an interactive terminal; suppress in
-        // headless/programmatic contexts to avoid polluting stdout.
-        if !harness_core::hook::is_headless() {
-            println!("{reminder}");
-        }
+        println!("{reminder}");
     }
 }

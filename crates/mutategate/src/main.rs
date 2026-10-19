@@ -276,8 +276,8 @@ mod tests {
         }
     }
 
-    // ── The violation write must not fail in SILENCE (audit finding F-1/F-2,
-    //    docs/audit-mutategate-verdict-paths.md §3). The gate's exit code is
+    // ── The violation write must not fail in SILENCE (verdict-path audit
+    //    finding F-1/F-2). The gate's exit code is
     //    deliberately unaffected; what changed is that a lost record is now
     //    reported instead of dropped.
     //

@@ -1275,39 +1275,6 @@ FAILED scripts/test_prose_flow_a.py::T::test_claim_circuit_idle_home_unset_trips
 1 failed, 40 deselected in 1.06s"""
 
 [[task]]
-id = "c00c3506"
-title = "condukt git runner deadlocks on output over the 64 KiB pipe buffer, so diff-risk journals no-diff for large diffs"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "condukt",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "worktree.rs run_git_bounded_with waits for child exit (wait_timeout) before read_bounded drains stdout. Output above the pipe buffer (65536 on macOS) blocks git; it is killed at GIT_TIMEOUT 45s. diffrisk_record::worktree_diff then falls back to git diff HEAD (empty on a clean committed tree) and journals no-diff. Observed 2026-10-19 at 51376c9c: run-20261018-190327-19056 t1 diff was 66752 bytes, state set done printed diff-risk NOT INSPECTED (no-diff); run-20261017-125123-30672 t3 had the same outcome. Possibly also the cause of the 45s condukt worktree merge timeout on 2026-10-18 (not verified). Fix direction: drain stdout/stderr concurrently while waiting."
-created_at = 1792419616
-updated_at = 1792419616
-weight = 0.0
-issue_number = 1418
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1418"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --bin condukt large_output_tests -- --ignored"
-rev = "827928c42b31b913f065b7b9888636bf3f09bb01"
-observed_at = 1792419616
-detail = """
-exit 101: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 912 filtered out; finished in 5.14s
-
-   Compiling condukt v0.7.267 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.06s
-     Running unittests src/main.rs (target/debug/deps/condukt-562e2d25402bd49f)
-error: test failed, to rerun pass `-p condukt --bin condukt`"""
-
-[[task]]
 id = "08494f63"
 title = "overwatch: record_changeset_and_detect returns Ok(empty) when the lock is not acquired, so condukt sets no merge-hold"
 project = "/Users/yuki/src/harness"

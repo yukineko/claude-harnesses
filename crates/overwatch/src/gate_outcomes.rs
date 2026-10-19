@@ -420,10 +420,13 @@ fn render_text(reports: &[GateReport], rev: &str, date: &str) -> String {
 
 /// CLI entry: print the readout; exit 3 when any part was undetermined.
 pub fn run_cli(json_out: bool, now: i64) -> anyhow::Result<()> {
-    let Some(home) = dirs::home_dir() else {
+    // Through harness_core::config::home(), the one resolver that honours
+    // the test sandbox and never guesses an unset HOME (backlog 099a5cbb).
+    let home = harness_core::config::home();
+    if home == std::path::Path::new(harness_core::config::UNDETERMINED_HOME) {
         eprintln!("overwatch gate-outcomes: UNDETERMINED — no home directory");
         std::process::exit(EXIT_UNDETERMINED);
-    };
+    }
     let reports = collect(&home);
     let rev = format!("overwatch {}", env!("CARGO_PKG_VERSION"));
     let date = utc_date(now);

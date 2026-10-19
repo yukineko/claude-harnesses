@@ -6,6 +6,12 @@
 //! failed before the implementation and passes after it. Every other transition
 //! (a test that never failed, one that still fails, or one that regressed) is
 //! not a valid oracle.
+//!
+//! "The test" means ONE test command: a RED recorded with command A and a
+//! GREEN recorded with an unrelated command B prove nothing about A going
+//! Fail→Pass. `tdd oracle` therefore goes through [`oracle_report_same_cmd`],
+//! which only accepts a `FailToPass` whose RED and GREEN proofs recorded the
+//! same `cmd` (backlog dc37a4da).
 
 use harness_core::verdict::Determination;
 use serde_json::{json, Value};
@@ -129,6 +135,59 @@ pub fn oracle_report(
     }
 }
 
+/// `tdd oracle`'s full verdict: [`oracle_report`] over the `passed` reads,
+/// plus the requirement that the RED and GREEN proofs were recorded with the
+/// SAME test command (`red_cmd` / `green_cmd`, from `proof::read_cmd`).
+///
+/// - Either `cmd` read `Undetermined` (artifact unreadable): transition
+///   `"undetermined"`, `valid_fp_oracle: false`, exit
+///   [`ORACLE_EXIT_UNDETERMINED`] — "could not look", never a valid oracle.
+/// - A `fail_to_pass` whose commands are not both present and equal
+///   (different commands, or a proof with no recorded `cmd`, which cannot show
+///   sameness): transition `"command_mismatch"`, `valid_fp_oracle: false`,
+///   exit [`ORACLE_EXIT_INVALID`]. It is deliberately NOT `"unknown"`:
+///   `condukt state check-oracle` degrades `"unknown"` to its fallback, while
+///   any other non-valid transition is a reject.
+/// - Otherwise the [`oracle_report`] verdict stands. The recorded commands are
+///   added as `red_cmd` / `green_cmd` (null when absent or unreadable).
+pub fn oracle_report_same_cmd(
+    pre_passed: Determination<Option<bool>>,
+    post_passed: Determination<Option<bool>>,
+    red_cmd: Determination<Option<String>>,
+    green_cmd: Determination<Option<String>>,
+) -> (Value, i32) {
+    let (mut report, code) = oracle_report(pre_passed, post_passed);
+    let (red_cmd, green_cmd) = match (red_cmd, green_cmd) {
+        (Determination::Known(r), Determination::Known(g)) => (r, g),
+        (r, g) => {
+            let why = |d: &Determination<Option<String>>| -> Option<String> {
+                match d {
+                    Determination::Known(_) => None,
+                    Determination::Undetermined(why) => Some(why.as_str().to_string()),
+                }
+            };
+            let (red_why, green_why) = (why(&r), why(&g));
+            if code != ORACLE_EXIT_UNDETERMINED {
+                report["undetermined"] = json!({ "red": red_why, "green": green_why });
+            }
+            report["transition"] = json!("undetermined");
+            report["valid_fp_oracle"] = json!(false);
+            report["red_cmd"] = Value::Null;
+            report["green_cmd"] = Value::Null;
+            return (report, ORACLE_EXIT_UNDETERMINED);
+        }
+    };
+    let same = matches!((&red_cmd, &green_cmd), (Some(r), Some(g)) if r == g);
+    report["red_cmd"] = json!(red_cmd);
+    report["green_cmd"] = json!(green_cmd);
+    if code == ORACLE_EXIT_VALID && !same {
+        report["transition"] = json!("command_mismatch");
+        report["valid_fp_oracle"] = json!(false);
+        return (report, ORACLE_EXIT_INVALID);
+    }
+    (report, code)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +256,112 @@ mod tests {
             assert_eq!(r["valid_fp_oracle"], false);
             assert_eq!(r["has_red"], has_red);
             assert_eq!(r["has_green"], has_green);
+        }
+    }
+
+    #[test]
+    fn oracle_report_undetermined_side_names_the_read_error() {
+        let (r, code) = oracle_report(
+            Determination::known(Some(false)),
+            Determination::undetermined("green proof unreadable: EISDIR"),
+        );
+        assert_eq!(code, ORACLE_EXIT_UNDETERMINED, "{r}");
+        assert_eq!(r["transition"], "undetermined");
+        assert_eq!(r["valid_fp_oracle"], false);
+        assert!(r["undetermined"]["red"].is_null(), "{r}");
+        assert!(
+            r["undetermined"]["green"]
+                .as_str()
+                .is_some_and(|s| s.contains("green proof unreadable: EISDIR")),
+            "{r}"
+        );
+    }
+
+    fn cmd(c: &str) -> Determination<Option<String>> {
+        Determination::known(Some(c.to_string()))
+    }
+
+    #[test]
+    fn same_cmd_fail_to_pass_is_valid() {
+        let (r, code) = oracle_report_same_cmd(
+            Determination::known(Some(false)),
+            Determination::known(Some(true)),
+            cmd("cargo test"),
+            cmd("cargo test"),
+        );
+        assert_eq!(code, ORACLE_EXIT_VALID, "{r}");
+        assert_eq!(r["transition"], "fail_to_pass");
+        assert_eq!(r["valid_fp_oracle"], true);
+        assert_eq!(r["red_cmd"], "cargo test");
+        assert_eq!(r["green_cmd"], "cargo test");
+    }
+
+    #[test]
+    fn different_cmd_fail_to_pass_is_command_mismatch() {
+        let (r, code) = oracle_report_same_cmd(
+            Determination::known(Some(false)),
+            Determination::known(Some(true)),
+            cmd("cargo test a"),
+            cmd("cargo test b"),
+        );
+        assert_eq!(code, ORACLE_EXIT_INVALID, "{r}");
+        assert_eq!(r["transition"], "command_mismatch");
+        assert_eq!(r["valid_fp_oracle"], false);
+    }
+
+    #[test]
+    fn absent_cmd_on_either_side_is_command_mismatch() {
+        for (red, green) in [
+            (Determination::known(None), cmd("x")),
+            (cmd("x"), Determination::known(None)),
+            (Determination::known(None), Determination::known(None)),
+        ] {
+            let (r, code) = oracle_report_same_cmd(
+                Determination::known(Some(false)),
+                Determination::known(Some(true)),
+                red,
+                green,
+            );
+            assert_eq!(code, ORACLE_EXIT_INVALID, "{r}");
+            assert_eq!(r["transition"], "command_mismatch");
+            assert_eq!(r["valid_fp_oracle"], false);
+        }
+    }
+
+    #[test]
+    fn non_fp_transitions_keep_their_name_regardless_of_cmd() {
+        let (r, code) = oracle_report_same_cmd(
+            Determination::known(Some(false)),
+            Determination::known(Some(false)),
+            cmd("a"),
+            cmd("b"),
+        );
+        assert_eq!(code, ORACLE_EXIT_INVALID);
+        assert_eq!(r["transition"], "fail_to_fail");
+        let (r, code) = oracle_report_same_cmd(
+            Determination::known(None),
+            Determination::known(None),
+            Determination::known(None),
+            Determination::known(None),
+        );
+        assert_eq!(code, ORACLE_EXIT_INVALID);
+        assert_eq!(r["transition"], "unknown");
+    }
+
+    #[test]
+    fn undetermined_cmd_read_is_undetermined_exit_2() {
+        let und = || Determination::<Option<String>>::undetermined("read blocked");
+        for (red, green) in [(und(), cmd("x")), (cmd("x"), und()), (und(), und())] {
+            let (r, code) = oracle_report_same_cmd(
+                Determination::known(Some(false)),
+                Determination::known(Some(true)),
+                red,
+                green,
+            );
+            assert_eq!(code, ORACLE_EXIT_UNDETERMINED, "{r}");
+            assert_eq!(r["transition"], "undetermined");
+            assert_eq!(r["valid_fp_oracle"], false);
+            assert!(r["undetermined"].is_object(), "{r}");
         }
     }
 }

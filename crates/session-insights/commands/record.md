@@ -88,13 +88,15 @@ job is to author the Japanese prose sections based on THIS conversation.
 
 5. **Reconcile the cross-session backlog.** The per-session `## 残課題` is a
    snapshot; the durable, cross-project queue is the **standalone `backlog`
-   crate** (`~/.backlog/tasks.toml`, surfaced at SessionStart by its own hook).
+   crate** (per repo: `<repo root>/.backlog/tasks.toml`, surfaced at SessionStart by its own hook).
    This is now the single canonical queue — session-insights no longer keeps an
    independent backlog. Use the project name from the record note heading as `<P>`.
    1. **See what's pending:** `backlog list --project <P> --status pending`
    2. **Close what this session finished.** For each pending item that is now
       done (compare against what was actually accomplished this session), mark it
-      by id: `backlog done <id>`.
+      by id WITH closure evidence: `backlog done <id> --test "<cmd>" --red-rev <rev>`
+      (or `--doc-only <commit>` / `--duplicate-of <id>`). A bare `backlog done <id>`
+      is refused by the backlog CLI.
    3. **Add genuinely-open follow-ups** from this session's `## 残課題`:
       `backlog add --title "<one open item>" --project <P> --repro-test "<committed test that fails at HEAD>"`
       (one call per item). Write and commit the failing test first; `add` without a

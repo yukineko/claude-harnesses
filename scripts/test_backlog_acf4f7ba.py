@@ -11,8 +11,9 @@ which is one of Step 1's stop conditions.
 The test runs the real `compass gap` (built from this checkout) in a throwaway
 git repo seeded with this repo's charter, and asserts: if the SKILL tells the
 reader to take `to_condukt` right after `compass gap`, then that key exists in
-the gap JSON (or the SKILL invokes `compass route`). Open defect ->
-expectedFailure.
+the gap JSON (or the SKILL invokes `compass route`); more generally every gap
+field the step names in backticks must be a key of the gap JSON. The SKILL path
+can be redirected with FLOW_SKILL_MD (RED check against the pre-fix prose).
 
     python3 scripts/test_backlog_acf4f7ba.py
 """
@@ -28,7 +29,9 @@ import unittest
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parent.parent
-SKILL = _REPO / "crates/flow/skills/flow/SKILL.md"
+SKILL = Path(os.environ.get("FLOW_SKILL_MD", _REPO / "crates/flow/skills/flow/SKILL.md"))
+GAP_FIELDS = ("opportunities", "dod", "measuring_stick", "last_outcome",
+              "to_condukt", "north_star", "current_gap")
 CHARTER = _REPO / ".compass/charter.md"
 
 
@@ -56,22 +59,27 @@ class SkillGapFieldMatchesGapOutput(unittest.TestCase):
             subprocess.run(["git", *args], cwd=self.tmp, check=True,
                            capture_output=True)
 
-    @unittest.expectedFailure  # backlog acf4f7ba: open defect, remove when fixed
-    def test_to_condukt_referenced_after_gap_exists_in_gap_output(self):
+    def test_gap_fields_named_after_gap_exist_in_gap_output(self):
         text = SKILL.read_text()
         start = text.index("compass gap     #")
-        step = text[start:start + 1200]
-        # Precondition: the SKILL step really does name `to_condukt`.
-        self.assertIn("`to_condukt`", step)
+        end = text.find("\n4. ", start)
+        step = text[start:end if end != -1 else start + 3000]
+        named = {f for f in GAP_FIELDS if f"`{f}`" in step}
+        # Anti-vacuity: the step must name at least one gap field, else the
+        # check below proves nothing about the prose.
+        self.assertTrue(named, "step names no gap field in backticks")
         p = subprocess.run([_compass_bin(), "gap"], cwd=self.tmp,
                            capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
-        keys = sorted(json.loads(p.stdout).keys())
+        keys = set(json.loads(p.stdout).keys())
         self.assertTrue(keys, "anti-vacuity: gap produced keys")
-        self.assertTrue(
-            "to_condukt" in keys or "compass route" in step,
-            "SKILL adopts `to_condukt` after `compass gap`, but gap's keys are %r "
-            "and the step never calls `compass route`" % keys,
+        missing = sorted(named - keys)
+        if "to_condukt" in missing and "compass route" in step:
+            missing.remove("to_condukt")  # produced by `compass route`, which the step invokes
+        self.assertEqual(
+            missing, [],
+            "SKILL names gap fields that `compass gap` does not output: %r (gap keys: %r)"
+            % (missing, sorted(keys)),
         )
 
 

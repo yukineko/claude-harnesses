@@ -555,6 +555,38 @@ mod tests {
         assert!(detect(&near_w, &c).is_none());
     }
 
+    /// backlog 69e34456 / f6c60f58: the Repeat trip's cooldown key is
+    /// `sig:`-keyed in exact-repeat mode (`similarity_threshold >= 1.0`) and
+    /// `tool:`-keyed in near-repeat mode. No other test pinned which side
+    /// exactly 1.0 lands on, so a `>=` -> `<` / `>` mutant of that comparison
+    /// survived and was "killed" only when an unrelated flaky test (07bfdca0)
+    /// happened to fail. Pin the boundary itself: 1.0 is exact mode, just
+    /// below 1.0 is near-repeat mode.
+    #[test]
+    fn repeat_key_is_sig_keyed_at_exactly_one_and_tool_keyed_below() {
+        let cmd = json!({"command": "cargo test"});
+        let w: Vec<Event> = (0..3).map(|i| ev(i, "Bash", cmd.clone())).collect();
+
+        let mut exact = cfg();
+        exact.similarity_threshold = 1.0;
+        let t = detect(&w, &exact).expect("three identical calls must trip");
+        assert_eq!(t.kind, Kind::Repeat);
+        assert_eq!(
+            t.key,
+            format!("repeat:sig:{}", w[2].sig),
+            "similarity_threshold == 1.0 is exact-repeat mode: the key must be the sig"
+        );
+
+        let mut near = cfg();
+        near.similarity_threshold = 0.99;
+        let t = detect(&w, &near).expect("three identical calls must trip");
+        assert_eq!(t.kind, Kind::Repeat);
+        assert_eq!(
+            t.key, "repeat:tool:Bash",
+            "similarity_threshold < 1.0 is near-repeat mode: the key must be the tool"
+        );
+    }
+
     /// Mirror the escalation-counter half of `watch()`: for `Kind::Repeat`
     /// the counter is the persistent consecutive-trip STREAK (advanced on
     /// every trip, independent of cooldown); for `Kind::Oscillation` it's the

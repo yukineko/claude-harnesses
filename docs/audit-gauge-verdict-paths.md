@@ -925,6 +925,10 @@ fail-open ではない）が、**agent_id が衝突した場合に他セッシ�
 ## 3. R — 判定不能を制限側へ解決している経路（**変更しない**）
 
 **見た目が permissive なので、grep ベースの一括修正で誤って「直される」危険がある。**
+
+> **superseded 2026-10-16（autoflow 0.1.33、ユーザー裁定）**: 下の record にある autoflow の「判定不能は stand down」は無出力 exit 0＝stop 許可となる fail-open と裁定され、現在の autoflow は driver 稼働状況が判定不能なら「判定不能」で Stop を block し、再入時は可視の systemMessage を出して通す [test: crates/autoflow/tests/undetermined_liveness.rs::a1_lock_exit_nonzero_blocks] [test: crates/autoflow/tests/undetermined_liveness.rs::c1_lock_exit_nonzero_bounded_systemmessage]。
+
+<!-- record: 2026-10-16 rev: b887fd1e -->
 budgetguard 監査 §3 / autoflow の lock と同じ、**grep の見た目と意味が逆転する**類
 （`crates/autoflow/src/lock.rs:32` 「Cannot-determine resolves to」。
 **なお budgetguard 監査 §3 がこの先例に付けている行番号は既に drift しており、
@@ -935,6 +939,7 @@ CLAUDE.md 第3節の警告の実例なので、本監査では再測定した行
 claim cites 81)` と報告する（exempt 扱いなので block はしない）。実体の逆転サイトは
 `crates/autoflow/src/lock.rs:94` `Some(v) => !v.get("stale").and_then(|s| s.as_bool()).unwrap_or(false),`
 であり、`unwrap_or(false)` は `!` を通って「**active＝stand down**」＝制限側に着地する。
+<!-- /record -->
 
 | # | 位置 | 逐語 | なぜ restrictive か | 実測 |
 |---|---|---|---|---|

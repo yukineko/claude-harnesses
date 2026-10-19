@@ -147,8 +147,11 @@ The `bin/ctxrot` launcher must be mode 100755 in the git index
 If a host has no matching binary, the launcher does **not** uniformly exit 0
 silently. It prints a build hint on stderr and then: `preguard` →
 `permissionDecision: "ask"`; `toolguard` → an `additionalContext` saying the
-output was not size-checked; `stop` → one fail-closed `{"decision":"block"}`
-(the `stop_hook_active` re-entry is allowed; empty stdin → exit 1);
+output was not size-checked; `stop` → a fail-closed `{"decision":"block"}`
+on ctxrot's first failure in the session, even on a `stop_hook_active` re-entry
+caused by another gate; only ctxrot's second consecutive failure in the same
+session is allowed (per-gate, per-session marker, as in `run_guarded`; an
+undetermined streak allows with a `systemMessage`; empty stdin → exit 1);
 `statusline` → an explicit `unknown` meter; `guard` / `rescue` / `restore` /
 `distill-bg` / `handoff` / `handoff-record` → exit 0; any other (CLI) verb →
 exit 1. Pinned by `tests/launcher_missing_binary.rs`.

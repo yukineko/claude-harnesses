@@ -145,15 +145,7 @@ fn stop_command() -> ! {
 
 fn stop_run(input: HookInput) {
     {
-        let session_id = if input.session_id.is_empty() {
-            std::env::var("CLAUDE_CODE_SESSION_ID").unwrap_or_default()
-        } else {
-            input.session_id.clone()
-        };
-        if session_id.is_empty() {
-            return;
-        }
-
+        // Operator escapes first (panic-free, before anything that can fail).
         let cfg = Config::load();
         if !cfg.enabled || Config::disabled_env() {
             return;
@@ -161,28 +153,65 @@ fn stop_run(input: HookInput) {
 
         let cwd = input.cwd_or_current();
 
+        // Allow THIS Stop when the user's own most recent signal (a typed
+        // message, or their answer to an AskUserQuestion) was an explicit stop
+        // instruction — see `stop_intent` for exactly what counts as one and
+        // why an undetermined/absent signal never triggers this. It is an
+        // observation of the user's instruction, so it is checked before the
+        // undetermined blocks below: autoflow must not block a stop the user
+        // explicitly asked for. Deliberately NOT latched into `Phase::Done`:
+        // an explicit stop acknowledges *this* Stop, not every future one in
+        // the session.
+        if stop_intent::user_requested_stop(&input.transcript_path) {
+            return;
+        }
+
+        let session_id = if input.session_id.is_empty() {
+            std::env::var("CLAUDE_CODE_SESSION_ID").unwrap_or_default()
+        } else {
+            input.session_id.clone()
+        };
+        if session_id.is_empty() {
+            // No session ⇒ no state to load and no way to tell what this
+            // session owes. That is a failure to observe, not "nothing to do";
+            // it used to return silently (= allow, indistinguishable from a
+            // clean pass).
+            block_undetermined_bounded(
+                &cwd,
+                "",
+                "session-id-undetermined",
+                "session id が無いため autoflow の状態を判定できません",
+                "hook payload に session_id が無く、CLAUDE_CODE_SESSION_ID も未設定です",
+                input.stop_hook_active,
+            );
+            return;
+        }
+
         // Stand down while another live session is driving THIS project's
         // queue: a /flow or /backlog driver is already running condukt against
         // it, and autoflow's auto-loop would drive it a second time. Liveness
         // is per-project, so an unrelated project's driver must not stand this
-        // session down; and a liveness answer we could not obtain counts as
-        // "active" (see lock::backlog_driver_active).
-        if lock::backlog_driver_active(&cwd) {
-            return;
+        // session down. Only a POSITIVE observation of a live driver stands
+        // down silently; a liveness answer we could not obtain is surfaced
+        // (see lock::backlog_driver_active) — it used to be read as "active"
+        // and stand down silently, which allowed the stop exactly like a
+        // clean pass.
+        match lock::backlog_driver_active(&cwd) {
+            Determination::Known(true) => return,
+            Determination::Known(false) => {}
+            Determination::Undetermined(why) => {
+                block_undetermined_bounded(
+                    &cwd,
+                    &session_id,
+                    "driver-liveness-undetermined",
+                    "backlog の driver 稼働状況を判定できませんでした",
+                    why.as_str(),
+                    input.stop_hook_active,
+                );
+                return;
+            }
         }
 
-        // Stand down for THIS Stop only when the user's own most recent
-        // signal (a typed message, or their answer to an AskUserQuestion)
-        // was an explicit stop instruction — see `stop_intent` for exactly
-        // what counts as one and why an undetermined/absent signal never
-        // triggers this. Deliberately NOT latched into `Phase::Done`: an
-        // explicit stop acknowledges *this* Stop, not every future one in
-        // the session, so if the user resumes ordinary work later, autoflow
-        // resumes its normal nagging on backlog/condukt state exactly as
-        // before.
-        if stop_intent::user_requested_stop(&input.transcript_path) {
-            return;
-        }
         let mut s = state::load(&cfg.state_dir, &session_id);
 
         match s.phase {
@@ -438,6 +467,44 @@ fn block_undetermined(
     );
 }
 
+/// [`block_undetermined`], bounded by `stop_hook_active` like the panic
+/// barrier in `harness_core::gate::run::run_guarded`.
+///
+/// First stop in the chain (`stop_hook_active == false`): block with the
+/// "判定不能" reason. Post-block re-entry (`stop_hook_active == true`): a
+/// persistent cannot-determine (a broken backlog install, a host that sends no
+/// session id) would otherwise block forever, so the stop is allowed — but
+/// never silently: a `systemMessage` (user-visible, not a `decision`) names
+/// what could not be determined and says it is unresolved, so the allow does
+/// not read as a clean pass.
+fn block_undetermined_bounded(
+    cwd: &std::path::Path,
+    session: &str,
+    check_kind: &str,
+    what: &str,
+    why: &str,
+    stop_hook_active: bool,
+) {
+    if stop_hook_active {
+        println!("{}", bounded_allow_message(what, why));
+        return;
+    }
+    block_undetermined(cwd, session, check_kind, what, why);
+}
+
+/// The `systemMessage` line for the bounded allow (see
+/// [`block_undetermined_bounded`]).
+fn bounded_allow_message(what: &str, why: &str) -> serde_json::Value {
+    serde_json::json!({
+        "systemMessage": format!(
+            "autoflow: {what}（判定不能）: {why}\n\
+             直前の stop で既にブロック済みのため、無限ブロックを避けてこの stop は通します。\
+             判定不能は解消していません — 「問題なし」という判定ではありません\
+             （恒久的に解消できない場合の緊急退避は AUTOFLOW_DISABLE=1）。"
+        )
+    })
+}
+
 /// Record a fleet-level violation for a blocking Stop, for cross-gate
 /// correlated-error detection (`overwatch::violation`). Fail-soft: never
 /// changes the gate's exit code/stdout, never panics if the overwatch store
@@ -495,17 +562,38 @@ const RESUME_FLOW_INJECT: &str = "直前に /compact したため flow ループ
 /// drivers, or holds the exclusive lock) and (b) the
 /// user hasn't opted out via `resume_flow_on_compact = false`. Any gate miss
 /// writes nothing. Never panics, never blocks compaction.
-fn pre_compact_run(session_id: &str, cwd: &std::path::Path, cfg: &Config) {
-    if session_id.is_empty() {
-        return; // unknown session → never key a marker
-    }
+///
+/// Returns a user-visible message when whether this session is driving could
+/// NOT be determined (no session id, or `backlog lock status` failed / was
+/// uninterpretable). No marker is written then — a false "keep driving"
+/// injection is the worse error — but the miss is said out loud: it used to be
+/// silent, which reads as "observed: this session is not driving, nothing to
+/// resume". An observed "not driving" or an opt-out stays silent (`None`).
+fn pre_compact_run(session_id: &str, cwd: &std::path::Path, cfg: &Config) -> Option<String> {
     if !cfg.resume_flow_on_compact {
-        return; // opted out
+        return None; // opted out: nothing to determine
     }
-    if !lock::this_session_holds_lock(session_id, cwd) {
-        return; // flow loop is not driving THIS session → nothing to resume
+    let holds = if session_id.is_empty() {
+        // Unknown session → never key a marker, and say why.
+        Determination::undetermined(
+            "session id が無いため、このセッションが /flow の driver かどうかを判定できません",
+        )
+    } else {
+        lock::this_session_holds_lock(session_id, cwd)
+    };
+    match holds {
+        Determination::Known(true) => {
+            state::write_resume_marker(&cfg.state_dir, session_id);
+            None
+        }
+        // Observed: the flow loop is not driving THIS session.
+        Determination::Known(false) => None,
+        Determination::Undetermined(why) => Some(format!(
+            "autoflow: /compact 後の /flow 自動再開を判定できませんでした（判定不能）: {}\n\
+             再開マーカーは書いていません。/flow を回していた場合は手動で再開してください。",
+            why.as_str()
+        )),
     }
-    state::write_resume_marker(&cfg.state_dir, session_id);
 }
 
 /// UserPromptSubmit core (testable): consume this session's resume-flow marker
@@ -533,7 +621,11 @@ fn pre_compact_command() -> ! {
         if !cfg.enabled || Config::disabled_env() {
             return;
         }
-        pre_compact_run(&session_id, &cwd, &cfg);
+        // `systemMessage` is user-visible and is not a `decision`, so it
+        // surfaces the undetermined answer without blocking compaction.
+        if let Some(msg) = pre_compact_run(&session_id, &cwd, &cfg) {
+            println!("{}", serde_json::json!({ "systemMessage": msg }));
+        }
     })
 }
 

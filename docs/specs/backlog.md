@@ -18,10 +18,9 @@
 - **status 語彙は3値固定** — `task::STATUSES` = `["pending", "done", "failed"]`（`STATUS_PENDING`/`STATUS_DONE`/
   `STATUS_FAILED`）。lifecycle は `pending → done`（`mark_done`）または `pending → failed`（`mark_failed`）で、deferred は
   期限切れで `pending` に戻る（`requeue_expired`）。`open` は hypothesis の語彙であり backlog には無い。`--status` に未知値を
-  渡すと `task::status_warning` が「空キューと区別できない silent 空マッチ」を防ぐため stderr に loud 警告を出す。
-- **fail-soft**（ターンを壊さない）— SessionStart は best-effort。`Config::disabled_env`（`BACKLOG_DISABLE=1`）や
-  `enabled=false` なら無出力。malformed stdin は `HookInput::parse` が `None` を返し stderr にログして skip、常に exit 0
-  （`run_hook`）。`store::load` はファイル不在で空 `Vec`。`requeue_expired` の clock 失敗は `t=0`（requeue 0 件）に倒す。
+  渡すと「空キューと区別できない silent 空マッチ」を防ぐため、`task::status_warning` のメッセージで非0終了する [test: crates/backlog/tests/repro_list_unknown_status_exit.rs::list_with_unknown_status_exits_nonzero] [test: crates/backlog/src/task.rs::status_warning_flags_unknown_and_suggests_valid]。
+- **SessionStart の malformed stdin** — 「注入なし」と区別できるよう stderr にエラーを出して非0終了する [test: crates/backlog/tests/repro_session_start_malformed_stdin.rs::session_start_malformed_stdin_is_a_visible_failure] [test: crates/backlog/tests/integration.rs::session_start_with_malformed_stdin_exits_nonzero]。
+- **store 不在** — `store::load` はファイル不在で空 `Vec` [test: crates/backlog/src/store.rs::load_missing_file_returns_empty]。
 - **重複コンテンツ拒否（content hashkey）** — `add` は `task::hashkey`（title を trim→NFKC→lowercase→空白圧縮→前後記号除去
   で正規化し、`\u{1f}` で project と連結、FNV-1a 64bit を 16 桁 hex 化）で内容重複を検出。既存の `pending`/`failed` タスクが
   同 hashkey を持つ、または `condukt state is-claimed --hashkey <h>` が exit 0 を返す（live cross-session claim）なら

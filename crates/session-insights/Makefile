@@ -1,5 +1,7 @@
 # Build the per-platform binaries the launcher (bin/session-insights) dispatches
-# to. `make bins` refreshes both bundled targets; commit them.
+# to. `make bins` refreshes both bundled targets. They are git-ignored (only the
+# bin/session-insights launcher is committed); scripts/rollout-plugins.sh builds
+# from source for the installed plugin.
 #
 # Linux cross-build uses cargo-zigbuild (no Docker). One-time setup on macOS:
 #   brew install zig

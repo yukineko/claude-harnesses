@@ -39,6 +39,8 @@ impl Outcome {
 struct Subject {
     text: String,
     exit: Option<i32>,
+    /// True for a `cmd` subject (whose `exit` is `None` only on a signal kill).
+    from_cmd: bool,
 }
 
 /// Run one case to an Outcome. Acquisition failures (unreadable file, unspawnable
@@ -54,6 +56,13 @@ pub fn run_case(case: &Case, cfg: &RunCfg) -> Outcome {
         };
     }
     let mut failures = Vec::new();
+    if assertion_count(&case.assert) == 0 {
+        // Zero assertions evaluated is not a pass: a non-draft case that
+        // asserts nothing would otherwise read as a passing regression check.
+        failures.push(
+            "case carries no assertion (empty `assert`); add one or mark it `draft`".to_string(),
+        );
+    }
     match acquire(case, cfg) {
         Ok(subject) => {
             check_exit(&case.assert, &subject, &mut failures);
@@ -74,7 +83,11 @@ fn acquire(case: &Case, cfg: &RunCfg) -> Result<Subject> {
         let path = cfg.root.join(rel);
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
-        return Ok(Subject { text, exit: None });
+        return Ok(Subject {
+            text,
+            exit: None,
+            from_cmd: false,
+        });
     }
     let cmd = case
         .cmd
@@ -107,6 +120,7 @@ fn run_cmd(cmd: &[String], stdin: Option<&str>, cfg: &RunCfg) -> Result<Subject>
     Ok(Subject {
         text: String::from_utf8_lossy(&out.stdout).into_owned(),
         exit: out.status.code(),
+        from_cmd: true,
     })
 }
 
@@ -123,16 +137,41 @@ fn path_with_prefix(bin_dir: &Path, root: &Path) -> Result<std::ffi::OsString> {
     std::env::join_paths(parts).context("rebuilding PATH")
 }
 
-/// Check the exit-code assertion against a subject.
+/// Check the subject's exit status. With an explicit `assert.exit`, the code
+/// must equal it. Without one, a `cmd` subject must exit `0`: a non-zero exit
+/// (or a signal kill, which has no code) is a failure, so a crashing command
+/// cannot pass on stdout-only assertions. `file` subjects have no exit status
+/// and are only checked when an exit is (wrongly) asserted on them.
 fn check_exit(a: &Assert, subject: &Subject, failures: &mut Vec<String>) {
-    let Some(expected) = a.exit else {
-        return;
-    };
-    match subject.exit {
-        Some(actual) if actual == expected => {}
-        Some(actual) => failures.push(format!("exit: expected {expected}, got {actual}")),
-        None => failures.push("exit asserted on a `file` case (no exit code)".to_string()),
+    match (a.exit, subject.from_cmd, subject.exit) {
+        (Some(expected), _, Some(actual)) if actual == expected => {}
+        (Some(expected), _, Some(actual)) => {
+            failures.push(format!("exit: expected {expected}, got {actual}"))
+        }
+        (Some(_), false, None) => {
+            failures.push("exit asserted on a `file` case (no exit code)".to_string())
+        }
+        (Some(expected), true, None) => failures.push(format!(
+            "exit: expected {expected}, but cmd terminated without an exit code (signal)"
+        )),
+        (None, true, Some(0)) | (None, false, _) => {}
+        (None, true, Some(actual)) => failures.push(format!(
+            "exit: cmd exited {actual} (non-zero) and no `assert.exit` allows it"
+        )),
+        (None, true, None) => failures.push(
+            "exit: cmd terminated without an exit code (signal) and no `assert.exit` allows it"
+                .to_string(),
+        ),
     }
+}
+
+/// Number of assertions a case carries (`exit` counts as one).
+fn assertion_count(a: &Assert) -> usize {
+    usize::from(a.exit.is_some())
+        + a.contains.len()
+        + a.not_contains.len()
+        + a.regex.len()
+        + a.not_regex.len()
 }
 
 /// Pure assertion core: append a human-readable failure for each unmet
@@ -375,6 +414,7 @@ mod tests {
             &Subject {
                 text: String::new(),
                 exit: Some(1),
+                from_cmd: true,
             },
             &mut f,
         );
@@ -394,6 +434,7 @@ mod tests {
             &Subject {
                 text: String::new(),
                 exit: None,
+                from_cmd: false,
             },
             &mut f,
         );

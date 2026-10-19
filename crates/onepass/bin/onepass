@@ -1,0 +1,36 @@
+#!/bin/sh
+# onepass plugin launcher — execs the bundled `onepass-<os>-<arch>` build.
+#
+# With no build for the host, `gate` (PreToolUse) cannot judge the spawn, so it
+# BLOCKS (exit 2, reason on stderr) instead of exiting 0, which would be an
+# allow. `reset` (UserPromptSubmit) exits 0 so the user's prompt still goes
+# through; with no binary, `gate` blocks anyway.
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+ext=""
+[ "$os" = windows ] && ext=".exe"
+
+binary="$root/onepass-$os-$arch$ext"
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
+fi
+
+echo "onepass: no bundled binary for $os-$arch ($binary); the Agent/Task spawn was not judged, so it is BLOCKED. Build it with scripts/build-plugin-bin.sh on that platform." >&2
+
+case "${1:-}" in
+  gate) exit 2 ;;
+  reset) exit 0 ;;
+  *) exit 1 ;;
+esac

@@ -89,14 +89,19 @@ fn verify_without_proofs_exits_one() {
 // `src/transition.rs`.
 
 /// Write a `<task>.<kind>.json` proof artifact (the shape `tdd red`/`tdd green`
-/// produce, reduced to the one field `tdd oracle` reads: `passed`) directly
-/// under `<dir>/.tdd/`, the default `proof_dir`.
+/// produce, reduced to the two fields `tdd oracle` reads: `passed` and `cmd` —
+/// the same `cmd` on both sides, since the oracle only accepts a Fail→Pass of
+/// one and the same command) directly under `<dir>/.tdd/`, the default
+/// `proof_dir`.
 fn write_proof(dir: &Path, task: &str, kind: &str, passed: bool) {
     let proof_dir = dir.join(".tdd");
     std::fs::create_dir_all(&proof_dir).expect("create proof dir");
     let path = proof_dir.join(format!("{task}.{kind}.json"));
-    std::fs::write(&path, serde_json::json!({ "passed": passed }).to_string())
-        .expect("write proof artifact");
+    std::fs::write(
+        &path,
+        serde_json::json!({ "passed": passed, "cmd": "cargo test" }).to_string(),
+    )
+    .expect("write proof artifact");
 }
 
 /// Run `tdd oracle --task <task>` in a fresh isolated dir, having first

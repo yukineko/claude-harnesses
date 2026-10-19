@@ -518,3 +518,44 @@ fn duplicate_of_done_with_evidence_target_is_accepted() {
         o.both()
     );
 }
+
+// ---- RED overlay is scoped to the test the argv names ---------------------------
+
+/// rev A: tests/check.sh (named) sources tests/lib.sh; lib.sh fails at A.
+/// rev B: only lib.sh changes (the fix lives in a test file the argv does NOT name).
+fn fix_in_unnamed_test_file(f: &Fixture, lib_at_a: &str) -> (String, String) {
+    f.write_script(
+        "tests/check.sh",
+        ". tests/lib.sh || { echo 'FAIL: lib check'; exit 1; }\necho '1 passed'",
+    );
+    f.write("tests/lib.sh", lib_at_a);
+    let a = f.commit_paths(&["tests/check.sh", "tests/lib.sh"], "test + lib");
+    f.write("tests/lib.sh", "true\n# rev B\n");
+    let b = f.commit_paths(&["tests/lib.sh"], "fix in unnamed test file");
+    (a, b)
+}
+
+#[test]
+fn fix_living_in_an_unnamed_test_file_is_accepted() {
+    let f = Fixture::new("unnamedfix");
+    let (red, _) = fix_in_unnamed_test_file(&f, "false\n");
+    let id = f.add("t");
+    let o = fix_done(&f, &id, &red);
+    assert_eq!(
+        o.code,
+        0,
+        "the named test FAILS at red-rev (only an unnamed test file differs) and PASSES at \
+         HEAD, so the close must be accepted: {}",
+        o.both()
+    );
+    assert_eq!(f.status(&id), "done");
+}
+
+#[test]
+fn control_test_already_passing_at_red_rev_is_still_refused_with_unnamed_files() {
+    let f = Fixture::new("unnamedctl");
+    let (red, _) = fix_in_unnamed_test_file(&f, "true\n");
+    let id = f.add("t");
+    let o = fix_done(&f, &id, &red);
+    assert_refused_unchanged(&f, &id, "pending", &o, "passes at red-rev: not RED");
+}

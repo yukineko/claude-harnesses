@@ -1,5 +1,6 @@
-//! Stop-hook entry helpers shared by the gates: the never-break-a-turn panic
-//! guard, the session-scoped one-shot skip, and the `max_attempts` concession.
+//! Stop-hook entry helpers shared by the gates: the fail-closed panic barrier
+//! (whose only allow is a gate's second CONSECUTIVE panic), the session-scoped
+//! one-shot skip, and the `max_attempts` concession.
 //!
 //! The last two are the same shape and exist for the same reason: a Stop is
 //! adjudicated by four independent processes, so a hatch one gate spends can be
@@ -7,28 +8,170 @@
 //! `stop_hook_active` — honoured while the chain is still being blocked, spent
 //! on the first stop that actually completes.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// What a panicking gate body resolves to, once the run mode is known. Pulled
-/// out of [`run_guarded`] so the fail-closed policy is unit-testable without
-/// actually exiting the process.
+use crate::verdict::{Determination, Required};
+
+/// What a panicking gate body resolves to, once the run mode and this gate's
+/// panic history are known. Pulled out of [`run_guarded`] so the policy is
+/// unit-testable without actually exiting the process.
 #[derive(Debug, PartialEq, Eq)]
 enum PanicAction {
     /// Manual/interactive run: surface the crash on stderr and exit 1. No stop
     /// decision is emitted (there is no live turn to block).
     InteractiveError,
-    /// Real Stop hook, first stop in the continuation chain: the gate crashed
-    /// before it could decide, so it cannot certify the stop is safe. Emit a
-    /// **block** decision (fail closed) and exit 0.
+    /// Real Stop hook: the gate crashed before it could decide, so it cannot
+    /// certify the stop is safe. Emit a **block** decision (fail closed) and
+    /// exit 0. Taken on the first stop of a chain, and on a re-entry
+    /// (`stop_hook_active`) whose PREVIOUS stop of this same gate did not panic
+    /// — `stop_hook_active` is set whenever ANY gate blocked, so on its own it
+    /// says nothing about this gate.
     FailClosedBlock,
-    /// Real Stop hook, already a post-block re-entry (`stop_hook_active`): a
-    /// second consecutive crash. Allow the stop (exit 0) to avoid trapping the
-    /// session in an endless block loop — the first crash already surfaced a
-    /// block. Bounded fail-open, and only after fail-closed fired once.
+    /// Real Stop hook, re-entry, and this gate's previous stop in this session
+    /// was ALSO a panic (its marker was read back). This is the second
+    /// consecutive crash: the first already surfaced a fail-closed block, and
+    /// blocking again would trap the session, so the stop is allowed.
     BoundedAllow,
+    /// Real Stop hook, re-entry, and whether this gate's previous stop also
+    /// panicked could NOT be determined — no usable session id, the marker
+    /// could not be read or cleared, or this panic could not be recorded. A
+    /// block here would be unbounded (the next re-entry would be just as
+    /// blind, so a deterministic crash plus a persistently broken store would
+    /// loop forever), so the stop is allowed — but never silently: a
+    /// `systemMessage` tells the user this gate did not check the stop, and
+    /// why. Carries that reason.
+    UndeterminedAllow(String),
 }
 
-/// Run a Stop-hook body under the never-break-a-turn panic guard.
+/// The record "this gate's previous stop in this session was a panic":
+/// `<base_dir("harness")>/state/panic-markers/<gate>/<session>.panic`.
+///
+/// Presence is the whole signal. It is cleared at the start of every hook-mode
+/// run ([`PanicMarker::take`]) and re-written only when that run panics, so a
+/// run that ends any other way — a clean allow, a block, an operator escape,
+/// all of which `process::exit` and never return to the guard — leaves no
+/// marker behind and the next panic counts as a FIRST panic again.
+struct PanicMarker {
+    path: PathBuf,
+}
+
+impl PanicMarker {
+    /// Locate the marker for gate `name` in the current session. The session
+    /// is `CLAUDE_CODE_SESSION_ID` (the run_guarded signature carries no
+    /// payload); without a usable one there is no per-session key, which is
+    /// undetermined — not "no previous panic".
+    fn locate(name: &str) -> Determination<PanicMarker> {
+        let session = std::env::var("CLAUDE_CODE_SESSION_ID").unwrap_or_default();
+        if !usable_session_id(&session) {
+            return Determination::undetermined(
+                "panic-streak marker: no usable session id (CLAUDE_CODE_SESSION_ID unset or \
+                 unusable), so this gate's previous-stop panic cannot be looked up",
+            );
+        }
+        if !usable_session_id(name) {
+            return Determination::undetermined(format!(
+                "panic-streak marker: gate name {name:?} is not a usable path component"
+            ));
+        }
+        Determination::known(PanicMarker {
+            path: crate::config::base_dir("harness")
+                .join("state")
+                .join("panic-markers")
+                .join(name)
+                .join(format!("{session}.panic")),
+        })
+    }
+
+    /// Read-and-clear: did this gate's previous stop panic? Clears the marker
+    /// so a run that does not panic resets the streak. Absent → `false`; any
+    /// other IO outcome (unreadable, or present but not removable — a marker
+    /// that cannot be cleared would make a later FIRST panic look like a
+    /// second one) → undetermined.
+    fn take(&self) -> Determination<bool> {
+        match std::fs::symlink_metadata(&self.path) {
+            Ok(_) => match std::fs::remove_file(&self.path) {
+                Ok(()) => Determination::known(true),
+                Err(e) => Determination::undetermined(format!(
+                    "panic-streak marker {} exists but could not be cleared: {e}",
+                    self.path.display()
+                )),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Determination::known(false),
+            Err(e) => Determination::undetermined(format!(
+                "panic-streak marker {} could not be read: {e}",
+                self.path.display()
+            )),
+        }
+    }
+
+    /// Record that this run panicked.
+    fn record(&self) -> Result<(), String> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+        }
+        std::fs::write(&self.path, b"panicked\n")
+            .map_err(|e| format!("could not write {}: {e}", self.path.display()))
+    }
+}
+
+/// The panic policy, given the run mode, this gate's previous-stop panic
+/// state, and a way to record the current panic. Pure apart from `record`.
+///
+/// * interactive → [`PanicAction::InteractiveError`].
+/// * first stop of a chain (`!stop_hook_active`) → record, then
+///   [`PanicAction::FailClosedBlock`] regardless of the record's outcome (the
+///   re-entry that follows handles a store that could not record it).
+/// * re-entry, previous stop of this gate panicked → record (keeps the streak
+///   across further re-entries), [`PanicAction::BoundedAllow`].
+/// * re-entry, previous stop did not panic → this is a FIRST panic: block, but
+///   only if it was recorded. If it could not be recorded, the next re-entry
+///   would see "no previous panic" again and block forever, so the outcome is
+///   [`PanicAction::UndeterminedAllow`] instead.
+/// * re-entry, previous state undetermined → [`PanicAction::UndeterminedAllow`].
+///
+/// Termination: on any chain of re-entries in which this gate keeps panicking,
+/// a block is only ever emitted after a marker was written, and the next
+/// re-entry either reads it (allow) or cannot (loud allow) — at most one block
+/// per streak once the chain is re-entering.
+fn decide(
+    interactive: bool,
+    stop_hook_active: bool,
+    prev: Determination<bool>,
+    record: impl FnOnce() -> Result<(), String>,
+) -> PanicAction {
+    if interactive {
+        return PanicAction::InteractiveError;
+    }
+    if !stop_hook_active {
+        if let Err(e) = record() {
+            eprintln!("panic-streak marker not recorded ({e}); the next re-entry cannot see it");
+        }
+        return PanicAction::FailClosedBlock;
+    }
+    match prev.require() {
+        Required::Determined(true) => {
+            if let Err(e) = record() {
+                eprintln!("panic-streak marker not recorded ({e})");
+            }
+            PanicAction::BoundedAllow
+        }
+        Required::Determined(false) => match record() {
+            Ok(()) => PanicAction::FailClosedBlock,
+            Err(e) => {
+                let why = format!(
+                    "this first panic on a re-entry could not be recorded ({e}), so a block \
+                     here could never be bounded"
+                );
+                crate::undetermined::record(&why, std::panic::Location::caller());
+                PanicAction::UndeterminedAllow(why)
+            }
+        },
+        Required::Blocked(why) => PanicAction::UndeterminedAllow(why.as_str().to_string()),
+    }
+}
+
+/// Run a Stop-hook body under the fail-closed panic barrier.
 ///
 /// `body` is the gate logic; it returns `!` because it always ends in a
 /// `process::exit`. A real `process::exit` inside `body` terminates the process
@@ -42,12 +185,19 @@ enum PanicAction {
 ///     false`) → emit a `{"decision":"block"}` decision on stdout and exit 0
 ///     (**fail closed**: block the stop and surface the crash, since a crashed
 ///     gate cannot certify the stop is safe).
-///   * hook mode, post-block re-entry (`stop_hook_active == true`) → allow the
-///     stop (exit 0). A deterministically-panicking gate would otherwise block
-///     forever; Claude Code sets `stop_hook_active` on the stop that follows a
-///     block, so this bounds the fail-closed block to a single occurrence
-///     (surface once, then let the session proceed). This mirrors how the Stop
-///     nudges (ctxrot/budgetguard) bound themselves via `stop_hook_active`.
+///   * hook mode, re-entry (`stop_hook_active == true`) → allow the stop (exit
+///     0) ONLY when this same gate's previous stop in this session was also a
+///     panic — the second consecutive crash (CLAUDE.md §1). `stop_hook_active`
+///     alone is not enough: Claude Code sets it whenever ANY gate blocked, so a
+///     gate panicking for the first time while another gate's block is being
+///     worked off is still a first panic and blocks. The streak is a
+///     per-gate, per-session marker ([`PanicMarker`]) cleared at the start of
+///     every hook-mode run, so a run that does not panic resets it.
+///   * hook mode, re-entry, and the streak cannot be determined (no
+///     `CLAUDE_CODE_SESSION_ID`, marker IO failure) → allow with a
+///     `systemMessage` on stdout naming the gate and the reason. Blocking would
+///     be unbounded there (see [`decide`]); the first stop of a chain still
+///     blocks.
 ///   * interactive/manual mode → print `<name>: internal error` and exit 1.
 ///
 /// Historically hook mode swallowed the panic and exited 0 (allow) — but an
@@ -72,51 +222,80 @@ enum PanicAction {
 /// dead code behind the crash. The `tests/gate_escape_ordering.rs` guard pins
 /// this ordering across all four gates. (The `give-up`/`max_attempts` hatch may
 /// stay after `evaluate`; the *crash* case is instead bounded by the
-/// `stop_hook_active` `BoundedAllow` above.)
+/// consecutive-panic `BoundedAllow` above.)
 pub fn run_guarded<R, F: FnOnce() -> R>(
     name: &str,
     interactive: bool,
     stop_hook_active: bool,
     body: F,
 ) -> R {
-    match guard(interactive, stop_hook_active, body) {
+    // Interactive runs have no session to key a streak on and never allow, so
+    // the marker is only touched in hook mode.
+    let marker = (!interactive).then(|| PanicMarker::locate(name));
+    // Read-and-clear BEFORE the body: the body never returns (it exits), so
+    // clearing up front is the only way a non-panicking run resets the streak.
+    let prev = match &marker {
+        Some(Determination::Known(m)) => m.take(),
+        Some(Determination::Undetermined(why)) => {
+            // Forward the reason without re-recording it (already recorded
+            // when `locate` minted it).
+            Determination::Undetermined(why.clone())
+        }
+        None => Determination::known(false),
+    };
+    let record = || match &marker {
+        Some(Determination::Known(m)) => m.record(),
+        Some(Determination::Undetermined(why)) => Err(why.as_str().to_string()),
+        None => Ok(()),
+    };
+    match guard(interactive, stop_hook_active, prev, record, body) {
         Ok(value) => value,
         Err(action) => panic_exit(name, action),
     }
 }
 
 /// Testable core of [`run_guarded`]: run `body`, returning its value on success
-/// or the [`PanicAction`] to take if it panicked. Does no IO and never exits, so
-/// the fail-closed policy can be asserted directly.
+/// or the [`PanicAction`] ([`decide`]) to take if it panicked. Never exits, so
+/// the policy can be asserted directly.
 fn guard<R, F: FnOnce() -> R>(
     interactive: bool,
     stop_hook_active: bool,
+    prev: Determination<bool>,
+    record: impl FnOnce() -> Result<(), String>,
     body: F,
 ) -> Result<R, PanicAction> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         Ok(v) => Ok(v),
-        Err(_) => Err(if interactive {
-            PanicAction::InteractiveError
-        } else if stop_hook_active {
-            PanicAction::BoundedAllow
-        } else {
-            PanicAction::FailClosedBlock
-        }),
+        Err(_) => Err(decide(interactive, stop_hook_active, prev, record)),
     }
 }
 
-/// The fail-closed block decision emitted when a gate body panics on the first
-/// stop: a serialized `{"decision":"block","reason":...}` line (the gates' own
-/// block protocol). Pure — split out so its shape/reason is unit-testable
-/// without exiting the process.
+/// The fail-closed block decision emitted when a gate body panics and this is
+/// not its second consecutive panic: a serialized
+/// `{"decision":"block","reason":...}` line (the gates' own block protocol).
+/// Pure — split out so its shape/reason is unit-testable without exiting the
+/// process.
 fn fail_closed_block_json(name: &str) -> String {
     let reason = format!(
         "{name}: internal error — the gate crashed before it could run, so this \
          stop is blocked as fail-closed (the check did not execute; its result \
          is unknown). Address the cause and continue; if {name} crashes again on \
-         the next stop it is allowed through, so the session is never trapped."
+         its very next stop it is allowed through, so the session is never trapped."
     );
     serde_json::json!({ "decision": "block", "reason": reason }).to_string()
+}
+
+/// The non-silent allow emitted for [`PanicAction::UndeterminedAllow`]: a
+/// `{"systemMessage": ...}` line, so the user sees that this gate did not
+/// check the stop and why the panic streak could not be determined.
+fn undetermined_allow_json(name: &str, why: &str) -> String {
+    let msg = format!(
+        "{name}: internal error on a stop re-entry — the gate crashed and did NOT check \
+         this stop. Whether its previous stop also crashed could not be determined \
+         ({why}), and blocking without that record could loop forever, so this stop is \
+         allowed. Treat this stop as unchecked by {name}."
+    );
+    serde_json::json!({ "systemMessage": msg }).to_string()
 }
 
 /// Carry out a [`PanicAction`]: emit the appropriate diagnostic/decision and
@@ -131,20 +310,27 @@ fn panic_exit(name: &str, action: PanicAction) -> ! {
             // Fail closed: the gate crashed before deciding, so it cannot vouch
             // that this stop is safe. Block it (the gates' own block protocol:
             // a `decision:block` JSON on stdout, exit 0) rather than let the
-            // turn end unchecked. `stop_hook_active` bounds this to one block.
+            // turn end unchecked. The consecutive-panic marker bounds this.
             println!("{}", fail_closed_block_json(name));
             std::process::exit(0);
         }
         PanicAction::BoundedAllow => {
-            // Second consecutive crash on the post-block re-entry. The first
-            // crash already surfaced a fail-closed block; blocking again would
-            // trap the session, so allow the stop (bounded fail-open). Still
-            // surface it on stderr for hook diagnostics.
+            // Second consecutive crash of THIS gate (its marker from the
+            // previous stop was read back). The first crash already surfaced a
+            // fail-closed block; blocking again would trap the session, so
+            // allow the stop (bounded fail-open). Still surface it on stderr.
             eprintln!(
-                "{name}: internal error again on stop re-entry — allowing this \
-                 stop to avoid trapping the session (a fail-closed block was \
-                 already surfaced once)."
+                "{name}: internal error again on its consecutive stop — allowing \
+                 this stop to avoid trapping the session (a fail-closed block was \
+                 already surfaced for the previous crash)."
             );
+            std::process::exit(0);
+        }
+        PanicAction::UndeterminedAllow(why) => {
+            // Bounded but never silent: the user is told on stdout
+            // (systemMessage) and the hook log gets the same on stderr.
+            println!("{}", undetermined_allow_json(name, &why));
+            eprintln!("{name}: internal error on stop re-entry; panic streak undetermined ({why}) — allowing loudly");
             std::process::exit(0);
         }
     }
@@ -536,23 +722,45 @@ pub fn append_jsonl(state_dir: &Path, entry: &serde_json::Value) {
 mod tests {
     use super::*;
 
+    fn ok() -> Result<(), String> {
+        Ok(())
+    }
+
+    fn fail() -> Result<(), String> {
+        Err("disk full".to_string())
+    }
+
+    fn no_prev() -> Determination<bool> {
+        Determination::known(false)
+    }
+
+    fn panicked_prev() -> Determination<bool> {
+        Determination::known(true)
+    }
+
     #[test]
     fn guard_passes_value_through() {
         // A clean body's value is returned regardless of mode / re-entry flag.
-        assert_eq!(guard(true, false, || 7), Ok(7));
-        assert_eq!(guard(false, false, || 7), Ok(7));
-        assert_eq!(guard(false, true, || 7), Ok(7));
+        assert_eq!(guard(true, false, no_prev(), ok, || 7), Ok(7));
+        assert_eq!(guard(false, false, no_prev(), ok, || 7), Ok(7));
+        assert_eq!(guard(false, true, panicked_prev(), ok, || 7), Ok(7));
     }
 
     #[test]
     fn guard_maps_panic_to_action() {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let interactive: Result<(), PanicAction> = guard(true, false, || panic!("boom"));
+        let interactive: Result<(), PanicAction> =
+            guard(true, false, no_prev(), ok, || panic!("boom"));
         // Real Stop hook, first stop: fail CLOSED (block), NOT allow.
-        let first_stop: Result<(), PanicAction> = guard(false, false, || panic!("boom"));
-        // Real Stop hook, post-block re-entry: bounded allow so it can't trap.
-        let re_entry: Result<(), PanicAction> = guard(false, true, || panic!("boom"));
+        let first_stop: Result<(), PanicAction> =
+            guard(false, false, panicked_prev(), ok, || panic!("boom"));
+        // Re-entry, but this gate's previous stop did not panic: a FIRST panic.
+        let first_on_reentry: Result<(), PanicAction> =
+            guard(false, true, no_prev(), ok, || panic!("boom"));
+        // Re-entry, previous stop of this gate panicked: second consecutive.
+        let second: Result<(), PanicAction> =
+            guard(false, true, panicked_prev(), ok, || panic!("boom"));
         std::panic::set_hook(prev);
         assert_eq!(interactive, Err(PanicAction::InteractiveError));
         assert_eq!(
@@ -561,10 +769,43 @@ mod tests {
             "a crashed gate on the first stop must fail CLOSED (block), not silently allow"
         );
         assert_eq!(
-            re_entry,
-            Err(PanicAction::BoundedAllow),
-            "a second crash on re-entry allows the stop so the session is not trapped"
+            first_on_reentry,
+            Err(PanicAction::FailClosedBlock),
+            "stop_hook_active alone (another gate blocked) must not allow a first panic"
         );
+        assert_eq!(
+            second,
+            Err(PanicAction::BoundedAllow),
+            "only a second consecutive crash of the same gate allows the stop"
+        );
+    }
+
+    #[test]
+    fn decide_unrecordable_first_panic_on_reentry_allows_loudly() {
+        // A first panic on a re-entry that cannot be recorded would block
+        // forever (the next re-entry is equally blind), so it is a loud allow.
+        assert!(matches!(
+            decide(false, true, no_prev(), fail),
+            PanicAction::UndeterminedAllow(_)
+        ));
+        // On the first stop of a chain the record failure does not matter:
+        // it still blocks.
+        assert_eq!(
+            decide(false, false, no_prev(), fail),
+            PanicAction::FailClosedBlock
+        );
+    }
+
+    #[test]
+    fn undetermined_allow_json_carries_a_system_message_and_no_decision() {
+        let v: serde_json::Value =
+            serde_json::from_str(&undetermined_allow_json("donegate", "no session")).unwrap();
+        assert!(
+            v.get("decision").is_none(),
+            "must not carry a decision: {v}"
+        );
+        let m = v["systemMessage"].as_str().unwrap();
+        assert!(m.contains("donegate") && m.contains("no session") && m.contains("NOT"));
     }
 
     #[test]
@@ -589,7 +830,7 @@ mod tests {
         // were set: a manual run has no live turn to block.
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let r: Result<(), PanicAction> = guard(true, true, || panic!("boom"));
+        let r: Result<(), PanicAction> = guard(true, true, panicked_prev(), ok, || panic!("boom"));
         std::panic::set_hook(prev);
         assert_eq!(r, Err(PanicAction::InteractiveError));
     }

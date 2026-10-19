@@ -53,17 +53,20 @@ _HOOK = Path(
 EXPECTED_SCANNERS = [
     "check-prompt-injection.py",
     "check-fail-open.py",
-    "check-doc-claims.py",
-    "check-claudemd-claims.py",
+    "check-fail-open-diff.py",
+    "check-doc-duplication.py",
     "check-plugin-versions.py",
     "check-version-bumped.py",
     "check-hardcoded-secret.py",
     "check-raw-io-ratchet.py",
+    "check-fault-injection-adoption.py",
     "check-worktree-isolation.py",
     "check-gate-crates-sync.py",
+    "check-gate-protection.py",
     "check-cross-crate-constants.py",
     "check-launcher-exec-bit.py",
     "check-clippy-lints.py",
+    "check-backlog-store.py",
 ]
 
 # Label the hook prints for each scanner, used to check the message names the
@@ -71,17 +74,20 @@ EXPECTED_SCANNERS = [
 LABELS = {
     "check-prompt-injection.py": "injectguard",
     "check-fail-open.py": "fail-open-guard",
-    "check-doc-claims.py": "doc-claims",
-    "check-claudemd-claims.py": "claudemd-claims",
+    "check-fail-open-diff.py": "fail-open-diff",
+    "check-doc-duplication.py": "doc-duplication",
     "check-plugin-versions.py": "version-lockstep",
     "check-version-bumped.py": "bump-on-change",
     "check-hardcoded-secret.py": "secret-guard",
     "check-raw-io-ratchet.py": "raw-io-ratchet",
+    "check-fault-injection-adoption.py": "fault-injection-adoption",
     "check-worktree-isolation.py": "worktree-isolation",
     "check-gate-crates-sync.py": "gate-crates-sync",
+    "check-gate-protection.py": "gate-protection",
     "check-cross-crate-constants.py": "crossx-constants",
     "check-launcher-exec-bit.py": "launcher-exec-bit",
     "check-clippy-lints.py": "clippy-lints",
+    "check-backlog-store.py": "backlog-store",
 }
 
 _STUB = """#!/usr/bin/env python3
@@ -303,7 +309,7 @@ class UndeterminedBlocksAndIsNamed(HookTestCase):
                 self.assertBlocked(proc, "when %s exits 2" % scanner)
 
     def test_exit_two_stderr_says_undetermined(self):
-        scanner = "check-doc-claims.py"
+        scanner = "check-doc-duplication.py"
         h = self.harness(exits={scanner: 2})
         proc = h.run()
         self.assertBlocked(proc)
@@ -314,7 +320,7 @@ class UndeterminedBlocksAndIsNamed(HookTestCase):
 
     def test_exit_one_is_not_labelled_undetermined(self):
         """The distinction must go both ways, or it carries no information."""
-        h = self.harness(exits={"check-doc-claims.py": 1})
+        h = self.harness(exits={"check-doc-duplication.py": 1})
         proc = h.run()
         self.assertBlocked(proc)
         self.assertNotIn("UNDETERMINED", proc.stderr)
@@ -371,13 +377,13 @@ class EveryScannerIsRun(HookTestCase):
 
     def test_multiple_failures_are_all_reported(self):
         h = self.harness(
-            exits={"check-prompt-injection.py": 1, "check-doc-claims.py": 2}
+            exits={"check-prompt-injection.py": 1, "check-doc-duplication.py": 2}
         )
         proc = h.run()
         self.assertBlocked(proc)
         self.assertEqual(h.ran(), EXPECTED_SCANNERS)
         self.assertIn("injectguard", proc.stderr)
-        self.assertIn("doc-claims", proc.stderr)
+        self.assertIn("doc-duplication", proc.stderr)
         self.assertIn("UNDETERMINED", proc.stderr)
 
     def test_hook_source_invokes_exactly_the_expected_scanner_list(self):

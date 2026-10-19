@@ -1,128 +1,74 @@
 ---
 name: overwatch
-description: プロジェクト全体の実行レジストリを監視・制御する。進行中のタスク、リース状態、dedup 状況を表示し、リース取得・解放・一時停止・再割当などの操作を行う。
+description: プロジェクト全体の実行レジストリを監視・制御したいときに使うこと。
 argument-hint: [status, sessions, pause, resume, reassign, reap]
 allowed-tools: Bash(overwatch:*), Read, Write
 ---
 
-# /overwatch — 実行レジストリの監視・制御
+caller 側は exit code を必ず確認し、非 0 なら決して先に進んではならない。
 
-プロジェクト全体の実行状態（進行中のタスク・リース・イベント履歴）を監視し、必要に応じて制御操作を行う。
-
-## 概要
-
-overwatch は、複数セッション間で共有される **プロジェクト全体の実行レジストリ** を管理する。各セッションが同じキーで claim を取得しようとするときに、既に他のセッションが live lease を保持していれば、その事実を報告して（exit 1 + skip JSON）戻る。これにより、同じ作業の重複実行を防ぐ。
-
-## コマンド
-
-### 監視コマンド（読み取り専用）
-
-#### `overwatch status [--json]`
-
-プロジェクト全体の現在の状態を表示する。
-
-- リース中のキー一覧
-- リース保有者のセッション名
-- ハートビート更新時刻
-- イベント履歴（直近 N 件）
-
-`--json` フラグで JSON 出力。
-
-#### `overwatch sessions [--json]`
-
-現在の session レコード一覧。
-
-- セッション ID
-- 保持中のリース
-- 最終ハートビート
-- status
-
-`--json` フラグで JSON 出力。
+制御コマンド（pause / resume / reassign / reap / end）は AskUserQuestion で確認せずに実行しない。
 
 ### 制御コマンド（side-effect あり。必ず AskUserQuestion で確認してから実行すること）
 
 #### `overwatch pause --run <run-id>`
 
-指定した run を一時停止状態にマークする。既存の commit は保持。再開まで待機。
-
-**HOTL gate**: 実行前に AskUserQuestion で確認。
+指定した run の一時停止を condukt に委譲する [test: crates/overwatch/src/control.rs::pause_cmd_builds_expected_argv] [test: crates/overwatch/tests/prose_claims.rs::claim_rd_pause_resume_delegate_condukt]。
 
 #### `overwatch resume --run <run-id>`
 
-一時停止状態の run を再開する。
-
-**HOTL gate**: 実行前に AskUserQuestion で確認。
+一時停止状態の run の再開を condukt に委譲する [test: crates/overwatch/src/control.rs::resume_cmd_builds_expected_argv] [test: crates/overwatch/tests/prose_claims.rs::claim_rd_pause_resume_delegate_condukt]。
 
 #### `overwatch reassign --key <key> --to <session-id>`
 
-既存のリース（`--key <key>`）の保有者を別セッション（`--to <session-id>`）に変更する。
+既存のリース（`--key <key>`）を解放し、`reassign to=<session-id>` イベントを記録する（`--to` 側に lease は作らない）。 [test: crates/overwatch/tests/prose_claims.rs::claim_sk_reassign_changes_holder]
 
-**HOTL gate**: 実行前に AskUserQuestion で確認。
+#### `overwatch reap`
 
-#### `overwatch reap [--ttl-secs <N>]`
-
-ハートビート TTL を超過した dead lease を削除し、キーを解放する。既定 TTL は設定で決まる（通常 5 分）。
-
-**HOTL gate**: 実行前に AskUserQuestion で確認。
+ハートビート TTL を超過した dead lease を削除し、キーを解放する。 [test: crates/overwatch/tests/prose_claims.rs::claim_sk_reap_removes_stale]
 
 #### `overwatch end --key <key>`
 
-指定したキー（`--key <key>`）のリースを明示的に終了・解放する。
-解放できたときだけ exit 0 + `released lease <key>`。key に lease が無い（未 begin・解放済み・stale reap 済み）
-ときと、lease ロックが取れず判定不能のときは非 0（いずれも「解放した」ではない）。
+解放できたときだけ exit 0 + `released lease <key>` [test: crates/overwatch/tests/prose_claims.rs::claim_sk_end_release_message] [test: crates/overwatch/tests/prose_claims.rs::claim_sk_end_nonzero_when_not_released]。
+key に lease が無い（未 begin・解放済み・stale reap 済み）ときと、lease ロックが取れず判定不能のときは非 0（いずれも「解放した」ではない）。 [test: crates/overwatch/tests/prose_claims.rs::claim_sk_end_nonzero_when_not_released]
 
-**HOTL gate**: 実行前に AskUserQuestion で確認。
-
-## Dedup Contract
-
-任意のセッションが以下を実行するとき：
 
 ```bash
 overwatch begin --key <k>
 ```
 
-overwatch は次のいずれかを返す：
+1. **success** (exit 0): リース取得成功。 [test: crates/overwatch/tests/lease_concurrency.rs::concurrent_begin_same_key_exactly_one_wins]
+2. **skip** (exit 1 + `holder` を含む skip JSON): そのキー `<k>` についての live lease を別セッションがすでに保持中。 [test: crates/overwatch/tests/lease_concurrency.rs::concurrent_begin_same_key_exactly_one_wins] [test: crates/overwatch/tests/prose_claims.rs::claim_rd_begin_held_key_exit1_skip_json]
 
-1. **success** (exit 0): リース取得成功。キー `<k>` は現在のセッションに排他的に割り当てられた。
-2. **skip** (exit 1): そのキー `<k>` についての live lease を別セッションがすでに保持中。呼び出し元は **直ちに処理をスキップする**（重複実行禁止）。JSON の skip reason を確認して、人間に報告する。
+非 0 のときは stdout の skip JSON（無ければ stderr のエラー）を確認して、人間に報告すること。
 
-caller 側は exit code を必ず確認し、exit 1 なら決して先に進んではならない。
 
-## Liveness Model
+#### `overwatch status [--json]`
 
-各リースは heartbeat TTL で管理される。典型的な TTL は 5 分。
+プロジェクト全体の現在の状態を表示する。 [test: crates/overwatch/tests/worktree_partition.rs::control_same_checkout_begin_then_status]
 
-- セッションが begin で lease を取得すると、タイムスタンプが記録される。
-- セッションが live（定期的にハートビートを送信）な限り、TTL はリセットされ、リースは有効。
-- セッションが crash・timeout・abnormal termination に陥った場合、ハートビート更新が止まり、TTL が切れる。
-- TTL 超過リースは `overwatch reap` で自動削除され、キーが再度利用可能になる。
+`--json` フラグで JSON 出力。 [test: crates/overwatch/tests/worktree_partition.rs::control_same_checkout_begin_then_status]
 
-## ファイル構造
+#### `overwatch sessions [--json]`
 
-すべてのデータは `<base>/<project-key>/overwatch/` に格納される（`<base>` は `~/.overwatch` 固定。設定ファイルは無い）。`<project-key>` はリポジトリの MAIN worktree root から導出されるので、main checkout と linked worktree は同じ store を共有する（解決不能ならエラー、worktree 単位への fallback はしない）。
+live（stale でない）lease を保持するセッションの一覧 [test: crates/overwatch/tests/prose_claims.rs::claim_sk_sessions_list] [test: crates/overwatch/tests/prose_claims.rs::claim_rd_sessions_roster_live_only]。
+
+
+すべてのデータは `<base>/<project-key>/overwatch/` に格納される（`<base>` は `~/.overwatch` 固定）。 [test: crates/overwatch/tests/prose_claims.rs::claim_sk_store_path]
+
+`<project-key>` はリポジトリの MAIN worktree root から導出されるので、main checkout と linked worktree は同じ store を共有する。 [test: crates/overwatch/tests/worktree_partition.rs::lease_begun_in_linked_worktree_is_visible_from_main_checkout]
 
 ```
 <base>/<project-key>/overwatch/
-  leases.json              # 現在の lease レコード（キー → セッション割当）
-  events.jsonl             # イベント履歴（各行 = 1 イベント JSON）
+  leases.json
+  events.jsonl
 ```
 
-- `leases.json`: スナップショット。`{ "key": { "holder": "session-id", "updated_at": "...", ... } }`
-- `events.jsonl`: append-only log。新しいレコードは行末に追加される。
-
-## Integration with PDO（Pending Data Object）
-
-overwatch は、プロジェクトの hypothesis (仮説) や awaiting-measurement (測定待ち) の状態を進捗ビューとして集約する。各リースの意味は、「このキーについて、どの仮説が pending か」を encoder する。
-
-これにより、各セッションは、グローバルな progress state を一覧でき、「何が既知・何が pending か」を把握してから開始できる。
-
-## 使い方（例）
+`events.jsonl`: append-only log。 [test: crates/overwatch/tests/prose_claims.rs::claim_sk_events_append_only]
 
 ```
-/overwatch status          # 現在のリース・イベント・セッション状態を確認
-/overwatch sessions        # セッション一覧
-/overwatch pause --run X   # run X を一時停止（HOTL 確認後）
-/overwatch reap            # dead lease を削除（HOTL 確認後）
+/overwatch status
+/overwatch sessions
+/overwatch pause --run X
+/overwatch reap
 ```
-
-すべての side-effect コマンド（pause / resume / reassign / reap / end）は AskUserQuestion で確認後に実行される。

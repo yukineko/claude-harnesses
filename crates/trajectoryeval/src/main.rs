@@ -86,9 +86,11 @@ struct TierArgs {
     #[arg(long)]
     snapshot: Option<PathBuf>,
     /// Non-core flows: whether the flow exists (existence check). Takes an
-    /// explicit bool, e.g. `--exists true` / `--exists false`. Defaults true.
-    #[arg(long, action = clap::ArgAction::Set, default_value_t = true)]
-    exists: bool,
+    /// explicit bool, e.g. `--exists true` / `--exists false`. No default:
+    /// omitting it for a non-core flow is a harness error (exit 2) — an
+    /// existence input nobody supplied is not evidence the flow exists.
+    #[arg(long, action = clap::ArgAction::Set)]
+    exists: Option<bool>,
     /// Non-core sampling seed (deterministic, seedable — no unseeded randomness).
     #[arg(long, default_value_t = 0)]
     seed: u64,
@@ -122,6 +124,12 @@ fn cmd_check(args: CheckArgs) -> i32 {
             return 2;
         }
     };
+    if spec.constrains_nothing() {
+        eprintln!(
+            "trajectoryeval: invalid expected spec: subsequence mode with no required step constrains nothing"
+        );
+        return 2;
+    }
 
     // Read + parse the actual trajectory (array of tool-name strings).
     let actual_raw = match std::fs::read_to_string(&args.actual) {
@@ -300,9 +308,18 @@ fn cmd_tier(args: TierArgs) -> i32 {
             )
         }
         Tier::NonCore => {
+            // Cannot determine existence without the input → harness error,
+            // never a pass (CLAUDE.md §3: undetermined resolves restrictive).
+            let Some(exists) = args.exists else {
+                eprintln!(
+                    "trajectoryeval: non-core flow '{}' requires --exists true|false",
+                    args.flow
+                );
+                return 2;
+            };
             let decision = non_core_decision(
                 &args.flow,
-                args.exists,
+                exists,
                 cfg.sample_one_in,
                 args.seed,
                 args.run_index,

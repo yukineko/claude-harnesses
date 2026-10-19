@@ -822,7 +822,7 @@ fn config_invalid_reason(why: &str) -> String {
 
 fn criteria_unreadable_reason(why: &str) -> String {
     format!(
-        "🚧 propguard: done_criteria ファイルを読めませんでした — {why}\n\n         criteria_file は存在するのに読めず、inline の done_criteria も空なので、このタスクの完了条件が         判定不能です。「done_criteria 未設定」として通過させると、読めないファイルの条件が一切検査されない         まま停止できてしまうため、この停止をブロックしています (再試行では解消しないため自動の通過許可は         ありません)。\n\n         前に進むには次のいずれか:\n         - criteria_file の権限/内容を直す (`propguard status` で確認)。\n         - このチェックを1回だけスキップ: `propguard skip --reason ...` を実行 (理由を1行)。\n         - propguard を完全に無効化: 環境変数 PROPGUARD_DISABLE=1。"
+        "🚧 propguard: done_criteria を読めませんでした — {why}\n\n         環境変数 PROPGUARD_CRITERIA が設定されているのに UTF-8 として読めない、または criteria_file は         存在するのに読めず inline の done_criteria も空なので、このタスクの完了条件が         判定不能です。「done_criteria 未設定」として通過させると、読めない条件が一切検査されない         まま停止できてしまうため、この停止をブロックしています (再試行では解消しないため自動の通過許可は         ありません)。\n\n         前に進むには次のいずれか:\n         - PROPGUARD_CRITERIA の値、または criteria_file の権限/内容を直す (`propguard status` で確認)。\n         - このチェックを1回だけスキップ: `propguard skip --reason ...` を実行 (理由を1行)。\n         - propguard を完全に無効化: 環境変数 PROPGUARD_DISABLE=1。"
     )
 }
 

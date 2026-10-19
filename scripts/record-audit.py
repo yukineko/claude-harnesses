@@ -7,23 +7,20 @@ WHY THIS EXISTS
     they rot, the next audit is not merely less useful, it is invalid — it will
     conclude "clean" from a ledger that stopped being written to.
 
-    The four rot modes below are not hypothetical. Each was observed before this
+    The three rot modes below are not hypothetical. Each was observed before this
     script existed (measurements dated inline, at the rev named in BASELINE_REV):
 
-      1. `check-doc-claims.py` reports verdict "clean" while 140 `path:line`
-         claims in docs/ cite lines or quotes that no longer exist. They are all
-         exempt, and exempt is rendered as clean.
-      2. `overwatch audit-metrics` has reported `converging: NO` for six
+      1. `overwatch audit-metrics` has reported `converging: NO` for six
          Continuous-Audit rounds (new findings 5 -> 1 -> 13 -> 0 -> 14 -> 15) and
          nothing consumes that flag.
-      3. `overwatch review-metrics` prints its stale-undisposed count and exits
+      2. `overwatch review-metrics` prints its stale-undisposed count and exits
          0 (crates/overwatch/src/disposition_cli.rs). 42 rows sit on the review
          queue against 0 dispositions ever recorded.
-      4. `backlog fail` does not retire an item; it defers it two days, after
+      3. `backlog fail` does not retire an item; it defers it two days, after
          which `Task::is_pending` counts it again (crates/backlog/src/task.rs).
          A rejected item resurfaces silently.
 
-    So: measure all four on a schedule, and escalate a threshold breach onto the
+    So: measure all three on a schedule, and escalate a threshold breach onto the
     one surface a human already reads (`overwatch review-queue`).
 
 WHERE THE SCHEDULE COMES FROM
@@ -70,12 +67,6 @@ DAY = 86400
 # rather than inherit these (CLAUDE.md: a number with no measurement point rots
 # the moment it is copied).
 BASELINE_REV = "c3f29681"
-
-# Doc-claim drift is a RATCHET, not an absolute bar: 140 stale claims already
-# exist and this job's purpose is not to fix them, it is to stop them growing
-# unobserved. The absolute figure is printed on every run regardless of verdict,
-# because "140, and the gate calls that clean" is the finding.
-DOC_DRIFT_BASELINE = 140
 
 # Any `converging: false` is a breach. There is no tolerance band: the flag is
 # already the summary of a trend, so a band on top of it would be a band on a
@@ -248,36 +239,6 @@ def _run_json(cmd, cwd=REPO, ok_codes=(0,)):
         raise RuntimeError(f"{' '.join(cmd)} did not emit parseable JSON: {e}")
 
 
-def measure_doc_drift():
-    """Stale `path:line` claims across docs/**/*.md and CLAUDE.md.
-
-    Counts EXEMPT findings too — they are the whole point. An exempt drifted
-    claim is still a claim that no longer describes the tree; the exemption
-    only means it does not block a commit.
-    """
-    total, by_kind, per_source = 0, {}, {}
-    for label, cmd in (
-        ("docs", ["python3", "scripts/check-doc-claims.py", "--json"]),
-        ("CLAUDE.md", ["python3", "scripts/check-claudemd-claims.py", "--json"]),
-    ):
-        try:
-            d = _run_json(cmd)
-        except RuntimeError as e:
-            return Measurement.undetermined(f"{label} claim check failed: {e}")
-        findings = d.get("findings")
-        if not isinstance(findings, list):
-            return Measurement.undetermined(
-                f"{label} claim check emitted no `findings` list "
-                f"(keys: {sorted(d)}) — shape change, not zero drift"
-            )
-        per_source[label] = len(findings)
-        total += len(findings)
-        for f in findings:
-            k = f.get("kind", "unknown")
-            by_kind[k] = by_kind.get(k, 0) + 1
-    return Measurement.known(total, by_kind=by_kind, per_source=per_source)
-
-
 def measure_audit_convergence():
     """The Continuous-Audit round ledger's tri-state `converging` flag."""
     try:
@@ -414,21 +375,6 @@ def measure_backlog_rot(now, stale_days):
 # --- assembly --------------------------------------------------------------
 def collect(now, thresholds):
     dims = []
-
-    m = measure_doc_drift()
-    dims.append(Dimension(
-        "doc-claim-drift",
-        "normative-doc claims that no longer match the tree",
-        m,
-        thresholds["doc_drift"],
-        m.is_known and m.value > thresholds["doc_drift"],
-        "med",
-        note=(
-            "ratchet: breach on GROWTH above the baseline. The absolute count is "
-            "reported every run because check-doc-claims.py renders an exempt "
-            "drifted claim as `clean`."
-        ),
-    ))
 
     m = measure_audit_convergence()
     dims.append(Dimension(
@@ -863,7 +809,6 @@ def main(argv=None):
                     help="print the ~/.daily/config.toml stanza that schedules this job")
     ap.add_argument("--now", type=int, default=None,
                     help="unix seconds to treat as now (tests; keeps ages deterministic)")
-    ap.add_argument("--doc-drift-baseline", type=int, default=DOC_DRIFT_BASELINE)
     ap.add_argument("--open-queue-max", type=int, default=OPEN_REVIEW_QUEUE_MAX)
     ap.add_argument("--stale-undisposed-max", type=int, default=STALE_UNDISPOSED_MAX)
     ap.add_argument("--backlog-stale-days", type=int, default=BACKLOG_STALE_DAYS)
@@ -876,7 +821,6 @@ def main(argv=None):
 
     now = args.now if args.now is not None else int(time.time())
     thresholds = {
-        "doc_drift": args.doc_drift_baseline,
         "open_queue": args.open_queue_max,
         "stale_undisposed": args.stale_undisposed_max,
         "stale_days": args.backlog_stale_days,

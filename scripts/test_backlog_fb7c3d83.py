@@ -81,9 +81,8 @@ class ResolveOverwatchBinTargetFallback(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(r.stdout.strip(), str(tmp / "elsewhere/release/overwatch"))
 
-    @unittest.expectedFailure
     def test_metadata_without_target_directory_does_not_guess_repo_target(self):
-        """backlog fb7c3d83: open defect (RED observed). cargo metadata exits 0
+        """backlog fb7c3d83: fixed (RED observed before the fix). cargo metadata exits 0
         with no target_directory: the build dir is undetermined, so the
         $REPO/target binary must not be selected (rebuild-plugins.sh exits 1
         here)."""
@@ -94,9 +93,8 @@ class ResolveOverwatchBinTargetFallback(unittest.TestCase):
                 "resolve_overwatch_bin guessed $REPO/target although cargo "
                 f"metadata reported no target_directory (rc={r.returncode})")
 
-    @unittest.expectedFailure
     def test_reported_dir_without_binary_does_not_fall_back_to_repo_target(self):
-        """backlog fb7c3d83: open defect (RED observed). cargo reports a
+        """backlog fb7c3d83: fixed (RED observed before the fix). cargo reports a
         different build dir with no overwatch built yet: the $REPO/target
         binary is not this build's and must not be selected."""
         with tempfile.TemporaryDirectory() as t:

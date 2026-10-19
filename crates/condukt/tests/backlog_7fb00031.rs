@@ -79,8 +79,21 @@ fn unrecorded_conflict_is_not_reported_as_recorded() {
     // branch with no recorded creation base before it ever reaches the conflict
     // path under test. Record the floating ref `main` as the base (it resolves to a commit that is an ancestor of `main`).
     run_git(&repo, &["config", "branch.feat.conduktBase", "main"]);
+    run_git(&repo, &["config", "branch.feat.conduktTask", "r/t"]);
     std::fs::write(repo.join("f.txt"), "theirs\n").unwrap();
-    run_git(&repo, &["commit", "-q", "-am", "theirs"]);
+    // The task's own commit carries its recorded `Condukt-Task:` trailer, so
+    // the trailer gate passes and the conflict path is reached.
+    run_git(
+        &repo,
+        &[
+            "commit",
+            "-q",
+            "-am",
+            "theirs",
+            "--trailer",
+            "Condukt-Task: r/t",
+        ],
+    );
     run_git(&repo, &["checkout", "-q", "main"]);
     std::fs::write(repo.join("f.txt"), "ours\n").unwrap();
     run_git(&repo, &["commit", "-q", "-am", "ours"]);
@@ -139,8 +152,19 @@ fn refused_trial_without_merge_state_is_still_recorded_conflict() {
     run_git(&repo, &["checkout", "-q", "-b", "feat"]);
     std::fs::write(repo.join("g.txt"), "theirs\n").unwrap();
     run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-q", "-m", "theirs"]);
+    run_git(
+        &repo,
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "theirs",
+            "--trailer",
+            "Condukt-Task: r/t",
+        ],
+    );
     run_git(&repo, &["config", "branch.feat.conduktBase", "main"]);
+    run_git(&repo, &["config", "branch.feat.conduktTask", "r/t"]);
     run_git(&repo, &["checkout", "-q", "main"]);
     std::fs::write(repo.join("f.txt"), "ours\n").unwrap();
     run_git(&repo, &["commit", "-q", "-am", "ours"]);

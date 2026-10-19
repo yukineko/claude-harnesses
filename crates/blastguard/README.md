@@ -388,6 +388,13 @@ before ever handing it to `sh -c`, and condukt's scheduler uses the graded
 `classify::classify` risk/reversibility assessor to force outward, irreversible
 actions (a deploy, `git push`, a release) through its GATED gate even when an
 upstream LLM mislabelled the task.
+A deploy word that appears only inside a file name in the task text (for example
+`rollout` in `scripts/check-plugin-rollout.py`) does not force the gate [test: crates/blastguard/src/classify.rs::deploy_needle_only_inside_a_touched_file_name_does_not_gate].
+A file-path token is a word containing `/`, or one ending in a known extension
+such as `.py`/`.rs`/`.sh`/`.md`/`.toml`, with no `:` or `@` [test: crates/blastguard/src/classify.rs::file_path_token_rule_is_narrow].
+A path still counts when it comes first, follows a runner word (`run`, `bash`,
+...) or shell separator, or starts with `./` [test: crates/blastguard/src/classify.rs::real_commands_containing_paths_still_gate].
+A path quoted in backticks still counts [test: crates/blastguard/src/classify.rs::backtick_quoted_command_prose_gates_exactly_as_before].
 
 Two diff-level modules are exported as well (pure, no I/O): `diffrisk`
 (`classify_diff` / `changes_public_symbol`) and `callgraph`

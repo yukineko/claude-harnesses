@@ -93,7 +93,6 @@ class WholesaleSideMerge(unittest.TestCase):
             r = run_gate(repo)
             self.assertEqual(r.returncode, 0, r.stderr)
 
-    @unittest.expectedFailure
     def test_ours_wholesale_resolution_dropping_theirs_id_is_refused(self):
         """backlog 68fb7237: open defect (RED observed)."""
         with tempfile.TemporaryDirectory() as t:

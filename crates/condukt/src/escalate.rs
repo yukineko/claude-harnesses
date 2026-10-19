@@ -30,9 +30,9 @@
 //! an id found only there is resolved in place; new records always go to the
 //! canonical file. Read-modify-writes hold the `__escalations__` lock, since
 //! the file is now shared by every checkout. Writes are atomic (temp + rename).
-//! A missing or corrupt file is treated as an empty registry; an
+//! A missing file is an empty registry; an unreadable or corrupt file, an
 //! undeterminable main worktree root, or a lock that cannot be acquired, is an
-//! `Err`. The module never panics.
+//! `Err` (a corrupt store is never overwritten). The module never panics.
 //!
 //! # Determinism
 //!
@@ -42,7 +42,7 @@
 //! separately for observability and never feeds the id.
 
 use crate::config::Config;
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use harness_core::projkey::fnv1a32;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -116,24 +116,28 @@ fn lock(cfg: &Config, cwd: &Path) -> Result<crate::lock::RunLock> {
 
 /// All escalations across [`escalations_paths`], canonical first. An id present
 /// in more than one file is reported once, from the first.
-fn load_all(paths: &[PathBuf]) -> Registry {
+fn load_all(paths: &[PathBuf]) -> Result<Registry> {
     let mut merged = Registry::default();
     for p in paths {
-        for e in load(p).escalations {
+        for e in load(p)?.escalations {
             if !merged.escalations.iter().any(|m| m.id == e.id) {
                 merged.escalations.push(e);
             }
         }
     }
-    merged
+    Ok(merged)
 }
 
-/// Fail-soft load: a missing or corrupt registry is treated as empty rather than
-/// breaking the caller (mirrors `claim.rs`).
-fn load(path: &Path) -> Registry {
+/// Load a registry. A missing file (io `NotFound`) is a legitimate empty
+/// registry; any other read error or a parse failure is an `Err` naming the
+/// path, so a corrupt store is never read as "no open escalations" and a
+/// mutating caller never saves over it.
+fn load(path: &Path) -> Result<Registry> {
     match std::fs::read_to_string(path) {
-        Ok(txt) => serde_json::from_str(&txt).unwrap_or_default(),
-        Err(_) => Registry::default(),
+        Ok(txt) => serde_json::from_str(&txt)
+            .with_context(|| format!("parsing escalation registry {}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Registry::default()),
+        Err(e) => Err(e).with_context(|| format!("reading escalation registry {}", path.display())),
     }
 }
 
@@ -159,7 +163,7 @@ fn derive_id(run: &str, task: &str, question: &str, prior_count: usize) -> Strin
 }
 
 /// Enqueue a new escalation and persist it. Returns the stored record (with its
-/// derived id). Atomic write; fail-soft load.
+/// derived id). Atomic write; a corrupt store is an `Err` (never overwritten).
 ///
 /// Idempotent for OPEN duplicates: if an existing record with the same
 /// `(run, task, question)` is still unresolved, that record is returned
@@ -179,10 +183,10 @@ pub fn add_escalation(
 ) -> Result<Escalation> {
     let _guard = lock(cfg, cwd)?;
     let path = escalations_path(cfg, cwd)?;
-    let mut reg = load(&path);
+    let mut reg = load(&path)?;
     // Dedup and the id's prior-count see the legacy records too, so a question
     // still open in a pre-`43393ce2` per-checkout registry is not re-enqueued.
-    let all = load_all(&escalations_paths(cfg, cwd)?);
+    let all = load_all(&escalations_paths(cfg, cwd)?)?;
 
     // Content-dedup backpressure: an identical (run, task, question) that is
     // still OPEN is returned as-is rather than appended again, so a flood of
@@ -216,7 +220,7 @@ pub fn add_escalation(
 
 /// List the still-OPEN (unresolved) escalations for `run`, in enqueue order.
 pub fn list_escalations(cfg: &Config, cwd: &Path, run: &str) -> Result<Vec<Escalation>> {
-    let reg = load_all(&escalations_paths(cfg, cwd)?);
+    let reg = load_all(&escalations_paths(cfg, cwd)?)?;
     Ok(reg
         .escalations
         .into_iter()
@@ -238,7 +242,7 @@ pub fn resolve_escalation(
     // Resolve the record where it is stored (canonical first, then a legacy
     // per-checkout registry), so it is never forked into a second copy.
     for path in escalations_paths(cfg, cwd)? {
-        let mut reg = load(&path);
+        let mut reg = load(&path)?;
         let mut updated = None;
         for e in reg.escalations.iter_mut() {
             if e.id == id {
@@ -257,12 +261,12 @@ pub fn resolve_escalation(
 }
 
 /// Retrieve a single escalation by id regardless of resolved state (so a caller
-/// can fetch a resolved record's answer to resume the task). Fail-soft.
+/// can fetch a resolved record's answer to resume the task). A corrupt store is an `Err`.
 // Library retrieval API for the resume path; consumed by tests today and the
 // resume wiring in a follow-up task.
 #[allow(dead_code)]
 pub fn get_escalation(cfg: &Config, cwd: &Path, id: &str) -> Result<Option<Escalation>> {
-    let reg = load_all(&escalations_paths(cfg, cwd)?);
+    let reg = load_all(&escalations_paths(cfg, cwd)?)?;
     Ok(reg.escalations.into_iter().find(|e| e.id == id))
 }
 
@@ -445,17 +449,25 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_store_is_treated_as_empty() {
+    fn corrupt_store_is_an_error_not_an_empty_registry() {
+        // backlog dfaa609a: "could not read the registry" is not "nothing is
+        // waiting on a human". A corrupt store must surface as an error on
+        // read, and a mutating call must refuse to overwrite it.
         let tmp_dir = make_tmp_dir("corrupt");
         let tmp = tmp_dir.path();
         let cfg = make_cfg(tmp);
         let path = escalations_path(&cfg, tmp).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, b"not json at all {{{").unwrap();
-        // Fail-soft: add still succeeds (registry read as empty then written).
-        let rec = add_escalation(&cfg, tmp, "runA", "t1", "Q", &opts(&["a"]), 0, 1).unwrap();
-        let got = get_escalation(&cfg, tmp, &rec.id).unwrap();
-        assert!(got.is_some());
+        let garbage = b"not json at all {{{";
+        std::fs::write(&path, garbage).unwrap();
+        assert!(list_escalations(&cfg, tmp, "runA").is_err());
+        assert!(get_escalation(&cfg, tmp, "whatever").is_err());
+        assert!(add_escalation(&cfg, tmp, "runA", "t1", "Q", &opts(&["a"]), 0, 1).is_err());
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            garbage,
+            "corrupt store was overwritten"
+        );
     }
 
     #[test]
@@ -503,7 +515,7 @@ mod tests {
         assert_eq!(first.id, second.id);
 
         let path = escalations_path(&cfg, tmp).unwrap();
-        let reg = load(&path);
+        let reg = load(&path).unwrap();
         assert_eq!(reg.escalations.len(), 1, "must not duplicate an open ask");
     }
 
@@ -523,7 +535,7 @@ mod tests {
         assert!(!second.resolved);
 
         let path = escalations_path(&cfg, tmp).unwrap();
-        let reg = load(&path);
+        let reg = load(&path).unwrap();
         assert_eq!(reg.escalations.len(), 2, "resolved + new open");
 
         let open = list_escalations(&cfg, tmp, "runA").unwrap();

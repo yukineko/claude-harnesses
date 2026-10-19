@@ -12,9 +12,12 @@
 //!
 //! These tests pin the corrected failure mode. The restrictive resolution is
 //! spoken in the Stop event's own vocabulary — `{"decision":"block"}` on
-//! stdout, exit 0 — bounded by `stop_hook_active` exactly like
-//! `harness_core::gate::run::run_guarded`'s panic barrier, so a missing binary
-//! surfaces once and can never trap the session. Every non-hook subcommand
+//! stdout, exit 0 — bounded like `harness_core::gate::run::run_guarded`'s panic
+//! barrier: `stop_hook_active` alone is NOT enough (another gate's block sets
+//! it), so only this gate's SECOND CONSECUTIVE failure in the session (a
+//! per-gate, per-session marker under `$HOME/.harness/state/panic-markers/`) is
+//! allowed through, and a re-entry whose streak cannot be determined is a loud
+//! `systemMessage` allow. A missing binary thus never traps the session. Every non-hook subcommand
 //! exits non-zero instead of printing an empty result that reads as data.
 
 use std::io::Write;
@@ -53,6 +56,15 @@ fn host_binary_name() -> String {
 /// `reviewgate-<os>-<arch>` sibling, so the missing-binary path is taken on every
 /// platform (the repo's own `bin/` may hold a built binary after a rollout).
 fn run(args: &[&str], stdin: &str) -> Run {
+    let home = tempfile::tempdir().expect("home tempdir");
+    run_in(home.path(), args, stdin)
+}
+
+/// Same, but with an explicit `HOME` so several launcher runs can share one
+/// failure-streak marker store. `HOME` is always a tempdir and
+/// `CLAUDE_CODE_SESSION_ID` is always removed, so a test never writes a marker
+/// into the real home nor keys on the live session.
+fn run_in(home: &std::path::Path, args: &[&str], stdin: &str) -> Run {
     let dir = tempfile::tempdir().expect("tempdir");
     let launcher = dir.path().join("reviewgate");
     std::fs::copy(launcher_src(), &launcher).expect("copy launcher");
@@ -60,6 +72,8 @@ fn run(args: &[&str], stdin: &str) -> Run {
     let mut child = Command::new("sh")
         .arg(&launcher)
         .args(args)
+        .env("HOME", home)
+        .env_remove("CLAUDE_CODE_SESSION_ID")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -109,23 +123,86 @@ fn stop_gate_missing_binary_blocks_instead_of_silently_certifying() {
     );
 }
 
-/// Bounded, exactly like `run_guarded`: the post-block re-entry is allowed
-/// through so a missing binary can never trap the session in a block loop.
-#[test]
-fn stop_gate_reentry_is_allowed_through_so_the_session_is_never_trapped() {
-    let r = run(
-        &["review"],
-        r#"{"session_id":"s1","stop_hook_active":true}"#,
-    );
-    assert_eq!(r.code, 0, "{r:?}");
+// ------------------------------------------------- failure-streak (9b3f98ec)
+
+/// A re-entry (`stop_hook_active:true`) is set by ANY gate's block, so on its
+/// own it says nothing about THIS gate. Only this gate's second consecutive
+/// failure in the session may be allowed.
+fn ev(active: bool, sid: Option<&str>) -> String {
+    match sid {
+        Some(s) => format!(r#"{{"session_id":"{s}","stop_hook_active":{active}}}"#),
+        None => format!(r#"{{"stop_hook_active":{active}}}"#),
+    }
+}
+
+fn assert_blocks(r: &Run, what: &str) {
+    assert_eq!(r.code, 0, "Stop decisions ride stdout JSON: {r:?}");
+    let v: serde_json::Value = serde_json::from_str(r.stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout must be a block decision ({e}): {r:?}"));
+    assert_eq!(v["decision"], "block", "{what}: {r:?}");
+}
+
+fn assert_plain_allow(r: &Run, what: &str) {
+    assert_eq!(r.code, 0, "{what}: {r:?}");
     assert!(
         r.stdout.trim().is_empty(),
-        "the second consecutive stop must be allowed (bounded block): {r:?}",
+        "{what}: allow carries no stdout: {r:?}"
     );
     assert!(
         !r.stderr.trim().is_empty(),
-        "allowing it silently would hide that the gate still has NOT run: {r:?}",
+        "{what}: allowing silently would hide that the gate has NOT run: {r:?}",
     );
+}
+
+fn assert_loud_allow(r: &Run, what: &str) {
+    assert_eq!(r.code, 0, "{what}: {r:?}");
+    let v: serde_json::Value = serde_json::from_str(r.stdout.trim())
+        .unwrap_or_else(|e| panic!("{what}: stdout must be one JSON object ({e}): {r:?}"));
+    assert!(v.get("decision").is_none(), "{what}: no decision key: {v}");
+    let msg = v["systemMessage"].as_str().unwrap_or_default();
+    assert!(
+        msg.contains("reviewgate") && msg.contains("NOT"),
+        "{what}: systemMessage must name the gate and say it did NOT check: {v}",
+    );
+}
+
+/// Fresh session (another gate's block caused the re-entry; this gate has not
+/// failed before) -> block, not allow.
+#[test]
+fn stop_reentry_in_a_fresh_session_blocks() {
+    let r = run(&["review"], &ev(true, Some("fresh-s")));
+    assert_blocks(
+        &r,
+        "first failure of this gate must block even on a re-entry",
+    );
+}
+
+/// The "never trapped" bound: first stop blocks, the re-entry after it (same
+/// session, same HOME) is allowed with empty stdout, and the streak continues.
+#[test]
+fn stop_gate_reentry_is_allowed_through_so_the_session_is_never_trapped() {
+    let home = tempfile::tempdir().expect("home");
+    let r1 = run_in(home.path(), &["review"], &ev(false, Some("s1")));
+    assert_blocks(&r1, "first stop");
+    let r2 = run_in(home.path(), &["review"], &ev(true, Some("s1")));
+    assert_plain_allow(&r2, "second consecutive failure");
+    let r3 = run_in(home.path(), &["review"], &ev(true, Some("s1")));
+    assert_plain_allow(&r3, "streak continues");
+    // a different session in the same HOME has its own (empty) streak
+    let r4 = run_in(home.path(), &["review"], &ev(true, Some("other")));
+    assert_blocks(&r4, "markers are per session");
+}
+
+/// No session id at all (payload without `session_id`, env removed): a
+/// re-entry's streak is undetermined -> loud allow; the same payload as a first
+/// stop still blocks.
+#[test]
+fn stop_reentry_without_session_id_is_a_loud_allow_but_first_stop_still_blocks() {
+    let home = tempfile::tempdir().expect("home");
+    let r = run_in(home.path(), &["review"], &ev(true, None));
+    assert_loud_allow(&r, "undetermined streak");
+    let r = run_in(home.path(), &["review"], &ev(false, None));
+    assert_blocks(&r, "first stop without a session id");
 }
 
 /// An empty stdin means this is a manual invocation, not a live Stop event.

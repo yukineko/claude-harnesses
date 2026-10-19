@@ -187,10 +187,108 @@ const OUTWARD_TARGETS: &[&str] = &[
 /// [`detect`] already catches (`git reset --hard`, `git clean -fdx`, ...).
 const HISTORY_SIGNALS: &[&str] = &["git rebase", "rebase -i", "--amend", "filter-branch"];
 
+/// File extensions that make a whitespace-delimited token a *file-path token*
+/// for [`mask_file_path_tokens`]. A fixed list (not "any `.xyz` suffix") so a
+/// version string like `v1.2.0` or a hostname is never mistaken for a file.
+const FILE_PATH_EXTENSIONS: &[&str] = &[
+    ".py", ".rs", ".sh", ".md", ".toml", ".json", ".yml", ".yaml", ".txt", ".js", ".ts", ".lock",
+    ".cfg", ".conf", ".ini",
+];
+
+/// Words that, immediately before a path token, put it in *command position*
+/// (it is being run, not named). A previous token ending in a shell separator
+/// (`;`, `|`, `&`, `(`) does too.
+const RUNNER_WORDS: &[&str] = &[
+    "run", "runs", "execute", "executes", "invoke", "invokes", "exec", "bash", "sh", "zsh",
+    "source", ".", "python", "python3", "node", "sudo", "env", "then", "&&", "||", "|", ";",
+];
+
+/// Is `tok` (lowercase, no whitespace, no backtick) a bare file-path token?
+///
+/// Narrow by design (backlog 11be9484, user ruling 2026-10-16): the token
+/// contains a `/` or ends in one of [`FILE_PATH_EXTENSIONS`], AND contains
+/// neither `:` nor `@` — so URLs (`s3://bucket`), remote specs
+/// (`user@host:/srv`, `prod:/var/www`) and `scheme:` forms stay visible to the
+/// deploy needles.
+fn is_file_path_token(tok: &str) -> bool {
+    if tok.contains(':') || tok.contains('@') {
+        return false;
+    }
+    let trimmed = tok.trim_end_matches([',', '.', ';', ')', '"', '\'']);
+    tok.contains('/') || FILE_PATH_EXTENSIONS.iter().any(|e| trimmed.ends_with(e))
+}
+
+/// Blank (replace with spaces) every bare file-path token in `lower` that is
+/// NOT being invoked, so a deploy needle that occurs only INSIDE a file name
+/// (`scripts/check-plugin-rollout.py` contains `rollout`) does not force-gate
+/// a task that merely edits that file (backlog 11be9484, file-name half; user
+/// ruling 2026-10-16).
+///
+/// Kept visible (NOT blanked) — each is a restrictive choice:
+/// - everything inside a backtick span, and everything after an unbalanced
+///   backtick: quoted command prose gates exactly as before this rule;
+/// - a path token in command position: the first token of the text or of the
+///   text following a backtick span, a token right after a [`RUNNER_WORDS`]
+///   word or after a token ending in `;`/`|`/`&`/`(`, and any token starting
+///   with `./` — so `scripts/rollout-plugins.sh`, `run scripts/rollout-plugins.sh`
+///   and `./deploy.sh` still gate;
+/// - tokens that are not file-path tokens per [`is_file_path_token`].
+///
+/// Only the deploy-needle tiers read the masked text; the [`detect`] step and
+/// the history step still see the original text, so a destructive command is
+/// judged with its path argument intact.
+///
+/// Known limit: a script that is meant to be run but is named outside the
+/// command positions above (e.g. "run the tests and scripts/rollout.sh",
+/// where the previous token is `and`) is blanked like any other file name;
+/// quote it in backticks or put it after a runner word to keep it visible.
+fn mask_file_path_tokens(lower: &str) -> String {
+    let mut out = String::with_capacity(lower.len());
+    for (i, seg) in lower.split('`').enumerate() {
+        if i > 0 {
+            out.push('`');
+        }
+        // Odd segments are inside a backtick span. A trailing segment after an
+        // unbalanced backtick also has an odd index, so it is kept too.
+        if i % 2 == 1 {
+            out.push_str(seg);
+            continue;
+        }
+        // `None` == start of a segment == command position.
+        let mut prev: Option<&str> = None;
+        let mut cursor = 0usize;
+        while let Some(start_rel) = seg[cursor..].find(|c: char| !c.is_ascii_whitespace()) {
+            let start = cursor + start_rel;
+            let len = seg[start..]
+                .find(|c: char| c.is_ascii_whitespace())
+                .unwrap_or(seg.len() - start);
+            let tok = &seg[start..start + len];
+            out.push_str(&seg[cursor..start]);
+            let command_position = match prev {
+                None => true,
+                Some(p) => RUNNER_WORDS.contains(&p) || p.ends_with([';', '|', '&', '(']),
+            };
+            let invoked = command_position || tok.starts_with("./");
+            if !invoked && is_file_path_token(tok) {
+                out.extend(std::iter::repeat_n(' ', tok.len()));
+            } else {
+                out.push_str(tok);
+            }
+            prev = Some(tok);
+            cursor = start + len;
+        }
+        out.push_str(&seg[cursor..]);
+    }
+    out
+}
+
 /// Classify a free-text action description into `{risk, reversible}`.
 ///
 /// Precedence (first match wins):
-///   1. outward deploy/publish/push  → High, irreversible
+///   1. outward deploy/publish/push  → High, irreversible (needles are
+///      matched with bare, non-invoked file-path tokens blanked — a needle
+///      that appears only inside a file NAME does not gate; see
+///      [`mask_file_path_tokens`])
 ///   2. locally destructive (whatever [`detect`] would DENY as a Bash command)
 ///      → High, irreversible
 ///   3. [`detect`] answered ASK — it refused to analyse the construct
@@ -228,9 +326,13 @@ pub fn classify(text: &str) -> RiskAssessment {
     // 1a. Tier-1 outward publish/deploy signal — leaves the machine, hard to undo.
     // 1b. Tier-2: a deploy verb co-occurring with an outward target, both matched
     //     at word boundaries so bare verbs / trap words never fire.
-    let tier1 = DEPLOY_SIGNALS.iter().any(|s| lower.contains(s));
-    let tier2 = DEPLOY_VERBS.iter().any(|v| has_word(&lower, v))
-        && OUTWARD_TARGETS.iter().any(|t| has_word(&lower, t));
+    // Both tiers scan `deploy_hay`, in which bare file-path tokens outside
+    // backtick spans and outside command position are blanked (see
+    // [`mask_file_path_tokens`]). Steps 2-4 still see the full text.
+    let deploy_hay = mask_file_path_tokens(&lower);
+    let tier1 = DEPLOY_SIGNALS.iter().any(|s| deploy_hay.contains(s));
+    let tier2 = DEPLOY_VERBS.iter().any(|v| has_word(&deploy_hay, v))
+        && OUTWARD_TARGETS.iter().any(|t| has_word(&deploy_hay, t));
     if tier1 || tier2 {
         return RiskAssessment {
             risk: Risk::High,
@@ -467,6 +569,93 @@ mod tests {
             assert!(a.reversible);
             assert!(!a.requires_gate(), "{action:?} must NOT be force-gated");
         }
+    }
+
+    // ---- backlog 11be9484 (file-name half, user ruling 2026-10-16) ----
+
+    #[test]
+    fn deploy_needle_only_inside_a_touched_file_name_does_not_gate() {
+        for text in [
+            "check script exits 0 when the registry is absent scripts/check-plugin-rollout.py",
+            "fix a typo scripts/rollout-plugins.sh",
+            "tidy the helper deploy.sh",
+            "edit crates/foo/src/deployment.rs and crates/foo/README.md",
+            "update scripts/test_check_plugin_rollout.py, then commit",
+        ] {
+            let a = classify(text);
+            assert!(
+                !a.requires_gate(),
+                "{text:?} must NOT be force-gated, got {a:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn real_commands_containing_paths_still_gate() {
+        for text in [
+            "git push origin main",
+            "git push origin feature/x",
+            "scripts/rollout-plugins.sh",
+            "./scripts/rollout-plugins.sh --all",
+            "run scripts/rollout-plugins.sh",
+            "bash scripts/rollout-plugins.sh",
+            "cd crates && scripts/rollout-plugins.sh",
+            "build it; scripts/rollout-plugins.sh",
+            "edit notes then run `scripts/rollout-plugins.sh`",
+            "deploy crates/foo/src/lib.rs to prod",
+            "aws s3 sync ./dist s3://prod-bucket/site",
+            "rsync -av dist/ prod:/var/www/html",
+            "scp build/app.tar user@prodserver:/var/www",
+            "kubectl apply -f k8s/deploy.yaml",
+            // detect still sees the original path argument.
+            "rm -rf /some/path",
+            "rm -rf build/out",
+        ] {
+            let a = classify(text);
+            assert!(
+                a.requires_gate(),
+                "{text:?} MUST still be force-gated, got {a:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn backtick_quoted_command_prose_gates_exactly_as_before() {
+        // The prose half of 11be9484 is out of scope by user ruling
+        // 2026-10-16: backtick spans are never masked.
+        for text in [
+            "block the retry when it re-runs `git config core.hooksPath /dev/null`",
+            "touch the `scripts/check-plugin-rollout.py` checker",
+            "unbalanced `scripts/check-plugin-rollout.py checker",
+        ] {
+            assert!(classify(text).requires_gate(), "{text:?} must still gate");
+        }
+    }
+
+    #[test]
+    fn file_path_token_rule_is_narrow() {
+        assert!(is_file_path_token("scripts/check-plugin-rollout.py"));
+        assert!(is_file_path_token("deploy.sh"));
+        assert!(is_file_path_token("rollout.md,"));
+        assert!(is_file_path_token("crates/x/"));
+        assert!(!is_file_path_token("rollout"));
+        assert!(!is_file_path_token("v1.2.0"));
+        assert!(!is_file_path_token("s3://bucket/key"));
+        assert!(!is_file_path_token("prod:/var/www"));
+        assert!(!is_file_path_token("user@host"));
+        assert_eq!(
+            mask_file_path_tokens("edit scripts/rollout.py now"),
+            format!("edit {} now", " ".repeat("scripts/rollout.py".len()))
+        );
+        assert_eq!(
+            mask_file_path_tokens("scripts/rollout.py now"),
+            "scripts/rollout.py now"
+        );
+        assert_eq!(
+            mask_file_path_tokens("see `a/rollout.py` b/rollout.py"),
+            "see `a/rollout.py` b/rollout.py",
+            "first token after a backtick span is command position"
+        );
     }
 
     #[test]

@@ -111,7 +111,6 @@ impl Fixture {
 }
 
 #[test]
-#[ignore = "backlog dfaa609a: RED repro"]
 fn corrupt_escalations_store_is_not_reported_as_no_open_escalations() {
     let fx = Fixture::new("red");
     let store = fx.add_one();

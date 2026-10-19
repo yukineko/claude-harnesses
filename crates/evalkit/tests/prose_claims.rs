@@ -258,7 +258,7 @@ fn claim_parse_errors_exit2() {
     let valid = r#"
 // comment
 
-{"id":"p","cmd":["true"],"assert":{}}
+{"id":"p","cmd":["true"],"assert":{"exit":0}}
 
 // another
 "#;

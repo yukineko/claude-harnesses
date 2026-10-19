@@ -173,10 +173,14 @@ read-only 監査。**このドキュメントは `crates/autoflow/` を1行も�
 
 ### 3.1 `lock::driver_active_from_status` — 判定不能は `true`（stand down）
 
+> **superseded 2026-10-16（autoflow 0.1.33、ユーザー裁定）**: この節の「判定不能は stand down」は無出力 exit 0＝stop 許可となる fail-open と裁定され、現在の autoflow は driver 稼働状況が判定不能なら「判定不能」で Stop を block し、再入時は可視の systemMessage を出して通す [test: crates/autoflow/tests/undetermined_liveness.rs::a1_lock_exit_nonzero_blocks] [test: crates/autoflow/tests/undetermined_liveness.rs::c1_lock_exit_nonzero_bounded_systemmessage]。
+
 根拠の逐語引用:
 
+<!-- record: 2026-07-28 rev: 1601b835 -->
 - `crates/autoflow/src/lock.rs:30` 「**Cannot-determine resolves to `true` (stand down).** The two answers are」
 - `crates/autoflow/src/lock.rs:33` 「again next turn). So a `backlog` invocation that fails to run, exits」 に続く `crates/autoflow/src/lock.rs:35` 「may be active".」
+<!-- /record -->
 <!-- doc-claim-exempt: historical quote — pre-fix state measured at commit 1601b835 (autoflow 0.1.16); this path was fixed in autoflow 0.1.17, so the cited line no longer reads as recorded. The finding text is preserved verbatim as the record of that state. -->
 - `crates/autoflow/src/lock.rs:63` 「* `none` → nothing is driving. This is the ONLY output that means "free":」
 <!-- doc-claim-exempt: historical quote — pre-fix state measured at commit 1601b835 (autoflow 0.1.16); this path was fixed in autoflow 0.1.17, so the cited line no longer reads as recorded. The finding text is preserved verbatim as the record of that state. -->
@@ -326,11 +330,13 @@ free を先に捌く。したがって `crates/autoflow/src/lock.rs:80` 「None 
   → `crates/autoflow/src/main.rs:149` 「if lock::backlog_driver_active(&cwd) {」 を素通り
 <!-- doc-claim-exempt: historical quote — pre-fix state measured at commit 1601b835 (autoflow 0.1.16); this path was fixed in autoflow 0.1.17, so the cited line no longer reads as recorded. The finding text is preserved verbatim as the record of that state. -->
   → `crates/autoflow/src/main.rs:187` 「let pending = condukt::find_pending(&cwd);」 以降で /condukt を自動駆動。
+<!-- record: 2026-07-28 rev: 1601b835 -->
 - docstring の carve-out はこの経路を**カバーしていない**。根拠:
   `crates/autoflow/src/lock.rs:37` 「The one deliberate exception is `backlog` not being installed at all. That」 /
   `crates/autoflow/src/lock.rs:38` 「is an observation, not a failure to observe: with no `backlog` binary there」。
   つまり免責の前提は「binary が存在しない」という**観測**だが、`.ok()?` は
   「dir を列挙できなかった」という**観測の失敗**を同じ `None` に写す。
+<!-- /record -->
 - fault injection（対照つき。PATH からは `backlog` を外す）:
   1. `$HOME/.claude/plugins/cache/yukineko/backlog/0.1.0/bin/backlog` に、
      `lock status` で `{"kind":"driver-presence",…,"drivers":[{"session_id":"other-live-session"}]}` を返す

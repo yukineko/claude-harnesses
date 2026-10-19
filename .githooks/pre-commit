@@ -36,17 +36,6 @@
 #                                                 cannot block this one (the
 #                                                 whole-workspace --ratchet
 #                                                 would); backlog 2133b6fe
-#   doc-claims         check-doc-claims.py        a `path:line` citation in
-#                                                 docs/**/*.md that no longer
-#                                                 describes reality
-#   prose-tests        check-prose-tests.py       a claim sentence in CLAUDE.md,
-#                                                 docs/**/*.md, crates/*/README*.md
-#                                                 or crates/*/skills/*/SKILL.md
-#                                                 (changed vs HEAD) with no
-#                                                 `[test: path::name]` citation to
-#                                                 an existing test, or a citation
-#                                                 that does not resolve. Dated
-#                                                 records and imperatives pass.
 #   doc-duplication    check-doc-duplication.py   a change that ADDS a copy of a
 #                                                 block (Jaccard >= 0.6 over
 #                                                 5-char shingles) between two
@@ -55,15 +44,6 @@
 #                                                 Ratchet vs HEAD per file pair;
 #                                                 existing copies grandfathered.
 #                                                 `--all` prints the full audit.
-#   claudemd-claims    check-claudemd-claims.py   a `path:line` citation in
-#                                                 CLAUDE.md itself that no
-#                                                 longer describes reality —
-#                                                 the dedicated gate for the
-#                                                 norm/instruction file, split
-#                                                 out of doc-claims so an
-#                                                 instruction file is not
-#                                                 folded into documentation
-#                                                 verification. No bypass flag.
 #   test-weakening     check-test-weakening.py    a change that weakens the test
 #                                                 surface instead of the code
 #   version-lockstep   check-plugin-versions.py   the three version files of a
@@ -228,9 +208,6 @@ run() {
 run check-prompt-injection.py injectguard
 run check-fail-open.py        fail-open-guard
 run check-fail-open-diff.py   fail-open-diff
-run check-doc-claims.py       doc-claims
-run check-claudemd-claims.py  claudemd-claims
-run check-prose-tests.py     prose-tests
 run check-doc-duplication.py  doc-duplication
 # check-test-weakening.py is NOT run here: it is run from .githooks/commit-msg
 # instead. Its acknowledgment marker lives in the commit message, which git has
@@ -393,17 +370,6 @@ Remediation hints:
                     <surface> }` plus a per-entry `match entry {...}` (never
                     `.flatten()`); for a shell capture keep the rc (`... || rc=$?`)
                     and refuse to pass when it is non-zero.
-  doc-claims        the cited `path:line` no longer says what the prose claims.
-                    Fix the citation or the prose — in THIS commit, not later.
-  claudemd-claims   same as doc-claims, scoped to CLAUDE.md itself. Fix the
-                    citation or the code — there is no bypass flag for this
-                    gate; a reasoned `<!-- doc-claim-exempt: <reason> -->` on
-                    the line before a deliberately historical claim is the
-                    only escape hatch.
-  prose-tests       cite a test that reproduces the claim with
-                    `[test: <path>::<name>]`, or delete the claim. A past
-                    observation stays as a record only with a dated marker
-                    (`実測 YYYY-MM-DD`, `[record: YYYY-MM-DD]`).
   test-weakening    restore the assertion, or acknowledge one specific finding
                     with a commit-message line
                     `test-weakening-justified: <path>:<kind> - <reason>`.

@@ -49,7 +49,19 @@ def main():
 
     problems = []
     checked = 0
-    for name in sorted(os.listdir(CRATES)):
+    try:
+        crate_names = sorted(os.listdir(CRATES))
+    except OSError as e:
+        # crates/ missing or unreadable: nothing could be compared. This is
+        # "cannot determine" (exit 2), not drift (1) and never consistent (0)
+        # (backlog 396b6089, CLAUDE.md §3).
+        print(
+            f"check-plugin-versions: cannot list {CRATES} ({e}); "
+            "nothing was checked, refusing to report consistency",
+            file=sys.stderr,
+        )
+        return 2
+    for name in crate_names:
         d = os.path.join(CRATES, name)
         pj = os.path.join(d, ".claude-plugin", "plugin.json")
         if not os.path.isfile(pj):

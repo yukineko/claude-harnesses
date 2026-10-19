@@ -50,7 +50,6 @@ class _Patched(unittest.TestCase):
     """Swaps the probe functions for stubs, restores them after."""
 
     PROBES = (
-        "measure_doc_drift",
         "measure_audit_convergence",
         "measure_open_review_queue",
         "measure_stale_undisposed",
@@ -64,7 +63,6 @@ class _Patched(unittest.TestCase):
         self._saved["_head_rev"] = ra._head_rev
         # Clean by default, so any failure in a case is caused by what that case
         # changed rather than inherited from the real repo.
-        ra.measure_doc_drift = lambda: M(0)
         ra.measure_audit_convergence = lambda: M(1)
         ra.measure_open_review_queue = lambda: M(0)
         ra.measure_stale_undisposed = lambda: M(0)
@@ -122,7 +120,7 @@ class ExitCodes(_Patched):
         not measure anything at all but happened to trip one threshold would
         report the narrower problem and hide the wider one."""
         ra.measure_audit_convergence = lambda: M(0)
-        ra.measure_doc_drift = lambda: U("check-doc-claims crashed")
+        ra.measure_open_review_queue = lambda: U("overwatch crashed")
         rc, out = self.run_main()
         self.assertEqual(rc, 2, out)
 
@@ -401,31 +399,6 @@ class Probes(unittest.TestCase):
         self.assertTrue(m.is_known, f"expected known, got {m!r}")
         self.assertEqual(m.value, 0)
 
-    def test_missing_findings_key_is_undetermined_not_zero_drift(self):
-        """A schema change in check-doc-claims.py must not read as 'no drift'."""
-        ra._run = lambda cmd, cwd=None, timeout=180: (
-            0, json.dumps({"verdict": "clean"}), ""
-        )
-        m = ra.measure_doc_drift()
-        self.assertFalse(m.is_known, f"expected undetermined, got {m!r}")
-        self.assertIn("shape change", m.why)
-
-    def test_doc_drift_counts_exempt_findings(self):
-        """The exempt population IS the finding. Counting only non-exempt ones
-        would report 0 against the 140 stale claims measured in this repo."""
-        payload = json.dumps({
-            "verdict": "clean",
-            "findings": [
-                {"kind": "line-drifted", "exempt": True},
-                {"kind": "quote-not-found", "exempt": True},
-            ],
-        })
-        ra._run = lambda cmd, cwd=None, timeout=180: (0, payload, "")
-        m = ra.measure_doc_drift()
-        self.assertTrue(m.is_known, f"expected known, got {m!r}")
-        # Two probes (docs + CLAUDE.md) share the stub, hence 4.
-        self.assertEqual(m.value, 4)
-
 
 class BacklogRot(unittest.TestCase):
     def setUp(self):
@@ -575,7 +548,7 @@ class ObservationLedger(_Patched):
         self.assertEqual(len(rows), 1)
         rec = json.loads(rows[0])
         self.assertEqual(rec["ts"], NOW)
-        self.assertEqual(len(rec["dimensions"]), 5)
+        self.assertEqual(len(rec["dimensions"]), 4)
 
     def test_a_second_run_appends_rather_than_replaces(self):
         """The ledger is the trend. A truncating write would leave exactly one
@@ -616,7 +589,7 @@ class EndToEnd(unittest.TestCase):
             )
         self.assertIn(p.returncode, (0, 1, 2), p.stderr)
         rec = json.loads(p.stdout)
-        self.assertEqual(len(rec["dimensions"]), 5)
+        self.assertEqual(len(rec["dimensions"]), 4)
         for d in rec["dimensions"]:
             self.assertIn(d["state"], ("ok", "breach", "undetermined"))
 

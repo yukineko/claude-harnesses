@@ -75,7 +75,6 @@ impl Fixture {
 }
 
 #[test]
-#[ignore = "backlog 0805b07a: RED repro"]
 fn check_oracle_help_matches_behaviour_when_tdd_is_missing() {
     let fx = Fixture::new();
     assert!(

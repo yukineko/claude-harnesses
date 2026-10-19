@@ -121,7 +121,6 @@ fn control_dry_run_plans_the_unmirrored_create() {
 }
 
 #[test]
-#[ignore = "backlog 7e575392: RED repro"]
 fn active_task_with_closed_issue_is_planned_for_reopen() {
     let out = dry_run_sync("reopen");
     for (id, num) in [("pend0420", "#420"), ("fail0427", "#427")] {

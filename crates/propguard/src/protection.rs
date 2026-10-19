@@ -38,7 +38,8 @@ pub const PROTECTION: Protection = Protection {
         scan or diff read; a truncated diff; an existing but unreadable or \
         unparseable config (config-unreadable); an unknown mode \
         (config-invalid); an existing but unreadable criteria_file with no \
-        non-empty inline done_criteria to fall back to (criteria-unreadable); \
+        non-empty inline done_criteria to fall back to, or a PROPGUARD_CRITERIA \
+        that is set but not valid UTF-8 (criteria-unreadable); \
         and a panic in the gate (run_guarded: it blocks once and allows on \
         the consecutive retry, stop_hook_active). Limits: with no \
         done_criteria source, no git repo, no checkable change, \

@@ -560,6 +560,37 @@ mod tests {
     }
 
     #[test]
+    fn claim_timeout_zero_sanitized() {
+        // Through the real loader (`Config::load`, the only path that runs
+        // `sanitize`; no other loader exists): `checker_timeout_secs = 0` in a
+        // project propguard.toml resolves to exactly 300.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let real_home = std::env::var("HOME").ok();
+        let fake_home = std::env::temp_dir().join(format!(
+            "propguard-config-zero-home-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&fake_home);
+        std::fs::create_dir_all(&fake_home).expect("create fake HOME");
+        std::env::set_var("HOME", &fake_home);
+        std::env::set_var("HARNESS_TRUST_ALL", "1");
+        let root = fake_home.join("proj");
+        std::fs::create_dir_all(&root).expect("create project root");
+        std::fs::write(Config::project_path(&root), "checker_timeout_secs = 0\n")
+            .expect("write propguard.toml");
+        let cfg = Config::load(&root);
+        std::env::remove_var("HARNESS_TRUST_ALL");
+        match real_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&fake_home);
+        assert!(cfg.load_error.is_none(), "{:?}", cfg.load_error);
+        assert_eq!(cfg.checker_timeout_secs, 300);
+    }
+
+    #[test]
     fn checker_timeout_secs_load_from_toml_text_overrides_default() {
         // Exercises the same `toml::from_str::<FileConfig>` + `apply` path that
         // `Config::load` uses, without touching the filesystem/trust gate.

@@ -435,7 +435,13 @@ class HeadMoveIntegrationOnly(ObserveGuardBase):
     """Ruling 2026-10-03 on case c: a HEAD move with a clean tree is allowed
     ONLY if the new HEAD is a merge commit (>=2 parents) OR is contained in some
     ref other than the branch main has checked out (a fast-forward to work that
-    already lives on a worktree / feature branch). c2 = the existing
+    already lives on a worktree / feature branch). Ruling 2026-10-16 (backlog
+    86e21645) adds a third accepted case: main's branch reflog has an entry for
+    exactly the old -> new HEAD move whose message starts with "merge " (written
+    by `git merge`), so a fast-forward whose source branch is already deleted is
+    allowed. A "commit:" entry, an entry for a different transition, or a
+    missing / unreadable reflog is still refused (see
+    test_guard_maintree_bash_ff_source_gone.py). c2 = the existing
     test_completed_fast_forward_merge_clean, c3 = test_completed_non_ff_merge_commit_clean.
     """
 

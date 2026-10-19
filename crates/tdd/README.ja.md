@@ -18,6 +18,7 @@ harness の他のゲートに対する「test-first の兄弟」にあたる。`
 エージェントはテストを後回しにしがちで、「テストを先に書いた」という主張は通常ただの自己申告にすぎない。人間の意志だけに頼ると次の失敗モードに陥る。
 
 - **テスト無しで実装が着地する。** 実装だけ書いてテストを伴わないままターンが終わってしまう。`tdd gate` は、追加された実装行（impl-glob のファイルから、テストファイルとインラインのテストマーカーを除いたもの）を数え、テストの証跡（追加された `#[test]` / `def test_` / `func Test…` / `it(...)`、または `tests/` 配下の変更ファイル）を探す。実装が追加されているのにテストが無ければ停止をブロックし、エージェントにテストを書かせる。skill を使っていなくてもこのゲートは効く。
+- **判定範囲は本セッションが書いたファイルだけ。** Stop hook 入力の `transcript_path` を読み、transcript（とサブエージェントの sidechain transcript）に `Edit`/`Write`/`MultiEdit`/`NotebookEdit` の記録があるファイル、またはそのパスを名指しした `Bash` コマンドがあるファイルだけを判定する（`harness_core::attribution::attribute_own_writes`、reviewgate と共有）。それ以外の未コミット変更（併走する別セッションの変更など）は除外し、「本セッションに帰属しない (not attributed to this session)」として stderr とブロック理由に列挙する [test: crates/tdd/tests/session_scope_own.rs::foreign_only_does_not_block] [test: crates/tdd/tests/session_scope_own.rs::own_bash_relative_path_still_blocks] [test: crates/tdd/tests/session_scope_own.rs::subagent_sidechain_edit_counts_as_own]。transcript が無い／読めないときは帰属判定不能として**作業ツリー全体**を判定し、理由に作成者を検証していない旨を書く [test: crates/tdd/tests/session_scope_own.rs::unreadable_transcript_judges_whole_checkout_and_says_so] [test: crates/tdd/tests/session_scope_own.rs::empty_transcript_path_judges_whole_checkout_and_says_so]。既知の穴: パスを名指ししないコマンド（`cargo fmt`・シェルの glob・スクリプト）で書いたファイルも除外される。
 - **「テストを先に書いた」が検証できない。** 後からテストを足しても、それが実装より先だったかは分からない。`tdd red` はテストが既に通る場合は証跡の記録を拒否し（それは test-first ではない）、`tdd green` は先行する RED 証跡が無ければ拒否する。これにより RED→GREEN の順序が捏造できない成果物として残る。
 - **詰まったエージェントを罠にかけない。** ゲートが連続でブロックし続けるとエージェントが進めなくなる。セッションごとの試行カウンタが `max_attempts` で諦めて停止を許す。純粋なリファクタ/リネーム/ドキュメントには `tdd skip --reason "<理由>"`（理由必須・**発行したセッション限定**・1 回だけ消費・発行と消費の両方をゲートログに記録）という逃げ道があり、`TDD_DISABLE=1` がキルスイッチになる（env は **Claude Code 自身を起動した環境**でのみ有効。フックはアプリの環境を継承するため、ツール呼び出しからの export は届かない）。旧来の project root の 1 行 `.tdd-skip` ファイルは撤去した — 共有ツリーの 1 回限りマーカーは次に停止したセッションが消費してしまう（CLAUDE.md §5）。
 - **harness 自身のバグでターンを壊さない。** tdd 側のエラー（自前のバグ、git が読めない等）では hook モードで exit 0 を返し、停止を許す。tdd が壊れたせいでターンが詰まることは無い。
@@ -40,11 +41,13 @@ harness の他のゲートに対する「test-first の兄弟」にあたる。`
 
 `tdd oracle --task <id>` はタスクの証跡から RED→GREEN の遷移を分類し、JSON レポート
 （`{"transition":"fail_to_pass","valid_fp_oracle":true,…}`）を出力する。有効な
-Fail→Pass のときだけ exit 0。証跡が無い/壊れている場合は `transition:"unknown"`（exit 1）、
+Fail→Pass のときだけ exit 0 [test: crates/tdd/tests/integration.rs::oracle_reports_valid_fail_to_pass_and_exits_zero]。有効とみなすのは RED と GREEN が同じテストコマンド（`cmd`）で
+記録された場合だけで、RED と異なるコマンドで GREEN を記録した場合（または `cmd` が記録されていない証跡）は
+`transition:"command_mismatch"`・`valid_fp_oracle:false`（exit 1）を報告する [test: crates/tdd/tests/backlog_dc37a4da.rs::oracle_rejects_red_and_green_recorded_with_different_test_commands] [test: crates/tdd/src/transition.rs::different_cmd_fail_to_pass_is_command_mismatch] [test: crates/tdd/src/transition.rs::absent_cmd_on_either_side_is_command_mismatch]。証跡が無い/壊れている場合は `transition:"unknown"`（exit 1） [test: crates/tdd/tests/integration.rs::oracle_missing_proofs_is_fail_soft_never_panics] [test: crates/tdd/src/transition.rs::oracle_report_missing_artifacts_are_unknown_and_invalid] [test: crates/tdd/src/proof.rs::read_passed_is_fail_soft]、
 証跡が存在するのに読めない場合は `transition:"undetermined"`・`valid_fp_oracle:false`
-（読み取りエラーを `"undetermined"` に記載、exit 2）を報告し、欠落や有効な証跡としては扱わない。`/tdd` skill 自体のフェーズには含まれず、`condukt` の
+（読み取りエラーを `"undetermined"` に記載、exit 2）を報告し、欠落や有効な証跡としては扱わない [test: crates/tdd/tests/integration.rs::oracle_unreadable_proof_exits_2_undetermined] [test: crates/tdd/src/transition.rs::oracle_report_undetermined_side_names_the_read_error]。`/tdd` skill 自体のフェーズには含まれず、`condukt` の
 Fail→Pass ゲート（`condukt state check-oracle`）が `fix`/`feature` タスクの RED/GREEN 証跡を
-決定論的に検証するために呼ぶ機械オラクルである。
+決定論的に検証するために呼ぶ機械オラクルである [test: crates/condukt/tests/fp_oracle_e2e.rs::fix_task_with_valid_fail_to_pass_oracle_is_verified] [test: crates/condukt/tests/fp_oracle_e2e.rs::fix_task_without_valid_fail_to_pass_oracle_is_refused]。
 
 ### サブコマンド
 

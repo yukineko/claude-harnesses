@@ -24,7 +24,10 @@ _spec = importlib.util.spec_from_file_location(
     "ctw_tests", _HERE / "test_check_test_weakening.py"
 )
 _ctw = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_ctw)
+exec(  # noqa: S102 -- source-text load, see test_check_fail_open.py (05726f9f)
+    compile(_spec.loader.get_source(_spec.name), _spec.origin, "exec", dont_inherit=True),
+    _ctw.__dict__,
+)
 
 COMMENT_ONLY_IGNORE_RS = """\
 #[test]

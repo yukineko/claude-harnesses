@@ -438,6 +438,7 @@ crates/reviewgate/src/review.rs:203-234
     }
 ```
 
+<!-- record: 2026-10-17 rev: 6b64a13e -->
 **発現経路A（全欠落 → 即allow）**: `changed_files`が`Files(v)`（変更ファイルあり、例:
 tracked な既存ファイルへの変更のみで untracked 新規ファイルは無い）を正しく確認した直後、
 `diff_text`内の`run_diff`（unstaged側・staged側の両方）がsubprocess失敗（非ゼロ終了／spawn失敗:
@@ -445,6 +446,7 @@ tracked な既存ファイルへの変更のみで untracked 新規ファイル�
 `others`（untrackedファイル一覧、対象がすべてtrackedなら空）も空なので、最終的な`diff`文字列は
 空になる。`diff.trim().is_empty()`が`true`となり、`crates/reviewgate/src/review.rs:278`の`return allow("empty-diff", st)`
 が実行される — **`changed_files`が確認した実在の変更が、一切レビューされずにStopが許可される**。
+<!-- /record -->
 
 **発現経路B（部分欠落 → 不完全diffが「レビュー済み」として確定する）**: `run_diff`の2回の呼び出し
 （unstaged・staged）のうち片方だけが失敗した場合、`diff`は非空だが**実際の変更の一部を欠いた**

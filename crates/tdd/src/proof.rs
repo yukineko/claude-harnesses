@@ -370,6 +370,34 @@ pub fn read_passed(
     })
 }
 
+/// Read a proof artifact's recorded test command (`cmd`) through the harness
+/// boundary — the same tri-state as [`read_passed`]:
+///
+/// - `Known(None)`: the artifact is missing, not valid JSON, or lacks a string
+///   `cmd` field.
+/// - `Known(Some(cmd))`: the command `tdd red`/`tdd green` ran (after
+///   `--cmd` / `test_cmd` resolution).
+/// - `Undetermined`: the artifact exists but could not be read.
+///
+/// Feeds `transition::oracle_report_same_cmd`, which only accepts a Fail→Pass
+/// whose RED and GREEN were recorded with the SAME command; a `Known(None)`
+/// on either side cannot show that, so it is rejected, not accepted.
+pub fn read_cmd(
+    root: &Path,
+    cfg: &Config,
+    task: &str,
+    kind: &str,
+) -> Determination<Option<String>> {
+    let path = artifact_path(root, cfg, task, kind);
+    harness_core::boundary::read_to_string(&path).map(|text| {
+        let value: serde_json::Value = serde_json::from_str(&text?).ok()?;
+        value
+            .get("cmd")?
+            .as_str()
+            .map(std::string::ToString::to_string)
+    })
+}
+
 impl runner::Outcome {
     fn status_str(&self) -> String {
         if self.timed_out {

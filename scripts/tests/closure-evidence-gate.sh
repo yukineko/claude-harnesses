@@ -223,6 +223,8 @@ case_; new_repo
   ( cd "$D" && git add .backlog/tasks.toml .backlog/tasks.done.toml ); expect "P8 duplicate_of existing done row" pass
 case_; stage_discard; expect "P9 cancelled with discard closure + non-empty discard_reason" pass
 case_; DISCARD_REASON="no evidence, speculation only"; stage_discard; expect "P10 cancelled discard with a different non-empty reason" pass
+case_; G_RUNNER=script; stage_f2p; expect "P11 CLI runner label script for bash tests/t.sh (backlog b0c3d263)" pass
+case_; G_RUNNER=sh; G_CMD="sh tests/t.sh"; stage_f2p; expect "P12 legacy first-word runner sh for sh tests/t.sh" pass
 
 # ---------------------------------------------------------------- BLOCK: no / malformed evidence
 case_; new_repo
@@ -235,6 +237,10 @@ case_; new_repo
 case_; G_EXIT=1; stage_f2p; expect "B03 green block exit != 0" block
 case_; G_PASSED=0; stage_f2p; expect "B04 green passed = 0" block
 case_; G_RUNNER=grep; G_CMD="grep -q done feature.txt"; stage_f2p; expect "B05 runner outside allowlist (grep)" block
+case_; G_RUNNER=cargo-test; stage_f2p; expect "B35 CLI label cargo-test on a bash script command (label/shape mismatch)" block
+case_; G_RUNNER=pytest; stage_f2p; expect "B36 CLI label pytest on a bash script command (label/shape mismatch)" block
+case_; G_RUNNER=python3; stage_f2p; expect "B37 legacy runner python3 on a bash script command (program mismatch)" block
+case_; G_RUNNER=shell-script; stage_f2p; expect "B38 unknown runner label on an allowlisted command" block
 case_; G_REV=abc123; stage_f2p; expect "B06 green rev not 40-hex" block
 case_; G_REV=$ZERO40; stage_f2p; expect "B07 green rev is not a commit" block
 case_; NO_RED=1; stage_f2p; expect "B08 F2P closure missing red block" block

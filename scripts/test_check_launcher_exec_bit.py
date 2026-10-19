@@ -251,28 +251,55 @@ class RealRepoState(unittest.TestCase):
         """A count assertion, so the scope cannot quietly shrink to a subset and
         keep reporting green over it.
 
-        39 LAUNCHER FILES, not 39 plugins — and getting that unit wrong is why
-        this constant has gone stale twice. `launchers()` returns one entry per
-        file under crates/*/bin/, so a crate shipping two of them contributes
-        two. Measured 2026-09-08 at 051f7850:
+        The expected launcher set is derived from an INDEPENDENT source — what
+        each plugin's Cargo.toml says it builds — never from the checker's own
+        output (a count pinned to the observation it is supposed to check proves
+        nothing). One launcher FILE per declared binary target, not one per
+        plugin: specguard declares two `[[bin]]` targets (specguard, specforge;
+        specforge's launcher landed in 0eb9996e) and so ships two launchers.
 
-            ls -d crates/*/.claude-plugin/plugin.json | wc -l          -> 41
-            plugins with no bin/ at all: daily-report, flow, scout     ->  3
-            crates/*/bin with more than one launcher: specguard
-                (specforge, specguard)                                 -> +1
-
-            41 - 3 + 1 = 39
-
-        Previous docstrings computed `plugins - skills_only` and compared it to
-        a count of FILES, which can only agree by accident; both of the earlier
-        "corrections" re-derived the same wrong formula and the assertion went
-        red again as soon as the population moved. If this fails, re-run the
-        three commands above rather than editing the number to whatever
-        len(found) currently is — a count pinned to the observation it is
-        supposed to check proves nothing."""
+        History: this used to be a hand-pinned 39, measured 2026-09-08 at
+        051f7850 as `41 plugins - 3 skill-only + 1 (specforge)`. It went stale
+        (backlog 26f6dd72) when jev was added as the 42nd plugin in f56497bf
+        (2026-10-02) — the third time a hardcoded number here rotted as the
+        population moved. Deriving it removes the need to re-measure by hand."""
+        expected = _declared_launchers(REPO_ROOT)
+        self.assertGreater(
+            len(expected), 0,
+            "no plugin declares a binary target — the independent source broke",
+        )
         found = cleb.launchers(cleb.index_entries(repo=str(REPO_ROOT)))
-        self.assertEqual(len(found), 39, [p for _m, p in found])
+        found_paths = sorted(p for _m, p in found)
+        self.assertEqual(found_paths, expected)
+        self.assertEqual(len(found), len(expected), found_paths)
 
+
+def _declared_launchers(repo):
+    """`crates/<c>/bin/<bin>` for every binary target that every plugin crate
+    (a crate with `.claude-plugin/plugin.json`) declares in its Cargo.toml.
+
+    Follows cargo's target rules: explicit `[[bin]]` names, plus — unless
+    `autobins = false` — the package name when `src/main.rs` exists and the
+    stem of each `src/bin/*.rs`. Plugins without a Cargo.toml (skill-only:
+    daily-report, flow, scout) build nothing and so ship no launcher."""
+    import tomllib
+
+    out = set()
+    for pj in sorted(repo.glob("crates/*/.claude-plugin/plugin.json")):
+        crate = pj.parent.parent
+        cargo = crate / "Cargo.toml"
+        if not cargo.is_file():
+            continue
+        with cargo.open("rb") as fh:
+            manifest = tomllib.load(fh)
+        package = manifest["package"]
+        names = {b["name"] for b in manifest.get("bin", [])}
+        if package.get("autobins", True):
+            if (crate / "src" / "main.rs").is_file():
+                names.add(package["name"])
+            names.update(p.stem for p in (crate / "src" / "bin").glob("*.rs"))
+        out.update(f"crates/{crate.name}/bin/{n}" for n in names)
+    return sorted(out)
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

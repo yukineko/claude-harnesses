@@ -1,0 +1,21 @@
+[package]
+name = "onepass"
+version = "0.1.0"
+edition = "2021"
+rust-version.workspace = true
+description = "PreToolUse gate on Agent/Task: at most ONE refutation/verification/audit subagent spawn per user prompt (rule 2026-10-17: one refutation and one test; do not dig several levels deep). UserPromptSubmit resets the per-session counter. Fail-closed: unreadable state or unparseable input denies."
+license = "MIT"
+
+[[bin]]
+name = "onepass"
+path = "src/main.rs"
+
+[dependencies]
+harness-core = { path = "../harness-core" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

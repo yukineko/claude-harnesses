@@ -356,6 +356,42 @@ pub fn decide_issue_close<R: Fn(&[&str]) -> Option<(bool, String)>>(
     }
 }
 
+/// The outcome of the `gh issue reopen` step (backlog 7e575392). Same shape as
+/// [`CloseOutcome`]: only an affirmative gh success may clear the recorded
+/// close; every other path leaves it set so the next `backlog sync` retries.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "outcome")]
+pub enum ReopenOutcome {
+    /// gh executed `issue reopen` and reported success.
+    Reopened,
+    /// The issue was NOT reopened. The caller must not clear `issue_closed_at`.
+    NotReopened { reason: String },
+}
+
+/// Decide the outcome of a `gh issue reopen <number>` invocation from its
+/// injected result. Never spawns a process itself; never panics.
+pub fn decide_issue_reopen<R: Fn(&[&str]) -> Option<(bool, String)>>(
+    remote_url: &str,
+    number: u64,
+    run: R,
+) -> ReopenOutcome {
+    if !is_github_remote(remote_url) {
+        return ReopenOutcome::NotReopened {
+            reason: "remote is not github.com; nothing to reopen".to_string(),
+        };
+    }
+    let n = number.to_string();
+    match run(&["issue", "reopen", n.as_str()]) {
+        None => ReopenOutcome::NotReopened {
+            reason: "gh CLI not found; issue left closed".to_string(),
+        },
+        Some((false, output)) => ReopenOutcome::NotReopened {
+            reason: format!("gh issue reopen failed: {}", output.trim()),
+        },
+        Some((true, _)) => ReopenOutcome::Reopened,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

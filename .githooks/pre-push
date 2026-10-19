@@ -312,8 +312,8 @@ fi
 # landed nothing in this repo ran it. The three `cargo` hits in
 # .githooks/pre-commit are a comment and two remediation strings; this file had
 # none at all, and every gate pre-commit runs (injectguard, fail-open-guard,
-# doc-claims, claudemd-claims, version-lockstep, bump-on-change, secret-guard,
-# raw-io-ratchet, worktree-isolation) is a Python text scanner. donegate DOES run
+# version-lockstep, bump-on-change, secret-guard, raw-io-ratchet,
+# worktree-isolation) is a Python text scanner. donegate DOES run
 # cargo, but it is a Stop hook bounded by max_attempts
 # (crates/donegate/src/main.rs:202-217 prints "Allowing stop" and exits 0 once the
 # attempt budget is spent, so a persistent type error passes on the 4th Stop), and

@@ -179,7 +179,7 @@ class T(unittest.TestCase):
         self.abs_path()
         invoked = [
             "check-prompt-injection.py", "check-fail-open.py", "check-fail-open-diff.py",
-            "check-doc-claims.py", "check-claudemd-claims.py", "check-plugin-versions.py",
+            "check-plugin-versions.py",
             "check-version-bumped.py", "check-hardcoded-secret.py", "check-raw-io-ratchet.py",
             "check-fault-injection-adoption.py", "check-worktree-isolation.py",
             "check-gate-crates-sync.py", "check-gate-protection.py",

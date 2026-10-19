@@ -52,6 +52,16 @@ fn commit_file(dir: &Path, file: &str, content: &str, msg: &str) -> String {
     git(dir, &["rev-parse", "HEAD"])
 }
 
+/// A task worker's commit: carries the `Condukt-Task: <task>` trailer that
+/// `worktree merge` demands on every landed commit.
+fn commit_task_file(dir: &Path, task: &str, file: &str, content: &str, msg: &str) -> String {
+    std::fs::write(dir.join(file), content).unwrap();
+    git(dir, &["add", file]);
+    let trailer = format!("Condukt-Task: {task}");
+    git(dir, &["commit", "-q", "-m", msg, "--trailer", &trailer]);
+    git(dir, &["rev-parse", "HEAD"])
+}
+
 impl Fx {
     fn new() -> Self {
         let tmp = tempfile::tempdir().unwrap();
@@ -128,7 +138,7 @@ fn create_from_main_then_main_advances_still_merges() {
         base,
         "create must record the commit it cut the task branch from"
     );
-    let task_commit = commit_file(&wt, "task.txt", "task\n", "task");
+    let task_commit = commit_task_file(&wt, "runH/t1", "task.txt", "task\n", "task");
     // main advances after create (another task landed meanwhile).
     commit_file(&fx.repo, "other.txt", "other\n", "main moved on");
     let out = fx.condukt(&["worktree", "merge", "--branch", &branch]);
@@ -175,7 +185,7 @@ fn record_pointing_at_a_blob_is_refused_and_main_unchanged() {
     let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let fx = Fx::new();
     let (wt, branch) = fx.create("runB", "t1", "b1");
-    commit_file(&wt, "task.txt", "task\n", "task");
+    commit_task_file(&wt, "runB/t1", "task.txt", "task\n", "task");
     std::fs::write(fx.repo.join("blob.txt"), "i am a blob\n").unwrap();
     let blob = git(&fx.repo, &["hash-object", "-w", "blob.txt"]);
     std::fs::remove_file(fx.repo.join("blob.txt")).unwrap();
@@ -206,7 +216,7 @@ fn ancestry_probe_error_exit_is_refused_and_main_unchanged() {
     let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let fx = Fx::new();
     let (wt, branch) = fx.create("runU", "t1", "b1");
-    commit_file(&wt, "task.txt", "task\n", "task");
+    commit_task_file(&wt, "runU/t1", "task.txt", "task\n", "task");
     let real = String::from_utf8_lossy(
         &Command::new("sh")
             .args(["-c", "command -v git"])
@@ -252,7 +262,13 @@ fn resolve_merge_refuses_base_off_main_and_main_unchanged() {
     let fx = Fx::new();
     commit_file(&fx.repo, "shared.txt", "l1\nl2\nl3\n", "shared");
     let (wt, branch) = fx.create("runR", "t1", "b1");
-    commit_file(&wt, "shared.txt", "l1\nbranch\nl3\n", "branch edit");
+    commit_task_file(
+        &wt,
+        "runR/t1",
+        "shared.txt",
+        "l1\nbranch\nl3\n",
+        "branch edit",
+    );
     commit_file(&fx.repo, "shared.txt", "l1\nmain\nl3\n", "main edit");
     let out = fx.condukt(&["worktree", "merge", "--branch", &branch]);
     let (so, se) = s(&out);

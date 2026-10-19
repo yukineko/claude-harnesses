@@ -42,7 +42,6 @@ fn control_same_task_without_the_file_name_is_not_gated() {
 }
 
 #[test]
-#[ignore = "backlog 11be9484: RED repro"]
 fn file_name_containing_a_deploy_needle_does_not_force_gate() {
     let a = classify(&action_text(
         TITLE_A,
@@ -68,7 +67,7 @@ fn control_prose_without_a_quoted_command_is_not_gated() {
 }
 
 #[test]
-#[ignore = "backlog 11be9484: RED repro"]
+#[ignore = "backlog 11be9484 prose half: out of scope by user ruling 2026-10-16"]
 fn prose_describing_a_command_does_not_force_gate() {
     let a = classify(&action_text(
         TITLE_B,

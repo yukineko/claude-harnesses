@@ -109,8 +109,9 @@ fn decomposition_json(task_id: &str, kind: Option<&str>, repro: Option<&str>) ->
 }
 
 /// Write a `<task>.<kind>.json` RED/GREEN proof artifact — the shape
-/// `tdd red`/`tdd green` produce, reduced to the one field `tdd oracle`
-/// reads (`passed`) — under `<dir>/.tdd/`, `tdd`'s default `proof_dir`. This
+/// `tdd red`/`tdd green` produce, reduced to the two fields `tdd oracle`
+/// reads (`passed`, and `cmd` — the same on both sides, since `tdd oracle`
+/// only accepts a Fail→Pass of one and the same command) — under `<dir>/.tdd/`, `tdd`'s default `proof_dir`. This
 /// is exactly the directory `tdd oracle` will read from when `condukt`
 /// shells out to it with `current_dir(run_dir)`, and `run_dir` defaults to
 /// the task's `condukt state set` invocation cwd when no worktree is
@@ -119,8 +120,11 @@ fn write_proof(dir: &Path, task: &str, kind: &str, passed: bool) {
     let proof_dir = dir.join(".tdd");
     std::fs::create_dir_all(&proof_dir).expect("create proof dir");
     let path = proof_dir.join(format!("{task}.{kind}.json"));
-    std::fs::write(&path, serde_json::json!({ "passed": passed }).to_string())
-        .expect("write proof artifact");
+    std::fs::write(
+        &path,
+        serde_json::json!({ "passed": passed, "cmd": "cargo test" }).to_string(),
+    )
+    .expect("write proof artifact");
 }
 
 /// Seed a fresh isolated run: writes the decomposition to `dir`, runs

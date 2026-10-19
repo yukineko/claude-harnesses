@@ -81,7 +81,6 @@ class HooksDirOption(unittest.TestCase):
         p = self._run("--repo", str(self.repo))
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
 
-    @unittest.expectedFailure
     def test_hooks_dir_option_checks_a_clone_without_hookspath(self):
         p = self._run(
             "--repo", str(self.repo), "--hooks-dir", str(self.repo / ".githooks")

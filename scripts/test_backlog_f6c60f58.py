@@ -10,8 +10,14 @@ and require the gate to pass. Any non-zero gate exit fails this test -- a
 below-threshold rate (exit 1) and an unmeasurable run (exit 2, fail-closed) are
 both NOT a pass (CLAUDE.md section 3).
 
-Slow (minutes): opt in with RUN_MUTATION_REPROS=1. Without it the test is
-SKIPPED, which unittest reports as skipped, never as passed.
+Slow (minutes): the measurement always runs. An opt-in skip made the suite
+report `Ran 0 tests`, which check-workspace-tests.py rightly reports as
+undetermined (backlog 69e34456).
+
+The detect.rs:128:47 mutant that used to flip between caught and missed was
+"caught" only when the racing anchor test (backlog 07bfdca0) happened to fail.
+That race is fixed and a dedicated detect.rs test now kills the mutant, so the
+threshold test carries no expectedFailure marker.
 """
 import os
 import subprocess
@@ -31,8 +37,6 @@ class KillRate(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        if os.environ.get("RUN_MUTATION_REPROS") != "1":
-            raise unittest.SkipTest("slow mutation run; set RUN_MUTATION_REPROS=1")
         # fixture precondition: cargo-mutants does not create target/ itself
         (REPO / "target").mkdir(exist_ok=True)
         env = dict(os.environ, PILOT=PILOT, MUTANTS_EXTRA=f"--file {FILE}")
@@ -47,7 +51,6 @@ class KillRate(unittest.TestCase):
         rc, tail = self.result
         self.assertIn(rc, (0, 1), f"mutation gate could not measure (exit {rc}):\n{tail}")
 
-    @unittest.expectedFailure  # backlog f6c60f58: open defect, remove when fixed
     def test_kill_rate_meets_pilot_threshold(self):
         rc, tail = self.result
         self.assertEqual(rc, 0, f"kill-rate below threshold for {FILE} (exit {rc}):\n{tail}")

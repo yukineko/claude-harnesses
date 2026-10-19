@@ -598,10 +598,13 @@ fn policy_answer_conflict_beats_approval() {
 ///   case needed separating out: a finding whose effect cannot be measured was
 ///   riding that same permissive path. Category (c), identical rationale to the
 ///   condukt rows above; a new residual stop, deliberately.
-/// overwatch SKILL (7): heading x1 + HOTL x5 (pause / resume / reassign / reap /
-///   end — each an "HOTL gate: 実行前に AskUserQuestion で確認" before a
-///   side-effecting control command) + PROSE x1 (summary line restating that all
-///   side-effect commands confirm via AskUserQuestion). overwatch is a manual
+/// overwatch SKILL (2): PROSE x1 (the prohibition "制御コマンド（pause / resume /
+///   reassign / reap / end）は AskUserQuestion で確認せずに実行しない。") + heading x1
+///   (the control-command section heading). Was 7 (heading + 5 per-command
+///   "HOTL gate" lines + 1 summary line) until ce76ce72 consolidated the five
+///   per-command gates and the summary into that one prohibition, which covers
+///   the same five commands; re-audited: no command lost its confirmation and no
+///   Ask site existed for any other command. overwatch is a manual
 ///   cross-session control/monitoring surface (its `allowed-tools` has NO Task
 ///   tool, so it cannot drive the scout/condukt/flow autonomy loop at all); these
 ///   are out-of-loop human-control prompts, so the two-stop invariant does not
@@ -615,7 +618,9 @@ const ASK_ALLOWLIST: &[(&str, usize)] = &[
     ("condukt/skills/condukt/SKILL.md", 25),
     ("flow/skills/flow/SKILL.md", 15),
     ("hypothesis/skills/add/SKILL.md", 1),
-    ("overwatch/skills/overwatch/SKILL.md", 7),
+    // ce76ce72: five per-command HOTL gates consolidated into one prohibition
+    // covering the same five commands (pause/resume/reassign/reap/end).
+    ("overwatch/skills/overwatch/SKILL.md", 2),
     ("scout/skills/scout/SKILL.md", 10),
     ("tdd/skills/tdd/SKILL.md", 1),
 ];

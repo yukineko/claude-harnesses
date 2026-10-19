@@ -284,7 +284,11 @@ def claudemd_crates(text):
 
 def skill_md_crates(text):
     """Extract crate names from the "## 対象 crate (既定)" section's backtick CSV."""
-    m = re.search(r"##\s*対象\s*crate\s*\(既定\)\s*\n+.*?`([a-z0-9_,-]+)`", text, re.S)
+    m = re.search(
+        r"##\s*対象\s*crate\s*\(既定\)(?:[ \t]*\[test:[^\]\n]*\])*[ \t]*\n+.*?`([a-z0-9_,-]+)`",
+        text,
+        re.S,
+    )
     if not m:
         return None
     return set(x for x in m.group(1).split(",") if x)

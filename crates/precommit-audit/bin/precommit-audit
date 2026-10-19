@@ -20,9 +20,15 @@
 #        AUDIT_MODE is set — see `resolve_mode`)         -> exit 2  (blocks the stop)
 #   precommit                                            -> exit 1  (aborts the commit)
 #
-# and it applies the SAME recursion guard the binary applies at src/main.rs:206
-# (`if hook.stop_hook_active { exit(0) }`), so the block is bounded to one and a
-# missing binary can never trap the session in a block loop.
+# The stop block is bounded like harness_core::gate::run::run_guarded's panic
+# barrier, NOT by `stop_hook_active` alone: that flag is set whenever ANY Stop
+# hook blocked the previous stop, so on its own it says nothing about THIS gate
+# (backlog 9b3f98ec). Only this gate's SECOND CONSECUTIVE missing-binary failure
+# in the session is allowed through (per-gate, per-session marker, see
+# `streak_decide` below), so a missing binary can never trap the session in a
+# block loop. Unlike the run_guarded gates, the precommit-audit binary does not
+# clear this marker when it runs, so a marker left by a missing-binary stop is
+# only cleared by the launcher's own next missing-binary stop.
 #
 # The remaining surface is `trust` (an operator write command that grants trust
 # to a repo's .precommit-audit.toml) plus --help/--version. Those are consumed
@@ -54,6 +60,85 @@ echo "precommit-audit: no bundled binary for $os-$arch ($binary)." >&2
 
 fix="Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the precommit-audit hook."
 
+# ---- missing-binary failure streak, bounded exactly like run_guarded --------
+# `stop_hook_active` is set whenever ANY Stop hook blocked the previous stop, so
+# on its own it says nothing about THIS gate (backlog 9b3f98ec). Only a SECOND
+# CONSECUTIVE failure of THIS gate in THIS session may allow (CLAUDE.md §1). The
+# streak uses the same per-gate, per-session marker layout run_guarded keeps for
+# panics (crates/harness-core/src/gate/run.rs `PanicMarker`):
+#   $HOME/.harness/state/panic-markers/<gate>/<session>.panic
+# read-and-cleared on every missing-binary stop and re-written when this stop
+# fails. The decision table mirrors run_guarded's `decide`:
+#   first stop of a chain              -> record, block (whatever the record did)
+#   re-entry, previous stop failed     -> record, allow (stderr only)
+#   re-entry, previous stop did not    -> record; block, or loud allow if the
+#                                         record failed (a block that cannot be
+#                                         recorded could never be bounded)
+#   re-entry, streak undetermined (no usable session id, HOME unset, marker not
+#   clearable)                         -> loud allow: systemMessage on stdout
+# Sets $streak (block|allow|loud) and $streak_why.
+streak_record() {
+  [ -n "$streak_marker" ] || return 1
+  mkdir -p "$streak_dir" 2>/dev/null || return 1
+  printf 'missing-binary\n' > "$streak_marker" 2>/dev/null
+}
+streak_decide() {
+  # $1 = Stop payload, $2 = yes when stop_hook_active is true, $3 = gate name
+  streak_why=""
+  streak_marker=""
+  streak_dir=""
+  if printf '%s' "$1" | grep -q '"session_id"'; then
+    streak_sid="$(printf '%s' "$1" | tr -d '\n' | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p')"
+  else
+    streak_sid="${CLAUDE_CODE_SESSION_ID:-}"
+  fi
+  case "$streak_sid" in
+    ''|.|..|_local|*/*|*\\*) streak_sid="" ;;
+  esac
+  if [ -z "$streak_sid" ]; then
+    streak_why="no usable session id, so this gate's previous-stop failure cannot be looked up"
+  elif [ -z "${HOME:-}" ]; then
+    streak_why="HOME is unset, so the failure-streak marker cannot be located"
+  else
+    streak_dir="$HOME/.harness/state/panic-markers/$3"
+    streak_marker="$streak_dir/$streak_sid.panic"
+  fi
+  streak_prev=no
+  if [ -z "$streak_marker" ]; then
+    streak_prev=undetermined
+  elif [ -e "$streak_marker" ] || [ -L "$streak_marker" ]; then
+    if rm -f "$streak_marker" 2>/dev/null && ! [ -e "$streak_marker" ] && ! [ -L "$streak_marker" ]; then
+      streak_prev=yes
+    else
+      streak_prev=undetermined
+      streak_why="the failure-streak marker exists but could not be cleared"
+      streak_marker=""
+    fi
+  fi
+  if [ "$2" != yes ]; then
+    streak_record || echo "$3: failure-streak marker not recorded; the next re-entry cannot see it." >&2
+    streak=block
+    return 0
+  fi
+  case "$streak_prev" in
+    yes)
+      streak_record || echo "$3: failure-streak marker not recorded." >&2
+      streak=allow
+      ;;
+    no)
+      if streak_record; then
+        streak=block
+      else
+        streak=loud
+        streak_why="this first failure on a re-entry could not be recorded, so a block here could never be bounded"
+      fi
+      ;;
+    *)
+      streak=loud
+      ;;
+  esac
+}
+
 # `trust` and the informational flags are CLI, not a hook: no verdict to give.
 case "${1:-}" in
   trust|-h|--help|-V|--version)
@@ -78,16 +163,29 @@ if [ "$mode" = "precommit" ]; then
   exit 1
 fi
 
-# stop / SessionEnd. Honour the binary's own recursion guard so the block is
-# bounded to one; without a live event on stdin there is nothing to guard on and
-# the restrictive answer stands.
+# stop / SessionEnd. Bound the block with the per-gate, per-session failure
+# streak; without a live event on stdin there is nothing to bound on and the
+# restrictive answer stands.
 if [ ! -t 0 ]; then
   payload="$(cat)"
+  reentry=no
   if printf '%s' "$payload" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
-    echo "precommit-audit: stop re-entry with no binary — allowing this stop (the fail-closed block was already surfaced once; the audit still has NOT run)." >&2
-    exit 0
+    reentry=yes
   fi
+  streak_decide "$payload" "$reentry" precommit-audit
+  case "$streak" in
+    allow)
+      echo "precommit-audit: no binary again on this gate's consecutive stop — allowing this stop (the fail-closed block was already surfaced for this gate's previous stop in this session; the audit still has NOT run)." >&2
+      exit 0
+      ;;
+    loud)
+      echo "precommit-audit: stop re-entry with no binary and an undetermined failure streak ($streak_why) — allowing loudly." >&2
+      printf '{"systemMessage":"%s"}\n' \
+        "precommit-audit did not run on a stop re-entry (no bundled binary for $os-$arch) and did NOT scan this working set. Whether its previous stop also failed could not be determined ($streak_why), and blocking without that record could loop forever, so this stop is allowed. Treat this stop as unchecked by precommit-audit. $fix"
+      exit 0
+      ;;
+  esac
 fi
 
-echo "precommit-audit: the audit did NOT run for $os-$arch, so this working set is UNSCANNED, not clean (blocked fail-closed once — the next stop is allowed through so the session can never be trapped). $fix" >&2
+echo "precommit-audit: the audit did NOT run for $os-$arch, so this working set is UNSCANNED, not clean (blocked fail-closed — only if precommit-audit also finds no binary on its very next stop in this session is that stop allowed through, so the session can never be trapped). $fix" >&2
 exit 2

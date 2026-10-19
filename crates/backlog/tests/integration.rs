@@ -469,11 +469,12 @@ fn session_start_with_valid_payload_exits_zero() {
 }
 
 #[test]
-fn session_start_with_malformed_stdin_exits_zero() {
-    // Fail-soft invariant: malformed stdin is skipped (logged to stderr), hook
-    // still exits 0 and never breaks the turn.
+fn session_start_with_malformed_stdin_exits_nonzero() {
+    // Contract change (ticket f580e5ef): malformed stdin is undetermined, not
+    // "nothing to inject". The hook must fail visibly (non-zero exit) rather
+    // than exit 0 with empty stdout.
     let home = temp_home("ss-bad");
     let (code, stdout) = run(&["session-start"], "not json", &home);
-    assert_eq!(code, 0, "malformed stdin must still exit 0");
+    assert_ne!(code, 0, "malformed stdin must exit non-zero");
     assert!(stdout.trim().is_empty(), "got: {stdout}");
 }

@@ -1,0 +1,13 @@
+# TRACKED (see .gitignore). Machine-local overrides belong in
+# $CARGO_HOME/config.toml or CARGO_TARGET_DIR, not here.
+#
+# [env] is exported by cargo to every `cargo test` / `cargo run` process and is
+# inherited by every child it spawns. HARNESS_SANDBOX_HOME makes
+# harness_core::config::home() redirect any process whose HOME is the REAL
+# account home (or unset) into this sandbox, so no test suite in the workspace
+# writes into the live ~/.overwatch, ~/.harness, ~/.condukt, ... (backlog
+# 099a5cbb). A test that sets its own HOME (e.g. a tempdir) is unaffected.
+# Consequence: `cargo run -p <plugin>` also sees the sandbox, not your live
+# state -- use the deployed plugin binary to operate on live state.
+[env]
+HARNESS_SANDBOX_HOME = { value = "target/harness-test-home", relative = true }

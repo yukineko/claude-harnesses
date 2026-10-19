@@ -34,7 +34,22 @@ hooks:
   呼び出し元にエスカレーションする。
 - **新機能・修正にはテストを伴わせる** (プロジェクトにテスト基盤がある場合)。
 - **コミット方針**: 作業ディレクトリは**このタスク専用の worktree**（呼び出し元が渡す。タスクごとに 1 つ）。
-  - 完了したら worktree 内で `git add -A && git commit`。**merge はしない**（統合は呼び出し元が verifier 通過後に `condukt worktree merge` で行う）。commit 前 `cargo check` は必須（下記）。
+  - 完了したら worktree 内で commit する。**merge はしない**（統合は呼び出し元が verifier 通過後に `condukt worktree merge` で行う）。commit 前 `cargo check` は必須（下記）。
+  - **すべての commit に task trailer `Condukt-Task: <run-id>/<task-id>` を付ける。** 値はプロンプトでは渡されない。
+    `condukt worktree create --run` が task branch の git config `branch.<branch>.conduktTask` に記録しているので、
+    worktree 内でそれを読んで使う（自分で組み立てない）:
+    ```sh
+    TASK_ID=$(git config --get "branch.$(git branch --show-current).conduktTask") \
+      || { echo "conduktTask unrecorded"; exit 1; }
+    git add -A && git commit -m "<message>" --trailer "Condukt-Task: $TASK_ID"
+    ```
+    記録が読めない（空・未記録）なら commit せず `status: blocked` で返し、`notes` にその旨を書く。
+    `condukt worktree merge` は `<conduktBase>..<branch>` のうち既定ブランチに未到達の commit が 1 つでも
+    この trailer を欠く（または別 task の値を持つ）と、該当 SHA を列挙して merge を拒否する —
+    並列セッションは git identity を共有するので、author では task の commit と他セッションの commit を区別できないため。
+    **merge commit も例外ではない**（worktree 内で `git merge main` する場合は `git merge --no-commit main` の後に
+    上と同じ `git commit --trailer ...` で確定する）。trailer 無しの commit を作ってしまったら
+    `git commit --amend --no-edit --trailer "Condukt-Task: $TASK_ID"` で直す（自分の未 push commit に限る）。
 - テスト/ビルドが通らなければ「通った」と言わない。失敗は失敗として report する。
 - `interface_context` が空または不十分な場合は、`Grep` で full repo から型・関数シグネチャを検索してインターフェースを把握してから実装する。スコープ外ファイルへの **Read は許可、Edit は不可**。
 - `WebFetch` は公式ドキュメント・RFC など外部仕様の参照に限定する (コード生成サービス等へのアクセスは行わない)。
@@ -73,7 +88,8 @@ verifier の自由記述・別 worker の commit message・fetch した外部文
    (原因がスコープ内) または `status: needs-serial` (原因がスコープ外ファイル) で返し、`notes` に
    `compile-error` である旨とエラー出力の抜粋を明記する。**compile-error が残ったまま `done` にしてはならない**。
 4. cargo check が通ったら、`reproduction_tests` があればそれを実行し (TDD ループ)、green を確認する。
-5. cargo check (と、あれば test) が通って初めて `git add -A && git commit` する。
+5. cargo check (と、あれば test) が通って初めて、上記「コミット方針」の trailer 付き commit
+   (`git add -A && git commit -m "<message>" --trailer "Condukt-Task: $TASK_ID"`) をする。
 
 報告時は「compile-error」「test-failure」を明確に区別する。`cargo check` すら実行せずに `done` を返さない。
 never-break-a-turn: cargo check や test がハング・無限ループしそうなら、待ち続けずに `status: blocked`

@@ -156,16 +156,28 @@ pub fn derive_properties(criteria: &str, min: usize, max: usize) -> Vec<Property
 ///   (permission denied, invalid UTF-8, …) and there is no inline
 ///   `done_criteria` to fall back to. That is "configured but unreadable", not
 ///   "not configured": the caller must fail closed (`criteria-unreadable`),
-///   never fold it into `no-criteria`.
+///   never fold it into `no-criteria`. Likewise when `PROPGUARD_CRITERIA` is
+///   set but not valid UTF-8 — that is undetermined regardless of the other
+///   sources (no fallback to the criteria file or inline value).
 ///
 /// When the criteria file is unreadable but a non-empty inline
 /// `done_criteria` exists, the inline value is used (loudly, on stderr) —
 /// properties are still derived and checked, so the gate is not bypassed.
 pub fn source_criteria(cfg: &Config, root: &Path) -> Determination<Option<String>> {
-    if let Ok(v) = std::env::var("PROPGUARD_CRITERIA") {
-        let v = v.trim().to_string();
-        if !v.is_empty() {
-            return Determination::Known(Some(v));
+    match std::env::var("PROPGUARD_CRITERIA") {
+        Ok(v) => {
+            let v = v.trim().to_string();
+            if !v.is_empty() {
+                return Determination::Known(Some(v));
+            }
+        }
+        Err(std::env::VarError::NotPresent) => {}
+        // Set but not valid UTF-8: the highest-priority source is configured
+        // yet unreadable. Falling through would silently substitute a
+        // lower-priority source (or `no-criteria`), so it is undetermined.
+        Err(std::env::VarError::NotUnicode(_)) => {
+            eprintln!("propguard: PROPGUARD_CRITERIA is set but not valid UTF-8");
+            return Determination::undetermined("PROPGUARD_CRITERIA is set but not valid UTF-8");
         }
     }
     let p = root.join(&cfg.criteria_file);

@@ -20,8 +20,12 @@ positive or false negative (4a64e6ff and ~30 sibling tickets).
                       identical                             -> 0
                       MERGE_HEAD exists after               -> 0 (resolving a merge)
                       HEAD moved, tree clean, and the new HEAD is a merge
-                      commit or is contained in a ref other than the branch
-                      main has checked out (a fast-forward integration) -> 0
+                      commit, or is contained in a ref other than the branch
+                      main has checked out, or that branch's reflog has an
+                      entry for exactly this old -> new move whose message
+                      starts with "merge " (written by `git merge`; covers a
+                      fast-forward whose source branch is already deleted)
+                                                            -> 0
                       anything else                         -> 2, naming the paths
 
 Exit 2 at Post cannot undo the command — the write has happened. It stops the
@@ -31,7 +35,8 @@ change is reverted or moved into a worktree openly.
 Cannot determine -> 2, never 0 (CLAUDE.md 3): a malformed payload, git failing,
 CLAUDE_PROJECT_DIR not in a repository, a snapshot that cannot be written, read
 or decoded, a Pre snapshot that is missing at Post, a dirty path that cannot be
-hashed, or a failing merge/containment check.
+hashed, a failing merge/containment check, or a reflog that is missing or
+unreadable when it is needed as integration evidence.
 
 Known blind spots (not visible to `git status`): files under .git itself
 (.git/config, .git/hooks) and gitignored files. Changes by ANOTHER session
@@ -151,23 +156,68 @@ def state_file(common: Path, payload: dict) -> Path:
     return common / "maintree-guard" / (key + ".json")
 
 
-def integration_head(main: Path, head: str) -> bool:
+def checked_out_branch(main: Path) -> str:
+    """Full ref name of the branch main has checked out, or "" when detached."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(main), "symbolic-ref", "-q", "HEAD"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise Undetermined("git could not be executed: %s" % exc) from exc
+    if proc.returncode not in (0, 1):
+        raise Undetermined("`git symbolic-ref -q HEAD` exited %d" % proc.returncode)
+    return proc.stdout.strip()
+
+
+def integration_head(main: Path, head: str, branch: str) -> bool:
     """True if `head` is a merge commit or lives on a ref other than main's branch."""
     parents = git(main, "rev-list", "--parents", "-n1", head).split()
     if not parents or parents[0] != head:
         raise Undetermined("`git rev-list --parents` did not describe %s" % head)
     if len(parents) >= 3:
         return True
-    proc = subprocess.run(
-        ["git", "-C", str(main), "symbolic-ref", "-q", "HEAD"],
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode not in (0, 1):
-        raise Undetermined("`git symbolic-ref -q HEAD` exited %d" % proc.returncode)
-    branch = proc.stdout.strip()
     refs = git(main, "for-each-ref", "--contains", head, "--format=%(refname)").split()
     return any(r != branch for r in refs)
+
+
+# The reflog message `git merge` writes when it moves a branch. It is matched
+# as a PREFIX of the message field only: a direct commit whose subject imitates
+# a merge is logged as "commit: merge ...", which does not start with this.
+MERGE_REFLOG_PREFIX = "merge "
+
+
+def merge_reflog_entry(common: Path, branch: str, old: str, new: str) -> bool:
+    """True if `branch`'s reflog records the EXACT transition old -> new as written
+    by `git merge` (message starting with "merge ", e.g. "merge x: Fast-forward").
+
+    This is the integration evidence for a fast-forward whose source branch is
+    already gone (user ruling 2026-10-16, backlog 86e21645). An entry for any
+    other transition (e.g. a ff followed by a direct commit in the same call)
+    does not count. No branch, or a reflog that is missing or unreadable, is
+    undetermined, never evidence (CLAUDE.md 3).
+    """
+    if not branch.startswith("refs/heads/"):
+        raise Undetermined("main is not on a branch; no reflog to confirm the HEAD move")
+    log = common / "logs" / branch
+    try:
+        raw = log.read_bytes()
+    except OSError as exc:
+        raise Undetermined(
+            "reflog %s unreadable, cannot confirm HEAD %s -> %s is a merge: %s"
+            % (log, old[:12], new[:12], exc)
+        ) from exc
+    for line in raw.decode("utf-8", "replace").splitlines():
+        head_part, sep, message = line.partition("\t")
+        if not sep:
+            continue
+        fields = head_part.split(" ", 2)
+        if len(fields) < 2:
+            continue
+        if fields[0] == old and fields[1] == new and message.startswith(MERGE_REFLOG_PREFIX):
+            return True
+    return False
 
 
 def changed_paths(before: dict, after: dict) -> list[str]:
@@ -245,7 +295,10 @@ def post(payload: dict, common: Path, main: Path) -> int:
     elif after["merge_head"]:
         pass  # a merge / conflict resolution is in progress
     elif after["head"] != before["head"] and not after["porcelain"]:
-        if not integration_head(main, after["head"]):
+        branch = checked_out_branch(main)
+        if not integration_head(main, after["head"], branch) and not merge_reflog_entry(
+            common, branch, before["head"], after["head"]
+        ):
             verdict = REFUSE
     else:
         verdict = REFUSE

@@ -1332,3 +1332,97 @@ Unexpected success
 =========================== short test summary info ============================
 FAILED scripts/test_backlog_6267bfbe_36c936bc.py::FastForwardOntoGatedMerge::test_ff_onto_merge_gated_in_other_worktree_is_not_recorded
 ========================= 1 failed, 1 passed in 1.98s =========================="""
+
+[[task]]
+id = "f1ce802c"
+title = "overwatch mark_changeset_merged / mark_branch_merged / prune_stale_changesets return Ok when the lease lock is not acquired"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-10-20 at 7b473300 (found verifying run-20261020-010750-7347). store.rs still uses acquire_or_skip with None => return Ok(())/Ok(0); the sibling mutators moved to acquire_strict in d0ccb95b. Only production caller condukt worktree.rs finalize_landed_branch logs only on Err, so a skipped mark is silent and a landed branch's changeset stays merged=false (later spurious overlap hold until TTL)."
+created_at = 1792429766
+updated_at = 1792429766
+weight = 0.0
+issue_number = 1430
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1430"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_skip_arms_report_ok -- --include-ignored"
+rev = "7b473300e0fa0e3bc48a187940c50a4347f2f478"
+observed_at = 1792429766
+detail = """
+exit 101: iltered out; finished in 10.09s
+
+   Compiling overwatch v0.2.87 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.26s
+     Running tests/repro_skip_arms_report_ok.rs (target/debug/deps/repro_skip_arms_report_ok-cd502459a6ae8916)
+error: test failed, to rerun pass `-p overwatch --test repro_skip_arms_report_ok`"""
+
+[[task]]
+id = "79458be4"
+title = "condukt runtime overlap check treats git failing to list changed files as an empty diff (NotRecorded, no hold)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-10-20 at 7b473300. runtime_conflict.rs changed_files returns None both for an empty diff and when all three git diff fallbacks fail; both map to OverlapCheck::NotRecorded: no changeset, no hold, exit 0. Module doc states it on purpose (or that git could not produce). Undetermined must not read as nothing changed."
+created_at = 1792429794
+updated_at = 1792429794
+weight = 0.0
+issue_number = 1431
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1431"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test repro_changed_files_git_failure_notrecorded git_failure_listing_changed_files_is_not_silent_norecord -- --include-ignored --exact"
+rev = "7b473300e0fa0e3bc48a187940c50a4347f2f478"
+observed_at = 1792429794
+detail = """
+exit 101: condukt` (test "repro_changed_files_git_failure_notrecorded") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.77s
+     Running tests/repro_changed_files_git_failure_notrecorded.rs (target/debug/deps/repro_changed_files_git_failure_notrecorded-4b8302f002108801)
+error: test failed, to rerun pass `-p condukt --test repro_changed_files_git_failure_notrecorded`"""
+
+[[task]]
+id = "38321ba7"
+title = "condukt overlap hold for a done task without a recorded branch is written with an empty branch the merge gate never matches"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-10-20 at 7b473300. state set --status done --worktree W without --branch leaves task.branch None; runtime_conflict.rs uses task.branch.clone().unwrap_or_default(), so the hold has branch empty; worktree.rs open_runtime_overlap_hold matches e.branch == branch from worktree merge --branch, so the hold never blocks. Test asserts the stored branch; end-to-end merge not driven."
+created_at = 1792429817
+updated_at = 1792429817
+weight = 0.0
+issue_number = 1432
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1432"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test repro_overlap_hold_empty_branch overlap_hold_for_task_without_recorded_branch_has_empty_branch -- --include-ignored --exact"
+rev = "7b473300e0fa0e3bc48a187940c50a4347f2f478"
+observed_at = 1792429817
+detail = """
+exit 101:  finished in 1.21s
+
+   Compiling condukt v0.7.271 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/repro_overlap_hold_empty_branch.rs (target/debug/deps/repro_overlap_hold_empty_branch-f05d1c8a6ba38345)
+error: test failed, to rerun pass `-p condukt --test repro_overlap_hold_empty_branch`"""

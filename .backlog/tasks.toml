@@ -1343,36 +1343,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; 
 error: test failed, to rerun pass `-p overwatch --test repro_lock_unavailable_reports_ok`"""
 
 [[task]]
-id = "50f89600"
-title = "overwatch: lock I/O failure is reported as lock_contended (begin, resolve-merge-conflict, record-disposition)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "overwatch",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1792424696
-updated_at = 1792424696
-weight = 0.0
-issue_number = 1425
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1425"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p overwatch --test repro_lock_io_failure_reported_as_contended -- --ignored"
-rev = "23b0d2f5ff3546b25967e592872112a54c2a742f"
-observed_at = 1792424696
-detail = """
-exit 101: h v0.2.84 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s
-     Running tests/repro_lock_io_failure_reported_as_contended.rs (target/debug/deps/repro_lock_io_failure_reported_as_contended-ae1efb03ba9c1b30)
-error: test failed, to rerun pass `-p overwatch --test repro_lock_io_failure_reported_as_contended`"""
-
-[[task]]
 id = "2d8c41c5"
 title = "overwatch spec: load_leases is said to load corrupt JSON as an empty registry, but it returns Err"
 project = "/Users/yuki/src/harness"

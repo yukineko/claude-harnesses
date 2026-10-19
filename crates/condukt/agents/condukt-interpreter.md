@@ -53,6 +53,7 @@ model: sonnet
       "confidence": "high | medium | low",
       "done_criteria": "検証で確認する合格条件 (具体的・観測可能に)",
       "reproduction_tests": "worktree 内で実行して pass/fail を確認できるコマンド (省略可)",
+      "commands": ["このタスクが実際に実行するコマンド (無ければ空配列 []。省略不可 — 省略すると force-gate)"],
       "kind": "fix | feature | chore | refactor | docs (省略可)",
       "expected_trajectory": {
         "mode": "strict | unordered | subsequence",
@@ -85,6 +86,13 @@ model: sonnet
   TDD (red→green) ループを回す起点になり、verifier が同じコマンドで客観的に合否を確認する。
   UI テストや設計判断タスクなど実行不可能な場合は省略。
   例: `"cargo test -p condukt -- test_name"` / `"pytest tests/test_foo.py::test_case"`
+- `commands` (**必須**): worker がこのタスクで実際に実行するコマンドを列挙する（ビルド/テスト以外の、
+  配布・設定変更・削除・push 等。`reproduction_tests` / `checks` は自動で加算されるので重複不要）。
+  何も実行しないなら空配列 `[]` を明示する。risk 分類（force-gate）は**このリストだけ**をコマンドとして
+  解析し、`title`/`done_criteria` の散文はコマンドとして解析しない（backlog dc955812）。散文中で
+  「`git config core.hooksPath` の再試行を検出する」のようにコマンドを*記述*しても gate されない代わりに、
+  実際に走らせるコマンドを隠すと分類をすり抜けるので正直に書くこと。**省略（キー自体が無い）は
+  「何を実行するか判定不能」として扱われ、そのタスクは必ず gated / escalate になる**。
 - `kind`: 既存の誤った挙動を直すタスクは `fix`、観測可能な新しい挙動を足すタスクは `feature`、それ以外
   (整形・リネーム・文書・依存更新など挙動を変えないもの) は `chore` 等にする。`fix`/`feature` は
   F→P 再現性ゲートの対象になり、worker が `tdd` で RED→GREEN を記録しない限り `verified` にできない。

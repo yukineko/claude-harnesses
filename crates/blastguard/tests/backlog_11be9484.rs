@@ -14,7 +14,11 @@
 //! backtick-quoted (as markdown-ish task prose usually quotes it); the same
 //! words without backticks were not gated.
 //!
-//! Repro: cargo test -p blastguard --test backlog_11be9484 -- --ignored
+//! The prose half was fixed under backlog dc955812 (user ruling 2026-10-20):
+//! `classify` now reads prose only; the commands a task runs go to
+//! `classify_command` / `classify_change(.., Some(commands), ..)` separately.
+//!
+//! Repro: cargo test -p blastguard --test backlog_11be9484
 
 use blastguard::classify::classify;
 
@@ -66,8 +70,9 @@ fn control_prose_without_a_quoted_command_is_not_gated() {
     assert!(!a.requires_gate(), "control must not be gated, got {a:?}");
 }
 
+/// backlog dc955812 (user ruling 2026-10-20): prose is no longer parsed as a
+/// command; the commands a task runs are classified separately.
 #[test]
-#[ignore = "backlog 11be9484 prose half: out of scope by user ruling 2026-10-16"]
 fn prose_describing_a_command_does_not_force_gate() {
     let a = classify(&action_text(
         TITLE_B,
@@ -78,5 +83,53 @@ fn prose_describing_a_command_does_not_force_gate() {
     assert!(
         !a.requires_gate(),
         "prose that DESCRIBES `git config core.hooksPath` force-gated a task that runs no command: {a:?}"
+    );
+}
+
+/// Control for dc955812: the very command the prose above describes, passed
+/// as a COMMAND the task will run, is still force-gated — through both the
+/// single-command entry and `classify_change` (condukt's call), under the
+/// same benign prose.
+#[test]
+fn control_the_described_command_passed_as_a_command_still_force_gates() {
+    use blastguard::classify::{classify_change, classify_command};
+    use blastguard::diffrisk::SensitiveConfig;
+    let cmd = "git config core.hooksPath /dev/null";
+    let a = classify_command(cmd);
+    assert!(a.requires_gate(), "{cmd:?} as a command must gate: {a:?}");
+
+    let cmds = [cmd.to_string()];
+    let d = classify_change(
+        &action_text(
+            TITLE_B,
+            "block the retry and report the original block reason",
+            &["scripts/check-retry.py"],
+        ),
+        Some(&cmds),
+        &["scripts/check-retry.py".to_string()],
+        "",
+        &SensitiveConfig::default(),
+    );
+    assert!(
+        matches!(&d, harness_core::verdict::Determination::Known(a) if a.requires_gate()),
+        "declared {cmd:?} must classify (not undetermined) and force-gate: {d:?}"
+    );
+}
+
+/// Control for dc955812 (fail-closed): a task that does not declare its
+/// commands is NOT classified from its prose — the answer is undetermined,
+/// which condukt resolves to the restricted side, never Low.
+#[test]
+fn control_undeclared_commands_are_undetermined_not_low() {
+    let d = blastguard::classify::classify_change(
+        TITLE_B,
+        None,
+        &[],
+        "",
+        &blastguard::diffrisk::SensitiveConfig::default(),
+    );
+    assert!(
+        matches!(d, harness_core::verdict::Determination::Undetermined(_)),
+        "undeclared commands must be undetermined"
     );
 }

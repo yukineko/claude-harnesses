@@ -408,7 +408,15 @@ A file-path token is a word containing `/`, or one ending in a known extension
 such as `.py`/`.rs`/`.sh`/`.md`/`.toml`, with no `:` or `@` [test: crates/blastguard/src/classify.rs::file_path_token_rule_is_narrow].
 A path still counts when it comes first, follows a runner word (`run`, `bash`,
 ...) or shell separator, or starts with `./` [test: crates/blastguard/src/classify.rs::real_commands_containing_paths_still_gate].
-A path quoted in backticks still counts [test: crates/blastguard/src/classify.rs::backtick_quoted_command_prose_gates_exactly_as_before].
+A path quoted in backticks still counts [test: crates/blastguard/src/classify.rs::backtick_spans_are_still_never_masked_for_deploy_needles].
+Task prose is never parsed as a command: `classify` reads prose with the deploy
+and history needles only, so prose that merely describes a command (for example
+quotes `git config core.hooksPath` in backticks) is not force-gated [test: crates/blastguard/src/classify.rs::prose_quoting_a_command_is_not_parsed_as_that_command].
+The commands a task will actually run are passed separately and go through the
+full `classify_command` analysis, so the same command passed as a command still
+gates [test: crates/blastguard/src/classify.rs::the_same_command_passed_as_a_command_still_gates].
+`classify_change` with no declared command list (`None`) is undetermined, never
+Low [test: crates/blastguard/src/classify.rs::undeclared_commands_are_undetermined_even_for_benign_prose].
 
 Two diff-level modules are exported as well (pure, no I/O): `diffrisk`
 (`classify_diff` / `changes_public_symbol`) and `callgraph`

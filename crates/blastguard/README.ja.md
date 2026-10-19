@@ -607,7 +607,12 @@ specguard の forge は LLM が生成した `test_cmd` を `sh -c` に渡す前�
 `.py`/`.rs`/`.sh`/`.md`/`.toml` 等の既知拡張子で終わり、かつ `:` も `@` も含まない語のこと [test: crates/blastguard/src/classify.rs::file_path_token_rule_is_narrow]。
 先頭にあるもの・runner 語（`run`, `bash` 等）や shell 区切りの直後にあるもの・`./` で
 始まるものは従来どおり判定対象に残る [test: crates/blastguard/src/classify.rs::real_commands_containing_paths_still_gate]。
-backtick で引用されたものも判定対象に残る [test: crates/blastguard/src/classify.rs::backtick_quoted_command_prose_gates_exactly_as_before]。
+backtick で引用されたものも判定対象に残る [test: crates/blastguard/src/classify.rs::backtick_spans_are_still_never_masked_for_deploy_needles]。
+タスク散文はコマンドとして解析しない: `classify` は散文を deploy / history の needle だけで読むので、
+コマンドを記述するだけの散文（例: backtick で `git config core.hooksPath` を引用する）は強制ゲートしない [test: crates/blastguard/src/classify.rs::prose_quoting_a_command_is_not_parsed_as_that_command]。
+タスクが実際に実行するコマンドは別に渡され、従来どおりの `classify_command` で全解析されるので、
+同じコマンドをコマンドとして渡せば gate される [test: crates/blastguard/src/classify.rs::the_same_command_passed_as_a_command_still_gates]。
+コマンド一覧が宣言されていない（`None`）`classify_change` は判定不能であり、Low にはならない [test: crates/blastguard/src/classify.rs::undeclared_commands_are_undetermined_even_for_benign_prose]。
 
 コマンド分類とは別に、**diff の内容そのもの**から意味的リスクを見る2つのモジュールも
 公開している。いずれも純粋・決定論・I/O なしで、command 分類が拾えない「無害な

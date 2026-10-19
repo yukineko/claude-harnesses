@@ -91,42 +91,48 @@ fn synthetic_decomp() -> serde_json::Value {
                 "title": "dup-a",
                 "touched_files": ["shared/dup.rs"],
                 "deps": [],
-                "class": "parallel"
+                "class": "parallel",
+                "commands": []
             },
             {
                 "id": "dup-b",
                 "title": "dup-b",
                 "touched_files": ["shared/dup.rs"],
                 "deps": [],
-                "class": "parallel"
+                "class": "parallel",
+                "commands": []
             },
             {
                 "id": "norm-a",
                 "title": "norm-a",
                 "touched_files": ["./shared/norm.rs"],
                 "deps": [],
-                "class": "parallel"
+                "class": "parallel",
+                "commands": []
             },
             {
                 "id": "norm-b",
                 "title": "norm-b",
                 "touched_files": ["shared//norm.rs"],
                 "deps": [],
-                "class": "parallel"
+                "class": "parallel",
+                "commands": []
             },
             {
                 "id": "indep-a",
                 "title": "indep-a",
                 "touched_files": ["indep/a.rs"],
                 "deps": [],
-                "class": "parallel"
+                "class": "parallel",
+                "commands": []
             },
             {
                 "id": "indep-b",
                 "title": "indep-b",
                 "touched_files": ["indep/b.rs"],
                 "deps": [],
-                "class": "parallel"
+                "class": "parallel",
+                "commands": []
             }
         ]
     })

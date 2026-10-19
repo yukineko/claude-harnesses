@@ -22,9 +22,14 @@
   互いに `deps` 無しのときだけ。`entries_conflict` は不確実なら「衝突あり」に倒す（誤衝突は直列化＝安全、
   取りこぼしは同一ファイル競合＝危険）。LLM 宣言の `Class`（`parallel`/`serial`/`gated`）より file-overlap が
   優先される。`shared_globs` に触れるタスクは警告付きで直列へ降格。
-- **force-gate（risk 分類の権威）** — `blastguard::classify(task_action_text(t)).requires_gate()` が真の
-  タスクは、LLM が宣言した `class` に関わらず `gated` へ強制隔離される（deploy/push/release 等の高リスク非可逆
-  アクション）。risk/reversibility 軸の唯一の情報源は blastguard の graded classifier。
+- **force-gate（risk 分類の権威）** — `blastguard::classify::classify_change(task_action_text(t),
+  task_commands(t), ..)` が `requires_gate()` / Medium 以上 / 判定不能のタスクは、LLM が宣言した `class` に
+  関わらず `gated` へ強制隔離される（deploy/push/release 等の高リスク非可逆アクション）。散文（title/
+  done_criteria/touched_files）は `classify` が deploy/history の needle だけで読み、コマンドとしては解析しない。
+  タスクが実際に実行するコマンド（宣言 `commands` + `reproduction_tests` + `checks[].cmd` +
+  `mechanical_check.cmd`）は `classify_command` が別途解析する（backlog dc955812）。`commands` 未宣言は
+  判定不能（Undetermined）として gated / escalate に倒れる。risk/reversibility 軸の唯一の情報源は blastguard の
+  graded classifier。
 - **完了ゲート（"done" の物理的強制）** — `state::gate_reasons` は全タスクが `Status::{Verified,Cancelled,
   Discarded}` でなく、または dirty/未削除の worktree が残る限り理由を積み、`state gate` は非ゼロで終了する。
   完了宣言をモデルの感覚で許さない。
@@ -55,7 +60,7 @@
 /`ReplanAction`/`ConsensusAction` 等）で定義。decomposition は interpreter が出力し `schedule` が消費する
 `model::Decomposition`（`goal`/`linked_hypotheses`/`tasks:[model::Task]`）。`Task` は `id`/`title`/`touched_files`/
 `deps`/`class`/`kind`/`suggested_model`/`done_criteria`/任意の `checks`/`expected_trajectory`/`is_behavioral`/
-`mechanical_check`（すべて `#[serde(default)]` で後方互換）。
+`mechanical_check`/`commands`（すべて `#[serde(default)]`。ただし `commands` 未宣言は force-gate に倒れる）。
 
 - **`schedule` / `validate`** — decomposition JSON（stdin or `--file`）から順序付きバッチと直列/gated リストを
   出力（`schedule::schedule`）/ 一意 ID・既知依存・循環なしを検証（`schedule::validate`）。

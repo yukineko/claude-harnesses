@@ -172,7 +172,7 @@ fn autonomy_check_env_false_overrides_config_true() {
 fn gated_task_is_isolated_and_never_batched() {
     let tmp = tempfile::tempdir().unwrap();
     let dec = r#"{"goal":"g","tasks":[
-        {"id":"work","touched_files":["src/a.rs"],"class":"parallel"},
+        {"id":"work","touched_files":["src/a.rs"],"class":"parallel","commands":[]},
         {"id":"deploy","touched_files":["deploy.sh"],"class":"gated"}
     ]}"#;
     let f = tmp.path().join("dec.json");

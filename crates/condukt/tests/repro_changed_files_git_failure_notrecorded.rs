@@ -142,7 +142,6 @@ fn find_by_suffix(root: &Path, suffix: &str) -> Option<PathBuf> {
 }
 
 #[test]
-#[ignore = "backlog: changed_files git failure maps to NotRecorded, indistinguishable from an empty diff (no hold, silent)"]
 fn git_failure_listing_changed_files_is_not_silent_norecord() {
     let fx = Fixture::new("gitfail");
     let decomp = r#"{"goal":"g","tasks":[

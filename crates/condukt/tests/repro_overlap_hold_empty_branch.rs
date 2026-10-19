@@ -142,7 +142,6 @@ fn find_by_suffix(root: &Path, suffix: &str) -> Option<PathBuf> {
 }
 
 #[test]
-#[ignore = "backlog: task with worktree but no branch gets a runtime-overlap hold with empty branch that the merge gate can never match"]
 fn overlap_hold_for_task_without_recorded_branch_has_empty_branch() {
     let fx = Fixture::new("nobranch");
     let decomp = r#"{"goal":"g","tasks":[

@@ -33,8 +33,10 @@ On each stop `tdd gate`:
    files **this session wrote**: a file counts as this session's when its
    transcript (or a subagent's sidechain transcript) records an
    `Edit`/`Write`/`MultiEdit`/`NotebookEdit` of it, or a `Bash` command naming
-   its path (`harness_core::attribution::attribute_own_writes`, shared with
-   reviewgate). Other uncommitted files — e.g. a concurrent session's — are
+   its path outside a read-only statement — merely reading a file
+   (`git diff`, `grep`, `cat`, naming it in a `tdd skip --reason`) does not make
+   it this session's [test: crates/harness-core/tests/attribution_read_only_bash.rs::group1_read_only_mentions_do_not_attribute] [test: crates/harness-core/tests/attribution_read_only_bash.rs::group2_writing_mentions_attribute] (`harness_core::attribution::attribute_own_writes`, shared
+   with reviewgate). Other uncommitted files — e.g. a concurrent session's — are
    excluded and named on stderr and in the block reason as "not attributed to
    this session"
    [test: crates/tdd/tests/session_scope_own.rs::foreign_only_does_not_block]

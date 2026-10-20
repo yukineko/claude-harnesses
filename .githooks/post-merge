@@ -23,6 +23,59 @@
 
 set -u
 
+# --- version collision after ANY merge, fast-forward included ---------------
+# Two lines of work can each bump a plugin to the SAME version with DIFFERENT
+# content. Each commit passes check-version-bumped against its own parent, git
+# merges the identical version lines without a conflict, and the result is a
+# version that names two contents. A rollout at an unchanged version is a
+# no-op, so whichever content was deployed first stays live (observed
+# 2026-10-20: flow 0.2.26 from 48335620 deployed, then 994a8695's 0.2.26 with a
+# different SKILL.md arrived by `git pull`). pre-merge-commit cannot see this:
+# measured, MERGE_HEAD is not readable there, and a fast-forward runs no
+# pre-* hook at all. Here both sides are known: ORIG_HEAD is what this checkout
+# had (and may have deployed), and HEAD^2.. is what a merge made here took in.
+#
+# post-merge cannot undo the merge, so this REPORTS; it does not block. It runs
+# before the merge-commit early exit below because a fast-forward needs it too.
+# Undetermined (no ORIG_HEAD, no python3, the checker errors) is said aloud,
+# never read as "no collision".
+vb_report() {
+  printf '\n%s\n' "POST-MERGE VERSION CHECK: $1" >&2
+}
+if [ "${1:-0}" != "1" ]; then
+  vb_bases=""
+  if vb_orig="$(git rev-parse -q --verify ORIG_HEAD 2>/dev/null)"; then
+    vb_bases="$vb_orig"
+  else
+    vb_report "UNDETERMINED - ORIG_HEAD is not readable, so this merge was NOT checked for same-version content changes."
+  fi
+  vb_subj="$(git reflog -1 --format=%gs HEAD 2>/dev/null)" || vb_subj=""
+  case "$vb_subj" in
+    *": Fast-forward" | *": Fast-forward (no commit created; -m option ignored)") ;;
+    *)
+      for vb_p in $(git rev-parse HEAD^@ 2>/dev/null | sed 1d); do
+        vb_bases="$vb_bases $vb_p"
+      done ;;
+  esac
+  for vb_base in $vb_bases; do
+    if ! command -v python3 >/dev/null 2>&1; then
+      vb_report "UNDETERMINED - python3 not found; same-version content changes vs $vb_base were NOT checked."
+      break
+    fi
+    python3 scripts/check-version-bumped.py --base "$vb_base" --head HEAD >/dev/null 2>"${TMPDIR:-/tmp}/post-merge-vb.$$"
+    vb_rc=$?
+    if [ "$vb_rc" -ne 0 ]; then
+      if [ "$vb_rc" -eq 1 ]; then
+        vb_report "VERSION COLLISION vs $vb_base - content changed under an unchanged version. A plain rollout will NOT deploy it; bump the version (>= micro, lockstep) in a worktree before rolling out."
+      else
+        vb_report "UNDETERMINED (checker exit $vb_rc) vs $vb_base - NOT a pass."
+      fi
+      cat "${TMPDIR:-/tmp}/post-merge-vb.$$" >&2
+    fi
+    rm -f "${TMPDIR:-/tmp}/post-merge-vb.$$"
+  done
+fi
+
 parents="$(git rev-parse HEAD^@ 2>/dev/null | grep -c .)" || exit 0
 [ "${parents:-0}" -lt 2 ] && exit 0
 

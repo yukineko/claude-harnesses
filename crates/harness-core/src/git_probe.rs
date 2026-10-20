@@ -101,11 +101,30 @@ pub fn decide_repo_probe(
 ///
 /// Does **not** consult `GIT_DIR`; that override is composed in by
 /// [`probe_repo`] so this stays a pure filesystem question.
+///
+/// # Only an observed absence counts as "no `.git`"
+///
+/// Each candidate is `lstat`ed, not `Path::exists`ed. `exists()` folds every
+/// error into `false`, so a repo root that cannot be searched (mode 000:
+/// `EACCES` on the stat, and git's chdir fails too) read as "no `.git`
+/// anywhere" and the probe returned `NotRepo` — the gate allowed a repo it
+/// could not look at (backlog 6bb90ca6). Now only `NotFound` / `NotADirectory`
+/// — the filesystem positively saying there is no such entry — moves the walk
+/// on; any other stat error means a `.git` cannot be ruled out and counts as
+/// evidence, so `probe_repo` resolves to `Undetermined`. `lstat` also counts a
+/// `.git` symlink whose target is gone: the entry is present even though it
+/// cannot be resolved.
 pub fn dot_git_present(root: &Path) -> bool {
     let mut cur = Some(root);
     while let Some(dir) = cur {
-        if dir.join(".git").exists() {
-            return true;
+        match std::fs::symlink_metadata(dir.join(".git")) {
+            Ok(_) => return true,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) => {}
+            Err(_) => return true,
         }
         cur = dir.parent();
     }

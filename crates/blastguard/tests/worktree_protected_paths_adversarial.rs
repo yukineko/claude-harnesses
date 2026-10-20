@@ -558,8 +558,8 @@ fn adv_paths_below_dotgit_inside_checkout_stay_denied() {
 /// 6316fec1 contract). Kept separate because it is measured Allow on the BASE
 /// binary too (pre-existing; non-recursive single-file rm is below the
 /// destructive bar), so a failure here is not attributable to 0.2.106.
+/// Fixed in 0.2.138 (`dotgit_link_deny`, backlog eba15868).
 #[test]
-#[ignore = "backlog eba15868: open defect, remove ignore when fixed"]
 fn adv_checkout_own_dotgit_file_is_not_allowed() {
     let f = Fixture::new("a_own_dotgit");
     control_allow(&f);
@@ -582,6 +582,18 @@ fn adv_checkout_own_dotgit_file_is_not_allowed() {
         "every write/delete of the checkout's own .git file must be Deny; \
          (case, denied) = {results:?}"
     );
+}
+
+/// The `unlink` twin of the row above (same severing, different verb). An
+/// INVARIANCE pin, not a repro: measured Deny already at 59b9fa02 (the
+/// unlink arm asks `protected_tree_deny` unconditionally, which `.git`
+/// matches as a holder of `.git/hooks`).
+#[test]
+fn adv_unlink_own_dotgit_file_is_not_allowed() {
+    let f = Fixture::new("a_own_dotgit_unlink");
+    control_allow(&f);
+    let out = f.bash(&format!("unlink {}", d(&f.wt.join(".git"))));
+    assert_deny("unlink <wt>/.git", &out);
 }
 
 // ===========================================================================

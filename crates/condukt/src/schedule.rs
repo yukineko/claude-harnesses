@@ -355,6 +355,24 @@ pub(crate) fn task_action_text(t: &Task) -> String {
     s
 }
 
+/// The commands a task will actually run, passed to blastguard's command
+/// classifier SEPARATELY from [`task_action_text`]'s prose (backlog dc955812):
+/// the interpreter-declared `commands` plus the task's own
+/// `reproduction_tests`, `checks[].cmd` and `mechanical_check.cmd`.
+///
+/// `None` (FAIL-CLOSED) when the task does not declare `commands`: the
+/// verification commands alone do not tell us what the worker runs, so the
+/// answer is "cannot determine", which `classify_change` turns into
+/// `Undetermined` and both call sites resolve to the restricted side.
+pub(crate) fn task_commands(t: &Task) -> Option<Vec<String>> {
+    let declared = t.commands.as_ref()?;
+    let mut out: Vec<String> = declared.clone();
+    out.extend(t.reproduction_tests.iter().cloned());
+    out.extend(t.checks.iter().map(|c| c.cmd.clone()));
+    out.extend(t.mechanical_check.iter().map(|m| m.cmd.clone()));
+    Some(out)
+}
+
 /// Resolve one task's risk classification into `(force_gate, undetermined_why)`.
 ///
 /// Extracted from [`schedule`] as a pure function so the FAIL-CLOSED arm is
@@ -467,8 +485,10 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
         // risk" is NOT "this task is low risk" — it force-gates, exactly like a
         // measured Medium+, and says so in a warning so the misconfiguration is
         // visible rather than silently widening the gate.
+        let commands = task_commands(t);
         let (force_gate, undetermined_why) = resolve_force_gate(classify_change(
             &task_action_text(t),
+            commands.as_deref(),
             &t.touched_files,
             "",
             &sensitive,
@@ -661,6 +681,7 @@ mod tests {
         let bad = SensitiveConfig::from_globs(vec!["[".to_string()]);
         let d = classify_change(
             "write a unit test",
+            Some(&[]),
             &["src/parser.rs".to_string()],
             "",
             &bad,
@@ -692,6 +713,7 @@ mod tests {
         // undetermined reason is fabricated.
         let (gate, why) = resolve_force_gate(classify_change(
             "write a unit test",
+            Some(&[]),
             &["src/parser.rs".to_string()],
             "",
             &cfg,
@@ -703,6 +725,7 @@ mod tests {
         // arm (no undetermined reason).
         let (gate, why) = resolve_force_gate(classify_change(
             "write a unit test",
+            Some(&[]),
             &["src/auth/login.rs".to_string()],
             "",
             &cfg,
@@ -713,12 +736,59 @@ mod tests {
         // Deploy text -> High/irreversible -> gated (unchanged).
         let (gate, why) = resolve_force_gate(classify_change(
             "git push origin main",
+            Some(&[]),
             &["README.md".to_string()],
             "",
             &cfg,
         ));
         assert!(gate);
         assert!(why.is_none());
+    }
+
+    // ── dc955812: commands are classified separately from prose ──────────────
+
+    #[test]
+    fn undeclared_commands_force_gate_with_a_naming_warning() {
+        // FAIL-CLOSED: a task that does not declare `commands` cannot be
+        // classified from its prose any more, so it is gated, and says why.
+        let mut t = task("t", &["src/a.rs"], &[], Class::Parallel);
+        t.commands = None;
+        let s = schedule(&dec(vec![t]), &[]);
+        assert_eq!(s.gated, vec!["t"], "undeclared commands must gate");
+        assert!(
+            s.warnings
+                .iter()
+                .any(|w| w.contains("risk could not be determined") && w.contains("commands")),
+            "the warning must name the missing command list, got {:?}",
+            s.warnings
+        );
+    }
+
+    #[test]
+    fn prose_quoting_a_command_does_not_gate_a_task_that_declares_none() {
+        let mut t = task("t", &["scripts/check-retry.py"], &[], Class::Parallel);
+        t.done_criteria =
+            Some("block the retry when it re-runs `git config core.hooksPath /dev/null`".into());
+        let s = schedule(&dec(vec![t]), &[]);
+        assert!(s.gated.is_empty(), "prose-only mention gated: {s:?}");
+    }
+
+    #[test]
+    fn a_dangerous_declared_command_still_force_gates() {
+        let mut t = task("t", &["src/a.rs"], &[], Class::Parallel);
+        t.commands = Some(vec!["git config core.hooksPath /dev/null".into()]);
+        let s = schedule(&dec(vec![t]), &[]);
+        assert_eq!(s.gated, vec!["t"], "declared dangerous command must gate");
+    }
+
+    #[test]
+    fn verification_commands_are_classified_as_commands() {
+        // reproduction_tests / checks are commands the task runs, so they go
+        // through the command classifier even with an empty declared list.
+        let mut t = task("t", &["src/a.rs"], &[], Class::Parallel);
+        t.reproduction_tests = Some("rm -rf build".into());
+        let s = schedule(&dec(vec![t]), &[]);
+        assert_eq!(s.gated, vec!["t"], "a destructive repro command must gate");
     }
 
     fn task(id: &str, files: &[&str], deps: &[&str], class: Class) -> Task {
@@ -739,6 +809,9 @@ mod tests {
             expected_trajectory: None,
             is_behavioral: None,
             mechanical_check: None,
+            // Declared: the fixture task runs no command (dc955812 — an
+            // undeclared list would force-gate every fixture task).
+            commands: Some(Vec::new()),
         }
     }
 
@@ -1331,6 +1404,8 @@ mod prop_tests {
             touched_files: files,
             deps,
             class,
+            // Declared: runs no command (dc955812; undeclared would gate all).
+            commands: Some(Vec::new()),
             ..Default::default()
         }
     }
@@ -1570,6 +1645,7 @@ mod backlog_2afeb849 {
             expected_trajectory: None,
             is_behavioral: None,
             mechanical_check: None,
+            commands: Some(Vec::new()),
         }
     }
 

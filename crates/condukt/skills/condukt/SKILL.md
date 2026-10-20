@@ -62,6 +62,10 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    実行してよい。irreversible または high-risk gated は同コマンドが必ず **Escalate (nonzero)** を返し、
    従来どおり人間承認へ倒れる。非 autonomous モードでは policy_is_auto=false なので **全 gated が従来どおり
    Escalate**(後方互換・挙動不変)。decision は append-only JSONL に journal 記録され後から可観測。
+   classify は散文（title/done_criteria）をコマンドとして解析せず、タスクの `commands`（+ `reproduction_tests`
+   / `checks`）だけをコマンドとして解析する（backlog dc955812）。**`commands` を宣言していないタスクは
+   判定不能として schedule で force-gate、`gate check` で Escalate になる**ので、decomposition には必ず
+   `commands`（何も実行しないなら `[]`）を入れる [test: crates/condukt/tests/gate_exec_cli.rs::undeclared_commands_escalate_even_when_autonomous]。
 3. **共有ファイルは直列** — `condukt schedule` が `shared_globs` 設定と file 衝突解析で `serial` に
    落とす。serial タスクは **順序の制約であって場所の制約ではない**: 1 件ずつ・schedule 順に、
    それぞれ **自分専用の worktree** で実装し、verifier 通過の直後に mid-run で

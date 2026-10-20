@@ -17,8 +17,10 @@ job is to author the Japanese prose sections based on THIS conversation.
    from the plugin dir.) It resolves the current session from
    `$CLAUDE_CODE_SESSION_ID`, refreshes the `## コスト` / `## 数値サマリ` blocks,
    and prints the **absolute path** of the note. Capture that path.
-   - If it prints nothing and writes `no record note written (Obsidian vault not
-     found: …)` to stderr, the vault directory does not exist. Tell the user the
+   - If it exits 1, prints nothing, and writes `no record note written (Obsidian vault not
+     found: …)` to stderr, the vault directory does not exist. (Exit 1 with
+     `could not write under …` means the vault exists but the write failed;
+     report that path and stop.) Tell the user the
      resolved `obsidian_vault` path and that they must create it (or set
      `obsidian_vault` / enable `record` in `session-insights.toml`), then stop.
 

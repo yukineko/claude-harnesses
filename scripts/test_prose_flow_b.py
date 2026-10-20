@@ -409,12 +409,11 @@ class TestCompassFailDetectable(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(), "")
 
-    @unittest.expectedFailure  # OPEN DEFECT found by this test: garbage charter => exit 0 + empty gap
     def test_claim_compass_fail_detectable_garbage_charter(self):
-        """The claim is that a corrupt charter is a detectable failure. Observed:
-        a UTF-8 charter that parses to nothing (here: unclosed front matter)
-        exits 0 with dod=[] and measuring_stick="" - an empty move that reads as
-        'no gap'. This asserts the CLAIMED behaviour and is expected to fail."""
+        """The claim is that a corrupt charter is a detectable failure. A UTF-8
+        charter that parses to nothing (here: unclosed front matter) once exited
+        0 with dod=[] and measuring_stick="" - an empty move that reads as
+        'no gap' (backlog 50bceba2). This asserts the claimed behaviour."""
         sb, _primary, linked = compass_fixture(self, charter=False)
         (linked / ".compass").mkdir()
         (linked / ".compass" / "charter.md").write_text("---\nnorth_star: [unclosed\n---\n")

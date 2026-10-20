@@ -1,8 +1,8 @@
 // このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! Black-box regression tests for `docs/audit-reviewgate-verdict-paths.md`
-//! §1 P2..P8 — 8 permissive verdict-path fail-opens found by that read-only
+//! Black-box regression tests for the reviewgate verdict-path audit
+//! items P2..P8 — 8 permissive verdict-path fail-opens found by that read-only
 //! audit and **not yet fixed** as of this file's authorship.
 //!
 //! Each test encodes the CONTRACT the audit's "是正の方向性" section describes,

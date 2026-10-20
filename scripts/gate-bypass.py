@@ -30,8 +30,20 @@ An entry whose commit is reachable from no ref, no worktree HEAD and no
 cannot leave this machine, and no pre-commit run can ever clear it. It is
 listed as "unreachable" and does not count as outstanding; it is never removed
 from the ledger, and it blocks again the moment anything makes it reachable.
-An entry that cannot be placed (malformed id, missing or non-commit object, a
-failing git call) is undetermined, never unreachable (backlog a7bf3cca).
+An entry that cannot be placed (malformed or abbreviated id, a non-commit
+object, a failing git call) is undetermined, never unreachable (backlog
+a7bf3cca).
+
+One exception to that a7bf3cca rule, by user ruling 2026-10-20 (「ゲートを直す」,
+backlog 860c43db): an entry whose id is a well-formed FULL-LENGTH object id
+and whose object `git cat-file --batch-check` definitively reports as
+"missing" is listed as unreachable too. A commit with no content in this
+repository cannot leave this machine, so for "can it be pushed" it is the same
+as an unreachable commit (observed: b77286119dc3, pruned after the same fix
+re-landed gated as 33a6c46b, blocked every push forever). It is never removed
+from the ledger either. "Missing" must be the answer git gave, not the absence
+of an answer: if the lookup itself fails, or the id is abbreviated (a prefix
+lookup cannot prove absence), the entry stays undetermined.
 That ordering is deliberate: clearing must be a side effect of actually
 inspecting the content, never an operation a caller can request on its own. A
 `--clear` flag here would be a one-command bypass of the bypass detector.
@@ -113,11 +125,14 @@ def read_ledger(path: Path) -> list[dict[str, str]]:
 SHA_CHARS = frozenset("0123456789abcdef")
 
 
-def _git(repo: Path | None, args: list[str]) -> subprocess.CompletedProcess:
+def _git(
+    repo: Path | None, args: list[str], stdin: str | None = None
+) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
             ["git", *args],
             cwd=str(repo) if repo else None,
+            input=stdin,
             capture_output=True,
             text=True,
         )
@@ -144,21 +159,52 @@ def head_tips(repo: Path | None) -> list[str]:
     ]
 
 
-def is_reachable(repo: Path | None, sha: str, tips: list[str]) -> bool:
-    """True if `sha` is contained in some ref, a worktree HEAD, or a pushed tip.
+HASH_HEX_LEN = {"sha1": 40, "sha256": 64}
 
-    Raises Undetermined when that cannot be established (malformed sha, missing
-    or non-commit object, a git call that fails): an entry we cannot place is
-    never treated as unreachable (backlog a7bf3cca).
+
+def object_id_length(repo: Path | None) -> int:
+    """Hex length of a full object id in this repository; Undetermined if unknown."""
+    proc = _git(repo, ["rev-parse", "--show-object-format"])
+    fmt = proc.stdout.strip()
+    if proc.returncode != 0 or fmt not in HASH_HEX_LEN:
+        raise Undetermined(
+            "`git rev-parse --show-object-format` exited %d with %r: %s"
+            % (proc.returncode, fmt, proc.stderr.strip() or "(no stderr)")
+        )
+    return HASH_HEX_LEN[fmt]
+
+
+def object_is_missing(repo: Path | None, sha: str, full_len: int) -> bool:
+    """True if `sha` names a commit that is definitively ABSENT; False if it
+    names a commit that is present.
+
+    Raises Undetermined for everything else: a malformed or abbreviated id, a
+    non-commit object, a lookup that fails or answers unexpectedly. Only a
+    full-length id can be proven missing (a prefix lookup cannot), and only the
+    literal "missing" answer from a cat-file that exited 0 counts as absence.
     """
     if not (4 <= len(sha) <= 64) or not set(sha) <= SHA_CHARS:
         raise Undetermined("ledger entry %r is not a commit id" % sha)
-    obj = _git(repo, ["cat-file", "-t", sha])
-    if obj.returncode != 0 or obj.stdout.strip() != "commit":
-        raise Undetermined(
-            "ledger entry %s is not a commit in this repository (%s)"
-            % (sha, (obj.stderr.strip() or obj.stdout.strip() or "no output"))
-        )
+    obj = _git(repo, ["cat-file", "--batch-check=%(objecttype)"], stdin=sha + "\n")
+    answer = obj.stdout.strip()
+    if obj.returncode == 0 and answer == "commit":
+        return False
+    if obj.returncode == 0 and answer == sha + " missing" and len(sha) == full_len:
+        return True
+    raise Undetermined(
+        "ledger entry %s is not a commit in this repository (%s)"
+        % (sha, (obj.stderr.strip() or answer or "no output"))
+    )
+
+
+def is_reachable(repo: Path | None, sha: str, tips: list[str]) -> bool:
+    """True if the PRESENT commit `sha` is contained in some ref, a worktree
+    HEAD, or a pushed tip (call `object_is_missing` first).
+
+    Raises Undetermined when that cannot be established (a git call that
+    fails): an entry we cannot place is never treated as unreachable (backlog
+    a7bf3cca).
+    """
     refs = _git(repo, ["for-each-ref", "--contains", sha, "--format=%(refname)"])
     if refs.returncode != 0:
         raise Undetermined(
@@ -187,13 +233,20 @@ def split_unreachable(
     A commit reachable from no ref, no worktree HEAD and no tip being pushed
     cannot leave this machine, and no pre-commit run can ever clear it (it is
     an ancestor of no HEAD). It is reported, never deleted, and does not block.
+    A commit whose object is definitively missing is unreachable too (user
+    ruling 2026-10-20, backlog 860c43db): it has no content to push.
     """
     if not entries:
         return [], []
+    full_len = object_id_length(repo)
     tips = head_tips(repo) + list(pushing)
     outstanding, unreachable = [], []
     for e in entries:
-        (outstanding if is_reachable(repo, e["commit"], tips) else unreachable).append(e)
+        sha = e["commit"]
+        if object_is_missing(repo, sha, full_len) or not is_reachable(repo, sha, tips):
+            unreachable.append(e)
+        else:
+            outstanding.append(e)
     return outstanding, unreachable
 
 
@@ -242,8 +295,8 @@ def main(argv: list[str]) -> int:
     if unreachable:
         print(
             "gate-bypass: %d ledger entr%s for commits reachable from no ref,\n"
-            "worktree HEAD or pushed tip (unreachable; cannot be pushed, kept in the\n"
-            "ledger, not blocking):" % (len(unreachable), "y" if len(unreachable) == 1 else "ies"),
+            "worktree HEAD or pushed tip, or absent from the object store\n"
+            "(unreachable; cannot be pushed, kept in the ledger, not blocking):" % (len(unreachable), "y" if len(unreachable) == 1 else "ies"),
             file=sys.stderr,
         )
         for e in unreachable:

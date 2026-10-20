@@ -52,7 +52,6 @@ fn run_with_failing_condukt(tag: &str, verb: &str) -> (Option<i32>, String, Stri
 }
 
 #[test]
-#[ignore = "repro: pause exits 0 when condukt fails; remove ignore when fixed"]
 fn pause_must_be_nonzero_when_condukt_fails() {
     let (code, so, se) = run_with_failing_condukt("pause", "pause");
     assert!(
@@ -67,7 +66,6 @@ fn pause_must_be_nonzero_when_condukt_fails() {
 }
 
 #[test]
-#[ignore = "repro: resume exits 0 when condukt fails; remove ignore when fixed"]
 fn resume_must_be_nonzero_when_condukt_fails() {
     let (code, so, se) = run_with_failing_condukt("resume", "resume");
     assert!(

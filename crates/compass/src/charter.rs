@@ -70,9 +70,23 @@ impl Charter {
     }
 
     /// Load a charter from an explicit `charter.md` path.
+    ///
+    /// A file that contains none of the charter's `## <field>` headings (e.g.
+    /// garbage, an empty file, or YAML-style front matter this scheme does not
+    /// use) is an error, not an empty charter: it cannot be determined what
+    /// the charter says, and `Charter::default()` would read downstream as
+    /// "no gap" (CLAUDE.md section 3: cannot-determine resolves to the
+    /// restrictive side).
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("reading charter {}", path.display()))?;
+        if !has_known_heading(&text) {
+            anyhow::bail!(
+                "charter {} is unparseable: it has none of the `## <field>` headings ({})",
+                path.display(),
+                FIELDS.join(", ")
+            );
+        }
         Ok(Charter::parse(&text))
     }
 
@@ -135,6 +149,23 @@ impl Charter {
         flush(&mut charter, &current, &body);
         charter
     }
+}
+
+/// The field headings `to_markdown` emits and `parse` recognizes.
+const FIELDS: [&str; 6] = [
+    "north_star",
+    "definition_of_done",
+    "measuring_stick",
+    "current_gap",
+    "next_action",
+    "parked",
+];
+
+/// Whether `text` contains at least one recognized `## <field>` heading.
+fn has_known_heading(text: &str) -> bool {
+    text.lines()
+        .filter_map(|l| l.strip_prefix("## "))
+        .any(|h| FIELDS.contains(&h.trim()))
 }
 
 fn push_scalar(out: &mut String, name: &str, value: &str) {
@@ -214,6 +245,20 @@ mod tests {
         let original = Charter::default();
         let loaded = Charter::parse(&original.to_markdown());
         assert_eq!(original, loaded);
+    }
+
+    #[test]
+    fn load_rejects_a_charter_with_no_field_heading() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("charter.md");
+        for text in ["---\nnorth_star: [unclosed\n---\n", "", "## bogus\nx\n"] {
+            std::fs::write(&path, text).expect("write");
+            let err = Charter::load(&path).expect_err(text);
+            assert!(err.to_string().contains("unparseable"), "{err}");
+        }
+        // control: the serialized empty charter still loads.
+        Charter::default().save(&path).expect("save");
+        assert_eq!(Charter::load(&path).expect("load"), Charter::default());
     }
 
     #[test]

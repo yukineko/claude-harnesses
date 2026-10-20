@@ -12,14 +12,15 @@
 //!
 //! # Two access patterns, two functions
 //!
-//! [`enumerate_callers`] answers "who calls these *specific* few symbols" and
-//! is O(names × lines) — right for blastguard's use, where `names` is the
-//! handful of declarations a diff touched.
+//! [`enumerate_callers`] answers "who calls these *specific* symbols" — the
+//! declarations a diff touched. It tokenizes each corpus line once and looks
+//! the tokens up in the wanted-name set, so it is O(lines) per query, not
+//! O(names × lines) (backlog 02e5a922: an 8000-declaration diff made the
+//! per-name rescan take minutes).
 //!
-//! [`build_graph`] answers "every edge in the tree" in one pass. It inverts the
-//! loop — for each line, which *known* symbols does it reference — making it
-//! O(lines) with a set lookup instead of O(all_names × lines). That is what
-//! makes a persisted graph affordable: [`enumerate_callers`] rescans the whole
+//! [`build_graph`] answers "every edge in the tree" in one pass, with the same
+//! per-line lookup against every *known* symbol. That is what makes a
+//! persisted graph affordable: [`enumerate_callers`] still rescans the whole
 //! corpus on every query, which is the cost this module exists to remove.
 //!
 //! # Cannot-determine is not "no edges" (CLAUDE.md §3)
@@ -124,52 +125,97 @@ fn line_references(line: &str, name: &str) -> bool {
 /// reference sites. A symbol's own declaration site is excluded. Pure, no I/O,
 /// never panics, fully deterministic.
 ///
-/// O(names × lines). For a whole-tree graph use [`build_graph`] instead.
+/// One pass per source line (backlog 02e5a922): each file's symbols are
+/// extracted once, and every line is tokenized once with
+/// [`referenced_idents`] and looked up in the set of wanted names. The old
+/// shape re-extracted every file's symbols and rescanned every line once PER
+/// NAME — O(names × (lines + symbols × matches)) — which took minutes on a
+/// single 8000-declaration diff and stalled `condukt state set --status done`.
+/// A name that is not a plain identifier (so tokenization could not see it as
+/// one token) keeps the per-name [`line_references`] scan, so the answer is the
+/// same for every input. For a whole-tree graph use [`build_graph`] instead.
 pub fn enumerate_callers(
     changed_symbols: &[String],
     sources: &[(String, String)],
 ) -> BTreeMap<String, Vec<CallSite>> {
     let mut out: BTreeMap<String, Vec<CallSite>> = BTreeMap::new();
 
+    // Plain identifiers are answered from the per-line token set; anything
+    // else (never produced by `changed_symbol_names` today) keeps the
+    // substring scan. An empty name would "match" every position — it gets an
+    // empty entry and no scan.
+    let mut token_names: BTreeSet<&str> = BTreeSet::new();
+    let mut scan_names: BTreeSet<&str> = BTreeSet::new();
     for name in changed_symbols {
-        // An empty name would "match" every position — guard it out.
+        out.entry(name.clone()).or_default();
         if name.is_empty() {
-            out.entry(name.clone()).or_default();
             continue;
         }
+        if is_plain_ident(name) {
+            token_names.insert(name.as_str());
+        } else {
+            scan_names.insert(name.as_str());
+        }
+    }
 
-        let mut sites: Vec<CallSite> = Vec::new();
+    for (path, contents) in sources {
+        let symbols = extract_symbols(contents, path);
+        // Declaration lines per name, so a declaration is not its own caller.
+        let mut decl_lines: BTreeMap<&str, BTreeSet<usize>> = BTreeMap::new();
+        // Line → declaration name; on a tie the LAST symbol in order wins,
+        // matching the old `max_by_key` over `symbols`.
+        let mut decl_at: BTreeMap<usize, &str> = BTreeMap::new();
+        for s in &symbols {
+            decl_lines
+                .entry(s.name.as_str())
+                .or_default()
+                .insert(s.line);
+            decl_at.insert(s.line, s.name.as_str());
+        }
+        let is_decl = |name: &str, line_no: usize| {
+            decl_lines
+                .get(name)
+                .is_some_and(|lines| lines.contains(&line_no))
+        };
+        let caller_at = |line_no: usize| {
+            decl_at
+                .range(..=line_no)
+                .next_back()
+                .map(|(_, n)| (*n).to_string())
+                .unwrap_or_default()
+        };
 
-        for (path, contents) in sources {
-            let symbols = extract_symbols(contents, path);
-            let decl_lines: BTreeSet<usize> = symbols
-                .iter()
-                .filter(|s| &s.name == name)
-                .map(|s| s.line)
-                .collect();
-
-            for (idx, raw_line) in contents.lines().enumerate() {
-                let line_no = idx + 1;
-                if decl_lines.contains(&line_no) {
+        for (idx, raw_line) in contents.lines().enumerate() {
+            let line_no = idx + 1;
+            let mut hits: BTreeSet<&str> = BTreeSet::new();
+            if !token_names.is_empty() {
+                for ident in referenced_idents(raw_line) {
+                    if let Some(name) = token_names.get(ident.as_str()) {
+                        hits.insert(name);
+                    }
+                }
+            }
+            for name in &scan_names {
+                if line_references(raw_line, name) {
+                    hits.insert(name);
+                }
+            }
+            for name in hits {
+                if is_decl(name, line_no) {
                     continue;
                 }
-                if !line_references(raw_line, name) {
-                    continue;
+                if let Some(sites) = out.get_mut(name) {
+                    sites.push(CallSite {
+                        file: path.clone(),
+                        line: line_no,
+                        caller: caller_at(line_no),
+                    });
                 }
-                let caller = symbols
-                    .iter()
-                    .filter(|s| s.line <= line_no)
-                    .max_by_key(|s| s.line)
-                    .map(|s| s.name.clone())
-                    .unwrap_or_default();
-                sites.push(CallSite {
-                    file: path.clone(),
-                    line: line_no,
-                    caller,
-                });
             }
         }
+    }
 
+    for sites in out.values_mut() {
         sites.sort_by(|a, b| {
             a.file
                 .cmp(&b.file)
@@ -177,11 +223,22 @@ pub fn enumerate_callers(
                 .then_with(|| a.caller.cmp(&b.caller))
         });
         sites.dedup();
-
-        out.insert(name.clone(), sites);
     }
 
     out
+}
+
+/// True when `name` is one whole identifier token as [`referenced_idents`]
+/// tokenizes a line: non-empty, only identifier characters, and not starting
+/// with an ASCII digit (which `referenced_idents` treats as a literal). For
+/// such a name, "a maximal identifier run equal to `name` in a call/path
+/// position" is exactly what [`line_references`] matches.
+fn is_plain_ident(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if is_ident_char(c) && !c.is_ascii_digit() => chars.all(is_ident_char),
+        _ => false,
+    }
 }
 
 /// Every identifier on `line` that sits in a call/path position, as
@@ -597,5 +654,81 @@ mod tests {
         let _ = build_graph(&[]);
         let _ = referenced_idents(weird);
         let _ = referenced_idents("");
+    }
+
+    /// The pre-02e5a922 per-name rescan, kept verbatim as the reference the
+    /// single-pass `enumerate_callers` must agree with.
+    fn enumerate_callers_reference(
+        changed_symbols: &[String],
+        sources: &[(String, String)],
+    ) -> BTreeMap<String, Vec<CallSite>> {
+        let mut out: BTreeMap<String, Vec<CallSite>> = BTreeMap::new();
+        for name in changed_symbols {
+            if name.is_empty() {
+                out.entry(name.clone()).or_default();
+                continue;
+            }
+            let mut sites: Vec<CallSite> = Vec::new();
+            for (path, contents) in sources {
+                let symbols = extract_symbols(contents, path);
+                let decl_lines: BTreeSet<usize> = symbols
+                    .iter()
+                    .filter(|s| &s.name == name)
+                    .map(|s| s.line)
+                    .collect();
+                for (idx, raw_line) in contents.lines().enumerate() {
+                    let line_no = idx + 1;
+                    if decl_lines.contains(&line_no) || !line_references(raw_line, name) {
+                        continue;
+                    }
+                    let caller = symbols
+                        .iter()
+                        .filter(|s| s.line <= line_no)
+                        .max_by_key(|s| s.line)
+                        .map(|s| s.name.clone())
+                        .unwrap_or_default();
+                    sites.push(CallSite {
+                        file: path.clone(),
+                        line: line_no,
+                        caller,
+                    });
+                }
+            }
+            sites.sort_by(|a, b| {
+                a.file
+                    .cmp(&b.file)
+                    .then_with(|| a.line.cmp(&b.line))
+                    .then_with(|| a.caller.cmp(&b.caller))
+            });
+            sites.dedup();
+            out.insert(name.clone(), sites);
+        }
+        out
+    }
+
+    #[test]
+    fn single_pass_enumerate_callers_matches_the_per_name_rescan() {
+        let mut sources = corpus();
+        sources.push((
+            "c.rs".to_string(),
+            "use crate::helper;\n// helper() in a comment\nfn helper() { helper(); }\n\
+             struct S; impl S { fn m() { S::m(); helper_x(); x_helper(); } }\n\
+             fn \u{4F60}() { \u{4F60}(); a::\u{4F60}; }\nmacro_rules! mac { () => {} }\n\
+             fn f() { mac!(); helper (); helper::<u8>(); ::helper; }\n"
+                .to_string(),
+        ));
+        sources.push(("a.rs".to_string(), "fn dup() { helper(); }\n".to_string()));
+        let names: Vec<String> = [
+            "helper", "uses_a", "S", "m", "\u{4F60}", "mac", "", "helper", "1x", "a b", "a::b",
+            "missing",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            enumerate_callers(&names, &sources),
+            enumerate_callers_reference(&names, &sources)
+        );
+        assert_eq!(enumerate_callers(&[], &sources), BTreeMap::new());
     }
 }

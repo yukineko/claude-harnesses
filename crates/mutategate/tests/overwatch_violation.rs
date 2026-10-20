@@ -160,8 +160,8 @@ fn emit_failure_does_not_gate_the_gate_but_is_announced() {
     // append_violation's create_dir_all/write to fail. Emit is fail-soft and
     // must not gate the gate.
     //
-    // CONTRACT CHANGE, deliberate (audit finding F-1/F-2,
-    // docs/audit-mutategate-verdict-paths.md §3). This test previously asserted
+    // CONTRACT CHANGE, deliberate (mutategate verdict-path audit finding
+    // F-1/F-2). This test previously asserted
     // that stderr was byte-identical with and without a working store. That
     // assertion WAS the fail-open: it pinned the property that a lost
     // fleet-violation record is indistinguishable from a recorded one, and the

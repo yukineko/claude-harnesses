@@ -141,8 +141,12 @@ fn gather_assessment(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str) -> G
     // matching classify_change's documented additive/backward-compatible
     // behavior. `touched_files` is condukt's own task field, so this is free.
     let sensitive = SensitiveConfig::default();
+    // dc955812: prose and the commands the task runs are classified
+    // separately; undeclared commands → Undetermined → Escalate.
+    let commands = crate::schedule::task_commands(task);
     match resolve_assessment(classify_change(
         &crate::schedule::task_action_text(task),
+        commands.as_deref(),
         &task.touched_files,
         "",
         &sensitive,
@@ -360,8 +364,9 @@ mod tests {
     #[test]
     fn blastguard_ask_command_escalates_end_to_end_under_auto_policy() {
         // END-TO-END, not a hand-built RiskAssessment: the assessment comes out
-        // of the real `blastguard::classify::classify`, which is what
-        // `gather_assessment` calls. A command blastguard REFUSED to analyse
+        // of the real `blastguard::classify::classify_command`, which is what
+        // `gather_assessment` applies (via `classify_change`) to each command
+        // a task declares (dc955812). A command blastguard REFUSED to analyse
         // (`Decision::Ask` — "not a verdict about the command, it is a refusal")
         // must not be eligible for AutoExec: the Low+reversible pair is exactly
         // `decide_gate_exec`'s auto-exec corner.
@@ -377,7 +382,7 @@ mod tests {
             "precondition: blastguard must answer Ask for {text:?} today, got {decision:?}"
         );
 
-        let a = blastguard::classify::classify(text);
+        let a = blastguard::classify::classify_command(text);
         assert_eq!(
             decide_gate_exec(a.risk, a.reversible, true),
             GateExec::Escalate,

@@ -1,4 +1,4 @@
-begin と end 以外のコマンドの exit 0 を、操作が行われた証拠とみなしてはならない。
+変更系コマンド（begin / run / end / heartbeat / reap / reassign / pause / resume）は、操作が行われなかったとき非 0 で終了する（lease ロック競合・lease root 解決不能・キー未保持〈end, reassign〉・`end --status` の未知値・condukt 失敗〈pause, resume〉）。`heartbeat` / `reap` の exit 0 は呼び出しが走ったことしか意味しないので、出力の `refreshed` / `reaped` の件数で実際の変化を確認すること。
 
 begin が exit 1 + skip JSON を返したら、決して先に進んではいけない。
 
@@ -37,7 +37,7 @@ overwatch sessions [--json]                  # Sessions ロスターのみ: live
 overwatch pause --run <id>                   # `condukt state pause --run <id>` に委譲し、control イベントを記録 [test: crates/overwatch/tests/prose_claims.rs::claim_rd_pause_resume_delegate_condukt]
 overwatch resume --run <id>                  # `condukt state resume --run <id>` に委譲し、control イベントを記録 [test: crates/overwatch/tests/prose_claims.rs::claim_rd_pause_resume_delegate_condukt]
 overwatch reassign --key <k> --to <sid>      # <k> の lease を「解放」し reassign to=<sid> イベントを記録（<sid> 側に lease は作らない） [test: crates/overwatch/tests/prose_claims.rs::claim_rd_reassign_releases_lease_no_new_lease]
-overwatch end --key <k> --status <s>         # キーの lease を解放し、終端 status を記録 [test: crates/overwatch/tests/prose_claims.rs::claim_rd_end_releases_lease_records_status]
+overwatch end --key <k> --status <done|abandoned>   # キーの lease を解放し、終端 status を記録（それ以外の status は非 0 で拒否され、lease は保持されたまま） [test: crates/overwatch/tests/prose_claims.rs::claim_rd_end_releases_lease_records_status]
 overwatch reap                               # stale lease（TTL 内にハートビート無し）を削除し {"reaped": N} を出力 [test: crates/overwatch/tests/prose_claims.rs::claim_rd_reap_drops_stale_prints_count]
 overwatch heartbeat --key <k>                # キーの heartbeat_at を更新し {"refreshed": 0|1} を出力 [test: crates/overwatch/tests/prose_claims.rs::claim_rd_heartbeat_refreshes_prints_count]
 overwatch --protects                         # このゲートが何を・何から・どんな根拠で守るかを表示 [test: crates/overwatch/tests/protects_flag.rs::protects_prints_three_labelled_nonempty_lines_and_exits_zero]
@@ -48,6 +48,8 @@ overwatch --protects                         # このゲートが何を・何か
 run ID は `$OVERWATCH_RUN_ID`、無ければタイムスタンプ由来の `run-…` になる [test: crates/overwatch/tests/prose_claims.rs::claim_rd_run_id_resolution]。
 
 `end` は lease ロックが競合したとき、非 0 で終了し、lease は解放されない [test: crates/overwatch/tests/prose_claims.rs::claim_sk_end_nonzero_when_not_released]。
+
+`run` / `heartbeat` / `reap` / `reassign` / `end` は、lease ロックが競合したとき、または lease root を解決できないとき非 0 で終了する（何も書かない。`end` は加えて lease を解放しない）。未保持キーの `reassign`、condukt が失敗した `pause` / `resume` も非 0 で終了する [test: crates/overwatch/tests/repro_mutators_unresolvable_root_exit_zero.rs::heartbeat_on_unresolvable_root_must_be_nonzero] [test: crates/overwatch/tests/repro_run_lock_contended_exit_zero.rs::run_under_real_lock_contention_must_be_nonzero] [test: crates/overwatch/tests/repro_reassign_unheld_key_exit_zero.rs::reassign_of_unheld_key_must_be_nonzero] [test: crates/overwatch/tests/repro_pause_resume_condukt_failure_exit_zero.rs::pause_must_be_nonzero_when_condukt_fails] [test: crates/overwatch/tests/repro_end_unknown_status_accepted.rs::end_with_unknown_status_is_rejected]。
 
 `end` はキーが未保持のとき、非 0（nothing was released）で終了する [test: crates/overwatch/tests/prose_claims.rs::claim_rd_end_unheld_key_nonzero]。
 
@@ -63,7 +65,7 @@ overwatch begin --key "hypothesis-v2.3"
 
 - **exit 0**: Lease 取得成功（同じセッションが既に保持していた場合は refresh、`claimed_at` は維持） [test: crates/overwatch/tests/prose_claims.rs::claim_rd_begin_exit0_refresh_keeps_claimed_at]。
 - **exit 1** + JSON `{ "skipped": true, "holder": { "session_id", "run_id", "heartbeat_at" } }`: このキーについて、別の live セッションが lease を保持中 [test: crates/overwatch/tests/prose_claims.rs::claim_rd_begin_held_key_exit1_skip_json]。**決して先に進んではいけない**。
-- **exit 1** + JSON `{ "skipped": true, "reason": "lock_contended" }`: lease レジストリのロックが取れず、キーが空いているかを確認していない [test: crates/overwatch/tests/prose_claims.rs::claim_rd_begin_held_key_exit1_skip_json]。後で再試行すること。**先に進んではいけない**。
+- **exit 1** + JSON `{ "skipped": true, "reason": "lock_contended" }`: 待機中ずっと live な相手が lease レジストリのロックを保持しており、キーが空いているかを確認していない [test: crates/overwatch/tests/prose_claims.rs::claim_rd_begin_held_key_exit1_skip_json]。後で再試行すること。**先に進んではいけない**。ロックの I/O 失敗（ロックディレクトリを作成・書き込みできない）は `lock_contended` としては報告せず、stderr に undetermined エラーを出して非 0 で終了する [test: crates/overwatch/tests/repro_lock_io_failure_reported_as_contended.rs::begin_with_uncreatable_lock_dir_must_not_claim_lock_contended]。
 
 exit code を確認し、非 0 なら処理をスキップすること。
 
@@ -147,6 +149,6 @@ overwatch escalations [--json] [--threshold N] [--window-secs S]    # systemic �
 - Continuous-Audit: `audit-round record` / `audit-round close`、`audit-metrics [--window 3]` [test: crates/overwatch/tests/prose_claims.rs::claim_rd_continuous_audit_commands]
 - テレメトリ: `undetermined-metrics [--window-days N]`、`gate-outcomes`（donegate / tdd / reviewgate の発火結果を `~/.<gate>/state/log.jsonl` から集計） [test: crates/overwatch/tests/prose_claims.rs::claim_rd_telemetry_commands]
 
-読み取り側の exit code 規約: ledger/journal が（不在・空ではなく）**読めない**とき、`review-queue` [test: crates/overwatch/tests/undetermined_e2e.rs::undecodable_violation_ledger_is_not_rendered_as_no_systemic_violations]・`review-metrics` [test: crates/overwatch/tests/undetermined_e2e.rs::review_metrics_with_an_unreadable_disposition_ledger_reports_null_not_zero]・`reconcile-fixed` [test: crates/overwatch/tests/undetermined_e2e.rs::reconcile_fixed_with_an_unreadable_disposition_ledger_writes_nothing]・`gate-outcomes` [test: crates/overwatch/tests/gate_outcomes_cli.rs::non_utf8_log_is_undetermined_with_null_counts_and_exit_3] は **exit 3** し、`auto-approved` は非 0 で終わる [test: crates/overwatch/tests/auto_approved_cli.rs::unreadable_journal_does_not_exit_clean]。
+読み取り側の exit code 規約: ledger/journal が（不在・空ではなく）**読めない**とき、`review-queue` [test: crates/overwatch/tests/undetermined_e2e.rs::undecodable_violation_ledger_is_not_rendered_as_no_systemic_violations]・`review-metrics` [test: crates/overwatch/tests/undetermined_e2e.rs::review_metrics_with_an_unreadable_disposition_ledger_reports_null_not_zero]・`reconcile-fixed` [test: crates/overwatch/tests/undetermined_e2e.rs::reconcile_fixed_with_an_unreadable_disposition_ledger_writes_nothing]・`gate-outcomes` [test: crates/overwatch/tests/gate_outcomes_cli.rs::non_utf8_log_is_undetermined_with_null_counts_and_exit_3] は **exit 3** し、`auto-approved` は非 0 で終わる [test: crates/overwatch/tests/auto_approved_cli.rs::unreadable_journal_does_not_exit_clean]。git 履歴も同じ扱いの入力で、`git log` が読めない（repository でない・git が無い・未知の ref）とき `reconcile-fixed` は exit 3・`commits_scanned: null`・`undetermined_sources` に `git log` を出し [test: crates/overwatch/tests/reconcile_fixed.rs::reconcile_fixed_undetermined_when_not_a_git_repo]、`review-metrics` は stale-undisposed 件数を 0 ではなく `null` と報告する [test: crates/overwatch/tests/repro_review_metrics_stale_count_not_a_git_repo.rs::review_metrics_stale_count_outside_git_repo_is_not_zero]。
 
 MIT [test: crates/overwatch/tests/prose_claims.rs::claim_rd_license_mit]

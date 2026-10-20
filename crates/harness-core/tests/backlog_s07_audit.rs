@@ -20,8 +20,14 @@ fn backlog_873a2621_two_hour_old_transcript_is_not_a_live_peer() {
     f.set_times(std::fs::FileTimes::new().set_accessed(t).set_modified(t))
         .unwrap();
     let fp = harness_core::transcript::peer_edit_footprint_in(root.path(), "me");
+    // Since backlog eef58891 the footprint is a `Determination`. This fixture
+    // does not pin the claim registry (it reads the real one), so `Undetermined`
+    // is a possible answer; it claims no files (callers exclude nothing), which
+    // is the property under test. A `Known` set must be empty.
+    let claims_files =
+        matches!(&fp, harness_core::verdict::Determination::Known(s) if !s.is_empty());
     assert!(
-        fp.is_empty(),
+        !claims_files,
         "a session whose transcript last changed 2h ago is not observed-live, yet it still \
          claims files: {fp:?}"
     );

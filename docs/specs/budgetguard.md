@@ -17,14 +17,18 @@ gate 判定・config 層・ledger ロック・hook 配線という薄い周辺�
 
 ## 不変条件
 
-- **turn を壊さない（fail-soft ハード不変条件）** — gate は「ブロックする」ときですら常に **exit 0** し、
-  ブロックは stdout の `{"decision":"block", …}` JSON で表現する（`gate::emit_and_exit` は全分岐で
-  `exit(0)`）。config 欠落・transcript 読めない・stdin パース失敗・空 `session_id`/`transcript_path`・
-  data error（`evaluate` が `None`）はすべて無出力で許可（`tests/integration.rs` の
-  `gate_with_empty_fields_exits_zero` / `gate_with_malformed_stdin_exits_zero` が固定）。
-- **安全側デフォルト（0 = 無効）** — 全上限は既定 0.0。`verdict` は各閾値を `> 0.0` でのみ評価するため、
-  何も設定しない導入は完全な no-op（`zero_threshold_means_disabled` テスト）。`enabled=false` または
-  環境変数 `BUDGETGUARD_DISABLE=1`（`Config::disabled_env`）でも即 return。
+- **ブロックは exit 0 + stdout JSON** — gate はブロックするときも **exit 0** し、ブロックは stdout の
+  `{"decision":"block", …}` JSON で表現する。stdin パース失敗は（`enabled=false` でも）ブロックし、
+  連続 3 回までで 4 回目は `systemMessage` 付きで通す（`tests/unparseable_retry_bound.rs`、
+  `tests/integration.rs::gate_with_malformed_stdin_blocks_even_with_no_limit`）。空 `session_id`/`transcript_path`
+  や読めない transcript は上限に従って block/warn（`gate_with_empty_fields_and_no_config_blocks`）。
+  （2026-10-19 のユーザ判断で旧「無出力で許可」から変更。）
+- **上限 0 はその軸だけ無効、上限が 1 つも無いときは自動設定** — `verdict` は各閾値を `> 0.0` でのみ評価する
+  （`zero_threshold_means_disabled`）。ただし設定ファイルが無い／全上限 0 のときは、台帳の過去 7 日以上から
+  Tukey fence で日次 warn/block を導出し、足りなければ既定値（日次 warn 1336 / block 1871）を使う。セッション軸は
+  自動設定しない（fence を情報として報告するだけ）。読めない台帳は判定不能＝ブロック
+  （`tests/unset_limits_are_derived.rs`、`config::derive_limits`）。`enabled=false` または
+  環境変数 `BUDGETGUARD_DISABLE=1`（`Config::disabled_env`）は明示的な無効化として従来どおり。
 - **再帰ブロック防止** — 直前の Stop hook が既にブロックして再入した場合（`input.stop_hook_active`）は
   再ブロックせず即 return。さもなくば over-budget セッションが毎回ブロックし turn を終われなくなる
   （一度警告済みなので停止を許す）。

@@ -41,7 +41,6 @@ fn control_end_is_nonzero_on_unresolvable_root() {
 }
 
 #[test]
-#[ignore = "repro: heartbeat exits 0 on unresolvable root; remove ignore when fixed"]
 fn heartbeat_on_unresolvable_root_must_be_nonzero() {
     let (code, so, se) = run_in_bad_root("hb", &["heartbeat", "--key", "k1"]);
     assert_ne!(
@@ -52,7 +51,6 @@ fn heartbeat_on_unresolvable_root_must_be_nonzero() {
 }
 
 #[test]
-#[ignore = "repro: run exits 0 on unresolvable root; remove ignore when fixed"]
 fn run_on_unresolvable_root_must_be_nonzero() {
     let (code, so, se) = run_in_bad_root("run", &["run", "--key", "k1"]);
     assert_ne!(
@@ -63,7 +61,6 @@ fn run_on_unresolvable_root_must_be_nonzero() {
 }
 
 #[test]
-#[ignore = "repro: reap exits 0 on unresolvable root; remove ignore when fixed"]
 fn reap_on_unresolvable_root_must_be_nonzero() {
     let (code, so, se) = run_in_bad_root("reap", &["reap"]);
     assert_ne!(
@@ -74,7 +71,6 @@ fn reap_on_unresolvable_root_must_be_nonzero() {
 }
 
 #[test]
-#[ignore = "repro: reassign exits 0 on unresolvable root; remove ignore when fixed"]
 fn reassign_on_unresolvable_root_must_be_nonzero() {
     let (code, so, se) = run_in_bad_root("reassign", &["reassign", "--key", "k1", "--to", "x"]);
     assert_ne!(

@@ -52,7 +52,6 @@ fn condukt(repo: &Path, home: &Path, args: &[&str]) -> Output {
 }
 
 #[test]
-#[ignore = "backlog 50158d9d: RED repro"]
 fn a_global_gitconfig_conduktbase_is_not_a_creation_base_record() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");

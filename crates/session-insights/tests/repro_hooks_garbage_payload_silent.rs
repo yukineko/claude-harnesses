@@ -35,7 +35,6 @@ fn home(tag: &str) -> std::path::PathBuf {
 }
 
 #[test]
-#[ignore = "RED repro: session-insights hooks swallow an unparseable payload silently"]
 fn garbage_payload_is_reported_on_stderr() {
     for hook in ["record", "stop"] {
         let h = home(hook);

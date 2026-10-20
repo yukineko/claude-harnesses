@@ -720,6 +720,84 @@ $PATH), so whether the old bytes were recoverable does not make it safe"
     )))
 }
 
+/// Where `target` REALLY lands to the kernel: its deepest existing ancestor
+/// canonicalised (symlinks resolved), with the not-yet-existing tail appended.
+///
+/// Backlog 2287ebae: [`system_path_block`] judges the LEXICAL path, so
+/// `: > <proj>/esc/etc/new.conf` with `esc -> /` was Allow — the file does not
+/// exist (recoverability says `NothingToDestroy`) and the text names no system
+/// directory, yet the kernel creates `/etc/new.conf`. The literal spelling of
+/// the same file is Deny.
+///
+/// `None` = not a path this can place (an unexpanded `$`/backtick target, or a
+/// relative one with no known base) — the caller's existing rules for those
+/// stand. `Undetermined` = the filesystem could not answer (EACCES on an
+/// ancestor, …); the caller must NOT read that as "not a system directory".
+fn real_landing(target: &str, base: Option<&str>) -> Option<Determination<String>> {
+    if target.contains('$') || target.contains('`') {
+        return None;
+    }
+    let path = crate::reversible::resolve(target, base)?;
+    let mut existing: &std::path::Path = path.as_path();
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    loop {
+        match std::fs::canonicalize(existing) {
+            Ok(mut real) => {
+                for comp in tail.iter().rev() {
+                    real.push(comp);
+                }
+                return Some(Determination::Known(real.display().to_string()));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                match (existing.parent(), existing.file_name()) {
+                    (Some(parent), Some(name)) => {
+                        tail.push(name);
+                        existing = parent;
+                    }
+                    _ => {
+                        return Some(Determination::undetermined(format!(
+                            "no ancestor of `{target}` could be resolved"
+                        )))
+                    }
+                }
+            }
+            Err(e) => {
+                return Some(Determination::undetermined(format!(
+                    "`{}` could not be resolved ({e}), so where `{target}` really lands is unknown",
+                    existing.display()
+                )))
+            }
+        }
+    }
+}
+
+/// [`system_path_block`] applied to the path the kernel will really write
+/// ([`real_landing`]) instead of the text. `Err(reason)` when the real landing
+/// could not be determined.
+fn real_system_path_block(
+    action: &str,
+    target: &str,
+    ctx: &Ctx,
+) -> Result<Option<Decision>, String> {
+    match real_landing(target, ctx.raw_base.as_deref()) {
+        None => Ok(None),
+        // macOS: the writable data volume is mounted at `/` through firmlinks,
+        // and some of its symlinks (`/home -> /System/Volumes/Data/home`)
+        // canonicalise to the volume's own path. That prefix is NOT the sealed
+        // `/System`; the path below it is what the root view shows, so it is
+        // judged as such (`/System/Volumes/Data/private/etc/x` is still
+        // `/private/etc/x`, a system directory).
+        Some(Determination::Known(real)) => {
+            let rooted = match real.strip_prefix("/System/Volumes/Data/") {
+                Some(rest) => format!("/{rest}"),
+                None => real,
+            };
+            Ok(system_path_block(action, &rooted, ctx))
+        }
+        Some(Determination::Undetermined(u)) => Err(u.to_string()),
+    }
+}
+
 /// Deny reason for an operation that DISARMS a protected gate/hook/policy path
 /// without writing a single byte to it, or `None` when the target is not one.
 ///
@@ -1142,6 +1220,23 @@ fn analyze_unlink_rmdir(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         }
     }
     Decision::Allow
+}
+
+/// Deny for a single-file delete whose operand IS a `.git` entry (not a path
+/// below one): in a linked worktree that entry is the `gitdir:` file, and
+/// removing it disconnects the work tree from its repository (backlog
+/// eba15868). `None` for every other operand.
+fn dotgit_link_deny(action: &str, operand: &str) -> Option<Decision> {
+    let norm = exclude::normalize(operand);
+    let norm = norm.trim_end_matches('/');
+    if norm == ".git" || norm.ends_with("/.git") {
+        Some(Decision::deny(format!(
+            "{action} {operand} removes a `.git` entry — in a linked worktree that is the \
+`gitdir:` file connecting the checkout to its repository, so blastguard refuses"
+        )))
+    } else {
+        None
+    }
 }
 
 /// The OUTPUT file of a `sort` command (`-o FILE`, `-oFILE`, `--output=FILE`,
@@ -1626,6 +1721,9 @@ primitive, not a filesystem path",
     // The cwd in force before each segment, so a RELATIVE redirect target can
     // be judged where it actually lands (f1c170ab). See `place_redirect_target`.
     let seg_cwds = segment_cwd_states(cmd);
+    // Which segments are interpreter program text (4a1cf1ad); see
+    // `interpreter_program_body_segments`.
+    let program_body = interpreter_program_body_segments(cmd);
     for (occurrence, raw_target) in redirect_targets(cmd).into_iter().enumerate() {
         let seg_idx = redirect_segments
             .as_ref()
@@ -1661,6 +1759,14 @@ primitive, not a filesystem path",
             if let Some(deny) = system_path_block("redirect", &target, ctx) {
                 return deny;
             }
+            // The same axis on the path the kernel really writes (2287ebae):
+            // a symlink in the text can land a NEW file in `/etc` that the
+            // lexical check above never sees.
+            let landing_undetermined = match real_system_path_block("redirect", &target, ctx) {
+                Ok(Some(deny)) => return deny,
+                Ok(None) => None,
+                Err(why) => Some(why),
+            };
             // RECOVERABILITY runs FIRST (operator ruling 2026-09-09). The two
             // verdicts this precedes — the confined ask and the flat deny —
             // fired 63 times across 25 transcripts, and neither had ever asked
@@ -1700,7 +1806,19 @@ primitive, not a filesystem path",
                 // Gating this on confinement was wrong and regressed
                 // `bg2_system_dir_rule_does_not_swallow_ordinary_absent_targets`
                 // — the location question only arises once there are bytes.
-                crate::reversible::Recovery::NothingToDestroy => true,
+                // ...unless where it really lands could not be determined: then
+                // the system-directory axis above did not actually look, and
+                // "could not check" is not "clean" (CLAUDE.md §3).
+                crate::reversible::Recovery::NothingToDestroy => {
+                    if let Some(why) = &landing_undetermined {
+                        line_level_asks.push(Decision::ask(format!(
+                            "'> {target}' creates a file, and {why} — blastguard cannot tell \
+whether it lands in a system directory"
+                        )));
+                        continue;
+                    }
+                    true
+                }
                 // THIS is the whose-tree case. Any git-tracked file in ANY
                 // checkout on the machine probes as restorable, so before this
                 // gate `echo x > <other project>/CLAUDE.md` was silently
@@ -1777,6 +1895,21 @@ primitive, not a filesystem path",
                     continue;
                 }
             }
+            // The same ruling at LINE level (4a1cf1ad): this `>` sits in the
+            // body of a quoted here-document handed to a code interpreter, so
+            // it is program text the shell never parses. Ask with the marker,
+            // never Allow; a Deny elsewhere on the line still wins.
+            if matches!(recovery, crate::reversible::Recovery::Undetermined(_))
+                && redirect_target_undeterminable(&target, ctx.raw_base.as_deref())
+                && seg_idx.is_some_and(|i| program_body.get(i) == Some(&true))
+            {
+                line_level_asks.push(recommend_against(Decision::ask(format!(
+                    "the body of a quoted here-document fed to a code interpreter contains a `>` \
+that a shell would read as a redirect whose target cannot be determined ({reason}); the shell \
+does not parse that body, but blastguard cannot show the program does not use it as one."
+                ))));
+                continue;
+            }
             return Decision::deny(reason);
         }
     }
@@ -1820,6 +1953,16 @@ primitive, not a filesystem path",
         // whole payload.
         if let Some(deny) = system_path_block("append redirect", &target, ctx) {
             return deny;
+        }
+        // ...and on the path the kernel really writes (2287ebae): a symlink in
+        // the text hides the system directory from the lexical check.
+        match real_system_path_block("append redirect", &target, ctx) {
+            Ok(Some(deny)) => return deny,
+            Ok(None) => {}
+            Err(why) => line_level_asks.push(Decision::ask(format!(
+                "'>> {target}' appends to a path whose real location is unknown ({why}) — \
+blastguard cannot tell whether it lands in a system directory"
+            ))),
         }
         // A target that is STILL an expansion after resolution names no path
         // either axis above could place, so both answered "not mine" without
@@ -3143,6 +3286,63 @@ fn here_document_layout(segs: &[SeparatedSegment]) -> (Vec<bool>, Option<usize>)
         }
     }
     (is_body, opener_idx)
+}
+
+/// Per segment of [`split_segments_with_separators`]`(cmd)`: true when the
+/// segment is a BODY line of a QUOTED-delimiter here-document whose opener
+/// segment hands it to a non-shell code interpreter (`python3 - <<'PY'`).
+///
+/// Backlog 4a1cf1ad: the line-level redirect scan read such a body as shell,
+/// so a `>` in a Python comment (`# writes \`<k(r)>/claims.json\``) was a
+/// truncating redirect with an undeterminable target and was DENIED — before
+/// [`interpreter_code_verdict`] could apply user ruling R2 (2026-10-14: an
+/// undeterminable `>` in program text is an Ask carrying [`RECOMMEND_NO`],
+/// never Deny and never Allow). With a quoted delimiter the shell does not
+/// parse the body at all.
+///
+/// Restrictive on every doubt: an opener segment that opens more than one
+/// here-document, an unquoted delimiter, or a command word that is not plainly
+/// a code interpreter (a shell, `env`, `sudo`, an assignment, …) marks nothing.
+fn interpreter_program_body_segments(cmd: &str) -> Vec<bool> {
+    let segs = split_segments_with_separators(cmd);
+    let mut out = vec![false; segs.len()];
+    let mut idx = 0;
+    while idx < segs.len() {
+        let openers = here_document_openers(&segs[idx].text);
+        if openers.is_empty() {
+            idx += 1;
+            continue;
+        }
+        // Only a NEWLINE ends the opener's line; anything after a `;`/`&&`/`|`
+        // on that line is shell code, so such a line marks nothing.
+        let program_text = openers.len() == 1
+            && segs[idx].ends_at_newline
+            && here_document_delimiter_is_quoted(&segs[idx].text)
+            && segs[idx]
+                .text
+                .split_whitespace()
+                .next()
+                .is_some_and(|w| is_code_interpreter(basename(w)) && !is_shell(basename(w)));
+        let opener = &openers[0];
+        let mut body = idx + 1;
+        while body < segs.len() && !segment_closes_here_document(&segs[body].text, opener) {
+            body += 1;
+        }
+        // Marked only when the body is CLOSED by its delimiter line and no
+        // body segment spans a newline (an unbalanced quote in the body, e.g.
+        // a Python `# don't`, merges lines and can bury the delimiter).
+        let closed = body < segs.len();
+        let clean = segs[idx + 1..body.min(segs.len())]
+            .iter()
+            .all(|s| !s.text.contains('\n'));
+        if program_text && closed && clean {
+            for flag in &mut out[idx + 1..body] {
+                *flag = true;
+            }
+        }
+        idx = body + 1;
+    }
+    out
 }
 
 /// The command with the BODY of its here-document removed, when — and only
@@ -5120,6 +5320,28 @@ const INTERPRETER_WRITE_CALLS: &[&str] = &[
     ",'wb'",
 ];
 
+/// True when `candidate` names an EXISTING DIRECTORY and nothing in `payload`
+/// can write into a directory operand — so the literal cannot be what the
+/// program's write call overwrites.
+///
+/// Backlog b85f6d5d: `l.startswith('//')` beside `open(p,'w')` was denied as
+/// "it writes `//`", because `//` is `/` to the probe and `/` is in no work
+/// tree. `open(dir, 'w')`, `os.truncate(dir)`, `copyfile(_, dir)` and
+/// `writeFileSync(dir)` all fail on a directory (EISDIR), so a directory
+/// literal is not their target. `shutil.copy2(src, dir)` DOES write into a
+/// directory (`dir/<basename>`), so when the program spells it this answers
+/// `false` and the literal is probed exactly as before. A path whose kind
+/// cannot be read (`metadata` fails, relative with no base) is also `false`:
+/// unknown stays on the probing side.
+fn names_unwritable_directory(candidate: &str, payload: &str, base: Option<&str>) -> bool {
+    if payload.to_ascii_lowercase().contains("shutil.copy2(") {
+        return false;
+    }
+    crate::reversible::resolve(candidate, base)
+        .and_then(|p| std::fs::metadata(p).ok())
+        .is_some_and(|m| m.is_dir())
+}
+
 /// The overwrite-shaped call in `payload`, if any. Case-folded for the same
 /// reason as [`interpreter_destructive_call`].
 fn interpreter_write_call(payload: &str) -> Option<&'static str> {
@@ -5668,7 +5890,11 @@ path — changing it changes which hooks and gates run, and blastguard will not 
                 // is exactly the waste the ruling names. Gated on the literal
                 // looking like a path, and capped, because each probe spawns
                 // git and this runs inside a PreToolUse hook.
-                if write_call.is_some() && probed < MAX_RECOVERY_PROBES && candidate.contains('/') {
+                if write_call.is_some()
+                    && probed < MAX_RECOVERY_PROBES
+                    && candidate.contains('/')
+                    && !names_unwritable_directory(candidate, payload, ctx.raw_base.as_deref())
+                {
                     probed += 1;
                     let recovery = crate::reversible::probe(candidate, ctx.raw_base.as_deref());
                     if let crate::reversible::Recovery::Unrecoverable(why) = &recovery {
@@ -8187,6 +8413,15 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     }
 
     if !recursive && !wildcard {
+        // Backlog eba15868: ONE file can still be the whole checkout. A linked
+        // worktree's `.git` is a `gitdir:` FILE, so `rm <wt>/.git` succeeds
+        // without `-r` and severs the work tree from its repository — while
+        // `Write`/`>` onto the same path is already refused as git internals.
+        // Only the recursive arm below has a deletion classifier for `.git`
+        // directories, so the non-recursive arm answers here.
+        if let Some(deny) = operands.iter().find_map(|o| dotgit_link_deny("rm", o)) {
+            return deny;
+        }
         // Single, non-recursive rm of named files — below the destructive bar.
         return Decision::Allow;
     }

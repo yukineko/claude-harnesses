@@ -1,7 +1,7 @@
 // Integration test file: unwrap/expect/panic are fine here (the workspace
 // clippy denies are for production code).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! Repro for backlog 00880b3d (docs/audit-gauge-verdict-paths.md P3/P4):
+//! Repro for backlog 00880b3d (gauge verdict-path audit items P3/P4):
 //! `gauge::config::Config::load` silently degrades a broken `gauge.toml`.
 //!
 //! * P3: `if let Ok(read_to_string)` / `if let Ok(toml::from_str)` — a config

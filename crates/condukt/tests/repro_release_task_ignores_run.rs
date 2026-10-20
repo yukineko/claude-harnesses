@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! RED repro: `condukt state release-task --run X` ignores --run. Run B can
-//! release a task claim held by run A, and reports "released ... for run 'B'".
+//! Regression (backlog 40dde238): `condukt state release-task --run X` used to
+//! ignore --run, so run B could release a task claim held by run A.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -56,7 +56,6 @@ impl Fx {
 }
 
 #[test]
-#[ignore = "RED repro: condukt state release-task ignores --run"]
 fn release_task_by_another_run_does_not_release_the_holders_claim() {
     let f = Fx::new("other-run");
     let o = f.c(&[

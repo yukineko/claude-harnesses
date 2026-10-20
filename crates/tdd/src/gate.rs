@@ -16,7 +16,8 @@
 //! `transcript_path` and the rule shared with reviewgate
 //! (`harness_core::attribution::attribute_own_writes`: an
 //! `Edit`/`Write`/`MultiEdit`/`NotebookEdit` of the file in the transcript or
-//! its subagent sidechains, or a `Bash` command naming its path). Files not
+//! its subagent sidechains, or a `Bash` command naming its path outside a
+//! read-only statement such as `git diff` / `grep` / `tdd skip`). Files not
 //! attributed are excluded and NAMED ([`attribution_note`], and the block
 //! reason). Residual hole, stated rather than hidden: a file this session
 //! wrote through a command that never names it (`cargo fmt`, a glob, a script)
@@ -336,7 +337,7 @@ pub fn attribution_note(v: &Report) -> Option<String> {
         Authorship::Attributed { excluded } => Some(format!(
             "tdd: {} uncommitted file(s) not attributed to this session were excluded from the \
              scan (no Edit/Write/MultiEdit/NotebookEdit of them and no Bash command naming them \
-             in this session's transcript): {}",
+             outside a read-only statement in this session's transcript): {}",
             excluded.len(),
             excluded.join(", ")
         )),
@@ -428,7 +429,8 @@ fn generic_block_reason(
             format!(
                 "Whose changes: only the uncommitted files this session's transcript shows it \
                  writing (an Edit/Write/MultiEdit/NotebookEdit of the file, including by its \
-                 subagents, or a Bash command naming its path). That attribution is inferred from \
+                 subagents, or a Bash command naming its path outside a read-only statement such as \
+                 `git diff`, `grep`, `cat` or `tdd skip`). That attribution is inferred from \
                  the transcript, not verified authorship.{ex}"
             )
         }

@@ -2,8 +2,8 @@
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! End-to-end tests: drive the real built `budgetguard` binary and assert on
-//! exit code + stdout. `budgetguard gate` is a Stop hook — harness errors always
-//! exit 0 (never break the turn). The rest is a subcommand CLI.
+//! exit code + stdout. `budgetguard gate` is a Stop hook; with no limit armed it
+//! has nothing to gate and exits 0. The rest is a subcommand CLI.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -81,21 +81,34 @@ fn status_json_emits_machine_readable_pressure() {
 }
 
 #[test]
-fn gate_with_empty_fields_exits_zero() {
-    // A valid Stop payload but with empty transcript_path/session_id → the gate
-    // returns early. The invariant is exit 0, never blocking the turn.
+fn gate_with_empty_fields_and_no_config_blocks() {
+    // CONTRACT CHANGE (user ruling 2026-10-19, 「設定上限をきめて、決められない
+    // ならその値にする」): this test used to pin exit 0 with no decision for a
+    // Stop payload with empty transcript_path/session_id and no config, because
+    // no config meant "no limit". No config now means the built-in default
+    // limits (no ledger history here), so the unmeasurable spend blocks like
+    // it does with any armed block limit; see
+    // tests/repro_unmeasurable_transcript_allows.rs.
     let home = temp_home("gate-valid");
     let payload = r#"{"hook_event_name":"Stop","session_id":"","transcript_path":""}"#;
     let (code, stdout) = run(&["gate"], payload, &home);
-    assert_eq!(code, 0, "gate hook must always exit 0");
-    assert!(stdout.trim().is_empty(), "got: {stdout}");
+    assert_eq!(code, 0, "a Stop block decision is read only on exit 0");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout must be a JSON decision ({e}): {stdout:?}"));
+    assert_eq!(v["decision"], "block", "got: {stdout}");
 }
 
 #[test]
-fn gate_with_malformed_stdin_exits_zero() {
-    // Fail-soft invariant: unparseable stdin → early return, never breaks a turn.
+fn gate_with_malformed_stdin_blocks_even_with_no_limit() {
+    // Contract change by user ruling 2026-10-19 (「読めないならエラー」 /
+    // 「処理できないならエラーでいい」): this test used to pin exit 0 with empty
+    // stdout for unparseable stdin with NO limit armed. The gate now blocks the
+    // stop whenever it cannot process its input, limit or not; see also
+    // tests/repro_unmeasurable_transcript_allows.rs.
     let home = temp_home("gate-bad");
     let (code, stdout) = run(&["gate"], "not json", &home);
-    assert_eq!(code, 0, "malformed stdin must still exit 0");
-    assert!(stdout.trim().is_empty(), "got: {stdout}");
+    assert_eq!(code, 0, "a Stop block decision is read only on exit 0");
+    let v: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout must be a JSON decision ({e}): {stdout:?}"));
+    assert_eq!(v["decision"], "block", "got: {stdout}");
 }

@@ -1,5 +1,5 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! RED wiring test for `docs/audit-reviewgate-verdict-paths.md` P1/P2.
+//! RED wiring test for reviewgate verdict-path audit items P1/P2.
 //!
 //! `git::diff_text()`'s three content-fetch sub-commands (`diff --`, `diff
 //! --cached --`, `ls-files --others --exclude-standard --`) used to swallow a

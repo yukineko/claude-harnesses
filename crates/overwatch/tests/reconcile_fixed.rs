@@ -267,11 +267,13 @@ fn reconcile_fixed_dry_run_does_not_write_disposition() {
 }
 
 #[test]
-fn reconcile_fixed_fail_soft_when_not_a_git_repo() {
-    // `work` is a plain directory, never `git init`-ed: `git log` must fail,
-    // and reconcile-fixed must degrade to "0 processed" rather than
-    // panicking or exiting non-zero (the fail-soft contract pre-push/CI
-    // rely on).
+fn reconcile_fixed_undetermined_when_not_a_git_repo() {
+    // Contract change (backlog 589a8bff): `work` is a plain directory, never
+    // `git init`-ed, so `git log` fails. That used to be pinned as "exit 0,
+    // commits_scanned 0, reconciled []" — indistinguishable from "scanned the
+    // history, nothing to reconcile". The history was never read, so it is
+    // now UNDETERMINED: exit 3, `commits_scanned: null`, and `git log` named
+    // in `undetermined_sources`.
     let (home, work) = make_sandbox("no-repo");
 
     let out = Command::new(overwatch_bin())
@@ -281,12 +283,14 @@ fn reconcile_fixed_fail_soft_when_not_a_git_repo() {
         .current_dir(&work)
         .output()
         .expect("failed to spawn overwatch binary");
-    assert!(
-        out.status.success(),
-        "reconcile-fixed must exit 0 even when cwd is not a git repo (fail-soft)"
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "an unreadable git history is undetermined (exit 3), not 'nothing to reconcile'"
     );
     let stdout = String::from_utf8(out.stdout).unwrap();
     let v: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(v["commits_scanned"], 0);
+    assert_eq!(v["commits_scanned"], Value::Null);
     assert_eq!(v["reconciled"], serde_json::json!([]));
+    assert_eq!(v["undetermined_sources"], serde_json::json!(["git log"]));
 }

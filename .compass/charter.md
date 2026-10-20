@@ -108,7 +108,7 @@ C locale 順の先頭 `CLAUDE.md` を返し、直後の `cp -f "$src" "$repofile
 - 【2026-09-13 追加】DoD12 の残り — 2d3cbda2（dead session の worktree/branch を回収する GC 自体が無い）。**DoD14 の後に来るべき**であることが今回の裁定で確定した: 共有 claim registry が worktree から見えないまま GC を書くと、生きている作業を dead と判定して削除する側へ倒れる（この軸では削除が不可逆）。DoD14(a) の分類表が claim registry を『共有』と宣言し、(b) がそれを Undetermined へ倒した後に着手する。
 - 【2026-09-13 追加】5daf0b60（abandon --all-stuck が生存 worker を liveness/dirty 未確認で切り離す）。2d3cbda2 と同じ理由で DoD14 の後。
 - 【2026-08-21 追加】DoD13 の実装 — shell 層の erasure を検出する pre-commit 字句ゲート。今サイクルで north_star の射程に入れた（人間裁定）が、ONE は liveness 側を維持したため parked。着手時の第一歩は 65 本の 3 分類。アンチ空虚の対照として f9bba02a の逐語形（nullglob で消えた glob → 引数 0 個の `ls`）が RED として落ちることを先に観測する。
-- blastguard の per-gate verdict 経路監査の**完了**（census 実測 196 production サイト、機械列挙は完了・分類は部分的）。監査 doc は docs/audit-blastguard-verdict-paths.md に存在し、自ら「分子を動かさない」と宣言している。未分類の範囲は同 doc §5 に列挙済み。
+- blastguard の per-gate verdict 経路監査の**完了**（census 実測 196 production サイト、機械列挙は完了・分類は部分的）。監査 doc は 2026-10-20 にユーザー指示（過去の記録の削除）で docs/ から削除した。未分類の範囲の一覧は削除前の git 履歴にのみ残る。
 - 『取得失敗が空集合に潰れて allow になる』横断パターンの一括是正。reviewgate の P1 と propguard の F-2 で 2 crate 確認済み、監査済み 7 crate を横断で当たれば追加で出る見込み。DoD9 の (ii) を実際に動かす唯一の候補。
 - 残る未監査 GATE crate: specguard と overwatch。
 - backlog ストアの分裂。**2026-08-21 に数字を訂正**: machine-local `~/.backlog` = 859 件（今日も書かれている、mtime 2026-08-21 13:02）/ repo `.backlog` = 682 件。前版の「668 件 と 14 件」は 3e3a9a48・89feaddb が landed する前の値で stale だった（主張は成立、数字は誤り）。backlog 5ba13c3e / e840c8b2。ユーザー決定により現時点では可視化のみで、全面移行はしない。

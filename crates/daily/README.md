@@ -22,10 +22,10 @@ injected as `additionalContext` for the agent — **non-blocking** (it never bre
 Before spawning, `task.command` is checked against the same `blastguard` detector
 the PreToolUse hook uses. A command blastguard **denies** (destructive) is refused —
 never spawned — and reported as `name (blocked: <reason>)` in the summary/report
-instead of running. **Only a `Deny` verdict blocks**: a command for which blastguard
-returns `Ask` (a construct it cannot analyse) is *not* refused here — `daily` does not
-harden `Ask` to `Deny` (`run_task` in `src/main.rs` matches only `Decision::Deny`), so
-such a command is spawned like any other.
+instead of running. An `Ask` verdict (a construct blastguard cannot analyse and
+refuses to guess about) blocks too: no human is present at SessionStart to answer it,
+so `run_task` in `src/main.rs` hardens `Ask` to `Deny` (`Decision::hardened`) and the
+command is reported as `name (blocked: <reason>)` without being spawned.
 
 With **no tasks registered**, a built-in default `security` task runs, preserving the
 original behavior:
@@ -52,7 +52,8 @@ that ran today (both successes and failures):
 Each task runs in its `dir` (or the session `cwd`). `dir` is canonicalized and must be
 the session `cwd` or a directory **under** it: a `dir` that does not exist, cannot be
 canonicalized, or resolves outside the session `cwd` (e.g. `../../etc`, or an absolute
-path elsewhere) is **silently ignored** and the task runs in the session `cwd` instead.
+path elsewhere) is **refused**: the task is not spawned (it is never run in the session
+`cwd` as a substitute) and is reported as `name (blocked: task dir … )`.
 `$CARGO_HOME/bin` is prepended to `PATH`, so `cargo` subcommands like `cargo-deny` resolve even when `~/.cargo/bin` isn't
 on the ambient PATH. `cargo-deny` must still be installed separately
 (`cargo install cargo-deny`) for the default security task to do anything.
@@ -135,7 +136,7 @@ command = "cargo deny check advisories bans sources licenses"
 [[task]]
 name = "notes-sync"
 command = "git -C ~/notes pull --ff-only"
-dir = "tools"             # optional; must resolve to the session cwd or below — else ignored (runs in the session cwd)
+dir = "tools"             # optional; must resolve to the session cwd or below — else the task is refused (blocked)
 ```
 
 - `enabled` defaults to **true** when omitted; set `enabled = false` to turn the runner
@@ -144,8 +145,9 @@ dir = "tools"             # optional; must resolve to the session cwd or below �
   `security` task runs; register **one or more** and only those run (add `security`
   yourself if you still want it).
 - Each `name` must be unique — it is the per-task daily state key.
-- An **unparseable** config is ignored with a stderr warning and treated as the default
-  (enabled, nothing registered → the built-in `security` task runs).
+- An **unparseable** config is **not** treated as the default: `session-start` runs no
+  task at all and injects a `systemMessage` + `additionalContext` saying the config is
+  unparseable and today's task status is UNKNOWN; `daily list` and `daily add` exit 1.
 
 ## Registering tasks
 
@@ -168,7 +170,7 @@ a duplicate name.
 | `daily list` | show registered tasks + whether each already ran today |
 | `daily report [--date <d>] [--last <n>]` | show the results report of past runs (today by default) |
 | `daily add --name <n> --command <c> [--dir <d>]` | register a new daily task in `~/.daily/config.toml` |
-| `daily install` | (not yet implemented — prints a notice and exits 0) — add the hook to `~/.claude/settings.json` manually |
+| `daily install` | (not yet implemented — installs nothing, prints a notice and exits 1) — add the hook to `~/.claude/settings.json` manually |
 
 ## Install
 

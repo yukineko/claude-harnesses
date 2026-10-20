@@ -120,7 +120,6 @@ fn state_cancel_refuses_verified() {
 }
 
 #[test]
-#[ignore = "backlog 2821738c: open defect, remove ignore when fixed"]
 fn state_set_cancelled_refuses_verified_like_state_cancel() {
     let f = Fixture::new("set");
     f.verified_run("r1");

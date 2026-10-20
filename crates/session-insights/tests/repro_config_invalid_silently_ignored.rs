@@ -35,7 +35,6 @@ fn home(tag: &str) -> std::path::PathBuf {
 }
 
 #[test]
-#[ignore = "RED repro: session-insights silently ignores invalid config"]
 fn invalid_config_is_not_silently_defaulted() {
     for (tag, body) in [
         ("unparse", "enabled = [[[ not toml"),

@@ -67,7 +67,7 @@ hypothesis は、発見作業の **未解決の問い**——「X だと信じ�
 |---|---|
 | `hypothesis add <text> [--goal <keyword>] [--success "<metric> >= <n>"] [--kill "<metric> <= <n>"] [--confidence <0..1>]` | 賭けを追加し新 ID を表示。`--success`/`--kill` は出荷前に反証可能な基準を事前登録（演算子: `>= <= > < ==`）。`--confidence` は発見の確信度を設定（既定 0.5） |
 | `hypothesis draft <text> [--goal <keyword>] [--success …] [--kill …] [--write-path <p>…\|--no-write-paths] [--read-path <p>…\|--no-read-paths]` | 曖昧なタスク文を問い詰める: 未解決の点（D1 scope / D2 success 基準 / D3 kill 基準 / D4 ゴール紐づけ）を表示し、すべて解消するまで **何も書き込まない**。解消したら宣言済み scope 付きで記録する。書き込み面が空（`--no-write-paths`）は拒否、読み込み面が空は受理。未解決が残る間も exit 0 |
-| `hypothesis list [--status <s>] [--json]` | 賭けを**発見順**（confidence 降順、次に created_at）で一覧（`open` / `awaiting-measurement` / `validated` / `rejected` でフィルタ可。未知の値は何にもマッチしない）。事前登録した基準・宣言 scope（未質問なら `[scope: undeclared]`）・RAT もインライン表示。`--json` は `{id,status,text,confidence,run}` の配列を出力 |
+| `hypothesis list [--status <s>] [--json]` | 賭けを**発見順**（confidence 降順、次に created_at）で一覧（`open` / `awaiting-measurement` / `validated` / `rejected` でフィルタ可。未知の値は非0終了で拒否される）。事前登録した基準・宣言 scope（未質問なら `[scope: undeclared]`）・RAT もインライン表示。`--json` は `{id,status,text,confidence,run}` の配列を出力 |
 | `hypothesis stats` | 出荷 vs 計測の健全性メトリクスを 1 つの JSON で出力（`shipped` / `validated` / `rejected` / `awaiting` / `avg_measurement_delay_days`） |
 | `hypothesis confidence <id> <value>` | 賭けの発見確信度（検証の優先度。高いほど検証に早く浮上）を設定。`list` の発見順キューを並べ替える |
 | `hypothesis await-measurement <id> [--run <run>]` | 出荷したが未計測の賭けに印を付ける（condukt が merge 時に呼ぶ） |

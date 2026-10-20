@@ -42,6 +42,9 @@ pub struct DoneArgs {
     pub id: String,
     pub test: Option<String>,
     pub red_rev: Option<String>,
+    /// `--red-overlay PATH` (repeatable): narrow the RED overlay to these
+    /// HEAD test files. Empty = the default overlay.
+    pub red_overlay: Vec<String>,
     pub reason: Option<String>,
     pub duplicate_of: Option<String>,
     pub doc_only: Option<String>,
@@ -66,9 +69,10 @@ pub fn done(tasks_path: &Path, a: DoneArgs) -> Result<()> {
     if routes > 1 {
         bail!("refused: give exactly one of --test, --doc-only, --duplicate-of");
     }
-    if a.test.is_none() && (a.red_rev.is_some() || a.reason.is_some()) {
+    if a.test.is_none() && (a.red_rev.is_some() || a.reason.is_some() || !a.red_overlay.is_empty())
+    {
         bail!(
-            "refused: --red-rev / --reason belong to a --test close (an obsolete close also needs \
+            "refused: --red-rev / --red-overlay / --reason belong to a --test close (an obsolete close also needs \
              a committed test proving the old surface is gone); use {DONE_USAGE}"
         );
     }
@@ -108,8 +112,9 @@ pub fn done(tasks_path: &Path, a: DoneArgs) -> Result<()> {
         };
         let cmd = evidence::parse_test_cmd(test).map_err(|e| anyhow!("refused: {e}"))?;
         let root = toplevel()?;
-        let f2p =
-            evidence::run_f2p(&root, &cmd, red_rev, now).map_err(|e| anyhow!("refused: {e}"))?;
+        let overlay = (!a.red_overlay.is_empty()).then_some(a.red_overlay.as_slice());
+        let f2p = evidence::run_f2p(&root, &cmd, red_rev, overlay, now)
+            .map_err(|e| anyhow!("refused: {e}"))?;
         Closure {
             reason,
             duplicate_of: None,

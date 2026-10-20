@@ -34,7 +34,6 @@ mod policy;
 mod pr;
 mod precedent;
 mod replan;
-mod repo_commit;
 mod review_brief;
 mod review_order;
 mod review_worthiness;
@@ -121,12 +120,6 @@ enum Command {
         #[command(subcommand)]
         action: WtAction,
     },
-    /// Mutations of the PRIMARY working tree (the shared one), serialized on the
-    /// repo-scoped primary lock.
-    Repo {
-        #[command(subcommand)]
-        action: RepoAction,
-    },
     /// Run-state tracking and the completion gate.
     State {
         #[command(subcommand)]
@@ -162,7 +155,8 @@ enum Command {
     },
     /// Deterministic CIRCUIT-BREAKER stop-condition gate: gather the three
     /// signals (consecutive-failure streak, budget-over-cap, idle/stall) for a
-    /// run — all FAIL-SOFT — run the pure `decide_circuit` core, print the
+    /// run — an uncountable streak or unmeasurable idle trips; budget is
+    /// opt-in — run the pure `decide_circuit` core, print the
     /// verdict + signals as JSON, journal it, and EXIT NONZERO when the breaker
     /// trips. The flow/condukt loops consult this each iteration
     /// (`if ! condukt circuit check --run RID; then stop; fi`).
@@ -471,10 +465,19 @@ enum ShadowRunAction {
         model: String,
         #[arg(long)]
         pass: bool,
+        /// Measured USD cost of the shadow attempt. OMIT it when no cost was
+        /// measured: the outcome is then recorded with the cost unmeasured
+        /// (`fugu-router record` gets no `--cost`), never with an invented
+        /// value. A supplied value must be finite and non-negative, or the
+        /// command is refused before anything is discarded (backlog `e44e233f`).
         #[arg(long)]
-        cost: f64,
+        cost: Option<f64>,
+        /// Measured wall-clock duration (seconds) of the shadow attempt. OMIT
+        /// it when not measured (recorded as unmeasured, never as 0). A
+        /// supplied value must be a finite positive number, or the command is
+        /// refused before anything is discarded (backlog `e44e233f`).
         #[arg(long)]
-        duration: f64,
+        duration: Option<f64>,
     },
 }
 
@@ -565,33 +568,6 @@ enum EscalateAction {
         /// The chosen option (should be one of the recorded options).
         #[arg(long)]
         choice: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum RepoAction {
-    /// Stage the named paths and commit them in the working tree you run it
-    /// from (cwd's toplevel; never the main tree: CLAUDE.md §8), with `lock::REPO_PRIMARY_LOCK_KEY` held (keyed on that checkout)
-    /// across the whole read-modify-write, so concurrent condukt executions
-    /// sharing that worktree's index can never interleave content in it.
-    ///
-    /// NOT required by the `/condukt` skill any more: single-worktree mode and
-    /// the small-task fast path were retired (2026-10-03, backlog 5e5cf0a9) and
-    /// every task commits in its own worktree. Kept for callers that share one
-    /// worktree's index: raw `git add ... && git commit` holds no lock there.
-    ///
-    /// Restrictive on every cannot-determine: no `--path`, a widening pathspec
-    /// (`.`, a glob, `:` magic), foreign content already staged in the shared
-    /// index, an unheld lock, or a failing `git` all refuse with a non-zero exit
-    /// and leave HEAD where it was.
-    Commit {
-        /// A file this task owns (repeatable). Explicit paths only — never `-A`,
-        /// `.` or a glob, so a peer's edits cannot ride along.
-        #[arg(long = "path")]
-        paths: Vec<String>,
-        /// Commit message.
-        #[arg(long, short = 'm')]
-        message: String,
     },
 }
 
@@ -884,6 +860,15 @@ enum LessonsAction {
 /// The two durable positions of the shared autonomy switch. Two values, not a
 /// bool, so `autonomy-set` rejects anything else at the CLI boundary instead of
 /// writing a file that would later read back as `Undetermined`.
+/// The outcome a stateless driver declares when releasing a finished item
+/// (`state release-task --outcome`). Omitted = unspecified, which the circuit
+/// breaker counts as NOT done.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum ReleaseOutcome {
+    Done,
+    Failed,
+}
+
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 enum AutonomySwitch {
     On,
@@ -1088,8 +1073,13 @@ enum StateAction {
         #[arg(long)]
         stateless: bool,
     },
-    /// Release task hashkeys from the task-claim registry (call when a task
-    /// reaches a terminal status). Prints the number of claims released.
+    /// Release task hashkeys held by `--run` from the task-claim registry (call
+    /// when a task reaches a terminal status). Prints the number of claims
+    /// released. A hashkey held by a DIFFERENT run is not released: it is named
+    /// on stderr and the command exits 1. Every call first appends each
+    /// hashkey's outcome to the run's item-outcome log, which `circuit check`
+    /// reads as the failure streak of a run without run state; if that record
+    /// cannot be written nothing is released and the command fails.
     ReleaseTask {
         #[arg(long)]
         run: String,
@@ -1097,6 +1087,11 @@ enum StateAction {
         /// An empty or whitespace-only hashkey is rejected as a usage error (exit 2).
         #[arg(long, required = true, value_parser = parse_task_hashkey)]
         hashkey: Vec<String>,
+        /// The item's outcome: `done` (resets the circuit breaker's failure
+        /// streak) or `failed`. Omitted → recorded as `unspecified`, which the
+        /// breaker counts as a failure: an unasserted success is not progress.
+        #[arg(long, value_enum)]
+        outcome: Option<ReleaseOutcome>,
     },
     /// Exit 0 if a live claim (from any run) holds the given task hashkey, else
     /// exit 1. Prints a small JSON `{hashkey, claimed, holder_run}` for humans,
@@ -1166,8 +1161,10 @@ enum StateAction {
     ///
     /// * 3 — at least one task is UNOBSERVABLE: a durable progress signal could
     ///   not be read at all (no `updated_at`, an unreadable worktree HEAD, a
-    ///   task with no worktree). The engine tried to look and could not; no
-    ///   re-run fixes that on its own.
+    ///   task with no worktree), or a confirmed-stalled task's worktree
+    ///   dirtiness could not be read by the uncommitted-work veto (backlog
+    ///   `d65110df`; dirtiness is a veto, not a progress signal). The engine
+    ///   tried to look and could not; no re-run fixes that on its own.
     /// * 0 — nothing was unobservable. Tasks that were confirmed stuck have been
     ///   abandoned (zero of them is still exit 0). This includes the case where
     ///   the only undetermined tasks are AWAITING-SAMPLE: every signal read
@@ -1730,7 +1727,8 @@ enum RunPolicyAction {
 
 #[derive(Subcommand)]
 enum CircuitAction {
-    /// Gather the streak/budget/stall signals for a run (all FAIL-SOFT), run the
+    /// Gather the streak/budget/stall signals for a run (an uncountable streak
+    /// or unmeasurable idle trips; budget is opt-in), run the
     /// deterministic `decide_circuit` core, print the verdict + gathered signals
     /// as JSON on stdout, append the same record to the run's append-only
     /// circuit-verdict journal (fail-soft), and EXIT 1 when the breaker trips /
@@ -2103,10 +2101,46 @@ fn refuse_undetermined_config(cmd: &Command, err: &str) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&out)?);
         std::process::exit(1);
     }
+    let cfg_path = config::base_dir().join("config.toml");
+    // `circuit check` keeps its documented stdout contract even here (backlog
+    // 6d43d9c5): a trip verdict JSON, exit 1. Nothing was measured without the
+    // config — the idle axis included — so the reason is `idle_unmeasured`,
+    // and the streak/budget signals are `null` (unmeasured), never 0/false.
+    if let Command::Circuit {
+        action:
+            CircuitAction::Check {
+                streak_cap,
+                idle_ttl_secs,
+                ..
+            },
+    } = cmd
+    {
+        let why = if cfg_path.starts_with(harness_core::config::UNDETERMINED_HOME) {
+            format!(
+                "HOME unset: the condukt config and the session transcript cannot be \
+                 located ({err})"
+            )
+        } else {
+            format!("config undetermined: {err} ({})", cfg_path.display())
+        };
+        let out = serde_json::json!({
+            "verdict": "trip",
+            "reason": "idle_unmeasured",
+            "streak": serde_json::Value::Null,
+            "streak_cap": streak_cap,
+            "budget_over_cap": serde_json::Value::Null,
+            "idle_secs": serde_json::Value::Null,
+            "idle_unknown_reason": why,
+            "idle_ttl_secs": idle_ttl_secs,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        eprintln!("condukt circuit check: {why}; tripping");
+        std::process::exit(1);
+    }
     bail!(
         "{err} ({}): refusing to run on built-in defaults, which would silently drop \
          the configured settings; fix or remove the file",
-        config::base_dir().join("config.toml").display()
+        cfg_path.display()
     )
 }
 
@@ -2136,7 +2170,6 @@ fn run_user(cmd: Command) -> Result<()> {
             }
         }
         Command::Worktree { action } => run_worktree(&cfg, &cwd, action)?,
-        Command::Repo { action } => run_repo(&cfg, &cwd, action)?,
         Command::State { action } => run_state(&cfg, &cwd, action)?,
         Command::Verify { action } => match action {
             VerifyAction::Digest { file } => {
@@ -2744,13 +2777,18 @@ fn run_shadow_run(cfg: &Config, cwd: &Path, action: ShadowRunAction) -> Result<(
             cost,
             duration,
         } => {
+            // Validate the optional measurements BEFORE anything is discarded:
+            // an invalid supplied value is refused outright (omitting the flag
+            // is the only way to say "unmeasured").
+            let cost_usd = shadow_run::validate_cost(cost)?;
+            let duration_secs = shadow_run::validate_duration(duration)?;
             let repo = worktree::toplevel(cwd)?;
             let outcome = shadow_run::ShadowOutcome {
                 title,
                 model,
                 pass,
-                cost_usd: cost,
-                duration_secs: duration,
+                cost_usd,
+                duration_secs,
             };
             // Resolve fugu-router (plugin cache first, `$PATH` second). The
             // worktree is discarded regardless; only recording depends on it.
@@ -3634,20 +3672,6 @@ fn run_policy(cfg: &Config, action: PolicyAction) -> ! {
     }
 }
 
-/// Primary-working-tree mutators. `cwd` may be anywhere inside the repo; the
-/// repo toplevel is resolved so the lock is keyed per repo, exactly like the
-/// other primary-repo mutators.
-fn run_repo(cfg: &Config, cwd: &Path, action: RepoAction) -> Result<()> {
-    let repo = worktree::toplevel(cwd)?;
-    match action {
-        RepoAction::Commit { paths, message } => {
-            let sha = repo_commit::commit(cfg, &repo, &paths, &message)?;
-            println!("{}", serde_json::json!({ "commit": sha, "paths": paths }));
-        }
-    }
-    Ok(())
-}
-
 fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
     let repo = worktree::toplevel(cwd)?;
     match action {
@@ -3795,18 +3819,14 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                 );
                 return Ok(());
             }
-            // The SAME repo-scoped lock the `reconcile` arm takes, for the same
-            // reason it takes it: the report must not be computed while a peer
-            // is adding or removing worktrees underneath it. A torn read here
-            // is not a harmless stale print — it is either offering a worktree
-            // that has just been removed, or failing to mention one that has
-            // just appeared, and both are answers about liveness that were
-            // never actually observed. This command writes nothing, so the lock
-            // is taken purely for a coherent read; refusing when it is
-            // contended (`?`) is right for a print-only discovery command —
-            // "run it again when the repo is quiet" costs nothing and leaves
-            // nothing half-done.
-            let _repo_lock = lock::acquire_repo_primary(cfg, &repo)?;
+            // Deliberately NOT under the repo-primary lock (user ruling
+            // 2026-10-13): this command writes nothing and has no caller that
+            // acts on its output, so waiting out (and then refusing on) a peer's
+            // merge/prune bought nothing. A report computed while a peer adds or
+            // removes a worktree may be momentarily stale; it is a discovery
+            // print, re-run it to refresh. `reconcile` still takes the lock
+            // because `--preserve` writes refs. Pinned by
+            // tests/resume_candidates_no_repo_lock.rs.
             // `preserve: false` — preservation writes refs into the repo, which
             // a print-only command must never do.
             let report = wt_reconcile::reconcile(cfg, cwd, &repo, false)?;
@@ -4288,6 +4308,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 bail!("invalid decomposition:\n  - {}", errs.join("\n  - "));
             }
             let run_id = run.unwrap_or_else(default_run_id);
+            state::ensure_init_does_not_shadow_legacy(cfg, cwd, &run_id)?;
             let resolved_label = label.or_else(resolve_label);
             let tasks = dec
                 .tasks
@@ -4363,6 +4384,14 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             };
             let mut rs = state::RunState::load(cfg, cwd, &run)?;
             let st: state::Status = status.parse()?;
+
+            // Same transition validator as `state cancel` (backlog 2821738c):
+            // checked before anything is claimed, gated or written.
+            if st == state::Status::Cancelled {
+                if let Some(t) = rs.tasks.iter().find(|t| t.id == task) {
+                    state::ensure_cancellable(&task, t.status)?;
+                }
+            }
 
             // Cross-session claim guard (PDO collision): before marking a task
             // RUNNING, claim the files it will touch. If a live holder from
@@ -4629,6 +4658,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // Only fire on the
             // Running/Pending→Done edge so a re-run of `set --status done` does
             // not double-record.
+            let mut overlap_hold_missing = false;
             if st == state::Status::Done && prior_status != state::Status::Done {
                 if let Some(t) = rs.tasks.iter().find(|t| t.id == task) {
                     let session = session_id_from_env().unwrap_or_default();
@@ -4684,13 +4714,16 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                     // Mid-flight runtime-conflict detection (design 625aa170 A):
                     // record this task's ACTUAL changed-file set into the
                     // overwatch project-global registry and, on a detected
-                    // overlap with another in-flight worktree, set a merge-hold
-                    // (an open RuntimeOverlap entry in the consensus review
+                    // overlap with another in-flight worktree — or when that
+                    // check could NOT run (backlog 08494f63: unchecked is
+                    // undetermined, not "no overlap") — set a merge-hold (an
+                    // open RuntimeOverlap entry in the consensus review
                     // surface). The condukt merge path checks the hold and skips
-                    // the merge until it is resolved. Fully fail-soft on the
-                    // compute side (only a positive detection holds); never
-                    // changes the exit code here.
-                    if runtime_conflict::record_and_check_actual_overlap(
+                    // the merge until it is resolved. A hold that was needed but
+                    // could NOT be enqueued leaves the merge UNHELD: that is
+                    // named on stderr and moves the exit code (at the end of this
+                    // arm, after the claim upkeep), never reported as held.
+                    match runtime_conflict::record_and_check_actual_overlap(
                         cfg,
                         cwd,
                         &run,
@@ -4698,10 +4731,29 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         state::now_secs(),
                         &session,
                     ) {
-                        eprintln!(
+                        runtime_conflict::OverlapCheck::NotRecorded
+                        | runtime_conflict::OverlapCheck::NoOverlap => {}
+                        runtime_conflict::OverlapCheck::Held => eprintln!(
                             "condukt: runtime overlap detected for task '{}' — merge held for review (overwatch review-queue [merge-conflict])",
                             t.id
-                        );
+                        ),
+                        runtime_conflict::OverlapCheck::UncheckedHeld(why) => eprintln!(
+                            "condukt: runtime-overlap check could NOT run for task '{}' ({why}) — this is UNCHECKED, not \"no overlap\"; merge held for review (overwatch review-queue [merge-conflict])",
+                            t.id
+                        ),
+                        runtime_conflict::OverlapCheck::HoldNotEnqueued { unchecked, why } => {
+                            eprintln!(
+                                "condukt: merge-hold for task '{}' (run '{run}') could NOT be enqueued ({why}).\n  consequence: the merge is NOT held although {} — do not merge this task's branch \
+                                 until the overlap has been reviewed (`overwatch review-queue`, `active_changesets.json`).",
+                                t.id,
+                                if unchecked {
+                                    "its overlap with in-flight peers was never checked"
+                                } else {
+                                    "an overlap with an in-flight peer WAS detected"
+                                }
+                            );
+                            overlap_hold_missing = true;
+                        }
                     }
                 }
             }
@@ -4833,8 +4885,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             }
             // Deliberately LAST in the arm: the heartbeat upkeep above must still
             // run and still report, so the exit carries the undetermined release
-            // without suppressing the other half of the same block.
-            if claim_release_undetermined {
+            // (or the un-enqueued merge-hold, backlog 452f3705) without
+            // suppressing the other half of the same block.
+            if claim_release_undetermined || overlap_hold_missing {
                 std::process::exit(1);
             }
         }
@@ -4951,9 +5004,46 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 std::process::exit(1);
             }
         }
-        StateAction::ReleaseTask { run, hashkey } => {
-            let n = claim::release_tasks(cfg, cwd, &hashkey)?;
-            eprintln!("released {n} task claim(s) for run '{run}'");
+        StateAction::ReleaseTask {
+            run,
+            hashkey,
+            outcome,
+        } => {
+            // Record the outcome FIRST (backlog cccc9c43): a release the circuit
+            // breaker cannot see would silently shorten the failure streak, so a
+            // failed write releases nothing and fails loudly.
+            let outcome = match outcome {
+                Some(ReleaseOutcome::Done) => gatelog::RELEASE_OUTCOME_DONE,
+                Some(ReleaseOutcome::Failed) => gatelog::RELEASE_OUTCOME_FAILED,
+                None => gatelog::RELEASE_OUTCOME_UNSPECIFIED,
+            };
+            let dir = state::run_dir(cfg, cwd, &run)?;
+            let now = state::now_secs();
+            for hk in &hashkey {
+                let rec = gatelog::ReleaseRecord {
+                    hashkey: hk.clone(),
+                    outcome: outcome.to_string(),
+                    released_at: now,
+                };
+                gatelog::append_release(&dir, &run, &rec).with_context(|| {
+                    format!(
+                        "recording the outcome of {hk} for run '{run}' failed; nothing released"
+                    )
+                })?;
+            }
+            let out = claim::release_tasks(cfg, cwd, &run, &hashkey)?;
+            eprintln!(
+                "released {} task claim(s) for run '{run}' (outcome: {outcome})",
+                out.released
+            );
+            if !out.held_by_other.is_empty() {
+                for (hk, holder) in &out.held_by_other {
+                    eprintln!(
+                        "condukt state release-task: NOT released {hk}: held by run '{holder}', not '{run}'"
+                    );
+                }
+                std::process::exit(1);
+            }
         }
         StateAction::IsClaimed { hashkey } => {
             // Exit codes are the contract: 0 = claimed, 1 = NOT claimed (stdout
@@ -5284,7 +5374,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 .collect();
             if !unobservable.is_empty() {
                 eprintln!(
-                    "{} task(s) UNDETERMINED (unobservable): a durable progress signal could not be read — neither stuck nor healthy, and must not be read as clean:",
+                    "{} task(s) UNDETERMINED (unobservable): an observation the verdict needs could not be read — a durable progress signal, or a stalled task's worktree dirtiness for the uncommitted-work veto (each task's reason names which) — neither stuck nor healthy, and must not be read as clean:",
                     unobservable.len()
                 );
                 for u in &unobservable {
@@ -5331,9 +5421,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 .iter_mut()
                 .find(|t| t.id == task)
                 .ok_or_else(|| anyhow!("no task '{task}' in run '{run}'"))?;
-            if t.status == state::Status::Verified {
-                bail!("task '{task}' is already verified and cannot be cancelled");
-            }
+            state::ensure_cancellable(&task, t.status)?;
             if t.status == state::Status::Cancelled {
                 eprintln!("task '{task}' is already cancelled");
                 return Ok(());

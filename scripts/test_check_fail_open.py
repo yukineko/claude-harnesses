@@ -681,6 +681,41 @@ class UndeterminedArmSpellingsRemaining(unittest.TestCase):
             "        }",
         ])
 
+    # ── user ruling 2026-10-19 ("1 b"): an arm that RECORDS the undetermined
+    # state is not an empty fallback. Shape taken verbatim from
+    # crates/overwatch/src/reconcile.rs `read_commits`: the arm pushes onto the
+    # caller's `undetermined` list, and its `None` is mapped to Undetermined by
+    # every caller. The two controls below keep the genuine erasures flagged.
+    def test_block_arm_that_records_undetermined_is_not_flagged(self):
+        src = [
+            "    match git_log_commits(cwd, range) {",
+            "        Determination::Known(c) => Some(c),",
+            "        Determination::Undetermined(why) => {",
+            "            eprintln!(",
+            "                \"overwatch: WARNING — the git history could not be read ({why:?}); NO \\",
+            "                 commit was scanned.\"",
+            "            );",
+            "            undetermined.push(\"git log\");",
+            "            None",
+            "        }",
+            "    }",
+        ]
+        self.assertNotIn("undetermined-arm-empty-fallback", names(fo.scan_rust(src)))
+
+    def test_control_block_arm_that_only_logs_then_returns_none_is_flagged(self):
+        # Printing `why` is not recording it: the caller still receives
+        # "nothing there" with no undetermined trace.
+        self._undet([
+            "        Determination::Undetermined(why) => {",
+            "            eprintln!(\"could not read: {why:?}\");",
+            "            None",
+            "        }",
+        ])
+
+    def test_control_old_reconcile_stale_count_collapse_is_flagged(self):
+        # The pre-fix crates/overwatch/src/reconcile.rs stale_undisposed_count arm.
+        self._undet(["        Determination::Undetermined(_) => Vec::new(),"])
+
     def test_err_arm_return_vec_new(self):
         self.assertIn("err-arm-empty-fallback",
                       names(fo.scan_rust(["        Err(_) => return Vec::new(),"])))

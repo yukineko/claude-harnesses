@@ -454,9 +454,19 @@ pub struct F2p {
 }
 
 /// Run the F2P protocol: GREEN at HEAD in the (clean) working tree, RED at
-/// `red_rev` in a detached temp worktree with the test files the argv names
-/// overlaid from HEAD. Every failure to observe either side refuses with its cause.
-pub fn run_f2p(root: &Path, cmd: &TestCmd, red_rev: &str, now: i64) -> Result<F2p, String> {
+/// `red_rev` in a detached temp worktree with HEAD's test files overlaid
+/// (the default overlay: every HEAD test file for cargo, the named files for
+/// pytest, the script for a script runner). `red_overlay` (from `done
+/// --red-overlay`) NARROWS that overlay to the named files, so a fix that
+/// itself lives in a test file is not copied into the RED tree; it can never
+/// widen it. Every failure to observe either side refuses with its cause.
+pub fn run_f2p(
+    root: &Path,
+    cmd: &TestCmd,
+    red_rev: &str,
+    red_overlay: Option<&[String]>,
+    now: i64,
+) -> Result<F2p, String> {
     let timeout = test_timeout()?;
     let head = head_commit(root)?;
     let red = resolve_commit(root, red_rev).map_err(|e| format!("--red-rev: {e}"))?;
@@ -467,6 +477,12 @@ pub fn run_f2p(root: &Path, cmd: &TestCmd, red_rev: &str, now: i64) -> Result<F2
         ));
     }
     preflight(root, cmd, &head)?;
+    // Resolve the overlay BEFORE any run, so a bad --red-overlay costs nothing.
+    let default_overlay = narrow_to_named(cmd, head_test_files(root, &head, cmd)?);
+    let overlay = match red_overlay {
+        None => RedOverlay::Default(default_overlay),
+        Some(paths) => RedOverlay::Narrowed(narrowed_overlay(paths, &default_overlay)?),
+    };
 
     // GREEN at HEAD.
     let g = match execute(cmd, root, timeout) {
@@ -503,7 +519,7 @@ pub fn run_f2p(root: &Path, cmd: &TestCmd, red_rev: &str, now: i64) -> Result<F2
     };
 
     // RED at red-rev.
-    let r = run_in_temp_worktree(root, &red, &head, cmd, timeout)?;
+    let r = run_in_temp_worktree(root, &red, &head, cmd, overlay.files(), timeout)?;
     let red_run = match r {
         Determination::Known(r) => r,
         Determination::Undetermined(why) => {
@@ -513,9 +529,22 @@ pub fn run_f2p(root: &Path, cmd: &TestCmd, red_rev: &str, now: i64) -> Result<F2
         }
     };
     if red_run.exit == 0 {
+        let how = match &overlay {
+            RedOverlay::Default(f) => format!(
+                "the RED run was {red} with HEAD's test files overlaid onto it ({} file(s), the \
+                 default overlay). If the fix itself lives in one of those test files, the \
+                 overlay copied it into the RED tree: name only the repro side with \
+                 --red-overlay PATH",
+                f.len()
+            ),
+            RedOverlay::Narrowed(f) => format!(
+                "the RED run was {red} with only --red-overlay {} overlaid from HEAD",
+                f.join(", ")
+            ),
+        };
         return Err(format!(
             "the test PASSES at --red-rev {red}; a test that passes before the fix is not RED \
-             and proves nothing about it"
+             and proves nothing about it ({how})"
         ));
     }
     classify_red(cmd, &red_run).map_err(|why| format!("RED at {red} refused: {why}"))?;
@@ -545,8 +574,70 @@ pub fn run_f2p(root: &Path, cmd: &TestCmd, red_rev: &str, now: i64) -> Result<F2
             rev: red,
             exit: red_run.exit,
             kind: "behavioural".to_string(),
+            overlay: match overlay {
+                RedOverlay::Default(_) => None,
+                RedOverlay::Narrowed(f) => Some(f),
+            },
         },
     })
+}
+
+/// Which HEAD test files the RED worktree receives.
+enum RedOverlay {
+    /// The default overlay (see [`narrow_to_named`]).
+    Default(Vec<String>),
+    /// `--red-overlay`: a non-empty subset of the default overlay.
+    Narrowed(Vec<String>),
+}
+
+impl RedOverlay {
+    fn files(&self) -> &[String] {
+        match self {
+            RedOverlay::Default(f) | RedOverlay::Narrowed(f) => f,
+        }
+    }
+}
+
+/// Validate `--red-overlay` paths: each must be a test file tracked at HEAD
+/// that the default overlay already contains, so the flag can only remove
+/// files from the RED overlay, never add one. Sorted and deduplicated.
+fn narrowed_overlay(paths: &[String], default: &[String]) -> Result<Vec<String>, String> {
+    if paths.is_empty() {
+        return Err("--red-overlay names no file".to_string());
+    }
+    let mut out: Vec<String> = Vec::new();
+    for raw in paths {
+        let p = raw.strip_prefix("./").unwrap_or(raw);
+        if p.is_empty() {
+            return Err("--red-overlay \"\" is empty; name a HEAD test file".to_string());
+        }
+        if Path::new(p).is_absolute() || p.split('/').any(|c| c == ".." || c == "." || c.is_empty())
+        {
+            return Err(format!(
+                "--red-overlay {raw:?} must be a clean repo-relative path (no leading `/`, no \
+                 `.`/`..` components)"
+            ));
+        }
+        if !is_test_path(p) {
+            return Err(format!(
+                "--red-overlay {raw:?} is not a test file (no `tests`/`test` directory \
+                 component, not test_*.py / *_test.py / conftest.py); only test files are \
+                 overlaid"
+            ));
+        }
+        if !default.iter().any(|d| d == p) {
+            return Err(format!(
+                "--red-overlay {raw:?} is not in the default overlay for this command (a test \
+                 file tracked at HEAD that the argv selects); --red-overlay may only narrow the \
+                 default overlay, never widen it"
+            ));
+        }
+        if !out.iter().any(|o| o == p) {
+            out.push(p.to_string());
+        }
+    }
+    out.sort();
+    Ok(out)
 }
 
 fn excerpt_short(output: &str) -> String {
@@ -690,9 +781,9 @@ fn run_in_temp_worktree(
     red: &str,
     head: &str,
     cmd: &TestCmd,
+    files: &[String],
     timeout: Duration,
 ) -> Result<Determination<RunResult>, String> {
-    let files = narrow_to_named(cmd, head_test_files(root, head, cmd)?);
     let mut wt = TempWorktree::create(root, red)?;
     for chunk in files.chunks(200) {
         let mut args: Vec<&str> = vec!["checkout", head, "--"];

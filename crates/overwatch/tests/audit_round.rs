@@ -222,7 +222,10 @@ fn same_finder_verifier_model_records_warning_finding_in_review_queue() {
 #[test]
 fn distinct_finder_verifier_model_records_no_collision_finding() {
     // Distinct finder/verifier models satisfy the diversity MUST => NO warning
-    // finding. Backward-compat: omitting both model args also records nothing.
+    // finding. Omitting both model args records no COLLISION finding either,
+    // but (contract change, backlog a1acaca5) it does record an "unchecked"
+    // finding: it used to record nothing, which made an unchecked round
+    // indistinguishable from a verified-distinct one.
     let (home, work) = make_sandbox("distinct-model");
 
     run_ow(
@@ -264,6 +267,18 @@ fn distinct_finder_verifier_model_records_no_collision_finding() {
                 .as_str()
                 .is_some_and(|id| id.starts_with("audit-round-model-collision-"))),
         "distinct/omitted models must NOT record a collision finding: {rows:?}"
+    );
+    let unchecked: Vec<&str> = rows
+        .iter()
+        .filter(|r| r["kind"] == "ai-finding")
+        .filter_map(|r| r["identifier"].as_str())
+        .filter(|id| id.starts_with("audit-round-model-unchecked-"))
+        .collect();
+    assert_eq!(
+        unchecked,
+        vec!["audit-round-model-unchecked-2026W32"],
+        "only the omitted-models round (W32), not the distinct-models round (W31), \
+         must record an unchecked-diversity finding: {rows:?}"
     );
 }
 

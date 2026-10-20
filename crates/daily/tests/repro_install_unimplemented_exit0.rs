@@ -31,7 +31,6 @@ fn daily(home: &Path, cwd: &Path, args: &[&str], stdin: &str) -> (i32, String, S
 }
 
 #[test]
-#[ignore = "RED repro: daily install exits 0 while unimplemented"]
 fn unimplemented_install_does_not_exit_zero() {
     let tmp = tempfile::tempdir().unwrap();
     let (code, stdout, stderr) = daily(tmp.path(), tmp.path(), &["install"], "");

@@ -412,10 +412,17 @@ condukt の完了ゲートを通ったら結果を source に書き戻すこと�
   - ユーザーに失敗を通知し、ループは続行すること。
 
 sink が成功でも失敗でも、`backlog done` / `backlog fail` の直後（または中断時）に、その item の claim を解放すること [test: scripts/test_prose_flow_a.py::T::test_claim_release_task_releases_only_that_hashkey]。
+`backlog done` した item は `--outcome done` を付けて解放すること:
+```bash
+condukt state release-task --run "flow-$CLAUDE_CODE_SESSION_ID" --outcome done --hashkey <hashkey>
+```
+`backlog fail` した item・中断した item は `--outcome` を付けずに（または `--outcome failed` で）解放すること:
 ```bash
 condukt state release-task --run "flow-$CLAUDE_CODE_SESSION_ID" --hashkey <hashkey>
 ```
+release-task は解放の前に item の outcome を run の item-outcome log に記録する。flow run には run state が無いので、3-4 の `condukt circuit check` はこの log の末尾から連続する done 以外の件数を failure streak として数える [test: scripts/test_prose_flow_a.py::T::test_claim_circuit_flow_invocation_streak_and_budget_axes_are_dead]。`--outcome done` を付け忘れると成功した item も失敗として数えられる。
 バッチなら item ごとに release すること（6/a で控えた `hashkey` を使う） [test: scripts/test_prose_flow_a.py::T::test_claim_release_task_releases_only_that_hashkey]。
+別 run が保持している hashkey は解放されず、release-task は exit 1 で終わる [test: crates/condukt/tests/repro_release_task_ignores_run.rs::release_task_by_another_run_does_not_release_the_holders_claim]。
 
 #### 3-4. ループを継続してよいか判定すること
 

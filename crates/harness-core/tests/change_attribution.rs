@@ -798,7 +798,9 @@ fn peer_scan_collects_other_sessions_and_never_my_own_session() {
         &[edit_line(&abs(&root, "src/peer_two.rs"))],
     );
 
-    let peers = peer_edit_footprint_in(&projects, me);
+    let peers = peer_edit_footprint_in(&projects, me)
+        .require()
+        .expect("registry is pinned live; liveness must be Known (eef58891)");
 
     assert!(
         peers.contains(&abs(&root, "src/peer_one.rs"))
@@ -817,15 +819,13 @@ fn peer_scan_collects_other_sessions_and_never_my_own_session() {
 }
 
 /// Pins rule 4 at the scan level: any failure to read the peer directory yields
-/// an EMPTY set.
+/// no peer evidence.
 ///
-/// Note for the next reader: this returns a plain `BTreeSet`, not a
-/// `Determination`, **on purpose** — do not "fix" it into one. Peer evidence is
-/// only ever used to REMOVE files from the audit set, so an empty peer footprint
-/// means zero exclusions, i.e. the audit stays as large as possible. Empty is
-/// the restrictive direction here, which is the opposite of
-/// `files_edited_by_session`, where an empty own footprint would remove this
-/// session's own evidence and so must stay distinguishable from "could not read".
+/// Since backlog `eef58891` the footprint is a `Determination`: an unreadable
+/// claim REGISTRY is `Undetermined` (propagated so the caller can say "could not
+/// check" instead of "no peers"). An unreadable projects DIRECTORY, which is
+/// what this test exercises, still shrinks a `Known` set. This fixture does not
+/// pin the registry, so either answer may come back; neither may claim a file.
 ///
 /// These two assertions are not vacuous: the same call on a populated tree
 /// returns a non-empty set in
@@ -833,10 +833,14 @@ fn peer_scan_collects_other_sessions_and_never_my_own_session() {
 #[test]
 fn unreadable_projects_directory_yields_an_empty_peer_footprint() {
     let tmp = Tmp::new("peer-unreadable");
+    let claims_nothing = |d: Determination<BTreeSet<String>>| match d {
+        Determination::Known(s) => s.is_empty(),
+        Determination::Undetermined(_) => true,
+    };
 
     let missing = tmp.path().join("no-such-projects-dir");
     assert!(
-        peer_edit_footprint_in(&missing, "aaaa-1111").is_empty(),
+        claims_nothing(peer_edit_footprint_in(&missing, "aaaa-1111")),
         "a projects dir that does not exist ({missing:?}) produced peer evidence out of nowhere; \
          an invented exclusion drops a file from the audit with no transcript behind it"
     );
@@ -844,7 +848,7 @@ fn unreadable_projects_directory_yields_an_empty_peer_footprint() {
     let not_a_dir = tmp.path().join("projects-is-a-file");
     std::fs::write(&not_a_dir, b"not a directory\n").expect("write non-directory fixture");
     assert!(
-        peer_edit_footprint_in(&not_a_dir, "aaaa-1111").is_empty(),
+        claims_nothing(peer_edit_footprint_in(&not_a_dir, "aaaa-1111")),
         "a non-enumerable projects path ({not_a_dir:?}) produced peer evidence; a scan that could \
          not run must not manufacture exclusions"
     );
@@ -898,7 +902,9 @@ fn unparseable_peer_transcript_keeps_files_never_excludes_them() {
         &[edit_line(&abs(&root, "src/peer_claimed.rs"))],
     );
 
-    let peers = peer_edit_footprint_in(&projects, me);
+    let peers = peer_edit_footprint_in(&projects, me)
+        .require()
+        .expect("registry is pinned live; liveness must be Known (eef58891)");
     assert_eq!(
         peers,
         set(&[abs(&root, "src/peer_claimed.rs")]),

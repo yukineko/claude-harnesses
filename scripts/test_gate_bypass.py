@@ -2369,8 +2369,10 @@ class CertificateBindsTheDiffNotTheOperation(GateTestCase):
 #   2. present in the object store, reachable from no ref -> NOT outstanding;
 #      exit 0 when it is the only entry; still LISTED as unreachable in the
 #      human and --json output; NOT removed from the ledger file
-#   3. reachability cannot be determined (git fails, malformed sha, object
-#      missing) -> never exit 0
+#   3. reachability cannot be determined (git fails, malformed sha) -> never
+#      exit 0. A full-length id whose object is definitively MISSING was in
+#      this list until the 2026-10-20 user ruling (backlog 860c43db); it is
+#      now listed as unreachable — see MissingObjectLedgerEntries below.
 #   4. made reachable again -> outstanding again
 #   5. one reachable + one unreachable -> exit 1
 # ---------------------------------------------------------------------------
@@ -2527,17 +2529,25 @@ class UnreachableLedgerEntries(GateTestCase):
         self.assertIn(sha, self._ledger_shas(h))
 
     # --- 3. undetermined is never clean -------------------------------------
-    def test_missing_commit_object_is_not_clean(self):
+    def test_missing_commit_object_is_unreachable_not_undetermined(self):
+        """CONTRACT CHANGE (user ruling 2026-10-20, backlog 860c43db): this
+        test used to assert a missing object is never clean (a7bf3cca). The
+        ruling reclassified a full-length id whose object is definitively
+        missing as unreachable: listed, never removed, not blocking. The
+        abbreviated-id, malformed-id, blob and failing-git cases stay
+        undetermined (MissingObjectLedgerEntries controls)."""
         h = self.harness()
         ghost = "0123456789abcdef0123456789abcdef01234567"
         self.assertNotEqual(h.git("cat-file", "-e", ghost, check=False).returncode, 0,
                             "anti-vacuity: the object must really be absent")
         h.ledger.write_text(ghost + "\tghost\n")
         proc = h.gate_bypass()
-        self.assertIn(proc.returncode, (1, 2), self._out(proc))
+        self.assertEqual(proc.returncode, 0, self._out(proc))
         proc = h.gate_bypass("--json")
-        self.assertIn(proc.returncode, (1, 2), self._out(proc))
-        self.assertNotEqual(json.loads(proc.stdout)["verdict"], "clean")
+        self.assertEqual(proc.returncode, 0, self._out(proc))
+        payload = json.loads(proc.stdout)
+        self.assertEqual([e["commit"] for e in payload["unreachable"]], [ghost], payload)
+        self.assertEqual(payload["entries"], [], payload)
 
     def test_malformed_sha_is_not_clean(self):
         h = self.harness()
@@ -2619,6 +2629,185 @@ class UnreachableLedgerEntries(GateTestCase):
         self.assertIn(live[:12], text)
         self.assertIn(orphan[:12], text)
         self.assertIn("unreachable", text.lower(), self._out(proc))
+
+
+# ---------------------------------------------------------------------------
+# Ledger entries whose object is ABSENT from the object store.
+#
+# Observed 2026-10-20: `.git/gate-bypassed` held b77286119dc345a3cd5a1aa455db1942b6499087
+# (a donegate fix later re-landed gated as 33a6c46b). The object had been
+# pruned, so `git cat-file -t` failed and gate-bypass.py reported UNDETERMINED
+# and blocked every push. No pre-commit run can clear it (it is an ancestor of
+# no HEAD), so it blocked forever.
+#
+# User ruling 2026-10-20 (verbatim): 「ゲートを直す」 — a commit that has no
+# content and cannot leave this machine is, for the purpose of "cannot be
+# pushed", the same as an unreachable commit: report it as unreachable instead
+# of blocking. This changes the a7bf3cca rule ("cannot be placed" =
+# undetermined) for exactly one case.
+#
+# Contract (only "well-formed full-length id + object definitively missing"
+# changes):
+#   - full-length hex id, `git cat-file --batch-check` says "missing"
+#       -> listed as unreachable, not outstanding; exit 0 if it is the only
+#          entry; never removed from the ledger (neither by gate-bypass.py nor
+#          by a green pre-commit)
+#   - malformed id, an abbreviated id, an id naming a blob, a git call that
+#     fails -> undetermined, exit 2                              [controls]
+#   - a reachable ungated commit -> outstanding, exit 1          [control]
+# ---------------------------------------------------------------------------
+class MissingObjectLedgerEntries(GateTestCase):
+    GHOST = "b77286119dc345a3cd5a1aa455db1942b6499087"
+
+    def _out(self, proc):
+        return "--- exit %d ---\n--- stdout ---\n%s\n--- stderr ---\n%s" % (
+            proc.returncode, proc.stdout, proc.stderr)
+
+    def _assert_missing(self, h, sha):
+        """Anti-vacuity: the object really is absent (not merely unreachable)."""
+        probe = h._run([_which("git"), "cat-file", "--batch-check"], stdin=sha + "\n")
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        self.assertEqual(probe.stdout.strip(), sha + " missing",
+                         "anti-vacuity: %s must be absent from the object store" % sha)
+
+    def _ghost_ledger(self, h, *extra_lines):
+        self._assert_missing(h, self.GHOST)
+        h.ledger.write_text("".join(
+            [self.GHOST + "\tghost-subject\n"] + [ln + "\n" for ln in extra_lines]))
+
+    def _bypass_commit(self, h, name, subject):
+        h.write(name, subject + "\n")
+        h.git("add", "-A")
+        proc = h.commit(subject, "--no-verify")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return h.git("rev-parse", "HEAD").stdout.strip()
+
+    # --- the changed case -----------------------------------------------------
+    def test_missing_object_only_entry_exits_zero(self):
+        h = self.harness()
+        self._ghost_ledger(h)
+        proc = h.gate_bypass()
+        self.assertEqual(proc.returncode, 0, self._out(proc))
+        text = proc.stdout + proc.stderr
+        self.assertIn(self.GHOST[:12], text, "must stay visible\n" + self._out(proc))
+        self.assertIn("unreachable", text.lower(), self._out(proc))
+
+    def test_missing_object_is_listed_as_unreachable_in_json(self):
+        h = self.harness()
+        self._ghost_ledger(h)
+        proc = h.gate_bypass("--json")
+        self.assertEqual(proc.returncode, 0, self._out(proc))
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["verdict"], "clean", payload)
+        self.assertEqual(payload["entries"], [], payload)
+        self.assertEqual([e["commit"] for e in payload["unreachable"]], [self.GHOST])
+        self.assertEqual(payload["unreachable"][0]["subject"], "ghost-subject")
+
+    def test_missing_object_only_entry_lets_pre_push_through(self):
+        h = self.harness()
+        self._ghost_ledger(h)
+        proc = h.pre_push()
+        self.assertEqual(proc.returncode, 0, self._out(proc))
+
+    def test_missing_object_entry_is_never_removed(self):
+        h = self.harness()
+        self._ghost_ledger(h)
+        before = h.ledger.read_bytes()
+        h.gate_bypass()
+        h.gate_bypass("--json")
+        self.assertEqual(h.ledger.read_bytes(), before,
+                         "gate-bypass.py is a reader; it must not rewrite the ledger")
+        # A green pre-commit over a non-empty staged diff clears only ancestors
+        # of HEAD; a missing object is an ancestor of nothing, so it is kept.
+        h.write("x.txt", "x\n")
+        h.git("add", "x.txt")
+        proc = h.pre_commit()
+        self.assertEqual(proc.returncode, 0, self._out(proc))
+        self.assertIn(self.GHOST, [ln.split("\t")[0] for ln in h.ledger_lines()],
+                      "a missing-object entry must never be cleared")
+
+    def test_missing_object_plus_reachable_ungated_exits_one(self):
+        h = self.harness()
+        live = self._bypass_commit(h, "live.txt", "live-bypass")
+        lines = h.ledger_lines()
+        self._ghost_ledger(h, *lines)
+        proc = h.gate_bypass("--json")
+        self.assertEqual(proc.returncode, 1, self._out(proc))
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["verdict"], "outstanding", payload)
+        self.assertEqual([e["commit"] for e in payload["entries"]], [live], payload)
+        self.assertEqual([e["commit"] for e in payload["unreachable"]], [self.GHOST])
+
+    # --- restrictive controls (must stay GREEN before and after) ---------------
+    def test_control_reachable_ungated_commit_is_outstanding(self):
+        h = self.harness()
+        self._bypass_commit(h, "a.txt", "on-main")
+        proc = h.gate_bypass()
+        self.assertEqual(proc.returncode, 1, self._out(proc))
+
+    def test_control_malformed_id_is_undetermined(self):
+        h = self.harness()
+        for bad in ("not-a-sha", "z" * 40, "--all", self.GHOST + "0", self.GHOST.upper()):
+            h.ledger.write_text(bad + "\tmalformed\n")
+            proc = h.gate_bypass()
+            self.assertEqual(proc.returncode, 2, "ledger id %r\n%s" % (bad, self._out(proc)))
+
+    def test_control_abbreviated_missing_id_is_undetermined(self):
+        """An abbreviated id is not well-formed enough to say the object is
+        definitively missing (it is a prefix lookup)."""
+        h = self.harness()
+        short = self.GHOST[:12]
+        self._assert_missing(h, short)
+        h.ledger.write_text(short + "\tshort\n")
+        proc = h.gate_bypass()
+        self.assertEqual(proc.returncode, 2, self._out(proc))
+
+    def test_control_blob_id_is_undetermined(self):
+        h = self.harness()
+        blob = h.git("rev-parse", "HEAD:seed.txt").stdout.strip()
+        self.assertEqual(h.git("cat-file", "-t", blob).stdout.strip(), "blob")
+        h.ledger.write_text(blob + "\tblob\n")
+        proc = h.gate_bypass()
+        self.assertEqual(proc.returncode, 2, self._out(proc))
+
+    def _failing_git(self, h, passthrough_case):
+        real_git = _which("git")
+        wrapper = h.root / ".stub-bin" / "git"
+        wrapper.write_text(
+            "#!/bin/sh\n"
+            'case " $* " in\n'
+            '  %s) exec "%s" "$@" ;;\n'
+            "esac\n"
+            "echo 'injected git failure' >&2\n"
+            "exit 128\n" % (passthrough_case, real_git)
+        )
+        wrapper.chmod(0o755)
+
+    def test_control_failing_git_is_undetermined(self):
+        """Every git call except locating the ledger fails: "missing" cannot be
+        told apart from a git error, so it must not read as unreachable."""
+        h = self.harness()
+        self._ghost_ledger(h)
+        self._failing_git(h, '*" rev-parse "*"--git-common-dir"*')
+        for args in ((), ("--json",)):
+            proc = h.gate_bypass(*args)
+            self.assertEqual(proc.returncode, 2, self._out(proc))
+
+    def test_control_failing_object_lookup_is_undetermined(self):
+        """Only the object lookup (cat-file) fails; everything else is real."""
+        h = self.harness()
+        self._ghost_ledger(h)
+        wrapper = h.root / ".stub-bin" / "git"
+        wrapper.write_text(
+            "#!/bin/sh\n"
+            'case " $* " in\n'
+            '  *" cat-file "*) echo "injected cat-file failure" >&2; exit 128 ;;\n'
+            "esac\n"
+            'exec "%s" "$@"\n' % _which("git")
+        )
+        wrapper.chmod(0o755)
+        proc = h.gate_bypass()
+        self.assertEqual(proc.returncode, 2, self._out(proc))
 
 
 if __name__ == "__main__":

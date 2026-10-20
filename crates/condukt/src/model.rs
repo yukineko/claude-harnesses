@@ -143,6 +143,19 @@ pub struct Task {
     /// decompositions without it fall back to extraction, unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mechanical_check: Option<MechanicalCheck>,
+    /// Interpreter-declared commands this task will actually run (beyond its
+    /// own `reproduction_tests` / `checks` / `mechanical_check`, which are
+    /// always added), e.g. `["scripts/rollout-plugins.sh --plugin x"]`.
+    /// `Some([])` declares "runs no further command". This list — NOT the
+    /// prose in `title`/`done_criteria` — is what blastguard's command
+    /// classifier sees (backlog dc955812): prose is never parsed as a command.
+    ///
+    /// FAIL-CLOSED when absent: `None` means condukt cannot determine what the
+    /// task runs, so the risk classification is undetermined and the task is
+    /// force-gated at schedule time and escalated at gate-check time — never
+    /// read as low risk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commands: Option<Vec<String>>,
 }
 
 impl Task {

@@ -62,7 +62,7 @@ enum Cmd {
         #[arg(long)]
         dir: Option<String>,
     },
-    /// Install the SessionStart hook into ~/.claude/settings.json (not yet implemented).
+    /// Install the SessionStart hook into ~/.claude/settings.json (not yet implemented; exits 1).
     Install,
 }
 
@@ -74,8 +74,10 @@ fn main() {
         Cmd::Report { date, last } => report_cmd(date.as_deref(), last),
         Cmd::Add { name, command, dir } => add_cmd(&name, &command, dir.as_deref()),
         Cmd::Install => {
-            eprintln!("daily install: not yet implemented — add the hook manually to ~/.claude/settings.json");
-            std::process::exit(0);
+            // Nothing is installed, so this must not report success: a caller
+            // scripting the install would otherwise believe the hook is wired.
+            eprintln!("daily install: not yet implemented — nothing was installed; add the hook manually to ~/.claude/settings.json");
+            std::process::exit(1);
         }
     }
 }
@@ -120,22 +122,22 @@ impl Default for Config {
     }
 }
 
-/// Parse config TOML text. Malformed TOML falls back to the default (enabled,
-/// no tasks) so a broken config never breaks a turn — the error goes to stderr.
-fn parse_config(text: &str) -> Config {
-    match toml::from_str::<Config>(text) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("daily: ignoring unparseable ~/.daily/config.toml: {e}");
-            Config::default()
-        }
-    }
+/// Parse config TOML text. Malformed TOML is an `Err` carrying the parse
+/// error, NOT the default config: the default (enabled, no tasks) runs the
+/// built-in security task, so substituting it would run a task the user's
+/// config may have replaced or disabled (`enabled = false`). Every caller
+/// refuses to act on an unparseable config.
+fn parse_config(text: &str) -> Result<Config, String> {
+    toml::from_str::<Config>(text).map_err(|e| e.to_string())
 }
 
-fn load_config() -> Config {
+/// Load `~/.daily/config.toml`. A missing/unreadable file yields the default
+/// (a read error other than NotFound is tracked separately as backlog
+/// d3245d99); a file that exists but does not parse is an `Err`.
+fn load_config() -> Result<Config, String> {
     match std::fs::read_to_string(config_path()) {
         Ok(text) => parse_config(&text),
-        Err(_) => Config::default(),
+        Err(_) => Ok(Config::default()),
     }
 }
 
@@ -166,7 +168,24 @@ fn session_start_cmd() -> ! {
         let raw = read_stdin();
         let input = HookInput::parse(&raw).unwrap_or_default();
 
-        let config = load_config();
+        let config = match load_config() {
+            Ok(c) => c,
+            Err(e) => {
+                // We cannot tell what the user registered (or whether daily is
+                // enabled at all), so run nothing and say so — the day's task
+                // status is UNKNOWN, not "nothing due".
+                let msg = format!(
+                    "⚠️ daily: ~/.daily/config.toml is unparseable ({}); no daily task ran — today's task status is UNKNOWN until the config is fixed",
+                    first_line(&e)
+                );
+                eprintln!("{msg}");
+                println!(
+                    "{}",
+                    json!({ "systemMessage": msg, "additionalContext": msg })
+                );
+                return;
+            }
+        };
         if !config.enabled {
             return;
         }
@@ -301,7 +320,8 @@ enum Outcome {
     Failed { code: Option<i32>, brief: String },
     /// The command could not be spawned at all (e.g. `sh` missing).
     SpawnError(String),
-    /// blastguard refused the command before it was ever spawned (fail-closed).
+    /// Refused before it was ever spawned (fail-closed): blastguard flagged the
+    /// command, or the task's `dir` could not be honoured.
     Blocked(String),
 }
 
@@ -313,9 +333,14 @@ enum Outcome {
 /// able to point a subprocess's working directory outside the project root.
 /// We `canonicalize()` both the root and the candidate dir (resolving `..`,
 /// symlinks, and relative segments) and require the candidate to be the root
-/// or a descendant of it. Any failure (missing dir, canonicalize error,
-/// escape) falls back to `cwd` itself rather than trusting the raw path.
-fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> PathBuf {
+/// or a descendant of it.
+///
+/// Any failure to honour an explicit `dir` (missing dir, canonicalize error,
+/// escape, or an un-canonicalizable root) is an `Err` carrying the reason: the
+/// task asked to run *somewhere specific*, and running it in the session cwd
+/// instead would execute it in a place the user never chose. The caller
+/// refuses the task (reported as `blocked`) rather than substituting `cwd`.
+fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> Result<PathBuf, String> {
     let Some(raw) = task_dir else {
         // Canonicalize the default too. Every other exit from this function
         // returns a canonical path, and a return value whose meaning depends on
@@ -323,9 +348,10 @@ fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> PathBuf {
         // `starts_with` against another canonical path. On macOS the difference
         // is real and routine: `/var/...` vs `/private/var/...` for the same
         // directory, which is exactly what made this fail on macos-14 while
-        // passing on ubuntu. Falls back to the raw cwd when canonicalization is
-        // impossible, matching the `Err` arm below.
-        return cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        // passing on ubuntu. With no `dir` requested, the session cwd IS the
+        // requested place, so when canonicalization is impossible the raw cwd
+        // is still the right answer (no override is being dropped).
+        return Ok(cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()));
     };
 
     let candidate = if Path::new(raw).is_absolute() {
@@ -334,18 +360,21 @@ fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> PathBuf {
         cwd.join(raw)
     };
 
-    let root_canon = match cwd.canonicalize() {
-        Ok(p) => p,
-        // Can't establish a trusted root at all — refuse the override and
-        // fall back to the (uncanonicalized) cwd rather than the candidate.
-        Err(_) => return cwd.to_path_buf(),
-    };
+    let root_canon = cwd.canonicalize().map_err(|e| {
+        format!(
+            "task dir `{raw}`: cannot canonicalize the session cwd {} ({e})",
+            cwd.display()
+        )
+    })?;
 
     match candidate.canonicalize() {
-        Ok(candidate_canon) if candidate_canon.starts_with(&root_canon) => candidate_canon,
-        // Either the dir doesn't exist, canonicalize failed, or it resolved
-        // outside the project root (e.g. `../../etc`) — reject and fall back.
-        _ => root_canon,
+        Ok(candidate_canon) if candidate_canon.starts_with(&root_canon) => Ok(candidate_canon),
+        Ok(candidate_canon) => Err(format!(
+            "task dir `{raw}` resolves to {} outside the session cwd {}",
+            candidate_canon.display(),
+            root_canon.display()
+        )),
+        Err(e) => Err(format!("task dir `{raw}` is unusable ({e})")),
     }
 }
 
@@ -358,15 +387,23 @@ fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> PathBuf {
 /// blastguard detector the PreToolUse hook uses (mirroring condukt's
 /// `run_check`). A flagged command is refused fail-closed (never spawned)
 /// rather than silently run.
+///
+/// No human is present at SessionStart to answer a blastguard `Ask` (a
+/// construct it could not analyse and refuses to guess about), so the verdict
+/// is [`hardened`](blastguard::model::Decision::hardened): `Ask` collapses to
+/// `Deny` and the command is refused exactly like a destructive one.
 fn run_task(task: &Task, cwd: &Path) -> Outcome {
     let input = serde_json::json!({ "command": task.command });
     if let blastguard::model::Decision::Deny(reason) =
-        blastguard::detect::detect("Bash", Some(&input))
+        blastguard::detect::detect("Bash", Some(&input)).hardened()
     {
         return Outcome::Blocked(reason);
     }
 
-    let dir = resolve_task_dir(task.dir.as_deref(), cwd);
+    let dir = match resolve_task_dir(task.dir.as_deref(), cwd) {
+        Ok(d) => d,
+        Err(reason) => return Outcome::Blocked(reason),
+    };
 
     let mut cmd = Command::new("sh");
     cmd.arg("-c").arg(&task.command).current_dir(&dir);
@@ -557,7 +594,13 @@ fn report_cmd(date: Option<&str>, last: Option<usize>) -> ! {
 // ─────────────────────────── list / add ────────────────────────────────────
 
 fn list_cmd() -> ! {
-    let config = load_config();
+    let config = match load_config() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("daily list: ~/.daily/config.toml is unparseable ({e}); registered tasks are UNKNOWN");
+            std::process::exit(1);
+        }
+    };
     let tasks = effective_tasks(&config);
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let state_dir = daily_state_dir();
@@ -599,7 +642,18 @@ fn add_cmd(name: &str, command: &str, dir: Option<&str>) -> ! {
 
     // Reject a duplicate name so two tasks can't share one daily state key.
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let config = parse_config(&existing);
+    // An unparseable config means the duplicate check cannot be performed, and
+    // appending to it would leave it just as broken: refuse.
+    let config = match parse_config(&existing) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "daily add: {} is unparseable ({e}); fix it before registering a task",
+                path.display()
+            );
+            std::process::exit(1);
+        }
+    };
     if config.task.iter().any(|t| t.name == name) {
         eprintln!("daily add: a task named '{name}' is already registered");
         std::process::exit(1);
@@ -715,14 +769,14 @@ mod tests {
 
     #[test]
     fn parse_config_reads_enabled_false() {
-        let c = parse_config("enabled = false\n");
+        let c = parse_config("enabled = false\n").unwrap();
         assert!(!c.enabled);
     }
 
     #[test]
     fn parse_config_missing_enabled_defaults_true() {
         // A config that only registers a task is still enabled.
-        let c = parse_config("[[task]]\nname = \"x\"\ncommand = \"echo hi\"\n");
+        let c = parse_config("[[task]]\nname = \"x\"\ncommand = \"echo hi\"\n").unwrap();
         assert!(c.enabled);
         assert_eq!(c.task.len(), 1);
         assert_eq!(c.task[0].name, "x");
@@ -742,16 +796,19 @@ name = \"b\"
 command = \"cmd-b\"
 dir = \"/repo\"
 ";
-        let c = parse_config(text);
+        let c = parse_config(text).unwrap();
         assert_eq!(c.task.len(), 2);
         assert_eq!(c.task[1].dir.as_deref(), Some("/repo"));
     }
 
+    /// Contract change (backlog f1f06417): malformed TOML used to fall back to
+    /// `Config::default()`, which runs the built-in security task. It is now an
+    /// `Err`, and every caller refuses to act on it.
     #[test]
-    fn parse_config_malformed_falls_back_to_default() {
+    fn parse_config_malformed_is_an_error_not_the_default() {
         let c = parse_config("this is not = valid toml ][");
-        assert!(c.enabled);
-        assert!(c.task.is_empty());
+        assert!(c.is_err(), "malformed config must not parse: {c:?}");
+        assert!(!c.unwrap_err().is_empty(), "the error carries a reason");
     }
 
     #[test]
@@ -764,7 +821,7 @@ dir = \"/repo\"
 
     #[test]
     fn effective_tasks_uses_registered_when_present() {
-        let c = parse_config("[[task]]\nname = \"only\"\ncommand = \"true\"\n");
+        let c = parse_config("[[task]]\nname = \"only\"\ncommand = \"true\"\n").unwrap();
         let tasks = effective_tasks(&c);
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].name, "only");
@@ -837,7 +894,7 @@ dir = \"/repo\"
     fn render_task_block_round_trips_through_parser() {
         let block = render_task_block("deploy check", "sh -c \"echo \\\"hi\\\"\"", Some("/a/b"));
         // Appended to an existing config, the block must parse back cleanly.
-        let c = parse_config(&format!("enabled = true\n{block}"));
+        let c = parse_config(&format!("enabled = true\n{block}")).unwrap();
         assert!(c.enabled);
         assert_eq!(c.task.len(), 1);
         assert_eq!(c.task[0].name, "deploy check");
@@ -854,10 +911,10 @@ dir = \"/repo\"
     fn config_skip_when_driver_active_defaults_true() {
         assert!(Config::default().skip_when_driver_active);
         // Omitted in config → still defaults true.
-        let c = parse_config("[[task]]\nname = \"x\"\ncommand = \"true\"\n");
+        let c = parse_config("[[task]]\nname = \"x\"\ncommand = \"true\"\n").unwrap();
         assert!(c.skip_when_driver_active);
         // Explicitly disabled.
-        let c = parse_config("skip_when_driver_active = false\n");
+        let c = parse_config("skip_when_driver_active = false\n").unwrap();
         assert!(!c.skip_when_driver_active);
     }
 
@@ -1025,7 +1082,7 @@ dir = \"/repo\"
     fn resolve_task_dir_defaults_to_cwd_when_unset() {
         let root = tempfile::tempdir().unwrap();
         let resolved = resolve_task_dir(None, root.path());
-        assert_eq!(resolved, root.path().canonicalize().unwrap());
+        assert_eq!(resolved, Ok(root.path().canonicalize().unwrap()));
     }
 
     #[test]
@@ -1034,35 +1091,56 @@ dir = \"/repo\"
         let sub = root.path().join("sub");
         std::fs::create_dir(&sub).unwrap();
         let resolved = resolve_task_dir(Some("sub"), root.path());
-        assert_eq!(resolved, sub.canonicalize().unwrap());
+        assert_eq!(resolved, Ok(sub.canonicalize().unwrap()));
     }
+
+    // Contract change (backlog 24a169f4): the three rejection cases below used
+    // to pin a silent fallback to the session cwd. A rejected `dir` is now an
+    // `Err`, so the task is refused instead of running somewhere unrequested.
 
     #[test]
     fn resolve_task_dir_rejects_parent_traversal_escape() {
         let root = tempfile::tempdir().unwrap();
-        let root_canon = root.path().canonicalize().unwrap();
         // e.g. `../../etc` — escapes the project root via `..` traversal.
         let resolved = resolve_task_dir(Some("../../etc"), root.path());
-        // Rejected: falls back to the (canonicalized) root, never `/etc`.
-        assert_eq!(resolved, root_canon);
-        assert!(!resolved.ends_with("etc"));
+        assert!(resolved.is_err(), "escape must be rejected: {resolved:?}");
+        // The refusal names the offending dir, so the blocked report says why.
+        let err = resolved.unwrap_err();
+        assert!(err.contains("../../etc"), "got: {err}");
     }
 
     #[test]
     fn resolve_task_dir_rejects_absolute_escape_outside_root() {
         let root = tempfile::tempdir().unwrap();
-        let root_canon = root.path().canonicalize().unwrap();
         // An absolute path outside the root must also be rejected.
         let resolved = resolve_task_dir(Some("/etc"), root.path());
-        assert_eq!(resolved, root_canon);
+        let err = resolved.expect_err("absolute escape must be rejected");
+        assert!(err.contains("outside the session cwd"), "got: {err}");
     }
 
     #[test]
     fn resolve_task_dir_rejects_nonexistent_dir() {
         let root = tempfile::tempdir().unwrap();
-        let root_canon = root.path().canonicalize().unwrap();
         let resolved = resolve_task_dir(Some("does-not-exist"), root.path());
-        assert_eq!(resolved, root_canon);
+        let err = resolved.expect_err("missing dir must be rejected");
+        assert!(err.contains("does-not-exist"), "got: {err}");
+    }
+
+    /// A task whose `dir` cannot be honoured is refused, never spawned.
+    #[test]
+    fn run_task_blocks_when_dir_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let task = Task {
+            name: "nodir".to_string(),
+            command: "touch spawned.marker".to_string(),
+            dir: Some("no-such-subdir".to_string()),
+        };
+        let outcome = run_task(&task, tmp.path());
+        assert!(
+            matches!(outcome, Outcome::Blocked(_)),
+            "expected Blocked, got {outcome:?}"
+        );
+        assert!(!tmp.path().join("spawned.marker").exists());
     }
 
     /// A destructive task.command (rm -rf) must be refused by blastguard before

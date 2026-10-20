@@ -15,7 +15,6 @@ fn bin() -> PathBuf {
 }
 
 #[test]
-#[ignore = "repro: unresolvable root is reported as lock_contended; remove ignore when fixed"]
 fn begin_on_unresolvable_root_must_not_claim_lock_contended() {
     let t = std::env::temp_dir().join(format!("ow-repro-begin-root-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&t);

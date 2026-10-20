@@ -2,9 +2,11 @@
 //!
 //! [`crate::detect`] answers a binary allow/deny for a single tool call. The
 //! autonomy policy engine needs finer axes: *how risky* is an action and *is it
-//! reversible*. This module supplies them as a pure, deterministic function over
-//! the action's free text (a shell command, or a task's title + done-criteria +
-//! touched files) so callers — e.g. condukt's scheduler — can force a high-risk
+//! reversible*. This module supplies them as pure, deterministic functions over
+//! a task's prose (title + done-criteria + touched files: [`classify`]) and,
+//! SEPARATELY, over the commands the task will actually run
+//! ([`classify_command`] / [`classify_commands`]) — prose is never parsed as a
+//! command (backlog dc955812) — so callers — e.g. condukt's scheduler — can force a high-risk
 //! irreversible action (a deploy / `git push` / release) through the outward
 //! GATED gate even when an upstream LLM mislabelled it. Pure (no I/O).
 
@@ -282,7 +284,66 @@ fn mask_file_path_tokens(lower: &str) -> String {
     out
 }
 
-/// Classify a free-text action description into `{risk, reversible}`.
+/// The outward deploy/publish/push needles (tiers 1 and 2), matched over
+/// `lower` with bare, non-invoked file-path tokens blanked (see
+/// [`mask_file_path_tokens`]). Shared by [`classify`] (task prose) and
+/// [`classify_command`] (a command) so the two can never drift apart.
+fn deploy_signal(lower: &str) -> bool {
+    let deploy_hay = mask_file_path_tokens(lower);
+    let tier1 = DEPLOY_SIGNALS.iter().any(|s| deploy_hay.contains(s));
+    let tier2 = DEPLOY_VERBS.iter().any(|v| has_word(&deploy_hay, v))
+        && OUTWARD_TARGETS.iter().any(|t| has_word(&deploy_hay, t));
+    tier1 || tier2
+}
+
+/// Classify a task's PROSE (title + done-criteria + touched files) into
+/// `{risk, reversible}`.
+///
+/// Prose is NOT a command (backlog dc955812, user ruling 2026-10-20): it is
+/// never handed to [`detect`] as if it were a Bash command line, so prose that
+/// merely DESCRIBES a command (e.g. quotes `git config core.hooksPath` in
+/// backticks) is not judged as running it. The commands a task will actually
+/// run are classified separately by [`classify_command`] /
+/// [`classify_commands`], and [`classify_change`] refuses to answer (returns
+/// `Undetermined`) when the caller cannot say what those commands are.
+///
+/// What prose still carries — intent-level needles, which are read here
+/// exactly as before:
+///   1. outward deploy/publish/push  → High, irreversible (needles are
+///      matched with bare, non-invoked file-path tokens blanked — a needle
+///      that appears only inside a file NAME does not gate; see
+///      [`mask_file_path_tokens`])
+///   2. local history rewrite        → Medium, reversible
+///   3. everything else              → Low, reversible
+///
+/// `Low` + reversible from this function is therefore NOT "the task is safe":
+/// it only says the prose names no outward/history action. A caller that has
+/// no declared command list must not read it as the whole answer — use
+/// [`classify_change`], which is undetermined in that case.
+pub fn classify(prose: &str) -> RiskAssessment {
+    let lower = prose.to_ascii_lowercase();
+    if deploy_signal(&lower) {
+        return RiskAssessment {
+            risk: Risk::High,
+            reversible: false,
+        };
+    }
+    if HISTORY_SIGNALS.iter().any(|s| lower.contains(s)) {
+        return RiskAssessment {
+            risk: Risk::Medium,
+            reversible: true,
+        };
+    }
+    RiskAssessment {
+        risk: Risk::Low,
+        reversible: true,
+    }
+}
+
+/// Classify ONE command a task will actually run into `{risk, reversible}`.
+///
+/// This is the full analysis the pre-dc955812 `classify` applied to every
+/// input (prose included); it is unchanged, only scoped to real commands.
 ///
 /// Precedence (first match wins):
 ///   1. outward deploy/publish/push  → High, irreversible (needles are
@@ -320,20 +381,16 @@ fn mask_file_path_tokens(lower: &str) -> String {
 /// auto-exec eligible. `Medium` + `!reversible` moves those 74 to
 /// `Escalate` (a human decides) without force-gating the other 101 through
 /// the outward gate.
-pub fn classify(text: &str) -> RiskAssessment {
+pub fn classify_command(text: &str) -> RiskAssessment {
     let lower = text.to_ascii_lowercase();
 
     // 1a. Tier-1 outward publish/deploy signal — leaves the machine, hard to undo.
     // 1b. Tier-2: a deploy verb co-occurring with an outward target, both matched
     //     at word boundaries so bare verbs / trap words never fire.
-    // Both tiers scan `deploy_hay`, in which bare file-path tokens outside
-    // backtick spans and outside command position are blanked (see
+    // Both tiers scan the masked text (bare file-path tokens outside backtick
+    // spans and outside command position blanked — see
     // [`mask_file_path_tokens`]). Steps 2-4 still see the full text.
-    let deploy_hay = mask_file_path_tokens(&lower);
-    let tier1 = DEPLOY_SIGNALS.iter().any(|s| deploy_hay.contains(s));
-    let tier2 = DEPLOY_VERBS.iter().any(|v| has_word(&deploy_hay, v))
-        && OUTWARD_TARGETS.iter().any(|t| has_word(&deploy_hay, t));
-    if tier1 || tier2 {
+    if deploy_signal(&lower) {
         return RiskAssessment {
             risk: Risk::High,
             reversible: false,
@@ -374,10 +431,28 @@ pub fn classify(text: &str) -> RiskAssessment {
     }
 }
 
-/// Generalized classification: merge command-text risk ([`classify`]) with
+/// Classify every command a task will actually run and merge the results
+/// ([`RiskAssessment::merge`]: highest tier wins, reversible only if all are).
+///
+/// An EMPTY slice is a real observation — the caller declared that the task
+/// runs no command — and answers `Low` + reversible. "The caller does not know
+/// which commands the task runs" is a different answer and is not expressible
+/// here: it is [`classify_change`]'s `commands: None`, which is undetermined.
+pub fn classify_commands(commands: &[String]) -> RiskAssessment {
+    commands.iter().fold(
+        RiskAssessment {
+            risk: Risk::Low,
+            reversible: true,
+        },
+        |acc, c| acc.merge(classify_command(c)),
+    )
+}
+
+/// Generalized classification: merge task-prose risk ([`classify`]), the risk
+/// of the commands the task will actually run ([`classify_commands`]) and
 /// diff-level semantic risk — configurable sensitive-path globs and
 /// public/exported-symbol changes (see [`crate::diffrisk`]) — into ONE
-/// [`RiskAssessment`]. Both signals ride the same `requires_gate` escalation
+/// [`RiskAssessment`]. All signals ride the same `requires_gate` escalation
 /// axis, so a change that touches an auth/payment/PII path or an exported API
 /// surface is force-gated exactly like a mislabelled `git push`, without
 /// callers needing a second parallel risk path.
@@ -391,34 +466,48 @@ pub fn classify(text: &str) -> RiskAssessment {
 /// implementation, pre-merge) would additionally light up the public-symbol
 /// signal by passing real `diff_text`.
 ///
-/// `text` is the free-text action description ([`classify`]'s existing
-/// input — title + done-criteria + touched files, unchanged from today).
-/// `paths` are the changed files (may overlap with what's embedded in
-/// `text`; kept separate so callers with a real diff/file list don't need to
-/// serialize it into prose). `diff_text` is optional unified-diff content
-/// (empty string if unavailable — the public-symbol signal simply won't
-/// fire, matching backward-compatible/additive behavior).
+/// `prose` is the task's free text (title + done-criteria + touched files);
+/// it is read by [`classify`] only and is never parsed as a command.
+/// `commands` are the commands the task will actually run, passed SEPARATELY
+/// (backlog dc955812, user ruling 2026-10-20); each goes through the full
+/// [`classify_command`] analysis. `paths` are the changed files (may overlap
+/// with what's embedded in `prose`; kept separate so callers with a real
+/// diff/file list don't need to serialize it into prose). `diff_text` is
+/// optional unified-diff content (empty string if unavailable — the
+/// public-symbol signal simply won't fire, matching backward-compatible/
+/// additive behavior).
 ///
-/// ## Undetermined is propagated, not folded into the command signal
+/// ## Undetermined is propagated, not folded into the other signals
 ///
-/// The command-text signal ([`classify`]) is a pure text scan and always
-/// determinable; the diff-level signal is not (an unparseable configured
-/// sensitive-path glob leaves it undetermined — see
-/// [`crate::diffrisk::SensitiveConfig::build`]). Rather than merge a *guessed*
-/// diff assessment into the command one — which would report a plausible-looking
-/// `RiskAssessment` that no one could tell apart from a real measurement — this
-/// returns [`Determination::Undetermined`] whenever the diff signal could not be
-/// determined, **even if the command signal alone was High**. Callers resolve
-/// that to their own restricted side (condukt force-gates / escalates), which is
-/// always at least as restrictive as the command-only tier would have been.
+/// Two inputs can leave the answer undetermined, and both return
+/// [`Determination::Undetermined`] **even if another signal alone was High**:
+///
+/// * `commands: None` — the caller cannot say which commands the task runs.
+///   Prose is no longer scanned as a command, so reporting the prose-only
+///   assessment here would turn "we did not look at what it runs" into
+///   "it runs nothing risky". `Some(&[])` (declared: no commands) is the
+///   determined counterpart.
+/// * the diff-level signal could not be determined (an unparseable configured
+///   sensitive-path glob — see [`crate::diffrisk::SensitiveConfig::build`]).
+///
+/// Callers resolve that to their own restricted side (condukt force-gates /
+/// escalates), which is always at least as restrictive as any partial
+/// assessment would have been.
 pub fn classify_change(
-    text: &str,
+    prose: &str,
+    commands: Option<&[String]>,
     paths: &[String],
     diff_text: &str,
     sensitive: &SensitiveConfig,
 ) -> Determination<RiskAssessment> {
-    let command = classify(text);
-    diffrisk::classify_diff(paths, diff_text, sensitive).map(|diff| command.merge(diff))
+    let Some(commands) = commands else {
+        return Determination::undetermined(
+            "the task does not declare the commands it will run (`commands` absent); \
+             prose is not classified as a command, so what it runs is unknown",
+        );
+    };
+    let action = classify(prose).merge(classify_commands(commands));
+    diffrisk::classify_diff(paths, diff_text, sensitive).map(|diff| action.merge(diff))
 }
 
 #[cfg(test)]
@@ -533,9 +622,10 @@ mod tests {
 
     #[test]
     fn locally_destructive_is_high_irreversible() {
-        // Anything the binary detector denies is irreversible data loss.
+        // Anything the binary detector denies is irreversible data loss — when
+        // it is passed as a COMMAND (dc955812: prose is not parsed as one).
         for action in ["rm -rf build", "git reset --hard HEAD~1", "git clean -fdx"] {
-            let a = classify(action);
+            let a = classify_command(action);
             assert_eq!(a.risk, Risk::High, "{action:?} must be High risk");
             assert!(!a.reversible, "{action:?} must be irreversible");
             assert!(a.requires_gate());
@@ -611,7 +701,7 @@ mod tests {
             "rm -rf /some/path",
             "rm -rf build/out",
         ] {
-            let a = classify(text);
+            let a = classify_command(text);
             assert!(
                 a.requires_gate(),
                 "{text:?} MUST still be force-gated, got {a:?}"
@@ -620,16 +710,77 @@ mod tests {
     }
 
     #[test]
-    fn backtick_quoted_command_prose_gates_exactly_as_before() {
-        // The prose half of 11be9484 is out of scope by user ruling
-        // 2026-10-16: backtick spans are never masked.
+    fn backtick_spans_are_still_never_masked_for_deploy_needles() {
+        // Backtick spans are never masked (11be9484 file-name half): a deploy
+        // needle quoted in prose still gates through `classify`.
         for text in [
-            "block the retry when it re-runs `git config core.hooksPath /dev/null`",
             "touch the `scripts/check-plugin-rollout.py` checker",
             "unbalanced `scripts/check-plugin-rollout.py checker",
         ] {
             assert!(classify(text).requires_gate(), "{text:?} must still gate");
         }
+    }
+
+    // ---- backlog dc955812 (user ruling 2026-10-20) ----
+    // CONTRACT CHANGE: prose that only DESCRIBES a command no longer goes to
+    // `detect` (the old `backtick_quoted_command_prose_gates_exactly_as_before`
+    // pinned the opposite). The command itself, passed as a command, still
+    // gates exactly as before — classify_command is the unchanged analysis.
+
+    #[test]
+    fn prose_quoting_a_command_is_not_parsed_as_that_command() {
+        let prose = "block the retry when it re-runs `git config core.hooksPath /dev/null`";
+        assert!(!classify(prose).requires_gate(), "prose gated: {prose:?}");
+    }
+
+    #[test]
+    fn the_same_command_passed_as_a_command_still_gates() {
+        let cmd = "git config core.hooksPath /dev/null";
+        let a = classify_command(cmd);
+        assert!(
+            a.requires_gate(),
+            "{cmd:?} must gate as a command, got {a:?}"
+        );
+        let a = classify_commands(&["cargo test".to_string(), cmd.to_string()]);
+        assert!(
+            a.requires_gate(),
+            "one dangerous command among benign ones must gate the set, got {a:?}"
+        );
+    }
+
+    #[test]
+    fn declared_empty_command_list_is_low_and_reversible() {
+        assert_eq!(
+            classify_commands(&[]),
+            RiskAssessment {
+                risk: Risk::Low,
+                reversible: true,
+            }
+        );
+    }
+
+    #[test]
+    fn undeclared_commands_are_undetermined_even_for_benign_prose() {
+        let cfg = SensitiveConfig::default();
+        let d = classify_change("refactor the parser", None, &[], "", &cfg);
+        assert!(
+            matches!(d, Determination::Undetermined(_)),
+            "undeclared commands must not classify (Low would be a guess)"
+        );
+    }
+
+    #[test]
+    fn classify_change_force_gates_a_dangerous_declared_command_under_benign_prose() {
+        let cfg = SensitiveConfig::default();
+        let cmds = ["rm -rf build".to_string()];
+        let a = known(classify_change(
+            "refactor the parser",
+            Some(&cmds),
+            &["src/parser.rs".to_string()],
+            "",
+            &cfg,
+        ));
+        assert!(a.requires_gate(), "declared rm -rf must gate, got {a:?}");
     }
 
     #[test]
@@ -706,8 +857,8 @@ mod tests {
     }
 
     /// What [`detect`] answers for `text` as a Bash command — the exact call
-    /// `classify` makes internally, so a precondition assert here observes the
-    /// same verdict `classify` sees.
+    /// `classify_command` makes internally, so a precondition assert here
+    /// observes the same verdict `classify_command` sees.
     fn detect_verdict(text: &str) -> crate::model::Decision {
         detect::detect("Bash", Some(&json!({ "command": text })))
     }
@@ -739,7 +890,7 @@ mod tests {
                 "precondition: {text:?} must make detect answer Ask today, got {d:?}"
             );
 
-            let a = classify(text);
+            let a = classify_command(text);
             assert!(
                 a.risk >= Risk::Medium,
                 "{text:?}: detect refused to analyse it, so classify must not report Low risk; got {a:?}"
@@ -770,7 +921,7 @@ mod tests {
                 "precondition: {text:?} must be plainly allowed by detect, got {d:?}"
             );
 
-            let a = classify(text);
+            let a = classify_command(text);
             assert_eq!(a.risk, Risk::Low, "{text:?} must stay Low risk; got {a:?}");
             assert!(a.reversible, "{text:?} must stay reversible; got {a:?}");
             assert!(!a.requires_gate(), "{text:?} must not be force-gated");
@@ -787,7 +938,7 @@ mod tests {
                 "precondition: {text:?} must be denied by detect, got {d:?}"
             );
 
-            let a = classify(text);
+            let a = classify_command(text);
             assert_eq!(
                 a.risk,
                 Risk::High,
@@ -805,6 +956,7 @@ mod tests {
         let text = "refactor the parser";
         let a = known(classify_change(
             text,
+            Some(&[]),
             &["src/parser.rs".to_string()],
             "",
             &cfg,
@@ -819,6 +971,7 @@ mod tests {
         let baseline = classify(text);
         let a = known(classify_change(
             text,
+            Some(&[]),
             &["src/auth/login.rs".to_string()],
             "",
             &cfg,
@@ -833,6 +986,7 @@ mod tests {
         let baseline = classify(text);
         let a = known(classify_change(
             text,
+            Some(&[]),
             &["src/lib.rs".to_string()],
             "+pub fn new_helper() {}",
             &cfg,
@@ -847,6 +1001,7 @@ mod tests {
         let cfg = SensitiveConfig::default();
         let a = known(classify_change(
             "git push origin main",
+            Some(&[]),
             &["README.md".to_string()],
             "",
             &cfg,

@@ -69,10 +69,10 @@ fn run_git_bounded_with(
 ) -> Result<GitOutput> {
     // Every real git spawn in this crate funnels through here. It takes
     // PATH_ENV_LOCK's read side, which used to exclude the PATH-mutating tests
-    // in oracle.rs / main.rs / lock.rs (reproduced: repo_commit.rs's
-    // git-spawning tests flaked when a PATH mutator ran concurrently). Since
-    // backlog 7c798579 nothing takes the write side at all — tests pass a
-    // custom PATH to their own child instead, pinned by
+    // in oracle.rs / main.rs / lock.rs (reproduced: the since-removed
+    // repo_commit.rs's git-spawning tests flaked when a PATH mutator ran
+    // concurrently). Since backlog 7c798579 nothing takes the write side at
+    // all — tests pass a custom PATH to their own child instead, pinned by
     // `oracle::tests::condukt_never_mutates_process_path` — so this read lock
     // is always uncontended, in tests and production alike. Kept rather than
     // removed; see `env_lock`'s doc comment.
@@ -99,10 +99,18 @@ fn run_git_bounded_with(
         .spawn()
         .with_context(|| format!("failed to spawn git {:?}", args))?;
 
+    // Drain both pipes CONCURRENTLY with the wait. Waiting for exit first and
+    // reading afterwards deadlocks as soon as git writes more than the OS pipe
+    // buffer (64 KiB on macOS): git blocks on the full pipe, never exits, and
+    // is killed at the timeout — which callers then saw as "no output"
+    // (backlog c00c3506: a 66 KB task diff journaled as `no-diff`).
+    let stdout_rx = spawn_reader(child.stdout.take());
+    let stderr_rx = spawn_reader(child.stderr.take());
+
     match child.wait_timeout(timeout) {
         Ok(Some(status)) => {
-            let stdout = read_bounded(child.stdout.take(), timeout);
-            let stderr = read_bounded(child.stderr.take(), timeout);
+            let stdout = read_bounded(stdout_rx, timeout);
+            let stderr = read_bounded(stderr_rx, timeout);
             Ok(GitOutput {
                 status: Some(status),
                 stdout,
@@ -141,23 +149,31 @@ fn kill_tree(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
-/// Bounded stream read: never block past `timeout` even if some lingering
-/// process keeps the pipe's write end open after the immediate child exits.
-fn read_bounded<R: std::io::Read + Send + 'static>(
+/// Start draining `stream` on a background thread immediately (before the
+/// child is waited on), so a child that writes more than the pipe buffer is
+/// never blocked on a full pipe. The collected bytes are delivered on the
+/// returned channel once the write end closes.
+fn spawn_reader<R: std::io::Read + Send + 'static>(
     stream: Option<R>,
-    timeout: Duration,
-) -> Vec<u8> {
-    use std::sync::mpsc;
-    let Some(mut s) = stream else {
-        return Vec::new();
-    };
-    let (tx, rx) = mpsc::channel();
+) -> Option<std::sync::mpsc::Receiver<Vec<u8>>> {
+    let mut s = stream?;
+    let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut out = Vec::new();
         let _ = s.read_to_end(&mut out);
         let _ = tx.send(out);
     });
-    rx.recv_timeout(timeout).unwrap_or_default()
+    Some(rx)
+}
+
+/// Bounded collection of a [`spawn_reader`] result: never block past `timeout`
+/// even if some lingering process keeps the pipe's write end open after the
+/// immediate child exits.
+fn read_bounded(rx: Option<std::sync::mpsc::Receiver<Vec<u8>>>, timeout: Duration) -> Vec<u8> {
+    match rx {
+        Some(rx) => rx.recv_timeout(timeout).unwrap_or_default(),
+        None => Vec::new(),
+    }
 }
 
 /// Run `git` with args in `dir`, returning trimmed stdout. On failure the error
@@ -256,7 +272,7 @@ fn git_output_to_result(
     // can carry a semantically meaningful LEADING space on its first line —
     // the "not staged" status column of the first entry. A blanket `.trim()`
     // eats that byte (it sits at position 0 of the whole blob), which made
-    // `repo_commit::staged_paths` misread an ordinary unstaged edit as
+    // the since-removed `repo_commit::staged_paths` misread an ordinary unstaged edit as
     // staged. Only the trailing newline(s) `git` always appends need
     // stripping.
     Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
@@ -790,7 +806,8 @@ pub fn create(repo: &Path, worktree_base: &Path, topic: &str, branch: &str) -> R
 /// (backlog 51595c41).
 ///
 /// Storage choice: `branch.<name>.conduktBase` in the repository's COMMON git
-/// config. It is written by plain `git config` (no `--worktree`), so it lands
+/// config, written and read with `git config --local` (never `--worktree`,
+/// and never the global/system files — backlog 50158d9d), so it lands
 /// in the shared `config` file that every linked worktree and the primary tree
 /// read; it survives across processes; and git itself scopes it to the branch
 /// — `git branch -D` drops the `branch.<name>` section and `git branch -m`
@@ -804,9 +821,9 @@ fn creation_base_key(branch: &str) -> String {
 /// it back (an unobserved write is not an observation).
 fn record_creation_base(repo: &Path, branch: &str, base: &str) -> Result<()> {
     let key = creation_base_key(branch);
-    git(repo, &["config", "--replace-all", &key, base])
+    git(repo, &["config", "--local", "--replace-all", &key, base])
         .with_context(|| format!("could not record creation base of '{branch}' in git config"))?;
-    let back = git(repo, &["config", "--get", &key]).unwrap_or_default();
+    let back = git(repo, &["config", "--local", "--get", &key]).unwrap_or_default();
     if back.trim() != base {
         bail!(
             "creation base of '{branch}' could not be read back from git config \
@@ -832,9 +849,12 @@ pub const TASK_TRAILER: &str = "Condukt-Task";
 /// reading it back.
 fn record_task_identity(repo: &Path, branch: &str, identity: &str) -> Result<()> {
     let key = task_identity_key(branch);
-    git(repo, &["config", "--replace-all", &key, identity])
-        .with_context(|| format!("could not record task identity of '{branch}' in git config"))?;
-    let back = git(repo, &["config", "--get", &key]).unwrap_or_default();
+    git(
+        repo,
+        &["config", "--local", "--replace-all", &key, identity],
+    )
+    .with_context(|| format!("could not record task identity of '{branch}' in git config"))?;
+    let back = git(repo, &["config", "--local", "--get", &key]).unwrap_or_default();
     if back.trim() != identity {
         bail!(
             "task identity of '{branch}' could not be read back from git config \
@@ -877,7 +897,9 @@ fn ensure_commits_carry_task_trailer(
 ) -> Result<String> {
     let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
     let key = task_identity_key(short);
-    let (found, value, err) = git_try(repo, &["config", "--get", &key])?;
+    // `--local`: only the repository's own record counts, never a value in
+    // the global/system gitconfig (backlog 50158d9d, twin of the base read).
+    let (found, value, err) = git_try(repo, &["config", "--local", "--get", &key])?;
     let recorded = value.trim();
     let recorded = (found && !recorded.is_empty()).then(|| recorded.to_string());
     let cli = cli_task.map(|(r, t)| format!("{r}/{t}"));
@@ -974,7 +996,10 @@ fn ensure_base_on_default_branch(
          hand if that history is meant to land, or re-run the task from the default branch";
     let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
     let key = creation_base_key(short);
-    let (found, value, err) = git_try(repo, &["config", "--get", &key])?;
+    // `--local` (backlog 50158d9d): the record is what `worktree create`
+    // wrote into the repository's config. A `conduktBase` in the user's
+    // global or system gitconfig is not that record and must not be honoured.
+    let (found, value, err) = git_try(repo, &["config", "--local", "--get", &key])?;
     let base = value.trim();
     if !found || base.is_empty() {
         bail!(
@@ -1268,8 +1293,9 @@ pub fn merge(
     //
     // Cannot-acquire REFUSES (`?`): this path checks out `default_branch` in the
     // SHARED primary working tree and commits a merge onto it. Unlocked, it can
-    // interleave with a peer's `repo commit` staging into the same index, with
-    // another run's merge, or with a `worktree prune`. An unheld lock is
+    // interleave with another run's merge (measured 2026-10-13: concurrent
+    // unlocked merges of NON-conflicting branches were recorded as conflicts
+    // and left the shared tree dirty) or with a `worktree prune`. An unheld lock is
     // cannot-determine and resolves to the restrictive side. Refusing costs
     // nothing here: it happens before any git mutation, so the merge is simply
     // retryable.
@@ -2858,8 +2884,8 @@ mod worktree_remove_tests {
     }
 
     /// `merge` checks out the default branch and commits a merge onto it in the
-    /// PRIMARY working tree. Running that unlocked can interleave with a peer
-    /// `repo commit`'s staging or another run's merge/prune. Cannot-acquire must
+    /// PRIMARY working tree. Running that unlocked can interleave with another
+    /// run's merge/prune. Cannot-acquire must
     /// therefore REFUSE — and refuse BEFORE any git mutation.
     #[test]
     fn merge_refuses_when_repo_primary_lock_cannot_be_acquired() {
@@ -3354,8 +3380,62 @@ pub(crate) fn repo_git_common_dir(repo: &Path) -> Option<PathBuf> {
     .and_then(|p| p.canonicalize().ok())
 }
 
-/// Does a worktree have uncommitted changes (tracked or untracked)?
+/// `Ok(())` only when `path` is the top of its OWN git worktree, i.e. `git
+/// rev-parse --show-toplevel` run there names `path` itself (backlog
+/// 4e560a64). A recorded worktree that lost its `.git` but sits inside another
+/// repository would otherwise have every git query walk up and answer, with
+/// full confidence, about the ENCLOSING repository. Any other answer —
+/// including git failing or a path that does not canonicalize — is an `Err`:
+/// which tree a reading would describe could not be established.
+pub fn ensure_own_worktree(path: &Path) -> Result<()> {
+    let top = git(path, &["rev-parse", "--show-toplevel"]).map_err(|e| {
+        anyhow!(
+            "could not resolve the git worktree of {}: {e}",
+            path.display()
+        )
+    })?;
+    let want = path
+        .canonicalize()
+        .with_context(|| format!("canonicalizing {}", path.display()))?;
+    let got = Path::new(top.trim())
+        .canonicalize()
+        .with_context(|| format!("canonicalizing git toplevel {top:?}"))?;
+    if want != got {
+        bail!(
+            "{} is not the top of its own git worktree (git resolved it to {}): its .git \
+             is missing or it is a subdirectory, so a git reading there would describe a \
+             different tree",
+            path.display(),
+            got.display()
+        );
+    }
+    Ok(())
+}
+
+/// A recorded worktree's git HEAD as a durable progress signal, refused
+/// (`Undetermined`) unless `path` is the top of its OWN worktree
+/// ([`ensure_own_worktree`]). Without the check, `git rev-parse HEAD` run in a
+/// worktree that lost its `.git` but sits inside another repository walks up
+/// and returns the ENCLOSING repository's HEAD — a confident `Known` reading
+/// about the wrong tree (backlog 4e560a64, HEAD-read half). Every condukt
+/// read of a recorded worktree's HEAD goes through here, never through
+/// [`harness_core::progress::git_head_signal`] directly.
+pub fn own_worktree_head_signal(path: &Path) -> Determination<Vec<u8>> {
+    if let Err(e) = ensure_own_worktree(path) {
+        return Determination::undetermined(format!(
+            "HEAD read refused for {}: {e}",
+            path.display()
+        ));
+    }
+    harness_core::progress::git_head_signal(path)
+}
+
+/// Does a worktree have uncommitted changes (tracked or untracked)? `Err` when
+/// `path` is not the top of its own worktree ([`ensure_own_worktree`]), so the
+/// enclosing repository's status is never reported as this worktree's.
 pub fn is_dirty(path: &Path) -> Result<bool> {
+    ensure_own_worktree(path)
+        .map_err(|e| anyhow!("status check failed for {}: {e}", path.display()))?;
     let status = git(path, &["status", "--porcelain"])
         .map_err(|e| anyhow!("status check failed for {}: {e}", path.display()))?;
     Ok(!status.trim().is_empty())
@@ -4650,5 +4730,41 @@ mod backlog_09d17bb6 {
             w.contains(&other_canon),
             "listing witness (first entry) dropped: {w:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod large_output_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Regression (backlog c00c3506, pipe deadlock): `run_git_bounded_with`
+    /// used to wait for git to EXIT before draining stdout, so a git command whose output exceeds the OS
+    /// pipe buffer (64 KiB on macOS) blocks writing, never exits, and is killed
+    /// at the timeout. Observed 2026-10-19 at 51376c9c: a 66,752-byte task diff
+    /// made `diffrisk_record::worktree_diff` fall through to `git diff HEAD`
+    /// (empty) and journal `no-diff` for a branch that had a real commit.
+    #[test]
+    fn output_larger_than_pipe_buffer_is_read_not_timed_out() {
+        let tmp = TempDir::new().expect("tempdir");
+        let repo = tmp.path();
+        git(repo, &["init", "-b", "main"]).unwrap();
+        git(repo, &["config", "user.email", "test@example.com"]).unwrap();
+        git(repo, &["config", "user.name", "Test"]).unwrap();
+        let big = "x".repeat(199_999) + "\n";
+        std::fs::write(repo.join("big.txt"), &big).unwrap();
+        git(repo, &["add", "."]).unwrap();
+        git(repo, &["commit", "-m", "big"]).unwrap();
+
+        let out = run_git_bounded_with(
+            Path::new("git"),
+            repo,
+            &["show", "HEAD:big.txt"],
+            Duration::from_secs(5),
+            &[],
+        )
+        .unwrap();
+        assert!(!out.timed_out, "git show of a 200 KB blob timed out");
+        assert_eq!(out.stdout.len(), big.len(), "stdout truncated");
     }
 }

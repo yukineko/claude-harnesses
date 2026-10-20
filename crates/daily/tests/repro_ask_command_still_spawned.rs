@@ -32,7 +32,6 @@ fn daily(home: &Path, cwd: &Path, args: &[&str], stdin: &str) -> (i32, String, S
 }
 
 #[test]
-#[ignore = "RED repro: daily run_task spawns a blastguard-Ask command"]
 fn ask_command_is_not_spawned() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");

@@ -98,7 +98,7 @@ fn check_schema_violation_exits_one() {
 
 // ── "checked and clean" must be distinguishable from "never checked" ─────────
 //
-// docs/audit-schemaguard-verdict-paths.md §5-6/§5-8: a decomposition task that
+// schemaguard verdict-path audit §5-6/§5-8: a decomposition task that
 // carries only `id` never evaluates the `class` / `suggested_model` /
 // `confidence` enum constraints (the fields are absent and `required: false`,
 // so schema.rs:114 `continue`s before the enum check). Its CLI verdict is

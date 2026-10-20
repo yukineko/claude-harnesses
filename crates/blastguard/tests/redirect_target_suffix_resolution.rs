@@ -928,12 +928,21 @@ impl SymlinkFx {
     /// same text really does not. Without this the rows could pass while
     /// measuring nothing.
     fn assert_escape_is_real(&self, spelling: &str, expected_real: &str) {
+        // The PARENT is resolved, not the file: the file need not exist on the
+        // host (macOS has no `/etc/fstab`, and `/etc` is `/private/etc`), and
+        // what makes the hazard real is that the kernel puts the name in the
+        // real system directory (backlog 2287ebae).
         let written = self.proj.join(spelling);
-        let real = std::fs::canonicalize(&written)
-            .unwrap_or_else(|e| panic!("fixture: {} must resolve: {e}", written.display()));
+        let expected = Path::new(expected_real);
+        let parent = written.parent().expect("fixture spelling has a parent");
+        let real_parent = std::fs::canonicalize(parent)
+            .unwrap_or_else(|e| panic!("fixture: {} must resolve: {e}", parent.display()));
+        let expected_parent =
+            std::fs::canonicalize(expected.parent().expect("expected has a parent"))
+                .unwrap_or_else(|e| panic!("fixture: parent of {expected_real} must exist: {e}"));
         assert_eq!(
-            real,
-            Path::new(expected_real),
+            (real_parent.as_path(), written.file_name()),
+            (expected_parent.as_path(), expected.file_name()),
             "fixture: {} must really resolve to {expected_real}",
             written.display()
         );

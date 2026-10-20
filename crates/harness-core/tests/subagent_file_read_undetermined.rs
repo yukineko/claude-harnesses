@@ -2,7 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 //! Pins the file-granularity half of the sub-agent scan's fail-closed contract
-//! (backlog `fbb3100a`, from `docs/audit-gauge-verdict-paths.md` P1/P5).
+//! (backlog `fbb3100a`, from the gauge verdict-path audit items P1/P5).
 //!
 //! `subagent_files` already forwards `Undetermined` when the **directory**
 //! cannot be read, so "the whole sub-agent dir is unreadable" was fail-closed.

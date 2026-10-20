@@ -222,7 +222,6 @@ fn stderr_of(out: &std::process::Output) -> String {
 /// read": that is not what was observed (`uncommitted_work_keep_reason`'s
 /// docstring: dirtiness is a veto, not a progress signal; CLAUDE.md section 4).
 #[test]
-#[ignore = "backlog 860efdd6: RED repro"]
 fn exit3_header_does_not_claim_an_unreadable_progress_signal_for_a_dirtiness_undetermination() {
     let fx = Fixture::new("b860efdd6");
     let (rid, wt) = running_task_past_ttl(&fx);

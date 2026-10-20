@@ -452,20 +452,26 @@ pub fn files_edited_by_session_and_subagents(path: &str) -> Determination<BTreeS
 /// [`peer_edit_footprint_for`] takes the repo root explicitly.
 ///
 /// If the registry cannot be read or parsed, liveness is UNDETERMINED and the
-/// answer is an empty footprint — **no exclusion**. That is an explicit arm in
-/// [`peer_edit_footprint_for`], not a side effect of an empty set.
+/// answer is `Determination::Undetermined` — propagated, not collapsed into an
+/// empty set (backlog `eef58891`, user ruling 2026-10-20 「空を維持（10-02）」).
+/// An empty set would read downstream exactly like "liveness was determined
+/// and nobody else is live", so a caller could not tell "checked" from "could
+/// not check". The same holds when the process has no cwd to key the registry
+/// on ([`peer_edit_footprint_within`]). A caller must treat `Undetermined` as
+/// "exclude nothing" AND surface it (see
+/// [`crate::attribution::attribute_from_transcript`], which returns
+/// `Attribution::Undetermined`).
 ///
-/// Returns a plain `BTreeSet`, **not** a `Determination`, and this is
-/// deliberate: everything that can go wrong here — an unreadable projects dir,
-/// an unreadable peer transcript, a peer whose transcript is half-written, an
-/// unreadable claim registry — shrinks the returned set, and a smaller peer
-/// footprint means *fewer* exclusions, which is the restrictive direction. An
-/// empty set is the safe answer, so there is nothing for a third value to
-/// express. Do not "fix" this into a `Determination`; doing so would invite a
-/// caller to treat a read failure as a reason to exclude.
+/// Other failures still only shrink a `Known` set: an unreadable projects dir,
+/// an unreadable or half-written peer transcript, or an unreadable mtime drop
+/// that peer's footprint. A smaller peer footprint means fewer exclusions, the
+/// restrictive direction; those paths are unchanged by `eef58891`.
 ///
 /// [`Attribution`]: crate::attribution::Attribution
-pub fn peer_edit_footprint_in(projects_dir: &Path, my_session_id: &str) -> BTreeSet<String> {
+pub fn peer_edit_footprint_in(
+    projects_dir: &Path,
+    my_session_id: &str,
+) -> Determination<BTreeSet<String>> {
     peer_edit_footprint_within(projects_dir, my_session_id, PEER_ACTIVE_WINDOW)
 }
 
@@ -589,16 +595,19 @@ pub fn live_claim_sessions(root: &Path) -> Determination<BTreeSet<String>> {
 
 /// [`peer_edit_footprint_in`] with an explicit activity window, so the bound is
 /// testable without waiting a day or back-dating the system clock. The claim
-/// registry is keyed by the process cwd; an unreadable cwd excludes nothing.
+/// registry is keyed by the process cwd; an unreadable cwd is `Undetermined`.
 pub fn peer_edit_footprint_within(
     projects_dir: &Path,
     my_session_id: &str,
     window: std::time::Duration,
-) -> BTreeSet<String> {
+) -> Determination<BTreeSet<String>> {
     match std::env::current_dir() {
         Ok(cwd) => peer_edit_footprint_for(projects_dir, my_session_id, window, &cwd),
-        // No cwd, no registry key: liveness undetermined, so no exclusion.
-        Err(_) => BTreeSet::new(),
+        // No cwd, no registry key: liveness cannot be decided (eef58891).
+        Err(e) => Determination::undetermined(format!(
+            "claim-registry: no process cwd to key the registry on ({e}); peer liveness \
+             cannot be decided"
+        )),
     }
 }
 
@@ -609,14 +618,30 @@ pub fn peer_edit_footprint_for(
     my_session_id: &str,
     window: std::time::Duration,
     registry_root: &Path,
-) -> BTreeSet<String> {
+) -> Determination<BTreeSet<String>> {
     let live = match live_claim_sessions(registry_root) {
         Determination::Known(live) => live,
-        // Ruling D (backlog 873a2621): liveness cannot be decided, so NO
-        // exclusion. This arm IS the decision, stated on purpose; it does not
-        // rely on a later loop happening to find nothing.
-        Determination::Undetermined(_) => return BTreeSet::new(),
+        // Liveness cannot be decided: propagate (backlog eef58891). The caller
+        // excludes nothing AND reports why, instead of reading an empty set as
+        // "no live peers".
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
+    Determination::known(footprint_of_live_peers(
+        projects_dir,
+        my_session_id,
+        window,
+        &live,
+    ))
+}
+
+/// The footprint of the `live` sessions other than `my_session_id`. Every read
+/// failure here only drops a peer (fewer exclusions: restrictive).
+fn footprint_of_live_peers(
+    projects_dir: &Path,
+    my_session_id: &str,
+    window: std::time::Duration,
+    live: &BTreeSet<String>,
+) -> BTreeSet<String> {
     let me = my_session_id.trim();
     let mut out = BTreeSet::new();
     if live.iter().all(|s| s == me) {

@@ -2,9 +2,9 @@
 //! Claim-reproduction tests: each `claim_*` fn pins one README/prose claim
 //! about budgetguard to an observed behaviour of the real binary.
 //!
-//! What this does NOT prove: anything about a real Claude Code host; the
-//! missing-transcript / malformed-stdin silent-allow paths are deliberately
-//! not pinned.
+//! What this does NOT prove: anything about a real Claude Code host. The
+//! missing-transcript and malformed-stdin paths are pinned elsewhere
+//! (tests/repro_unmeasurable_transcript_allows.rs, tests/integration.rs).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -569,10 +569,21 @@ fn claim_status_json_fields() {
     let v = json(&o.stdout);
     let mut keys: Vec<_> = v.as_object().unwrap().keys().cloned().collect();
     keys.sort();
+    // Contract change 2026-10-19: `limits_source` and the session limits were
+    // added (user rulings on unset limits and session reporting).
     assert_eq!(
         keys,
-        ["daily_block_usd", "daily_warn_usd", "day_usd", "pressure"]
+        [
+            "daily_block_usd",
+            "daily_warn_usd",
+            "day_usd",
+            "limits_source",
+            "pressure",
+            "session_block_usd",
+            "session_warn_usd"
+        ]
     );
+    assert_eq!(v["limits_source"], "config");
     assert_eq!(v["daily_warn_usd"], 5.0);
     assert_eq!(v["daily_block_usd"], 9.0);
 
@@ -802,8 +813,15 @@ fn claim_session_undetermined_daily_arms() {
     assert!(v.get("decision").is_none());
     assert!(o.stderr.contains("session unknown"), "{}", o.stderr);
 
-    // control: nothing armed -> allow.
+    // CONTRACT CHANGE (user ruling 2026-10-19, 「設定上限をきめて、決められない
+    // ならその値にする」): this control used to pin "nothing armed -> allow".
+    // An empty config now gets the default limits (no ledger history here),
+    // whose daily block makes the unmeasurable spend block.
     write_cfg(&e, "");
+    let o = gate(&e, "s-ud", &tp, false);
+    assert_eq!(json(&o.stdout)["decision"], "block", "{}", o.stderr);
+    // The explicit opt-out still allows.
+    write_cfg(&e, "enabled = false\n");
     let o = gate(&e, "s-ud", &tp, false);
     assert_eq!(o.stdout.trim(), "", "{}", o.stderr);
 }

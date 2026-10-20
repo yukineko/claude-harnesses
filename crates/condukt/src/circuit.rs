@@ -60,6 +60,12 @@ pub enum CircuitReason {
     /// The restrictive VERDICT and the honest LABEL are both required; this
     /// variant is the deliberate third outcome.
     IdleUnmeasured,
+    /// The failure streak of a run WITHOUT run state could not be counted: its
+    /// item-outcome log (written by `state release-task`) exists but is
+    /// unreadable or holds an unparseable line. Same reasoning as
+    /// [`CircuitReason::IdleUnmeasured`]: an uncountable streak is not a streak
+    /// of 0, so it trips, under its own label (backlog cccc9c43).
+    StreakUnmeasured,
 }
 
 impl CircuitReason {
@@ -71,6 +77,7 @@ impl CircuitReason {
             CircuitReason::BudgetOverCap => "budget_over_cap",
             CircuitReason::Stall => "stall",
             CircuitReason::IdleUnmeasured => "idle_unmeasured",
+            CircuitReason::StreakUnmeasured => "streak_unmeasured",
         }
     }
 }
@@ -359,11 +366,21 @@ pub(crate) fn circuit_report(
 /// code (`0` = continue, `1` = trip) so the loops can do
 /// `if ! condukt circuit check --run RID; then stop; fi`. Never panics.
 ///
-/// # Gathering is fail-soft on two axes and FAIL-CLOSED on the third
+/// # Gathering: streak and idle are FAIL-CLOSED, budget is opt-in
 ///
-/// The streak and budget axes still degrade to their non-tripping value when
-/// they cannot be read (an unloadable run has no countable failures; an absent
-/// budget ledger or an unsupplied cap is not an over-cap observation).
+/// The budget axis is off unless `--budget-cap-usd` is supplied, and an absent
+/// budget ledger is not an over-cap observation (`/flow` passes no cap, so its
+/// budget axis is disabled — stated, not hidden).
+///
+/// The streak axis is counted from the run state's task statuses; for a run
+/// whose run state is ABSENT (a stateless `/flow` driver) it is the trailing
+/// non-`done` outcomes in the item-outcome log that `state release-task`
+/// writes ([`crate::gatelog::release_failure_streak`]; a release without
+/// `--outcome done` counts as a failure). A streak that cannot be counted (an
+/// unreadable run state, an unreadable or unparseable outcome log) trips
+/// [`CircuitReason::StreakUnmeasured`] while the streak axis is on, and the
+/// JSON's `streak` is then `null` with `streak_unknown_reason` set
+/// (backlog cccc9c43).
 ///
 /// The idle axis does NOT. It is gathered as a [`Determination<i64>`] by
 /// [`gather_idle_secs`], and an idleness that could not be measured trips the
@@ -409,8 +426,8 @@ pub fn run_circuit_check(
     budget_cap_usd: Option<f64>,
     session: Option<&str>,
 ) -> i32 {
-    // 1. failure-streak — load the run fail-soft; an unloadable run → streak 0.
-    //    Whether the load failed because the file is ABSENT (as opposed to
+    // 1. failure-streak — load the run; an unloadable run's streak is
+    //    Undetermined (trips `streak_unmeasured`). Whether the load failed because the file is ABSENT (as opposed to
     //    unreadable/corrupt) is kept: only an absent run state may be a
     //    stateless /flow driver whose idleness the claim registry can measure.
     let run_load = RunState::load(cfg, cwd, run_id);
@@ -421,7 +438,25 @@ pub fn run_circuit_check(
         Ok(_) => false,
     };
     let run = run_load.ok();
-    let streak = run.as_ref().map(trailing_failure_streak).unwrap_or(0);
+    // A run WITHOUT run state (a stateless `/flow` driver) has no task statuses;
+    // its finished items are recorded by `state release-task` in the run's
+    // item-outcome log, so the streak is the trailing non-`done` outcomes there
+    // (backlog cccc9c43). An uncountable log is Undetermined, never 0.
+    let streak_det: Determination<u32> = match &run {
+        Some(r) => Determination::known(trailing_failure_streak(r)),
+        None if run_state_absent => match state::run_dir(cfg, cwd, run_id) {
+            Ok(dir) => crate::gatelog::release_failure_streak(&dir, run_id),
+            Err(e) => {
+                Determination::undetermined(format!("run dir for '{run_id}' unresolvable: {e:#}"))
+            }
+        },
+        // Unreadable/corrupt run state: its failures cannot be counted.
+        None => Determination::undetermined(format!("run state for '{run_id}' unreadable")),
+    };
+    let (streak, streak_unknown_reason) = match &streak_det {
+        Determination::Known(n) => (*n, None),
+        Determination::Undetermined(why) => (0, Some(why.as_str().to_string())),
+    };
 
     // 2. budget_over_cap — LEAST-COUPLING source: read budgetguard's on-disk
     //    day-usage ledger through the SHARED `harness_core::ledger::Ledger`
@@ -459,13 +494,23 @@ pub fn run_circuit_check(
         (gather_idle_secs(run.as_ref(), now), IdleSource::RunState)
     };
 
-    let verdict = decide_circuit(
+    let verdict = match decide_circuit(
         streak,
         streak_cap,
         budget_over_cap,
         idle.clone(),
         idle_ttl_secs,
-    );
+    ) {
+        // An uncountable streak with the streak axis on cannot continue; only
+        // a budget trip (higher precedence) keeps its own label.
+        CircuitVerdict::Trip(CircuitReason::BudgetOverCap) => {
+            CircuitVerdict::Trip(CircuitReason::BudgetOverCap)
+        }
+        _ if streak_cap > 0 && streak_unknown_reason.is_some() => {
+            CircuitVerdict::Trip(CircuitReason::StreakUnmeasured)
+        }
+        v => v,
+    };
     let (verdict_str, reason) = verdict_fields(&verdict);
 
     // Observable stdout JSON (verdict + reason slug + every gathered signal).
@@ -482,6 +527,23 @@ pub fn run_circuit_check(
             "idle_source".to_string(),
             serde_json::json!(idle_source.as_str()),
         );
+        obj.insert(
+            "streak_source".to_string(),
+            serde_json::json!(if run.is_some() {
+                "run_state"
+            } else if run_state_absent {
+                "release_log"
+            } else {
+                "unloadable_run_state"
+            }),
+        );
+        obj.insert(
+            "streak_unknown_reason".to_string(),
+            serde_json::json!(streak_unknown_reason),
+        );
+        if streak_unknown_reason.is_some() {
+            obj.insert("streak".to_string(), serde_json::Value::Null);
+        }
     }
     println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
 

@@ -28,7 +28,6 @@ fn find(root: &Path, name: &str, out: &mut Vec<PathBuf>) {
 }
 
 #[test]
-#[ignore = "repro: run exits 0 under real lock contention; remove ignore when fixed"]
 fn run_under_real_lock_contention_must_be_nonzero() {
     let t = std::env::temp_dir().join(format!("ow-repro-run-contend-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&t);

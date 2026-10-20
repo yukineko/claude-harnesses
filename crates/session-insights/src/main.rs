@@ -5,7 +5,10 @@
 //! vault). `report` prints the rollup: a size class (XS–XL), a work category, the
 //! turn/tool/file counts, and the top tools — the deterministic, no-API-key
 //! analogue of Devin's Session Insights. Recording only ever writes to its own
-//! state (and, opt-in, the vault); it never blocks a turn and always exits 0.
+//! state (and, opt-in, the vault); the hooks never block a turn and always exit
+//! 0. A hook payload that is empty or unparseable is still not dropped silently:
+//! every hook says on stderr that the event was NOT recorded (and `stop` also
+//! emits a `systemMessage`).
 
 mod config;
 mod context;
@@ -113,6 +116,10 @@ fn record() {
     }
     let raw = read_stdin();
     let Some(input) = HookInput::parse(&raw) else {
+        // Not a verdict, so no block — but the dropped event is disclosed: a
+        // silent return made "payload unreadable, tool call NOT counted"
+        // indistinguishable from "counted".
+        eprintln!("{}", unparseable_payload_message("record", &raw));
         return;
     };
     let root = input.cwd_or_current();
@@ -133,6 +140,12 @@ fn stop() {
     }
     let raw = read_stdin();
     let Some(input) = HookInput::parse(&raw) else {
+        // Same disclosure as `record`, plus a `systemMessage` (the channel the
+        // user actually sees for a Stop hook — the launcher's missing-binary
+        // fallback uses it for the same reason). No block: no verdict here.
+        let msg = unparseable_payload_message("stop", &raw);
+        eprintln!("{msg}");
+        println!("{}", serde_json::json!({ "systemMessage": msg }));
         return;
     };
     let root = input.cwd_or_current();
@@ -152,6 +165,23 @@ fn stop() {
     }
 }
 
+/// The diagnostic for a hook payload that is empty or not a JSON hook input.
+fn unparseable_payload_message(hook: &str, raw: &str) -> String {
+    let what = if raw.trim().is_empty() {
+        "an empty payload".to_string()
+    } else {
+        format!("an unparseable payload ({} bytes)", raw.len())
+    };
+    let lost = match hook {
+        "stop" => "this turn was NOT counted and no session note was written",
+        "sessionend" => "the record note (when `record` is on) was NOT updated",
+        _ => "this tool call was NOT counted",
+    };
+    format!(
+        "session-insights {hook}: received {what}; {lost}, so the session metrics are incomplete."
+    )
+}
+
 /// SessionEnd hook: write/update the AEGIS-style record note. Uses the
 /// harness-core HookInput because it carries `transcript_path` (the local
 /// `model::HookInput` does not). No-op when disabled or no transcript/vault.
@@ -161,6 +191,8 @@ fn sessionend() {
     }
     let raw = read_stdin_if_piped();
     let Some(input) = harness_core::hook::HookInput::parse(&raw) else {
+        // SessionEnd discards stdout; stderr is the only channel.
+        eprintln!("{}", unparseable_payload_message("sessionend", &raw));
         return;
     };
     let root = input.cwd_or_current();
@@ -242,8 +274,9 @@ fn find_transcript(session_id: &str) -> String {
 }
 
 /// On-demand record-note generation for the `/record` command. Resolves the
-/// session id, discovers the transcript, (re)writes the note, prints its path.
-/// Always exits 0 (the command layer handles the prose).
+/// session id, discovers the transcript, (re)writes the note, prints its path
+/// and exits 0. When no note was written (vault missing, or the write failed)
+/// it prints nothing on stdout, says why on stderr, and exits 1.
 fn record_now(session_arg: Option<String>) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let mut cfg = Config::load(&root);
@@ -270,10 +303,22 @@ fn record_now(session_arg: Option<String>) {
     let turns_fallback = turns_fallback(&transcript);
     match record::write_from_session(&cfg, &s, &transcript, turns_fallback) {
         Some(p) => println!("{}", p.display()),
-        None => eprintln!(
-            "no record note written (Obsidian vault not found: {})",
-            cfg.obsidian_vault.display()
-        ),
+        None => {
+            if cfg.obsidian_vault.is_dir() {
+                eprintln!(
+                    "no record note written (could not write under {})",
+                    cfg.obsidian_vault.join(&cfg.record_dir).display()
+                );
+            } else {
+                eprintln!(
+                    "no record note written (Obsidian vault not found: {})",
+                    cfg.obsidian_vault.display()
+                );
+            }
+            // The verb's job did not happen: exit 0 with empty stdout would
+            // read as success to any caller checking the exit code.
+            std::process::exit(1);
+        }
     }
 }
 
@@ -281,18 +326,18 @@ fn report(session: Option<String>, all: bool, context: bool) {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
     if all {
-        let sessions = match metrics::load_all(&cfg) {
-            harness_core::verdict::Determination::Known(s) => s,
+        let loaded = match metrics::load_all(&cfg) {
+            harness_core::verdict::Determination::Known(l) => l,
             harness_core::verdict::Determination::Undetermined(why) => {
                 eprintln!("unknown — session store could not be read: {why}");
                 std::process::exit(1);
             }
         };
-        if sessions.is_empty() {
+        if loaded.sessions.is_empty() && loaded.unreadable.is_empty() {
             println!("(no sessions recorded yet)");
             return;
         }
-        for s in &sessions {
+        for s in &loaded.sessions {
             println!(
                 "{}  {:<14} {:>2} turns  {:>3} tools  size {:<2} {:<8} {}",
                 metrics::short(&s.session_id),
@@ -303,6 +348,12 @@ fn report(session: Option<String>, all: bool, context: bool) {
                 s.category(),
                 s.last_at.chars().take(19).collect::<String>(),
             );
+        }
+        // The readable sessions are still listed, but the list is PARTIAL:
+        // say so and exit 1 so no caller reads it as the complete set.
+        if !loaded.unreadable.is_empty() {
+            eprintln!("incomplete — {}", loaded.unreadable_summary());
+            std::process::exit(1);
         }
         return;
     }
@@ -350,7 +401,13 @@ fn init() -> anyhow::Result<()> {
 
 fn status() {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
-    let cfg = Config::load(&root);
+    // A config that could not be read/parsed (or has a malformed field) is
+    // reported on stderr and makes `status` exit 1: the values printed below
+    // are then (partly) defaults, NOT the configured ones.
+    let (cfg, problems) = Config::load_checked(&root);
+    for p in &problems {
+        eprintln!("session-insights: {p}");
+    }
     let src = if Config::project_path(&root).exists() {
         Config::project_path(&root)
     } else if Config::home_path().exists() {
@@ -358,7 +415,14 @@ fn status() {
     } else {
         Path::new("(defaults — no config file)").to_path_buf()
     };
-    println!("config:          {}", src.display());
+    if problems.is_empty() {
+        println!("config:          {}", src.display());
+    } else {
+        println!(
+            "config:          {} (INVALID — defaults substituted, see stderr)",
+            src.display()
+        );
+    }
     println!("enabled:         {}", cfg.enabled);
     println!("ignore_tools:    {}", cfg.ignore_tools.join(", "));
     println!("size_thresholds: {:?} (S,M,L,XL)", cfg.size_thresholds);
@@ -368,11 +432,22 @@ fn status() {
     println!("record_dir:      {}", cfg.record_dir);
     println!("state_dir:       {}", cfg.state_dir.display());
     match metrics::load_all(&cfg) {
-        harness_core::verdict::Determination::Known(s) => {
-            println!("sessions:        {}", s.len());
+        harness_core::verdict::Determination::Known(l) if l.unreadable.is_empty() => {
+            println!("sessions:        {}", l.sessions.len());
+        }
+        harness_core::verdict::Determination::Known(l) => {
+            println!(
+                "sessions:        {} readable + {} unreadable (incomplete — see stderr)",
+                l.sessions.len(),
+                l.unreadable.len()
+            );
+            eprintln!("session-insights: {}", l.unreadable_summary());
         }
         harness_core::verdict::Determination::Undetermined(why) => {
             println!("sessions:        unknown — store could not be read: {why}");
         }
+    }
+    if !problems.is_empty() {
+        std::process::exit(1);
     }
 }

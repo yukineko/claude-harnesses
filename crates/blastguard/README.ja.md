@@ -43,7 +43,9 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
 
 通常作業の邪魔をしないよう、明確に無害な形は通す — 非再帰の `rm file.txt`、追記
 （`>>`）、fd リダイレクト（`2>&1`, `>&2`）、`/dev/null` 等への切り詰めリダイレクト
-はいずれも allow である。
+はいずれも allow である（例外: オペランドが `.git` そのものである非再帰 `rm` は
+deny — linked worktree ではそれが `gitdir:` ファイルで、消すと checkout が repo から
+切り離される。backlog eba15868）。
 
 **ただし「曖昧なものは allow」ではない。** この段落はかつて「設計は意図的に保守的で
 あり、曖昧なものはすべて allow に倒す」と書いていたが、それは `Ask` 導入前の二値時代の
@@ -512,7 +514,10 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 > その後変わっている。行番号も現在のソースとは一致しない）**:
 >
 > - **truncating-redirect**: もはや一律 deny ではない。順に、保護パスは `ask`・
->   システムディレクトリは `deny`、**対象が存在しない**なら allow、セッションの安全
+>   システムディレクトリは `deny`（文字列と、カーネルが実際に着地させる実パス —
+>   存在する最深の祖先を canonicalize したもの — の両方で判定。symlink 経由の
+>   `/etc` 新規作成も deny。backlog 2287ebae。`>>` も同じ）、**対象が存在しない**
+>   なら allow（ただし実パスが解決できないなら `ask`）、セッションの安全
 >   ルート内の git 作業ツリーで `git status` が答えたなら（追跡・変更あり・**未追跡**を
 >   問わず。2026-09-18 の operator 裁定）allow、安全ルート内なら `ask`（headless では
 >   deny）、それ以外・probe 失敗は `deny`（`src/detect.rs` の切り詰めリダイレクト
@@ -602,7 +607,12 @@ specguard の forge は LLM が生成した `test_cmd` を `sh -c` に渡す前�
 `.py`/`.rs`/`.sh`/`.md`/`.toml` 等の既知拡張子で終わり、かつ `:` も `@` も含まない語のこと [test: crates/blastguard/src/classify.rs::file_path_token_rule_is_narrow]。
 先頭にあるもの・runner 語（`run`, `bash` 等）や shell 区切りの直後にあるもの・`./` で
 始まるものは従来どおり判定対象に残る [test: crates/blastguard/src/classify.rs::real_commands_containing_paths_still_gate]。
-backtick で引用されたものも判定対象に残る [test: crates/blastguard/src/classify.rs::backtick_quoted_command_prose_gates_exactly_as_before]。
+backtick で引用されたものも判定対象に残る [test: crates/blastguard/src/classify.rs::backtick_spans_are_still_never_masked_for_deploy_needles]。
+タスク散文はコマンドとして解析しない: `classify` は散文を deploy / history の needle だけで読むので、
+コマンドを記述するだけの散文（例: backtick で `git config core.hooksPath` を引用する）は強制ゲートしない [test: crates/blastguard/src/classify.rs::prose_quoting_a_command_is_not_parsed_as_that_command]。
+タスクが実際に実行するコマンドは別に渡され、従来どおりの `classify_command` で全解析されるので、
+同じコマンドをコマンドとして渡せば gate される [test: crates/blastguard/src/classify.rs::the_same_command_passed_as_a_command_still_gates]。
+コマンド一覧が宣言されていない（`None`）`classify_change` は判定不能であり、Low にはならない [test: crates/blastguard/src/classify.rs::undeclared_commands_are_undetermined_even_for_benign_prose]。
 
 コマンド分類とは別に、**diff の内容そのもの**から意味的リスクを見る2つのモジュールも
 公開している。いずれも純粋・決定論・I/O なしで、command 分類が拾えない「無害な

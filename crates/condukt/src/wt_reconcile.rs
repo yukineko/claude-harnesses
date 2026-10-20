@@ -924,7 +924,7 @@ fn claim_progress_verdict(
     now: i64,
     window: i64,
 ) -> Determination<progress::Liveness> {
-    let head = progress::git_head_signal(path);
+    let head = crate::worktree::own_worktree_head_signal(path);
     let updated = match claim.updated_at {
         Some(ts) => Determination::Known(ts.to_string().into_bytes()),
         None => Determination::undetermined(
@@ -1406,7 +1406,10 @@ fn unclaimed_occupancy(
         Determination::Undetermined(why) => Determination::Undetermined(why.clone()),
     };
     let current = progress::fingerprint_from_signals(vec![
-        ("worktree-head", progress::git_head_signal(path)),
+        (
+            "worktree-head",
+            crate::worktree::own_worktree_head_signal(path),
+        ),
         ("worktree-activity", worktree_activity_signal(path)),
         ("session-transcript", signal),
     ]);

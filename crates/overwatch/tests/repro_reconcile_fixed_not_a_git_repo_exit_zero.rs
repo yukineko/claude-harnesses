@@ -11,7 +11,6 @@
 use std::process::Command;
 
 #[test]
-#[ignore = "repro: reconcile-fixed exits 0 outside a git repo; remove ignore when fixed"]
 fn reconcile_fixed_outside_git_repo_must_be_nonzero() {
     let t = std::env::temp_dir().join(format!("ow-repro-reconcile-norepo-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&t);

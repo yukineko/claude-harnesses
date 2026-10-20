@@ -48,8 +48,9 @@ use std::path::Path;
 /// id) is recorded into the review queue and a stderr warning is emitted. It is
 /// **never** a hard failure — the audit loop is never broken (never-break-a-turn),
 /// so a warning finding + the round record are preferred over aborting. When one
-/// or both model args are omitted, the check is skipped entirely (backward
-/// compatible: existing callers that pass no model args behave exactly as before).
+/// or both model args are omitted, diversity is UNCHECKED, which is not the same
+/// as satisfied: a separate medium-severity `audit-round-model-unchecked-<round>`
+/// warning finding is recorded and a stderr warning names the round.
 ///
 /// `unverified` is the round's UNDETERMINED count (verdicts that were neither
 /// confirmed nor refuted). It is stored alongside `confirmed` — never folded
@@ -132,7 +133,7 @@ pub fn record(
 
     // Deterministic finder != verifier model-diversity enforcement. Runs AFTER
     // (and independently of) the round append so it fires even if the ledger
-    // write failed. Only checks when BOTH models were supplied (backward compat).
+    // write failed. A missing model records an "unchecked" warning finding.
     enforce_model_diversity(&cwd, &record.round, finder_model, verifier_model, now);
 
     Ok(())
@@ -143,6 +144,11 @@ pub fn record(
 /// (round-derived id, idempotent) into the review queue and warn on stderr.
 /// Fail-soft and non-fatal: a store-write failure is only logged; the audit loop
 /// is never broken.
+///
+/// When one or both models are missing, diversity was NOT checked: that is
+/// recorded as its own warning finding (`audit-round-model-unchecked-<round>`)
+/// and announced on stderr, so the round is never indistinguishable from one
+/// whose models were verified distinct.
 fn enforce_model_diversity(
     cwd: &std::path::Path,
     round: &str,
@@ -150,6 +156,20 @@ fn enforce_model_diversity(
     verifier_model: Option<&str>,
     now: i64,
 ) {
+    if let Some(finding) = model_unchecked_finding(round, finder_model, verifier_model, now) {
+        eprintln!(
+            "overwatch: WARNING finder/verifier model diversity was NOT checked for round \
+             {round:?} (--finder-model / --verifier-model missing) — recorded as warning \
+             finding {} in review-queue; this round is NOT verified-distinct",
+            finding.finding_id
+        );
+        if let Err(e) = store::append_review_finding(cwd, &finding) {
+            eprintln!(
+                "overwatch: WARNING could not record model-unchecked finding (continuing): {e}"
+            );
+        }
+        return;
+    }
     let Some(finding) = model_collision_finding(round, finder_model, verifier_model, now) else {
         return;
     };
@@ -193,6 +213,41 @@ fn model_collision_finding(
         "continuous-audit".to_string(),
         Some("high".to_string()),
         summary,
+        None,
+        None,
+        now,
+    ))
+}
+
+/// Pure builder for the "model diversity unchecked" warning finding: `Some`
+/// iff [`audit_round::model_diversity`] is `Unchecked` (one or both models
+/// missing / blank). Severity `medium`: not a proven violation, but an
+/// unverified MUST.
+fn model_unchecked_finding(
+    round: &str,
+    finder_model: Option<&str>,
+    verifier_model: Option<&str>,
+    now: i64,
+) -> Option<ReviewFinding> {
+    if audit_round::model_diversity(finder_model, verifier_model)
+        != audit_round::ModelDiversity::Unchecked
+    {
+        return None;
+    }
+    let shown = |m: Option<&str>| match m.map(str::trim) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => "(missing)".to_string(),
+    };
+    Some(ReviewFinding::new(
+        audit_round::model_unchecked_finding_id(round),
+        "continuous-audit".to_string(),
+        Some("medium".to_string()),
+        format!(
+            "finder/verifier model diversity unchecked (finder={}, verifier={}): the \
+             finder != verifier MUST was not verified for this round",
+            shown(finder_model),
+            shown(verifier_model)
+        ),
         None,
         None,
         now,

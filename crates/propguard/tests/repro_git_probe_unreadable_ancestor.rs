@@ -29,6 +29,11 @@ fn run_check(cwd: &Path, home: &Path, payload_cwd: &Path, sid: &str) -> (i32, St
         .arg("check")
         .current_dir(cwd)
         .env("HOME", home)
+        // Hermetic session: the repeat ledger keys on CLAUDE_CODE_SESSION_ID,
+        // so the parent's value leaking in made the control's block and this
+        // run's identical block look like one session's repeat (waived). In a
+        // real hook the env var and the payload session agree.
+        .env("CLAUDE_CODE_SESSION_ID", sid)
         .env("PROPGUARD_STATE_DIR", home.join(".propguard-state"))
         .env(
             "PROPGUARD_CRITERIA",
@@ -54,7 +59,6 @@ fn run_check(cwd: &Path, home: &Path, payload_cwd: &Path, sid: &str) -> (i32, St
 }
 
 #[test]
-#[ignore = "RED repro: propguard allows (no-git) when the repo root is unsearchable"]
 fn unsearchable_repo_root_does_not_read_as_not_a_repo() {
     let base = std::env::temp_dir().join(format!("pg-unreadable-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);

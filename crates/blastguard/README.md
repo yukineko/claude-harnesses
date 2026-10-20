@@ -56,7 +56,13 @@ audited (`analyze_code_interpreter` / `interpreter_code_verdict` in
 embedded shell line is destructive, is a deny; one that names a protected
 gate/config path is an ask; a benign program such as `python3 -c "print(1)"`
 is allowed (0.2.59). Running a script **file** (`python3 app.py`,
-`python3 -m …`) is not judged.
+`python3 -m …`) is not judged. A `>` in program text whose "target" cannot be
+determined (`print(1 > 0)`, a backticked `` `<k(r)>/x.json` `` in a comment) is
+an `ask` marked "Recommended: do not run this." — never a deny, never an allow
+(user ruling R2, 2026-10-14). Since 0.2.140 this also holds for the line-level
+redirect scan over the body of a quoted-delimiter here-document fed to a
+non-shell interpreter (`python3 - <<'PY'`), when that body is closed by its
+delimiter line (backlog 4a1cf1ad).
 
 ### File operations
 
@@ -124,7 +130,10 @@ stay allowed.
 
 The detector only **denies** *clearly* destructive, hard-to-undo patterns, and
 stays out of the way of ordinary work: a single non-recursive `rm file.txt`,
-appends (`>>`), and fd redirects (`2>&1`, `>&2`) are all allowed.
+appends (`>>`), and fd redirects (`2>&1`, `>&2`) are all allowed. (Exception:
+a non-recursive `rm` whose operand is a `.git` entry is denied — in a linked
+worktree that is the `gitdir:` file, and removing it severs the checkout;
+backlog eba15868.)
 
 **Ambiguity does not fall through to allow.** This paragraph used to say it did,
 which was the pre-`Ask` two-valued behaviour and the opposite of what ships:
@@ -242,8 +251,13 @@ exempt config file is no longer a flat deny. In order (`src/detect.rs`, the
 truncating-redirect arm; `src/reversible.rs` `probe`):
 
 1. A protected gate/config path → `ask`; a target inside a system directory →
-   `deny`.
-2. The target **does not exist** → allowed (no prior bytes to destroy).
+   `deny`. The system-directory check is made on the text **and** on where the
+   kernel really lands it (deepest existing ancestor canonicalised, so
+   `<proj>/esc/etc/new.conf` with `esc -> /` is `/etc/new.conf`; backlog
+   2287ebae). The `>>` append loop makes the same two checks.
+2. The target **does not exist** → allowed (no prior bytes to destroy) —
+   unless its real landing could not be resolved (e.g. an unsearchable
+   ancestor), which is an `ask`.
 3. The target is inside a git work tree whose `git status` answered **and** it
    lies inside this session's safe roots (or a linked worktree checkout under
    a worktree storage root) → allowed, unattended. By operator ruling
@@ -394,7 +408,15 @@ A file-path token is a word containing `/`, or one ending in a known extension
 such as `.py`/`.rs`/`.sh`/`.md`/`.toml`, with no `:` or `@` [test: crates/blastguard/src/classify.rs::file_path_token_rule_is_narrow].
 A path still counts when it comes first, follows a runner word (`run`, `bash`,
 ...) or shell separator, or starts with `./` [test: crates/blastguard/src/classify.rs::real_commands_containing_paths_still_gate].
-A path quoted in backticks still counts [test: crates/blastguard/src/classify.rs::backtick_quoted_command_prose_gates_exactly_as_before].
+A path quoted in backticks still counts [test: crates/blastguard/src/classify.rs::backtick_spans_are_still_never_masked_for_deploy_needles].
+Task prose is never parsed as a command: `classify` reads prose with the deploy
+and history needles only, so prose that merely describes a command (for example
+quotes `git config core.hooksPath` in backticks) is not force-gated [test: crates/blastguard/src/classify.rs::prose_quoting_a_command_is_not_parsed_as_that_command].
+The commands a task will actually run are passed separately and go through the
+full `classify_command` analysis, so the same command passed as a command still
+gates [test: crates/blastguard/src/classify.rs::the_same_command_passed_as_a_command_still_gates].
+`classify_change` with no declared command list (`None`) is undetermined, never
+Low [test: crates/blastguard/src/classify.rs::undeclared_commands_are_undetermined_even_for_benign_prose].
 
 Two diff-level modules are exported as well (pure, no I/O): `diffrisk`
 (`classify_diff` / `changes_public_symbol`) and `callgraph`

@@ -143,13 +143,31 @@ fn find_by_suffix(root: &Path, suffix: &str) -> Option<PathBuf> {
 /// A decomposition with one Low-risk, reversible task (ordinary local work — no
 /// deploy/push/destructive signal → classifier returns Low + reversible).
 fn safe_decomp() -> &'static str {
-    r#"{"goal":"g","tasks":[{"id":"t1","title":"rename a local helper function","touched_files":["src/util.rs"],"deps":[],"class":"serial","done_criteria":"the helper is renamed and unit tests pass"}]}"#
+    r#"{"goal":"g","tasks":[{"id":"t1","title":"rename a local helper function","touched_files":["src/util.rs"],"deps":[],"class":"serial","done_criteria":"the helper is renamed and unit tests pass","commands":[]}]}"#
 }
 
 /// A decomposition with one High-risk irreversible task (an outward release/push
 /// → classifier returns High + not reversible → always escalates).
 fn risky_decomp() -> &'static str {
-    r#"{"goal":"g","tasks":[{"id":"t1","title":"deploy the release and git push to production","touched_files":["deploy.sh"],"deps":[],"class":"gated","done_criteria":"the release is pushed to production"}]}"#
+    r#"{"goal":"g","tasks":[{"id":"t1","title":"deploy the release and git push to production","touched_files":["deploy.sh"],"deps":[],"class":"gated","done_criteria":"the release is pushed to production","commands":[]}]}"#
+}
+
+/// dc955812 FAIL-CLOSED: the same safe task WITHOUT a declared `commands` list
+/// cannot be classified (prose is not parsed as a command), so even under
+/// autonomous ON it escalates with an undetermined reason — never auto-exec.
+#[test]
+fn undeclared_commands_escalate_even_when_autonomous() {
+    let fx = Fixture::new("nocmds");
+    let rid = fx.init_run(
+        r#"{"goal":"g","tasks":[{"id":"t1","title":"rename a local helper function","touched_files":["src/util.rs"],"deps":[],"class":"serial","done_criteria":"the helper is renamed and unit tests pass"}]}"#,
+    );
+    let out = fx.condukt(&["gate", "check", "--run", &rid, "--task", "t1"], true);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1), "must escalate; out={out:?}");
+    assert!(
+        stdout.contains("\"verdict\": \"escalate\"") && stdout.contains("commands"),
+        "expected escalate naming the missing commands; got {stdout}"
+    );
 }
 
 #[test]

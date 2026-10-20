@@ -33,8 +33,10 @@ On each stop `tdd gate`:
    files **this session wrote**: a file counts as this session's when its
    transcript (or a subagent's sidechain transcript) records an
    `Edit`/`Write`/`MultiEdit`/`NotebookEdit` of it, or a `Bash` command naming
-   its path (`harness_core::attribution::attribute_own_writes`, shared with
-   reviewgate). Other uncommitted files — e.g. a concurrent session's — are
+   its path outside a read-only statement — merely reading a file
+   (`git diff`, `grep`, `cat`, naming it in a `tdd skip --reason`) does not make
+   it this session's [test: crates/harness-core/tests/attribution_read_only_bash.rs::group1_read_only_mentions_do_not_attribute] [test: crates/harness-core/tests/attribution_read_only_bash.rs::group2_writing_mentions_attribute] (`harness_core::attribution::attribute_own_writes`, shared
+   with reviewgate). Other uncommitted files — e.g. a concurrent session's — are
    excluded and named on stderr and in the block reason as "not attributed to
    this session"
    [test: crates/tdd/tests/session_scope_own.rs::foreign_only_does_not_block]
@@ -100,6 +102,7 @@ verbatim), else `~/.tdd/config.toml`, else language-aware defaults. Common keys:
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | master switch for the gate |
+| `mode` | `"strict"` | `"strict"`: report the finding on every stop. `"loose"` (for projects that will not or cannot do test-first): warn once per implementation file content hash — a stop whose flagged files are all at an already-warned hash goes through silently (gate log `already-warned`); editing a file warns again. An undetermined scan still blocks every time. Set it per repository in that repo's `tdd.toml` |
 | `max_attempts` | `3` | give up (allow the stop) after N consecutive blocks |
 | `reset_after_secs` | `600` | idle gap that resets the attempt counter |
 | `min_added_impl_lines` | `1` | added impl lines before a test is required |

@@ -491,6 +491,59 @@ pub fn release(project: &str) -> Result<()> {
     release_at(project, None)
 }
 
+/// May `session` claim a task (`next --claim`) in `project` under the
+/// per-project exclusive lock? `lock acquire` is the way to exclude every
+/// other session from a project (backlog 60b59f75), so:
+///   - no lock file: permitted;
+///   - a lock (active OR heartbeat-stale) held by `session`: permitted;
+///   - a lock held by any other session: refused. A stale lock still protects
+///     its holder until `lock acquire` reaps a confirmed-stalled one or the
+///     holder runs `lock release`, the same rule `acquire` applies;
+///   - a claimer with no session id while a lock exists: refused (it cannot be
+///     shown to be the holder);
+///   - an unreadable lock file: refused (whether the project is locked is
+///     unknown, CLAUDE.md section 3).
+///
+/// `Err` carries the reason. `project` is the claim identity, which
+/// [`project_slug`] canonicalizes to the same slug `lock acquire --project`
+/// writes.
+pub fn claim_permitted_at(
+    project: &str,
+    session: Option<&str>,
+    lock_dir: Option<&Path>,
+) -> Result<(), String> {
+    let (info, state) = match status_at(project, lock_dir) {
+        LockStatus::None => return Ok(()),
+        LockStatus::Undetermined(why) => {
+            return Err(format!(
+                "whether the project is held by an exclusive lock is unknown ({why}), so no \
+                 claim is made"
+            ))
+        }
+        LockStatus::Active(info) => (info, "held"),
+        LockStatus::Stale(info) => (info, "held (heartbeat stale)"),
+    };
+    match session {
+        Some(s) if s == info.session_id => Ok(()),
+        Some(s) => Err(format!(
+            "the project's exclusive lock is {state} by session {} (this session is {s}); `lock \
+             acquire` excludes every other session from claiming. The holder releases it with \
+             `backlog lock release`; a stalled holder is reaped by `backlog lock acquire`",
+            info.session_id
+        )),
+        None => Err(format!(
+            "the project's exclusive lock is {state} by session {}, and this claimer has no \
+             CLAUDE_CODE_SESSION_ID, so it cannot be shown to be the holder",
+            info.session_id
+        )),
+    }
+}
+
+/// [`claim_permitted_at`] against the default lock directory.
+pub fn claim_permitted(project: &str, session: Option<&str>) -> Result<(), String> {
+    claim_permitted_at(project, session, None)
+}
+
 /// Return the current lock status for a specific project.
 /// `lock_dir` allows tests to override the directory.
 pub fn status_at(project: &str, lock_dir: Option<&Path>) -> LockStatus {
@@ -942,6 +995,47 @@ mod tests {
             refreshed.heartbeat_at > backdated,
             "heartbeat_at should be refreshed forward by the owning session"
         );
+    }
+
+    #[test]
+    fn claim_permitted_truth_table() {
+        let dir = tmp();
+        let d = dir.path();
+        let pid = std::process::id();
+        // No lock: anyone may claim, with or without a session id.
+        assert_eq!(claim_permitted_at("p", Some("B"), Some(d)), Ok(()));
+        assert_eq!(claim_permitted_at("p", None, Some(d)), Ok(()));
+        // Active lock: the holder may claim, others and the anonymous may not.
+        acquire_at("A", pid, "p", Some(d)).expect("acquire");
+        assert_eq!(claim_permitted_at("p", Some("A"), Some(d)), Ok(()));
+        let e = claim_permitted_at("p", Some("B"), Some(d)).expect_err("other session");
+        assert!(e.contains("session A"), "{e}");
+        assert!(claim_permitted_at("p", None, Some(d)).is_err());
+        // A lock on ANOTHER project does not affect this one.
+        assert_eq!(claim_permitted_at("q", Some("B"), Some(d)), Ok(()));
+        // Stale lock: still protects its holder.
+        let info = LockInfo {
+            session_id: "A".into(),
+            pid,
+            project: "p".into(),
+            acquired_at: 1,
+            heartbeat_at: 1,
+        };
+        std::fs::write(
+            lock_path_for(d, "p"),
+            serde_json::to_string(&info).expect("json"),
+        )
+        .expect("write stale");
+        assert!(matches!(status_at("p", Some(d)), LockStatus::Stale(_)));
+        assert_eq!(claim_permitted_at("p", Some("A"), Some(d)), Ok(()));
+        let e = claim_permitted_at("p", Some("B"), Some(d)).expect_err("stale protects");
+        assert!(e.contains("stale"), "{e}");
+        // Unreadable lock file: unknown, so refused even for a would-be holder.
+        std::fs::write(lock_path_for(d, "p"), "not json").expect("write garbage");
+        assert!(claim_permitted_at("p", Some("A"), Some(d)).is_err());
+        // Released: permitted again.
+        std::fs::remove_file(lock_path_for(d, "p")).expect("rm");
+        assert_eq!(claim_permitted_at("p", Some("B"), Some(d)), Ok(()));
     }
 
     #[test]

@@ -2,11 +2,12 @@
 ///
 /// These actions have cross-session side effects, so the binary performs the
 /// deterministic action here; user approval is handled upstream by the
-/// /overwatch skill, not in this file. Every action is FAIL-SOFT — a missing
-/// downstream binary (`condukt`) or a non-zero exit must NOT crash the turn —
-/// and every action records an event to the overwatch ledger for auditability.
+/// /overwatch skill, not in this file. A control action that did not happen
+/// (downstream `condukt` missing or exiting non-zero, an unresolvable lease
+/// root, a contended lease lock, an unheld reassign key) exits NON-ZERO and
+/// says so; it is never reported as success. pause/resume record their
+/// outcome (`ok=true|false`) to the overwatch ledger for auditability.
 use crate::event::LifecycleEvent;
-use crate::lock::LeaseLock;
 use crate::store;
 use anyhow::Result;
 use std::process::Command;
@@ -59,9 +60,10 @@ fn resume_cmd(run: &str) -> Vec<String> {
     ]
 }
 
-/// Run an argv fail-soft: never propagate an error. Returns true if the command
+/// Run an argv without propagating an error. Returns true if the command
 /// spawned AND exited zero; false if the binary was absent or exited non-zero.
-/// A note is printed either way so the operator sees what happened.
+/// A note is printed on failure so the operator sees what happened; the caller
+/// turns `false` into a non-zero exit.
 fn run_fail_soft(argv: &[String]) -> bool {
     if argv.is_empty() {
         return false;
@@ -85,8 +87,8 @@ fn run_fail_soft(argv: &[String]) -> bool {
 
 /// Record a control action to the overwatch ledger. Reuses `LifecycleEvent`
 /// (consistent with event.rs, which has no dedicated control kind) as a
-/// `running` event whose `status` note carries the control verb. Fail-soft:
-/// a ledger write error is noted but never crashes the turn.
+/// `running` event whose `status` note carries the control verb. A ledger
+/// write error is noted on stdout (the control action itself already ran).
 fn record_control_event(subject_key: &str, run_id: &str, action_note: String) {
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
@@ -106,49 +108,47 @@ fn record_control_event(subject_key: &str, run_id: &str, action_note: String) {
     }
 }
 
-/// Pause a run: delegate to condukt, then audit. Fail-soft throughout.
+/// Pause a run: delegate to condukt, then audit. Errors (non-zero exit) when
+/// condukt could not be run or exited non-zero: the pause did not happen.
 pub fn pause(run: &str) -> Result<()> {
     let ok = run_fail_soft(&pause_cmd(run));
     record_control_event(run, run, format!("pause ok={ok}"));
+    if !ok {
+        anyhow::bail!(
+            "overwatch pause: `condukt state pause --run {run}` failed; run was NOT paused"
+        );
+    }
     Ok(())
 }
 
-/// Resume a run: delegate to condukt, then audit. Fail-soft throughout.
+/// Resume a run: delegate to condukt, then audit. Errors (non-zero exit) when
+/// condukt could not be run or exited non-zero: the resume did not happen.
 pub fn resume(run: &str) -> Result<()> {
     let ok = run_fail_soft(&resume_cmd(run));
     record_control_event(run, run, format!("resume ok={ok}"));
+    if !ok {
+        anyhow::bail!(
+            "overwatch resume: `condukt state resume --run {run}` failed; run was NOT resumed"
+        );
+    }
     Ok(())
 }
 
 /// Reassign a lease: release the current lease for `key` (load → remove → save,
-/// mirroring lease.rs mutations) and audit the new owner `to`. Fail-soft if the
-/// key isn't held (note + continue).
+/// mirroring lease.rs mutations) and audit the new owner `to`. Errors (non-zero
+/// exit, nothing recorded) if the key isn't held, the lock can't be taken, or
+/// the lease root is unresolvable.
 pub fn reassign(key: &str, to: &str) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
 
     // Hold the lease-registry lock across the whole load->reap->remove->save
-    // cycle, exactly as lease.rs's mutators do. reassign is the 6th lease
-    // mutator and was the only one still doing its RMW WITHOUT the lock: a
-    // reassign racing a concurrent begin/heartbeat could load a pre-begin
-    // snapshot and, after the racer committed, save the stale snapshot back —
-    // silently freeing a just-claimed key so another begin could re-grab it
-    // (double-grab). Fail-soft: LeaseLock degrades to unlocked on timeout and
-    // never panics. reassign never calls process::exit, so the guard is simply
-    // dropped at end of scope. HARD-SKIP on contention: skip rather than proceed
-    // to an unlocked load->reap->remove->save that could silently free a peer's
-    // just-claimed key (double-grab). The old fail-soft `acquire` left that
-    // window open.
-    let _lock = match LeaseLock::acquire_or_skip(&cwd) {
-        Some(l) => l,
-        None => {
-            println!(
-                "{{\"control_note\": \"reassign: lease lock contended for {key}; \
-                 skipping to avoid a racing double-grab\"}}"
-            );
-            return Ok(());
-        }
-    };
+    // cycle, exactly as lease.rs's mutators do, so a reassign racing a
+    // concurrent begin/heartbeat cannot save a stale snapshot back and
+    // silently free a just-claimed key (double-grab). HARD-SKIP: if the lock
+    // is not taken (contended, or the root is unresolvable) fail with a
+    // non-zero exit rather than proceed unlocked.
+    let _lock = crate::lease::lock_or_bail(&cwd, "reassign")?;
 
     let mut leases = store::load_leases(&cwd)?;
     store::reap_stale(&mut leases, now);
@@ -157,17 +157,14 @@ pub fn reassign(key: &str, to: &str) -> Result<()> {
     // Capture the run id of the released lease (if any) for the audit event.
     let released_run = leases.get(key).map(|l| l.run_id.clone());
 
-    match leases.remove(key) {
-        Some(_) => {
-            // Persist the released registry.
-            store::save_leases(&cwd, &leases)?;
-        }
-        None => {
-            println!(
-                "{{\"control_note\": \"reassign: key {key} not held; recording intent anyway\"}}"
-            );
-        }
+    if leases.remove(key).is_none() {
+        println!("{{\"control_note\": \"reassign: key {key} not held; nothing reassigned\"}}");
+        anyhow::bail!(
+            "overwatch reassign: no lease held under key `{key}`; nothing was reassigned"
+        );
     }
+    // Persist the released registry.
+    store::save_leases(&cwd, &leases)?;
 
     let run_id = released_run.unwrap_or_else(|| format!("run-{now}"));
     record_control_event(key, &run_id, format!("reassign to={to}"));

@@ -32,7 +32,6 @@ fn daily(home: &Path, cwd: &Path, args: &[&str], stdin: &str) -> (i32, String, S
 }
 
 #[test]
-#[ignore = "RED repro: daily runs the default task on an unparseable config"]
 fn unparseable_config_does_not_run_default_task() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");

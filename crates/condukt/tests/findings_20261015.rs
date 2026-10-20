@@ -66,9 +66,11 @@ fn schedule_with_config(tag: &str, config: &str) -> Output {
             "goal": "shared glob serialization",
             "tasks": [
                 {"id": "touch-shared", "title": "touch-shared",
-                 "touched_files": ["shared/x.rs"], "deps": [], "class": "parallel"},
+                 "touched_files": ["shared/x.rs"], "deps": [], "class": "parallel",
+                 "commands": []},
                 {"id": "other", "title": "other",
-                 "touched_files": ["other/y.rs"], "deps": [], "class": "parallel"}
+                 "touched_files": ["other/y.rs"], "deps": [], "class": "parallel",
+                 "commands": []}
             ]
         }))
         .unwrap(),

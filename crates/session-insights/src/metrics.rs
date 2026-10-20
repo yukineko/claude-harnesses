@@ -167,47 +167,107 @@ pub fn short(s: &str) -> String {
     s.chars().take(8).collect()
 }
 
+/// The result of scanning the state dir: the rollups that loaded, and every
+/// `<sid>.json` that could NOT be read or parsed. `unreadable` non-empty means
+/// `sessions` is a PARTIAL list — callers must not present it as complete.
+#[derive(Debug, Default)]
+pub struct Loaded {
+    pub sessions: Vec<Session>,
+    /// `(path, reason)` for each session file that failed to read/parse.
+    pub unreadable: Vec<(PathBuf, String)>,
+}
+
+impl Loaded {
+    /// One-line disclosure of the unreadable files, for stderr.
+    pub fn unreadable_summary(&self) -> String {
+        let parts: Vec<String> = self
+            .unreadable
+            .iter()
+            .map(|(p, why)| format!("{} ({why})", p.display()))
+            .collect();
+        format!(
+            "{} session file(s) could not be read: {}",
+            self.unreadable.len(),
+            parts.join("; ")
+        )
+    }
+}
+
 /// All session rollups on disk, newest first. A missing state dir is a
-/// legitimate absence (no session recorded yet) and yields `Known(vec![])`;
+/// legitimate absence (no session recorded yet) and yields an empty `Known`;
 /// any OTHER `read_dir` error (permission denied, IO) is a cannot-determine
 /// — it must not be silently read as "no sessions", so it comes back
-/// `Undetermined` instead.
-pub fn load_all(cfg: &Config) -> Determination<Vec<Session>> {
-    let mut out = Vec::new();
+/// `Undetermined` instead. A single `<sid>.json` that cannot be read or parsed
+/// is NOT dropped silently either: it is listed in [`Loaded::unreadable`].
+pub fn load_all(cfg: &Config) -> Determination<Loaded> {
+    let mut out = Loaded::default();
     let entries = match std::fs::read_dir(&cfg.state_dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Determination::Known(Vec::new())
+            return Determination::Known(out);
         }
         Err(e) => return Determination::undetermined(format!("{}: {e}", cfg.state_dir.display())),
     };
-    for e in entries.flatten() {
+    for e in entries {
+        // A failed directory entry names no file, so it cannot be attributed
+        // to one session: the whole scan is a cannot-determine.
+        let e = match e {
+            Ok(e) => e,
+            Err(err) => {
+                return Determination::undetermined(format!(
+                    "{}: directory entry could not be read: {err}",
+                    cfg.state_dir.display()
+                ))
+            }
+        };
         let p = e.path();
         if p.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
-        if let Some(s) = std::fs::read_to_string(&p)
-            .ok()
-            .and_then(|t| serde_json::from_str::<Session>(&t).ok())
-        {
-            out.push(s);
+        let parsed = std::fs::read_to_string(&p)
+            .map_err(|e| e.to_string())
+            .and_then(|t| serde_json::from_str::<Session>(&t).map_err(|e| e.to_string()));
+        match parsed {
+            Ok(s) => out.sessions.push(s),
+            Err(why) => out.unreadable.push((p, why)),
         }
     }
-    out.sort_by(|a, b| b.last_at.cmp(&a.last_at));
+    out.sessions.sort_by(|a, b| b.last_at.cmp(&a.last_at));
     Determination::Known(out)
 }
 
+/// The newest session. If any session file is unreadable, which one is newest
+/// cannot be determined (the unreadable one may be it), so this is
+/// `Undetermined` rather than a possibly-wrong answer.
 pub fn latest(cfg: &Config) -> Determination<Option<Session>> {
     match load_all(cfg) {
-        Determination::Known(v) => Determination::Known(v.into_iter().next()),
+        Determination::Known(l) if !l.unreadable.is_empty() => {
+            Determination::undetermined(l.unreadable_summary())
+        }
+        Determination::Known(l) => Determination::Known(l.sessions.into_iter().next()),
         Determination::Undetermined(why) => Determination::Undetermined(why),
     }
 }
 
+/// The newest session whose id starts with `prefix`. An unreadable file whose
+/// name (`<sid>.json`) also matches the prefix makes the answer undetermined;
+/// unreadable files that cannot match do not.
 pub fn find(cfg: &Config, prefix: &str) -> Determination<Option<Session>> {
     match load_all(cfg) {
-        Determination::Known(v) => {
-            Determination::Known(v.into_iter().find(|s| s.session_id.starts_with(prefix)))
+        Determination::Known(mut l) => {
+            l.unreadable.retain(|(p, _)| {
+                p.file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_none_or(|stem| stem.starts_with(prefix))
+            });
+            if !l.unreadable.is_empty() {
+                return Determination::undetermined(l.unreadable_summary());
+            }
+            Determination::Known(
+                l.sessions
+                    .into_iter()
+                    .find(|s| s.session_id.starts_with(prefix)),
+            )
         }
         Determination::Undetermined(why) => Determination::Undetermined(why),
     }
@@ -276,7 +336,70 @@ mod tests {
     fn missing_state_dir_yields_known_empty_not_undetermined() {
         let mut c = cfg();
         c.state_dir = std::path::PathBuf::from("/no/such/session-insights/state/dir/at/all");
-        assert!(matches!(load_all(&c), Determination::Known(v) if v.is_empty()));
+        assert!(matches!(
+            load_all(&c),
+            Determination::Known(l) if l.sessions.is_empty() && l.unreadable.is_empty()
+        ));
+    }
+
+    fn state_with_corrupt(tag: &str) -> Config {
+        let dir = std::env::temp_dir().join(format!(
+            "session-insights-metrics-corrupt-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut c = cfg();
+        c.state_dir = dir;
+        let mut good = Session::default();
+        good.ensure("good-1", "p", "/p");
+        save(&c, "good-1", &good);
+        std::fs::write(c.state_dir.join("bad-2.json"), "{ not json").unwrap();
+        c
+    }
+
+    #[test]
+    fn corrupt_session_file_is_listed_as_unreadable() {
+        let c = state_with_corrupt("all");
+        let r = load_all(&c);
+        let _ = std::fs::remove_dir_all(&c.state_dir);
+        match r {
+            Determination::Known(l) => {
+                assert_eq!(l.sessions.len(), 1);
+                assert_eq!(l.unreadable.len(), 1, "{:?}", l.unreadable);
+                assert!(l.unreadable[0].0.ends_with("bad-2.json"));
+            }
+            other => panic!("expected Known, got {other:?}"),
+        }
+    }
+
+    /// The corrupt file may be the newest session, so `latest` cannot answer.
+    #[test]
+    fn latest_with_a_corrupt_file_is_undetermined() {
+        let c = state_with_corrupt("latest");
+        let r = latest(&c);
+        let _ = std::fs::remove_dir_all(&c.state_dir);
+        assert!(
+            matches!(&r, Determination::Undetermined(w) if w.as_str().contains("bad-2.json")),
+            "{r:?}"
+        );
+    }
+
+    /// `find` is undetermined only when the corrupt file's id could match.
+    #[test]
+    fn find_is_undetermined_only_for_a_matching_corrupt_file() {
+        let c = state_with_corrupt("find");
+        let matching = find(&c, "bad");
+        let other = find(&c, "good");
+        let _ = std::fs::remove_dir_all(&c.state_dir);
+        assert!(
+            matches!(&matching, Determination::Undetermined(w) if w.as_str().contains("bad-2.json")),
+            "{matching:?}"
+        );
+        assert!(
+            matches!(&other, Determination::Known(Some(s)) if s.session_id == "good-1"),
+            "{other:?}"
+        );
     }
 
     /// CA-session-insights-metrics-01: a state dir that EXISTS but is

@@ -6,7 +6,6 @@
 use std::process::{Command, Stdio};
 
 #[test]
-#[ignore = "RED repro: status --json reads a corrupt ledger as zero spend / no pressure"]
 fn status_json_corrupt_ledger_is_not_zero_spend() {
     let base = std::env::temp_dir().join(format!("bg-status-corrupt-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);

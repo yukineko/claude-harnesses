@@ -106,7 +106,9 @@ fn control_a_genuinely_active_peer_claims_its_file() {
     // active" peer is one holding a LIVE entry in condukt's claim registry. The
     // assertion below is unchanged.
     let _live = LiveRegistry::for_cwd(&["peer"]);
-    let got = peer_edit_footprint_within(&root, "me", Duration::from_secs(24 * 3600));
+    let got = peer_edit_footprint_within(&root, "me", Duration::from_secs(24 * 3600))
+        .require()
+        .expect("registry is live and readable; liveness must be Known (eef58891)");
     assert!(
         got.contains("/tmp/claimed.rs"),
         "fresh peer must be admitted: {got:?}"
@@ -127,7 +129,9 @@ fn a_transcript_whose_records_are_a_week_old_is_not_a_peer_even_if_its_mtime_is_
         edit_line("/tmp/not-claimed.rs", "2020-01-01T00:00:00.000Z") + "\n",
     )
     .unwrap();
-    let got = peer_edit_footprint_within(&root, "me", Duration::from_secs(24 * 3600));
+    let got = peer_edit_footprint_within(&root, "me", Duration::from_secs(24 * 3600))
+        .require()
+        .expect("liveness must be Known for this fixture (eef58891)");
     assert!(
         !got.contains("/tmp/not-claimed.rs"),
         "a session whose own records are years old was admitted as a peer on the strength of a \

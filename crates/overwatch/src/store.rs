@@ -5,7 +5,7 @@ use crate::changeset::{
 };
 use crate::disposition::Disposition;
 use crate::event::LifecycleEvent;
-use crate::lock::LeaseLock;
+use crate::lock::{LeaseLock, LockError};
 use crate::merge_conflict::{MergeConflictEntry, MergeConflictResolution};
 use crate::review_finding::{AuditVerdict, ReviewFinding};
 use crate::rollback::RollbackEvent;
@@ -852,6 +852,20 @@ pub enum AppendOutcome {
     SkippedUndetermined(String),
 }
 
+/// Map a failed strict lock acquire to the not-persisted [`AppendOutcome`]:
+/// only genuine contention ([`LockError::NotAcquired`]) is
+/// [`AppendOutcome::SkippedContended`]; an unresolvable lock path or a lock I/O
+/// failure is [`AppendOutcome::SkippedUndetermined`] — no peer is known to hold
+/// anything, so "contended, retry shortly" would misstate the cause.
+fn lock_failure_outcome(e: LockError) -> AppendOutcome {
+    match e {
+        LockError::NotAcquired => AppendOutcome::SkippedContended,
+        LockError::PathUndetermined(_) | LockError::Io(_) => {
+            AppendOutcome::SkippedUndetermined(format!("{e}; nothing was persisted"))
+        }
+    }
+}
+
 /// Answer "is there already a record matching `pred` in this ledger?" from the
 /// tri-state [`scan_jsonl`], for the dedup-then-append writers below.
 ///
@@ -877,7 +891,9 @@ fn ledger_contains<T: serde::de::DeserializeOwned>(
 /// read->check->append critical section and re-check for an existing
 /// disposition with this `finding_id` INSIDE the lock, skipping the append if
 /// one is already present. On lock contention the append is HARD-SKIPPED
-/// ([`AppendOutcome::SkippedContended`]). The dedup reads the ledger via the
+/// ([`AppendOutcome::SkippedContended`]); a lock I/O failure or unresolvable
+/// lock path is [`AppendOutcome::SkippedUndetermined`], never "contended".
+/// The dedup reads the ledger via the
 /// tri-state [`scan_dispositions`] path: an unreadable ledger or a corrupt
 /// existing line makes the dedup undetermined and the append is REFUSED
 /// ([`AppendOutcome::SkippedUndetermined`]) — it is never treated as "no prior
@@ -957,13 +973,9 @@ fn append_disposition_detailed_with_deadline(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let _lock = match LeaseLock::acquire_or_skip_with_deadline(cwd, deadline) {
-        Some(l) => l,
-        None => {
-            return Ok(DispositionAppend::NotPersisted(
-                AppendOutcome::SkippedContended,
-            ))
-        }
+    let _lock = match LeaseLock::acquire_strict_with_deadline(cwd, deadline) {
+        Ok(l) => l,
+        Err(e) => return Ok(DispositionAppend::NotPersisted(lock_failure_outcome(e))),
     };
     // Dedup via the tri-state scan (CA-overwatch-02): the best-effort
     // `read_dispositions` dropped an unreadable ledger / undecodable line, so a
@@ -1046,9 +1058,9 @@ pub fn runtime_conflicts_path(cwd: &Path) -> Result<PathBuf> {
 ///
 /// So only an absent file yields `Ok(ChangesetRegistry::default())`; unreadable
 /// or corrupt yields `Err`, aborting the mutator before it can write anything
-/// back. Callers that must not fail on detection already treat an `Err` as "no
-/// overlap detected" (only a POSITIVE detection holds a merge) — and now do so
-/// without clobbering the registry on the way.
+/// back. Through [`record_changeset_and_detect`] that `Err` reaches condukt's
+/// detection hook, which treats it as an UNCHECKED overlap and holds the merge
+/// (backlog 08494f63) — never as "no overlap detected".
 pub fn load_active_changesets(cwd: &Path) -> Result<ChangesetRegistry> {
     let path = active_changesets_path(cwd)?;
     match harness_core::boundary::read_to_string(&path) {
@@ -1129,23 +1141,28 @@ pub fn scan_runtime_conflicts(cwd: &Path) -> Result<Determination<Vec<RuntimeCon
 /// each event -> upsert this changeset -> save. Returns the events so the
 /// caller (condukt's detection hook) can set a merge-hold when non-empty.
 ///
-/// Fail-soft on the detection side: the caller wraps this so a lock timeout /
-/// write error degrades to "no overlap detected" and never holds a merge on a
-/// compute error (only a POSITIVE detection holds). The `LeaseLock` never
-/// panics; a write error propagates as `Err` for the caller to swallow.
+/// `Ok(events)` means the changeset WAS recorded and cross-checked: an empty
+/// vec is a genuine "no overlap". Anything that prevented the check — the
+/// `LeaseLock` not acquired (contended, or its path unresolvable), an unreadable/corrupt registry, a
+/// write error — is `Err` (backlog 08494f63): the overlap is then UNCHECKED,
+/// not absent, and the caller (condukt's `runtime_conflict`) holds the merge
+/// on it rather than reading it as "no overlap". The `LeaseLock` never panics.
 pub fn record_changeset_and_detect(
     cwd: &Path,
     changeset: &ActualChangeset,
 ) -> Result<Vec<RuntimeConflictEvent>> {
-    // HARD-SKIP on contention: skip the record+detect rather than proceed to an
-    // unlocked load->save that could clobber a peer's changeset. Returning no
-    // events matches the caller's documented degrade ("no overlap detected" — a
-    // positive detection is the only thing that holds a merge), so a contended
-    // pass never spuriously holds. The old fail-soft `acquire` left that window
-    // open.
-    let _lock = match LeaseLock::acquire_or_skip(cwd) {
-        Some(l) => l,
-        None => return Ok(Vec::new()),
+    // On contention, do NOT proceed to an unlocked load->save that could clobber
+    // a peer's changeset — and do NOT report "no overlap" either: nothing was
+    // recorded or cross-checked, so the answer is undetermined and is an `Err`
+    // (backlog 08494f63; it used to be `Ok(vec![])`, which let the merge
+    // proceed unchecked).
+    let _lock = match LeaseLock::acquire_strict(cwd) {
+        Ok(l) => l,
+        Err(e) => anyhow::bail!(
+            "overwatch lease-registry lock not acquired ({e}); changeset {} was NOT \
+             recorded or cross-checked for overlap — overlap is undetermined, not absent",
+            changeset.task_key
+        ),
     };
     // Test-only race widener (no-op in prod): widen the load->save window so the
     // concurrency regression test can reliably interleave two writers.
@@ -1545,19 +1562,26 @@ pub fn merge_conflict_resolutions_path(cwd: &Path) -> Result<PathBuf> {
 /// under `LeaseLock` (same TOCTOU guard as `append_disposition`). If the
 /// existing ledger cannot be read in full (unreadable / undecodable line) the
 /// dedup is undetermined and this returns `Err` WITHOUT appending
-/// (CA-overwatch-03), rather than double-rowing the entry. Callers warn on
-/// `Err`.
+/// (CA-overwatch-03), rather than double-rowing the entry. If the `LeaseLock`
+/// cannot be acquired (contended, or its path unresolvable) nothing is written and this also returns
+/// `Err` (backlog 452f3705) — `Ok(())` always means the entry is on the ledger
+/// (freshly appended or already present). Callers must treat `Err` as "the
+/// blocked merge is NOT on the review surface".
 pub fn append_merge_conflict(cwd: &Path, entry: &MergeConflictEntry) -> Result<()> {
     let path = merge_conflicts_path(cwd)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // HARD-SKIP on contention: skip the append rather than proceed to an
-    // unlocked check-then-append that could double-row the blocked merge. The
-    // old fail-soft `acquire` left that window open.
-    let _lock = match LeaseLock::acquire_or_skip(cwd) {
-        Some(l) => l,
-        None => return Ok(()),
+    // On contention, do NOT proceed to an unlocked check-then-append that could
+    // double-row the blocked merge — and do NOT report success: nothing was
+    // written, so this is an `Err` (backlog 452f3705; it used to be `Ok(())`).
+    let _lock = match LeaseLock::acquire_strict(cwd) {
+        Ok(l) => l,
+        Err(e) => anyhow::bail!(
+            "overwatch lease-registry lock not acquired ({e}); merge conflict {} was NOT \
+             recorded",
+            entry.conflict_id
+        ),
     };
     // Dedup via the tri-state scan (CA-overwatch-03 twin): an undetermined
     // dedup is an ERROR, not a silent `Ok(())` — the callers (condukt) warn
@@ -1608,6 +1632,8 @@ pub fn scan_merge_conflicts(cwd: &Path) -> Result<Determination<Vec<MergeConflic
 /// [`append_disposition`]: hold the store `LeaseLock`, re-check for an existing
 /// resolution of this `conflict_id` INSIDE the lock, skip if present. On lock
 /// contention the append is HARD-SKIPPED ([`AppendOutcome::SkippedContended`]);
+/// a lock I/O failure or unresolvable lock path is
+/// [`AppendOutcome::SkippedUndetermined`], never "contended";
 /// an unreadable / partially-undecodable resolution ledger makes the dedup
 /// undetermined and the append is REFUSED
 /// ([`AppendOutcome::SkippedUndetermined`]), never appended as a duplicate.
@@ -1627,9 +1653,9 @@ pub fn append_merge_conflict_resolution(
     // HARD-SKIP on contention: skip the append rather than proceed to an
     // unlocked check-then-append that could double-row the resolution. The old
     // fail-soft `acquire` left that window open.
-    let _lock = match LeaseLock::acquire_or_skip(cwd) {
-        Some(l) => l,
-        None => return Ok(AppendOutcome::SkippedContended),
+    let _lock = match LeaseLock::acquire_strict(cwd) {
+        Ok(l) => l,
+        Err(e) => return Ok(lock_failure_outcome(e)),
     };
     // Dedup via the tri-state scan (CA-overwatch-03 twin).
     match ledger_contains::<MergeConflictResolution>(
@@ -2026,7 +2052,7 @@ mod tests {
     // an unlocked check-then-append that could double-row the disposition. RED
     // with the old fail-soft `acquire`: it hands back an unlocked guard, the
     // append proceeds, and dispositions.jsonl gains a line. GREEN with
-    // `acquire_or_skip_with_deadline`.
+    // `acquire_strict_with_deadline`.
     #[test]
     fn contended_store_lock_makes_append_disposition_skip_not_double_write() {
         use crate::disposition::{Disposition, DispositionVerdict};

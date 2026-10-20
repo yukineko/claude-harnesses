@@ -70,6 +70,10 @@ Fail→Pass ゲート（`condukt state check-oracle`）が `fix`/`feature` タ�
 
 ```toml
 enabled = true
+mode = "strict"             # "strict"（既定）: 毎回指摘する / "loose": 実装ファイルの内容 hash ごとに 1 度だけ
+                            #   指摘し、指摘対象が全て指摘済みの hash なら黙って通す（ゲートログに already-warned）。
+                            #   ファイルを編集すれば再び指摘する。判定不能（git 失敗）は毎回ブロック。
+                            #   テストを書かない・書けないリポジトリでそのリポジトリの tdd.toml に書く
 max_attempts = 3            # 連続 N 回ブロックしたら諦めて停止を許す
 reset_after_secs = 600      # アイドルがこの秒数を超えると試行カウンタをリセット
 min_added_impl_lines = 1    # 追加実装行がこの行数に達したらテストを要求

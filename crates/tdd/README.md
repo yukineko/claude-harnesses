@@ -102,6 +102,7 @@ verbatim), else `~/.tdd/config.toml`, else language-aware defaults. Common keys:
 | Key | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | master switch for the gate |
+| `mode` | `"strict"` | `"strict"`: report the finding on every stop. `"loose"` (for projects that will not or cannot do test-first): warn once per implementation file content hash — a stop whose flagged files are all at an already-warned hash goes through silently (gate log `already-warned`); editing a file warns again. An undetermined scan still blocks every time. Set it per repository in that repo's `tdd.toml` |
 | `max_attempts` | `3` | give up (allow the stop) after N consecutive blocks |
 | `reset_after_secs` | `600` | idle gap that resets the attempt counter |
 | `min_added_impl_lines` | `1` | added impl lines before a test is required |

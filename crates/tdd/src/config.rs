@@ -12,9 +12,38 @@ use serde::Deserialize;
 pub use harness_core::config::expand_tilde;
 use harness_core::trust;
 
+/// How hard the Stop gate holds a repository to test-first (operator ruling
+/// 2026-10-20: 「repository ごとに strict と loose くらいを定めてもいい」
+/// 「default は strict」).
+///
+/// * `Strict` (default) — a finding is reported on every stop (blocking up to
+///   `max_attempts`, then the shared repeat/give-up rules).
+/// * `Loose` — for projects that will not or cannot do test-first: warn once
+///   per file hash (「strict は毎回警告するが、そうでないなら一つの file の hash
+///   にたいして一度だけ」). A finding is shown when any implementation file it
+///   names is at a (path, content hash) not warned before; when every named
+///   file is at an already-warned hash the stop goes through silently
+///   (recorded in the gate log). Editing a file gives it a new hash and it is
+///   warned again. Only a determined finding is deduplicated — an
+///   undetermined scan (git failed) still blocks every time, because "already
+///   warned" cannot be known about something that was never determined. See
+///   `warned.rs`.
+///
+/// A value other than `strict` / `loose` fails to parse, and an unparseable
+/// `tdd.toml` falls back to the defaults, i.e. `Strict`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    #[default]
+    Strict,
+    Loose,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub enabled: bool,
+    /// See [`Mode`]. Default `Strict`.
+    pub mode: Mode,
     /// After this many consecutive blocks in one session, give up and allow the
     /// stop (so a genuinely stuck agent isn't trapped forever).
     pub max_attempts: u32,
@@ -114,6 +143,7 @@ pub fn effective_strict_separation(explicit: Option<bool>, gate_context: bool) -
 #[derive(Debug, Default, Deserialize)]
 struct FileConfig {
     enabled: Option<bool>,
+    mode: Option<Mode>,
     max_attempts: Option<u32>,
     reset_after_secs: Option<i64>,
     state_dir: Option<String>,
@@ -205,6 +235,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             enabled: true,
+            mode: Mode::Strict,
             max_attempts: 3,
             reset_after_secs: 600,
             state_dir: base_dir().join("state"),
@@ -266,6 +297,9 @@ impl Config {
                 if let Ok(fc) = toml::from_str::<FileConfig>(&text) {
                     if let Some(v) = fc.enabled {
                         cfg.enabled = v;
+                    }
+                    if let Some(v) = fc.mode {
+                        cfg.mode = v;
                     }
                     if let Some(v) = fc.max_attempts {
                         cfg.max_attempts = v;

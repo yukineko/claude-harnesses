@@ -774,16 +774,17 @@ enum ConsensusAction {
 
 #[derive(Subcommand)]
 enum AdversarialAction {
-    /// Decide whether a completion warrants an adversarial panel. OPT-IN:
-    /// engaged by the env switch `CONDUKT_ADVERSARIAL` (1/true) OR by a
-    /// high-stakes change (any `--touched` path under a GATE crate:
-    /// blastguard/propguard/specguard/stuckguard/mutategate). Prints the plan
+    /// Decide whether a completion warrants an adversarial panel. OPT-IN only:
+    /// engaged by config.toml `[adversarial] enabled` or the env switch
+    /// `CONDUKT_ADVERSARIAL` (1/true). A high-stakes change (any `--touched`
+    /// path under a GATE crate) is echoed as `high_stakes` but does NOT engage
+    /// the panel. Prints the plan
     /// JSON and exits 0 when a panel is warranted (so the skill can branch on
     /// the exit code, like `consensus plan` / `state autonomy-check`), 1 for the
     /// ordinary single-verifier path.
     Plan {
-        /// A changed path (repeatable). A path under `crates/<gate>/` forces the
-        /// panel even when the global switch is off.
+        /// A changed path (repeatable). A path under `crates/<gate>/` sets
+        /// `high_stakes` in the output; it does not engage the panel.
         #[arg(long = "touched")]
         touched: Vec<String>,
         /// Panel width override (clamped to [2, MAX_PANEL] when engaged).
@@ -4096,9 +4097,10 @@ fn adversarial_policy(cfg: &Config) -> adversarial::Policy {
 fn run_adversarial(cfg: &Config, action: AdversarialAction) -> Result<()> {
     match action {
         AdversarialAction::Plan { touched, size } => {
-            // OPT-IN: the global switch comes from config.toml `[adversarial]
-            // enabled` / `CONDUKT_ADVERSARIAL` (resolved in Config::load); a
-            // change under any GATE crate forces the panel regardless.
+            // OPT-IN only: the global switch comes from config.toml
+            // `[adversarial] enabled` / `CONDUKT_ADVERSARIAL` (resolved in
+            // Config::load). A GATE-crate change is echoed as `high_stakes`
+            // but does not engage the panel.
             let high_stakes = adversarial::touches_gate_crate(&touched);
             let plan = adversarial::plan(
                 cfg.adversarial_enabled,

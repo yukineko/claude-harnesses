@@ -60280,3 +60280,62 @@ rev = "ff52201a3a6b1137efd7c9ffa81a3d2a1a64d9c9"
 exit = 101
 kind = "behavioural"
 overlay = ["crates/reviewgate/tests/integration.rs"]
+
+[[task]]
+id = "e23580cd"
+title = "interrogate.rs の純粋性主張と Determination::undetermined の間接 telemetry IO が食い違う"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "Issue summary: measured 2026-08-18 at 8e901056. t3 done_criteria item 4 requires no IO added to interrogate.rs, guarded lexically by tests/interrogate_purity.rs. But ScopeDraft::declare's Undetermined path goes through harness_core::verdict::Determination::undetermined, which calls crate::undetermined::record and writes a file (self-suppressed under cargo, writes in production). The purity test doc admits it does not detect indirect IO. Needs a decision: narrow item 4 to no direct IO, or document telemetry as an IO exception. recreated 2026-10-04 from issue #360; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1792620950
+weight = 0.0
+issue_number = 360
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/360"
+issue_closed_at = 1792620953
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test backlog_e23580cd -- --ignored declare_on_an_unasked_draft_performs_no_file_io"
+rev = "3be54fd6902dc0386ab26750b77fda2d79326082"
+observed_at = 1791049881
+detail = """
+exit 101: lures:
+    declare_on_an_unasked_draft_performs_no_file_io
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_e23580cd.rs (target/debug/deps/backlog_e23580cd-3b683f7a6290ba45)
+error: test failed, to rerun pass `-p harness-core --test backlog_e23580cd`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test backlog_e23580cd declare_on_an_unasked_draft_writes_one_telemetry_line"
+exit = 0
+passed = 1
+rev = "0d550af2dd001a67d7ae85aa4bad0c78e693cde3"
+observed_at = 1792620939
+output_digest = "sha256:f87fb38c97ad980310162123419fdebb11645b73755a991c7173612f774187e4"
+excerpt = """
+
+running 1 test
+test declare_on_an_unasked_draft_writes_one_telemetry_line ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_e23580cd.rs (target/debug/deps/backlog_e23580cd-75873ad2fd30451a)
+"""
+
+[task.closure.red]
+rev = "ff52201a3a6b1137efd7c9ffa81a3d2a1a64d9c9"
+exit = 101
+kind = "behavioural"

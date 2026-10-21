@@ -528,37 +528,6 @@ exit 1: e414e.py::\u001B[1mLockfileOnlyChange::test_cargo_lock_only_change_is_no
 \u001B[31m========================= \u001B[31m\u001B[1m2 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.58s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "1eae7cb9"
-title = "autoflow still keys its state off repo_root rather than the main worktree root"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "verifier side finding on 43393ce2: condukt moved to main_worktree_root but autoflow did not, so the two disagree when invoked from a linked worktree."
-created_at = 1791053152
-updated_at = 1792005369
-weight = 0.0
-issue_number = 1321
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1321"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p autoflow --test backlog_1eae7cb9 -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005366
-detail = """
-exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/overwatch)
-   Compiling autoflow v0.1.31 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/autoflow)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.84s
-     Running tests/backlog_1eae7cb9.rs (target/debug/deps/backlog_1eae7cb9-a8ce5e3b08911b2f)
-error: test failed, to rerun pass `-p autoflow --test backlog_1eae7cb9`"""
-
-[[task]]
 id = "ee0e0b85"
 title = "blastguard: スクリプトファイル実行時に中身を判定しない(書いてから実行で rm -rf ~ が通る)"
 project = "/Users/yuki/src/harness"

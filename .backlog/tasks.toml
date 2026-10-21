@@ -410,38 +410,6 @@ exit 1: st/unittest.py\u001B[0m:354: XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 1.31s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "636842cd"
-title = "specguard doc_problem follows symlinks: a docs/specs/x.md symlink to a file outside the repo counts as a valid binding (gate-check, and now brief covered)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "specguard",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "From the 230c34ec verifier 2026-10-04: gatecheck.rs doc_problem uses std::fs::metadata (follows symlinks). Pre-existing in gate-check; brief now inherits it as a source of covered. Not tested."
-created_at = 1791047755
-updated_at = 1792005357
-weight = 0.0
-issue_number = 1279
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1279"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p specguard --test backlog_636842cd -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005355
-detail = """
-exit 101: ; 0 ignored; 0 measured; 1 filtered out; finished in 0.96s
-
-   Compiling specguard v0.2.89 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/specguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
-     Running tests/backlog_636842cd.rs (target/debug/deps/backlog_636842cd-f978ceae758f92f0)
-error: test failed, to rerun pass `-p specguard --test backlog_636842cd`"""
-
-[[task]]
 id = "fc9e3487"
 title = "scripts/tests/rebuild-stage-repo-destination.sh hardcodes backlog-linux-x86_64, so on darwin-arm64 it fails its own vacuity check"
 project = "/Users/yuki/src/harness"

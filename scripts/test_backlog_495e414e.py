@@ -79,12 +79,10 @@ class LockfileOnlyChange(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("nothing to lint", proc.stdout)
 
-    @unittest.expectedFailure
     def test_cargo_lock_only_change_is_not_nothing_to_lint(self) -> None:
         (self.repo / "Cargo.lock").write_text("version = 4\n")
         self.assert_not_claimed_clean("Cargo.lock")
 
-    @unittest.expectedFailure
     def test_root_manifest_only_change_is_not_nothing_to_lint(self) -> None:
         with (self.repo / "Cargo.toml").open("a") as f:
             f.write('\n[workspace.lints.clippy]\nunwrap_used = "deny"\n')

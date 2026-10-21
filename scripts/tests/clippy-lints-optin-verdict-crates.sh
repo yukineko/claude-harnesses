@@ -1,92 +1,39 @@
 #!/usr/bin/env bash
 # scripts/tests/clippy-lints-optin-verdict-crates.sh
 #
-# Pins backlog 034b6620: the REAL crates `tdd` (crates/tdd) and `condukt`
-# (crates/condukt) must be covered by scripts/check-clippy-lints.py — i.e. a
-# denied `.unwrap()` planted in their PRODUCTION (non-test) code must make
-# the gate block (exit 1), not "not opted in" / "nothing to check" (exit 0).
+# Pins backlog 034b6620 for the REAL crates `tdd` (crates/tdd) and `condukt`
+# (crates/condukt): both must carry `[lints] workspace = true`, and
+# scripts/check-clippy-lints.py must refuse a working-tree change that drops it.
 #
 # Why this is a SEPARATE test from scripts/tests/precommit-clippy-gate.sh
 # ------------------------------------------------------------------------
-# That suite already proves the opt-in MECHANISM works, using synthetic
-# fixture crates (`gatecrate`, `plaincrate`) built from scratch. It does not,
-# and cannot, tell you whether any particular real crate in THIS repository
-# has actually opted in. Membership in scripts/check-clippy-lints.py is
-# derived from `[lints] workspace = true` in each crate's own Cargo.toml
-# (see that scanner's module docstring, "Membership is DERIVED, never
-# hardcoded") — a crate that never added that line is invisible to the gate
-# no matter how correct the gate's derivation logic is. tdd and condukt are
-# both verdict-bearing gate crates (tdd blocks Stop on missing tests; condukt
-# orchestrates and merges work across worktrees), so an unwrap()-driven panic
-# inside either is exactly the "cannot-determine turned into a crash instead
-# of a block" case CLAUDE.md section 3 names. This test exercises the REAL
-# crates, in a sandbox copy of the REAL repository, to answer "are these two
-# specific crates actually covered" as an observed fact, not an inference
-# from the mechanism being correct in the abstract.
+# That suite proves the mechanism on synthetic fixture crates. It cannot tell
+# you whether any particular real crate in THIS repository has opted in. tdd
+# and condukt are verdict-bearing gate crates, so an unwrap()-driven panic in
+# either is the "cannot-determine turned into a crash" case CLAUDE.md 3 names.
 #
-# What each case proves
-# ----------------------
-#   planted  — appends a production (non-test) item containing a denied
-#              `.unwrap()` to crates/<crate>/src/main.rs, runs the scanner,
-#              and requires exit 1 AND a
-#              "running: cargo clippy -p <crate> --all-targets" line in the
-#              output (proving the crate was actually compiled and checked,
-#              not blocked for some unrelated UNDETERMINED reason such as a
-#              missing cargo).
-#   control  — anti-vacuity. From a FRESH reset of the same sandbox (never
-#              the post-"planted" state), appends a genuinely clean
-#              production item to the same file and requires exit 0 AND the
-#              same "running: cargo clippy -p <crate>" line. Without the
-#              second assertion here, a scanner that silently SKIPS the
-#              crate (because it is not opted in) would satisfy "exit 0"
-#              vacuously — it would look identical to a scanner that checked
-#              the crate and found it clean. The "running:" line is what
-#              tells the two apart.
+# check-clippy-lints.py no longer runs cargo clippy (donegate's lint-changed
+# check owns that). It scans [lints] CONFIGURATION only. So the questions this
+# test answers, as observations on a sandbox copy of the REAL working tree, are:
 #
-# EXPECTED RESULT AT THE TIME THIS TEST WAS WRITTEN (backlog 034b6620, not
-# yet fixed): neither crates/tdd/Cargo.toml nor crates/condukt/Cargo.toml
-# carries `[lints] workspace = true`. So for BOTH crates: "planted" is
-# expected to FAIL (the scanner prints "not opted in ([lints] workspace =
-# true absent): crates/<dir>" and exits 0, not 1), and "control" is expected
-# to FAIL on its "running:" assertion (exit 0 is correct, but for the wrong
-# reason — nothing was ever compiled). Per CLAUDE.md section 2 ("tests must
-# be observed RED before GREEN"), this script is committed to being run and
-# read while red; do not edit crates/tdd or crates/condukt to silence it.
+#   opted-in  — the real crates/<crate>/Cargo.toml has `[lints] workspace = true`
+#               (read with tomllib, not grepped).
+#   dropped   — removing that opt-in from the real manifest makes the scanner
+#               block (exit 1) and name crates/<crate>/Cargo.toml.
+#   control   — anti-vacuity: from a FRESH reset, a harmless edit to the same
+#               manifest (a trailing comment) exits 0. Without it, a scanner that
+#               always blocks would satisfy "dropped".
 #
 # Sandbox construction — copy of the WORKING TREE, not HEAD
 # -----------------------------------------------------------
-# `git ls-files -z -co --exclude-standard` (cached + others, NUL-separated,
-# gitignore-respecting) enumerates exactly what is actually on disk right
-# now in this worktree — tracked files as they currently stand, plus any
-# untracked-but-not-ignored files — mirroring how
-# scripts/check-clippy-lints.py itself selects (working tree, never the
-# index alone; see that scanner's "diff source == scanned content"
-# invariant). `target/` is excluded twice over: it is gitignored (so
-# --exclude-standard already drops it) and the copy step additionally
-# refuses any path starting with `target/` or containing `/target/` as a
-# belt-and-braces measure. The whole workspace is copied (not just
-# crates/tdd or crates/condukt) because `[workspace] members = ["crates/*"]`
-# in the root Cargo.toml means `cargo clippy -p tdd` needs every member
-# crate present to resolve the workspace at all — tdd and condukt both have
-# in-tree path dependencies (harness-core, overwatch, blastguard,
-# schemaguard, ...) that must exist on disk.
+# `git ls-files -z -co --exclude-standard` enumerates what is on disk now
+# (tracked + untracked-not-ignored), mirroring the scanner's own working-tree
+# selection. `target/` is excluded. The copy is `git init` + committed inside
+# the sandbox so the scanner has a HEAD to diff against. This script NEVER
+# mutates the real repository; every destructive git command targets $SANDBOX
+# under a fresh mktemp -d, cleaned up by the EXIT trap.
 #
-# The copy is then `git init` + committed inside the sandbox so the scanner
-# (which needs a repo root and a HEAD to diff against — see
-# scripts/check-clippy-lints.py's `changed_paths`) has one to work with.
-#
-# This script NEVER mutates the real repository. Every git command below
-# that is destructive (reset --hard, commit, etc.) targets `$SANDBOX`, a
-# directory under a fresh `mktemp -d`, not the worktree this script lives
-# in. "Do not run git stash/checkout/reset in the worktree" (this session's
-# instructions) refers to /Users/yuki/src/.harness-worktrees/lints-034b6620
-# itself; $SANDBOX is a disposable throwaway copy this script owns outright,
-# cleaned up by the EXIT trap.
-#
-# MAC-RUNNABLE: bash 3.2, BSD tools, python3 (used only for the tree copy,
-# so file/symlink handling is uniform regardless of bsdtar/cpio version
-# quirks), git, cargo. No network access. No file in the real repository is
-# read for anything but the initial snapshot listing and is never written.
+# MAC-RUNNABLE: bash 3.2, BSD tools, python3, git. No cargo, no network.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -100,28 +47,12 @@ pass() { echo "  ok: $*"; }
 [ -n "$REAL_GIT" ] || fail "git not found on PATH"
 [ -n "$PY" ] || fail "python3 not found on PATH"
 [ -f "$SCANNER" ] || fail "scripts/check-clippy-lints.py does not exist (nothing to test)"
-
-REAL_CARGO=""
-if command -v cargo >/dev/null 2>&1; then
-  REAL_CARGO="$(command -v cargo)"
-elif [ -x "$HOME/.cargo/bin/cargo" ]; then
-  REAL_CARGO="$HOME/.cargo/bin/cargo"
-fi
-[ -n "$REAL_CARGO" ] || fail "no cargo found (PATH or ~/.cargo/bin) — this test needs the real toolchain"
 echo "using repo:    $REPO"
 echo "using scanner: $SCANNER"
-echo "using cargo:   $REAL_CARGO"
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/clippy-lints-optin-verdict.XXXXXX")"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
-
-# Shared build cache across all four (2 crates x 2 cases) real-clippy runs.
-# Honour an external override if one is set, so a caller can point this at a
-# persistent cache across repeated runs of this script.
-: "${CLIPPY_LINTS_TEST_TARGET_DIR:=$TMP/cargo-target}"
-mkdir -p "$CLIPPY_LINTS_TEST_TARGET_DIR"
-export CARGO_TARGET_DIR="$CLIPPY_LINTS_TEST_TARGET_DIR"
 
 SANDBOX="$TMP/sandbox"
 mkdir -p "$SANDBOX"
@@ -164,9 +95,8 @@ if copied == 0:
 print(f"copied {copied} files into sandbox")
 PYEOF
 [ -f "$SANDBOX/Cargo.toml" ] || fail "sandbox copy has no root Cargo.toml — copy step is broken"
-[ -f "$SANDBOX/crates/tdd/src/main.rs" ] || fail "sandbox copy is missing crates/tdd/src/main.rs"
-[ -f "$SANDBOX/crates/condukt/src/main.rs" ] || fail "sandbox copy is missing crates/condukt/src/main.rs"
-[ -f "$SANDBOX/scripts/check-clippy-lints.py" ] || fail "sandbox copy is missing the scanner itself"
+[ -f "$SANDBOX/crates/tdd/Cargo.toml" ] || fail "sandbox copy is missing crates/tdd/Cargo.toml"
+[ -f "$SANDBOX/crates/condukt/Cargo.toml" ] || fail "sandbox copy is missing crates/condukt/Cargo.toml"
 pass "sandbox tree materialized"
 
 "$REAL_GIT" -C "$SANDBOX" init -q
@@ -196,82 +126,82 @@ note_fail() {
   OVERALL_FAIL=1
 }
 
-MAIN_REL_PATH_FOR() { # <crate> -> repo-relative path to its main.rs
-  echo "crates/$1/src/main.rs"
-}
+run_cases() { # <crate>
+  local crate="$1" rel="crates/$1/Cargo.toml"
 
-run_planted_case() { # <crate>
-  local crate="$1" main_rel
-  main_rel="$(MAIN_REL_PATH_FOR "$crate")"
   echo
-  echo ">>> $crate / planted: denied .unwrap() in production code — expect exit 1"
+  echo ">>> $crate / opted-in: $rel has [lints] workspace = true"
   reset_sandbox
-  cat >>"$SANDBOX/$main_rel" <<'RSEOF'
+  if "$PY" - "$SANDBOX/$rel" <<'PYEOF'
+import sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    m = tomllib.load(f)
+lints = m.get("lints")
+sys.exit(0 if isinstance(lints, dict) and lints.get("workspace") is True else 1)
+PYEOF
+  then
+    pass "$crate/opted-in: [lints] workspace = true present"
+  else
+    note_fail "$crate/opted-in: $rel does not carry [lints] workspace = true"
+  fi
 
-#[allow(dead_code)]
-fn __planted_034b6620() -> u8 {
-    "7".parse::<u8>().ok().unwrap()
-}
-RSEOF
+  echo
+  echo ">>> $crate / dropped: opt-in removed from $rel — expect exit 1"
+  reset_sandbox
+  # Drop the `workspace = true` line that follows `[lints]` (and the header).
+  "$PY" - "$SANDBOX/$rel" <<'PYEOF'
+import sys
+p = sys.argv[1]
+lines = open(p).read().splitlines(keepends=True)
+out, in_lints = [], False
+for line in lines:
+    s = line.strip()
+    if s.startswith("["):
+        in_lints = s == "[lints]"
+        if in_lints:
+            continue
+    if in_lints and s.replace(" ", "") == "workspace=true":
+        continue
+    out.append(line)
+open(p, "w").write("".join(out))
+PYEOF
+  if "$REAL_GIT" -C "$SANDBOX" diff --quiet HEAD -- "$rel"; then
+    note_fail "$crate/dropped: fixture is wrong — $rel did not change"
+  fi
   scan
-  local running_seen=0
-  printf '%s\n' "$OUT" | grep -q "running: cargo clippy -p $crate --all-targets" && running_seen=1
-
   if [ "$RC" != "1" ]; then
-    note_fail "$crate/planted: expected exit 1 (blocked), got $RC — scanner output above"
+    note_fail "$crate/dropped: expected exit 1 (blocked), got $RC"
   else
-    pass "$crate/planted: exit 1"
+    pass "$crate/dropped: exit 1"
   fi
-  if [ "$running_seen" != "1" ]; then
-    note_fail "$crate/planted: no 'running: cargo clippy -p $crate --all-targets' line — crate was not actually checked (likely still not opted in: [lints] workspace = true missing from crates/$crate/Cargo.toml)"
+  if printf '%s\n' "$OUT" | grep -q "$rel"; then
+    pass "$crate/dropped: the crate manifest is named"
   else
-    pass "$crate/planted: crate was actually compiled and checked"
+    note_fail "$crate/dropped: $rel was not named in the block reason"
   fi
-}
 
-run_control_case() { # <crate>  -- anti-vacuity: same file, genuinely clean change
-  local crate="$1" main_rel
-  main_rel="$(MAIN_REL_PATH_FOR "$crate")"
   echo
-  echo ">>> $crate / control (anti-vacuity): clean production change — expect exit 0 AND checked"
+  echo ">>> $crate / control (anti-vacuity): harmless edit to $rel — expect exit 0"
   reset_sandbox
-  cat >>"$SANDBOX/$main_rel" <<'RSEOF'
-
-#[allow(dead_code)]
-fn __clean_034b6620() -> u8 {
-    7
-}
-RSEOF
+  printf '%s\n' '# harmless trailing comment (034b6620 control)' >>"$SANDBOX/$rel"
   scan
-  local running_seen=0
-  printf '%s\n' "$OUT" | grep -q "running: cargo clippy -p $crate --all-targets" && running_seen=1
-
   if [ "$RC" != "0" ]; then
-    note_fail "$crate/control: expected exit 0 (clean), got $RC — scanner output above"
+    note_fail "$crate/control: expected exit 0 (clean), got $RC"
   else
     pass "$crate/control: exit 0"
-  fi
-  if [ "$running_seen" != "1" ]; then
-    note_fail "$crate/control: no 'running: cargo clippy -p $crate --all-targets' line — exit 0 is VACUOUS (the crate was skipped, not checked-and-clean); this is the anti-vacuity check catching a silent skip"
-  else
-    pass "$crate/control: crate was actually compiled and checked (exit 0 is a real pass, not a skip)"
   fi
 }
 
 for crate in tdd condukt; do
-  run_planted_case "$crate"
-  run_control_case "$crate"
+  run_cases "$crate"
 done
 
 echo
 if [ "$OVERALL_FAIL" != "0" ]; then
-  echo "FAIL: backlog 034b6620 is NOT pinned clean — tdd and/or condukt are not"
-  echo "      (fully) covered by scripts/check-clippy-lints.py. See the FAIL"
-  echo "      lines above for which assertion(s) failed per crate/case."
+  echo "FAIL: tdd and/or condukt are not (fully) protected by the [lints]"
+  echo "      opt-in scan. See the FAIL lines above."
   exit 1
 fi
 
-echo "PASS: tdd and condukt are both covered by scripts/check-clippy-lints.py —"
-echo "      a denied .unwrap() planted in either crate's production code blocks"
-echo "      (exit 1), and a genuinely clean change to either is checked and"
-echo "      passes (exit 0), never a silent skip."
+echo "PASS: tdd and condukt both carry [lints] workspace = true, dropping it"
+echo "      blocks (exit 1), and a harmless manifest edit passes (exit 0)."

@@ -43,6 +43,7 @@ fn init_repo(work: &Path) {
 
 /// One Stop-hook run in a child process. Returns (exit code, stdout, stderr).
 fn run_review(cwd: &Path, home: &Path, session: &str) -> (i32, String, String) {
+    ensure_inject_config(home);
     let payload = format!(
         r#"{{"hook_event_name":"Stop","session_id":"{session}","stop_hook_active":false,"cwd":{}}}"#,
         serde_json::to_string(&cwd.to_string_lossy()).unwrap()
@@ -125,4 +126,15 @@ fn inject_giveup_is_visibly_signalled() {
         "the give-up allowed an unreviewed diff but printed no signal naming it. stdout={o2:?} stderr={e2:?}"
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// reviewgate's built-in default is `mode = "off"` (no review). These tests
+/// exercise the reviewing path, so they opt in explicitly with a home config
+/// `mode = "inject"` -- written only when the test has not placed its own.
+fn ensure_inject_config(home: &Path) {
+    let cfg = home.join(".reviewgate").join("config.toml");
+    if !cfg.exists() {
+        std::fs::create_dir_all(home.join(".reviewgate")).unwrap();
+        std::fs::write(cfg, "mode = \"inject\"\n").unwrap();
+    }
 }

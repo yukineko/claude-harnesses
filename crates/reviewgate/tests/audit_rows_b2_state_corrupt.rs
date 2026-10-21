@@ -50,6 +50,7 @@ const SESSION: &str = "s-audit-b2";
 
 /// HOME is the project dir itself (sandbox).
 fn stop(dir: &Path) -> (i32, String, String) {
+    ensure_inject_config(dir);
     let payload = serde_json::json!({
         "session_id": SESSION,
         "cwd": dir.to_string_lossy(),
@@ -205,4 +206,15 @@ fn corrupt_state_file_reads_as_unreviewed_and_blocks() {
         2,
         "the second stop must have taken the Block arm (violation event recorded): {out2}"
     );
+}
+
+/// reviewgate's built-in default is `mode = "off"` (no review). These tests
+/// exercise the reviewing path, so they opt in explicitly with a home config
+/// `mode = "inject"` -- written only when the test has not placed its own.
+fn ensure_inject_config(home: &Path) {
+    let cfg = home.join(".reviewgate").join("config.toml");
+    if !cfg.exists() {
+        std::fs::create_dir_all(home.join(".reviewgate")).unwrap();
+        std::fs::write(cfg, "mode = \"inject\"\n").unwrap();
+    }
 }

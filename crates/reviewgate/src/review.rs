@@ -1,5 +1,7 @@
 //! The gate proper: gather the reviewable diff, decide whether to block the
-//! stop, and produce the model-facing reason. Two modes:
+//! stop, and produce the model-facing reason. Two reviewing modes (opt-in;
+//! the built-in default is `off`, which reviews nothing and allows — see
+//! `config::Mode::Off`):
 //!
 //!   * `inject` — block once per new diff state and inject a review rubric; the
 //!     running subscription agent reviews its own changes.
@@ -209,6 +211,9 @@ fn attribution_note(a: &Attribution) -> Option<String> {
     }
 }
 
+/// Log tag for a stop allowed because reviewing is configured `off`.
+pub const MODE_OFF_TAG: &str = "mode-off";
+
 /// Core decision. `st` is the loaded prior session state. `transcript_path` is
 /// the Stop payload's transcript (`HookInput::transcript_path`) — the only
 /// input that can tell this session's edits from a peer's.
@@ -218,6 +223,13 @@ pub fn evaluate(
     st: &crate::state::SessionState,
     transcript_path: &str,
 ) -> Decision {
+    // `off` (the no-config default): the gate is disabled, so there is no
+    // verdict to reach — not even a git scan whose failure could block.
+    // main.rs short-circuits before calling us; this keeps `evaluate` itself
+    // honest for any other caller.
+    if cfg.mode == Mode::Off {
+        return allow(MODE_OFF_TAG, st);
+    }
     let changed = match crate::git::changed_files(root) {
         // No git scope: nothing to review, allow (unchanged behavior).
         crate::git::ChangeScan::NotRepo => return allow("no-git", st),
@@ -310,6 +322,8 @@ pub fn evaluate(
     }
 
     let decision = match cfg.mode {
+        // Unreachable after the early return above; kept non-reviewing.
+        Mode::Off => return allow(MODE_OFF_TAG, st),
         Mode::Inject => {
             let attempts = prior_attempts + 1;
             if attempts > cfg.max_attempts {

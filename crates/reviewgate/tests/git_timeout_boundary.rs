@@ -115,6 +115,7 @@ struct Run {
 }
 
 fn run_review(work: &Path, home: &Path, fake_dir: &Path, timeout_ms: Option<&str>) -> Run {
+    ensure_inject_config(home);
     let ambient = std::env::var_os("PATH").unwrap_or_default();
     let mut paths = vec![fake_dir.to_path_buf()];
     paths.extend(std::env::split_paths(&ambient));
@@ -288,5 +289,16 @@ fn bad_timeout_values_do_not_fail_a_fast_git() {
             r.stderr
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+/// reviewgate's built-in default is `mode = "off"` (no review). These tests
+/// exercise the reviewing path, so they opt in explicitly with a home config
+/// `mode = "inject"` -- written only when the test has not placed its own.
+fn ensure_inject_config(home: &Path) {
+    let cfg = home.join(".reviewgate").join("config.toml");
+    if !cfg.exists() {
+        std::fs::create_dir_all(home.join(".reviewgate")).unwrap();
+        std::fs::write(cfg, "mode = \"inject\"\n").unwrap();
     }
 }

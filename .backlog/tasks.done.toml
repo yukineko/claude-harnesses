@@ -58981,3 +58981,62 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "0780f39985bf4028c44f25329c848f6a6c8eb17d"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "9d1f3885"
+title = "check-fail-open: jev client.rs:137 false positive remains (fix branch shelved)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "User ruling 2026-10-03: shelve. Branch fix/fail-open-paren-depth at 23aca045 (worktree .harness-worktrees/fail-open-paren), rounds 1-11. The block-arm rule reads a Required::Blocked arm whose multi-line call has a None positional argument as an empty tail value; jev client.rs:137 forwards why into give_up and is a false positive (advisory class). Every precise lexical rule for closure-bar classification left a stable-Rust false negative vs old 01c8c228: r9 bar-shift after bitwise-or/or-pattern, r10 opener after attribute ] / break label / static const gen, r11 leading-vert or-pattern arm and r#static r#match r#in split into r # ident. 0 occurrences in the repo each time. Verifier fixtures: scratchpad fo/r9 r10 r11 (atk*.py, rs/*.rs, fuzz10.py adds lone bitwise-or leaves that the old fuzz pools lacked). Options left: a real parse (syn) instead of lexical classification, or flag every window holding an ambiguous single bar (measure the over-flag first)."
+created_at = 1790999879
+updated_at = 1792619013
+weight = 0.0
+issue_number = 1126
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1126"
+issue_closed_at = 1792619017
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_9d1f3885.py"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005430
+detail = """
+exit 1: test.py\u001B[0m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_9d1f3885.py::\u001B[1mJevClient137::test_forwarding_why_into_a_multiline_call_is_not_flagged\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.07s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_9d1f3885.py"
+exit = 0
+passed = 3
+rev = "8691b0745e42685533a3eb102efd5cca69663339"
+observed_at = 1792619011
+output_digest = "sha256:8ddaab0dfadd0ffb7b1e4eee2971a1e1fa069a9e01bdef6dd61c0b9de861784b"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-failopen-c5b9
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_backlog_9d1f3885.py ...                                     [100%]
+
+============================== 3 passed in 0.04s ===============================
+"""
+
+[task.closure.red]
+rev = "6d6566ed9484514c8d03b809d4393b1ec1bf1420"
+exit = 1
+kind = "behavioural"

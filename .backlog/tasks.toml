@@ -1,34 +1,4 @@
 [[task]]
-id = "9d1f3885"
-title = "check-fail-open: jev client.rs:137 false positive remains (fix branch shelved)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "fail-open",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "User ruling 2026-10-03: shelve. Branch fix/fail-open-paren-depth at 23aca045 (worktree .harness-worktrees/fail-open-paren), rounds 1-11. The block-arm rule reads a Required::Blocked arm whose multi-line call has a None positional argument as an empty tail value; jev client.rs:137 forwards why into give_up and is a false positive (advisory class). Every precise lexical rule for closure-bar classification left a stable-Rust false negative vs old 01c8c228: r9 bar-shift after bitwise-or/or-pattern, r10 opener after attribute ] / break label / static const gen, r11 leading-vert or-pattern arm and r#static r#match r#in split into r # ident. 0 occurrences in the repo each time. Verifier fixtures: scratchpad fo/r9 r10 r11 (atk*.py, rs/*.rs, fuzz10.py adds lone bitwise-or leaves that the old fuzz pools lacked). Options left: a real parse (syn) instead of lexical classification, or flag every window holding an ambiguous single bar (measure the over-flag first)."
-created_at = 1790999879
-updated_at = 1792005430
-weight = 0.0
-issue_number = 1126
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1126"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_9d1f3885.py"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005430
-detail = """
-exit 1: test.py\u001B[0m:354: XFailed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_9d1f3885.py::\u001B[1mJevClient137::test_forwarding_why_into_a_multiline_call_is_not_flagged\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.07s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
 id = "a57e299b"
 title = "scripts/test_backlog_audit_b1_0.py RealRepoState expects 39 binary-shipping plugins but the repo has 40"
 project = "/Users/yuki/src/harness"

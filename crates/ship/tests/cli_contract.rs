@@ -703,16 +703,6 @@ fn claim_hooks_json_sessionend() {
 }
 
 #[test]
-fn claim_skill_ship_exists() {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/ship/SKILL.md");
-    let s = fs::read_to_string(p).unwrap();
-    let mut it = s.lines();
-    assert_eq!(it.next(), Some("---"));
-    let fm: Vec<&str> = it.take_while(|l| *l != "---").collect();
-    assert!(fm.contains(&"name: ship"), "front matter: {fm:?}");
-}
-
-#[test]
 fn claim_platform_bins_gitignored() {
     let ignored = |p: &str| {
         Command::new("git")

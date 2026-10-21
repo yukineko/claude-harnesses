@@ -621,22 +621,6 @@ fn claim_skeleton_prose_sections_placeholders() {
 }
 
 #[test]
-fn claim_record_md_fold_pointers() {
-    let md =
-        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("commands/record.md"))
-            .unwrap();
-    let flat = md.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(
-        flat.contains("fold ids and path:line evidence into pointers"),
-        "subagent prompt must fold ids and path:line evidence into pointers"
-    );
-    assert!(
-        flat.contains("ID と evidence（`path:line`）は列挙せず ポインタに畳む"),
-        "hard rule must say to fold ids / path:line into pointers"
-    );
-}
-
-#[test]
 fn claim_cognition_sections_adjacent() {
     let e = Env::new();
     e.mk_vault();

@@ -138,10 +138,10 @@ strict DAG into a cyclic graph. They are guarded reads/writes, not part of the
 main execution path, so they are excluded from the mermaid picture above:
 
 - **`condukt -.-> compass`** — Phase 0-next reads `compass gap` to pick the next
-  move (`crates/condukt/skills/condukt/SKILL.md:191` "COMPASS_GAP=$(compass gap"). Combined with the forward
+  move (`crates/condukt/skills/condukt/SKILL.md:199` "COMPASS_GAP=$(compass gap"). Combined with the forward
   `compass --> condukt` handoff, this forms a **2-cycle `condukt ↔ compass`**.
 - **`condukt -.-> backlog`** — Phase 0-next reads it at
-  `crates/condukt/skills/condukt/SKILL.md:192` "BACKLOG=$(backlog next)" [test: crates/condukt/tests/skill_phase0_next_uses_backlog_next.rs::phase0_next_picks_work_with_backlog_next_and_keeps_errors].
+  `crates/condukt/skills/condukt/SKILL.md:196` "BACKLOG=$(backlog next)" [test: crates/condukt/tests/skill_phase0_next_uses_backlog_next.rs::phase0_next_picks_work_with_backlog_next_and_keeps_errors].
 - **`condukt -.-> hypothesis`** — Phase 1 injects open hypotheses and Phase 8
   transitions `linked_hypotheses` to `awaiting-measurement`
   (`SKILL.md:155-162`, `SKILL.md:603-620`). Combined with `hypothesis -.-> compass`
@@ -177,10 +177,10 @@ absent. Evidence cites `crates/condukt/skills/condukt/SKILL.md`.
 > PDO linkage respectively) but are not part of the "~10 telemetry/eval seed"
 > above; they appear in the DAG and the reachability table.
 > `condukt` also **mentions** `tdd` once ("tdd/specguard を経路面から補強",
-> `crates/condukt/skills/condukt/SKILL.md:937` "tdd/specguard を経路面") — that mention is a
+> `crates/condukt/skills/condukt/SKILL.md:948` "tdd/specguard を経路面") — that mention is a
 > conceptual reference, not a SKILL-level edge. It is **not** the whole story: condukt's
 > *binary* spawns it at `crates/condukt/src/oracle.rs:127` "tdd", documented at
-> `crates/condukt/skills/condukt/SKILL.md:853` "tdd oracle --task". See the scope limit below.
+> `crates/condukt/skills/condukt/SKILL.md:862` "tdd oracle --task". See the scope limit below.
 
 ---
 
@@ -263,7 +263,7 @@ Two nuances worth flagging:
   fugu-router-backed capability**.
 - **`tdd`** is a leaf **under this doc's edge rule only** (SKILL/agent-file
   invocations). condukt's SKILL mentions it conceptually at
-  `crates/condukt/skills/condukt/SKILL.md:937` "tdd/specguard を経路面" and issues no bash call to it —
+  `crates/condukt/skills/condukt/SKILL.md:948` "tdd/specguard を経路面" and issues no bash call to it —
   but condukt's *binary* does spawn it (`crates/condukt/src/oracle.rs:127` "tdd"),
   so "condukt never invokes tdd" is **false at the process level**. The leaf
   classification here means "no SKILL-level caller", not "no caller".

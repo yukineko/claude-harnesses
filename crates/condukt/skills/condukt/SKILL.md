@@ -783,6 +783,8 @@ CC=$(condukt state check-criteria --run "$RID" --task "<id>")
   を返したタスク（純粋に機械的な done_criteria）のみ `verified` に set できる。それ以外
   （`behavioral: true` 等）は exit 0 を **証拠として添えて** verifier agent に渡し最終判定させる
   ——テスト緑は verifier の代替にならない。
+- この main loop の 1 回が reproduction_tests の唯一の再実行である。**verifier agent はこれを再実行しない**:
+  記録済みの exit code・出力要約と `tdd oracle` の証跡を読む（`agents/condukt-verifier.md`）。
 
 これにより「テストで赤確定」のタスクは LLM verifier 1 本分を省けつつ、振る舞い的な done_criteria が
 「テストが通ったから正しい」で verifier を素通りする穴（generation と verification の共有盲点の一種）を
@@ -924,6 +926,8 @@ REVIEW_ORDER=$(cd "$WT" && condukt review-order --from-git --base "$BASE" --head
 
 verifier 起動プロンプトには以下を渡す:
 - `done_criteria`: タスクの合格条件
+- `reproduction_evidence` (reproduction_tests があれば必須): 上の決定論先行実行のコマンド・exit code・出力要約。
+  verifier はテストを再実行せずこれと `tdd oracle` を読む。渡さなければ verifier は記録欠落として pass にしない。
 - `worktree`: 対象 worktree パス
 - `touched_files`: タスクの実装対象ファイル
 - `target_symbols` (あれば): `t.target_symbols` — 検証対象の関数/クラス名。verifier がピンポイントで

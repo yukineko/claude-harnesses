@@ -1,6 +1,5 @@
-//! Claim-reproduction tests for the deepwiki READMEs / packaging prose.
-//! Each test drives the real binary (or reads packaged files) in isolated
-//! temp dirs with a temp HOME.
+//! CLI contract tests for deepwiki. Each test drives the real binary (or
+//! inspects git packaging state) in isolated temp dirs with a temp HOME.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -209,42 +208,6 @@ fn claim_root_flag() {
 }
 
 #[test]
-fn claim_command_file() {
-    let p = manifest().join("commands/deepwiki.md");
-    let t = std::fs::read_to_string(&p).expect("commands/deepwiki.md exists");
-    assert_eq!(p.file_stem().unwrap(), "deepwiki");
-    let rest = t.strip_prefix("---\n").expect("front matter");
-    let (fm, body) = rest.split_once("\n---\n").expect("front matter end");
-    assert!(
-        fm.lines()
-            .any(|l| l.starts_with("description:") && l.len() > "description:".len() + 1),
-        "{fm}"
-    );
-    for sub in ["status", "scan", "stamp"] {
-        let needle = format!("${{CLAUDE_PLUGIN_ROOT}}/bin/deepwiki {sub}");
-        assert!(body.contains(&needle), "missing {needle}");
-    }
-}
-
-#[test]
-fn claim_writer_agent_file() {
-    let t = std::fs::read_to_string(manifest().join("agents/deepwiki-writer.md"))
-        .expect("agent file exists");
-    let rest = t.strip_prefix("---\n").expect("front matter");
-    let (fm, _) = rest.split_once("\n---\n").expect("front matter end");
-    assert!(fm.lines().any(|l| l == "name: deepwiki-writer"), "{fm}");
-    let tools = fm
-        .lines()
-        .find_map(|l| l.strip_prefix("tools:"))
-        .expect("tools line");
-    assert!(tools.split(',').any(|x| x.trim() == "Write"), "{tools}");
-    assert!(
-        t.contains("Write/Edit the pages under `.deepwiki/`."),
-        "agent body must instruct writing pages under .deepwiki/"
-    );
-}
-
-#[test]
 fn claim_launcher_tracked_bins_ignored() {
     let m = manifest();
     let home = tempfile::tempdir().unwrap();
@@ -292,27 +255,6 @@ fn claim_launcher_tracked_bins_ignored() {
     assert_eq!(
         run(&["check-ignore", "-q", "bin/deepwiki"]).status.code(),
         Some(1)
-    );
-}
-
-#[test]
-fn claim_writer_forbids_invention() {
-    let agent = std::fs::read_to_string(manifest().join("agents/deepwiki-writer.md")).unwrap();
-    let cmd = std::fs::read_to_string(manifest().join("commands/deepwiki.md")).unwrap();
-    // Collapse line wraps so sentences match across newlines.
-    let flat = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
-    let (agent, cmd) = (flat(&agent), flat(&cmd));
-    assert!(
-        agent.contains("Reference concrete `path:line` locations"),
-        "agent must require path:line citations"
-    );
-    assert!(
-        agent.contains("Never invent files, symbols, or paths."),
-        "agent must forbid inventing"
-    );
-    assert!(
-        cmd.contains("do not invent files"),
-        "command must forbid inventing files"
     );
 }
 

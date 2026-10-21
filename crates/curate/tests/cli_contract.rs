@@ -1,5 +1,5 @@
-//! Claim-reproduction tests for the curate README prose. Each test drives the
-//! real binary and asserts the specific outcome the prose states.
+//! CLI contract tests for curate. Each test drives the real binary and asserts
+//! the specific observable outcome.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

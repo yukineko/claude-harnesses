@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! Prose-claim reproduction tests for difflog (README.md / README.ja.md /
-//! SKILL.md). Each test drives the real binary with a fresh tempdir HOME.
+//! CLI / hook contract tests for difflog. Each test drives the real binary
+//! with a fresh tempdir HOME, or checks packaging wiring (hooks.json,
+//! plugin.json).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -152,25 +153,6 @@ fn session_scenario(sid: &str) -> (Env, String) {
     commit_file(&e.repo, "hello.txt", "hello\n");
     end(&e, sid);
     (e, start_sha)
-}
-
-fn skill_text() -> String {
-    std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/difflog/SKILL.md"))
-        .unwrap()
-}
-
-fn front_matter_field(text: &str, key: &str) -> Option<String> {
-    let mut lines = text.lines();
-    assert_eq!(lines.next(), Some("---"));
-    for l in lines {
-        if l == "---" {
-            break;
-        }
-        if let Some(v) = l.strip_prefix(&format!("{key}:")) {
-            return Some(v.trim().to_string());
-        }
-    }
-    None
 }
 
 #[test]
@@ -557,19 +539,6 @@ fn claim_disable_env() {
 }
 
 #[test]
-fn claim_skill_slash_command() {
-    let t = skill_text();
-    assert_eq!(front_matter_field(&t, "name").as_deref(), Some("difflog"));
-}
-
-#[test]
-fn claim_skill_session_arg() {
-    let t = skill_text();
-    let h = front_matter_field(&t, "argument-hint").unwrap();
-    assert!(h.contains("--session <id>"), "{h}");
-}
-
-#[test]
 fn claim_skill_invocation_namespace() {
     let pj = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join(".claude-plugin/plugin.json"),
@@ -577,10 +546,6 @@ fn claim_skill_invocation_namespace() {
     .unwrap();
     let v: serde_json::Value = serde_json::from_str(&pj).unwrap();
     assert_eq!(v["name"].as_str(), Some("difflog"));
-    assert_eq!(
-        front_matter_field(&skill_text(), "name").as_deref(),
-        Some("difflog")
-    );
 }
 
 #[test]

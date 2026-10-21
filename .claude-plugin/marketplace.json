@@ -33,7 +33,7 @@
     {
       "name": "beacon",
       "description": "Desktop & webhook notifications for Claude Code: Stop and Notification hooks that ping you (macOS/Linux desktop, Slack, generic webhook, or a custom command) when a turn finishes or Claude needs your input — so you can step away from long sessions. Subscription-native (two hooks + bundled Rust binary, no API key).",
-      "version": "0.1.12",
+      "version": "0.1.13",
       "category": "notifications",
       "keywords": [
         "hooks",
@@ -232,7 +232,7 @@
     {
       "name": "curate",
       "description": "Promote fugu-router playbooks into versioned golden eval datasets for evalkit: turn the append-only routing log into a curated, deduplicated holdout set. Mechanical acceptance criteria (`cargo test`, a backticked command) become runnable golden cases; the rest become drafts for a human to fill. The supply side of the offline eval loop. Subscription-native (one bundled Rust binary, no API key).",
-      "version": "0.1.9",
+      "version": "0.1.10",
       "category": "quality",
       "keywords": [
         "eval",
@@ -257,7 +257,7 @@
     {
       "name": "deepwiki",
       "description": "v0.1.5: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Repository architecture wiki for Claude Code: a /deepwiki command that maps the repo with a bundled Rust scanner, has a subagent write & refresh hierarchical wiki pages (.deepwiki/*.md) with source links, and tracks freshness against git. Inspired by Devin Wiki. Subscription-native (binary + subagent + command, no API key). v0.1.4: `scan.rs`'s three readdir walks (`scan`'s top-level summary, `walk`, `count_files`) no longer swallow an unreadable subdirectory or entry via `.flatten()`/`let-else` into the same silent skip as a legitimately-vanished one — a non-NotFound error now surfaces via `eprintln!` while the scan still degrades to whatever was readable (this is a best-effort repo-map generator feeding a wiki-writer subagent, not a gate, so partial results remain correct behavior — only the silent swallowing of a real permission error was the bug). New regression test scans a tree with a chmod-000 subdirectory and confirms the readable files are still counted.",
-      "version": "0.1.11",
+      "version": "0.1.12",
       "category": "knowledge",
       "keywords": [
         "wiki",
@@ -281,7 +281,7 @@
     {
       "name": "difflog",
       "description": "Session diff-log for Claude Code: snapshot HEAD at SessionStart, write a structured git diff summary (commits, stat, files changed, bounded diff body) at SessionEnd. A /difflog skill can generate a human-readable narrative from the log. Subscription-native (no API key). v0.1.5: `list`/`last`'s shared `md_entries` helper no longer swallows an unreadable individual directory entry via `.filter_map(|e| e.ok())`, and distinguishes a missing `log_dir` (\"not found\") from an existing-but-unreadable one (\"unreadable\", now surfaced) instead of both silently reading as \"no logs\". New regression tests cover an absent dir, a chmod-000 unreadable dir, and md-only filtering.",
-      "version": "0.1.11",
+      "version": "0.1.12",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -509,7 +509,7 @@
     {
       "name": "playbook",
       "description": "v0.1.7: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Project knowledge retrieval + injection for Claude Code: a UserPromptSubmit hook that pulls the curated atomic notes relevant to your prompt and injects them under a strict char budget, so conventions and gotchas resurface without re-typing. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.14",
+      "version": "0.1.15",
       "category": "knowledge",
       "keywords": [
         "hooks",
@@ -581,7 +581,7 @@
     {
       "name": "runbook",
       "description": "v0.1.8: cargo fmt --all reformatting only (fixes the 'build & commit plugin binaries' smoke workflow's `cargo fmt --all --check` gate, chronically red on main since 2026-07-21 per scripts/check-ci-red.py); no behavior change. Reusable procedure includes for Claude Code: a UserPromptSubmit hook that expands `!name` macros in your prompt into the matching repo-committed procedure (.runbook/<name>.md), so recurring workflows run the same way every time. Inspired by Devin Playbooks; distinct from knowledge injection. Subscription-native (one hook + bundled Rust binary, no API key).",
-      "version": "0.1.15",
+      "version": "0.1.16",
       "category": "knowledge",
       "keywords": [
         "hooks",
@@ -703,7 +703,7 @@
     {
       "name": "taskprog",
       "description": "Multi-session progress file for Claude Code. Injects .claude/progress.md at SessionStart so the agent knows what is pending; at Stop it prompts the agent to keep the file current. Enables seamless HOTL handoff across sessions.",
-      "version": "0.1.12",
+      "version": "0.1.13",
       "category": "workflow",
       "keywords": [
         "hooks",
@@ -752,7 +752,7 @@
     {
       "name": "tracekit",
       "description": "Span-tree tracer for condukt runs: record one run's interpreter→worker→verifier phases as a parent-linked span tree (phase, model, ms, cost, status), render it with `tracekit trace <RID>`, and export OpenTelemetry GenAI-semconv JSON. Answers which phase of a failed run was slow/expensive/broke. Subscription-native (one bundled Rust binary, file-only, no network, no API key).",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "category": "observability",
       "keywords": [
         "observability",
@@ -957,7 +957,7 @@
     {
       "name": "replaykit",
       "description": "Trace→golden replay regression harness: turns a tracekit-recorded condukt run into an evalkit golden case so a real run becomes a committed regression fixture. `extract` distils a run's spans.jsonl into a portable trajectory summary (ordered phase/model/status steps + an `expect` block pinning phase set / error count / cost); `promote` writes the fixture under evals/replay/fixtures and appends a dedup'd golden whose `cmd` re-runs `replaykit verify`; `verify` recomputes those aggregates from the steps and gates 0/1/2. The trace-side sibling of curate's playbook→golden. Subscription-native (one bundled Rust binary, file-only, no network, no API key).",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "category": "quality",
       "keywords": [
         "replay",

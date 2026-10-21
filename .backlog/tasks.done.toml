@@ -58854,3 +58854,306 @@ scripts/test_backlog_9e0c9106.py ..                                      [100%]
 rev = "55243a13f8a98dc6b9e808c6278ed7b5366e6d1b"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "a87134cd"
+title = "a live session's leases other than its newest are never heartbeated and get reaped after the TTL"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "stuckguard",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed live 2026-10-20: session 6d32fd65 held 3ee0b6deb25e59ed and 9d9efd09e429cfd1 (same claimed_at); ~48 min later end of 3ee0b6 said no lease held, 9d9efd09 ended fine. stuckguard anchor.rs heartbeat_piggyback runs overwatch lease --session (pick_session_lease = max_by_key claimed_at, ONE lease) then heartbeat --key; the rest age past LEASE_TTL_SECS 1800 and reap_stale drops them, so another session can claim the same work. Repro at 7708e03e."
+created_at = 1792435460
+updated_at = 1792618698
+weight = 0.0
+issue_number = 1434
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1434"
+issue_closed_at = 1792618701
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_session_heartbeat_refreshes_one_lease session_heartbeat_piggyback_refreshes_all_session_leases -- --include-ignored --exact"
+rev = "7708e03eea25f0f5ef37951f1e74003532250b35"
+observed_at = 1792435460
+detail = """
+exit 101: h v0.2.88 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.30s
+     Running tests/repro_session_heartbeat_refreshes_one_lease.rs (target/debug/deps/repro_session_heartbeat_refreshes_one_lease-e08cd9410ed6ee8f)
+error: test failed, to rerun pass `-p overwatch --test repro_session_heartbeat_refreshes_one_lease`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_session_heartbeat_refreshes_one_lease session_heartbeat_piggyback_refreshes_all_session_leases -- --exact"
+exit = 0
+passed = 1
+rev = "a1cb930992ccce5ee3a9e5cfced4bce05153f264"
+observed_at = 1792618672
+output_digest = "sha256:91fa9007a805c7225db5af13932fa617581b682f07d37cdea455774a8f4e8654"
+excerpt = """
+
+running 1 test
+test session_heartbeat_piggyback_refreshes_all_session_leases ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.64s
+
+   Compiling overwatch v0.2.89 (/Users/yuki/src/.harness-worktrees/c5b9-overwatch/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.69s
+     Running tests/repro_session_heartbeat_refreshes_one_lease.rs (target/debug/deps/repro_session_heartbeat_refreshes_one_lease-a451136a4090b6c6)
+"""
+
+[task.closure.red]
+rev = "dee45c5228b064d6af9bb127bff76e3eef6cf521"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "3fb912d6"
+title = "overwatch reap_stale drops a stale lease without appending any event"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "events.jsonl at ~/.overwatch/harness-e77d23c7 has 258 started vs 193 ended and no reap event kind (2026-10-20). Every mutator calls store::reap_stale, which retains silently, so a vanished lease is indistinguishable from never begun in the ledger. Repro at 7708e03e."
+created_at = 1792435469
+updated_at = 1792618729
+weight = 0.0
+issue_number = 1435
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1435"
+issue_closed_at = 1792618734
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_session_heartbeat_refreshes_one_lease stale_lease_reap_by_a_mutator_is_not_silent -- --include-ignored --exact"
+rev = "7708e03eea25f0f5ef37951f1e74003532250b35"
+observed_at = 1792435469
+detail = """
+exit 101: D. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/repro_session_heartbeat_refreshes_one_lease.rs (target/debug/deps/repro_session_heartbeat_refreshes_one_lease-e08cd9410ed6ee8f)
+error: test failed, to rerun pass `-p overwatch --test repro_session_heartbeat_refreshes_one_lease`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_session_heartbeat_refreshes_one_lease stale_lease_reap_by_a_mutator_is_not_silent -- --exact"
+exit = 0
+passed = 1
+rev = "a1cb930992ccce5ee3a9e5cfced4bce05153f264"
+observed_at = 1792618702
+output_digest = "sha256:f9f0e1d52c7cc55ed5d06e122f9fc3015ff50c4d85dd705e4a87eddd6ad62c6a"
+excerpt = """
+
+running 1 test
+test stale_lease_reap_by_a_mutator_is_not_silent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.42s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_session_heartbeat_refreshes_one_lease.rs (target/debug/deps/repro_session_heartbeat_refreshes_one_lease-a451136a4090b6c6)
+"""
+
+[task.closure.red]
+rev = "dee45c5228b064d6af9bb127bff76e3eef6cf521"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "f1ce802c"
+title = "overwatch mark_changeset_merged / mark_branch_merged / prune_stale_changesets return Ok when the lease lock is not acquired"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Measured 2026-10-20 at 7b473300 (found verifying run-20261020-010750-7347). store.rs still uses acquire_or_skip with None => return Ok(())/Ok(0); the sibling mutators moved to acquire_strict in d0ccb95b. Only production caller condukt worktree.rs finalize_landed_branch logs only on Err, so a skipped mark is silent and a landed branch's changeset stays merged=false (later spurious overlap hold until TTL)."
+created_at = 1792429766
+updated_at = 1792618789
+weight = 0.0
+issue_number = 1430
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1430"
+issue_closed_at = 1792618792
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_skip_arms_report_ok -- --include-ignored"
+rev = "7b473300e0fa0e3bc48a187940c50a4347f2f478"
+observed_at = 1792429766
+detail = """
+exit 101: iltered out; finished in 10.09s
+
+   Compiling overwatch v0.2.87 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.26s
+     Running tests/repro_skip_arms_report_ok.rs (target/debug/deps/repro_skip_arms_report_ok-cd502459a6ae8916)
+error: test failed, to rerun pass `-p overwatch --test repro_skip_arms_report_ok`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_skip_arms_report_ok"
+exit = 0
+passed = 3
+rev = "a1cb930992ccce5ee3a9e5cfced4bce05153f264"
+observed_at = 1792618735
+output_digest = "sha256:3259b530e05aa1c2a44e934f6519f0e8512ac21b2330cb24979f431ba4cd7b17"
+excerpt = """
+
+running 3 tests
+test mark_changeset_merged_unacquired_lock_must_not_return_ok ... ok
+test prune_stale_changesets_unacquired_lock_must_not_return_ok ... ok
+test mark_branch_merged_unacquired_lock_must_not_return_ok ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.09s
+
+   Compiling overwatch v0.2.89 (/Users/yuki/src/.harness-worktrees/c5b9-overwatch/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/repro_skip_arms_report_ok.rs (target/debug/deps/repro_skip_arms_report_ok-afc85eec3c8d7800)
+"""
+
+[task.closure.red]
+rev = "dee45c5228b064d6af9bb127bff76e3eef6cf521"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "2d8c41c5"
+title = "overwatch spec: load_leases is said to load corrupt JSON as an empty registry, but it returns Err"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "docs",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1792424700
+updated_at = 1792618817
+weight = 0.0
+issue_number = 1426
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1426"
+issue_closed_at = 1792618820
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_spec_load_leases_corrupt_claim -- --ignored"
+rev = "23b0d2f5ff3546b25967e592872112a54c2a742f"
+observed_at = 1792424700
+detail = """
+exit 101:    Compiling overwatch v0.2.84 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests/repro_spec_load_leases_corrupt_claim.rs (target/debug/deps/repro_spec_load_leases_corrupt_claim-7a40ca8a777e1295)
+error: test failed, to rerun pass `-p overwatch --test repro_spec_load_leases_corrupt_claim`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_spec_load_leases_corrupt_claim"
+exit = 0
+passed = 1
+rev = "a1cb930992ccce5ee3a9e5cfced4bce05153f264"
+observed_at = 1792618792
+output_digest = "sha256:46687759dc0fac4817239edf0f34062d8e85c7f84ba12483f41c537d6106f66f"
+excerpt = """
+
+running 1 test
+test spec_must_not_claim_corrupt_leases_json_loads_as_empty_registry ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+   Compiling overwatch v0.2.89 (/Users/yuki/src/.harness-worktrees/c5b9-overwatch/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/repro_spec_load_leases_corrupt_claim.rs (target/debug/deps/repro_spec_load_leases_corrupt_claim-93d15c63a269ec06)
+"""
+
+[task.closure.red]
+rev = "dee45c5228b064d6af9bb127bff76e3eef6cf521"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "ba45d1b4"
+title = "design-625aa170 doc says the overlap cross-check runs under LeaseLock::acquire; the code calls acquire_strict"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "docs/design-625aa170-runtime-conflict-detect-consensus-resolve.md:33 vs crates/overwatch/src/store.rs record_changeset_and_detect after d0ccb95b. Repro at 7708e03e."
+created_at = 1792435473
+updated_at = 1792618822
+weight = 0.0
+issue_number = 1436
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1436"
+issue_closed_at = 1792618825
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_design_625aa170_lock_fn_claim.py"
+rev = "7708e03eea25f0f5ef37951f1e74003532250b35"
+observed_at = 1792435473
+detail = """
+exit 1: _and_detect calls LeaseLock::['acquire_strict']
+
+scripts/test_design_625aa170_lock_fn_claim.py:44: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_design_625aa170_lock_fn_claim.py::T::test_doc_named_lock_fn_is_the_one_record_changeset_and_detect_calls
+============================== 1 failed in 0.04s ==============================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_design_625aa170_lock_fn_claim.py"
+exit = 0
+passed = 1
+rev = "a1cb930992ccce5ee3a9e5cfced4bce05153f264"
+observed_at = 1792618820
+output_digest = "sha256:69d71e235f0144c1d4e5506f4929542263dff39fe28cafd076f9533a7a289184"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/c5b9-overwatch
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_design_625aa170_lock_fn_claim.py .                          [100%]
+
+============================== 1 passed in 0.03s ===============================
+"""
+
+[task.closure.red]
+rev = "dee45c5228b064d6af9bb127bff76e3eef6cf521"
+exit = 1
+kind = "behavioural"

@@ -20,10 +20,12 @@
 //! never panics. What the caller does then differs by entry point: the strict
 //! callers (`acquire_strict`, used by the `lease` mutators and
 //! `control::reassign`) FAIL CLOSED with a non-zero exit, the
-//! `store::record_changeset_and_detect` / `store::append_merge_conflict`
-//! mutators also call `acquire_strict` and return `Err` (never a success-shaped
-//! `Ok`), the remaining `acquire_or_skip` callers (the other `store::`
-//! mutators) skip their read-modify-write, and only the
+//! `store::record_changeset_and_detect` / `store::append_merge_conflict` /
+//! `store::mark_changeset_merged` / `store::mark_branch_merged` /
+//! `store::prune_stale_changesets` mutators also call `acquire_strict` and
+//! return `Err` (never a success-shaped `Ok`), the remaining `acquire_or_skip`
+//! callers (`store::compact_review_findings`, `audit_round_cli`) skip their
+//! read-modify-write, and only the
 //! test-only wait variant `acquire` proceeds unlocked.
 
 use crate::store;
@@ -167,8 +169,8 @@ impl LeaseLock {
     /// timeout it logs and returns an unlocked guard (fail-soft).
     ///
     /// `#[allow(dead_code)]`: every production mutator migrated off this
-    /// wait-variant — the `store::` mutators to the hard-skip
-    /// [`LeaseLock::acquire_or_skip`], the lease/control mutators to the
+    /// wait-variant — the remaining hard-skip `store::` mutators to
+    /// [`LeaseLock::acquire_or_skip`], the lease/control/changeset mutators to the
     /// fail-closed [`LeaseLock::acquire_strict`] — proceeding under an
     /// UNLOCKED guard on timeout was exactly the double-claim/double-write window
     /// that closed. This wait-variant is retained as the concurrency and

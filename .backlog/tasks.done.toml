@@ -58312,3 +58312,64 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "c10b106c3e352b1d4c01b4a8b2229bda762a01c5"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "636842cd"
+title = "specguard doc_problem follows symlinks: a docs/specs/x.md symlink to a file outside the repo counts as a valid binding (gate-check, and now brief covered)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "specguard",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "From the 230c34ec verifier 2026-10-04: gatecheck.rs doc_problem uses std::fs::metadata (follows symlinks). Pre-existing in gate-check; brief now inherits it as a source of covered. Not tested."
+created_at = 1791047755
+updated_at = 1792610404
+weight = 0.0
+issue_number = 1279
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1279"
+issue_closed_at = 1792610407
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p specguard --test backlog_636842cd -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005355
+detail = """
+exit 101: ; 0 ignored; 0 measured; 1 filtered out; finished in 0.96s
+
+   Compiling specguard v0.2.89 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/specguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests/backlog_636842cd.rs (target/debug/deps/backlog_636842cd-f978ceae758f92f0)
+error: test failed, to rerun pass `-p specguard --test backlog_636842cd`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p specguard --test backlog_636842cd"
+exit = 0
+passed = 2
+rev = "04edcf2dabbdb44bc541a3916be43e4916e0326d"
+observed_at = 1792610386
+output_digest = "sha256:dfe38ca000bf1808bf1fe6640b0590cf4d5ed13931fccfb95f262a93cc452519"
+excerpt = """
+
+running 2 tests
+test control_binding_to_regular_file_passes ... ok
+test binding_to_symlink_pointing_outside_repo_does_not_count ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_636842cd.rs (target/debug/deps/backlog_636842cd-1421e45cc9173a63)
+"""
+
+[task.closure.red]
+rev = "0780f39985bf4028c44f25329c848f6a6c8eb17d"
+exit = 101
+kind = "behavioural"

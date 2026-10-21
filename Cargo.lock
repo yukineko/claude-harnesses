@@ -84,7 +84,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoflow"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "clap",
  "harness-core",
@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "budgetguard"
-version = "0.1.43"
+version = "0.1.44"
 dependencies = [
  "anyhow",
  "chrono",
@@ -522,7 +522,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "fetchguard"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "clap",
  "harness-core",
@@ -883,7 +883,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.89"
+version = "0.2.90"
 dependencies = [
  "anyhow",
  "clap",
@@ -899,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "parallelguard"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "harness-core",
  "serde",
@@ -962,7 +962,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.67"
+version = "0.1.68"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1114,7 +1114,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.49"
+version = "0.1.50"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1176,7 +1176,7 @@ dependencies = [
 
 [[package]]
 name = "schemaguard"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "clap",

@@ -5,14 +5,25 @@
 仕様本体は **`specs/spec-loop.toml`**（specforge Spec IR）。本文書はその散文側で、
 **なぜこの形なのか**と**測ったこと**だけを書く。要求そのものは重複させない。
 
-## 1. いま何が繋がっていないか（測定値・2026-07-31・測定点 `0ad0d055`）
+## 1. 設計時点で何が繋がっていなかったか（測定値・2026-07-31・測定点 `0ad0d055`）
+
+> **この節は設計時点（`0ad0d055`）の測定記録であり、現状ではない**（backlog `7b88aa9a`）。
+> その後 R1 が landing した（`38dd4814`, 2026-08-02, specguard 0.2.48）: `ratify`
+> （`crates/specguard/src/forge/main.rs` の `fn ratify`）は `enqueue_and_report` を呼び、
+> それが `crates/specguard/src/forge/queue.rs` の `queue::enqueue_with` で requirement を
+> `backlog add` する。`specforge.toml` も `a81444b7`（2026-09-07）で repo に同梱された。
+> 下の箇条の「経路は無い」「`specforge.toml` が存在しない」は、どちらも 2026-07-31 時点の観測である。
+> 付記（実測 2026-10-22、測定点 `55243a13`）: 現行の `backlog add` は `--repro-test` の無い起票を
+> 拒否するため、この経路は `cargo test -p specguard --test forge_integration
+> ratify_promotes_draft_and_pins_consent` で `backlog add: REFUSED, nothing written (no --repro-test was given)`
+> として失敗する（backlog `eb93be49`）。経路はコードとして存在するが、現行 backlog に対しては通らない。
 
 - specforge (`crates/specguard/Cargo.toml:16-18`, `src/forge/main.rs`) は
   gather → draft → ratify → impl-prompt → implement → evidence → agree → merge の
   **完結したパイプライン**を持つ。
 - `src/forge/` 配下で `overwatch` / `condukt` / `backlog` を grep すると **ヒットは1件**、
   それも `crates/specguard/src/forge/implement.rs:331` の**コメント**。
-  つまり批准された spec が queue に入る経路は**無い**。
+  つまり（`0ad0d055` 時点では）批准された spec が queue に入る経路は**無い**。
 - repo 内で唯一存在する spec→backlog の受け渡しは **散文**である:
   `crates/specguard/commands/spec-audit.md:167-171` と
   `crates/specguard/commands/drift-map.md:121` が
@@ -149,7 +160,7 @@ R3 (d7330aef, 独立)          R1 (2dd5180f, 独立・本体)
 specforge --config specforge.toml ratify --id spec-loop -m "<なぜこの仕様を受け入れるか>"
 ```
 
-`specforge.toml` は §1 のとおり**まだ無い**。同梱が R1 の前提作業になる。
+`specforge.toml` は設計時点（§1, `0ad0d055`）では無かったが、`a81444b7` で repo に同梱済み。
 批准すると `[spec.ratification]` に canon commit と fingerprint が焼き込まれ、
 以後 requirement を1文字でも編集すると fingerprint が変わって**再批准が要る**
 （`crates/specguard/src/forge/ir.rs:140` の `fingerprint()`）。

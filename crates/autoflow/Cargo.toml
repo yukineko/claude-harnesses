@@ -2,9 +2,9 @@
 rust-version.workspace = true
 license.workspace = true
 name = "autoflow"
-version = "0.1.36"
+version = "0.1.37"
 edition = "2021"
-description = "Session-end auto-flow: record + condukt continuation gate for Claude Code."
+description = "Session-end auto-flow gate for Claude Code: a Stop hook that prompts /record once, then keeps looping /condukt while the in-flight run still has pending tasks."
 
 [[bin]]
 name = "autoflow"

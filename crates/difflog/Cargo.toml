@@ -1,9 +1,9 @@
 [package]
 rust-version.workspace = true
 name = "difflog"
-version = "0.1.12"
+version = "0.1.13"
 edition = "2021"
-description = "Session diff-log for Claude Code: on SessionEnd, record a structured git diff summary (files changed, net insertions/deletions, changed symbols) and link it to the session's cost record. A /difflog skill can then generate a human-readable narrative from that summary."
+description = "Session diff-log for Claude Code: snapshots HEAD at SessionStart and records a structured git diff summary at SessionEnd, with a /difflog skill that turns it into a readable narrative."
 license = "MIT"
 
 [[bin]]

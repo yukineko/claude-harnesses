@@ -1,9 +1,9 @@
 [package]
 rust-version.workspace = true
 name = "specguard"
-version = "0.2.96"
+version = "0.2.97"
 edition = "2021"
-description = "Project-agnostic spec/implementation drift audit harness. Drives an LLM agent (read-only) to check that an implementation still matches its canonical specs, and that the specs themselves are free of silence/contradiction/duplication."
+description = "Project-agnostic spec and implementation drift audit harness that drives a read-only LLM agent to check an implementation against its canonical specs and the specs against each other."
 license = "MIT"
 readme = "README.md"
 

@@ -1,7 +1,7 @@
 {
   "name": "onepass",
-  "version": "0.1.0",
-  "description": "PreToolUse gate on Agent/Task: allows at most ONE refutation/verification/audit subagent spawn (description or subagent_type matching refut|verif|audit|adversar|反証|検証|監査) per user prompt and denies the second, quoting the rule 「1度の反証とテスト、証明できなければ破棄、テストがREDなら起票」「何段階も深くほらない」. A UserPromptSubmit hook resets the per-session counter. Fail-closed: unreadable/unwritable state or an unparseable payload denies. Non-matching spawns are never touched.",
+  "version": "0.1.1",
+  "description": "PreToolUse gate on Agent and Task that allows at most one refutation, verification or audit subagent spawn per user prompt, failing closed when state is unreadable.",
   "author": {
     "name": "yukineko"
   },

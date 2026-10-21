@@ -2,9 +2,9 @@
 rust-version.workspace = true
 license.workspace = true
 name = "backlog"
-version = "0.3.65"
+version = "0.3.66"
 edition = "2021"
-description = "Cross-project task queue with cycle-type tags for Claude Code."
+description = "Cross-project task queue for Claude Code with cycle-type tags, a SessionStart hook that injects pending work, and subcommands to add, list, claim and finish tasks."
 
 [[bin]]
 name = "backlog"

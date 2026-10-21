@@ -53,7 +53,6 @@ class SchemaguardDescriptions(unittest.TestCase):
         missing = [n for n in registry_names() if f"`{n}`" not in line]
         self.assertEqual(missing, [], f"README.ja.md '{line}' omits {missing}")
 
-    @unittest.expectedFailure  # backlog 830715af: open defect, remove when fixed
     def test_marketplace_description_is_current(self):
         e = marketplace_entry()
         d = e["description"]

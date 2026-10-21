@@ -36,7 +36,6 @@ fn run_in(home: &Path, args: &[&str]) -> (i32, String, String) {
 }
 
 #[test]
-#[ignore = "backlog 4fc130d3: RED repro"]
 fn supplied_zero_cost_is_rejected_or_kept_as_measured() {
     let home = temp_home();
     let (code, out, err) = run_in(

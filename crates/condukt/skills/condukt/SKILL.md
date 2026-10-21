@@ -693,19 +693,19 @@ PLAN_EXIT=$?
 
 ### Phase 6 — 検証 (verifier agent) + 実績の記録
 
-**adversarial verify ゲート（GATE クレート変更時の反証パネル・opt-in）**: 単一 verifier は
-worker と同じ盲点を共有しうる（shared blind spot）。重要な完了判定（GATE クレート自体の変更）
-に限り、N 人の独立 skeptic による反証パネルを挟めるかを、Phase 5.5 の `consensus plan` と
-同じ形で決定論的に判定する:
+**adversarial verify ゲート（反証パネル・既定 OFF・opt-in）**: 単一 verifier は
+worker と同じ盲点を共有しうる（shared blind spot）。`CONDUKT_ADVERSARIAL=1` または config
+`[adversarial] enabled=true` で明示的に opt-in した場合に限り、N 人の独立 skeptic による
+反証パネルを挟むかを、Phase 5.5 の `consensus plan` と同じ形で決定論的に判定する
+（GATE_CRATES 配下の変更だけでは engage しない。`high_stakes` として JSON に表示されるのみ）:
 ```bash
 PLAN=$(condukt adversarial plan --touched <changed_file_1> --touched <changed_file_2> ...)
 PLAN_EXIT=$?
 ```
 - **exit 1（engage:false・既定）** → 下記「単一 verifier による検証」をそのまま実行する
   （既存パスは無変更）。追加コストなし。
-- **exit 0（engage:true）** → GATE_CRATES（blastguard/propguard/specguard/stuckguard/
-  mutategate）配下を変更している、または `CONDUKT_ADVERSARIAL=1`/config `[adversarial]
-  enabled=true` のグローバルスイッチ。`$PLAN` の `size`（N、2〜5 にクランプ済み）体の
+- **exit 0（engage:true）** → `CONDUKT_ADVERSARIAL=1`/config `[adversarial]
+  enabled=true` のグローバルスイッチが on。`$PLAN` の `size`（N、2〜5 にクランプ済み）体の
   独立 skeptic でパネルを張る。
 
 **パネル実行手順（engage 時のみ）**:
@@ -1254,11 +1254,14 @@ fi
 `await-measurement` は状態を「出荷済み・未計測」に進めるだけで検証ではない。
 `hypothesis validate`/`reject` は計測した証拠 (`--evidence`/`--reason`) を必須とするため、証拠なしでは status を変えられない。
 
-**spec-drift チェック (soft 依存)**: gate PASS 後、変更が正典仕様と乖離していないかを specguard で監査する。
-`specguard` バイナリが PATH 上にあり、かつ CWD に `specguard.toml` が存在する場合のみ実行する。
+**spec-drift チェック (既定 OFF・opt-in)**: gate PASS 後、変更が正典仕様と乖離していないかを specguard で監査する。
+環境変数 `CONDUKT_SPEC_AUDIT=1` で明示的に opt-in した場合に限り実行する（未設定なら 1 行の skip 通知のみ）。
+opt-in 時も `specguard` バイナリが PATH 上にあり、かつ CWD に `specguard.toml` が存在する場合のみ実行する。
 
 ```bash
-if command -v specguard >/dev/null 2>&1 && test -f specguard.toml; then
+if [ "${CONDUKT_SPEC_AUDIT:-}" != "1" ]; then
+  echo "specguard: spec-drift 監査を skip (既定 OFF。実行するには CONDUKT_SPEC_AUDIT=1)"
+elif command -v specguard >/dev/null 2>&1 && test -f specguard.toml; then
   # 1. shard プロンプトを取得 (scope 計算 + テンプレート描画)
   SPECGUARD_JSON=$(specguard prompt --json 2>/dev/null || true)
   SHARD_COUNT=$(echo "$SPECGUARD_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('shards',[])))" 2>/dev/null || echo "0")

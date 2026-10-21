@@ -308,7 +308,8 @@ pub fn adjudicate(votes: &[Vote], policy: &Policy, expected: usize) -> Panel {
 }
 
 /// True iff any changed path lives under a GATE crate (`crates/<gate>/...`),
-/// which makes a completion high-stakes and worth an adversarial panel.
+/// which marks a completion high-stakes. Informational only: it is echoed in
+/// [`PanelPlan::high_stakes`] but does NOT engage the panel (opt-in only).
 pub fn touches_gate_crate(files: &[String]) -> bool {
     files.iter().any(|f| {
         let f = f.replace('\\', "/");
@@ -324,7 +325,7 @@ pub fn touches_gate_crate(files: &[String]) -> bool {
 /// `consensus::plan` and the `state autonomy-check` exit-code contract).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct PanelPlan {
-    /// Whether to convene a panel at all (global switch OR high-stakes change).
+    /// Whether to convene a panel at all (the global opt-in switch only).
     pub engaged: bool,
     /// How many independent skeptics to spawn (clamped to `[2, MAX_PANEL]` when
     /// engaged; 1 — i.e. the ordinary single-verifier path — when not).
@@ -333,12 +334,14 @@ pub struct PanelPlan {
     pub min_voters: usize,
     /// Block ratio handed to [`adjudicate`] afterward.
     pub block_ratio: f64,
-    /// Echo of whether the change touched a GATE crate (forced engagement).
+    /// Echo of whether the change touched a GATE crate. Informational: it no
+    /// longer forces engagement (the panel is opt-in only).
     pub high_stakes: bool,
 }
 
-/// Compute the panel plan. Engaged iff the global switch is on OR the change is
-/// high-stakes (touched a GATE crate). `size` is clamped to `[2, MAX_PANEL]` when
+/// Compute the panel plan. Engaged iff the global opt-in switch is on
+/// (`[adversarial] enabled` / `CONDUKT_ADVERSARIAL`); a high-stakes change
+/// (touched a GATE crate) is echoed but does not engage the panel. `size` is clamped to `[2, MAX_PANEL]` when
 /// engaged (a one-skeptic "panel" is not adversarial); reports 1 when not.
 pub fn plan(
     global_enabled: bool,
@@ -346,7 +349,7 @@ pub fn plan(
     policy: &Policy,
     high_stakes: bool,
 ) -> PanelPlan {
-    let engaged = global_enabled || high_stakes;
+    let engaged = global_enabled;
     let size = if engaged {
         configured_size.clamp(2, MAX_PANEL)
     } else {
@@ -635,8 +638,16 @@ mod tests {
     }
 
     #[test]
-    fn plan_high_stakes_forces_panel_even_when_global_off() {
+    fn plan_high_stakes_does_not_engage_panel_when_global_off() {
         let plan = plan(false, DEFAULT_PANEL, &Policy::default(), true);
+        assert!(!plan.engaged);
+        assert_eq!(plan.size, 1);
+        assert!(plan.high_stakes);
+    }
+
+    #[test]
+    fn plan_high_stakes_with_global_on_engages_panel() {
+        let plan = plan(true, DEFAULT_PANEL, &Policy::default(), true);
         assert!(plan.engaged);
         assert_eq!(plan.size, DEFAULT_PANEL);
         assert!(plan.high_stakes);

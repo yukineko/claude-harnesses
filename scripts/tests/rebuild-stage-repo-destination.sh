@@ -125,4 +125,4 @@ grep -qE "cache bins scanned: [1-9]" <<<"$OUT" \
   || { echo "$OUT" | tail -5 >&2; fail "the refresh loop scanned no cache binary — assertions above are vacuous"; }
 pass "the refresh loop did scan the fixture (assertions are not vacuous)"
 
-echo "PASS: rebuild-plugins.sh --stage-repo destination stays inside crates/*/bin/"
+echo "PASS: rebuild-plugins.sh --stage-repo destination stays inside crates/*/bin/ (3 passed)"

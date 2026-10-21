@@ -51,4 +51,4 @@ pass "RESULT: PASS (4/4)"
 [ "$before" = "$after" ] || fail "the demo modified this repo's backlog store $store"
 pass "this repo's backlog store is untouched"
 
-echo "PASS: e2e-autonomy.sh runs its demo end to end"
+echo "PASS: e2e-autonomy.sh runs its demo end to end (3 passed)"

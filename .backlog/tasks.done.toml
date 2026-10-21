@@ -58756,3 +58756,1088 @@ PASS: rebuild-plugins.sh --stage-repo destination stays inside crates/*/bin/
 rev = "59acfdc315516016399fd55d68a26c2644bfe8ed"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "60ecd6ff"
+title = "fugu-router delegation-stats avg_duration_secs prints 0.0 when there are no duration samples"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fugu-router",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Worker side finding on 55fb3861: no-data shown as zero, same class the ticket fixed for cost."
+created_at = 1791055124
+updated_at = 1792594731
+weight = 0.0
+issue_number = 1333
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1333"
+issue_closed_at = 1792594735
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p fugu-router --test backlog_60ecd6ff -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005327
+detail = """
+exit 101: rness-worktrees/session-1a4ac77f/crates/harness-core)
+   Compiling fugu-router v0.1.46 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/fugu-router)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.65s
+     Running tests/backlog_60ecd6ff.rs (target/debug/deps/backlog_60ecd6ff-27a0fe0afe73f3fe)
+error: test failed, to rerun pass `-p fugu-router --test backlog_60ecd6ff`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p fugu-router --test backlog_60ecd6ff"
+exit = 0
+passed = 1
+rev = "23b6ed410bbe74457b6157203c205fde31931529"
+observed_at = 1792594714
+output_digest = "sha256:9455a55fab130349c540f1c976ba84245ab80e10e18808cac92d47506319935f"
+excerpt = """
+
+running 1 test
+test delegation_stats_without_duration_samples_is_not_reported_as_zero ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_60ecd6ff.rs (target/debug/deps/backlog_60ecd6ff-0bf7681593a6c1aa)
+"""
+
+[task.closure.red]
+rev = "59acfdc315516016399fd55d68a26c2644bfe8ed"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "4fc130d3"
+title = "fugu-router record accepts --cost 0 and stores 0.0 but reads it back as unmeasured, so a genuinely measured zero cost cannot be recorded (duration rejects 0 at write instead)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fugu-router",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Verifier side finding on 55fb3861 (branch run-20261004-035627-41010/55fb3861, fugu-router 0.1.41): read rule mirrors duration_secs (non-positive -> None) but the write rule does not (duration rejects non-positive with non-zero exit; cost accepts 0). Either reject 0 at write like duration, or give cost a representation for a measured zero."
+created_at = 1791055719
+updated_at = 1792594751
+weight = 0.0
+issue_number = 1340
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1340"
+issue_closed_at = 1792594754
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p fugu-router --test backlog_4fc130d3 -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005335
+detail = """
+exit 101: nored; 0 measured; 0 filtered out; finished in 0.74s
+
+   Compiling fugu-router v0.1.46 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/fugu-router)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/backlog_4fc130d3.rs (target/debug/deps/backlog_4fc130d3-76bff5637a4500cd)
+error: test failed, to rerun pass `-p fugu-router --test backlog_4fc130d3`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p fugu-router --test backlog_4fc130d3"
+exit = 0
+passed = 1
+rev = "23b6ed410bbe74457b6157203c205fde31931529"
+observed_at = 1792594735
+output_digest = "sha256:6c9ee9611cc657dee2dd5d23c4090e6bf49fe07e8ee1ea73674396d27f0c44f5"
+excerpt = """
+
+running 1 test
+test supplied_zero_cost_is_rejected_or_kept_as_measured ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_4fc130d3.rs (target/debug/deps/backlog_4fc130d3-6adee46d79dd6ed9)
+"""
+
+[task.closure.red]
+rev = "59acfdc315516016399fd55d68a26c2644bfe8ed"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "e3ca0b92"
+title = "compass carve::load collapses a read or parse error of carve-state.json into None (fresh state)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "compass",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Worker side finding 2026-10-04 on b0e1e4a2: crates/compass/src/carve.rs:31-34 treats a read/parse error as None 'so a stale state never wedges a carve'. Unreadable and absent become the same answer (CLAUDE.md section 3 Absent vs Undetermined). Needs a repro test."
+created_at = 1791053672
+updated_at = 1792595832
+weight = 0.0
+issue_number = 1324
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1324"
+issue_closed_at = 1792595835
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --test backlog_e3ca0b92 -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005369
+detail = """
+exit 101: failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.55s
+
+   Compiling compass v0.1.23 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/compass)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.30s
+     Running tests/backlog_e3ca0b92.rs (target/debug/deps/backlog_e3ca0b92-e3d2d46030ea7aad)
+error: test failed, to rerun pass `-p compass --test backlog_e3ca0b92`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p compass --test backlog_e3ca0b92"
+exit = 0
+passed = 2
+rev = "d4f4d7127a79333f75dd2761c8c330ea0f1a4254"
+observed_at = 1792595818
+output_digest = "sha256:d171eb48f8f3cb4ac8b7121e21d358835323b0a1b9fe97f71399b75cd435011f"
+excerpt = """
+
+running 2 tests
+test unparseable_state_is_not_treated_as_absent ... ok
+test control_absent_state_is_initialized ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_e3ca0b92.rs (target/debug/deps/backlog_e3ca0b92-b82eec2748ff533a)
+"""
+
+[task.closure.red]
+rev = "8f78310b27b26b7eb3797f31c5f43c78b676a43f"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "1eae7cb9"
+title = "autoflow still keys its state off repo_root rather than the main worktree root"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "verifier side finding on 43393ce2: condukt moved to main_worktree_root but autoflow did not, so the two disagree when invoked from a linked worktree."
+created_at = 1791053152
+updated_at = 1792596027
+weight = 0.0
+issue_number = 1321
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1321"
+issue_closed_at = 1792596030
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p autoflow --test backlog_1eae7cb9 -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005366
+detail = """
+exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/overwatch)
+   Compiling autoflow v0.1.31 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/autoflow)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.84s
+     Running tests/backlog_1eae7cb9.rs (target/debug/deps/backlog_1eae7cb9-a8ce5e3b08911b2f)
+error: test failed, to rerun pass `-p autoflow --test backlog_1eae7cb9`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p autoflow --test backlog_1eae7cb9"
+exit = 0
+passed = 2
+rev = "a8c09c5e3865f9178dd5c48d7a94c059f59667bb"
+observed_at = 1792596007
+output_digest = "sha256:f2acbaded5be4fad4616317a68767a4a6665eafc24a270abda35d293d877d23d"
+excerpt = """
+
+running 2 tests
+test control_from_main_tree_autoflow_sees_condukt_run ... ok
+test from_linked_worktree_autoflow_sees_the_same_condukt_run ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/backlog_1eae7cb9.rs (target/debug/deps/backlog_1eae7cb9-557bee58a9345299)
+"""
+
+[task.closure.red]
+rev = "c10b106c3e352b1d4c01b4a8b2229bda762a01c5"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "636842cd"
+title = "specguard doc_problem follows symlinks: a docs/specs/x.md symlink to a file outside the repo counts as a valid binding (gate-check, and now brief covered)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "specguard",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "From the 230c34ec verifier 2026-10-04: gatecheck.rs doc_problem uses std::fs::metadata (follows symlinks). Pre-existing in gate-check; brief now inherits it as a source of covered. Not tested."
+created_at = 1791047755
+updated_at = 1792610404
+weight = 0.0
+issue_number = 1279
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1279"
+issue_closed_at = 1792610407
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p specguard --test backlog_636842cd -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005355
+detail = """
+exit 101: ; 0 ignored; 0 measured; 1 filtered out; finished in 0.96s
+
+   Compiling specguard v0.2.89 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/specguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running tests/backlog_636842cd.rs (target/debug/deps/backlog_636842cd-f978ceae758f92f0)
+error: test failed, to rerun pass `-p specguard --test backlog_636842cd`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p specguard --test backlog_636842cd"
+exit = 0
+passed = 2
+rev = "04edcf2dabbdb44bc541a3916be43e4916e0326d"
+observed_at = 1792610386
+output_digest = "sha256:dfe38ca000bf1808bf1fe6640b0590cf4d5ed13931fccfb95f262a93cc452519"
+excerpt = """
+
+running 2 tests
+test control_binding_to_regular_file_passes ... ok
+test binding_to_symlink_pointing_outside_repo_does_not_count ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_636842cd.rs (target/debug/deps/backlog_636842cd-1421e45cc9173a63)
+"""
+
+[task.closure.red]
+rev = "0780f39985bf4028c44f25329c848f6a6c8eb17d"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "4493142a"
+title = "backlog lock release deletes another session's exclusive lock without any ownership check"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed live 2026-10-20: lock acquire refused to reap d52fbfce's stale lock, then lock release --project (no session id) removed it. main.rs LockAction::Release takes no caller; lock::release_at remove_file with no holder check. Repro at feab5559."
+created_at = 1792444756
+updated_at = 1792595652
+weight = 0.0
+issue_number = 1437
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1437"
+issue_closed_at = 1792595656
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test lock_status_release_ownership release_by_non_holder_does_not_delete_the_lock -- --include-ignored --exact"
+rev = "feab5559a088a9a7e31dc27a876d1990099268c1"
+observed_at = 1792444756
+detail = """
+exit 101: ed out; finished in 0.67s
+
+   Compiling backlog v0.3.63 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.97s
+     Running tests/lock_status_release_ownership.rs (target/debug/deps/lock_status_release_ownership-8556bfdc3992614d)
+error: test failed, to rerun pass `-p backlog --test lock_status_release_ownership`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test lock_status_release_ownership release_by_non_holder_does_not_delete_the_lock -- --exact"
+exit = 0
+passed = 1
+rev = "e2e33a93d1e254a1e8bb9749603198dca52abbd7"
+observed_at = 1792595620
+output_digest = "sha256:23cb86b2570ebb333c7d338fecd407aa7a38b8fb3f03c746ceb452ac94ee97fc"
+excerpt = """
+
+running 1 test
+test release_by_non_holder_does_not_delete_the_lock ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.76s
+
+   Compiling backlog v0.3.64 (/Users/yuki/src/.harness-worktrees/c5b9-backlog/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running tests/lock_status_release_ownership.rs (target/debug/deps/lock_status_release_ownership-07f240e7277313e0)
+"""
+
+[task.closure.red]
+rev = "59acfdc315516016399fd55d68a26c2644bfe8ed"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "28a16afd"
+title = "backlog lock status hides a heartbeat-stale exclusive lock that next --claim still honours"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed live 2026-10-20: next --claim refused on d52fbfce's exclusive lock (heartbeat 2026-07-28) while lock status printed kind driver-presence with no holder. Fresh locks are shown; only stale ones are hidden. Repro at feab5559."
+created_at = 1792444763
+updated_at = 1792595799
+weight = 0.0
+issue_number = 1438
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1438"
+issue_closed_at = 1792595802
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test lock_status_release_ownership status_reports_exclusive_lock_held_by_another_session -- --include-ignored --exact"
+rev = "feab5559a088a9a7e31dc27a876d1990099268c1"
+observed_at = 1792444763
+detail = """
+exit 101: _held_by_another_session
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.55s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/lock_status_release_ownership.rs (target/debug/deps/lock_status_release_ownership-8556bfdc3992614d)
+error: test failed, to rerun pass `-p backlog --test lock_status_release_ownership`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test lock_status_release_ownership status_reports_exclusive_lock_held_by_another_session -- --exact"
+exit = 0
+passed = 1
+rev = "e2e33a93d1e254a1e8bb9749603198dca52abbd7"
+observed_at = 1792595784
+output_digest = "sha256:5336df0bdcda1b4d408d81a19597bc6f55712e14402e2c3432555ecde2b331bc"
+excerpt = """
+
+running 1 test
+test status_reports_exclusive_lock_held_by_another_session ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.56s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/lock_status_release_ownership.rs (target/debug/deps/lock_status_release_ownership-07f240e7277313e0)
+"""
+
+[task.closure.red]
+rev = "59acfdc315516016399fd55d68a26c2644bfe8ed"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "a14b2fa2"
+title = "backlog done: red-rev run inherits caller env (closure of 9b64f427 needed AUDIT_RUN_OPEN=1 to unskip at red rev) but the closure record does not store the env"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "p3",
+]
+touched_files = []
+status = "done"
+notes = "2026-10-03: 9b64f427 closed with AUDIT_RUN_OPEN=1 in the caller env; RED at 4bc312db was exit 1 behavioural (4 failed), GREEN at HEAD 4 passed. A re-run of the stored command without that env would skip at red rev. Either record env in the closure or reject env-dependent skips."
+created_at = 1791029536
+updated_at = 1792595820
+weight = 0.0
+issue_number = 1214
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1214"
+issue_closed_at = 1792595824
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_a14b2fa2 -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005363
+detail = """
+exit 101: failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.40s
+
+   Compiling backlog v0.3.47 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running tests/backlog_a14b2fa2.rs (target/debug/deps/backlog_a14b2fa2-82b288e7fb577c95)
+error: test failed, to rerun pass `-p backlog --test backlog_a14b2fa2`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_a14b2fa2"
+exit = 0
+passed = 2
+rev = "e2e33a93d1e254a1e8bb9749603198dca52abbd7"
+observed_at = 1792595803
+output_digest = "sha256:9e2301bcbac130f778c35a0e5d91005e0b6eab098f2a6209bd09b714bd27798c"
+excerpt = """
+
+running 2 tests
+test accepted_env_dependent_closure_records_the_env_or_is_refused ... ok
+test control_without_env_the_red_rev_is_not_red ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s
+
+   Compiling backlog v0.3.64 (/Users/yuki/src/.harness-worktrees/c5b9-backlog/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running tests/backlog_a14b2fa2.rs (target/debug/deps/backlog_a14b2fa2-5ce4c5951b2b01d5)
+"""
+
+[task.closure.red]
+rev = "59acfdc315516016399fd55d68a26c2644bfe8ed"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "eb1ac319"
+title = "backlog lib.rs fails cargo fmt --check on main"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p3"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-03 at main a91e1d55: rustfmt --check crates/backlog/src/lib.rs reports a diff at line 1 (two added blank lines). Present on main, not introduced by 1e6f00ae. No gate runs fmt, so it went unnoticed."
+created_at = 1791001963
+updated_at = 1792595947
+weight = 0.0
+issue_number = 1134
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1134"
+issue_closed_at = 1792595950
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_eb1ac319 -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005357
+detail = """
+exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
+   Compiling backlog v0.3.47 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.01s
+     Running tests/backlog_eb1ac319.rs (target/debug/deps/backlog_eb1ac319-c81b4328c5362d22)
+error: test failed, to rerun pass `-p backlog --test backlog_eb1ac319`"""
+
+[task.closure]
+reason = "already-fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test backlog_eb1ac319"
+exit = 0
+passed = 1
+rev = "e2e33a93d1e254a1e8bb9749603198dca52abbd7"
+observed_at = 1792595933
+output_digest = "sha256:ecf35eff22c4beb762e233dde21b28c2443b4a8ca88c5c8676263c16af1f24f2"
+excerpt = """
+
+running 1 test
+test backlog_lib_rs_is_rustfmt_clean ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_eb1ac319.rs (target/debug/deps/backlog_eb1ac319-84a46c6fb038db90)
+"""
+
+[task.closure.red]
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/backlog/tests/backlog_eb1ac319.rs"]
+
+[[task]]
+id = "1a4d26d1"
+title = "backlog claim_check_contract::non_executable_condukt_is_refused fails when a real condukt is later on PATH (lookup skips the non-exec shim) — fixture must not inherit PATH; fix is in the 1e6f00ae integration"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1791000564
+updated_at = 1792595967
+weight = 0.0
+issue_number = 1133
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1133"
+issue_closed_at = 1792595971
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test claim_check_contract non_executable_condukt_is_refused"
+rev = "38a0d0c8b857f1b6d80c3c4739e9d16aa8b1e03a"
+observed_at = 1791000564
+detail = """
+exit 101: e
+
+
+failures:
+    non_executable_condukt_is_refused
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/claim_check_contract.rs (target/debug/deps/claim_check_contract-31b1a59fd334b40f)
+error: test failed, to rerun pass `-p backlog --test claim_check_contract`"""
+
+[task.closure]
+reason = "already-fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test claim_check_contract non_executable_condukt_is_refused"
+exit = 0
+passed = 1
+rev = "e2e33a93d1e254a1e8bb9749603198dca52abbd7"
+observed_at = 1792595950
+output_digest = "sha256:61d088c83ebc27b7f596e1b8731b8ff3f22b7ee55b252e73f34677eb75fbf7dc"
+excerpt = """
+
+running 1 test
+test non_executable_condukt_is_refused ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.80s
+
+   Compiling backlog v0.3.64 (/Users/yuki/src/.harness-worktrees/c5b9-backlog/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/claim_check_contract.rs (target/debug/deps/claim_check_contract-47112970578c13d9)
+"""
+
+[task.closure.red]
+rev = "38a0d0c8b857f1b6d80c3c4739e9d16aa8b1e03a"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/backlog/tests/backlog_eb1ac319.rs"]
+
+[[task]]
+id = "9d1f3885"
+title = "check-fail-open: jev client.rs:137 false positive remains (fix branch shelved)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "User ruling 2026-10-03: shelve. Branch fix/fail-open-paren-depth at 23aca045 (worktree .harness-worktrees/fail-open-paren), rounds 1-11. The block-arm rule reads a Required::Blocked arm whose multi-line call has a None positional argument as an empty tail value; jev client.rs:137 forwards why into give_up and is a false positive (advisory class). Every precise lexical rule for closure-bar classification left a stable-Rust false negative vs old 01c8c228: r9 bar-shift after bitwise-or/or-pattern, r10 opener after attribute ] / break label / static const gen, r11 leading-vert or-pattern arm and r#static r#match r#in split into r # ident. 0 occurrences in the repo each time. Verifier fixtures: scratchpad fo/r9 r10 r11 (atk*.py, rs/*.rs, fuzz10.py adds lone bitwise-or leaves that the old fuzz pools lacked). Options left: a real parse (syn) instead of lexical classification, or flag every window holding an ambiguous single bar (measure the over-flag first)."
+created_at = 1790999879
+updated_at = 1792619013
+weight = 0.0
+issue_number = 1126
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1126"
+issue_closed_at = 1792619017
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_9d1f3885.py"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005430
+detail = """
+exit 1: test.py\u001B[0m:354: XFailed
+\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
+\u001B[31mFAILED\u001B[0m scripts/test_backlog_9d1f3885.py::\u001B[1mJevClient137::test_forwarding_why_into_a_multiline_call_is_not_flagged\u001B[0m - _pytest.outcomes.XFailed
+\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.07s\u001B[0m\u001B[31m ==========================\u001B[0m"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_9d1f3885.py"
+exit = 0
+passed = 3
+rev = "8691b0745e42685533a3eb102efd5cca69663339"
+observed_at = 1792619011
+output_digest = "sha256:8ddaab0dfadd0ffb7b1e4eee2971a1e1fa069a9e01bdef6dd61c0b9de861784b"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-failopen-c5b9
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_backlog_9d1f3885.py ...                                     [100%]
+
+============================== 3 passed in 0.04s ===============================
+"""
+
+[task.closure.red]
+rev = "6d6566ed9484514c8d03b809d4393b1ec1bf1420"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "7b88aa9a"
+title = "docs/DESIGN-spec-loop.md is stale: it asserts no ratified-spec-to-backlog path exists, but forge/queue.rs implements one"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "Issue summary: found 2026-08-14 at ee214481. docs/DESIGN-spec-loop.md:15-17 says no path from a ratified spec into the backlog queue exists (measured at 0ad0d055), but crates/specguard/src/forge/queue.rs implements it, forge/main.rs:435 ratify calls enqueue_and_report, and queue.rs:453-490 has tests including undetermined arms. R1 landed without updating the doc; readers may rebuild the leg (R4 clause 4 was scoped untestable partly because of this). Fix: correct the sections predating R1 and check whether the R0 termination and R3 descriptions are also stale. recreated 2026-10-04 from issue #348; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1792619285
+weight = 0.0
+issue_number = 348
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/348"
+issue_closed_at = 1792619288
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_7b88aa9a.py"
+rev = "3be54fd6902dc0386ab26750b77fda2d79326082"
+observed_at = 1791049887
+detail = """
+exit 1: (reason))
+E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_7b88aa9a.py::DesignDocMatchesRatifyQueuePath::test_doc_does_not_deny_the_existing_path
+========================= 1 failed, 1 passed in 0.44s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_7b88aa9a.py"
+exit = 0
+passed = 2
+rev = "95e443919f4dd0ea33753bf3f7d0a3219ed0196e"
+observed_at = 1792619283
+output_digest = "sha256:a183fd07049d32109adcd7dab695dd6d58e9fe4fe737bd9152f7c2a165d361ef"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-docs-c5b9
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_7b88aa9a.py ..                                      [100%]
+
+============================== 2 passed in 0.03s ===============================
+"""
+
+[task.closure.red]
+rev = "55243a13f8a98dc6b9e808c6278ed7b5366e6d1b"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "9e0c9106"
+title = "hypothesis_field_set_has_no_metric_surface のコメントが serde default の効果を誤記 — 実際の罠は文書より強い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "Issue summary: measured 2026-08-18 at 8e901056. The comment on the test in crates/hypothesis/src/hypothesis.rs claims a field added with serde(default) keeps the struct literal compiling. Wrong: serde attributes affect only deserialization and a struct literal must list every field; adding scope_write_paths / scope_read_paths broke the literal with missing field regardless of serde(default). The trap is stronger than documented (catches any added field). Docstring vs behaviour mismatch (CLAUDE.md 6 duty 1); fix the comment. recreated 2026-10-04 from issue #358; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1792619290
+weight = 0.0
+issue_number = 358
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/358"
+issue_closed_at = 1792619293
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_9e0c9106.py"
+rev = "3be54fd6902dc0386ab26750b77fda2d79326082"
+observed_at = 1791049894
+detail = """
+exit 1: .outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_9e0c9106.py::MetricSurfaceCommentMatchesRust::test_comment_does_not_claim_serde_default_keeps_the_literal_compiling
+========================= 1 failed, 1 passed in 0.12s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_9e0c9106.py"
+exit = 0
+passed = 2
+rev = "95e443919f4dd0ea33753bf3f7d0a3219ed0196e"
+observed_at = 1792619289
+output_digest = "sha256:7176c4a3808abeefdd6154045ea7f26d7fd8617f876041d8b8a1e6552692a4f5"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-docs-c5b9
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_9e0c9106.py ..                                      [100%]
+
+============================== 2 passed in 0.03s ===============================
+"""
+
+[task.closure.red]
+rev = "55243a13f8a98dc6b9e808c6278ed7b5366e6d1b"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "a87134cd"
+title = "a live session's leases other than its newest are never heartbeated and get reaped after the TTL"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "stuckguard",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed live 2026-10-20: session 6d32fd65 held 3ee0b6deb25e59ed and 9d9efd09e429cfd1 (same claimed_at); ~48 min later end of 3ee0b6 said no lease held, 9d9efd09 ended fine. stuckguard anchor.rs heartbeat_piggyback runs overwatch lease --session (pick_session_lease = max_by_key claimed_at, ONE lease) then heartbeat --key; the rest age past LEASE_TTL_SECS 1800 and reap_stale drops them, so another session can claim the same work. Repro at 7708e03e."
+created_at = 1792435460
+updated_at = 1792618698
+weight = 0.0
+issue_number = 1434
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1434"
+issue_closed_at = 1792618701
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_session_heartbeat_refreshes_one_lease session_heartbeat_piggyback_refreshes_all_session_leases -- --include-ignored --exact"
+rev = "7708e03eea25f0f5ef37951f1e74003532250b35"
+observed_at = 1792435460
+detail = """
+exit 101: h v0.2.88 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.30s
+     Running tests/repro_session_heartbeat_refreshes_one_lease.rs (target/debug/deps/repro_session_heartbeat_refreshes_one_lease-e08cd9410ed6ee8f)
+error: test failed, to rerun pass `-p overwatch --test repro_session_heartbeat_refreshes_one_lease`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_session_heartbeat_refreshes_one_lease session_heartbeat_piggyback_refreshes_all_session_leases -- --exact"
+exit = 0
+passed = 1
+rev = "a1cb930992ccce5ee3a9e5cfced4bce05153f264"
+observed_at = 1792618672
+output_digest = "sha256:91fa9007a805c7225db5af13932fa617581b682f07d37cdea455774a8f4e8654"
+excerpt = """
+
+running 1 test
+test session_heartbeat_piggyback_refreshes_all_session_leases ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.64s
+
+   Compiling overwatch v0.2.89 (/Users/yuki/src/.harness-worktrees/c5b9-overwatch/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.69s
+     Running tests/repro_session_heartbeat_refreshes_one_lease.rs (target/debug/deps/repro_session_heartbeat_refreshes_one_lease-a451136a4090b6c6)
+"""
+
+[task.closure.red]
+rev = "dee45c5228b064d6af9bb127bff76e3eef6cf521"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "3fb912d6"
+title = "overwatch reap_stale drops a stale lease without appending any event"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "events.jsonl at ~/.overwatch/harness-e77d23c7 has 258 started vs 193 ended and no reap event kind (2026-10-20). Every mutator calls store::reap_stale, which retains silently, so a vanished lease is indistinguishable from never begun in the ledger. Repro at 7708e03e."
+created_at = 1792435469
+updated_at = 1792618729
+weight = 0.0
+issue_number = 1435
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1435"
+issue_closed_at = 1792618734
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_session_heartbeat_refreshes_one_lease stale_lease_reap_by_a_mutator_is_not_silent -- --include-ignored --exact"
+rev = "7708e03eea25f0f5ef37951f1e74003532250b35"
+observed_at = 1792435469
+detail = """
+exit 101: D. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/repro_session_heartbeat_refreshes_one_lease.rs (target/debug/deps/repro_session_heartbeat_refreshes_one_lease-e08cd9410ed6ee8f)
+error: test failed, to rerun pass `-p overwatch --test repro_session_heartbeat_refreshes_one_lease`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_session_heartbeat_refreshes_one_lease stale_lease_reap_by_a_mutator_is_not_silent -- --exact"
+exit = 0
+passed = 1
+rev = "a1cb930992ccce5ee3a9e5cfced4bce05153f264"
+observed_at = 1792618702
+output_digest = "sha256:f9f0e1d52c7cc55ed5d06e122f9fc3015ff50c4d85dd705e4a87eddd6ad62c6a"
+excerpt = """
+
+running 1 test
+test stale_lease_reap_by_a_mutator_is_not_silent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.42s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/repro_session_heartbeat_refreshes_one_lease.rs (target/debug/deps/repro_session_heartbeat_refreshes_one_lease-a451136a4090b6c6)
+"""
+
+[task.closure.red]
+rev = "dee45c5228b064d6af9bb127bff76e3eef6cf521"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "f1ce802c"
+title = "overwatch mark_changeset_merged / mark_branch_merged / prune_stale_changesets return Ok when the lease lock is not acquired"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Measured 2026-10-20 at 7b473300 (found verifying run-20261020-010750-7347). store.rs still uses acquire_or_skip with None => return Ok(())/Ok(0); the sibling mutators moved to acquire_strict in d0ccb95b. Only production caller condukt worktree.rs finalize_landed_branch logs only on Err, so a skipped mark is silent and a landed branch's changeset stays merged=false (later spurious overlap hold until TTL)."
+created_at = 1792429766
+updated_at = 1792618789
+weight = 0.0
+issue_number = 1430
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1430"
+issue_closed_at = 1792618792
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_skip_arms_report_ok -- --include-ignored"
+rev = "7b473300e0fa0e3bc48a187940c50a4347f2f478"
+observed_at = 1792429766
+detail = """
+exit 101: iltered out; finished in 10.09s
+
+   Compiling overwatch v0.2.87 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.26s
+     Running tests/repro_skip_arms_report_ok.rs (target/debug/deps/repro_skip_arms_report_ok-cd502459a6ae8916)
+error: test failed, to rerun pass `-p overwatch --test repro_skip_arms_report_ok`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_skip_arms_report_ok"
+exit = 0
+passed = 3
+rev = "a1cb930992ccce5ee3a9e5cfced4bce05153f264"
+observed_at = 1792618735
+output_digest = "sha256:3259b530e05aa1c2a44e934f6519f0e8512ac21b2330cb24979f431ba4cd7b17"
+excerpt = """
+
+running 3 tests
+test mark_changeset_merged_unacquired_lock_must_not_return_ok ... ok
+test prune_stale_changesets_unacquired_lock_must_not_return_ok ... ok
+test mark_branch_merged_unacquired_lock_must_not_return_ok ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.09s
+
+   Compiling overwatch v0.2.89 (/Users/yuki/src/.harness-worktrees/c5b9-overwatch/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/repro_skip_arms_report_ok.rs (target/debug/deps/repro_skip_arms_report_ok-afc85eec3c8d7800)
+"""
+
+[task.closure.red]
+rev = "dee45c5228b064d6af9bb127bff76e3eef6cf521"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "2d8c41c5"
+title = "overwatch spec: load_leases is said to load corrupt JSON as an empty registry, but it returns Err"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "overwatch",
+    "docs",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1792424700
+updated_at = 1792618817
+weight = 0.0
+issue_number = 1426
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1426"
+issue_closed_at = 1792618820
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_spec_load_leases_corrupt_claim -- --ignored"
+rev = "23b0d2f5ff3546b25967e592872112a54c2a742f"
+observed_at = 1792424700
+detail = """
+exit 101:    Compiling overwatch v0.2.84 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests/repro_spec_load_leases_corrupt_claim.rs (target/debug/deps/repro_spec_load_leases_corrupt_claim-7a40ca8a777e1295)
+error: test failed, to rerun pass `-p overwatch --test repro_spec_load_leases_corrupt_claim`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_spec_load_leases_corrupt_claim"
+exit = 0
+passed = 1
+rev = "a1cb930992ccce5ee3a9e5cfced4bce05153f264"
+observed_at = 1792618792
+output_digest = "sha256:46687759dc0fac4817239edf0f34062d8e85c7f84ba12483f41c537d6106f66f"
+excerpt = """
+
+running 1 test
+test spec_must_not_claim_corrupt_leases_json_loads_as_empty_registry ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+   Compiling overwatch v0.2.89 (/Users/yuki/src/.harness-worktrees/c5b9-overwatch/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/repro_spec_load_leases_corrupt_claim.rs (target/debug/deps/repro_spec_load_leases_corrupt_claim-93d15c63a269ec06)
+"""
+
+[task.closure.red]
+rev = "dee45c5228b064d6af9bb127bff76e3eef6cf521"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "ba45d1b4"
+title = "design-625aa170 doc says the overlap cross-check runs under LeaseLock::acquire; the code calls acquire_strict"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "docs/design-625aa170-runtime-conflict-detect-consensus-resolve.md:33 vs crates/overwatch/src/store.rs record_changeset_and_detect after d0ccb95b. Repro at 7708e03e."
+created_at = 1792435473
+updated_at = 1792618822
+weight = 0.0
+issue_number = 1436
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1436"
+issue_closed_at = 1792618825
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_design_625aa170_lock_fn_claim.py"
+rev = "7708e03eea25f0f5ef37951f1e74003532250b35"
+observed_at = 1792435473
+detail = """
+exit 1: _and_detect calls LeaseLock::['acquire_strict']
+
+scripts/test_design_625aa170_lock_fn_claim.py:44: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_design_625aa170_lock_fn_claim.py::T::test_doc_named_lock_fn_is_the_one_record_changeset_and_detect_calls
+============================== 1 failed in 0.04s ==============================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_design_625aa170_lock_fn_claim.py"
+exit = 0
+passed = 1
+rev = "a1cb930992ccce5ee3a9e5cfced4bce05153f264"
+observed_at = 1792618820
+output_digest = "sha256:69d71e235f0144c1d4e5506f4929542263dff39fe28cafd076f9533a7a289184"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/c5b9-overwatch
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_design_625aa170_lock_fn_claim.py .                          [100%]
+
+============================== 1 passed in 0.03s ===============================
+"""
+
+[task.closure.red]
+rev = "dee45c5228b064d6af9bb127bff76e3eef6cf521"
+exit = 1
+kind = "behavioural"

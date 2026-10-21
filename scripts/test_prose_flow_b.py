@@ -847,7 +847,14 @@ class TestLockRelease(unittest.TestCase):
         self.assertEqual(acq.returncode, 0, acq.stderr)
         held = sb.run(["backlog", "lock", "status", "--project", str(linked)], linked)
         self.assertEqual(json.loads(held.stdout)["kind"], "exclusive-lock")
-        r = sb.run(rel, linked)
+        # Only the holder releases (backlog 4493142a): the SKILL's command
+        # identifies the caller via CLAUDE_CODE_SESSION_ID. A non-holder is
+        # refused and the lock survives.
+        other = sb.run(rel, linked, CLAUDE_CODE_SESSION_ID="S2")
+        self.assertNotEqual(other.returncode, 0, other.stdout)
+        still = sb.run(["backlog", "lock", "status", "--project", str(linked)], linked)
+        self.assertEqual(json.loads(still.stdout)["kind"], "exclusive-lock")
+        r = sb.run(rel, linked, CLAUDE_CODE_SESSION_ID="S1")
         self.assertEqual(r.returncode, 0, r.stderr)
         after = sb.run(["backlog", "lock", "status", "--project", str(linked)], linked)
         self.assertEqual(after.stdout.strip(), "none")

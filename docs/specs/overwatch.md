@@ -29,7 +29,7 @@ pause/resume/reassign の制御面は下流（condukt）へ委譲するが、人
 - **liveness = heartbeat TTL** — lease の生死は保存 pid ではなく `heartbeat_at` の鮮度で判定する
   （`store::is_stale`＝`now - heartbeat_at > LEASE_TTL_SECS`、`saturating_sub`）。crash/hang した session は
   heartbeat が止まり stale 化し、`reap`/次 `begin` の `reap_stale` で除去される。
-- **fail-soft 永続化** — `load_leases` は欠落・破損 JSON を空レジストリとして扱う（`unwrap_or_default`）。
+- **fail-closed 永続化** — `load_leases` が空のレジストリを返すのはファイルが本当に無いときだけで、読めない・壊れた JSON は `Err` を返す（次の read-modify-write が他セッションの lease を空で上書きしないため）。
   `save_leases` は temp + rename の原子的書き込み。`read_events` は不正行を捨てて読める分だけ返す。
 - **fail-soft 集約** — `aggregate::build` は infallible。台帳ロード失敗、下流バイナリ（backlog/hypothesis/
   condukt/compass）の欠落や非ゼロ終了はすべて `shell_soft` が `None` を返して該当セクションを省くだけで、

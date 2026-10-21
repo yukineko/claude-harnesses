@@ -86,7 +86,11 @@ fn lock_holder_claims_and_release_restores_others() {
         other.both()
     );
 
-    let rel = f.run(&["lock", "release", "--project", &p]);
+    // Only the holder releases (backlog 4493142a).
+    let rel = f.run_env(
+        &["lock", "release", "--project", &p],
+        &[("CLAUDE_CODE_SESSION_ID", "session-A")],
+    );
     assert_eq!(rel.code, 0, "apparatus: {}", rel.both());
     let after = f.run_env(
         &["next", "--claim", "--project", &p],

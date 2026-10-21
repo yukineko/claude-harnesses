@@ -28,7 +28,6 @@ def fn_body(src: str, name: str) -> str:
 
 
 class T(unittest.TestCase):
-    @pytest.mark.xfail(strict=True, reason="backlog: design-625aa170 doc names LeaseLock::acquire; RED repro: python3 -m pytest --runxfail scripts/test_design_625aa170_lock_fn_claim.py")
     def test_doc_named_lock_fn_is_the_one_record_changeset_and_detect_calls(self):
         doc = DOC.read_text()
         line = next(

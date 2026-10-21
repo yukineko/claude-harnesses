@@ -34,7 +34,6 @@ fn run_in(home: &Path, args: &[&str]) -> (i32, String, String) {
 }
 
 #[test]
-#[ignore = "backlog 60ecd6ff: RED repro"]
 fn delegation_stats_without_duration_samples_is_not_reported_as_zero() {
     let home = temp_home();
     // One flow-delegation episode with NO --duration (unmeasured).

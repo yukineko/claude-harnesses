@@ -62,7 +62,6 @@ class MergeHeadShape(unittest.TestCase):
         self.merge_head.write_text(self.git("rev-parse", "HEAD"))
         self.assertEqual(self.gate().returncode, 0)
 
-    @unittest.expectedFailure
     def test_directory_merge_head_does_not_allow_a_main_commit(self):
         self.merge_head.mkdir()
         p = self.gate()
@@ -72,7 +71,6 @@ class MergeHeadShape(unittest.TestCase):
             "a non-merge commit in main\n" + p.stderr,
         )
 
-    @unittest.expectedFailure
     def test_symlink_to_directory_merge_head_does_not_allow_a_main_commit(self):
         target = self.root / "somedir"
         target.mkdir()

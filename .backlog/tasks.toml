@@ -120,36 +120,6 @@ exit 1: == short test summary info ============================\u001B[0m
 \u001B[31m======================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[33m22 deselected\u001B[0m\u001B[31m in 0.09s\u001B[0m\u001B[31m =======================\u001B[0m"""
 
 [[task]]
-id = "65dfc23e"
-title = "session-rollout-drift.py が rc2 (enablement) に rollout-plugins.sh を勧める — rollout は plugin を有効化しない"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = """
-scripts/session-rollout-drift.py:66-68,113-117 prints 'Fix with: scripts/rollout-plugins.sh' for RC_ENABLEMENT; the checker itself says rollout does NOT enable plugins. Since 73c2c089 an absent settings.json also lands here, which is undetermined rather than actionable.
-
-Observed 2026-10-03 in flow batch 13 (run-20261003-155809-33509), base fbc3dac8 / main c0d4701c."""
-created_at = 1791018580
-updated_at = 1792005386
-weight = 0.0
-issue_number = 1156
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1156"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_65dfc23e.py"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005386
-detail = """
-exit 1: 0m:354: XFailed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_65dfc23e.py::\u001B[1mEnablementRemedyIsNotRollout::test_enablement_notice_does_not_prescribe_rollout\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.06s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
 id = "d058b22a"
 title = "mutation-gate.sh validates MIN_KILL_RATE only after the full cargo-mutants run (late validation, not fail-open)"
 project = "/Users/yuki/src/harness"
@@ -175,36 +145,6 @@ exit 1: Failed
 \u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
 \u001B[31mFAILED\u001B[0m scripts/test_backlog_d058b22a.py::\u001B[1mMutationGateThresholdOrder::test_invalid_threshold_is_rejected_before_cargo_mutants_runs\u001B[0m - _pytest.outcomes.XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.53s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
-id = "74280d46"
-title = "check-unlisted-gates は到達不能コード (呼ばれない関数・if false・exit 0 の後) の呼び出しも invoked と数える"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = """
-666b6704 verifier: a scanner invoked only inside a function that is never called, inside `if false; then`, or after `exit 0` counts as invoked (fail-open direction). Not claimed by the docstring; documented as a limitation in scripts/check-unlisted-gates.py.
-
-Observed 2026-10-03 in flow batch 14 (run-20261003-202619-762), main 4b0e5ab3..4bc312db."""
-created_at = 1791028020
-updated_at = 1792005387
-weight = 0.0
-issue_number = 1197
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1197"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_74280d46.py"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005386
-detail = """
-exit 1: :354: XFailed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_74280d46.py::\u001B[1mUnreachableInvocationIsNotListed::test_unreachable_call_is_not_counted_as_invoked\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.56s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
 id = "6798f47d"
@@ -269,62 +209,6 @@ exit 101: failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.40s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
      Running tests/backlog_a14b2fa2.rs (target/debug/deps/backlog_a14b2fa2-82b288e7fb577c95)
 error: test failed, to rerun pass `-p backlog --test backlog_a14b2fa2`"""
-
-[[task]]
-id = "234011a6"
-title = "test_deny_ledger_e033c406 が短い TMPDIR に依存する (ledger の raw が 120 文字で切られ期待パスが消える)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "With a long scratchpad TMPDIR 4 tests fail because deny_ledger truncates raw at 120 chars; with only HOME overridden: Ran 67 tests OK. Test fragility, or the truncation drops the path that the retry matcher needs (check which: if the matcher uses raw, long paths escape the ledger). Observed 2026-10-03 by the b5358f58 verifier (run-20261003-202619-762, base 4a7fcb1e, HEAD d8426c4e)."
-created_at = 1791028903
-updated_at = 1792005430
-weight = 0.0
-issue_number = 1209
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1209"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_234011a6.py"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005424
-detail = """
-exit 1: st/unittest.py\u001B[0m:354: XFailed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_234011a6.py::\u001B[1mDenyLedgerTestsIndependentOfTmpdir::test_long_tmpdir_passes_too\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 5.16s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
-id = "1af8be51"
-title = "check-worktree-isolation _merge_head_visible uses os.path.exists: a directory/symlink MERGE_HEAD allows a main-tree commit (fail-open, disagrees with edit guard)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "worktree-hygiene",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Found 2026-10-04 by the c8c11add implementer (session 33de4c25). scripts/check-worktree-isolation.py _merge_head_visible treats any existing MERGE_HEAD (directory, symlink, unreadable) as merge-in-progress and allows a non-merge commit in main's tree. The edit guard after c8c11add (4f37e9b0, guard-maintree-edit.py _merge_head_state) treats those as undetermined -> block. Section 3: undetermined must resolve to block. Needs a reproduction test (MERGE_HEAD as a directory -> commit-side guard must refuse)."
-created_at = 1791044136
-updated_at = 1792005389
-weight = 0.0
-issue_number = 1230
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1230"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_1af8be51.py"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005388
-detail = """
-exit 1: ::\u001B[1mMergeHeadShape::test_directory_merge_head_does_not_allow_a_main_commit\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_1af8be51.py::\u001B[1mMergeHeadShape::test_symlink_to_directory_merge_head_does_not_allow_a_main_commit\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m2 failed\u001B[0m, \u001B[32m2 passed\u001B[0m\u001B[31m in 1.14s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
 id = "eb93be49"
@@ -448,62 +332,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
 error: test failed, to rerun pass `-p harness-core --test backlog_e23580cd`"""
 
 [[task]]
-id = "63e2690d"
-title = "check-test-weakening がコメント内の #[ignore] 言及を属性追加として数える (帰属バグ)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Issue summary: measured 2026-10-02 at cde0b6a6. A commit adding only a new test file was blocked: crates/overwatch/tests/bridge_supplies_evidence.rs ignore-added (0 to 1), though the only occurrence is inside a line comment at :200 and cargo test reports 0 ignored. Mechanism: scripts/check-test-weakening.py:110 IGNORE_ATTR_RE counted at :502 over test_surface (:447-450), which returns raw src for tests/ files; the comment masker _mask_noncode (:314) is used only by test_fn_assertions (:476). Same blindness affects TEST_ATTR_RE / SHOULD_PANIC_RE / ASSERT_RE; the reverse polarity is worse (doc-comment assert mentions can offset a real assertion removal). Proposal: strip Rust comments and string literals symmetrically on both before and after surfaces. That commit was approved via test-weakening-justified in d01ad822. recreated 2026-10-04 from issue #1050; original task lost (cause unidentified, see backlog 68fb7237)"
-created_at = 1791048119
-updated_at = 1791049885
-weight = 0.0
-issue_number = 1050
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1050"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_63e2690d.py"
-rev = "3be54fd6902dc0386ab26750b77fda2d79326082"
-observed_at = 1791049883
-detail = """
-exit 1:        _pytest.outcomes.XFailed
-
-../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
-=========================== short test summary info ============================
-FAILED scripts/test_backlog_63e2690d.py::CommentIgnoreIsNotAnAttribute::test_new_test_file_with_ignore_only_in_a_comment_is_clean
-============================== 1 failed in 0.61s ==============================="""
-
-[[task]]
-id = "d38c195b"
-title = ".githooks/pre-push の rc=1 分岐が orphan cache dir finding にも『roll it out』の advisory を出す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-04 by the 5461ba1c verifier (main d8dccdac). .githooks/pre-push around line 209: the `1)` branch prints a rollout remedy; since 5461ba1c keeps RC_ROLLOUT for orphan cache dirs, the orphan-only case still gets 'roll it out' under the correct ORPHAN CACHE DIR block. .githooks is human-only: needs a patch."
-created_at = 1791046042
-updated_at = 1792005391
-weight = 0.0
-issue_number = 1257
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1257"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_d38c195b.py"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005389
-detail = """
-exit 1: st/unittest.py\u001B[0m:354: XFailed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_d38c195b.py::\u001B[1mOrphanOnlyRc1::test_orphan_only_finding_is_not_told_to_roll_out\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 1.31s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
 id = "636842cd"
 title = "specguard doc_problem follows symlinks: a docs/specs/x.md symlink to a file outside the repo counts as a valid binding (gate-check, and now brief covered)"
 project = "/Users/yuki/src/harness"
@@ -564,62 +392,6 @@ exit 1: repo bin updated: 0 | hooks config updated: 0
 superseded version dir bin(s) left frozen (not current per repo plugin.json): 0
 note: no *-darwin-arm64 binaries found under /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T//rebuild-stage-dest.AiT8Nq/cache/yukineko (wrong cache root, or no host-platform plugins installed).
 FAIL: the refresh loop scanned no cache binary — assertions above are vacuous"""
-
-[[task]]
-id = "6b5971e4"
-title = "guard-maintree-bash refuses git merge --abort on main as a non-integration modification"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "gate",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-04: after a conflicted 'git merge --no-ff <branch>' on main, 'git merge --abort' was refused by the PostToolUse guard as 'modified this project MAIN working tree outside integration' listing the files the abort restored. Aborting one's own conflicted merge is part of integration and leaves main exactly at HEAD. The refusal arrives after the fact, so nothing was blocked, but it is a false alarm on the documented integration path."
-created_at = 1791049231
-updated_at = 1792005424
-weight = 0.0
-issue_number = 1294
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1294"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_6b5971e4.py"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005423
-detail = """
-exit 1: ytest/unittest.py\u001B[0m:354: XFailed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_6b5971e4.py::\u001B[1mMergeAbortOnMain::test_merge_abort_of_own_conflicted_merge_is_allowed\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m============================== \u001B[31m\u001B[1m1 failed\u001B[0m\u001B[31m in 0.61s\u001B[0m\u001B[31m ===============================\u001B[0m"""
-
-[[task]]
-id = "495e414e"
-title = "lint-changed-crates: a Cargo.lock-only or root Cargo.toml-only change triggers the check but prints 'no crate touched - nothing to lint' and exits 0, though a lockfile change can affect every crate"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Found by the d470a478 worker (2026-10-04), not yet observed by a test. Same wording class as d470a478: silence/nothing-to-lint read as checked. Pre-existing behaviour."
-created_at = 1791049861
-updated_at = 1792005432
-weight = 0.0
-issue_number = 1295
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1295"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_495e414e.py"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005431
-detail = """
-exit 1: e414e.py::\u001B[1mLockfileOnlyChange::test_cargo_lock_only_change_is_not_nothing_to_lint\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_495e414e.py::\u001B[1mLockfileOnlyChange::test_root_manifest_only_change_is_not_nothing_to_lint\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m2 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.58s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
 id = "1eae7cb9"

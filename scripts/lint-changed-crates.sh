@@ -27,9 +27,12 @@
 #                                 catches a shared-crate change that breaks a
 #                                 dependent's compile. It runs no lint and no
 #                                 formatting check.
-#   scripts/check-clippy-lints.py (pre-commit) — clippy, but ALSO scoped to the
-#                                 changed crates, so it is not a backstop for
-#                                 the fan-out either.
+#   scripts/check-clippy-lints.py (pre-commit) — runs NO clippy and no fmt. It
+#                                 only scans Cargo.toml [lints] configuration
+#                                 (a lost `workspace = true` opt-in or root
+#                                 deny), so it is not a backstop for the
+#                                 fan-out either. Clippy on changed crates is
+#                                 this script's (donegate lint-changed) job.
 #
 # So the honest statement is: after a change to a widely-depended-on crate, the
 # fan-out's clippy/fmt state is UNKNOWN until someone runs the sweep by hand:

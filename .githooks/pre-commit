@@ -113,20 +113,20 @@
 #                                                 does not parse as TOML. Also runs
 #                                                 for merge commits via
 #                                                 pre-merge-commit (backlog ece51b35)
-#   clippy-lints      check-clippy-lints.py      an unwrap_used/expect_used/
-#                                                 panic deny-lint violation in a
-#                                                 crate that inherits `[lints]
-#                                                 workspace = true`. Scoped to
-#                                                 the crates the working tree
-#                                                 actually changed, so an
-#                                                 untouched crate cannot block
-#                                                 you. Built and verified in
-#                                                 de2e9829 but left unwired for
-#                                                 weeks -- the gate existed and
-#                                                 blocked nothing, DARK rather
-#                                                 than red, the same shape as
-#                                                 launcher-exec-bit above
-#                                                 (backlog 7ecf3797)
+#   clippy-lints      check-clippy-lints.py      a weakened deny-lint CONFIG:
+#                                                 a changed crate whose HEAD
+#                                                 Cargo.toml had `[lints]
+#                                                 workspace = true` no longer
+#                                                 has it, or the root
+#                                                 [workspace.lints.clippy] loses
+#                                                 a deny for unwrap_used/
+#                                                 expect_used/panic. A manifest
+#                                                 scanner only: it does NOT run
+#                                                 cargo, clippy or fmt (donegate
+#                                                 lint-changed owns clippy).
+#                                                 Scoped to what the working
+#                                                 tree changed vs HEAD (backlog
+#                                                 7ecf3797)
 #
 # Plus one Rust gate (not python3):
 #   main-tree-guard    condukt guard main-tree    a commit from the SHARED primary

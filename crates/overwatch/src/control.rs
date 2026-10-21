@@ -151,7 +151,7 @@ pub fn reassign(key: &str, to: &str) -> Result<()> {
     let _lock = crate::lease::lock_or_bail(&cwd, "reassign")?;
 
     let mut leases = store::load_leases(&cwd)?;
-    store::reap_stale(&mut leases, now);
+    store::reap_stale_recorded(&cwd, &mut leases, now)?;
     artificial_reassign_delay();
 
     // Capture the run id of the released lease (if any) for the audit event.

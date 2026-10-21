@@ -86,8 +86,9 @@ enum Command {
         /// resolved it. OMIT the flag to record the episode's cost as
         /// unmeasured (`Episode.cost_usd = None`, excluded from every cost
         /// aggregate). A negative or non-finite value is REJECTED (exit
-        /// non-zero). `0` is accepted but, like a legacy `0.0`, reads back as
-        /// unmeasured (see `store::Episode::cost_usd`).
+        /// non-zero). `0` is a MEASURED zero: it is stored in a form a legacy
+        /// unmeasured `0.0` cannot take and reads back as a measured `0.0`
+        /// (backlog 4fc130d3; see `store::Episode::cost_usd`).
         #[arg(long)]
         cost: Option<f64>,
         /// Acceptance criteria for this task (persisted to playbook store when pass).
@@ -1732,7 +1733,10 @@ fn cmd_delegation_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
                         // `null` when no episode in the bucket has a measured cost.
                         "avg_cost_usd": b.cost.avg(),
                         "cost_samples": b.cost.n,
-                        "avg_duration_secs": if b.duration_n > 0 { b.duration_total / b.duration_n as f64 } else { 0.0 },
+                        // `null` when no episode in the bucket has a measured
+                        // duration: no samples is unmeasured, never 0.0 seconds
+                        // (backlog 60ecd6ff).
+                        "avg_duration_secs": (b.duration_n > 0).then(|| b.duration_total / b.duration_n as f64),
                         "duration_samples": b.duration_n,
                     }),
                 )

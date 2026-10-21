@@ -123,8 +123,10 @@ non-pass. `--cost` is optional (read it from `gauge` if you want cost-aware rout
 Omitting it records the episode's cost as **unmeasured** (`cost_usd` absent), which is
 excluded from every cost aggregate (`stats`, `delegation-stats`, the prompt summary,
 cost-per-pass routing) rather than averaged in as `$0`. A negative or non-finite `--cost`
-is rejected. A stored `0.0` (the pre-0.1.41 writer's encoding of "unmeasured") reads back
-as unmeasured, so `--cost 0` is also treated as unmeasured.
+is rejected. A stored float `0.0` (the pre-0.1.41 writer's encoding of "unmeasured") reads
+back as unmeasured, while `--cost 0` is a **measured** zero: it is stored as the integer `0`
+(a form the old writer never produced) and reads back as `$0` (backlog `4fc130d3`)
+[test: crates/fugu-router/tests/backlog_4fc130d3.rs::supplied_zero_cost_is_rejected_or_kept_as_measured].
 
 Pass `--skill-fingerprint "$(fugu-router fingerprint)"` to stamp the episode with
 the version of the SKILL.md corpus that produced it (stored as

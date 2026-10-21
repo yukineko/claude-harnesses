@@ -35,13 +35,16 @@ pub struct Episode {
     /// Back-compat: the OLD writer always serialized this field, writing `0.0`
     /// for an unmeasured task (`record --cost` defaulted to `0.0`), so a legacy
     /// `0.0` cannot be told apart from a measured zero. [`de_cost_usd`] reads a
-    /// present `0.0` (and any non-positive / `null`) back as `None`, the same
-    /// rule `de_duration_secs` applies. Consequence: a NEW `record --cost 0`
-    /// is accepted and written as `0.0`, but also reads back as unmeasured.
+    /// present FLOAT `0.0` (and any non-positive / `null`) back as `None`, the
+    /// same rule `de_duration_secs` applies. A MEASURED zero (`record --cost
+    /// 0`) is written by [`ser_cost_usd`] as the JSON INTEGER `0`, a form the
+    /// old writer (which serialized an `f64`, always `0.0`) never produced, and
+    /// reads back as `Some(0.0)` (backlog 4fc130d3).
     /// The NEW writer omits the field for `None` (`skip_serializing_if`).
     #[serde(
         default,
         deserialize_with = "de_cost_usd",
+        serialize_with = "ser_cost_usd",
         skip_serializing_if = "Option::is_none"
     )]
     pub cost_usd: Option<f64>,
@@ -150,15 +153,42 @@ where
 }
 
 /// Deserialize `Episode::cost_usd` with the same legacy rule as
-/// [`de_duration_secs`]: a present `0.0` (the old writer's encoding of an
-/// unmeasured cost), a present `null`, or any non-positive / non-finite value
-/// maps to `None`; only a present strictly-positive finite number is a cost.
+/// [`de_duration_secs`]: a present float `0.0` (the old writer's encoding of an
+/// unmeasured cost), a present `null`, any non-number, or any negative /
+/// non-finite value maps to `None`. A strictly-positive finite number is a
+/// cost, and the JSON INTEGER `0` is a measured zero (only [`ser_cost_usd`]
+/// writes it; the old writer serialized an `f64` and so never did).
 fn de_cost_usd<'de, D>(d: D) -> Result<Option<f64>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let v = Option::<f64>::deserialize(d)?;
-    Ok(v.filter(|x| x.is_finite() && *x > 0.0))
+    let v = Option::<serde_json::Value>::deserialize(d)?;
+    let Some(serde_json::Value::Number(n)) = v else {
+        return Ok(None);
+    };
+    let Some(x) = n.as_f64().filter(|x| x.is_finite()) else {
+        return Ok(None);
+    };
+    if x > 0.0 {
+        return Ok(Some(x));
+    }
+    // A zero survives only in the integer form the current writer uses for a
+    // measured zero; a float `0.0` is the legacy "unmeasured".
+    Ok((x == 0.0 && !n.is_f64()).then_some(0.0))
+}
+
+/// Serialize `Episode::cost_usd`: a measured zero is written as the JSON
+/// integer `0` so [`de_cost_usd`] can tell it apart from the legacy float
+/// `0.0` that meant "unmeasured" (backlog 4fc130d3); any other cost is an `f64`.
+fn ser_cost_usd<S>(v: &Option<f64>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match v {
+        Some(c) if *c == 0.0 => s.serialize_u64(0),
+        Some(c) => s.serialize_f64(*c),
+        None => s.serialize_none(),
+    }
 }
 
 impl Episode {

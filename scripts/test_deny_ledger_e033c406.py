@@ -35,6 +35,18 @@ STOP = os.path.join(SCRIPTS, "stop-verify-worktree.py")
 CLEAR = os.path.join(SCRIPTS, "deny-ledger-clear.py")
 SID = "e033c406-ledger-session"
 
+sys.path.insert(0, SCRIPTS)
+import deny_ledger  # noqa: E402
+
+
+def _raw(s):
+    """The ledger's stored/quoted form of a raw call: its first RAW_LIMIT chars.
+
+    The fixture paths live under TMPDIR, so with a long TMPDIR "Write <target>"
+    exceeds the limit and only this prefix is recorded (backlog 234011a6).
+    """
+    return s[: deny_ledger.RAW_LIMIT]
+
 GIT_ENV = {
     "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
@@ -139,7 +151,7 @@ class DenyIsRecorded(_Fixture):
         self.assertEqual(e["target_abs"], self.target)
         self.assertEqual(e["root"], self.main)
         self.assertEqual(e["denier"], "guard-maintree-edit.py")
-        self.assertIn("Write " + self.target, e["raw"])
+        self.assertEqual(_raw("Write " + self.target), e["raw"])
         self.assertTrue(e["reason"])
         self.assertTrue(e["snapshot"]["exists"])
         self.assertEqual(e["snapshot"]["status"], "")
@@ -159,7 +171,7 @@ class RetryIsRefused(_Fixture):
         # refuses it, because its text names the denied main path.
         retry = self.mention(self.target)
         self.assertEqual(retry.returncode, 2, retry.stderr)
-        self.assertIn("guard-maintree-edit.py refused `Write " + self.target + "`",
+        self.assertIn("guard-maintree-edit.py refused `" + _raw("Write " + self.target) + "`",
                       retry.stderr)
         self.assertIn("This call reaches the same target " + self.target +
                       " by another spelling; confirm it is genuinely a "
@@ -172,7 +184,7 @@ class RetryIsRefused(_Fixture):
         out = json.loads(retry.stdout)["hookSpecificOutput"]
         self.assertEqual(out["permissionDecision"], "ask")
         self.assertEqual(out["hookEventName"], "PreToolUse")
-        self.assertIn("refused `Write " + self.target + "`",
+        self.assertIn("refused `" + _raw("Write " + self.target) + "`",
                       out["permissionDecisionReason"])
 
     def test_retry_through_write_content_is_refused(self):
@@ -299,7 +311,7 @@ class StopDetectsChange(_Fixture):
         os.remove(self.target)  # the refused effect, by a route no guard saw
         r = self.stop()
         self.assertEqual(r.returncode, 2, r.stderr)
-        self.assertIn("guard-maintree-edit.py refused `Write " + self.target + "`",
+        self.assertIn("guard-maintree-edit.py refused `" + _raw("Write " + self.target) + "`",
                       r.stderr)
 
     def test_stop_blocks_when_a_denied_path_was_rewritten(self):

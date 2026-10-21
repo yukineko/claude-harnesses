@@ -53,7 +53,6 @@ class DenyLedgerTestsIndependentOfTmpdir(unittest.TestCase):
         proc = self._run(str(self.base))
         self.assertEqual(proc.returncode, 0, proc.stdout[-3000:] + proc.stderr[-2000:])
 
-    @unittest.expectedFailure
     def test_long_tmpdir_passes_too(self) -> None:
         long_dir = self.base / ("long-scratchpad-" + "x" * 100)
         long_dir.mkdir()

@@ -5,7 +5,6 @@ use std::path::Path;
 use std::process::Command;
 
 #[test]
-#[ignore = "backlog eb1ac319: RED repro"]
 fn backlog_lib_rs_is_rustfmt_clean() {
     let lib = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
     let out = Command::new("rustfmt")

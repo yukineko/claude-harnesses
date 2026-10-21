@@ -94,7 +94,9 @@ fn lock_value(info: &LockInfo) -> Value {
 ///
 /// Precedence, most restrictive first:
 /// 1. an active exclusive lock — carries `"progress"`,
-/// 2. one or more live driver registrations — carries `"progress"`,
+/// 2. one or more live driver registrations — carries `"progress"`; a
+///    heartbeat-stale or unreadable exclusive lock (which `next --claim` still
+///    honours) is surfaced alongside under `"exclusive_lock"`, never hidden,
 /// 3. undetermined on either side (rendered as an active-reading object, since
 ///    "I could not look" must not be printed as "nothing is driving"); no
 ///    holder is asserted alive, so no progress claim is made,
@@ -148,6 +150,24 @@ pub fn status_value(
                 "progress": progress_str(&progress),
             }),
         );
+        // A heartbeat-stale (or unreadable) exclusive lock still excludes
+        // every other session from `next --claim` (`lock::claim_permitted_at`),
+        // so it must not be hidden behind the driver-presence answer
+        // (backlog 28a16afd). It rides along under `exclusive_lock`.
+        match &lock {
+            LockStatus::Stale(info) => {
+                let mut l = lock_value(info);
+                merge(&mut l, json!({ "stale": true, "excludes_claims": true }));
+                merge(&mut v, json!({ "exclusive_lock": l }));
+            }
+            LockStatus::Undetermined(why) => {
+                merge(
+                    &mut v,
+                    json!({ "exclusive_lock": { "undetermined": true, "reason": why } }),
+                );
+            }
+            LockStatus::Active(_) | LockStatus::None => {}
+        }
         return Some(v);
     }
 

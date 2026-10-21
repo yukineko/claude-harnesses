@@ -9,6 +9,8 @@
 //! `python3 -m pytest`, or `bash`/`sh` running a git-tracked script under a
 //! tests directory), and every command is split into argv and executed
 //! directly — never through `sh -c`, and never with shell metacharacters.
+//! Every run inherits only the fixed [`INHERITED_ENV`] variables from the
+//! caller, so the recorded command text alone reproduces what was observed.
 //!
 //! Three answers everywhere, never two (CLAUDE.md §3): a run that could not be
 //! carried to a conclusion (spawn failure, timeout, unreadable output, a git
@@ -304,10 +306,44 @@ pub struct RunResult {
     pub output: String,
 }
 
-/// Execute `cmd` in `dir` with the bound. `Undetermined` = no conclusion.
+/// The only caller environment variables an evidence run inherits
+/// (backlog a14b2fa2). A closure / repro record stores the command text only,
+/// so a run whose outcome depended on any other variable in the caller's env
+/// (e.g. `AUDIT_RUN_OPEN=1` un-skipping a test at the red rev) would record a
+/// RED that re-running the stored command does not reproduce. Every run is
+/// therefore executed with the environment cleared down to this fixed set —
+/// what locating the toolchain, the user's git config and a temp dir needs —
+/// so the recorded command alone reproduces the observation, and an
+/// env-gated test that only goes RED with an extra variable is refused (its
+/// RED run skips) instead of being accepted on an irreproducible record.
+pub const INHERITED_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TERM",
+    "TZ",
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "RUSTUP_TOOLCHAIN",
+];
+
+/// Execute `cmd` in `dir` with the bound, under the [`INHERITED_ENV`]
+/// environment only. `Undetermined` = no conclusion.
 fn execute(cmd: &TestCmd, dir: &Path, timeout: Duration) -> Determination<RunResult> {
     let mut c = Command::new(&cmd.argv[0]);
     c.args(&cmd.argv[1..]).current_dir(dir).stdin(Stdio::null());
+    c.env_clear();
+    for key in INHERITED_ENV {
+        if let Some(v) = std::env::var_os(key) {
+            c.env(key, v);
+        }
+    }
     match boundary::run_with_timeout(&mut c, timeout) {
         Determination::Known(out) => Determination::known(to_result(out)),
         Determination::Undetermined(why) => Determination::Undetermined(why),

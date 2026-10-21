@@ -39,7 +39,6 @@ class EnablementRemedyIsNotRollout(unittest.TestCase):
             self.assertIn("`rollout-plugins.sh` does NOT enable plugins", f.read())
         self.assertEqual(mod.RC_ENABLEMENT, 2)
 
-    @unittest.expectedFailure
     def test_enablement_notice_does_not_prescribe_rollout(self):
         n = mod.classify(mod.RC_ENABLEMENT, "")
         self.assertIsNotNone(n, "rc=2 must still be reported")

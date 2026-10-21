@@ -13,7 +13,9 @@
 #   2. The backlog queue mechanics: a scout-style opportunity can be enqueued
 #      with `backlog add` and then surfaces in `backlog list --status pending`
 #      (the hand-off queue between scout and flow/condukt). Done in an ISOLATED
-#      temp HOME so the real ~/.backlog is never touched.
+#      temp HOME holding its own throwaway git repo + linked worktree and a
+#      committed failing repro test (backlog keeps one store per repo and files
+#      only reproduced findings), so no real store is ever touched.
 #   3. The gate CONTRACTS that remove every human `AskUserQuestion` stop along
 #      the chain, asserted by grepping the actually-installed SKILL specs:
 #        - scout  Phase 4 (selection Ask)  → skipped under autonomy
@@ -100,20 +102,44 @@ cleanup() {
 trap cleanup EXIT
 info "isolated HOME = $TMPHOME  (real ~/.backlog is untouched)"
 
-DEMO_PROJECT="/tmp/e2e-autonomy-demo-project"
 DEMO_TITLE="scout: harden autonomy hand-off (seeded by e2e)"
 
-# backlog reads its store from \$HOME/.backlog, so a per-command HOME fully
-# isolates the demo queue. This models a scout Phase-5 `backlog add`.
-env HOME="$TMPHOME" "$BACKLOG" add \
+# backlog keeps ONE store per repo (<repo root>/.backlog/tasks.toml), refuses a
+# --project naming a different repo, refuses `add` inside a primary working
+# tree, and files a task only when a committed --repro-test FAILS at HEAD. So
+# the demo gets its own throwaway git repo inside the temp HOME, a linked
+# worktree to run from, and a committed failing repro script — the shape a
+# real scout Phase-5 `backlog add` has. Nothing touches the invoking repo.
+DEMO_GIT_ENV=(HOME="$TMPHOME" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+  GIT_AUTHOR_NAME=e2e GIT_AUTHOR_EMAIL=e2e@example.invalid
+  GIT_COMMITTER_NAME=e2e GIT_COMMITTER_EMAIL=e2e@example.invalid)
+DEMO_PROJECT="$(cd "$TMPHOME" && pwd -P)/demo"
+DEMO_WT="$(cd "$TMPHOME" && pwd -P)/demo-wt"
+env "${DEMO_GIT_ENV[@]}" git init -q -b main "$DEMO_PROJECT" \
+  || die "could not create the demo git repo"
+env "${DEMO_GIT_ENV[@]}" git -C "$DEMO_PROJECT" commit -q --allow-empty -m seed \
+  || die "could not seed the demo git repo"
+env "${DEMO_GIT_ENV[@]}" git -C "$DEMO_PROJECT" worktree add -q -b demo "$DEMO_WT" \
+  || die "could not add the demo linked worktree"
+mkdir -p "$DEMO_WT/tests" || die "could not create the demo tests dir"
+printf '%s\n' '#!/usr/bin/env bash' 'echo "FAIL: modeled scout finding (e2e)"' 'exit 1' \
+  >"$DEMO_WT/tests/repro.sh" || die "could not write the demo repro test"
+env "${DEMO_GIT_ENV[@]}" git -C "$DEMO_WT" add tests/repro.sh \
+  && env "${DEMO_GIT_ENV[@]}" git -C "$DEMO_WT" commit -q -m "demo repro" \
+  || die "could not commit the demo repro test"
+info "demo repo = $DEMO_PROJECT (run from linked worktree $DEMO_WT)"
+
+(cd "$DEMO_WT" && env "${DEMO_GIT_ENV[@]}" "$BACKLOG" add \
   --title "$DEMO_TITLE" \
   --project "$DEMO_PROJECT" \
   --priority p1 \
-  --notes "modeled scout opportunity for the human-0 e2e" >/dev/null \
+  --notes "modeled scout opportunity for the human-0 e2e" \
+  --repro-test "bash tests/repro.sh" >/dev/null) \
   || die "backlog add failed"
 ok "backlog add — one scout-style opportunity enqueued"
 
-PENDING_JSON="$(env HOME="$TMPHOME" "$BACKLOG" list --status pending --json)"
+PENDING_JSON="$(cd "$DEMO_WT" && env "${DEMO_GIT_ENV[@]}" "$BACKLOG" list --status pending --json)" \
+  || die "backlog list failed"
 printf '%s' "$PENDING_JSON" | grep -q "$DEMO_PROJECT" \
   || die "enqueued task did not surface in 'backlog list --status pending'"
 printf '%s' "$PENDING_JSON" | grep -q '"status":"pending"' \

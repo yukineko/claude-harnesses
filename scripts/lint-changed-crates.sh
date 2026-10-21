@@ -59,6 +59,11 @@
 # On a red run the same scope note is printed after the FAILED lines.
 #
 # Exit 0 when no crate changed, so a docs- or script-only turn pays nothing.
+# A change to a WORKSPACE-LEVEL file (root Cargo.toml, Cargo.lock, clippy /
+# rustfmt / toolchain / .cargo config) is not "no crate changed" (backlog
+# 495e414e): it lints every workspace member, except a Cargo.lock change provably
+# confined to members' own path-package entries (a version bump), which lints
+# those members. Members that cannot be enumerated fail closed (exit 1).
 #
 # WHERE THIS DIVERGES FROM test-changed-crates.sh (both stricter, neither looser):
 #   * "not a git repo" exits 1 here, not 0. Without a repo the changed set cannot
@@ -150,7 +155,75 @@ changed="$(printf '%s\n%s\n' "$diff_out" "$untracked_out" | sort -u)"
 # crates/<dir>/... -> <dir>
 dirs="$(printf '%s\n' "$changed" | sed -n 's#^crates/\([^/]*\)/.*#\1#p' | sort -u)"
 
-if [ -z "$dirs" ]; then
+# Workspace-level inputs (backlog 495e414e). A change to the root manifest, the
+# lockfile or a workspace-wide lint/format/toolchain config can change how EVERY
+# crate builds and lints, so a change touching only these must not read as "no
+# crate touched — nothing to lint". grep's rc 1 (no match) is the legitimate
+# "none changed"; any other non-zero rc is a cannot-determine and fails closed.
+# An UNTRACKED Cargo.lock (absent from HEAD) is excluded: it is cargo's own
+# output of the same fresh resolution HEAD performs, written by the build this
+# very script runs, not an input change (scripts/test_lint_changed_crates.py's
+# fixtures produce exactly that).
+ut_rc=0
+untracked_ws="$(printf '%s\n' "$untracked_out" | grep -vx 'Cargo\.lock')" || ut_rc=$?
+if [ "$ut_rc" -gt 1 ]; then
+    echo "lint-changed-crates: could not classify the untracked files (grep rc=$ut_rc) — refusing to report 'nothing to lint'" >&2
+    exit 1
+fi
+ws_candidates="$(printf '%s\n%s\n' "$diff_out" "$untracked_ws")"
+ws_rc=0
+ws_changed="$(printf '%s\n' "$ws_candidates" | grep -E '^(Cargo\.toml|Cargo\.lock|\.?clippy\.toml|\.?rustfmt\.toml|rust-toolchain(\.toml)?|\.cargo/config(\.toml)?)$')" || ws_rc=$?
+if [ "$ws_rc" -gt 1 ]; then
+    echo "lint-changed-crates: could not classify the changed files (grep rc=$ws_rc) — refusing to report 'nothing to lint'" >&2
+    exit 1
+fi
+
+# A lockfile-only workspace change is narrowed when it is provably confined to
+# workspace members' own entries (a [[package]] block with no `source`, i.e. a
+# path package — what a plugin version bump rewrites): those members are linted.
+# Any changed block WITH a `source` (a registry/git dependency), a changed
+# header, or a lockfile that cannot be read/parsed on either side means every
+# crate may lint differently: the whole workspace is linted.
+ws_all=0
+lock_members=""
+if [ -n "$ws_changed" ]; then
+    if [ "$ws_changed" = "Cargo.lock" ] && command -v python3 >/dev/null 2>&1; then
+        lock_rc=0
+        lock_members="$(python3 -c '
+import re, subprocess, sys
+def blocks(text):
+    parts = re.split(r"(?m)^\[\[package\]\]\n", text)
+    out = {}
+    for b in parts[1:]:
+        m = re.search(r"(?m)^name = \"([^\"]+)\"$", b)
+        if not m:
+            sys.exit(3)
+        out[b] = (m.group(1), re.search(r"(?m)^source = ", b) is not None)
+    return parts[0], out
+head = subprocess.run(["git", "show", "HEAD:Cargo.lock"], capture_output=True, text=True)
+if head.returncode != 0:
+    sys.exit(3)
+with open("Cargo.lock", encoding="utf-8") as f:
+    work = f.read()
+h0, hb = blocks(head.stdout)
+w0, wb = blocks(work)
+if h0 != w0:
+    sys.exit(3)
+names = set()
+for b in set(hb) ^ set(wb):
+    name, sourced = (hb.get(b) or wb.get(b))
+    if sourced:
+        sys.exit(3)
+    names.add(name)
+print(" ".join(sorted(names)))
+')" || lock_rc=$?
+        [ "$lock_rc" -ne 0 ] && ws_all=1
+    else
+        ws_all=1
+    fi
+fi
+
+if [ -z "$dirs" ] && [ -z "$ws_changed" ]; then
     echo "lint-changed-crates: no crate touched — nothing to lint"
     exit 0
 fi
@@ -173,6 +246,36 @@ for d in $dirs; do
     ' "$manifest")"
     [ -n "$name" ] && pkgs="$pkgs $name"
 done
+
+ws_note=""
+if [ "$ws_all" -eq 1 ]; then
+    # Every workspace member. Not obtainable -> fail closed: the scope of this
+    # change is the whole workspace and nothing here could enumerate it.
+    members_rc=0
+    # pipefail (set above) makes a cargo metadata failure the pipeline's rc.
+    members="$(cargo metadata --no-deps --format-version=1 | python3 -c '
+import json, sys
+print(" ".join(sorted(p["name"] for p in json.load(sys.stdin)["packages"])))
+')" || members_rc=$?
+    if [ "$members_rc" -ne 0 ] || [ -z "$members" ]; then
+        echo "lint-changed-crates: workspace-level file(s) changed ($(printf '%s' "$ws_changed" | tr '\n' ' ')) but the workspace members could not be enumerated (rc=$members_rc)" >&2
+        echo "  refusing to report this change as linted — every crate's lint may be affected" >&2
+        exit 1
+    fi
+    pkgs=" $members"
+    ws_note="workspace-level change ($(printf '%s' "$ws_changed" | tr '\n' ' ' | sed 's/ $//')): every workspace member linted"
+elif [ -n "$lock_members" ]; then
+    for m in $lock_members; do
+        case " $pkgs " in *" $m "*) ;; *) pkgs="$pkgs $m" ;; esac
+    done
+fi
+
+if [ -z "$pkgs" ] && [ -n "$ws_changed" ]; then
+    # Only reachable for a lockfile change with no differing [[package]] block
+    # (e.g. whitespace): nothing any crate builds from changed.
+    echo "lint-changed-crates: Cargo.lock changed but no [[package]] entry differs — nothing to lint"
+    exit 0
+fi
 
 if [ -z "$pkgs" ]; then
     echo "lint-changed-crates: touched crate dirs have no Cargo.toml (skill-only?) — nothing to lint"
@@ -224,6 +327,7 @@ print(" ".join(sorted(seen - changed)))
         scope_note="no workspace dependents"
     fi
 fi
+[ -n "$ws_note" ] && scope_note="$ws_note"
 changed_list="$(printf '%s' "$pkgs" | sed 's/^ //')"
 
 # clippy BUILDS, so this gate is a frequent writer into the target-dir (which

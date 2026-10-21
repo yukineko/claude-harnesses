@@ -22,8 +22,10 @@ post-commit / post-merge read that certificate afterwards.
   HEAD as a proxy for "this operation created a merge commit", and an ff whose
   new HEAD happens to be a merge commit passes that proxy.
 
-36c936bc was filed as an open defect (a false positive that fails closed) and is
-marked expectedFailure. This file does not depend on the pre-commit scanner list.
+36c936bc was filed as an open defect (a false positive that fails closed). It was
+fixed by 1472b9f4 (backlog 1d2446de: post-merge skips the recorder on a positive
+"Fast-forward" reflog observation), so the expectedFailure marker was removed
+(backlog dacb9dc1). This file does not depend on the pre-commit scanner list.
 """
 
 import os
@@ -127,7 +129,6 @@ class AmendOfGatedCommit(unittest.TestCase):
 class FastForwardOntoGatedMerge(unittest.TestCase):
     """backlog 36c936bc"""
 
-    @unittest.expectedFailure
     def test_ff_onto_merge_gated_in_other_worktree_is_not_recorded(self):
         s = Scratch(self)
         s.write(s.main, "a.txt", "base\n")

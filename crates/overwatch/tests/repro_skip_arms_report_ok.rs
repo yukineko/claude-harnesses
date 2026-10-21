@@ -74,7 +74,6 @@ fn seed(cwd: &Path) {
 }
 
 #[test]
-#[ignore = "backlog: mark_changeset_merged returns Ok(()) when lock not acquired (nothing written)"]
 fn mark_changeset_merged_unacquired_lock_must_not_return_ok() {
     let cwd = git_repo("mcm");
     seed(&cwd);
@@ -88,7 +87,6 @@ fn mark_changeset_merged_unacquired_lock_must_not_return_ok() {
 }
 
 #[test]
-#[ignore = "backlog: mark_branch_merged returns Ok(0) when lock not acquired (nothing written)"]
 fn mark_branch_merged_unacquired_lock_must_not_return_ok() {
     let cwd = git_repo("mbm");
     seed(&cwd);
@@ -102,7 +100,6 @@ fn mark_branch_merged_unacquired_lock_must_not_return_ok() {
 }
 
 #[test]
-#[ignore = "backlog: prune_stale_changesets returns Ok(0) when lock not acquired (nothing pruned)"]
 fn prune_stale_changesets_unacquired_lock_must_not_return_ok() {
     let cwd = git_repo("psc");
     seed(&cwd);

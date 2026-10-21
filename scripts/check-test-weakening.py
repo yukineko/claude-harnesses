@@ -86,9 +86,12 @@ Two consequences of that design, stated so they read as decisions:
 
   The per-function half reads a COMMENT- AND LITERAL-MASKED copy of the surface
   (`_mask_noncode`), because attributing a `#[test]` to a function requires
-  knowing it is code; the per-file counts still read the raw surface, so this
-  change does not move any existing verdict. It also means an `assert!` that
-  appears only inside a string fixture is not credited to the enclosing test.
+  knowing it is code. It also means an `assert!` that appears only inside a
+  string fixture is not credited to the enclosing test. Since backlog 63e2690d
+  the per-file counts (assertions / `#[test]` / `#[ignore]` / `#[should_panic]`)
+  read the same masked surface, on both sides of the diff: an `#[ignore]` that
+  appears only in a comment is no longer `ignore-added`, and an `assert!` in a
+  doc comment can no longer offset a real assertion removal.
 
   What this deliberately does NOT do: pair functions across a rename. A function
   present at the base and absent at HEAD is not reported as assertion loss -- a
@@ -509,11 +512,16 @@ def test_fn_assertions(surface: str, path: str) -> dict:
 
 
 def counts(surface: str, path: str = "") -> dict:
+    # Counted over the comment- and literal-MASKED surface, symmetrically for
+    # both sides of the diff (backlog 63e2690d): an `#[ignore]` / `assert!` /
+    # `#[test]` mentioned in a comment or string is prose, not code, and must
+    # neither be reported as added nor offset a real removal.
+    code = _mask_noncode(surface, path)
     return {
-        "assertions": len(ASSERT_RE.findall(surface)),
-        "tests": len(TEST_ATTR_RE.findall(surface)),
-        "ignores": len(IGNORE_ATTR_RE.findall(surface)),
-        "should_panics": len(SHOULD_PANIC_RE.findall(surface)),
+        "assertions": len(ASSERT_RE.findall(code)),
+        "tests": len(TEST_ATTR_RE.findall(code)),
+        "ignores": len(IGNORE_ATTR_RE.findall(code)),
+        "should_panics": len(SHOULD_PANIC_RE.findall(code)),
         "fn_assertions": test_fn_assertions(surface, path),
     }
 

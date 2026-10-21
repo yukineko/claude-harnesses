@@ -58196,3 +58196,83 @@ test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "59acfdc315516016399fd55d68a26c2644bfe8ed"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "ee0e0b85"
+title = "blastguard: スクリプトファイル実行時に中身を判定しない(書いてから実行で rm -rf ~ が通る)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "deferred",
+]
+touched_files = []
+status = "done"
+notes = "Deferred by user ruling 2026-10-14 (スクリプト実行は全部見送り / 一旦現状維持). Write/Edit/printf of a destructive script then bash x.sh is allowed: each call is judged alone. Reproduced by crates/blastguard/tests/script_file_content_exec.rs (14 tests ignored with the ruling as reason; run with --ignored). Agreed spec if resumed: script content gets the same verdict as the inline command, args and flags included in locating the script file; undeterminable -> Ask with 'Recommended: do not run this.'. Open question left by the user: argument-derived targets (rm -rf $1) may be the script side's responsibility. Introduced alongside commit db259cfb."
+created_at = 1791928061
+updated_at = 1792619288
+weight = 0.0
+issue_number = 1349
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1349"
+issue_closed_at = 1792619292
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test script_file_content_exec -- --ignored"
+rev = "e1b94646777ca2b0abf4f59c2040efe3e125f6ce"
+observed_at = 1791931748
+detail = """
+exit 101: adable_script_file_asks_with_marker
+
+test result: FAILED. 0 passed; 14 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.75s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/script_file_content_exec.rs (target/debug/deps/script_file_content_exec-9172a7d8fe005cd8)
+error: test failed, to rerun pass `-p blastguard --test script_file_content_exec`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test script_file_content_exec"
+exit = 0
+passed = 20
+rev = "fdf9ad4af7b61f3dfbe5a45028111efc3a88734d"
+observed_at = 1792619273
+output_digest = "sha256:37dc92765e184974de7ec22cdfc5e4f5c16add7c1d3d579d16b8cc6d82c9ac57"
+excerpt = """
+
+running 20 tests
+test control_binary_executable_verdict_is_unchanged ... ok
+test control_inline_destruction_stays_denied ... ok
+test control_inline_recursive_rm_in_repo_stays_confined_ask ... ok
+test harmless_interpreter_files_are_allowed ... ok
+test control_inline_harmless_text_is_allowed_in_this_fixture ... ok
+test missing_script_file_asks_with_marker ... ok
+test non_utf8_script_file_asks_with_marker ... ok
+test node_file_destroying_home_asks_with_marker ... ok
+test python_file_destroying_home_asks_with_marker ... ok
+test destructive_script_with_args_and_flags_asks_with_marker ... ok
+test script_running_another_script_asks_with_marker ... ok
+test shebang_selects_interpreter_for_direct_exec_asks_with_marker ... ok
+test script_with_undeterminable_content_asks_with_marker ... ok
+test repo_confined_rm_script_asks_same_as_inline ... ok
+test script_destroying_root_asks_with_marker ... ok
+test harmless_shell_script_is_allowed ... ok
+test two_step_write_then_run_asks_with_marker ... ok
+test unreadable_script_file_asks_with_marker ... ok
+test shell_script_destroying_home_asks_with_marker ... ok
+test shell_script_destroying_home_subdir_asks_with_marker ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/script_file_content_exec.rs (target/debug/deps/script_file_content_exec-a7de8a1b3dcf4c34)
+"""
+
+[task.closure.red]
+rev = "59acfdc315516016399fd55d68a26c2644bfe8ed"
+exit = 101
+kind = "behavioural"

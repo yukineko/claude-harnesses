@@ -716,39 +716,6 @@ exit 101: nored; 0 measured; 0 filtered out; finished in 0.74s
 error: test failed, to rerun pass `-p fugu-router --test backlog_4fc130d3`"""
 
 [[task]]
-id = "ee0e0b85"
-title = "blastguard: スクリプトファイル実行時に中身を判定しない(書いてから実行で rm -rf ~ が通る)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "deferred",
-]
-touched_files = []
-status = "pending"
-notes = "Deferred by user ruling 2026-10-14 (スクリプト実行は全部見送り / 一旦現状維持). Write/Edit/printf of a destructive script then bash x.sh is allowed: each call is judged alone. Reproduced by crates/blastguard/tests/script_file_content_exec.rs (14 tests ignored with the ruling as reason; run with --ignored). Agreed spec if resumed: script content gets the same verdict as the inline command, args and flags included in locating the script file; undeterminable -> Ask with 'Recommended: do not run this.'. Open question left by the user: argument-derived targets (rm -rf $1) may be the script side's responsibility. Introduced alongside commit db259cfb."
-created_at = 1791928061
-updated_at = 1791931749
-weight = 0.0
-issue_number = 1349
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1349"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test script_file_content_exec -- --ignored"
-rev = "e1b94646777ca2b0abf4f59c2040efe3e125f6ce"
-observed_at = 1791931748
-detail = """
-exit 101: adable_script_file_asks_with_marker
-
-test result: FAILED. 0 passed; 14 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.75s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running tests/script_file_content_exec.rs (target/debug/deps/script_file_content_exec-9172a7d8fe005cd8)
-error: test failed, to rerun pass `-p blastguard --test script_file_content_exec`"""
-
-[[task]]
 id = "2d8c41c5"
 title = "overwatch spec: load_leases is said to load corrupt JSON as an empty registry, but it returns Err"
 project = "/Users/yuki/src/harness"

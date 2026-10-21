@@ -22,7 +22,18 @@ pub struct Episode {
     pub touched_files: Vec<String>,
     #[serde(default)]
     pub class: String,
+    /// Routing tier (`haiku`/`sonnet`/`opus`) — the only names `policy` learns
+    /// from. A full Claude model ID is folded onto its tier by
+    /// [`normalize_model`] (on `record` and on every read), so it is never an
+    /// orphan row that routing silently ignores. A name with no recognizable
+    /// tier is kept verbatim (and stays outside routing) rather than guessed.
     pub model: String,
+    /// The full model ID (e.g. `claude-opus-5-5`) when the caller supplied one,
+    /// kept as provenance so outcomes can be split by model version. `None` =
+    /// the caller passed only a tier name; the version is unknown and is never
+    /// fabricated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
     #[serde(default = "default_role")]
     pub role: String,
     pub pass: bool,
@@ -218,6 +229,48 @@ pub fn save_all(path: &Path, eps: &[Episode]) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
+/// The routing tier a model name belongs to: a bare tier name, or a full
+/// Claude model ID whose hyphen-separated segments name exactly one tier
+/// (`claude-opus-5-5`, `claude-haiku-4-5-20251001`, `claude-3-opus-20240229`).
+/// Anything else (`claude-fable-5-1`, `gpt-5`, `none`, a panel label, `""`) is
+/// `None`: it cannot be determined, so it is not guessed onto a tier.
+pub fn model_tier(raw: &str) -> Option<&'static str> {
+    const TIERS: [&str; 3] = ["haiku", "sonnet", "opus"];
+    if let Some(t) = TIERS.iter().find(|t| **t == raw) {
+        return Some(t);
+    }
+    if !raw.starts_with("claude-") {
+        return None;
+    }
+    let mut found = raw
+        .split('-')
+        .filter_map(|seg| TIERS.iter().find(|t| **t == seg).copied());
+    match (found.next(), found.next()) {
+        (Some(t), None) => Some(t),
+        _ => None,
+    }
+}
+
+/// Fold a full model ID in `ep.model` onto its tier, keeping the ID in
+/// `ep.model_id`. Idempotent; leaves a bare tier or an unrecognized name as is.
+pub fn normalize_model(ep: &mut Episode) {
+    if let Some(tier) = model_tier(&ep.model) {
+        if tier != ep.model {
+            let id = std::mem::replace(&mut ep.model, tier.to_string());
+            ep.model_id.get_or_insert(id);
+        }
+    }
+}
+
+/// Parse one store line into a model-normalized episode (`None` if malformed).
+/// Every reader goes through this so legacy full-ID lines aggregate under their
+/// tier and hash identically to their normalized form.
+fn parse_line(line: &str) -> Option<Episode> {
+    let mut ep = serde_json::from_str::<Episode>(line).ok()?;
+    normalize_model(&mut ep);
+    Some(ep)
+}
+
 /// Load all episodes, skipping any malformed line.
 pub fn load(path: &Path) -> Vec<Episode> {
     let Ok(text) = std::fs::read_to_string(path) else {
@@ -225,7 +278,7 @@ pub fn load(path: &Path) -> Vec<Episode> {
     };
     text.lines()
         .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str::<Episode>(l).ok())
+        .filter_map(parse_line)
         .collect()
 }
 
@@ -313,7 +366,7 @@ pub fn import_episodes(src: &Path, dst: &Path, dry_run: bool) -> std::io::Result
     let src_eps: Vec<Episode> = text
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str::<Episode>(l).ok())
+        .filter_map(parse_line)
         .collect();
 
     let mut summary = ImportSummary {
@@ -499,6 +552,7 @@ mod tests {
             touched_files: vec!["src/lib.rs".into()],
             class: "parallel".into(),
             model: model.into(),
+            model_id: None,
             role: "worker".into(),
             pass: true,
             cost_usd: Some(0.01),
@@ -764,6 +818,7 @@ mod tests {
             touched_files: vec!["src/auth/login.ts".into()],
             class: "parallel".into(),
             model: "sonnet".into(),
+            model_id: None,
             role: "worker".into(),
             pass: true,
             cost_usd: Some(0.12),
@@ -822,6 +877,7 @@ mod tests {
                             touched_files: vec![],
                             class: "parallel".into(),
                             model: "sonnet".into(),
+                            model_id: None,
                             role: "worker".into(),
                             pass: true,
                             cost_usd: None,

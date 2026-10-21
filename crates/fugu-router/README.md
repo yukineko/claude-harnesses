@@ -118,6 +118,13 @@ fugu-router record --title "<task title>" --files "<touched_files>" \
   --class parallel --model sonnet --status verified --cost 0.09
 ```
 
+`--model` takes a routing tier (`haiku`/`sonnet`/`opus`) or a full Claude model ID.
+A full ID is stored under its tier (`claude-opus-5-5` → `model: "opus"`) with the ID kept
+as `model_id`, so routing learns from it; a bare tier records no `model_id` (the version
+is unknown, not fabricated). A name with no recognizable tier (`claude-fable-5-1`, `gpt-5`)
+is kept verbatim and stays outside routing. Legacy store lines carrying a full ID are
+folded the same way on every read (`stats`, `route`, `import` dedup).
+
 `--status` other than a pass-word (`verified|pass|passed|ok|true`) counts as a
 non-pass. `--cost` is optional (read it from `gauge` if you want cost-aware routing).
 Omitting it records the episode's cost as **unmeasured** (`cost_usd` absent), which is

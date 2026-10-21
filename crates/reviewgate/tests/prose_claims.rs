@@ -410,7 +410,7 @@ fn claim_example_toml() {
         r.stdout
     );
     assert!(
-        r.stdout.contains("mode:          inject"),
+        r.stdout.contains("mode:          off"),
         "stdout: {}",
         r.stdout
     );
@@ -419,10 +419,12 @@ fn claim_example_toml() {
         "stdout: {}",
         r.stdout
     );
-    // The Stop hook is not config-invalid under it either.
+    // The Stop hook is not config-invalid under it either: the example ships
+    // the default mode (off), so the stop is allowed with no review.
     sb.write("changed.rs", "fn c() {}\n");
     let s = sb.stop("ex");
-    assert_eq!(sb.last_verdict("ex"), "blocked-inject", "{}", s.stderr);
+    assert!(!s.blocked(), "stdout={} stderr={}", s.stdout, s.stderr);
+    assert_eq!(s.code, 0, "{}", s.stderr);
 
     // RED control: a corrupted copy of the example is reported as FAILED.
     let sb2 = Sandbox::new();

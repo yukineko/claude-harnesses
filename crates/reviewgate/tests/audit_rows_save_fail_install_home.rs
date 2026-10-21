@@ -9,22 +9,25 @@
 //!   again (restrictive direction). Because the repeat ledger may waive an
 //!   identical second block to a `systemMessage`, the Block arm is observed via
 //!   the re-issued review text (`round 1/2`) and a second violation event.
-//! * `install.rs` `dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))`
-//!   (Claim D): with no resolvable home, `reviewgate install` writes
-//!   `./.claude/settings.json` relative to cwd and reports success.
-//!   `install_with_unresolvable_home_writes_to_cwd_and_succeeds` pins the CURRENT,
-//!   DEFECTIVE (fail-open) behaviour; a fix should FLIP it (and un-ignore
-//!   `install_with_unresolvable_home_refuses`, which asserts the correct
-//!   behaviour and fails today).
+//! * `install.rs` used `dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))`
+//!   (Claim D): with no resolvable home, `reviewgate install` wrote
+//!   `./.claude/settings.json` relative to cwd and reported success (backlog
+//!   12657c5e). Fixed: `install_with_unresolvable_home_refuses` (and its
+//!   dry-run twin) assert the refusal. The former
+//!   `install_with_unresolvable_home_writes_to_cwd_and_succeeds`, which pinned
+//!   the defective behaviour and said a fix should flip it, was removed in the
+//!   fixing commit (contract change).
 //!
 //! Written by a disinterested test author (CLAUDE.md §2(a)). Drives the real
 //! binary with a sandboxed HOME.
 //!
-//! How "no home" is forced (`dirs::home_dir()` = `$HOME`, else `getpwuid_r`):
-//! `HOME` is removed and the binary runs under
-//! `unshare -U --map-user=54321 --map-group=54321`, a uid that has no passwd
-//! entry, so the fallback fails too. If `unshare` cannot do that on this host the
-//! precondition assertion FAILS loudly (it never silently skips).
+//! How "no home" is forced, portably (backlog bc6508e7): `install` resolves
+//! home with `harness_core::config::home()`, which on unix reads ONLY `$HOME`
+//! (it deliberately never guesses the passwd home, see that function's doc) and
+//! consults the account home only when `HARNESS_SANDBOX_HOME` is declared. So
+//! removing both variables makes the home undeterminable on any unix host;
+//! the former Linux-only `unshare -U` (a uid with no passwd entry) is no longer
+//! needed.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -167,31 +170,19 @@ fn unwritable_state_dir_repeat_blocks_again() {
     );
 }
 
-/// Run `reviewgate install` (not dry-run) in a fresh cwd with HOME unset and an
-/// unresolvable uid. Returns (cwd, exit code, stdout, stderr).
-fn install_no_home() -> (PathBuf, i32, String, String) {
+/// Run `reviewgate <args>` in a fresh cwd with `HOME` and
+/// `HARNESS_SANDBOX_HOME` unset, i.e. an undeterminable home. Returns (cwd,
+/// exit code, stdout, stderr).
+fn run_no_home(args: &[&str]) -> (PathBuf, i32, String, String) {
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let cwd = std::env::temp_dir().join(format!("rg-auditd-cwd-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&cwd);
     std::fs::create_dir_all(&cwd).unwrap();
-    // Precondition: prove home really is unresolvable in this environment.
-    let probe = Command::new("unshare")
-        .args(["-U", "--map-user=54321", "--map-group=54321", "sh", "-c"])
-        .arg("getent passwd 54321 >/dev/null 2>&1 && echo HAS_PASSWD || echo NO_PASSWD")
-        .env_remove("HOME")
-        .output()
-        .expect("`unshare` is required to force an unresolvable home dir");
-    assert_eq!(
-        String::from_utf8_lossy(&probe.stdout).trim(),
-        "NO_PASSWD",
-        "cannot force dirs::home_dir()==None here (unshare failed or uid has a passwd entry): {probe:?}"
-    );
-    let out = Command::new("unshare")
-        .args(["-U", "--map-user=54321", "--map-group=54321"])
-        .arg(env!("CARGO_BIN_EXE_reviewgate"))
-        .arg("install")
+    let out = Command::new(env!("CARGO_BIN_EXE_reviewgate"))
+        .args(args)
         .current_dir(&cwd)
         .env_remove("HOME")
+        .env_remove("HARNESS_SANDBOX_HOME")
         .output()
         .unwrap();
     (
@@ -202,27 +193,29 @@ fn install_no_home() -> (PathBuf, i32, String, String) {
     )
 }
 
-/// Claim D, pinning CURRENT (DEFECTIVE, fail-open) behaviour: no resolvable
-/// home => install silently writes `./.claude/settings.json` under cwd and
-/// reports success. A fix should FLIP this test.
+/// Run `reviewgate install` (not dry-run) with an undeterminable home.
+fn install_no_home() -> (PathBuf, i32, String, String) {
+    run_no_home(&["install"])
+}
+
+/// Claim D, dry-run twin: with an undeterminable home, `install --dry-run`
+/// must refuse too rather than preview a merge into a settings file whose
+/// location it does not know.
 #[test]
-fn install_with_unresolvable_home_writes_to_cwd_and_succeeds() {
-    let (cwd, code, stdout, stderr) = install_no_home();
-    assert_eq!(code, 0, "stdout={stdout} stderr={stderr}");
-    assert!(
-        stdout.contains("Installed Stop hook"),
-        "reports success: {stdout} {stderr}"
+fn install_dry_run_with_unresolvable_home_refuses() {
+    let (cwd, code, stdout, stderr) = run_no_home(&["install", "--dry-run"]);
+    assert_ne!(
+        code, 0,
+        "must exit non-zero; stdout={stdout} stderr={stderr}"
     );
-    let written = cwd.join(".claude").join("settings.json");
     assert!(
-        written.is_file(),
-        "settings written relative to cwd (defect): {written:?}"
+        !cwd.join(".claude").exists(),
+        "nothing may be written under cwd"
     );
 }
 
-/// Claim D, CORRECT behaviour (backlog repro): must refuse. FAILS today.
+/// Claim D, CORRECT behaviour (backlog 12657c5e repro): must refuse.
 #[test]
-#[ignore = "fails today: install falls back to ./ when home is unresolvable"]
 fn install_with_unresolvable_home_refuses() {
     let (cwd, code, stdout, stderr) = install_no_home();
     assert_ne!(

@@ -60101,3 +60101,123 @@ scripts/test_backlog_d058b22a.py ..                                      [100%]
 rev = "1065fa53db911395280841928231ad46b8fa5d8b"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "12657c5e"
+title = "reviewgate install reports success when home dir is unresolvable (writes ./.claude/settings.json)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "reviewgate",
+    "fail-open",
+]
+touched_files = []
+status = "done"
+notes = """crates/reviewgate/src/install.rs: dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")). With HOME unset and a uid with no passwd entry, reviewgate install exits 0, prints 'Installed Stop hook', and writes ./.claude/settings.json under cwd: the gate is not installed where Claude Code reads it, yet success is reported. Same class as backlog 1e783882. Repro: ignored test install_with_unresolvable_home_refuses (bd18ece9), observed RED: 'must exit non-zero; stdout=updated: ./.claude/settings.json'."""
+created_at = 1792121387
+updated_at = 1792619766
+weight = 0.0
+issue_number = 1364
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1364"
+issue_closed_at = 1792619770
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test audit_rows_save_fail_install_home -- --ignored install_with_unresolvable_home_refuses"
+rev = "11aa44d305519304f0b81cabc8a49d9eaca7626c"
+observed_at = 1792121387
+detail = """
+exit 101: viewgate v0.1.40 (/home/hiroyuki_nakayama/src/.claude-harnesses-worktrees/session-dcbf913f/crates/reviewgate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.74s
+     Running tests/audit_rows_save_fail_install_home.rs (target/debug/deps/audit_rows_save_fail_install_home-94ce47eebcf70dd6)
+error: test failed, to rerun pass `-p reviewgate --test audit_rows_save_fail_install_home`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p reviewgate --test audit_rows_save_fail_install_home install_with_unresolvable_home_refuses"
+exit = 0
+passed = 1
+rev = "afbf5e52b5b447c0751aea0ffc9a5223d270f4e6"
+observed_at = 1792619751
+output_digest = "sha256:e885973b971c9d97c624d56186cd4432261215f0f1f90f8edc2862791926ca53"
+excerpt = """
+
+running 1 test
+test install_with_unresolvable_home_refuses ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.57s
+
+   Compiling overwatch v0.2.89 (/Users/yuki/src/.harness-worktrees/fix-reviewgate-c5b9/crates/overwatch)
+   Compiling reviewgate v0.1.46 (/Users/yuki/src/.harness-worktrees/fix-reviewgate-c5b9/crates/reviewgate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.91s
+     Running tests/audit_rows_save_fail_install_home.rs (target/debug/deps/audit_rows_save_fail_install_home-f2bdecadaecc8cd6)
+"""
+
+[task.closure.red]
+rev = "ff52201a3a6b1137efd7c9ffa81a3d2a1a64d9c9"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "bc6508e7"
+title = "reviewgate install_with_unresolvable_home test requires Linux unshare and fails on macOS"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1792429752
+updated_at = 1792619792
+weight = 0.0
+issue_number = 1429
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1429"
+issue_closed_at = 1792619794
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p reviewgate --test audit_rows_save_fail_install_home install_with_unresolvable_home_writes_to_cwd_and_succeeds"
+rev = "caa78b02fe76894db2e549a199336730d2fc9c2b"
+observed_at = 1792429752
+detail = """
+exit 101: tch)
+   Compiling reviewgate v0.1.45 (/Users/yuki/src/.harness-worktrees/session-c5b9c02b/crates/reviewgate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.62s
+     Running tests/audit_rows_save_fail_install_home.rs (target/debug/deps/audit_rows_save_fail_install_home-8c6a47333d40b1a2)
+error: test failed, to rerun pass `-p reviewgate --test audit_rows_save_fail_install_home`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p reviewgate --test audit_rows_save_fail_install_home"
+exit = 0
+passed = 4
+rev = "afbf5e52b5b447c0751aea0ffc9a5223d270f4e6"
+observed_at = 1792619777
+output_digest = "sha256:c6bae782cc694d4373800698920600a66cf71e2821007f2a568a2eb04d0e783c"
+excerpt = """
+
+running 4 tests
+test install_with_unresolvable_home_refuses ... ok
+test install_dry_run_with_unresolvable_home_refuses ... ok
+test unwritable_state_dir_repeat_blocks_again ... ok
+test writable_state_repeat_is_already_reviewed ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.95s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/audit_rows_save_fail_install_home.rs (target/debug/deps/audit_rows_save_fail_install_home-f2bdecadaecc8cd6)
+"""
+
+[task.closure.red]
+rev = "ff52201a3a6b1137efd7c9ffa81a3d2a1a64d9c9"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/reviewgate/tests/integration.rs"]

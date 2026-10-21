@@ -834,32 +834,3 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
      Running tests/lock_status_release_ownership.rs (target/debug/deps/lock_status_release_ownership-8556bfdc3992614d)
 error: test failed, to rerun pass `-p backlog --test lock_status_release_ownership`"""
-
-[[task]]
-id = "51a26dc5"
-title = "scripts/e2e-autonomy.sh step 2 backlog add --project /tmp/... is refused by backlog's one-store-per-repo rule, so the script always exits 1"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scripts",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-22 at bbf3c044: from a linked worktree backlog refuses the foreign --project; from main backlog add is refused inside the primary working tree; outside a repo there is no store. Fix: run the demo inside its own temp git repo + linked worktree."
-created_at = 1792610382
-updated_at = 1792610382
-weight = 0.0
-issue_number = 1439
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1439"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/e2e-autonomy-runs.sh"
-rev = "d06fc874361e8f4a32d265b6fb358d025d259064"
-observed_at = 1792610382
-detail = """
-exit 1: src/harness (/Users/yuki/src/.harness-worktrees/flow-c5b9-scripts), so it cannot hold tasks for --project /tmp/e2e-autonomy-demo-project (resolved to /tmp/e2e-autonomy-demo-project). backlog keeps one queue per repo, so every task in this store is in scope already — drop --project, or run from the checkout of the project you mean.
-  \u001B[31mFAIL\u001B[0m backlog add failed
-FAIL: e2e-autonomy.sh exited 1"""

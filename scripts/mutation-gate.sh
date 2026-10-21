@@ -95,6 +95,23 @@ PILOT="${PILOT:-harness-core}"
 MIN_KILL_RATE="${MIN_KILL_RATE:-0.80}"
 MUTANTS_TIMEOUT="${MUTANTS_TIMEOUT:-120}"
 
+# EARLY THRESHOLD CHECK (backlog d058b22a). mutategate rejects a threshold
+# outside (1e-9, 1.0] — a floor at or below 1e-9 always passes and so disables
+# the gate (crates/mutategate/src/lib.rs validate_min_kill_rate) — but it is
+# invoked as the LAST step, so an invalid MIN_KILL_RATE used to be discovered
+# only after the whole cargo-mutants run. This mirrors that rule up front so the
+# expensive run is never started for a threshold that will be refused. It is an
+# early copy, not the authority: mutategate still validates at the end, so if
+# the two ever drift apart the late check still refuses (exit 2), never passes.
+# Anything that is not a plain decimal number is refused here as well.
+if ! [[ "$MIN_KILL_RATE" =~ ^[+]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$ ]] \
+  || ! awk -v r="$MIN_KILL_RATE" 'BEGIN { exit !((r + 0) > 1e-9 && (r + 0) <= 1.0) }'; then
+  echo "mutation-gate: MIN_KILL_RATE must be a number greater than 1e-9 and at most 1.0" >&2
+  echo "  (got '${MIN_KILL_RATE}'); a floor at or below 1e-9 disables the gate, and a" >&2
+  echo "  kill-rate above 1.0 is unsatisfiable. Refusing before running cargo-mutants." >&2
+  exit 2
+fi
+
 # Per-pilot default scope, used only when the caller does not set MUTANTS_EXTRA.
 # specguard is large (~14k lines); narrow to the pure polarity logic
 # (src/similarity.rs) and skip the one known git-HEAD-dependent flaky test

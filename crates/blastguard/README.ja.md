@@ -570,17 +570,6 @@ truncating-redirect については、この判定と並行して**別種の純�
   マッチし、`python3 script.py`（フラグ無しのスクリプト実行）は対象外
   （`:986-987` のコメント参照）。複雑な処理が必要なら Write ツールでスクリプトを
   書き出してから引数無しで実行すればよく、コードも可視化される。
-  - **v0.2.145（backlog ee0e0b85, ユーザー裁定 R3）以降、hook はスクリプトファイルの
-    中身を読んで判定する**（`src/detect/script_file.rs`）。`bash f.sh` / `sh f.sh` /
-    `zsh f` / `./f.sh`（shebang で言語を選ぶ）/ `source f.sh` / `. f.sh` /
-    `python3 f.py` / `node f.js` / `perl` / `ruby` のスクリプトを、その行が走る cwd
-    基準で読み、同じテキストを inline で実行した場合と同じ規則で判定する。中身が
-    Deny/Ask なら **Ask（`Recommended: do not run this.` 付き）**、読めない・存在しない・
-    UTF-8 でない・大きすぎる・パスがリテラルでない・別のスクリプトを実行する場合も
-    **Ask**（Allow には倒さない）。中身が Allow なら Allow。バイナリ実行ファイル
-    （ELF / Mach-O）は対象外で従来の判定のまま。ライブラリ入口の `detect::detect`
-    （condukt の check runner 等）はスクリプトファイルを読まず、従来の判定のまま。
-    つまり「Write で書き出して実行」は、書き出した中身が判定対象になる。
   - **v0.2.12 で追記した具体例**: この判定の妥当性を、本セッション自身で観測した
     実発火例で裏付ける。次の `python3 -c` 呼び出しは、transcript ファイルを開いて
     `json.loads` でパースし、マッチした行番号を `print` するだけの read-only スクリプト

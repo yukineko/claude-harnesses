@@ -45,7 +45,6 @@ class UnreachableInvocationIsNotListed(unittest.TestCase):
         p = _check(self, ["run check-dead.py dead"])
         self.assertEqual(p.returncode, 0, tcu.out(p))
 
-    @unittest.expectedFailure
     def test_unreachable_call_is_not_counted_as_invoked(self):
         for name, lines in UNREACHABLE.items():
             with self.subTest(case=name):

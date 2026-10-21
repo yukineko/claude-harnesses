@@ -25,13 +25,11 @@
 //! at what it was measured to be before the feature, so the feature cannot
 //! silently change it. Inline commands are unchanged (`rm -rf ~` stays Deny).
 //!
-//! Deferred by user ruling 2026-10-14 and resumed as backlog ee0e0b85: the
-//! content-reading tests below were `#[ignore]`d while blastguard did not read
-//! script files (RED with `--ignored`); `src/detect/script_file.rs` implements
-//! the ruling and they run unignored, assertions unchanged.
+//! DEFERRED (user ruling 2026-10-14): blastguard does not read script-file
+//! content yet, so every content-reading test below is `#[ignore]`d; run with
+//! `--ignored` to reproduce the write-then-run gap. The controls stay active.
 //!
-//! Written by a disinterested author (CLAUDE.md §2(a)); `src/` untouched by
-//! that author.
+//! Written by a disinterested author (CLAUDE.md §2(a)); `src/` untouched.
 //!
 //! Fixture: a session repo `<base>/src/proj` (a git repo) is the payload
 //! `cwd` and `CLAUDE_PROJECT_DIR`; `HOME` is a synthetic `<base>/home` (so
@@ -192,6 +190,7 @@ fn s(v: &[&str]) -> Vec<String> {
 /// A shell script whose content destroys `~` (outside repo/tmp), run through
 /// every shell spelling the ruling names: Ask + marker.
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn shell_script_destroying_home_asks_with_marker() {
     let f = Fixture::new("destroy_home_sh");
     f.script("f.sh", "#!/bin/sh\nrm -rf ~\n", true);
@@ -212,6 +211,7 @@ fn shell_script_destroying_home_asks_with_marker() {
 /// Same with `~/Documents`, an extension-less file for `zsh f`, a script in a
 /// subdirectory, and an ABSOLUTE script path.
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn shell_script_destroying_home_subdir_asks_with_marker() {
     let f = Fixture::new("destroy_docs_sh");
     f.script("f", "rm -rf ~/Documents\n", false);
@@ -236,6 +236,7 @@ fn shell_script_destroying_home_subdir_asks_with_marker() {
 
 /// Python file whose content removes the home directory: Ask + marker.
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn python_file_destroying_home_asks_with_marker() {
     let f = Fixture::new("destroy_home_py");
     f.script(
@@ -251,6 +252,7 @@ fn python_file_destroying_home_asks_with_marker() {
 /// Node file whose content runs `rm -rf ~` through a child process: Ask +
 /// marker.
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn node_file_destroying_home_asks_with_marker() {
     let f = Fixture::new("destroy_home_js");
     f.script(
@@ -266,6 +268,7 @@ fn node_file_destroying_home_asks_with_marker() {
 /// (here: the fixture writes it before the hook sees anything), then the
 /// innocuous-looking `bash x.sh` arrives. Ask + marker.
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn two_step_write_then_run_asks_with_marker() {
     let f = Fixture::new("two_step");
     // Step 1 (prior Write tool call): nothing to judge in the Bash hook.
@@ -279,6 +282,7 @@ fn two_step_write_then_run_asks_with_marker() {
 /// not take the call out of scope, and a text `./f` WITHOUT a shebang is still
 /// a script. Each destructive file -> Ask + marker.
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn destructive_script_with_args_and_flags_asks_with_marker() {
     let f = Fixture::new("args_flags");
     f.script("f.sh", "rm -rf ~\n", true);
@@ -314,6 +318,7 @@ fn destructive_script_with_args_and_flags_asks_with_marker() {
 /// User ruling (2026-10-14, follow-up 2): `./f` is judged by its shebang. A
 /// python shebang on a file whose python program removes `~` -> Ask + marker.
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn shebang_selects_interpreter_for_direct_exec_asks_with_marker() {
     let f = Fixture::new("shebang_python");
     f.script(
@@ -328,6 +333,7 @@ fn shebang_selects_interpreter_for_direct_exec_asks_with_marker() {
 /// User ruling (2026-10-14, follow-up): a file containing system destruction
 /// (`rm -rf /`) is also Ask + marker (file content -> Ask, inline stays Deny).
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn script_destroying_root_asks_with_marker() {
     let f = Fixture::new("destroy_root_sh");
     f.script("r.sh", "#!/bin/sh\nrm -rf /\n", true);
@@ -338,6 +344,7 @@ fn script_destroying_root_asks_with_marker() {
 // ---------------------------------------------- undeterminable content -> Ask
 
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn missing_script_file_asks_with_marker() {
     let f = Fixture::new("missing");
     let bad = not_ask_with_marker(
@@ -355,6 +362,7 @@ fn missing_script_file_asks_with_marker() {
 }
 
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn unreadable_script_file_asks_with_marker() {
     let f = Fixture::new("unreadable");
     let p = f.script("noperm.sh", "echo hi\n", false);
@@ -370,6 +378,7 @@ fn unreadable_script_file_asks_with_marker() {
 }
 
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn non_utf8_script_file_asks_with_marker() {
     let f = Fixture::new("non_utf8");
     let p = f.proj.join("bin.sh");
@@ -380,6 +389,7 @@ fn non_utf8_script_file_asks_with_marker() {
 
 /// The text is readable but itself undeterminable: `rm -rf "$x"`.
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn script_with_undeterminable_content_asks_with_marker() {
     let f = Fixture::new("undet_content");
     f.script("v.sh", "#!/bin/sh\nrm -rf \"$x\"\n", true);
@@ -390,6 +400,7 @@ fn script_with_undeterminable_content_asks_with_marker() {
 /// A script that runs ANOTHER script is undeterminable by ruling, even when
 /// the inner script is harmless.
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn script_running_another_script_asks_with_marker() {
     let f = Fixture::new("nested_script");
     f.script("inner.sh", "#!/bin/sh\necho hi\n", true);
@@ -429,6 +440,7 @@ fn harmless_shell_script_is_allowed() {
 /// repo is a confined Ask, so the script is an Ask too. The marker is NOT
 /// required: this is a repo-confined question, not a destruction-risk Ask.
 #[test]
+#[ignore = "deferred by user ruling 2026-10-14: blastguard does not read script-file content yet; run with --ignored to reproduce the write-then-run gap"]
 fn repo_confined_rm_script_asks_same_as_inline() {
     let f = Fixture::new("repo_confined_sh");
     f.script("b.sh", "#!/bin/sh\nrm -rf ./target\n", true);

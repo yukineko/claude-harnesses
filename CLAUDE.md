@@ -370,6 +370,9 @@ merge で統合すればよい。統合できないのは**同じ index / 作業
 `.claude-plugin/marketplace.json` の当該エントリ `version`）で lockstep させる。触ったのに
 据え置きは禁忌。** さらに `scripts/rollout-plugins.sh` を実行しない限り稼働ハーネスには
 一切反映されない（手動 `cp` は禁止 — cache の version dir が乖離し古い版が配布される）。
+**例外（`check-version-bumped.py` が告知付きで免除）**: 変更が `crates/<name>/` 配下の `*.md` のみ
+（非 `.md` が1つでも混ざれば対象）なら bump 不要。ただし SKILL.md / agents の md 編集は、
+次の bump まで version キーの `claude plugin update` ではインストール済み plugin に再配布されない。
 
 **`crates/harness-core/` は例外的に扱いが違う**（plugin ではなく、ほぼ全 plugin にリンクされる共有
 クレート）。plugin.json も marketplace.json も持たないので lockstep 3ファイルの対象ではないが、

@@ -28,6 +28,14 @@ EDIT = os.path.join(HERE, "guard-maintree-edit.py")
 STOP = os.path.join(HERE, "stop-verify-worktree.py")
 CLEAR = os.path.join(HERE, "deny-ledger-clear.py")
 
+sys.path.insert(0, HERE)
+import deny_ledger  # noqa: E402
+
+
+def _raw(s):
+    """The ledger's quoted form of a raw call: its first RAW_LIMIT chars."""
+    return s[: deny_ledger.RAW_LIMIT]
+
 
 def _git(cwd, *args):
     subprocess.run(("git", "-c", "user.email=v@v", "-c", "user.name=v") + args,
@@ -109,7 +117,10 @@ class RetryPrevention(_Fixture):
         r = self.note(self.target)
         self.assertEqual(r.returncode, 2, r.stderr)
         self.assertIn("guard-maintree-edit.py refused", r.stderr)
-        self.assertIn(f"Write {self.target}", r.stderr)
+        # The quote is the ledger's raw, truncated to RAW_LIMIT (backlog
+        # 234011a6); the full target is named by the refusal's reason.
+        self.assertIn("refused `" + _raw(f"Write {self.target}") + "`", r.stderr)
+        self.assertIn(self.target, r.stderr)
 
     def test_retry_is_ask_when_interactive(self):
         r = self.note(self.target, interactive=True)

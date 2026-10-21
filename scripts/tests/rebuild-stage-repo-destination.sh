@@ -43,7 +43,33 @@ trap cleanup EXIT
 # `crates/backlog/bin/` holds only the launcher — no staged
 # `backlog-linux-x86_64` — which is exactly the miss that triggered the bug.
 BINNAME=backlog
-REL="$REPO/target/release/$BINNAME"
+
+# The refresh loop only scans cache binaries named <name>-<host os>-<arch>
+# (rebuild-plugins.sh's SUF), so the fixture must use the HOST suffix, computed
+# the same way. A hard-coded linux-x86_64 made the loop scan nothing on any
+# other host and this test fail its own vacuity check (backlog fc9e3487).
+triple="$(rustc -vV | sed -n 's/^host: //p')"
+[ -n "$triple" ] || fail "could not read the host triple from rustc -vV"
+case "$triple" in
+  *apple-darwin*) os=darwin ;;
+  *linux*)        os=linux ;;
+  *windows*)      os=windows ;;
+  *)              fail "unrecognised host triple $triple" ;;
+esac
+case "$triple" in
+  x86_64-*)  arch=x86_64 ;;
+  aarch64-*) arch=arm64 ;;
+  *)         fail "unrecognised host arch in $triple" ;;
+esac
+SUF="$os-$arch"
+[ "$os" = windows ] && fail "the fixture does not model the Windows .exe suffix"
+
+# Where cargo really writes release artifacts (rebuild-plugins.sh asks cargo
+# metadata too; .cargo/config.toml may redirect target-dir).
+TARGET_DIR="$(cd "$REPO" && cargo metadata --no-deps --format-version=1 \
+  | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
+[ -n "$TARGET_DIR" ] || fail "cargo metadata reported no target_directory"
+REL="$TARGET_DIR/release/$BINNAME"
 if [ ! -x "$REL" ]; then
   echo "  (building $BINNAME --release for the fixture)"
   (cd "$REPO" && cargo build --release -p "$BINNAME" --quiet) \
@@ -52,8 +78,8 @@ fi
 [ -x "$REL" ] || fail "$REL still missing after build"
 
 # A staged copy must NOT exist for this name — that absence IS the fixture.
-if compgen -G "$REPO/crates/*/bin/$BINNAME-linux-x86_64" >/dev/null; then
-  fail "fixture invalid: a staged crates/*/bin/$BINNAME-linux-x86_64 exists, so \
+if compgen -G "$REPO/crates/*/bin/$BINNAME-$SUF" >/dev/null; then
+  fail "fixture invalid: a staged crates/*/bin/$BINNAME-$SUF exists, so \
 this run cannot exercise the glob-miss path. Pick a plugin with no staged binary."
 fi
 
@@ -68,8 +94,8 @@ CUR_VER="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
 [ -n "$CUR_VER" ] || fail "could not read $BINNAME's current version"
 TEST_CACHE="$TMP/cache/yukineko"
 mkdir -p "$TEST_CACHE/$BINNAME/$CUR_VER/bin"
-: >"$TEST_CACHE/$BINNAME/$CUR_VER/bin/$BINNAME-linux-x86_64"
-chmod +x "$TEST_CACHE/$BINNAME/$CUR_VER/bin/$BINNAME-linux-x86_64"
+: >"$TEST_CACHE/$BINNAME/$CUR_VER/bin/$BINNAME-$SUF"
+chmod +x "$TEST_CACHE/$BINNAME/$CUR_VER/bin/$BINNAME-$SUF"
 
 OUT="$(cd "$REPO" && CLAUDE_PLUGIN_CACHE="$TEST_CACHE" \
   bash "$REBUILD" --no-clean --dry-run --stage-repo 2>&1)"
@@ -100,3 +126,4 @@ grep -qE "cache bins scanned: [1-9]" <<<"$OUT" \
 pass "the refresh loop did scan the fixture (assertions are not vacuous)"
 
 echo "PASS: rebuild-plugins.sh --stage-repo destination stays inside crates/*/bin/"
+echo "3 passed"

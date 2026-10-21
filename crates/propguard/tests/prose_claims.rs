@@ -211,24 +211,24 @@ fn saved_attempts(state: &Path, session: &str) -> u64 {
     v["attempts"].as_u64().expect("attempts number")
 }
 
-// ───────────────────────────── 1. one_stop_hook ─────────────────────────────
+// ───────────────────────────── 1. no_stop_hook_wired ─────────────────────────────
 
+/// The plugin's hooks.json registers no Stop hook (the hook logged
+/// `no-criteria` on every run and never judged anything). The binary and the
+/// explicit `install` subcommand are unchanged.
 #[test]
-fn claim_one_stop_hook() {
+fn claim_no_stop_hook_wired() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("hooks/hooks.json");
     let text = std::fs::read_to_string(&path).expect("hooks.json readable");
     let v: Value = serde_json::from_str(&text).expect("hooks.json is JSON");
     let hooks = v["hooks"].as_object().expect("hooks is an object");
-    let events: Vec<&String> = hooks.keys().collect();
-    assert_eq!(events, vec!["Stop"], "exactly one event, Stop: {events:?}");
-    let groups = hooks["Stop"].as_array().expect("Stop is an array");
-    assert_eq!(groups.len(), 1, "exactly one Stop group");
-    let cmds = groups[0]["hooks"].as_array().expect("group.hooks array");
-    assert_eq!(cmds.len(), 1, "exactly one hook in the group");
-    assert_eq!(cmds[0]["type"], "command");
-    assert_eq!(
-        cmds[0]["command"],
-        "${CLAUDE_PLUGIN_ROOT}/bin/propguard check"
+    assert!(
+        !hooks.contains_key("Stop"),
+        "hooks.json must not register a Stop hook: {hooks:?}"
+    );
+    assert!(
+        !text.contains("propguard"),
+        "no hook entry may invoke propguard: {text}"
     );
 }
 

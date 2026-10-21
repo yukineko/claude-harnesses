@@ -1,8 +1,8 @@
-`Stop` のたびに、現在のタスクの `done_criteria` から *semantic property*（不変条件）を導出し [test: crates/propguard/src/derive.rs::derives_matching_properties_from_criteria] [test: crates/propguard/src/derive.rs::derivation_is_capped_at_max] [test: crates/propguard/src/derive.rs::thin_criteria_are_padded_to_the_minimum]、生成コードがそれを満たすかを検査してからターン完了を許可します [test: crates/propguard/tests/integration.rs::with_criteria_inject_blocks_first_stop_but_exits_zero] [test: crates/propguard/tests/integration.rs::block_appends_propguard_signed_violation]。
+Stop hook として配線した場合（既定では未配線）、`Stop` のたびに、現在のタスクの `done_criteria` から *semantic property*（不変条件）を導出し [test: crates/propguard/src/derive.rs::derives_matching_properties_from_criteria] [test: crates/propguard/src/derive.rs::derivation_is_capped_at_max] [test: crates/propguard/src/derive.rs::thin_criteria_are_padded_to_the_minimum]、生成コードがそれを満たすかを検査してからターン完了を許可します [test: crates/propguard/tests/integration.rs::with_criteria_inject_blocks_first_stop_but_exits_zero] [test: crates/propguard/tests/integration.rs::block_appends_propguard_signed_violation]。
 
 [record: 2026-07-01 rev: 10de5291] プロパティの導出は **PGS**（Property-Generated Solver, [arXiv:2506.18315](https://arxiv.org/pdf/2506.18315)）に倣います。
 
-Stop hook 1 本が同梱バイナリの `propguard check` を実行する [test: crates/propguard/tests/prose_claims.rs::claim_one_stop_hook]。
+プラグインは既定では Stop hook を配線しない（`hooks/hooks.json` は何も登録しない）。Stop ゲートは下記の `propguard install` で明示的に配線した場合のみ動く [test: crates/propguard/tests/prose_claims.rs::claim_no_stop_hook_wired]。
 
 バイナリはプロパティの *導出* と count→threshold のブロック判定を決定論的に担い [test: crates/propguard/src/derive.rs::derivation_is_deterministic] [test: crates/propguard/src/gate.rs::below_threshold_is_the_single_comparison]、各プロパティが実際に *成り立つか* の意味判断は、subscription 上で動いている当のエージェント（inject モード）か、設定した独立チェッカー（subprocess モード）に委ねます [test: crates/propguard/src/gate.rs::inject_mode_block_reason_states_that_propguard_itself_did_not_judge] [test: crates/propguard/tests/integration.rs::block_appends_propguard_signed_violation]。
 

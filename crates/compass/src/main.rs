@@ -495,7 +495,7 @@ fn evaluate_command() -> Result<()> {
 
     // Initialize-or-load: a fresh evaluate re-seeds the bundle from gather (so
     // it reflects the current repo state); a resumed carve keeps its answers.
-    let mut state = match carve::load(&root) {
+    let mut state = match carve::load(&root)? {
         Some(mut s) => {
             // Refresh the freshly-gathered material but keep recorded answers
             // folded back in (they were appended as High fragments by `apply`).
@@ -547,7 +547,7 @@ fn apply_command(args: ApplyArgs) -> Result<()> {
     let answer: Answer = serde_json::from_str(&json).context("parsing answer JSON")?;
 
     // Resume the carve; if none persisted, start one over the current gather.
-    let mut state = match carve::load(&root) {
+    let mut state = match carve::load(&root)? {
         Some(s) => s,
         None => {
             let bundle = gather::gather(&root, &charter, &cfg)?;

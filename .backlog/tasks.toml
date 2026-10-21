@@ -207,38 +207,6 @@ exit 1: :354: XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.56s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "6798f47d"
-title = "blastguard: stdin-program scan (python3 - heredoc) flags the word rmtree inside comments/strings, not only real calls"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p3",
-]
-touched_files = []
-status = "pending"
-notes = "From the 9b64f427 agent, 2026-10-03. The patch script deleted nothing; rmtree appeared only in comment text. Verbatim: takes its program from stdin, and it runs rmtree, which deletes files or directories outright. Unverified by a test."
-created_at = 1791029535
-updated_at = 1792005346
-weight = 0.0
-issue_number = 1213
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1213"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_6798f47d -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005345
-detail = """
-exit 101: ignored; 0 measured; 1 filtered out; finished in 0.29s
-
-   Compiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
-     Running tests/backlog_6798f47d.rs (target/debug/deps/backlog_6798f47d-67e7fdf555f9799e)
-error: test failed, to rerun pass `-p blastguard --test backlog_6798f47d`"""
-
-[[task]]
 id = "a14b2fa2"
 title = "backlog done: red-rev run inherits caller env (closure of 9b64f427 needed AUDIT_RUN_OPEN=1 to unskip at red rev) but the closure record does not store the env"
 project = "/Users/yuki/src/harness"
@@ -838,38 +806,6 @@ Unexpected success
 =========================== short test summary info ============================
 FAILED scripts/test_backlog_6267bfbe_36c936bc.py::FastForwardOntoGatedMerge::test_ff_onto_merge_gated_in_other_worktree_is_not_recorded
 ========================= 1 failed, 1 passed in 1.98s =========================="""
-
-[[task]]
-id = "2dc70bc5"
-title = "blastguard の truncating-redirect Deny 理由が「this gate does not refuse or ask about」と判定と矛盾する文言を出す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-20 verbatim block: '> /Users/yuki/src/.harness-worktrees/bg-p1-c5b9/crates/blastguard/src/detect.rs' destroys the file's current contents and it is inside a git work tree, which this gate does not refuse or ask about. The gate refused while the reason says it does not refuse (CLAUDE.md 4: prose contradicting behaviour). Source: Recovery::RecoverableFromGit.describe() in crates/blastguard/src/reversible.rs is appended by the redirect Deny in crates/blastguard/src/detect.rs (format at the 'destroys the file's current contents' site) when the target is recoverable but neither confined nor a recognised worktree checkout. Repro: crates/blastguard/tests/deny_reason_contradicts_verdict.rs (ignored)."
-created_at = 1792431180
-updated_at = 1792431180
-weight = 0.0
-issue_number = 1433
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1433"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test deny_reason_contradicts_verdict -- --include-ignored"
-rev = "c40e3bf5a479e87ab1ff9a3b40bbca1b612cd0b5"
-observed_at = 1792431180
-detail = """
-exit 101: finished in 0.07s
-
-   Compiling blastguard v0.2.142 (/Users/yuki/src/.harness-worktrees/cmd-dc95/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
-     Running tests/deny_reason_contradicts_verdict.rs (target/debug/deps/deny_reason_contradicts_verdict-e176126693fb9e65)
-error: test failed, to rerun pass `-p blastguard --test deny_reason_contradicts_verdict`"""
 
 [[task]]
 id = "12657c5e"

@@ -59361,3 +59361,62 @@ scripts/test_backlog_9e0c9106.py ..                                      [100%]
 rev = "55243a13f8a98dc6b9e808c6278ed7b5366e6d1b"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "eb93be49"
+title = "Red at main 9e9d8db3: blastguard redirect_target_suffix_resolution (2 symlink tests) and specguard forge_integration ratify_promotes_draft_and_pins_consent"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-10-04 (session 33de4c25) in the session worktree at main 9e9d8db3. cargo test -p blastguard --test redirect_target_suffix_resolution: symlink_before_dotdot_in_a_suffix_must_not_be_resolved and symlink_without_a_dotdot_is_caught_by_the_symlink_axis FAILED (12 passed, 2 failed). cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent FAILED. Both are pre-existing, not caused by 873a2621. Possibly related: 3ca56588 and b280cfa2 (blastguard symlink + ..). Also, stuckguard anchor::backlog_c397cd15::heartbeat_reaches_overwatch_that_is_only_in_the_plugin_cache failed in a full cargo test --workspace run but passed 3/3 in isolation: a parallel-run flake.
+
+[2026-10-20, session c5b9c02b] The blastguard half is fixed by 14de6b48 (blastguard 0.2.137, closed with 2287ebae: both symlink rows RED at 59b9fa02, 14 passed after). Not closed: the specguard half is still RED at 59b9fa02 — cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent panics at forge_integration.rs:331 with 'specforge: requirement を backlog に積めなかった: requirement R1 を起票できなかった' (the backlog add subprocess). A different defect in a different plugin."""
+created_at = 1791046280
+updated_at = 1792620513
+weight = 0.0
+issue_number = 1259
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1259"
+issue_closed_at = 1792620517
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005339
+detail = """
+exit 101: c/.harness-worktrees/session-1a4ac77f/crates/blastguard)
+   Compiling specguard v0.2.89 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/specguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.98s
+     Running tests/forge_integration.rs (target/debug/deps/forge_integration-50932e832101fd10)
+error: test failed, to rerun pass `-p specguard --test forge_integration`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p specguard --test forge_integration ratify_promotes_draft_and_pins_consent"
+exit = 0
+passed = 1
+rev = "075d5053bdbf5f987ba9b6843cbdbccd2115f93b"
+observed_at = 1792620495
+output_digest = "sha256:88a2ef4c396cb9ce940a13a6f2e91836db8f2da80eac0da527312e48562fe46b"
+excerpt = """
+
+running 1 test
+test ratify_promotes_draft_and_pins_consent ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 1.03s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/forge_integration.rs (target/debug/deps/forge_integration-821891a73420f3c7)
+"""
+
+[task.closure.red]
+rev = "ff52201a3a6b1137efd7c9ffa81a3d2a1a64d9c9"
+exit = 101
+kind = "behavioural"

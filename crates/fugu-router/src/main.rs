@@ -659,12 +659,13 @@ fn run_user(cmd: Command) -> Result<()> {
             let repo_root = pathutil::repo_root_from_cwd();
             let touched = pathutil::normalise_paths(&raw_touched, repo_root.as_deref());
             let pass = is_pass(&status);
-            let ep = store::Episode {
+            let mut ep = store::Episode {
                 ts: store::now_secs(),
                 title: title.clone(),
                 touched_files: touched.clone(),
                 class: class.clone(),
                 model,
+                model_id: None,
                 role,
                 pass,
                 cost_usd,
@@ -686,6 +687,9 @@ fn run_user(cmd: Command) -> Result<()> {
                 tokens_output,
                 mode: mode.map(|m| m.as_str().to_string()),
             };
+            // A full model ID (`claude-opus-5-5`) is stored under its routing
+            // tier with the ID kept as `model_id`, so routing learns from it.
+            store::normalize_model(&mut ep);
             store::append(&cfg.store_path(), &ep).context("appending episode")?;
             if pass && !done_criteria.is_empty() {
                 let pb = store::Playbook {
@@ -1961,6 +1965,7 @@ mod delegation_stats_tests {
             touched_files: vec![],
             class: class.to_string(),
             model: "sonnet".to_string(),
+            model_id: None,
             role: "worker".to_string(),
             pass,
             cost_usd: (cost > 0.0).then_some(cost),
@@ -2040,6 +2045,7 @@ mod duration_outliers_tests {
             touched_files: vec![],
             class: class.to_string(),
             model: model.to_string(),
+            model_id: None,
             role: "worker".to_string(),
             pass,
             cost_usd: None,
@@ -2173,6 +2179,7 @@ mod label_tests {
             touched_files: vec![],
             class: "parallel".into(),
             model: "sonnet".into(),
+            model_id: None,
             role: "worker".into(),
             pass: true,
             cost_usd: None,

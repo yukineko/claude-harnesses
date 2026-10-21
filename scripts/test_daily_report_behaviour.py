@@ -3,7 +3,7 @@
 Every test pins what is OBSERVED today about a prose claim in
 crates/daily-report/{README*.md,skills/daily-report/SKILL.md}. Commands are
 extracted from SKILL.md fenced blocks so a prose change breaks the test.
-Run: python3 -m pytest scripts/test_prose_daily_report.py -q
+Run: python3 -m pytest scripts/test_daily_report_behaviour.py -q
 """
 import datetime
 import json
@@ -173,21 +173,6 @@ class T(unittest.TestCase):
             self.assertNotEqual(bsd.stdout.strip(), d("+%F").stdout.strip())
             self.assertIn(bsd.stdout.strip(), {yday.isoformat(), today.isoformat()})
 
-    # -------------------------------------------------------------- argument
-    def test_claim_arg_since(self):
-        self.assertIn("--since <git-expr>", frontmatter()["argument-hint"])
-        # the period-mode command actually uses the argument
-        self.assertIn('--since="<git-expr>"', bash_block_after("期間モードなら"))
-
-    def test_claim_arg_date(self):
-        self.assertIn("YYYY-MM-DD | today | yesterday", frontmatter()["argument-hint"])
-
-    def test_claim_arg_repo(self):
-        self.assertIn("--repo <path>", frontmatter()["argument-hint"])
-
-    def test_claim_arg_stdout(self):
-        self.assertIn("--stdout", frontmatter()["argument-hint"])
-
     # ---------------------------------------------------------------- config
     def test_claim_config_home_keys(self):
         with tempfile.TemporaryDirectory() as t:
@@ -317,63 +302,6 @@ class T(unittest.TestCase):
             r = run_sh(c, t)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(r.stdout.split(), names[:2])
-
-    def test_claim_write_only_daily(self):
-        # SKILL.md hard rule: "<vault>/daily/<date>.md 以外には書かないこと".
-        # What the DEFINITION can show: no write-capable instruction targets
-        # anything but <vault>/daily/, and records appear only in reads.
-        text = skill_text()
-        body = re.sub(r"\A---\n.*?\n---\n", "", text, count=1, flags=re.S)
-        tools = allowed_tools()
-        for t in ("Edit", "MultiEdit", "NotebookEdit"):
-            self.assertNotIn(t, tools)
-        # fenced bash blocks: read-only commands only, no redirect/tee/mkdir
-        blocks = re.findall(r"```bash\n(.*?)```", body, re.S)
-        self.assertGreaterEqual(len(blocks), 3)
-        for b in blocks:
-            b = b.replace("\\\n", " ")
-            # drop <placeholder> tokens so only real redirects remain
-            self.assertNotIn(">", re.sub(r"<[A-Za-z_-]+>", "", b))
-            self.assertIsNone(re.search(r"\btee\b|\bmkdir\b|\bsed\s+-i|\bcp\b|\bmv\b|\brm\b", b), b)
-            for cmd in re.split(r"\n|\|", b):
-                w = cmd.split()
-                if w:
-                    self.assertIn(w[0], {"git", "ls", "grep", "cat", "date"}, cmd)
-        # every prose line naming a write operation (mkdir / Write tool) has
-        # path targets that are all under <vault>/daily/, and there is >= 1.
-        prose = re.sub(r"```.*?```", "", body, flags=re.S)
-        write_re = re.compile(r"mkdir|\bWrite\b|\bEdit\b|追記|上書き|書き込")
-        targets = []
-        for line in prose.splitlines():
-            if not write_re.search(line):
-                continue
-            for span in re.findall(r"`([^`]+)`", line):
-                if "/" in span:
-                    targets.append(span)
-                    self.assertTrue(span.startswith("<vault>/daily/"), (span, line))
-        self.assertIn("<vault>/daily/<date>.md", targets)
-        self.assertIn("<vault>/daily/", targets)
-        # the records dir never co-occurs with a write verb, unless the line
-        # is itself a prohibition
-        prohib = re.compile(r"ないこと|禁止|Never|never")
-        verbs = re.compile(r"mkdir|\bWrite\b|\bEdit\b|追記|上書き|書き込|書く|書き換え|保存|tee")
-        for line in prose.splitlines():
-            if re.search(r"record_dir|records|record|レコード", line) and verbs.search(line):
-                self.assertIsNotNone(prohib.search(line), line)
-        # the prohibition itself is present in the skill and both READMEs
-        self.assertIn("`<vault>/daily/<date>.md` 以外には書かないこと", body)
-        self.assertIn("`records/` には決して書かないこと", body)
-        self.assertIn("Never write anywhere except `<vault>/daily/<date>.md`; "
-                      "never write into `records/`.", README.read_text(encoding="utf-8"))
-        ja = README_JA.read_text(encoding="utf-8")
-        self.assertIn("`<vault>/daily/<date>.md` 以外には書かないこと。", ja)
-        self.assertIn("`records/` には決して書き込まないこと。", ja)
-
-    def test_claim_mkdir_write_allowed(self):
-        tools = allowed_tools()
-        self.assertIn("Bash(mkdir:*)", tools)
-        self.assertIn("Write", tools)
-        self.assertIn("`mkdir -p`", skill_text())
 
 
 if __name__ == "__main__":

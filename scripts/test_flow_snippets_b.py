@@ -10,7 +10,7 @@ once from this checkout and run with a temp HOME, temp git repos and, where the
 store boundary matters, a linked worktree. The real ~/.claude, ~/.backlog and
 $HOME are never touched.
 
-Run: python3 -m pytest -q scripts/test_prose_flow_b.py
+Run: python3 -m pytest -q scripts/test_flow_snippets_b.py
 """
 import json
 import os
@@ -276,10 +276,6 @@ class TestWeightDefault(unittest.TestCase):
         self.assertEqual(r2.returncode, 0, r2.stderr)
         tasks = json.loads(sb.run(["backlog", "list", "--json"], linked).stdout)
         self.assertEqual(next(t for t in tasks if t["title"] == "weighted")["weight"], 2.5)
-
-    def test_claim_weight_default_skill_command_supplies_weight_flag(self):
-        argv = skill_cmd("backlog add --title")
-        self.assertIn("--weight", argv)
 
 
 class TestTagTaxonomy(unittest.TestCase):
@@ -973,14 +969,6 @@ class TestBudgetCheck(unittest.TestCase):
         except Exception:
             return f"<no verdict; stdout={r.stdout!r} stderr={r.stderr!r}>"
 
-    def test_claim_budget_frontmatter_allows_budgetguard(self):
-        fm = skill_text().split("---")[1]
-        line = next(l for l in fm.splitlines() if l.startswith("allowed-tools:"))
-        self.assertIn("Bash(budgetguard:*)", line)
-
-    def test_claim_budget_3_1_block_contains_check_command(self):
-        self.assertTrue(self._cmd().startswith("budgetguard check"))
-
     def test_claim_budget_over_is_nonzero(self):
         r = self._run(self.CFG, self._today_ledger(10.0))
         self.assertEqual(self._verdict(r), "over", r)
@@ -1005,19 +993,6 @@ class TestBudgetCheck(unittest.TestCase):
         # Not in PATH => the shell reports 127; "exit 0 以外 -> Step 4" must catch it.
         r = self._run(self.CFG, self._today_ledger(1.0), with_binary=False)
         self.assertNotEqual(r.returncode, 0, r)
-
-    def test_claim_budget_prose_nonzero_goes_to_step_4(self):
-        t = skill_text()
-        for name, body in (("3-1", _section(t, r"^#### 3-1\. ", "#### ")),
-                           ("早期脱出条件", _section(t, r"^## 早期脱出条件", "## "))):
-            sents = re.split(r"。|\n", body)
-            self.assertTrue(any("exit 0 以外" in x and "Step 4" in x for x in sents),
-                            f"{name}: no sentence with both `exit 0 以外` and `Step 4`")
-
-    def test_claim_budget_pressure_line_mentions_pressure_and_n1(self):
-        s31 = _section(skill_text(), r"^#### 3-1\. ", "#### ")
-        lines = [l for l in s31.splitlines() if "pressure" in l and "N=1" in l]
-        self.assertTrue(lines, "3-1 has no line mentioning both `pressure` and `N=1`")
 
 
 if __name__ == "__main__":

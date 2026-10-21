@@ -30,7 +30,7 @@ backlog driver status [--project <path>]           # 登録中の driver 一覧�
 # 排他ロックは「全セッションを締め出す」ときだけ取ること [test: crates/backlog/tests/prose_claims.rs::claim_n_force_takes_live_lock] [test: crates/backlog/src/liveness.rs::an_active_exclusive_lock_still_wins_and_keeps_its_shape]。キューを回すのに取る必要は無い [test: crates/backlog/tests/concurrent_drivers.rs::two_concurrent_driver_processes_get_disjoint_tasks]
 backlog lock status [--project <path>]             # 排他ロック + driver 登録の合算ステータス（project 省略時は全 project 横断） [test: crates/backlog/tests/concurrent_drivers.rs::another_projects_driver_does_not_make_my_project_look_busy] [test: crates/backlog/src/liveness.rs::an_active_exclusive_lock_still_wins_and_keeps_its_shape]
 backlog lock acquire --session-id <id> --project <path>
-backlog lock release --project <path>
+backlog lock release --project <path> [--session-id <id>]   # 保有セッションだけが解放できる（既定は CLAUDE_CODE_SESSION_ID。他セッション保有・session id 無し・読めないロックは非 0 で拒否しロックを残す） [test: crates/backlog/tests/lock_status_release_ownership.rs::release_by_non_holder_does_not_delete_the_lock]
 ```
 
 - `lock acquire` は**人が意図的に全セッションを締め出すときだけ**使うこと [test: crates/backlog/tests/prose_claims.rs::claim_n_force_takes_live_lock] [test: crates/backlog/src/liveness.rs::an_active_exclusive_lock_still_wins_and_keeps_its_shape]。保有中（heartbeat が stale でも）は保有セッション以外の `next --claim` が非 0 で拒否される [test: crates/backlog/tests/repro_exclusive_lock_ignored_by_claim.rs::held_exclusive_lock_stops_other_sessions_claiming] [test: crates/backlog/tests/repro_exclusive_lock_ignored_by_claim.rs::lock_holder_claims_and_release_restores_others] [test: crates/backlog/src/lock.rs::claim_permitted_truth_table]。

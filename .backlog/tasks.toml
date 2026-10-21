@@ -29,68 +29,6 @@ exit 1: test.py\u001B[0m:354: XFailed
 \u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.07s\u001B[0m\u001B[31m ==========================\u001B[0m"""
 
 [[task]]
-id = "1a4d26d1"
-title = "backlog claim_check_contract::non_executable_condukt_is_refused fails when a real condukt is later on PATH (lookup skips the non-exec shim) — fixture must not inherit PATH; fix is in the 1e6f00ae integration"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1791000564
-updated_at = 1791000564
-weight = 0.0
-issue_number = 1133
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1133"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test claim_check_contract non_executable_condukt_is_refused"
-rev = "38a0d0c8b857f1b6d80c3c4739e9d16aa8b1e03a"
-observed_at = 1791000564
-detail = """
-exit 101: e
-
-
-failures:
-    non_executable_condukt_is_refused
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.60s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
-     Running tests/claim_check_contract.rs (target/debug/deps/claim_check_contract-31b1a59fd334b40f)
-error: test failed, to rerun pass `-p backlog --test claim_check_contract`"""
-
-[[task]]
-id = "eb1ac319"
-title = "backlog lib.rs fails cargo fmt --check on main"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p3"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-03 at main a91e1d55: rustfmt --check crates/backlog/src/lib.rs reports a diff at line 1 (two added blank lines). Present on main, not introduced by 1e6f00ae. No gate runs fmt, so it went unnoticed."
-created_at = 1791001963
-updated_at = 1792005363
-weight = 0.0
-issue_number = 1134
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1134"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test backlog_eb1ac319 -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005357
-detail = """
-exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
-   Compiling backlog v0.3.47 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.01s
-     Running tests/backlog_eb1ac319.rs (target/debug/deps/backlog_eb1ac319-c81b4328c5362d22)
-error: test failed, to rerun pass `-p backlog --test backlog_eb1ac319`"""
-
-[[task]]
 id = "a57e299b"
 title = "scripts/test_backlog_audit_b1_0.py RealRepoState expects 39 binary-shipping plugins but the repo has 40"
 project = "/Users/yuki/src/harness"
@@ -237,38 +175,6 @@ exit 101: ignored; 0 measured; 1 filtered out; finished in 0.29s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
      Running tests/backlog_6798f47d.rs (target/debug/deps/backlog_6798f47d-67e7fdf555f9799e)
 error: test failed, to rerun pass `-p blastguard --test backlog_6798f47d`"""
-
-[[task]]
-id = "a14b2fa2"
-title = "backlog done: red-rev run inherits caller env (closure of 9b64f427 needed AUDIT_RUN_OPEN=1 to unskip at red rev) but the closure record does not store the env"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "p3",
-]
-touched_files = []
-status = "pending"
-notes = "2026-10-03: 9b64f427 closed with AUDIT_RUN_OPEN=1 in the caller env; RED at 4bc312db was exit 1 behavioural (4 failed), GREEN at HEAD 4 passed. A re-run of the stored command without that env would skip at red rev. Either record env in the closure or reject env-dependent skips."
-created_at = 1791029536
-updated_at = 1792005365
-weight = 0.0
-issue_number = 1214
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1214"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test backlog_a14b2fa2 -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005363
-detail = """
-exit 101: failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.40s
-
-   Compiling backlog v0.3.47 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
-     Running tests/backlog_a14b2fa2.rs (target/debug/deps/backlog_a14b2fa2-82b288e7fb577c95)
-error: test failed, to rerun pass `-p backlog --test backlog_a14b2fa2`"""
 
 [[task]]
 id = "234011a6"
@@ -896,68 +802,3 @@ scripts/test_design_625aa170_lock_fn_claim.py:44: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_design_625aa170_lock_fn_claim.py::T::test_doc_named_lock_fn_is_the_one_record_changeset_and_detect_calls
 ============================== 1 failed in 0.04s ==============================="""
-
-[[task]]
-id = "4493142a"
-title = "backlog lock release deletes another session's exclusive lock without any ownership check"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed live 2026-10-20: lock acquire refused to reap d52fbfce's stale lock, then lock release --project (no session id) removed it. main.rs LockAction::Release takes no caller; lock::release_at remove_file with no holder check. Repro at feab5559."
-created_at = 1792444756
-updated_at = 1792444756
-weight = 0.0
-issue_number = 1437
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1437"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test lock_status_release_ownership release_by_non_holder_does_not_delete_the_lock -- --include-ignored --exact"
-rev = "feab5559a088a9a7e31dc27a876d1990099268c1"
-observed_at = 1792444756
-detail = """
-exit 101: ed out; finished in 0.67s
-
-   Compiling backlog v0.3.63 (/Users/yuki/src/.harness-worktrees/session-6d32fd65/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.97s
-     Running tests/lock_status_release_ownership.rs (target/debug/deps/lock_status_release_ownership-8556bfdc3992614d)
-error: test failed, to rerun pass `-p backlog --test lock_status_release_ownership`"""
-
-[[task]]
-id = "28a16afd"
-title = "backlog lock status hides a heartbeat-stale exclusive lock that next --claim still honours"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed live 2026-10-20: next --claim refused on d52fbfce's exclusive lock (heartbeat 2026-07-28) while lock status printed kind driver-presence with no holder. Fresh locks are shown; only stale ones are hidden. Repro at feab5559."
-created_at = 1792444763
-updated_at = 1792444763
-weight = 0.0
-issue_number = 1438
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1438"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test lock_status_release_ownership status_reports_exclusive_lock_held_by_another_session -- --include-ignored --exact"
-rev = "feab5559a088a9a7e31dc27a876d1990099268c1"
-observed_at = 1792444763
-detail = """
-exit 101: _held_by_another_session
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.55s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
-     Running tests/lock_status_release_ownership.rs (target/debug/deps/lock_status_release_ownership-8556bfdc3992614d)
-error: test failed, to rerun pass `-p backlog --test lock_status_release_ownership`"""

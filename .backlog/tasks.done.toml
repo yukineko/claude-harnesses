@@ -59244,3 +59244,120 @@ scripts/test_backlog_9d1f3885.py ...                                     [100%]
 rev = "6d6566ed9484514c8d03b809d4393b1ec1bf1420"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "7b88aa9a"
+title = "docs/DESIGN-spec-loop.md is stale: it asserts no ratified-spec-to-backlog path exists, but forge/queue.rs implements one"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "Issue summary: found 2026-08-14 at ee214481. docs/DESIGN-spec-loop.md:15-17 says no path from a ratified spec into the backlog queue exists (measured at 0ad0d055), but crates/specguard/src/forge/queue.rs implements it, forge/main.rs:435 ratify calls enqueue_and_report, and queue.rs:453-490 has tests including undetermined arms. R1 landed without updating the doc; readers may rebuild the leg (R4 clause 4 was scoped untestable partly because of this). Fix: correct the sections predating R1 and check whether the R0 termination and R3 descriptions are also stale. recreated 2026-10-04 from issue #348; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1792619285
+weight = 0.0
+issue_number = 348
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/348"
+issue_closed_at = 1792619288
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_7b88aa9a.py"
+rev = "3be54fd6902dc0386ab26750b77fda2d79326082"
+observed_at = 1791049887
+detail = """
+exit 1: (reason))
+E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_7b88aa9a.py::DesignDocMatchesRatifyQueuePath::test_doc_does_not_deny_the_existing_path
+========================= 1 failed, 1 passed in 0.44s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_7b88aa9a.py"
+exit = 0
+passed = 2
+rev = "95e443919f4dd0ea33753bf3f7d0a3219ed0196e"
+observed_at = 1792619283
+output_digest = "sha256:a183fd07049d32109adcd7dab695dd6d58e9fe4fe737bd9152f7c2a165d361ef"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-docs-c5b9
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_7b88aa9a.py ..                                      [100%]
+
+============================== 2 passed in 0.03s ===============================
+"""
+
+[task.closure.red]
+rev = "55243a13f8a98dc6b9e808c6278ed7b5366e6d1b"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "9e0c9106"
+title = "hypothesis_field_set_has_no_metric_surface のコメントが serde default の効果を誤記 — 実際の罠は文書より強い"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "Issue summary: measured 2026-08-18 at 8e901056. The comment on the test in crates/hypothesis/src/hypothesis.rs claims a field added with serde(default) keeps the struct literal compiling. Wrong: serde attributes affect only deserialization and a struct literal must list every field; adding scope_write_paths / scope_read_paths broke the literal with missing field regardless of serde(default). The trap is stronger than documented (catches any added field). Docstring vs behaviour mismatch (CLAUDE.md 6 duty 1); fix the comment. recreated 2026-10-04 from issue #358; original task lost (cause unidentified, see backlog 68fb7237)"
+created_at = 1791048119
+updated_at = 1792619290
+weight = 0.0
+issue_number = 358
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/358"
+issue_closed_at = 1792619293
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_9e0c9106.py"
+rev = "3be54fd6902dc0386ab26750b77fda2d79326082"
+observed_at = 1791049894
+detail = """
+exit 1: .outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_9e0c9106.py::MetricSurfaceCommentMatchesRust::test_comment_does_not_claim_serde_default_keeps_the_literal_compiling
+========================= 1 failed, 1 passed in 0.12s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_backlog_9e0c9106.py"
+exit = 0
+passed = 2
+rev = "95e443919f4dd0ea33753bf3f7d0a3219ed0196e"
+observed_at = 1792619289
+output_digest = "sha256:7176c4a3808abeefdd6154045ea7f26d7fd8617f876041d8b8a1e6552692a4f5"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-docs-c5b9
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_backlog_9e0c9106.py ..                                      [100%]
+
+============================== 2 passed in 0.03s ===============================
+"""
+
+[task.closure.red]
+rev = "55243a13f8a98dc6b9e808c6278ed7b5366e6d1b"
+exit = 1
+kind = "behavioural"

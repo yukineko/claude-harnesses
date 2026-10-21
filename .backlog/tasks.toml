@@ -91,35 +91,6 @@ exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
 error: test failed, to rerun pass `-p backlog --test backlog_eb1ac319`"""
 
 [[task]]
-id = "a57e299b"
-title = "scripts/test_backlog_audit_b1_0.py RealRepoState expects 39 binary-shipping plugins but the repo has 40"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "test-red",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Measured 2026-10-03 on main 82ee4a78 (session worktree): python3 -m unittest scripts.test_backlog_audit_b1_0 -> FAILED (failures=1) via Backlog06a9d33fDirectInvocationRunsTests.test_a_direct_run_reports_a_nonzero_test_count; inner RealRepoState.test_the_scope_finds_every_plugin_that_ships_a_binary: AssertionError: 40 != 39. pre-commit prints launcher-exec-bit: all 40 plugin launcher(s) recorded 100755. Readings: (a) the hard-coded 39 is stale after a plugin was added; (b) a launcher was added that should not be in scope. Find which crate is the 40th (git log on crates/*/bin) and decide; do not just bump the number without checking (b)."
-created_at = 1791004938
-updated_at = 1792005385
-weight = 0.0
-issue_number = 1143
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1143"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_check_launcher_exec_bit.py -k test_the_scope_finds_every_plugin_that_ships_a_binary"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005385
-detail = """
-exit 1: == short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_check_launcher_exec_bit.py::\u001B[1mRealRepoState::test_the_scope_finds_every_plugin_that_ships_a_binary\u001B[0m - AssertionError: 40 != 39 : ['crates/autoflow/bin/autoflow', 'crates/backlog...
-\u001B[31m======================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[33m22 deselected\u001B[0m\u001B[31m in 0.09s\u001B[0m\u001B[31m =======================\u001B[0m"""
-
-[[task]]
 id = "d058b22a"
 title = "mutation-gate.sh validates MIN_KILL_RATE only after the full cargo-mutants run (late validation, not fail-open)"
 project = "/Users/yuki/src/harness"
@@ -582,34 +553,6 @@ exit 101:    Compiling overwatch v0.2.84 (/Users/yuki/src/.harness-worktrees/ses
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
      Running tests/repro_spec_load_leases_corrupt_claim.rs (target/debug/deps/repro_spec_load_leases_corrupt_claim-7a40ca8a777e1295)
 error: test failed, to rerun pass `-p overwatch --test repro_spec_load_leases_corrupt_claim`"""
-
-[[task]]
-id = "dacb9dc1"
-title = "test_backlog_6267bfbe_36c936bc: expectedFailure test_ff_onto_merge_gated_in_other_worktree_is_not_recorded now passes (Unexpected success), suite red"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-20 at 3f4ad6e7 (main 23eb74b3 plus a test-only commit) while running gate-bypass consumer suites for 860c43db: python3 -m pytest scripts/test_backlog_6267bfbe_36c936bc.py reports 1 failed (Unexpected success). Either the defect was fixed and the marker must be removed, or the test no longer observes the defect. Not investigated (out of scope of 860c43db)."
-created_at = 1792426751
-updated_at = 1792426751
-weight = 0.0
-issue_number = 1428
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1428"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_backlog_6267bfbe_36c936bc.py"
-rev = "ce7deadcd7ddc8cb9fad70ddcfe5f0b0b61c90ac"
-observed_at = 1792426751
-detail = """
-exit 1: tForwardOntoGatedMerge.test_ff_onto_merge_gated_in_other_worktree_is_not_recorded _
-Unexpected success
-=========================== short test summary info ============================
-FAILED scripts/test_backlog_6267bfbe_36c936bc.py::FastForwardOntoGatedMerge::test_ff_onto_merge_gated_in_other_worktree_is_not_recorded
-========================= 1 failed, 1 passed in 1.98s =========================="""
 
 [[task]]
 id = "2dc70bc5"

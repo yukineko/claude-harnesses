@@ -335,36 +335,6 @@ exit 101: ; 0 ignored; 0 measured; 1 filtered out; finished in 0.96s
 error: test failed, to rerun pass `-p specguard --test backlog_636842cd`"""
 
 [[task]]
-id = "fc9e3487"
-title = "scripts/tests/rebuild-stage-repo-destination.sh hardcodes backlog-linux-x86_64, so on darwin-arm64 it fails its own vacuity check"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "scripts",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "From the a0525604 worker 2026-10-04: 'FAIL: the refresh loop scanned no cache binary' with or without its change. The scripts/tests/*.sh shell tests are not wired into any hook, so nobody sees the red."
-created_at = 1791047761
-updated_at = 1792005422
-weight = 0.0
-issue_number = 1280
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1280"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/rebuild-stage-repo-destination.sh"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005392
-detail = """
-exit 1: repo bin updated: 0 | hooks config updated: 0
-superseded version dir bin(s) left frozen (not current per repo plugin.json): 0
-note: no *-darwin-arm64 binaries found under /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T//rebuild-stage-dest.AiT8Nq/cache/yukineko (wrong cache root, or no host-platform plugins installed).
-FAIL: the refresh loop scanned no cache binary — assertions above are vacuous"""
-
-[[task]]
 id = "1eae7cb9"
 title = "autoflow still keys its state off repo_root rather than the main worktree root"
 project = "/Users/yuki/src/harness"

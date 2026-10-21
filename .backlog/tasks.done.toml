@@ -58701,3 +58701,58 @@ PASS: e2e-autonomy.sh runs its demo end to end
 rev = "bbf3c044b29274ba669a419db7bf9db987d83476"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "fc9e3487"
+title = "scripts/tests/rebuild-stage-repo-destination.sh hardcodes backlog-linux-x86_64, so on darwin-arm64 it fails its own vacuity check"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "scripts",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "From the a0525604 worker 2026-10-04: 'FAIL: the refresh loop scanned no cache binary' with or without its change. The scripts/tests/*.sh shell tests are not wired into any hook, so nobody sees the red."
+created_at = 1791047761
+updated_at = 1792619420
+weight = 0.0
+issue_number = 1280
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1280"
+issue_closed_at = 1792619423
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/rebuild-stage-repo-destination.sh"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005392
+detail = """
+exit 1: repo bin updated: 0 | hooks config updated: 0
+superseded version dir bin(s) left frozen (not current per repo plugin.json): 0
+note: no *-darwin-arm64 binaries found under /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T//rebuild-stage-dest.AiT8Nq/cache/yukineko (wrong cache root, or no host-platform plugins installed).
+FAIL: the refresh loop scanned no cache binary — assertions above are vacuous"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/f2p_fc9e3487.sh"
+exit = 0
+passed = 1
+rev = "6166088db15176e09622601c85e34d2ee0c0e350"
+observed_at = 1792619392
+output_digest = "sha256:ea82ba4778c1123ecbf8b4a0df45d6d12027a70d5c66b12fc1f7514903d980a9"
+excerpt = """
+  ok: no repo-root CLAUDE.md destination
+  ok: every --stage-repo destination is under crates/*/bin/
+  ok: the refresh loop did scan the fixture (assertions are not vacuous)
+PASS: rebuild-plugins.sh --stage-repo destination stays inside crates/*/bin/
+1 passed
+"""
+
+[task.closure.red]
+rev = "59acfdc315516016399fd55d68a26c2644bfe8ed"
+exit = 1
+kind = "behavioural"

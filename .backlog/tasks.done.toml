@@ -59841,3 +59841,207 @@ scripts/test_design_625aa170_lock_fn_claim.py .                          [100%]
 rev = "dee45c5228b064d6af9bb127bff76e3eef6cf521"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "2dc70bc5"
+title = "blastguard の truncating-redirect Deny 理由が「this gate does not refuse or ask about」と判定と矛盾する文言を出す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-20 verbatim block: '> /Users/yuki/src/.harness-worktrees/bg-p1-c5b9/crates/blastguard/src/detect.rs' destroys the file's current contents and it is inside a git work tree, which this gate does not refuse or ask about. The gate refused while the reason says it does not refuse (CLAUDE.md 4: prose contradicting behaviour). Source: Recovery::RecoverableFromGit.describe() in crates/blastguard/src/reversible.rs is appended by the redirect Deny in crates/blastguard/src/detect.rs (format at the 'destroys the file's current contents' site) when the target is recoverable but neither confined nor a recognised worktree checkout. Repro: crates/blastguard/tests/deny_reason_contradicts_verdict.rs (ignored)."
+created_at = 1792431180
+updated_at = 1792594839
+weight = 0.0
+issue_number = 1433
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1433"
+issue_closed_at = 1792594845
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test deny_reason_contradicts_verdict -- --include-ignored"
+rev = "c40e3bf5a479e87ab1ff9a3b40bbca1b612cd0b5"
+observed_at = 1792431180
+detail = """
+exit 101: finished in 0.07s
+
+   Compiling blastguard v0.2.142 (/Users/yuki/src/.harness-worktrees/cmd-dc95/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running tests/deny_reason_contradicts_verdict.rs (target/debug/deps/deny_reason_contradicts_verdict-e176126693fb9e65)
+error: test failed, to rerun pass `-p blastguard --test deny_reason_contradicts_verdict`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test deny_reason_contradicts_verdict"
+exit = 0
+passed = 1
+rev = "264c7ec83869e31b20fb76a2dcbefef635ae81be"
+observed_at = 1792594822
+output_digest = "sha256:e9fad2aa341b04d9a3005aaf7281d679517926a973f473d746a6fae7563467fe"
+excerpt = """
+
+running 1 test
+test refusal_reason_does_not_claim_the_gate_does_not_refuse ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/deny_reason_contradicts_verdict.rs (target/debug/deps/deny_reason_contradicts_verdict-a148248acff496a5)
+"""
+
+[task.closure.red]
+rev = "59acfdc315516016399fd55d68a26c2644bfe8ed"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "6798f47d"
+title = "blastguard: stdin-program scan (python3 - heredoc) flags the word rmtree inside comments/strings, not only real calls"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p3",
+]
+touched_files = []
+status = "done"
+notes = "From the 9b64f427 agent, 2026-10-03. The patch script deleted nothing; rmtree appeared only in comment text. Verbatim: takes its program from stdin, and it runs rmtree, which deletes files or directories outright. Unverified by a test."
+created_at = 1791029535
+updated_at = 1792595650
+weight = 0.0
+issue_number = 1213
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1213"
+issue_closed_at = 1792595654
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_6798f47d -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005345
+detail = """
+exit 101: ignored; 0 measured; 1 filtered out; finished in 0.29s
+
+   Compiling blastguard v0.2.129 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/backlog_6798f47d.rs (target/debug/deps/backlog_6798f47d-67e7fdf555f9799e)
+error: test failed, to rerun pass `-p blastguard --test backlog_6798f47d`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_6798f47d"
+exit = 0
+passed = 5
+rev = "264c7ec83869e31b20fb76a2dcbefef635ae81be"
+observed_at = 1792595620
+output_digest = "sha256:f0e26b3f7734739bbfbabded1c082563c30a9846224fc89c3c5eb8e4418dda22"
+excerpt = """
+
+running 5 tests
+test control_real_rmtree_call_is_refused_with_the_rmtree_reason ... ok
+test rmtree_only_in_a_string_is_refused_without_claiming_a_call ... ok
+test real_rmtree_call_after_a_comment_is_still_denied ... ok
+test rmtree_only_in_a_comment_is_not_reported_as_a_call ... ok
+test rmtree_only_in_a_comment_still_asks_never_allows ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_6798f47d.rs (target/debug/deps/backlog_6798f47d-5b2eb6c4dc2c7792)
+"""
+
+[task.closure.red]
+rev = "59acfdc315516016399fd55d68a26c2644bfe8ed"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "ee0e0b85"
+title = "blastguard: スクリプトファイル実行時に中身を判定しない(書いてから実行で rm -rf ~ が通る)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "deferred",
+]
+touched_files = []
+status = "done"
+notes = "Deferred by user ruling 2026-10-14 (スクリプト実行は全部見送り / 一旦現状維持). Write/Edit/printf of a destructive script then bash x.sh is allowed: each call is judged alone. Reproduced by crates/blastguard/tests/script_file_content_exec.rs (14 tests ignored with the ruling as reason; run with --ignored). Agreed spec if resumed: script content gets the same verdict as the inline command, args and flags included in locating the script file; undeterminable -> Ask with 'Recommended: do not run this.'. Open question left by the user: argument-derived targets (rm -rf $1) may be the script side's responsibility. Introduced alongside commit db259cfb."
+created_at = 1791928061
+updated_at = 1792619288
+weight = 0.0
+issue_number = 1349
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1349"
+issue_closed_at = 1792619292
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test script_file_content_exec -- --ignored"
+rev = "e1b94646777ca2b0abf4f59c2040efe3e125f6ce"
+observed_at = 1791931748
+detail = """
+exit 101: adable_script_file_asks_with_marker
+
+test result: FAILED. 0 passed; 14 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.75s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/script_file_content_exec.rs (target/debug/deps/script_file_content_exec-9172a7d8fe005cd8)
+error: test failed, to rerun pass `-p blastguard --test script_file_content_exec`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test script_file_content_exec"
+exit = 0
+passed = 20
+rev = "fdf9ad4af7b61f3dfbe5a45028111efc3a88734d"
+observed_at = 1792619273
+output_digest = "sha256:37dc92765e184974de7ec22cdfc5e4f5c16add7c1d3d579d16b8cc6d82c9ac57"
+excerpt = """
+
+running 20 tests
+test control_binary_executable_verdict_is_unchanged ... ok
+test control_inline_destruction_stays_denied ... ok
+test control_inline_recursive_rm_in_repo_stays_confined_ask ... ok
+test harmless_interpreter_files_are_allowed ... ok
+test control_inline_harmless_text_is_allowed_in_this_fixture ... ok
+test missing_script_file_asks_with_marker ... ok
+test non_utf8_script_file_asks_with_marker ... ok
+test node_file_destroying_home_asks_with_marker ... ok
+test python_file_destroying_home_asks_with_marker ... ok
+test destructive_script_with_args_and_flags_asks_with_marker ... ok
+test script_running_another_script_asks_with_marker ... ok
+test shebang_selects_interpreter_for_direct_exec_asks_with_marker ... ok
+test script_with_undeterminable_content_asks_with_marker ... ok
+test repo_confined_rm_script_asks_same_as_inline ... ok
+test script_destroying_root_asks_with_marker ... ok
+test harmless_shell_script_is_allowed ... ok
+test two_step_write_then_run_asks_with_marker ... ok
+test unreadable_script_file_asks_with_marker ... ok
+test shell_script_destroying_home_asks_with_marker ... ok
+test shell_script_destroying_home_subdir_asks_with_marker ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/script_file_content_exec.rs (target/debug/deps/script_file_content_exec-a7de8a1b3dcf4c34)
+"""
+
+[task.closure.red]
+rev = "59acfdc315516016399fd55d68a26c2644bfe8ed"
+exit = 101
+kind = "behavioural"

@@ -59,6 +59,7 @@ use crate::scope::{Placement, SafeRoots};
 use harness_core::verdict::{Determination, Verdict};
 
 mod executors;
+mod script_file;
 
 /// Top-level entry WITH a location model: same dispatch as [`detect`], but the
 /// destructive-shape rules may resolve their targets and, for targets provably
@@ -68,7 +69,19 @@ mod executors;
 /// canonicalise paths); [`detect`] is the no-model form every other consumer
 /// keeps using. See [`crate::scope`] for why the relaxation cannot leak into
 /// unattended execution.
+///
+/// This entry also reads the script FILE a command runs and judges its content
+/// (backlog ee0e0b85, see [`script_file`]); [`detect`] does not.
 pub fn detect_scoped(tool_name: &str, tool_input: Option<&Value>, scope: &SafeRoots) -> Decision {
+    detect_in(tool_name, tool_input, scope, true)
+}
+
+fn detect_in(
+    tool_name: &str,
+    tool_input: Option<&Value>,
+    scope: &SafeRoots,
+    script_files: bool,
+) -> Decision {
     match tool_name {
         "Bash" => {
             let cmd = tool_input
@@ -80,7 +93,7 @@ pub fn detect_scoped(tool_name: &str, tool_input: Option<&Value>, scope: &SafeRo
                     // top-level entry point, so each tool call gets a full
                     // budget and no state leaks between calls.
                     ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
-                    detect_bash(c, 0, &Ctx::new(scope, c))
+                    detect_bash(c, 0, &Ctx::new(scope, c, script_files))
                 }
                 // A Bash call IS in jurisdiction, and the command could not be
                 // read out of it (absent key, non-string value, schema drift).
@@ -89,14 +102,16 @@ pub fn detect_scoped(tool_name: &str, tool_input: Option<&Value>, scope: &SafeRo
                 None => unreadable_operand("Bash", "tool_input.command"),
             }
         }
-        "Write" => detect_write(tool_input, &Ctx::new(scope, "")),
+        "Write" => detect_write(tool_input, &Ctx::new(scope, "", script_files)),
         // Edit / MultiEdit / NotebookEdit are partial edits, not full-file
         // destruction, so they are allowed for ordinary files. They are NOT
         // unconditionally allowed: a one-line edit is all it takes to disarm a
         // gate (`.claude/settings.json`, `.githooks/pre-commit`, a shell rc),
         // and "partial" says nothing about blast radius. Classifying the TARGET
         // is what distinguishes the two.
-        "Edit" | "MultiEdit" | "NotebookEdit" => detect_edit(tool_input, &Ctx::new(scope, "")),
+        "Edit" | "MultiEdit" | "NotebookEdit" => {
+            detect_edit(tool_input, &Ctx::new(scope, "", script_files))
+        }
         // An UNMATCHED TOOL is a different situation and stays a silent Allow:
         // blastguard claims no jurisdiction over Read/Grep/WebFetch/Task, so
         // there is genuinely nothing here to judge. Do not fold this arm into
@@ -114,9 +129,10 @@ pub fn detect_scoped(tool_name: &str, tool_input: Option<&Value>, scope: &SafeRo
 /// question `Undetermined`. This is the entry point for every library consumer
 /// that hands commands to `sh -c` with no human present (condukt's check
 /// runner, specguard's forge, daily's task runner): they get the strict gate,
-/// unchanged.
+/// unchanged. That includes NOT reading script files: `bash x.sh` here keeps
+/// the verdict it had before backlog ee0e0b85, whatever `x.sh` contains.
 pub fn detect(tool_name: &str, tool_input: Option<&Value>) -> Decision {
-    detect_scoped(tool_name, tool_input, &SafeRoots::none())
+    detect_in(tool_name, tool_input, &SafeRoots::none(), false)
 }
 
 /// The location model, plus the working directory the CURRENT segment resolves
@@ -177,6 +193,13 @@ struct Ctx<'a> {
     /// but it cannot be shown NOT to be one, so it is never cleared to Allow.
     /// `None` everywhere else: an ordinary command line keeps today's Deny.
     program_text_redirects: Option<&'a std::cell::RefCell<Vec<String>>>,
+    /// Whether a script FILE the command runs is read and judged by its
+    /// content ([`script_file`], backlog ee0e0b85). `true` only through
+    /// [`detect_scoped`] — the PreToolUse hook, which the ruling is about.
+    /// The unscoped [`detect`] keeps its documented "unchanged" contract for
+    /// library consumers, so there a script file is not read (and keeps the
+    /// verdict it had before).
+    script_files: bool,
 }
 
 /// Marker every Ask produced under the user's 2026-10-14 rulings R1/R2 carries
@@ -209,7 +232,7 @@ fn redirect_target_undeterminable(target: &str, base: Option<&str>) -> bool {
 impl<'a> Ctx<'a> {
     /// The context for a segment at the start of a command line: no `cd` seen
     /// yet, so both bases are the session's own working directory.
-    fn new(scope: &'a SafeRoots, command: &str) -> Ctx<'a> {
+    fn new(scope: &'a SafeRoots, command: &str, script_files: bool) -> Ctx<'a> {
         Ctx {
             scope,
             rewritten_base: scope.session_cwd(),
@@ -218,6 +241,7 @@ impl<'a> Ctx<'a> {
             deletion_rm_eligible: deletion_rm_eligible(command),
             checkout_exempt_eligible: checkout_exempt_eligible(command),
             program_text_redirects: None,
+            script_files,
         }
     }
 
@@ -272,6 +296,46 @@ impl<'a> Ctx<'a> {
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
             program_text_redirects: self.program_text_redirects,
+            script_files: self.script_files,
+        }
+    }
+
+    /// The context for judging the TEXT of a script file this command runs
+    /// ([`script_file`]): the same cwd, but the top-level eligibility flags are
+    /// recomputed from the script text, since they describe the command line
+    /// being judged and the script is a different one.
+    ///
+    /// The flags are computed on the script as the equivalent ONE command line:
+    /// blank and `#`-comment lines (the shebang included) dropped, the rest
+    /// joined with `; `. Those functions split on `;`/`&`/`|`, not on newlines,
+    /// so the raw text would make every script ineligible — a stricter verdict
+    /// than the same text typed inline, which the ruling says it must equal.
+    fn for_script_text(&self, text: &str) -> Ctx<'a> {
+        let line = text
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Ctx {
+            scope: self.scope,
+            // The script runs in the segment's cwd (`raw_base`), and its own
+            // `rm ./x` is not rewritten until the script itself `cd`s, so the
+            // rewritten-operand base must be that cwd too. When it is a
+            // different directory (`cd sub && bash x.sh`) it cannot be
+            // borrowed here, so it is unknown — relative operands then place
+            // nowhere, which is the restrictive side.
+            rewritten_base: if self.raw_base.as_deref() == self.rewritten_base {
+                self.rewritten_base
+            } else {
+                None
+            },
+            raw_base: self.raw_base.clone(),
+            worktree_rm_eligible: worktree_rm_eligible(&line),
+            deletion_rm_eligible: deletion_rm_eligible(&line),
+            checkout_exempt_eligible: checkout_exempt_eligible(&line),
+            program_text_redirects: None,
+            script_files: self.script_files,
         }
     }
 
@@ -288,6 +352,7 @@ impl<'a> Ctx<'a> {
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
             program_text_redirects: self.program_text_redirects,
+            script_files: self.script_files,
         }
     }
 
@@ -2142,6 +2207,18 @@ through it, and refuses to guess"
             depth,
             cmd,
             seg_idx,
+            &seg_ctx,
+        )) {
+            return deny;
+        }
+        // Backlog ee0e0b85 (user ruling R3): a script FILE this segment runs
+        // is judged by its content, against the cwd the segment runs in. Here,
+        // once per real segment, rather than inside `analyze_segment`, which
+        // is re-entered on sub-views (`unknown_wrapper_ask`'s tail, loop
+        // variants) whose first word is not a command word at all.
+        if let Some(deny) = acc.record(script_file::segment_verdict(
+            &effective_seg,
+            depth,
             &seg_ctx,
         )) {
             return deny;
@@ -11768,11 +11845,13 @@ mod tests {
         assert_eq!(bash("sh --help"), Decision::Allow);
         assert_eq!(bash("bash -c \"cargo test\""), Decision::Allow);
         assert_eq!(bash("sh -c 'ls -la'"), Decision::Allow);
-        // source/. of an opaque file path cannot be inspected — allowed
-        // (re-analyse-inline bias: a bare path is not a destructive command).
+        // UNSCOPED entry (`detect`) only: it does not read script files
+        // (backlog ee0e0b85 reads them only through `detect_scoped`, the
+        // hook), so source/. of a file path and a shell running a script file
+        // keep their earlier Allow here. The hook's verdicts for these shapes
+        // are pinned in tests/script_file_content_exec.rs.
         assert_eq!(bash("source .venv/bin/activate"), Decision::Allow);
         assert_eq!(bash(". ~/.bashrc"), Decision::Allow);
-        // A shell running a script file (no -c) — file unknowable, allowed.
         assert_eq!(bash("bash build.sh"), Decision::Allow);
         // find -exec with a non-shell, non-rm command.
         assert_eq!(

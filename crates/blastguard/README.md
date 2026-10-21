@@ -55,8 +55,16 @@ audited (`analyze_code_interpreter` / `interpreter_code_verdict` in
 `src/detect.rs`). A program that demonstrably deletes something, or whose
 embedded shell line is destructive, is a deny; one that names a protected
 gate/config path is an ask; a benign program such as `python3 -c "print(1)"`
-is allowed (0.2.59). Running a script **file** (`python3 app.py`,
-`python3 -m …`) is not judged. A `>` in program text whose "target" cannot be
+is allowed (0.2.59). Running a script **file** is judged by its content in the
+hook since 0.2.145 (backlog ee0e0b85, user ruling R3, `src/detect/script_file.rs`):
+`bash f.sh`, `sh`/`zsh f`, `./f.sh` (language from its shebang), `source f.sh`,
+`. f.sh`, `python3 f.py`, `node f.js`, `perl`/`ruby` read the file against the
+cwd the segment runs in and judge its text like the same text inline. Content
+that judges Deny or Ask, and content that cannot be judged (missing, unreadable,
+not UTF-8, too large, a non-literal path, or a script that runs another script),
+is an `ask` marked "Recommended: do not run this." — never an allow. Binary
+executables keep their previous verdict, `python3 -m …` is not a script file,
+and the library entry `detect::detect` does not read script files. A `>` in program text whose "target" cannot be
 determined (`print(1 > 0)`, a backticked `` `<k(r)>/x.json` `` in a comment) is
 an `ask` marked "Recommended: do not run this." — never a deny, never an allow
 (user ruling R2, 2026-10-14). Since 0.2.140 this also holds for the line-level

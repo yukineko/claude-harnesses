@@ -302,14 +302,87 @@ sentinel = ".forge-pending"
     );
 }
 
-#[test]
-fn ratify_promotes_draft_and_pins_consent() {
-    let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path();
-    init_repo(repo);
-    write_config(repo, GOOD_DRAFT);
+/// `GOOD_DRAFT` whose requirement carries a repro test.
+const GOOD_DRAFT_WITH_REPRO: &str = r#"[[requirement]]
+id = "R1"
+statement = "同一IPから60s内に5回失敗で429"
+acceptance = ["5回目まで通る", "6回目は429", "Retry-Afterヘッダ"]
+canon = ["docs/auth.md#rate-limit"]
+falsifiable = true
+repro_test = "cargo test -p auth --test rate_limit six_failures_get_429"
+
+<<<SPEC_DRAFT>>>
+rigor: pass
+needs_user: no
+summary: rate-limit を1要求に正規化"#;
+
+/// A hermetic queue for the ratify tests: `HOME` is an empty temp dir (so no
+/// plugin-cache `backlog` and no real store is reachable) and `PATH` starts
+/// with a fake `backlog` that logs each invocation's argv (one arg per line,
+/// then `--END--`) and answers `list` with `[]`, everything else with exit 0.
+struct FakeQueue {
+    _dir: tempfile::TempDir,
+    home: std::path::PathBuf,
+    bin: std::path::PathBuf,
+    log: std::path::PathBuf,
+}
+
+impl FakeQueue {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let bin = dir.path().join("bin");
+        let log = dir.path().join("backlog.log");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&bin).unwrap();
+        let script = format!(
+            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> '{log}'; done\n\
+             echo --END-- >> '{log}'\n\
+             if [ \"$1\" = list ]; then echo '[]'; fi\nexit 0\n",
+            log = log.display()
+        );
+        let fake = bin.join("backlog");
+        fs::write(&fake, script).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        FakeQueue {
+            _dir: dir,
+            home,
+            bin,
+            log,
+        }
+    }
+
+    fn forge(&self, repo: &Path, args: &[&str]) -> std::process::Output {
+        let path = format!(
+            "{}:{}",
+            self.bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        Command::new(env!("CARGO_BIN_EXE_specforge"))
+            .current_dir(repo)
+            .env("HOME", &self.home)
+            .env_remove("HARNESS_SANDBOX_HOME")
+            .env("PATH", path)
+            .args(["--config", "specforge.toml", "--date", "2026-01-01"])
+            .args(args)
+            .output()
+            .expect("specforge runs")
+    }
+
+    /// Every `add` invocation's argv.
+    fn adds(&self) -> Vec<Vec<String>> {
+        let text = fs::read_to_string(&self.log).unwrap_or_default();
+        text.split("--END--\n")
+            .map(|call| call.lines().map(str::to_string).collect::<Vec<_>>())
+            .filter(|argv| argv.first().map(String::as_str) == Some("add"))
+            .collect()
+    }
+}
+
+fn draft_login(q: &FakeQueue, repo: &Path) {
     fs::write(repo.join("req.md"), "x\n").unwrap();
-    assert!(forge(
+    let out = q.forge(
         repo,
         &[
             "draft",
@@ -318,13 +391,29 @@ fn ratify_promotes_draft_and_pins_consent() {
             "--req",
             "req.md",
             "--canon",
-            "docs/auth.md#rate-limit"
-        ]
-    )
-    .status
-    .success());
+            "docs/auth.md#rate-limit",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "draft: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
 
-    let out = forge(
+/// Ratify pins consent AND files the requirement through
+/// `backlog add --repro-test <its repro_test>` (backlog eb93be49). Hermetic:
+/// the queue is a fake `backlog`, never the installed one or a real store.
+#[test]
+fn ratify_promotes_draft_and_pins_consent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_repo(repo);
+    write_config(repo, GOOD_DRAFT_WITH_REPRO);
+    let q = FakeQueue::new();
+    draft_login(&q, repo);
+
+    let out = q.forge(
         repo,
         &["ratify", "--id", "login", "-m", "受け入れ条件に合意"],
     );
@@ -339,6 +428,50 @@ fn ratify_promotes_draft_and_pins_consent() {
     assert!(spec.contains("reason = \"受け入れ条件に合意\""));
     assert!(spec.contains("canon_commit = "));
     assert!(spec.contains("fingerprint = "));
+
+    let adds = q.adds();
+    assert_eq!(adds.len(), 1, "one add per requirement: {adds:?}");
+    let i = adds[0]
+        .iter()
+        .position(|a| a == "--repro-test")
+        .unwrap_or_else(|| panic!("add must carry --repro-test: {:?}", adds[0]));
+    assert_eq!(
+        adds[0][i + 1],
+        "cargo test -p auth --test rate_limit six_failures_get_429"
+    );
+    assert!(adds[0].contains(&"req:login:R1".to_string()), "{adds:?}");
+    assert!(
+        !repo.join(".backlog").exists(),
+        "the test must never write a real backlog store"
+    );
+}
+
+/// No test, no ticket: a requirement without `repro_test` is NOT filed, the
+/// spec stays ratified, and ratify names the unfiled requirement and exits 12
+/// — never a silent success (backlog eb93be49, user ruling 2026-10-22).
+#[test]
+fn ratify_without_a_repro_test_files_nothing_and_says_which() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    init_repo(repo);
+    write_config(repo, GOOD_DRAFT);
+    let q = FakeQueue::new();
+    draft_login(&q, repo);
+
+    let out = q.forge(repo, &["ratify", "--id", "login", "-m", "合意"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(12), "stderr: {stderr}");
+    assert!(
+        stderr.contains("login:R1"),
+        "names the requirement: {stderr}"
+    );
+    assert!(stderr.contains("repro_test が無い"), "says why: {stderr}");
+    let spec = fs::read_to_string(repo.join("specs/login.toml")).unwrap();
+    assert!(
+        spec.contains("status = \"ratified\""),
+        "consent kept:\n{spec}"
+    );
+    assert!(q.adds().is_empty(), "no add without a repro test");
 }
 
 #[test]

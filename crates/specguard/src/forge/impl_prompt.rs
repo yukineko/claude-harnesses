@@ -107,6 +107,7 @@ mod tests {
             acceptance: vec!["5回失敗→429".into()],
             canon: vec!["docs/auth.md#rate-limit".into()],
             falsifiable: true,
+            repro_test: None,
         }
     }
 

@@ -16,7 +16,12 @@
 > 付記（実測 2026-10-22、測定点 `55243a13`）: 現行の `backlog add` は `--repro-test` の無い起票を
 > 拒否するため、この経路は `cargo test -p specguard --test forge_integration
 > ratify_promotes_draft_and_pins_consent` で `backlog add: REFUSED, nothing written (no --repro-test was given)`
-> として失敗する（backlog `eb93be49`）。経路はコードとして存在するが、現行 backlog に対しては通らない。
+> として失敗していた（backlog `eb93be49`）。
+> 是正（2026-10-22、ユーザー裁定。backlog の規則は変えない）: requirement は `repro_test` を持つ
+> ものだけを `backlog add --repro-test` で起票し、`repro_test` の無いもの・backlog が拒否したものは
+> 起票せず id と理由を出して exit 12 で終える（`crates/specguard/DESIGN.md` §5.4）。
+> 本物の backlog は dirty tree を判定不能として拒否するので、`ratify` 直後は exit 12 になり、
+> 批准済み spec を commit してから `specforge queue --id <id>` で起票する。
 
 - specforge (`crates/specguard/Cargo.toml:16-18`, `src/forge/main.rs`) は
   gather → draft → ratify → impl-prompt → implement → evidence → agree → merge の
@@ -162,5 +167,5 @@ specforge --config specforge.toml ratify --id spec-loop -m "<なぜこの仕様�
 
 `specforge.toml` は設計時点（§1, `0ad0d055`）では無かったが、`a81444b7` で repo に同梱済み。
 批准すると `[spec.ratification]` に canon commit と fingerprint が焼き込まれ、
-以後 requirement を1文字でも編集すると fingerprint が変わって**再批准が要る**
+以後 requirement を1文字でも編集すると（`repro_test` を除く）fingerprint が変わって**再批准が要る**
 （`crates/specguard/src/forge/ir.rs:140` の `fingerprint()`）。

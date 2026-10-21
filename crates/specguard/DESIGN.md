@@ -164,6 +164,16 @@ source(課題の供給側)であるためには、合意の完了がそのまま
 - **item の中身**: title は `[<spec id>:<req id>] <statement>`、notes には statement に加えて
   **acceptance を逐語で** `done_criteria` ブロックとして載せる。condukt の interpreter が
   statement から再導出せずに済ませるため — 再導出は requirement が黙って牙を失う場所である。
+- **再現テスト必須(no test, no ticket)**: 起票は requirement ごとの `repro_test`(HEAD で FAIL
+  する commit 済みのテストコマンド)を `backlog add --repro-test` に渡して行う。`repro_test` の
+  無い requirement は `backlog add` に渡さず、`backlog` が exit 2 で拒否した requirement
+  (テストが再現しない / 判定不能)も含めて**起票しなかった id と理由を列挙して exit 12
+  (`EXIT_REQUIREMENTS_UNFILED`)** で終える — 黙って成功しない(backlog `eb93be49`、
+  ユーザー裁定 2026-10-22。backlog 側の規則は変えない)。`repro_test` は fingerprint に
+  含めない(合意の内容ではなく、キューが要求する証拠)ので、批准後に追加して
+  `specforge queue --id <id>` で起票できる。実測: 本物の `backlog` は作業ツリーが dirty だと
+  判定不能として拒否するため、`ratify` 直後は自分が書いた `specs/<id>.toml` が未 commit で
+  全件 exit 12 になる。批准済み spec を commit してから `specforge queue` を実行する。
 - **冪等性**: 各 item に `req:<spec id>:<req id>` という identity tag を打ち、起票前に
   `backlog list --json` の tag 集合と突き合わせる。tag は **2 つの id だけ**から導かれるので、
   statement を書き換えても item は重複しない。spec id で namespace してあるので、別 spec の

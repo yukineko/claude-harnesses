@@ -13,7 +13,7 @@ SOURCE（課題の供給。上から順に引く）   EXECUTOR（解決手段の
   prompt     … ユーザー直の課題文      ─┘
                                      │
   specforge  … spec-gap の戻り経路   ◀┘  正典が無い課題は実装フェーズへ通さず
-       └──▶ ratify（exit 9 なら人間へ返す）
+       └──▶ ratify（exit 9 / 12 なら人間へ返す）
 ```
 
 ## 自分から提案しない
@@ -335,9 +335,10 @@ Step 0.5 の表に従うこと。この経路を通さず
 - 課題文は `--req <file>` か stdin で渡し、`--id` を必ず付けること [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_draft_requires_id] [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_draft_via_req_file_and_stdin]。`ratify` には `--reason` を必ず付けること [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_requires_reason]。
 - 元の課題は `fail` せず pending のまま残すこと [test: scripts/test_prose_flow_b.py::TestFailVsPending::test_claim_fail_vs_pending_fail_withdraws_task]。`backlog edit <id> --status pending` は lease を解放せず、`fail` 済みの task の defer も解かない [test: scripts/test_prose_flow_b.py::TestFailVsPending::test_claim_fail_vs_pending_edit_pending_keeps_task_deferred]。このセッションが `backlog driver heartbeat` を続ける間、divert した課題の lease は失効せず、他の driver には配られない [test: crates/backlog/tests/verifier_486e83ca.rs::verifier_live_holder_keeps_lease_past_window]。heartbeat が止まって `CLAIM_STALE_SECS`（1 時間）を過ぎると再び配られる [test: crates/backlog/tests/verifier_486e83ca.rs::verifier_dead_holder_is_reclaimable]。
 - `ratify` が通らなければ（contract floor 違反で非0終了）、specforge が出す理由を添えて人間へ返すこと [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_refuses_contract_violation_and_queues_nothing]。
-- `ratify` は spec を批准したあと、要件ごとに `backlog add` を呼ぶ [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_queues_one_item_per_requirement]。
-- 本物の `backlog` はこの `add` を `--repro-test` 無しとして拒否するので、`ratify` は exit 9 で終了し、backlog には何も積まれない [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_with_real_backlog_exits_9_and_files_nothing]。
-- `ratify` が exit 9 なら、spec 由来の要件が queue されなかったことを人間へ返すこと [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_with_real_backlog_exits_9_and_files_nothing]。
+- `ratify` は spec を批准したあと、`repro_test` を持つ要件ごとに `backlog add --repro-test <その repro_test>` を呼ぶ [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_queues_one_item_per_requirement]。
+- `repro_test` の無い要件は起票されず、`ratify` はその要件を名指しして exit 12 で終了する（spec は批准済みのまま） [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_without_repro_test_exits_12_and_files_nothing]。
+- 本物の `backlog` は commit 済みの HEAD で `repro_test` が FAIL したときだけ起票する。`ratify` 自身が書いた `specs/<id>.toml` が未 commit のままなので、`ratify` の直後の `add` は全件拒否され exit 12 になる。批准済み spec を commit してから `specforge queue --id <spec id>` を実行すると起票される [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_with_real_backlog_files_requirements_with_a_failing_repro_test]。
+- `ratify` が exit 12 なら、起票されなかった要件とその理由を人間へ返すこと [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_without_repro_test_exits_12_and_files_nothing]。exit 9（キューを読めない・`backlog` が無い等、受け渡し自体の失敗）でも、spec 由来の要件が queue されなかったことを人間へ返すこと。
 - `ratify` は contract floor 違反（`Spec::contract_violations()` が非空）の spec の批准を拒否し、非0で終了する [test: scripts/test_prose_flow_b.py::TestSpecforge::test_claim_specforge_ratify_refuses_contract_violation_and_queues_nothing]。
 
 [record: 2026-09-07 rev: a81444b7] この起動形は実測で通した（specguard 0.2.54、使い捨て git repo で draft→ratify→backlog を通しで実行し、`ratify` が `backlog: 3 件を起票 / 0 件は起票済み (計 3 requirement)` を出力し、直後の確認用の `backlog list --status pending`（ピックに使ってはいけない純粋な read）に `[r4demo:R1]`〜`[r4demo:R3]` の3件が `p1 / pending` で並んだ）。

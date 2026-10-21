@@ -654,6 +654,7 @@ statement = "first"
 acceptance = ["a1", "a2"]
 canon = ["docs/a.md#x"]
 falsifiable = true
+repro_test = "bash tests/fail.sh"
 
 [[requirement]]
 id = "R2"
@@ -661,6 +662,7 @@ statement = "second"
 acceptance = ["b1"]
 canon = ["docs/a.md#y"]
 falsifiable = true
+repro_test = "bash tests/fail.sh"
 
 <<<SPEC_DRAFT>>>
 rigor: pass
@@ -671,7 +673,9 @@ summary: s"""
 class TestSpecforge(unittest.TestCase):
     def setUp(self):
         self.sb = Sandbox(self)
-        self.primary = self.sb.init_repo(files={"specforge.toml": forge_config(TWO_REQ_DRAFT)})
+        self.primary = self.sb.init_repo(files={"specforge.toml": forge_config(TWO_REQ_DRAFT),
+                                                "tests/fail.sh": FAIL_SH,
+                                                ".gitignore": ".scratch/\n"})
         self.w = self.sb.worktree(self.primary, "w")
         (self.sb.base / "req.md").write_text("req text\n")
         self.req = str(self.sb.base / "req.md")
@@ -756,22 +760,53 @@ class TestSpecforge(unittest.TestCase):
         full = log.read_text()
         self.assertIn("--tag req:ok:R1", full)
         self.assertIn("--tag req:ok:R2", full)
+        # argv is logged with `$*`, so multi-line notes split an add across
+        # lines; count on the whole log instead.
+        self.assertEqual(full.count("--repro-test bash tests/fail.sh"), 2, full)
         self.assertIn("2 件を起票", r.stdout)
 
-    def test_claim_specforge_ratify_with_real_backlog_exits_9_and_files_nothing(self):
-        """The earlier prose claimed a passing ratify makes the items appear in
-        backlog. The test pins the observed behaviour: the real `backlog add` is
-        REFUSED because specforge passes no --repro-test (no test, no ticket), so
-        ratify promotes the spec to ratified, then exits 9 with nothing queued."""
+    def spec_tasks(self, sid):
+        listed = self.sb.run(["backlog", "list", "--json"], self.w)
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        tasks = json.loads(listed.stdout) if listed.stdout.strip() else []
+        return [t for t in tasks if f"spec:{sid}" in t.get("tags", [])]
+
+    def test_claim_specforge_ratify_with_real_backlog_files_requirements_with_a_failing_repro_test(self):
+        """With the real `backlog`, a requirement is filed via `backlog add
+        --repro-test` only when that test FAILS at committed HEAD (backlog
+        eb93be49). Observed: ratify itself leaves specs/<id>.toml uncommitted,
+        so the real backlog refuses every add as undetermined (dirty tree) and
+        ratify exits 12 naming each requirement; once the ratified spec is
+        committed, `specforge queue` files them."""
         shutil.copy(bin_path("backlog"), self.sb.extra_bin / "backlog")
         self.assertEqual(self.sb.run(self.draft_argv("real"), self.w).returncode, 0)
         r = self.sb.run(self.ratify_argv("real"), self.w)
-        self.assertEqual(r.returncode, 9, r.stdout + r.stderr)
-        self.assertIn("no --repro-test was given", r.stderr)
+        self.assertEqual(r.returncode, 12, r.stdout + r.stderr)
+        self.assertIn("real:R1", r.stderr)
+        self.assertIn("uncommitted changes", r.stderr)
         self.assertEqual(self.status_of("real"), "ratified")
-        listed = self.sb.run(["backlog", "list", "--json"], self.w)
-        tasks = json.loads(listed.stdout) if listed.stdout.strip() else []
-        self.assertEqual([t for t in tasks if "spec:real" in t.get("tags", [])], [])
+        self.assertEqual(self.spec_tasks("real"), [])
+        self.sb.git(self.w, "add", "specs")
+        self.sb.git(self.w, "commit", "-q", "-m", "ratified spec")
+        q = self.sb.run(["specforge", "queue", "--id", "real"], self.w)
+        self.assertEqual(q.returncode, 0, q.stdout + q.stderr)
+        tags = sorted(tag for t in self.spec_tasks("real") for tag in t["tags"]
+                      if tag.startswith("req:"))
+        self.assertEqual(tags, ["req:real:R1", "req:real:R2"])
+
+    def test_claim_specforge_ratify_without_repro_test_exits_12_and_files_nothing(self):
+        """No test, no ticket: requirements without a repro_test are not filed;
+        ratify keeps the spec ratified, names them, and exits 12."""
+        shutil.copy(bin_path("backlog"), self.sb.extra_bin / "backlog")
+        self.assertEqual(self.sb.run(self.draft_argv("norepro"), self.w).returncode, 0)
+        spec = self.w / "specs" / "norepro.toml"
+        spec.write_text(re.sub(r'(?m)^repro_test = .*\n', "", spec.read_text()))
+        r = self.sb.run(self.ratify_argv("norepro"), self.w)
+        self.assertEqual(r.returncode, 12, r.stdout + r.stderr)
+        self.assertIn("norepro:R1", r.stderr)
+        self.assertIn("norepro:R2", r.stderr)
+        self.assertEqual(self.status_of("norepro"), "ratified")
+        self.assertEqual(self.spec_tasks("norepro"), [])
 
     def test_claim_specforge_without_config_exits_2(self):
         bare = self.sb.base / "bare"

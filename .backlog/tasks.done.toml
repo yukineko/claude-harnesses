@@ -58252,3 +58252,63 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "8f78310b27b26b7eb3797f31c5f43c78b676a43f"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "1eae7cb9"
+title = "autoflow still keys its state off repo_root rather than the main worktree root"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "verifier side finding on 43393ce2: condukt moved to main_worktree_root but autoflow did not, so the two disagree when invoked from a linked worktree."
+created_at = 1791053152
+updated_at = 1792596027
+weight = 0.0
+issue_number = 1321
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1321"
+issue_closed_at = 1792596030
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p autoflow --test backlog_1eae7cb9 -- --ignored"
+rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
+observed_at = 1792005366
+detail = """
+exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/overwatch)
+   Compiling autoflow v0.1.31 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/autoflow)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.84s
+     Running tests/backlog_1eae7cb9.rs (target/debug/deps/backlog_1eae7cb9-a8ce5e3b08911b2f)
+error: test failed, to rerun pass `-p autoflow --test backlog_1eae7cb9`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p autoflow --test backlog_1eae7cb9"
+exit = 0
+passed = 2
+rev = "a8c09c5e3865f9178dd5c48d7a94c059f59667bb"
+observed_at = 1792596007
+output_digest = "sha256:f2acbaded5be4fad4616317a68767a4a6665eafc24a270abda35d293d877d23d"
+excerpt = """
+
+running 2 tests
+test control_from_main_tree_autoflow_sees_condukt_run ... ok
+test from_linked_worktree_autoflow_sees_the_same_condukt_run ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/backlog_1eae7cb9.rs (target/debug/deps/backlog_1eae7cb9-557bee58a9345299)
+"""
+
+[task.closure.red]
+rev = "c10b106c3e352b1d4c01b4a8b2229bda762a01c5"
+exit = 101
+kind = "behavioural"

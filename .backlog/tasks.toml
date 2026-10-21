@@ -653,38 +653,6 @@ exit 101: yuki/src/.harness-worktrees/session-1a4ac77f/crates/overwatch)
 error: test failed, to rerun pass `-p autoflow --test backlog_1eae7cb9`"""
 
 [[task]]
-id = "e3ca0b92"
-title = "compass carve::load collapses a read or parse error of carve-state.json into None (fresh state)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "compass",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Worker side finding 2026-10-04 on b0e1e4a2: crates/compass/src/carve.rs:31-34 treats a read/parse error as None 'so a stale state never wedges a carve'. Unreadable and absent become the same answer (CLAUDE.md section 3 Absent vs Undetermined). Needs a repro test."
-created_at = 1791053672
-updated_at = 1792005371
-weight = 0.0
-issue_number = 1324
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1324"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p compass --test backlog_e3ca0b92 -- --ignored"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005369
-detail = """
-exit 101: failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.55s
-
-   Compiling compass v0.1.23 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/compass)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.30s
-     Running tests/backlog_e3ca0b92.rs (target/debug/deps/backlog_e3ca0b92-e3d2d46030ea7aad)
-error: test failed, to rerun pass `-p compass --test backlog_e3ca0b92`"""
-
-[[task]]
 id = "ee0e0b85"
 title = "blastguard: スクリプトファイル実行時に中身を判定しない(書いてから実行で rm -rf ~ が通る)"
 project = "/Users/yuki/src/harness"

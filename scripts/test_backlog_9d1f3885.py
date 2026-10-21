@@ -63,6 +63,21 @@ fn call(&self) -> Option<u8> {
 """
 
 
+CTOR_WRAPPED = """\
+fn call(&self) -> Result<Option<u8>, E> {
+    let h = match http.require() {
+        Required::Determined(h) => h,
+        Required::Blocked(_why) => {
+            return Ok(
+                None
+            )
+        }
+    };
+    Ok(Some(h))
+}
+"""
+
+
 def hits(src: str) -> list[tuple[int, str, str]]:
     return [h for h in fo.scan_rust(src.splitlines(keepends=True)) if h[2] == RULE]
 
@@ -71,7 +86,13 @@ class JevClient137(unittest.TestCase):
     def test_control_genuinely_empty_arm_is_flagged(self) -> None:
         self.assertTrue(hits(EMPTY), "control: the rule must flag `=> { return None }`")
 
-    @unittest.expectedFailure
+    def test_control_empty_value_inside_a_constructor_paren_is_flagged(self) -> None:
+        # A multi-line `Ok(\n None\n)` is still the arm's (empty) value: only a
+        # CALL's argument list is exempt, never a constructor's.
+        self.assertTrue(
+            hits(CTOR_WRAPPED), "control: the rule must flag `=> { return Ok(\\n None\\n) }`"
+        )
+
     def test_forwarding_why_into_a_multiline_call_is_not_flagged(self) -> None:
         self.assertEqual(
             hits(FORWARDING),

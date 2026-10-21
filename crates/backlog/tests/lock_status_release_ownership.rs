@@ -52,7 +52,6 @@ fn lock_files(home: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-#[ignore = "backlog: lock status hides an exclusive lock held by another session when a driver is registered (kind=driver-presence only)"]
 fn status_reports_exclusive_lock_held_by_another_session() {
     let home = temp_home("f1");
     let (c, o, e) = run(
@@ -106,7 +105,6 @@ fn status_reports_exclusive_lock_held_by_another_session() {
 }
 
 #[test]
-#[ignore = "backlog: lock release deletes another session's lock (no ownership check; release takes no session id)"]
 fn release_by_non_holder_does_not_delete_the_lock() {
     let home = temp_home("f2");
     let (c, o, e) = run(

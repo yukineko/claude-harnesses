@@ -412,11 +412,18 @@ enum LockAction {
         force: bool,
     },
 
-    /// Release the lock (no-op if none)
+    /// Release the lock (no-op if none). Only the holder may release: the
+    /// caller is `--session-id`, else CLAUDE_CODE_SESSION_ID; a lock held by
+    /// another session, a caller with no session id, or an unreadable lock is
+    /// refused non-zero and the lock is left in place.
     Release {
         /// Project path (must match the project passed to `acquire`)
         #[arg(long)]
         project: String,
+
+        /// The releasing session (defaults to CLAUDE_CODE_SESSION_ID)
+        #[arg(long)]
+        session_id: Option<String>,
     },
 
     /// Print the project's liveness as JSON, or "none".
@@ -1693,8 +1700,14 @@ fn run(cli: Cli) -> Result<()> {
                     println!("lock acquired");
                 }
             }
-            LockAction::Release { project } => {
-                lock::release(&project)?;
+            LockAction::Release {
+                project,
+                session_id,
+            } => {
+                let session = session_id
+                    .or_else(|| std::env::var("CLAUDE_CODE_SESSION_ID").ok())
+                    .filter(|s| !s.trim().is_empty());
+                lock::release(&project, session.as_deref())?;
                 println!("lock released");
             }
             LockAction::Status { project } => {

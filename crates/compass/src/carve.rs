@@ -25,12 +25,32 @@ pub fn state_path(root: &Path) -> PathBuf {
     root.join(".compass").join("carve-state.json")
 }
 
-/// Load the persisted [`CarveState`], if any. A missing file => `None`; a
-/// corrupt file is also treated as `None` (the caller re-initializes) so a stale
-/// state never wedges a carve.
-pub fn load(root: &Path) -> Option<CarveState> {
-    let text = std::fs::read_to_string(state_path(root)).ok()?;
-    serde_json::from_str(&text).ok()
+/// Load the persisted [`CarveState`], if any. Only a missing file is
+/// `Ok(None)` (no carve in flight; the caller initializes one). Any other read
+/// error, or a file that does not parse, is an `Err` (undetermined, backlog
+/// e3ca0b92): it is never reported as "no carve", so the caller does not
+/// re-initialize and overwrite recorded answers it could not read.
+/// `compass carve-reset` is the explicit way to discard such a file.
+pub fn load(root: &Path) -> Result<Option<CarveState>> {
+    let path = state_path(root);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(e).with_context(|| {
+                format!(
+                    "reading {} (cannot determine the carve state; run `compass carve-reset` to discard it)",
+                    path.display()
+                )
+            })
+        }
+    };
+    serde_json::from_str(&text).map(Some).with_context(|| {
+        format!(
+            "parsing {} (cannot determine the carve state; run `compass carve-reset` to discard it)",
+            path.display()
+        )
+    })
 }
 
 /// Persist `state` to `.compass/carve-state.json`, creating parent dirs.
@@ -116,7 +136,7 @@ mod tests {
         });
 
         save(root, &state).expect("save");
-        let loaded = load(root).expect("load");
+        let loaded = load(root).expect("load").expect("present");
         assert_eq!(loaded.round, 2);
         assert_eq!(loaded.bundle.fragments.len(), 1);
         assert_eq!(loaded.max_rounds, 4);
@@ -126,15 +146,15 @@ mod tests {
     fn load_missing_is_none_and_reset_is_idempotent() {
         let tmp = temp_root();
         let root = tmp.path();
-        assert!(load(root).is_none());
+        assert!(load(root).expect("load missing").is_none());
         // reset on a missing file is a no-op, not an error.
         reset(root).expect("reset missing");
 
         let state = CarveState::new(Bundle::default(), 1);
         save(root, &state).expect("save");
-        assert!(load(root).is_some());
+        assert!(load(root).expect("load present").is_some());
         reset(root).expect("reset present");
-        assert!(load(root).is_none());
+        assert!(load(root).expect("load after reset").is_none());
     }
 
     #[test]

@@ -39,7 +39,7 @@ when harness-core moves, and .deployed-from.json pins the exact commit — so th
 plugin bumps would buy a version string, at that cost, for a repo that does not
 redistribute by version. Decided with the repo owner, 2026-07-30.
 
-TWO carve-outs, each argued at its implementation site below and each ANNOUNCED
+THREE carve-outs, each argued at its implementation site below and each ANNOUNCED
 rather than applied silently:
   1. a plugin whose changed paths are ALL under crates/<name>/bin/ (compiled
      output, not source) does not require a bump. Mixed bin+source is still
@@ -51,6 +51,13 @@ rather than applied silently:
      src/, which cannot be identified without parsing — counts as linked and
      demands the bump, because §3 says an undecidable case resolves to the
      restrictive side. Covered by scripts/tests/version-bumped-shared-crate.sh.
+  3. a plugin whose changed paths ALL end in .md does not require a bump
+     (prose, not compiled). Mixed .md + any non-.md path (plugin.json, hooks,
+     src, tests) is still enforced. Covered by
+     scripts/tests/version-bumped-md-only.sh. CONSEQUENCE, stated plainly: a
+     SKILL.md / agents/*.md edit under this exemption is NOT re-delivered to
+     installed plugins by version-keyed `claude plugin update` until the next
+     version bump.
 """
 import argparse
 import json
@@ -270,6 +277,7 @@ def main():
 
     offenders = []
     bin_only = []
+    md_only = []
     checked = 0
     if not os.path.isdir(CRATES):
         print("check-version-bumped: no crates/ dir (run from repo root)", file=sys.stderr)
@@ -307,6 +315,12 @@ def main():
             bin_only.append((name, len(changed)))
             continue
 
+        # Markdown-only carve-out: every changed path is prose (*.md). Narrow on
+        # purpose (ALL paths must be .md) and announced below, not silent.
+        if all(p.endswith(".md") for p in changed):
+            md_only.append((name, len(changed)))
+            continue
+
         try:
             base_v = plugin_version_at(base, pj_rel)
         except Undetermined as e:
@@ -342,6 +356,15 @@ def main():
         print(
             f"check-version-bumped: {len(bin_only)} plugin(s) changed ONLY under "
             f"bin/ ({total} derived-artifact file(s)); no bump required: {names}"
+        )
+
+    if md_only:
+        total = sum(n for _, n in md_only)
+        names = ", ".join(name for name, _ in md_only)
+        print(
+            f"check-version-bumped: {len(md_only)} plugin(s) changed ONLY *.md "
+            f"files ({total} file(s)); no bump required (installed plugins are "
+            f"not re-delivered until the next bump): {names}"
         )
 
     if offenders_shared:

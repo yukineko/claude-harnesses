@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.63"
+version = "0.2.64"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1114,7 +1114,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1376,7 +1376,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.45"
+version = "0.1.47"
 dependencies = [
  "anyhow",
  "chrono",

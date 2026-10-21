@@ -263,12 +263,18 @@ pub fn attribute_from_transcript(
 /// subagent sidechain) shows it being written:
 ///
 /// * an `Edit` / `Write` / `MultiEdit` / `NotebookEdit` tool_use names it, or
-/// * a `Bash` tool_use command line contains its absolute path (as `root`
-///   spells it, or canonicalised), its repo-relative path, or its path
-///   relative to the `cwd` that transcript line recorded. This is a substring
+/// * a `Bash` tool_use command contains its absolute path (as `root` spells
+///   it, or canonicalised), its repo-relative path, or its path relative to
+///   the `cwd` that transcript line recorded, in a statement that is not
+///   provably read-only ([`writing_statements`]). The test is a substring
 ///   test, so it OVER-attributes (`src/a.rs` also matches a mention of
-///   `crates/x/src/a.rs`, and a mere `cat` of a file counts as writing it);
-///   over-attribution keeps more files in the gate, the restrictive side.
+///   `crates/x/src/a.rs`); over-attribution keeps more files in the gate, the
+///   restrictive side. A statement made only of read-only commands
+///   (`git diff a.js`, `grep … a.js | head`, `tdd skip --reason "… a.js …"`)
+///   does not count: before this rule, reading a peer's dirty file — or
+///   naming it in the very skip reason that says "not mine" — made the file
+///   this session's and blocked every later stop (observed 2026-10-20,
+///   session 0402317c, `src/services/api.js`).
 ///
 /// Every other changed file goes to `excluded` — no peer evidence is needed.
 ///
@@ -331,16 +337,17 @@ pub fn attribute_own_writes(root: &Path, transcript_path: &str, changed: &[Strin
         ];
         needles.retain(|n| !n.is_empty());
         let named = |call: &crate::transcript::BashCall| {
-            if needles.iter().any(|n| call.command.contains(n.as_str())) {
-                return true;
-            }
             // A path relative to the directory the command ran in.
-            call.cwd.as_deref().is_some_and(|cwd| {
+            let rel = call.cwd.as_deref().and_then(|cwd| {
                 let cwd = resolve(Path::new(cwd));
-                abs.strip_prefix(&cwd).ok().is_some_and(|rel| {
-                    let rel = rel.to_string_lossy();
-                    !rel.is_empty() && call.command.contains(rel.as_ref())
-                })
+                abs.strip_prefix(&cwd)
+                    .ok()
+                    .map(|r| r.to_string_lossy().into_owned())
+                    .filter(|r| !r.is_empty())
+            });
+            writing_statements(&call.command).iter().any(|text| {
+                needles.iter().any(|n| text.contains(n.as_str()))
+                    || rel.as_deref().is_some_and(|r| text.contains(r))
             })
         };
         if edited.contains(&abs) || bash.iter().any(named) {
@@ -350,6 +357,257 @@ pub fn attribute_own_writes(root: &Path, transcript_path: &str, changed: &[Strin
         }
     }
     Attribution::Narrowed { keep, excluded }
+}
+
+/// The parts of a shell `command` that may have written the files they name.
+///
+/// The command is split into statements at unquoted `;` `&&` `||` `&`
+/// newline `(` `)`; a statement is a pipeline. A pipeline is dropped only when
+/// EVERY stage is provably read-only ([`read_only_stage`]): a writing stage
+/// anywhere in it keeps the whole pipeline, because `grep -l x a.js | xargs
+/// sed -i …` writes a file only the read-only stage names.
+///
+/// Anything this parser cannot follow keeps the WHOLE command (the old,
+/// over-attributing rule): command substitution (`$(…)`, backticks), a
+/// heredoc (`<<`), an unterminated quote. Being unable to tell is not "read
+/// only" (CLAUDE.md 第3節).
+fn writing_statements(command: &str) -> Vec<&str> {
+    match statements(command) {
+        Some(stmts) => stmts
+            .into_iter()
+            .filter(|s| !s.stages.iter().all(read_only_stage))
+            .map(|s| &command[s.start..s.end])
+            .collect(),
+        None => vec![command],
+    }
+}
+
+#[derive(Default)]
+struct Stage {
+    words: Vec<String>,
+    /// An output redirect to something other than `/dev/null` or an fd.
+    writes: bool,
+}
+
+struct Statement {
+    start: usize,
+    end: usize,
+    stages: Vec<Stage>,
+}
+
+/// Quote-aware split of `command` into pipelines. `None` = a construct this
+/// parser does not follow (see [`writing_statements`]).
+fn statements(command: &str) -> Option<Vec<Statement>> {
+    let b = command.as_bytes();
+    let mut out = Vec::new();
+    let mut stages: Vec<Stage> = Vec::new();
+    let mut stage = Stage::default();
+    let mut word = String::new();
+    let mut in_word = false;
+    let mut start = 0;
+    let mut i = 0;
+
+    fn end_word(stage: &mut Stage, word: &mut String, in_word: &mut bool) {
+        if *in_word {
+            stage.words.push(std::mem::take(word));
+            *in_word = false;
+        }
+    }
+
+    while i < b.len() {
+        let c = b[i];
+        match c {
+            b'\\' => {
+                // `\x` is a literal x; byte-indexing is fine: `\` is ASCII and
+                // the char after it is copied whole below.
+                let ch = command[i + 1..].chars().next();
+                if let Some(ch) = ch {
+                    word.push(ch);
+                    i += 1 + ch.len_utf8();
+                } else {
+                    i += 1;
+                }
+                in_word = true;
+                continue;
+            }
+            b'\'' => {
+                let close = command[i + 1..].find('\'')? + i + 1;
+                word.push_str(&command[i + 1..close]);
+                in_word = true;
+                i = close + 1;
+                continue;
+            }
+            b'"' => {
+                let mut j = i + 1;
+                loop {
+                    match b.get(j)? {
+                        b'"' => break,
+                        b'\\' => j += 2,
+                        b'`' => return None,
+                        b'$' if b.get(j + 1) == Some(&b'(') => return None,
+                        _ => j += 1,
+                    }
+                }
+                word.push_str(&command[i + 1..j]);
+                in_word = true;
+                i = j + 1;
+                continue;
+            }
+            b'`' => return None,
+            b'$' if b.get(i + 1) == Some(&b'(') => return None,
+            b'<' if b.get(i + 1) == Some(&b'<') => return None,
+            b'>' => {
+                end_word(&mut stage, &mut word, &mut in_word);
+                // A leading fd number (`2>`) was already pushed as a word.
+                if matches!(stage.words.last(), Some(w) if w.bytes().all(|d| d.is_ascii_digit())) {
+                    stage.words.pop();
+                }
+                let mut j = i + 1;
+                if b.get(j) == Some(&b'>') {
+                    j += 1;
+                }
+                if b.get(j) == Some(&b'&') {
+                    // `>&2`: to a file descriptor, not a file.
+                    j += 1;
+                    while b.get(j).is_some_and(|d| d.is_ascii_digit() || *d == b'-') {
+                        j += 1;
+                    }
+                } else {
+                    while b.get(j).is_some_and(|d| *d == b' ' || *d == b'\t') {
+                        j += 1;
+                    }
+                    let t = j;
+                    while b.get(j).is_some_and(|d| !b" \t\n;&|()<>".contains(d)) {
+                        j += 1;
+                    }
+                    if &command[t..j] != "/dev/null" {
+                        stage.writes = true;
+                    }
+                }
+                i = j;
+                continue;
+            }
+            b'&' if b.get(i + 1) == Some(&b'>') => {
+                // `&>file`: same as `>file` for this purpose.
+                end_word(&mut stage, &mut word, &mut in_word);
+                i += 1;
+                continue;
+            }
+            b'|' if b.get(i + 1) != Some(&b'|') => {
+                end_word(&mut stage, &mut word, &mut in_word);
+                stages.push(std::mem::take(&mut stage));
+                i += 1;
+                continue;
+            }
+            b';' | b'\n' | b'&' | b'|' | b'(' | b')' => {
+                end_word(&mut stage, &mut word, &mut in_word);
+                stages.push(std::mem::take(&mut stage));
+                out.push(Statement {
+                    start,
+                    end: i,
+                    stages: std::mem::take(&mut stages),
+                });
+                let mut j = i + 1;
+                if (c == b'&' || c == b'|') && b.get(j) == Some(&c) {
+                    j += 1;
+                }
+                start = j;
+                i = j;
+                continue;
+            }
+            b' ' | b'\t' => {
+                end_word(&mut stage, &mut word, &mut in_word);
+            }
+            _ => {
+                let ch = command[i..].chars().next()?;
+                word.push(ch);
+                in_word = true;
+                i += ch.len_utf8();
+                continue;
+            }
+        }
+        i += 1;
+    }
+    end_word(&mut stage, &mut word, &mut in_word);
+    stages.push(stage);
+    out.push(Statement {
+        start,
+        end: b.len(),
+        stages,
+    });
+    Some(out)
+}
+
+/// A pipeline stage that cannot write a file. Conservative: anything not on
+/// this list — `sed`, `awk`, `cp`, `xargs`, `find`, `sort`, an interpreter, a
+/// bare `VAR=value` — may write and is NOT read-only.
+fn read_only_stage(stage: &Stage) -> bool {
+    if stage.writes {
+        return false;
+    }
+    let mut words = stage.words.iter().map(String::as_str).peekable();
+    // Shell keywords that only introduce the real command.
+    while let Some(w) = words.peek() {
+        if matches!(
+            *w,
+            "if" | "then" | "else" | "elif" | "do" | "while" | "until" | "!" | "time"
+        ) {
+            words.next();
+        } else {
+            break;
+        }
+    }
+    let rest: Vec<&str> = words.collect();
+    let Some(first) = rest.first() else {
+        // Nothing runs: an empty stage (a trailing `;`, a leading `(`) or
+        // only introducing keywords.
+        return true;
+    };
+    if is_keyword(first) {
+        return rest.iter().all(|w| is_keyword(w));
+    }
+    let prog = first.rsplit('/').next().unwrap_or(first);
+    match prog {
+        "cat" | "head" | "tail" | "less" | "more" | "grep" | "egrep" | "fgrep" | "rg" | "ls"
+        | "wc" | "file" | "stat" | "diff" | "cmp" | "echo" | "printf" | "test" | "["
+        | "realpath" | "readlink" | "dirname" | "basename" | "nl" | "cd" | "pwd" | "true"
+        | "false" | "which" | "md5sum" | "sha1sum" | "sha256sum" | "du" | "df" | "tree" | "cut"
+        | "tr" | "jq" | "column" => true,
+        "git" => {
+            let mut args = rest[1..].iter();
+            let sub = loop {
+                match args.next() {
+                    Some(&("-C" | "-c")) => {
+                        args.next();
+                    }
+                    Some(a) if a.starts_with('-') => {}
+                    other => break other,
+                }
+            };
+            matches!(
+                sub.copied(),
+                Some(
+                    "diff"
+                        | "show"
+                        | "log"
+                        | "status"
+                        | "blame"
+                        | "grep"
+                        | "ls-files"
+                        | "cat-file"
+                        | "rev-parse"
+                        | "shortlog"
+                        | "describe"
+                )
+            ) && !rest.iter().any(|a| a.starts_with("--output"))
+        }
+        "tdd" | "reviewgate" => rest.get(1) == Some(&"skip"),
+        _ => false,
+    }
+}
+
+fn is_keyword(w: &str) -> bool {
+    matches!(w, "done" | "fi" | "esac" | "{" | "}")
 }
 
 /// Split `changed` for a caller that knows only a **session id** — a pre-commit

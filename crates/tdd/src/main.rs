@@ -33,6 +33,7 @@ mod state;
 mod transition;
 #[cfg(test)]
 mod trust_worktree_tests;
+mod warned;
 
 use std::io::Read;
 use std::path::Path;
@@ -41,6 +42,7 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 
 use config::Config;
+use harness_core::verdict::Determination;
 use model::HookInput;
 
 #[derive(Parser)]
@@ -310,6 +312,27 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
+    // mode = "loose" (config::Mode): warn once per file hash. When every
+    // implementation file the finding names is at a (path, hash) already
+    // shown, the stop goes through without repeating it. Only a positive
+    // "all seen" lets it through; an unreadable file or ledger keeps the block.
+    let loose_entries = if cfg.mode == config::Mode::Loose && !interactive {
+        loose_entries(&verdict, &root)
+    } else {
+        Determination::undetermined("mode is strict (or a manual run): nothing is deduplicated")
+    };
+    if let Determination::Known(entries) = &loose_entries {
+        if let Determination::Known(true) = warned::all_seen(&cfg.state_dir, &root, entries) {
+            state::reset(&cfg.state_dir, &session);
+            log_event(&cfg, &session, "already-warned", 0);
+            eprintln!(
+                "tdd (mode = loose): every file in this finding was already warned at its \
+                 current content — allowing the stop without repeating it"
+            );
+            std::process::exit(0);
+        }
+    }
+
     // a blocking finding: no test for new implementation
     let attempt = state::bump(&cfg.state_dir, &session, cfg.reset_after_secs);
 
@@ -330,6 +353,14 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         eprintln!("{}", gate::human_report(&verdict, &cfg));
         eprintln!("\n{reason}");
         std::process::exit(1);
+    }
+    if let Determination::Known(entries) = &loose_entries {
+        if let Err(e) = warned::record(&cfg.state_dir, &root, entries) {
+            eprintln!(
+                "tdd (mode = loose): could not record that this finding was shown ({e}); \
+                 it will be shown again"
+            );
+        }
     }
     // Repeat ledger: operator ruling 2026-09-18.
     harness_core::repeat::emit_stop_block("tdd", &reason);
@@ -400,6 +431,17 @@ fn oracle_command(task: &str) -> ! {
     let (report, code) = transition::oracle_report_same_cmd(pre, post, red_cmd, green_cmd);
     println!("{report}");
     std::process::exit(code);
+}
+
+/// The `mode = "loose"` entries of a determined finding: each implementation
+/// file it names at its current hash. `Undetermined` for an undetermined scan
+/// or a file that could not be read — and the caller deduplicates ONLY a
+/// `Known` answer, so an undetermined one keeps the normal block.
+fn loose_entries(verdict: &gate::Report, root: &Path) -> Determination<Vec<String>> {
+    match &verdict.scan {
+        Determination::Known(Some(f)) => warned::entries(root, &f.impl_files),
+        _ => Determination::undetermined("no determined finding to deduplicate"),
+    }
 }
 
 fn log_event(cfg: &Config, session: &str, verdict: &str, attempt: u32) {

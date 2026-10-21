@@ -101,6 +101,12 @@ SCANNERS = _precommit_scanners() + [
     "check-test-weakening.py",
 ]
 
+# What .githooks/post-merge runs after a TRUE (two-parent) merge, whatever
+# pre-merge-commit did: its version-collision report calls
+# check-version-bumped.py once against ORIG_HEAD and once against HEAD^2.
+# These are post-merge's own invocations, not part of the pre-merge gate list.
+POST_MERGE_CHECKS = ["check-version-bumped.py", "check-version-bumped.py"]
+
 # A stub scanner: records that it ran, then exits with the code baked in here.
 # It never reads the repository, so it can only ever report what this test told
 # it to report.
@@ -705,7 +711,10 @@ class MergeCommits(GateTestCase):
         self._merge_setup(h)
         h.git("merge", "--no-ff", "-m", "merge feat", "feat")
         self.assertEqual(
-            h.ran(), SCANNERS, "pre-merge-commit must run the same gate list"
+            h.ran(),
+            SCANNERS + POST_MERGE_CHECKS,
+            "pre-merge-commit must run the same gate list (then post-merge "
+            "runs its version-collision checks)",
         )
 
     def test_a_red_gate_blocks_a_merge_commit(self):
@@ -770,7 +779,11 @@ class MergeCommits(GateTestCase):
         self._merge_setup(h)
 
         h.git("merge", "--no-ff", "--no-verify", "-m", "ungated merge", "feat")
-        self.assertEqual(h.ran(), [], "precondition: no gate ran")
+        self.assertEqual(
+            h.ran(),
+            POST_MERGE_CHECKS,
+            "precondition: no pre-merge gate ran (only post-merge's checks)",
+        )
         self.assertLedgerHas(h, 1, "the ungated merge must reach the ledger")
         self.assertNotEqual(
             h.pre_push().returncode, 0, "and pre-push must refuse to push it"

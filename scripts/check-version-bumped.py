@@ -39,7 +39,7 @@ when harness-core moves, and .deployed-from.json pins the exact commit — so th
 plugin bumps would buy a version string, at that cost, for a repo that does not
 redistribute by version. Decided with the repo owner, 2026-07-30.
 
-THREE carve-outs, each argued at its implementation site below and each ANNOUNCED
+TWO carve-outs, each argued at its implementation site below and each ANNOUNCED
 rather than applied silently:
   1. a plugin whose changed paths are ALL under crates/<name>/bin/ (compiled
      output, not source) does not require a bump. Mixed bin+source is still
@@ -51,13 +51,13 @@ rather than applied silently:
      src/, which cannot be identified without parsing — counts as linked and
      demands the bump, because §3 says an undecidable case resolves to the
      restrictive side. Covered by scripts/tests/version-bumped-shared-crate.sh.
-  3. a plugin whose changed paths ALL end in .md does not require a bump
-     (prose, not compiled). Mixed .md + any non-.md path (plugin.json, hooks,
-     src, tests) is still enforced. Covered by
-     scripts/tests/version-bumped-md-only.sh. CONSEQUENCE, stated plainly: a
-     SKILL.md / agents/*.md edit under this exemption is NOT re-delivered to
-     installed plugins by version-keyed `claude plugin update` until the next
-     version bump.
+
+There is NO markdown-only carve-out for plugins (removed 2026-10-22 by user
+ruling): a plugin's SKILL.md / agents/*.md is functional content that is only
+re-delivered by a version bump, so an .md-only change under crates/<name>/
+demands a bump in both the working-tree mode and --head (post-merge collision)
+mode. Covered by scripts/tests/version-bumped-md-only.sh and
+scripts/tests/post-merge-version-collision.sh.
 """
 import argparse
 import json
@@ -206,19 +206,19 @@ def crate_version_worktree(path):
         return None
 
 
-def check_shared_crate(base):
+def check_shared_crate(base, head=None):
     """Enforce the shared-crate bump. Returns (verdict, message).
 
     verdict is "ok", "exempt", "fail", or "error" — four answers rather than a
     bool, so "could not diff" cannot be recorded as "nothing changed".
     """
     manifest = f"{CRATES}/{SHARED_CRATE}/Cargo.toml"
-    if not os.path.isfile(manifest):
+    if head is None and not os.path.isfile(manifest):
         # Not this repo's layout (or running in a sandbox without the shared
         # crate). Nothing to enforce, and nothing to claim.
         return "ok", None
 
-    diff = git("diff", "--name-only", base, "--", f"{CRATES}/{SHARED_CRATE}/")
+    diff = git("diff", "--name-only", *_range(base, head), "--", f"{CRATES}/{SHARED_CRATE}/")
     if diff.returncode != 0:
         return "error", (
             f"cannot diff {CRATES}/{SHARED_CRATE} against {base}: "
@@ -246,7 +246,13 @@ def check_shared_crate(base):
         # Absent from the base TREE (new crate): a shared crate that did not
         # exist at base cannot have "changed" in the sense this rule is about.
         return "ok", None
-    cur_v = crate_version_worktree(manifest)
+    if head is None:
+        cur_v = crate_version_worktree(manifest)
+    else:
+        try:
+            cur_v = crate_version_at(head, manifest)
+        except Undetermined as e:
+            return "error", str(e)
     if cur_v is None:
         return "fail", (
             f"{SHARED_CRATE}: cannot read [package].version from {manifest} "
@@ -264,33 +270,70 @@ def check_shared_crate(base):
     return "ok", None
 
 
+def _range(base, head):
+    """`git diff` operands: working tree vs base, or base vs head."""
+    return (base,) if head is None else (base, head)
+
+
+def plugin_names_at(head):
+    """Plugin crate names whose plugin.json is in the TREE of `head`.
+
+    Raises Undetermined when the tree cannot be listed (never "no plugins").
+    """
+    r = git("ls-tree", "--name-only", "-d", f"{head}:{CRATES}")
+    if r.returncode != 0:
+        raise Undetermined(f"cannot list {CRATES}/ at {head}: {r.stderr.strip()}")
+    names = []
+    for name in r.stdout.splitlines():
+        if name.strip() and blob_at(head, f"{CRATES}/{name}/{PLUGIN_JSON_REL}") is not None:
+            names.append(name)
+    return names
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="HEAD", help="ref to compare against (default: HEAD)")
+    ap.add_argument(
+        "--head",
+        default=None,
+        help="compare this commit instead of the working tree (post-merge: "
+        "--base ORIG_HEAD --head HEAD, and --base HEAD^2 --head HEAD)",
+    )
     args = ap.parse_args()
     base = args.base
+    head = args.head
 
-    # sanity: base must resolve
-    if git("rev-parse", "--verify", "--quiet", base).returncode != 0:
-        print(f"check-version-bumped: base ref '{base}' does not resolve", file=sys.stderr)
-        return 2
+    # sanity: base (and head) must resolve
+    for ref in (base,) if head is None else (base, head):
+        if git("rev-parse", "--verify", "--quiet", ref).returncode != 0:
+            print(f"check-version-bumped: ref '{ref}' does not resolve", file=sys.stderr)
+            return 2
 
     offenders = []
     bin_only = []
-    md_only = []
     checked = 0
-    if not os.path.isdir(CRATES):
-        print("check-version-bumped: no crates/ dir (run from repo root)", file=sys.stderr)
-        return 2
+    if head is None:
+        if not os.path.isdir(CRATES):
+            print("check-version-bumped: no crates/ dir (run from repo root)", file=sys.stderr)
+            return 2
+        names = [
+            n for n in sorted(os.listdir(CRATES))
+            if os.path.isfile(f"{CRATES}/{n}/{PLUGIN_JSON_REL}")
+        ]
+    else:
+        try:
+            names = sorted(plugin_names_at(head))
+        except Undetermined as e:
+            print(f"check-version-bumped: {e}", file=sys.stderr)
+            return 2
 
-    for name in sorted(os.listdir(CRATES)):
+    for name in names:
         pj_rel = f"{CRATES}/{name}/{PLUGIN_JSON_REL}"
-        if not os.path.isfile(pj_rel):
-            continue  # not a plugin (harness-core, integration-tests, ...)
         checked += 1
 
-        # did anything under this plugin change vs base? (working tree vs base)
-        diff = git("diff", "--name-only", base, "--", f"{CRATES}/{name}/")
+        # did anything under this plugin change vs base? (working tree, or
+        # `head` when given, vs base)
+        diff = git("diff", "--name-only", *_range(base, head), "--", f"{CRATES}/{name}/")
         if diff.returncode != 0:
             print(f"check-version-bumped: git diff failed for {name}: {diff.stderr.strip()}", file=sys.stderr)
             return 2
@@ -315,11 +358,6 @@ def main():
             bin_only.append((name, len(changed)))
             continue
 
-        # Markdown-only carve-out: every changed path is prose (*.md). Narrow on
-        # purpose (ALL paths must be .md) and announced below, not silent.
-        if all(p.endswith(".md") for p in changed):
-            md_only.append((name, len(changed)))
-            continue
 
         try:
             base_v = plugin_version_at(base, pj_rel)
@@ -329,7 +367,14 @@ def main():
             return 2
         if base_v is None:
             continue  # new plugin (plugin.json absent from the base tree) — no bump required
-        cur_v = plugin_version_worktree(pj_rel)
+        if head is None:
+            cur_v = plugin_version_worktree(pj_rel)
+        else:
+            try:
+                cur_v = plugin_version_at(head, pj_rel)
+            except Undetermined as e:
+                print(f"check-version-bumped: {name}: {e}", file=sys.stderr)
+                return 2
 
         bs, cs = semver(base_v), semver(cur_v)
         if cs is None or bs is None or not (cs > bs):
@@ -337,7 +382,7 @@ def main():
 
     # The shared crate (harness-core) is not a plugin, so the loop above skipped
     # it; its own version is what must move when it changes.
-    shared_verdict, shared_msg = check_shared_crate(base)
+    shared_verdict, shared_msg = check_shared_crate(base, head)
     if shared_verdict == "error":
         print(f"check-version-bumped: {shared_msg}", file=sys.stderr)
         return 2
@@ -356,15 +401,6 @@ def main():
         print(
             f"check-version-bumped: {len(bin_only)} plugin(s) changed ONLY under "
             f"bin/ ({total} derived-artifact file(s)); no bump required: {names}"
-        )
-
-    if md_only:
-        total = sum(n for _, n in md_only)
-        names = ", ".join(name for name, _ in md_only)
-        print(
-            f"check-version-bumped: {len(md_only)} plugin(s) changed ONLY *.md "
-            f"files ({total} file(s)); no bump required (installed plugins are "
-            f"not re-delivered until the next bump): {names}"
         )
 
     if offenders_shared:

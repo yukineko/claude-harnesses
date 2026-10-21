@@ -147,7 +147,8 @@ fn now() -> i64 {
 /// reviewgate reviews only what THIS session wrote:
 /// `harness_core::attribution::attribute_own_writes` keeps a changed file iff
 /// the transcript (parent + subagent sidechains) shows an `Edit`/`Write`/
-/// `MultiEdit`/`NotebookEdit` of it, or a `Bash` command naming its path.
+/// `MultiEdit`/`NotebookEdit` of it, or a `Bash` command naming its path
+/// outside a read-only statement (`git diff`, `grep`, `cat`, `tdd skip`, …).
 /// Everything else is excluded and NAMED in the note. Residual hole: a file
 /// written by a command that never names it (`cargo fmt`, a glob, a script) is
 /// excluded too — which is why the exclusion list is always printed. Because

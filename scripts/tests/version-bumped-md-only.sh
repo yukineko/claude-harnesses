@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Self-contained test for the markdown-only carve-out in
-# scripts/check-version-bumped.py.
+# Self-contained test that scripts/check-version-bumped.py has NO
+# markdown-only carve-out for plugins (removed 2026-10-22 by user ruling;
+# this file previously pinned the opposite contract).
 #
 # Proves:
-#   A. a change confined to *.md files (README.md, skills/x/SKILL.md) demands
-#      no bump (exit 0) and ANNOUNCES the exemption;
+#   A. a change confined to *.md files (README.md, skills/x/SKILL.md) with no
+#      bump FAILS (exit 1) and no exemption is announced;
 #   B. a source-only change with no bump STILL fails (exit 1);
 #   C. *.md plus a source file with no bump STILL fails (exit 1);
 #   D. a .md-only change WITH a bump still passes (exit 0);
@@ -56,12 +57,12 @@ run_gate() {
 put README.md "readme v2"
 put skills/x/SKILL.md "skill v2"
 run_gate
-[ "$RC" -eq 0 ] || fail "A: a .md-only change must not demand a bump; rc=$RC out=$OUT"
+[ "$RC" -eq 1 ] || fail "A: a .md-only change with no bump must fail; rc=$RC out=$OUT"
 case "$OUT" in
-  *"ONLY *.md"*) : ;;
-  *) fail "A: the carve-out must announce itself; out=$OUT" ;;
+  *"ONLY *.md"*) fail "A: no md-only exemption may be announced; out=$OUT" ;;
+  *) : ;;
 esac
-pass "A: .md-only change passes and the exemption is announced"
+pass "A: .md-only change with no bump blocks"
 reset_tree
 
 # B

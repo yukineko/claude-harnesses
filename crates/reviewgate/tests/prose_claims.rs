@@ -61,8 +61,17 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 impl Sandbox {
-    /// HOME + a git repo (`$HOME/project`) with one committed file `seed.rs`.
+    /// HOME + a git repo (`$HOME/project`) with one committed file `seed.rs`,
+    /// opted in to reviewing with a home config `mode = "inject"` (the
+    /// built-in default is `off`, see `claim_default_mode_off`).
     fn new() -> Sandbox {
+        let sb = Sandbox::unconfigured();
+        sb.home_config("mode = \"inject\"\n");
+        sb
+    }
+
+    /// Like [`Sandbox::new`] but with NO config file at all (built-in defaults).
+    fn unconfigured() -> Sandbox {
         let tmp = tempfile::tempdir().expect("tempdir");
         let home = tmp.path().canonicalize().expect("canonicalize");
         let repo = home.join("project");
@@ -102,10 +111,19 @@ impl Sandbox {
         std::fs::write(p, body).unwrap();
     }
 
+    /// Write the home config. A body that sets no `mode` key gets
+    /// `mode = "inject"` prepended, so the claims about the reviewing path keep
+    /// exercising it now that the built-in default is `off`.
     fn home_config(&self, toml: &str) {
         let d = self.home.join(".reviewgate");
         std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("config.toml"), toml).unwrap();
+        let sets_mode = toml.lines().any(|l| l.trim_start().starts_with("mode"));
+        let body = if sets_mode {
+            toml.to_string()
+        } else {
+            format!("mode = \"inject\"\n{toml}")
+        };
+        std::fs::write(d.join("config.toml"), body).unwrap();
     }
 
     fn state_dir(&self) -> PathBuf {
@@ -392,7 +410,7 @@ fn claim_example_toml() {
         r.stdout
     );
     assert!(
-        r.stdout.contains("mode:          inject"),
+        r.stdout.contains("mode:          off"),
         "stdout: {}",
         r.stdout
     );
@@ -401,10 +419,12 @@ fn claim_example_toml() {
         "stdout: {}",
         r.stdout
     );
-    // The Stop hook is not config-invalid under it either.
+    // The Stop hook is not config-invalid under it either: the example ships
+    // the default mode (off), so the stop is allowed with no review.
     sb.write("changed.rs", "fn c() {}\n");
     let s = sb.stop("ex");
-    assert_eq!(sb.last_verdict("ex"), "blocked-inject", "{}", s.stderr);
+    assert!(!s.blocked(), "stdout={} stderr={}", s.stdout, s.stderr);
+    assert_eq!(s.code, 0, "{}", s.stderr);
 
     // RED control: a corrupted copy of the example is reported as FAILED.
     let sb2 = Sandbox::new();
@@ -418,12 +438,12 @@ fn claim_example_toml() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn claim_default_mode_inject() {
-    let sb = Sandbox::new();
+fn claim_default_mode_off() {
+    let sb = Sandbox::unconfigured();
     let r = sb.cli(&["status"]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     assert!(
-        r.stdout.contains("mode:          inject"),
+        r.stdout.contains("mode:          off"),
         "stdout: {}",
         r.stdout
     );
@@ -432,16 +452,20 @@ fn claim_default_mode_inject() {
         "this must be the no-config case: {}",
         r.stdout
     );
-    // Behaviourally: with no config the stop is an inject block (rubric
-    // injected, no reviewer spawned).
+    // Behaviourally: with no config the stop is allowed with no review (no
+    // block, no rubric) and nothing is logged as a review verdict.
     sb.write("changed.rs", "fn c() {}\n");
     let s = sb.stop("dm");
-    assert!(s.blocked(), "stdout={} stderr={}", s.stdout, s.stderr);
-    assert_eq!(sb.last_verdict("dm"), "blocked-inject");
-    // RED control: an explicit subprocess config flips the status line.
-    sb.home_config("mode = \"subprocess\"\n");
+    assert!(!s.blocked(), "stdout={} stderr={}", s.stdout, s.stderr);
+    assert!(s.stdout.trim().is_empty(), "stdout={}", s.stdout);
+    assert_eq!(s.code, 0);
+    // RED control: an explicit inject config on the same change blocks.
+    sb.home_config("mode = \"inject\"\n");
     let r2 = sb.cli(&["status"]);
-    assert!(r2.stdout.contains("mode:          subprocess"));
+    assert!(r2.stdout.contains("mode:          inject"));
+    let s2 = sb.stop("dm");
+    assert!(s2.blocked(), "stdout={} stderr={}", s2.stdout, s2.stderr);
+    assert_eq!(sb.last_verdict("dm"), "blocked-inject");
 }
 
 #[test]
@@ -537,7 +561,10 @@ fn claim_broken_config_still_gates() {
         "stderr: {}",
         r.stderr
     );
-    assert_eq!(sb.last_verdict("bc"), "blocked-inject");
+    // A broken file is undetermined: it blocks `config-invalid` rather than
+    // falling back to the built-in default (now `off`, i.e. no gate).
+    assert_eq!(sb.last_verdict("bc"), "config-invalid");
+    assert!(r.stdout.contains("config-invalid"), "stdout: {}", r.stdout);
     // And `status` says the file FAILED rather than adopting it.
     let st = sb.cli(&["status"]);
     assert!(st.stdout.contains("FAILED to load"), "{}", st.stdout);

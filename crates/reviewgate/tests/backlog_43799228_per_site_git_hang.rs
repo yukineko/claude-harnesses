@@ -79,6 +79,7 @@ fn fake_git(dir: &Path, cond: &str) -> PathBuf {
 }
 
 fn review(work: &Path, home: &Path, fake: &Path) -> (String, String, bool) {
+    ensure_inject_config(home);
     let ambient = std::env::var_os("PATH").unwrap_or_default();
     let mut paths = vec![fake.to_path_buf()];
     paths.extend(std::env::split_paths(&ambient));
@@ -197,4 +198,15 @@ fn only_untracked_ls_files_fetch_hangs() {
         "[ \"$1\" = ls-files ] && [ $has_dd = 1 ]",
         "git ls-files --others:",
     );
+}
+
+/// reviewgate's built-in default is `mode = "off"` (no review). These tests
+/// exercise the reviewing path, so they opt in explicitly with a home config
+/// `mode = "inject"` -- written only when the test has not placed its own.
+fn ensure_inject_config(home: &Path) {
+    let cfg = home.join(".reviewgate").join("config.toml");
+    if !cfg.exists() {
+        std::fs::create_dir_all(home.join(".reviewgate")).unwrap();
+        std::fs::write(cfg, "mode = \"inject\"\n").unwrap();
+    }
 }

@@ -146,6 +146,7 @@ struct Run {
 
 /// Run `reviewgate review` with the given payload, HOME, cwd and PATH.
 fn run_review(home: &Path, cwd: &Path, path: &std::ffi::OsStr, payload: &str) -> Run {
+    ensure_inject_config(home);
     let bin = env!("CARGO_BIN_EXE_reviewgate");
     let mut cmd = Command::new(bin);
     cmd.arg("review")
@@ -983,4 +984,14 @@ fn empty_stdin_keeps_manual_cli_mode_exit_1_on_block() {
         "manual-CLI mode must not also emit the hook JSON on stdout: {:?}",
         run.stdout
     );
+}
+
+/// reviewgate's built-in default is `mode = "off"` (no review). These tests
+/// exercise the reviewing path, so they opt in explicitly with a home config
+/// `mode = "inject"` -- written only when the test has not placed its own.
+fn ensure_inject_config(home: &Path) {
+    let cfg = home.join(".reviewgate").join("config.toml");
+    if !cfg.exists() {
+        write_home_config(home, "mode = \"inject\"\n");
+    }
 }

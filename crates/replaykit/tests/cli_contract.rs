@@ -1,5 +1,5 @@
-//! Claim-reproduction tests for the replaykit README prose. Each test drives the
-//! real binary (or reads the real packaging files) in an isolated temp dir/HOME.
+//! CLI contract tests for replaykit. Each test drives the real binary (or reads
+//! the real packaging files) in an isolated temp dir/HOME.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

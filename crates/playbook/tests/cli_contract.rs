@@ -1,8 +1,8 @@
-//! Claim-reproduction tests: one test per prose claim made in README.md /
-//! README.ja.md. Each drives the real `playbook` binary in a fresh temp HOME
-//! (so `~/.playbook` and `~/.claude` resolve inside the sandbox) and asserts
-//! the specific outcome the prose states. Where the prose is not true of the
-//! code, the test asserts the OBSERVED behaviour and says so in its comment.
+//! CLI / hook contract tests for playbook. Each drives the real `playbook`
+//! binary in a fresh temp HOME (so `~/.playbook` and `~/.claude` resolve
+//! inside the sandbox) and asserts the specific observable outcome. Where the
+//! README once described different behaviour, the test asserts the OBSERVED
+//! behaviour and says so in its comment.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

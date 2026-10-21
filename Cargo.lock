@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.64"
+version = "0.3.65"
 dependencies = [
  "anyhow",
  "clap",
@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "benchkit"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "clap",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "context-governor"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "harness-core",
@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "evalkit"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "clap",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "gauge"
-version = "0.3.27"
+version = "0.3.28"
 dependencies = [
  "anyhow",
  "chrono",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "harness-status"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "anyhow",
  "clap",
@@ -1248,7 +1248,7 @@ dependencies = [
 
 [[package]]
 name = "session-insights"
-version = "0.2.34"
+version = "0.2.35"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1274,7 +1274,7 @@ dependencies = [
 
 [[package]]
 name = "ship"
-version = "0.1.19"
+version = "0.1.20"
 dependencies = [
  "anyhow",
  "clap",
@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "trajectoryeval"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "anyhow",
  "clap",

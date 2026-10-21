@@ -1,31 +1,4 @@
 [[task]]
-id = "d058b22a"
-title = "mutation-gate.sh validates MIN_KILL_RATE only after the full cargo-mutants run (late validation, not fail-open)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p3"]
-touched_files = []
-status = "pending"
-notes = "Seen 2026-10-03 by the f6919056 fork at 0f7571fb. mutategate rejects MIN_KILL_RATE=0 (f276fc8d), but only after the expensive run. Efficiency only. Check by running with MIN_KILL_RATE=0 and timing until rejection."
-created_at = 1791027467
-updated_at = 1792005381
-weight = 0.0
-issue_number = 1189
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1189"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_backlog_d058b22a.py"
-rev = "ca8ec575ddd1e4d5c067acfd2dfcc095b44a5fb1"
-observed_at = 1792005380
-detail = """
-exit 1: Failed
-\u001B[36m\u001B[1m=========================== short test summary info ============================\u001B[0m
-\u001B[31mFAILED\u001B[0m scripts/test_backlog_d058b22a.py::\u001B[1mMutationGateThresholdOrder::test_invalid_threshold_is_rejected_before_cargo_mutants_runs\u001B[0m - _pytest.outcomes.XFailed
-\u001B[31m========================= \u001B[31m\u001B[1m1 failed\u001B[0m, \u001B[32m1 passed\u001B[0m\u001B[31m in 0.53s\u001B[0m\u001B[31m ==========================\u001B[0m"""
-
-[[task]]
 id = "eb93be49"
 title = "Red at main 9e9d8db3: blastguard redirect_target_suffix_resolution (2 symlink tests) and specguard forge_integration ratify_promotes_draft_and_pins_consent"
 project = "/Users/yuki/src/harness"

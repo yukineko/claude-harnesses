@@ -122,7 +122,7 @@ target 解決は `/specguard:spec-audit` と対称・コスト有界 (無際限�
 
   ```sh
   backlog add --title "fix failing tests after drift adjustment: <entry key / 何が壊れたか>" --project "$PWD" --priority p1 \
-    --repro-test "<その失敗を再現するコミット済みテスト>"   # 再現しなければ拒否され store に何も書かれない [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]
+    --repro-test "<その失敗を再現するコミット済みテスト>"   # 再現しなければ拒否され store に何も書かれない
   ```
 
   失敗したテストの文脈 (どのテスト・どのエラー) を backlog の説明に含め、

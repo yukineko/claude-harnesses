@@ -102,7 +102,7 @@ job is to author the Japanese prose sections based on THIS conversation.
    3. **Add genuinely-open follow-ups** from this session's `## 残課題`:
       `backlog add --title "<one open item>" --project <P> --repro-test "<committed test that fails at HEAD>"`
       (one call per item). Write and commit the failing test first; `add` without a
-      reproducing `--repro-test` is refused and writes nothing to the store [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere].
+      reproducing `--repro-test` is refused and writes nothing to the store.
       Do NOT add items you just closed, or transient notes — only durable
       "still needs doing" work.
    Keep backlog item titles short and action-oriented ("X が必要", "Y を直す") so the

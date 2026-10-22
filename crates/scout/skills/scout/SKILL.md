@@ -268,7 +268,7 @@ for 施策名 in "${APPROVED_TASKS[@]}"; do
   compass discovery record --session-id "$SESSION_ID" --title "$施策名" 2>/dev/null || true
   
   # backlog に積む — 再現テスト（RED）が書けた施策だけが起票される（2026-10-04 裁定「testがないなら起票してはならない」）。
-  # --repro-test が無い / 再現しない施策は拒否され、store に何も書かれない [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]。
+  # --repro-test が無い / 再現しない施策は拒否され、store に何も書かれない。
   backlog add --title "$施策名" --project "$PWD" \
     --repro-test "<この施策の不足を示すコミット済みテスト>" \
     --priority <p0|p1|p2> \

@@ -1,9 +1,9 @@
 [package]
 rust-version.workspace = true
 name = "ship"
-version = "0.1.20"
+version = "0.1.22"
 edition = "2021"
-description = "nudge the commit・merge・push・plugin-update shipping ritual; detect unshipped state; subscription-native"
+description = "Nudges the commit, merge, push and plugin-update shipping ritual and detects unshipped state using read-only git checks, never auto-running a mutating command."
 license = "MIT"
 
 [[bin]]

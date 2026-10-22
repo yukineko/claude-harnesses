@@ -1,7 +1,7 @@
 {
   "name": "difflog",
-  "version": "0.1.12",
-  "description": "Session diff-log for Claude Code: snapshot HEAD at SessionStart, write a structured git diff summary (commits, stat, files changed, bounded diff body) at SessionEnd. A /difflog skill can generate a human-readable narrative from the log. Subscription-native (no API key).",
+  "version": "0.1.14",
+  "description": "Session diff-log for Claude Code: snapshots HEAD at SessionStart and records a structured git diff summary at SessionEnd, with a /difflog skill that turns it into a readable narrative.",
   "author": {
     "name": "yukineko"
   },

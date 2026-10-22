@@ -72,15 +72,19 @@ cd "$REPO" 2>/dev/null || { echo "pre-push: cannot enter the repository work tre
 # "could not determine" is not "clean". A missing python3 or missing script also
 # blocks: this check has teeth or it is theatre.
 #
-# Ledger entries no ref or worktree HEAD contains are non-blocking (they can
-# never reach a remote), EXCEPT the sha being pushed: passing it as --pushing
-# keeps `git push origin <sha>:main` of an orphaned ungated commit blocked.
+# Each pushed (local sha, remote sha) pair is passed as --push, so only ledger
+# entries THIS push carries (reachable from the local sha, not from the remote
+# sha) block it; an ungated commit on some other branch does not (user ruling
+# 2026-10-22). That also keeps `git push origin <sha>:main` of an orphaned
+# ungated commit blocked. An undeterminable range exits 2 and blocks. With no
+# stdin lines at all, gate-bypass.py falls back to judging every entry any
+# ref or worktree HEAD contains (the restrictive side).
 PUSH_INPUT="$(cat)"
 set --
 while read -r _lr _ls _rr _rs; do
     case "${_ls:-}" in
         ""|0000000000000000000000000000000000000000) ;;
-        *) set -- "$@" --pushing "$_ls" ;;
+        *) set -- "$@" --push "$_ls" "${_rs:-0000000000000000000000000000000000000000}" ;;
     esac
 done <<EOF
 $PUSH_INPUT

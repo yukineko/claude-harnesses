@@ -1,14 +1,14 @@
 ---
 name: continuous-audit
-description: gate crates に対する敵対的レビュー1ラウンド(finder→refute ベース verifier→CONFIRMED/REFUTED/UNVERIFIED の三値判定)を回し、CONFIRMED を overwatch review-queue へ、UNVERIFIED を再検証待ちとして [UNVERIFIED] マーク付きで queue へ記録する Continuous-Audit driver [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。round metrics を audit ledger に残し収束(round 越しの new-findings 減少)を追跡する [test: crates/overwatch/tests/audit_round.rs::audit_metrics_reports_decreasing_trend_and_closure_rate]。
+description: gate crates に対する敵対的レビュー1ラウンド(finder→refute ベース verifier→CONFIRMED/REFUTED/UNVERIFIED の三値判定)を回し、CONFIRMED を overwatch review-queue へ、UNVERIFIED を再検証待ちとして [UNVERIFIED] マーク付きで queue へ記録する Continuous-Audit driver。round metrics を audit ledger に残し収束(round 越しの new-findings 減少)を追跡する。
 argument-hint: [round-id] [--target crate1,crate2] [--dry-run]
 allowed-tools: Task, Bash(scripts/continuous-audit.sh:*), Bash(overwatch:*), Bash(git:*), Read, Grep, Glob
 ---
 
 gate crates への **敵対的レビュー 1 ラウンド**を回し、確認された指摘 (CONFIRMED findings) を
 `overwatch review-queue` に、**判定不能な指摘 (UNVERIFIED)** を review-queue に
-「再検証待ち」として自動供給する [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。決定論の記録は `scripts/continuous-audit.sh`(+ overwatch
-バイナリ) が担う [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves]。
+「再検証待ち」として自動供給する。決定論の記録は `scripts/continuous-audit.sh`(+ overwatch
+バイナリ) が担う。
 
 ```
 finder (提案)  →  refute-verifier (反証で篩う)  →  verdict 三値
@@ -22,22 +22,22 @@ finder (提案)  →  refute-verifier (反証で篩う)  →  verdict 三値
                         overwatch review-queue  (finding-id で dedup 済み)
 ```
 
-**opt-in**: どの always-on ゲートにも配線されておらず、condukt/rollout の挙動を変えない [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_opt_in_not_wired]。呼んだときだけ走る [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_opt_in_not_wired]。
+**opt-in**: どの always-on ゲートにも配線されておらず、condukt/rollout の挙動を変えない。呼んだときだけ走る。
 
-`scripts/continuous-audit.sh` が存在することを確認すること [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves]。無ければ導入を案内して停止すること。
+`scripts/continuous-audit.sh` が存在することを確認すること。無ければ導入を案内して停止すること。
 
-overwatch バイナリをビルド済みにしておくこと。スクリプトが自動解決する (`OVERWATCH_BIN` / PATH / `target/{release,debug}`) [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_binary_resolution]。
+overwatch バイナリをビルド済みにしておくこと。スクリプトが自動解決する (`OVERWATCH_BIN` / PATH / `target/{release,debug}`)。
 
 ## 対象 crate (既定)
 
-既定の target は GATE crates に audit 専用の backlog を加えた `blastguard,propguard,specguard,stuckguard,mutategate,overwatch,parallelguard,backlog` である [test: scripts/test_check_gate_crates_sync.py::test_current_repo_is_in_sync]。
-`--target` で上書きできる [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_target_override]。
+既定の target は GATE crates に audit 専用の backlog を加えた `blastguard,propguard,specguard,stuckguard,mutategate,overwatch,parallelguard,backlog` である。
+`--target` で上書きできる。
 
 ### Step 0 — 引数を決めること
 
-- `round-id` には識別子 (例: `2026W28`、連番、日付) を渡すこと [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves]。
-- `--target <csv>`: 対象 crate を上書き (既定は上記 GATE crates) [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_target_override]。
-- `--dry-run`: 記録せずに計画だけ表示 (finder/verifier は回してよいが record はしない) [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves] [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_unverified_finding_flag_records_unverified]。
+- `round-id` には識別子 (例: `2026W28`、連番、日付) を渡すこと。
+- `--target <csv>`: 対象 crate を上書き (既定は上記 GATE crates)。
+- `--dry-run`: 記録せずに計画だけ表示 (finder/verifier は回してよいが record はしない)。
 
 ### Step 1 — finder (敵対的発見) を起動すること
 
@@ -61,7 +61,7 @@ verifier に三値 (CONFIRMED / REFUTED / UNVERIFIED) で verdict を出させ�
 - finder と verifier に同一のモデルを指定してはならない。MUST: 別 subagent を使い、finder で記録したモデルと異なるモデルを明示的に指定すること。
 - 指定後、実際に同じモデルペアになっていないことを確認してから verifier を実行すること。
 - **PLAUSIBLE** という語を使用しない。
-- **CONFIRMED** (verifier がコードで再現/立証できた指摘) は review-queue に載せる [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。
+- **CONFIRMED** (verifier がコードで再現/立証できた指摘) は review-queue に載せる。
   - 立証には該当箇所の **file:line と逐語引用**、および「その状態が下流でどう permissive に作用するか」の
     経路を 1 本以上示すこと。
 - **REFUTED** は、指摘が実在しないことを**積極的に立証できた**ときだけ使うこと。反証側にも立証責任を課すこと。
@@ -71,28 +71,28 @@ verifier に三値 (CONFIRMED / REFUTED / UNVERIFIED) で verdict を出させ�
   - 「grep した」で済ませず、各消費経路について file:line + 逐語引用を出すこと。
   - 各経路について「この経路では permissive にならない」根拠を、**引用したコードだけから**述べること。「〜のはず」「設計上そうなっていない」を根拠にしないこと。
   - 消費者が別 binary や別 crate にコンパイルされる、呼び出しが動的、という理由で追跡を打ち切った場合は UNVERIFIED とすること。
-  - overwatch は `record-finding --verdict refuted` を、機械 probe の結果が `not_reproduced` (`--probe <file>`、JSON `{"result":"not_reproduced"}`) **かつ人間の sign-off** (`--signed-off-by <name>`) の両方が揃った場合にだけ `refuted` として保存する [test: crates/overwatch/tests/refuted_witness.rs::refuted_with_not_reproduced_probe_and_signoff_stands_control] [test: crates/overwatch/tests/refuted_witness.rs::refuted_with_a_probe_but_no_signoff_is_stored_unverified] [test: crates/overwatch/tests/refuted_witness.rs::refuted_without_a_probe_is_stored_unverified]。
-  - probe が読めない・パースできない場合は `unverified` として保存する [test: crates/overwatch/tests/refuted_witness.rs::unreadable_or_unparseable_probe_is_never_refuted]。
-  - probe が `reproduced` なら (sign-off 付きの場合) `confirmed` として保存する [test: crates/overwatch/tests/refuted_witness.rs::reproduced_probe_against_a_refuted_claim_lands_confirmed]。
-  - verifier が REFUTED と判定した指摘を捨ててはならない。`--unverified-finding` で UNVERIFIED として記録すること [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_unverified_finding_flag_records_unverified]。
+  - overwatch は `record-finding --verdict refuted` を、機械 probe の結果が `not_reproduced` (`--probe <file>`、JSON `{"result":"not_reproduced"}`) **かつ人間の sign-off** (`--signed-off-by <name>`) の両方が揃った場合にだけ `refuted` として保存する。
+  - probe が読めない・パースできない場合は `unverified` として保存する。
+  - probe が `reproduced` なら (sign-off 付きの場合) `confirmed` として保存する。
+  - verifier が REFUTED と判定した指摘を捨ててはならない。`--unverified-finding` で UNVERIFIED として記録すること。
   - rationale の先頭に、REFUTED 判定だったこと (probe witness も human sign-off も無いこと) を書き、列挙した消費経路と逐語引用を続けること。
-  - REFUTED として閉じられるのは、人間が probe を回して `overwatch record-finding --verdict refuted --probe <file> --signed-off-by <name>` を実行した時だけ [test: crates/overwatch/tests/refuted_witness.rs::refuted_with_not_reproduced_probe_and_signoff_stands_control]。
+  - REFUTED として閉じられるのは、人間が probe を回して `overwatch record-finding --verdict refuted --probe <file> --signed-off-by <name>` を実行した時だけ。
 - **UNVERIFIED**: 上記いずれも満たさない判定不能のものは UNVERIFIED とすること。
   - 捨てないこと: 項目は pending のまま (done にも失敗にもしない) Step 3 の `--unverified-finding` で記録し、
-    review-queue には `[UNVERIFIED]` マークつきで並び、再検証待ちとして可視化されたまま残る [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。
+    review-queue には `[UNVERIFIED]` マークつきで並び、再検証待ちとして可視化されたまま残る。
   - verifier には「何が確認できて、何が確認できなかったか (辿れなかった経路の名前)」を rationale に書かせること。
-- Step 3 で finder と verifier のモデルを必ず両方渡すこと。overwatch は両者が同一モデルなら review-queue に high severity の警告 finding を1件記録する [test: crates/overwatch/tests/audit_round.rs::same_finder_verifier_model_records_warning_finding_in_review_queue]。
+- Step 3 で finder と verifier のモデルを必ず両方渡すこと。overwatch は両者が同一モデルなら review-queue に high severity の警告 finding を1件記録する。
 - 高リスク指摘では verifier を複数立てて多数決にしてもよいが、その場合も複数の verifier に異なるモデルを指定すること。
 - verifier が **CONFIRMED** と判定した際は、その根拠 (file:line 引用込み・反証を退けた理由) を rationale として保持しておくこと。
-  Step 3 で、渡せる場合は必ず `--rationale` にそのまま渡すこと [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_rationale_flag]。
-  `--rationale` を省略しても記録自体は成功する [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_rationale_flag]。
+  Step 3 で、渡せる場合は必ず `--rationale` にそのまま渡すこと。
+  `--rationale` を省略しても記録自体は成功する。
 - **UNVERIFIED** と判定した際も rationale を残すこと。内容は「辿れた経路」と**「辿れなかった経路」**の
   両方 (何が未確認のまま残っているか) を書くこと。
 - **REFUTED** と判定した際は、消費経路の全列挙と各経路の逐語引用を verifier の出力に残すこと。列挙できない場合や引用できない場合は REFUTED を名乗らせず、UNVERIFIED に落とすこと。列挙できた場合も、記録は UNVERIFIED として行い、その列挙を rationale に入れること。
 
 CONFIRMED subset と UNVERIFIED subset をそれぞれ確定し、各件を finding-id | severity | summary | file の形に整形すること。
 finding-id を、CA-<crate>-<連番> や rule id のような安定なキーにすること。同じ指摘が次ラウンドでも CONFIRMED なら同じ finding-id を再利用すること。
-同じ finding-id で再度記録された指摘は review-queue で 1 行に畳まれる [test: crates/overwatch/tests/review_queue.rs::review_queue_collapses_a_refound_finding_to_one_row]。
+同じ finding-id で再度記録された指摘は review-queue で 1 行に畳まれる。
 UNVERIFIED も同じ id を使い回すこと。
 
 ### Step 3 — 決定論レコーダで記録すること
@@ -101,10 +101,10 @@ verifier の REFUTED を捨ててはならない。
 
 スクリプトが非 0 で終わったら、その round は記録されていない（overwatch バイナリが見つからない・`--dry-run` 以外で `--round` が無い・`record-finding` が失敗した）。PASS 行が出ていないなら記録済みとみなさないこと。exit 0 でも metrics / reconcile などの報告系呼び出しは WARNING を出して続行しているので、stderr の WARNING は読むこと。
 
-CONFIRMED subset と round metrics を `scripts/continuous-audit.sh` に渡すこと [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves]。
+CONFIRMED subset と round metrics を `scripts/continuous-audit.sh` に渡すこと。
 
 ```sh
-# 記録 (実書き込み): [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves]
+# 記録 (実書き込み):
 scripts/continuous-audit.sh --round <round-id> --target <csv> \
   --new-findings <このラウンドで新規に出た件数> \
   --confirmed <CONFIRMED 件数> \
@@ -114,25 +114,25 @@ scripts/continuous-audit.sh --round <round-id> --target <csv> \
   --finding '<id>|<severity>|<summary>|<file>|<rationale>' \
   --unverified-finding '<id>|<severity>|<summary>|<file>|<rationale>'
 
-# プレビュー (何も書かない): [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves] [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_unverified_finding_flag_records_unverified]
+# プレビュー (何も書かない):
 scripts/continuous-audit.sh --round <round-id> --dry-run
 ```
 
-- `--finding` / `--unverified-finding` を CONFIRMED / UNVERIFIED の件数だけ繰り返し指定すること [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_finding_flags_repeat_and_format]。
-- `--finding` / `--unverified-finding` の書式は同じ `id|severity|summary|file|rationale` (severity / file / rationale は省略可) [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_finding_flags_repeat_and_format]。
-- **verdict は record 時に記録される**: `--finding` は `overwatch record-finding --verdict confirmed`、 `--unverified-finding` は `--verdict unverified` として書かれる [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_unverified_finding_flag_records_unverified]。
-- スクリプトは `--verdict refuted` を書かない [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_script_never_writes_refuted]。witness 無しの REFUTED は overwatch 側でも UNVERIFIED に倒される [test: crates/overwatch/tests/refuted_witness.rs::refuted_without_a_probe_is_stored_unverified]。
-- REFUTED は `--unverified` 件数にも数えること [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_unverified_count_flag]。
-- 未知の verdict 値は `unverified` に倒れる [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。
-- `overwatch review-queue` に `[UNVERIFIED]` マークつきで並ぶ = **捨てられない** [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。
-- UNVERIFIED は `--confirmed` 件数に含めないこと [test: crates/overwatch/src/audit_round.rs::round_records_unverified_count_separately_from_confirmed]。
-- `--finder-model` と `--verifier-model` の両方を常に渡すこと [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_script_forwards_model_flags]。
-  片方でも省略すると diversity は「未検査」であって「充足」ではないので、overwatch は review-queue に `audit-round-model-unchecked-<round>` の警告 finding を記録する [test: crates/overwatch/tests/audit_round.rs::distinct_finder_verifier_model_records_no_collision_finding] [test: crates/overwatch/tests/repro_audit_round_omitted_models_counted_clean.rs::omitted_models_must_not_be_indistinguishable_from_verified_distinct]。
+- `--finding` / `--unverified-finding` を CONFIRMED / UNVERIFIED の件数だけ繰り返し指定すること。
+- `--finding` / `--unverified-finding` の書式は同じ `id|severity|summary|file|rationale` (severity / file / rationale は省略可)。
+- **verdict は record 時に記録される**: `--finding` は `overwatch record-finding --verdict confirmed`、 `--unverified-finding` は `--verdict unverified` として書かれる。
+- スクリプトは `--verdict refuted` を書かない。witness 無しの REFUTED は overwatch 側でも UNVERIFIED に倒される。
+- REFUTED は `--unverified` 件数にも数えること。
+- 未知の verdict 値は `unverified` に倒れる。
+- `overwatch review-queue` に `[UNVERIFIED]` マークつきで並ぶ = **捨てられない**。
+- UNVERIFIED は `--confirmed` 件数に含めないこと。
+- `--finder-model` と `--verifier-model` の両方を常に渡すこと。
+  片方でも省略すると diversity は「未検査」であって「充足」ではないので、overwatch は review-queue に `audit-round-model-unchecked-<round>` の警告 finding を記録する。
 - `--new-findings` / `--confirmed` / `--unverified` / `--regression-tests-added` は
-  **round ledger にそのまま記録される件数** [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_unverified_count_flag]。`--finding` / `--unverified-finding` エントリは
-  review-queue に流す subset (件数入力とは独立) [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_finding_entries_independent_of_counts]。
-- スクリプトは finding を review-queue へ、ラウンドを収束 ledger へ追記する [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves]。
-- `audit-round record` は判定を持つので、拒否されたらスクリプトはそこで停止する [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves]。
+  **round ledger にそのまま記録される件数**。`--finding` / `--unverified-finding` エントリは
+  review-queue に流す subset (件数入力とは独立)。
+- スクリプトは finding を review-queue へ、ラウンドを収束 ledger へ追記する。
+- `audit-round record` は判定を持つので、拒否されたらスクリプトはそこで停止する。
 
 ### Step 3.5 — ミラー掃討を行うこと (**必須**)
 
@@ -153,16 +153,16 @@ scripts/continuous-audit.sh --round <round-id> --dry-run
 
 > **回帰テストをラウンド記録より後に landed させてはならない。** CONFIRMED を減らして辻褄を合わせることは禁止する。
 
-- `overwatch audit-round record` は `regression_tests_added < confirmed` のラウンドを拒否する (非0終了・audit-round ledger へ一切書かない・`scripts/continuous-audit.sh` もそこで停止する) [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves]。
-- confirmed が 0 のラウンド (全件 refute) は締める対象が無いので通る [test: crates/overwatch/src/audit_round.rs::closure_incomplete_lets_an_all_refuted_round_through] [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_target_override]。
+- `overwatch audit-round record` は `regression_tests_added < confirmed` のラウンドを拒否する (非0終了・audit-round ledger へ一切書かない・`scripts/continuous-audit.sh` もそこで停止する)。
+- confirmed が 0 のラウンド (全件 refute) は締める対象が無いので通る。
 - CONFIRMED のうち**挙動バグ**は、対象 crate に**回帰テストを追加して固定**すること。
   これは別タスク (backlog / condukt) に委譲してもよいが、追加できた件数を記録すること。
 
 ### Step 4.5 — closure を書き戻すこと
 
-> 新規ラウンドを、record は 0 件で通して後から close で埋める形で記録しようとしてはならない (record 自体が拒否される [test: crates/overwatch/tests/continuous_audit_script.rs::continuous_audit_script_behaves])。
+> 新規ラウンドを、record は 0 件で通して後から close で埋める形で記録しようとしてはならない (record 自体が拒否される)。
 > この Step は、拒否ルール導入前に記録された既存ラウンドの backfill 専用として使うこと。
-> `converging` は `closure_rate` を参照しない [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_converging_ignores_closure_rate]。
+> `converging` は `closure_rate` を参照しない。
 
 CONFIRMED を回帰テストで締めたら、その件数を**元のラウンドへ closure として書き戻す**こと。
 
@@ -171,24 +171,24 @@ overwatch audit-round close --round <round-id> --tests <N>
 ```
 
 - N に raw なテスト関数の総数を渡してはならない。N には「回帰テストで固定した confirmed findings の数」を渡すこと。
-- 同じ N で二度 close しても二重計上されない (SET であり加算ではない) [test: crates/overwatch/src/audit_round.rs::set_round_tests_is_idempotent_set_not_add]。
-- N が confirmed を超えても closure_rate は 1.0 を超えない [test: crates/overwatch/src/audit_round.rs::set_round_tests_clamps_to_confirmed_so_closure_rate_never_exceeds_one]。
-- 同じ round-id が重複記録されている場合は**最後に記録されたラウンド**が closure 対象になる [test: crates/overwatch/src/audit_round.rs::set_round_tests_duplicate_id_closes_most_recent]。
+- 同じ N で二度 close しても二重計上されない (SET であり加算ではない)。
+- N が confirmed を超えても closure_rate は 1.0 を超えない。
+- 同じ round-id が重複記録されている場合は**最後に記録されたラウンド**が closure 対象になる。
 
 ### Step 5 — 結果を確認すること
 
 ```sh
-overwatch review-queue            # 記録した finding が [ai-finding] タグで severity 順 (同じ severity 内は最新順) に並ぶ (finding-id で dedup 済み) [test: crates/overwatch/src/review_queue.rs::stale_high_severity_outranks_fresh_low_severity] [test: crates/overwatch/tests/review_queue.rs::review_queue_merges_all_three_sources_time_ordered] [test: crates/overwatch/tests/review_queue.rs::review_queue_collapses_a_refound_finding_to_one_row]
-overwatch audit-metrics           # round 越しの new-findings 推移・converging フラグ [test: crates/overwatch/tests/audit_round.rs::audit_metrics_reports_decreasing_trend_and_closure_rate]
+overwatch review-queue            # 記録した finding が [ai-finding] タグで severity 順 (同じ severity 内は最新順) に並ぶ (finding-id で dedup 済み)
+overwatch audit-metrics           # round 越しの new-findings 推移・converging フラグ
 ```
 
-- CONFIRMED は `overwatch review-queue` に `[ai-finding]` 行として現れる (systemic / rollback と統合表示) [test: crates/overwatch/tests/audit_round.rs::confirmed_finding_recorded_by_audit_loop_surfaces_in_review_queue] [test: crates/overwatch/tests/review_queue.rs::review_queue_merges_all_three_sources_time_ordered]。
-- UNVERIFIED は `[UNVERIFIED]` マーク付きで現れる [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]。
+- CONFIRMED は `overwatch review-queue` に `[ai-finding]` 行として現れる (systemic / rollback と統合表示)。
+- UNVERIFIED は `[UNVERIFIED]` マーク付きで現れる。
   **UNVERIFIED が積み上がるのは異常ではなく情報**: 次ラウンドで優先的に再検証する対象を指している
-  (`audit-metrics` の `cumulative unverified` で追える [test: crates/overwatch/src/audit_round.rs::round_records_unverified_count_separately_from_confirmed])。
-- ラウンドを重ねて `new-findings` が減少すると `converging` は true になる [test: crates/overwatch/src/audit_round.rs::converging_when_new_findings_decrease]。増加すると false になる [test: crates/overwatch/src/audit_round.rs::not_converging_when_new_findings_increase]。
+  (`audit-metrics` の `cumulative unverified` で追える)。
+- ラウンドを重ねて `new-findings` が減少すると `converging` は true になる。増加すると false になる。
 
-`scripts/continuous-audit.sh` 冒頭と `scripts/continuous-audit.cron.example` に、週次 cron / git pre-push advisory のテンプレートがある [test: crates/overwatch/tests/prose_claims_ca.rs::claim_ca_automation_templates_exist]。
+`scripts/continuous-audit.sh` 冒頭と `scripts/continuous-audit.cron.example` に、週次 cron / git pre-push advisory のテンプレートがある。
 導入は手動 (コピー) で行うこと。
 
 - overwatch バイナリが不在なら、ビルドしてから再実行すること。

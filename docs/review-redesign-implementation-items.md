@@ -341,8 +341,8 @@ rollout-plugins.shと複数crateを横断していた）。この経験から、
      verdictは三値 CONFIRMED/REFUTED/UNVERIFIED で、既定はUNVERIFIED。REFUTEDは「到達しない理由」を
      発見と同水準の逐語引用と全消費経路の追跡で示せた場合のみ。示せなければUNVERIFIEDとして捨てず、
      `scripts/continuous-audit.sh ... --unverified-finding` で review-queue に `[UNVERIFIED]`
-     （再検証待ち）として残す [test: crates/overwatch/tests/verdict_tri_state.rs::unverified_findings_stay_pending_and_visible]（手順は
-     `crates/overwatch/skills/continuous-audit/SKILL.md` Step 2/3））。[record: 2026-07-10] 1ラウンドの結果を鵜呑みにせず、複数ラウンド
+     （再検証待ち）として残す（手順は
+     `crates/overwatch/skills/continuous-audit/SKILL.md` Step 2/3））。 1ラウンドの結果を鵜呑みにせず、複数ラウンド
      ・複数エージェントを跨いだ収束（同じ問題が繰り返し浮上するか、それとも一度きりで消えるか）
      で確度を判断する——今回の2周の`/code-review`が実際にこの収束パターンを示した
      （1周目19件→2周目は主に1周目の修正の不備7件、新規の完全に独立した発見は少数）。

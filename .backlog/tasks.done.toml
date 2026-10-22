@@ -60339,3 +60339,66 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "ff52201a3a6b1137efd7c9ffa81a3d2a1a64d9c9"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "435702e4"
+title = "condukt rollback/overlap/diff-risk run git in a gitless recorded worktree and act on the enclosing repo"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Follow-up of 4e560a64 (is_dirty and HEAD-read halves fixed in 0.7.277/0.7.284). Remaining paths that run git with a recorded task worktree as cwd and get the ENCLOSING repo's answer when the worktree lost its .git: (A) state rollback restore_checkpoint runs git reset --hard SHA in the worktree, which resets the enclosing repo (observed: parent HEAD moved back, committed file discarded); (B) done-edge runtime_conflict changed_files records the parent's diff (parent_only.rs) as the task changeset and reports NoOverlap; (C) done-edge diffrisk_record worktree_diff classifies the parent's diff (classified-not-high). Repro: crates/condukt/tests/backlog_4e560a64_followup.rs, RED at dc17c435 (test commit on 7e4ce46a)."
+created_at = 1792672089
+updated_at = 1792678977
+weight = 0.0
+issue_number = 1440
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1440"
+issue_closed_at = 1792678980
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_4e560a64_followup"
+rev = "dc17c435ed2f5c7cc12fad9bcbf6cbf5a1a25531"
+observed_at = 1792672089
+detail = """
+exit 101: ltered out; finished in 1.56s
+
+   Compiling condukt v0.7.288 (/Users/yuki/src/.harness-worktrees/probe-4e560a64-followup/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.08s
+     Running tests/backlog_4e560a64_followup.rs (target/debug/deps/backlog_4e560a64_followup-424065cf135fb923)
+error: test failed, to rerun pass `-p condukt --test backlog_4e560a64_followup`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_4e560a64_followup"
+exit = 0
+passed = 3
+rev = "41ebf3b87fe510ec7140c53b9049f838e47ff059"
+observed_at = 1792678950
+output_digest = "sha256:b74945265570dfa83cccdb2514165460677ded2eff16236589258154105d1ff9"
+excerpt = """
+
+running 3 tests
+test rollback_does_not_reset_the_enclosing_repo_of_a_gitless_worktree ... ok
+test overlap_check_of_a_gitless_worktree_is_not_read_from_the_enclosing_repo ... ok
+test diff_risk_of_a_gitless_worktree_is_not_read_from_the_enclosing_repo ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s
+
+   Compiling condukt v0.7.289 (/Users/yuki/src/.harness-worktrees/probe-4e560a64-followup/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.48s
+     Running tests/backlog_4e560a64_followup.rs (target/debug/deps/backlog_4e560a64_followup-becc611c06bfa7cc)
+"""
+
+[task.closure.red]
+rev = "dc17c435ed2f5c7cc12fad9bcbf6cbf5a1a25531"
+exit = 101
+kind = "behavioural"

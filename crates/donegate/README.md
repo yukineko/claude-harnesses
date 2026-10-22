@@ -25,7 +25,12 @@ and reads exit codes — so it can never hit a rate limit.
 
 `donegate gate` is wired to the Claude Code **Stop** hook. On each stop it:
 
-1. reads the hook JSON from stdin (`session_id`, `cwd`, `stop_hook_active`);
+1. reads the hook JSON from stdin (`session_id`, `cwd`, `stop_hook_active`) and
+   resolves the roots to judge: the hook `cwd` plus the git toplevel of every file
+   the session transcript records as written (`harness_core::session_roots`). Checks
+   of every written root run, not only the cwd's. An unresolvable written root, or a
+   session that wrote files while no root declares any check, blocks naming the roots;
+   a session with no recorded writes is unaffected;
 2. loads `./donegate.toml` (or `~/.donegate/config.toml`);
 3. asks `git` which files changed, and selects the checks whose `when_changed`
    globs match (unscoped checks always run);

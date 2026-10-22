@@ -559,6 +559,147 @@ fn allow(tag: &'static str, st: &crate::state::SessionState) -> Decision {
     }
 }
 
+/// The Stop hook's entry point: [`evaluate_roots`] under a path that ends in
+/// `::evaluate(`, the anchor `harness-core/tests/gate_escape_ordering.rs` uses to
+/// check that operator escapes precede the panic-prone verification call.
+pub mod all_roots {
+    pub fn evaluate(
+        cfg: &crate::config::Config,
+        cwd: &std::path::Path,
+        st: &crate::state::SessionState,
+        transcript_path: &str,
+    ) -> super::Decision {
+        super::evaluate_roots(cfg, cwd, st, transcript_path)
+    }
+}
+
+/// Tag of the block raised when the session's written roots cannot be resolved.
+pub const ROOTS_UNDETERMINED_TAG: &str = "session-roots-undetermined";
+/// Tag of the block raised when the session wrote files but nothing was reviewed.
+pub const WROTE_BUT_NOTHING_REVIEWED_TAG: &str = "wrote-but-nothing-reviewed";
+
+fn block_now(reason: String, tag: &'static str, st: &crate::state::SessionState) -> Decision {
+    Decision::Block {
+        reason,
+        tag,
+        files: Vec::new(),
+        attempts: st.attempts,
+        last_hash: st.last_hash.clone(),
+    }
+}
+
+/// [`evaluate`] over every root the session wrote into (hook `cwd` plus the git
+/// toplevel of each written file, see `harness_core::session_roots`), not just
+/// the hook cwd. An undetermined root, or a session that wrote files while
+/// every root reviewed nothing, BLOCKS naming the roots.
+pub fn evaluate_roots(
+    cfg: &Config,
+    cwd: &Path,
+    st: &crate::state::SessionState,
+    transcript_path: &str,
+) -> Decision {
+    use harness_core::verdict::Determination;
+    let sr = match harness_core::session_roots::resolve(cwd, transcript_path) {
+        Determination::Known(sr) => sr,
+        Determination::Undetermined(why) => {
+            return block_now(
+                format!(
+                    "reviewgate: BLOCKED - the session's roots cannot be determined ({}). \
+                     Nothing was reviewed; fix the cause or use `reviewgate skip --reason ...`.",
+                    why.as_str()
+                ),
+                ROOTS_UNDETERMINED_TAG,
+                st,
+            )
+        }
+    };
+    let names = || {
+        sr.roots
+            .iter()
+            .map(|r| r.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut first_allow: Option<Decision> = None;
+    let mut reviewed_something = false;
+    for (i, root) in sr.roots.iter().enumerate() {
+        let root_cfg;
+        let c = if i == 0 {
+            cfg
+        } else {
+            root_cfg = Config::load(root);
+            let bad = root_cfg
+                .load_error
+                .clone()
+                .or_else(|| root_cfg.config_invalid.clone());
+            if let Some(e) = bad {
+                return block_now(
+                    format!(
+                        "reviewgate: BLOCKED - config of root {} is unusable ({e}); roots \
+                         judged: {}",
+                        root.display(),
+                        names()
+                    ),
+                    ROOTS_UNDETERMINED_TAG,
+                    st,
+                );
+            }
+            &root_cfg
+        };
+        if !c.enabled || c.mode == Mode::Off {
+            // Explicitly disabled root: a real opt-out, not an empty review.
+            reviewed_something = true;
+            continue;
+        }
+        match evaluate(c, root, st, transcript_path) {
+            Decision::Block {
+                reason,
+                tag,
+                files,
+                attempts,
+                last_hash,
+            } => {
+                let reason = if sr.roots.len() > 1 {
+                    format!("[root: {}]\n{reason}", root.display())
+                } else {
+                    reason
+                };
+                return Decision::Block {
+                    reason,
+                    tag,
+                    files,
+                    attempts,
+                    last_hash,
+                };
+            }
+            d @ Decision::Allow { tag, .. } => {
+                if tag != "no-reviewable-changes" && tag != "no-git" {
+                    reviewed_something = true;
+                }
+                if first_allow.is_none() {
+                    first_allow = Some(d);
+                }
+            }
+        }
+    }
+    // Only when the session wrote into a root other than the hook cwd: with the
+    // cwd as the sole root, an edit that leaves nothing reviewable is the
+    // long-standing allow (tests/session_scope_own.rs).
+    if sr.roots.len() > 1 && sr.wrote_any && !reviewed_something {
+        return block_now(
+            format!(
+                "reviewgate: BLOCKED - the session wrote files but no review set was produced \
+                 for any root, so nothing was reviewed (an empty review is not a clean one). \
+                 Roots judged: {}. Use `reviewgate skip --reason ...` if this is intended.",
+                names()
+            ),
+            WROTE_BUT_NOTHING_REVIEWED_TAG,
+            st,
+        );
+    }
+    first_allow.unwrap_or_else(|| allow("no-roots", st))
+}
+
 /// The diff was truncated to fit `max_diff_bytes`, so its tail is unreviewed.
 /// Fail *closed* (but bounded): block the stop with a loud, escapable reason for
 /// up to `max_attempts` consecutive stops (giving the agent a chance to split the

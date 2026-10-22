@@ -1004,6 +1004,11 @@ class TestBudgetCheck(unittest.TestCase):
         except Exception:
             return f"<no verdict; stdout={r.stdout!r} stderr={r.stderr!r}>"
 
+    def test_claim_budget_frontmatter_allows_budgetguard(self):
+        fm = skill_text().split("---")[1]
+        line = next(l for l in fm.splitlines() if l.startswith("allowed-tools:"))
+        self.assertIn("Bash(budgetguard:*)", line)
+
     def test_claim_budget_over_is_nonzero(self):
         r = self._run(self.CFG, self._today_ledger(10.0))
         self.assertEqual(self._verdict(r), "over", r)

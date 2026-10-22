@@ -299,6 +299,54 @@ class T(unittest.TestCase):
                    input=json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": sess}))
         self.assertNotIn("/flow", r.stdout + r.stderr)
 
+    # ------------------------------------------------------------- frontmatter
+    def test_claim_frontmatter_declares_args_and_tools(self):
+        fm = frontmatter()
+        self.assertEqual(fm["name"], "flow")
+        self.assertIn("argument-hint", fm)
+        self.assertIn("$ARGUMENTS", skill_text())
+        at = allowed_tools()
+        for t in ("Task", "AskUserQuestion", "Bash(backlog:*)", "Bash(compass:*)", "Bash(condukt:*)",
+                  "Bash(fugu-router:*)", "Bash(hypothesis:*)", "Bash(overwatch:*)"):
+            self.assertIn(t, at)
+        cfm = frontmatter(CONDUKT_SKILL)
+        self.assertEqual(cfm["name"], "condukt")
+        self.assertTrue(CONDUKT_SKILL.exists())
+        # the skill's own Step-0 / carve / Task prose is present
+        t = skill_text()
+        self.assertIn("`$ARGUMENTS` に課題文があれば Step 3（その課題文で condukt 実行）へ直行せよ", t)
+        self.assertIn("`/condukt` は `Task` ツールで非同期起動すること", t)
+        self.assertIn("`AskUserQuestion`「続行 / 中止」", t)
+        self.assertIn("この carve 中の `AskUserQuestion` を省いてはならない", t)
+
+    @staticmethod
+    def _invoked_binaries():
+        """Binaries invoked as commands in the skill's fenced bash blocks."""
+        names = ["backlog", "compass", "condukt", "fugu-router", "hypothesis", "overwatch",
+                 "specguard", "specforge", "jq", "printf", "git"]
+        found = set()
+        for lang, body, _ in fences(skill_text()):
+            if lang != "bash":
+                continue
+            for raw in body.splitlines():
+                line = raw.split("  #")[0]
+                if line.lstrip().startswith("#"):
+                    continue
+                for n in names:
+                    if re.search(rf"(^|[\s(|;&`]|\$\()({re.escape(n)})\s", line + " "):
+                        found.add(n)
+        return found
+
+    def test_claim_frontmatter_every_invoked_binary_allowed(self):
+        """Every binary the fenced bash blocks invoke must be granted by allowed-tools."""
+        at = allowed_tools()
+        granted = {re.match(r"Bash\(([^:)]+)", t).group(1) for t in at if t.startswith("Bash(")}
+        invoked = self._invoked_binaries()
+        for n in ("backlog", "compass", "condukt", "fugu-router", "hypothesis", "overwatch"):
+            self.assertIn(n, invoked)
+        missing = invoked - granted
+        self.assertEqual(missing, set(), f"invoked but not granted: {sorted(missing)}")
+
     # ---------------------------------------------- autonomy_unknown_subcommand
     def test_claim_autonomy_unknown_subcommand_never_exits_zero(self):
         sb = self.sb

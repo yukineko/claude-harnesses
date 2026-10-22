@@ -1,7 +1,7 @@
 {
   "name": "schemaguard",
-  "version": "0.1.23",
-  "description": "Schema-validation gate for LLM structured outputs at source→executor boundaries: validates named declared schemas, emits structured errors for one re-ask, and counts rejects to metrics so silent drops become observable. Subscription-native (one bundled Rust binary, no API key).",
+  "version": "0.1.24",
+  "description": "Schema-validation gate for LLM structured outputs: validates a JSON value against a named declared schema (such as verdict or undetermined-probe) and emits structured errors for one re-ask.",
   "author": {
     "name": "yukineko"
   },

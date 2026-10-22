@@ -1,9 +1,9 @@
 [package]
 rust-version.workspace = true
 name = "blastguard"
-version = "0.2.147"
+version = "0.2.148"
 edition = "2021"
-description = "PreToolUse hook that denies project-destroying Bash commands and file operations. Self-contained, subscription-native."
+description = "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary."
 license = "MIT"
 
 [[bin]]

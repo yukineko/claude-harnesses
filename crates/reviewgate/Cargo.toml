@@ -1,9 +1,9 @@
 [package]
 rust-version.workspace = true
 name = "reviewgate"
-version = "0.1.51"
+version = "0.1.52"
 edition = "2021"
-description = "Code-review gate for Claude Code. On Stop it reviews the diff before the agent can declare done: either by injecting a review rubric for the running agent to self-review (no API key), or by spawning an independent reviewer command. Findings are fed back for a fix loop."
+description = "Code-review gate for Claude Code whose Stop hook defaults to off; opt in to inject a review rubric for self-review or to spawn an independent reviewer command."
 license = "MIT"
 
 [[bin]]

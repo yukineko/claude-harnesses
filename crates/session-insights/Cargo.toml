@@ -1,9 +1,9 @@
 [package]
 rust-version.workspace = true
 name = "session-insights"
-version = "0.2.36"
+version = "0.2.37"
 edition = "2021"
-description = "Per-session work metrics for Claude Code. PostToolUse + Stop hooks roll up tool calls, turns, files touched, a size class (XS–XL) and a work category per session, with an optional dated session log written to an Obsidian vault."
+description = "Per-session work metrics for Claude Code: PostToolUse and Stop hooks roll up tool calls, turns, files touched, a size class and a work category, with optional Obsidian session logs."
 license = "MIT"
 
 [[bin]]

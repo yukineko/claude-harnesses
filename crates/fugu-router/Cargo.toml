@@ -2,9 +2,9 @@
 rust-version.workspace = true
 license.workspace = true
 name = "fugu-router"
-version = "0.1.51"
+version = "0.1.52"
 edition = "2021"
-description = "fugu-style per-model routing for Claude Code orchestration. Learns from past task outcomes (which Claude tier passed verification, at what cost) via lexical k-NN over a local JSONL episode store and picks the cheapest tier that historically clears similar work; feeds condukt's suggested_model. No API key, no embedding service."
+description = "Per-model routing for Claude Code orchestration: learns from past task outcomes via a local episode store and suggests the cheapest model tier that historically cleared similar work."
 
 [[bin]]
 name = "fugu-router"

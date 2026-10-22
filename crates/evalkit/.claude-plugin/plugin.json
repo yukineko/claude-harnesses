@@ -1,7 +1,7 @@
 {
   "name": "evalkit",
-  "version": "0.1.13",
-  "description": "Offline golden-regression eval harness for Claude Code plugins: read golden *.jsonl cases (file-content or CLI-output assertions) and exit non-zero when a prompt edit or CLI contract regresses. The offline sibling of condukt's online verifier — runnable as a CI gate with no API key. Subscription-native (one bundled Rust binary).",
+  "version": "0.1.14",
+  "description": "Offline golden-regression eval harness for Claude Code plugins: reads golden JSONL cases and exits non-zero when a prompt edit or CLI contract regresses, with no API key.",
   "author": {
     "name": "yukineko"
   },

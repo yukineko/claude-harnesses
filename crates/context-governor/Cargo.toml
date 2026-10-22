@@ -1,10 +1,10 @@
 [package]
 name = "context-governor"
-version = "0.1.23"
+version = "0.1.24"
 edition = "2021"
 rust-version.workspace = true
 license = "MIT"
-description = "A thin control layer around Claude Code's built-in compaction: pin + lossless-recall + retrieval + tool-hygiene, wired as a single hook-dispatch binary. Separates the three axes it touches — size (window occupancy), cost (recompute/cache), correctness (norm preservation) — and never writes its own lossy summarizer (compression is delegated to built-in compaction). Subscription-native (hooks + binary, no API key)."
+description = "Thin control layer around Claude Code's built-in compaction: pinning, lossless recall, retrieval and tool-result hygiene, wired as a single hook-dispatch binary."
 repository = "https://github.com/yukineko/context-governor"
 
 # A library target so the acceptance/property tests in `tests/` can import the

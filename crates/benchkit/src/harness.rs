@@ -19,7 +19,7 @@
 //!     [`RealExecSource`] that shells out (git clone / git apply / pytest,
 //!     matching the `download` house pattern) and is reached *only* via
 //!     `benchkit run-instance --real`. Tests reach it only through the binary
-//!     with fake git / python first on PATH (tests/prose_claims.rs).
+//!     with fake git / python first on PATH (tests/cli_contract.rs).
 
 use std::collections::BTreeMap;
 

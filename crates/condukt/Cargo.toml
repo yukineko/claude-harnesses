@@ -1,10 +1,10 @@
 [package]
 rust-version.workspace = true
 name = "condukt"
-version = "0.7.289"
+version = "0.7.290"
 edition = "2021"
 license = "MIT"
-description = "Deterministic orchestration engine for Claude Code: schedule parallel/serial task batches by file-conflict analysis, manage git worktree lifecycle, track run state and gate completion. Subscription-native (skill + agents + hooks, no API key)."
+description = "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion."
 repository = "https://github.com/yukineko/condukt"
 
 [[bin]]

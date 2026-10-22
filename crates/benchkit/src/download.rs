@@ -3,7 +3,7 @@
 //! Fetches the SWE-bench Verified split (princeton-nlp/SWE-bench_Verified on
 //! HuggingFace) into a local cache file. NOTE: the bytes are written verbatim --
 //! the upstream file is a `.parquet`, and nothing converts it to the JSONL shape
-//! `load` reads (pinned by tests/prose_claims.rs::claim_download_shape).
+//! `load` reads (pinned by tests/cli_contract.rs::claim_download_shape).
 //! Following the beacon house
 //! pattern, network I/O shells out to `curl` rather than linking an HTTP stack,
 //! keeping the bundled binary tiny.
@@ -11,7 +11,7 @@
 //! Two invariants matter:
 //!   * **Gated** — the network path is reached *only* when `benchkit download`
 //!     is explicitly invoked. Under `cargo test` it runs only through the binary
-//!     with a FAKE `curl` first on PATH (tests/prose_claims.rs), never the real
+//!     with a FAKE `curl` first on PATH (tests/cli_contract.rs), never the real
 //!     network; the loader and model are the deterministic, offline core.
 //!   * **Idempotent** — if the cache file already exists it is a no-op (unless
 //!     `--force`), so re-running is cheap and safe.

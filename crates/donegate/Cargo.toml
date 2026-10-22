@@ -1,9 +1,9 @@
 [package]
 rust-version.workspace = true
 name = "donegate"
-version = "0.1.41"
+version = "0.1.42"
 edition = "2021"
-description = "Completion-verification gate for Claude Code. On Stop it runs your acceptance commands as subprocesses; the agent can't declare done until every applicable check is green. Failures are fed back for an auto-fix loop."
+description = "Completion-verification gate for Claude Code: on Stop it runs your acceptance commands and blocks until every applicable check is green, feeding failures back for an auto-fix loop."
 license = "MIT"
 
 [[bin]]

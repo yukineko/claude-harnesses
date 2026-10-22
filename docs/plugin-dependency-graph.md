@@ -141,7 +141,7 @@ main execution path, so they are excluded from the mermaid picture above:
   move (`crates/condukt/skills/condukt/SKILL.md:199` "COMPASS_GAP=$(compass gap"). Combined with the forward
   `compass --> condukt` handoff, this forms a **2-cycle `condukt ↔ compass`**.
 - **`condukt -.-> backlog`** — Phase 0-next reads it at
-  `crates/condukt/skills/condukt/SKILL.md:196` "BACKLOG=$(backlog next)" [test: crates/condukt/tests/skill_phase0_next_uses_backlog_next.rs::phase0_next_picks_work_with_backlog_next_and_keeps_errors].
+  `crates/condukt/skills/condukt/SKILL.md:196` "BACKLOG=$(backlog next)".
 - **`condukt -.-> hypothesis`** — Phase 1 injects open hypotheses and Phase 8
   transitions `linked_hypotheses` to `awaiting-measurement`
   (`SKILL.md:155-162`, `SKILL.md:603-620`). Combined with `hypothesis -.-> compass`

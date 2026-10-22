@@ -112,10 +112,16 @@ pub(crate) fn repo_sensitive_config() -> SensitiveConfig {
 /// the branch *added* since it forked from `base` (the merge-base), not
 /// unrelated commits that landed on `base` in the meantime — the same shape a
 /// reviewer sees for the pending merge.
+///
+/// Also `None` when `worktree` is not the top of its own git worktree (its
+/// `.git` is gone; backlog 4e560a64 follow-up): git there would diff the
+/// ENCLOSING repository and that diff would be classified as the task's. The
+/// caller journals `None` as `no-diff`, i.e. not inspected.
 fn worktree_diff(worktree: &Path, base: &str) -> Option<String> {
     if !worktree.exists() {
         return None;
     }
+    crate::worktree::ensure_own_worktree(worktree).ok()?;
     // `<base>...HEAD` diffs against the merge-base; fall back to a plain
     // working-tree diff if the symmetric form fails (e.g. base ref unknown in
     // this worktree), so an uncommitted-but-real change is still inspected.

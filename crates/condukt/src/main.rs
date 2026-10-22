@@ -5964,6 +5964,17 @@ fn restore_checkpoint(
         if let (Some(wt), Some(sha)) = (t.worktree.as_deref(), cp.branch_shas.get(&t.id)) {
             let wt_path = Path::new(wt);
             if wt_path.exists() {
+                // A recorded worktree that lost its `.git` would have `git
+                // reset --hard` walk up and reset the ENCLOSING repository
+                // (backlog 4e560a64 follow-up). Refuse it, loudly.
+                if let Err(e) = worktree::ensure_own_worktree(wt_path) {
+                    eprintln!(
+                        "rollback: git reset REFUSED for task '{}': {e:#}; its worktree was \
+                         NOT restored",
+                        t.id
+                    );
+                    continue;
+                }
                 if let Err(e) = worktree::git(wt_path, &["reset", "--hard", sha]) {
                     eprintln!("rollback: git reset skipped for task '{}': {e:#}", t.id);
                 }

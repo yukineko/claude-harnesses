@@ -26,7 +26,9 @@
 //! registered and no hold is set.
 //!
 //! A changed-file listing that `git` could NOT produce (every diff fallback
-//! failed) is NOT an empty diff: the task's changes are unknown, so its overlap
+//! failed, or the worktree is not the top of its own git worktree so git would
+//! answer about an enclosing repository) is NOT an empty diff: the task's
+//! changes are unknown, so its overlap
 //! with in-flight peers is undetermined. It is handled like an unchecked
 //! overlap (backlog 79458be4): nothing is registered (there is no file set to
 //! register) but the `<task_key>/runtime-overlap-unchecked` merge-hold is
@@ -75,7 +77,16 @@ use std::path::Path;
 /// later-moving default branch does not shift the comparison. Falls back to the
 /// default-branch NAME when the merge-base can't be resolved (still a valid
 /// three-dot spec, just not frozen). Best-effort; `None` only when neither works.
+///
+/// A worktree that is not the top of its own git worktree (its `.git` is gone;
+/// backlog 4e560a64 follow-up) gets the default-branch NAME without asking git:
+/// git there would answer about the ENCLOSING repository, and returning `None`
+/// would turn the check into a silent `NotRecorded`. [`changed_files`] then
+/// refuses the same worktree, so the overlap is held as unchecked.
 fn frozen_base(worktree: &Path, default_branch: &str) -> Option<String> {
+    if worktree.exists() && crate::worktree::ensure_own_worktree(worktree).is_err() {
+        return Some(default_branch.to_string());
+    }
     if let Ok(sha) = crate::worktree::git(worktree, &["merge-base", "HEAD", default_branch]) {
         let sha = sha.trim().to_string();
         if !sha.is_empty() {
@@ -107,6 +118,12 @@ fn head_sha(worktree: &Path) -> String {
 fn changed_files(worktree: &Path, base: &str) -> ChangedFiles {
     if !worktree.exists() {
         return ChangedFiles::Absent;
+    }
+    // A directory that is not the top of its own git worktree would have git
+    // walk up and list the ENCLOSING repository's changes as this task's
+    // (backlog 4e560a64 follow-up): the task's changed set is unknown.
+    if let Err(e) = crate::worktree::ensure_own_worktree(worktree) {
+        return ChangedFiles::Undetermined(format!("{e:#}"));
     }
     let spec = format!("{base}...HEAD");
     let out = crate::worktree::git(worktree, &["diff", "--name-only", &spec])
@@ -142,6 +159,9 @@ fn hold_branch(task: &TaskState, worktree: &Path) -> Option<String> {
             return Some(b.to_string());
         }
     }
+    // Never derive the branch from a directory that is not its own worktree
+    // top: git would name the ENCLOSING repository's checked-out branch.
+    crate::worktree::ensure_own_worktree(worktree).ok()?;
     crate::worktree::git(worktree, &["symbolic-ref", "--short", "-q", "HEAD"])
         .ok()
         .map(|s| s.trim().to_string())

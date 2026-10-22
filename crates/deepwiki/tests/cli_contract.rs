@@ -208,6 +208,24 @@ fn claim_root_flag() {
 }
 
 #[test]
+fn claim_writer_agent_file() {
+    let t = std::fs::read_to_string(manifest().join("agents/deepwiki-writer.md"))
+        .expect("agent file exists");
+    let rest = t.strip_prefix("---\n").expect("front matter");
+    let (fm, _) = rest.split_once("\n---\n").expect("front matter end");
+    assert!(fm.lines().any(|l| l == "name: deepwiki-writer"), "{fm}");
+    let tools = fm
+        .lines()
+        .find_map(|l| l.strip_prefix("tools:"))
+        .expect("tools line");
+    assert!(tools.split(',').any(|x| x.trim() == "Write"), "{tools}");
+    assert!(
+        t.contains("Write/Edit the pages under `.deepwiki/`."),
+        "agent body must instruct writing pages under .deepwiki/"
+    );
+}
+
+#[test]
 fn claim_launcher_tracked_bins_ignored() {
     let m = manifest();
     let home = tempfile::tempdir().unwrap();

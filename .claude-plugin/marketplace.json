@@ -557,7 +557,7 @@
     {
       "name": "reviewgate",
       "description": "Code-review gate for Claude Code whose Stop hook defaults to off; opt in to inject a review rubric for self-review or to spawn an independent reviewer command.",
-      "version": "0.1.53",
+      "version": "0.1.54",
       "category": "quality",
       "keywords": [
         "hooks",

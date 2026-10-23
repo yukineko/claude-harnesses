@@ -319,6 +319,47 @@ fn claim_hooks_one_stop() {
     assert!(check_hooks_one_stop(&two).is_err());
 }
 
+/// `Some(tools line)` from YAML-ish front matter.
+fn frontmatter_tools(md: &str) -> Option<String> {
+    let mut lines = md.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    for l in lines {
+        if l.trim() == "---" {
+            return None;
+        }
+        if let Some(rest) = l.strip_prefix("tools:") {
+            return Some(rest.trim().to_string());
+        }
+    }
+    None
+}
+
+fn tools_have_no_write(tools: &str) -> bool {
+    !tools
+        .split(',')
+        .map(str::trim)
+        .any(|t| matches!(t, "Edit" | "Write" | "NotebookEdit" | "MultiEdit"))
+}
+
+#[test]
+fn claim_typing_agent_readonly() {
+    let md = crate_file("agents/reviewgate-typing.md");
+    let tools = frontmatter_tools(&md).expect("front matter has a tools: line");
+    assert!(
+        tools_have_no_write(&tools),
+        "tools must not include Edit/Write/NotebookEdit; tools = {tools:?}"
+    );
+    assert!(tools.contains("Read"), "tools = {tools:?}");
+    // The agent is scoped to type-checker use + determinism.
+    assert!(md.contains("型検査") && md.contains("決定性"));
+    // RED control: a mutated tools line is rejected.
+    assert!(!tools_have_no_write("Read, Grep, Edit"));
+    assert!(!tools_have_no_write("Read, Write"));
+    assert!(!tools_have_no_write("Read, NotebookEdit"));
+}
+
 #[test]
 fn claim_review_hook_does_not_invoke_agent() {
     let needle = "reviewgate-typing";

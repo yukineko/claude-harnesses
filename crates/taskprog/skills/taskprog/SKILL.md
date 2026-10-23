@@ -9,9 +9,9 @@ allowed-tools: Bash(taskprog:*), Read, Write
 - 箇条書きのみで書くこと。
 - 完了・残・ブロッカーの3セクションを必ず書き、空なら "(none)" と書くこと。
 
-1) 現在の進捗ファイルを `taskprog show` で確認すること [test: crates/taskprog/tests/prose_claims.rs::claim_show_prints_file]。
+1) 現在の進捗ファイルを `taskprog show` で確認すること。
 2) このセッションで完了したタスク・残タスク・ブロッカーを把握すること。
-3) 以下の構造で `.claude/progress.md`（プロジェクトルート直下）を Write ツールで書き込むこと [test: crates/taskprog/src/config.rs::a_subdirectory_cwd_anchors_at_the_project_root]。
+3) 以下の構造で `.claude/progress.md`（プロジェクトルート直下）を Write ツールで書き込むこと。
 
 ```markdown
 # Progress
@@ -31,6 +31,6 @@ Updated: <date>
 - <context for next session>
 ```
 
-4) 書き込み後、`taskprog show` で確認すること [test: crates/taskprog/tests/prose_claims.rs::claim_show_prints_file]。
+4) 書き込み後、`taskprog show` で確認すること。
 
-`--reset` が渡されたら、進捗ファイルを空にしてから書き直すこと [test: crates/taskprog/tests/prose_claims.rs::claim_skill_reset_arg]。
+`--reset` が渡されたら、進捗ファイルを空にしてから書き直すこと。

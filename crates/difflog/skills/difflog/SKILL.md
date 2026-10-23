@@ -9,7 +9,7 @@ allowed-tools: Bash(difflog:*), Read
 
 ログが見つからない場合はナラティブを作らず、ログが無いことを報告すること。
 
-1. `difflog last` で直近のログを取得（引数に `--session <id>` があれば `difflog list` から探す）[test: crates/difflog/tests/prose_claims.rs::claim_last_prints_newest] [test: crates/difflog/tests/prose_claims.rs::claim_list_newest_first_limit] [test: crates/difflog/tests/prose_claims.rs::claim_skill_session_arg]。
+1. `difflog last` で直近のログを取得（引数に `--session <id>` があれば `difflog list` から探す）。
 2. ログに **Commits / Files changed / Stat / Diff** セクションがあれば、それを読むこと。
 3. 日本語・エンジニア向けに、以下の構造でナラティブを出力すること。
 

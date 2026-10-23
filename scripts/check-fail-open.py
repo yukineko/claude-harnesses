@@ -447,25 +447,60 @@ def _block_yields_empty(code: list[str], idx: int) -> bool:
     undetermined state to the caller instead of erasing it, so it is not an
     empty fallback. Only a mutation of an `undetermined`-named binding counts;
     logging `why` does not. Still lexical: whether the caller then READS that
-    list is not traced here."""
+    list is not traced here.
+
+    Call arguments are not the arm's value (backlog 9d1f3885): a line inside an
+    open parenthesis whose opener is a CALL (`give_up(`, `self.f(`, `f::<T>(`,
+    `format!(` — a lower-case or `_` callee, or a turbofish) is an argument to
+    that call, so `return self.give_up(req,\n None,\n why)` forwards `why` and
+    is not an empty fallback. A line inside a CONSTRUCTOR paren (`Ok(`,
+    `Some(` — an upper-case callee), a tuple `(` or an array `[` still counts:
+    its value is what the arm yields."""
     depth = 1
     yields_empty = False
     records = False
+    groups: list[str] = []  # open ( / [ kinds: "call" or "value"
     for j in range(idx + 1, min(len(code), idx + 1 + ARM_BLOCK_WINDOW)):
         body = code[j]
-        if depth == 1:
+        if depth == 1 and "call" not in groups:
             if RS_EMPTY_VALUE_LINE.match(body):
                 yields_empty = True
             if RS_RECORDS_UNDETERMINED.search(body):
                 records = True
-        for ch in _strip_for_braces(body):
+        stripped = _strip_for_braces(body)
+        for k, ch in enumerate(stripped):
             if ch == "{":
                 depth += 1
             elif ch == "}":
                 depth -= 1
+            elif ch == "(":
+                groups.append(_paren_kind(stripped[:k]))
+            elif ch == "[":
+                groups.append("value")
+            elif ch in ")]" and groups:
+                groups.pop()
         if depth <= 0:
             break
     return yields_empty and not records
+
+
+def _paren_kind(before: str) -> str:
+    """Classify the `(` that follows `before`: "call" when it is a function,
+    method or macro call (a lower-case or `_` callee, `name!`, or a turbofish
+    `>`), "value" for a constructor (an upper-case callee such as `Ok`/`Some`)
+    or a bare tuple/grouping paren."""
+    m = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*(!?)\s*$", before)
+    if m:
+        name = m.group(1)
+        if m.group(2) or name[0].islower() or name[0] == "_":
+            # Keywords before a paren open a grouping, not a call.
+            if name in {"return", "in", "if", "while", "match", "else", "move", "let", "mut"}:
+                return "value"
+            return "call"
+        return "value"
+    if before.rstrip().endswith(">"):
+        return "call"
+    return "value"
 
 
 def _prev_code_line(code: list[str], idx: int) -> str:

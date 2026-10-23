@@ -9,6 +9,16 @@ ledger in the common git dir. This script is the ledger's consumer.
 
     python3 scripts/gate-bypass.py            # human-readable status
     python3 scripts/gate-bypass.py --json
+    python3 scripts/gate-bypass.py --push LOCAL REMOTE [--push ...]   # pre-push
+
+With `--push` (one per pre-push stdin line), only entries whose commit THIS
+push carries are outstanding: reachable from a pushed LOCAL tip and not from
+its REMOTE sha (an all-zero REMOTE, a new remote ref, excludes nothing). Other
+present entries are listed as "not in this push" and do not block it (user
+ruling 2026-10-22 「ゲートを直す」: a841ad3c, ungated and living only on another
+session's branch, blocked `git push origin main`). A REMOTE object unknown to
+this repository, or any failing ancestry check, is undetermined (exit 2).
+Without `--push` the status form below applies.
 
 Exit codes (fail-closed: "cannot determine" resolves to the restricted side)
 
@@ -25,8 +35,8 @@ The ledger is cleared by a pre-commit run that goes green, not by this script �
 and only by a run over a non-empty staged diff, and only for entries whose
 commit is an ancestor of the HEAD that run judged (backlog c767cb47).
 
-An entry whose commit is reachable from no ref, no worktree HEAD and no
-`--pushing` tip (e.g. the pre-rebase original that survives only in a reflog)
+In the status form, an entry whose commit is reachable from no ref and no
+worktree HEAD (e.g. the pre-rebase original that survives only in a reflog)
 cannot leave this machine, and no pre-commit run can ever clear it. It is
 listed as "unreachable" and does not count as outstanding; it is never removed
 from the ledger, and it blocks again the moment anything makes it reachable.
@@ -198,8 +208,8 @@ def object_is_missing(repo: Path | None, sha: str, full_len: int) -> bool:
 
 
 def is_reachable(repo: Path | None, sha: str, tips: list[str]) -> bool:
-    """True if the PRESENT commit `sha` is contained in some ref, a worktree
-    HEAD, or a pushed tip (call `object_is_missing` first).
+    """True if the PRESENT commit `sha` is contained in some ref or one of
+    `tips` (the worktree HEADs; call `object_is_missing` first).
 
     Raises Undetermined when that cannot be established (a git call that
     fails): an entry we cannot place is never treated as unreachable (backlog
@@ -213,24 +223,76 @@ def is_reachable(repo: Path | None, sha: str, tips: list[str]) -> bool:
         )
     if refs.stdout.strip():
         return True
-    for tip in tips:
-        anc = _git(repo, ["merge-base", "--is-ancestor", sha, tip])
-        if anc.returncode == 0:
-            return True
-        if anc.returncode != 1:
-            raise Undetermined(
-                "`git merge-base --is-ancestor %s %s` exited %d: %s"
-                % (sha, tip, anc.returncode, anc.stderr.strip() or "(no stderr)")
-            )
-    return False
+    return any(_is_ancestor(repo, sha, tip) for tip in tips)
+
+
+ZERO_OID_CHARS = frozenset("0")
+
+
+def _is_ancestor(repo: Path | None, sha: str, tip: str) -> bool:
+    """`git merge-base --is-ancestor`: exit 0 is yes, 1 is no, anything else
+    (an unknown object, a failing git) is Undetermined."""
+    anc = _git(repo, ["merge-base", "--is-ancestor", sha, tip])
+    if anc.returncode == 0:
+        return True
+    if anc.returncode == 1:
+        return False
+    raise Undetermined(
+        "`git merge-base --is-ancestor %s %s` exited %d: %s"
+        % (sha, tip, anc.returncode, anc.stderr.strip() or "(no stderr)")
+    )
+
+
+def in_pushed_range(repo: Path | None, sha: str, local: str, remote: str) -> bool:
+    """True if the push of `local` over `remote` carries commit `sha`: `sha` is
+    reachable from `local` and not from `remote`.
+
+    An all-zero `remote` (the remote ref does not exist yet) excludes nothing,
+    so every ancestor of `local` counts as carried (the restrictive reading).
+    A `remote` object this repository does not have, or any failing git call,
+    is Undetermined — never "not carried".
+    """
+    if not _is_ancestor(repo, sha, local):
+        return False
+    if not remote or set(remote) <= ZERO_OID_CHARS:
+        return True
+    return not _is_ancestor(repo, sha, remote)
+
+
+def split_for_push(
+    repo: Path | None, entries: list[dict[str, str]], pushes: list[list[str]]
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+    """Partition entries into (outstanding, unreachable, not_in_push) for a
+    push of the given (local, remote) pairs.
+
+    Only an entry whose commit this push carries is outstanding (user ruling
+    2026-10-22: an ungated commit on another branch, not in the pushed range,
+    blocked `git push origin main`). A definitively missing object is
+    unreachable, as in `split_unreachable`. Anything that cannot be placed
+    raises Undetermined.
+    """
+    if not entries:
+        return [], [], []
+    full_len = object_id_length(repo)
+    outstanding, unreachable, not_in_push = [], [], []
+    for e in entries:
+        sha = e["commit"]
+        if object_is_missing(repo, sha, full_len):
+            unreachable.append(e)
+        elif any(in_pushed_range(repo, sha, lo, rm) for lo, rm in pushes):
+            outstanding.append(e)
+        else:
+            not_in_push.append(e)
+    return outstanding, unreachable, not_in_push
 
 
 def split_unreachable(
-    repo: Path | None, entries: list[dict[str, str]], pushing: list[str]
+    repo: Path | None, entries: list[dict[str, str]]
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    """Partition entries into (outstanding, unreachable).
+    """Partition entries into (outstanding, unreachable) when no push is being
+    judged (the status form, invoked without `--push`).
 
-    A commit reachable from no ref, no worktree HEAD and no tip being pushed
+    A commit reachable from no ref and no worktree HEAD
     cannot leave this machine, and no pre-commit run can ever clear it (it is
     an ancestor of no HEAD). It is reported, never deleted, and does not block.
     A commit whose object is definitively missing is unreachable too (user
@@ -239,7 +301,7 @@ def split_unreachable(
     if not entries:
         return [], []
     full_len = object_id_length(repo)
-    tips = head_tips(repo) + list(pushing)
+    tips = head_tips(repo)
     outstanding, unreachable = [], []
     for e in entries:
         sha = e["commit"]
@@ -255,17 +317,26 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--repo", type=Path, default=None)
     ap.add_argument("--json", action="store_true")
     ap.add_argument(
-        "--pushing",
+        "--push",
+        nargs=2,
         action="append",
         default=[],
-        help="a local sha being pushed; an entry it contains is outstanding even if no ref holds it",
+        metavar=("LOCAL", "REMOTE"),
+        help="a pushed (local sha, remote sha) pair from pre-push stdin; when "
+        "given, only entries this push carries are outstanding",
     )
     args = ap.parse_args(argv[1:])
 
+    not_in_push: list[dict[str, str]] = []
     try:
         ledger = common_git_dir(args.repo) / "gate-bypassed"
         entries = read_ledger(ledger)
-        entries, unreachable = split_unreachable(args.repo, entries, args.pushing)
+        if args.push:
+            entries, unreachable, not_in_push = split_for_push(
+                args.repo, entries, args.push
+            )
+        else:
+            entries, unreachable = split_unreachable(args.repo, entries)
     except Undetermined as exc:
         if args.json:
             print(json.dumps({"verdict": "undetermined", "reason": str(exc)}))
@@ -286,6 +357,7 @@ def main(argv: list[str]) -> int:
                     "ledger": str(ledger),
                     "entries": entries,
                     "unreachable": unreachable,
+                    "not_in_push": not_in_push,
                 },
                 ensure_ascii=False,
             )
@@ -294,12 +366,24 @@ def main(argv: list[str]) -> int:
 
     if unreachable:
         print(
-            "gate-bypass: %d ledger entr%s for commits reachable from no ref,\n"
-            "worktree HEAD or pushed tip, or absent from the object store\n"
+            "gate-bypass: %d ledger entr%s for commits reachable from no ref\n"
+            "or worktree HEAD, or absent from the object store\n"
             "(unreachable; cannot be pushed, kept in the ledger, not blocking):" % (len(unreachable), "y" if len(unreachable) == 1 else "ies"),
             file=sys.stderr,
         )
         for e in unreachable:
+            print("  %s  %s" % (e["commit"][:12], e["subject"]), file=sys.stderr)
+        print("", file=sys.stderr)
+
+    if not_in_push:
+        print(
+            "gate-bypass: %d ledger entr%s for commits this push does not carry\n"
+            "(not reachable from a pushed tip, or already on the remote ref;\n"
+            "kept in the ledger, not blocking this push):"
+            % (len(not_in_push), "y" if len(not_in_push) == 1 else "ies"),
+            file=sys.stderr,
+        )
+        for e in not_in_push:
             print("  %s  %s" % (e["commit"][:12], e["subject"]), file=sys.stderr)
         print("", file=sys.stderr)
 

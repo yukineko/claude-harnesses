@@ -81,7 +81,6 @@ class MutationGateThresholdOrder(unittest.TestCase):
         rc, calls, out = run_gate("0.80")
         self.assertTrue(ran_mutants(calls), "control: shim log must record the run: %r" % calls)
 
-    @unittest.expectedFailure
     def test_invalid_threshold_is_rejected_before_cargo_mutants_runs(self):
         rc, calls, out = run_gate("0")
         self.assertNotEqual(rc, 0, out)

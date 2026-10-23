@@ -3,7 +3,7 @@
 //! Idempotent: existing reviewgate groups are stripped before re-adding, so
 //! running install twice is safe. The file is backed up before any write.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 #[cfg(test)]
@@ -14,11 +14,21 @@ const SUB: &str = "review";
 /// Generous timeout — subprocess mode runs a full reviewer pass.
 const TIMEOUT_SECS: u64 = 600;
 
-fn settings_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claude")
-        .join("settings.json")
+/// `~/.claude/settings.json`, with home resolved by the shared
+/// [`harness_core::config::home`] policy. An undeterminable home (on unix:
+/// `$HOME` unset or empty) is an error (backlog 12657c5e): falling back to
+/// `./` wrote `./.claude/settings.json` under the cwd, where Claude Code never
+/// reads it, and still reported "Installed Stop hook".
+fn settings_path() -> Result<PathBuf> {
+    let home = harness_core::config::home();
+    if home == Path::new(harness_core::config::UNDETERMINED_HOME) {
+        anyhow::bail!(
+            "cannot determine the home directory ($HOME is unset or empty), so the \
+             location of ~/.claude/settings.json is unknown; refusing to write \
+             anything. Set HOME and re-run."
+        );
+    }
+    Ok(home.join(".claude").join("settings.json"))
 }
 
 fn binary_path() -> String {
@@ -46,7 +56,7 @@ fn strip_ours(arr: &[Value]) -> Vec<Value> {
 }
 
 pub fn install(dry_run: bool) -> Result<()> {
-    let mut settings = harness_core::install::load_settings(&settings_path())?;
+    let mut settings = harness_core::install::load_settings(&settings_path()?)?;
     let bin = binary_path();
     if !settings.is_object() {
         anyhow::bail!("settings.json is not a JSON object");
@@ -63,14 +73,14 @@ pub fn install(dry_run: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&settings)?);
         return Ok(());
     }
-    harness_core::install::write_settings(&settings_path(), &settings)?;
+    harness_core::install::write_settings(&settings_path()?, &settings)?;
     println!("\nInstalled Stop hook → {bin} {SUB}");
     println!("Tune ./reviewgate.toml (or ~/.reviewgate/config.toml) — `reviewgate init` writes a starter.");
     Ok(())
 }
 
 pub fn uninstall(dry_run: bool) -> Result<()> {
-    let mut settings = harness_core::install::load_settings(&settings_path())?;
+    let mut settings = harness_core::install::load_settings(&settings_path()?)?;
     if !settings.is_object() {
         anyhow::bail!("settings.json is not a JSON object");
     }
@@ -82,7 +92,7 @@ pub fn uninstall(dry_run: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&settings)?);
         return Ok(());
     }
-    harness_core::install::write_settings(&settings_path(), &settings)?;
+    harness_core::install::write_settings(&settings_path()?, &settings)?;
     println!("removed {removed} reviewgate hook group(s)");
     Ok(())
 }

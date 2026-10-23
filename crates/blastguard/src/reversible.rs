@@ -65,7 +65,10 @@ pub enum Recovery {
     ///
     /// The variant keeps its name so the diff of that ruling stays legible, but
     /// do not read it as "git holds these bytes" — read it as "inside a work
-    /// tree, and therefore never denied or asked about".
+    /// tree, so the COST axis raises no objection". It does not settle the
+    /// WHOSE-TREE axis: the truncating-redirect rule in `detect.rs` still
+    /// refuses a recoverable target that is neither inside one of the
+    /// session's safe roots nor a recognised worktree checkout.
     RecoverableFromGit,
     /// The bytes exist only here. Losing them is final; the reason names what
     /// makes it final.
@@ -92,10 +95,10 @@ impl Recovery {
             // Deliberately does NOT claim "git restore recovers it": since the
             // 2026-09-18 ruling this variant also covers untracked and dirty
             // paths, for which that sentence would be false (CLAUDE.md §4).
-            Recovery::RecoverableFromGit => {
-                "it is inside a git work tree, which this gate does not refuse or ask about"
-                    .to_string()
-            }
+            // Nor does it claim the gate never refuses such a path (backlog
+            // 2dc70bc5): the redirect rule appends this text to a Deny when the
+            // tree is not this session's, so that claim contradicted the verdict.
+            Recovery::RecoverableFromGit => "it is inside a git work tree".to_string(),
             Recovery::Unrecoverable(why) | Recovery::Undetermined(why) => why.clone(),
         }
     }

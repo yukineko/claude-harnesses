@@ -1183,14 +1183,21 @@ pub fn record_changeset_and_detect(
 
 /// Mark a task's changeset as merged (landed) in the registry, so it is no
 /// longer treated as in-flight for overlap checks. RMW under `LeaseLock`.
-/// Fail-soft: an absent entry is a no-op. Called on branch-land cleanup.
+/// An absent entry is a no-op (`Ok`). Called on branch-land cleanup.
+///
+/// The `LeaseLock` not acquired (contended, unresolvable path, I/O) is `Err`
+/// (backlog f1ce802c): nothing was marked, so `Ok(())` would report a write
+/// that did not happen and the landed changeset would silently keep holding
+/// later tasks.
 pub fn mark_changeset_merged(cwd: &Path, task_key: &str) -> Result<()> {
-    // HARD-SKIP on contention: skip rather than run an unlocked RMW that could
-    // clobber a peer's changeset. Safe: an unmarked entry ages out via
-    // prune_stale_changesets. The old fail-soft `acquire` left that window open.
-    let _lock = match LeaseLock::acquire_or_skip(cwd) {
-        Some(l) => l,
-        None => return Ok(()),
+    // Never run an unlocked RMW that could clobber a peer's changeset; and a
+    // skipped mark is reported, not hidden.
+    let _lock = match LeaseLock::acquire_strict(cwd) {
+        Ok(l) => l,
+        Err(e) => anyhow::bail!(
+            "overwatch lease-registry lock not acquired ({e}); changeset {task_key} was NOT \
+             marked merged"
+        ),
     };
     let mut registry = load_active_changesets(cwd)?;
     if let Some(entry) = registry.get_mut(task_key) {
@@ -1206,16 +1213,21 @@ pub fn mark_changeset_merged(cwd: &Path, task_key: &str) -> Result<()> {
 /// `task_key`), so this is the branch-keyed sibling of [`mark_changeset_merged`]
 /// and is the production caller that closes finding #1 (a landed task's
 /// changeset staying `merged=false` and spuriously holding the next sequential
-/// task that touches a common file). Fail-soft by contract at the call site: a
-/// cleanup error must never break a merge that already succeeded.
+/// task that touches a common file). The call site logs an `Err` and carries
+/// on: a cleanup error must never break a merge that already succeeded.
+///
+/// The `LeaseLock` not acquired is `Err`, never `Ok(0)` (backlog f1ce802c):
+/// "0 marked" must mean no entry matched, not that the registry was never
+/// looked at.
 pub fn mark_branch_merged(cwd: &Path, branch: &str) -> Result<usize> {
-    // HARD-SKIP on contention: skip (0 marked) rather than run an unlocked RMW
-    // that could clobber a peer's changeset. Safe: an unmarked entry ages out
-    // via prune_stale_changesets. The old fail-soft `acquire` left that window
-    // open.
-    let _lock = match LeaseLock::acquire_or_skip(cwd) {
-        Some(l) => l,
-        None => return Ok(0),
+    // Never run an unlocked RMW that could clobber a peer's changeset; and a
+    // skipped mark is reported, not hidden.
+    let _lock = match LeaseLock::acquire_strict(cwd) {
+        Ok(l) => l,
+        Err(e) => anyhow::bail!(
+            "overwatch lease-registry lock not acquired ({e}); changesets of branch {branch} \
+             were NOT marked merged"
+        ),
     };
     let mut registry = load_active_changesets(cwd)?;
     let mut marked = 0usize;
@@ -1274,13 +1286,17 @@ pub fn clear_runtime_overlap_holds(cwd: &Path, branch: &str, now: i64) -> Result
 /// The lease-liveness filter in `detect_conflicts` already ignores these, so
 /// pruning is a housekeeping compaction (keeps the registry bounded); a
 /// crashed run that left `merged=false` ages out here on any later record/prune.
+///
+/// The `LeaseLock` not acquired is `Err`, never `Ok(0)` (backlog f1ce802c):
+/// "0 pruned" must mean nothing was prunable, not that no pass ran.
 pub fn prune_stale_changesets(cwd: &Path, now: i64) -> Result<usize> {
-    // HARD-SKIP on contention: skip (0 pruned) rather than run an unlocked RMW
-    // that could clobber a peer's changeset. Pruning is housekeeping — a skipped
-    // pass runs again later. The old fail-soft `acquire` left that window open.
-    let _lock = match LeaseLock::acquire_or_skip(cwd) {
-        Some(l) => l,
-        None => return Ok(0),
+    // Never run an unlocked RMW that could clobber a peer's changeset; and a
+    // skipped pass is reported, not hidden.
+    let _lock = match LeaseLock::acquire_strict(cwd) {
+        Ok(l) => l,
+        Err(e) => anyhow::bail!(
+            "overwatch lease-registry lock not acquired ({e}); no stale-changeset prune ran"
+        ),
     };
     let mut registry = load_active_changesets(cwd)?;
     let before = registry.len();
@@ -1789,9 +1805,43 @@ pub fn find_merge_conflict_resolution(
         .find(|r| r.conflict_id == conflict_id))
 }
 
-/// Reap stale leases from the registry (in-place mutation).
-pub fn reap_stale(leases: &mut LeaseRegistry, now: i64) {
-    leases.retain(|_, lease| !is_stale(lease, now));
+/// Reap stale leases from the registry (in-place mutation), returning the
+/// leases that were dropped. Pure: it records nothing. A caller that SAVES the
+/// reaped registry must use [`reap_stale_recorded`] instead, or the drop is
+/// silent in the ledger (backlog 3fb912d6). Read-only views (status, `lease
+/// --session`) may use this directly: they never persist the drop.
+pub fn reap_stale(leases: &mut LeaseRegistry, now: i64) -> Vec<Lease> {
+    let stale: Vec<String> = leases
+        .iter()
+        .filter(|(_, l)| is_stale(l, now))
+        .map(|(k, _)| k.clone())
+        .collect();
+    stale.iter().filter_map(|k| leases.remove(k)).collect()
+}
+
+/// The `Ended` status recorded for a lease dropped by the stale reap.
+pub const REAPED_STATUS: &str = "reaped";
+
+/// [`reap_stale`] for a mutator that saves the registry afterwards: every
+/// dropped lease is appended to `events.jsonl` as an `Ended` event with status
+/// [`REAPED_STATUS`], so a vanished lease is distinguishable from one that was
+/// never begun (backlog 3fb912d6). An append failure is `Err` — the caller
+/// must not save a registry whose drops went unrecorded.
+pub fn reap_stale_recorded(cwd: &Path, leases: &mut LeaseRegistry, now: i64) -> Result<()> {
+    for lease in reap_stale(leases, now) {
+        let event = LifecycleEvent::ended(
+            lease.key,
+            lease.title,
+            lease.session_id,
+            lease.run_id,
+            now,
+            REAPED_STATUS.to_string(),
+        );
+        append_event(cwd, &event).map_err(|e| {
+            e.context("overwatch: could not record a stale-lease reap in events.jsonl")
+        })?;
+    }
+    Ok(())
 }
 
 /// Get current time as unix seconds.

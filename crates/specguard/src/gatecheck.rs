@@ -21,7 +21,8 @@
 //!     `[[spec]] path/doc/reason`): `path` names the entry key or one of its
 //!     impl files, `reason` is not blank, and `doc` is a relative
 //!     `docs/specs/…/*.md` path with no `.`/`..`/empty component that exists
-//!     under the repo root as a regular file with non-blank content. A binding
+//!     under the repo root as a regular file with non-blank content, with no
+//!     symlink in any of its components (backlog 636842cd). A binding
 //!     that fails any of these does not count, and the violation says why;
 //!   - a tracked reasoned ack (`.specguard/spec-doc-acks.toml`,
 //!     `[[ack]] path/reason`, same `path` rule, `reason` not blank).
@@ -390,16 +391,32 @@ fn doc_problem(repo_root: &Path, doc: &str) -> Determination<Option<String>> {
             "{doc}: not a relative {SPEC_DOC_DIR}**/*.md path"
         )));
     }
-    let full = repo_root.join(doc);
-    match std::fs::metadata(&full) {
-        Ok(m) if !m.is_file() => {
-            return Determination::known(Some(format!("{doc}: not a regular file")))
+    // Stat every component under the repo root WITHOUT following symlinks
+    // (backlog 636842cd): a symlinked doc, or a doc under a symlinked
+    // directory, may resolve outside the repo, so it is not "a regular file
+    // under the repo root" whatever it points at.
+    let mut full = repo_root.to_path_buf();
+    let components: Vec<&str> = doc.split('/').collect();
+    for (i, comp) in components.iter().enumerate() {
+        full.push(comp);
+        let shown = components[..=i].join("/");
+        match std::fs::symlink_metadata(&full) {
+            Ok(m) if m.file_type().is_symlink() => {
+                return Determination::known(Some(format!(
+                    "{doc}: {shown} is a symlink, not a regular file under the repo root"
+                )))
+            }
+            Ok(m) if i + 1 == components.len() && !m.is_file() => {
+                return Determination::known(Some(format!("{doc}: not a regular file")))
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Determination::known(Some(format!("{doc}: does not exist")))
+            }
+            Err(e) => {
+                return Determination::undetermined(format!("cannot stat spec doc {doc}: {e}"))
+            }
         }
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Determination::known(Some(format!("{doc}: does not exist")))
-        }
-        Err(e) => return Determination::undetermined(format!("cannot stat spec doc {doc}: {e}")),
     }
     match boundary::read_to_string(&full).require() {
         Required::Determined(Some(text)) if !text.trim().is_empty() => Determination::known(None),

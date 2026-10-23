@@ -35,18 +35,15 @@ On each stop `tdd gate`:
    `Edit`/`Write`/`MultiEdit`/`NotebookEdit` of it, or a `Bash` command naming
    its path outside a read-only statement — merely reading a file
    (`git diff`, `grep`, `cat`, naming it in a `tdd skip --reason`) does not make
-   it this session's [test: crates/harness-core/tests/attribution_read_only_bash.rs::group1_read_only_mentions_do_not_attribute] [test: crates/harness-core/tests/attribution_read_only_bash.rs::group2_writing_mentions_attribute] (`harness_core::attribution::attribute_own_writes`, shared
+   it this session's (`harness_core::attribution::attribute_own_writes`, shared
    with reviewgate). Other uncommitted files — e.g. a concurrent session's — are
    excluded and named on stderr and in the block reason as "not attributed to
    this session"
-   [test: crates/tdd/tests/session_scope_own.rs::foreign_only_does_not_block]
-   [test: crates/tdd/tests/session_scope_own.rs::own_bash_relative_path_still_blocks]
-   [test: crates/tdd/tests/session_scope_own.rs::subagent_sidechain_edit_counts_as_own].
+  .
    If the transcript is missing or unreadable, attribution is undetermined and
    the **whole checkout** is scanned, with the reason saying authorship was not
    verified
-   [test: crates/tdd/tests/session_scope_own.rs::unreadable_transcript_judges_whole_checkout_and_says_so]
-   [test: crates/tdd/tests/session_scope_own.rs::empty_transcript_path_judges_whole_checkout_and_says_so].
+  .
    Known gap: a file written by a command that never names it (`cargo fmt`, a
    shell glob, a script) is excluded too;
 4. counts *added implementation lines* (impl-glob files, minus test files and
@@ -82,17 +79,17 @@ comes from `--cmd`, else `tdd.toml`'s `test_cmd` (default `cargo test`).
 
 `tdd oracle --task <id>` classifies the task's RED→GREEN transition from its
 proofs and prints a JSON report (`{"transition":"fail_to_pass","valid_fp_oracle":true,…}`);
-it exits 0 only for a valid Fail→Pass oracle [test: crates/tdd/tests/integration.rs::oracle_reports_valid_fail_to_pass_and_exits_zero]. A valid oracle requires the RED
+it exits 0 only for a valid Fail→Pass oracle. A valid oracle requires the RED
 and GREEN proofs to have been recorded with the same test command (`cmd`): a
 RED of one command followed by a GREEN of a different command (or a proof with
 no recorded `cmd`) reports `transition:"command_mismatch"`,
-`valid_fp_oracle:false` (exit 1) [test: crates/tdd/tests/backlog_dc37a4da.rs::oracle_rejects_red_and_green_recorded_with_different_test_commands] [test: crates/tdd/src/transition.rs::different_cmd_fail_to_pass_is_command_mismatch] [test: crates/tdd/src/transition.rs::absent_cmd_on_either_side_is_command_mismatch]. A missing/corrupt proof reports
-`transition:"unknown"` (exit 1) [test: crates/tdd/tests/integration.rs::oracle_missing_proofs_is_fail_soft_never_panics] [test: crates/tdd/src/transition.rs::oracle_report_missing_artifacts_are_unknown_and_invalid] [test: crates/tdd/src/proof.rs::read_passed_is_fail_soft]; a proof that exists but cannot be read reports
+`valid_fp_oracle:false` (exit 1). A missing/corrupt proof reports
+`transition:"unknown"` (exit 1); a proof that exists but cannot be read reports
 `transition:"undetermined"`, `valid_fp_oracle:false` with the read error under
-`"undetermined"` (exit 2) — never as a missing or valid proof [test: crates/tdd/tests/integration.rs::oracle_unreadable_proof_exits_2_undetermined] [test: crates/tdd/src/transition.rs::oracle_report_undetermined_side_names_the_read_error]. It isn't part of
+`"undetermined"` (exit 2) — never as a missing or valid proof. It isn't part of
 the `/tdd` skill's own phases — it's the machine oracle `condukt`'s Fail→Pass
 gate (`condukt state check-oracle`) calls to verify a `fix`/`feature` task's
-RED/GREEN proofs deterministically [test: crates/condukt/tests/fp_oracle_e2e.rs::fix_task_with_valid_fail_to_pass_oracle_is_verified] [test: crates/condukt/tests/fp_oracle_e2e.rs::fix_task_without_valid_fail_to_pass_oracle_is_refused].
+RED/GREEN proofs deterministically.
 
 ## Config & other subcommands
 

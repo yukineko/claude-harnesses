@@ -7,9 +7,8 @@ Observable claim: a commit that adds a test file whose only `#[ignore]` text is
 in a line comment (cargo reports 0 ignored) must be judged clean (exit 0) by
 the gate. At the measured rev the gate exits 1 with `ignore-added`.
 
-Open defect: the test is marked expectedFailure so the default suite stays
-green. Run it RED with `python3 -m pytest --runxfail scripts/test_backlog_63e2690d.py`.
-Remove the marker when the gate masks comments on the ignore count.
+Fixed: counts() now reads the comment/literal-masked surface; the
+expectedFailure marker was removed with the fix.
 """
 
 import subprocess
@@ -39,7 +38,6 @@ fn bridge_supplies_evidence() {
 
 
 class CommentIgnoreIsNotAnAttribute(_ctw.GateTestCase):
-    @unittest.expectedFailure  # backlog 63e2690d: open defect, remove when fixed
     def test_new_test_file_with_ignore_only_in_a_comment_is_clean(self):
         repo = self.make_repo()
         repo.write("crates/demo/tests/bridge.rs", COMMENT_ONLY_IGNORE_RS)

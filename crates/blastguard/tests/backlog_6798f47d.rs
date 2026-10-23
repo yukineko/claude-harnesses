@@ -67,7 +67,6 @@ fn control_real_rmtree_call_is_refused_with_the_rmtree_reason() {
 
 /// THE DEFECT: the word only in a comment yields a reason claiming the call.
 #[test]
-#[ignore = "backlog 6798f47d: RED repro"]
 fn rmtree_only_in_a_comment_is_not_reported_as_a_call() {
     let cmd = "python3 - <<'EOF'\n# deliberately does not call shutil.rmtree\nprint('ok')\nEOF\n";
     let out = verdict(cmd);
@@ -75,5 +74,40 @@ fn rmtree_only_in_a_comment_is_not_reported_as_a_call() {
         !out.contains(CLAIM),
         "the program never calls rmtree (it appears only in a comment), so the \
          reason must not assert {CLAIM:?}; got {out:?}"
+    );
+}
+
+/// The comment-only mention is not silenced either: the comment reading is not
+/// a language parser, so the verdict is an Ask, never an Allow.
+#[test]
+fn rmtree_only_in_a_comment_still_asks_never_allows() {
+    let cmd = "python3 - <<'EOF'\n# deliberately does not call shutil.rmtree\nprint('ok')\nEOF\n";
+    let out = verdict(cmd);
+    assert!(
+        out.contains("\"ask\"") && out.contains("only in what reads as a `#` comment"),
+        "a comment-only mention must resolve to an Ask naming why; got {out:?}"
+    );
+}
+
+/// A real call after a comment line is still denied with the call reason.
+#[test]
+fn real_rmtree_call_after_a_comment_is_still_denied() {
+    let cmd = "python3 - <<'EOF'\n# clean up\nimport shutil; shutil.rmtree('/') # gone\nEOF\n";
+    let out = verdict(cmd);
+    assert!(
+        out.contains("\"deny\"") && out.contains(CLAIM),
+        "a real call next to comments must still be denied naming rmtree; got {out:?}"
+    );
+}
+
+/// A mention only inside a quoted string is still refused, but the reason does
+/// not claim the program runs it.
+#[test]
+fn rmtree_only_in_a_string_is_refused_without_claiming_a_call() {
+    let cmd = "python3 - <<'EOF'\nprint('see shutil.rmtree docs')\nEOF\n";
+    let out = verdict(cmd);
+    assert!(
+        out.contains("\"deny\"") && !out.contains(CLAIM) && out.contains("quoted string"),
+        "a string-only mention must stay refused without asserting a call; got {out:?}"
     );
 }

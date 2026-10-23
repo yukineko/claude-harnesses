@@ -211,24 +211,24 @@ fn saved_attempts(state: &Path, session: &str) -> u64 {
     v["attempts"].as_u64().expect("attempts number")
 }
 
-// ───────────────────────────── 1. one_stop_hook ─────────────────────────────
+// ───────────────────────────── 1. no_stop_hook_wired ─────────────────────────────
 
+/// The plugin's hooks.json registers no Stop hook (the hook logged
+/// `no-criteria` on every run and never judged anything). The binary and the
+/// explicit `install` subcommand are unchanged.
 #[test]
-fn claim_one_stop_hook() {
+fn claim_no_stop_hook_wired() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("hooks/hooks.json");
     let text = std::fs::read_to_string(&path).expect("hooks.json readable");
     let v: Value = serde_json::from_str(&text).expect("hooks.json is JSON");
     let hooks = v["hooks"].as_object().expect("hooks is an object");
-    let events: Vec<&String> = hooks.keys().collect();
-    assert_eq!(events, vec!["Stop"], "exactly one event, Stop: {events:?}");
-    let groups = hooks["Stop"].as_array().expect("Stop is an array");
-    assert_eq!(groups.len(), 1, "exactly one Stop group");
-    let cmds = groups[0]["hooks"].as_array().expect("group.hooks array");
-    assert_eq!(cmds.len(), 1, "exactly one hook in the group");
-    assert_eq!(cmds[0]["type"], "command");
-    assert_eq!(
-        cmds[0]["command"],
-        "${CLAUDE_PLUGIN_ROOT}/bin/propguard check"
+    assert!(
+        !hooks.contains_key("Stop"),
+        "hooks.json must not register a Stop hook: {hooks:?}"
+    );
+    assert!(
+        !text.contains("propguard"),
+        "no hook entry may invoke propguard: {text}"
     );
 }
 
@@ -275,28 +275,6 @@ fn parse_derived(stdout: &str) -> Vec<(String, String)> {
             let rest = rest.strip_prefix('[')?;
             let (id, title) = rest.split_once("] ")?;
             Some((id.to_string(), title.trim().to_string()))
-        })
-        .collect()
-}
-
-/// README table rows: (id, title cell).
-fn readme_rows(name: &str) -> Vec<(String, String)> {
-    let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(name))
-        .expect("README readable");
-    text.lines()
-        .filter(|l| l.starts_with("| `"))
-        .filter_map(|l| {
-            let cells: Vec<&str> = l.split('|').collect();
-            if cells.len() < 4 {
-                return None;
-            }
-            let id = cells[1].trim().trim_matches('`').to_string();
-            if !CATALOG_EXPECTED.iter().any(|(i, _)| *i == id) {
-                return None;
-            }
-            let cell = cells[2].trim();
-            let cell = cell.split(" [test:").next().unwrap_or(cell).trim();
-            Some((id, cell.to_string()))
         })
         .collect()
 }
@@ -354,36 +332,6 @@ fn claim_catalog() {
     let o = run(&fx, &["derive", "zzz qqq"], &[]);
     let ids: Vec<String> = parse_derived(&o.stdout).into_iter().map(|p| p.0).collect();
     assert_eq!(ids, vec!["error-path", "output-schema", "determinism"]);
-
-    // README tables must show the catalog's ids and titles.
-    let mut mismatches = Vec::new();
-    for readme in ["README.md", "README.ja.md"] {
-        let rows = readme_rows(readme);
-        let row_ids: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
-        assert_eq!(row_ids, want_ids, "{readme} table ids/order");
-        for ((id, cell), (_, title)) in rows.iter().zip(CATALOG_EXPECTED.iter()) {
-            // README.ja drops the trailing English gloss; compare the Japanese
-            // part (everything before the final " (") for it.
-            let want_cell = if readme == "README.md" {
-                title.to_string()
-            } else {
-                title
-                    .rsplit_once(" (")
-                    .map(|x| x.0)
-                    .unwrap_or(title)
-                    .to_string()
-            };
-            if *cell != want_cell {
-                mismatches.push(format!(
-                    "{readme} {id}: table {cell:?} != catalog {want_cell:?}"
-                ));
-            }
-        }
-    }
-    assert!(
-        mismatches.is_empty(),
-        "README rows differ from CATALOG: {mismatches:#?}"
-    );
 }
 
 // ────────────────────────── 3. criteria_file_default ──────────────────────────

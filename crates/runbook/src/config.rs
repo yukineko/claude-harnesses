@@ -2,7 +2,7 @@
 //! built-in defaults (first file that exists wins; layers are not merged). Env
 //! kill switch `RUNBOOK_DISABLE`. The hook only ever *injects* the procedures a
 //! prompt explicitly asked for, under a char budget that is not hard (the first
-//! procedure is always included; see tests/prose_claims.rs).
+//! procedure is always included; see tests/cli_contract.rs).
 
 use std::path::{Path, PathBuf};
 

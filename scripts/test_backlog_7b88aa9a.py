@@ -35,7 +35,6 @@ class DesignDocMatchesRatifyQueuePath(unittest.TestCase):
         self.assertIn("queue::enqueue_with(", src)
         self.assertTrue(FORGE_QUEUE.exists())
 
-    @unittest.expectedFailure  # backlog 7b88aa9a: open defect, remove when fixed
     def test_doc_does_not_deny_the_existing_path(self):
         doc = DOC.read_text(encoding="utf-8")
         if ABSENCE_CLAIM in doc:

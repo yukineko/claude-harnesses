@@ -11,7 +11,7 @@
 //! JSON-*string* holding an array; the vendored fixture uses a plain JSON list
 //! of strings, which is what the model accepts here. `download` does NOT
 //! produce this shape: it stores the upstream `.parquet` unconverted
-//! (tests/prose_claims.rs::claim_download_shape).
+//! (tests/cli_contract.rs::claim_download_shape).
 
 use serde::{Deserialize, Serialize};
 

@@ -472,23 +472,53 @@ pub fn acquire(session_id: &str, pid: u32, project: &str) -> Result<()> {
     acquire_at(session_id, pid, project, None)
 }
 
-/// Release the lock.  No-op if no lock file exists.
+/// Release the lock held by `session`. No-op if no lock file exists.
+///
+/// Only the holder may release (backlog 4493142a): the lock is deleted only
+/// when its recorded `session_id` equals `session`. Everything else is an
+/// `Err` and the lock file is left in place:
+///   - a lock held by another session (active OR heartbeat-stale — a stale
+///     lock still protects its holder, the same rule [`claim_permitted_at`]
+///     applies; a stalled holder is reaped by `lock acquire`);
+///   - a caller with no session id (it cannot be shown to be the holder);
+///   - an unreadable/unparseable lock file (who holds it is unknown,
+///     CLAUDE.md section 3).
+///
 /// `lock_dir` allows tests to override the directory.
-pub fn release_at(project: &str, lock_dir: Option<&Path>) -> Result<()> {
+pub fn release_at(project: &str, session: Option<&str>, lock_dir: Option<&Path>) -> Result<()> {
     let path = match lock_dir {
         Some(d) => lock_path_for(d, project),
         None => lock_path(project),
     };
-    if path.exists() {
-        std::fs::remove_file(&path)
-            .with_context(|| format!("remove lock file {}", path.display()))?;
+    let info = match status_from_path(&path) {
+        LockStatus::None => return Ok(()),
+        LockStatus::Undetermined(why) => anyhow::bail!(
+            "refusing to release: who holds the project's exclusive lock is unknown ({why})"
+        ),
+        LockStatus::Active(info) | LockStatus::Stale(info) => info,
+    };
+    match session {
+        Some(s) if s == info.session_id => {}
+        Some(s) => anyhow::bail!(
+            "refusing to release: the project's exclusive lock is held by session {} (this \
+             session is {s}); only the holder releases it. A stalled holder is reaped by \
+             `backlog lock acquire`; a live one is taken only by `lock acquire --force`",
+            info.session_id
+        ),
+        None => anyhow::bail!(
+            "refusing to release: the project's exclusive lock is held by session {}, and this \
+             caller gave no --session-id and has no CLAUDE_CODE_SESSION_ID, so it cannot be \
+             shown to be the holder",
+            info.session_id
+        ),
     }
+    std::fs::remove_file(&path).with_context(|| format!("remove lock file {}", path.display()))?;
     Ok(())
 }
 
-/// Release using the default lock path.
-pub fn release(project: &str) -> Result<()> {
-    release_at(project, None)
+/// Release using the default lock path. See [`release_at`].
+pub fn release(project: &str, session: Option<&str>) -> Result<()> {
+    release_at(project, session, None)
 }
 
 /// May `session` claim a task (`next --claim`) in `project` under the
@@ -1061,7 +1091,15 @@ mod tests {
         }
 
         // Release.
-        release_at("my-project", Some(d)).expect("release");
+        // A non-holder (and a caller with no session id) is refused and the
+        // lock survives (backlog 4493142a).
+        assert!(release_at("my-project", Some("other"), Some(d)).is_err());
+        assert!(release_at("my-project", None, Some(d)).is_err());
+        assert!(matches!(
+            status_at("my-project", Some(d)),
+            LockStatus::Active(_)
+        ));
+        release_at("my-project", Some("sess-1"), Some(d)).expect("release");
 
         // Status should be None again.
         assert!(matches!(status_at("my-project", Some(d)), LockStatus::None));

@@ -153,6 +153,7 @@ mod tests {
             touched_files: files.iter().map(|s| s.to_string()).collect(),
             class: "parallel".into(),
             model: model.into(),
+            model_id: None,
             role: "worker".into(),
             pass,
             cost_usd: None,

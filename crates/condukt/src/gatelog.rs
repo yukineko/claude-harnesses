@@ -450,7 +450,8 @@ pub enum DiffRiskOutcome {
     /// blind spot, not a clean bill of health.
     NoWorktree,
     /// Gate 2: a worktree existed but produced no usable diff (absent on disk,
-    /// git failure, or an empty diff). NOT inspected — also a blind spot.
+    /// git failure, a directory that is not the top of its own git worktree, or
+    /// an empty diff). NOT inspected — also a blind spot.
     NoDiff,
     /// The diff was actually classified and came back below High. This is the
     /// only value that means "we looked and it was fine".

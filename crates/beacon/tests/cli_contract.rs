@@ -1,4 +1,4 @@
-//! Claim-reproduction tests for the beacon README / packaging prose.
+//! CLI / hook contract tests for beacon and its packaging wiring.
 //!
 //! Every test drives the real `beacon` binary with a fresh temp HOME and a
 //! fresh temp cwd. `osascript` / `notify-send` / `curl` are replaced by fake

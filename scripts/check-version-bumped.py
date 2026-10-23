@@ -51,6 +51,13 @@ rather than applied silently:
      src/, which cannot be identified without parsing — counts as linked and
      demands the bump, because §3 says an undecidable case resolves to the
      restrictive side. Covered by scripts/tests/version-bumped-shared-crate.sh.
+
+There is NO markdown-only carve-out for plugins (removed 2026-10-22 by user
+ruling): a plugin's SKILL.md / agents/*.md is functional content that is only
+re-delivered by a version bump, so an .md-only change under crates/<name>/
+demands a bump in both the working-tree mode and --head (post-merge collision)
+mode. Covered by scripts/tests/version-bumped-md-only.sh and
+scripts/tests/post-merge-version-collision.sh.
 """
 import argparse
 import json
@@ -350,6 +357,7 @@ def main():
         if all(p.startswith(bin_prefix) for p in changed):
             bin_only.append((name, len(changed)))
             continue
+
 
         try:
             base_v = plugin_version_at(base, pj_rel)

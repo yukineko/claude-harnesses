@@ -5,7 +5,7 @@
 //! invariant) or a `cmd`'s stdout+exit (catch a CLI contract regression). It is
 //! the *offline* sibling of condukt's online Phase-6 verifier: deterministic and
 //! API-key-free. No CI workflow and no hook runs it (pinned by
-//! `tests/prose_claims.rs::claim_no_ci_no_hook`); it is invoked by hand.
+//! `tests/cli_contract.rs::claim_no_ci_no_hook`); it is invoked by hand.
 //!
 //! `run` exit codes: `0` all passed, `1` a real regression, `2` harness error
 //! (no cases / only draft cases / unreadable eval files) — so a caller can tell

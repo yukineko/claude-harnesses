@@ -1050,21 +1050,22 @@ tested = false
     // to assert "this struct has no field named X", so this is pinned the same
     // way the repo already pins struct shape elsewhere: an exhaustive
     // field-pattern construction. If a future edit adds a `metric_surface`
-    // field to `Hypothesis` *without* `#[serde(default)]` (or without updating
-    // this literal), this struct literal fails to compile with "missing field
-    // metric_surface" or "no field metric_surface on type ..." — either way,
+    // field to `Hypothesis` without updating this literal, this struct literal
+    // fails to compile with "missing field metric_surface" or "no field
+    // metric_surface on type ..." — with or without `#[serde(default)]`,
+    // which affects deserialization only (backlog 9e0c9106) — either way,
     // this test forces the author to touch this line and see the field they
     // just added, and to confront the fact that success/kill criteria already
     // exist for this purpose. Success/kill criteria coverage is exercised by
     // `test_criteria_persist` (store.rs) and `criterion_*` tests above.
     //
     // What this does NOT prove: this is a compile-time speed bump, not a
-    // guarantee. A determined author can add `metric_surface: Option<String>`
-    // with `#[serde(default)]` and this struct literal keeps compiling
-    // unchanged (the field just defaults to `None` here) — the test cannot
-    // force a *reviewer* to notice, only make the shape visible in a diff at
-    // the moment the field is added to this struct literal's surrounding type
-    // definition. It also says nothing about `metric_surface` appearing on
+    // guarantee. The literal breaks on ANY added field, defaulted or not, so
+    // a determined author can add `metric_surface: Option<String>` and simply
+    // write `metric_surface: None,` into this literal to make it compile
+    // again — the test cannot force a *reviewer* to notice, only make the
+    // shape visible in a diff at the moment the field is added. It also says
+    // nothing about `metric_surface` appearing on
     // some *other* type (e.g. a new `ScopeDeclaration`) instead of on
     // `Hypothesis` directly.
     //
@@ -1091,17 +1092,16 @@ tested = false
             shipped_at: None,
             // Added by t3's implementation, which is exactly the mechanism this
             // test exists for: a struct literal cannot omit a field, so the new
-            // field had to be written out here by hand. NOTE, against the
-            // paragraph above: `#[serde(default)]` does NOT exempt a field from
-            // a struct literal — serde attributes affect deserialization only.
-            // So this literal is a *stronger* trap than documented: ANY added
-            // field, defaulted or not, breaks it. See the report/backlog note.
+            // field had to be written out here by hand. `#[serde(default)]`
+            // does NOT exempt a field from a struct literal (serde attributes
+            // affect deserialization only), so ANY added field, defaulted or
+            // not, breaks this literal (backlog 9e0c9106).
             scope_write_paths: None,
             scope_read_paths: None,
             // No `metric_surface: ...` line here. If the struct definition
-            // gains that field without a serde default, this literal fails to
-            // compile ("missing field `metric_surface`"), surfacing the
-            // change to whoever runs this test.
+            // gains that field, this literal fails to compile ("missing field
+            // `metric_surface`"), surfacing the change to whoever runs this
+            // test.
         };
         assert!(h.success_criterion.is_none());
         assert!(h.kill_criterion.is_none());

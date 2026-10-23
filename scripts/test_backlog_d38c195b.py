@@ -53,7 +53,6 @@ class OrphanOnlyRc1(tph.HookTestCase):
         proc = self._run_orphan_only()
         self.assertIn("ORPHAN CACHE DIR", proc.stderr, proc.stderr)
 
-    @unittest.expectedFailure
     def test_orphan_only_finding_is_not_told_to_roll_out(self):
         proc = self._run_orphan_only()
         self.assertNotIn(

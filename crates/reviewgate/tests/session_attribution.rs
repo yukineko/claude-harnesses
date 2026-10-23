@@ -180,6 +180,14 @@ impl Fixture {
         // and a transcript recorded under one spelling must still line up with a
         // repo root spelled the other way.
         let repo = repo.canonicalize().unwrap_or(repo);
+        // reviewgate's built-in default is `mode = "off"` (no review); these
+        // tests exercise the reviewing path, so opt in explicitly.
+        std::fs::create_dir_all(home.join(".reviewgate")).unwrap();
+        std::fs::write(
+            home.join(".reviewgate").join("config.toml"),
+            "mode = \"inject\"\n",
+        )
+        .unwrap();
         Fixture { home, repo }
     }
 

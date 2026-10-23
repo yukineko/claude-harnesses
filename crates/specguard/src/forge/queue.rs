@@ -65,13 +65,29 @@ pub fn req_tag(spec_id: &str, req_id: &str) -> String {
 
 /// What one `enqueue` call did. `already` is not a failure — it is the
 /// idempotent path, and it is reported separately so a caller can never print
-/// "queued N" for work that was already tracked.
+/// "queued N" for work that was already tracked. `unfiled` IS a failure the
+/// caller must surface (non-zero exit): requirements that reached no queue item.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[must_use]
 pub struct Enqueued {
     pub queued: Vec<String>,
     pub already: Vec<String>,
+    pub unfiled: Vec<Unfiled>,
 }
+
+/// A requirement that was NOT filed, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unfiled {
+    pub id: String,
+    pub why: String,
+}
+
+/// `backlog add --repro-test` exits 2 when it files nothing: no repro test, the
+/// test did not reproduce (exit 0), or the run was undetermined (`backlog add
+/// --help`). That is a refusal of THIS requirement, not an unreadable queue, so
+/// it is recorded as [`Unfiled`] and the remaining requirements still get their
+/// turn. Every other non-zero code stays `Undetermined`.
+const BACKLOG_ADD_REFUSED: i32 = 2;
 
 /// The backlog item title for a requirement.
 pub fn item_title(spec: &ir::Spec, r: &ir::Requirement) -> String {
@@ -205,6 +221,11 @@ fn stdout_of<R: BacklogRunner>(runner: &mut R, args: &[&str]) -> Determination<S
 
 /// Queue one backlog item per requirement that does not have one yet.
 ///
+/// Each item is filed with `backlog add --repro-test <requirement.repro_test>`.
+/// A requirement with no `repro_test`, or whose add `backlog` refuses with exit
+/// 2, is returned in [`Enqueued::unfiled`] (never silently skipped); the caller
+/// exits non-zero when that list is not empty.
+///
 /// `Undetermined` rather than a guess when the existing queue cannot be read or
 /// parsed. A failure PART WAY THROUGH carries the count of items that DID land,
 /// so the caller never reports a number larger than reality; re-running is safe
@@ -236,6 +257,21 @@ pub fn enqueue_with<R: BacklogRunner>(
             out.already.push(r.id.clone());
             continue;
         }
+        // No test, no ticket (backlog eb93be49): a requirement without a repro
+        // test is never handed to `backlog add`, and it is reported by id
+        // rather than silently dropped.
+        let Some(repro) = r
+            .repro_test
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            out.unfiled.push(Unfiled {
+                id: r.id.clone(),
+                why: "repro_test が無い (再現テストの無い requirement は起票しない)".to_string(),
+            });
+            continue;
+        };
         let title = item_title(spec, r);
         let notes = item_notes(spec, r);
         let stag = spec_tag(&spec.spec.id);
@@ -255,8 +291,29 @@ pub fn enqueue_with<R: BacklogRunner>(
             stag.as_str(),
             "--tag",
             tag.as_str(),
+            "--repro-test",
+            repro,
         ];
-        match stdout_of(runner, &args) {
+        let added = match runner.run(&args) {
+            Determination::Known(o) if o.code() == BACKLOG_ADD_REFUSED => {
+                let tail: String = o.stderr().trim().chars().take(400).collect();
+                out.unfiled.push(Unfiled {
+                    id: r.id.clone(),
+                    why: format!(
+                        "backlog add が起票を拒否した (exit {BACKLOG_ADD_REFUSED}): {}",
+                        if tail.is_empty() {
+                            "<stderr 無し>"
+                        } else {
+                            &tail
+                        }
+                    ),
+                });
+                continue;
+            }
+            Determination::Known(o) => o.stdout_on_success(),
+            Determination::Undetermined(why) => Determination::Undetermined(why),
+        };
+        match added {
             Determination::Known(_) => out.queued.push(r.id.clone()),
             Determination::Undetermined(why) => {
                 return Determination::undetermined(format!(
@@ -297,6 +354,7 @@ mod tests {
                     acceptance: vec![format!("acceptance for {id}")],
                     canon: vec!["CLAUDE.md".to_string()],
                     falsifiable: true,
+                    repro_test: Some(format!("cargo test -p x --test {id}")),
                 })
                 .collect(),
         }
@@ -500,6 +558,61 @@ mod tests {
         let why = undetermined(enqueue_with(&spec, "/p", "p1", &mut runner));
         assert!(why.contains("requirement R1"), "{why}");
         assert!(why.contains("その前に 1 件"), "{why}");
+    }
+
+    /// Each add carries the requirement's own repro test.
+    #[test]
+    fn each_add_carries_its_requirements_repro_test() {
+        let spec = spec_with(&["R0", "R1"]);
+        let mut runner = FakeRunner::new(|| ok_out("[]"));
+        let out = known(enqueue_with(&spec, "/p", "p1", &mut runner));
+        assert_eq!(out.queued, vec!["R0", "R1"]);
+        assert!(out.unfiled.is_empty());
+        for (add, id) in runner.adds_seen().iter().zip(["R0", "R1"]) {
+            let i = add
+                .iter()
+                .position(|s| s == "--repro-test")
+                .expect("--repro-test");
+            assert_eq!(add[i + 1], format!("cargo test -p x --test {id}"));
+        }
+    }
+
+    /// No test, no ticket: a requirement without `repro_test` (or with a blank
+    /// one) is never handed to `backlog add` and is reported by id; the others
+    /// are still filed.
+    #[test]
+    fn a_requirement_without_a_repro_test_is_reported_not_filed() {
+        let mut spec = spec_with(&["R0", "R1", "R2"]);
+        spec.requirements[0].repro_test = None;
+        spec.requirements[2].repro_test = Some("   ".to_string());
+        let mut runner = FakeRunner::new(|| ok_out("[]"));
+        let out = known(enqueue_with(&spec, "/p", "p1", &mut runner));
+        assert_eq!(out.queued, vec!["R1"]);
+        let ids: Vec<&str> = out.unfiled.iter().map(|u| u.id.as_str()).collect();
+        assert_eq!(ids, vec!["R0", "R2"]);
+        assert!(out.unfiled[0].why.contains("repro_test が無い"), "{out:?}");
+        let adds = runner.adds_seen();
+        assert_eq!(adds.len(), 1, "{:?}", runner.seen);
+        assert!(adds[0].contains(&"req:sl:R1".to_string()));
+    }
+
+    /// `backlog add` exit 2 (the repro did not reproduce, or was undetermined)
+    /// files nothing for THAT requirement: it is reported with backlog's
+    /// stderr, and the next requirement still gets its turn.
+    #[test]
+    fn a_backlog_refusal_is_reported_and_the_rest_are_still_filed() {
+        let spec = spec_with(&["R0", "R1"]);
+        let refused = boundary::run(
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg("echo 'not reproduced' >&2; exit 2"),
+        );
+        let mut runner = FakeRunner::new(|| ok_out("[]")).with_adds(vec![refused, ok_out("")]);
+        let out = known(enqueue_with(&spec, "/p", "p1", &mut runner));
+        assert_eq!(out.queued, vec!["R1"]);
+        assert_eq!(out.unfiled.len(), 1);
+        assert_eq!(out.unfiled[0].id, "R0");
+        assert!(out.unfiled[0].why.contains("not reproduced"), "{out:?}");
     }
 
     #[test]

@@ -1,54 +1,39 @@
 #!/usr/bin/env bash
-# Self-contained test for scripts/check-clippy-lints.py — the per-crate clippy
-# gate for the workspace's opt-in deny lints (unwrap_used / expect_used / panic).
+# Self-contained test for scripts/check-clippy-lints.py — the pre-commit
+# scanner for the workspace's opt-in deny-lint CONFIGURATION.
 #
 # What is under test, and why each part exists
 # --------------------------------------------
 # The workspace root Cargo.toml declares `[workspace.lints.clippy]` with
 # unwrap_used/expect_used/panic = "deny", and a crate INHERITS them only by
-# writing `[lints] workspace = true` in its own Cargo.toml. Before this scanner
-# the only local place that ran `cargo clippy` at all was donegate.toml's Stop
-# hook (workspace-wide, and only in a clone where `donegate trust` has been run);
-# `.githooks/pre-commit` and `.githooks/pre-push` invoke cargo nowhere. So a
-# commit could introduce a denied `.unwrap()` into an opted-in gate crate and
-# nothing at commit time would notice.
+# writing `[lints] workspace = true` in its own Cargo.toml.
 #
-# The failure modes this pins down are the ones CLAUDE.md 3 names, so each gets
-# its own observable case rather than a comment claiming it is handled:
+# The scanner does NOT run cargo or clippy (donegate's lint-changed check owns
+# clippy execution; the old clippy run here duplicated it). It inspects only the
+# manifests, comparing the WORKING TREE against HEAD:
 #
-#   * diff source == scanned content. clippy compiles the WORKING TREE, so the
-#     crate set must come from the working tree too. A `git diff --cached`-based
-#     selector lets you leave a violating edit unstaged, find no crates, and pass
-#     a commit that contains the violation. Part J stages NOTHING, asserts
-#     `git diff --cached` is genuinely empty, and requires a block anyway.
-#   * untracked files count. A brand-new .rs file in a gate crate does not appear
-#     in `git diff HEAD` at all. Part K asserts `git diff --name-only HEAD` is
-#     empty for that state and requires a block anyway (selection must come from
-#     the UNION of the diff and `git ls-files --others --exclude-standard`, the
-#     same model scripts/test-changed-crates.sh:56-80 uses).
-#   * membership is DERIVED, never hardcoded. Part B (crate without `[lints]` is
-#     skipped) and Part M (the SAME crate, after opting in, is checked) are the
-#     two halves of that proof. Part L pins that the resolved cargo package name
-#     comes from the manifest's `[package]` section, not the directory name —
-#     the fixture deliberately names dir `gatecrate` package `gatecrate-pkg`.
-#   * "no opted-in crate changed" and "could not determine the crate set" are
-#     DIFFERENT answers. Parts A/B exit 0, Parts C/D/E/F/N/O exit 2, and Part P
-#     asserts the two codes differ. Collapsing them into one empty list is the
-#     empty-set-reads-as-clean fail-open.
-#   * the verdict is the subprocess EXIT STATUS. Part I runs a fake cargo that
-#     prints nothing and exits 101 (must block) and a fake cargo that prints
-#     compiler-looking text on stdout and exits 0 (must pass).
-#   * ANTI-VACUITY. Part G modifies the gate crate in a way that is genuinely
-#     clean and requires exit 0. Without it, a scanner that blocks unconditionally
-#     would satisfy every other case here and the suite would prove nothing.
+#   * exit 1 when a changed crate whose HEAD Cargo.toml had
+#     `[lints] workspace = true` no longer has it (Parts U, U2, J), or when the
+#     root `[workspace.lints.clippy]` loses a deny for unwrap_used / expect_used /
+#     panic (Parts W1-W4).
+#   * exit 2 for every cannot-determine case: git failures (C, N, H, O), an
+#     unparsable / unreadable manifest (F, F2), and a manifest target path that
+#     escapes the repository (S).
+#   * exit 0 otherwise — including the anti-vacuity controls (G, X, X2, Y, R),
+#     without which a scanner that always blocks would satisfy every other case.
 #
-# Parts G, H, J, K, M run the REAL cargo clippy against a minimal throwaway
-# workspace (measured ~0.1s per invocation on this machine, because the fixture
-# crate has no dependencies) — they are not faked. Only Parts D/E/I/N/O fake or
-# withhold cargo, because their subject IS the resolution/exit-status plumbing.
+# Part T is the scope pin for this rewrite: a fake `cargo` on PATH writes a
+# marker file if it is ever executed, and the marker must NOT appear. Against
+# the previous clippy-running scanner this case is RED (it resolved cargo from
+# PATH and ran it); against the config-only scanner it is GREEN.
 #
-# MAC-RUNNABLE: pure git + cargo + python3 in a mktemp sandbox. No GNU coreutils
-# options, no network, no ~/.claude and no repository file is touched.
+# Diff source == scanned content: selection uses `git diff --name-only HEAD`
+# UNION `git ls-files --others --exclude-standard`, never `--cached`. Part J
+# leaves the opt-in removal unstaged with an empty `--cached` diff and requires
+# a block anyway.
+#
+# MAC-RUNNABLE: pure git + python3 in a mktemp sandbox. No cargo needed, no
+# network, no ~/.claude and no repository file is touched.
 #
 # Exit 0 on success, non-zero on any failed assertion.
 set -uo pipefail
@@ -64,29 +49,37 @@ pass() { echo "  ok: $*"; }
 [ -n "$REAL_GIT" ] || fail "git not found on PATH"
 [ -n "$PY" ] || fail "python3 not found on PATH"
 [ -f "$SCANNER" ] || fail "scripts/check-clippy-lints.py does not exist (nothing to test)"
-
-# The real cargo, resolved the same two ways the scanner is expected to: PATH
-# first, then the rustup default location (CLAUDE.md: toolchain is via rustup).
-REAL_CARGO=""
-if command -v cargo >/dev/null 2>&1; then
-  REAL_CARGO="$(command -v cargo)"
-elif [ -x "$HOME/.cargo/bin/cargo" ]; then
-  REAL_CARGO="$HOME/.cargo/bin/cargo"
-fi
-[ -n "$REAL_CARGO" ] || fail "no cargo found (PATH or ~/.cargo/bin) — the real-clippy parts cannot run"
 echo "using scanner: $SCANNER"
-echo "using cargo:   $REAL_CARGO"
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/precommit-clippy-gate.XXXXXX")"
-cleanup() { rm -rf "$TMP"; }
+cleanup() { chmod -R u+rw "$TMP" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 
-# One shared target dir so the repeated real-clippy parts hit the build cache.
-export CARGO_TARGET_DIR="$TMP/cargo-target"
-
 CLEAN_MAIN='fn main() { println!("ok"); }'
-# `.unwrap()` on an Option — denied by workspace.lints.clippy.unwrap_used.
 DIRTY_MAIN='fn main() { let v: Option<u8> = Some(1); println!("{}", v.unwrap()); }'
+
+ROOT_MANIFEST='[workspace]
+members  = ["crates/gatecrate", "crates/plaincrate"]
+resolver = "2"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic       = "deny"'
+
+GATE_MANIFEST_HEAD='[package]
+name    = "gatecrate-pkg"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "gatecrate-pkg"
+path = "src/main.rs"'
+
+GATE_MANIFEST="$GATE_MANIFEST_HEAD
+
+[lints]
+workspace = true"
 
 T=""   # current fixture repo, set by seed()
 
@@ -94,44 +87,14 @@ seed() { # <name> -> fresh fixture workspace at $TMP/<name>, one commit deep
   T="$TMP/$1"
   rm -rf "$T"
   mkdir -p "$T/crates/gatecrate/src" "$T/crates/plaincrate/src" "$T/crates/skillonly"
-
-  # `members` is listed explicitly, not globbed: crates/skillonly has no
-  # Cargo.toml (the skill-only plugin shape this repo really has), and a
-  # `crates/*` glob would make cargo itself refuse to load the workspace.
-  cat >"$T/Cargo.toml" <<'EOF'
-[workspace]
-members  = ["crates/gatecrate", "crates/plaincrate"]
-resolver = "2"
-
-[workspace.lints.clippy]
-unwrap_used = "deny"
-expect_used = "deny"
-panic       = "deny"
-EOF
-
-  # Directory name (gatecrate) deliberately != package name (gatecrate-pkg).
-  cat >"$T/crates/gatecrate/Cargo.toml" <<'EOF'
-[package]
-name    = "gatecrate-pkg"
-version = "0.0.0"
-edition = "2021"
-
-[[bin]]
-name = "gatecrate-pkg"
-path = "src/main.rs"
-
-[lints]
-workspace = true
-EOF
-
-  # No [lints] section -> does NOT inherit the deny lints -> out of scope.
+  printf '%s\n' "$ROOT_MANIFEST" >"$T/Cargo.toml"
+  printf '%s\n' "$GATE_MANIFEST" >"$T/crates/gatecrate/Cargo.toml"
   cat >"$T/crates/plaincrate/Cargo.toml" <<'EOF'
 [package]
 name    = "plaincrate-pkg"
 version = "0.0.0"
 edition = "2021"
 EOF
-
   printf '%s\n' "$CLEAN_MAIN" >"$T/crates/gatecrate/src/main.rs"
   printf '%s\n' "$CLEAN_MAIN" >"$T/crates/plaincrate/src/main.rs"
   printf '%s\n' "# skill only, no Cargo.toml" >"$T/crates/skillonly/SKILL.md"
@@ -152,12 +115,9 @@ scan() { # run the scanner in $T with any given env assignments as arguments
 }
 
 # A git stub that fails one subcommand and delegates the rest to real git.
-#
-# The subcommand is located by skipping leading global options rather than by
-# reading $1. That is not cosmetic: the scanner invokes `git -C <repo> diff ...`,
-# so a stub keyed on $1 matches "-C" and never fires — it would have silently
-# tested nothing, and the first version of this file did exactly that until
-# Part C caught it.
+# The subcommand is located by skipping leading global options (the scanner
+# calls `git -C <repo> <sub> ...`, so keying on $1 would match "-C" and never
+# fire).
 make_git_stub() { # <dir> <subcommand-to-fail>
   mkdir -p "$1"
   cat >"$1/git" <<STUBEOF
@@ -187,6 +147,31 @@ STUBEOF
 }
 
 # =============================================================================
+# T: the scanner must NOT execute cargo. A fake cargo on PATH writes a marker.
+# The change is a source edit containing a denied .unwrap() in an opted-in
+# crate: the old clippy-running scanner selected the crate and ran cargo here.
+# =============================================================================
+echo
+echo ">>> T: fake cargo on PATH must never be executed — expect no marker, exit 0"
+seed t
+printf '%s\n' "$DIRTY_MAIN" >"$T/crates/gatecrate/src/main.rs"
+FAKEBIN="$TMP/fakecargo-bin"; mkdir -p "$FAKEBIN"
+MARKER="$TMP/cargo-was-executed.marker"
+rm -f "$MARKER"
+cat >"$FAKEBIN/cargo" <<EOF
+#!/usr/bin/env bash
+echo "fake cargo invoked: \$*" >>"$MARKER"
+exit 0
+EOF
+chmod +x "$FAKEBIN/cargo"
+cp "$FAKEBIN/cargo" "$FAKEBIN/cargo-clippy"
+scan PATH="$FAKEBIN:$PATH" CHECK_CLIPPY_LINTS_CARGO="$FAKEBIN/cargo"
+[ ! -e "$MARKER" ] || fail "T: the scanner executed cargo (marker written: $(cat "$MARKER"))"
+pass "no cargo / clippy subprocess was executed"
+[ "$RC" = "0" ] || fail "T: a source-only edit with intact [lints] config must exit 0, got $RC"
+pass "source-only edit with intact [lints] config exits 0"
+
+# =============================================================================
 # A: nothing changed at all — a genuine, determined "clean" -> exit 0
 # =============================================================================
 echo
@@ -195,37 +180,168 @@ seed a
 scan PATH="$PATH"
 [ "$RC" = "0" ] || fail "A: clean tree must exit 0, got $RC"
 pass "clean tree exits 0"
-RC_LEGIT_EMPTY_A="$RC"
-
-# =============================================================================
-# B: only a NON-opted-in crate changed — derived membership skips it -> exit 0
-# =============================================================================
-echo
-echo ">>> B: plaincrate (no [lints]) modified — expect exit 0, crate NOT checked"
-seed b
-printf '%s\n' "$DIRTY_MAIN" >"$T/crates/plaincrate/src/main.rs"
-scan PATH="$PATH"
-[ "$RC" = "0" ] || fail "B: a crate without [lints] must not be checked; expected 0, got $RC"
-grep -q 'plaincrate-pkg' <<<"$OUT" && fail "B: plaincrate-pkg was checked despite having no [lints] section"
-pass "crate without [lints] is skipped (derivation excludes it) and exits 0"
 RC_LEGIT_EMPTY="$RC"
 
 # =============================================================================
-# C: `git diff` fails -> UNDETERMINED, exit 2 (never an empty crate set)
+# B: a NON-opted-in crate's manifest changed (still no [lints]) -> exit 0
+# =============================================================================
+echo
+echo ">>> B: plaincrate (never opted in) manifest edited — expect exit 0"
+seed b
+printf '%s\n' '# touched' >>"$T/crates/plaincrate/Cargo.toml"
+scan PATH="$PATH"
+[ "$RC" = "0" ] || fail "B: a crate that never opted in cannot lose the opt-in; expected 0, got $RC"
+pass "never-opted-in crate is not a violation"
+
+# =============================================================================
+# U: an opted-in crate drops `[lints] workspace = true` -> exit 1
+# =============================================================================
+echo
+echo ">>> U: gatecrate drops [lints] workspace = true — expect exit 1"
+seed u
+printf '%s\n' "$GATE_MANIFEST_HEAD" >"$T/crates/gatecrate/Cargo.toml"
+scan PATH="$PATH"
+[ "$RC" = "1" ] || fail "U: removing the opt-in must exit 1, got $RC"
+grep -q 'crates/gatecrate' <<<"$OUT" || fail "U: the offending crate was not named"
+pass "removing [lints] workspace = true blocks and names the crate"
+
+echo
+echo ">>> U2: gatecrate sets [lints] workspace = false — expect exit 1"
+seed u2
+printf '%s\n' "$GATE_MANIFEST_HEAD" '' '[lints]' 'workspace = false' >"$T/crates/gatecrate/Cargo.toml"
+scan PATH="$PATH"
+[ "$RC" = "1" ] || fail "U2: workspace = false must exit 1, got $RC"
+pass "workspace = false blocks"
+
+# =============================================================================
+# J: diff source == scanned content. The opt-in removal is UNSTAGED and
+# `git diff --cached` is empty (asserted). Must still block.
+# =============================================================================
+echo
+echo ">>> J: opt-in removal left UNSTAGED (git diff --cached empty) — expect exit 1"
+seed j
+printf '%s\n' "$GATE_MANIFEST_HEAD" >"$T/crates/gatecrate/Cargo.toml"
+CACHED="$("$REAL_GIT" -C "$T" diff --cached --name-only)"
+[ -z "$CACHED" ] || fail "J: fixture is wrong — git diff --cached is not empty: $CACHED"
+pass "precondition: git diff --cached is genuinely empty"
+scan PATH="$PATH"
+[ "$RC" = "1" ] || fail "J: an UNSTAGED opt-in removal must still block (exit 1), got $RC"
+pass "unstaged removal blocks (selection follows the working tree)"
+
+# =============================================================================
+# G: ANTI-VACUITY — opted-in crate manifest edited, opt-in kept -> exit 0
+# =============================================================================
+echo
+echo ">>> G: gatecrate manifest edited, opt-in kept — expect exit 0 (anti-vacuity)"
+seed g
+sed 's/^version = "0.0.0"/version = "0.0.1"/' "$T/crates/gatecrate/Cargo.toml" >"$T/m.tmp"
+mv "$T/m.tmp" "$T/crates/gatecrate/Cargo.toml"
+"$REAL_GIT" -C "$T" diff --quiet HEAD -- crates/gatecrate/Cargo.toml \
+  && fail "G: fixture is wrong — the manifest did not change"
+scan PATH="$PATH"
+[ "$RC" = "0" ] || fail "G: an edit keeping the opt-in must exit 0, got $RC (a gate that always blocks fails here)"
+pass "manifest edit keeping the opt-in exits 0"
+
+# =============================================================================
+# Y: a crate that NEWLY opts in -> exit 0 (gaining the opt-in is not a loss)
+# =============================================================================
+echo
+echo ">>> Y: plaincrate newly opts in — expect exit 0"
+seed y
+printf '%s\n' '' '[lints]' 'workspace = true' >>"$T/crates/plaincrate/Cargo.toml"
+scan PATH="$PATH"
+[ "$RC" = "0" ] || fail "Y: newly opting in must exit 0, got $RC"
+pass "newly opting in exits 0"
+
+# =============================================================================
+# R: a crate with no Cargo.toml at HEAD (brand-new, untracked) -> exit 0
+# =============================================================================
+echo
+echo ">>> R: brand-new untracked crate without [lints] — expect exit 0"
+seed r
+mkdir -p "$T/crates/newcrate/src"
+printf '%s\n' '[package]' 'name = "newcrate"' 'version = "0.0.0"' 'edition = "2021"' \
+  >"$T/crates/newcrate/Cargo.toml"
+scan PATH="$PATH"
+[ "$RC" = "0" ] || fail "R: a new crate has nothing to lose; expected 0, got $RC"
+pass "brand-new crate exits 0"
+
+# =============================================================================
+# D: an opted-in crate's manifest is deleted outright -> exit 0, but SAID.
+# The crate stops being a cargo package; that is not a lint downgrade on a
+# package that still compiles. Pinned so the choice is visible, not implicit.
+# =============================================================================
+echo
+echo ">>> D: gatecrate Cargo.toml deleted — expect exit 0 with a 'removed' note"
+seed d
+rm "$T/crates/gatecrate/Cargo.toml"
+scan PATH="$PATH"
+[ "$RC" = "0" ] || fail "D: a deleted crate manifest must exit 0, got $RC"
+grep -q 'manifest removed' <<<"$OUT" || fail "D: the removal was not reported"
+pass "deleted crate manifest exits 0 and is reported"
+
+# =============================================================================
+# W: the root [workspace.lints.clippy] loses a deny -> exit 1
+# =============================================================================
+for lint in unwrap_used expect_used panic; do
+  echo
+  echo ">>> W/$lint: root deny for $lint removed — expect exit 1"
+  seed "w-$lint"
+  grep -v "^$lint " "$T/Cargo.toml" >"$T/root.tmp"
+  mv "$T/root.tmp" "$T/Cargo.toml"
+  grep -q "^$lint " "$T/Cargo.toml" && fail "W/$lint: fixture is wrong — line still present"
+  scan PATH="$PATH"
+  [ "$RC" = "1" ] || fail "W/$lint: losing the root deny for $lint must exit 1, got $RC"
+  grep -q "$lint" <<<"$OUT" || fail "W/$lint: the lost lint was not named"
+  pass "losing the root deny for $lint blocks"
+done
+
+echo
+echo ">>> W4: root unwrap_used downgraded to \"warn\" — expect exit 1"
+seed w4
+sed 's/^unwrap_used = "deny"/unwrap_used = "warn"/' "$T/Cargo.toml" >"$T/root.tmp"
+mv "$T/root.tmp" "$T/Cargo.toml"
+scan PATH="$PATH"
+[ "$RC" = "1" ] || fail "W4: downgrading to warn must exit 1, got $RC"
+pass "downgrade deny -> warn blocks"
+
+# =============================================================================
+# X: ANTI-VACUITY for the root — root manifest changed, denies intact -> exit 0
+# X2: table form { level = "deny", priority = 1 } is still a deny -> exit 0
+# =============================================================================
+echo
+echo ">>> X: root Cargo.toml changed, denies intact — expect exit 0"
+seed x
+printf '%s\n' '# touched: workspace lint table' >>"$T/Cargo.toml"
+[ "$("$REAL_GIT" -C "$T" diff --name-only HEAD --)" = "Cargo.toml" ] \
+  || fail "X: fixture is wrong — expected only Cargo.toml changed"
+scan PATH="$PATH"
+[ "$RC" = "0" ] || fail "X: root change with denies intact must exit 0, got $RC"
+pass "root change keeping the denies exits 0"
+
+echo
+echo ">>> X2: root deny rewritten to table form — expect exit 0"
+seed x2
+sed 's/^panic       = "deny"/panic = { level = "deny", priority = 1 }/' "$T/Cargo.toml" >"$T/root.tmp"
+mv "$T/root.tmp" "$T/Cargo.toml"
+grep -q 'level = "deny"' "$T/Cargo.toml" || fail "X2: fixture is wrong"
+scan PATH="$PATH"
+[ "$RC" = "0" ] || fail "X2: table-form deny is still a deny; expected 0, got $RC"
+pass "table-form deny exits 0"
+
+# =============================================================================
+# C / N / H: git subcommand failures -> UNDETERMINED, exit 2
 # =============================================================================
 echo
 echo ">>> C: git diff fails — expect exit 2 (undetermined)"
 seed c
-printf '%s\n' "$DIRTY_MAIN" >"$T/crates/gatecrate/src/main.rs"
+printf '%s\n' "$GATE_MANIFEST_HEAD" >"$T/crates/gatecrate/Cargo.toml"
 STUB_DIFF="$TMP/stub-diff"; make_git_stub "$STUB_DIFF" diff
 scan PATH="$STUB_DIFF:$PATH"
 [ "$RC" = "2" ] || fail "C: a failing git diff must exit 2, got $RC"
 pass "failing git diff exits 2"
 RC_UNDETERMINED="$RC"
 
-# =============================================================================
-# N: `git ls-files --others` fails -> UNDETERMINED, exit 2 (the twin of C)
-# =============================================================================
 echo
 echo ">>> N: git ls-files fails — expect exit 2 (undetermined)"
 seed n
@@ -234,11 +350,26 @@ scan PATH="$STUB_LS:$PATH"
 [ "$RC" = "2" ] || fail "N: a failing git ls-files must exit 2, got $RC"
 pass "failing git ls-files exits 2"
 
+echo
+echo ">>> H: reading the HEAD manifest fails — expect exit 2 (undetermined)"
+seed h
+printf '%s\n' '# touched' >>"$T/crates/gatecrate/Cargo.toml"
+STUB_SHOW="$TMP/stub-show"; make_git_stub "$STUB_SHOW" show
+scan PATH="$STUB_SHOW:$PATH"
+[ "$RC" = "2" ] || fail "H: a failing read of the HEAD manifest must exit 2, got $RC"
+pass "failing HEAD manifest read exits 2"
+
+echo
+echo ">>> H2: listing the HEAD tree fails — expect exit 2 (undetermined)"
+seed h2
+printf '%s\n' '# touched' >>"$T/crates/gatecrate/Cargo.toml"
+STUB_LT="$TMP/stub-lstree"; make_git_stub "$STUB_LT" ls-tree
+scan PATH="$STUB_LT:$PATH"
+[ "$RC" = "2" ] || fail "H2: a failing git ls-tree must exit 2, got $RC"
+pass "failing git ls-tree exits 2"
+
 # =============================================================================
-# O: unborn branch (no HEAD, so `git diff HEAD` fails) -> exit 2
-# Pinned deliberately: this scanner does NOT carve out the unborn case the way
-# scripts/test-changed-crates.sh does. Cannot-determine takes the restricted
-# side, and a carve-out is only safe if something proves it is.
+# O: unborn branch (no HEAD) -> exit 2 (no unverified carve-out)
 # =============================================================================
 echo
 echo ">>> O: unborn branch (no commits) — expect exit 2 (undetermined)"
@@ -248,43 +379,12 @@ T="$TMP/o"; rm -rf "$T"; mkdir -p "$T"
 "$REAL_GIT" -C "$T" config user.name t
 scan PATH="$PATH"
 [ "$RC" = "2" ] || fail "O: unborn branch must exit 2, got $RC"
-pass "unborn branch exits 2 (no unverified carve-out)"
+pass "unborn branch exits 2"
 
 # =============================================================================
-# D: cargo absent from PATH (and from ~/.cargo/bin) -> exit 2
-# PATH is scoped to a directory holding ONLY git, and HOME is redirected so the
-# rustup fallback location does not exist either.
-# =============================================================================
-echo
-echo ">>> D: cargo absent from PATH — expect exit 2 (undetermined)"
-seed d
-printf '%s\n' "$CLEAN_MAIN" >"$T/crates/gatecrate/src/main.rs.tmp"
-printf '%s\n' 'fn main() { println!("still clean"); }' >"$T/crates/gatecrate/src/main.rs"
-rm -f "$T/crates/gatecrate/src/main.rs.tmp"
-SCOPED="$TMP/scoped-bin"; mkdir -p "$SCOPED"
-ln -sf "$REAL_GIT" "$SCOPED/git"
-FAKEHOME="$TMP/fakehome"; mkdir -p "$FAKEHOME"
-scan PATH="$SCOPED" HOME="$FAKEHOME"
-[ "$RC" = "2" ] || fail "D: cargo absent must exit 2, got $RC"
-grep -qi 'cargo' <<<"$OUT" || fail "D: did not name cargo as the reason"
-pass "cargo absent exits 2 and names cargo"
-
-# =============================================================================
-# E: cargo resolves but is NOT executable -> exit 2
-# =============================================================================
-echo
-echo ">>> E: cargo path not executable — expect exit 2 (undetermined)"
-seed e
-printf '%s\n' 'fn main() { println!("still clean"); }' >"$T/crates/gatecrate/src/main.rs"
-NOEXEC="$TMP/noexec-cargo"
-printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$NOEXEC"
-chmod 0644 "$NOEXEC"
-scan PATH="$PATH" CHECK_CLIPPY_LINTS_CARGO="$NOEXEC"
-[ "$RC" = "2" ] || fail "E: a non-executable cargo must exit 2, got $RC"
-pass "non-executable cargo exits 2"
-
-# =============================================================================
-# F: a changed crate's Cargo.toml cannot be parsed -> exit 2
+# F: a changed crate's working-tree Cargo.toml cannot be parsed -> exit 2
+# F2: ... cannot be read -> exit 2
+# F3: the HEAD root manifest is fine but the working-tree root is unparsable -> 2
 # =============================================================================
 echo
 echo ">>> F: unparseable Cargo.toml in a changed crate — expect exit 2"
@@ -293,199 +393,32 @@ printf '%s\n' '[package' 'name = "broken' >"$T/crates/gatecrate/Cargo.toml"
 scan PATH="$PATH"
 [ "$RC" = "2" ] || fail "F: an unparseable Cargo.toml must exit 2, got $RC"
 grep -qi 'cargo.toml' <<<"$OUT" || fail "F: did not name the manifest as the reason"
-pass "unparseable Cargo.toml exits 2 (not skipped as 'not opted in')"
+pass "unparseable Cargo.toml exits 2"
 
-# =============================================================================
-# G: ANTI-VACUITY CONTROL — gate crate modified, change is CLEAN -> exit 0
-# An implementation that always blocks FAILS here. Real cargo clippy runs.
-# =============================================================================
+if [ "$(id -u)" != "0" ]; then
+  echo
+  echo ">>> F2: unreadable Cargo.toml in a changed crate — expect exit 2"
+  seed f2
+  printf '%s\n' '# touched' >>"$T/crates/gatecrate/Cargo.toml"
+  chmod 000 "$T/crates/gatecrate/Cargo.toml"
+  scan PATH="$PATH"
+  chmod 644 "$T/crates/gatecrate/Cargo.toml"
+  [ "$RC" = "2" ] || fail "F2: an unreadable Cargo.toml must exit 2, got $RC"
+  pass "unreadable Cargo.toml exits 2"
+else
+  echo "  skip: F2 (running as root, chmod 000 does not deny reads)"
+fi
+
 echo
-echo ">>> G: gate crate modified with CLEAN code — expect exit 0 (anti-vacuity control)"
-seed g
-printf '%s\n' 'fn main() { let v: Option<u8> = Some(1); println!("{}", v.unwrap_or(0)); }' \
-  >"$T/crates/gatecrate/src/main.rs"
+echo ">>> F3: unparseable root Cargo.toml — expect exit 2"
+seed f3
+printf '%s\n' '[workspace' >"$T/Cargo.toml"
 scan PATH="$PATH"
-[ "$RC" = "0" ] || fail "G: a clean change to a gate crate must exit 0, got $RC (a gate that always blocks fails here)"
-grep -q 'gatecrate-pkg' <<<"$OUT" || fail "G: the gate crate was not actually checked (vacuous pass?)"
-pass "clean change to a checked gate crate exits 0 (and the crate WAS checked)"
+[ "$RC" = "2" ] || fail "F3: an unparseable root Cargo.toml must exit 2, got $RC"
+pass "unparseable root Cargo.toml exits 2"
 
 # =============================================================================
-# L: the checked unit is the cargo PACKAGE name from [package], not the dir name
-# =============================================================================
-echo
-echo ">>> L: the unit handed to cargo is the [package] name, not the directory name"
-grep -q -- '-p gatecrate-pkg' <<<"$OUT" || fail "L: cargo was not invoked with -p gatecrate-pkg"
-grep -qE -- '-p gatecrate($|[^-])' <<<"$OUT" \
-  && fail "L: cargo was invoked with the bare directory name instead of the [package] name"
-pass "cargo invoked as -p gatecrate-pkg (dir 'gatecrate' -> pkg 'gatecrate-pkg')"
-
-# =============================================================================
-# H: gate crate modified with a DENIED construct -> exit 1 (real clippy)
-# =============================================================================
-echo
-echo ">>> H: gate crate modified with .unwrap() — expect exit 1 (violation)"
-seed h
-printf '%s\n' "$DIRTY_MAIN" >"$T/crates/gatecrate/src/main.rs"
-scan PATH="$PATH"
-[ "$RC" = "1" ] || fail "H: a denied .unwrap() in a gate crate must exit 1, got $RC"
-pass "denied .unwrap() in a gate crate exits 1"
-
-# =============================================================================
-# I: the verdict is the subprocess EXIT STATUS, not stdout content
-# I1: fake cargo prints NOTHING and exits 101 -> must block.
-# I2: fake cargo prints compiler-looking errors on stdout and exits 0 -> passes.
-# =============================================================================
-echo
-echo ">>> I1: fake cargo, silent, exit 101 — expect exit 1 (status, not stdout)"
-seed i
-printf '%s\n' "$CLEAN_MAIN" 'fn other() {}' >"$T/crates/gatecrate/src/main.rs"
-SILENT="$TMP/cargo-silent"
-printf '%s\n' '#!/usr/bin/env bash' 'exit 101' >"$SILENT"; chmod +x "$SILENT"
-scan PATH="$PATH" CHECK_CLIPPY_LINTS_CARGO="$SILENT"
-[ "$RC" = "1" ] || fail "I1: a silent non-zero checker must block (exit 1), got $RC"
-pass "silent non-zero cargo blocks (verdict came from the exit status)"
-
-echo
-echo ">>> I2: fake cargo, prints 'error:' on stdout, exit 0 — expect exit 0"
-LOUD="$TMP/cargo-loud"
-printf '%s\n' '#!/usr/bin/env bash' 'echo "error: could not compile (this text is not the verdict)"' 'exit 0' >"$LOUD"
-chmod +x "$LOUD"
-scan PATH="$PATH" CHECK_CLIPPY_LINTS_CARGO="$LOUD"
-[ "$RC" = "0" ] || fail "I2: verdict must follow the exit status, not stdout text; expected 0, got $RC"
-pass "loud-but-zero cargo passes (stdout text is not the verdict)"
-
-# =============================================================================
-# J: diff source == scanned content. NOTHING is staged; the violating edit is
-# unstaged. `git diff --cached` is empty here (asserted), so a --cached-based
-# selector would find no crates and pass the commit. This must block.
-# =============================================================================
-echo
-echo ">>> J: violating edit left UNSTAGED (git diff --cached empty) — expect exit 1"
-seed j
-printf '%s\n' "$DIRTY_MAIN" >"$T/crates/gatecrate/src/main.rs"
-CACHED="$("$REAL_GIT" -C "$T" diff --cached --name-only)"
-[ -z "$CACHED" ] || fail "J: fixture is wrong — git diff --cached is not empty: $CACHED"
-pass "precondition: git diff --cached is genuinely empty"
-scan PATH="$PATH"
-[ "$RC" = "1" ] || fail "J: an UNSTAGED violation must still block (exit 1), got $RC — the selector is reading the index, not the working tree"
-pass "unstaged violation blocks (selection follows the working tree)"
-
-# =============================================================================
-# K: an UNTRACKED new file in a gate crate. `git diff HEAD` is empty here
-# (asserted), so diff alone is insufficient — selection must union in
-# `git ls-files --others --exclude-standard`. src/bin/*.rs is auto-discovered
-# by cargo, so the new file is compiled without editing any tracked file.
-# =============================================================================
-echo
-echo ">>> K: violation in an UNTRACKED new file (git diff HEAD empty) — expect exit 1"
-seed k
-mkdir -p "$T/crates/gatecrate/src/bin"
-printf '%s\n' "$DIRTY_MAIN" >"$T/crates/gatecrate/src/bin/extra.rs"
-DIFFED="$("$REAL_GIT" -C "$T" diff --name-only HEAD --)"
-[ -z "$DIFFED" ] || fail "K: fixture is wrong — git diff HEAD is not empty: $DIFFED"
-pass "precondition: git diff --name-only HEAD is genuinely empty"
-scan PATH="$PATH"
-[ "$RC" = "1" ] || fail "K: a violation in an untracked new file must block (exit 1), got $RC — untracked files are not in the selection union"
-pass "untracked new file selects the crate and blocks"
-
-# =============================================================================
-# M: a crate that NEWLY opts in is picked up automatically (no hardcoded list).
-# plaincrate — skipped in Part B — gains `[lints] workspace = true` and the same
-# violating body, and must now be checked and blocked.
-# =============================================================================
-echo
-echo ">>> M: plaincrate newly opts in — expect it to be picked up, exit 1"
-seed m
-cat >>"$T/crates/plaincrate/Cargo.toml" <<'EOF'
-
-[lints]
-workspace = true
-EOF
-printf '%s\n' "$DIRTY_MAIN" >"$T/crates/plaincrate/src/main.rs"
-scan PATH="$PATH"
-[ "$RC" = "1" ] || fail "M: a newly opted-in crate must be picked up automatically; expected 1, got $RC"
-grep -q 'plaincrate-pkg' <<<"$OUT" || fail "M: plaincrate-pkg was not named as checked"
-pass "newly opted-in crate is derived automatically and blocks"
-
-# =============================================================================
-# Q: a change to the WORKSPACE ROOT manifest puts every opted-in crate in scope,
-# because that file holds the lint table they inherit. No crate file is touched
-# here (asserted: the diff lists only Cargo.toml), and the code is clean, so the
-# observable is the selection itself plus exit 0.
-# =============================================================================
-echo
-echo ">>> Q: only the workspace root Cargo.toml changed — expect opted-in crates selected, exit 0"
-seed q
-printf '%s\n' '# touched: workspace lint table' >>"$T/Cargo.toml"
-QDIFF="$("$REAL_GIT" -C "$T" diff --name-only HEAD --)"
-[ "$QDIFF" = "Cargo.toml" ] || fail "Q: fixture is wrong — expected only Cargo.toml changed, got: $QDIFF"
-pass "precondition: only the workspace root Cargo.toml changed"
-scan PATH="$PATH"
-[ "$RC" = "0" ] || fail "Q: clean crates under a root-manifest change must exit 0, got $RC"
-grep -q -- '-p gatecrate-pkg' <<<"$OUT" || fail "Q: root-manifest change did not put the opted-in crate in scope"
-grep -q -- '-p plaincrate-pkg' <<<"$OUT" && fail "Q: a crate without [lints] was pulled in by the root-manifest change"
-pass "root-manifest change selects opted-in crates only, and exits 0 when clean"
-
-# =============================================================================
-# R: a manifest `build` path pointing OUT of the crate directory.
-#
-# Editing only that file changes what the opted-in crate compiles, under that
-# crate's own deny table, while touching nothing under crates/<dir>/. Selection
-# driven purely by the `crates/` prefix cannot see it, so the scanner said
-# "nothing to check" and exited 0 while real clippy failed the same tree. That
-# is a pass-with-violation, demonstrated rather than theorised (backlog
-# 3832ba25).
-#
-# This case also settles a claim rather than trusting it: it is only a false
-# negative if clippy actually applies the package deny table to a build script.
-# If it does not, this case cannot reach exit 1 no matter how selection works.
-# =============================================================================
-echo
-echo ">>> R: out-of-crate build script edited — expect the crate selected, exit 1"
-seed r
-mkdir -p "$T/buildscripts"
-
-# Rewritten whole rather than appended to: `build` belongs to [package], and
-# appending would land it under [lints], where it means nothing.
-cat >"$T/crates/gatecrate/Cargo.toml" <<'EOF'
-[package]
-name    = "gatecrate-pkg"
-version = "0.0.0"
-edition = "2021"
-build   = "../../buildscripts/build_helper.rs"
-
-[[bin]]
-name = "gatecrate-pkg"
-path = "src/main.rs"
-
-[lints]
-workspace = true
-EOF
-printf '%s\n' 'fn main() {}' >"$T/buildscripts/build_helper.rs"
-"$REAL_GIT" -C "$T" add -A >/dev/null
-"$REAL_GIT" -C "$T" commit -qm build-script
-
-# The violation goes in the OUT-OF-CRATE file, and nowhere else.
-printf '%s\n' 'fn main() { let v: Option<u32> = Some(1); let _ = v.unwrap(); }' \
-  >"$T/buildscripts/build_helper.rs"
-RDIFF="$("$REAL_GIT" -C "$T" diff --name-only HEAD --)"
-[ "$RDIFF" = "buildscripts/build_helper.rs" ] \
-  || fail "R: fixture is wrong — expected only the build script changed, got: $RDIFF"
-pass "precondition: only an out-of-crate build script changed"
-scan PATH="$PATH"
-[ "$RC" = "1" ] \
-  || fail "R: a denied expression in an out-of-crate build script must block; expected 1, got $RC"
-grep -q 'gatecrate-pkg' <<<"$OUT" \
-  || fail "R: the crate whose build path was edited was never selected"
-pass "an out-of-crate build path is followed back to its crate and blocks"
-
-# =============================================================================
-# S: a `build` path that escapes the REPOSITORY, not merely the crate dir.
-#
-# Such a file can never appear in `git diff`, so the gate cannot know whether it
-# changed or what is in it. That is cannot-determine, and CLAUDE.md 3 puts it on
-# the restrictive side: exit 2, not a silent 0. Skipping it quietly would be the
-# same fail-open this case exists to remove, one level further out.
+# S: an opted-in crate's manifest target path escapes the REPOSITORY -> exit 2
 # =============================================================================
 echo
 echo ">>> S: build path escaping the repo root — expect UNDETERMINED (exit 2)"
@@ -504,31 +437,24 @@ path = "src/main.rs"
 [lints]
 workspace = true
 EOF
-printf '%s\n' "$CLEAN_MAIN" >"$T/crates/gatecrate/src/main.rs.new"
-mv "$T/crates/gatecrate/src/main.rs.new" "$T/crates/gatecrate/src/main.rs"
-printf '%s\n' '// touched' >>"$T/crates/gatecrate/src/main.rs"
 scan PATH="$PATH"
 [ "$RC" = "2" ] \
-  || fail "S: a build path outside the repo is uncheckable and must be UNDETERMINED; expected 2, got $RC"
-pass "a build path escaping the repo resolves to cannot-determine, not to clean"
+  || fail "S: a manifest path outside the repo must be UNDETERMINED; expected 2, got $RC"
+pass "a manifest path escaping the repo resolves to cannot-determine"
 
 # =============================================================================
-# P: the two zero-crate answers are DIFFERENT exit codes.
+# P: the two zero-finding answers are DIFFERENT exit codes.
 # =============================================================================
 echo
-echo ">>> P: 'no opted-in crate changed' vs 'could not determine' must differ"
-echo "    legitimately-empty (Part A) rc=$RC_LEGIT_EMPTY_A"
-echo "    legitimately-empty (Part B) rc=$RC_LEGIT_EMPTY"
+echo ">>> P: 'nothing lost' vs 'could not determine' must differ"
+echo "    legitimately-clean (Part A) rc=$RC_LEGIT_EMPTY"
 echo "    cannot-determine   (Part C) rc=$RC_UNDETERMINED"
-[ "$RC_LEGIT_EMPTY" = "0" ] || fail "P: legitimately-empty must be 0"
+[ "$RC_LEGIT_EMPTY" = "0" ] || fail "P: legitimately-clean must be 0"
 [ "$RC_UNDETERMINED" = "2" ] || fail "P: cannot-determine must be 2"
-[ "$RC_LEGIT_EMPTY" != "$RC_UNDETERMINED" ] || fail "P: the two states collapsed to the same exit code"
-pass "the two states are distinct (0 vs 2), not one empty list"
+pass "the two states are distinct (0 vs 2)"
 
 echo
-echo "PASS: check-clippy-lints.py derives its crate set from the WORKING TREE"
-echo "      (diff UNION untracked, never the index), derives membership from"
-echo "      [lints] workspace = true rather than a hardcoded list, takes its"
-echo "      verdict from the subprocess exit status, distinguishes 'nothing"
-echo "      opted-in changed' (0) from 'could not determine' (2), and still"
-echo "      passes a genuinely clean change to a checked gate crate."
+echo "PASS: check-clippy-lints.py never executes cargo/clippy, blocks (1) when a"
+echo "      changed crate loses [lints] workspace = true or the root loses a"
+echo "      deny for unwrap_used/expect_used/panic, resolves every"
+echo "      cannot-determine case to 2, and passes (0) genuinely clean changes."

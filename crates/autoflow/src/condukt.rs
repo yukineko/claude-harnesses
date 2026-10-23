@@ -3,9 +3,32 @@ use std::path::{Path, PathBuf};
 use harness_core::config::home;
 // Shared with condukt (the single source of truth) so autoflow reads the exact
 // run-state directory condukt writes — see harness_core::projkey.
-use harness_core::projkey::{project_key, repo_root};
+use harness_core::projkey::{main_worktree_root, project_key, repo_root};
 use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
+
+/// The condukt run-state directories to consult for `cwd`, canonical first.
+///
+/// condukt keys a run by the MAIN worktree root (backlog 43393ce2), so from a
+/// linked worktree the run lives under the main tree's key, not under
+/// `repo_root(cwd)` (backlog 1eae7cb9). A pre-43393ce2 run stored under a
+/// linked worktree's own per-checkout key is still read from that worktree,
+/// after the canonical directory, the same order condukt itself resolves.
+/// An undeterminable main worktree root is `Undetermined`, never a fallback to
+/// the per-checkout key.
+fn project_dirs(cwd: &Path) -> Determination<Vec<PathBuf>> {
+    let base = home().join(".condukt").join("state");
+    let main = match main_worktree_root(cwd) {
+        Determination::Known(root) => root,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let mut dirs = vec![base.join(project_key(&main))];
+    let legacy = base.join(project_key(&repo_root(cwd)));
+    if !dirs.contains(&legacy) {
+        dirs.push(legacy);
+    }
+    Determination::Known(dirs)
+}
 
 /// 2 hours in seconds. Running tasks older than this are considered interrupted.
 const STUCK_SECS: i64 = 7200;
@@ -101,13 +124,14 @@ pub fn find_pending(cwd: &Path) -> Determination<Vec<TaskState>> {
 /// would have written. Fail-soft: an unreadable/unparseable/missing run file
 /// returns `false`.
 pub fn has_completed_tasks_for_run(cwd: &Path, run_id: &str) -> bool {
-    let root = repo_root(cwd);
-    let key = project_key(&root);
-    let project_dir = home().join(".condukt").join("state").join(&key);
-    let path = project_dir.join(format!(
-        "{}.json",
-        harness_core::store::safe_session(run_id)
-    ));
+    let dirs = match project_dirs(cwd) {
+        Determination::Known(d) => d,
+        Determination::Undetermined(_) => return false,
+    };
+    let file = format!("{}.json", harness_core::store::safe_session(run_id));
+    let Some(path) = dirs.iter().map(|d| d.join(&file)).find(|p| p.exists()) else {
+        return false;
+    };
     let run = match std::fs::read_to_string(&path)
         .ok()
         .and_then(|t| serde_json::from_str::<RunState>(&t).ok())
@@ -164,13 +188,24 @@ pub fn mark_running(cwd: &Path, task_ids: &[&str]) {
 /// not fit the schema — e.g. one task missing `status`, which fails the WHOLE
 /// document and would otherwise hide every healthy task alongside it).
 fn load_latest(cwd: &Path) -> Determination<Option<(PathBuf, RunState)>> {
-    let root = repo_root(cwd);
-    let key = project_key(&root);
-    let project_dir = home().join(".condukt").join("state").join(&key);
-    let path = match latest_run_file(&project_dir) {
-        Determination::Known(Some(p)) => p,
-        Determination::Known(None) => return Determination::Known(None),
+    let dirs = match project_dirs(cwd) {
+        Determination::Known(d) => d,
         Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    // The newest run of the first directory that holds any (canonical first).
+    let mut found = None;
+    for dir in &dirs {
+        match latest_run_file(dir) {
+            Determination::Known(Some(p)) => {
+                found = Some(p);
+                break;
+            }
+            Determination::Known(None) => {}
+            Determination::Undetermined(why) => return Determination::Undetermined(why),
+        }
+    }
+    let Some(path) = found else {
+        return Determination::Known(None);
     };
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,

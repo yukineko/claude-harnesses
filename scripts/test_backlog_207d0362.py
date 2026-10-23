@@ -44,10 +44,13 @@ def tagged() -> list[tuple[str, str, str]]:
 
 
 class MarketplaceDescriptionTagTracksVersion(unittest.TestCase):
-    def test_scan_sees_tagged_descriptions(self) -> None:
-        self.assertTrue(tagged(), "no description opens with a vX.Y.Z tag")
+    def test_scan_reads_marketplace_plugins(self) -> None:
+        # Control: descriptions no longer carry a leading vX.Y.Z tag (history
+        # lives in git log), so an empty tagged() is expected; prove the scan
+        # still reads real marketplace entries rather than an empty file.
+        with open(MARKETPLACE, encoding="utf-8") as f:
+            self.assertTrue(json.load(f)["plugins"], "marketplace.json lists no plugins")
 
-    @unittest.expectedFailure  # backlog 207d0362: open defect
     def test_leading_tag_equals_version(self) -> None:
         drift = [f"{n}: description v{t} vs version {v}" for n, t, v in tagged() if t != v]
         self.assertEqual(drift, [], f"{len(drift)} drifted entries:\n" + "\n".join(drift))

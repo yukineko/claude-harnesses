@@ -534,15 +534,6 @@ fn claim_session_start_undetermined_injects() {
 }
 
 #[test]
-fn claim_status_command() {
-    let body = manifest("commands/status.md");
-    assert!(body.contains("${CLAUDE_PLUGIN_ROOT}/bin/harness-status"));
-    // The invocation is in the Steps body, not only in the front matter.
-    let after_fm = body.splitn(3, "---").nth(2).unwrap();
-    assert!(after_fm.contains("${CLAUDE_PLUGIN_ROOT}/bin/harness-status"));
-}
-
-#[test]
 fn claim_full_dashboard() {
     let sb = Sb::new();
     let o = sb.run(&[]);

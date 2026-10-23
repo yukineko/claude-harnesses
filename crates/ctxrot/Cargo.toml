@@ -1,10 +1,10 @@
 [package]
 name = "ctxrot"
-version = "0.5.36"
+version = "0.5.37"
 edition = "2021"
 # MSRV: `is_none_or` (store.rs/usage.rs) was stabilized in Rust 1.82.
 rust-version.workspace = true
-description = "A context-rot guard for Claude Code: detect, rescue, restore, and distill conversation context to fight attention decay in long sessions."
+description = "Context-rot guard for Claude Code that detects, rescues, restores and distills conversation context to fight attention decay in long sessions."
 license = "MIT"
 
 [[bin]]

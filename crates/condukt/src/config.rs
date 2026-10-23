@@ -70,8 +70,9 @@ pub struct Config {
     /// Adversarial refutation panel (verification-side fan-out; opt-in). When
     /// true, `condukt adversarial plan` convenes N independent skeptics to refute
     /// a completed high-stakes artifact, failing closed. OFF by default (N× the
-    /// verify cost). Overridable via `CONDUKT_ADVERSARIAL`. A GATE-crate-touching
-    /// change forces a panel even when this is off (`adversarial::touches_gate_crate`).
+    /// verify cost). Overridable via `CONDUKT_ADVERSARIAL`. This switch is the
+    /// ONLY way to engage the panel: a GATE-crate-touching change is reported
+    /// as `high_stakes` but does not force a panel.
     pub adversarial_enabled: bool,
     /// Panel width when engaged. Defaults to 3; clamped to `adversarial::MAX_PANEL`.
     pub adversarial_size: usize,

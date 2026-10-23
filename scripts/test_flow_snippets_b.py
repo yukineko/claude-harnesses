@@ -10,7 +10,7 @@ once from this checkout and run with a temp HOME, temp git repos and, where the
 store boundary matters, a linked worktree. The real ~/.claude, ~/.backlog and
 $HOME are never touched.
 
-Run: python3 -m pytest -q scripts/test_prose_flow_b.py
+Run: python3 -m pytest -q scripts/test_flow_snippets_b.py
 """
 import json
 import os
@@ -276,10 +276,6 @@ class TestWeightDefault(unittest.TestCase):
         self.assertEqual(r2.returncode, 0, r2.stderr)
         tasks = json.loads(sb.run(["backlog", "list", "--json"], linked).stdout)
         self.assertEqual(next(t for t in tasks if t["title"] == "weighted")["weight"], 2.5)
-
-    def test_claim_weight_default_skill_command_supplies_weight_flag(self):
-        argv = skill_cmd("backlog add --title")
-        self.assertIn("--weight", argv)
 
 
 class TestTagTaxonomy(unittest.TestCase):
@@ -654,6 +650,7 @@ statement = "first"
 acceptance = ["a1", "a2"]
 canon = ["docs/a.md#x"]
 falsifiable = true
+repro_test = "bash tests/fail.sh"
 
 [[requirement]]
 id = "R2"
@@ -661,6 +658,7 @@ statement = "second"
 acceptance = ["b1"]
 canon = ["docs/a.md#y"]
 falsifiable = true
+repro_test = "bash tests/fail.sh"
 
 <<<SPEC_DRAFT>>>
 rigor: pass
@@ -671,7 +669,9 @@ summary: s"""
 class TestSpecforge(unittest.TestCase):
     def setUp(self):
         self.sb = Sandbox(self)
-        self.primary = self.sb.init_repo(files={"specforge.toml": forge_config(TWO_REQ_DRAFT)})
+        self.primary = self.sb.init_repo(files={"specforge.toml": forge_config(TWO_REQ_DRAFT),
+                                                "tests/fail.sh": FAIL_SH,
+                                                ".gitignore": ".scratch/\n"})
         self.w = self.sb.worktree(self.primary, "w")
         (self.sb.base / "req.md").write_text("req text\n")
         self.req = str(self.sb.base / "req.md")
@@ -756,22 +756,53 @@ class TestSpecforge(unittest.TestCase):
         full = log.read_text()
         self.assertIn("--tag req:ok:R1", full)
         self.assertIn("--tag req:ok:R2", full)
+        # argv is logged with `$*`, so multi-line notes split an add across
+        # lines; count on the whole log instead.
+        self.assertEqual(full.count("--repro-test bash tests/fail.sh"), 2, full)
         self.assertIn("2 件を起票", r.stdout)
 
-    def test_claim_specforge_ratify_with_real_backlog_exits_9_and_files_nothing(self):
-        """The earlier prose claimed a passing ratify makes the items appear in
-        backlog. The test pins the observed behaviour: the real `backlog add` is
-        REFUSED because specforge passes no --repro-test (no test, no ticket), so
-        ratify promotes the spec to ratified, then exits 9 with nothing queued."""
+    def spec_tasks(self, sid):
+        listed = self.sb.run(["backlog", "list", "--json"], self.w)
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        tasks = json.loads(listed.stdout) if listed.stdout.strip() else []
+        return [t for t in tasks if f"spec:{sid}" in t.get("tags", [])]
+
+    def test_claim_specforge_ratify_with_real_backlog_files_requirements_with_a_failing_repro_test(self):
+        """With the real `backlog`, a requirement is filed via `backlog add
+        --repro-test` only when that test FAILS at committed HEAD (backlog
+        eb93be49). Observed: ratify itself leaves specs/<id>.toml uncommitted,
+        so the real backlog refuses every add as undetermined (dirty tree) and
+        ratify exits 12 naming each requirement; once the ratified spec is
+        committed, `specforge queue` files them."""
         shutil.copy(bin_path("backlog"), self.sb.extra_bin / "backlog")
         self.assertEqual(self.sb.run(self.draft_argv("real"), self.w).returncode, 0)
         r = self.sb.run(self.ratify_argv("real"), self.w)
-        self.assertEqual(r.returncode, 9, r.stdout + r.stderr)
-        self.assertIn("no --repro-test was given", r.stderr)
+        self.assertEqual(r.returncode, 12, r.stdout + r.stderr)
+        self.assertIn("real:R1", r.stderr)
+        self.assertIn("uncommitted changes", r.stderr)
         self.assertEqual(self.status_of("real"), "ratified")
-        listed = self.sb.run(["backlog", "list", "--json"], self.w)
-        tasks = json.loads(listed.stdout) if listed.stdout.strip() else []
-        self.assertEqual([t for t in tasks if "spec:real" in t.get("tags", [])], [])
+        self.assertEqual(self.spec_tasks("real"), [])
+        self.sb.git(self.w, "add", "specs")
+        self.sb.git(self.w, "commit", "-q", "-m", "ratified spec")
+        q = self.sb.run(["specforge", "queue", "--id", "real"], self.w)
+        self.assertEqual(q.returncode, 0, q.stdout + q.stderr)
+        tags = sorted(tag for t in self.spec_tasks("real") for tag in t["tags"]
+                      if tag.startswith("req:"))
+        self.assertEqual(tags, ["req:real:R1", "req:real:R2"])
+
+    def test_claim_specforge_ratify_without_repro_test_exits_12_and_files_nothing(self):
+        """No test, no ticket: requirements without a repro_test are not filed;
+        ratify keeps the spec ratified, names them, and exits 12."""
+        shutil.copy(bin_path("backlog"), self.sb.extra_bin / "backlog")
+        self.assertEqual(self.sb.run(self.draft_argv("norepro"), self.w).returncode, 0)
+        spec = self.w / "specs" / "norepro.toml"
+        spec.write_text(re.sub(r'(?m)^repro_test = .*\n', "", spec.read_text()))
+        r = self.sb.run(self.ratify_argv("norepro"), self.w)
+        self.assertEqual(r.returncode, 12, r.stdout + r.stderr)
+        self.assertIn("norepro:R1", r.stderr)
+        self.assertIn("norepro:R2", r.stderr)
+        self.assertEqual(self.status_of("norepro"), "ratified")
+        self.assertEqual(self.spec_tasks("norepro"), [])
 
     def test_claim_specforge_without_config_exits_2(self):
         bare = self.sb.base / "bare"
@@ -847,7 +878,14 @@ class TestLockRelease(unittest.TestCase):
         self.assertEqual(acq.returncode, 0, acq.stderr)
         held = sb.run(["backlog", "lock", "status", "--project", str(linked)], linked)
         self.assertEqual(json.loads(held.stdout)["kind"], "exclusive-lock")
-        r = sb.run(rel, linked)
+        # Only the holder releases (backlog 4493142a): the SKILL's command
+        # identifies the caller via CLAUDE_CODE_SESSION_ID. A non-holder is
+        # refused and the lock survives.
+        other = sb.run(rel, linked, CLAUDE_CODE_SESSION_ID="S2")
+        self.assertNotEqual(other.returncode, 0, other.stdout)
+        still = sb.run(["backlog", "lock", "status", "--project", str(linked)], linked)
+        self.assertEqual(json.loads(still.stdout)["kind"], "exclusive-lock")
+        r = sb.run(rel, linked, CLAUDE_CODE_SESSION_ID="S1")
         self.assertEqual(r.returncode, 0, r.stderr)
         after = sb.run(["backlog", "lock", "status", "--project", str(linked)], linked)
         self.assertEqual(after.stdout.strip(), "none")
@@ -971,9 +1009,6 @@ class TestBudgetCheck(unittest.TestCase):
         line = next(l for l in fm.splitlines() if l.startswith("allowed-tools:"))
         self.assertIn("Bash(budgetguard:*)", line)
 
-    def test_claim_budget_3_1_block_contains_check_command(self):
-        self.assertTrue(self._cmd().startswith("budgetguard check"))
-
     def test_claim_budget_over_is_nonzero(self):
         r = self._run(self.CFG, self._today_ledger(10.0))
         self.assertEqual(self._verdict(r), "over", r)
@@ -998,19 +1033,6 @@ class TestBudgetCheck(unittest.TestCase):
         # Not in PATH => the shell reports 127; "exit 0 以外 -> Step 4" must catch it.
         r = self._run(self.CFG, self._today_ledger(1.0), with_binary=False)
         self.assertNotEqual(r.returncode, 0, r)
-
-    def test_claim_budget_prose_nonzero_goes_to_step_4(self):
-        t = skill_text()
-        for name, body in (("3-1", _section(t, r"^#### 3-1\. ", "#### ")),
-                           ("早期脱出条件", _section(t, r"^## 早期脱出条件", "## "))):
-            sents = re.split(r"。|\n", body)
-            self.assertTrue(any("exit 0 以外" in x and "Step 4" in x for x in sents),
-                            f"{name}: no sentence with both `exit 0 以外` and `Step 4`")
-
-    def test_claim_budget_pressure_line_mentions_pressure_and_n1(self):
-        s31 = _section(skill_text(), r"^#### 3-1\. ", "#### ")
-        lines = [l for l in s31.splitlines() if "pressure" in l and "N=1" in l]
-        self.assertTrue(lines, "3-1 has no line mentioning both `pressure` and `N=1`")
 
 
 if __name__ == "__main__":

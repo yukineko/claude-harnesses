@@ -72,15 +72,19 @@ cd "$REPO" 2>/dev/null || { echo "pre-push: cannot enter the repository work tre
 # "could not determine" is not "clean". A missing python3 or missing script also
 # blocks: this check has teeth or it is theatre.
 #
-# Ledger entries no ref or worktree HEAD contains are non-blocking (they can
-# never reach a remote), EXCEPT the sha being pushed: passing it as --pushing
-# keeps `git push origin <sha>:main` of an orphaned ungated commit blocked.
+# Each pushed (local sha, remote sha) pair is passed as --push, so only ledger
+# entries THIS push carries (reachable from the local sha, not from the remote
+# sha) block it; an ungated commit on some other branch does not (user ruling
+# 2026-10-22). That also keeps `git push origin <sha>:main` of an orphaned
+# ungated commit blocked. An undeterminable range exits 2 and blocks. With no
+# stdin lines at all, gate-bypass.py falls back to judging every entry any
+# ref or worktree HEAD contains (the restrictive side).
 PUSH_INPUT="$(cat)"
 set --
 while read -r _lr _ls _rr _rs; do
     case "${_ls:-}" in
         ""|0000000000000000000000000000000000000000) ;;
-        *) set -- "$@" --pushing "$_ls" ;;
+        *) set -- "$@" --push "$_ls" "${_rs:-0000000000000000000000000000000000000000}" ;;
     esac
 done <<EOF
 $PUSH_INPUT
@@ -245,6 +249,26 @@ if command -v python3 >/dev/null 2>&1 && [ -f scripts/check-plugin-rollout.py ];
             #
             # Backlog tracks relocating the enforcement so this does not degrade
             # into "someone will notice" (CLAUDE.md §6 forbids resting on that).
+            #
+            # An ORPHAN-ONLY rc=1 (an ORPHAN CACHE DIR block and no ROLLOUT
+            # DRIFT block) has no crate to roll out; the checker's own Fix line
+            # says so, and naming rollout-plugins.sh here would contradict it
+            # (backlog d38c195b).
+            case "$rollout_out" in
+                *"ROLLOUT DRIFT ("*) rollout_orphan_only=0 ;;
+                *"ORPHAN CACHE DIR ("*) rollout_orphan_only=1 ;;
+                *) rollout_orphan_only=0 ;;
+            esac
+            if [ "$rollout_orphan_only" -eq 1 ]; then
+                cat >&2 <<'EOF'
+
+rollout: the plugin cache holds a dir for a plugin with no crate (ORPHAN CACHE
+DIR above). That is NOT fixed by a rollout — follow the checker's Fix line
+(delete the orphan cache dir, or declare it in scripts/retired-plugins.json).
+
+This is advisory only — the push is not blocked.
+EOF
+            else
             cat >&2 <<'EOF'
 
 rollout: the versions above are committed but not live on THIS machine — the fix
@@ -255,6 +279,7 @@ is in git and reaches no session here until you roll it out:
 This is advisory only — the push is not blocked. Rollout is local deployment
 state, not code quality, so it does not gate sharing code with the remote.
 EOF
+            fi
             ;;
         3)
             # Unverifiable class. Neither a rollout nor an enablement edit can

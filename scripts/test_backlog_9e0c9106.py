@@ -48,7 +48,6 @@ class MetricSurfaceCommentMatchesRust(unittest.TestCase):
         self.assertIn("scope_write_paths:", body)
         self.assertIn("scope_read_paths:", body)
 
-    @unittest.expectedFailure  # backlog 9e0c9106: open defect, remove when fixed
     def test_comment_does_not_claim_serde_default_keeps_the_literal_compiling(self):
         comment, _ = comment_and_body()
         self.assertIsNone(

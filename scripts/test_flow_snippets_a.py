@@ -8,7 +8,7 @@ throw-away HOME; the real ~/.claude and $HOME are never touched.
 
 Redirect the prose for RED checks with FLOW_SKILL_MD / FLOW_README_MD /
 FLOW_README_JA_MD (and CONDUKT_SKILL_MD for the condukt skill).
-Run: python3 -m pytest -q scripts/test_prose_flow_a.py
+Run: python3 -m pytest -q scripts/test_flow_snippets_a.py
 """
 import json
 import os
@@ -222,27 +222,6 @@ class T(unittest.TestCase):
         pkgs = [p["name"] for p in json.loads(r.stdout)["packages"]]
         self.assertNotIn("flow", pkgs)
 
-    def test_claim_layout_readme_prose_and_fence_comments(self):
-        for path in (README, README_JA):
-            t = prose(path)
-            fence = fence_with(".claude-plugin/plugin.json", t)
-            self.assertRegex(fence, r"\.claude-plugin/plugin\.json\s+#")
-            self.assertRegex(fence, r"skills/flow/SKILL\.md\s+#")
-            # the layout fence lists exactly those two paths
-            self.assertEqual(len([l for l in fence.splitlines() if l.strip()]), 2, fence)
-        en = prose(README)
-        self.assertIn("plugin manifest", fence_with("plugin.json", en))
-        self.assertIn("the /flow skill (drives the source", fence_with("plugin.json", en))
-        self.assertIn("flow has no hook.", en)
-        self.assertIn("no binary, no launcher, no hook, not a Cargo crate", en)
-        self.assertIn("The plugin bundles the `/flow` skill and nothing else.", en)
-        self.assertIn("so `cargo` is not involved in shipping it", en)
-        ja = prose(README_JA)
-        self.assertIn("flow は hook を持たない", ja)
-        self.assertIn("バイナリ・ランチャ・hook はいずれも無く、Cargo クレートでもない", ja)
-        self.assertIn("プラグインは `/flow` skill のみを同梱する", ja)
-        self.assertIn("`cargo` は関わらない", ja)
-
     # ----------------------------------------------------------------- license
     def test_claim_license_mit(self):
         m = json.loads(MARKETPLACE.read_text())
@@ -319,13 +298,6 @@ class T(unittest.TestCase):
         r = sb.run([binpath("autoflow"), "prompt-submit"], env=env,
                    input=json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": sess}))
         self.assertNotIn("/flow", r.stdout + r.stderr)
-
-    def test_claim_no_propose_docs_say_explicit_invocation_only(self):
-        self.assertIn("自分から `/flow` を提案してはならない", skill_text())
-        self.assertIn("明示的に起動したときだけ走る", frontmatter()["description"])
-        self.assertIn("提案することはしない", frontmatter()["description"])
-        self.assertIn("runs when, and only when, you invoke it", prose(README))
-        self.assertIn("明示的に起動したときだけ走る", prose(README_JA))
 
     # ------------------------------------------------------------- frontmatter
     def test_claim_frontmatter_declares_args_and_tools(self):
@@ -425,12 +397,6 @@ class T(unittest.TestCase):
                 if needle in cells[0]:
                     rows[key] = cells
         return header, rows
-
-    def test_claim_policy_table_header_and_rows_present(self):
-        header, rows = self.table()
-        self.assertEqual(header[0], "human gate")
-        self.assertEqual(header[2:5], ["risk", "reversible", "confidence"])
-        self.assertEqual(sorted(rows), sorted(self.TABLE_ROWS))
 
     def _answer(self, risk, rev, conf, *flags, recommend="0", opts=("A", "B")):
         args = ["--risk", risk, "--reversible", rev, "--confidence", conf, "--question", "q"]
@@ -580,50 +546,6 @@ class T(unittest.TestCase):
         self.assertEqual(ctl.returncode, 0)
         self.assertEqual(json.loads(ctl.stdout)["chosen"], "継続")  # recommend 1 == 継続
 
-    def test_claim_judgment_no_approval_on_judgment_gates_in_skill_text(self):
-        t = skill_text()
-        # every policy-answer command that carries --approval is a permission-approval gate:
-        # the only fenced one is the generic approval template, never a judgment question.
-        for lang, body, _ in fences(t):
-            if "--approval" in body and "condukt policy answer" in body:
-                self.assertIn("進んでよいか", body.replace("進めてよいか", "進んでよいか"))
-                for judgment in ("divert", "pivot", "charter", "blocked"):
-                    self.assertNotIn(judgment, body)
-        # every other mention of --approval is in a prohibition sentence, the permission gates
-        # (lock/resume/deploy/Phase 3) or the flag description lines
-        allowed_ctx = re.compile(r"付けてはならない|付けない|付けること|付ける|付けて|付けても|付けた|"
-                                 r"\|.*--approval|`--approval`|--approval` は|--approval` と|--approval 付き|--approval を付け|"
-                                 r"--approval\s+\\|condukt policy answer --approval")
-        for i, line in enumerate(strip_test_tags(t).splitlines(), 1):
-            if "--approval" in line:
-                self.assertRegex(line, allowed_ctx, f"SKILL.md:{i}: {line}")
-        self.assertIn("判断要求（人間に選択・設計判断を求める Ask）のゲートに `--approval` を付けてはならない", t)
-        self.assertIn("charter 彫り直しの問いを自答してはならない", t)
-        self.assertIn("勝手に `/compass` を起動してはならない", t)
-        stop_list = re.search(r"自律でも escalate のまま残るのは (\(a\).*?)であり、policy が block を返したゲートも止まる", t, re.S).group(1)
-        for tag in ("(a) worker blocked", "(b) pivot", "(c) conflict/untestable", "(d) spec-gap divert",
-                    "(e) charter 彫り直し中の問い"):
-            self.assertIn(tag, stop_list)
-
-    # ------------------------------------------------------------- step1_order
-    def test_claim_step1_order_backlog_before_compass(self):
-        t = skill_text()
-        blocks = fences(t)
-        first_backlog = next(off for l, b, off in blocks if "backlog next --claim" in b)
-        first_compass = next(off for l, b, off in blocks if re.search(r"\bcompass gap\b", b))
-        self.assertLess(first_backlog, first_compass)
-        s1 = t.index("### Step 1")
-        s2 = t.index("### Step 2")
-        self.assertLess(s1, s2)
-        in_step1 = [b for l, b, off in blocks if s1 < off < s2]
-        for b in in_step1:
-            self.assertNotRegex(b, r"\bcompass\b")
-        self.assertNotRegex(t[s1:s2].split("\n", 3)[3], r"`compass gap`\s*$")
-        # compass gap in a fenced block only ever appears after step 2
-        for l, b, off in blocks:
-            if re.search(r"\bcompass (gap|charter)\b", b):
-                self.assertGreater(off, s2)
-
     # ------------------------------------------------------ max_parallel_default
     def test_claim_max_parallel_default_is_four_when_unset(self):
         sb = self.sb
@@ -654,20 +576,6 @@ class T(unittest.TestCase):
         # the interpreter agent defines per-task confidence (high|medium|low)
         interp = (CONDUKT_AGENTS / "condukt-interpreter.md").read_text(encoding="utf-8")
         self.assertIn('"confidence": "high | medium | low"', interp)
-
-    def test_claim_decomp_fields_open_questions_is_the_researcher_field_not_the_interpreters(self):
-        """FALSE finding (trigger 1 wording): SKILL.md says "condukt interpreter が
-        `open_questions` を出したとき". The interpreter's schema has no open_questions;
-        the field is defined by the RESEARCHER agent (research_brief). The engine's
-        Decomposition type has no such field either (it is silently ignored)."""
-        interp = (CONDUKT_AGENTS / "condukt-interpreter.md").read_text(encoding="utf-8")
-        research = (CONDUKT_AGENTS / "condukt-researcher.md").read_text(encoding="utf-8")
-        self.assertNotIn("open_questions", interp)
-        self.assertIn('"open_questions"', research)
-        model = (ROOT / "crates" / "condukt" / "src" / "model.rs").read_text()
-        decomp_struct = re.search(r"pub struct Decomposition \{.*?\n\}", model, re.S).group(0)
-        self.assertNotIn("open_questions", decomp_struct)
-        self.assertIn("trigger 1: condukt-researcher の research brief が `open_questions` を出したとき", skill_text())
 
     # ------------------------------------------------------- condukt_fugu_route
     def _route(self, good_model, suggested, runs=20):

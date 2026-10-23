@@ -232,6 +232,7 @@ fn episode_for_merge(
         touched_files: files,
         class: "merge".to_string(),
         model: model.to_string(),
+        model_id: None,
         role: "worker".to_string(),
         pass,
         duration_secs,

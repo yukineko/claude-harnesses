@@ -10,7 +10,7 @@ allowed-tools: Bash(git:*), Bash(ls:*), Bash(cat:*), Bash(mkdir:*), Bash(date:*)
 - session-insights の record ノートは絶対に書き換えないこと。
 - 数値を捏造しないこと。
 - 全 diff 本文は読まないこと。
-- `<vault>/daily/<date>.md` 以外には書かないこと（`records/` には決して書かないこと） [test: scripts/test_prose_daily_report.py::test_claim_write_only_daily]。
+- `<vault>/daily/<date>.md` 以外には書かないこと（`records/` には決して書かないこと）。
 - turns / tokens / cost は record の機械充填値、変更規模は git の実値だけを使うこと。
 - config 欠如・非 git リポジトリ・records 0 件でも止まらず、拾えた材料で日報を出すこと。
 - プロジェクトを跨ぐ全体像は record から、当該リポジトリの変更詳細は git から取り、両者を突き合わせて合成すること。
@@ -23,38 +23,38 @@ allowed-tools: Bash(git:*), Bash(ls:*), Bash(cat:*), Bash(mkdir:*), Bash(date:*)
 
 ### Step 0 — 引数から対象日と設定を決めること
 
-- 引数に日付 `YYYY-MM-DD` があれば、それを対象日にすること [test: scripts/test_prose_daily_report.py::test_claim_arg_date]。
-- 引数が `today` または省略なら今日、`yesterday` なら前日を対象日にすること [test: scripts/test_prose_daily_report.py::test_claim_arg_date]。
-- 日付の解決には、今日は `date +%F`、前日は `date -v-1d +%F`（BSD/macOS の date）か `date -d yesterday +%F`（GNU date）を使うこと [test: scripts/test_prose_daily_report.py::test_claim_date_today_yesterday]。
-- `--since <git-expr>` が渡されたら期間モードにし、`<date>` をその期間の終端日にすること [test: scripts/test_prose_daily_report.py::test_claim_arg_since]。
-- `--repo <path>` が渡されたら、そのリポジトリも追加で走査すること [test: scripts/test_prose_daily_report.py::test_claim_arg_repo]。省略時はカレントリポジトリのみを走査すること。
-- `--stdout` が渡されたら、vault へ書き込まずターミナル出力だけにすること [test: scripts/test_prose_daily_report.py::test_claim_arg_stdout]。
+- 引数に日付 `YYYY-MM-DD` があれば、それを対象日にすること。
+- 引数が `today` または省略なら今日、`yesterday` なら前日を対象日にすること。
+- 日付の解決には、今日は `date +%F`、前日は `date -v-1d +%F`（BSD/macOS の date）か `date -d yesterday +%F`（GNU date）を使うこと。
+- `--since <git-expr>` が渡されたら期間モードにし、`<date>` をその期間の終端日にすること。
+- `--repo <path>` が渡されたら、そのリポジトリも追加で走査すること。省略時はカレントリポジトリのみを走査すること。
+- `--stdout` が渡されたら、vault へ書き込まずターミナル出力だけにすること。
 
 ### Step 1 — Obsidian vault を解決すること
 
-1. カレントディレクトリに `session-insights.toml` があればそれを、無ければ `~/.session-insights/config.toml` を読み（2 つはマージせず、先に見つかった 1 つだけを使う）、`obsidian_vault` と `record_dir` を採ること [test: scripts/test_prose_daily_report.py::test_claim_config_home_keys]。
-2. `obsidian_vault` は `~` を展開すること [test: scripts/test_prose_daily_report.py::test_claim_config_tilde]。
-3. config が無ければ既定にフォールバックし、vault は `~/Documents/vault/yukineko`、record_dir は `records` を使うこと [test: scripts/test_prose_daily_report.py::test_claim_config_defaults]。
+1. カレントディレクトリに `session-insights.toml` があればそれを、無ければ `~/.session-insights/config.toml` を読み（2 つはマージせず、先に見つかった 1 つだけを使う）、`obsidian_vault` と `record_dir` を採ること。
+2. `obsidian_vault` は `~` を展開すること。
+3. config が無ければ既定にフォールバックし、vault は `~/Documents/vault/yukineko`、record_dir は `records` を使うこと。
 4. 解決した records ディレクトリが存在しなければ、その旨を報告し、records 無しで git だけから日報を作ること。records が 0 件でも同様に続行すること。
 
 ### Step 2 — git コミットを収集すること
 
 - 全 diff 本文は読まないこと。
-- 対象リポジトリ（カレントと追加指定分）ごとに、対象日のコミットを作者で絞らずに集めること [test: scripts/test_prose_daily_report.py::test_claim_git_log_single_day_all_authors]。
-- 単日なら次の git log を実行すること [test: scripts/test_prose_daily_report.py::test_claim_git_log_single_day_all_authors]。
+- 対象リポジトリ（カレントと追加指定分）ごとに、対象日のコミットを作者で絞らずに集めること。
+- 単日なら次の git log を実行すること。
 
 ```bash
 git log --since="<date> 00:00" --until="<date> 23:59:59" --no-merges \
         --pretty=format:'%h%x09%an%x09%ad%x09%s' --date=format:'%H:%M'
 ```
 
-- 期間モードなら次の git log を実行すること [test: scripts/test_prose_daily_report.py::test_claim_git_log_period]。
+- 期間モードなら次の git log を実行すること。
 
 ```bash
 git log --since="<git-expr>" --no-merges --pretty=format:'%h%x09%an%x09%ad%x09%s' --date=short
 ```
 
-- 変更規模は `git log --shortstat` か、代表コミットに対する `git show --stat <sha>` で調べること [test: scripts/test_prose_daily_report.py::test_claim_git_shortstat]。
+- 変更規模は `git log --shortstat` か、代表コミットに対する `git show --stat <sha>` で調べること。
 - コミットが 0 件なら「このリポジトリでのコミットは無し」と控え、records 側の成果に依存すること。
 - git が失敗した（非リポジトリ等の）場合は、そのリポジトリを飛ばして続行すること。
 
@@ -62,7 +62,7 @@ git log --since="<git-expr>" --no-merges --pretty=format:'%h%x09%an%x09%ad%x09%s
 
 - record の数値を創作しないこと。
 
-対象日の record ノート（ファイル名は `<date>-<project>-<session8>.md` [test: crates/session-insights/src/record.rs::write_record_first_then_merge_on_disk]）を列挙して読むこと [test: scripts/test_prose_daily_report.py::test_claim_record_list_grep]。
+対象日の record ノート（ファイル名は `<date>-<project>-<session8>.md`）を列挙して読むこと。
 
 ```bash
 ls "<vault>/<record_dir>/" | grep "^<date>-"
@@ -70,11 +70,11 @@ ls "<vault>/<record_dir>/" | grep "^<date>-"
 
 各 record から次の散文セクションを抽出すること（見出しは session-insights の record フォーマットに従うこと）。
 
-- `## 完了サマリ` から、その session で完了したことを成果の主材料として抽出すること。[test: crates/session-insights/src/record.rs::skeleton_has_all_sections_and_placeholders]
-- `## つまずき / 学び` から、学び・気づきを抽出すること。[test: crates/session-insights/src/record.rs::skeleton_has_all_sections_and_placeholders]
-- `## 振り返り / 確立した方針` から、確立した方針を抽出すること。[test: crates/session-insights/src/record.rs::skeleton_has_all_sections_and_placeholders]
-- `## 注意点 / 落とし穴`、`## 残課題`、`## 要追跡 / あとで確認` から、残課題・フォローアップを抽出すること。[test: crates/session-insights/src/record.rs::skeleton_has_all_sections_and_placeholders]
-- `## 数値サマリ` と `## コスト` から、機械が自動充填した数値（turns / tool events / files / tokens / cost）をそのまま引用すること [test: crates/session-insights/src/record.rs::skeleton_has_all_sections_and_placeholders]。
+- `## 完了サマリ` から、その session で完了したことを成果の主材料として抽出すること。
+- `## つまずき / 学び` から、学び・気づきを抽出すること。
+- `## 振り返り / 確立した方針` から、確立した方針を抽出すること。
+- `## 注意点 / 落とし穴`、`## 残課題`、`## 要追跡 / あとで確認` から、残課題・フォローアップを抽出すること。
+- `## 数値サマリ` と `## コスト` から、機械が自動充填した数値（turns / tool events / files / tokens / cost）をそのまま引用すること。
 
 > record が 0 件の日は、git コミットだけから成果を書き、散文は git message から要約すること。
 > record 本文が薄い（プレースホルダのみ）session は、散文はスキップしてよいが、数値は拾うこと。
@@ -117,8 +117,8 @@ ls "<vault>/<record_dir>/" | grep "^<date>-"
 ### Step 5 — 出力すること
 
 - 既存が手書きの別内容なら上書きしないこと。
-- `--stdout` 指定時は、合成結果をターミナルに出力するだけで終了すること [test: scripts/test_prose_daily_report.py::test_claim_arg_stdout]。
-- 通常時は `mkdir -p` で `<vault>/daily/` を用意し、`<vault>/daily/<date>.md` に Write すること [test: scripts/test_prose_daily_report.py::test_claim_mkdir_write_allowed]。
+- `--stdout` 指定時は、合成結果をターミナルに出力するだけで終了すること。
+- 通常時は `mkdir -p` で `<vault>/daily/` を用意し、`<vault>/daily/<date>.md` に Write すること。
 - 既に同名ファイルがあれば Read して内容を確認し、追記か更新かを判断すること。
 - 既存が手書きの別内容なら、別セクションとして追記すること。
 - 書き込み後、保存先パスと本文（または要約）をターミナルにも表示して完了報告すること。

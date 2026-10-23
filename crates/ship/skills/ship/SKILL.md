@@ -14,8 +14,8 @@ Run the diagnostic, rebuild and rollout steps without asking for approval; only 
 ship check
 ```
 
-`ship check` prints a checklist of uncommitted changes, unmerged condukt/* branches, leftover worktrees, unpushed commits and stale plugin binaries [test: crates/ship/tests/prose_claims.rs::claim_check_lists_categories].
-`ship check` changes neither the working tree, the staged content, nor `HEAD` [test: crates/ship/tests/prose_claims.rs::claim_check_does_not_modify].
+`ship check` prints a checklist of uncommitted changes, unmerged condukt/* branches, leftover worktrees, unpushed commits and stale plugin binaries.
+`ship check` changes neither the working tree, the staged content, nor `HEAD`.
 
 ### 2. Run the safe auto-rebuild
 
@@ -23,7 +23,7 @@ ship check
 ship check --run-safe
 ```
 
-`ship check --run-safe` runs `scripts/rebuild-plugins.sh --stage-repo` from the repo root, then reprints the GATED items [test: crates/ship/tests/prose_claims.rs::claim_run_safe_runs_rebuild_stage_repo].
+`ship check --run-safe` runs `scripts/rebuild-plugins.sh --stage-repo` from the repo root, then reprints the GATED items.
 
 ### Run the explicit rollout (step 2b)
 
@@ -31,10 +31,10 @@ ship check --run-safe
 ship rollout
 ```
 
-`ship rollout` runs `scripts/rollout-plugins.sh` from the repo root with no arguments [test: crates/ship/tests/prose_claims.rs::claim_rollout_runs_script_no_args].
-`ship check --run-safe` does not itself run `scripts/rollout-plugins.sh`, and `ship rollout` does not itself run `scripts/rebuild-plugins.sh` [test: crates/ship/tests/prose_claims.rs::claim_run_safe_and_rollout_separate].
-`scripts/rollout-plugins.sh` runs `scripts/rebuild-plugins.sh` without `--stage-repo`, and `scripts/rebuild-plugins.sh` copies into `crates/*/bin` only under `--stage-repo` [test: crates/ship/tests/prose_claims.rs::claim_rollout_script_no_stage_repo].
-Neither `scripts/rebuild-plugins.sh` nor `scripts/rollout-plugins.sh` contains a state-mutating git command [test: crates/ship/tests/prose_claims.rs::claim_scripts_no_mutating_git].
+`ship rollout` runs `scripts/rollout-plugins.sh` from the repo root with no arguments.
+`ship check --run-safe` does not itself run `scripts/rollout-plugins.sh`, and `ship rollout` does not itself run `scripts/rebuild-plugins.sh`.
+`scripts/rollout-plugins.sh` runs `scripts/rebuild-plugins.sh` without `--stage-repo`, and `scripts/rebuild-plugins.sh` copies into `crates/*/bin` only under `--stage-repo`.
+Neither `scripts/rebuild-plugins.sh` nor `scripts/rollout-plugins.sh` contains a state-mutating git command.
 Use the rollout step to advance the installed plugin version, not to fix stale plugin binaries.
 
 ### 3. Commit (GATED — requires user approval)

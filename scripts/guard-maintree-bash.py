@@ -19,6 +19,12 @@ positive or false negative (4a64e6ff and ~30 sibling tickets).
                       re-snapshot and compare with the stored Pre snapshot:
                       identical                             -> 0
                       MERGE_HEAD exists after               -> 0 (resolving a merge)
+                      MERGE_HEAD existed before and is gone after, HEAD
+                      unchanged, and every changed path is one the merge
+                      brought in (`git diff HEAD...<MERGE_HEAD oid>`):
+                      `git merge --abort` of an in-progress merge
+                                                            -> 0
+                      (an unreadable MERGE_HEAD oid at Pre -> not covered)
                       HEAD moved, tree clean, and the new HEAD is a merge
                       commit, or is contained in a ref other than the branch
                       main has checked out, or that branch's reflog has an
@@ -139,12 +145,52 @@ def snapshot(main: Path, common: Path) -> dict:
             hashes[rel] = hash_path(main / rel)
         except OSError as exc:
             raise Undetermined("cannot hash dirty path %s: %s" % (rel, exc)) from exc
+    merge_head = (common / "MERGE_HEAD").exists()
     return {
         "porcelain": porcelain,
         "hashes": hashes,
         "head": git(main, "rev-parse", "HEAD").strip(),
-        "merge_head": (common / "MERGE_HEAD").exists(),
+        "merge_head": merge_head,
+        "merge_head_oid": merge_head_oid(common) if merge_head else None,
     }
+
+
+def merge_head_oid(common: Path) -> str | None:
+    """The first oid MERGE_HEAD names, or None when it cannot be read as one.
+
+    None is not evidence of anything: post() then has no merge to attribute an
+    abort to and refuses (CLAUDE.md 3).
+    """
+    try:
+        first = (common / "MERGE_HEAD").read_text().split()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not first or len(first[0]) not in (40, 64) or not all(c in "0123456789abcdef" for c in first[0]):
+        return None
+    return first[0]
+
+
+def merge_abort_back_to_head(main: Path, before: dict, after: dict) -> bool:
+    """True if this call ended an in-progress merge back to the same HEAD and
+    every path it changed is one the merge itself brought in (backlog 6b5971e4).
+
+    `git merge --abort` of one's own conflicted merge is integration (CLAUDE.md
+    8): it restores main to HEAD. The paths are bounded by
+    `git diff --name-only HEAD...<MERGE_HEAD>` (what the incoming side changed
+    since the merge base), so a call that also touched an unrelated path is not
+    covered. No recorded MERGE_HEAD oid -> False (refuse), never a guess.
+    """
+    if not before.get("merge_head") or after["merge_head"]:
+        return False
+    if after["head"] != before["head"]:
+        return False
+    oid = before.get("merge_head_oid")
+    if not isinstance(oid, str) or not oid:
+        return False
+    merged = set(
+        git(main, "diff", "--name-only", "-z", "%s...%s" % (before["head"], oid)).split("\0")
+    ) - {""}
+    return all(p in merged for p in changed_paths(before, after))
 
 
 def state_file(common: Path, payload: dict) -> Path:
@@ -294,6 +340,8 @@ def post(payload: dict, common: Path, main: Path) -> int:
         pass
     elif after["merge_head"]:
         pass  # a merge / conflict resolution is in progress
+    elif merge_abort_back_to_head(main, before, after):
+        pass  # aborting one's own in-progress merge back to HEAD
     elif after["head"] != before["head"] and not after["porcelain"]:
         branch = checked_out_branch(main)
         if not integration_head(main, after["head"], branch) and not merge_reflog_entry(

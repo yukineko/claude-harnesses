@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""Gate: run `cargo clippy` on the crates that opted in to the workspace deny lints.
+"""Gate: refuse a commit that weakens the workspace deny-lint CONFIGURATION.
 
-Why this exists
----------------
+This scanner does NOT run `cargo`, `cargo clippy` or `cargo fmt`. It reads
+`Cargo.toml` manifests (working tree and HEAD) and nothing else. Executing
+clippy on changed crates is owned by donegate's lint-changed check; an earlier
+version of this script ran `cargo clippy -p <pkg> --all-targets` itself, which
+duplicated that work on every commit, and was removed.
+`scripts/tests/precommit-clippy-gate.sh` Part T pins the removal: a fake `cargo`
+on PATH that writes a marker file must never be executed.
+
+What it protects
+----------------
 The workspace root `Cargo.toml` declares
 
     [workspace.lints.clippy]
@@ -12,183 +20,82 @@ The workspace root `Cargo.toml` declares
 
 and a crate inherits them only by writing `[lints] workspace = true` in its own
 manifest. Those three lints are the physical exits a verdict-bearing crate uses
-to turn "cannot determine" into a crash, so in a gate crate they must not
-compile at all.
+to turn "cannot determine" into a crash. Whether clippy then enforces them is
+the clippy runner's job; whether the CONFIGURATION that makes clippy enforce
+them is still there is this scanner's job. A commit that quietly drops the
+opt-in (or the root deny) would make every later clippy run pass vacuously.
 
-Before this scanner, `cargo clippy` ran in exactly ONE local place: donegate.toml,
-as a Stop-hook check, workspace-wide, and only in a clone where `donegate trust`
-has been run. `.githooks/pre-commit` and `.githooks/pre-push` invoke cargo
-nowhere. So a commit could introduce a denied `.unwrap()` into an opted-in gate
-crate and nothing at commit time would notice.
+It blocks (exit 1) when, comparing the working tree against HEAD:
 
-Diff source == scanned content (the invariant this scanner is built around)
---------------------------------------------------------------------------
-The crate set is selected from the WORKING TREE — `git diff --name-only HEAD`
+  * a changed crate (any path under `crates/<dir>/` differs from HEAD, or is
+    untracked) whose HEAD `crates/<dir>/Cargo.toml` had `[lints] workspace = true`
+    no longer has it (removed, or set to anything other than boolean true);
+  * the root `Cargo.toml` changed and `[workspace.lints.clippy]` no longer has
+    a `deny` (or the stricter `forbid`) level for unwrap_used, expect_used or
+    panic that HEAD had — removed, or downgraded to `warn`/`allow`. Both the
+    string form (`panic = "deny"`) and the table form
+    (`panic = { level = "deny", priority = 1 }`) are recognised.
+
+Gaining an opt-in, adding a new crate, deleting a crate's manifest outright, or
+editing a manifest while keeping the opt-in is not a violation (exit 0).
+
+Diff source == scanned content
+------------------------------
+The changed set is taken from the WORKING TREE — `git diff --name-only HEAD`
 unioned with `git ls-files --others --exclude-standard` — and NEVER from
-`git diff --cached`.
-
-The reason is that clippy compiles the working tree. If the selector read the
-index while the checker reads the working tree, the two disagree, and the
-disagreement is exploitable in the permissive direction: stage a clean version of
-a file, leave the violating change unstaged, and the selector finds no crate to
-check. The gate then reports clean and the commit that git actually creates is
-never inspected. Selecting from the same content that gets compiled is the only
-arrangement where a pass means something. `scripts/tests/precommit-clippy-gate.sh`
-Part J pins this by leaving a violation unstaged with an empty `--cached` diff and
-requiring a block anyway.
-
-The untracked half is not optional either: a brand-new `.rs` file in a gate crate
-does not appear in `git diff HEAD` at all, so diff alone would miss a violation
-in newly added code entirely. This mirrors the union already used by
-`scripts/test-changed-crates.sh` (diff at :56, untracked at :70, unioned at :80).
-Part K pins it.
-
-Membership is DERIVED, never hardcoded
---------------------------------------
-A crate is in scope iff its `Cargo.toml` contains a `[lints]` table with
-`workspace = true`. There is no list of crate names in this file: a crate that
-newly opts in is picked up on its next change with no edit here, and a crate
-that opts out stops being checked. The cargo package name is then read from the
-manifest's `[package]` section — deliberately NOT from `[[bin]]`/`[[bench]]`,
-whose `name` fields can differ from the package name — because the directory
-name is not always the package name. Same model as
-`scripts/test-changed-crates.sh:83-106` (dir extraction at :83, `[package] name`
-resolution at :92-106).
-
-Verdict comes from the EXIT STATUS
-----------------------------------
-`cargo clippy`'s return code is the verdict. Its stdout/stderr are only ever
-shown to the human. A checker that crashed, was killed, or could not be started
-is not a checker that passed, and no amount of reassuring text on stdout changes
-that.
+`git diff --cached`. The manifests compared are the working-tree files. If the
+selector read the index while the comparison reads the working tree, a clean
+staged version with an unstaged opt-in removal would be selected as "nothing
+changed". Part J of the test suite pins this.
 
 Cannot-determine resolves to the restricted side (CLAUDE.md 3)
 --------------------------------------------------------------
-Every state where the crate set or the checker itself cannot be established is
-exit 2, and `.githooks/pre-commit`'s `run()` helper treats exit 2 as UNDETERMINED
-and blocks. Specifically: cargo not found, cargo found but not executable, cargo
-failing to launch, `git diff` or `git ls-files` exiting non-zero (which includes
-an unborn branch), and a `Cargo.toml` that cannot be read or parsed while
-deciding membership.
+Every state where the answer cannot be established is exit 2, and
+`.githooks/pre-commit`'s `run()` helper treats exit 2 as UNDETERMINED and
+blocks: `git diff` / `git ls-files` / `git ls-tree` / `git show` exiting
+non-zero (which includes an unborn branch with no HEAD), a working-tree or HEAD
+`Cargo.toml` that cannot be read or parsed, and an opted-in crate whose
+manifest declares a target path (`package.build`, `lib.path`, or `path` on
+`[[bin]]`/`[[example]]`/`[[test]]`/`[[bench]]`) that resolves outside the
+repository. That last case is retained from the clippy-running version: such a
+file can never appear in `git diff`, so this gate cannot see it at all, and the
+restricted answer is to say so rather than skip it.
 
-Crucially, "could not determine the crate set" is a DIFFERENT state from
-"git answered, and genuinely no opted-in crate changed". They are separate
-variants below (`Undetermined` vs `Selection`), not one empty list, because an
-empty list read as "nothing to check, therefore clean" is exactly the fail-open
-CLAUDE.md 3 names. The former is exit 2, the latter is exit 0.
+"Could not determine" is a DIFFERENT state from "determined: nothing was
+weakened". They are separate variants (`Undetermined` vs a list of findings),
+never one empty list; the former is exit 2, the latter exit 0.
 
-FORMER KNOWN LIMITATION — now closed
--------------------------------------------------------------------
-budgetguard, donegate, reviewgate, schemaguard and harness-core used to have NO
-`[lints]` section (measured 2026-07-28 on branch flow/clippy-precommit-gate).
-The four plugin crates hand-pasted `#![deny(clippy::panic)]` into their crate
-roots instead (crates/budgetguard/src/main.rs, crates/donegate/src/main.rs,
-crates/reviewgate/src/main.rs, crates/schemaguard/src/lib.rs and
-crates/schemaguard/src/main.rs — 5 hand-placed attributes across 4 crates);
-harness-core had no deny of any of the three lints at all.
-`clippy::panic` is a different lint from `clippy::unwrap_used` and
-`clippy::expect_used`, so those two were not denied in those crates by any
-invocation, and this scanner (membership derived from the opt-in) did not check
-them.
-
-All five crates now carry `[lints] workspace = true` and the hand-placed
-`#![deny(clippy::panic)]` attributes were removed (the deny is inherited from
-the workspace root instead). This scanner now covers them like any other
-opted-in crate — there is no remaining special case here, by construction of
-the derivation rule above ("Membership is DERIVED, never hardcoded").
-
-Out-of-directory sources: a false negative that WAS demonstrated, now closed
----------------------------------------------------------------------------
-Selection began as `crates/<dir>/` prefixes plus the workspace root
-`Cargo.toml`. That missed a real escape, found by an independent verifier and
-reproduced here: a manifest `build` path pointing out of the crate directory.
-With `build = "../../buildscripts/foo.rs"` in an opted-in crate's Cargo.toml,
-editing ONLY `buildscripts/foo.rs` to add a denied `.unwrap()` gave
-
-    git diff --name-only HEAD --   ->  buildscripts/foo.rs
-    this scanner                   ->  "nothing to check", exit 0
-    cargo clippy -p <pkg> --all-targets  ->  error, exit 101
-
-— a pass-with-violation, because the build script inherits the crate's deny
-table. That clippy really does apply the package deny table to a build script
-is measured, not assumed; case R of the test suite fails if it ever stops
-being true, and the failure it produced before the fix is in the same case.
-
-`_external_sources` closes it: every opted-in crate's manifest is read, the
-target paths that inherit its `[lints]` table (`package.build`, `lib.path`, and
-`path` on `[[bin]]`/`[[example]]`/`[[test]]`/`[[bench]]`) are resolved against
-the crate directory, and any that lands outside it is registered as a trigger
-for that crate. A path that leaves the REPOSITORY is Undetermined rather than
-ignored — such a file can never appear in `git diff`, so whether it changed is
-unknowable, and quietly skipping it would displace the same fail-open one level
-outward. Reading all 42 manifests costs ~0.1s, measured on this repo.
-
-Path DEPENDENCIES are deliberately not followed. A path dependency is its own
-package with its own lint table, so a violation inside one is attributed to
-that package, not to the crate that depends on it.
-
-Two currently-real instances of the same shape that CANNOT smuggle a violation,
-recorded so the boundary is precise: the root `Cargo.lock` (changes on any
-dependency bump), and `crates/specguard/src/forge/prompt.rs:10`, which does
-`include_str!("../../templates/normalize-prompt.md")` — a real repo-root file
-that changes what an opted-in crate compiles. Neither can introduce a denied
-expression, because a lockfile bump adds no source to the crate and
-`include_str!` embeds inert text rather than parsed Rust. Note that this means
-the gate still does not follow `include_str!`/`include!` targets: those are not
-manifest-declared, so finding them would mean parsing Rust source rather than
-TOML. `include!` of a repo file containing a denied expression remains an
-uncovered path.
+Every opted-in crate's working-tree manifest is read on each run (for the
+repo-escape check), so an unparsable manifest anywhere under `crates/*/` is
+exit 2 even if that crate did not change. Measured ~0.1s for all manifests in
+this repo when the clippy-running version introduced the same read.
 
 Exit codes
 ----------
-    0   checked (or nothing opted-in changed) and clippy was clean
-    1   clippy reported a violation in at least one in-scope crate
-    2   UNDETERMINED — the crate set or the checker could not be established
+    0   determined: no changed crate lost its opt-in and the root denies hold
+    1   a crate lost `[lints] workspace = true`, or the root lost a deny
+    2   UNDETERMINED — git, a manifest, or a target path could not be resolved
 """
 
 from __future__ import annotations
 
 import os
 import posixpath
-import shutil
 import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
 
-# Test seam: an explicit cargo path, used by
-# scripts/tests/precommit-clippy-gate.sh to exercise the not-executable and
-# exit-status branches without a real toolchain.
-#
-# BE PRECISE ABOUT WHAT THIS IS. It IS a bypass: pointing it at anything that
-# exits 0 (e.g. /usr/bin/true) makes this gate report clean on a crate that
-# genuinely contains a denied .unwrap(). That was demonstrated, not reasoned
-# about — an independent verifier reproduced exactly that, exit 0 on a real
-# violation.
-#
-# What is true is narrower, and is the only claim made here: it grants no
-# capability beyond what PATH control already grants. The same verifier
-# reproduced the identical result with no env var at all, by shadowing `cargo`
-# on PATH. Any local pre-commit hook has this property, because the committer
-# controls their own environment; it is the same class as `git commit
-# --no-verify`, which .githooks/pre-commit documents as a deliberate hole.
-#
-# What this seam CANNOT do is convert a real clippy run's non-zero exit into a
-# pass — the verdict is `proc.returncode` and nothing else (see run_clippy).
-# The earlier wording here ("it is not a bypass") overstated that narrow fact
-# into a categorical safety claim, which is exactly the prose-drifts-from-code
-# failure CLAUDE.md section 4 forbids.
-CARGO_ENV = "CHECK_CLIPPY_LINTS_CARGO"
-
 CRATES_PREFIX = "crates/"
 ROOT_MANIFEST = "Cargo.toml"
+DENIED_LINTS = ("unwrap_used", "expect_used", "panic")
+DENY_LEVELS = ("deny", "forbid")
 
 
 # --------------------------------------------------------------------------
-# Tri-state. `Undetermined` and `Selection([])` are distinct on purpose: the
-# first says the question could not be answered, the second says it was answered
-# and the answer is "none". Collapsing them is the empty-set-reads-as-clean
-# fail-open, so they are not the same type and cannot be confused by accident.
+# Tri-state. `Undetermined` and an empty findings list are distinct on purpose:
+# the first says the question could not be answered, the second says it was
+# answered and the answer is "nothing weakened".
 # --------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Undetermined:
@@ -196,11 +103,8 @@ class Undetermined:
 
 
 @dataclass(frozen=True)
-class Selection:
-    """Crates to check, as (package_name, crate_dir) pairs. May be empty, and an
-    empty Selection means 'determined: nothing opted-in changed'."""
-
-    crates: tuple[tuple[str, str], ...]
+class Absent:
+    """The path does not exist at HEAD (a determined answer, not a failure)."""
 
 
 def _git(repo: str, *args: str) -> str | None:
@@ -247,8 +151,7 @@ def changed_paths(repo: str) -> Undetermined | frozenset[str]:
     Not `git diff --cached`: see the module docstring's diff-source invariant.
 
     An unborn branch makes `git diff HEAD` fail and is reported as Undetermined
-    rather than carved out. The carve-out may well be safe, but nothing here
-    establishes that it is, and cannot-determine takes the restricted side.
+    rather than carved out.
     """
     diff = _git(repo, "diff", "--name-only", "HEAD", "--")
     if diff is None:
@@ -274,12 +177,12 @@ def changed_paths(repo: str) -> Undetermined | frozenset[str]:
 
 
 def _crate_dirs_with_manifests(repo: str) -> Undetermined | tuple[str, ...]:
-    """Every `crates/<dir>` that has a Cargo.toml, sorted. Used when the
-    workspace root manifest itself changed, since that can change the lint
-    configuration every opted-in crate inherits."""
+    """Every `crates/<dir>` that has a working-tree Cargo.toml, sorted."""
     base = os.path.join(repo, "crates")
     try:
         entries = sorted(os.listdir(base))
+    except FileNotFoundError:
+        return ()
     except OSError as exc:
         return Undetermined(f"could not list {base}: {exc}")
     out = []
@@ -299,43 +202,64 @@ def _read_manifest(path: str) -> Undetermined | dict:
         return Undetermined(f"could not parse {path}: {exc}")
 
 
-def _opts_in(manifest: dict) -> bool:
-    """`[lints] workspace = true` — the sole membership criterion.
+def _head_manifest(repo: str, rel: str) -> Undetermined | Absent | dict:
+    """The manifest at `HEAD:<rel>`, parsed; Absent if HEAD has no such file.
 
-    `workspace` must literally be the boolean true; `"true"` or 1 are not it, and
-    treating them as opt-in would be guessing at intent.
+    Existence is asked of `git ls-tree` first so that "not at HEAD" (a new
+    crate — determined) is never confused with "`git show` failed"
+    (Undetermined).
     """
+    listing = _git(repo, "ls-tree", "--name-only", "HEAD", "--", rel)
+    if listing is None:
+        return Undetermined(
+            f"`git ls-tree HEAD -- {rel}` did not succeed, so whether HEAD "
+            f"has this manifest is unknown"
+        )
+    if not listing.strip():
+        return Absent()
+    text = _git(repo, "show", f"HEAD:{rel}")
+    if text is None:
+        return Undetermined(f"`git show HEAD:{rel}` did not succeed")
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        return Undetermined(f"could not parse HEAD:{rel}: {exc}")
+
+
+def _opts_in(manifest: dict) -> bool:
+    """`[lints] workspace = true`, literally the boolean true."""
     lints = manifest.get("lints")
     if not isinstance(lints, dict):
         return False
     return lints.get("workspace") is True
 
 
-def _package_name(manifest: dict) -> str | None:
-    """The `[package] name`. Read only from `[package]`: `[[bin]]`/`[[bench]]`
-    entries also carry a `name`, and theirs can differ from the package name, so
-    picking one of those up would hand `cargo -p` the wrong unit."""
-    package = manifest.get("package")
-    if not isinstance(package, dict):
+def _clippy_level(manifest: dict, lint: str) -> str | None:
+    """The level of `[workspace.lints.clippy] <lint>`, string or table form."""
+    workspace = manifest.get("workspace")
+    if not isinstance(workspace, dict):
         return None
-    name = package.get("name")
-    if isinstance(name, str) and name.strip():
-        return name.strip()
+    lints = workspace.get("lints")
+    if not isinstance(lints, dict):
+        return None
+    clippy = lints.get("clippy")
+    if not isinstance(clippy, dict):
+        return None
+    value = clippy.get(lint)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        level = value.get("level")
+        if isinstance(level, str):
+            return level
     return None
 
 
 def _manifest_source_paths(manifest: dict) -> tuple[str, ...]:
-    """Every manifest value naming Rust source that THIS package compiles.
+    """Every manifest value naming a target source file this package compiles.
 
-    Restricted to targets that inherit the package's `[lints]` table, because
-    inheriting that table is the whole reason a path matters here. Path
-    dependencies are deliberately excluded: a path dependency is its own
-    package with its own lint table, so a violation in one is attributed to
-    that package, not to this one.
-
-    `build = true` / `build = false` select or disable the default `build.rs`,
-    which lives inside the crate directory and is already covered by the
-    ordinary `crates/<dir>/` prefix; only a string names some other file.
+    `build = true` / `build = false` select or disable the default `build.rs`;
+    only a string names some other file.
     """
     found: list[str] = []
 
@@ -365,178 +289,100 @@ def _manifest_source_paths(manifest: dict) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _external_sources(
-    manifest: dict, crate_dir: str
-) -> Undetermined | frozenset[str]:
-    """Repo-relative paths this crate compiles from OUTSIDE its own directory.
-
-    A path that leaves the repository is Undetermined rather than ignored: such
-    a file can never appear in `git diff`, so the gate cannot see whether it
-    changed or what is in it. Skipping it quietly would be the same
-    empty-set-reads-as-clean fail-open this function exists to close, displaced
-    one level outward.
-    """
+def _repo_escape(manifest: dict, crate_dir: str) -> Undetermined | None:
+    """Undetermined if any declared target path leaves the repository."""
     inside = f"{CRATES_PREFIX}{crate_dir}/"
     manifest_path = f"{inside}Cargo.toml"
-    external: set[str] = set()
-
     for raw in _manifest_source_paths(manifest):
         normalised = raw.replace("\\", "/")
         if posixpath.isabs(normalised):
             return Undetermined(
                 f"{manifest_path} compiles {raw!r}, an absolute path; the gate "
-                f"cannot tell whether a file outside the working tree changed"
+                f"cannot see a file outside the working tree"
             )
         resolved = posixpath.normpath(posixpath.join(inside, normalised))
         if resolved == ".." or resolved.startswith("../"):
             return Undetermined(
                 f"{manifest_path} compiles {raw!r}, which resolves to "
-                f"{resolved!r} — outside the repository. That file cannot "
-                f"appear in `git diff`, so whether it introduced a denied "
-                f"expression is unknowable here"
+                f"{resolved!r} — outside the repository, so it can never "
+                f"appear in `git diff` and is invisible to this gate"
             )
-        if not resolved.startswith(inside):
-            external.add(resolved)
-
-    return frozenset(external)
+    return None
 
 
-def select_crates(repo: str) -> Undetermined | Selection:
-    """Which cargo packages to run clippy on, derived from the working tree."""
+def scan(repo: str) -> Undetermined | list[str]:
+    """Findings (human-readable), or Undetermined. Empty list = determined clean."""
     changed = changed_paths(repo)
     if isinstance(changed, Undetermined):
         return changed
+
+    # Every opted-in crate's working-tree manifest: unreadable/unparsable or a
+    # repo-escaping target path is Undetermined, regardless of what changed.
+    all_dirs = _crate_dirs_with_manifests(repo)
+    if isinstance(all_dirs, Undetermined):
+        return all_dirs
+    for crate_dir in all_dirs:
+        manifest = _read_manifest(os.path.join(repo, "crates", crate_dir, "Cargo.toml"))
+        if isinstance(manifest, Undetermined):
+            return manifest
+        if _opts_in(manifest):
+            escape = _repo_escape(manifest, crate_dir)
+            if escape is not None:
+                return escape
+
+    findings: list[str] = []
 
     dirs: set[str] = set()
     for path in changed:
         if not path.startswith(CRATES_PREFIX):
             continue
-        rest = path[len(CRATES_PREFIX) :]
-        head, sep, _ = rest.partition("/")
+        head, sep, _ = path[len(CRATES_PREFIX) :].partition("/")
         if sep and head:
             dirs.add(head)
 
-    # A change to the workspace root manifest can change the very lint table the
-    # opted-in crates inherit, so it puts all of them in scope.
-    if ROOT_MANIFEST in changed:
-        all_dirs = _crate_dirs_with_manifests(repo)
-        if isinstance(all_dirs, Undetermined):
-            return all_dirs
-        dirs.update(all_dirs)
-
-    # A crate can compile source that does not live under its own directory — a
-    # manifest `build` or target `path` pointing elsewhere. Such a file carries
-    # the crate's deny table, so editing it must select the crate even though
-    # nothing under crates/<dir>/ was touched. Selection driven only by the
-    # `crates/` prefix missed this, and the miss was a demonstrated
-    # pass-with-violation, not a hypothetical (backlog 3832ba25).
-    #
-    # Every opted-in crate is examined, including ones already selected: the
-    # repo-escaping check below is about whether this gate CAN see the crate's
-    # sources at all, which is true regardless of why the crate is in scope.
-    all_dirs = _crate_dirs_with_manifests(repo)
-    if isinstance(all_dirs, Undetermined):
-        return all_dirs
-    for crate_dir in all_dirs:
-        manifest_path = os.path.join(repo, "crates", crate_dir, "Cargo.toml")
-        manifest = _read_manifest(manifest_path)
-        if isinstance(manifest, Undetermined):
-            return manifest
-        if not _opts_in(manifest):
-            continue
-        external = _external_sources(manifest, crate_dir)
-        if isinstance(external, Undetermined):
-            return external
-        if external & changed:
-            dirs.add(crate_dir)
-
-    selected: list[tuple[str, str]] = []
     for crate_dir in sorted(dirs):
-        manifest_path = os.path.join(repo, "crates", crate_dir, "Cargo.toml")
-        if not os.path.exists(manifest_path):
-            # No manifest at all is a determinable answer, not a failure: this is
-            # the skill-only plugin shape (crates/scout, crates/daily-report,
-            # crates/flow since 0.2.7),
-            # which is not a cargo crate and cannot opt in to anything.
+        rel = f"{CRATES_PREFIX}{crate_dir}/Cargo.toml"
+        before = _head_manifest(repo, rel)
+        if isinstance(before, Undetermined):
+            return before
+        if isinstance(before, Absent) or not _opts_in(before):
             continue
-        manifest = _read_manifest(manifest_path)
-        if isinstance(manifest, Undetermined):
-            return manifest
-        if not _opts_in(manifest):
-            print(
-                f"  not opted in ([lints] workspace = true absent): "
-                f"crates/{crate_dir}"
-            )
+        path = os.path.join(repo, rel)
+        if not os.path.exists(path):
+            print(f"  crate manifest removed (not a lint downgrade): {rel}")
             continue
-        name = _package_name(manifest)
-        if name is None:
-            return Undetermined(
-                f"{manifest_path} opts in to the workspace lints but has no "
-                f"readable [package] name, so the unit to check is unknown"
+        after = _read_manifest(path)
+        if isinstance(after, Undetermined):
+            return after
+        if not _opts_in(after):
+            findings.append(
+                f"{rel}: `[lints] workspace = true` was present at HEAD and is "
+                f"gone (or no longer boolean true) in the working tree"
             )
-        selected.append((name, crate_dir))
 
-    return Selection(tuple(selected))
+    if ROOT_MANIFEST in changed:
+        before = _head_manifest(repo, ROOT_MANIFEST)
+        if isinstance(before, Undetermined):
+            return before
+        if not isinstance(before, Absent):
+            root_path = os.path.join(repo, ROOT_MANIFEST)
+            after: dict | Undetermined
+            if os.path.exists(root_path):
+                after = _read_manifest(root_path)
+            else:
+                after = {}
+            if isinstance(after, Undetermined):
+                return after
+            for lint in DENIED_LINTS:
+                was = _clippy_level(before, lint)
+                now = _clippy_level(after, lint)
+                if was in DENY_LEVELS and now not in DENY_LEVELS:
+                    findings.append(
+                        f"{ROOT_MANIFEST}: [workspace.lints.clippy] {lint} was "
+                        f"{was!r} at HEAD and is {now!r} in the working tree"
+                    )
 
-
-def resolve_cargo() -> Undetermined | str:
-    """The cargo executable, or Undetermined.
-
-    Order: the explicit test seam, then PATH, then the rustup default location
-    (CLAUDE.md: the toolchain is installed via rustup, and a hook can run with a
-    PATH that has not sourced ~/.cargo/env). Anything that is present but not
-    executable is Undetermined rather than skipped — "there is a cargo here that
-    I cannot run" is not "there is nothing to run".
-    """
-    override = os.environ.get(CARGO_ENV)
-    if override:
-        if not os.path.isfile(override):
-            return Undetermined(f"{CARGO_ENV}={override} is not a file")
-        if not os.access(override, os.X_OK):
-            return Undetermined(f"{CARGO_ENV}={override} is not executable")
-        return override
-
-    found = shutil.which("cargo")
-    if found:
-        return found
-
-    fallback = os.path.join(os.path.expanduser("~"), ".cargo", "bin", "cargo")
-    if os.path.isfile(fallback):
-        if not os.access(fallback, os.X_OK):
-            return Undetermined(f"{fallback} exists but is not executable")
-        return fallback
-
-    return Undetermined(
-        "cargo not found on PATH or at ~/.cargo/bin/cargo, so the clippy check "
-        "could not be run at all"
-    )
-
-
-def run_clippy(cargo: str, repo: str, package: str) -> Undetermined | bool:
-    """True if clippy passed, False if it reported a violation.
-
-    The verdict is `proc.returncode`, nothing else. A failure to launch is
-    Undetermined, never a pass.
-    """
-    cmd = (cargo, "clippy", "-p", package, "--all-targets")
-    print(f"  running: cargo clippy -p {package} --all-targets")
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=repo,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return Undetermined(f"could not run `{' '.join(cmd)}`: {exc}")
-
-    if proc.returncode == 0:
-        return True
-
-    sys.stderr.write(f"\n--- cargo clippy -p {package} --all-targets (exit {proc.returncode}) ---\n")
-    sys.stderr.write(proc.stdout)
-    sys.stderr.write(proc.stderr)
-    return False
+    return findings
 
 
 UNDETERMINED_NOTE = """
@@ -549,13 +395,13 @@ than loosening it.
 """
 
 VIOLATION_NOTE = """
-clippy-lints: blocked — {names} violate the workspace deny lints
-(clippy::unwrap_used / expect_used / panic), which they opted in to via
-`[lints] workspace = true`.
+clippy-lints: blocked — the workspace deny-lint configuration was weakened:
+{findings}
 
-Those three lints are how a verdict-bearing crate is stopped from turning
-"cannot determine" into a crash. Fix the flagged expressions; do not remove the
-opt-in to make this pass.
+`[lints] workspace = true` and the root `[workspace.lints.clippy]` denies for
+unwrap_used / expect_used / panic are how a verdict-bearing crate is stopped from
+turning "cannot determine" into a crash. Restore them; do not drop the opt-in to
+make a clippy run pass.
 """
 
 
@@ -570,43 +416,18 @@ def main() -> int:
         )
         return 2
 
-    selection = select_crates(repo)
-    if isinstance(selection, Undetermined):
-        sys.stderr.write(UNDETERMINED_NOTE.format(reason=selection.reason))
+    result = scan(repo)
+    if isinstance(result, Undetermined):
+        sys.stderr.write(UNDETERMINED_NOTE.format(reason=result.reason))
         return 2
 
-    if not selection.crates:
-        # Determined, and the answer is "none". Distinct from Undetermined above.
-        print(
-            "clippy-lints: no crate with `[lints] workspace = true` was changed "
-            "in the working tree — nothing to check"
+    if result:
+        sys.stderr.write(
+            VIOLATION_NOTE.format(findings="\n".join(f"  - {f}" for f in result))
         )
-        return 0
-
-    cargo = resolve_cargo()
-    if isinstance(cargo, Undetermined):
-        sys.stderr.write(UNDETERMINED_NOTE.format(reason=cargo.reason))
-        return 2
-
-    print(
-        "clippy-lints: checking "
-        + ", ".join(f"{name} (crates/{d})" for name, d in selection.crates)
-    )
-
-    failed: list[str] = []
-    for name, _crate_dir in selection.crates:
-        verdict = run_clippy(cargo, repo, name)
-        if isinstance(verdict, Undetermined):
-            sys.stderr.write(UNDETERMINED_NOTE.format(reason=verdict.reason))
-            return 2
-        if not verdict:
-            failed.append(name)
-
-    if failed:
-        sys.stderr.write(VIOLATION_NOTE.format(names=", ".join(failed)))
         return 1
 
-    print("clippy-lints: clean")
+    print("clippy-lints: [lints] configuration intact (no cargo/clippy run)")
     return 0
 
 

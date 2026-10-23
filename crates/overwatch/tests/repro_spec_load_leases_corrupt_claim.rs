@@ -12,7 +12,6 @@ use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
-#[ignore = "repro: spec says load_leases maps corrupt JSON to an empty registry but code returns Err; remove ignore when spec is fixed"]
 fn spec_must_not_claim_corrupt_leases_json_loads_as_empty_registry() {
     let home = std::env::temp_dir().join(format!("ow-repro-spec-leases-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);

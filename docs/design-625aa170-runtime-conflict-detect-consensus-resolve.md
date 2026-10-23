@@ -31,7 +31,8 @@ conflict-hardening batch (schedule.rs twins fc03d26d, worktree repo-lock c701e75
   head_sha, files (normalized repo-relative), ts, merged }`, stored in NEW registry
   `active_changesets.json` (BTreeMap by task_key) + append-only `runtime_conflicts.jsonl`. New module
   `crates/overwatch/src/changeset.rs` mirroring violations_path/append/read trio.
-- Cross-check is a shared-registry RMW → runs under `overwatch::lock::LeaseLock::acquire(repo)` (the
+- Cross-check is a shared-registry RMW → runs under `overwatch::lock::LeaseLock::acquire_strict(repo)`,
+  and a lock not acquired is `Err` (overlap undetermined, the merge is held), never "no overlap" (the
   SAME lock as other overwatch registry mutations; NOT condukt's REPO_PRIMARY_LOCK_KEY — the diff is
   in the task's own worktree). For each other in-flight (`!merged` AND lease live per LEASE_TTL_SECS)
   entry, intersect normalized paths (reuse `schedule::normalize_entry` for casefold/`./`-strip parity;

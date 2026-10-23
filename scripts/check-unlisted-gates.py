@@ -75,13 +75,19 @@ word):
 Anything this parser does not recognise is NOT counted, so an unrecognised
 invocation style reads as unlisted (red), never as listed.
 
-KNOWN LIMITATION (fail-open, not fixed): reachability is not analysed. A
-recognised invocation is counted even if it can never execute — inside a
-function that is defined but never called, under `if false`, after an
-unconditional `exit 0`, behind a `case` arm no value reaches, and so on. Such a
-scanner reads as listed while no commit ever runs it. Closing this would need
-control-flow analysis of the hook; it is left open on purpose and stated here
-rather than implied away.
+Reachability (backlog 74280d46): an invocation is NOT counted when it sits
+inside a function that live code never calls, in the branch of a literal
+`if false` / `elif false` (or `! true`), in the body of `while false`, or after
+an unconditional `exit` / `return` in the same block (one not reached through
+`&&` / `||` / `|`). See command_starts().
+
+KNOWN LIMITATION (fail-open, still open): only those syntactic shapes are
+recognised. An invocation behind a computed condition that is always false
+(`if [ 1 = 0 ]`), a `case` arm no value reaches, a function called only from
+such a branch, and so on, is still counted. (The opposite error — a function
+called only through `eval` or a variable reads as uncalled — is the red
+direction.) Closing that
+needs evaluation of the hook; it is stated here rather than implied away.
 
 Usage
 -----
@@ -143,6 +149,21 @@ HEREDOC_RE = re.compile(
     r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([A-Za-z0-9_.-]+))"
 )
 REDIR_RE = re.compile(r"[<>]+&?[ \t]*[^\s;&|()<>\"'`]*")
+# Control-flow words (backlog 74280d46), matched only at a command position.
+_END = r"(?=[\s;&|)]|$)"
+CLOSER_RE = re.compile(r"(fi|done|esac)" + _END)
+BRANCH_RE = re.compile(r"(then|do|else|elif)" + _END)
+OPENER_RE = re.compile(r"(if|while|until|for|select|case)(?=\s)")
+FALSE_COND_RE = re.compile(r"[ \t]+(?:![ \t]*true|false)[ \t]*(?:;|\n|$)")
+EXIT_RE = re.compile(r"(?:exit|return)" + _END)
+FUNC_DEF_RE = re.compile(
+    r"(?:function[ \t]+([A-Za-z_][\w.-]*)(?:[ \t]*\([ \t]*\))?|([A-Za-z_][\w.-]*)[ \t]*\([ \t]*\))"
+)
+CALL_WORD_RE = re.compile(r"([A-Za-z_][\w.-]*)" + _END)
+
+
+def _frame(kind):
+    return {"kind": kind, "dead": False, "func": None, "pending": False, "false_cond": False}
 
 
 class Undetermined(Exception):
@@ -261,15 +282,57 @@ def command_starts(body):
     recognised outside quotes; heredoc bodies are skipped. An unbalanced quote,
     `$(`, backtick, `(`, `${` or an unterminated heredoc at EOF raises
     Undetermined: the body could not be parsed.
+
+    Reachability (backlog 74280d46). Alongside the quote stack a stack of
+    control-flow FRAMES is kept (subshell / `$(` / backtick / `{ }` / function
+    body / if / loop / case). A command start is DROPPED (never returned) when
+    any enclosing frame is dead:
+      * after an unconditional `exit` / `return` (one not reached through
+        `&&`, `||` or `|`), the rest of that frame is dead; the frame ends at
+        its closer, and an if-branch / case arm also ends at `elif` / `else` /
+        `;;` (`;&`, `;;&`);
+      * the branch of `if false` / `elif false` and the body of `while false`
+        are dead (literal `false` / `! true` condition only).
+    A start inside a function body is returned with that function's name in
+    its owner chain; invoked_by() counts it only if the function is called
+    from live code. A `fi` / `done` / `esac` / `}` with no matching opener is
+    unbalanced: Undetermined. Returns (src, starts, owners) where owners maps
+    each start to its tuple of enclosing function names.
     """
     src = body.replace("\\\n", "  ")
     n = len(src)
     stack = ["top"]  # top | paren | cmdsub | bq | dq | sq
     starts = []
+    owners = {}
     cmd_pos = True
     assign_depth = None  # stack depth of a leading VAR=value word being walked
     heredocs = []
+    # Control-flow frames: dicts with kind, dead, func, pending (if/while
+    # condition awaiting then/do), false_cond.
+    frames = [_frame("top")]
+    cond = False  # the next command is reached only via && / || / |
+    pending_func = None
     i = 0
+
+    def push(kind):
+        nonlocal pending_func
+        f = _frame(kind)
+        if pending_func is not None and kind in ("brace", "paren"):
+            f["func"] = pending_func
+        pending_func = None
+        frames.append(f)
+
+    def pop_to(kinds, what):
+        # Pop to the innermost frame of one of `kinds`, but never past a
+        # quote-stack frame (paren / cmdsub / bq) that is not itself targeted.
+        while len(frames) > 1:
+            f = frames.pop()
+            if f["kind"] in kinds:
+                return f
+            if f["kind"] in ("paren", "cmdsub", "bq"):
+                break
+        raise Undetermined("unbalanced %s at offset %d" % (what, i))
+
     while i < n:
         ctx = stack[-1]
         c = src[i]
@@ -287,12 +350,16 @@ def command_starts(body):
                 i += 1
             elif src.startswith("$(", i):
                 stack.append("cmdsub")
+                push("cmdsub")
                 cmd_pos = True
+                cond = False
                 assign_depth = None
                 i += 2
             elif c == "`":
                 stack.append("bq")
+                push("bq")
                 cmd_pos = True
+                cond = False
                 assign_depth = None
                 i += 1
             elif src.startswith("${", i):
@@ -307,6 +374,7 @@ def command_starts(body):
                 i = _skip_heredocs(src, i, heredocs)
                 heredocs = []
             cmd_pos = True
+            cond = False
             assign_depth = None
             continue
         if c in " \t":
@@ -326,6 +394,7 @@ def command_starts(body):
             continue
         if ctx == "bq" and c == "`":
             stack.pop()
+            pop_to(("bq",), "backtick")
             cmd_pos = False
             i += 1
             continue
@@ -348,25 +417,32 @@ def command_starts(body):
             continue
         if src.startswith("$(", i):
             stack.append("cmdsub")
+            push("cmdsub")
             cmd_pos = True
+            cond = False
             assign_depth = None
             i += 2
             continue
         if c == "`":
             stack.append("bq")
+            push("bq")
             cmd_pos = True
+            cond = False
             assign_depth = None
             i += 1
             continue
         if c == "(":
             stack.append("paren")
+            push("paren")
             cmd_pos = True
+            cond = False
             assign_depth = None
             i += 1
             continue
         if c == ")":
             if ctx in ("paren", "cmdsub"):
                 stack.pop()
+                pop_to((ctx,), ")")
                 cmd_pos = False
             else:
                 # Unmatched at this level: a `case` pattern terminator.
@@ -374,13 +450,86 @@ def command_starts(body):
             assign_depth = None
             i += 1
             continue
-        if c in ";&|{}":
+        if src.startswith("&&", i) or src.startswith("||", i):
+            cmd_pos = True
+            cond = True
+            assign_depth = None
+            i += 2
+            continue
+        if frames[-1]["kind"] == "case" and (src.startswith(";;", i) or src.startswith(";&", i)):
+            # End of a case arm: an exit inside it does not kill the next arm.
+            frames[-1]["dead"] = False
+            cmd_pos = True
+            cond = False
+            assign_depth = None
+            i += 3 if src.startswith(";;&", i) else 2
+            continue
+        if c == "{" and cmd_pos:
+            push("brace")
+            cond = False
+            assign_depth = None
+            i += 1
+            continue
+        if c == "}" and cmd_pos:
+            pop_to(("brace",), "}")
             cmd_pos = True
             assign_depth = None
             i += 1
             continue
+        if c in ";&|{}":
+            cmd_pos = True
+            cond = c == "|"
+            assign_depth = None
+            i += 1
+            continue
         if cmd_pos:
-            starts.append(i)
+            closer = CLOSER_RE.match(src, i)
+            if closer:
+                word = closer.group(1)
+                pop_to({"fi": ("if",), "done": ("loop",), "esac": ("case",)}[word], word)
+                cmd_pos = False
+                i = closer.end()
+                continue
+            dead = any(f["dead"] for f in frames)
+            if not dead:
+                starts.append(i)
+                owners[i] = tuple(f["func"] for f in frames if f["func"] is not None)
+            top = frames[-1]
+            branch = BRANCH_RE.match(src, i)
+            if branch:
+                word = branch.group(1)
+                if word in ("then", "do"):
+                    if top["kind"] in ("if", "loop") and top["pending"]:
+                        top["pending"] = False
+                        top["dead"] = top["false_cond"]
+                elif top["kind"] == "if":  # elif / else start a fresh branch
+                    top["dead"] = False
+                    top["pending"] = word == "elif"
+                    top["false_cond"] = word == "elif" and bool(FALSE_COND_RE.match(src, branch.end()))
+                cond = False
+                i = branch.end()
+                continue
+            opener = OPENER_RE.match(src, i)
+            if opener:
+                word = opener.group(1)
+                kind = {"if": "if", "case": "case"}.get(word, "loop")
+                push(kind)
+                frames[-1]["pending"] = kind != "case"
+                frames[-1]["false_cond"] = word in ("if", "while") and bool(
+                    FALSE_COND_RE.match(src, opener.end())
+                )
+                cond = False
+                i = opener.end()
+                continue
+            fdef = FUNC_DEF_RE.match(src, i)
+            if fdef:
+                pending_func = fdef.group(1) or fdef.group(2)
+                cmd_pos = True
+                i = fdef.end()
+                continue
+            pending_func = None
+            if EXIT_RE.match(src, i) and not cond:
+                top["dead"] = True
             kw = KEYWORD_RE.match(src, i)
             if kw:
                 i = kw.end()
@@ -402,7 +551,12 @@ def command_starts(body):
         raise Undetermined("unbalanced shell quoting/nesting at EOF (open: %s)" % "/".join(stack[1:]))
     if heredocs:
         raise Undetermined("heredoc <<%s is never terminated" % heredocs[0][1])
-    return src, starts
+    if len(frames) != 1:
+        raise Undetermined(
+            "unclosed control-flow block(s) at EOF (open: %s)"
+            % "/".join(f["kind"] for f in frames[1:])
+        )
+    return src, starts, owners
 
 
 def _skip_word(src, i):
@@ -443,7 +597,22 @@ def invoked_by(text):
 
     Raises Undetermined when the body cannot be parsed (see command_starts).
     """
-    src, starts = command_starts(text)
+    src, all_starts, owners = command_starts(text)
+    # A function body runs only if the function is called from live code
+    # (top level, or a function that is itself live). Fixpoint over call words.
+    defined = {f for chain in owners.values() for f in chain}
+    live = set()
+    changed = True
+    while changed:
+        changed = False
+        for i in all_starts:
+            if not set(owners[i]) <= live:
+                continue
+            w = CALL_WORD_RE.match(src, i)
+            if w and w.group(1) in defined and w.group(1) not in live and w.group(1) not in owners[i]:
+                live.add(w.group(1))
+                changed = True
+    starts = [i for i in all_starts if set(owners[i]) <= live]
     has_run = False
     run_calls = set()
     found = set()

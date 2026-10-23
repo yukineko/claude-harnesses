@@ -32,13 +32,13 @@ max_iters = 10
 ## CLI 呼び出し例
 
 ```bash
-# server サイクル (deploy → test) を 1 イテレーションだけ実行し、上限 max_iters は --iteration <i> を渡したときに検査されて上限を超えた呼び出しは cycle を実行せず拒否される [test: crates/condukt/tests/drift_b1_loop_cap.rs::loop_refuses_iteration_beyond_configured_max_iters]
+# server サイクル (deploy → test) を 1 イテレーションだけ実行し、上限 max_iters は --iteration <i> を渡したときに検査されて上限を超えた呼び出しは cycle を実行せず拒否される
 condukt loop --module server
 
-# client サイクル (build → test) の 3 回目、前回の failure_count は 4 [test: crates/condukt/tests/drift_b1_loop_cap.rs::loop_refuses_iteration_beyond_configured_max_iters]
+# client サイクル (build → test) の 3 回目、前回の failure_count は 4
 condukt loop --module client --iteration 3 --prev-failures 4
 
-# e2e サイクル (build → deploy → test)、最大イテレーション数を上書き [test: crates/condukt/tests/loop_max_iters_flag.rs::max_iters_flag_lowers_the_configured_cap]
+# e2e サイクル (build → deploy → test)、最大イテレーション数を上書き
 condukt loop --module e2e --max-iters 5
 ```
 
@@ -62,8 +62,8 @@ condukt loop --module e2e --max-iters 5
 |---|---|
 | `"all tests pass"` | failure_count が 0 になった (正常完了) |
 | `"no progress: failure count unchanged"` | failure_count が前回と変わらなかった (差分0件で自動停止) |
-| `"max iters reached: ..."` | `--iteration` が上限を超えたので cycle を実行せず拒否した (exit 1、failure_count は null) [test: crates/condukt/tests/loop_max_iters_flag.rs::max_iters_flag_lowers_the_configured_cap] |
-| `"max iters undetermined: ..."` | config.toml が読めず上限を決められないので拒否した (exit 1) [test: crates/condukt/tests/loop_max_iters_flag.rs::unparseable_config_refuses_instead_of_running_uncapped] |
+| `"max iters reached: ..."` | `--iteration` が上限を超えたので cycle を実行せず拒否した (exit 1、failure_count は null) |
+| `"max iters undetermined: ..."` | config.toml が読めず上限を決められないので拒否した (exit 1) |
 
 ## 動作フロー
 
@@ -98,8 +98,8 @@ condukt loop --module <type> を実行 (1 イテレーション)
 
 ### Step 1 — 引数を受け取る
 
-`$ARGUMENTS` から `--module` と `--max-iters` を解析する [test: crates/condukt/tests/drift_c3_doc_cli_flags.rs::documented_condukt_flags_exist_in_the_binary]。
-`--module` は必須 [test: crates/condukt/tests/loop_max_iters_flag.rs::loop_without_module_is_rejected]。未指定の場合はユーザーに確認すること。
+`$ARGUMENTS` から `--module` と `--max-iters` を解析する。
+`--module` は必須。未指定の場合はユーザーに確認すること。
 
 ### Step 2 — ループ開始
 
@@ -108,7 +108,7 @@ condukt loop --module <server|client|e2e> --iteration <i> [--prev-failures <prev
 ```
 
 JSON を stdout から受け取り、フィールドを読む。
-`--iteration` には 1 から数えた回数を、2 回目以降の `--prev-failures` には前回の `failure_count` を渡すこと [test: crates/condukt/tests/drift_b1_loop_cap.rs::loop_refuses_iteration_beyond_configured_max_iters]。
+`--iteration` には 1 から数えた回数を、2 回目以降の `--prev-failures` には前回の `failure_count` を渡すこと。
 
 ### Step 3 — 停止判定
 
@@ -117,7 +117,7 @@ JSON を stdout から受け取り、フィールドを読む。
 - `"all tests pass"` → 成功で終了
 - `"no progress: failure count unchanged"` → **差分0件のため自動停止**。
   同じ failure_count が続いており修正が機能していないことを報告する。
-- `"max iters reached: ..."` / `"max iters undetermined: ..."` → 上限による停止 (Step 5) [test: crates/condukt/tests/drift_b1_loop_cap.rs::loop_refuses_iteration_beyond_configured_max_iters]。
+- `"max iters reached: ..."` / `"max iters undetermined: ..."` → 上限による停止 (Step 5)。
 
 ### Step 4 — 失敗テストの修正
 
@@ -133,8 +133,8 @@ JSON を stdout から受け取り、フィールドを読む。
 ### Step 5 — 強制終了
 
 上限の判定は `condukt loop` が行う: `--iteration` が上限 (`--max-iters`、未指定なら config.toml の
-`max_iters`) を超えると、cycle を実行せずに `stop=true` を返して exit 1 で終わる [test: crates/condukt/tests/drift_b1_loop_cap.rs::loop_refuses_iteration_beyond_configured_max_iters] [test: crates/condukt/tests/loop_max_iters_flag.rs::max_iters_flag_raises_the_configured_cap]。
-config.toml に `max_iters` が無いときの上限は 10 [test: crates/condukt/src/config.rs::loop_max_iters_strict_reads_value_and_defaults_only_when_unset]。
+`max_iters`) を超えると、cycle を実行せずに `stop=true` を返して exit 1 で終わる。
+config.toml に `max_iters` が無いときの上限は 10。
 このスキル側で回数を数えて打ち切る判断はせず、Step 3 と同じくその JSON に従って終了し、直前のイテレーションの failure_count とともに報告すること。
 
 ## サイクル別の使い分け
@@ -173,7 +173,7 @@ condukt loop --module e2e --max-iters 5
 
 1. **差分0件での自動停止** — `no progress: failure count unchanged` が返ったら無条件に停止し、
    同じ修正を繰り返すループには入らない。
-2. **max-iters の強制終了** — イテレーション上限の超過は `condukt loop` が `stop=true` で拒否する [test: crates/condukt/tests/drift_b1_loop_cap.rs::loop_refuses_iteration_beyond_configured_max_iters]。
+2. **max-iters の強制終了** — イテレーション上限の超過は `condukt loop` が `stop=true` で拒否する。
 3. **subagent への移譲** — コード修正は必ず condukt-worker subagent (Task ツール) に委譲し、
    このスキル自体はオーケストレーションに徹する。
 4. **JSON のみ信頼** — `condukt loop` の stdout JSON のみを判断基準にする。

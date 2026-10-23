@@ -43,25 +43,21 @@ Therefore every gate MUST be:
   `harness_core::gate::run::run_guarded`: a panic there means the check never
   ran, so the crash itself is surfaced as a fail-closed block instead of
   silently allowing the stop
-  [test: crates/harness-core/tests/prose_claims.rs::claim_prohib_run_guarded_panic_carries_a_block_decision].
+ .
   Only the gate's second CONSECUTIVE panic in the
   session is allowed through (so a deterministically-crashing gate can't trap
   the session): that requires `stop_hook_active` AND a per-gate, per-session
   marker showing this same gate's previous stop also panicked — a first panic
   during a re-entry caused by another gate's block still blocks
-  [test: crates/harness-core/tests/panic_bound_consecutive.rs::second_consecutive_panic_allows]
-  [test: crates/harness-core/tests/panic_bound_consecutive.rs::first_panic_on_continuation_blocks]
-  [test: crates/harness-core/tests/panic_bound_consecutive.rs::clean_run_resets_the_streak].
+ .
   If that marker
   cannot be read or written (or there is no session id), a re-entry is allowed
   with a `systemMessage` saying the gate did not check the stop; the first
   stop of a chain always blocks
-  [test: crates/harness-core/tests/panic_bound_consecutive.rs::marker_io_failure_reentry_is_bounded_and_loud]
-  [test: crates/harness-core/tests/panic_bound_consecutive.rs::marker_io_failure_first_stop_blocks]
-  [test: crates/harness-core/tests/panic_bound_consecutive.rs::missing_session_id_is_undetermined].
+ .
   This applies to
   donegate, reviewgate, propguard, tdd, budgetguard, autoflow, and ctxrot
-  [test: crates/harness-core/tests/prose_claims.rs::claim_prohib_run_guarded].
+ .
   **Never-break-a-turn only applies to gates that carry no verdict** —
   condukt's `record-run --all` (pure fugu-router bookkeeping), context-governor,
   and precommit-audit never emit a block decision, so an internal error there is

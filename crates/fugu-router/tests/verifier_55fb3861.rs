@@ -7,8 +7,8 @@
 //!   and `stats` never averages it in as $0;
 //! - a measured cost is stored and averaged;
 //! - a legacy stored `cost_usd: 0.0` reads back as unmeasured (mirrors
-//!   `duration_secs`), and an explicit `--cost 0` is written as 0.0 but also
-//!   reads back as unmeasured;
+//!   `duration_secs`), while an explicit `--cost 0` is a measured zero
+//!   (backlog 4fc130d3 changed this: it used to read back as unmeasured);
 //! - a negative / non-finite `--cost` exits non-zero and writes nothing;
 //! - `policy::decide` (explore = false) no longer treats unmeasured passes as
 //!   free, and an all-measured / none-measured history decides as before.
@@ -122,8 +122,10 @@ fn v_legacy_zero_and_explicit_zero_read_back_as_unmeasured() {
         ),
     )
     .unwrap();
-    // Explicit `--cost 0`: the worker claims it is written as 0.0 but reads
-    // back as unmeasured (same rule as duration_secs).
+    // Explicit `--cost 0` is a MEASURED zero (contract change, backlog
+    // 4fc130d3: it used to read back as unmeasured, so a supplied measurement
+    // was silently discarded). It is persisted as the integer 0, which the
+    // legacy writer never produced; the legacy float 0.0 stays unmeasured.
     rec(&h, "zero", "sonnet", Some("0"));
     assert_eq!(
         raw_line(&h, "zero")["cost_usd"].as_f64(),
@@ -134,8 +136,8 @@ fn v_legacy_zero_and_explicit_zero_read_back_as_unmeasured() {
     assert_eq!(v["models"]["sonnet"]["count"], 3, "{v}");
     assert_eq!(
         v["models"]["sonnet"]["avg_cost_usd"].as_f64(),
-        Some(5.0),
-        "legacy 0.0 and explicit 0 must both read as unmeasured: {v}"
+        Some(2.5),
+        "legacy 0.0 must read as unmeasured, explicit 0 as a measured zero: {v}"
     );
 }
 

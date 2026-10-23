@@ -264,4 +264,4 @@ overwatch review-queue --since <ts> --limit <n>
 - ロールバック事象は `scripts/rollout-plugins.sh` の canary auto-rollback 時に
   `overwatch record-rollback` で追記される（fail-soft: 記録失敗はロールアウトを止めない）。
 - AI 指摘の永続ストア（`overwatch record-finding` の取り込み口）が空なら ai-finding の行は出ず、
-  他のソースはそのまま表示される [test: crates/overwatch/tests/review_queue.rs::review_queue_degrades_gracefully_when_a_source_is_empty]。
+  他のソースはそのまま表示される。

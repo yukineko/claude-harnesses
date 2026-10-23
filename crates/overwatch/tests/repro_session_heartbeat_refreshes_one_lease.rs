@@ -98,7 +98,6 @@ impl Drop for Sb {
 }
 
 #[test]
-#[ignore = "backlog: stuckguard heartbeat piggyback refreshes only one of a session's leases (lease_for_session returns a single lease)"]
 fn session_heartbeat_piggyback_refreshes_all_session_leases() {
     let sb = Sb::new("hb-one-lease");
     sb.begin("keyA", "S");
@@ -126,7 +125,6 @@ fn session_heartbeat_piggyback_refreshes_all_session_leases() {
 }
 
 #[test]
-#[ignore = "backlog: reap_stale drops a lease with no event in events.jsonl (silent reap)"]
 fn stale_lease_reap_by_a_mutator_is_not_silent() {
     let sb = Sb::new("reap-silent");
     sb.begin("keyA", "S");

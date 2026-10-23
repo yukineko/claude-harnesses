@@ -1,9 +1,9 @@
 [package]
 name = "onepass"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version.workspace = true
-description = "PreToolUse gate on Agent/Task: at most ONE refutation/verification/audit subagent spawn per user prompt (rule 2026-10-17: one refutation and one test; do not dig several levels deep). UserPromptSubmit resets the per-session counter. Fail-closed: unreadable state or unparseable input denies."
+description = "PreToolUse gate on Agent and Task that allows at most one refutation, verification or audit subagent spawn per user prompt, failing closed when state is unreadable."
 license = "MIT"
 
 [[bin]]

@@ -9,8 +9,8 @@ SOURCE（課題の供給）                          EXECUTOR（解決手段の�
 計測して validate/reject する（出荷 ≠ 検証 ＝ build ≠ validate）。
 ```
 
-It does **not** lock the whole queue: several sessions may run `/flow` on the same project at once [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_loop_does_not_acquire_the_exclusive_project_lock] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::a_peer_driver_is_not_a_reason_to_stand_down].
-Exclusion is per task — `backlog next --claim` (pick and reserve in one critical section) plus `condukt state claim-task` — and each session registers itself non-exclusively with `backlog driver register` [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_pick_reserves_the_task_instead_of_only_reading_it] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_per_task_claim_guards_are_retained] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_loop_does_not_acquire_the_exclusive_project_lock].
+It does **not** lock the whole queue: several sessions may run `/flow` on the same project at once.
+Exclusion is per task — `backlog next --claim` (pick and reserve in one critical section) plus `condukt state claim-task` — and each session registers itself non-exclusively with `backlog driver register`.
 
 早期脱出・エラー時も、driver 登録の解除を飛ばしてはならない。
 盲目実行をしない。
@@ -42,15 +42,15 @@ Exclusion is per task — `backlog next --claim` (pick and reserve in one critic
      場合のみ lock release）+ `overwatch end` + サマリ報告 + pivot-check
 ```
 
-The autonomy check and the gate routing are specified in `skills/flow/SKILL.md` Step 0.5 [test: crates/condukt/tests/autonomy_invariant.rs::invariant_prose_anchors_are_present].
+The autonomy check and the gate routing are specified in `skills/flow/SKILL.md` Step 0.5.
 
 On an **auto** verdict (exit 0), `condukt policy answer` self-answers the recommended option and logs it to
-`gate-decisions.jsonl` (auditable via `condukt policy answers`) [test: crates/condukt/tests/policy_cli.rs::auto_verdict_self_answers_recommended_option_and_journals] [test: crates/condukt/tests/policy_cli.rs::answers_reader_replays_the_audit_trail].
+`gate-decisions.jsonl` (auditable via `condukt policy answers`).
 Do **not** ask the user on an auto verdict.
 
-**flow has no hook [test: scripts/test_prose_flow_a.py::T::test_claim_layout_no_cargo_no_bin_no_hooks] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_no_hook_runs_flow]. `/flow` runs when, and only when, you invoke it.** [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_no_hook_runs_flow] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_autoflow_has_no_sessionstart_and_no_proposal_strings] [test: scripts/test_prose_flow_a.py::T::test_claim_no_propose_autoflow_stop_output_never_proposes_flow]
+**flow has no hook. `/flow` runs when, and only when, you invoke it.**
 
-[record: 2026-08-20 rev: 5289312f] Through 0.2.6 a `flow propose` SessionStart hook injected an L2
+ Through 0.2.6 a `flow propose` SessionStart hook injected an L2
 propose-then-confirm directive every session the backlog had pending items: *"before
 starting other work, ask the user with a single AskUserQuestion whether to start
 `/flow`."* **It was retired on the user's instruction (2026-08-20)**, together with
@@ -58,9 +58,9 @@ autoflow's two paths that said the same thing — its SessionStart "バックロ
 /flow で開始しますか？" and its Stop-hook arm that blocked every single turn with
 "/backlog を実行してください".
 
-flow is a **skills-only plugin**: no binary, no launcher, no hook, not a Cargo crate. [test: scripts/test_prose_flow_a.py::T::test_claim_layout_no_cargo_no_bin_no_hooks] [test: scripts/test_prose_flow_a.py::T::test_claim_layout_not_a_workspace_member]
+flow is a **skills-only plugin**: no binary, no launcher, no hook, not a Cargo crate.
 
-The plugin bundles the `/flow` skill and nothing else. [test: scripts/test_prose_flow_a.py::T::test_claim_layout_only_skill_is_flow]
+The plugin bundles the `/flow` skill and nothing else.
 
 ```text
 # in Claude Code:
@@ -69,20 +69,20 @@ The plugin bundles the `/flow` skill and nothing else. [test: scripts/test_prose
 ```
 
 ```
-.claude-plugin/plugin.json     # plugin manifest [test: scripts/test_prose_flow_a.py::T::test_claim_layout_plugin_json_valid_name_flow_no_hooks] [test: scripts/test_prose_flow_a.py::T::test_claim_layout_readme_prose_and_fence_comments]
-skills/flow/SKILL.md           # the /flow skill (drives the source→executor loop) [test: scripts/test_prose_flow_a.py::T::test_claim_layout_only_skill_is_flow] [test: scripts/test_prose_flow_a.py::T::test_claim_layout_readme_prose_and_fence_comments]
+.claude-plugin/plugin.json     # plugin manifest
+skills/flow/SKILL.md           # the /flow skill (drives the source→executor loop)
 ```
 
-[record: 2026-08-20 rev: 5289312f] Through 0.2.6 it also shipped `hooks/hooks.json`, `bin/flow` (a POSIX launcher),
+ Through 0.2.6 it also shipped `hooks/hooks.json`, `bin/flow` (a POSIX launcher),
 `bin/flow-<os>-<arch>`, `src/main.rs` and `Cargo.toml`, all of which existed to serve
 `flow propose` and went with it.
 
-Not a Cargo crate, so `cargo` is not involved in shipping it [test: scripts/test_prose_flow_a.py::T::test_claim_layout_no_cargo_no_bin_no_hooks] [test: scripts/test_prose_flow_a.py::T::test_claim_layout_not_a_workspace_member]. The `/flow` skill's
+Not a Cargo crate, so `cargo` is not involved in shipping it. The `/flow` skill's
 queue-driving contract is pinned as text by
-`crates/integration-tests/tests/flow_skill_queue_contract.rs`: [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_loop_does_not_acquire_the_exclusive_project_lock] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_pick_reserves_the_task_instead_of_only_reading_it] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::a_peer_driver_is_not_a_reason_to_stand_down] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::the_per_task_claim_guards_are_retained] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::undetermined_liveness_is_not_read_as_free] [test: crates/integration-tests/tests/flow_skill_queue_contract.rs::every_claim_task_invocation_is_marked_stateless]
+`crates/integration-tests/tests/flow_skill_queue_contract.rs`:
 
 ```sh
 cargo test -p integration-tests --test flow_skill_queue_contract
 ```
 
-MIT [test: scripts/test_prose_flow_a.py::T::test_claim_license_mit]
+MIT

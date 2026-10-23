@@ -34,7 +34,6 @@ class MergeAbortOnMain(ObserveGuardBase):
         self.assertTrue((self.main / ".git" / "MERGE_HEAD").exists())
         return head
 
-    @unittest.expectedFailure
     def test_merge_abort_of_own_conflicted_merge_is_allowed(self) -> None:
         head = self._conflicted_merge()
         tid = self._next_id()

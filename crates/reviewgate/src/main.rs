@@ -1,8 +1,9 @@
 //! reviewgate — a code-review gate for Claude Code.
 //!
 //! One binary, one subcommand per job. The `review` subcommand is the **Stop**
-//! hook: before the agent can declare a turn done, reviewgate reviews the diff.
-//! In `inject` mode it blocks the stop and injects a review rubric so the
+//! hook: before the agent can declare a turn done, reviewgate reviews the diff
+//! — when a reviewing mode is configured. The built-in default (no config file)
+//! is `off`: no review, the stop is allowed. In `inject` mode it blocks the stop and injects a review rubric so the
 //! running (subscription) agent reviews its own changes; in `subprocess` mode it
 //! runs an independent reviewer and blocks only when issues are reported. It is
 //! the "is this good code?" complement to donegate's "does it actually run?".
@@ -14,8 +15,10 @@
 //! aggregation point instead of being duplicated.
 //!
 //! Failure modes are split deliberately:
-//!   * a *harness* error (bad config, no git, our own bug) → exit 0, allow the
-//!     stop. We must never trap a turn because reviewgate itself broke.
+//!   * no git repo → exit 0, allow the stop (nothing to review).
+//!   * a config file that exists but is unreadable / unparseable / names an
+//!     unknown `mode` → block `config-invalid` (undetermined, never the `off`
+//!     default).
 //!   * a real review finding (subprocess) or a not-yet-reviewed diff (inject) →
 //!     block on purpose, with an actionable reason.
 //!   * a *reviewer* that fails (subprocess crash / timeout / unusable output) is
@@ -188,12 +191,26 @@ fn review_run(hook: Option<HookInput>, interactive: bool) -> ! {
     if let Some(e) = &cfg.load_error {
         eprintln!(
             "reviewgate: WARNING config could not be loaded ({e}) — its settings are NOT in \
-             effect; running with the built-in defaults. Fix the file (see `reviewgate status`)."
+             effect; the stop is BLOCKED as config-invalid (not silently run with the `off` \
+             default). Fix the file (see `reviewgate status`)."
         );
     }
     if !cfg.enabled {
         if interactive {
             eprintln!("reviewgate: disabled in config");
+        }
+        harness_core::hook_latency::record("reviewgate", "", __start.elapsed().as_millis() as u64);
+        std::process::exit(0);
+    }
+
+    // `mode = "off"` (also the built-in default when NO config file exists):
+    // the gate is disabled — a verdict-free path like `enabled = false`, not
+    // an error resolved to allow. Guarded on `config_invalid` because an
+    // invalid/unreadable config leaves `mode` at the `Off` placeholder: that
+    // is undetermined and must reach the config-invalid block below.
+    if cfg.mode == Mode::Off && cfg.config_invalid.is_none() {
+        if interactive {
+            eprintln!("reviewgate: mode = off (no review configured)");
         }
         harness_core::hook_latency::record("reviewgate", "", __start.elapsed().as_millis() as u64);
         std::process::exit(0);
@@ -334,7 +351,7 @@ fn review_run(hook: Option<HookInput>, interactive: bool) -> ! {
 fn config_invalid_reason(why: &str) -> String {
     format!(
         "🚧 reviewgate: config-invalid — 設定値を解釈できません: {why}\n\n\
-         `mode` に指定できる値は \"inject\" または \"subprocess\" (別名: reviewer / independent) です。\
+         `mode` に指定できる値は \"off\" (既定) / \"inject\" / \"subprocess\" (別名: reviewer / independent) です。\
          綴り間違いをどちらかのモードに推測で割り当てると、独立レビューが自己レビューへ黙って降格する\
          (または意図しない reviewer_cmd の起動が走る) ため、この停止をブロックしています。\n\n\
          前に進むには次のいずれか:\n\
@@ -403,7 +420,7 @@ fn status() {
     println!("enabled:       {}", cfg.enabled);
     match &cfg.config_invalid {
         Some(why) => println!(
-            "mode:          config-invalid ({why} — valid: \"inject\" / \"subprocess\" \
+            "mode:          config-invalid ({why} — valid: \"off\" / \"inject\" / \"subprocess\" \
              [aliases reviewer, independent]); stops are BLOCKED (a repeat of the same block in a \
              session is waived with a systemMessage) until fixed"
         ),
@@ -467,6 +484,7 @@ fn init(force: bool) -> anyhow::Result<()> {
 const STARTER: &str = r#"# reviewgate.toml — code-review gate for Claude Code.
 #
 # On Stop, reviewgate reviews the diff before the agent can declare done.
+#   mode = "off"        no review (the built-in default when no config exists).
 #   mode = "inject"     block once per new diff and inject a rubric; the running
 #                       agent reviews its own changes (no API key).
 #   mode = "subprocess" run `reviewer_cmd` as an independent reviewer and block

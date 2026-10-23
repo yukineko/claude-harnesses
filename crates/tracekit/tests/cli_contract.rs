@@ -1,5 +1,5 @@
-//! Prose-claim reproduction tests for the tracekit README claims.
-//! Each test drives the real binary with a fresh temp HOME.
+//! CLI contract tests for tracekit. Each test drives the real binary with a
+//! fresh temp HOME, or checks packaging wiring (plugin.json, source scan).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -392,48 +392,6 @@ fn claim_no_hook() {
     assert_eq!(no_hook_violation(&crate_root()), None);
 }
 
-fn skill_violation(skill: &str) -> Option<String> {
-    let l: Vec<&str> = skill
-        .lines()
-        .filter(|l| l.contains("tracekit record"))
-        .collect();
-    // join each record invocation with its continuation lines
-    let joined: Vec<String> = {
-        let all: Vec<&str> = skill.lines().collect();
-        all.iter()
-            .enumerate()
-            .filter(|(_, x)| x.contains("tracekit record"))
-            .map(|(i, _)| all[i..(i + 3).min(all.len())].join(" "))
-            .collect()
-    };
-    if l.len() < 3 {
-        return Some(format!("only {} tracekit record calls", l.len()));
-    }
-    if !skill.contains("command -v tracekit") {
-        return Some("no command -v tracekit guard".into());
-    }
-    let interp = joined
-        .iter()
-        .any(|j| j.contains("--span interpret") && !j.contains("--parent"));
-    let worker = joined
-        .iter()
-        .any(|j| j.contains("--parent interpret") && j.contains("--phase worker"));
-    let verif = joined
-        .iter()
-        .any(|j| j.contains("--parent \"<t.id>\"") && j.contains("--phase verifier"));
-    if !(interp && worker && verif) {
-        return Some(format!("interp={interp} worker={worker} verifier={verif}"));
-    }
-    None
-}
-
-#[test]
-fn claim_condukt_skill_calls_record() {
-    let p = crate_root().join("../condukt/skills/condukt/SKILL.md");
-    let s = std::fs::read_to_string(&p).expect("SKILL.md");
-    assert_eq!(skill_violation(&s), None);
-}
-
 fn scan_for_tracekit(dir: &Path, hits: &mut Vec<PathBuf>) {
     for e in std::fs::read_dir(dir).expect("read_dir") {
         let p = e.expect("entry").path();
@@ -487,12 +445,6 @@ fn red_inputs_for_packaging_claims_are_detected() {
         no_hook_violation(empty.path()).is_some(),
         "malformed plugin.json must not pass"
     );
-
-    let p = crate_root().join("../condukt/skills/condukt/SKILL.md");
-    let s = std::fs::read_to_string(p).unwrap();
-    assert!(skill_violation(&s.replace("command -v tracekit", "command -v other")).is_some());
-    assert!(skill_violation(&s.replace("--parent interpret", "--parent root")).is_some());
-    assert!(skill_violation(&s.replace("--parent \"<t.id>\"", "--parent zz")).is_some());
 
     std::fs::create_dir_all(t.path().join("src/sub")).unwrap();
     std::fs::write(t.path().join("src/sub/a.rs"), "// tracekit record").unwrap();

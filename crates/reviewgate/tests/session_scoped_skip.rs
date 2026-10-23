@@ -78,6 +78,7 @@ impl Run {
 }
 
 fn run(dir: &Path, args: &[&str], session: Option<&str>, stdin: &str) -> Run {
+    ensure_inject_config(dir);
     let bin = env!("CARGO_BIN_EXE_reviewgate");
     let mut cmd = Command::new(bin);
     cmd.args(args)
@@ -198,4 +199,15 @@ fn a_skip_issued_by_another_session_does_not_wave_my_reviewgate_gate_through() {
         a.stdout,
         a.stderr
     );
+}
+
+/// reviewgate's built-in default is `mode = "off"` (no review). These tests
+/// exercise the reviewing path, so they opt in explicitly with a home config
+/// `mode = "inject"` -- written only when the test has not placed its own.
+fn ensure_inject_config(home: &Path) {
+    let cfg = home.join(".reviewgate").join("config.toml");
+    if !cfg.exists() {
+        std::fs::create_dir_all(home.join(".reviewgate")).unwrap();
+        std::fs::write(cfg, "mode = \"inject\"\n").unwrap();
+    }
 }

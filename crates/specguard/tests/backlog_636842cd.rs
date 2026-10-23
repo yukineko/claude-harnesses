@@ -117,7 +117,6 @@ fn control_binding_to_regular_file_passes() {
 }
 
 #[test]
-#[ignore = "backlog 636842cd: RED repro"]
 fn binding_to_symlink_pointing_outside_repo_does_not_count() {
     let outside = tempfile::tempdir().unwrap();
     let target = outside.path().join("elsewhere.md");

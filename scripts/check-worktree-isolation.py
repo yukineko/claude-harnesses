@@ -21,7 +21,9 @@ its `--git-common-dir`. The main checkout is the one place they are equal. So:
 
 A merge commit is the ALLOWED operation on main, and it is recognised two ways:
 
-  1. `MERGE_HEAD` existing in the git dir at commit time — checked with a
+  1. `MERGE_HEAD` existing in the git dir at commit time as a readable REGULAR
+     file (a directory / symlink / unreadable MERGE_HEAD is undetermined and
+     blocks; backlog 1af8be51) — checked with a
      bounded retry (see `MERGE_HEAD_RETRY_*` below), because git writing the
      file and this script observing it are not the same instant. Measured
      live (backlog, 3 reproductions): a clean `git merge --no-edit <branch>`
@@ -65,6 +67,7 @@ the commit is BLOCKED. "Cannot determine whether this is the main tree" is not
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -126,18 +129,39 @@ def declared_merge_integration(env: dict[str, str]) -> bool:
     return verb in ("merge", "pull")
 
 
-def _merge_head_visible(git_dir: str) -> bool:
-    """MERGE_HEAD existing in the git dir, with a bounded retry to absorb the
+def _merge_head_state(git_dir: str) -> str:
+    """Tri-state MERGE_HEAD probe, with a bounded retry to absorb the
     filesystem-visibility lag between git writing it and this script observing
-    it (see module docstring). Finite and short: giving up still answers
-    False, never True."""
+    it (see module docstring). Finite and short: giving up answers "absent".
+
+    "present"      MERGE_HEAD is a regular file this process can open and read.
+    "absent"       MERGE_HEAD does not exist (after the bounded retry).
+    "undetermined" anything else: a directory, a symlink or other non-regular
+                   file, an unreadable file, or an lstat error other than
+                   ENOENT. Blocks the commit (CLAUDE.md 3; backlog 1af8be51).
+
+    Mirrors guard-maintree-edit.py's `_merge_head_state`, so the edit-time and
+    commit-time guards agree on what counts as a merge record.
+    """
     marker = os.path.join(git_dir, "MERGE_HEAD")
     for attempt in range(MERGE_HEAD_RETRY_ATTEMPTS):
-        if os.path.exists(marker):
-            return True
-        if attempt < MERGE_HEAD_RETRY_ATTEMPTS - 1:
-            time.sleep(MERGE_HEAD_RETRY_DELAY_S)
-    return False
+        try:
+            st = os.lstat(marker)
+        except FileNotFoundError:
+            if attempt < MERGE_HEAD_RETRY_ATTEMPTS - 1:
+                time.sleep(MERGE_HEAD_RETRY_DELAY_S)
+            continue
+        except OSError:
+            return "undetermined"
+        if not stat.S_ISREG(st.st_mode):
+            return "undetermined"
+        try:
+            with open(marker, "rb") as f:
+                f.read(1)
+        except OSError:
+            return "undetermined"
+        return "present"
+    return "absent"
 
 
 BLOCK = """Refused: this commit is being made directly in the MAIN working tree.
@@ -161,6 +185,13 @@ UNDETERMINED = """Refused: could not determine whether this commit is in the mai
 cannot-determine takes the restricted side). Re-run from a valid git checkout.
 """
 
+MERGE_HEAD_UNDETERMINED = """Refused: this commit is in the MAIN working tree and `{path}` exists but is not a
+readable regular file (a directory, a symlink, or unreadable), so whether a merge
+is in progress cannot be determined. That resolves to a block (CLAUDE.md 3), the
+same answer guard-maintree-edit.py gives. Remove the stray MERGE_HEAD or
+re-run the merge.
+"""
+
 
 def main() -> int:
     git_dir = _git("rev-parse", "--absolute-git-dir")
@@ -180,8 +211,13 @@ def main() -> int:
     # allow-on-giving-up).
     if declared_merge_integration(os.environ):
         return 0
-    if _merge_head_visible(git_dir):
+    state = _merge_head_state(git_dir)
+    if state == "present":
         return 0
+    if state == "undetermined":
+        sys.stderr.write(MERGE_HEAD_UNDETERMINED.format(
+            path=os.path.join(git_dir, "MERGE_HEAD")))
+        return 1
 
     head = _git("rev-parse", "--short", "HEAD") or "<base>"
     sys.stderr.write(BLOCK.format(head=head))

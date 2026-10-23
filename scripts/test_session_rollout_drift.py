@@ -69,11 +69,18 @@ class DriftIsReported(unittest.TestCase):
         )
 
     def test_enablement_and_retired_are_also_reported(self):
-        for rc in (mod.RC_ENABLEMENT, mod.RC_RETIRED):
+        # Contract change (backlog 65dfc23e): these used to assert the notice
+        # named rollout-plugins.sh, which fixes neither class. Each now names
+        # its own remedy, mirroring check-plugin-rollout.py's "Fix:" lines.
+        expected = {
+            mod.RC_ENABLEMENT: "enabledPlugins",
+            mod.RC_RETIRED: "retired-plugins.json",
+        }
+        for rc, remedy in expected.items():
             with self.subTest(rc=rc):
                 n = mod.classify(rc, "body")
                 self.assertIsNotNone(n, f"rc={rc} must not be silent")
-                self.assertIn("rollout-plugins.sh", n)
+                self.assertIn(remedy, n)
 
 
 class UndeterminedIsNeverSilent(unittest.TestCase):

@@ -1,9 +1,13 @@
 //! Configuration: project `reviewgate.toml` (preferred) layered over a
 //! home-level `~/.reviewgate/config.toml`, over built-in defaults.
 //!
-//! Safe by default: with no config the gate reviews ordinary source changes,
-//! but if nothing reviewable changed (or there is no git repo) it lets every
-//! stop through. Installing the hook can never *trap* a turn on its own.
+//! Off by default: with no config file at all the gate performs no review
+//! (`Mode::Off`) — the measured cost of a default self-review (inject mode
+//! blocked 232/3000 stops only to make the author review its own diff) did not
+//! pay for itself. Reviewing is an explicit opt-in: `mode = "inject"` or
+//! `mode = "subprocess"`. `Off` is the absence of a configured gate, not an
+//! error resolved to allow: a config file that EXISTS but cannot be read or
+//! parsed, or that names an unknown `mode`, is `config_invalid` and blocks.
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +19,9 @@ pub use harness_core::config::expand_tilde;
 /// How the review is actually performed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
+    /// No review at all: the Stop hook allows without scanning git. The
+    /// built-in default (no config file), or `mode = "off"` explicitly.
+    Off,
     /// Block the stop and inject a rubric; the running (subscription) agent
     /// reviews its own diff. No API key, no extra process.
     Inject,
@@ -35,11 +42,13 @@ impl Mode {
         match s.trim().to_ascii_lowercase().as_str() {
             "subprocess" | "reviewer" | "independent" => Ok(Mode::Subprocess),
             "inject" => Ok(Mode::Inject),
+            "off" => Ok(Mode::Off),
             _ => Err(s.to_string()),
         }
     }
     pub fn as_str(&self) -> &'static str {
         match self {
+            Mode::Off => "off",
             Mode::Inject => "inject",
             Mode::Subprocess => "subprocess",
         }
@@ -75,12 +84,14 @@ pub struct Config {
     pub reviewer_timeout_secs: u64,
     pub state_dir: PathBuf,
     /// `Some(why)` when a config file was chosen but could not be read or
-    /// parsed. The built-in defaults are then in effect, NOT that file's
-    /// settings — `status` and the review path must say so rather than report
-    /// the file as adopted (audit P7).
+    /// parsed. That file's settings are NOT in effect — `status` and the review
+    /// path must say so rather than report the file as adopted (audit P7). It
+    /// also sets [`Config::config_invalid`]: falling back to the built-in
+    /// default would silently mean `Mode::Off`, i.e. a typo disabling the gate.
     pub load_error: Option<String>,
-    /// `Some(description)` when the config was read but holds a value that
-    /// cannot be interpreted (currently: an unrecognised `mode`, named in the
+    /// `Some(description)` when a config file exists but cannot be used: it
+    /// could not be read/parsed (see `load_error`), or it holds a value that
+    /// cannot be interpreted (an unrecognised `mode`, named in the
     /// description). Undetermined, not a choice: `mode` keeps its default only
     /// as a placeholder, and the Stop hook blocks `config-invalid` before any
     /// review runs (even when nothing is reviewable). `reviewgate status`
@@ -175,7 +186,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             enabled: true,
-            mode: Mode::Inject,
+            mode: Mode::Off,
             max_attempts: 2,
             reset_after_secs: 600,
             min_changed_files: 1,
@@ -207,8 +218,11 @@ impl Config {
     /// untrusted, repo-shipped value would be arbitrary code execution. When the
     /// project file exists but the root is not trusted we ignore it and fall back
     /// to the (trusted) home config, then built-in defaults. The home config and
-    /// defaults need no trust. Any parse error silently falls back (the gate must
-    /// never crash a turn). Trust is resolved with
+    /// defaults need no trust. A read/parse error of the chosen file is recorded
+    /// in `load_error` AND `config_invalid` (the Stop hook then blocks
+    /// `config-invalid`); it never silently becomes the `Off` default. Note that an
+    /// untrusted project file is *ignored*, not invalid: with no home config the
+    /// result is the `Off` default (announced on stderr). Trust is resolved with
     /// [`harness_core::trust::resolve`], i.e. including worktree inheritance: a
     /// linked git worktree of a trusted checkout is trusted (same rule as donegate).
     pub fn load(root: &Path) -> Self {
@@ -246,6 +260,7 @@ impl Config {
                 });
             if let Err(e) = &parsed {
                 cfg.load_error = Some(e.clone());
+                cfg.config_invalid = Some(format!("config could not be loaded ({e})"));
             }
             if let Ok(fc) = parsed {
                 if let Some(v) = fc.enabled {
@@ -493,6 +508,8 @@ mod backlog_7d56f1e3_mode_parse {
             ("subprocess", Mode::Subprocess),
             (" REVIEWER ", Mode::Subprocess),
             ("independent", Mode::Subprocess),
+            ("off", Mode::Off),
+            (" OFF ", Mode::Off),
         ] {
             assert_eq!(Mode::parse(s), Ok(m), "{s:?}");
         }
@@ -524,6 +541,7 @@ mod backlog_7d56f1e3_mode_parse {
             ("subprocess", Mode::Subprocess),
             ("reviewer", Mode::Subprocess),
             ("independent", Mode::Subprocess),
+            ("off", Mode::Off),
         ] {
             std::fs::write(Config::home_path(), format!("mode = \"{s}\"\n")).unwrap();
             let cfg = Config::load(&proj);

@@ -7,7 +7,8 @@
 //!
 //! ARCHITECTURE: the interrogation loop is NOT self-driven by Rust. The thing
 //! that asks the human (`AskUserQuestion`) is a Claude Code tool that a binary
-//! cannot call. So this module is pure and stateless-style: it exposes only
+//! cannot call. So this module is pure (apart from the undetermined telemetry
+//! described under the purity invariant below) and stateless-style: it exposes only
 //!   - [`evaluate`] — run the gates over a [`Bundle`] to surface [`OpenQuestion`]s, and
 //!   - [`apply`] — fold one human [`Answer`] into a [`CarveState`] and re-evaluate.
 //!
@@ -15,9 +16,17 @@
 //!   `evaluate` → (LLM asks the human) → `apply(answer)` → repeat,
 //! while the calling binary persists [`CarveState`] across invocations.
 //!
-//! Purity invariant: no file I/O, no network, no LLM, no `AskUserQuestion`, no
-//! question-text generation. [`Authority`] is carried as data — a presentation
-//! HINT for the SKILL — and is never used to auto-resolve conflicts in code.
+//! Purity invariant: no network, no LLM, no `AskUserQuestion`, no
+//! question-text generation, and no file I/O written in this module — with one
+//! exception reached indirectly (backlog e23580cd): creating an `Undetermined`
+//! value (e.g. [`ScopeDraft::declare`] on an unresolved draft) goes through
+//! [`Determination::undetermined`], which writes one telemetry line
+//! to the undetermined sink ([`crate::undetermined`]) whenever that sink is
+//! active (up to that module's per-process cap). The sink is active by default
+//! outside cargo, suppressed under cargo, and selectable with
+//! [`crate::undetermined::SINK_ENV`]. [`Authority`] is carried as data — a
+//! presentation HINT for the SKILL — and is never used to auto-resolve
+//! conflicts in code.
 
 use serde::{Deserialize, Serialize};
 
@@ -84,7 +93,11 @@ impl ScopeDeclaration {
 }
 
 impl ScopeDraft {
-    /// Resolve this draft. **Pure — no IO of any kind.**
+    /// Resolve this draft. Deterministic, with one side effect: each
+    /// `Undetermined` it returns is created via [`Determination::undetermined`],
+    /// which writes one telemetry line to the undetermined sink when that sink
+    /// is active (see the module's purity invariant; backlog e23580cd). A
+    /// resolved draft performs no IO.
     ///
     /// Returns `Determination::Undetermined` (never a permissive empty
     /// declaration) when any of the following holds:

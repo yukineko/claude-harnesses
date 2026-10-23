@@ -25,8 +25,10 @@ bash scripts/e2e-autonomy.sh
 ```
 
 It is `set -euo pipefail`, idempotent, and cleans up its throwaway state
-(a temp `$HOME` holding an isolated `~/.backlog`) via an `EXIT` trap. The real
-`~/.backlog` and `~/.condukt` are never modified.
+(a temp `$HOME` holding a throwaway git repo + linked worktree whose
+`.backlog/` is the demo store, since backlog keeps one store per repo) via an
+`EXIT` trap. No real backlog store and no `~/.condukt` is modified. Pinned by
+`scripts/tests/e2e-autonomy-runs.sh`.
 
 ### What it verifies
 

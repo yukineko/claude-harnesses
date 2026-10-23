@@ -150,7 +150,6 @@ fn control_from_main_tree_autoflow_sees_condukt_run() {
 }
 
 #[test]
-#[ignore = "backlog 1eae7cb9: RED repro"]
 fn from_linked_worktree_autoflow_sees_the_same_condukt_run() {
     let env = Env::new("linked");
     let out = env.stop(&env.linked);

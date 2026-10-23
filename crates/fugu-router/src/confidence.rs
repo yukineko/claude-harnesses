@@ -102,6 +102,7 @@ mod tests {
                 touched_files: vec![],
                 class: "parallel".into(),
                 model: model.into(),
+                model_id: None,
                 role: "worker".into(),
                 pass,
                 cost_usd: None,
@@ -279,6 +280,7 @@ mod tests {
                 touched_files: vec!["src/auth/login.ts".into()],
                 class: "parallel".into(),
                 model: "sonnet".into(),
+                model_id: None,
                 role: "worker".into(),
                 pass: i < 3, // 3/4 pass
                 cost_usd: None,

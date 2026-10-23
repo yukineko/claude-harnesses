@@ -48,7 +48,6 @@ fn control_without_env_the_red_rev_is_not_red() {
 }
 
 #[test]
-#[ignore = "backlog a14b2fa2: RED repro"]
 fn accepted_env_dependent_closure_records_the_env_or_is_refused() {
     let f = Fixture::new("a14b");
     let (red, _head) = env_gated_bug_then_fix(&f);

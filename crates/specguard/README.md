@@ -170,9 +170,9 @@ specguard scope                    # print the resolved scope only (no agent)
 specguard prompt                   # print each shard's prompt (no agent)
 specguard prompt --json            # emit shards as machine-readable JSON (used by the plugin)
 specguard ingest [--from <file>] [--kind drift|audit] [--filter <q>]
-#   feed pre-collected shard outputs (JSON/stdin) into parse→report→sentinel (does NOT spawn an agent) [test: crates/specguard/tests/findings_20261015.rs::audit_report_survives_a_same_day_drift_ingest]
-#   --kind: which shard set the outputs answer, drift (`prompt --json`) or audit (`audit --json`) [test: crates/specguard/tests/findings_20261015.rs::audit_report_survives_a_same_day_drift_ingest]
-#   --filter: audit outputs only; the same `--filter` the `audit --json` run used [test: crates/specguard/tests/findings_20261015.rs::readme_ingest_usage_lists_every_ingest_flag]
+#   feed pre-collected shard outputs (JSON/stdin) into parse→report→sentinel (does NOT spawn an agent)
+#   --kind: which shard set the outputs answer, drift (`prompt --json`) or audit (`audit --json`)
+#   --filter: audit outputs only; the same `--filter` the `audit --json` run used
 specguard brief "<task>"           # read-only pre-task spec briefing (runs the agent)
 specguard brief "<task>" --prompt  # render the briefing prompt only (used by the plugin)
 specguard brief "<task>" --json    # deterministic canon-coverage verdict only, no agent:
@@ -313,7 +313,7 @@ actually exercise the spec's behaviors).
 
 | Path | Contents |
 |---|---|
-| `<report_dir>/<date>.md` | the report: the drift report, plus the spec-audit report as a marked section of the same file that a later same-day drift ingest keeps [test: crates/specguard/tests/findings_20261015.rs::audit_report_survives_a_same_day_drift_ingest] |
+| `<report_dir>/<date>.md` | the report: the drift report, plus the spec-audit report as a marked section of the same file that a later same-day drift ingest keeps |
 | `<report_dir>/.last-ref` | the last audited HEAD (next run's change-triggered baseline) |
 | `<sentinel>` | only when `needs_user=yes` (date / report / summary) |
 | `<report_dir>/.shard-fingerprints` | per-shard content fingerprint of the last **clean** audit (see below) |

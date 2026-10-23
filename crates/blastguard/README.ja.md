@@ -602,17 +602,17 @@ specguard の forge は LLM が生成した `test_cmd` を `sh -c` に渡す前�
 誤ラベル付けした場合でも deploy・`git push`・release のような対外的で不可逆な
 アクションを GATED ゲートへ強制的に通す。
 タスク文中のファイル名の内側にだけ現れる deploy 語（例: `scripts/check-plugin-rollout.py`
-の `rollout`）では強制ゲートしない [test: crates/blastguard/src/classify.rs::deploy_needle_only_inside_a_touched_file_name_does_not_gate]。
+の `rollout`）では強制ゲートしない。
 ファイルパス token とは `/` を含むか、
-`.py`/`.rs`/`.sh`/`.md`/`.toml` 等の既知拡張子で終わり、かつ `:` も `@` も含まない語のこと [test: crates/blastguard/src/classify.rs::file_path_token_rule_is_narrow]。
+`.py`/`.rs`/`.sh`/`.md`/`.toml` 等の既知拡張子で終わり、かつ `:` も `@` も含まない語のこと。
 先頭にあるもの・runner 語（`run`, `bash` 等）や shell 区切りの直後にあるもの・`./` で
-始まるものは従来どおり判定対象に残る [test: crates/blastguard/src/classify.rs::real_commands_containing_paths_still_gate]。
-backtick で引用されたものも判定対象に残る [test: crates/blastguard/src/classify.rs::backtick_spans_are_still_never_masked_for_deploy_needles]。
+始まるものは従来どおり判定対象に残る。
+backtick で引用されたものも判定対象に残る。
 タスク散文はコマンドとして解析しない: `classify` は散文を deploy / history の needle だけで読むので、
-コマンドを記述するだけの散文（例: backtick で `git config core.hooksPath` を引用する）は強制ゲートしない [test: crates/blastguard/src/classify.rs::prose_quoting_a_command_is_not_parsed_as_that_command]。
+コマンドを記述するだけの散文（例: backtick で `git config core.hooksPath` を引用する）は強制ゲートしない。
 タスクが実際に実行するコマンドは別に渡され、従来どおりの `classify_command` で全解析されるので、
-同じコマンドをコマンドとして渡せば gate される [test: crates/blastguard/src/classify.rs::the_same_command_passed_as_a_command_still_gates]。
-コマンド一覧が宣言されていない（`None`）`classify_change` は判定不能であり、Low にはならない [test: crates/blastguard/src/classify.rs::undeclared_commands_are_undetermined_even_for_benign_prose]。
+同じコマンドをコマンドとして渡せば gate される。
+コマンド一覧が宣言されていない（`None`）`classify_change` は判定不能であり、Low にはならない。
 
 コマンド分類とは別に、**diff の内容そのもの**から意味的リスクを見る2つのモジュールも
 公開している。いずれも純粋・決定論・I/O なしで、command 分類が拾えない「無害な

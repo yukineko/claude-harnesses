@@ -86,7 +86,6 @@ class DescriptionGate(unittest.TestCase):
             self.assertNotEqual(rc, 0, "plugin.json and marketplace.json descriptions disagree "
                                        f"(one carries an unscoped absence claim) yet the gate passed:\n{out}")
 
-    @unittest.expectedFailure  # backlog 61c1f83c: open defect, remove when fixed
     def test_live_repo_descriptions_agree(self):
         market = json.loads((REPO / ".claude-plugin/marketplace.json").read_text(encoding="utf-8"))
         by_path = {}

@@ -14,7 +14,8 @@ class of fault nothing goes red for: 16 plugins once drifted silently across
 demoted check with no new home is "someone might notice", which CLAUDE.md 6
 names as the thing not to rely on. Detection itself was never the problem —
 `scripts/check-plugin-rollout.py` survives intact — so this moves the REPORT to
-the moment an operator is present and can run `scripts/rollout-plugins.sh`.
+the moment an operator is present and can act (run `scripts/rollout-plugins.sh`
+for rollout drift; enablement and retired findings name their own remedies).
 
 Silence is load-bearing here, in both directions:
 
@@ -62,10 +63,27 @@ RC_RETIRED_CONFIG = 6
 
 # Classes that mean "there is a real, actionable drift". Each has a remedy the
 # operator can run right now, which is the whole reason this report moved here.
+# The remedies differ per class and mirror check-plugin-rollout.py's own "Fix:"
+# lines: `rollout-plugins.sh` does NOT enable plugins (rc 2) and does not remove
+# a retired one (rc 5), so naming it for those classes sends the operator to a
+# command that leaves the finding exactly where it was (backlog 65dfc23e).
 ACTIONABLE = {
-    RC_ROLLOUT: "plugin rollout drift",
-    RC_ENABLEMENT: "a GATE crate is not enabled",
-    RC_RETIRED: "a retired plugin is still deployed",
+    RC_ROLLOUT: (
+        "plugin rollout drift",
+        "The deployed harness is NOT running your committed code. Fix with:\n"
+        "      scripts/rollout-plugins.sh",
+    ),
+    RC_ENABLEMENT: (
+        "a GATE crate is not enabled, or settings.json is absent/malformed",
+        "The deployed gate is NOT active. Fix: edit enabledPlugins in "
+        "settings.json and restart Claude Code\n"
+        "  (rollout does not enable plugins).",
+    ),
+    RC_RETIRED: (
+        "a retired plugin is still deployed",
+        "Something no crate backs is still enabled/installed. Fix: remove it "
+        "(or declare it in scripts/retired-plugins.json).",
+    ),
 }
 
 # Classes where the checker ran but could NOT decide. Reported as undetermined,
@@ -109,11 +127,8 @@ def classify(rc: int | None, output: str) -> str | None:
         )
 
     if rc in ACTIONABLE:
-        return (
-            f"⚠ plugin rollout: {ACTIONABLE[rc]} (rc={rc}).\n"
-            "  The deployed harness is NOT running your committed code. Fix with:\n"
-            "      scripts/rollout-plugins.sh\n" + _body(output)
-        )
+        what, remedy = ACTIONABLE[rc]
+        return f"⚠ plugin rollout: {what} (rc={rc}).\n  {remedy}\n" + _body(output)
 
     if rc in UNDETERMINED:
         return (

@@ -40,6 +40,7 @@ fn unique_dir(tag: &str) -> PathBuf {
 }
 
 fn run_review(cwd: &Path, home: &Path, path: &Path, payload: &str) -> (i32, String) {
+    ensure_inject_config(home);
     let bin = env!("CARGO_BIN_EXE_reviewgate");
     let mut child = Command::new(bin)
         .arg("review")
@@ -193,4 +194,15 @@ fn genuine_non_repo_with_real_git_still_allows() {
          {stdout:?}"
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// reviewgate's built-in default is `mode = "off"` (no review). These tests
+/// exercise the reviewing path, so they opt in explicitly with a home config
+/// `mode = "inject"` -- written only when the test has not placed its own.
+fn ensure_inject_config(home: &Path) {
+    let cfg = home.join(".reviewgate").join("config.toml");
+    if !cfg.exists() {
+        std::fs::create_dir_all(home.join(".reviewgate")).unwrap();
+        std::fs::write(cfg, "mode = \"inject\"\n").unwrap();
+    }
 }

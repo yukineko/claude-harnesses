@@ -328,7 +328,7 @@ fn claim_download_not_in_cargo_test() {
     assert!(download_tests_never_reach_curl(&nofile).is_err());
 
     // No other file in src/ or tests/ calls into download's execute/fetch;
-    // prose_claims.rs only reaches download through the BINARY + fake curl.
+    // cli_contract.rs only reaches download through the BINARY + fake curl.
     let mut files: Vec<PathBuf> = Vec::new();
     for d in ["src", "tests"] {
         rs_files(&Path::new(ROOT).join(d), &mut files);
@@ -342,7 +342,7 @@ fn claim_download_not_in_cargo_test() {
             continue;
         }
         let s = std::fs::read_to_string(&p).unwrap();
-        if name == "prose_claims.rs" {
+        if name == "cli_contract.rs" {
             // only this file's own needle literals may mention them
             let stripped = s.replace(needle_a, "").replace(needle_b, "");
             assert!(!stripped.contains(concat!("use benchkit::", "download")));
@@ -388,7 +388,7 @@ fn claim_download_not_in_cargo_test_binary_runs() {
     assert!(dl_code.contains("Command::new(\"curl\")"));
     assert!(!dl_code.contains("Command::new(\"/"));
     // (b) this file's own binary spawns go through the fake PATH.
-    let me = std::fs::read_to_string(Path::new(ROOT).join("tests/prose_claims.rs")).unwrap();
+    let me = std::fs::read_to_string(Path::new(ROOT).join("tests/cli_contract.rs")).unwrap();
     own_runs_use_fake_path(&me).unwrap();
     // self-checks: the scan rejects a second spawn and a PATH not fake-first.
     let spawn = concat!("Command::new(", "BIN)");

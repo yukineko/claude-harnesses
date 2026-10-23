@@ -71,7 +71,7 @@ pub fn store_path(root: &Path) -> PathBuf {
 }
 
 /// Load all recorded outcomes (oldest first). A missing file => empty Vec; a
-/// corrupt file is a hard error (unlike carve state, we don't want to silently
+/// corrupt file is a hard error (as for carve state: we don't want to silently
 /// drop recorded measurements).
 pub fn load(root: &Path) -> Result<Vec<Outcome>> {
     let path = store_path(root);

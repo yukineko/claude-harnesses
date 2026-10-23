@@ -101,6 +101,12 @@ SCANNERS = _precommit_scanners() + [
     "check-test-weakening.py",
 ]
 
+# What .githooks/post-merge runs after a TRUE (two-parent) merge, whatever
+# pre-merge-commit did: its version-collision report calls
+# check-version-bumped.py once against ORIG_HEAD and once against HEAD^2.
+# These are post-merge's own invocations, not part of the pre-merge gate list.
+POST_MERGE_CHECKS = ["check-version-bumped.py", "check-version-bumped.py"]
+
 # A stub scanner: records that it ran, then exits with the code baked in here.
 # It never reads the repository, so it can only ever report what this test told
 # it to report.
@@ -705,7 +711,10 @@ class MergeCommits(GateTestCase):
         self._merge_setup(h)
         h.git("merge", "--no-ff", "-m", "merge feat", "feat")
         self.assertEqual(
-            h.ran(), SCANNERS, "pre-merge-commit must run the same gate list"
+            h.ran(),
+            SCANNERS + POST_MERGE_CHECKS,
+            "pre-merge-commit must run the same gate list (then post-merge "
+            "runs its version-collision checks)",
         )
 
     def test_a_red_gate_blocks_a_merge_commit(self):
@@ -770,7 +779,11 @@ class MergeCommits(GateTestCase):
         self._merge_setup(h)
 
         h.git("merge", "--no-ff", "--no-verify", "-m", "ungated merge", "feat")
-        self.assertEqual(h.ran(), [], "precondition: no gate ran")
+        self.assertEqual(
+            h.ran(),
+            POST_MERGE_CHECKS,
+            "precondition: no pre-merge gate ran (only post-merge's checks)",
+        )
         self.assertLedgerHas(h, 1, "the ungated merge must reach the ledger")
         self.assertNotEqual(
             h.pre_push().returncode, 0, "and pre-push must refuse to push it"
@@ -2808,6 +2821,69 @@ class MissingObjectLedgerEntries(GateTestCase):
         wrapper.chmod(0o755)
         proc = h.gate_bypass()
         self.assertEqual(proc.returncode, 2, self._out(proc))
+
+
+# ---------------------------------------------------------------------------
+# pre-push judges the commits THIS push carries, not every ledger entry
+# (user ruling 2026-10-22 「ゲートを直す」: a841ad3c, an ungated commit living
+# only on another session's branch, blocked `git push origin main` although
+# the push did not carry it).
+# ---------------------------------------------------------------------------
+class PushRangeScoping(GateTestCase):
+    def _out(self, proc):
+        return "--- exit %d ---\n--- stdout ---\n%s\n--- stderr ---\n%s" % (
+            proc.returncode, proc.stdout, proc.stderr)
+
+    def test_only_ungated_commits_in_the_pushed_range_block(self):
+        h = self.harness()
+        remote = h.git("rev-parse", "HEAD").stdout.strip()  # what origin/main has
+
+        # An ungated commit on a side branch the push does not carry.
+        h.git("checkout", "-q", "-b", "side")
+        h.write("side.txt", "side\n")
+        h.git("add", "-A")
+        self.assertEqual(h.commit("side-bypass", "--no-verify").returncode, 0)
+        side = h.git("rev-parse", "HEAD").stdout.strip()
+        h.git("checkout", "-q", "main")
+
+        # A gated commit on main: the tip being pushed.
+        h.write("main.txt", "gated\n")
+        h.git("add", "-A")
+        self.assertEqual(h.commit("gated-on-main").returncode, 0)
+        tip = h.git("rev-parse", "HEAD").stdout.strip()
+
+        self.assertIn(side, [ln.split("\t")[0] for ln in h.ledger_lines()],
+                      "precondition: the side bypass is in the ledger")
+        self.assertNotEqual(
+            h.git("merge-base", "--is-ancestor", side, tip, check=False).returncode,
+            0, "precondition: the side bypass is not in the pushed range")
+
+        line = "refs/heads/main %s refs/heads/main %s\n" % (tip, remote)
+        proc = h.pre_push(stdin=line)
+        self.assertEqual(
+            proc.returncode, 0,
+            "an ungated commit the push does not carry must not block it\n"
+            + self._out(proc))
+
+        # Twin: an ungated commit that IS in the pushed range still blocks.
+        h.write("main.txt", "ungated\n")
+        h.git("add", "-A")
+        self.assertEqual(h.commit("main-bypass", "--no-verify").returncode, 0)
+        tip2 = h.git("rev-parse", "HEAD").stdout.strip()
+        line2 = "refs/heads/main %s refs/heads/main %s\n" % (tip2, remote)
+        proc = h.pre_push(stdin=line2)
+        self.assertNotEqual(proc.returncode, 0,
+                            "an ungated commit in the pushed range must block\n"
+                            + self._out(proc))
+        self.assertIn("main-bypass", proc.stderr)
+
+        # Cannot determine the range (remote object unknown here): block.
+        unknown = "f" * len(remote)
+        line3 = "refs/heads/main %s refs/heads/main %s\n" % (tip2, unknown)
+        proc = h.pre_push(stdin=line3)
+        self.assertNotEqual(proc.returncode, 0,
+                            "an undeterminable push range must block\n"
+                            + self._out(proc))
 
 
 if __name__ == "__main__":

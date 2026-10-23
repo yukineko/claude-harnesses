@@ -65,7 +65,7 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    classify は散文（title/done_criteria）をコマンドとして解析せず、タスクの `commands`（+ `reproduction_tests`
    / `checks`）だけをコマンドとして解析する（backlog dc955812）。**`commands` を宣言していないタスクは
    判定不能として schedule で force-gate、`gate check` で Escalate になる**ので、decomposition には必ず
-   `commands`（何も実行しないなら `[]`）を入れる [test: crates/condukt/tests/gate_exec_cli.rs::undeclared_commands_escalate_even_when_autonomous]。
+   `commands`（何も実行しないなら `[]`）を入れる。
 3. **共有ファイルは直列** — `condukt schedule` が `shared_globs` 設定と file 衝突解析で `serial` に
    落とす。serial タスクは **順序の制約であって場所の制約ではない**: 1 件ずつ・schedule 順に、
    それぞれ **自分専用の worktree** で実装し、verifier 通過の直後に mid-run で
@@ -95,7 +95,7 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    並列 run では**その worktree を消した時点で観測の文脈ごと消える**。落とした 1 件は誰にも見えず、
    余分な 1 件はキューの 1 行で済む。orchestrator は Phase 5/6 で worker と verifier の返り値を読んだら、
    `別件:` 行と verifier の reason 中の対象外の指摘を**Phase 7 の worktree 削除より前に**すべて
-   **再現テスト（RED）を書いて** `backlog add --repro-test` で起票すること（テスト無し・再現しないものは拒否され store に何も書かれない [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_without_repro_writes_nothing_anywhere] [test: crates/backlog/tests/no_confirm_no_unproven.rs::add_with_non_reproducing_repro_writes_nothing_anywhere]）。
+   **再現テスト（RED）を書いて** `backlog add --repro-test` で起票すること（テスト無し・再現しないものは拒否され store に何も書かれない）。
    テストが書けなければ Ask すること。
    書く内容は逐語の観測・測定点 (rev と日付・どの task の worktree で見たか)・
    判定できないときは (a) 実在の欠陥 / (b) 意図どおりの両方の読みと、それを見分ける方法とすること。
@@ -193,7 +193,7 @@ open run が 0 件かつ引数が「次は何をする」系のとき。**残タ
 
 ```bash
 # 1. バックログを確認
-BACKLOG=$(backlog next)   # reproduced な repro を持つ最優先の 1 件を返し、store が読めなければ失敗する [test: crates/backlog/tests/no_confirm_no_unproven.rs::next_hands_out_the_reproduced_row_over_a_repro_less_one] [test: crates/backlog/tests/no_unconfirmed.rs::next_fails_closed_on_an_unconfirmed_row_in_tasks_toml]
+BACKLOG=$(backlog next)   # reproduced な repro を持つ最優先の 1 件を返し、store が読めなければ失敗する
 
 # 2. compass の gap を確認（charter があれば）
 COMPASS_GAP=$(compass gap 2>/dev/null | head -30 || true)
@@ -211,7 +211,7 @@ OPEN_HYPOS=$(hypothesis list --status open 2>/dev/null | head -10 || true)
 
 | 状態 | 対応 |
 |---|---|
-| `backlog next` が task を返した | その 1 件を課題文として Phase 0.5 へ進む（`next` は reproduced な repro の無い行を返さない [test: crates/backlog/tests/no_confirm_no_unproven.rs::next_hands_out_the_reproduced_row_over_a_repro_less_one]） |
+| `backlog next` が task を返した | その 1 件を課題文として Phase 0.5 へ進む（`next` は reproduced な repro の無い行を返さない） |
 | compass gap が明確な next_action を示す | それを課題文として Phase 0.5 へ進む |
 | どちらもなく直近コミットから自明な続きがある | それを課題文として Phase 0.5 へ進む |
 | 判断できない・選択肢が複数ある | `AskUserQuestion` でユーザーに候補を提示して選ばせる |
@@ -693,19 +693,19 @@ PLAN_EXIT=$?
 
 ### Phase 6 — 検証 (verifier agent) + 実績の記録
 
-**adversarial verify ゲート（GATE クレート変更時の反証パネル・opt-in）**: 単一 verifier は
-worker と同じ盲点を共有しうる（shared blind spot）。重要な完了判定（GATE クレート自体の変更）
-に限り、N 人の独立 skeptic による反証パネルを挟めるかを、Phase 5.5 の `consensus plan` と
-同じ形で決定論的に判定する:
+**adversarial verify ゲート（反証パネル・既定 OFF・opt-in）**: 単一 verifier は
+worker と同じ盲点を共有しうる（shared blind spot）。`CONDUKT_ADVERSARIAL=1` または config
+`[adversarial] enabled=true` で明示的に opt-in した場合に限り、N 人の独立 skeptic による
+反証パネルを挟むかを、Phase 5.5 の `consensus plan` と同じ形で決定論的に判定する
+（GATE_CRATES 配下の変更だけでは engage しない。`high_stakes` として JSON に表示されるのみ）:
 ```bash
 PLAN=$(condukt adversarial plan --touched <changed_file_1> --touched <changed_file_2> ...)
 PLAN_EXIT=$?
 ```
 - **exit 1（engage:false・既定）** → 下記「単一 verifier による検証」をそのまま実行する
   （既存パスは無変更）。追加コストなし。
-- **exit 0（engage:true）** → GATE_CRATES（blastguard/propguard/specguard/stuckguard/
-  mutategate）配下を変更している、または `CONDUKT_ADVERSARIAL=1`/config `[adversarial]
-  enabled=true` のグローバルスイッチ。`$PLAN` の `size`（N、2〜5 にクランプ済み）体の
+- **exit 0（engage:true）** → `CONDUKT_ADVERSARIAL=1`/config `[adversarial]
+  enabled=true` のグローバルスイッチが on。`$PLAN` の `size`（N、2〜5 にクランプ済み）体の
   独立 skeptic でパネルを張る。
 
 **パネル実行手順（engage 時のみ）**:
@@ -783,6 +783,8 @@ CC=$(condukt state check-criteria --run "$RID" --task "<id>")
   を返したタスク（純粋に機械的な done_criteria）のみ `verified` に set できる。それ以外
   （`behavioral: true` 等）は exit 0 を **証拠として添えて** verifier agent に渡し最終判定させる
   ——テスト緑は verifier の代替にならない。
+- この main loop の 1 回が reproduction_tests の唯一の再実行である。**verifier agent はこれを再実行しない**:
+  記録済みの exit code・出力要約と `tdd oracle` の証跡を読む（`agents/condukt-verifier.md`）。
 
 これにより「テストで赤確定」のタスクは LLM verifier 1 本分を省けつつ、振る舞い的な done_criteria が
 「テストが通ったから正しい」で verifier を素通りする穴（generation と verification の共有盲点の一種）を
@@ -855,23 +857,23 @@ condukt state check-oracle --run "$RID" --task "<id>"
 # → {"required":bool,"valid_fp_oracle":bool,"fallback":bool,"transition":"fail_to_pass|fail_to_fail|pass_to_pass|pass_to_fail","reason":"..."}
 ```
 これは advisory な信号で常に exit 0 (JSON を出すだけでそれ自体はゲートしない)。フィールドの意味:
-- `required`: タスクの `kind` が `fix`/`feature` (大小無視) なら true、それ以外は false [test: crates/condukt/src/oracle.rs::check_oracle_non_fix_feature_task_is_still_exempted]。
-  再現コマンドを宣言したかどうかは、この値を変えない [test: crates/condukt/src/oracle.rs::check_oracle_fix_or_feature_without_reproduction_tests_is_not_exempted]。
+- `required`: タスクの `kind` が `fix`/`feature` (大小無視) なら true、それ以外は false。
+  再現コマンドを宣言したかどうかは、この値を変えない。
 - `valid_fp_oracle`: `tdd oracle --task <id>` の判定。RED→GREEN が `fail_to_pass` のときだけ true
   (`fail_to_fail`/`pass_to_pass`/`pass_to_fail` はすべて false)。
-- `fallback`: true のときだけ判定を従来の検証ゲート (`state check-criteria` → verifier agent) に委ねる [test: crates/condukt/src/state.rs::enforce_fp_gate_allows_on_fallback_even_if_required]。
-  kind が fix/feature でないタスクは true になる [test: crates/condukt/src/oracle.rs::not_required_falls_back_immediately]。
+- `fallback`: true のときだけ判定を従来の検証ゲート (`state check-criteria` → verifier agent) に委ねる。
+  kind が fix/feature でないタスクは true になる。
   `tdd` が見つからない・起動できない・非0終了したときは判定不能として
-  `required:true, fallback:false, valid_fp_oracle:false` になり、従来ゲートには委ねない [test: crates/condukt/tests/drift_c4_oracle_doc.rs::binary_missing_tdd_blocks_regardless_of_reproduction_tests] [test: crates/condukt/src/oracle.rs::oracle_check_oracle_forwards_nonzero_exit_and_rejects]。
-  exit 0 なのに stdout が空または JSON でないときは true になる [test: crates/condukt/src/oracle.rs::exit_ok_empty_stdout_still_falls_back] [test: crates/condukt/src/oracle.rs::exit_ok_corrupt_stdout_still_falls_back]。
+  `required:true, fallback:false, valid_fp_oracle:false` になり、従来ゲートには委ねない。
+  exit 0 なのに stdout が空または JSON でないときは true になる。
 - `transition` / `reason`: 判定の詳細 (ログ・カスケードエスカレーションの `failure_context` に転記してよい)。
 
 **実際の強制は `condukt state set --run $RID --task <id> --status verified` 自身が行う**: このコマンドは
 内部で上と同じ判定 (`check-oracle` 相当) を再実行し、`required:true, fallback:false,
-valid_fp_oracle:false` のときは昇格を**拒否**する (非0終了・理由を出力) [test: crates/condukt/tests/fp_oracle_e2e.rs::fix_task_without_valid_fail_to_pass_oracle_is_refused]。
+valid_fp_oracle:false` のときは昇格を**拒否**する (非0終了・理由を出力)。
 `tdd` が無い環境でもこの拒否は同じで、`kind: fix/feature` のタスクは本物の Fail→Pass 再現が
-記録されるまで `verified` にできない [test: crates/condukt/src/state.rs::enforce_fp_gate_rejects_undetermined_spawn_failure_verdict]。
-`fallback:true` (kind が fix/feature でないタスク等) のときは verifier agent の pass/fail 判定に委ねる [test: crates/condukt/tests/fp_oracle_e2e.rs::task_without_a_fix_or_feature_kind_verifies_unconditionally]。
+記録されるまで `verified` にできない。
+`fallback:true` (kind が fix/feature でないタスク等) のときは verifier agent の pass/fail 判定に委ねる。
 
 done の各タスクを `condukt-verifier` 相当で done_criteria 照合する。検証する子の **model は
 worker と必ず別モデルにする**（同一モデルだと generation と verification が同じ盲点を共有するため）。
@@ -924,6 +926,8 @@ REVIEW_ORDER=$(cd "$WT" && condukt review-order --from-git --base "$BASE" --head
 
 verifier 起動プロンプトには以下を渡す:
 - `done_criteria`: タスクの合格条件
+- `reproduction_evidence` (reproduction_tests があれば必須): 上の決定論先行実行のコマンド・exit code・出力要約。
+  verifier はテストを再実行せずこれと `tdd oracle` を読む。渡さなければ verifier は記録欠落として pass にしない。
 - `worktree`: 対象 worktree パス
 - `touched_files`: タスクの実装対象ファイル
 - `target_symbols` (あれば): `t.target_symbols` — 検証対象の関数/クラス名。verifier がピンポイントで
@@ -1051,11 +1055,11 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
    # 慣習通りでなくても取りこぼさない。agentId が引けない/gauge にデータが無い場合は condukt 側が
    # 手で渡した --cost にフォールバックし、それも無ければ **未計測** として fugu-router record の
    # --cost を省略する (0 を捏造しない — backlog 55fb3861)。**コストが分からないのに --cost 0 を
-   # 渡さない**: condukt は明示した 0 をそのまま `--cost 0` として転送するが、fugu-router >= 0.1.41
-   # は保存された 0 を duration と同じく **未計測** として読み戻す。したがって本当に $0 だった
-   # コストを「計測値 0」として記録する手段は無い (0 は常に未計測扱い)。
+   # 渡さない**: condukt は明示した 0 をそのまま `--cost 0` として転送し、fugu-router >= 0.1.49
+   # はそれを **計測値 0** ($0) として記録・集計する (backlog 4fc130d3)。0.1.41〜0.1.48 は
+   # 0 を未計測として読み戻していた。保存済みの旧 writer の float `0.0` は今も未計測扱い。
    # ただし gauge が JSON として読めない出力を返した場合は「データ無し」ではなく判定不能として扱い、
-   # 手動 --cost にはフォールバックせず episode を記録しない [test: crates/condukt/tests/backlog_18ebbfe6.rs::malformed_gauge_json_is_not_recorded_as_manual_cost]
+   # 手動 --cost にはフォールバックせず episode を記録しない
    condukt state set --run "$RID" --task "<t.id>" --status verified \
      --model <worker に使ったモデル> --agent-id "<Task tool が返した agentId>"
    # fail 時も同様に --status failed --model <試したモデル> --agent-id <同上> を残す (失敗も学習信号)
@@ -1077,8 +1081,8 @@ snippet を打つのではなく **condukt バイナリが決定論的に発火�
    `--model` を省略すると decomposition の `suggested_model` にフォールバックし、`--agent-id`/`--cost`
    の省略は unchanged (未設定のまま) になる。**agent-id 経由の実コスト解決には gauge >= 0.3.0
    (`gauge subagents --json` に `agent_id`/`cost_usd` が乗っている版) が必要**。それ未満、または
-   agentId が解決できない場合は `--cost` に渡した値がそのまま転送され (ただし 0 は fugu-router
-   >= 0.1.41 で未計測として読み戻される)、`--cost` も無ければ
+   agentId が解決できない場合は `--cost` に渡した値がそのまま転送され (0 は fugu-router
+   >= 0.1.49 で計測値 0 として記録される)、`--cost` も無ければ
    fugu-router には **未計測** (`--cost` 省略、fugu-router >= 0.1.41 で cost の集計から除外) として記録される。
 
    **verifier 側も対になる形で記録する** (計測専用。route.rs/decide_bandit 等の自動ルーティング
@@ -1182,7 +1186,7 @@ fi
 ```
 condukt state gate --run $RID      # exit 0 まで完了宣言しない
 ```
-- gate FAIL の場合、**まず reconcile を試みる**（branch が fork point より先の commit を持ちそれがマージ済みのタスクだけを自動 verified に昇格する [test: crates/condukt/tests/backlog_41c837ab.rs::control_really_merged_task_is_still_promoted]。`failed` タスクは昇格しない [test: crates/condukt/tests/backlog_41c837ab.rs::failed_unmerged_task_is_not_promoted_to_verified_by_reconcile]）:
+- gate FAIL の場合、**まず reconcile を試みる**（branch が fork point より先の commit を持ちそれがマージ済みのタスクだけを自動 verified に昇格する。`failed` タスクは昇格しない）:
   ```
   condukt state reconcile --run $RID
   condukt state gate --run $RID    # 再チェック
@@ -1254,11 +1258,14 @@ fi
 `await-measurement` は状態を「出荷済み・未計測」に進めるだけで検証ではない。
 `hypothesis validate`/`reject` は計測した証拠 (`--evidence`/`--reason`) を必須とするため、証拠なしでは status を変えられない。
 
-**spec-drift チェック (soft 依存)**: gate PASS 後、変更が正典仕様と乖離していないかを specguard で監査する。
-`specguard` バイナリが PATH 上にあり、かつ CWD に `specguard.toml` が存在する場合のみ実行する。
+**spec-drift チェック (既定 OFF・opt-in)**: gate PASS 後、変更が正典仕様と乖離していないかを specguard で監査する。
+環境変数 `CONDUKT_SPEC_AUDIT=1` で明示的に opt-in した場合に限り実行する（未設定なら 1 行の skip 通知のみ）。
+opt-in 時も `specguard` バイナリが PATH 上にあり、かつ CWD に `specguard.toml` が存在する場合のみ実行する。
 
 ```bash
-if command -v specguard >/dev/null 2>&1 && test -f specguard.toml; then
+if [ "${CONDUKT_SPEC_AUDIT:-}" != "1" ]; then
+  echo "specguard: spec-drift 監査を skip (既定 OFF。実行するには CONDUKT_SPEC_AUDIT=1)"
+elif command -v specguard >/dev/null 2>&1 && test -f specguard.toml; then
   # 1. shard プロンプトを取得 (scope 計算 + テンプレート描画)
   SPECGUARD_JSON=$(specguard prompt --json 2>/dev/null || true)
   SHARD_COUNT=$(echo "$SPECGUARD_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('shards',[])))" 2>/dev/null || echo "0")

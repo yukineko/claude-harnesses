@@ -1181,3 +1181,94 @@ weight = 0.0
         jout
     );
 }
+
+/// Restores a chmod-000 directory's permissions on drop, so a failing
+/// assertion cannot leave an undeletable directory behind.
+struct RestorePerms(PathBuf);
+
+impl Drop for RestorePerms {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+    }
+}
+
+/// Test (j): when the existence check on `--project` itself fails with an
+/// error other than NotFound (here: PermissionDenied, because the parent
+/// directory is chmod 000), existence was NOT disproven — it could not be
+/// checked. That is "cannot determine", so the stored task must carry
+/// `project_unresolved = true`, exactly like the identity-resolution degrade.
+/// Treating it as "absent" (unresolved = false) would store a guessed label
+/// indistinguishable from a resolved one.
+#[test]
+fn add_with_a_project_whose_existence_cannot_be_checked_marks_the_stored_task() {
+    use std::os::unix::fs::PermissionsExt;
+    assert!(
+        git_available(),
+        "git is required for project-identity tests but is not available in PATH"
+    );
+
+    let home = temp_home("perm-denied-marker");
+    // A linked worktree: `add` refuses to write into a primary working tree.
+    let repo = common::linked_checkout(&temp_dir("perm-denied-marker-repo"));
+    common::commit_repro(&repo);
+
+    // The unreadable parent lives OUTSIDE the checkout so git's own
+    // clean-tree checks never have to descend into it.
+    let locked = temp_dir("perm-denied-marker-locked");
+    let project = locked.join("child");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000))
+        .expect("chmod 000 the project's parent");
+    let _restore = RestorePerms(locked.clone());
+
+    // Precondition: the existence check really fails with something other
+    // than NotFound in this environment (e.g. not running as root).
+    let probe = std::fs::symlink_metadata(&project)
+        .expect_err("precondition: stat under a chmod-000 parent must fail");
+    assert_eq!(
+        probe.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "precondition: the existence check must fail with PermissionDenied, got {probe:?}"
+    );
+
+    let project_str = project.to_string_lossy().into_owned();
+    let (code, _out, err) = run_in(
+        &[
+            "add",
+            "--title",
+            "Filed under an unreadable project",
+            "--project",
+            &project_str,
+            "--repro-test",
+            common::COMMITTED_REPRO,
+        ],
+        "",
+        &home,
+        &repo,
+    );
+    assert_eq!(
+        code, 0,
+        "add must still succeed when the project's existence cannot be checked; stderr: {}",
+        err
+    );
+    assert!(
+        err.contains("could not determine whether it exists: Permission denied"),
+        "the PermissionDenied existence-check branch must be the one exercised, got stderr:\n{}",
+        err
+    );
+
+    let stored = std::fs::read_to_string(repo.join(".backlog").join("tasks.toml"))
+        .expect("add must have written a store");
+    assert!(
+        stored.contains("Filed under an unreadable project"),
+        "anti-vacuity check failed: the task must be in the store, got:\n{}",
+        stored
+    );
+    assert!(
+        stored.contains("project_unresolved = true"),
+        "a task written while the project's existence could NOT be checked \
+         (PermissionDenied) must carry `project_unresolved = true`; without it \
+         the guessed label is indistinguishable from a resolved one. Store:\n{}",
+        stored
+    );
+}

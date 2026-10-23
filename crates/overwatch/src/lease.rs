@@ -182,7 +182,7 @@ pub fn begin(
 
     // Load and reap stale leases
     let mut leases = store::load_leases(&cwd)?;
-    store::reap_stale(&mut leases, now);
+    store::reap_stale_recorded(&cwd, &mut leases, now)?;
     artificial_race_delay();
 
     // Check if key is held by a live OTHER session
@@ -305,7 +305,7 @@ pub fn run(key: &str, note: Option<&str>) -> Result<()> {
 
     // Load leases
     let mut leases = store::load_leases(&cwd)?;
-    store::reap_stale(&mut leases, now);
+    store::reap_stale_recorded(&cwd, &mut leases, now)?;
     artificial_mutator_delay();
 
     // If the lease exists, update heartbeat. Otherwise just record the event (fail-soft).
@@ -372,7 +372,7 @@ pub fn end(key: &str, status: &str) -> Result<()> {
 
     // Load leases
     let mut leases = store::load_leases(&cwd)?;
-    store::reap_stale(&mut leases, now);
+    store::reap_stale_recorded(&cwd, &mut leases, now)?;
     artificial_mutator_delay();
 
     // Get lease info before removing it (for the event)
@@ -409,7 +409,27 @@ pub fn end(key: &str, status: &str) -> Result<()> {
     Ok(())
 }
 
-/// Refresh the heartbeat for a held lease.
+/// Refresh `key`'s heartbeat and, when its holder has a non-empty session id,
+/// the heartbeat of every other lease held by that same session. Returns how
+/// many leases were refreshed (0 when `key` is not held).
+fn refresh_session_leases(leases: &mut store::LeaseRegistry, key: &str, now: i64) -> usize {
+    let Some(session) = leases.get(key).map(|l| l.session_id.clone()) else {
+        return 0;
+    };
+    let mut refreshed = 0;
+    for (k, lease) in leases.iter_mut() {
+        if k == key || (!session.is_empty() && lease.session_id == session) {
+            lease.heartbeat_at = now;
+            refreshed += 1;
+        }
+    }
+    refreshed
+}
+
+/// Refresh the heartbeat for a held lease, and for every other lease held by
+/// the same session (see [`refresh_session_leases`]). Prints
+/// `{"refreshed": N}` — the number of leases refreshed, 0 when `key` is not
+/// held.
 pub fn heartbeat(key: &str) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let now = store::now();
@@ -424,17 +444,18 @@ pub fn heartbeat(key: &str) -> Result<()> {
 
     // Load leases
     let mut leases = store::load_leases(&cwd)?;
-    store::reap_stale(&mut leases, now);
+    store::reap_stale_recorded(&cwd, &mut leases, now)?;
     artificial_mutator_delay();
 
-    // Update heartbeat if the lease exists
-    if let Some(lease) = leases.get_mut(key) {
-        lease.heartbeat_at = now;
-        let count = 1;
-        println!("{{\"refreshed\": {}}}", count);
-    } else {
-        println!("{{\"refreshed\": 0}}");
-    }
+    // A heartbeat on `key` is evidence that the session holding it is alive,
+    // so every other live lease of that same session is refreshed too
+    // (backlog a87134cd): stuckguard's per-tool-call piggyback heartbeats
+    // only the ONE lease `lease --session` returns, and a live session's
+    // other leases used to age past the TTL and be reaped, letting another
+    // session claim work that was still in progress. An empty session id
+    // identifies no session, so only `key` itself is refreshed then.
+    let refreshed = refresh_session_leases(&mut leases, key, now);
+    println!("{{\"refreshed\": {refreshed}}}");
 
     // Save updated leases
     store::save_leases(&cwd, &leases)?;
@@ -499,7 +520,7 @@ pub fn reap() -> Result<()> {
     // Load and reap
     let mut leases = store::load_leases(&cwd)?;
     let before = leases.len();
-    store::reap_stale(&mut leases, now);
+    store::reap_stale_recorded(&cwd, &mut leases, now)?;
     artificial_mutator_delay();
     let after = leases.len();
     let reaped = before - after;

@@ -1876,10 +1876,21 @@ whether it lands in a system directory"
                 ));
                 continue;
             }
-            let reason = format!(
-                "'> {target}' destroys the file's current contents and {}",
-                recovery.describe()
-            );
+            // A recoverable target only reaches here when the whose-tree check
+            // above failed, so the reason names that — it is why this refuses
+            // (backlog 2dc70bc5: the bare description used to say the gate
+            // "does not refuse or ask about" the very path it was refusing).
+            let observed = match recovery {
+                crate::reversible::Recovery::RecoverableFromGit => format!(
+                    "{}, but not one of this session's trees (neither inside its safe roots \
+nor a recognised worktree checkout), so git being able to restore it does not make the \
+overwrite this session's to make",
+                    recovery.describe()
+                ),
+                _ => recovery.describe(),
+            };
+            let reason =
+                format!("'> {target}' destroys the file's current contents and {observed}");
             // User ruling R2 (2026-10-14): inside interpreter PROGRAM TEXT a
             // redirect whose target cannot be determined is not denied here;
             // it is handed back to `interpreter_code_verdict`, which resolves
@@ -5362,6 +5373,75 @@ fn interpreter_destructive_call(payload: &str) -> Option<&'static str> {
         .copied()
 }
 
+/// `payload` with every `#` line comment removed, quote-aware.
+///
+/// Backlog 6798f47d: `# deliberately does not call shutil.rmtree` was denied
+/// as "it runs `rmtree`". A `#` opens a comment here only at the start of a
+/// line or after whitespace, and only outside `'`/`"`/`` ` `` quotes
+/// (backslash escapes honoured), so `"#{x}"`, `$#a`, `${#v}` and `this.#p`
+/// are kept. `//` is NOT stripped: in Python it is floor division, and code
+/// after it would vanish.
+///
+/// This is not a parser for any one language, and it can be wrong — a JS
+/// private field `{ #p; … }` reads as a comment. That is why its only use is
+/// to tell "a destructive spelling appears outside comments" (Deny, as before)
+/// from "it appears ONLY inside what reads as a comment" (Ask, see
+/// [`interpreter_code_verdict`]). A misreading moves a Deny to an Ask, never
+/// to an Allow.
+///
+/// With `blank_strings`, the contents of quoted strings are dropped too (the
+/// quote characters stay). That text is used ONLY to choose the wording of a
+/// Deny — "it runs `x`" versus "a quoted string spells `x`" — never the verdict.
+fn strip_hash_comments(payload: &str, blank_strings: bool) -> String {
+    let mut out = String::with_capacity(payload.len());
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut in_comment = false;
+    let mut prev: Option<char> = None;
+    for c in payload.chars() {
+        if in_comment {
+            if c == '\n' {
+                in_comment = false;
+                out.push(c);
+            }
+            prev = Some(c);
+            continue;
+        }
+        match quote {
+            Some(q) => {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' {
+                    escaped = true;
+                } else if c == q {
+                    quote = None;
+                }
+                if !blank_strings || quote.is_none() {
+                    out.push(c);
+                }
+            }
+            None => {
+                if c == '\\' {
+                    escaped = !escaped;
+                    out.push(c);
+                } else if escaped {
+                    escaped = false;
+                    out.push(c);
+                } else if c == '\'' || c == '"' || c == '`' {
+                    quote = Some(c);
+                    out.push(c);
+                } else if c == '#' && prev.is_none_or(char::is_whitespace) {
+                    in_comment = true;
+                } else {
+                    out.push(c);
+                }
+            }
+        }
+        prev = Some(c);
+    }
+    out
+}
+
 /// Commands whose effect cannot be undone after the fact, sitting beside the
 /// `mkfs` arm that already denies for the same reason.
 ///
@@ -5738,6 +5818,7 @@ fn interpreter_code_verdict(
         program_text_redirects: Some(&redirects),
         ..ctx.clone()
     };
+    let comment_mention = std::cell::Cell::new(None);
     let verdict = interpreter_program_verdict(
         shape,
         payloads,
@@ -5745,7 +5826,30 @@ fn interpreter_code_verdict(
         ctx,
         &program_ctx,
         expansion_possible,
+        &comment_mention,
     );
+    // A destructive spelling seen ONLY inside what reads as a `#` comment
+    // (backlog 6798f47d). Not a Deny — the reason would claim a call nobody
+    // observed — and not silence either: `strip_hash_comments` is not a parser
+    // for the program's language, so a misread comment cannot be shown to be
+    // inert. A Deny found elsewhere still wins.
+    let verdict = match (comment_mention.get(), verdict) {
+        (_, Decision::Deny(reason)) => Decision::Deny(reason),
+        (None, v) => v,
+        (Some(call), v) => {
+            let finding = format!(
+                "{shape}, and its program spells `{call}` only in what reads as a `#` comment; \
+blastguard does not parse the program's language, so it cannot show that `{call}` (which deletes \
+files or directories outright) is not called"
+            );
+            match v {
+                Decision::Ask(reason) => {
+                    recommend_against(Decision::ask(format!("{reason}; {finding}")))
+                }
+                _ => recommend_against(Decision::ask(finding)),
+            }
+        }
+    };
     let redirects = redirects.into_inner();
     let Some(first) = redirects.first() else {
         return verdict;
@@ -5773,6 +5877,7 @@ fn interpreter_program_verdict(
     ctx: &Ctx<'_>,
     program_ctx: &Ctx<'_>,
     expansion_possible: bool,
+    comment_mention: &std::cell::Cell<Option<&'static str>>,
 ) -> Decision {
     // Descend through nested quoting rather than stopping at the first layer.
     // A destructive command can sit several quote layers down —
@@ -5786,16 +5891,37 @@ fn interpreter_program_verdict(
     // is bounded rather than left to the length of the program.
     const MAX_RECOVERY_PROBES: usize = 6;
     let mut layer: Vec<String> = payloads.to_vec();
-    for _ in 0..MAX_QUOTE_LAYERS {
+    for depth_of_layer in 0..MAX_QUOTE_LAYERS {
         if layer.is_empty() {
             break;
         }
         let mut next = Vec::new();
         for payload in &layer {
-            if let Some(call) = interpreter_destructive_call(payload) {
+            // Backlog 6798f47d: judged on the text with `#` comments removed,
+            // so a mention in a comment is not reported as a call. A spelling
+            // that exists ONLY in a comment is recorded, not dropped.
+            if let Some(call) = interpreter_destructive_call(&strip_hash_comments(payload, false)) {
+                // Layer 0 is the program text itself; deeper layers, and any
+                // spelling found only inside a quoted string of layer 0, are
+                // string contents that may or may not be run as code — the
+                // reason says so rather than claiming a call. Same Deny either
+                // way: only the wording depends on this.
+                let outside_strings = depth_of_layer == 0
+                    && interpreter_destructive_call(&strip_hash_comments(payload, true)).is_some();
+                if outside_strings {
+                    return Decision::deny(format!(
+                        "{shape}, and it runs `{call}`, which deletes files or directories outright"
+                    ));
+                }
                 return Decision::deny(format!(
-                    "{shape}, and it runs `{call}`, which deletes files or directories outright"
+                    "{shape}, and a quoted string in its program spells `{call}`, which deletes \
+files or directories outright if that string is run as code; blastguard cannot show it is not"
                 ));
+            }
+            if comment_mention.get().is_none() {
+                if let Some(call) = interpreter_destructive_call(payload) {
+                    comment_mention.set(Some(call));
+                }
             }
             // `program_ctx`: an undeterminable redirect target is recorded for
             // `interpreter_code_verdict` instead of denied (ruling R2).

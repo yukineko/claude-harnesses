@@ -75,7 +75,6 @@ fn control_absent_state_is_initialized() {
 }
 
 #[test]
-#[ignore = "backlog e3ca0b92: RED repro"]
 fn unparseable_state_is_not_treated_as_absent() {
     let f = fx();
     let state = f.cwd.join(".compass/carve-state.json");

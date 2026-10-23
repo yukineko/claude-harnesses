@@ -403,20 +403,20 @@ before ever handing it to `sh -c`, and condukt's scheduler uses the graded
 actions (a deploy, `git push`, a release) through its GATED gate even when an
 upstream LLM mislabelled the task.
 A deploy word that appears only inside a file name in the task text (for example
-`rollout` in `scripts/check-plugin-rollout.py`) does not force the gate [test: crates/blastguard/src/classify.rs::deploy_needle_only_inside_a_touched_file_name_does_not_gate].
+`rollout` in `scripts/check-plugin-rollout.py`) does not force the gate.
 A file-path token is a word containing `/`, or one ending in a known extension
-such as `.py`/`.rs`/`.sh`/`.md`/`.toml`, with no `:` or `@` [test: crates/blastguard/src/classify.rs::file_path_token_rule_is_narrow].
+such as `.py`/`.rs`/`.sh`/`.md`/`.toml`, with no `:` or `@`.
 A path still counts when it comes first, follows a runner word (`run`, `bash`,
-...) or shell separator, or starts with `./` [test: crates/blastguard/src/classify.rs::real_commands_containing_paths_still_gate].
-A path quoted in backticks still counts [test: crates/blastguard/src/classify.rs::backtick_spans_are_still_never_masked_for_deploy_needles].
+...) or shell separator, or starts with `./`.
+A path quoted in backticks still counts.
 Task prose is never parsed as a command: `classify` reads prose with the deploy
 and history needles only, so prose that merely describes a command (for example
-quotes `git config core.hooksPath` in backticks) is not force-gated [test: crates/blastguard/src/classify.rs::prose_quoting_a_command_is_not_parsed_as_that_command].
+quotes `git config core.hooksPath` in backticks) is not force-gated.
 The commands a task will actually run are passed separately and go through the
 full `classify_command` analysis, so the same command passed as a command still
-gates [test: crates/blastguard/src/classify.rs::the_same_command_passed_as_a_command_still_gates].
+gates.
 `classify_change` with no declared command list (`None`) is undetermined, never
-Low [test: crates/blastguard/src/classify.rs::undeclared_commands_are_undetermined_even_for_benign_prose].
+Low.
 
 Two diff-level modules are exported as well (pure, no I/O): `diffrisk`
 (`classify_diff` / `changes_public_symbol`) and `callgraph`

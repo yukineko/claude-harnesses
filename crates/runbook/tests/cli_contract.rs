@@ -1,5 +1,5 @@
-//! Reproduction tests for runbook's prose claims. Each `claim_<id>` drives the
-//! real binary (or reads a packaged repo file) and asserts the specific outcome.
+//! CLI / hook contract tests for runbook. Each `claim_<id>` drives the real
+//! binary (or reads a packaged repo file) and asserts the specific outcome.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

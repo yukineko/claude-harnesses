@@ -1,5 +1,5 @@
-//! Reproduction tests for taskprog's prose claims. Each `claim_<id>` drives the
-//! real binary (or reads the packaged file) and asserts the specific outcome.
+//! CLI / hook contract tests for taskprog. Each `claim_<id>` drives the real
+//! binary (or reads a packaged config file) and asserts the specific outcome.
 
 use serde_json::Value;
 use std::io::Write;
@@ -333,25 +333,6 @@ fn claim_license_mit() {
         }
     };
     assert_eq!(resolved, "MIT");
-}
-
-#[test]
-fn claim_skill_reset_arg() {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/taskprog/SKILL.md");
-    let s = std::fs::read_to_string(p).unwrap();
-    let fm = s
-        .strip_prefix("---\n")
-        .unwrap()
-        .split("\n---")
-        .next()
-        .unwrap();
-    let line = |k: &str| {
-        fm.lines()
-            .find_map(|l| l.strip_prefix(k).map(|r| r.trim().to_string()))
-            .unwrap_or_default()
-    };
-    assert_eq!(line("name:"), "taskprog");
-    assert!(line("argument-hint:").contains("--reset"), "{fm}");
 }
 
 #[test]

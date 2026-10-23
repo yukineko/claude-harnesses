@@ -39,7 +39,6 @@ class SchemaguardDescriptions(unittest.TestCase):
     def test_control_registry_has_six(self):
         self.assertEqual(len(registry_names()), 6, registry_names())
 
-    @unittest.expectedFailure  # backlog 830715af: open defect, remove when fixed
     def test_readme_en_lists_every_registered_schema(self):
         t = (REPO / "crates/schemaguard/README.md").read_text(encoding="utf-8")
         line = next(l for l in t.splitlines() if l.startswith("Declared schemas"))
@@ -53,7 +52,6 @@ class SchemaguardDescriptions(unittest.TestCase):
         missing = [n for n in registry_names() if f"`{n}`" not in line]
         self.assertEqual(missing, [], f"README.ja.md '{line}' omits {missing}")
 
-    @unittest.expectedFailure  # backlog 830715af: open defect, remove when fixed
     def test_marketplace_description_is_current(self):
         e = marketplace_entry()
         d = e["description"]

@@ -63,6 +63,16 @@ pub struct Requirement {
     /// The agent's assertion that every acceptance criterion is observable.
     #[serde(default)]
     pub falsifiable: bool,
+    /// A committed test command that REPRODUCES this requirement as unmet (it
+    /// must FAIL at HEAD), e.g. `cargo test -p x --test y z`. `ratify`/`queue`
+    /// file the requirement only through `backlog add --repro-test <this>`; a
+    /// requirement without one is NOT filed and is reported by id, with a
+    /// non-zero exit (backlog eb93be49, user ruling 2026-10-22: no test, no
+    /// ticket). Deliberately NOT part of [`Spec::fingerprint`]: the test is the
+    /// evidence the queue demands, not requirement content, so adding one after
+    /// ratification and re-running `specforge queue` does not void consent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repro_test: Option<String>,
 }
 
 /// What the agent emits in the report body: just the requirement tables.
@@ -201,6 +211,7 @@ mod tests {
             acceptance: vec!["X observable".into()],
             canon: vec!["docs/spec.md#x".into()],
             falsifiable: true,
+            repro_test: None,
         }
     }
 
@@ -266,6 +277,7 @@ falsifiable = true
                 acceptance: vec![],
                 canon: vec![],
                 falsifiable: false,
+                repro_test: None,
             }],
         };
         let v = spec.contract_violations();

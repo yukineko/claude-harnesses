@@ -90,6 +90,15 @@ const EXIT_AGENT_SILENT: u8 = 10;
 /// so three different conditions shared one code and a reader of the exit status
 /// could not tell which had happened.
 const EXIT_BAD_DRAFT_BODY: u8 = 11;
+/// The spec IS ratified and the queue was readable, but one or more
+/// requirements were NOT filed: they have no `repro_test`, or `backlog add
+/// --repro-test` refused them (exit 2: the test did not reproduce, or its run
+/// was undetermined). The unfiled ids are printed; the others were filed.
+/// Distinct from [`EXIT_QUEUE_FAILED`] (the handoff itself broke) so a caller
+/// can tell "queue unreachable" from "these requirements have no RED test"
+/// (backlog eb93be49, user ruling 2026-10-22: no test, no ticket — never a
+/// silent success). Add/fix the repro test, commit it, then `specforge queue`.
+const EXIT_REQUIREMENTS_UNFILED: u8 = 12;
 
 #[derive(Parser)]
 #[command(
@@ -505,7 +514,21 @@ fn enqueue_and_report(l: &Loaded, spec: &ir::Spec, priority: &str, id: &str) -> 
             for rid in &out.queued {
                 println!("    + {id}:{rid}");
             }
-            Ok(EXIT_OK)
+            if out.unfiled.is_empty() {
+                return Ok(EXIT_OK);
+            }
+            eprintln!(
+                "specforge: {} 件の requirement を起票しなかった (再現テスト必須):",
+                out.unfiled.len()
+            );
+            for u in &out.unfiled {
+                eprintln!("    - {id}:{}: {}", u.id, u.why);
+            }
+            eprintln!(
+                "  spec は批准済み。各 requirement に HEAD で FAIL する repro_test を書いて commit し、\
+                 `specforge queue --id {id}` で再試行する。"
+            );
+            Ok(EXIT_REQUIREMENTS_UNFILED)
         }
         Determination::Undetermined(why) => {
             eprintln!(

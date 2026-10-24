@@ -1349,6 +1349,11 @@ pub fn merge(
         return Ok(MergeOutcome::Held(conflict_id));
     }
 
+    // ── Pending `.backlog` store diff of the source worktree ─────────────────
+    // Captured read-only BEFORE any checkout/merge. A failure to determine it is
+    // refused (restrictive side): proceeding would silently strand the diff.
+    let pending_store = capture_pending_store_diff(repo, branch, default_branch)?;
+
     git(repo, &["checkout", default_branch])
         .with_context(|| format!("could not checkout {default_branch} before merge"))?;
     let current = git(repo, &["branch", "--show-current"])?;
@@ -1456,6 +1461,11 @@ pub fn merge(
         .with_context(|| "could not abort trial merge before real merge")?;
 
     let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
+    if let Some(pending) = pending_store {
+        merge_carrying_store_diff(repo, branch, short, &tip, &pending)?;
+        finalize_landed_branch(repo, branch);
+        return Ok(MergeOutcome::Merged);
+    }
     git(
         repo,
         &[
@@ -1469,6 +1479,169 @@ pub fn merge(
     .with_context(|| format!("merge of {branch} into {default_branch} failed"))?;
     finalize_landed_branch(repo, branch);
     Ok(MergeOutcome::Merged)
+}
+
+/// A source worktree's uncommitted `.backlog/` store diff, captured as a
+/// binary patch file (tracked edits, deletions and untracked files).
+struct PendingStoreDiff {
+    worktree: PathBuf,
+    patch: tempfile::NamedTempFile,
+}
+
+/// The directory of the worktree that has `branch` checked out, found via
+/// `git worktree list --porcelain`. `None` when no worktree has it.
+fn worktree_for_branch(repo: &Path, branch: &str) -> Result<Option<PathBuf>> {
+    let want = if branch.starts_with("refs/") {
+        branch.to_string()
+    } else {
+        format!("refs/heads/{branch}")
+    };
+    let listing = git(repo, &["worktree", "list", "--porcelain"])?;
+    let mut cur: Option<PathBuf> = None;
+    for line in listing.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            cur = Some(PathBuf::from(p));
+        } else if let Some(b) = line.strip_prefix("branch ") {
+            if b == want {
+                return Ok(cur);
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Capture the uncommitted `.backlog/` diff of `branch`'s worktree (user
+/// ruling 2026-10-24: store edits stay uncommitted and ride along with the
+/// merge). `Ok(None)` when there is no worktree, it is the primary tree, or the
+/// store is clean. Any failure to determine is an `Err` (never "no diff").
+fn capture_pending_store_diff(
+    repo: &Path,
+    branch: &str,
+    default_branch: &str,
+) -> Result<Option<PendingStoreDiff>> {
+    let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
+    if short == default_branch {
+        return Ok(None);
+    }
+    let Some(wt) = worktree_for_branch(repo, branch)
+        .with_context(|| format!("could not locate the worktree of '{branch}'"))?
+    else {
+        return Ok(None);
+    };
+    if wt.canonicalize().ok() == repo.canonicalize().ok() {
+        return Ok(None);
+    }
+    let status = git(
+        &wt,
+        &[
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--",
+            ".backlog",
+        ],
+    )
+    .with_context(|| format!("could not read the .backlog status of {}", wt.display()))?;
+    if status.trim().is_empty() {
+        return Ok(None);
+    }
+    // Build the full patch (incl. untracked files) from a THROWAWAY index so
+    // the worktree's own index is untouched.
+    let idx = tempfile::Builder::new()
+        .prefix("condukt-store-idx-")
+        .tempfile()
+        .context("could not create a temporary index")?;
+    let patch = tempfile::Builder::new()
+        .prefix("condukt-store-patch-")
+        .tempfile()
+        .context("could not create a temporary patch file")?;
+    let run = |args: &[&str]| -> Result<()> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&wt)
+            .env("GIT_INDEX_FILE", idx.path())
+            .output()
+            .with_context(|| format!("could not run git {args:?}"))?;
+        if !out.status.success() {
+            bail!(
+                "git {args:?} in {} failed: {}",
+                wt.display(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(())
+    };
+    // `read-tree` into the (empty) temp file replaces it with HEAD's tree.
+    run(&["read-tree", "HEAD"])?;
+    run(&["add", "-A", "--", ".backlog"])?;
+    let out_arg = format!("--output={}", patch.path().display());
+    run(&[
+        "diff", "--cached", "--binary", &out_arg, "HEAD", "--", ".backlog",
+    ])?;
+    let len = std::fs::metadata(patch.path())
+        .context("could not stat the store patch")?
+        .len();
+    if len == 0 {
+        bail!(
+            "{} reports a dirty .backlog but the captured store patch is empty; refusing \
+             (cannot determine what to carry)",
+            wt.display()
+        );
+    }
+    Ok(Some(PendingStoreDiff {
+        worktree: wt,
+        patch,
+    }))
+}
+
+/// Merge `tip` into the checked-out default branch and fold the source
+/// worktree's pending store diff into the SAME merge commit: a no-commit,
+/// no-ff merge, a three-way apply into the in-progress merge's index, one
+/// commit. Staging after the merge has started is why git does not refuse it,
+/// and the tip is not amended, so attested commits keep their identity. Any
+/// failure aborts the merge: the default branch does not move and the
+/// worktree's diff is left intact.
+fn merge_carrying_store_diff(
+    repo: &Path,
+    branch: &str,
+    short: &str,
+    tip: &str,
+    pending: &PendingStoreDiff,
+) -> Result<()> {
+    let fail = |what: String| -> anyhow::Error {
+        let aborted = abort_trial_merge(repo);
+        anyhow::anyhow!(
+            "{what}; the merge of '{branch}' was NOT performed and the .backlog diff in {} \
+             is left intact. {}",
+            pending.worktree.display(),
+            abort_state_phrase(&aborted)
+        )
+    };
+    match git_try(repo, &["merge", "--no-commit", "--no-ff", tip]) {
+        Ok((true, _, _)) => {}
+        Ok((false, o, e)) => return Err(fail(format!("merge failed: {} {}", o.trim(), e.trim()))),
+        Err(e) => return Err(fail(format!("merge failed: {e:#}"))),
+    }
+    let patch = pending.patch.path().to_string_lossy().to_string();
+    if let Err(e) = git(repo, &["apply", "--3way", "--index", &patch]) {
+        return Err(fail(format!(
+            "could not apply the .backlog store diff: {e:#}"
+        )));
+    }
+    if let Err(e) = git(repo, &["commit", "-m", &format!("Merge branch '{short}'")]) {
+        return Err(fail(format!("could not commit the merge: {e:#}")));
+    }
+    // Landed. Restore the worktree's store so the change is not duplicated.
+    let reset = git(&pending.worktree, &["checkout", "HEAD", "--", ".backlog"])
+        .and_then(|_| git(&pending.worktree, &["clean", "-fdq", "--", ".backlog"]));
+    if let Err(e) = reset {
+        eprintln!(
+            "condukt: merged '{branch}' with its .backlog diff but could not reset {}'s store \
+             (it still shows the change): {e:#}",
+            pending.worktree.display()
+        );
+    }
+    Ok(())
 }
 
 /// On-merge cleanup (design 625aa170 decision A — the cleanup half). Once

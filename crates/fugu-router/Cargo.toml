@@ -2,7 +2,7 @@
 rust-version.workspace = true
 license.workspace = true
 name = "fugu-router"
-version = "0.1.61"
+version = "0.1.62"
 edition = "2021"
 description = "Per-model routing for Claude Code orchestration: learns from past task outcomes via a local episode store and suggests the cheapest model tier that historically cleared similar work."
 
@@ -20,6 +20,10 @@ dirs = "5"
 anyhow = { workspace = true }
 sha2 = { workspace = true }
 wait-timeout = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+# setsid for the detached SessionEnd worker, kill(pid, 0) for its liveness.
+libc = "0.2"
 
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }

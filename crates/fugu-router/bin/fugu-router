@@ -1,7 +1,7 @@
 #!/bin/sh
 # fugu-router plugin launcher — selects the per-platform binary bundled in this dir.
 #
-# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/fugu-router <prompt|sync>`; this dispatcher execs the
+# Hooks call `${CLAUDE_PLUGIN_ROOT}/bin/fugu-router <prompt|session-end-sync|...>`; this dispatcher execs the
 # matching `fugu-router-<os>-<arch>` build.
 #
 # WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT a blanket "exit 0"
@@ -15,7 +15,8 @@
 #                  (the only place a failed SessionEnd sync becomes visible).
 #                  -> stdout JSON: additionalContext (the model reads this hook's silence as
 #                  'nothing to report') + systemMessage (the user). exit 0.
-#   sync           SessionEnd.
+#   session-end-sync, sync
+#                  SessionEnd (`session-end-sync`), or `sync` run the same way.
 #                  -> SessionEnd: Claude Code discards stdout/JSON; stderr is the only
 #                  channel, so exit 1 (non-blocking hook error + stderr line).
 #
@@ -59,8 +60,8 @@ case "$*" in
     printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$msg" "$msg"
     exit 0
     ;;
-  "sync")
-    echo "fugu-router sync did NOT run: no bundled binary for $os-$arch, so the routing store was NOT synced. $fix" >&2
+  "sync"|"session-end-sync")
+    echo "fugu-router $* did NOT run: no bundled binary for $os-$arch, so the routing store was NOT synced. $fix" >&2
     exit 1
     ;;
 esac

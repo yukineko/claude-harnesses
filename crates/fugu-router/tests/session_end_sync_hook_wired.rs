@@ -175,27 +175,89 @@ fn every_declared_subcommand_exists_in_the_binary() {
 }
 
 /// SessionEnd must run `harvest` (turn merges into episodes) BEFORE `sync`
-/// (push the store), sequentially, in ONE command string: separate hooks run
+/// (push the store), sequentially, from ONE hook command: separate hooks run
 /// in parallel and sync could push a store harvest has not yet appended to.
+///
+/// Re-anchored 2026-10-25. The proxy used to be the literal command string
+/// `harvest; sync`. That foreground chain blew Claude Code's ~1.5 s SessionEnd
+/// budget and was cancelled mid-sync (`tests/session_end_budget.rs`), so the
+/// hook is now `session-end-sync`, which hands both steps to one detached worker.
+/// The property is unchanged and is now observed on the real path: the single
+/// declared SessionEnd command is run, and the worker's log must show the
+/// harvest step starting before the sync step, with each step started exactly
+/// once.
 #[test]
 fn session_end_runs_harvest_before_sync_in_one_command() {
     let doc = load();
     let commands = commands_for(&doc, "SessionEnd");
-    let cmd = commands
-        .iter()
-        .find(|c| c.contains("harvest"))
-        .unwrap_or_else(|| panic!("no SessionEnd command runs `harvest`: {commands:?}"));
-    let parts: Vec<&str> = cmd
-        .split(';')
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .collect();
     assert_eq!(
-        parts,
-        vec![
-            "${CLAUDE_PLUGIN_ROOT}/bin/fugu-router harvest",
-            "${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync",
-        ],
-        "harvest must precede sync in a single `;`-chained command: {cmd:?}"
+        commands.len(),
+        1,
+        "SessionEnd must declare exactly one command, so harvest and sync cannot \
+         run as parallel hooks: {commands:?}"
+    );
+    let cmd = &commands[0];
+
+    let root = std::env::temp_dir().join(format!("fugu-sessionend-order-{}", std::process::id()));
+    if root.exists() {
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+    let home = root.join("home");
+    let plugin = root.join("plugin");
+    let cwd = root.join("cwd");
+    std::fs::create_dir_all(home.join(".fugu-router")).unwrap();
+    std::fs::create_dir_all(plugin.join("bin")).unwrap();
+    std::fs::create_dir_all(&cwd).unwrap();
+    std::os::unix::fs::symlink(
+        env!("CARGO_BIN_EXE_fugu-router"),
+        plugin.join("bin").join("fugu-router"),
+    )
+    .unwrap();
+
+    let out = Command::new("sh")
+        .args(["-c", cmd])
+        .env("HOME", &home)
+        .env("CLAUDE_PLUGIN_ROOT", &plugin)
+        .env("GIT_CEILING_DIRECTORIES", &root)
+        .env_remove("FUGU_ROUTER_DISABLED")
+        .current_dir(&cwd)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "SessionEnd command {cmd:?} exited {:?}: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Wait for the detached worker to finish (its log says `done`).
+    let log_path = home.join(".fugu-router").join("session-end.log");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let log = loop {
+        let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        if log.contains("session-end: done") {
+            break log;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the SessionEnd worker did not finish within 20 s; log so far:\n{log}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let harvest_at = log.find("session-end: step harvest");
+    let sync_at = log.find("session-end: step sync");
+    assert!(
+        matches!((harvest_at, sync_at), (Some(h), Some(s)) if h < s),
+        "harvest must precede sync in the single SessionEnd command {cmd:?}; worker log:\n{log}"
+    );
+    assert_eq!(
+        log.matches("session-end: step harvest").count(),
+        1,
+        "log:\n{log}"
+    );
+    assert_eq!(
+        log.matches("session-end: step sync").count(),
+        1,
+        "log:\n{log}"
     );
 }

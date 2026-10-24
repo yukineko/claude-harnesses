@@ -137,7 +137,7 @@ fugu-router install|uninstall [--dry-run]   # 手動（非プラグイン）で�
 プラグイン版は `bin/fugu-router` ランチャ（プラットフォーム別バイナリは gitignore されておりローカルでビルドし、`scripts/rollout-plugins.sh` が配置する）・`/fugu-router` skill・4 本のフックを同梱する。いずれも `hooks/hooks.json` に宣言され、`${CLAUDE_PLUGIN_ROOT}` 経由で解決される。API キー不要で**サブスクリプションで完結**する。
 
 - `UserPromptSubmit` → `fugu-router prompt`。プロンプトがコーディング作業に見えるときルーティングメモリの要約を 1 ブロック注入する。
-- `SessionEnd` → `fugu-router harvest; fugu-router sync`（timeout 60 秒）。`harvest` が cwd リポジトリの `main`/`master` への merge のうち観測窓を過ぎたものを `merge` episode として記録し、続いて `sync` が record ストアを `sync_repo` から pull し、ローカルの追記を commit & push する（`sync_repo` 未設定なら no-op）。
+- `SessionEnd` → `fugu-router session-end-sync`。Claude Code は SessionEnd フックに約 1.5 秒しか与えず、`hooks.json` の `timeout` を大きくしてもこの上限は伸びない（実測 2026-10-25: 以前の前景実行 `harvest; sync` は network の pull/push 中に "Hook cancelled" で殺され、sync checkout に未 push の commit が溜まった）。そのためフック自身は数ミリ秒で返る: まず `~/.fugu-router/session-end-pending/` に pid を記録した pending marker を書き、次に完全に切り離した worker（`setsid` で別セッション、stdin は `/dev/null`、stdout/stderr は `~/.fugu-router/session-end.log`）を起動して終了する。worker は marker を自分の pid で書き直し、`harvest`（cwd リポジトリの `main`/`master` への merge のうち観測窓を過ぎたものを `merge` episode として記録）→ `sync`（record ストアを `sync_repo` から pull し、ローカルの追記を commit & push）の順に直列で実行し、最後まで到達したら marker を消す。`sync_repo` 未設定では `sync` は失敗として `sync-error.json` に記録される。
 - `PreToolUse`（matcher `Agent|Task`）→ `fugu-router agent-model`。sub-agent 起動が `model` を指定していないとき、condukt の検証済み episode（class `subagent` 以外の全 class。unscored は除く）から学習したモデルを設定する。学習信号が無い・ストアが読めないときは何も出力せず（呼び出し側の既定モデルが使われ、理由を stderr に 1 行出す）、ブロックはしない。`FUGU_ROUTER_AUTO_MODEL=0` で無効化。
 - `SubagentStop` → `fugu-router agent-record`。終了した sub-agent ごとに class `subagent` の利用記録 episode を 1 件追記する。モデル ID は sub-agent の transcript から実測値を読む。終了 payload には成否の信号が無いので、episode は unscored（`outcome: "unscored"`）として記録され、pass にも fail にも数えられない。`model_choice` は transcript 隣の `.meta.json` の `toolUseId` で起動時の選択と突き合わせた値（突き合わせられなければ `unknown`）。読めない transcript・モデル ID の無い transcript では何も記録しない。Claude Code は sub-agent の最後の assistant 行が書き出される前にこの hook を走らせるので、モデル ID の無い transcript は最大 3 秒まで読み直す。
 
@@ -172,7 +172,7 @@ fugu-router install               # UserPromptSubmit フックをマージ
 
 sync ディレクトリには `episodes.jsonl` / `playbooks.jsonl` を `merge=union` とする `.gitattributes` が（無ければ）書き込まれる。2 台が同じ JSONL に追記すると末尾で隣接した追加になり既定の merge driver は conflict と判定するが、`union` は**両側の行を残す**。重複は `import --dedup`（content-hash）で回復できるが、落とした episode は回復できない。
 
-`sync` が完走できなかった場合は `~/.fugu-router/sync-error.json` に記録され、成功するまで `UserPromptSubmit` フックが毎プロンプトで通知する。`sync` の自動呼び出し元は `SessionEnd` フックだけで、その exit code も stderr も誰にも届かない（＝非0終了は誰も受け取らない信号）ため。
+`sync` がエラーで終わった場合は `~/.fugu-router/sync-error.json` に記録され、成功するまで `UserPromptSubmit` フックが毎プロンプトで通知する。`sync` の自動呼び出し元は SessionEnd の切り離された worker だけで、その exit code は誰にも届かず stderr はログファイルに行く（＝非0終了は誰も受け取らない信号）ため。ただし**殺された** `sync` は `sync-error.json` を書けない。そのケースは pending marker が拾う: `UserPromptSubmit` フックは、記録された pid のプロセスがもう生きていない marker を「完了しなかった sync」として即座に（経過時間ではなく生存判定で）通知する。プロセスが生きている marker は実行中とみなして通知しないが、15 分を超えたものは停滞として通知する。marker やディレクトリが読めない・パースできない・生存判定ができない場合も未完了として通知する（判定不能は制限側へ倒す）。marker を書けなかった場合はフックが代わりに `sync-error.json` を書き、これは sync が実際に成功したときにだけ消える。
 
 なお `sync_repo` は sync ディレクトリを **clone するときにしか読まれない**。checkout が存在した後の pull/push はその repo 自身の `origin` に従うので、後から `sync_repo` を変えても効果は無い（`git remote set-url` を使う）。**手動（`import`）:** `store_file` と `playbook_file` を自分で管理する git リポジトリ内のパスに向け、`git pull` 後に `import` するだけでマシン間同期が完結する（content-hash で重複排除されるので同じ実績を二度引いても安全）。
 

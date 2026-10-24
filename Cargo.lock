@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.43"
+version = "0.1.46"
 dependencies = [
  "anyhow",
  "chrono",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.64"
+version = "0.2.65"
 dependencies = [
  "anyhow",
  "chrono",
@@ -915,7 +915,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "playbook"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1114,7 +1114,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.53"
+version = "0.1.55"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1376,7 +1376,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.50"
+version = "0.1.51"
 dependencies = [
  "anyhow",
  "chrono",

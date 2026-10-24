@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """Issue #1186: revisions created or moved earlier in the same Bash command.
 
-The static guard's KNOWN HOLES (4b0e5ab3) listed two routes it could not see:
+The static guard's KNOWN HOLES (4b0e5ab3) listed routes it could not see:
 
   * `git fetch ... && git checkout FETCH_HEAD -- <pathspec>`
   * `git checkout x && git checkout - -- <pathspec>`
+  * `--pathspec-from-file` (git checkout / git restore)
+  * a nested `.githooks` dir, caught only when named literally (here: a glob
+    pathspec `'*hook*'` that rewrites `sub/.githooks/pre-commit`)
 
 The guard was replaced by the effect observer (b8390f7a). These tests drive
-both routes through the REAL scripts/guard-maintree-bash.py (Pre, then the
-command, then Post) and assert the Post refuses (exit 2) and names the main
-file the command modified. Neither route is in the corpus of
-test_guard_maintree_bash_observe.py.
+each route through the REAL scripts/guard-maintree-bash.py (Pre, then the
+command, then Post), assert the command really modified a main file, and
+assert the Post refuses (exit 2) naming it. None of these routes is in the
+corpus of test_guard_maintree_bash_observe.py.
 
     python3 -m pytest scripts/test_issue_1186_guard_bash_rev_routes.py
 
@@ -64,6 +67,59 @@ class RevisionRoutesAreObserved(ObserveGuardBase):
         self.assertEqual(git(self.main, "symbolic-ref", "HEAD").stdout.strip(),
                          "refs/heads/main")
         self.assert_blocked_d(self._post(tid, cmd), "tracked.txt")
+
+    def _branch_x_changing_tracked(self) -> None:
+        git(self.main, "branch", "-q", "x")
+        git(self.main, "checkout", "-q", "x")
+        (self.main / "tracked.txt").write_text("on-x\n")
+        git(self.main, "commit", "-q", "-am", "x change")
+        git(self.main, "checkout", "-q", "main")
+        self.assertEqual(self.status(), "", "anti-vacuity: main clean before the call")
+
+    def _pathspec_list(self) -> Path:
+        # Outside main, so the list file itself is not a main change.
+        lst = self.tmp / "pathspecs.txt"
+        lst.write_text("tracked.txt\n")
+        return lst
+
+    def test_checkout_pathspec_from_file_into_main_is_refused(self) -> None:
+        self._branch_x_changing_tracked()
+        cmd = f"git checkout x --pathspec-from-file={self._pathspec_list()}"
+        tid, _ = self.pre_ok(cmd)
+        self._sh(cmd)
+        self.assertEqual((self.main / "tracked.txt").read_text(), "on-x\n",
+                         "anti-vacuity: the command modified a main file")
+        self.assertEqual(git(self.main, "symbolic-ref", "HEAD").stdout.strip(),
+                         "refs/heads/main")
+        self.assert_blocked_d(self._post(tid, cmd), "tracked.txt")
+
+    def test_restore_pathspec_from_file_into_main_is_refused(self) -> None:
+        self._branch_x_changing_tracked()
+        cmd = f"git restore --source=x --pathspec-from-file={self._pathspec_list()}"
+        tid, _ = self.pre_ok(cmd)
+        self._sh(cmd)
+        self.assertEqual((self.main / "tracked.txt").read_text(), "on-x\n",
+                         "anti-vacuity: the command modified a main file")
+        self.assert_blocked_d(self._post(tid, cmd), "tracked.txt")
+
+    def test_glob_checkout_into_nested_githooks_is_refused(self) -> None:
+        hook = self.main / "sub" / ".githooks" / "pre-commit"
+        hook.parent.mkdir(parents=True)
+        hook.write_text("#!/bin/sh\nexit 0\n")
+        git(self.main, "add", "sub/.githooks/pre-commit")
+        git(self.main, "commit", "-q", "-m", "nested hook")
+        git(self.main, "branch", "-q", "x")
+        git(self.main, "checkout", "-q", "x")
+        hook.write_text("#!/bin/sh\necho replaced\nexit 0\n")
+        git(self.main, "commit", "-q", "-am", "x replaces nested hook")
+        git(self.main, "checkout", "-q", "main")
+        self.assertEqual(self.status(), "", "anti-vacuity: main clean before the call")
+        cmd = "git checkout x -- '*hook*'"
+        tid, _ = self.pre_ok(cmd)
+        self._sh(cmd)
+        self.assertIn("replaced", hook.read_text(),
+                      "anti-vacuity: the command rewrote the nested .githooks file")
+        self.assert_blocked_d(self._post(tid, cmd), "sub/.githooks/pre-commit")
 
 
 if __name__ == "__main__":

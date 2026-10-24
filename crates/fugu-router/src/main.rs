@@ -252,12 +252,13 @@ enum Command {
     /// UserPromptSubmit hook: inject a routing-memory summary.
     Prompt,
     /// PreToolUse hook (Agent|Task): set `model` on a sub-agent spawn that
-    /// names none, learned from class-"subagent" episodes only. Prints
-    /// nothing (caller's default applies) when there is no learned signal.
-    /// Off with FUGU_ROUTER_AUTO_MODEL=0.
+    /// names none, learned from condukt's scored episodes (never from
+    /// class-"subagent" or unscored ones). Prints nothing (caller's default
+    /// applies) when there is no learned signal. Off with FUGU_ROUTER_AUTO_MODEL=0.
     AgentModel,
-    /// SubagentStop hook: record the finished sub-agent's outcome as one
-    /// class-"subagent" episode (model id read from its transcript).
+    /// SubagentStop hook: record the finished sub-agent's USAGE as one
+    /// class-"subagent", `outcome: "unscored"` episode (model id read from its
+    /// transcript). Never a pass/fail: the payload carries no success signal.
     AgentRecord,
     /// Write a starter fugu-router.toml in the current directory.
     Init {
@@ -491,11 +492,14 @@ fn seed_rng(eps_len: usize) -> rng::Rng {
     rng::Rng::new(nanos ^ (eps_len as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
 }
 
-/// Condukt-routing population: every episode except class-"subagent" ones,
-/// which belong to the `agent-model` hook's separate population.
+/// The scored learning population: every episode except class-"subagent"
+/// usage records and any unscored (`outcome: "unscored"`) episode. Every
+/// pass/fail reader — `route`, `suggest`, `confidence`, the Prompt summary,
+/// `stats`' main table and the `agent-model` hook — learns only from this set,
+/// so a usage-only record never counts as a pass or a fail.
 fn condukt_eps(eps: Vec<store::Episode>) -> Vec<store::Episode> {
     eps.into_iter()
-        .filter(|e| e.class != subagent::CLASS)
+        .filter(|e| e.class != subagent::CLASS && !e.is_unscored())
         .collect()
 }
 
@@ -560,8 +564,8 @@ fn main() {
             };
 
             let summary = if inject::looks_actionable(&input.prompt) {
-                // Routing-memory summary = condukt population only; class
-                // "subagent" outcomes are a separate population.
+                // Routing-memory summary = scored condukt population only;
+                // class "subagent" and unscored episodes never count.
                 let eps = condukt_eps(store::load(&cfg.store_path()));
                 inject::summary(&eps, cfg.inject_limit)
             } else {
@@ -712,6 +716,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 tokens_output,
                 mode: mode.map(|m| m.as_str().to_string()),
                 model_choice: None,
+                outcome: None,
             };
             // A full model ID (`claude-opus-5-5`) is stored under its routing
             // tier with the ID kept as `model_id`, so routing learns from it.
@@ -1665,15 +1670,39 @@ fn print_model_rows(agg: &std::collections::BTreeMap<String, (usize, usize, Cost
     }
 }
 
-/// `stats`: the main table (and `episodes` / coverage) is the condukt-routing
-/// population only; class-"subagent" episodes are reported apart under
-/// `subagent`, never mixed into the main per-model numbers.
+/// Usage counts for class-"subagent" episodes: `(per tier, per model_choice)`.
+/// No pass rate — these episodes are usage records. A missing `model_choice`
+/// is counted under `"unrecorded"`, never folded into a real choice.
+type UsageCounts = (
+    std::collections::BTreeMap<String, usize>,
+    std::collections::BTreeMap<String, usize>,
+);
+
+fn subagent_usage(eps: &[store::Episode]) -> UsageCounts {
+    let mut by_model = std::collections::BTreeMap::new();
+    let mut by_choice = std::collections::BTreeMap::new();
+    for e in eps {
+        *by_model.entry(e.model.clone()).or_insert(0) += 1;
+        let choice = e.model_choice.as_deref().unwrap_or("unrecorded");
+        *by_choice.entry(choice.to_string()).or_insert(0) += 1;
+    }
+    (by_model, by_choice)
+}
+
+/// `stats`: the main table (and `episodes` / coverage) is the scored condukt
+/// population only ([`condukt_eps`]: no class-"subagent", no unscored).
+/// Class-"subagent" episodes are reported apart under `subagent` as usage
+/// counts (per tier, per model_choice) with no pass rate.
 fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
-    let (sub_eps, eps): (Vec<store::Episode>, Vec<store::Episode>) = store::load(&cfg.store_path())
-        .into_iter()
-        .partition(|e| e.class == subagent::CLASS);
+    let all = store::load(&cfg.store_path());
+    let sub_eps: Vec<store::Episode> = all
+        .iter()
+        .filter(|e| e.class == subagent::CLASS)
+        .cloned()
+        .collect();
+    let eps = condukt_eps(all);
     let agg = model_stats(&eps);
-    let sub_agg = model_stats(&sub_eps);
+    let (sub_models, sub_choices) = subagent_usage(&sub_eps);
     // Duration coverage: how many episodes carry a real (Some) measurement out
     // of the total — surfaced so the low recording rate is visible.
     let measured_n = eps.iter().filter(|e| e.duration_secs.is_some()).count();
@@ -1691,7 +1720,8 @@ fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
                 "models": model_stats_json(&agg),
                 "subagent": {
                     "episodes": sub_eps.len(),
-                    "models": model_stats_json(&sub_agg),
+                    "models": sub_models,
+                    "model_choice": sub_choices,
                 },
             }))?
         );
@@ -1700,8 +1730,16 @@ fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
         println!("duration coverage: {measured_n}/{total_n} episodes measured");
         println!("cost coverage: {cost_measured_n}/{total_n} episodes measured");
         print_model_rows(&agg);
-        println!("subagent episodes (separate population): {}", sub_eps.len());
-        print_model_rows(&sub_agg);
+        println!(
+            "subagent usage (unscored, no pass rate): {} episodes",
+            sub_eps.len()
+        );
+        for (m, n) in &sub_models {
+            println!("  {m:<6} {n}");
+        }
+        for (c, n) in &sub_choices {
+            println!("  model_choice {c}: {n}");
+        }
     }
     Ok(())
 }
@@ -1768,7 +1806,11 @@ fn delegation_buckets(
 }
 
 fn cmd_delegation_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
-    let eps = store::load(&cfg.store_path());
+    // Pass rates below: unscored (usage-only) episodes carry no outcome.
+    let eps: Vec<store::Episode> = store::load(&cfg.store_path())
+        .into_iter()
+        .filter(|e| !e.is_unscored())
+        .collect();
     let agg = delegation_buckets(&eps);
 
     let total: usize = agg.values().map(|b| b.count).sum();
@@ -1840,7 +1882,11 @@ struct ClassModelDuration {
 
 fn cmd_duration_outliers(cfg: &config::Config, as_json: bool, threshold: f64) -> Result<()> {
     use std::collections::BTreeMap;
-    let eps = store::load(&cfg.store_path());
+    // Pass rates below: unscored (usage-only) episodes carry no outcome.
+    let eps: Vec<store::Episode> = store::load(&cfg.store_path())
+        .into_iter()
+        .filter(|e| !e.is_unscored())
+        .collect();
 
     // Duration coverage: how many episodes carry a real measurement out of the
     // total. Surfaced so the (historically low) recording rate is visible

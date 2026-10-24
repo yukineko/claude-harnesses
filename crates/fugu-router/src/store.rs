@@ -141,13 +141,28 @@ pub struct Episode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     /// For class-"subagent" episodes: how the sub-agent's model was chosen at
-    /// spawn time — "auto" (the `agent-model` hook set it), "explicit" (the
-    /// caller passed `model`), or "inherited" (neither; the caller's default
-    /// applied). `None` means **not recorded** (no spawn-time marker was
-    /// found), never one of those three. Measurement-only.
+    /// spawn time — a tier (`haiku`/`sonnet`/`opus`: the `agent-model` hook
+    /// overrode with that tier), "explicit" (the caller passed `model`),
+    /// "inherited" (neither; the caller's default applied), or "unknown" (the
+    /// spawn-time marker could not be joined: no meta file, no `toolUseId`, or
+    /// no marker), never a guessed real choice. `None` = an episode not
+    /// written by `agent-record` (or one predating this field).
+    /// Measurement-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_choice: Option<String>,
+    /// Whether this episode carries an outcome at all. `Some("unscored")`
+    /// ([`OUTCOME_UNSCORED`]) marks a usage-only record — e.g. the SubagentStop
+    /// `agent-record` hook, whose payload carries no success signal — whose
+    /// `pass` is a placeholder, not a verdict. Every pass/fail reader must skip
+    /// it (see [`Episode::is_unscored`]). `None` = an ordinary scored episode;
+    /// omitted when `None`, so existing lines and their content hashes are
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
 }
+
+/// [`Episode::outcome`] value for a usage-only record that has no pass/fail.
+pub const OUTCOME_UNSCORED: &str = "unscored";
 
 fn default_role() -> String {
     "worker".to_string()
@@ -212,8 +227,22 @@ where
 impl Episode {
     /// The effective pass signal the policy should learn from: the human label
     /// when present, otherwise the verifier's self-reported `pass`.
+    ///
+    /// An unscored episode ([`Episode::is_unscored`]) has no outcome, so this
+    /// is `false` for it — never a pass. Readers that compute pass RATES must
+    /// still drop unscored episodes before counting (a `false` would otherwise
+    /// count as a failure); `condukt_eps` in `main.rs` does that for every
+    /// routing/stats reader.
     pub fn effective_pass(&self) -> bool {
+        if self.is_unscored() {
+            return false;
+        }
         self.human_label.unwrap_or(self.pass)
+    }
+
+    /// `true` when this is a usage-only record with no pass/fail outcome.
+    pub fn is_unscored(&self) -> bool {
+        self.outcome.as_deref() == Some(OUTCOME_UNSCORED)
     }
 }
 
@@ -599,6 +628,23 @@ mod tests {
         ep.pass = false;
         ep.human_label = Some(true); // human rescues a failed episode
         assert!(ep.effective_pass());
+    }
+
+    #[test]
+    fn unscored_is_never_a_pass_and_none_keeps_the_hash() {
+        let mut ep = sample_ep("t", "sonnet");
+        let before = content_hash_episode(&ep);
+        let line = serde_json::to_string(&ep).unwrap();
+        assert!(!line.contains("outcome"), "None must be omitted: {line}");
+        assert!(!ep.is_unscored());
+        ep.outcome = Some(OUTCOME_UNSCORED.to_string());
+        ep.human_label = Some(true);
+        assert!(ep.is_unscored());
+        assert!(!ep.effective_pass(), "unscored must never read as a pass");
+        assert_ne!(content_hash_episode(&ep), before);
+        ep.outcome = None;
+        ep.human_label = None;
+        assert_eq!(content_hash_episode(&ep), before);
     }
 
     #[test]

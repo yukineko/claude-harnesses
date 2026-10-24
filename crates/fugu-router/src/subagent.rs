@@ -1,23 +1,23 @@
-//! Sub-agent model choice and outcome recording.
+//! Sub-agent model choice and usage recording.
 //!
 //! * `agent-model` (PreToolUse, matcher `Agent|Task`) suggests a model for a
-//!   sub-agent spawn that did not name one, learned ONLY from class
-//!   [`CLASS`] episodes.
-//! * `agent-record` (SubagentStop) appends one class-[`CLASS`] episode per
-//!   finished sub-agent, with the model id read from the sub-agent's own
-//!   transcript.
+//!   sub-agent spawn that did not name one, learned from condukt's scored
+//!   population (`crate::condukt_eps`: every class except [`CLASS`], and no
+//!   unscored episode).
+//! * `agent-record` (SubagentStop) appends one class-[`CLASS`] USAGE episode
+//!   per finished sub-agent, with the model id read from the sub-agent's own
+//!   transcript. The real SubagentStop payload carries no success signal, so
+//!   the episode is `outcome: "unscored"` with a placeholder `pass: false`;
+//!   no pass/fail reader counts it.
 //!
 //! Neither hook carries an allow/deny verdict. `agent-model`'s output is an
 //! optional suggestion: when it prints nothing, the spawn keeps the caller's
 //! default model, and every "nothing" path writes one stderr line saying why,
 //! so silence is never presented as "the router chose the default".
 //! `agent-record` never invents a value it could not read: an unreadable
-//! transcript, a missing model id, or an unknown stop reason records nothing
-//! (plus a stderr note) rather than a guessed episode.
-//!
-//! Condukt routing (`route` / `suggest` / `confidence` / `stats`' main table)
-//! excludes class [`CLASS`], and this module reads only class [`CLASS`], so the
-//! two populations never steer each other.
+//! transcript or a missing model id records nothing (plus a stderr note)
+//! rather than a guessed episode, and a model choice it cannot join back to
+//! the spawn is recorded as `"unknown"`, never as one of the real choices.
 
 use std::path::{Path, PathBuf};
 
@@ -76,7 +76,18 @@ fn safe_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-const CHOICES: [&str; 3] = ["auto", "explicit", "inherited"];
+/// Marker values that are not a tier: the caller passed `model`, or neither
+/// the caller nor the hook set one. When `agent-model` overrides, the marker
+/// holds the routing tier it emitted (`haiku`/`sonnet`/`opus`) instead.
+const CHOICES: [&str; 2] = ["explicit", "inherited"];
+
+/// `model_choice` when the spawn-time marker cannot be joined: no meta file,
+/// no `toolUseId` in it, or no marker for that id.
+const CHOICE_UNKNOWN: &str = "unknown";
+
+fn valid_choice(v: &str) -> bool {
+    CHOICES.contains(&v) || store::model_tier(v) == Some(v)
+}
 
 fn write_marker(tool_use_id: Option<&str>, choice: &str) {
     let Some(id) = tool_use_id.filter(|i| safe_id(i)) else {
@@ -118,7 +129,7 @@ fn take_marker(tool_use_id: &str) -> Option<String> {
         ));
     }
     let v = raw.trim();
-    if CHOICES.contains(&v) {
+    if valid_choice(v) {
         Some(v.to_string())
     } else {
         note(&format!(
@@ -133,8 +144,9 @@ fn str_field<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
-/// Route a spawn from class-subagent history. `Err` carries why there is no
-/// suggestion (each such path leaves the caller's default in place).
+/// Route a spawn from condukt's scored history (no class-subagent, no
+/// unscored episode). `Err` carries why there is no suggestion (each such
+/// path leaves the caller's default in place).
 fn suggest(cfg: &config::Config, tool_input: &Value) -> Result<String, String> {
     let title = task_text(
         str_field(tool_input, "description"),
@@ -144,9 +156,9 @@ fn suggest(cfg: &config::Config, tool_input: &Value) -> Result<String, String> {
     let path = cfg.store_path();
     let eps = store::load_strict(&path)
         .map_err(|e| format!("episode store {} unreadable ({e})", path.display()))?;
-    let eps: Vec<store::Episode> = eps.into_iter().filter(|e| e.class == CLASS).collect();
+    let eps = crate::condukt_eps(eps);
     if eps.is_empty() {
-        return Err("no class-subagent episodes recorded yet".into());
+        return Err("no scored condukt episodes recorded yet".into());
     }
     let mut rng = crate::seed_rng(eps.len());
     let d = crate::route_decision(cfg, &title, &files, CLASS, &eps, &mut rng);
@@ -199,7 +211,7 @@ pub fn cmd_agent_model() {
                 }
             });
             println!("{out}");
-            write_marker(tool_use_id, "auto");
+            write_marker(tool_use_id, &model);
         }
         Err(why) => {
             note(&format!(
@@ -280,7 +292,9 @@ fn scan_transcript(text: &str) -> (Option<String>, Option<String>) {
     (prompt, model)
 }
 
-/// SubagentStop: append one class-subagent episode, or nothing (with a note).
+/// SubagentStop: append one class-subagent, unscored USAGE episode, or nothing
+/// (with a note). The payload has no stop_reason or any other success signal
+/// (measured 2026-10-24), so no pass/fail is inferred from the stop.
 pub fn cmd_agent_record() {
     if config::disabled_env() {
         return;
@@ -307,19 +321,8 @@ pub fn cmd_agent_record() {
         .as_ref()
         .map(|m| str_field(m, "toolUseId"))
         .filter(|id| !id.is_empty())
-        .and_then(take_marker);
-
-    let pass = match v.get("stop_reason").and_then(Value::as_str) {
-        Some("completed") => true,
-        Some("failed") | Some("timeout") => false,
-        Some("user_interrupt") => return,
-        other => {
-            note(&format!(
-                "agent-record: stop_reason {other:?} cannot be mapped to pass/fail; nothing recorded"
-            ));
-            return;
-        }
-    };
+        .and_then(take_marker)
+        .unwrap_or_else(|| CHOICE_UNKNOWN.to_string());
 
     let text = match std::fs::read_to_string(&tpath) {
         Ok(t) => t,
@@ -358,8 +361,10 @@ pub fn cmd_agent_record() {
         class: CLASS.to_string(),
         model,
         role: "worker".to_string(),
-        pass,
-        model_choice,
+        // Placeholder only: `outcome: "unscored"` makes every reader skip it.
+        pass: false,
+        model_choice: Some(model_choice),
+        outcome: Some(store::OUTCOME_UNSCORED.to_string()),
         ..Default::default()
     };
     store::normalize_model(&mut ep);
@@ -420,6 +425,16 @@ mod tests {
         assert!(!safe_id("../x"));
         assert!(!safe_id("a/b"));
         assert!(!safe_id(""));
+    }
+
+    #[test]
+    fn valid_choice_accepts_tiers_and_named_choices_only() {
+        for ok in ["haiku", "sonnet", "opus", "explicit", "inherited"] {
+            assert!(valid_choice(ok), "{ok}");
+        }
+        for bad in ["auto", "unknown", "claude-sonnet-5-5", "", "x"] {
+            assert!(!valid_choice(bad), "{bad}");
+        }
     }
 
     #[test]

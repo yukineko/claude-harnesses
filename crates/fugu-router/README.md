@@ -265,18 +265,23 @@ resolved through `${CLAUDE_PLUGIN_ROOT}`:
   record store from `sync_repo` and commits+pushes local appends back (no-op
   when `sync_repo` is unset).
 - `PreToolUse` (matcher `Agent|Task`) → `fugu-router agent-model`: when a
-  sub-agent spawn names no `model`, sets one learned from class-`subagent`
-  episodes; prints nothing (the caller's default applies, with a one-line
-  stderr reason) when there is no learned signal or the store is unreadable.
-  Never blocks. Turn it off with `FUGU_ROUTER_AUTO_MODEL=0`.
+  sub-agent spawn names no `model`, sets one learned from condukt's verified
+  episodes (every class except `subagent`, excluding unscored ones); prints
+  nothing (the caller's default applies, with a one-line stderr reason) when
+  there is no learned signal or the store is unreadable. Never blocks. Turn it
+  off with `FUGU_ROUTER_AUTO_MODEL=0`.
 - `SubagentStop` → `fugu-router agent-record`: appends one class-`subagent`
-  episode per finished sub-agent, with the real model id read from its
-  transcript (`completed` = pass, `failed`/`timeout` = fail; a user interrupt,
-  an unknown stop reason or an unreadable transcript records nothing).
+  usage episode per finished sub-agent, with the real model id read from its
+  transcript. The stop payload carries no success signal, so the episode is
+  recorded unscored (`outcome: "unscored"`) and never counts as a pass or a
+  fail. Its `model_choice` is the spawn-time choice joined through the
+  transcript's `.meta.json` `toolUseId` (`unknown` when it cannot be joined).
+  An unreadable transcript, or one with no model id, records nothing.
 
-Condukt routing (`route`/`suggest`/`confidence`, and `stats`' main table) and
-the `agent-model` hook each learn only from their own class, so sub-agent
-outcomes never steer condukt routing and vice versa.
+Every pass/fail reader (`route`/`suggest`/`confidence`, the prompt summary,
+`stats`' main table, and the `agent-model` hook) skips class-`subagent` and
+unscored episodes. `stats` reports sub-agent usage separately, as counts per
+tier and per `model_choice`, with no pass rate.
 
 ### Manual
 ```

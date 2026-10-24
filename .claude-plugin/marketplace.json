@@ -82,7 +82,7 @@
     {
       "name": "backlog",
       "description": "Cross-project task queue for Claude Code with cycle-type tags, a SessionStart hook that injects pending work, and subcommands to add, list, claim and finish tasks.",
-      "version": "0.3.68",
+      "version": "0.3.69",
       "category": "workflow",
       "keywords": [
         "backlog",
@@ -156,7 +156,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.290",
+      "version": "0.7.291",
       "category": "orchestration",
       "keywords": [
         "orchestration",

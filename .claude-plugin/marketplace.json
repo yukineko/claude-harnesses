@@ -509,7 +509,7 @@
     {
       "name": "playbook",
       "description": "Project knowledge retrieval for Claude Code: a UserPromptSubmit hook that injects the curated notes relevant to your prompt under a strict character budget.",
-      "version": "0.1.17",
+      "version": "0.1.18",
       "category": "knowledge",
       "keywords": [
         "hooks",

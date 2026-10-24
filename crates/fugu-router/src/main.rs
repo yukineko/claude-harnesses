@@ -560,7 +560,9 @@ fn main() {
             };
 
             let summary = if inject::looks_actionable(&input.prompt) {
-                let eps = store::load(&cfg.store_path());
+                // Routing-memory summary = condukt population only; class
+                // "subagent" outcomes are a separate population.
+                let eps = condukt_eps(store::load(&cfg.store_path()));
                 inject::summary(&eps, cfg.inject_limit)
             } else {
                 None

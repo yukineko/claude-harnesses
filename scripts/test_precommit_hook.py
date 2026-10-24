@@ -67,6 +67,7 @@ EXPECTED_SCANNERS = [
     "check-launcher-exec-bit.py",
     "check-clippy-lints.py",
     "check-backlog-store.py",
+    "check-projkey-store-classification.py",
 ]
 
 # Label the hook prints for each scanner, used to check the message names the
@@ -88,6 +89,7 @@ LABELS = {
     "check-launcher-exec-bit.py": "launcher-exec-bit",
     "check-clippy-lints.py": "clippy-lints",
     "check-backlog-store.py": "backlog-store",
+    "check-projkey-store-classification.py": "projkey-classification",
 }
 
 _STUB = """#!/usr/bin/env python3
@@ -396,6 +398,67 @@ class EveryScannerIsRun(HookTestCase):
             if line.startswith("run ") and len(line.split()) >= 2
         ]
         self.assertEqual(invoked, EXPECTED_SCANNERS)
+
+
+class ProjkeyClassificationIsGated(HookTestCase):
+    """charter DoD14(a): every consumer of harness_core::projkey must be
+    classified shared or worktree-local, and an unclassified one must STOP the
+    commit -- a table nobody enforces does not keep the count of unclassified
+    consumers at zero (measured 2026-10-23 at a19ee218: the checker exited 1
+    with 4 findings and no hook ran it).
+
+    Uses the REAL checker, not a stub, against a throwaway tree, so the block
+    is caused by the unclassified consumer itself.  The first half is the
+    anti-vacuity control: the same tree with every consumer classified must be
+    allowed, otherwise a hook (or a checker) that always blocks would pass.
+    """
+
+    _TABLE_ENTRY = (
+        '[[consumer]]\n'
+        'file = "crates/demo/src/lib.rs"\n'
+        'symbol = "{symbol}"\n'
+        "count = 1\n"
+        'scope = "shared"\n'
+        'kind = "store-key"\n'
+        'evidence = "test fixture"\n'
+    )
+
+    def test_unclassified_projkey_consumer_blocks_the_commit(self):
+        h = self.harness()
+        checker = "check-projkey-store-classification.py"
+        shutil.copy2(_HERE / checker, h.root / "scripts" / checker)
+        src = h.root / "crates" / "demo" / "src"
+        src.mkdir(parents=True)
+        table = h.root / "scripts" / "projkey-store-classification.toml"
+        lib = src / "lib.rs"
+
+        # Control: one consumer, classified -> allowed.
+        lib.write_text(
+            "use std::path::Path;\n"
+            "use harness_core::projkey::repo_root;\n"
+            "pub fn a(p: &Path) { let _ = repo_root(p); }\n"
+        )
+        table.write_text(self._TABLE_ENTRY.format(symbol="repo_root"))
+        proc = h.run()
+        self.assertEqual(
+            proc.returncode,
+            0,
+            "a fully classified tree must be allowed\n--- stderr ---\n%s"
+            % proc.stderr,
+        )
+
+        # Same tree plus one UNCLASSIFIED consumer -> blocked, and named.
+        lib.write_text(
+            "use std::path::Path;\n"
+            "use harness_core::projkey::{project_key, repo_root};\n"
+            "pub fn a(p: &Path) { let _ = repo_root(p); }\n"
+            "pub fn b(p: &Path) { let _ = project_key(p); }\n"
+        )
+        proc = h.run()
+        self.assertBlocked(proc, "when a projkey consumer is unclassified")
+        self.assertIn("UNCLASSIFIED", proc.stderr)
+        self.assertIn("crates/demo/src/lib.rs::project_key", proc.stderr)
+        self.assertIn("projkey-classification", proc.stderr)
 
 
 class NotAGitRepoBlocks(HookTestCase):

@@ -55,15 +55,23 @@ symbol = "project_key"
 count = 5
 scope = "shared"
 kind = "mixed"
-evidence = "3 production calls key `~/.condukt/state/<key>/` (has_completed_tasks_for_run, load_latest) — condukt's run state, which must be the same directory the condukt binary wrote; 2 are unit-test calls asserting this crate's key equals harness_core's. Restrictive reading of the set: shared."
+evidence = "2 production calls, both in project_dirs() (used by has_completed_tasks_for_run and load_latest), key `~/.condukt/state/<key>/` — condukt's run state, which must be the same directory the condukt binary wrote: the canonical key of main_worktree_root(cwd), then the legacy per-checkout key of repo_root(cwd) read after it (backlog 1eae7cb9); 3 are unit-test calls (two asserting this crate's key equals harness_core's, one test fixture). Restrictive reading of the set: shared."
 
 [[consumer]]
 file = "crates/autoflow/src/condukt.rs"
 symbol = "repo_root"
-count = 3
+count = 2
 scope = "shared"
 kind = "mixed"
-evidence = "Feeds the project_key calls above (2 production, 1 in a test fixture). Same store, same identity requirement."
+evidence = "1 production call in project_dirs(): the LEGACY per-checkout run-state key, read only after the canonical main_worktree_root key (store-key, per-checkout by purpose: it finds pre-43393ce2 runs); 1 in a test fixture. Count went 3 to 2 when a8c09c5e (1eae7cb9) moved the canonical key to main_worktree_root. Restrictive reading of the set: shared."
+
+[[consumer]]
+file = "crates/autoflow/src/condukt.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "project_dirs(): the canonical condukt run-state dir `~/.condukt/state/<project_key(main_worktree_root(cwd))>`, the same key condukt's project_root() uses, so it is one per project from every linked worktree. Undetermined is returned as Determination::Undetermined, never a fallback to the per-checkout key."
 
 [[consumer]]
 file = "crates/autoflow/src/delegation_audit.rs"
@@ -150,10 +158,10 @@ evidence = "project_root() — the root every per-project condukt state file (ru
 [[consumer]]
 file = "crates/condukt/src/state.rs"
 symbol = "project_key"
-count = 4
+count = 5
 scope = "shared"
 kind = "mixed"
-evidence = "NOT one kind: project_dir() = `<state_dir>/<project-key of project_root()>` is the canonical shared run-state dir (store-key, shared); legacy_project_dir() = `<state_dir>/<project-key of repo_root(cwd)>` addresses the PRE-43393ce2 per-checkout dir, read and written back only for runs that already live there (store-key, per-checkout by purpose); the other two are the canonical/legacy expectations in run_dir_is_canonical_for_new_runs_and_write_back_for_legacy_ones (test). Restrictive reading of the set: shared."
+evidence = "NOT one kind: project_dir() = `<state_dir>/<project-key of project_root()>` is the canonical shared run-state dir (store-key, shared); legacy_project_dir() = `<state_dir>/<project-key of repo_root(cwd)>` addresses the PRE-43393ce2 per-checkout dir, read and written back only for runs that already live there (store-key, per-checkout by purpose); the run-init guard keys `<state_dir>/<project-key of wt>` for each linked worktree path to refuse a run id that a legacy per-checkout run already uses (store-key, per-checkout by purpose, read-only); the other two are the canonical/legacy expectations in run_dir_is_canonical_for_new_runs_and_write_back_for_legacy_ones (test). Restrictive reading of the set: shared."
 
 [[consumer]]
 file = "crates/condukt/src/state.rs"
@@ -262,6 +270,16 @@ count = 1
 scope = "shared"
 kind = "store-key"
 evidence = "The inner half of condukt_escalations_path()'s key derivation."
+
+# ── tdd ────────────────────────────────────────────────────────────────────
+
+[[consumer]]
+file = "crates/tdd/src/warned.rs"
+symbol = "project_key"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "ledger() keys the mode = loose warned-once ledger `<state_dir>/warned/<project_key(root)>`. The module doc states the contract verbatim: 'The ledger is per project, not per session' (operator ruling 2026-10-20: warn once per file hash). Scope shared records that contract; the call site is out of step with it: root is the Stop hook's cwd (crates/tdd/src/main.rs, input.cwd_or_current()), not main_worktree_root, so from a linked worktree the ledger is per worktree and a file already warned in another checkout is warned again."
 
 # ── non-Rust mechanisms ────────────────────────────────────────────────────
 #

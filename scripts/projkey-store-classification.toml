@@ -47,7 +47,7 @@ symbol = "repo_root"
 count = 1
 scope = "shared"
 kind = "store-key"
-evidence = "repo_project_path() canonicalises repo_root(cwd) into the string used as backlog's `--project` filter. Tasks are filed against one project identity; from a linked worktree this yields the worktree path, so the queue filters to a different (empty) project."
+evidence = "repo_project_path() canonicalises repo_root(cwd) into the string used as backlog's `--project` filter. Tasks are filed against one project identity; from a linked worktree this yields the worktree path. Its one production caller is lock.rs (`backlog lock status --project`), and backlog normalises that path to the main worktree before keying the driver registry (lock.rs project_slug via canonicalize_project), so main and every linked worktree read the same driver set. Pinned by crates/backlog/tests/driver_liveness_across_worktrees.rs (fault-injected RED observed when the normalisation is removed; a never-registered repo still reads `none`)."
 
 [[consumer]]
 file = "crates/autoflow/src/condukt.rs"

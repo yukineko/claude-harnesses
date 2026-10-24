@@ -1,6 +1,6 @@
 {
   "name": "fugu-router",
-  "version": "0.1.55",
+  "version": "0.1.56",
   "description": "Per-model routing for Claude Code orchestration: learns from past task outcomes via a local episode store and suggests the cheapest model tier that historically cleared similar work.",
   "author": {
     "name": "yukineko"

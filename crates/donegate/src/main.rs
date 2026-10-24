@@ -311,6 +311,11 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             .join(", ");
         let mut any_ran = false;
         let mut all_opted_out = true;
+        // Roots with NO donegate config at all (Declaration::Absent) vs roots
+        // whose config exists but declares no checks (a real observation that
+        // blocks when the session wrote into it).
+        let mut unconfigured: Vec<String> = Vec::new();
+        let mut configured_empty = false;
         let mut blocks: Vec<String> = Vec::new();
         for (i, r) in roots.roots.iter().enumerate() {
             let (rcfg, rdecl) = Config::resolve(r);
@@ -331,6 +336,11 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             }
             all_opted_out = false;
             if rcfg.checks.is_empty() {
+                if matches!(rdecl, config::Declaration::Absent) {
+                    unconfigured.push(r.display().to_string());
+                } else {
+                    configured_empty = true;
+                }
                 continue;
             }
             any_ran = true;
@@ -365,6 +375,19 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         }
         if !blocks.is_empty() {
             stop_block_now(&blocks.join("\n\n"), interactive);
+        }
+        if roots.wrote_any && !any_ran && !all_opted_out && !configured_empty {
+            // Every written root has no donegate config at all: allow, but
+            // visibly (never a silent green) on stdout and stderr.
+            let msg = format!(
+                "donegate not configured for {}: no checks ran",
+                unconfigured.join(", ")
+            );
+            eprintln!("{msg}");
+            if !interactive {
+                println!("{}", serde_json::json!({ "systemMessage": msg }));
+            }
+            std::process::exit(0);
         }
         if roots.wrote_any && !any_ran && !all_opted_out {
             stop_block_now(

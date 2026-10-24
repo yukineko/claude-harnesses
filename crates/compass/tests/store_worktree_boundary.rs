@@ -212,8 +212,12 @@ fn outcome_from_primary_checkout_is_refused_and_writes_nothing() {
     );
 }
 
+/// Contract change (user ruling 2026-10-24): the outcomes store is the
+/// project's SHARED store under the main worktree root, so a run from a linked
+/// worktree lands there and creates no per-worktree copy. (Previously this
+/// asserted the reverse: "succeeds there only".)
 #[test]
-fn outcome_from_linked_worktree_succeeds_there_only() {
+fn outcome_from_linked_worktree_succeeds_into_the_shared_store() {
     let fx = fixture(true);
     let (code, out, err) = run(
         &fx,
@@ -224,8 +228,8 @@ fn outcome_from_linked_worktree_succeeds_there_only() {
         code, 0,
         "outcome from a linked worktree must succeed; out={out:?} err={err:?}"
     );
-    assert!(fx.linked.join(".compass/outcomes.json").exists());
-    assert!(!fx.primary.join(".compass/outcomes.json").exists());
+    assert!(fx.primary.join(".compass/outcomes.json").exists());
+    assert!(!fx.linked.join(".compass/outcomes.json").exists());
 }
 
 #[test]

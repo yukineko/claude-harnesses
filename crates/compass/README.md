@@ -119,7 +119,9 @@ structurally reduces the "blank after a checkpoint."
 Routing a move to condukt **ships** it, but shipping is not validated learning
 (**build ≠ validate**). When a move completes, `compass outcome --verdict
 <forward|unchanged|backward> --evidence <measured result>` judges it against the
-`measuring_stick` and appends the verdict to `.compass/outcomes.json` — **evidence is
+`measuring_stick` and appends the verdict to `.compass/outcomes.json` under the
+project's **main worktree root** (one history shared by every linked worktree; an
+undeterminable root is refused, never answered from a per-worktree store) — **evidence is
 required**, an outcome with no measured result is refused, so a move can't be marked
 "progress" just for having shipped. The next `compass gap` reads the latest record back
 as `last_outcome`, so each round reflects *measured* progress rather than what was merely
@@ -172,7 +174,7 @@ The binary is thin and deterministic:
 | `compass route [--file <path>]` | size-triage a condukt decomposition; park the rest |
 | `compass charter` / `compass charter --write <JSON>` | show the parsed charter + config / persist a sharpened charter |
 | `compass outcome --verdict <forward\|unchanged\|backward> --evidence <text>…` | record a completed move's verdict vs the `measuring_stick` (evidence required); the next `compass gap` surfaces it as `last_outcome` |
-| `compass pivot-check` | print the pivot-or-persevere signal from the trailing outcome streak as `{recommendation, streak, threshold, reason}` (always exits 0, for flow to gate on) |
+| `compass pivot-check` | print the pivot-or-persevere signal from the trailing outcome streak as `{recommendation, streak, threshold, reason}` from the shared (main-worktree-root) store, for flow to gate on. A never-written store is an empty history (exit 0, persevere); an undeterminable root or a corrupt store exits non-zero with no recommendation |
 | `compass opportunity add --title <T> [--outcome <ref>] [--weight <f>]` | record a named bet (PDO OST) under the active outcome (charter `north_star` unless `--outcome` overrides) |
 | `compass opportunity list [--json] [--outcome <ref>]` | list the named bets under the active outcome; `--json` prints a JSON array |
 | `compass discovery record --title <T> [--session-id <ID>]` | append a discovery row for `<T>` under the given (or env-derived) session, for cross-session dedup; fail-soft, always exits 0 |
@@ -322,7 +324,7 @@ Claude Code セッション内の LLM 労働、バイナリは状態維持と決
 エッジ: **`GoalTooBig`**（全部 l/xl）→ ゴールを小さく彫り直す、**`OnlyNoise`**（全部 xs）→ north_star を問い直す。
 
 **計測ループ（outcome）**: 一手の完了後 `compass outcome --verdict <forward|unchanged|backward> --evidence <計測値>`
-で measuring_stick 判定を `.compass/outcomes.json` に記録する（**証拠必須**＝出荷だけでは記録できない、build ≠ validate）。
+で measuring_stick 判定を main worktree root の `.compass/outcomes.json`（全 linked worktree で共有）に記録する（**証拠必須**＝出荷だけでは記録できない、build ≠ validate）。
 次の `compass gap` が `last_outcome` として読み戻すので、各ラウンドが「計測された進捗」を反映する
 （[`/flow`](../flow) 経由なら sink が自動記録）。
 

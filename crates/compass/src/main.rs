@@ -291,6 +291,26 @@ fn project_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf())
 }
 
+/// Root of the project's SHARED outcomes store (user ruling 2026-10-24): the
+/// MAIN worktree root of `cwd`, so every linked worktree reads and appends one
+/// history. `.compass/outcomes.json` is gitignored, so resolving it off the cwd
+/// (as the charter is) gave each worktree its own private, usually empty store.
+/// An undeterminable root is an error (CLAUDE.md section 3): there is no
+/// per-worktree fallback, which would silently address a different store.
+fn outcomes_root(cwd: &Path) -> Result<PathBuf> {
+    use harness_core::verdict::Required;
+    match harness_core::projkey::main_worktree_root(cwd).require() {
+        Required::Determined(root) => Ok(root),
+        Required::Blocked(v) => anyhow::bail!(
+            "could not determine the main worktree root for {} ({}); refusing to \
+             address the outcomes store under a per-worktree fallback, which would \
+             be a different history than every other checkout of this project uses",
+            cwd.display(),
+            v.as_str()
+        ),
+    }
+}
+
 /// Refuse a state-store WRITE (backlog 1e6f00ae) when `root` is inside the
 /// PRIMARY working tree of a git repo (CLAUDE.md section 8: main's tree only
 /// receives merges) or when that cannot be determined (section 3). Outside any
@@ -656,8 +676,9 @@ fn gap_command(args: GapArgs) -> Result<()> {
     let cfg = Config::load(&root);
     let bundle = gather::gather(&root, &charter, &cfg)?;
     let mut inputs = gap::assemble_gap_inputs(&charter, &bundle);
-    // Close the measurement loop: surface the latest judged outcome (§7).
-    inputs.last_outcome = outcome::latest(&root)?;
+    // Close the measurement loop: surface the latest judged outcome (§7) from
+    // the project's SHARED store (main worktree root), not this checkout's.
+    inputs.last_outcome = outcome::latest(&outcomes_root(&root)?)?;
     // OST (§3): scaffold one gap slot per opportunity under the active outcome
     // so the skill derives a gap per named bet, not one flat gap. Ranked by
     // weight descending (load-bearing — heaviest bet leads). Tolerant load — a
@@ -682,32 +703,40 @@ fn gap_command(args: GapArgs) -> Result<()> {
 
 /// outcome (§7): record a completed move's judged outcome against the charter
 /// `measuring_stick`, requiring measured evidence, and append it to the
-/// `.compass/outcomes.json` store. The latest record is surfaced by `gap`
-/// (`last_outcome`). No LLM — the verdict/evidence are the human's judgment.
+/// `.compass/outcomes.json` store of the project's MAIN worktree root (shared by
+/// every linked worktree; see [`outcomes_root`]). The latest record is surfaced
+/// by `gap` (`last_outcome`). No LLM — the verdict/evidence are the human's
+/// judgment. The primary-tree write guard applies to the CALLER's checkout
+/// (cwd): the command is refused when run from the primary checkout, while a
+/// run from a linked worktree appends to the shared (gitignored) store there.
 fn outcome_command(args: OutcomeArgs) -> Result<()> {
     let root = project_root();
     guard_write(&root, "compass outcome")?;
+    let store_root = outcomes_root(&root)?;
     let path = Charter::project_path(&root);
     let charter = Charter::load(&path)
         .with_context(|| "loading .compass/charter.md (run `/compass` to carve one)")?;
 
-    let recorded = outcome::record(&root, &charter, args.verdict, args.evidence)?;
+    let recorded = outcome::record(&store_root, &charter, args.verdict, args.evidence)?;
     println!(
         "compass: recorded outcome #{} ({:?}) vs measuring_stick — {}",
         recorded.seq,
         recorded.verdict,
-        outcome::store_path(&root).display()
+        outcome::store_path(&store_root).display()
     );
     Ok(())
 }
 
 /// pivot-or-persevere signal from the trailing outcome streak. Loads the
-/// `.compass/outcomes.json` store, runs the deterministic `pivot_signal()`
-/// aggregation, and prints the result as JSON. Always exits 0 so downstream
-/// drivers (flow) can gate on the `recommendation` field without error handling.
+/// project's SHARED `.compass/outcomes.json` store (main worktree root, see
+/// [`outcomes_root`]), runs the deterministic `pivot_signal()` aggregation, and
+/// prints the result as JSON. A never-written store is a known empty history
+/// (exit 0, persevere). An undeterminable root or an unreadable/corrupt store
+/// is NOT an empty history: it exits non-zero with no recommendation printed
+/// (CLAUDE.md section 3).
 fn pivot_check_command() -> Result<()> {
-    let root = project_root();
-    let outcomes = outcome::load(&root).unwrap_or_default();
+    let root = outcomes_root(&project_root())?;
+    let outcomes = outcome::load(&root)?;
     let sig = outcome::pivot_signal(&outcomes, outcome::DEFAULT_PIVOT_THRESHOLD);
     let rec = match sig.recommendation {
         outcome::Recommendation::Pivot => "pivot",

@@ -58,7 +58,7 @@ evaluate ─► carve ループ ─► charter ─► gap ─► (condukt 分解
 
 保留は taskprog の progress.md「残り」へ 1 行ずつ書き戻され、次回 `/compass` の gap 入力に再浮上する（自己供給ループ）。
 
-**計測ループ（outcome）**: 一手の完了で出荷はされるが、出荷は検証された学習ではない（build ≠ validate）。`compass outcome --verdict <forward|unchanged|backward> --evidence <計測値>` で measuring_stick 判定を `.compass/outcomes.json` に記録する（**証拠必須**で、計測なしの outcome は拒否される）。次の `compass gap` が `last_outcome` として読み戻すので、各ラウンドが「計測された進捗」を反映する。[`/flow`](../flow) 経由なら sink が自動記録する。
+**計測ループ（outcome）**: 一手の完了で出荷はされるが、出荷は検証された学習ではない（build ≠ validate）。`compass outcome --verdict <forward|unchanged|backward> --evidence <計測値>` で measuring_stick 判定を project の main worktree root の `.compass/outcomes.json`（全 linked worktree で共有する1本の履歴。root を判定できなければ拒否し、worktree 毎の store には落とさない）に記録する（**証拠必須**で、計測なしの outcome は拒否される）。次の `compass gap` が `last_outcome` として読み戻すので、各ラウンドが「計測された進捗」を反映する。[`/flow`](../flow) 経由なら sink が自動記録する。
 
 ### 2 つの hook
 
@@ -92,7 +92,7 @@ primary では `compass breadcrumb` は書き込まず、stderr にその旨を�
 | `compass route [--file <path>]` | 分解を size triage し、残りを park |
 | `compass charter` / `--write <JSON>` | charter＋config の表示 / 彫れた charter の永続化 |
 | `compass outcome --verdict <…> --evidence <text>` | 完了した一手の verdict を記録（証拠必須） |
-| `compass pivot-check` | 直近 outcome ストリークから pivot/persevere シグナルを `{recommendation, streak, threshold, reason}` で出力（常に exit 0、flow の gate 用） |
+| `compass pivot-check` | 直近 outcome ストリークから pivot/persevere シグナルを `{recommendation, streak, threshold, reason}` で出力（共有 store = main worktree root を読む。flow の gate 用。未記録は空履歴として exit 0・persevere、root 判定不能や store 破損は recommendation を出さず非0終了） |
 | `compass opportunity add --title <T> [--outcome <ref>] [--weight <f>]` | active outcome（既定は charter `north_star`）配下に named bet（PDO OST）を記録 |
 | `compass opportunity list [--json] [--outcome <ref>]` | active outcome 配下の named bet を一覧。`--json` は JSON 配列で出力 |
 | `compass discovery record --title <T> [--session-id <ID>]` | 指定（または env 由来）のセッション配下に discovery 行を追記（cross-session dedup 用）。fail-soft、常に exit 0 |

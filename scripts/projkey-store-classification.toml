@@ -89,6 +89,16 @@ scope = "shared"
 kind = "test"
 evidence = "The inner half of the same four fixture expressions."
 
+# ── compass ────────────────────────────────────────────────────────────────
+
+[[consumer]]
+file = "crates/compass/src/main.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "outcomes_root() resolves the directory of `.compass/outcomes.json` (read by outcome, pivot-check and gap's last_outcome). User ruling 2026-10-24: the outcome history is one store per project, shared by every linked worktree; an Undetermined root is an Err (non-zero exit), with no per-worktree fallback. Pinned by crates/compass/tests/outcomes_shared_across_worktrees.rs."
+
 # ── condukt ────────────────────────────────────────────────────────────────
 
 [[consumer]]
@@ -297,4 +307,4 @@ evidence = "Ignored, so each linked worktree carries its OWN carve state; a re-c
 [[consumer]]
 language = "gitignore"
 pattern = ".compass/outcomes.json"
-evidence = "Same mechanism as carve-state.json: ignored, therefore per-worktree. compass outcomes recorded in one worktree do not inform a run in another."
+evidence = "Ignored, so the path would exist separately in every linked worktree. compass no longer resolves it off the cwd: the CLI addresses it under the MAIN worktree root (see the crates/compass/src/main.rs main_worktree_root entry above), so the ignore line now only keeps the shared store untracked in the main checkout. A stray worktree-local copy is never read."

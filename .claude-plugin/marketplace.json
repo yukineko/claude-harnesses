@@ -132,7 +132,7 @@
     {
       "name": "compass",
       "description": "Goal re-grounding and next-move derivation for Claude Code, sitting upstream of condukt to decide what to work on.",
-      "version": "0.1.26",
+      "version": "0.1.27",
       "category": "planning",
       "keywords": [
         "compass",

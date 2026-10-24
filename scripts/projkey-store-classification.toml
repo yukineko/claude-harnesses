@@ -271,7 +271,15 @@ symbol = "project_key"
 count = 1
 scope = "shared"
 kind = "store-key"
-evidence = "condukt_escalations_path() re-derives condukt's escalations.json path from another crate. It is correct exactly when it matches crates/condukt/src/escalate.rs. It NO LONGER matches: escalate.rs now goes through state::project_state_dir (main_worktree_root), while this still keys off repo_root, so from a linked worktree it reads a different (legacy per-checkout) file. Scope shared records the contract; the call site is out of step with it."
+evidence = "condukt_escalations_paths() re-derives condukt's escalations.json paths from another crate. It is correct exactly when it matches crates/condukt/src/escalate.rs::escalations_paths (state::project_state_dirs). It matches: the one project_key call (inside the file_for closure) keys the canonical file on main_worktree_root(cwd), shared by every checkout, and the legacy per-checkout file on repo_root(cwd), read after it only when distinct, as condukt does. Guarded by crates/overwatch/tests/escalations_shared_across_worktrees.rs."
+
+[[consumer]]
+file = "crates/overwatch/src/review_escalation.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "condukt_escalations_paths(): the canonical escalations.json key, the same main_worktree_root condukt's state::project_root uses. Undetermined is forwarded as Undetermined (review-queue warns and omits the source); there is no fallback to the per-checkout key."
 
 [[consumer]]
 file = "crates/overwatch/src/review_escalation.rs"
@@ -279,7 +287,7 @@ symbol = "repo_root"
 count = 1
 scope = "shared"
 kind = "store-key"
-evidence = "The inner half of condukt_escalations_path()'s key derivation."
+evidence = "condukt_escalations_paths(): only the LEGACY per-checkout escalations.json path, read after the canonical one when it differs, mirroring condukt's state::legacy_project_dir so escalations written by a pre-re-keying condukt from a linked worktree are not lost. Never the sole or primary key."
 
 # ── tdd ────────────────────────────────────────────────────────────────────
 

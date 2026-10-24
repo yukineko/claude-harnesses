@@ -7,13 +7,19 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// Per-process counter so two tests that call `temp_home` with the same tag in
+/// the same clock tick (the macOS clock is microsecond-grained, and parallel
+/// test threads share the pid) never share one store.
+static NEXT_HOME: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn temp_home(tag: &str) -> PathBuf {
     let pid = std::process::id();
+    let seq = NEXT_HOME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("fugu-router-tier-{tag}-{pid}-{nanos}"));
+    let dir = std::env::temp_dir().join(format!("fugu-router-tier-{tag}-{pid}-{seq}-{nanos}"));
     std::fs::create_dir_all(&dir).expect("create temp home");
     dir
 }

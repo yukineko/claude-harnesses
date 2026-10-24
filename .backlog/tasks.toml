@@ -1,1 +1,57 @@
-task = []
+[[task]]
+id = "3df89d5b"
+title = "condukt editgate silently allows when cwd is unreadable"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = 'GitHub #1341. crates/condukt/src/main.rs run_editgate: current_dir() Err(_) => return prints nothing and exits 0 (allow). Test: crates/condukt/tests/repro_gh1341_editgate_deleted_cwd.rs editgate_with_deleted_cwd_does_not_silently_allow. Observed FAIL 2026-10-25 on main 3b151d5e plus test commit c69fdec0 (condukt 0.7.292 code): panicked at crates/condukt/tests/repro_gh1341_editgate_deleted_cwd.rs:74:5: editgate with an undeterminable cwd must block/ask or exit non-zero with a reason, not silently allow; exit=Some(0) stdout="" stderr="warning: autonomy switch is UNDETERMINED: the current directory cannot be read (No such file or directory (os error 2)), so the project the switch belongs to is unknown\nwarning: resolving autonomy to OFF (fail-closed)\n" ... test result: FAILED. 0 passed; 1 failed'
+created_at = 1792884568
+updated_at = 1792884568
+weight = 0.0
+issue_number = 1441
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1441"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test repro_gh1341_editgate_deleted_cwd"
+rev = "c69fdec064caa887354f2c181d2338d2b1a3a6b7"
+observed_at = 1792884568
+detail = """
+exit 101: shed in 0.74s
+
+   Compiling condukt v0.7.293 (/Users/yuki/src/.harness-worktrees/issue-repros-rs/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.34s
+     Running tests/repro_gh1341_editgate_deleted_cwd.rs (target/debug/deps/repro_gh1341_editgate_deleted_cwd-583292ca13c3ff57)
+error: test failed, to rerun pass `-p condukt --test repro_gh1341_editgate_deleted_cwd`"""
+
+[[task]]
+id = "d74c423d"
+title = "backlog done misreads a behavioural RED as a build failure"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = 'GitHub #1347. crates/backlog/src/evidence.rs classify_red checks build_failure_marker (any "could not compile" anywhere) before "test result: FAILED", so a RED run with a genuine FAILED test plus an unrelated package compile error is refused. Test: crates/backlog/tests/repro_gh1347_mixed_build_marker_red.rs red_with_test_result_failed_and_unrelated_could_not_compile_is_behavioural (its own failure message redacts the marker as could-not-compile so this repro is not itself refused by the bug). Observed FAIL 2026-10-25 on main 3b151d5e plus test commit c69fdec0 (backlog 0.3.70 code), before redaction: assertion `left == right` failed: ... `done` must accept it: Error: refused: RED at 24a70f6952178ac09aa8d0a6d6c9f32385b3cc6d refused: the run failed at BUILD/compile time (output contains "could not compile"), not behaviourally; a build failure is not RED. ... left: 1 right: 0 ... test result: FAILED. 0 passed; 1 failed'
+created_at = 1792884597
+updated_at = 1792884597
+weight = 0.0
+issue_number = 1442
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1442"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test repro_gh1347_mixed_build_marker_red"
+rev = "c69fdec064caa887354f2c181d2338d2b1a3a6b7"
+observed_at = 1792884597
+detail = """
+exit 101: in 1.55s
+
+   Compiling backlog v0.3.71 (/Users/yuki/src/.harness-worktrees/issue-repros-rs/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s
+     Running tests/repro_gh1347_mixed_build_marker_red.rs (target/debug/deps/repro_gh1347_mixed_build_marker_red-d3ca8222934076bd)
+error: test failed, to rerun pass `-p backlog --test repro_gh1347_mixed_build_marker_red`"""

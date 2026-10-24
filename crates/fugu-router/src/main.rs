@@ -22,6 +22,7 @@ mod rag;
 mod rng;
 mod semantic;
 mod store;
+mod subagent;
 mod syncstate;
 
 use std::path::{Path, PathBuf};
@@ -250,6 +251,14 @@ enum Command {
     },
     /// UserPromptSubmit hook: inject a routing-memory summary.
     Prompt,
+    /// PreToolUse hook (Agent|Task): set `model` on a sub-agent spawn that
+    /// names none, learned from class-"subagent" episodes only. Prints
+    /// nothing (caller's default applies) when there is no learned signal.
+    /// Off with FUGU_ROUTER_AUTO_MODEL=0.
+    AgentModel,
+    /// SubagentStop hook: record the finished sub-agent's outcome as one
+    /// class-"subagent" episode (model id read from its transcript).
+    AgentRecord,
     /// Write a starter fugu-router.toml in the current directory.
     Init {
         #[arg(default_value = "fugu-router.toml")]
@@ -482,6 +491,14 @@ fn seed_rng(eps_len: usize) -> rng::Rng {
     rng::Rng::new(nanos ^ (eps_len as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
 }
 
+/// Condukt-routing population: every episode except class-"subagent" ones,
+/// which belong to the `agent-model` hook's separate population.
+fn condukt_eps(eps: Vec<store::Episode>) -> Vec<store::Episode> {
+    eps.into_iter()
+        .filter(|e| e.class != subagent::CLASS)
+        .collect()
+}
+
 /// Route one task: retrieve neighbours, then explore (bandit) or exploit (threshold).
 fn route_decision(
     cfg: &config::Config,
@@ -492,7 +509,11 @@ fn route_decision(
     rng: &mut rng::Rng,
 ) -> policy::Decision {
     let nb = rag::knn(title, files, eps, cfg.k, cfg.sim_threshold);
-    if cfg.explore {
+    // No similar episode at all: there is nothing to explore FROM, and a
+    // bandit draw over empty Beta(1,1) posteriors would report basis
+    // "bandit" for what is pure noise. Use the deterministic path, which
+    // yields the cold-start "prior" (or "gated") basis.
+    if cfg.explore && !nb.is_empty() {
         policy::decide_bandit(
             title,
             files,
@@ -585,6 +606,8 @@ fn main() {
             }
             println!("{out}");
         }),
+        Command::AgentModel => run_hook(subagent::cmd_agent_model),
+        Command::AgentRecord => run_hook(subagent::cmd_agent_record),
         other => {
             if let Err(e) = run_user(other) {
                 eprintln!("fugu-router: {e:#}");
@@ -686,6 +709,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 tokens_input,
                 tokens_output,
                 mode: mode.map(|m| m.as_str().to_string()),
+                model_choice: None,
             };
             // A full model ID (`claude-opus-5-5`) is stored under its routing
             // tier with the ID kept as `model_id`, so routing learns from it.
@@ -764,7 +788,7 @@ fn run_user(cmd: Command) -> Result<()> {
         } => {
             let title = text.join(" ");
             let f = split_files(&files);
-            let eps = store::load(&cfg.store_path());
+            let eps = condukt_eps(store::load(&cfg.store_path()));
             let mut rng = seed_rng(eps.len());
             let d = route_decision(&cfg, &title, &f, &class, &eps, &mut rng);
             let resolved_mode = resolve_mode(mode, &cfg)?;
@@ -778,7 +802,7 @@ fn run_user(cmd: Command) -> Result<()> {
         Command::Confidence { files, class, text } => {
             let title = text.join(" ");
             let f = split_files(&files);
-            let eps = store::load(&cfg.store_path());
+            let eps = condukt_eps(store::load(&cfg.store_path()));
             let score = confidence::calibrated_confidence(
                 &title,
                 &f,
@@ -826,7 +850,9 @@ fn run_user(cmd: Command) -> Result<()> {
             CodeIndexAction::Build { root, if_stale } => cmd_code_index_build(root, if_stale),
             CodeIndexAction::Search { query, root, k } => cmd_code_index_search(query, root, k),
         },
-        Command::Prompt => unreachable!("handled in main"),
+        Command::Prompt | Command::AgentModel | Command::AgentRecord => {
+            unreachable!("handled in main")
+        }
     }
 }
 
@@ -1133,7 +1159,7 @@ fn cmd_route(
     };
     let mut dec: decomp::Decomposition =
         serde_json::from_str(&raw).context("parsing decomposition JSON")?;
-    let eps = store::load(&cfg.store_path());
+    let eps = condukt_eps(store::load(&cfg.store_path()));
     let mut rng = seed_rng(eps.len());
 
     // Budget-aware downgrade (soft dep): if budgetguard reports the day's spend
@@ -1602,9 +1628,50 @@ fn model_stats(
     agg
 }
 
+/// JSON rendering of a [`model_stats`] table.
+fn model_stats_json(
+    agg: &std::collections::BTreeMap<String, (usize, usize, CostSum)>,
+) -> serde_json::Map<String, serde_json::Value> {
+    agg.iter()
+        .map(|(m, (n, p, c))| {
+            (
+                m.clone(),
+                json!({
+                    "count": n,
+                    "passes": p,
+                    "pass_rate": if *n > 0 { *p as f64 / *n as f64 } else { 0.0 },
+                    // `null` when no episode of this model has a measured cost.
+                    "avg_cost_usd": c.avg(),
+                    "cost_samples": c.n,
+                }),
+            )
+        })
+        .collect()
+}
+
+fn print_model_rows(agg: &std::collections::BTreeMap<String, (usize, usize, CostSum)>) {
+    for (m, (n, p, c)) in agg {
+        println!(
+            "  {m:<6} {p}/{n} pass ({:.0}%)  avg {}",
+            if *n > 0 {
+                *p as f64 / *n as f64 * 100.0
+            } else {
+                0.0
+            },
+            fmt_avg_cost(c)
+        );
+    }
+}
+
+/// `stats`: the main table (and `episodes` / coverage) is the condukt-routing
+/// population only; class-"subagent" episodes are reported apart under
+/// `subagent`, never mixed into the main per-model numbers.
 fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
-    let eps = store::load(&cfg.store_path());
+    let (sub_eps, eps): (Vec<store::Episode>, Vec<store::Episode>) = store::load(&cfg.store_path())
+        .into_iter()
+        .partition(|e| e.class == subagent::CLASS);
     let agg = model_stats(&eps);
+    let sub_agg = model_stats(&sub_eps);
     // Duration coverage: how many episodes carry a real (Some) measurement out
     // of the total — surfaced so the low recording rate is visible.
     let measured_n = eps.iter().filter(|e| e.duration_secs.is_some()).count();
@@ -1613,46 +1680,26 @@ fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
     let cost_measured_n = eps.iter().filter(|e| e.cost_usd.is_some()).count();
     let total_n = eps.len();
     if as_json {
-        let obj: serde_json::Map<String, serde_json::Value> = agg
-            .iter()
-            .map(|(m, (n, p, c))| {
-                (
-                    m.clone(),
-                    json!({
-                        "count": n,
-                        "passes": p,
-                        "pass_rate": if *n > 0 { *p as f64 / *n as f64 } else { 0.0 },
-                        // `null` when no episode of this model has a measured cost.
-                        "avg_cost_usd": c.avg(),
-                        "cost_samples": c.n,
-                    }),
-                )
-            })
-            .collect();
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "episodes": eps.len(),
                 "duration_coverage": {"recorded": measured_n, "total": total_n},
                 "cost_coverage": {"recorded": cost_measured_n, "total": total_n},
-                "models": obj,
+                "models": model_stats_json(&agg),
+                "subagent": {
+                    "episodes": sub_eps.len(),
+                    "models": model_stats_json(&sub_agg),
+                },
             }))?
         );
     } else {
         println!("episodes: {}", eps.len());
         println!("duration coverage: {measured_n}/{total_n} episodes measured");
         println!("cost coverage: {cost_measured_n}/{total_n} episodes measured");
-        for (m, (n, p, c)) in &agg {
-            println!(
-                "  {m:<6} {p}/{n} pass ({:.0}%)  avg {}",
-                if *n > 0 {
-                    *p as f64 / *n as f64 * 100.0
-                } else {
-                    0.0
-                },
-                fmt_avg_cost(c)
-            );
-        }
+        print_model_rows(&agg);
+        println!("subagent episodes (separate population): {}", sub_eps.len());
+        print_model_rows(&sub_agg);
     }
     Ok(())
 }

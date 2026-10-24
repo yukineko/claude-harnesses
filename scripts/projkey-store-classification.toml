@@ -289,7 +289,15 @@ symbol = "project_key"
 count = 1
 scope = "shared"
 kind = "store-key"
-evidence = "ledger() keys the mode = loose warned-once ledger `<state_dir>/warned/<project_key(root)>`. The module doc states the contract verbatim: 'The ledger is per project, not per session' (operator ruling 2026-10-20: warn once per file hash). Scope shared records that contract; the call site is out of step with it: root is the Stop hook's cwd (crates/tdd/src/main.rs, input.cwd_or_current()), not main_worktree_root, so from a linked worktree the ledger is per worktree and a file already warned in another checkout is warned again."
+evidence = "ledger() keys the mode = loose warned-once ledger `<state_dir>/warned/<project_key(main)>`, where main is main_worktree_root(root) of the Stop hook's checkout. The module doc states the contract verbatim: 'The ledger is per project, not per session' (operator ruling 2026-10-20: warn once per file hash). Pinned by crates/tdd/tests/loose_ledger_per_project_across_worktrees.rs."
+
+[[consumer]]
+file = "crates/tdd/src/warned.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "ledger() resolves the Stop hook's checkout to the main worktree root so every linked worktree of one repo shares one warned-once ledger. Undetermined is forwarded: all_seen returns Undetermined (the gate keeps its block) and record returns an error; there is no fallback to the per-checkout key."
 
 # ── non-Rust mechanisms ────────────────────────────────────────────────────
 #

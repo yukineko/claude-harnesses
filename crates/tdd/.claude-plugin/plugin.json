@@ -1,6 +1,6 @@
 {
   "name": "tdd",
-  "version": "0.1.51",
+  "version": "0.1.52",
   "description": "Test-first gate for Claude Code: on Stop it blocks when implementation lines were added with no test visible in the uncommitted changes, and red/green/verify subcommands record RED before GREEN.",
   "author": {
     "name": "yukineko"

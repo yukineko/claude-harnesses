@@ -10,9 +10,13 @@
 //!
 //! The ledger is per project, not per session: the ruling is about the files,
 //! so a later session does not see the same untouched files again either.
+//! "Project" means the repo, not the checkout: the ledger is keyed on the
+//! main worktree root, so a file warned from one linked worktree counts as
+//! warned from every other checkout of the same repo at the same content.
 //!
 //! Every answer that is not a positive "all of these were shown" — a file
-//! that cannot be read, a ledger that cannot be read, no files named — keeps
+//! that cannot be read, a ledger that cannot be read, a main worktree root
+//! that cannot be determined, no files named — keeps
 //! the gate's normal block (CLAUDE.md §3: "cannot tell" is not "already
 //! warned").
 
@@ -44,10 +48,19 @@ pub fn entries(root: &Path, files: &[String]) -> Determination<Vec<String>> {
     Determination::known(out)
 }
 
-fn ledger(state_dir: &Path, root: &Path) -> PathBuf {
-    state_dir
-        .join("warned")
-        .join(harness_core::projkey::project_key(root))
+/// The ledger file for the project `root` belongs to.
+///
+/// Keyed on the project's MAIN worktree root, so every linked worktree of one
+/// repo shares one ledger. `root` itself is the checkout being judged (the
+/// Stop hook's cwd), which differs per worktree; keying on it would make the
+/// ledger per checkout. When the main worktree root cannot be determined the
+/// answer is `Undetermined` — never a fallback to the per-checkout key.
+fn ledger(state_dir: &Path, root: &Path) -> Determination<PathBuf> {
+    harness_core::projkey::main_worktree_root(root).map(|main| {
+        state_dir
+            .join("warned")
+            .join(harness_core::projkey::project_key(&main))
+    })
 }
 
 /// Whether EVERY one of `entries` was already shown for this project.
@@ -55,7 +68,11 @@ pub fn all_seen(state_dir: &Path, root: &Path, entries: &[String]) -> Determinat
     if entries.is_empty() {
         return Determination::undetermined("no entries to look up");
     }
-    match std::fs::read_to_string(ledger(state_dir, root)) {
+    let path = match ledger(state_dir, root) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    match std::fs::read_to_string(path) {
         Ok(text) => {
             let shown: Vec<&str> = text.lines().map(str::trim_end).collect();
             Determination::known(entries.iter().all(|e| shown.contains(&e.as_str())))
@@ -66,8 +83,18 @@ pub fn all_seen(state_dir: &Path, root: &Path, entries: &[String]) -> Determinat
 }
 
 /// Remember that each of `entries` has now been shown for this project.
+///
+/// When the project's ledger cannot be located this is an error (the finding
+/// will be shown again), not a write to a per-checkout ledger.
 pub fn record(state_dir: &Path, root: &Path, entries: &[String]) -> std::io::Result<()> {
-    let path = ledger(state_dir, root);
+    let path = match ledger(state_dir, root) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Err(std::io::Error::other(format!(
+                "project ledger location undetermined: {why}"
+            )))
+        }
+    };
     for e in entries {
         harness_core::append::append_line(&path, e)?;
     }
@@ -111,5 +138,25 @@ mod tests {
         std::fs::write(root.join("a.js"), "two").unwrap();
         let a2 = known(entries(&root, &["a.js".to_string()]));
         assert!(!known(all_seen(&state, &root, &a2)));
+    }
+
+    #[test]
+    fn undeterminable_project_root_is_undetermined_and_records_nothing() {
+        let root = tmp("badgit");
+        let state = tmp("badgit-state");
+        // A `.git` FILE that is not a `gitdir:` pointer: the main worktree
+        // root cannot be determined.
+        std::fs::write(root.join(".git"), "not a gitdir pointer\n").unwrap();
+        std::fs::write(root.join("a.js"), "one").unwrap();
+        let a = known(entries(&root, &["a.js".to_string()]));
+        assert!(matches!(
+            all_seen(&state, &root, &a),
+            Determination::Undetermined(_)
+        ));
+        assert!(record(&state, &root, &a).is_err());
+        assert!(
+            !state.join("warned").exists(),
+            "no per-checkout ledger may be written as a fallback"
+        );
     }
 }

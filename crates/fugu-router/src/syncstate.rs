@@ -1,16 +1,17 @@
 //! Durable record of the last `sync` failure, so the failure is not dark.
 //!
-//! `sync`'s only caller is the `SessionEnd` hook declared in
-//! `hooks/hooks.json`. A `SessionEnd` hook's exit code and stderr reach
-//! neither the agent nor the user, so a non-zero exit is, on its own, an
-//! invisible signal: "the store synced and had nothing to do" and "the store
-//! has not synced in a month" look identical from outside (CLAUDE.md §1/§3).
-//! Measured 2026-08-26: `sync` had been aborting in its pull phase since
-//! 2026-07-23 and nothing anywhere said so.
+//! `sync`'s only automatic caller is the detached worker started by the
+//! `SessionEnd` hook (`session-end-sync`, see `sessionend.rs`). Its exit code
+//! reaches nobody and its stderr goes to a log file, so a non-zero exit is, on
+//! its own, an invisible signal: "the store synced and had nothing to do" and
+//! "the store has not synced in a month" look identical from outside
+//! (CLAUDE.md §1/§3). Measured 2026-08-26: `sync` had been aborting in its
+//! pull phase since 2026-07-23 and nothing anywhere said so.
 //!
 //! So a failure is written here, and the `UserPromptSubmit` hook — a channel
 //! someone actually reads — surfaces it until a later `sync` succeeds and
-//! clears it.
+//! clears it. A sync killed before it can write here is covered separately by
+//! the pending marker in `sessionend.rs`.
 
 use std::path::PathBuf;
 

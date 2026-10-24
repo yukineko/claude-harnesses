@@ -10,7 +10,7 @@
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/fugu-router harvest; ${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync", "timeout": 60 }
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/fugu-router session-end-sync", "timeout": 5 }
         ]
       }
     ],

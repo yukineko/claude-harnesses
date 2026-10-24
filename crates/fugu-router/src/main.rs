@@ -21,6 +21,7 @@ mod policy;
 mod rag;
 mod rng;
 mod semantic;
+mod sessionend;
 mod store;
 mod subagent;
 mod syncstate;
@@ -34,6 +35,11 @@ use clap::{Parser, Subcommand};
 use harness_core::hook::{read_stdin, run_hook, HookInput};
 use serde_json::json;
 use wait_timeout::ChildExt;
+
+/// `harvest`'s default observation window, shared with the SessionEnd worker.
+const HARVEST_WINDOW_DAYS: u64 = 3;
+/// `harvest`'s default lookback, shared with the SessionEnd worker.
+const HARVEST_LOOKBACK_DAYS: u64 = 60;
 
 #[derive(Parser)]
 #[command(
@@ -289,17 +295,29 @@ enum Command {
     /// once each merge's observation window has closed: pass = no `fix`/`revert`
     /// commit touching the same (non-noise) files landed within the window.
     /// Idempotent (per-repo cursor in ~/.fugu-router/harvest-cursor.json). Run
-    /// by the SessionEnd hook before `sync`.
+    /// by the SessionEnd worker (`session-end-sync`) before `sync`.
     Harvest {
         /// Repository to harvest (default: the toplevel of the cwd's checkout).
         #[arg(long)]
         repo: Option<PathBuf>,
         /// Days a merge must age before its outcome is decided and recorded.
-        #[arg(long, default_value_t = 3)]
+        #[arg(long, default_value_t = HARVEST_WINDOW_DAYS)]
         window_days: u64,
         /// Only consider merges at most this many days old.
-        #[arg(long, default_value_t = 60)]
+        #[arg(long, default_value_t = HARVEST_LOOKBACK_DAYS)]
         lookback_days: u64,
+    },
+    /// The SessionEnd hook: write a pending marker, start a detached worker
+    /// that runs `harvest` then `sync`, and return at once (Claude Code gives
+    /// SessionEnd hooks ~1.5 s). A worker that dies before finishing is
+    /// reported by the `prompt` hook.
+    SessionEndSync,
+    /// Internal: the detached worker started by `session-end-sync`.
+    #[command(hide = true)]
+    SessionEndSyncWorker {
+        /// The pending marker to take over and clear when done.
+        #[arg(long)]
+        marker: Option<PathBuf>,
     },
     /// Merge another machine's store file(s) into the local stores, deduplicating
     /// by content hash. At least one of --episodes or --playbooks must be given.
@@ -558,10 +576,18 @@ fn main() {
             // prompt looks like coding work — a stale store is not a property
             // of the prompt.
             // Same for a failed `harvest` (also SessionEnd-only).
-            let notice = match (syncstate::pending(), harvest::pending()) {
-                (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
-                (a, b) => a.or(b),
-            };
+            // And for a SessionEnd sync that started but never finished (the
+            // worker was killed): it writes no sync-error.json, only its
+            // pending marker says so.
+            let notices: Vec<String> = [
+                syncstate::pending(),
+                sessionend::pending(),
+                harvest::pending(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            let notice = (!notices.is_empty()).then(|| notices.join("\n"));
 
             let summary = if inject::looks_actionable(&input.prompt) {
                 // Routing-memory summary = scored condukt population only;
@@ -845,6 +871,13 @@ fn run_user(cmd: Command) -> Result<()> {
             window_days,
             lookback_days,
         } => harvest::cmd_harvest(&cfg, repo, window_days, lookback_days),
+        Command::SessionEndSync => sessionend::cmd_session_end(),
+        Command::SessionEndSyncWorker { marker } => sessionend::cmd_session_end_worker(
+            &cfg,
+            marker,
+            HARVEST_WINDOW_DAYS,
+            HARVEST_LOOKBACK_DAYS,
+        ),
         Command::Fingerprint { dir } => {
             let root = dir.unwrap_or_else(|| PathBuf::from("."));
             let fp = fingerprint::skill_fingerprint(&root).with_context(|| {
@@ -1333,26 +1366,21 @@ fn spawn_and_wait_timeout(
 /// Sync the record store with `sync_repo`, and leave a durable trace when it
 /// cannot finish.
 ///
-/// STREAM CONTRACT — do not "tidy" these back onto a single stream. The only
-/// caller is the `SessionEnd` hook: Claude Code discards a hook's stdout, and
-/// surfaces its stderr to the user. So
-///
-///   * progress and success go to **stdout** — informative when a human runs
-///     `fugu-router sync` by hand, silent at `SessionEnd`;
-///   * failure goes to **stderr** (the `Err` returned here, printed by `main`),
-///     which is the stream the user actually reads.
+/// STREAM CONTRACT — do not "tidy" these back onto a single stream. Progress
+/// and success go to **stdout**; failure goes to **stderr** (the `Err`
+/// returned here, printed by the caller), so a human running `fugu-router
+/// sync` by hand can tell the two apart.
 ///
 /// Measured 2026-10-02: every message, success included, used to go to stderr,
 /// and stdout was empty, so a clean sync emitted three lines at the end of every
 /// single session and was reported as "fugu-router sync がエラーをだしている".
-/// The older claim that a `SessionEnd` hook's "stderr reaches nobody" was wrong
-/// in the direction that matters — it reaches the user — which is exactly why
-/// stderr has to mean failure here.
 ///
-/// That stderr line is transient, though: it appears as the session ends and is
-/// gone by the next one, and it never reaches an agent. So a failure is ALSO
-/// written to `syncstate`, which the `UserPromptSubmit` hook surfaces on the
-/// next prompt; a success clears it.
+/// The automatic caller is the detached `session-end-sync` worker
+/// (`sessionend.rs`), whose stdout/stderr go to `~/.fugu-router/session-end.log`,
+/// which nobody reads in passing. So a failure is ALSO written to `syncstate`,
+/// which the `UserPromptSubmit` hook surfaces on the next prompt; a success
+/// clears it. A worker killed before it gets here writes nothing at all; its
+/// pending marker covers that case.
 fn cmd_sync(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<()> {
     match sync_inner(cfg, pull_only, push_only) {
         Ok(()) => {

@@ -134,10 +134,14 @@ fugu-router install|uninstall [--dry-run]   # 手動（非プラグイン）で�
 
 ### インストールと配線
 
-プラグイン版は `bin/fugu-router` ランチャ（プラットフォーム別バイナリは gitignore されておりローカルでビルドし、`scripts/rollout-plugins.sh` が配置する）・`/fugu-router` skill・2 本のフックを同梱する。どちらも `hooks/hooks.json` に宣言され、`${CLAUDE_PLUGIN_ROOT}` 経由で解決される。API キー不要で**サブスクリプションで完結**する。
+プラグイン版は `bin/fugu-router` ランチャ（プラットフォーム別バイナリは gitignore されておりローカルでビルドし、`scripts/rollout-plugins.sh` が配置する）・`/fugu-router` skill・4 本のフックを同梱する。いずれも `hooks/hooks.json` に宣言され、`${CLAUDE_PLUGIN_ROOT}` 経由で解決される。API キー不要で**サブスクリプションで完結**する。
 
 - `UserPromptSubmit` → `fugu-router prompt`。プロンプトがコーディング作業に見えるときルーティングメモリの要約を 1 ブロック注入する。
 - `SessionEnd` → `fugu-router harvest; fugu-router sync`（timeout 60 秒）。`harvest` が cwd リポジトリの `main`/`master` への merge のうち観測窓を過ぎたものを `merge` episode として記録し、続いて `sync` が record ストアを `sync_repo` から pull し、ローカルの追記を commit & push する（`sync_repo` 未設定なら no-op）。
+- `PreToolUse`（matcher `Agent|Task`）→ `fugu-router agent-model`。sub-agent 起動が `model` を指定していないとき、class `subagent` の episode から学習したモデルを設定する。学習信号が無い・ストアが読めないときは何も出力せず（呼び出し側の既定モデルが使われ、理由を stderr に 1 行出す）、ブロックはしない。`FUGU_ROUTER_AUTO_MODEL=0` で無効化。
+- `SubagentStop` → `fugu-router agent-record`。終了した sub-agent ごとに class `subagent` の episode を 1 件追記する。モデル ID は sub-agent の transcript から実測値を読む（`completed` = pass、`failed`/`timeout` = fail。ユーザー中断・不明な stop reason・読めない transcript では何も記録しない）。
+
+condukt のルーティング（`route`/`suggest`/`confidence` と `stats` の本表）と `agent-model` フックはそれぞれ自分の class だけから学習するので、sub-agent の結果が condukt のルーティングを動かすことはなく、その逆もない。
 
 手動導入する場合は次のとおり。
 

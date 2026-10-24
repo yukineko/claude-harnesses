@@ -254,7 +254,7 @@ breaks. See `crates/condukt/skills/condukt/SKILL.md`.
 ### Plugin
 Bundles the `bin/fugu-router` launcher (the per-platform binary is built
 locally — it is gitignored — and deployed by `scripts/rollout-plugins.sh`), the
-`/fugu-router` skill, and two hooks, both declared in `hooks/hooks.json` and
+`/fugu-router` skill, and four hooks, all declared in `hooks/hooks.json` and
 resolved through `${CLAUDE_PLUGIN_ROOT}`:
 
 - `UserPromptSubmit` → `fugu-router prompt`, which injects a one-block
@@ -264,6 +264,19 @@ resolved through `${CLAUDE_PLUGIN_ROOT}`:
   `main`/`master` whose observation window has closed, then `sync` pulls the
   record store from `sync_repo` and commits+pushes local appends back (no-op
   when `sync_repo` is unset).
+- `PreToolUse` (matcher `Agent|Task`) → `fugu-router agent-model`: when a
+  sub-agent spawn names no `model`, sets one learned from class-`subagent`
+  episodes; prints nothing (the caller's default applies, with a one-line
+  stderr reason) when there is no learned signal or the store is unreadable.
+  Never blocks. Turn it off with `FUGU_ROUTER_AUTO_MODEL=0`.
+- `SubagentStop` → `fugu-router agent-record`: appends one class-`subagent`
+  episode per finished sub-agent, with the real model id read from its
+  transcript (`completed` = pass, `failed`/`timeout` = fail; a user interrupt,
+  an unknown stop reason or an unreadable transcript records nothing).
+
+Condukt routing (`route`/`suggest`/`confidence`, and `stats`' main table) and
+the `agent-model` hook each learn only from their own class, so sub-agent
+outcomes never steer condukt routing and vice versa.
 
 ### Manual
 ```
@@ -357,7 +370,8 @@ cleanly across machines and produce better k-NN file-token similarity.
 
 ## Cold start
 
-With an empty store, routing uses a keyword prior biased **cheap** — start at the
+With an empty store (or no similar episode — the bandit only explores once at
+least one neighbour exists), routing uses a keyword prior biased **cheap** — start at the
 floor and let the verifier's cascade escalation (haiku→sonnet→opus on a failed
 check) buy up only the tasks that need it:
 

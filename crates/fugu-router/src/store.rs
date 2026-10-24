@@ -140,6 +140,13 @@ pub struct Episode {
     /// Measurement-only — never consulted by `policy::route`/`decide_bandit`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// For class-"subagent" episodes: how the sub-agent's model was chosen at
+    /// spawn time — "auto" (the `agent-model` hook set it), "explicit" (the
+    /// caller passed `model`), or "inherited" (neither; the caller's default
+    /// applied). `None` means **not recorded** (no spawn-time marker was
+    /// found), never one of those three. Measurement-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_choice: Option<String>,
 }
 
 fn default_role() -> String {
@@ -280,6 +287,24 @@ pub fn load(path: &Path) -> Vec<Episode> {
         .filter(|l| !l.trim().is_empty())
         .filter_map(parse_line)
         .collect()
+}
+
+/// Like [`load`], but an unreadable store is an `Err` instead of an empty
+/// history. Only a store that does not exist yet is `Ok(vec![])` (a real
+/// "no history"); any other read failure (permission, a directory in the
+/// file's place, invalid UTF-8) cannot be told apart from "no history" by
+/// [`load`], so callers that must say *why* they have nothing use this.
+pub fn load_strict(path: &Path) -> std::io::Result<Vec<Episode>> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e),
+    };
+    Ok(text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .filter_map(parse_line)
+        .collect())
 }
 
 /// Append one episode as a JSON line, creating parent dirs as needed.

@@ -278,3 +278,92 @@ scripts/test_issue_1346_fugu_router_header_shape.py:76: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_issue_1346_fugu_router_header_shape.py::HeaderMatchesEmittedShape::test_prompt_entry_names_every_emitted_key
 ============================== 1 failed in 0.06s ==============================="""
+
+[[task]]
+id = "3cef580f"
+title = "SessionStart hooks print top-level additionalContext which Claude Code 2.1.284 never delivers to the model (GitHub 1343)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "github-1343",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "claude -p probe 2026-10-25, Claude Code 2.1.284: top-level SessionStart additionalContext gives NONE, hookSpecificOutput form gives MARK-B. Emitters: backlog main.rs, daily main.rs (2 sites), harness-status main.rs, hypothesis main.rs, taskprog main.rs. Fix: wrap in hookSpecificOutput with hookEventName SessionStart. Repro re-runs claude -p twice (haiku)."
+created_at = 1792885783
+updated_at = 1792885783
+weight = 0.0
+issue_number = 1450
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1450"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/probe_gh1343_sessionstart_shape.sh"
+rev = "cde613ebba64735f747182b6050b9b0ef59437fb"
+observed_at = 1792885783
+detail = '''
+exit 1:                serde_json::json!({ "additionalContext": sections.join("\n\n") })
+/Users/yuki/src/.harness-worktrees/probe-gh134x/crates/hypothesis/src/main.rs:388:                    println!("{}", serde_json::json!({ "additionalContext": ctx }));
+/Users/yuki/src/.harness-worktrees/probe-gh134x/crates/taskprog/src/main.rs:126:                    println!("{}", json!({ "additionalContext": ctx }));'''
+
+[[task]]
+id = "63ce7ff9"
+title = "budgetguard and taskprog Stop hooks print top-level additionalContext which reaches neither model nor user (GitHub 1344)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "github-1344",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "claude -p probe 2026-10-25, Claude Code 2.1.284, stream-json verbose: Stop hook printing top-level additionalContext MARK-C ran, session ended after 1 turn, MARK-C absent from the whole stream. Control Stop systemMessage MARK-D surfaced as system informational 'Stop says: MARK-D'. Emitters: budgetguard gate.rs, taskprog update.rs (2 sites). Repro re-runs claude -p once (haiku)."
+created_at = 1792885803
+updated_at = 1792885803
+weight = 0.0
+issue_number = 1451
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1451"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/probe_gh1344_stop_shape.sh"
+rev = "cde613ebba64735f747182b6050b9b0ef59437fb"
+observed_at = 1792885803
+detail = """
+exit 1: /probe-gh134x/crates/budgetguard/src/gate.rs:503:                    println!("{}", json!({ "additionalContext": msg }));
+/Users/yuki/src/.harness-worktrees/probe-gh134x/crates/taskprog/src/update.rs:58:            println!("{}", json!({ "additionalContext": msg }));
+/Users/yuki/src/.harness-worktrees/probe-gh134x/crates/taskprog/src/update.rs:105:    let out = json!({ "additionalContext": msg });"""
+
+[[task]]
+id = "8924ca76"
+title = "fugu-router SessionEnd hook (harvest then sync) is cancelled in headless claude -p runs so sync never pulls or pushes (GitHub 1345)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "github-1345",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "claude -p probe 2026-10-25, Claude Code 2.1.284, fugu-router 0.1.60 alone via --plugin-dir: stderr 'SessionEnd hook [...fugu-router harvest; ...fugu-router sync] failed: Hook cancelled'; debug shows cancel about 1.5 s after shutdown began despite timeout 60. Local data: sync made its local commit (no local loss observed; harvest no-op in a non-repo cwd so harvest loss NOT measured). Remote: pull and push did not complete; sync repo stays ahead of upstream (22 before and after). Repro runs the real installed plugin; sync touches ~/.fugu-router/sync as any session end does."
+created_at = 1792885809
+updated_at = 1792885809
+weight = 0.0
+issue_number = 1452
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1452"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/probe_gh1345_fugu_sessionend.sh"
+rev = "cde613ebba64735f747182b6050b9b0ef59437fb"
+observed_at = 1792885809
+detail = """
+exit 1: LAUDE_PLUGIN_ROOT}/bin/fugu-router harvest; ${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync] failed: Hook cancelled
+debug SessionEnd lines:
+2026-10-24T23:50:13.079Z [DEBUG] SessionEnd:other [${CLAUDE_PLUGIN_ROOT}/bin/fugu-router harvest; ${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync] cancelled
+sync repo commits ahead of upstream after: 22
+DEFECT: fugu-router SessionEnd hook was cancelled in a headless run"""

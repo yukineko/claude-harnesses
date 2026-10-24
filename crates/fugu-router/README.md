@@ -277,6 +277,8 @@ resolved through `${CLAUDE_PLUGIN_ROOT}`:
   fail. Its `model_choice` is the spawn-time choice joined through the
   transcript's `.meta.json` `toolUseId` (`unknown` when it cannot be joined).
   An unreadable transcript, or one with no model id, records nothing.
+  Claude Code runs the hook before the sub-agent's last assistant lines are
+  flushed, so a transcript without a model id is re-read for up to 3 s.
 
 Every pass/fail reader (`route`/`suggest`/`confidence`, the prompt summary,
 `stats`' main table, and the `agent-model` hook) skips class-`subagent` and

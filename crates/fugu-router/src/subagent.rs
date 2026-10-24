@@ -15,11 +15,13 @@
 //! default model, and every "nothing" path writes one stderr line saying why,
 //! so silence is never presented as "the router chose the default".
 //! `agent-record` never invents a value it could not read: an unreadable
-//! transcript or a missing model id records nothing (plus a stderr note)
+//! transcript or a model id still missing after a bounded wait for the
+//! late-flushed transcript records nothing (plus a stderr note)
 //! rather than a guessed episode, and a model choice it cannot join back to
 //! the spawn is recorded as `"unknown"`, never as one of the real choices.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -30,6 +32,13 @@ pub const CLASS: &str = "subagent";
 
 /// Per-part cap (chars) on the description / prompt that make up the task text.
 const PART_CAP: usize = 2000;
+
+/// Total time `agent-record` waits for the sub-agent's assistant lines to be
+/// flushed to its transcript. Well under the 10 s hook timeout in hooks.json.
+const FLUSH_WAIT: Duration = Duration::from_millis(3000);
+
+/// Sleep between transcript re-reads while waiting for the flush.
+const FLUSH_STEP: Duration = Duration::from_millis(100);
 
 fn cap(s: &str) -> String {
     s.chars().take(PART_CAP).collect()
@@ -324,23 +333,34 @@ pub fn cmd_agent_record() {
         .and_then(take_marker)
         .unwrap_or_else(|| CHOICE_UNKNOWN.to_string());
 
-    let text = match std::fs::read_to_string(&tpath) {
-        Ok(t) => t,
-        Err(e) => {
+    // Claude Code runs SubagentStop before the sub-agent's final assistant
+    // lines reach the transcript (measured 2026-10-24), so a readable
+    // transcript without a model id is re-read for a bounded time.
+    let deadline = Instant::now() + FLUSH_WAIT;
+    let (prompt, model) = loop {
+        let text = match std::fs::read_to_string(&tpath) {
+            Ok(t) => t,
+            Err(e) => {
+                note(&format!(
+                    "agent-record: sub-agent transcript {} unreadable ({e}); nothing recorded",
+                    tpath.display()
+                ));
+                return;
+            }
+        };
+        let (prompt, model) = scan_transcript(&text);
+        if let Some(model) = model {
+            break (prompt, model);
+        }
+        if Instant::now() >= deadline {
             note(&format!(
-                "agent-record: sub-agent transcript {} unreadable ({e}); nothing recorded",
-                tpath.display()
+                "agent-record: no assistant model id in {} after waiting {} ms for it to be flushed; nothing recorded",
+                tpath.display(),
+                FLUSH_WAIT.as_millis()
             ));
             return;
         }
-    };
-    let (prompt, model) = scan_transcript(&text);
-    let Some(model) = model else {
-        note(&format!(
-            "agent-record: no assistant model id in {}; nothing recorded",
-            tpath.display()
-        ));
-        return;
+        std::thread::sleep(FLUSH_STEP);
     };
 
     let description = meta

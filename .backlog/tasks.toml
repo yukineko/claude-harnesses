@@ -151,38 +151,6 @@ FAILED scripts/test_issue_1182_deny_ledger_unreadable_stale.py::UnreadableStaleL
 ========================= 1 failed, 1 passed in 1.57s =========================='''
 
 [[task]]
-id = "52d17300"
-title = "Scope test-weakening findings to the branch's own changes"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "issue-1181",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = '''GitHub issue #1181. scripts/check-test-weakening.py scan() diffs merge-base(origin/main, HEAD) against the worktree; when local main is ahead of a stale origin/main, commits already on main are charged to every branch commit, so an unrelated commit prints an [ack] line for crates/tdd/src/git.rs. Fixture repo: origin/main C0, main C1 adds #[ignore] (acked), branch feat changes only docs/unrelated.txt. Note: the module docstring states scope is base vs HEAD by design; the fix must keep the branch-wide scope while not charging main's commits. RED observed at rev 3b151d5e (test committed in 17d33e63), 2026-10-25. Verbatim failing output (one arrow token replaced by [arrow] because backlog notes refuse it): 'AssertionError: '\''crates/tdd/src/git.rs'\'' unexpectedly found in '\''[ack] crates/tdd/src/git.rs: ignore-added (#[ignore] attributes 0 [arrow] 1)\ncheck-test-weakening: no unacknowledged test weakening.\n'\'' : a file this commit and branch never touched was reported; rc=0' / '1 failed in 0.81s'.'''
-created_at = 1792884922
-updated_at = 1792884922
-weight = 0.0
-issue_number = 1446
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1446"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_issue_1181_test_weakening_unrelated_ack.py"
-rev = "17d33e63690f2749331e403967137f3efccc8f97"
-observed_at = 1792884922
-detail = '''
-exit 1: akening.\n'
-
-scripts/test_issue_1181_test_weakening_unrelated_ack.py:106: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_issue_1181_test_weakening_unrelated_ack.py::UnrelatedAckLine::test_commit_touching_only_unrelated_file_does_not_report_tdd_git_rs
-============================== 1 failed in 0.47s ==============================='''
-
-[[task]]
 id = "11756f2e"
 title = "Allow scratch-file writes that only name a denied path"
 project = "/Users/yuki/src/harness"

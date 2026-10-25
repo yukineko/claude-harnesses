@@ -60402,3 +60402,64 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "dc17c435ed2f5c7cc12fad9bcbf6cbf5a1a25531"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "52d17300"
+title = "Scope test-weakening findings to the branch's own changes"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "issue-1181",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = '''GitHub issue #1181. scripts/check-test-weakening.py scan() diffs merge-base(origin/main, HEAD) against the worktree; when local main is ahead of a stale origin/main, commits already on main are charged to every branch commit, so an unrelated commit prints an [ack] line for crates/tdd/src/git.rs. Fixture repo: origin/main C0, main C1 adds #[ignore] (acked), branch feat changes only docs/unrelated.txt. Note: the module docstring states scope is base vs HEAD by design; the fix must keep the branch-wide scope while not charging main's commits. RED observed at rev 3b151d5e (test committed in 17d33e63), 2026-10-25. Verbatim failing output (one arrow token replaced by [arrow] because backlog notes refuse it): 'AssertionError: '\''crates/tdd/src/git.rs'\'' unexpectedly found in '\''[ack] crates/tdd/src/git.rs: ignore-added (#[ignore] attributes 0 [arrow] 1)\ncheck-test-weakening: no unacknowledged test weakening.\n'\'' : a file this commit and branch never touched was reported; rc=0' / '1 failed in 0.81s'.'''
+created_at = 1792884922
+updated_at = 1792886694
+weight = 0.0
+issue_number = 1446
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1446"
+issue_closed_at = 1792886697
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_issue_1181_test_weakening_unrelated_ack.py"
+rev = "17d33e63690f2749331e403967137f3efccc8f97"
+observed_at = 1792884922
+detail = '''
+exit 1: akening.\n'
+
+scripts/test_issue_1181_test_weakening_unrelated_ack.py:106: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_issue_1181_test_weakening_unrelated_ack.py::UnrelatedAckLine::test_commit_touching_only_unrelated_file_does_not_report_tdd_git_rs
+============================== 1 failed in 0.47s ==============================='''
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_issue_1181_test_weakening_unrelated_ack.py"
+exit = 0
+passed = 1
+rev = "41049b9088d35f38feb4178064979f706c76a141"
+observed_at = 1792886689
+output_digest = "sha256:dad64a5e6f9382640618c9fbffff59b570c400e8c220e1a453f3ea8b959c1a35"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/fix-1181-tw-scope
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_issue_1181_test_weakening_unrelated_ack.py .                [100%]
+
+============================== 1 passed in 0.83s ===============================
+"""
+
+[task.closure.red]
+rev = "c2f596946cd62a70ec3fb956446d4805a6707642"
+exit = 1
+kind = "behavioural"

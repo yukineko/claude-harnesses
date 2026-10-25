@@ -1938,7 +1938,8 @@ fn editgate_block_reason(verdict: &serde_json::Value) -> String {
 /// unresolvable) — prints one line of JSON
 /// `{"decision":"block","reason":<verdict reason, then diagnostics>}` (see
 /// [`editgate_block_reason`]) so the worker fixes it in the same turn. It also
-/// blocks, with a stated reason, when the project's run state cannot be
+/// blocks, with a stated reason, when the current directory cannot be
+/// determined (e.g. deleted), or when the project's run state cannot be
 /// located, including when condukt's configuration cannot be loaded
 /// (config.toml unreadable or unparseable). Out-of-scope paths (non-edit tool, no file, non-Rust file,
 /// out-of-worktree edit), a clean build, and empty/invalid stdin print nothing.
@@ -1986,7 +1987,21 @@ fn run_editgate() {
     };
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
-        Err(_) => return,
+        Err(e) => {
+            // Undeterminable cwd (e.g. deleted): where the edit lands relative to
+            // live condukt worktrees is unknown, so block (stated), never allow.
+            let out = serde_json::json!({
+                "decision": "block",
+                "reason": format!(
+                    "condukt editgate could not determine the current directory, so \
+                     whether this edit is inside a live condukt worktree is unknown: {e}"
+                ),
+            });
+            if let Ok(line) = serde_json::to_string(&out) {
+                println!("{line}");
+            }
+            return;
+        }
     };
 
     // Resolve the project's run-state directories the same way every run-state

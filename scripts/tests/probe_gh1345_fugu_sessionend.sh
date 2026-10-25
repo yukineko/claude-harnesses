@@ -22,14 +22,24 @@
 # Cost: one `claude -p --model haiku` call.
 set -u
 
+# Final pytest/cargo-style summary line. It only reports the exit status
+# the checks below chose (0 OK -> "1 passed", 1 DEFECT -> "1 failed",
+# anything else, i.e. undetermined -> "0 passed"); it never changes it.
+summary() {
+  case "$1" in 0) echo "1 passed" ;; 1) echo "1 failed" ;; *) echo "0 passed" ;; esac
+}
+trap 'summary $?' EXIT
+
 command -v claude >/dev/null 2>&1 || { echo "UNDETERMINED: claude not on PATH"; exit 126; }
 plugin="$(ls -d "$HOME"/.claude/plugins/cache/yukineko/fugu-router/*/ 2>/dev/null | sort -V | tail -1)"
 [ -n "$plugin" ] && [ -f "$plugin/hooks/hooks.json" ] || { echo "UNDETERMINED: installed fugu-router plugin not found"; exit 126; }
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/gh1345.XXXXXX")" || exit 126
 cleanup() {
+  rc=$?
   rm -f "$tmp/debug.log" "$tmp/stdout" "$tmp/stderr"
   rmdir "$tmp" 2>/dev/null
+  summary "$rc"
 }
 trap cleanup EXIT
 

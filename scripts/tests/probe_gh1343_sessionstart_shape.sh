@@ -20,13 +20,23 @@
 # Cost: two `claude -p --model haiku` calls.
 set -u
 
+# Final pytest/cargo-style summary line. It only reports the exit status
+# the checks below chose (0 OK -> "1 passed", 1 DEFECT -> "1 failed",
+# anything else, i.e. undetermined -> "0 passed"); it never changes it.
+summary() {
+  case "$1" in 0) echo "1 passed" ;; 1) echo "1 failed" ;; *) echo "0 passed" ;; esac
+}
+trap 'summary $?' EXIT
+
 root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)" || exit 126
 command -v claude >/dev/null 2>&1 || { echo "UNDETERMINED: claude not on PATH"; exit 126; }
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/gh1343.XXXXXX")" || exit 126
 cleanup() {
+  rc=$?
   rm -f "$tmp/top.json" "$tmp/nested.json"
   rmdir "$tmp/ran_a" "$tmp/ran_b" "$tmp" 2>/dev/null
+  summary "$rc"
 }
 trap cleanup EXIT
 

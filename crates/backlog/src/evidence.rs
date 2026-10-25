@@ -401,30 +401,34 @@ fn build_failure_marker(output: &str) -> Option<&'static str> {
 /// Is a non-zero run a BEHAVIOURAL failure (the test ran and failed)?
 /// `Err` names why it is not (build failure, runner usage error, signal...).
 ///
-/// For `cargo test`: checks for `test result: FAILED` **before** the
-/// build-failure marker. If output contains `test result: FAILED`, the test ran
-/// and failed (behavioural RED), even if an unrelated package's build marker
-/// (e.g., "could not compile") also appears. A pure build failure (marker
-/// present, no FAILED test result) is still refused.
+/// For `cargo test`, a `test result: FAILED` line is checked **before** the
+/// build-failure marker: that line is printed only by a test binary that ran
+/// and had a failing test, so it is a behavioural RED even if an unrelated
+/// package's build marker (e.g. "could not compile") also appears in the same
+/// output (GitHub 1347). A cargo run with the marker and no FAILED line is
+/// still refused as a build failure. For pytest and script runners the
+/// build-failure marker is checked first, as before: they have no equivalent
+/// "this test ran and failed" line to outrank it.
 fn classify_red(cmd: &TestCmd, r: &RunResult) -> Result<(), String> {
+    let build_failure = |m: &str| {
+        format!(
+            "the run failed at BUILD/compile time (output contains {m:?}), not behaviourally; a \
+             build failure is not RED. Restructure the test so the pre-fix revision builds and \
+             fails an assertion; if no behavioural RED can be shown, the item is cancelled \
+             (`backlog cancel ID --reason R`)"
+        )
+    };
+    if !matches!(cmd.runner, Runner::CargoTest) {
+        if let Some(m) = build_failure_marker(&r.output) {
+            return Err(build_failure(m));
+        }
+    }
     match cmd.runner {
         Runner::CargoTest => {
-            // Check for a real test failure first. If the output contains
-            // "test result: FAILED", it means a test ran and failed, making this
-            // a behavioural RED even if an unrelated package's build failure
-            // marker (e.g., "could not compile") also appears in the output.
             if r.output.contains("test result: FAILED") {
                 Ok(())
             } else if let Some(m) = build_failure_marker(&r.output) {
-                // No FAILED test result. The build marker indicates the test
-                // suite failed at compile time (the test didn't run), not
-                // behaviourally.
-                Err(format!(
-                    "the run failed at BUILD/compile time (output contains {m:?}), not behaviourally; a \
-                     build failure is not RED. Restructure the test so the pre-fix revision builds and \
-                     fails an assertion; if no behavioural RED can be shown, the item is cancelled \
-                     (`backlog cancel ID --reason R`)"
-                ))
+                Err(build_failure(m))
             } else {
                 // No "test result: FAILED" and no build marker. The test didn't
                 // produce a conclusive failure output.

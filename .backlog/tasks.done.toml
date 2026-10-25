@@ -60850,3 +60850,65 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "c98d176d75fd0a472f7ca8752b11224623dc73ef"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "d222b3e3"
+title = "pre-push certifies a sha that is not the one pushed when main moves during the hook (https push re-resolves the ref by name)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "pre-push",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-25. Push A (subagent aafc316d, started 09:04:45 JST, main=2f8e4209) ran the pre-push checks on 2f8e4209 and printed 'c2f59694..2f8e4209 main -> main'. GitHub activity API (repos/yukineko/claude-harnesses/activity, ref main) records that push as '2026-10-25T00:09:54Z push c2f59694..4d3dd426'. While A's hook ran, main moved to 0241c62f (09:07:14) and then to 4d3dd426 (09:09:08). Pushes B (ab4afec1, started 09:07:28, certified 0241c62f) and C (a3e3e304, started 09:09:28) then got '[remote rejected] main -> main (cannot lock ref refs/heads/main: is at 4d3dd426 but expected c2f59694)'. Cause: over a remote helper transport (https), git passes the refspec by name to git-remote-https. send-pack then re-reads refs/heads/main after the pre-push hook returns. A local smart-HTTP reproduction with git 2.50.1 got: the hook saw Y, the client printed base..Y, and the remote received Z, where Z is the commit main moved to during the hook. Over file:// the remote received Y. The checks that ran on the wrong sha: gate-bypass ledger, cargo check, compile-fail, specguard. 0241c62f and 4d3dd426 left without them. Fix sketch, not done: at hook end, re-resolve each pushed local_ref and block if it no longer equals local_sha. That leaves a small window after hook exit, so also consider pushing by sha, e.g. 'git push origin SHA:refs/heads/main', which makes the helper send the certified object. Verify that with the http repro before relying on it."
+created_at = 1792892138
+updated_at = 1792906930
+weight = 0.0
+issue_number = 1453
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1453"
+issue_closed_at = 1792906933
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_prepush_ref_moved_during_hook.py"
+rev = "49a23fbde21a9a959e6091e7c8bb9659dd2af468"
+observed_at = 1792892138
+detail = '''
+exit 1: compile-fail contracts at f3aa136 (scripts/check-compile-fail.py)...\n').returncode
+
+scripts/test_prepush_ref_moved_during_hook.py:103: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_prepush_ref_moved_during_hook.py::test_ref_moved_during_hook_blocks
+========================= 1 failed, 1 passed in 2.10s =========================='''
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_prepush_ref_moved_during_hook.py"
+exit = 0
+passed = 2
+rev = "64c84a04cfabc2edd0c7b474b9b84e0f564d4e0d"
+observed_at = 1792906926
+output_digest = "sha256:d4ad22e6903ffaad4b859507a46bd995c94d1d1e1087a6f083d9ce75d71027b4"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/backlog-done-d222b3e3
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_prepush_ref_moved_during_hook.py ..                         [100%]
+
+============================== 2 passed in 1.37s ===============================
+"""
+
+[task.closure.red]
+rev = "13e1bd83230a9376b47c1e3117a77ff4aa9c741c"
+exit = 1
+kind = "behavioural"

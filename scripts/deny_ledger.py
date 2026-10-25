@@ -82,10 +82,24 @@ in any string of the new call's tool_input — as a substring that is not
 continued by another file-name character, so `<main>/f` does not match
 `<main>/f2`; folded for case on darwin, like the guards — the call is refused,
 quoting the deny verbatim. A redo against a worktree path has a different
-target_abs and is silent. Note this is a SUBSTRING test on purpose: it fires on
-any later mention of the exact path in the window, reads included, because the
-point is to make the agent (or a human) confirm the new call is a genuinely
-different approach.
+target_abs and is silent. This is a SUBSTRING test on purpose: it fires on a
+later mention of the exact path in the window, in any string of tool_input
+(content / old_string / new_string included), because the point is to make the
+agent (or a human) confirm the new call is a genuinely different approach.
+
+NARROWED (issue #1180, backlog 11756f2e, user ruling 2026-10-25 「1180は一旦
+せばめて」): when the call's write target (file_path / notebook_path) is
+POSITIVELY outside every git repository — e.g. a note in the session
+scratchpad — only the target path strings are matched, not its content, so a
+scratch note that merely names the denied path is allowed. "Positively
+outside" means: an absolute path, not under any live deny's recorded root (as
+recorded or by realpath), and `git rev-parse` at its nearest existing directory
+failed with git's own "not a git repository" (LC_ALL=C, no
+GIT_CEILING_DIRECTORIES, discovery across filesystems). Every other outcome —
+a relative or missing path, a repo found (a worktree file included, so a
+content retry into any repo stays refused), git unusable, a timeout, any other
+failure — keeps the full substring test (CLAUDE.md 3). A scratchpad that sits
+inside some repository is therefore NOT narrowed.
 
 SIGNAL 2 — DETECTION (stop_check, called by scripts/stop-verify-worktree.py).
 At Stop, every deny entry with a target is re-snapshotted. The target counts as
@@ -595,6 +609,58 @@ def _mentions(haystack: str, needle: str) -> bool:
         start = i + 1
 
 
+_NOT_A_REPO = "not a git repository"
+
+
+def _outside_repo_write_target(payload: dict, live: list[dict]) -> list[str] | None:
+    """The call's write-target strings when that target is POSITIVELY outside
+    every git repository; None otherwise (issue #1180).
+
+    None — the restrictive answer, which keeps the full substring test — for:
+    no file_path / notebook_path string, a relative one, a target under any
+    live deny's recorded root (as recorded or by realpath), a git probe that
+    could not run or timed out, a probe that found a repository, and a probe
+    that failed for any reason other than git's own "not a git repository".
+    The probe runs with LC_ALL=C (so that message is not localised), without
+    GIT_CEILING_DIRECTORIES and with GIT_DISCOVERY_ACROSS_FILESYSTEM=1 (so
+    neither can stop discovery short of an enclosing repository)."""
+    ti = payload.get("tool_input")
+    if not isinstance(ti, dict):
+        return None
+    raw = None
+    for key in ("file_path", "notebook_path"):
+        val = ti.get(key)
+        if isinstance(val, str) and val:
+            raw = val
+            break
+    if raw is None or not os.path.isabs(raw):
+        return None
+    target = os.path.realpath(raw)
+    for e in live:
+        root = e.get("root")
+        if not isinstance(root, str) or not os.path.isabs(root):
+            return None
+        if (_under(target, root) or _under(target, os.path.realpath(root))
+                or _under(os.path.abspath(raw), root)):
+            return None
+    d = os.path.dirname(target) or target
+    while d and d != os.path.dirname(d) and not os.path.isdir(d):
+        d = os.path.dirname(d)
+    if not d or not os.path.isdir(d):
+        return None
+    env = {k: v for k, v in os.environ.items() if k != "GIT_CEILING_DIRECTORIES"}
+    env["LC_ALL"] = "C"
+    env["GIT_DISCOVERY_ACROSS_FILESYSTEM"] = "1"
+    try:
+        out = subprocess.run(["git", "rev-parse", "--absolute-git-dir"], cwd=d,
+                             env=env, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode == 0 or _NOT_A_REPO not in (out.stderr or ""):
+        return None
+    return [raw, target]
+
+
 def quote(entry: dict) -> str:
     return (f"{entry['denier']} refused `{entry['raw']}` at {entry['ts']} "
             f"because {entry['reason']}")
@@ -638,6 +704,26 @@ def check_retry(payload: dict, now: float | None = None) -> str | None:
         if any(_mentions(haystack, n) for n in needles):
             hit = e
             break
+    # Narrowing (issue #1180, user ruling 2026-10-25): a write whose target is
+    # POSITIVELY outside every git repository (a scratch note, a report) is not
+    # a retry merely because its content names the path. Only the target path
+    # strings are matched then. Anything short of a positive "outside" keeps
+    # the full substring test above (CLAUDE.md 3).
+    if hit is not None:
+        target_strings = _outside_repo_write_target(payload, live)
+        if target_strings is not None:
+            narrow = "\n".join(target_strings)
+            hit = None
+            for e in reversed(live):
+                target, root = e.get("target_abs"), e.get("root")
+                if target is None or not _under(target, root):
+                    continue
+                needles = [target]
+                if os.path.isabs(e.get("raw_target") or ""):
+                    needles.append(e["raw_target"])
+                if any(_mentions(narrow, n) for n in needles):
+                    hit = e
+                    break
     # This call is one more guarded call inside the window of every live deny.
     # A tick that cannot be written leaves the count where it is; the time
     # bound still ends the window (RESIDUALS), so it does not refuse the call.

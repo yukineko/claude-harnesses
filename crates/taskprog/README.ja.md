@@ -1,5 +1,5 @@
 - **SessionStart** で、進捗ファイルを`hookSpecificOutput.additionalContext`（hookEventName `SessionStart`） として注入する。
-- **Stop** で、進捗ファイルの更新をエージェントに促す。
+- **Stop** で、ファイルが無ければ雛形を書き、`{"systemMessage":"…"}` を出す。これはユーザーにのみ表示され、モデルには届かない（Stop に `additionalContext` は未定義で、トップレベルのものは誰にも届かないことを実測済み）。
 
 2 つのフック（SessionStart + Stop）を登録し、それぞれ `taskprog session-start` と `taskprog stop` を呼ぶ。
 
@@ -22,7 +22,7 @@ taskprog install
 
 ```sh
 taskprog session-start   # SessionStart フック: 進捗ファイルを注入する
-taskprog stop            # Stop フック: 進捗ファイルの更新をエージェントに促す
+taskprog stop            # Stop フック: 雛形を書き、進捗ファイルの更新をユーザーに通知する
 taskprog show            # 現在の進捗ファイルを表示する
 taskprog write --cwd .   # stdin から progress.md を書き込む（--cwd の既定は .）
 taskprog init [TARGET]   # 雛形の設定を書き出す（TARGET の既定は taskprog.toml）

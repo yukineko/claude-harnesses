@@ -21,7 +21,7 @@ struct Cli {
 enum Command {
     /// SessionStart hook: inject progress file as additionalContext
     SessionStart,
-    /// Stop hook: prompt LLM to update the progress file
+    /// Stop hook: seed a skeleton if missing and notify the user (systemMessage)
     Stop,
     /// Print the current progress file
     Show,
@@ -95,8 +95,8 @@ fn stop_hook(input: &HookInput) -> Result<()> {
     if !cfg.enabled {
         return Ok(());
     }
-    // The outcome (including `NotAnchored`) is reported on the model's channel
-    // by `on_stop` itself; the Stop hook has no other channel and must not
+    // The outcome (including `NotAnchored`) is reported on the user's channel
+    // (`systemMessage`) by `on_stop` itself; the Stop hook has no other channel and must not
     // change its exit status.
     update::on_stop(input, &cfg).map(|_| ())
 }

@@ -18,7 +18,7 @@ feature branch with a plain merge message.
 
 The scanner is invoked exactly as .githooks/commit-msg invokes it
 (`python3 <scanner> --repo <repo> --pending-msg <msgfile>`, no --base: the
-throwaway repo has no remote, so the default origin/main falls back to main),
+default base is local main, per the #1181 ruling, with no origin/main fallback),
 with a real `git merge --no-commit` in progress (MERGE_HEAD present).
 
 RED repro:  python3 -m pytest --runxfail scripts/test_test_weakening_merge_ack.py

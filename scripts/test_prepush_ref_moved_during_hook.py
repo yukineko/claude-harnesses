@@ -23,7 +23,9 @@ gate-bypass ledger, cargo check, compile-fail and specguard checks judged
 Property pinned: if a pushed local ref no longer names the sha the hook was
 given by the time the hook finishes, the hook cannot vouch for what git will
 send, so it must block. Cannot determine resolves to block (CLAUDE.md 3).
-Open, so it is marked xfail(strict). Run the RED with
+Fixed (backlog d222b3e3): the hook now re-checks each pushed ref before its
+final exit 0, so this test is expected to pass. The RED was observed at
+13e1bd83 with
 `python3 -m pytest --runxfail scripts/test_prepush_ref_moved_during_hook.py`.
 """
 

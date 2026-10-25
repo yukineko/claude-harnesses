@@ -42,8 +42,8 @@
 # degrade to silence when their prerequisite (python3, the script, the registry)
 # is absent. They never block.
 #
-# ONE check blocks: the first thing this hook does is look for an ungated commit
-# outstanding in the bypass ledger (`scripts/gate-bypass.py`). That is the
+# The FIRST of the five blocking checks: the first thing this hook does is look
+# for an ungated commit outstanding in the bypass ledger (`scripts/gate-bypass.py`). That is the
 # consequence half of closing the `--no-verify` hole — the bypass cannot be
 # prevented at commit time, so it is instead made to stop the next push until the
 # content has actually been through the gate.

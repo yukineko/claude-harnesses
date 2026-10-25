@@ -129,8 +129,9 @@ valid entries or bytes that are not UTF-8) refuses only for
 RETRY_WINDOW_SECS (20 minutes) measured from that file's mtime — otherwise a
 non-interactive run, which never submits a prompt, would be refused on every
 Edit/Write call and every Stop for the rest of the run. Once the file is older
-than that, it is renamed aside to `<name>.corrupt-<unix-ts>` (left for a human
-to inspect) and SALVAGED: its lines that are valid `deny` entries are written
+than that, it is moved aside to `<name>.corrupt-<unix-ts>` (or
+`<name>.corrupt-<unix-ts>-<n>` when that name exists: an aside is never
+replaced; left for a human to inspect) and SALVAGED: its lines that are valid `deny` entries are written
 into a fresh active file at the original path (O_CREAT|O_EXCL|O_NOFOLLOW, 0600),
 so those refusals keep feeding signals 1 and 2; only the lines that are not
 valid entries are dropped (ticks are not carried over: the call count restarts).
@@ -406,11 +407,42 @@ def _parse(path: str, data: bytes) -> tuple[list[dict], list[int]]:
     return out, bad
 
 
+def _move_aside(path: str, stamp: int) -> str:
+    """Move `path` to a name that did not exist, and return that name.
+
+    The name is `<path>.corrupt-<stamp>`, or `<path>.corrupt-<stamp>-<n>` when
+    that is taken. The move is os.link (fails with EEXIST, never replaces) then
+    unlink, so two salvages in the same second, or racing processes, can never
+    overwrite an earlier aside (issue #1183). Raises OSError when no free name
+    is obtained or the link fails (the original is left in place), or when the
+    unlink fails after the link (the original stays and a hard-linked copy exists
+    at the aside name; the message says so)."""
+    for n in range(1000):
+        aside = f"{path}.corrupt-{stamp}" + (f"-{n}" if n else "")
+        try:
+            os.link(path, aside)
+        except FileExistsError:
+            continue
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass  # a racing salvage already moved the same file; both asides hold it
+        except OSError as e:
+            # The link succeeded, so a copy exists at `aside`, but the original
+            # is still in place: say both, and stay restrictive (the caller
+            # treats any OSError as "not moved" and uses the salvage this call).
+            raise OSError(f"a hard-linked copy exists at {aside} but the "
+                          f"original could not be removed: {e}") from e
+        return aside
+    raise OSError(f"no unused aside name for {path}.corrupt-{stamp}")
+
+
 def _read_bounded(path: str, now: float) -> list[dict]:
     """Entries of one ledger file. [] when it does not exist; Undetermined for
     anything else that is not a clean read — with the BRICK BOUND for a
     CORRUPT file: it refuses for
-    RETRY_WINDOW_SECS from its mtime; after that it is renamed aside, its
+    RETRY_WINDOW_SECS from its mtime; after that it is moved aside to a
+    unique, never-replaced name (see _move_aside), its
     valid DENY lines are salvaged into a fresh active file, and only the
     unparseable lines are dropped (named in a stderr notice).
 
@@ -439,13 +471,13 @@ def _read_bounded(path: str, now: float) -> list[dict]:
                            "is moved aside") from bad
     # Salvage from the bytes already read: they are the bytes that were judged.
     salvaged = [e for e in entries if e["kind"] == "deny"]
-    aside = f"{path}.corrupt-{int(now)}"
     head = (f"maintree deny ledger: {path} was corrupt for "
             f"more than {RETRY_WINDOW_SECS // 60} minutes ({bad})")
     lines = ", ".join("whole file not UTF-8" if n == 0 else str(n) for n in bad_lines)
     try:
-        os.rename(path, aside)
+        aside = _move_aside(path, int(now))
     except OSError as e:
+        aside = ""
         sys.stderr.write(f"{head}; could NOT move it aside ({e}); using its "
                          f"{len(salvaged)} valid deny line(s) for this call; "
                          f"dropped line(s): {lines}.\n")

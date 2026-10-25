@@ -34,7 +34,8 @@ size differ), the stop is BLOCKED, quoting the refusal: the refused change was
 made anyway by another spelling. An unreadable or corrupt ledger, a target whose
 state cannot be read, or an unusable session_id also blocks — a corrupt (but
 readable) ledger file only for 20 minutes from its mtime, after which it is
-renamed aside to `<name>.corrupt-<ts>`, its valid deny lines are carried into
+renamed aside to `<name>.corrupt-<ts>` (or `-<n>` suffixed when that name
+exists; an aside is never replaced), its valid deny lines are carried into
 a fresh ledger file (and still judged here), the unparseable lines are dropped
 (named in a stderr notice) and the stop proceeds. An UNREADABLE ledger file
 (e.g. mode 000) has no such bound and is never moved aside: nothing can be

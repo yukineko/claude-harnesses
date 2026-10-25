@@ -83,7 +83,8 @@ ask quoting the earlier refusal — hardened to a deny unless the session is an
 interactive terminal (CLAUDECODE=1 and CLAUDE_CODE_ENTRYPOINT=cli). An
 unreadable or corrupt ledger, or an unusable session_id, refuses the same way —
 a corrupt (but readable) ledger file only for 20 minutes from its mtime, after
-which it is renamed aside to `<name>.corrupt-<ts>`, its valid deny lines are
+which it is renamed aside to `<name>.corrupt-<ts>` (or `-<n>` suffixed when that name
+exists; an aside is never replaced), its valid deny lines are
 carried into a fresh ledger file, the unparseable lines are dropped (named in a
 stderr notice) and the call proceeds. An UNREADABLE ledger file (e.g. mode 000)
 has no such bound and is never moved aside: nothing can be salvaged from it, so

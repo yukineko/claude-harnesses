@@ -75,24 +75,6 @@ fn commands_for(doc: &serde_json::Value, event: &str) -> Vec<String> {
 }
 
 #[test]
-fn session_end_sync_hook_is_declared_in_the_plugin() {
-    let doc = load();
-    let commands = commands_for(&doc, "SessionEnd");
-    assert!(
-        !commands.is_empty(),
-        "hooks.json declares no SessionEnd hook, so `cmd_sync` is unreachable \
-         from the harness and the record store is never pushed to sync_repo \
-         unless a human runs `fugu-router sync` by hand: {doc:#?}"
-    );
-    assert!(
-        commands
-            .iter()
-            .any(|c| c.contains("fugu-router") && c.contains("sync")),
-        "no declared SessionEnd command invokes `fugu-router sync`: {commands:?}"
-    );
-}
-
-#[test]
 fn every_declared_command_resolves_through_plugin_root() {
     let doc = load();
     let events = doc

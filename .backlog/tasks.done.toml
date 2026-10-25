@@ -60524,3 +60524,329 @@ scripts/test_issue_1180_deny_ledger_scratch_write.py ..                  [100%]
 rev = "c2f596946cd62a70ec3fb956446d4805a6707642"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "3df89d5b"
+title = "condukt editgate silently allows when cwd is unreadable"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = 'GitHub #1341. crates/condukt/src/main.rs run_editgate: current_dir() Err(_) => return prints nothing and exits 0 (allow). Test: crates/condukt/tests/repro_gh1341_editgate_deleted_cwd.rs editgate_with_deleted_cwd_does_not_silently_allow. Observed FAIL 2026-10-25 on main 3b151d5e plus test commit c69fdec0 (condukt 0.7.292 code): panicked at crates/condukt/tests/repro_gh1341_editgate_deleted_cwd.rs:74:5: editgate with an undeterminable cwd must block/ask or exit non-zero with a reason, not silently allow; exit=Some(0) stdout="" stderr="warning: autonomy switch is UNDETERMINED: the current directory cannot be read (No such file or directory (os error 2)), so the project the switch belongs to is unknown\nwarning: resolving autonomy to OFF (fail-closed)\n" ... test result: FAILED. 0 passed; 1 failed'
+created_at = 1792884568
+updated_at = 1792892150
+weight = 0.0
+issue_number = 1441
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1441"
+issue_closed_at = 1792892153
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test repro_gh1341_editgate_deleted_cwd"
+rev = "c69fdec064caa887354f2c181d2338d2b1a3a6b7"
+observed_at = 1792884568
+detail = """
+exit 101: shed in 0.74s
+
+   Compiling condukt v0.7.293 (/Users/yuki/src/.harness-worktrees/issue-repros-rs/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.34s
+     Running tests/repro_gh1341_editgate_deleted_cwd.rs (target/debug/deps/repro_gh1341_editgate_deleted_cwd-583292ca13c3ff57)
+error: test failed, to rerun pass `-p condukt --test repro_gh1341_editgate_deleted_cwd`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test repro_gh1341_editgate_deleted_cwd"
+exit = 0
+passed = 1
+rev = "ff23f87151c5cf6e6dd64ed0206cc9bf87fc0115"
+observed_at = 1792892098
+output_digest = "sha256:2419468ec370745308b99a51cc484e2908b4a9cc2cd49e1467cee3bcb21679e9"
+excerpt = """
+
+running 1 test
+test editgate_with_deleted_cwd_does_not_silently_allow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.59s
+
+   Compiling libc v0.2.186
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling serde_core v1.0.228
+   Compiling memchr v2.8.2
+   Compiling serde v1.0.228
+   Compiling cfg-if v1.0.4
+   Compiling autocfg v1.5.1
+   Compiling version_check v0.9.5
+   Compiling regex-syntax v0.8.11
+   Compiling hashbrown v0.17.1
+   Compiling generic-array v0.14.7
+   Compiling num-traits v0.2.19
+   Compiling equivalent v1.0.2
+   Compiling zmij v1.0.21
+   Compiling aho-corasick v1.1.4
+   Compiling utf8parse v0.2.2
+   Compiling anstyle-parse v1.0.0
+   Compiling indexmap v2.14.0
+   Compiling serde_json v1.0.150
+   Compiling syn v2.0.118
+   Compiling colorchoice v1.0.5
+   Compiling core-foundation-sys v0.8.7
+   Compiling winnow v0.7.15
+   Compiling anstyle-query v1.1.5
+   Compiling option-ext v0.2.0
+   Compiling toml_write v0.1.2
+   Compiling typenum v1.20.1
+   Compiling anyhow v1.0.103
+   Compiling anstyle v1.0.14
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling getrandom v0.3.4
+   Compiling anstream v1.0.0
+   Compiling regex-automata v0.4.14
+   Compiling dirs-sys v0.4.1
+   Compiling iana-time-zone v0.1.65
+   Compiling itoa v1.0.18
+   Compiling clap_lex v1.1.0
+   Compiling heck v0.5.0
+   Compiling strsim v0.11.1
+   Compiling chrono v0.4.45
+   Compiling dirs v5.0.1
+   Compiling clap_builder v4.6.0
+   Compiling wait-timeout v0.2.1
+   Compiling zerocopy v0.8.52
+   Compiling rand_core v0.9.5
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling bitflags v2.13.0
+   Compiling rustix v1.1.4
+   Compiling getrandom v0.4.3
+   Compiling digest v0.10.7
+   Compiling regex v1.12.4
+   Compiling cpufeatures v0.2.17
+   Compiling errno v0.3.14
+   Compiling bstr v1.12.2
+   Compiling log v0.4.33
+   Compiling sha2 v0.10.9
+   Compiling once_cell v1.21.4
+   Compiling globset v0.4.18
+   Compiling fastrand v2.4.1
+   Compiling rand_xorshift v0.4.0
+   Compiling serde_derive v1.0.228
+   Compiling clap_derive v4.6.1
+   Compiling rand v0.9.4
+   Compiling shlex v1.3.0
+   Compiling unarray v0.1.4
+   Compiling tempfile v3.27.0
+   Compiling clap v4.6.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.9.0
+   Compiling proptest v1.11.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.65 (/Users/yuki/src/.harness-worktrees/backlog-done-c5b9-a/crates/harness-core)
+   Compiling overwatch v0.2.96 (/Users/yuki/src/.harness-worktrees/backlog-done-c5b9-a/crates/overwatch)
+   Compiling schemaguard v0.1.24 (/Users/yuki/src/.harness-worktrees/backlog-done-c5b9-a/crates/schemaguard)
+   Compiling blastguard v0.2.148 (/Users/yuki/src/.harness-worktrees/backlog-done-c5b9-a/crates/blastguard)
+   Compiling condukt v0.7.294 (/Users/yuki/src/.harness-worktrees/backlog-done-c5b9-a/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 23.31s
+     Running tests/repro_gh1341_editgate_deleted_cwd.rs (target/debug/deps/repro_gh1341_editgate_deleted_cwd-80e02f76aea6c92b)
+"""
+
+[task.closure.red]
+rev = "4d3dd4265378938e91e8737f7946bc563552608d"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "0b216e87"
+title = "Add a crash barrier to guard-maintree-bash.py"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "issue-1235",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = '''GitHub issue #1235. scripts/guard-maintree-bash.py main() catches only ValueError and Undetermined; any other exception exits 1, which Claude Code treats as allow (fail-open). Siblings deny-no-verify.py and guard-maintree-edit.py have barriers. Repro: scripts/test_issue_1235_guard_bash_crash_barrier.py (both cases must exit 2). RED observed at rev 3b151d5e (tests committed in 17d33e63), 2026-10-25. Verbatim failing output: (a) deeply nested payload: 'AssertionError: 1 == 1 : exit 1 is allow to Claude Code (fail-open)' with stderr ending 'RecursionError: maximum recursion depth exceeded while decoding a JSON array from a unicode string'. (b) Pre snapshot with hashes as a list: 'AssertionError: 1 == 1 : exit 1 is allow to Claude Code (fail-open)' with stderr ending 'File "scripts/guard-maintree-bash.py", line 274 ... AttributeError: '\''list'\'' object has no attribute '\''get'\''. Result line: 2 failed in 1.01s.'''
+created_at = 1792884890
+updated_at = 1792892417
+weight = 0.0
+issue_number = 1443
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1443"
+issue_closed_at = 1792892420
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_issue_1235_guard_bash_crash_barrier.py"
+rev = "17d33e63690f2749331e403967137f3efccc8f97"
+observed_at = 1792884890
+detail = """
+exit 1: ========== short test summary info ============================
+FAILED scripts/test_issue_1235_guard_bash_crash_barrier.py::CrashBarrier::test_a_deeply_nested_payload_is_refused_not_crashed
+FAILED scripts/test_issue_1235_guard_bash_crash_barrier.py::CrashBarrier::test_b_snapshot_with_list_hashes_is_refused_not_crashed
+============================== 2 failed in 0.51s ==============================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_issue_1235_guard_bash_crash_barrier.py"
+exit = 0
+passed = 2
+rev = "ff23f87151c5cf6e6dd64ed0206cc9bf87fc0115"
+observed_at = 1792892414
+output_digest = "sha256:a6f4ca7b633229ede6033f4ee09d47d557c2440ff02e6df6bdc9e86dcaadf4f5"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/backlog-done-c5b9-a
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_issue_1235_guard_bash_crash_barrier.py ..                   [100%]
+
+============================== 2 passed in 0.62s ===============================
+"""
+
+[task.closure.red]
+rev = "4d3dd4265378938e91e8737f7946bc563552608d"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "51c702da"
+title = "Make check-fail-open ALLOWLIST exempt one line, not every copy"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "issue-1232",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = '''GitHub issue #1232. scripts/check-fail-open.py _allowlisted matches path + rule + needle-in-line, so a duplicated copy of the reviewed line in the same file is exempted too: scan_shell gives 2 raw hits, scan_file returns []. Uses the real entry scripts/test-changed-crates.sh / git ls-files 2>/dev/null against a temp REPO copy. Control (single line exempt) passes. RED observed at rev 3b151d5e (test committed in 17d33e63), 2026-10-25. Verbatim failing output: 'AssertionError: 0 not greater than or equal to 1 : the unreviewed duplicate was exempted by the reviewed line'\''s needle; scan_file=[]' / '1 failed, 1 passed in 0.10s'.'''
+created_at = 1792884959
+updated_at = 1792892423
+weight = 0.0
+issue_number = 1448
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1448"
+issue_closed_at = 1792892426
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_issue_1232_fail_open_allowlist_duplicate.py"
+rev = "17d33e63690f2749331e403967137f3efccc8f97"
+observed_at = 1792884959
+detail = """
+exit 1: e's needle; scan_file=[]
+
+scripts/test_issue_1232_fail_open_allowlist_duplicate.py:79: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_issue_1232_fail_open_allowlist_duplicate.py::AllowlistDuplicateLine::test_duplicated_reviewed_line_is_still_reported
+========================= 1 failed, 1 passed in 0.06s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_issue_1232_fail_open_allowlist_duplicate.py"
+exit = 0
+passed = 2
+rev = "ff23f87151c5cf6e6dd64ed0206cc9bf87fc0115"
+observed_at = 1792892421
+output_digest = "sha256:c615f0e281edf6cd374c0930393edf10c8e1593b847207a38959aa76cd10f690"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/backlog-done-c5b9-a
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_issue_1232_fail_open_allowlist_duplicate.py ..              [100%]
+
+============================== 2 passed in 0.04s ===============================
+"""
+
+[task.closure.red]
+rev = "4d3dd4265378938e91e8737f7946bc563552608d"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "d74c423d"
+title = "backlog done misreads a behavioural RED as a build failure"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = 'GitHub #1347. crates/backlog/src/evidence.rs classify_red checks build_failure_marker (any "could not compile" anywhere) before "test result: FAILED", so a RED run with a genuine FAILED test plus an unrelated package compile error is refused. Test: crates/backlog/tests/repro_gh1347_mixed_build_marker_red.rs red_with_test_result_failed_and_unrelated_could_not_compile_is_behavioural (its own failure message redacts the marker as could-not-compile so this repro is not itself refused by the bug). Observed FAIL 2026-10-25 on main 3b151d5e plus test commit c69fdec0 (backlog 0.3.70 code), before redaction: assertion `left == right` failed: ... `done` must accept it: Error: refused: RED at 24a70f6952178ac09aa8d0a6d6c9f32385b3cc6d refused: the run failed at BUILD/compile time (output contains "could not compile"), not behaviourally; a build failure is not RED. ... left: 1 right: 0 ... test result: FAILED. 0 passed; 1 failed'
+created_at = 1792884597
+updated_at = 1792892850
+weight = 0.0
+issue_number = 1442
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1442"
+issue_closed_at = 1792892852
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test repro_gh1347_mixed_build_marker_red"
+rev = "c69fdec064caa887354f2c181d2338d2b1a3a6b7"
+observed_at = 1792884597
+detail = """
+exit 101: in 1.55s
+
+   Compiling backlog v0.3.71 (/Users/yuki/src/.harness-worktrees/issue-repros-rs/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s
+     Running tests/repro_gh1347_mixed_build_marker_red.rs (target/debug/deps/repro_gh1347_mixed_build_marker_red-d3ca8222934076bd)
+error: test failed, to rerun pass `-p backlog --test repro_gh1347_mixed_build_marker_red`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test repro_gh1347_mixed_build_marker_red"
+exit = 0
+passed = 1
+rev = "6ccf9c7dc0fb468f8028d82b166c99b208e02aa7"
+observed_at = 1792892822
+output_digest = "sha256:facd989ee886e7f037894c50a223cbb635ca0827bebe9f3e0defbe2a21fd8aa8"
+excerpt = """
+
+running 1 test
+test red_with_test_result_failed_and_unrelated_could_not_compile_is_behavioural ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.75s
+
+   Compiling num-traits v0.2.19
+   Compiling aho-corasick v1.1.4
+   Compiling tinyvec_macros v0.1.1
+   Compiling tinyvec v1.11.0
+   Compiling unicode-normalization v0.1.25
+   Compiling regex-automata v0.4.14
+   Compiling chrono v0.4.45
+   Compiling regex v1.12.4
+   Compiling harness-core v0.2.65 (/Users/yuki/src/.harness-worktrees/backlog-done-c5b9-a/crates/harness-core)
+   Compiling backlog v0.3.73 (/Users/yuki/src/.harness-worktrees/backlog-done-c5b9-a/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.88s
+     Running tests/repro_gh1347_mixed_build_marker_red.rs (target/debug/deps/repro_gh1347_mixed_build_marker_red-e450840c8429bfdd)
+"""
+
+[task.closure.red]
+rev = "c98d176d75fd0a472f7ca8752b11224623dc73ef"
+exit = 101
+kind = "behavioural"

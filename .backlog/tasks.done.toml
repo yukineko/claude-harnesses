@@ -60912,3 +60912,65 @@ scripts/test_prepush_ref_moved_during_hook.py ..                         [100%]
 rev = "13e1bd83230a9376b47c1e3117a77ff4aa9c741c"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "e753a0b6"
+title = "Fix fugu-router launcher header to name hookSpecificOutput"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "issue-1346",
+    "doc",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = '''GitHub issue #1346 (doc only). crates/fugu-router/bin/fugu-router lines 16-17 say prompt stdout is 'additionalContext ... + systemMessage' but line 59 emits systemMessage plus hookSpecificOutput{hookEventName,additionalContext}. The test runs the launcher from a temp copy (no binary, so the fallback runs) and requires every emitted key to be named in the header's prompt entry. Editing the launcher touches crates/fugu-router: lockstep micro bump required. RED observed at rev 3b151d5e (test committed in 17d33e63), 2026-10-25. Verbatim failing output: 'AssertionError: Lists differ: ['\''hookEventName'\'', '\''hookSpecificOutput'\''] != [] ... header `prompt` entry does not name the emitted shape' / '1 failed in 0.10s'.'''
+created_at = 1792884962
+updated_at = 1792913245
+weight = 0.0
+issue_number = 1449
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1449"
+issue_closed_at = 1792913248
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_issue_1346_fugu_router_header_shape.py"
+rev = "17d33e63690f2749331e403967137f3efccc8f97"
+observed_at = 1792884962
+detail = """
+exit 1: or remove the fugu-router plugin."}}'
+
+scripts/test_issue_1346_fugu_router_header_shape.py:76: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_issue_1346_fugu_router_header_shape.py::HeaderMatchesEmittedShape::test_prompt_entry_names_every_emitted_key
+============================== 1 failed in 0.06s ==============================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_issue_1346_fugu_router_header_shape.py"
+exit = 0
+passed = 1
+rev = "1f609efe22eefb6c2ac608ca8d2c20e6a7dafdd9"
+observed_at = 1792913243
+output_digest = "sha256:607cb745e6eb031ddf656cc86a7ddea0dc06f183b6ef1572207fe92cb57d90d8"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/c5b9-backlog-done-b
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_issue_1346_fugu_router_header_shape.py .                    [100%]
+
+============================== 1 passed in 0.04s ===============================
+"""
+
+[task.closure.red]
+rev = "17d33e63690f2749331e403967137f3efccc8f97"
+exit = 1
+kind = "behavioural"

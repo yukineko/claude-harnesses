@@ -63,39 +63,6 @@ FAILED scripts/test_issue_1182_deny_ledger_unreadable_stale.py::UnreadableStaleL
 ========================= 1 failed, 1 passed in 1.57s =========================='''
 
 [[task]]
-id = "e753a0b6"
-title = "Fix fugu-router launcher header to name hookSpecificOutput"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "issue-1346",
-    "doc",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = '''GitHub issue #1346 (doc only). crates/fugu-router/bin/fugu-router lines 16-17 say prompt stdout is 'additionalContext ... + systemMessage' but line 59 emits systemMessage plus hookSpecificOutput{hookEventName,additionalContext}. The test runs the launcher from a temp copy (no binary, so the fallback runs) and requires every emitted key to be named in the header's prompt entry. Editing the launcher touches crates/fugu-router: lockstep micro bump required. RED observed at rev 3b151d5e (test committed in 17d33e63), 2026-10-25. Verbatim failing output: 'AssertionError: Lists differ: ['\''hookEventName'\'', '\''hookSpecificOutput'\''] != [] ... header `prompt` entry does not name the emitted shape' / '1 failed in 0.10s'.'''
-created_at = 1792884962
-updated_at = 1792884962
-weight = 0.0
-issue_number = 1449
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1449"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_issue_1346_fugu_router_header_shape.py"
-rev = "17d33e63690f2749331e403967137f3efccc8f97"
-observed_at = 1792884962
-detail = """
-exit 1: or remove the fugu-router plugin."}}'
-
-scripts/test_issue_1346_fugu_router_header_shape.py:76: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_issue_1346_fugu_router_header_shape.py::HeaderMatchesEmittedShape::test_prompt_entry_names_every_emitted_key
-============================== 1 failed in 0.06s ==============================="""
-
-[[task]]
 id = "3cef580f"
 title = "SessionStart hooks print top-level additionalContext which Claude Code 2.1.284 never delivers to the model (GitHub 1343)"
 project = "/Users/yuki/src/harness"

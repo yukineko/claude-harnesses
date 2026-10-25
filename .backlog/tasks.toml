@@ -1,33 +1,4 @@
 [[task]]
-id = "3df89d5b"
-title = "condukt editgate silently allows when cwd is unreadable"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = 'GitHub #1341. crates/condukt/src/main.rs run_editgate: current_dir() Err(_) => return prints nothing and exits 0 (allow). Test: crates/condukt/tests/repro_gh1341_editgate_deleted_cwd.rs editgate_with_deleted_cwd_does_not_silently_allow. Observed FAIL 2026-10-25 on main 3b151d5e plus test commit c69fdec0 (condukt 0.7.292 code): panicked at crates/condukt/tests/repro_gh1341_editgate_deleted_cwd.rs:74:5: editgate with an undeterminable cwd must block/ask or exit non-zero with a reason, not silently allow; exit=Some(0) stdout="" stderr="warning: autonomy switch is UNDETERMINED: the current directory cannot be read (No such file or directory (os error 2)), so the project the switch belongs to is unknown\nwarning: resolving autonomy to OFF (fail-closed)\n" ... test result: FAILED. 0 passed; 1 failed'
-created_at = 1792884568
-updated_at = 1792884568
-weight = 0.0
-issue_number = 1441
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1441"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test repro_gh1341_editgate_deleted_cwd"
-rev = "c69fdec064caa887354f2c181d2338d2b1a3a6b7"
-observed_at = 1792884568
-detail = """
-exit 101: shed in 0.74s
-
-   Compiling condukt v0.7.293 (/Users/yuki/src/.harness-worktrees/issue-repros-rs/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.34s
-     Running tests/repro_gh1341_editgate_deleted_cwd.rs (target/debug/deps/repro_gh1341_editgate_deleted_cwd-583292ca13c3ff57)
-error: test failed, to rerun pass `-p condukt --test repro_gh1341_editgate_deleted_cwd`"""
-
-[[task]]
 id = "d74c423d"
 title = "backlog done misreads a behavioural RED as a build failure"
 project = "/Users/yuki/src/harness"
@@ -55,36 +26,6 @@ exit 101: in 1.55s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s
      Running tests/repro_gh1347_mixed_build_marker_red.rs (target/debug/deps/repro_gh1347_mixed_build_marker_red-d3ca8222934076bd)
 error: test failed, to rerun pass `-p backlog --test repro_gh1347_mixed_build_marker_red`"""
-
-[[task]]
-id = "0b216e87"
-title = "Add a crash barrier to guard-maintree-bash.py"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "issue-1235",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = '''GitHub issue #1235. scripts/guard-maintree-bash.py main() catches only ValueError and Undetermined; any other exception exits 1, which Claude Code treats as allow (fail-open). Siblings deny-no-verify.py and guard-maintree-edit.py have barriers. Repro: scripts/test_issue_1235_guard_bash_crash_barrier.py (both cases must exit 2). RED observed at rev 3b151d5e (tests committed in 17d33e63), 2026-10-25. Verbatim failing output: (a) deeply nested payload: 'AssertionError: 1 == 1 : exit 1 is allow to Claude Code (fail-open)' with stderr ending 'RecursionError: maximum recursion depth exceeded while decoding a JSON array from a unicode string'. (b) Pre snapshot with hashes as a list: 'AssertionError: 1 == 1 : exit 1 is allow to Claude Code (fail-open)' with stderr ending 'File "scripts/guard-maintree-bash.py", line 274 ... AttributeError: '\''list'\'' object has no attribute '\''get'\''. Result line: 2 failed in 1.01s.'''
-created_at = 1792884890
-updated_at = 1792884890
-weight = 0.0
-issue_number = 1443
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1443"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_issue_1235_guard_bash_crash_barrier.py"
-rev = "17d33e63690f2749331e403967137f3efccc8f97"
-observed_at = 1792884890
-detail = """
-exit 1: ========== short test summary info ============================
-FAILED scripts/test_issue_1235_guard_bash_crash_barrier.py::CrashBarrier::test_a_deeply_nested_payload_is_refused_not_crashed
-FAILED scripts/test_issue_1235_guard_bash_crash_barrier.py::CrashBarrier::test_b_snapshot_with_list_hashes_is_refused_not_crashed
-============================== 2 failed in 0.51s ==============================="""
 
 [[task]]
 id = "23bc311c"
@@ -149,38 +90,6 @@ scripts/test_issue_1182_deny_ledger_unreadable_stale.py:55: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_issue_1182_deny_ledger_unreadable_stale.py::UnreadableStaleLedger::test_unreadable_stale_ledger_still_blocks_stop
 ========================= 1 failed, 1 passed in 1.57s =========================='''
-
-[[task]]
-id = "51c702da"
-title = "Make check-fail-open ALLOWLIST exempt one line, not every copy"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "issue-1232",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = '''GitHub issue #1232. scripts/check-fail-open.py _allowlisted matches path + rule + needle-in-line, so a duplicated copy of the reviewed line in the same file is exempted too: scan_shell gives 2 raw hits, scan_file returns []. Uses the real entry scripts/test-changed-crates.sh / git ls-files 2>/dev/null against a temp REPO copy. Control (single line exempt) passes. RED observed at rev 3b151d5e (test committed in 17d33e63), 2026-10-25. Verbatim failing output: 'AssertionError: 0 not greater than or equal to 1 : the unreviewed duplicate was exempted by the reviewed line'\''s needle; scan_file=[]' / '1 failed, 1 passed in 0.10s'.'''
-created_at = 1792884959
-updated_at = 1792884959
-weight = 0.0
-issue_number = 1448
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1448"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_issue_1232_fail_open_allowlist_duplicate.py"
-rev = "17d33e63690f2749331e403967137f3efccc8f97"
-observed_at = 1792884959
-detail = """
-exit 1: e's needle; scan_file=[]
-
-scripts/test_issue_1232_fail_open_allowlist_duplicate.py:79: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_issue_1232_fail_open_allowlist_duplicate.py::AllowlistDuplicateLine::test_duplicated_reviewed_line_is_still_reported
-========================= 1 failed, 1 passed in 0.06s =========================="""
 
 [[task]]
 id = "e753a0b6"

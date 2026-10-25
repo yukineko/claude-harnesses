@@ -3,10 +3,13 @@
 #
 #     git config core.hooksPath .githooks
 #
-# This hook has three advisory nudges plus four blocking checks (the bypass
+# This hook has three advisory nudges plus five blocking checks (the bypass
 # ledger below, `cargo check` over each pushed tip, the trybuild compile-fail
-# type contracts via scripts/check-compile-fail.py, and `specguard map
-# gate-check` over each pushed tip — see the end of this file):
+# type contracts via scripts/check-compile-fail.py, `specguard map
+# gate-check` over each pushed tip, and a final re-check that each pushed ref
+# still names the sha those checks judged — see the end of this file; over
+# https that re-check narrows but does not close the window, a residual window
+# remains):
 #   1. GATE crates (advisory) — when the push touches blastguard/propguard/
 #      specguard/stuckguard/mutategate/overwatch (the fleet defense gates),
 #      suggest a Continuous-Audit round (`scripts/continuous-audit.sh --dry-run`).
@@ -552,4 +555,41 @@ for sha in $pushed_shas; do
 done
 
 cleanup_typecheck_tree
+
+# --- the last blocking check: the pushed refs still name the certified shas --
+# Every check above judged the local_sha values git gave on stdin. Over a remote
+# helper transport (http/https), git hands the helper the refspec BY NAME and the
+# helper re-reads the local ref AFTER this hook returns. So if a ref moves while
+# the hook runs (a concurrent merge in another session), the remote receives a
+# commit this hook never checked. Observed 2026-10-25 on this repo: a push whose
+# hook certified 2f8e4209 delivered 4d3dd426, so 0241c62f and 4d3dd426 reached
+# origin unchecked (backlog d222b3e3, scripts/test_prepush_ref_moved_during_hook.py).
+#
+# This re-check NARROWS the window but does NOT close it: a ref can still move
+# between this re-check and the moment the transport re-reads it. A residual
+# window remains; the race is not closed. Pushing a sha (`git push origin
+# <sha>:main`) or over file:// does not have it at all.
+#
+# FAIL-CLOSED: a moved ref blocks, and so does a ref that cannot be resolved
+# (cannot determine what git will send is not "it is what was certified").
+# Delete lines (all-zero local_sha) send no commit and are skipped.
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "${local_sha:-}" ] && continue
+    case "$local_sha" in
+        0000000000000000000000000000000000000000) continue ;;
+    esac
+    current_sha="$(git rev-parse --verify --quiet "$local_ref" 2>/dev/null)"
+    if [ -z "$current_sha" ] || [ "$current_sha" != "$local_sha" ]; then
+        echo "" >&2
+        echo "pre-push: BLOCKED — $local_ref moved while this hook ran." >&2
+        echo "  certified sha: $local_sha" >&2
+        echo "  current sha:   ${current_sha:-(cannot be resolved)}" >&2
+        echo "Over https git re-reads the ref after this hook returns, so the remote" >&2
+        echo "would receive a commit no check above has seen. Push again." >&2
+        exit 1
+    fi
+done <<EOF
+$PUSH_INPUT
+EOF
+
 exit 0

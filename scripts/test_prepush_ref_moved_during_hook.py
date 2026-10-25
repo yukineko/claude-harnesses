@@ -88,7 +88,6 @@ def test_control_unmoved_ref_is_allowed(cleanup):
     assert proc.returncode == 0, proc.stderr
 
 
-@pytest.mark.xfail(strict=True, reason="open: pre-push does not re-check that the pushed ref still names the certified sha")
 def test_ref_moved_during_hook_blocks(cleanup):
     h, moved = _harness_with_moving_main(cleanup)
     proc = h.run()

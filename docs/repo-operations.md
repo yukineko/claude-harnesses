@@ -16,8 +16,17 @@
 - **Continuous-Audit 自動起動導線** — `git config core.hooksPath .githooks` を有効化していれば
   `.githooks/pre-push` が GATE_CRATES（blastguard/propguard/specguard/stuckguard/mutategate/overwatch）配下の
   変更を検知し、`scripts/continuous-audit.sh --dry-run` を勧める advisory メッセージを出す
-  （pre-commit と同じ fail-soft 設計。push は絶対に止めない・常に exit 0）。cron 定期実行の雛形は
-  `scripts/continuous-audit.cron.example` を参照。
+  （この advisory 自体は push を止めない。ただし hook 全体は下記の再確認を含むブロッキングチェックで
+  非0終了しうる）。cron 定期実行の雛形は `scripts/continuous-audit.cron.example` を参照。
+- **pre-push の ref 再確認（backlog d222b3e3）** — `.githooks/pre-push` は最後の `exit 0` の直前に、
+  stdin の各行（local_sha が全ゼロの delete 行は除く）の local_ref を `git rev-parse --verify --quiet`
+  で引き直し、local_sha と比較する。ref が動いていた・解決できなかった場合は、ref 名・certified sha・
+  current sha を表示して非0で block する（fail-closed、CLAUDE.md §3）。理由: https では git は hook が
+  返った**後で** ref を名前で読み直して送るので、hook 実行中に ref が動くと remote は hook が検査して
+  いない commit を受け取る。実測 2026-10-25: hook が 2f8e4209 を検査した push で、0241c62f と 4d3dd426
+  が未検査のまま origin に届いた（`scripts/test_prepush_ref_moved_during_hook.py`）。**この再確認は窓を
+  狭めるだけで閉じない** — 再確認から transport の読み直しまでの間に ref が動けば同じことが起きる。
+  残余の窓は残っており、race は閉じていない。
 
 ## 記録そのものの定期監査 — `scripts/record-audit.py`（backlog 0f55003a）
 

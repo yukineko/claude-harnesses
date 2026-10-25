@@ -68,7 +68,7 @@ set -u
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "pre-push: cwd is not inside any git work tree - refusing to certify this push" >&2; exit 1; }
 cd "$REPO" 2>/dev/null || { echo "pre-push: cannot enter the repository work tree root - refusing to certify this push" >&2; exit 1; }
 
-# --- the one blocking check --------------------------------------------------
+# --- the first blocking check: the bypass ledger -----------------------------
 # An ungated commit (created with --no-verify, or replayed by cherry-pick or
 # rebase) must not leave this machine before the gate has seen its content.
 # exit 1 = outstanding, exit 2 = the ledger could not be read; both block, since

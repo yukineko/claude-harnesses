@@ -73,11 +73,17 @@ fn claim_session_start_injects() {
     let o = run(&["session-start"], &root, &home, &hook_json(&root));
     assert_eq!(o.code, 0);
     let v: Value = serde_json::from_str(o.stdout.trim()).expect("stdout is JSON");
-    // ACTUAL: the key is top-level `additionalContext`, NOT
-    // `hookSpecificOutput.additionalContext`.
-    let ctx = v["additionalContext"].as_str().expect("additionalContext");
+    // SessionStart: nested `hookSpecificOutput.additionalContext` (a top-level
+    // key is never delivered to the model, GH 1343). Stop stays top-level.
+    assert_eq!(
+        v["hookSpecificOutput"]["hookEventName"], "SessionStart",
+        "{v}"
+    );
+    assert!(v.get("additionalContext").is_none(), "{v}");
+    let ctx = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .expect("additionalContext");
     assert!(ctx.contains("MARKER-XYZ pending item"), "{ctx}");
-    assert!(v.get("hookSpecificOutput").is_none(), "{v}");
 }
 
 #[test]
@@ -224,7 +230,12 @@ fn claim_config_lookup_order() {
 
 fn injected(o: &Out) -> String {
     let v: Value = serde_json::from_str(o.stdout.trim()).expect("JSON");
-    v["additionalContext"].as_str().unwrap().to_string()
+    // SessionStart output is nested; Stop output is still top-level.
+    v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .or_else(|| v["additionalContext"].as_str())
+        .unwrap()
+        .to_string()
 }
 
 #[test]

@@ -167,7 +167,7 @@ fn session_start_warns_via_additional_context_when_binary_missing() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let v: serde_json::Value = serde_json::from_str(stdout.trim())
         .unwrap_or_else(|e| panic!("expected JSON additionalContext, got {stdout:?}: {e}"));
-    let ctx = v["additionalContext"]
+    let ctx = v["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .expect("additionalContext must be a string");
     assert!(

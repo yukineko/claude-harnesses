@@ -461,14 +461,20 @@ fn claim_inject_budget_default_and_env() {
     assert_eq!(flags(&o).len(), 2, "{}", o.stdout);
 }
 
-/// The `additionalContext` is emitted as a TOP-LEVEL key (not nested under
-/// `hookSpecificOutput`); this pins what the binary actually prints.
+/// The `additionalContext` is emitted NESTED under `hookSpecificOutput`
+/// (hookEventName SessionStart) -- a top-level key is never delivered to the
+/// model by Claude Code (GH 1343); this pins what the binary actually prints.
 fn session_start_ctx(o: &Out) -> String {
     let v: serde_json::Value = serde_json::from_str(o.stdout.trim())
         .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {:?}", o.stdout));
-    v["additionalContext"]
+    assert_eq!(
+        v["hookSpecificOutput"]["hookEventName"], "SessionStart",
+        "{v}"
+    );
+    assert!(v.get("additionalContext").is_none(), "{v}");
+    v["hookSpecificOutput"]["additionalContext"]
         .as_str()
-        .unwrap_or_else(|| panic!("no top-level additionalContext in {v}"))
+        .unwrap_or_else(|| panic!("no hookSpecificOutput.additionalContext in {v}"))
         .to_string()
 }
 

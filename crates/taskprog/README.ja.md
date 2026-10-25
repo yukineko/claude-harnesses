@@ -1,4 +1,4 @@
-- **SessionStart** で、進捗ファイルをトップレベルの `additionalContext` として注入する。
+- **SessionStart** で、進捗ファイルを`hookSpecificOutput.additionalContext`（hookEventName `SessionStart`） として注入する。
 - **Stop** で、進捗ファイルの更新をエージェントに促す。
 
 2 つのフック（SessionStart + Stop）を登録し、それぞれ `taskprog session-start` と `taskprog stop` を呼ぶ。

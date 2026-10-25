@@ -33,9 +33,17 @@ fn session_start(f: &Fixture) -> Out {
 fn additional_context(o: &Out) -> String {
     let v: serde_json::Value = serde_json::from_str(o.stdout.trim())
         .unwrap_or_else(|e| panic!("hook stdout is not JSON ({e}): {:?}", o.stdout));
-    v["additionalContext"]
+    assert_eq!(
+        v["hookSpecificOutput"]["hookEventName"], "SessionStart",
+        "contract: nested hookSpecificOutput with hookEventName SessionStart: {v}"
+    );
+    assert!(
+        v.get("additionalContext").is_none(),
+        "top-level additionalContext is never delivered to the model: {v}"
+    );
+    v["hookSpecificOutput"]["additionalContext"]
         .as_str()
-        .unwrap_or_else(|| panic!("no additionalContext in {v}"))
+        .unwrap_or_else(|| panic!("no hookSpecificOutput.additionalContext in {v}"))
         .to_string()
 }
 

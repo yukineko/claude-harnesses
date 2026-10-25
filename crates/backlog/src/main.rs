@@ -1654,7 +1654,15 @@ fn run(cli: Cli) -> Result<()> {
             };
             run_hook(|| {
                 if let Some(ctx) = hooks::session_start::run(&input) {
-                    println!("{}", json!({ "additionalContext": ctx }));
+                    println!(
+                        "{}",
+                        json!({
+                            "hookSpecificOutput": {
+                                "hookEventName": "SessionStart",
+                                "additionalContext": ctx
+                            }
+                        })
+                    );
                 }
             });
         }

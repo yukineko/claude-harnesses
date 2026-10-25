@@ -1461,7 +1461,7 @@ fn session_start_does_not_report_body_staleness() {
         .lines()
         .find_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
         .map(|v| {
-            v["additionalContext"]
+            v["hookSpecificOutput"]["additionalContext"]
                 .as_str()
                 .unwrap_or_default()
                 .to_string()

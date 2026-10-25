@@ -124,12 +124,14 @@ that is not an absolute path refuses (ask, hardened as above; at Stop, a block)
 — never allows. The ONE exception: a ledger FILE that does not exist means "no
 prior denies".
 
-BRICK BOUND. An unreadable or corrupt ledger file refuses only for
+BRICK BOUND. A CORRUPT ledger file (readable, but with lines that are not
+valid entries or bytes that are not UTF-8) refuses only for
 RETRY_WINDOW_SECS (20 minutes) measured from that file's mtime — otherwise a
 non-interactive run, which never submits a prompt, would be refused on every
 Edit/Write call and every Stop for the rest of the run. Once the file is older
-than that, it is renamed aside to `<name>.corrupt-<unix-ts>` (left for a human
-to inspect) and SALVAGED: its lines that are valid `deny` entries are written
+than that, it is moved aside to `<name>.corrupt-<unix-ts>` (or
+`<name>.corrupt-<unix-ts>-<n>` when that name exists: an aside is never
+replaced; left for a human to inspect) and SALVAGED: its lines that are valid `deny` entries are written
 into a fresh active file at the original path (O_CREAT|O_EXCL|O_NOFOLLOW, 0600),
 so those refusals keep feeding signals 1 and 2; only the lines that are not
 valid entries are dropped (ticks are not carried over: the call count restarts).
@@ -139,6 +141,14 @@ file. If writing the salvaged lines fails, the notice says so and they are used
 for this call only. A file whose mtime cannot be read is refused without a
 bound. If the rename fails, the notice says so and the salvaged lines are used
 for this call only (the stale file is re-examined on the next).
+An UNREADABLE ledger file (open or read fails: permissions such as mode 000, a
+symlink planted at the path, an IO error) has NO bound and is never moved
+aside: nothing can be salvaged from it, so moving it aside would turn "the
+prior refusals could not be read" into "there were none" (issue #1182). It
+refuses every guarded call and every Stop until a human repairs or removes it
+or a new user prompt clears the session's ledger (deny-ledger-clear.py). A
+non-interactive run is therefore refused for the rest of the run by an
+unreadable ledger; Stop is still released by `stop_hook_active` (RESIDUALS).
 
 RESIDUALS (recorded, not hidden — CLAUDE.md 4):
   * a payload with NO session_id key has no ledger: nothing is recorded or
@@ -163,6 +173,10 @@ RESIDUALS (recorded, not hidden — CLAUDE.md 4):
     failure itself does not refuse the call.
   * a deny recorded while its ledger file is corrupt is appended to that file
     and refreshes its mtime, which restarts the brick bound for that file.
+  * an UNREADABLE ledger file has no brick bound (issue #1182): in a session
+    that never submits a prompt it refuses every guarded call for the rest of
+    the session, and each Stop blocks once before `stop_hook_active` releases
+    it. Restrictive by design — the prior refusals it holds cannot be read.
   * a deny whose recorded root no longer exists (the main checkout was moved
     or deleted) cannot be re-snapshotted, so Stop blocks as undetermined for
     it until the ledger is cleared (the next UserPromptSubmit) or pruned (a
@@ -393,77 +407,105 @@ def _parse(path: str, data: bytes) -> tuple[list[dict], list[int]]:
     return out, bad
 
 
-def _read_file(path: str) -> list[dict]:
-    """Entries of one ledger file. [] when it does not exist; Undetermined for
-    anything else that is not a clean read."""
-    data = _read_bytes(path)
-    if data is None:
-        return []
-    entries, bad = _parse(path, data)
-    if bad:
-        where = "is not UTF-8" if bad == [0] else f"line {bad[0] or bad[-1]} is not a valid entry"
-        raise Undetermined(f"the deny ledger {path} {where}")
-    return entries
+def _move_aside(path: str, stamp: int) -> str:
+    """Move `path` to a name that did not exist, and return that name.
+
+    The name is `<path>.corrupt-<stamp>`, or `<path>.corrupt-<stamp>-<n>` when
+    that is taken. The move is os.link (fails with EEXIST, never replaces) then
+    unlink, so two salvages in the same second, or racing processes, can never
+    overwrite an earlier aside (issue #1183). Raises OSError when no free name
+    is obtained or the link fails (the original is left in place), or when the
+    unlink fails after the link (the original stays and a hard-linked copy exists
+    at the aside name; the message says so)."""
+    for n in range(1000):
+        aside = f"{path}.corrupt-{stamp}" + (f"-{n}" if n else "")
+        try:
+            os.link(path, aside)
+        except FileExistsError:
+            continue
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass  # a racing salvage already moved the same file; both asides hold it
+        except OSError as e:
+            # The link succeeded, so a copy exists at `aside`, but the original
+            # is still in place: say both, and stay restrictive (the caller
+            # treats any OSError as "not moved" and uses the salvage this call).
+            raise OSError(f"a hard-linked copy exists at {aside} but the "
+                          f"original could not be removed: {e}") from e
+        return aside
+    raise OSError(f"no unused aside name for {path}.corrupt-{stamp}")
 
 
 def _read_bounded(path: str, now: float) -> list[dict]:
-    """_read_file, with the BRICK BOUND: a bad file refuses for
-    RETRY_WINDOW_SECS from its mtime; after that it is renamed aside, its
+    """Entries of one ledger file. [] when it does not exist; Undetermined for
+    anything else that is not a clean read — with the BRICK BOUND for a
+    CORRUPT file: it refuses for
+    RETRY_WINDOW_SECS from its mtime; after that it is moved aside to a
+    unique, never-replaced name (see _move_aside), its
     valid DENY lines are salvaged into a fresh active file, and only the
-    unparseable lines are dropped (named in a stderr notice)."""
+    unparseable lines are dropped (named in a stderr notice).
+
+    An UNREADABLE file (open/read fails: permissions, a planted symlink, an IO
+    error) is not bounded: nothing can be salvaged from it, so moving it aside
+    would turn "could not read the prior refusals" into "there were none"
+    (issue #1182, CLAUDE.md 3). It refuses on every call, and is never moved
+    aside, until a human fixes or removes it or a new user prompt clears it."""
+    data = _read_bytes(path)  # Undetermined when unreadable: refuse, unbounded
+    if data is None:
+        return []
+    entries, bad_lines = _parse(path, data)
+    if not bad_lines:
+        return entries
+    where = ("is not UTF-8" if bad_lines == [0]
+             else f"line {bad_lines[0] or bad_lines[-1]} is not a valid entry")
+    bad = Undetermined(f"the deny ledger {path} {where}")
     try:
-        return _read_file(path)
-    except Undetermined as bad:
-        try:
-            age = now - os.lstat(path).st_mtime
-        except OSError:
-            raise bad  # cannot measure its age: refuse, unbounded
-        if age <= RETRY_WINDOW_SECS:
-            until = time.strftime("%H:%M:%S", time.localtime(
-                now - age + RETRY_WINDOW_SECS))
-            raise Undetermined(f"{bad}; refused until {until}, when the file "
-                               "is moved aside") from bad
-        try:
-            data = _read_bytes(path) or b""
-            salvaged, dropped = _parse(path, data)
-        except Undetermined:
-            salvaged, dropped = [], ["all (unreadable)"]
-        salvaged = [e for e in salvaged if e["kind"] == "deny"]
-        aside = f"{path}.corrupt-{int(now)}"
-        head = (f"maintree deny ledger: {path} was unreadable or corrupt for "
-                f"more than {RETRY_WINDOW_SECS // 60} minutes ({bad})")
-        lines = ", ".join("whole file not UTF-8" if n == 0 else str(n) for n in dropped)
-        try:
-            os.rename(path, aside)
-        except OSError as e:
-            sys.stderr.write(f"{head}; could NOT move it aside ({e}); using its "
-                             f"{len(salvaged)} valid deny line(s) for this call; "
-                             f"dropped line(s): {lines}.\n")
-            return salvaged
-        note = ""
-        if salvaged:
-            try:
-                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
-                             | getattr(os, "O_NOFOLLOW", 0), 0o600)
-                try:
-                    os.write(fd, "".join(
-                        json.dumps(e, ensure_ascii=False, sort_keys=True) + "\n"
-                        for e in salvaged).encode("utf-8"))
-                finally:
-                    os.close(fd)
-                note = f"; {len(salvaged)} valid deny line(s) carried into a fresh {path}"
-            except OSError as e:
-                note = (f"; its {len(salvaged)} valid deny line(s) could NOT be "
-                        f"written back ({e}) and are used for this call only")
-        sys.stderr.write(f"{head}; moved it aside to {aside}{note}; dropped "
-                         f"unparseable line(s): {lines}.\n")
+        age = now - os.lstat(path).st_mtime
+    except OSError:
+        raise bad  # cannot measure its age: refuse, unbounded
+    if age <= RETRY_WINDOW_SECS:
+        until = time.strftime("%H:%M:%S", time.localtime(
+            now - age + RETRY_WINDOW_SECS))
+        raise Undetermined(f"{bad}; refused until {until}, when the file "
+                           "is moved aside") from bad
+    # Salvage from the bytes already read: they are the bytes that were judged.
+    salvaged = [e for e in entries if e["kind"] == "deny"]
+    head = (f"maintree deny ledger: {path} was corrupt for "
+            f"more than {RETRY_WINDOW_SECS // 60} minutes ({bad})")
+    lines = ", ".join("whole file not UTF-8" if n == 0 else str(n) for n in bad_lines)
+    try:
+        aside = _move_aside(path, int(now))
+    except OSError as e:
+        aside = ""
+        sys.stderr.write(f"{head}; could NOT move it aside ({e}); using its "
+                         f"{len(salvaged)} valid deny line(s) for this call; "
+                         f"dropped line(s): {lines}.\n")
         return salvaged
+    note = ""
+    if salvaged:
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            try:
+                os.write(fd, "".join(
+                    json.dumps(e, ensure_ascii=False, sort_keys=True) + "\n"
+                    for e in salvaged).encode("utf-8"))
+            finally:
+                os.close(fd)
+            note = f"; {len(salvaged)} valid deny line(s) carried into a fresh {path}"
+        except OSError as e:
+            note = (f"; its {len(salvaged)} valid deny line(s) could NOT be "
+                    f"written back ({e}) and are used for this call only")
+    sys.stderr.write(f"{head}; moved it aside to {aside}{note}; dropped "
+                     f"unparseable line(s): {lines}.\n")
+    return salvaged
 
 
 def read(session_id: str, now: float | None = None) -> list[dict]:
     """Every entry of the session's ledgers (home + fallback), merged in epoch
-    order. [] when neither file exists. Raises Undetermined for a bad file
-    still inside its brick bound."""
+    order. [] when neither file exists. Raises Undetermined for an unreadable
+    file, and for a corrupt file still inside its brick bound."""
     now = time.time() if now is None else now
     out: list[dict] = []
     for path in ledger_paths(session_id):
@@ -752,8 +794,9 @@ Earlier refusals in this session are recorded so that the same target cannot be
 re-reached by another spelling (backlog e033c406). A ledger this gate could not
 read is not a ledger that says "no prior refusals" (CLAUDE.md 最上位の方針 3), so
 this call is refused rather than allowed. A human can inspect or remove the file;
-a new user prompt clears this session's ledger. A corrupt or unreadable file is
-refused only for {mins} minutes from its last change, then moved aside.
+a new user prompt clears this session's ledger. A corrupt file is refused only
+for {mins} minutes from its last change, then moved aside; an unreadable file
+is refused until it is repaired, removed or cleared.
 """
 
 

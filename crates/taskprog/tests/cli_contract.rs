@@ -74,7 +74,7 @@ fn claim_session_start_injects() {
     assert_eq!(o.code, 0);
     let v: Value = serde_json::from_str(o.stdout.trim()).expect("stdout is JSON");
     // SessionStart: nested `hookSpecificOutput.additionalContext` (a top-level
-    // key is never delivered to the model, GH 1343). Stop stays top-level.
+    // key is never delivered to the model, GH 1343). Stop uses systemMessage (GH 1344).
     assert_eq!(
         v["hookSpecificOutput"]["hookEventName"], "SessionStart",
         "{v}"
@@ -91,7 +91,11 @@ fn claim_stop_prompts_update() {
     let (root, home) = repo(Some("# Progress\nexisting-content\n"));
     let o = run(&["stop"], &root, &home, &hook_json(&root));
     let v: Value = serde_json::from_str(o.stdout.trim()).expect("stdout is JSON");
-    let ctx = v["additionalContext"].as_str().unwrap();
+    // Stop has no additionalContext (top-level or nested); systemMessage is
+    // shown to the user only, so the key must be the only message channel.
+    assert!(v.get("additionalContext").is_none(), "{v}");
+    assert!(v.get("hookSpecificOutput").is_none(), "{v}");
+    let ctx = v["systemMessage"].as_str().unwrap();
     assert!(ctx.contains("please update the progress file"), "{ctx}");
     assert!(ctx.contains("existing-content"), "{ctx}");
 }
@@ -230,10 +234,9 @@ fn claim_config_lookup_order() {
 
 fn injected(o: &Out) -> String {
     let v: Value = serde_json::from_str(o.stdout.trim()).expect("JSON");
-    // SessionStart output is nested; Stop output is still top-level.
+    // SessionStart output only (nested); Stop uses systemMessage.
     v["hookSpecificOutput"]["additionalContext"]
         .as_str()
-        .or_else(|| v["additionalContext"].as_str())
         .unwrap()
         .to_string()
 }
@@ -318,7 +321,12 @@ fn claim_disabled_env() {
         &hook_json(&root2),
         &[("TASKPROG_DISABLED", "0")],
     );
-    assert!(injected(&o).contains("progress file"));
+    let v: Value = serde_json::from_str(o.stdout.trim()).expect("JSON");
+    assert!(v["systemMessage"]
+        .as_str()
+        .unwrap()
+        .contains("progress file"));
+    assert!(v.get("additionalContext").is_none(), "{v}");
     assert!(root2.join(".claude/progress.md").exists());
 }
 

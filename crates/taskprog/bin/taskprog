@@ -14,8 +14,8 @@
 #   session-start  SessionStart. Injects the progress file as additionalContext.
 #                  -> stdout JSON: additionalContext (the model reads this hook's silence as
 #                  'nothing to report') + systemMessage (the user). exit 0.
-#   stop           Stop. The binary's on_stop reminds the model via additionalContext and
-#                  never blocks; the reminder is advisory, so the user is told.
+#   stop           Stop. The binary's on_stop prints a systemMessage reminder (shown to the
+#                  user, not the model) and never blocks.
 #                  -> stdout JSON systemMessage (the user is the only consumer). exit 0 —
 #                  no verdict to protect, so no block.
 #
@@ -60,7 +60,7 @@ case "$*" in
     exit 0
     ;;
   "stop")
-    msg="taskprog stop did NOT run: no bundled binary for $os-$arch, so you were NOT prompted to update the progress file this turn. $fix"
+    msg="taskprog stop did NOT run: no bundled binary for $os-$arch, so you were NOT reminded to update the progress file this turn. $fix"
     printf '{"systemMessage":"%s"}\n' "$msg"
     exit 0
     ;;

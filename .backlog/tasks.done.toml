@@ -60783,3 +60783,70 @@ scripts/test_issue_1232_fail_open_allowlist_duplicate.py ..              [100%]
 rev = "4d3dd4265378938e91e8737f7946bc563552608d"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "d74c423d"
+title = "backlog done misreads a behavioural RED as a build failure"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = 'GitHub #1347. crates/backlog/src/evidence.rs classify_red checks build_failure_marker (any "could not compile" anywhere) before "test result: FAILED", so a RED run with a genuine FAILED test plus an unrelated package compile error is refused. Test: crates/backlog/tests/repro_gh1347_mixed_build_marker_red.rs red_with_test_result_failed_and_unrelated_could_not_compile_is_behavioural (its own failure message redacts the marker as could-not-compile so this repro is not itself refused by the bug). Observed FAIL 2026-10-25 on main 3b151d5e plus test commit c69fdec0 (backlog 0.3.70 code), before redaction: assertion `left == right` failed: ... `done` must accept it: Error: refused: RED at 24a70f6952178ac09aa8d0a6d6c9f32385b3cc6d refused: the run failed at BUILD/compile time (output contains "could not compile"), not behaviourally; a build failure is not RED. ... left: 1 right: 0 ... test result: FAILED. 0 passed; 1 failed'
+created_at = 1792884597
+updated_at = 1792892850
+weight = 0.0
+issue_number = 1442
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1442"
+issue_closed_at = 1792892852
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test repro_gh1347_mixed_build_marker_red"
+rev = "c69fdec064caa887354f2c181d2338d2b1a3a6b7"
+observed_at = 1792884597
+detail = """
+exit 101: in 1.55s
+
+   Compiling backlog v0.3.71 (/Users/yuki/src/.harness-worktrees/issue-repros-rs/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s
+     Running tests/repro_gh1347_mixed_build_marker_red.rs (target/debug/deps/repro_gh1347_mixed_build_marker_red-d3ca8222934076bd)
+error: test failed, to rerun pass `-p backlog --test repro_gh1347_mixed_build_marker_red`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test repro_gh1347_mixed_build_marker_red"
+exit = 0
+passed = 1
+rev = "6ccf9c7dc0fb468f8028d82b166c99b208e02aa7"
+observed_at = 1792892822
+output_digest = "sha256:facd989ee886e7f037894c50a223cbb635ca0827bebe9f3e0defbe2a21fd8aa8"
+excerpt = """
+
+running 1 test
+test red_with_test_result_failed_and_unrelated_could_not_compile_is_behavioural ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.75s
+
+   Compiling num-traits v0.2.19
+   Compiling aho-corasick v1.1.4
+   Compiling tinyvec_macros v0.1.1
+   Compiling tinyvec v1.11.0
+   Compiling unicode-normalization v0.1.25
+   Compiling regex-automata v0.4.14
+   Compiling chrono v0.4.45
+   Compiling regex v1.12.4
+   Compiling harness-core v0.2.65 (/Users/yuki/src/.harness-worktrees/backlog-done-c5b9-a/crates/harness-core)
+   Compiling backlog v0.3.73 (/Users/yuki/src/.harness-worktrees/backlog-done-c5b9-a/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.88s
+     Running tests/repro_gh1347_mixed_build_marker_red.rs (target/debug/deps/repro_gh1347_mixed_build_marker_red-e450840c8429bfdd)
+"""
+
+[task.closure.red]
+rev = "c98d176d75fd0a472f7ca8752b11224623dc73ef"
+exit = 101
+kind = "behavioural"

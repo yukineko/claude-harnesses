@@ -63,7 +63,14 @@ Two consequences of that design, stated so they read as decisions:
   `--pending-msg` points at the message that is being committed, not at a
   scratch file -- and it is held to the same exactness rules. This gate now runs
   from .githooks/commit-msg, where git supplies that path as $1.
-* Scope is base vs HEAD, not per commit. A file that did not exist at the base
+* Scope is the current branch/worktree's own changes: merge-base(local `main`,
+  HEAD) -- the fork point from the branch it integrates into -- vs the worktree,
+  not per commit and not from `origin/main`. User ruling 2026-10-25:
+  「スキャナは現在作業しているbranch,worktreeに限定した」 (GitHub #1181, backlog
+  52d17300). A stale `origin/main` behind local `main` used to charge main's
+  commits to every branch commit. A base that does not resolve, or a merge-base
+  that cannot be computed, is Undetermined (exit 2, block); there is no fallback
+  ref. Within that scope it is branch-wide. A file that did not exist at the base
   cannot have had existing coverage weakened, and per-commit analysis would fire
   on ordinary iteration (write test, refactor, consolidate); a gate that fires on
   normal work gets switched off. The gap this leaves -- adding a strong new test
@@ -193,20 +200,26 @@ def git(repo: str, *args: str, allow_fail: bool = False) -> str:
     return proc.stdout
 
 
-def resolve_base(repo: str, base: str, base_was_explicit: bool) -> str:
+def resolve_base(repo: str, base: str) -> str:
     """Resolve the comparison base to a commit sha.
 
-    The default (`origin/main`) may legitimately be absent in a clone that has
-    no remote, so it falls back to `main`. An EXPLICIT `--base` gets no such
-    fallback: silently comparing against something the caller did not ask for
-    would produce a confident verdict about the wrong range.
+    The default is the LOCAL `main` -- the branch a worktree integrates into --
+    not `origin/main`. Until 2026-10-25 the default was `origin/main` (falling
+    back to `main`), and a stale `origin/main` behind local `main` charged every
+    commit already on main to each commit of every branch: an unrelated commit
+    printed `[ack] crates/tdd/src/git.rs: ignore-added` for a file neither it nor
+    its branch touched (GitHub #1181, backlog 52d17300). User ruling 2026-10-25:
+    「スキャナは現在作業しているbranch,worktreeに限定した」.
+
+    There is NO fallback, for the default or an explicit `--base`: a base that
+    does not resolve raises Undetermined (exit 2, block). Silently comparing
+    against some other ref would produce a confident verdict about the wrong
+    range.
     """
-    candidates = [base] if base_was_explicit else [base, "main"]
-    for cand in candidates:
-        out = git(repo, "rev-parse", "--verify", "--quiet", cand + "^{commit}",
-                  allow_fail=True).strip()
-        if out:
-            return out
+    out = git(repo, "rev-parse", "--verify", "--quiet", base + "^{commit}",
+              allow_fail=True).strip()
+    if out:
+        return out
     raise Undetermined(f"base ref does not resolve: {base}")
 
 
@@ -1117,10 +1130,10 @@ def changed_pairs(repo: str, merge_base: str) -> list:
     return pairs
 
 
-def scan(repo: str, base: str, base_was_explicit: bool, pending_msg=None) -> list:
+def scan(repo: str, base: str, pending_msg=None) -> list:
     if not is_git_repo(repo):
         raise Undetermined(f"not a git repository: {repo}")
-    base_sha = resolve_base(repo, base, base_was_explicit)
+    base_sha = resolve_base(repo, base)
     merge_base = git(repo, "merge-base", base_sha, "HEAD").strip()
     if not merge_base:
         raise Undetermined("merge-base produced no commit")
@@ -1165,7 +1178,13 @@ def scan(repo: str, base: str, base_was_explicit: bool, pending_msg=None) -> lis
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--base", default="origin/main")
+    ap.add_argument(
+        "--base",
+        default="main",
+        help="the branch this worktree integrates into (default: local main); "
+        "the scan covers merge-base(BASE, HEAD) to the worktree. Not origin/main: "
+        "a stale remote ref charges main's commits to the branch (#1181)",
+    )
     ap.add_argument("--repo", default=None)
     ap.add_argument("--json", action="store_true")
     ap.add_argument(
@@ -1178,10 +1197,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     repo = args.repo or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    base_was_explicit = args.base != "origin/main"
-
     try:
-        findings = scan(repo, args.base, base_was_explicit, args.pending_msg)
+        findings = scan(repo, args.base, args.pending_msg)
     except Undetermined as exc:
         # The one branch that must never become 0. `undetermined` is greppable
         # on purpose so a CI log can be searched for it.

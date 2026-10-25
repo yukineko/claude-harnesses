@@ -385,7 +385,15 @@ fn run() -> Result<()> {
         Command::SessionStart => {
             harness_core::hook::run_hook(|| {
                 if let Some(ctx) = hooks::session_start::run() {
-                    println!("{}", serde_json::json!({ "additionalContext": ctx }));
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "hookSpecificOutput": {
+                                "hookEventName": "SessionStart",
+                                "additionalContext": ctx
+                            }
+                        })
+                    );
                 }
             });
         }

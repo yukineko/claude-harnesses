@@ -1,4 +1,4 @@
-- On **SessionStart** it injects the progress file as a top-level `additionalContext`.
+- On **SessionStart** it injects the progress file as `hookSpecificOutput.additionalContext` (hookEventName `SessionStart`).
 - On **Stop** it prompts the agent to update the file.
 
 taskprog registers two hooks, SessionStart and Stop, which call `taskprog session-start` and `taskprog stop`.

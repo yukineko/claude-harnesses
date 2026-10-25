@@ -127,7 +127,9 @@ fn drift_counts_are_injected_into_additional_context() {
         .lines()
         .find_map(|l| serde_json::from_str(l).ok())
         .expect("hook must emit one JSON line");
-    let ctx = v["additionalContext"].as_str().unwrap_or_default();
+    let ctx = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
     assert!(
         ctx.contains("2") && ctx.to_lowercase().contains("close"),
         "the unclosed-issue count must be stated: {ctx:?}"
@@ -177,7 +179,9 @@ fn a_store_that_never_mirrored_anything_is_silent() {
         .lines()
         .find_map(|l| serde_json::from_str(l).ok())
         .expect("hook must still list the pending tasks");
-    let ctx = v["additionalContext"].as_str().unwrap_or_default();
+    let ctx = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap_or_default();
     assert!(
         !ctx.to_lowercase().contains("mirror drift"),
         "a store with no mirror in use must not report drift: {ctx:?}"
@@ -203,7 +207,7 @@ fn a_fully_reconciled_store_is_silent() {
         .lines()
         .find_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
         .map(|v| {
-            v["additionalContext"]
+            v["hookSpecificOutput"]["additionalContext"]
                 .as_str()
                 .unwrap_or_default()
                 .to_string()

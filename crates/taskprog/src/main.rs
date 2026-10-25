@@ -123,7 +123,15 @@ fn main() {
                 let raw = read_stdin();
                 let input = HookInput::parse(&raw).unwrap_or_default();
                 if let Some(ctx) = session_start_hook(&input).unwrap_or(None) {
-                    println!("{}", json!({ "additionalContext": ctx }));
+                    println!(
+                        "{}",
+                        json!({
+                            "hookSpecificOutput": {
+                                "hookEventName": "SessionStart",
+                                "additionalContext": ctx
+                            }
+                        })
+                    );
                 }
             });
         }

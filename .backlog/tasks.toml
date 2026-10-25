@@ -1,62 +1,4 @@
 [[task]]
-id = "3cef580f"
-title = "SessionStart hooks print top-level additionalContext which Claude Code 2.1.284 never delivers to the model (GitHub 1343)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "github-1343",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "claude -p probe 2026-10-25, Claude Code 2.1.284: top-level SessionStart additionalContext gives NONE, hookSpecificOutput form gives MARK-B. Emitters: backlog main.rs, daily main.rs (2 sites), harness-status main.rs, hypothesis main.rs, taskprog main.rs. Fix: wrap in hookSpecificOutput with hookEventName SessionStart. Repro re-runs claude -p twice (haiku)."
-created_at = 1792885783
-updated_at = 1792885783
-weight = 0.0
-issue_number = 1450
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1450"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/probe_gh1343_sessionstart_shape.sh"
-rev = "cde613ebba64735f747182b6050b9b0ef59437fb"
-observed_at = 1792885783
-detail = '''
-exit 1:                serde_json::json!({ "additionalContext": sections.join("\n\n") })
-/Users/yuki/src/.harness-worktrees/probe-gh134x/crates/hypothesis/src/main.rs:388:                    println!("{}", serde_json::json!({ "additionalContext": ctx }));
-/Users/yuki/src/.harness-worktrees/probe-gh134x/crates/taskprog/src/main.rs:126:                    println!("{}", json!({ "additionalContext": ctx }));'''
-
-[[task]]
-id = "63ce7ff9"
-title = "budgetguard and taskprog Stop hooks print top-level additionalContext which reaches neither model nor user (GitHub 1344)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "github-1344",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "claude -p probe 2026-10-25, Claude Code 2.1.284, stream-json verbose: Stop hook printing top-level additionalContext MARK-C ran, session ended after 1 turn, MARK-C absent from the whole stream. Control Stop systemMessage MARK-D surfaced as system informational 'Stop says: MARK-D'. Emitters: budgetguard gate.rs, taskprog update.rs (2 sites). Repro re-runs claude -p once (haiku)."
-created_at = 1792885803
-updated_at = 1792885803
-weight = 0.0
-issue_number = 1451
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1451"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/probe_gh1344_stop_shape.sh"
-rev = "cde613ebba64735f747182b6050b9b0ef59437fb"
-observed_at = 1792885803
-detail = """
-exit 1: /probe-gh134x/crates/budgetguard/src/gate.rs:503:                    println!("{}", json!({ "additionalContext": msg }));
-/Users/yuki/src/.harness-worktrees/probe-gh134x/crates/taskprog/src/update.rs:58:            println!("{}", json!({ "additionalContext": msg }));
-/Users/yuki/src/.harness-worktrees/probe-gh134x/crates/taskprog/src/update.rs:105:    let out = json!({ "additionalContext": msg });"""
-
-[[task]]
 id = "8924ca76"
 title = "fugu-router SessionEnd hook (harvest then sync) is cancelled in headless claude -p runs so sync never pulls or pushes (GitHub 1345)"
 project = "/Users/yuki/src/harness"
@@ -86,35 +28,6 @@ debug SessionEnd lines:
 2026-10-24T23:50:13.079Z [DEBUG] SessionEnd:other [${CLAUDE_PLUGIN_ROOT}/bin/fugu-router harvest; ${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync] cancelled
 sync repo commits ahead of upstream after: 22
 DEFECT: fugu-router SessionEnd hook was cancelled in a headless run"""
-
-[[task]]
-id = "c69602f8"
-title = "Stale expectedFailure on test_pre_commit_runs_projkey_store_classification now passes (Unexpected success)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "scripts/test_backlog_de721e5e_df49f872.py:59 carries @unittest.expectedFailure (backlog df49f872: open defect, remove when fixed), but df49f872 is cancelled and the test now passes, so pytest reports Unexpected success and the file fails: '1 failed, 3 passed, 1 xfailed'. Observed 2026-10-25 at 4d3dd426 (worktree run-20261025-091235-39546-t0b216e87) and in the t51c702da worktree. Readings: (a) the projkey classification gate is now wired into pre-commit (pre-commit output shows 'projkey-store-classification: OK') so the marker is stale and should be removed; (b) the test passes for the wrong reason. Distinguish by reading the test body against .githooks/pre-commit."
-created_at = 1792893270
-updated_at = 1792893270
-weight = 0.0
-issue_number = 1454
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1454"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_backlog_de721e5e_df49f872.py"
-rev = "6ccf9c7dc0fb468f8028d82b166c99b208e02aa7"
-observed_at = 1792893270
-detail = """
-exit 1: =====================
-______ BacklogDf49f872.test_pre_commit_runs_projkey_store_classification _______
-Unexpected success
-=========================== short test summary info ============================
-FAILED scripts/test_backlog_de721e5e_df49f872.py::BacklogDf49f872::test_pre_commit_runs_projkey_store_classification
-==================== 1 failed, 3 passed, 1 xfailed in 3.91s ===================="""
 
 [[task]]
 id = "b114a0b3"

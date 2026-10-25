@@ -13,9 +13,11 @@
 #
 #   prompt         UserPromptSubmit. Injects routing/lesson hints and the failed-sync notice
 #                  (the only place a failed SessionEnd sync becomes visible).
-#                  -> stdout JSON: additionalContext (the model reads this hook's silence as
-#                  'nothing to report') + systemMessage (the user). exit 0.
-#   session-end-sync, sync
+#                  -> stdout JSON: systemMessage (shown to the user) + hookSpecificOutput
+#                  (hookEventName "UserPromptSubmit" + additionalContext). The model-facing
+#                  text is nested in hookSpecificOutput.additionalContext (the model reads
+#                  this hook's silence as 'nothing to report'). exit 0.
+#   sync (and session-end-sync)
 #                  SessionEnd (`session-end-sync`), or `sync` run the same way.
 #                  -> SessionEnd: Claude Code discards stdout/JSON; stderr is the only
 #                  channel, so exit 1 (non-blocking hook error + stderr line).

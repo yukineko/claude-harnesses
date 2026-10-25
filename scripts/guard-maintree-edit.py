@@ -82,10 +82,13 @@ in the same session (within 25 guarded calls / 20 minutes), it is refused as an
 ask quoting the earlier refusal — hardened to a deny unless the session is an
 interactive terminal (CLAUDECODE=1 and CLAUDE_CODE_ENTRYPOINT=cli). An
 unreadable or corrupt ledger, or an unusable session_id, refuses the same way —
-a corrupt or unreadable ledger file only for 20 minutes from its mtime, after
+a corrupt (but readable) ledger file only for 20 minutes from its mtime, after
 which it is renamed aside to `<name>.corrupt-<ts>`, its valid deny lines are
 carried into a fresh ledger file, the unparseable lines are dropped (named in a
-stderr notice) and the call proceeds. See deny_ledger.py for the exact rules and residuals.
+stderr notice) and the call proceeds. An UNREADABLE ledger file (e.g. mode 000)
+has no such bound and is never moved aside: nothing can be salvaged from it, so
+every guarded call is refused until it is repaired, removed or cleared by the
+next user prompt (issue #1182). See deny_ledger.py for the exact rules and residuals.
 
 Protocol: reads the PreToolUse JSON payload on stdin.
 

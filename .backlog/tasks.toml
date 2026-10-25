@@ -185,39 +185,6 @@ sync repo commits ahead of upstream after: 22
 DEFECT: fugu-router SessionEnd hook was cancelled in a headless run"""
 
 [[task]]
-id = "d222b3e3"
-title = "pre-push certifies a sha that is not the one pushed when main moves during the hook (https push re-resolves the ref by name)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "pre-push",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-25. Push A (subagent aafc316d, started 09:04:45 JST, main=2f8e4209) ran the pre-push checks on 2f8e4209 and printed 'c2f59694..2f8e4209 main -> main'. GitHub activity API (repos/yukineko/claude-harnesses/activity, ref main) records that push as '2026-10-25T00:09:54Z push c2f59694..4d3dd426'. While A's hook ran, main moved to 0241c62f (09:07:14) and then to 4d3dd426 (09:09:08). Pushes B (ab4afec1, started 09:07:28, certified 0241c62f) and C (a3e3e304, started 09:09:28) then got '[remote rejected] main -> main (cannot lock ref refs/heads/main: is at 4d3dd426 but expected c2f59694)'. Cause: over a remote helper transport (https), git passes the refspec by name to git-remote-https. send-pack then re-reads refs/heads/main after the pre-push hook returns. A local smart-HTTP reproduction with git 2.50.1 got: the hook saw Y, the client printed base..Y, and the remote received Z, where Z is the commit main moved to during the hook. Over file:// the remote received Y. The checks that ran on the wrong sha: gate-bypass ledger, cargo check, compile-fail, specguard. 0241c62f and 4d3dd426 left without them. Fix sketch, not done: at hook end, re-resolve each pushed local_ref and block if it no longer equals local_sha. That leaves a small window after hook exit, so also consider pushing by sha, e.g. 'git push origin SHA:refs/heads/main', which makes the helper send the certified object. Verify that with the http repro before relying on it."
-created_at = 1792892138
-updated_at = 1792892138
-weight = 0.0
-issue_number = 1453
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1453"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_prepush_ref_moved_during_hook.py"
-rev = "49a23fbde21a9a959e6091e7c8bb9659dd2af468"
-observed_at = 1792892138
-detail = '''
-exit 1: compile-fail contracts at f3aa136 (scripts/check-compile-fail.py)...\n').returncode
-
-scripts/test_prepush_ref_moved_during_hook.py:103: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_prepush_ref_moved_during_hook.py::test_ref_moved_during_hook_blocks
-========================= 1 failed, 1 passed in 2.10s =========================='''
-
-[[task]]
 id = "c69602f8"
 title = "Stale expectedFailure on test_pre_commit_runs_projkey_store_classification now passes (Unexpected success)"
 project = "/Users/yuki/src/harness"

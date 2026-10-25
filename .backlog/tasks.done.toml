@@ -61244,3 +61244,61 @@ FAILED scripts/test_backlog_de721e5e_df49f872.py::BacklogDf49f872::test_pre_comm
 [task.closure]
 reason = "discard"
 discard_reason = "Fixed by 31fbb06f (stale expectedFailure marker removed). The fix lives in the repro test file itself, so the default overlay copies it into the RED tree and no F→P evidence can be recorded; closed as cancel per user ruling 2026-10-25."
+
+[[task]]
+id = "16b69d09"
+title = "scripts/test_prepush_ref_moved_during_hook.py has no unittest.main guard (audit b1_0 suite red)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-25 at main 247b3f4a (also at 13e1bd83, reported by the 1fbd94ea worker). python3 -m pytest scripts/test_backlog_audit_b1_0.py -k main_guard: 'AssertionError: Lists differ: [test_prepush_ref_moved_during_hook.py] != []'. The file belongs to d222b3e3 (run-20261025-111326-62786). Reading (a): missing guard, add if __name__ == '__main__': unittest.main() (pytest-style file may need a different direct-invocation path). Reading (b): the file is pytest-only on purpose and the audit needs an exemption; distinguish by whether the file uses unittest.TestCase."
+created_at = 1792927384
+updated_at = 1792969290
+weight = 0.0
+issue_number = 1456
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1456"
+issue_closed_at = 1792969293
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_backlog_audit_b1_0.py -k main_guard"
+rev = "9bab9917213003acd38190d99087e35ab5366d33"
+observed_at = 1792927384
+detail = """
+exit 1: s and exit 0 when invoked directly
+
+scripts/test_backlog_audit_b1_0.py:96: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_backlog_audit_b1_0.py::Backlog06a9d33fDirectInvocationRunsTests::test_every_scripts_suite_has_a_main_guard_calling_unittest_main
+======================= 1 failed, 10 deselected in 0.23s ======================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_backlog_audit_b1_0.py -k main_guard"
+exit = 0
+passed = 1
+rev = "f0a77704aec492e5705627b33fd036a0a795229a"
+observed_at = 1792969286
+output_digest = "sha256:02411a2acb8b934fbcd4caf404c31bb0b755f0630878bc53183a77c063775728"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/.condukt/worktrees/c5b9-backlog-done-c
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 11 items / 10 deselected / 1 selected
+
+scripts/test_backlog_audit_b1_0.py .                                     [100%]
+
+======================= 1 passed, 10 deselected in 0.44s =======================
+"""
+
+[task.closure.red]
+rev = "520446483d198ba9900eacb4ee4685827f069f7a"
+exit = 1
+kind = "behavioural"

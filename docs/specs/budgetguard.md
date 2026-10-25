@@ -56,7 +56,7 @@ gate 判定・config 層・ledger ロック・hook 配線という薄い周辺�
 - **`gate`（Stop hook）** — `run_hook(gate_command)` 経由。`disabled_env`→stdin パース→空フィールド
   →`stop_hook_active` の各 early-return を通り、`gate::evaluate(cfg, session_id, transcript_path, today)`
   で verdict を算出、`emit_and_exit` が出力する。verdict は 3 種:
-  **Allow**（exit 0 無出力）／**Warn**（`{"additionalContext": "⚠ budgetguard:…"}`、助言のみ非ブロック）／
+  **Allow**（exit 0 無出力）／**Warn**（`{"systemMessage": "⚠ budgetguard:…"}`、助言のみ非ブロック。ユーザーにのみ表示され、モデルには届かない）／
   **Block**（`{"decision":"block","reason":"budgetguard: …予算超過 …作業を保存し、コミットして終了して
   ください。"}`）。実行時の session/day 合計は stderr にログし、hook が読む stdout JSON は汚さない。
 - **`status [--json]`** — 解決済み config と当日支出を表示（read-only）。人間向けは

@@ -54,7 +54,7 @@ struct CacheLevel {
 
 #[derive(Debug, Default, Deserialize)]
 struct BudgetLevel {
-    /// Emit a warning (additionalContext) when spend crosses this. 0 = disabled.
+    /// Emit a warning (systemMessage, shown to the user) when spend crosses this. 0 = disabled.
     warn_usd: Option<f64>,
     /// Block the stop when spend crosses this. 0 = disabled.
     block_usd: Option<f64>,

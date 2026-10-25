@@ -13,7 +13,7 @@
 タスクは `~/.daily/config.toml` の `[[task]]` 配列（`name` + shell `command` + 任意 `dir`）に
 登録し、各タスクは `sh -c` で実行される。1 つも登録が無ければ組み込みの `security` タスク
 （`cargo deny check advisories bans sources licenses`, `default_security_task`）が走り、
-従来挙動を維持する。実行結果は非ブロッキングな `additionalContext`（1 行要約）としてセッションに
+従来挙動を維持する。実行結果は非ブロッキングな `hookSpecificOutput.additionalContext`（1 行要約）としてセッションに
 注入され、各 run は JSONL レポート（`~/.daily/reports.jsonl`）に追記される。subscription-native
 （1 hook + 同梱バイナリ、API キー不要、マシン外送信なし）。
 
@@ -49,7 +49,7 @@ skill-only プラグイン）とは無関係の、hook + バイナリ型プラ�
 - **`session-start`（SessionStart hook 本体）** — stdin を `read_stdin`/`HookInput::parse` で読み
   （破損時 default）、`load_config` → `enabled=false` なら即 return → driver-skip 判定 →
   当日未実行の各 `effective_tasks` を `run_task` で実行 → `mark_done` で日付を刻み →
-  `append_report` でレポート追記 → 何か走ったら `summary` を `additionalContext` として注入。
+  `append_report` でレポート追記 → 何か走ったら `summary` を `hookSpecificOutput.additionalContext` として注入。
 - **`list`** — 登録タスク（無ければ組み込み default）を、各タスクの `pending today` / `ran today`
   状態（`DailyGuard::should_run`）と shell command・`dir` 付きで表示。config の enabled 状態と
   登録件数も出す。exit 0。

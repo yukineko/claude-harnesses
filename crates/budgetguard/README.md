@@ -11,15 +11,15 @@
 4. checks the session total and the day's cumulative total against configured
    limits;
 5. **within limits** → exits 0, the stop proceeds;
-   **warn threshold** → emits `{"additionalContext":"…"}` (advisory only, no block);
+   **warn threshold** → emits `{"systemMessage":"…"}` (advisory only, shown to the user, not the model; no block);
    **block threshold** → emits `{"decision":"block","reason":"…"}` asking the
    agent to save and commit before the turn ends.
    Thresholds are inclusive (spend at or above the limit); block beats warn.
 
 It also reports **cache-hit health** from gauge's session record (to stderr): once `input + cache_read` reaches `[cache].min_tokens` (default
 200000), a hit rate below `[cache].min_rate` (default 0.5; out-of-range values
-fall back to the default) is promoted to an advisory `additionalContext`
-warning when nothing louder is being said. It never blocks.
+fall back to the default) is promoted to an advisory `systemMessage`
+warning (user-visible only) when nothing louder is being said. It never blocks.
 
 A blocking stop also records an overwatch violation event.
 

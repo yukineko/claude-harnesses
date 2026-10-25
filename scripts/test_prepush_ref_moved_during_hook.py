@@ -33,9 +33,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import unittest
 from pathlib import Path
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_prepush_hook import HookHarness  # noqa: E402
@@ -48,9 +47,9 @@ exit 0
 """
 
 
-def _harness_with_moving_main(tmp_cleanup):
+def _harness_with_moving_main(add_cleanup):
     h = HookHarness(gate_bypass_exit=0)
-    tmp_cleanup.append(h)
+    add_cleanup(h.cleanup)
     git = ["git", "-C", str(h.root)]
     tree = subprocess.run(
         git + ["rev-parse", h.local_sha + "^{tree}"],
@@ -73,36 +72,32 @@ def _harness_with_moving_main(tmp_cleanup):
     return h, moved
 
 
-@pytest.fixture
-def cleanup():
-    hs = []
-    yield hs
-    for h in hs:
-        h.cleanup()
+class RefMovedDuringHookTests(unittest.TestCase):
+    def test_control_unmoved_ref_is_allowed(self):
+        """Anti-vacuity: the same harness with main left alone is ALLOWED, so the
+        block asserted below is about the moved ref and not a harness defect."""
+        h = HookHarness(gate_bypass_exit=0)
+        self.addCleanup(h.cleanup)
+        proc = h.run()
+        assert proc.returncode == 0, proc.stderr
+
+    def test_ref_moved_during_hook_blocks(self):
+        h, moved = _harness_with_moving_main(self.addCleanup)
+        proc = h.run()
+        now = subprocess.run(
+            ["git", "-C", str(h.root), "rev-parse", "refs/heads/main"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        # Precondition: the stand-in really moved main away from the certified sha.
+        assert now == moved != h.local_sha
+        assert proc.returncode != 0, (
+            "pre-push exited 0 although refs/heads/main moved from the certified "
+            "%s to %s during the hook; over https git sends %s unchecked\n--- stderr ---\n%s"
+            % (h.local_sha, moved, moved, proc.stderr)
+        )
 
 
-def test_control_unmoved_ref_is_allowed(cleanup):
-    """Anti-vacuity: the same harness with main left alone is ALLOWED, so the
-    block asserted below is about the moved ref and not a harness defect."""
-    h = HookHarness(gate_bypass_exit=0)
-    cleanup.append(h)
-    proc = h.run()
-    assert proc.returncode == 0, proc.stderr
-
-
-def test_ref_moved_during_hook_blocks(cleanup):
-    h, moved = _harness_with_moving_main(cleanup)
-    proc = h.run()
-    now = subprocess.run(
-        ["git", "-C", str(h.root), "rev-parse", "refs/heads/main"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    # Precondition: the stand-in really moved main away from the certified sha.
-    assert now == moved != h.local_sha
-    assert proc.returncode != 0, (
-        "pre-push exited 0 although refs/heads/main moved from the certified "
-        "%s to %s during the hook; over https git sends %s unchecked\n--- stderr ---\n%s"
-        % (h.local_sha, moved, moved, proc.stderr)
-    )
+if __name__ == "__main__":
+    unittest.main()

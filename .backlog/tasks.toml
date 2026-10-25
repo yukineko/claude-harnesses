@@ -151,38 +151,6 @@ FAILED scripts/test_issue_1182_deny_ledger_unreadable_stale.py::UnreadableStaleL
 ========================= 1 failed, 1 passed in 1.57s =========================='''
 
 [[task]]
-id = "11756f2e"
-title = "Allow scratch-file writes that only name a denied path"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "issue-1180",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = '''GitHub issue #1180. deny_ledger.py check_retry refuses any guarded call whose tool_input mentions a denied main path for 25 calls / 20 min, so a Write to a scratch file outside every repo whose content only names the path is refused with the RETRY text (reaches the same target ... by another spelling). CONTRACT CHANGE: the deny_ledger.py docstring (a SUBSTRING test on purpose ... reads included) and test_deny_ledger_e033c406.py test_retry_through_write_content_is_refused (a worktree file) pin the current behaviour; the fixer needs a user ruling on the narrowing before changing them. Control (scratch Write not naming the path) passes. RED observed at rev 3b151d5e (test committed in 17d33e63), 2026-10-25. Verbatim failing output: 'AssertionError: 2 != 0 : a scratch-file note naming the path is not a retry; stderr="guard-maintree-edit.py refused `Write .../main/tracked.rs` at 2026-10-25T08:30:05+0900 because Refused: editing `.../main/tracked.rs` writes to this project'\''s MAIN working tree.. This call reaches the same target .../main/tracked.rs by another spelling; confirm it is genui...' / '1 failed, 1 passed'.'''
-created_at = 1792884955
-updated_at = 1792884955
-weight = 0.0
-issue_number = 1447
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1447"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_issue_1180_deny_ledger_scratch_write.py"
-rev = "17d33e63690f2749331e403967137f3efccc8f97"
-observed_at = 1792884955
-detail = '''
-exit 1: sonl)\n"
-
-scripts/test_issue_1180_deny_ledger_scratch_write.py:54: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_issue_1180_deny_ledger_scratch_write.py::ScratchWriteNamingDeniedPath::test_scratch_write_whose_content_names_the_denied_path_is_allowed
-========================= 1 failed, 1 passed in 1.46s =========================='''
-
-[[task]]
 id = "51c702da"
 title = "Make check-fail-open ALLOWLIST exempt one line, not every copy"
 project = "/Users/yuki/src/harness"

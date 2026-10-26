@@ -66,3 +66,31 @@ exit 101: ished in 0.17s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
      Running tests/session_roots_outside_repo.rs (target/debug/deps/session_roots_outside_repo-64d6c74858ffb120)
 error: test failed, to rerun pass `-p harness-core --test session_roots_outside_repo`"""
+
+[[task]]
+id = "4807c821"
+title = "guard-maintree-bash blames a concurrent session's merge on the current command"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-26 (session c5b9c02b). scripts/guard-maintree-bash.py (PostToolUse:Bash) refused a command that wrote only inside a scratchpad worktree. Verbatim: Refused: this command modified this project's MAIN working tree outside integration (CLAUDE.md 8: main only receives merges). Changed in /Users/yuki/src/harness: .backlog/tasks.toml ... During that call another session merged into main: 807ca59e (backlog: add 775e5bc8), merge 16f2e9c9 (reflog: merge c5b9-sessionroots-red: Merge made by the 'ort' strategy). Something similar happened earlier the same session. Mechanism (reproduced): the message has no 'HEAD a -> b' line, so HEAD was equal at Pre and Post. The Post snapshot fell inside the other session's git merge window (merged tree already in main's index and worktree, HEAD not yet moved, no MERGE_HEAD; git runs pre-merge-commit there, and .githooks/pre-merge-commit runs gates, so the window is long). post() at scripts/guard-maintree-bash.py:343-357 then falls through to verdict = REFUSE and prints 'this command modified'. A merge that completes between Pre and Post is already allowed (integration_head, :350-355; control test green). Repro: scripts/test_guard_maintree_bash_concurrent_merge.py, committed 0deb7cef, merged 64ca934b; RED 2026-10-26: 1 failed, 2 passed (test_red_post_inside_concurrent_merge_window_does_not_blame_command, guard rc=2 naming tracked.txt). Done when that test is green with both controls still green: the guard allows, or stops claiming 'this command modified' when the change is another session's in-flight merge. The refusal must stay fail-closed when the cause cannot be determined."
+created_at = 1793019226
+updated_at = 1793019226
+weight = 0.0
+issue_number = 1460
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1460"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_concurrent_merge.py"
+rev = "64ca934bcd74f978c745c10922f0695b45751cc8"
+observed_at = 1793019226
+detail = """
+exit 1: 12xs02k588nyw5txm0000gp/T/mtg-observe-3s2v5orj/main status` before reverting anything.
+
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_concurrent_merge.py::GuardConcurrentMerge::test_red_post_inside_concurrent_merge_window_does_not_blame_command
+========================= 1 failed, 2 passed in 1.57s =========================="""

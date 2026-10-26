@@ -1,6 +1,6 @@
 {
   "name": "playbook",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Project knowledge retrieval for Claude Code: a UserPromptSubmit hook that injects the curated notes relevant to your prompt under a strict character budget.",
   "author": {
     "name": "yukineko"

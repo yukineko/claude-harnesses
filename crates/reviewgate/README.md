@@ -28,6 +28,8 @@ The exclusion is appended to the block reason.
 The exclusion is printed to stderr.
 When attribution is undetermined (no/unreadable transcript) every changed file is reviewed.
 
+**Which trees.** The review runs over every root the session wrote into, not only the hook `cwd`: the cwd plus the git toplevel of each file the transcript records as written (`harness_core::session_roots`). An unresolvable written root, or a session that wrote files while no root produced a review set, blocks naming the roots; a session with no recorded writes is unaffected.
+
 A *reviewer* that itself fails is **not** the same as a clean review, so it does not silently allow — that would turn a broken reviewer into a bypass:
 
 - A reviewer subprocess that cannot be spawned / times out / emits unusable output (empty stdout, non-UTF-8 stdout) → **block** (bounded by `max_attempts`).

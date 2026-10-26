@@ -1,5 +1,11 @@
-//! Stop hook: prompt the LLM to update the progress file by returning
-//! additionalContext asking it to write an updated `.claude/progress.md`.
+//! Stop hook: seed `.claude/progress.md` deterministically and tell the USER
+//! (via `systemMessage`) that the progress file should be updated.
+//!
+//! Stop has no documented `additionalContext` (top-level or nested), and a
+//! top-level one was measured (claude -p 2.1.284) to reach neither model nor
+//! user. `systemMessage` is shown to the user, NOT the model, so this hook no
+//! longer nudges the model; the deterministic skeleton write is the only
+//! thing that guarantees the file exists.
 
 use std::path::{Path, PathBuf};
 
@@ -31,7 +37,7 @@ pub enum StopOutcome {
 }
 
 /// Run at Stop. If no progress file exists yet, suggest creating one.
-/// If it does exist, ask the LLM to keep it current.
+/// If it does exist, tell the user (systemMessage) it should be kept current.
 ///
 /// When the progress file cannot be anchored to a project root, this writes
 /// nothing at all and returns [`StopOutcome::NotAnchored`]. It deliberately does
@@ -48,14 +54,14 @@ pub fn on_stop(input: &HookInput, cfg: &Config) -> Result<StopOutcome> {
         Determination::Known(p) => p,
         Determination::Undetermined(why) => {
             let reason = why.as_str().to_string();
-            // Say so on the model's channel. Writing nothing is correct; being
-            // silent about it is not.
+            // Say so on the user's channel (systemMessage). Writing nothing is
+            // correct; being silent about it is not.
             let msg = format!(
                 "taskprog: no progress file was written or read this turn — {reason}. \
                  If this directory should have one, run taskprog from the project root \
                  or set `progress_file` in taskprog.toml."
             );
-            println!("{}", json!({ "additionalContext": msg }));
+            println!("{}", json!({ "systemMessage": msg }));
             return Ok(StopOutcome::NotAnchored(reason));
         }
     };
@@ -67,7 +73,7 @@ pub fn on_stop(input: &HookInput, cfg: &Config) -> Result<StopOutcome> {
 
     // Deterministic, LLM-independent write: if there is no real progress content
     // yet, seed a minimal skeleton ourselves so the file is never left stale/
-    // missing even when the model ignores the additionalContext nudge below.
+    // missing even though the Stop message below only reaches the user, not the model.
     // Fail-soft: an IO error here must never break the turn (Stop runs under
     // run_hook, which already guarantees exit 0, but we also swallow the error).
     if !has_content {
@@ -86,23 +92,23 @@ pub fn on_stop(input: &HookInput, cfg: &Config) -> Result<StopOutcome> {
             ),
         )
     } else {
-        // We just seeded a skeleton — ask the model to flesh it out in place.
+        // We just seeded a skeleton — tell the user it still needs to be filled in.
         (
             "update",
             format!(
-                "\n\nA minimal skeleton was just written to `{}` — please flesh it out.",
+                "\n\nA minimal skeleton was just written to `{}` — it still needs to be filled in.",
                 path.display()
             ),
         )
     };
 
     let msg = format!(
-        "Before ending this session, please {verb} the progress file with what was accomplished, \
-         what is pending, and any blocking issues. Keep it concise (bullet points). \
-         Write it with the Write tool.{current_block}"
+        "taskprog notice (shown to you, not to the model): before ending this session, please {verb} \
+         the progress file with what was accomplished, what is pending, and any blocking \
+         issues (concise bullet points) — ask the agent to write it, or edit it yourself.{current_block}"
     );
 
-    let out = json!({ "additionalContext": msg });
+    let out = json!({ "systemMessage": msg });
     println!("{out}");
     Ok(if has_content {
         StopOutcome::Existing(path)

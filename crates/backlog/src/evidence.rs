@@ -400,20 +400,38 @@ fn build_failure_marker(output: &str) -> Option<&'static str> {
 
 /// Is a non-zero run a BEHAVIOURAL failure (the test ran and failed)?
 /// `Err` names why it is not (build failure, runner usage error, signal...).
+///
+/// For `cargo test`, a `test result: FAILED` line is checked **before** the
+/// build-failure marker: that line is printed only by a test binary that ran
+/// and had a failing test, so it is a behavioural RED even if an unrelated
+/// package's build marker (e.g. "could not compile") also appears in the same
+/// output (GitHub 1347). A cargo run with the marker and no FAILED line is
+/// still refused as a build failure. For pytest and script runners the
+/// build-failure marker is checked first, as before: they have no equivalent
+/// "this test ran and failed" line to outrank it.
 fn classify_red(cmd: &TestCmd, r: &RunResult) -> Result<(), String> {
-    if let Some(m) = build_failure_marker(&r.output) {
-        return Err(format!(
+    let build_failure = |m: &str| {
+        format!(
             "the run failed at BUILD/compile time (output contains {m:?}), not behaviourally; a \
              build failure is not RED. Restructure the test so the pre-fix revision builds and \
              fails an assertion; if no behavioural RED can be shown, the item is cancelled \
              (`backlog cancel ID --reason R`)"
-        ));
+        )
+    };
+    if !matches!(cmd.runner, Runner::CargoTest) {
+        if let Some(m) = build_failure_marker(&r.output) {
+            return Err(build_failure(m));
+        }
     }
     match cmd.runner {
         Runner::CargoTest => {
             if r.output.contains("test result: FAILED") {
                 Ok(())
+            } else if let Some(m) = build_failure_marker(&r.output) {
+                Err(build_failure(m))
             } else {
+                // No "test result: FAILED" and no build marker. The test didn't
+                // produce a conclusive failure output.
                 Err(format!(
                     "cargo exited {} without a `test result: FAILED` line, so no test is shown \
                      to have run and failed (a build/compile failure is not RED; if the RED \

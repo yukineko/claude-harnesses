@@ -269,39 +269,39 @@ fn claim_uninstall_and_dry_run() {
 }
 
 #[test]
-fn claim_complex_prompt_flow_line() {
+fn inject_never_suggests_flow() {
     let sb = Sb::new("flow");
-    let flow = |p: &str| -> bool {
+    for p in [
+        "condukt で回して",
+        "let's run this via /flow",
+        "本番 struct を変更",
+        "production change but can't test",
+        "trait refactor but test impossible",
+        "hello",
+    ] {
         let o = sb.inject(p);
-        assert_eq!(o.code, 0);
-        let has = o.stdout.lines().any(|l| l == format!("→ /flow {p}"));
-        // A bare "→ /flow" marker must only ever appear in the exact form.
-        assert_eq!(has, o.stdout.contains("→ /flow"), "stdout: {:?}", o.stdout);
-        has
-    };
-    // Explicit request: a single signal suffices.
-    assert!(flow("condukt で回して"));
-    // Simple prompt: nothing.
-    assert!(!flow("hello"));
-    // Production alone / Rust alone / constraint alone: not enough.
-    assert!(!flow("production bug fix (normal)"));
-    assert!(!flow("rename a struct field"));
-    assert!(!flow("we can't test this alone"));
-    // Two signal categories: enough (prod+rust, prod+constraint, rust+constraint).
-    assert!(flow("本番 struct を変更"));
-    assert!(flow("production change but can't test"));
-    assert!(flow("trait refactor but test impossible"));
+        assert_eq!(o.code, 0, "prompt {p:?}: {}", o.stderr);
+        assert!(
+            !o.stdout.contains("→ /flow"),
+            "prompt {p:?} got a /flow suggestion: {:?}",
+            o.stdout
+        );
+        assert!(
+            !o.stdout.contains("複雑な問題"),
+            "prompt {p:?} got a complexity banner: {:?}",
+            o.stdout
+        );
+    }
 }
 
 #[test]
-fn claim_flow_and_notes_together() {
+fn notes_still_injected_without_flow_line() {
     let sb = Sb::new("flownotes");
     sb.add("fn note", "zebraxyz", "", "FLOWNOTEBODY", &[]);
-    let p = "condukt で回して zebraxyz";
-    let o = sb.inject(p);
+    let o = sb.inject("condukt で回して zebraxyz");
     assert_eq!(o.code, 0);
-    assert!(o.stdout.contains(&format!("→ /flow {p}")), "{:?}", o.stdout);
     assert!(o.stdout.contains("FLOWNOTEBODY"), "{:?}", o.stdout);
+    assert!(!o.stdout.contains("→ /flow"), "{:?}", o.stdout);
 }
 
 #[test]

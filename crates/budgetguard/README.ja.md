@@ -12,7 +12,7 @@
 4. セッション合計とその日の累積合計を、設定した上限と照合する。
 5. 判定を出す:
    - **上限内** → exit 0、Stop はそのまま進む。
-   - **warn 閾値超過** → `{"additionalContext":"…"}` を出す (助言のみ、ブロックしない)。
+   - **warn 閾値超過** → `{"systemMessage":"…"}` を出す (助言のみ。ユーザーに表示されモデルには届かない。ブロックしない)。
    - **block 閾値超過** → `{"decision":"block","reason":"…"}` を出し、ターンが終わる前に
      エージェントへ保存・コミットを促す。
    - 閾値は「上限以上」で判定し、block が warn に優先する。
@@ -20,7 +20,7 @@
 あわせて gauge のセッションレコードから **キャッシュヒットの健全性** を stderr に報告する。
 `input + cache_read` が `[cache].min_tokens` (既定 200000) に達した後、ヒット率が `[cache].min_rate`
 (既定 0.5、範囲外の値は既定値に戻る) を下回ると、より強い通知が無い場合に限り助言の
-`additionalContext` に昇格する。
+`systemMessage` (ユーザー向け) に昇格する。
 ブロックはしない。
 
 ブロックした Stop は overwatch の violation event も記録する。

@@ -21,7 +21,9 @@ mod policy;
 mod rag;
 mod rng;
 mod semantic;
+mod sessionend;
 mod store;
+mod subagent;
 mod syncstate;
 
 use std::path::{Path, PathBuf};
@@ -33,6 +35,11 @@ use clap::{Parser, Subcommand};
 use harness_core::hook::{read_stdin, run_hook, HookInput};
 use serde_json::json;
 use wait_timeout::ChildExt;
+
+/// `harvest`'s default observation window, shared with the SessionEnd worker.
+const HARVEST_WINDOW_DAYS: u64 = 3;
+/// `harvest`'s default lookback, shared with the SessionEnd worker.
+const HARVEST_LOOKBACK_DAYS: u64 = 60;
 
 #[derive(Parser)]
 #[command(
@@ -250,6 +257,15 @@ enum Command {
     },
     /// UserPromptSubmit hook: inject a routing-memory summary.
     Prompt,
+    /// PreToolUse hook (Agent|Task): set `model` on a sub-agent spawn that
+    /// names none, learned from condukt's scored episodes (never from
+    /// class-"subagent" or unscored ones). Prints nothing (caller's default
+    /// applies) when there is no learned signal. Off with FUGU_ROUTER_AUTO_MODEL=0.
+    AgentModel,
+    /// SubagentStop hook: record the finished sub-agent's USAGE as one
+    /// class-"subagent", `outcome: "unscored"` episode (model id read from its
+    /// transcript). Never a pass/fail: the payload carries no success signal.
+    AgentRecord,
     /// Write a starter fugu-router.toml in the current directory.
     Init {
         #[arg(default_value = "fugu-router.toml")]
@@ -279,17 +295,29 @@ enum Command {
     /// once each merge's observation window has closed: pass = no `fix`/`revert`
     /// commit touching the same (non-noise) files landed within the window.
     /// Idempotent (per-repo cursor in ~/.fugu-router/harvest-cursor.json). Run
-    /// by the SessionEnd hook before `sync`.
+    /// by the SessionEnd worker (`session-end-sync`) before `sync`.
     Harvest {
         /// Repository to harvest (default: the toplevel of the cwd's checkout).
         #[arg(long)]
         repo: Option<PathBuf>,
         /// Days a merge must age before its outcome is decided and recorded.
-        #[arg(long, default_value_t = 3)]
+        #[arg(long, default_value_t = HARVEST_WINDOW_DAYS)]
         window_days: u64,
         /// Only consider merges at most this many days old.
-        #[arg(long, default_value_t = 60)]
+        #[arg(long, default_value_t = HARVEST_LOOKBACK_DAYS)]
         lookback_days: u64,
+    },
+    /// The SessionEnd hook: write a pending marker, start a detached worker
+    /// that runs `harvest` then `sync`, and return at once (Claude Code gives
+    /// SessionEnd hooks ~1.5 s). A worker that dies before finishing is
+    /// reported by the `prompt` hook.
+    SessionEndSync,
+    /// Internal: the detached worker started by `session-end-sync`.
+    #[command(hide = true)]
+    SessionEndSyncWorker {
+        /// The pending marker to take over and clear when done.
+        #[arg(long)]
+        marker: Option<PathBuf>,
     },
     /// Merge another machine's store file(s) into the local stores, deduplicating
     /// by content hash. At least one of --episodes or --playbooks must be given.
@@ -482,6 +510,17 @@ fn seed_rng(eps_len: usize) -> rng::Rng {
     rng::Rng::new(nanos ^ (eps_len as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15))
 }
 
+/// The scored learning population: every episode except class-"subagent"
+/// usage records and any unscored (`outcome: "unscored"`) episode. Every
+/// pass/fail reader — `route`, `suggest`, `confidence`, the Prompt summary,
+/// `stats`' main table and the `agent-model` hook — learns only from this set,
+/// so a usage-only record never counts as a pass or a fail.
+fn condukt_eps(eps: Vec<store::Episode>) -> Vec<store::Episode> {
+    eps.into_iter()
+        .filter(|e| e.class != subagent::CLASS && !e.is_unscored())
+        .collect()
+}
+
 /// Route one task: retrieve neighbours, then explore (bandit) or exploit (threshold).
 fn route_decision(
     cfg: &config::Config,
@@ -492,7 +531,11 @@ fn route_decision(
     rng: &mut rng::Rng,
 ) -> policy::Decision {
     let nb = rag::knn(title, files, eps, cfg.k, cfg.sim_threshold);
-    if cfg.explore {
+    // No similar episode at all: there is nothing to explore FROM, and a
+    // bandit draw over empty Beta(1,1) posteriors would report basis
+    // "bandit" for what is pure noise. Use the deterministic path, which
+    // yields the cold-start "prior" (or "gated") basis.
+    if cfg.explore && !nb.is_empty() {
         policy::decide_bandit(
             title,
             files,
@@ -533,13 +576,23 @@ fn main() {
             // prompt looks like coding work — a stale store is not a property
             // of the prompt.
             // Same for a failed `harvest` (also SessionEnd-only).
-            let notice = match (syncstate::pending(), harvest::pending()) {
-                (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
-                (a, b) => a.or(b),
-            };
+            // And for a SessionEnd sync that started but never finished (the
+            // worker was killed): it writes no sync-error.json, only its
+            // pending marker says so.
+            let notices: Vec<String> = [
+                syncstate::pending(),
+                sessionend::pending(),
+                harvest::pending(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            let notice = (!notices.is_empty()).then(|| notices.join("\n"));
 
             let summary = if inject::looks_actionable(&input.prompt) {
-                let eps = store::load(&cfg.store_path());
+                // Routing-memory summary = scored condukt population only;
+                // class "subagent" and unscored episodes never count.
+                let eps = condukt_eps(store::load(&cfg.store_path()));
                 inject::summary(&eps, cfg.inject_limit)
             } else {
                 None
@@ -585,6 +638,8 @@ fn main() {
             }
             println!("{out}");
         }),
+        Command::AgentModel => run_hook(subagent::cmd_agent_model),
+        Command::AgentRecord => run_hook(subagent::cmd_agent_record),
         other => {
             if let Err(e) = run_user(other) {
                 eprintln!("fugu-router: {e:#}");
@@ -686,6 +741,8 @@ fn run_user(cmd: Command) -> Result<()> {
                 tokens_input,
                 tokens_output,
                 mode: mode.map(|m| m.as_str().to_string()),
+                model_choice: None,
+                outcome: None,
             };
             // A full model ID (`claude-opus-5-5`) is stored under its routing
             // tier with the ID kept as `model_id`, so routing learns from it.
@@ -764,7 +821,7 @@ fn run_user(cmd: Command) -> Result<()> {
         } => {
             let title = text.join(" ");
             let f = split_files(&files);
-            let eps = store::load(&cfg.store_path());
+            let eps = condukt_eps(store::load(&cfg.store_path()));
             let mut rng = seed_rng(eps.len());
             let d = route_decision(&cfg, &title, &f, &class, &eps, &mut rng);
             let resolved_mode = resolve_mode(mode, &cfg)?;
@@ -778,7 +835,7 @@ fn run_user(cmd: Command) -> Result<()> {
         Command::Confidence { files, class, text } => {
             let title = text.join(" ");
             let f = split_files(&files);
-            let eps = store::load(&cfg.store_path());
+            let eps = condukt_eps(store::load(&cfg.store_path()));
             let score = confidence::calibrated_confidence(
                 &title,
                 &f,
@@ -814,6 +871,13 @@ fn run_user(cmd: Command) -> Result<()> {
             window_days,
             lookback_days,
         } => harvest::cmd_harvest(&cfg, repo, window_days, lookback_days),
+        Command::SessionEndSync => sessionend::cmd_session_end(),
+        Command::SessionEndSyncWorker { marker } => sessionend::cmd_session_end_worker(
+            &cfg,
+            marker,
+            HARVEST_WINDOW_DAYS,
+            HARVEST_LOOKBACK_DAYS,
+        ),
         Command::Fingerprint { dir } => {
             let root = dir.unwrap_or_else(|| PathBuf::from("."));
             let fp = fingerprint::skill_fingerprint(&root).with_context(|| {
@@ -826,7 +890,9 @@ fn run_user(cmd: Command) -> Result<()> {
             CodeIndexAction::Build { root, if_stale } => cmd_code_index_build(root, if_stale),
             CodeIndexAction::Search { query, root, k } => cmd_code_index_search(query, root, k),
         },
-        Command::Prompt => unreachable!("handled in main"),
+        Command::Prompt | Command::AgentModel | Command::AgentRecord => {
+            unreachable!("handled in main")
+        }
     }
 }
 
@@ -1133,7 +1199,7 @@ fn cmd_route(
     };
     let mut dec: decomp::Decomposition =
         serde_json::from_str(&raw).context("parsing decomposition JSON")?;
-    let eps = store::load(&cfg.store_path());
+    let eps = condukt_eps(store::load(&cfg.store_path()));
     let mut rng = seed_rng(eps.len());
 
     // Budget-aware downgrade (soft dep): if budgetguard reports the day's spend
@@ -1300,26 +1366,21 @@ fn spawn_and_wait_timeout(
 /// Sync the record store with `sync_repo`, and leave a durable trace when it
 /// cannot finish.
 ///
-/// STREAM CONTRACT — do not "tidy" these back onto a single stream. The only
-/// caller is the `SessionEnd` hook: Claude Code discards a hook's stdout, and
-/// surfaces its stderr to the user. So
-///
-///   * progress and success go to **stdout** — informative when a human runs
-///     `fugu-router sync` by hand, silent at `SessionEnd`;
-///   * failure goes to **stderr** (the `Err` returned here, printed by `main`),
-///     which is the stream the user actually reads.
+/// STREAM CONTRACT — do not "tidy" these back onto a single stream. Progress
+/// and success go to **stdout**; failure goes to **stderr** (the `Err`
+/// returned here, printed by the caller), so a human running `fugu-router
+/// sync` by hand can tell the two apart.
 ///
 /// Measured 2026-10-02: every message, success included, used to go to stderr,
 /// and stdout was empty, so a clean sync emitted three lines at the end of every
 /// single session and was reported as "fugu-router sync がエラーをだしている".
-/// The older claim that a `SessionEnd` hook's "stderr reaches nobody" was wrong
-/// in the direction that matters — it reaches the user — which is exactly why
-/// stderr has to mean failure here.
 ///
-/// That stderr line is transient, though: it appears as the session ends and is
-/// gone by the next one, and it never reaches an agent. So a failure is ALSO
-/// written to `syncstate`, which the `UserPromptSubmit` hook surfaces on the
-/// next prompt; a success clears it.
+/// The automatic caller is the detached `session-end-sync` worker
+/// (`sessionend.rs`), whose stdout/stderr go to `~/.fugu-router/session-end.log`,
+/// which nobody reads in passing. So a failure is ALSO written to `syncstate`,
+/// which the `UserPromptSubmit` hook surfaces on the next prompt; a success
+/// clears it. A worker killed before it gets here writes nothing at all; its
+/// pending marker covers that case.
 fn cmd_sync(cfg: &config::Config, pull_only: bool, push_only: bool) -> Result<()> {
     match sync_inner(cfg, pull_only, push_only) {
         Ok(()) => {
@@ -1602,9 +1663,74 @@ fn model_stats(
     agg
 }
 
+/// JSON rendering of a [`model_stats`] table.
+fn model_stats_json(
+    agg: &std::collections::BTreeMap<String, (usize, usize, CostSum)>,
+) -> serde_json::Map<String, serde_json::Value> {
+    agg.iter()
+        .map(|(m, (n, p, c))| {
+            (
+                m.clone(),
+                json!({
+                    "count": n,
+                    "passes": p,
+                    "pass_rate": if *n > 0 { *p as f64 / *n as f64 } else { 0.0 },
+                    // `null` when no episode of this model has a measured cost.
+                    "avg_cost_usd": c.avg(),
+                    "cost_samples": c.n,
+                }),
+            )
+        })
+        .collect()
+}
+
+fn print_model_rows(agg: &std::collections::BTreeMap<String, (usize, usize, CostSum)>) {
+    for (m, (n, p, c)) in agg {
+        println!(
+            "  {m:<6} {p}/{n} pass ({:.0}%)  avg {}",
+            if *n > 0 {
+                *p as f64 / *n as f64 * 100.0
+            } else {
+                0.0
+            },
+            fmt_avg_cost(c)
+        );
+    }
+}
+
+/// Usage counts for class-"subagent" episodes: `(per tier, per model_choice)`.
+/// No pass rate — these episodes are usage records. A missing `model_choice`
+/// is counted under `"unrecorded"`, never folded into a real choice.
+type UsageCounts = (
+    std::collections::BTreeMap<String, usize>,
+    std::collections::BTreeMap<String, usize>,
+);
+
+fn subagent_usage(eps: &[store::Episode]) -> UsageCounts {
+    let mut by_model = std::collections::BTreeMap::new();
+    let mut by_choice = std::collections::BTreeMap::new();
+    for e in eps {
+        *by_model.entry(e.model.clone()).or_insert(0) += 1;
+        let choice = e.model_choice.as_deref().unwrap_or("unrecorded");
+        *by_choice.entry(choice.to_string()).or_insert(0) += 1;
+    }
+    (by_model, by_choice)
+}
+
+/// `stats`: the main table (and `episodes` / coverage) is the scored condukt
+/// population only ([`condukt_eps`]: no class-"subagent", no unscored).
+/// Class-"subagent" episodes are reported apart under `subagent` as usage
+/// counts (per tier, per model_choice) with no pass rate.
 fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
-    let eps = store::load(&cfg.store_path());
+    let all = store::load(&cfg.store_path());
+    let sub_eps: Vec<store::Episode> = all
+        .iter()
+        .filter(|e| e.class == subagent::CLASS)
+        .cloned()
+        .collect();
+    let eps = condukt_eps(all);
     let agg = model_stats(&eps);
+    let (sub_models, sub_choices) = subagent_usage(&sub_eps);
     // Duration coverage: how many episodes carry a real (Some) measurement out
     // of the total — surfaced so the low recording rate is visible.
     let measured_n = eps.iter().filter(|e| e.duration_secs.is_some()).count();
@@ -1613,45 +1739,34 @@ fn cmd_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
     let cost_measured_n = eps.iter().filter(|e| e.cost_usd.is_some()).count();
     let total_n = eps.len();
     if as_json {
-        let obj: serde_json::Map<String, serde_json::Value> = agg
-            .iter()
-            .map(|(m, (n, p, c))| {
-                (
-                    m.clone(),
-                    json!({
-                        "count": n,
-                        "passes": p,
-                        "pass_rate": if *n > 0 { *p as f64 / *n as f64 } else { 0.0 },
-                        // `null` when no episode of this model has a measured cost.
-                        "avg_cost_usd": c.avg(),
-                        "cost_samples": c.n,
-                    }),
-                )
-            })
-            .collect();
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "episodes": eps.len(),
                 "duration_coverage": {"recorded": measured_n, "total": total_n},
                 "cost_coverage": {"recorded": cost_measured_n, "total": total_n},
-                "models": obj,
+                "models": model_stats_json(&agg),
+                "subagent": {
+                    "episodes": sub_eps.len(),
+                    "models": sub_models,
+                    "model_choice": sub_choices,
+                },
             }))?
         );
     } else {
         println!("episodes: {}", eps.len());
         println!("duration coverage: {measured_n}/{total_n} episodes measured");
         println!("cost coverage: {cost_measured_n}/{total_n} episodes measured");
-        for (m, (n, p, c)) in &agg {
-            println!(
-                "  {m:<6} {p}/{n} pass ({:.0}%)  avg {}",
-                if *n > 0 {
-                    *p as f64 / *n as f64 * 100.0
-                } else {
-                    0.0
-                },
-                fmt_avg_cost(c)
-            );
+        print_model_rows(&agg);
+        println!(
+            "subagent usage (unscored, no pass rate): {} episodes",
+            sub_eps.len()
+        );
+        for (m, n) in &sub_models {
+            println!("  {m:<6} {n}");
+        }
+        for (c, n) in &sub_choices {
+            println!("  model_choice {c}: {n}");
         }
     }
     Ok(())
@@ -1719,7 +1834,11 @@ fn delegation_buckets(
 }
 
 fn cmd_delegation_stats(cfg: &config::Config, as_json: bool) -> Result<()> {
-    let eps = store::load(&cfg.store_path());
+    // Pass rates below: unscored (usage-only) episodes carry no outcome.
+    let eps: Vec<store::Episode> = store::load(&cfg.store_path())
+        .into_iter()
+        .filter(|e| !e.is_unscored())
+        .collect();
     let agg = delegation_buckets(&eps);
 
     let total: usize = agg.values().map(|b| b.count).sum();
@@ -1791,7 +1910,11 @@ struct ClassModelDuration {
 
 fn cmd_duration_outliers(cfg: &config::Config, as_json: bool, threshold: f64) -> Result<()> {
     use std::collections::BTreeMap;
-    let eps = store::load(&cfg.store_path());
+    // Pass rates below: unscored (usage-only) episodes carry no outcome.
+    let eps: Vec<store::Episode> = store::load(&cfg.store_path())
+        .into_iter()
+        .filter(|e| !e.is_unscored())
+        .collect();
 
     // Duration coverage: how many episodes carry a real measurement out of the
     // total. Surfaced so the (historically low) recording rate is visible

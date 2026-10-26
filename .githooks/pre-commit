@@ -113,7 +113,18 @@
 #                                                 does not parse as TOML. Also runs
 #                                                 for merge commits via
 #                                                 pre-merge-commit (backlog ece51b35)
-#   clippy-lints      check-clippy-lints.py      a weakened deny-lint CONFIG:
+#   projkey-           check-projkey-store-       a harness_core::projkey call
+#     classification   classification.py          site (repo_root/project_key/
+#                                                 main_worktree_root) under
+#                                                 crates/*/src not classified
+#                                                 shared/worktree-local in
+#                                                 scripts/projkey-store-
+#                                                 classification.toml, a drifted
+#                                                 count, or a stale entry
+#                                                 (compass DoD14(a)). Existed
+#                                                 unwired and red until
+#                                                 2026-10-23
+#   clippy-lints     check-clippy-lints.py      a weakened deny-lint CONFIG:
 #                                                 a changed crate whose HEAD
 #                                                 Cargo.toml had `[lints]
 #                                                 workspace = true` no longer
@@ -226,6 +237,7 @@ run check-cross-crate-constants.py crossx-constants
 run check-launcher-exec-bit.py launcher-exec-bit
 run check-clippy-lints.py     clippy-lints
 run check-backlog-store.py    backlog-store
+run check-projkey-store-classification.py projkey-classification
 
 # main-tree-guard — CLAUDE.md §8, the one gate here that is Rust rather than
 # python3, because its decision is a tri-state over injectable inputs and is

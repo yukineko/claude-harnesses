@@ -3,8 +3,13 @@
 #
 # With no build for the host, `gate` (PreToolUse) cannot judge the spawn, so it
 # BLOCKS (exit 2, reason on stderr) instead of exiting 0, which would be an
-# allow. `reset` (UserPromptSubmit) exits 0 so the user's prompt still goes
-# through; with no binary, `gate` blocks anyway.
+# allow. `reset` (UserPromptSubmit) still exits 0 so the user's prompt goes
+# through, but NOT silently: the real binary reports a failed reset via
+# additionalContext, so its consumer reads silence as "reset happened, the
+# refutation slot is free". Silence here would be indistinguishable from that,
+# so the fallback prints a UserPromptSubmit JSON (systemMessage +
+# additionalContext) saying reset did NOT run and the slot state is UNKNOWN.
+# With no binary, `gate` blocks anyway.
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 case "$(uname -s)" in
@@ -27,10 +32,21 @@ if [ -x "$binary" ]; then
   exec "$binary" "$@"
 fi
 
-echo "onepass: no bundled binary for $os-$arch ($binary); the Agent/Task spawn was not judged, so it is BLOCKED. Build it with scripts/build-plugin-bin.sh on that platform." >&2
+fix="Build it with scripts/build-plugin-bin.sh on that platform."
 
 case "${1:-}" in
-  gate) exit 2 ;;
-  reset) exit 0 ;;
-  *) exit 1 ;;
+  gate)
+    echo "onepass: no bundled binary for $os-$arch ($binary); the Agent/Task spawn was not judged, so it is BLOCKED. $fix" >&2
+    exit 2
+    ;;
+  reset)
+    echo "onepass: no bundled binary for $os-$arch ($binary); reset did NOT run. $fix" >&2
+    msg="onepass reset did NOT run: no bundled binary for $os-$arch. The refutation-spawn slot state is UNKNOWN, not reset. Agent/Task spawns are blocked by the gate fallback anyway. $fix"
+    printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"%s"}}\n' "$msg" "$msg"
+    exit 0
+    ;;
+  *)
+    echo "onepass: no bundled binary for $os-$arch ($binary); '$*' did NOT run. $fix" >&2
+    exit 1
+    ;;
 esac

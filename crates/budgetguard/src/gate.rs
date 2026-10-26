@@ -2,7 +2,8 @@
 //!
 //! A budget violation emits `{"decision":"block","reason":"…"}` so Claude
 //! receives the overage notice and can wind down gracefully. A warn-only
-//! crossing emits `{"additionalContext":"…"}` (advisory, no block).
+//! crossing emits `{"systemMessage":"…"}` (advisory, shown to the user, not
+//! the model; no block).
 //!
 //! **Something that could not be determined is not a spend of $0.** Every input
 //! this gate needs can fail to be measured, and each failure resolves to the
@@ -488,7 +489,7 @@ pub fn emit_and_exit(result: Option<GateResult>) -> ! {
             );
             // A degraded hit rate is advisory, not a block: it costs money, it
             // does not violate a limit the operator set. But it must reach the
-            // user, so it is promoted to the same `additionalContext` channel a
+            // user, so it is promoted to the same `systemMessage` channel a
             // budget warning uses when nothing louder is already being said. A
             // Warn or Block already speaks; appending would bury both.
             let verdict = match (r.verdict, &r.cache) {
@@ -500,7 +501,7 @@ pub fn emit_and_exit(result: Option<GateResult>) -> ! {
             match verdict {
                 Verdict::Allow => std::process::exit(0),
                 Verdict::Warn(msg) => {
-                    println!("{}", json!({ "additionalContext": msg }));
+                    println!("{}", json!({ "systemMessage": msg }));
                     std::process::exit(0);
                 }
                 Verdict::Block(reason, _check_kind) => {

@@ -312,8 +312,11 @@ SH_RC_RECOVERED = re.compile(r"\|\|\s*(\w+=\$\?|true\b|:\s|\{)")
 SH_PROBE = re.compile(r"\bcommand\s+-v\b|\btype\s+-p\b|\bwhich\b")
 
 # ── allowlist ───────────────────────────────────────────────────────────────
-# Genuine, reviewed exceptions. Each entry suppresses a hit whose (relpath,
-# pattern, and `needle` substring of the offending line) all match. Every entry
+# Genuine, reviewed exceptions. Each entry suppresses AT MOST ONE hit per
+# file: the hit whose (relpath, pattern, `needle` substring of the offending
+# line) all match. If the needle matches more than one hit of the same path and
+# pattern, NONE are exempted (fail closed: which copy was reviewed is
+# undetermined). See filter_allowlisted(). Every entry
 # MUST carry a reason; a "filed" reason names the backlog id tracking the real
 # fix (grandfathered so this detector can ship and block NEW instances — never a
 # silent excuse).
@@ -588,16 +591,36 @@ def scan_shell(lines: list[str]) -> list[tuple[int, str, str]]:
     return hits
 
 
-def _allowlisted(relpath: str, name: str, line: str) -> bool:
-    for e in ALLOWLIST:
-        if e["path"] == relpath and e["pattern"] == name and e["needle"] in line:
-            return True
-    return False
+def filter_allowlisted(relpath: str, raw_hits: list[tuple[int, str, str]]) -> list[tuple[int, str, str]]:
+    """Return the hits NOT exempted by ALLOWLIST. The single place the allowlist
+    rule lives; scan_file and check-fail-open-diff.py _hits both call it.
+
+    An entry (path, pattern, needle) exempts AT MOST ONE hit per file: if its
+    needle matches exactly one hit of that pattern, that hit is exempted. If it
+    matches more than one, NONE are exempted (fail closed: which copy was
+    reviewed is undetermined). If it matches none, nothing is exempted. The
+    exemption is keyed on (line, pattern), so a hit of a DIFFERENT pattern on
+    the same line is still reported."""
+    exempted: set[tuple[int, str]] = set()
+    for entry in ALLOWLIST:
+        if entry["path"] != relpath:
+            continue
+        matching = [
+            h for h in raw_hits
+            if h[2] == entry["pattern"] and entry["needle"] in h[1]
+        ]
+        if len(matching) == 1:
+            exempted.add((matching[0][0], matching[0][2]))
+    return [h for h in raw_hits if (h[0], h[2]) not in exempted]
 
 
 def scan_file(path: Path) -> list[tuple[int, str, str]]:
     """Scan one file. Unreadable / undecodable → a finding (never silently clean,
-    mirroring injectguard). Allowlisted hits are dropped."""
+    mirroring injectguard). Allowlisted hits are dropped. An ALLOWLIST entry
+    exempts AT MOST ONE hit per file: if an entry (path, pattern, needle) matches
+    more than one hit in the file, all matching hits are reported (fail closed),
+    not silently exempted. This prevents duplicate/copied lines from being
+    exempted when only one instance was reviewed."""
     try:
         raw = path.read_bytes()
     except OSError as e:
@@ -614,8 +637,8 @@ def scan_file(path: Path) -> list[tuple[int, str, str]]:
     else:
         raw_hits = []
     rel = str(path.relative_to(REPO)) if REPO in path.parents else str(path)
-    return [(ln, txt, nm) for (ln, txt, nm) in raw_hits
-            if not _allowlisted(rel, nm, txt)]
+
+    return filter_allowlisted(rel, raw_hits)
 
 
 class BaselineError(Exception):

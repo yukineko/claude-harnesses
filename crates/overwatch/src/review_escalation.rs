@@ -9,17 +9,19 @@
 //! `overwatch` taking a `condukt` crate dependency would be a cycle. Instead
 //! this module reads condukt's `escalations.json` **by path**, as fail-soft
 //! foreign JSON, using ONLY `harness_core` primitives —
-//! `harness_core::config::base_dir` / `harness_core::projkey::{repo_root,
-//! project_key}`, mirroring condukt's own `escalations_path` keying.
+//! `harness_core::config::base_dir` / `harness_core::projkey::{main_worktree_root,
+//! repo_root, project_key}`, mirroring condukt's own `escalations_paths` keying.
 //!
-//! NOTE: this deliberately does NOT follow [`crate::store`]'s keying. The
-//! overwatch store is keyed on the MAIN worktree root
-//! (`projkey::main_worktree_root`, so linked worktrees share it), whereas
-//! condukt keys `escalations.json` on `projkey::repo_root` — i.e. per linked
-//! worktree. This reader must land on the file condukt actually writes, so it
-//! mirrors condukt, not the overwatch store. Consequence: escalations filed
-//! from a linked worktree are only visible to a review-queue run from that
-//! same worktree.
+//! NOTE: this reader must land on the file condukt actually writes, so it
+//! mirrors condukt's keying (which today coincides with [`crate::store`]'s):
+//! condukt keys `escalations.json` on the MAIN worktree root
+//! (`projkey::main_worktree_root`, via `state::project_state_dir`), so every
+//! checkout of a repo — the main tree and each linked worktree — shares one
+//! queue. Like condukt, it also reads this checkout's LEGACY per-checkout file
+//! (keyed on `projkey::repo_root`, written by a condukt from before the
+//! re-keying) when that is a different file, so already-written escalations are
+//! not lost. A main worktree root that cannot be determined is `Undetermined`,
+//! never a fallback to the per-checkout key (see [`condukt_escalations_paths`]).
 //!
 //! # "Could not read" is not "nobody is asking"
 //!
@@ -122,16 +124,23 @@ struct Registry {
 /// or half-written artefact, not a statement that nothing is pending.
 ///
 /// The absent-FILE case is a property of the read, not of any text, and lives
-/// in [`scan_open_escalations`] — which is this function's only production
-/// caller, so the two can never disagree about what a given text holds.
+/// in [`scan_open_escalations`].
+///
+/// `#[cfg(test)]`: this is [`parse_registry`] filtered to open rows, and
+/// [`scan_open_escalations`] calls `parse_registry` directly (it must merge the
+/// canonical and legacy files by id BEFORE dropping resolved rows, as condukt
+/// does), so both share one parse and can never disagree about what a given
+/// text holds. Kept as the unit tests' entry to that parse contract.
+#[cfg(test)]
 pub fn parse_open_escalations(txt: &str, source: &str) -> Determination<Vec<ConduktEscalation>> {
+    parse_registry(txt, source).map(only_open)
+}
+
+/// Every record of a registry text, resolved or not. Same parse contract as
+/// [`parse_open_escalations`] (which is this, filtered).
+fn parse_registry(txt: &str, source: &str) -> Determination<Vec<ConduktEscalation>> {
     match serde_json::from_str::<Registry>(txt) {
-        Ok(reg) => Determination::known(
-            reg.escalations
-                .into_iter()
-                .filter(|e| !e.resolved)
-                .collect(),
-        ),
+        Ok(reg) => Determination::known(reg.escalations),
         Err(e) => Determination::undetermined(format!(
             "condukt's escalation registry at {source} does not parse: {e} — reading it as \
              an empty queue would report a blocked human question as no question at all"
@@ -139,44 +148,95 @@ pub fn parse_open_escalations(txt: &str, source: &str) -> Determination<Vec<Cond
     }
 }
 
-/// Derive the DEFAULT path to condukt's `escalations.json` for the project
-/// rooted at (or above) `cwd`:
-/// `harness_core::config::base_dir("condukt")/state/<project-key>/escalations.json`
-/// — mirroring condukt's own `escalate.rs::escalations_path` /
-/// `config.rs::base_dir` derivation (`projkey::repo_root`, i.e. per checkout —
-/// NOT the main-worktree keying [`crate::store`] uses; see the module doc).
+fn only_open(rows: Vec<ConduktEscalation>) -> Vec<ConduktEscalation> {
+    rows.into_iter().filter(|e| !e.resolved).collect()
+}
+
+const ESCALATIONS_FILE: &str = "escalations.json";
+
+/// Every DEFAULT-path `escalations.json` that may hold this project's
+/// escalations, canonical first — mirroring condukt's own
+/// `escalate.rs::escalations_paths` (via `state::project_state_dirs`):
+///
+/// 1. canonical: `<base_dir("condukt")>/state/<project-key of
+///    main_worktree_root(cwd)>/escalations.json`, the one file every checkout of
+///    the repo shares and the only one condukt writes new escalations to;
+/// 2. legacy, only when it differs: the same under the project key of
+///    `repo_root(cwd)` — where a pre-re-keying condukt wrote from this linked
+///    worktree. condukt still reads it, so this reader does too.
+///
+/// An undeterminable main worktree root is `Undetermined`, forwarded verbatim
+/// (not re-minted). There is deliberately NO fallback to the per-checkout key:
+/// that would read a different store than condukt writes and report its
+/// emptiness as a real zero — the exact split this function exists to close.
+///
 /// See the module doc for the known non-default-`state_dir` limitation.
-pub fn condukt_escalations_path(cwd: &Path) -> PathBuf {
-    let base = harness_core::config::base_dir("condukt");
-    let repo_root = harness_core::projkey::repo_root(cwd);
-    let project_key = harness_core::projkey::project_key(&repo_root);
-    base.join("state")
-        .join(project_key)
-        .join("escalations.json")
+pub fn condukt_escalations_paths(cwd: &Path) -> Determination<Vec<PathBuf>> {
+    let state = harness_core::config::base_dir("condukt").join("state");
+    let main_root = match harness_core::projkey::main_worktree_root(cwd) {
+        Determination::Known(root) => root,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let file_for = |root: &Path| {
+        state
+            .join(harness_core::projkey::project_key(root))
+            .join(ESCALATIONS_FILE)
+    };
+    let canonical = file_for(&main_root);
+    let legacy = file_for(&harness_core::projkey::repo_root(cwd));
+    let mut paths = vec![canonical];
+    if legacy != paths[0] {
+        paths.push(legacy);
+    }
+    Determination::known(paths)
 }
 
 /// Read condukt's open escalations for the project at `cwd` — the sanctioned
-/// reader, and the only one whose answer may feed a decision.
+/// reader, and the only one whose answer may feed a decision. Reads every file
+/// of [`condukt_escalations_paths`] and merges them canonical first; a record id
+/// already seen in an earlier file is reported once, from the earlier file (as
+/// condukt's `escalate.rs::load_all` does), and only then are resolved records
+/// dropped.
 ///
-/// * no file (condukt never ran here, or never escalated) → `Known(vec![])`.
-///   A real observation of zero: nothing was ever written, so nothing is
-///   pending. See the module note for why this arm is NOT undetermined.
-/// * file read and parsed → `Known(open rows)`.
-/// * file present but unreadable (permissions, non-UTF-8, I/O) →
+/// * main worktree root undeterminable → `Undetermined` (see
+///   [`condukt_escalations_paths`]).
+/// * no file anywhere (condukt never ran here, or never escalated) →
+///   `Known(vec![])`. A real observation of zero: nothing was ever written, so
+///   nothing is pending. See the module note for why this arm is NOT
+///   undetermined.
+/// * every present file read and parsed → `Known(open rows)`.
+/// * ANY present file unreadable (permissions, non-UTF-8, I/O) →
 ///   `Undetermined`, forwarded verbatim from
 ///   [`harness_core::boundary::read_to_string`] and deliberately not re-minted,
 ///   so the undetermined telemetry counts this opacity once.
-/// * file present but not a parseable registry → `Undetermined` (see
+/// * ANY present file not a parseable registry → `Undetermined` (see
 ///   [`parse_open_escalations`]).
 pub fn scan_open_escalations(cwd: &Path) -> Determination<Vec<ConduktEscalation>> {
-    let path = condukt_escalations_path(cwd);
-    match harness_core::boundary::read_to_string(&path) {
-        Determination::Known(None) => Determination::known(Vec::new()),
-        Determination::Known(Some(txt)) => {
-            parse_open_escalations(&txt, &path.display().to_string())
+    let paths = match condukt_escalations_paths(cwd) {
+        Determination::Known(paths) => paths,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let mut merged: Vec<ConduktEscalation> = Vec::new();
+    for path in &paths {
+        let rows = match harness_core::boundary::read_to_string(path) {
+            Determination::Known(None) => continue,
+            Determination::Known(Some(txt)) => {
+                match parse_registry(&txt, &path.display().to_string()) {
+                    Determination::Known(rows) => rows,
+                    Determination::Undetermined(why) => return Determination::Undetermined(why),
+                }
+            }
+            Determination::Undetermined(why) => return Determination::Undetermined(why),
+        };
+        for e in rows {
+            // An empty id is a partial record this mirror tolerates; it cannot
+            // be matched across files, so it is never treated as a duplicate.
+            if e.id.is_empty() || !merged.iter().any(|m| m.id == e.id) {
+                merged.push(e);
+            }
         }
-        Determination::Undetermined(why) => Determination::Undetermined(why),
     }
+    Determination::known(only_open(merged))
 }
 
 /// BEST-EFFORT read: [`scan_open_escalations`] with the undetermined arm
@@ -250,7 +310,7 @@ mod tests {
     }
 
     /// Run `f` with `$HOME` pointed at a fresh temp dir (so
-    /// `condukt_escalations_path` resolves inside it and the real
+    /// `condukt_escalations_paths` resolves inside it and the real
     /// `~/.condukt` is never touched), handing it a project cwd underneath.
     ///
     /// `$HOME` is restored and the crate-wide lock released BEFORE the caller
@@ -288,9 +348,21 @@ mod tests {
         out
     }
 
+    /// The canonical (first) registry path for `cwd`, failing the test if the
+    /// paths could not be determined.
+    #[track_caller]
+    fn canonical_path(cwd: &Path) -> PathBuf {
+        match condukt_escalations_paths(cwd) {
+            Determination::Known(paths) => paths[0].clone(),
+            Determination::Undetermined(why) => {
+                unreachable!("test fixture paths must be determinable: {why:?}")
+            }
+        }
+    }
+
     /// Write condukt's registry file for `cwd` (creating its parents).
     fn write_registry(cwd: &Path, bytes: &[u8]) {
-        let path = condukt_escalations_path(cwd);
+        let path = canonical_path(cwd);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, bytes).unwrap();
     }
@@ -469,7 +541,7 @@ mod tests {
     #[test]
     fn condukt_escalations_path_is_rooted_under_condukt_state() {
         let cwd = std::env::temp_dir();
-        let path = condukt_escalations_path(&cwd);
+        let path = canonical_path(&cwd);
         assert!(path.ends_with("escalations.json"));
         let s = path.to_string_lossy();
         assert!(s.contains(".condukt"));

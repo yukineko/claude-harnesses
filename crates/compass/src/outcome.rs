@@ -11,8 +11,10 @@
 //!
 //! # Persistence
 //!
-//! Outcomes are appended to a small JSON array at `.compass/outcomes.json` (same
-//! `.compass/` dir as the charter, resolved off the project root). Load → append
+//! Outcomes are appended to a small JSON array at `<root>/.compass/outcomes.json`.
+//! The CLI passes the project's MAIN worktree root as `<root>` (not the cwd the
+//! charter is read from), because the file is gitignored and a per-checkout
+//! store would split the history across linked worktrees. Load → append
 //! → atomic-write, mirroring the charter/hypothesis store conventions. Each
 //! record snapshots the charter's `north_star` and `current_gap` at record time
 //! so it is self-describing, plus a monotonic `seq` and a `recorded_at`

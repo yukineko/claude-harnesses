@@ -64,6 +64,7 @@ pub mod repeat;
 pub mod retrieval;
 pub mod scorer;
 pub mod session;
+pub mod session_roots;
 pub mod shell;
 pub mod spans;
 pub mod store;

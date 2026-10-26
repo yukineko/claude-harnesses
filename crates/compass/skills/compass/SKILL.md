@@ -106,7 +106,7 @@ charter に書いた measuring_stick は handoff に印字されるだけで**�
 compass outcome --verdict <forward|unchanged|backward> --evidence "<観測した成果>"
 ```
 - verdict は move の diff・テスト結果・gap への接近度から**あなた(LLM)が判定**する（前進 / 不変 / 後退）。
-- `--evidence` は計測値必須（証拠なしは失敗＝ build ≠ validate）。記録は `.compass/outcomes.json` に蓄積され、
+- `--evidence` は計測値必須（証拠なしは失敗＝ build ≠ validate）。記録は project の main worktree root の `.compass/outcomes.json`（全 linked worktree で共有。root 判定不能なら拒否）に蓄積され、
   次回 `compass gap` の `last_outcome` として再浮上する。
 - `/flow` 経由で回している場合は sink（Step 3-3）が自動でこれを呼ぶので、手動の Step 8 は不要。
 

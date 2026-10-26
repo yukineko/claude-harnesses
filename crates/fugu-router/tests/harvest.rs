@@ -730,10 +730,11 @@ fn self_sync_subject_uses_the_actual_branch_name_master() {
 }
 
 // ---------------------------------------------------------------------------
-// Which stream the messages go to. `harvest` is run by the same `SessionEnd`
-// hook as `sync` (`hooks/hooks.json`: `fugu-router harvest; fugu-router sync`),
-// and a SessionEnd hook's stderr is surfaced to the user while its stdout is
-// discarded. So the stream is the user-visible behaviour, not a detail.
+// Which stream the messages go to. `harvest` runs alongside `sync` at session
+// end (originally the hook `fugu-router harvest; fugu-router sync`; since
+// 0.1.62 the detached `session-end-sync` worker, whose stdout/stderr go to
+// `~/.fugu-router/session-end.log`). When a human runs either verb by hand,
+// stderr still means failure and stdout progress, so the split still matters.
 //
 // Measured 2026-10-02 at rev b478fdcf (fugu-router 0.1.31): the success line
 // `fugu-router: harvested {n} merge episode(s)` was an `eprintln!`

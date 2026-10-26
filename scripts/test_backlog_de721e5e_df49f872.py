@@ -56,7 +56,6 @@ class BacklogDf49f872(unittest.TestCase):
     def test_control_checker_exists(self):
         self.assertTrue((REPO / "scripts" / "check-projkey-store-classification.py").is_file())
 
-    @unittest.expectedFailure  # backlog df49f872: open defect, remove when fixed
     def test_pre_commit_runs_projkey_store_classification(self):
         self.assertIn("pre-commit", invoking_hooks("check-projkey-store-classification.py"))
 

@@ -191,6 +191,27 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
+    // Every checkout the session wrote into, not only the hook cwd: a session
+    // working in a linked worktree while the hook runs in the primary tree must
+    // have the worktree's checks run (otherwise the clean primary tree reads as
+    // "green, checks: []"). Extra roots are evaluated here; the hook cwd keeps
+    // the existing flow below.
+    let roots = match harness_core::session_roots::resolve(&root, &input.transcript_path) {
+        harness_core::verdict::Determination::Known(sr) => sr,
+        harness_core::verdict::Determination::Undetermined(why) => stop_block_now(
+            &format!(
+                "donegate: BLOCKED - the session's roots cannot be determined ({}). No checks \
+                 ran for the roots it wrote into. Fix the cause or use `donegate skip --reason ...`.",
+                why.as_str()
+            ),
+            interactive,
+        ),
+    };
+    // Only the single-root, no-writes case may take the early "nothing declared"
+    // allow below; every other shape is judged by the per-root loop that follows
+    // the operator escapes.
+    let single_plain_root = roots.roots.len() == 1 && !roots.wrote_any;
+
     let (cfg, declaration) = Config::resolve(&root);
     if !cfg.enabled {
         // An explicit opt-out written in a config we were entitled to read.
@@ -218,7 +239,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         );
     }
 
-    if cfg.checks.is_empty() {
+    if cfg.checks.is_empty() && single_plain_root {
         // A real observation: nothing was declared (Absent), or a config we DID
         // read declares no `[[check]]`. donegate is opt-in per project, so this
         // allows — see `Declaration::Absent`'s docs for why that is not the same
@@ -273,6 +294,111 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             __start.elapsed().as_millis() as u64,
         );
         std::process::exit(0);
+    }
+
+    // Every checkout the session wrote into, not only the hook cwd: a session
+    // working in a linked worktree while the hook runs in the primary tree must
+    // have the worktree's checks run (otherwise the clean primary tree reads as
+    // "green, checks: []"). Extra roots are evaluated here; the hook cwd keeps
+    // the existing flow below. Placed after the operator escapes (see
+    // `tests/gate_escape_ordering.rs`).
+    {
+        let names = roots
+            .roots
+            .iter()
+            .map(|r| r.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut any_ran = false;
+        let mut all_opted_out = true;
+        // Roots with NO donegate config at all (Declaration::Absent) vs roots
+        // whose config exists but declares no checks (a real observation that
+        // blocks when the session wrote into it).
+        let mut unconfigured: Vec<String> = Vec::new();
+        let mut configured_empty = false;
+        let mut blocks: Vec<String> = Vec::new();
+        for (i, r) in roots.roots.iter().enumerate() {
+            let (rcfg, rdecl) = Config::resolve(r);
+            if rdecl.is_refusal() {
+                all_opted_out = false;
+                any_ran = true;
+                if i != 0 {
+                    blocks.push(format!(
+                        "[root: {}] donegate refuses to run this root's checks: {}",
+                        r.display(),
+                        declaration_note(r, &rdecl)
+                    ));
+                }
+                continue;
+            }
+            if !rcfg.enabled {
+                continue;
+            }
+            all_opted_out = false;
+            if rcfg.checks.is_empty() {
+                if matches!(rdecl, config::Declaration::Absent) {
+                    unconfigured.push(r.display().to_string());
+                } else {
+                    configured_empty = true;
+                }
+                continue;
+            }
+            any_ran = true;
+            if i == 0 {
+                continue;
+            }
+            let report = gate::evaluate(&rcfg, r);
+            if report.all_green() {
+                continue;
+            }
+            let attempt = state::bump(&rcfg.state_dir, &session, rcfg.reset_after_secs);
+            let failing: Vec<String> = report.blocking().iter().map(|o| o.name.clone()).collect();
+            if attempt > rcfg.max_attempts {
+                state::reset(&rcfg.state_dir, &session);
+                log_event(&rcfg, &session, "giveup", &failing, attempt);
+                eprintln!(
+                    "donegate: root {} still failing after {} attempts ({}); giving up on it. \
+                     The checks are still RED.",
+                    r.display(),
+                    rcfg.max_attempts,
+                    failing.join(", ")
+                );
+                continue;
+            }
+            log_event(&rcfg, &session, "blocked", &failing, attempt);
+            emit_violations(r, &session, &failing, Outcome::Blocked);
+            blocks.push(format!(
+                "[root: {}]\n{}",
+                r.display(),
+                gate::block_reason(&report, attempt, rcfg.max_attempts)
+            ));
+        }
+        if !blocks.is_empty() {
+            stop_block_now(&blocks.join("\n\n"), interactive);
+        }
+        if roots.wrote_any && !any_ran && !all_opted_out && !configured_empty {
+            // Every written root has no donegate config at all: allow, but
+            // visibly (never a silent green) on stdout and stderr.
+            let msg = format!(
+                "donegate not configured for {}: no checks ran",
+                unconfigured.join(", ")
+            );
+            eprintln!("{msg}");
+            if !interactive {
+                println!("{}", serde_json::json!({ "systemMessage": msg }));
+            }
+            std::process::exit(0);
+        }
+        if roots.wrote_any && !any_ran && !all_opted_out {
+            stop_block_now(
+                &format!(
+                    "donegate: BLOCKED - the session wrote files but no check ran for any root \
+                     (an empty check set is not a pass). Roots judged: {names}. Declare checks \
+                     in a donegate.toml or use `donegate skip --reason ...` if this is intended."
+                ),
+                interactive,
+            );
+        }
     }
 
     let report = gate::evaluate(&cfg, &root);
@@ -388,6 +514,17 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // non-green gate end the turn by printing nothing) is preserved inside it.
     harness_core::repeat::emit_stop_block("donegate", &reason);
     harness_core::hook_latency::record("donegate", &session, __start.elapsed().as_millis() as u64);
+    std::process::exit(0);
+}
+
+/// Emit a blocking verdict and exit: hook mode prints the Stop `decision:block`
+/// JSON (exit 0 toward Claude), manual CLI mode prints to stderr and exits 1.
+fn stop_block_now(reason: &str, interactive: bool) -> ! {
+    if interactive {
+        eprintln!("{reason}");
+        std::process::exit(1);
+    }
+    harness_core::repeat::emit_stop_block("donegate", reason);
     std::process::exit(0);
 }
 

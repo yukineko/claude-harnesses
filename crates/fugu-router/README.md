@@ -254,16 +254,44 @@ breaks. See `crates/condukt/skills/condukt/SKILL.md`.
 ### Plugin
 Bundles the `bin/fugu-router` launcher (the per-platform binary is built
 locally — it is gitignored — and deployed by `scripts/rollout-plugins.sh`), the
-`/fugu-router` skill, and two hooks, both declared in `hooks/hooks.json` and
+`/fugu-router` skill, and four hooks, all declared in `hooks/hooks.json` and
 resolved through `${CLAUDE_PLUGIN_ROOT}`:
 
 - `UserPromptSubmit` → `fugu-router prompt`, which injects a one-block
   routing-memory summary when your prompt looks like coding work.
-- `SessionEnd` → `fugu-router harvest; fugu-router sync` (60s timeout):
-  `harvest` records `merge` episodes for merges into the cwd repo's
-  `main`/`master` whose observation window has closed, then `sync` pulls the
-  record store from `sync_repo` and commits+pushes local appends back (no-op
-  when `sync_repo` is unset).
+- `SessionEnd` → `fugu-router session-end-sync`. Claude Code gives SessionEnd
+  hooks about 1.5 s, and the declared `timeout` does not raise that (measured
+  2026-10-25: the old foreground `harvest; sync` was cancelled mid-push). So
+  the hook writes a pending marker recording a pid under
+  `~/.fugu-router/session-end-pending/`, spawns a fully detached worker (own
+  session via `setsid`, stdin `/dev/null`, stdout/stderr to
+  `~/.fugu-router/session-end.log`), and returns within milliseconds. The
+  worker takes over the marker with its own pid and runs, sequentially,
+  `harvest` (records `merge` episodes for merges into the cwd repo's
+  `main`/`master` whose observation window has closed) and then `sync` (pulls
+  the record store from `sync_repo` and commits+pushes local appends back),
+  then removes the marker. With `sync_repo` unset, `sync` fails and records
+  that in `sync-error.json`.
+- `PreToolUse` (matcher `Agent|Task`) → `fugu-router agent-model`: when a
+  sub-agent spawn names no `model`, sets one learned from condukt's verified
+  episodes (every class except `subagent`, excluding unscored ones); prints
+  nothing (the caller's default applies, with a one-line stderr reason) when
+  there is no learned signal or the store is unreadable. Never blocks. Turn it
+  off with `FUGU_ROUTER_AUTO_MODEL=0`.
+- `SubagentStop` → `fugu-router agent-record`: appends one class-`subagent`
+  usage episode per finished sub-agent, with the real model id read from its
+  transcript. The stop payload carries no success signal, so the episode is
+  recorded unscored (`outcome: "unscored"`) and never counts as a pass or a
+  fail. Its `model_choice` is the spawn-time choice joined through the
+  transcript's `.meta.json` `toolUseId` (`unknown` when it cannot be joined).
+  An unreadable transcript, or one with no model id, records nothing.
+  Claude Code runs the hook before the sub-agent's last assistant lines are
+  flushed, so a transcript without a model id is re-read for up to 3 s.
+
+Every pass/fail reader (`route`/`suggest`/`confidence`, the prompt summary,
+`stats`' main table, and the `agent-model` hook) skips class-`subagent` and
+unscored episodes. `stats` reports sub-agent usage separately, as counts per
+tier and per `model_choice`, with no pass rate.
 
 ### Manual
 ```
@@ -329,11 +357,19 @@ the default merge driver calls a conflict; `union` keeps **both** sides' lines.
 Duplicates are recoverable (`import --dedup`, content-hash) — a dropped
 episode is not.
 
-If `sync` cannot finish, it writes `~/.fugu-router/sync-error.json` and the
+If `sync` ends in an error, it writes `~/.fugu-router/sync-error.json` and the
 `UserPromptSubmit` hook surfaces the failure on every prompt until a later sync
-succeeds. This exists because `sync`'s only automatic caller is the
-`SessionEnd` hook, whose exit code and stderr reach neither the agent nor the
-user — a non-zero exit there is not a signal anyone receives.
+succeeds. This exists because `sync`'s only automatic caller is the detached
+SessionEnd worker, whose exit code reaches nobody and whose stderr goes to a
+log file — a non-zero exit there is not a signal anyone receives. A sync that
+is **killed** cannot write that file; the pending marker covers it: the
+`UserPromptSubmit` hook reports, immediately, any marker whose recorded
+process is no longer alive (judged by liveness, not by age). A marker whose
+process is alive is a sync in flight and is not reported unless it is older
+than 15 minutes. An unreadable or unparseable marker or directory, or a
+liveness probe that cannot decide, is reported as unfinished. If the hook
+cannot write the marker at all, it writes `sync-error.json` instead, which
+only a sync that actually succeeds clears.
 
 Note that `sync_repo` is only read when the sync dir has to be **cloned**.
 Once the checkout exists, pull and push follow its own `origin`; changing
@@ -357,7 +393,8 @@ cleanly across machines and produce better k-NN file-token similarity.
 
 ## Cold start
 
-With an empty store, routing uses a keyword prior biased **cheap** — start at the
+With an empty store (or no similar episode — the bandit only explores once at
+least one neighbour exists), routing uses a keyword prior biased **cheap** — start at the
 floor and let the verifier's cascade escalation (haiku→sonnet→opus on a failed
 check) buy up only the tasks that need it:
 

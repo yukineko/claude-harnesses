@@ -625,6 +625,91 @@ pub fn attribute_from_session(root: &Path, session_id: &str, changed: &[String])
     }
 }
 
+/// Absolute paths the session wrote, split by how sure we are they are paths.
+pub struct SessionWrites {
+    /// Targets of Edit / Write / MultiEdit / NotebookEdit (parent session and
+    /// every subagent sidechain). Each is definitely a path the session wrote.
+    pub edited: BTreeSet<PathBuf>,
+    /// Path-looking words (absolute, or relative to the command's cwd) in the
+    /// statements of recorded Bash calls that [`attribute_own_writes`] would
+    /// treat as possibly writing. Heuristic: a word that is not an existing
+    /// path is not a candidate. A write through a glob / variable / generator
+    /// that never names its target is not seen (same disclosed hole as
+    /// [`attribute_own_writes`]).
+    pub bash: BTreeSet<PathBuf>,
+}
+
+/// Every file the session (and its subagents) is recorded as having written.
+/// An unreadable transcript or sidechain is `Undetermined`, never an empty set.
+pub fn session_written_paths(transcript_path: &str) -> Determination<SessionWrites> {
+    let mut edited = match crate::transcript::files_edited_by_session(transcript_path) {
+        Determination::Known(v) => v,
+        Determination::Undetermined(why) => {
+            return Determination::undetermined(why.as_str().to_string())
+        }
+    };
+    let mut bash = match crate::transcript::bash_commands_by_session(transcript_path) {
+        Determination::Known(v) => v,
+        Determination::Undetermined(why) => {
+            return Determination::undetermined(why.as_str().to_string())
+        }
+    };
+    let sides = match crate::transcript::subagent_transcripts_strict(Path::new(transcript_path)) {
+        Determination::Known(v) => v,
+        Determination::Undetermined(why) => {
+            return Determination::undetermined(why.as_str().to_string())
+        }
+    };
+    for side in sides {
+        let s = side.to_string_lossy();
+        match crate::transcript::files_edited_by_session(&s) {
+            Determination::Known(v) => edited.extend(v),
+            Determination::Undetermined(why) => {
+                return Determination::undetermined(format!(
+                    "subagent transcript: {}",
+                    why.as_str()
+                ))
+            }
+        }
+        match crate::transcript::bash_commands_by_session(&s) {
+            Determination::Known(v) => bash.extend(v),
+            Determination::Undetermined(why) => {
+                return Determination::undetermined(format!(
+                    "subagent transcript: {}",
+                    why.as_str()
+                ))
+            }
+        }
+    }
+    let mut bash_paths = BTreeSet::new();
+    for call in &bash {
+        let cwd = call.cwd.as_deref().map(Path::new);
+        for text in writing_statements(&call.command) {
+            for raw in text.split_whitespace() {
+                let w = raw.trim_matches(|c: char| matches!(c, '"' | '\'' | '>' | ';' | '(' | ')'));
+                if w.is_empty() || w.starts_with('-') {
+                    continue;
+                }
+                let p = Path::new(w);
+                let abs = if p.is_absolute() {
+                    p.to_path_buf()
+                } else if let Some(c) = cwd.filter(|_| w.contains('/') || w.contains('.')) {
+                    c.join(p)
+                } else {
+                    continue;
+                };
+                if abs.exists() {
+                    bash_paths.insert(resolve(&abs));
+                }
+            }
+        }
+    }
+    Determination::known(SessionWrites {
+        edited: resolved(&edited),
+        bash: bash_paths,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

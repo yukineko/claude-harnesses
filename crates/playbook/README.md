@@ -1,9 +1,6 @@
 `playbook inject` is wired to the **UserPromptSubmit** hook.
 
-A keyword classifier flags a
-prompt that contains an explicit flow request (such as "condukt で回して"), or at
-least two of production impact, Rust changes and untestable constraints, and prints a `→ /flow <problem>` suggestion.
-Knowledge injection still runs alongside it.
+It does not suggest `/flow`: a keyword classifier that did was removed because it misfired on status questions and sub-agent reports.
 
 1. loads the notes visible from the cwd — the project store
    (`<store>/<basename>-<hash>/`) plus the shared `_global/` store;

@@ -290,3 +290,46 @@ fn session_start_hook_survives_garbage_stdin() {
     let (code, _stdout) = run_with_stdin(&["session-start"], "not json", "hook-garbage");
     assert_eq!(code, 0, "session-start hook must exit 0 on garbage stdin");
 }
+
+/// GH 1343: the SessionStart hook's real stdout must nest `additionalContext`
+/// under `hookSpecificOutput` (a top-level key is never delivered to the model).
+#[test]
+fn session_start_stdout_nests_additional_context() {
+    let bin = env!("CARGO_BIN_EXE_hypothesis");
+    let home = temp_home("ss-shape");
+    let add = Command::new(bin)
+        .args(["add", "shape probe hypothesis"])
+        .env("HOME", &home)
+        .output()
+        .expect("add runs");
+    assert_eq!(add.status.code().unwrap_or(-1), 0);
+
+    let mut child = Command::new(bin)
+        .arg("session-start")
+        .env("HOME", &home)
+        .current_dir(&home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    if let Some(mut s) = child.stdin.take() {
+        let _ = s.write_all(format!(r#"{{"cwd":"{}"}}"#, home.display()).as_bytes());
+    }
+    let out = child.wait_with_output().expect("runs");
+    std::fs::remove_dir_all(&home).ok();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let v: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {stdout:?}"));
+    assert_eq!(
+        v["hookSpecificOutput"]["hookEventName"], "SessionStart",
+        "{v}"
+    );
+    assert!(v.get("additionalContext").is_none(), "top-level key: {v}");
+    assert!(
+        v["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .is_some_and(|c| c.contains("shape probe hypothesis")),
+        "{v}"
+    );
+}

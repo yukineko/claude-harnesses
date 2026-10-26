@@ -176,7 +176,8 @@ fn session_start_context(f: &Fx) -> String {
     let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap_or_else(|e| {
         panic!("session-start printed no JSON context ({e}); out={out:?} err={err:?}")
     });
-    v.get("additionalContext")
+    v.get("hookSpecificOutput")
+        .and_then(|h| h.get("additionalContext"))
         .and_then(|x| x.as_str())
         .unwrap_or_else(|| panic!("no string additionalContext in {out:?}"))
         .to_string()

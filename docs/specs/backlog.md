@@ -8,7 +8,7 @@
 `~/.backlog/tasks.toml`（`config::Config::tasks_path`）に `[[task]]` 配列として作業項目を永続化し、追加・一覧・ピック・
 完了/失敗マーク・編集を担う。加えて、複数セッションを直列化するための排他 run-lock（`~/.backlog/run.lock`,
 `lock::LockInfo`）を所有し、**SessionStart** フック（`hooks::session_start::run`）でセッション開始時に cwd のリポジトリに
-紐づく pending タスクを `additionalContext` として注入する。判定（次に何をやるか）は上位 driver（`/flow`）や人間に委ね、
+紐づく pending タスクを `hookSpecificOutput.additionalContext` として注入する。判定（次に何をやるか）は上位 driver（`/flow`）や人間に委ね、
 本バイナリは queue+state+lock の決定論的な管理層に徹する。skill 1 つ・hook 1 つ・同梱バイナリ 1 つで動く subscription-native
 （`ANTHROPIC_API_KEY` 不要）。lock→pick→`/condukt`→done のループ driver 自体は `/flow` へ統合され、`/backlog` skill は
 その薄い queue/state 操作のエントリポイント。
@@ -59,7 +59,7 @@
   置換）。`updated_at` を現在時刻に。
 - **`session-start`** — SessionStart フック。`read_stdin`→`HookInput::parse`。`cwd_or_current` から `.git` を上へ辿って
   repo_root を解決し、期限切れ deferred を `requeue_expired` で復帰させてから、その repo の pending/failed タスクを
-  priority→created_at 順で Markdown 化し `{"additionalContext": …}` として出力。cycle タグ（`cycle:test-fix`/`tdd`/
+  priority→created_at 順で Markdown 化し `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":…}}` として出力。cycle タグ（`cycle:test-fix`/`tdd`/
   `implement`/`review-fix`/`once`）ごとに完了までの指示文を差し込む。`inject_limit`（既定 4000B）超は UTF-8 境界を壊さず
   切り詰め `*(truncated)*` を付す。
 - **`install` / `uninstall` [--dry-run]** — `~/.claude/settings.json` の `SessionStart` グループを冪等マージ/除去

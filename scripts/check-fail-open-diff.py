@@ -228,7 +228,7 @@ def _hits(rel: str, text: str) -> list:
         raw = fo.scan_shell(lines)
     else:
         raw = []
-    return [h for h in raw if not fo._allowlisted(rel, h[2], h[1])]
+    return fo.filter_allowlisted(rel, raw)
 
 
 def merge_parents(repo: Path) -> list[str]:

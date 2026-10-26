@@ -157,11 +157,11 @@ fn claim_verdict_outputs() {
             "allow" => assert_eq!(o.stdout.trim(), "", "allow stdout"),
             "warn" => {
                 let v = json(&o.stdout);
-                assert!(v["additionalContext"]
-                    .as_str()
-                    .unwrap()
-                    .contains("budgetguard"));
+                assert!(v["systemMessage"].as_str().unwrap().contains("budgetguard"));
                 assert!(v.get("decision").is_none());
+                // Stop has no additionalContext: it must be absent at every level.
+                assert!(v.get("additionalContext").is_none(), "{v}");
+                assert!(v.get("hookSpecificOutput").is_none(), "{v}");
             }
             _ => {
                 let v = json(&o.stdout);
@@ -336,7 +336,7 @@ fn claim_session_undetermined_warn_only() {
     let o = gate(&e, "s-u1", &tp, false);
     assert_eq!(o.code, 0);
     let v = json(&o.stdout);
-    assert!(v["additionalContext"]
+    assert!(v["systemMessage"]
         .as_str()
         .unwrap()
         .contains("測定できません"));
@@ -365,7 +365,7 @@ fn claim_day_undetermined_warn_only() {
     let tp = transcript(&e, "t.jsonl", "claude-opus-4-8", 1_000_000, 0);
     let o = gate(&e, "s-d1", &tp, false);
     let v = json(&o.stdout);
-    assert!(v["additionalContext"]
+    assert!(v["systemMessage"]
         .as_str()
         .unwrap()
         .contains("測定できません"));
@@ -446,7 +446,7 @@ fn claim_cache_health_promoted_warning() {
     assert_eq!(o.code, 0);
     assert!(o.stderr.contains("cache hit rate"), "{}", o.stderr);
     let v = json(&o.stdout);
-    assert!(v["additionalContext"].as_str().unwrap().contains("cache"));
+    assert!(v["systemMessage"].as_str().unwrap().contains("cache"));
     assert!(v.get("decision").is_none());
 }
 
@@ -457,7 +457,7 @@ fn claim_cache_health_below_floor_not_promoted() {
     assert_eq!(o.stdout.trim(), "");
     // [cache].min_tokens lowers the floor.
     let o = cache_run("[cache]\nmin_tokens = 50000\n", 100_000, 0);
-    assert!(json(&o.stdout)["additionalContext"]
+    assert!(json(&o.stdout)["systemMessage"]
         .as_str()
         .unwrap()
         .contains("cache"));
@@ -470,7 +470,7 @@ fn claim_cache_health_out_of_range_rate_uses_default() {
     assert_eq!(o.stdout.trim(), "", "{}", o.stderr);
     // rate = 0.4: degraded at default 0.5.
     let o = cache_run("[cache]\nmin_rate = 5.0\n", 300_000, 200_000);
-    assert!(json(&o.stdout)["additionalContext"]
+    assert!(json(&o.stdout)["systemMessage"]
         .as_str()
         .unwrap()
         .contains("cache"));
@@ -481,7 +481,7 @@ fn claim_cache_health_never_blocks_louder_wins() {
     let o = cache_run_cost("[session]\nblock_usd = 1.0\n", 300_000, 0, 1_000_000);
     let v = json(&o.stdout);
     assert_eq!(v["decision"], "block");
-    assert!(v.get("additionalContext").is_none());
+    assert!(v.get("systemMessage").is_none());
     assert!(o.stderr.contains("cache hit rate"));
 }
 
@@ -736,7 +736,7 @@ fn claim_cache_min_tokens_default_boundary() {
     // == 200_000 -> judged, degraded, promoted.
     let o = cache_run("", 200_000, 0);
     assert!(
-        json(&o.stdout)["additionalContext"]
+        json(&o.stdout)["systemMessage"]
             .as_str()
             .unwrap()
             .contains("cache"),
@@ -744,11 +744,7 @@ fn claim_cache_min_tokens_default_boundary() {
         o.stderr
     );
     let o = cache_run("", 150_000, 50_000);
-    assert!(
-        json(&o.stdout)["additionalContext"].is_string(),
-        "{}",
-        o.stderr
-    );
+    assert!(json(&o.stdout)["systemMessage"].is_string(), "{}", o.stderr);
 }
 
 #[test]
@@ -759,7 +755,7 @@ fn claim_cache_min_rate_default_and_inrange() {
     // 0.49 -> promoted.
     let o = cache_run("", 510_000, 490_000);
     assert!(
-        json(&o.stdout)["additionalContext"].is_string(),
+        json(&o.stdout)["systemMessage"].is_string(),
         "0.49: {}",
         o.stderr
     );
@@ -768,14 +764,10 @@ fn claim_cache_min_rate_default_and_inrange() {
     assert_eq!(o.stdout.trim(), "", "0.3/0.4: {}", o.stderr);
     // ... and degraded at default (control), and at min_rate = 1.0 for rate 0.6.
     let o = cache_run("", 300_000, 200_000);
-    assert!(
-        json(&o.stdout)["additionalContext"].is_string(),
-        "{}",
-        o.stderr
-    );
+    assert!(json(&o.stdout)["systemMessage"].is_string(), "{}", o.stderr);
     let o = cache_run("[cache]\nmin_rate = 1.0\n", 200_000, 300_000);
     assert!(
-        json(&o.stdout)["additionalContext"].is_string(),
+        json(&o.stdout)["systemMessage"].is_string(),
         "1.0/0.6: {}",
         o.stderr
     );
@@ -785,7 +777,7 @@ fn claim_cache_min_rate_default_and_inrange() {
         let cfg = format!("[cache]\nmin_rate = {bad}\n");
         let o = cache_run(&cfg, 300_000, 200_000);
         assert!(
-            json(&o.stdout)["additionalContext"].is_string(),
+            json(&o.stdout)["systemMessage"].is_string(),
             "{bad}/0.4: {}",
             o.stderr
         );
@@ -806,7 +798,7 @@ fn claim_session_undetermined_daily_arms() {
     write_cfg(&e, "[daily]\nwarn_usd = 1000.0\n");
     let o = gate(&e, "s-ud", &tp, false);
     let v = json(&o.stdout);
-    assert!(v["additionalContext"]
+    assert!(v["systemMessage"]
         .as_str()
         .unwrap()
         .contains("測定できません"));

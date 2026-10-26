@@ -47,7 +47,7 @@ symbol = "repo_root"
 count = 1
 scope = "shared"
 kind = "store-key"
-evidence = "repo_project_path() canonicalises repo_root(cwd) into the string used as backlog's `--project` filter. Tasks are filed against one project identity; from a linked worktree this yields the worktree path, so the queue filters to a different (empty) project."
+evidence = "repo_project_path() canonicalises repo_root(cwd) into the string used as backlog's `--project` filter. Tasks are filed against one project identity; from a linked worktree this yields the worktree path. Its one production caller is lock.rs (`backlog lock status --project`), and backlog normalises that path to the main worktree before keying the driver registry (lock.rs project_slug via canonicalize_project), so main and every linked worktree read the same driver set. Pinned by crates/backlog/tests/driver_liveness_across_worktrees.rs (fault-injected RED observed when the normalisation is removed; a never-registered repo still reads `none`)."
 
 [[consumer]]
 file = "crates/autoflow/src/condukt.rs"
@@ -55,15 +55,23 @@ symbol = "project_key"
 count = 5
 scope = "shared"
 kind = "mixed"
-evidence = "3 production calls key `~/.condukt/state/<key>/` (has_completed_tasks_for_run, load_latest) — condukt's run state, which must be the same directory the condukt binary wrote; 2 are unit-test calls asserting this crate's key equals harness_core's. Restrictive reading of the set: shared."
+evidence = "2 production calls, both in project_dirs() (used by has_completed_tasks_for_run and load_latest), key `~/.condukt/state/<key>/` — condukt's run state, which must be the same directory the condukt binary wrote: the canonical key of main_worktree_root(cwd), then the legacy per-checkout key of repo_root(cwd) read after it (backlog 1eae7cb9); 3 are unit-test calls (two asserting this crate's key equals harness_core's, one test fixture). Restrictive reading of the set: shared."
 
 [[consumer]]
 file = "crates/autoflow/src/condukt.rs"
 symbol = "repo_root"
-count = 3
+count = 2
 scope = "shared"
 kind = "mixed"
-evidence = "Feeds the project_key calls above (2 production, 1 in a test fixture). Same store, same identity requirement."
+evidence = "1 production call in project_dirs(): the LEGACY per-checkout run-state key, read only after the canonical main_worktree_root key (store-key, per-checkout by purpose: it finds pre-43393ce2 runs); 1 in a test fixture. Count went 3 to 2 when a8c09c5e (1eae7cb9) moved the canonical key to main_worktree_root. Restrictive reading of the set: shared."
+
+[[consumer]]
+file = "crates/autoflow/src/condukt.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "project_dirs(): the canonical condukt run-state dir `~/.condukt/state/<project_key(main_worktree_root(cwd))>`, the same key condukt's project_root() uses, so it is one per project from every linked worktree. Undetermined is returned as Determination::Undetermined, never a fallback to the per-checkout key."
 
 [[consumer]]
 file = "crates/autoflow/src/delegation_audit.rs"
@@ -80,6 +88,16 @@ count = 4
 scope = "shared"
 kind = "test"
 evidence = "The inner half of the same four fixture expressions."
+
+# ── compass ────────────────────────────────────────────────────────────────
+
+[[consumer]]
+file = "crates/compass/src/main.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "outcomes_root() resolves the directory of `.compass/outcomes.json` (read by outcome, pivot-check and gap's last_outcome). User ruling 2026-10-24: the outcome history is one store per project, shared by every linked worktree; an Undetermined root is an Err (non-zero exit), with no per-worktree fallback. Pinned by crates/compass/tests/outcomes_shared_across_worktrees.rs."
 
 # ── condukt ────────────────────────────────────────────────────────────────
 
@@ -150,10 +168,10 @@ evidence = "project_root() — the root every per-project condukt state file (ru
 [[consumer]]
 file = "crates/condukt/src/state.rs"
 symbol = "project_key"
-count = 4
+count = 5
 scope = "shared"
 kind = "mixed"
-evidence = "NOT one kind: project_dir() = `<state_dir>/<project-key of project_root()>` is the canonical shared run-state dir (store-key, shared); legacy_project_dir() = `<state_dir>/<project-key of repo_root(cwd)>` addresses the PRE-43393ce2 per-checkout dir, read and written back only for runs that already live there (store-key, per-checkout by purpose); the other two are the canonical/legacy expectations in run_dir_is_canonical_for_new_runs_and_write_back_for_legacy_ones (test). Restrictive reading of the set: shared."
+evidence = "NOT one kind: project_dir() = `<state_dir>/<project-key of project_root()>` is the canonical shared run-state dir (store-key, shared); legacy_project_dir() = `<state_dir>/<project-key of repo_root(cwd)>` addresses the PRE-43393ce2 per-checkout dir, read and written back only for runs that already live there (store-key, per-checkout by purpose); the run-init guard keys `<state_dir>/<project-key of wt>` for each linked worktree path to refuse a run id that a legacy per-checkout run already uses (store-key, per-checkout by purpose, read-only); the other two are the canonical/legacy expectations in run_dir_is_canonical_for_new_runs_and_write_back_for_legacy_ones (test). Restrictive reading of the set: shared."
 
 [[consumer]]
 file = "crates/condukt/src/state.rs"
@@ -253,7 +271,15 @@ symbol = "project_key"
 count = 1
 scope = "shared"
 kind = "store-key"
-evidence = "condukt_escalations_path() re-derives condukt's escalations.json path from another crate. It is correct exactly when it matches crates/condukt/src/escalate.rs. It NO LONGER matches: escalate.rs now goes through state::project_state_dir (main_worktree_root), while this still keys off repo_root, so from a linked worktree it reads a different (legacy per-checkout) file. Scope shared records the contract; the call site is out of step with it."
+evidence = "condukt_escalations_paths() re-derives condukt's escalations.json paths from another crate. It is correct exactly when it matches crates/condukt/src/escalate.rs::escalations_paths (state::project_state_dirs). It matches: the one project_key call (inside the file_for closure) keys the canonical file on main_worktree_root(cwd), shared by every checkout, and the legacy per-checkout file on repo_root(cwd), read after it only when distinct, as condukt does. Guarded by crates/overwatch/tests/escalations_shared_across_worktrees.rs."
+
+[[consumer]]
+file = "crates/overwatch/src/review_escalation.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "condukt_escalations_paths(): the canonical escalations.json key, the same main_worktree_root condukt's state::project_root uses. Undetermined is forwarded as Undetermined (review-queue warns and omits the source); there is no fallback to the per-checkout key."
 
 [[consumer]]
 file = "crates/overwatch/src/review_escalation.rs"
@@ -261,7 +287,25 @@ symbol = "repo_root"
 count = 1
 scope = "shared"
 kind = "store-key"
-evidence = "The inner half of condukt_escalations_path()'s key derivation."
+evidence = "condukt_escalations_paths(): only the LEGACY per-checkout escalations.json path, read after the canonical one when it differs, mirroring condukt's state::legacy_project_dir so escalations written by a pre-re-keying condukt from a linked worktree are not lost. Never the sole or primary key."
+
+# ── tdd ────────────────────────────────────────────────────────────────────
+
+[[consumer]]
+file = "crates/tdd/src/warned.rs"
+symbol = "project_key"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "ledger() keys the mode = loose warned-once ledger `<state_dir>/warned/<project_key(main)>`, where main is main_worktree_root(root) of the Stop hook's checkout. The module doc states the contract verbatim: 'The ledger is per project, not per session' (operator ruling 2026-10-20: warn once per file hash). Pinned by crates/tdd/tests/loose_ledger_per_project_across_worktrees.rs."
+
+[[consumer]]
+file = "crates/tdd/src/warned.rs"
+symbol = "main_worktree_root"
+count = 1
+scope = "shared"
+kind = "store-key"
+evidence = "ledger() resolves the Stop hook's checkout to the main worktree root so every linked worktree of one repo shares one warned-once ledger. Undetermined is forwarded: all_seen returns Undetermined (the gate keeps its block) and record returns an error; there is no fallback to the per-checkout key."
 
 # ── non-Rust mechanisms ────────────────────────────────────────────────────
 #
@@ -279,4 +323,4 @@ evidence = "Ignored, so each linked worktree carries its OWN carve state; a re-c
 [[consumer]]
 language = "gitignore"
 pattern = ".compass/outcomes.json"
-evidence = "Same mechanism as carve-state.json: ignored, therefore per-worktree. compass outcomes recorded in one worktree do not inform a run in another."
+evidence = "Ignored, so the path would exist separately in every linked worktree. compass no longer resolves it off the cwd: the CLI addresses it under the MAIN worktree root (see the crates/compass/src/main.rs main_worktree_root entry above), so the ignore line now only keeps the shared store untracked in the main checkout. A stray worktree-local copy is never read."

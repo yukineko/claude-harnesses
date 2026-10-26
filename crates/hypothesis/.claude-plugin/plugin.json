@@ -1,6 +1,6 @@
 {
   "name": "hypothesis",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "description": "PDO hypothesis lifecycle management for Claude Code: create, validate and track the falsifiable bets behind a compass goal, so shipping is not mistaken for validating.",
   "author": {
     "name": "yukineko"

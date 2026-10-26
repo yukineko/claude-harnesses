@@ -16,7 +16,13 @@
 //!    transcript bound to it;
 //! 2. its branch is an ancestor of the default branch (`merge-base
 //!    --is-ancestor` exits 0);
-//! 3. its tree is clean, untracked files included.
+//! 3. its tree is clean, untracked files included — except that a tree whose
+//!    ONLY dirtiness is under `.backlog/` (user ruling 2026-10-24: store
+//!    changes stay uncommitted and ride along) first has that diff committed
+//!    once on the session branch and merged into the default branch (in the
+//!    primary tree, which must be on the default branch and clean), and is then
+//!    judged clean. If that fails the worktree is kept and the failure is
+//!    reported; a second reap finds the worktree gone and commits nothing.
 //!
 //! Anything undetermined — no registration at all (every worktree that
 //! predates the ruling), a first probe, an unreadable registry, a failing git —
@@ -343,7 +349,26 @@ impl ReapReport {
 pub fn reap(cfg: &Config, cwd: &Path, repo: &Path) -> Result<ReapReport> {
     let report = wt_reconcile::reconcile_judgements(cfg, cwd, repo)?;
     let mut out = ReapReport::default();
-    for j in report {
+    for mut j in report {
+        // A dead, merged session worktree whose ONLY dirtiness is `.backlog/`
+        // gets that diff committed once and integrated, so it is no longer
+        // dirty; every failure keeps the worktree and is reported.
+        let mut leftover_failure: Option<String> = None;
+        if matches!(j.role, Role::Registered)
+            && j.branch
+                .as_deref()
+                .is_some_and(|b| b.starts_with("session-"))
+            && matches!(j.attribution, Determination::Known(Attribution::ThisRepo))
+            && matches!(j.occupancy, Determination::Known(Occupancy::Dead))
+            && matches!(j.dirty, Determination::Known(true))
+        {
+            let branch = j.branch.clone().unwrap_or_default();
+            match commit_and_integrate_store_leftover(repo, &j.path, &branch, &cfg.default_branch) {
+                Ok(StoreLeftover::NotStoreOnly) => {}
+                Ok(StoreLeftover::Integrated) => j.dirty = Determination::Known(false),
+                Err(e) => leftover_failure = Some(format!("{e:#}")),
+            }
+        }
         let needs_merge = matches!(j.role, Role::Registered)
             && j.branch
                 .as_deref()
@@ -369,6 +394,10 @@ pub fn reap(cfg: &Config, cwd: &Path, repo: &Path) -> Result<ReapReport> {
         let path = j.path.to_string_lossy().to_string();
         let mut branch_delete = None;
         let outcome = match verdict {
+            _ if leftover_failure.is_some() => ReapOutcome::Failed(format!(
+                "could not integrate the leftover .backlog diff, worktree kept: {}",
+                leftover_failure.unwrap_or_default()
+            )),
             Reap::Keep(why) => ReapOutcome::Kept(why),
             Reap::Undetermined(why) => ReapOutcome::KeptUndetermined(why),
             Reap::Remove => {
@@ -408,6 +437,88 @@ pub fn reap(cfg: &Config, cwd: &Path, repo: &Path) -> Result<ReapReport> {
         });
     }
     Ok(out)
+}
+
+/// What [`commit_and_integrate_store_leftover`] found.
+enum StoreLeftover {
+    /// Something outside `.backlog/` is dirty (or the branch is not merged):
+    /// nothing was done; the ordinary verdict applies.
+    NotStoreOnly,
+    /// The `.backlog/` diff was committed on the session branch and merged into
+    /// the default branch; the worktree is now clean.
+    Integrated,
+}
+
+/// For a dead session worktree whose branch is merged and whose ONLY dirtiness
+/// is under `.backlog/`: commit that diff once on the session branch, then
+/// integrate it into the default branch with a plain merge in the primary tree
+/// (the caller holds the repo-primary lock). Refuses (Err) when the primary
+/// tree is not on the default branch or is dirty. Anything that cannot be
+/// determined is an `Err`; the caller keeps the worktree.
+fn commit_and_integrate_store_leftover(
+    repo: &Path,
+    wt: &Path,
+    branch: &str,
+    default_branch: &str,
+) -> Result<StoreLeftover> {
+    let status = crate::worktree::git(
+        wt,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )
+    .context("could not read the worktree status")?;
+    let mut any = false;
+    for entry in status.split('\0').filter(|e| !e.is_empty()) {
+        any = true;
+        // `XY <path>`; a rename carries a second NUL-separated path, which then
+        // shows up as its own entry without the status prefix and fails the
+        // check below, keeping the worktree (restrictive side).
+        let Some(path) = entry.get(3..) else {
+            return Ok(StoreLeftover::NotStoreOnly);
+        };
+        if !path.starts_with(".backlog/") {
+            return Ok(StoreLeftover::NotStoreOnly);
+        }
+    }
+    if !any {
+        return Ok(StoreLeftover::NotStoreOnly);
+    }
+    match is_merged(repo, branch, default_branch) {
+        Determination::Known(true) => {}
+        Determination::Known(false) => return Ok(StoreLeftover::NotStoreOnly),
+        Determination::Undetermined(why) => {
+            anyhow::bail!(
+                "could not establish that {branch} is merged: {}",
+                why.as_str()
+            )
+        }
+    }
+    // Check the primary tree BEFORE committing, so a refusal changes nothing.
+    let cur = crate::worktree::git(repo, &["branch", "--show-current"])?;
+    if cur != default_branch {
+        anyhow::bail!(
+            "the primary tree is on '{cur}', not '{default_branch}'; refusing to integrate"
+        );
+    }
+    let primary_status = crate::worktree::git(repo, &["status", "--porcelain=v1"])?;
+    if !primary_status.trim().is_empty() {
+        anyhow::bail!("the primary tree is dirty; refusing to integrate");
+    }
+    crate::worktree::git(wt, &["add", "-A", "--", ".backlog"])?;
+    crate::worktree::git(
+        wt,
+        &[
+            "commit",
+            "-m",
+            "chore(backlog): store changes left by the finished session",
+        ],
+    )
+    .context("could not commit the leftover .backlog diff")?;
+    let msg = format!("Merge branch '{branch}'");
+    if let Err(e) = crate::worktree::git(repo, &["merge", "--no-edit", "-m", &msg, branch]) {
+        let _ = crate::worktree::git(repo, &["merge", "--abort"]);
+        return Err(e).context("merge of the leftover commit failed");
+    }
+    Ok(StoreLeftover::Integrated)
 }
 
 /// Delete `branch` (the branch of a worktree that was just removed) iff it is

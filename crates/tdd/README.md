@@ -27,7 +27,12 @@ Code subscription.
 
 On each stop `tdd gate`:
 
-1. reads the hook JSON from stdin (`session_id`, `cwd`, `transcript_path`);
+1. reads the hook JSON from stdin (`session_id`, `cwd`, `transcript_path`) and
+   resolves the roots to judge: the hook `cwd` plus the git toplevel of every file
+   the transcript records as written (`harness_core::session_roots`); each root is
+   evaluated, not only the cwd. An unresolvable written root, or a session that wrote
+   files while no root had an implementation change to evaluate, blocks naming the
+   roots;
 2. loads `./tdd.toml` (or `~/.tdd/config.toml`, or language-aware defaults);
 3. asks `git` what changed and which lines were **added**, then keeps only the
    files **this session wrote**: a file counts as this session's when its

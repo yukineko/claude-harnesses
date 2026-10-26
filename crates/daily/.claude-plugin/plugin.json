@@ -1,6 +1,6 @@
 {
   "name": "daily",
-  "version": "0.3.25",
+  "version": "0.3.26",
   "description": "Daily-once task runner for Claude Code: a SessionStart hook that runs registered shell tasks at most once per calendar day and feeds a summary of what ran back into the session.",
   "author": {
     "name": "yukineko"

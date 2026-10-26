@@ -298,7 +298,83 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // Scoped to what this session wrote (the Stop payload's transcript); an
     // undetermined attribution scans the whole checkout. The note is printed
     // on every run, allowing ones included, so an exclusion is never silent.
-    let verdict = gate::evaluate(&cfg, &root, &input.transcript_path);
+    //
+    // Every checkout the session wrote into is evaluated, not only the hook cwd
+    // (a session in a linked worktree while the hook runs in the primary tree
+    // would otherwise be judged on the clean primary tree). The first root whose
+    // verdict blocks is the one reported; an undetermined root blocks.
+    let sr = match harness_core::session_roots::resolve(&root, &input.transcript_path) {
+        Determination::Known(sr) => sr,
+        Determination::Undetermined(why) => stop_block_now(
+            &format!(
+                "🔴 tdd: the session's roots cannot be determined ({}). Nothing was evaluated \
+                 for the roots it wrote into; fix the cause or run `tdd skip --reason \"...\"`.",
+                why.as_str()
+            ),
+            interactive,
+        ),
+    };
+    let mut cfg = cfg;
+    let mut root = root;
+    let mut chosen: Option<gate::Report> = None;
+    let mut first: Option<gate::Report> = None;
+    let mut evaluated_something = false;
+    let mut all_opted_out = true;
+    for (i, r) in sr.roots.iter().enumerate() {
+        let rcfg = if i == 0 { cfg.clone() } else { Config::load(r) };
+        if !rcfg.enabled {
+            continue;
+        }
+        all_opted_out = false;
+        let rep = gate::evaluate(&rcfg, r, &input.transcript_path);
+        if rep.blocks(&rcfg) {
+            if chosen.is_none() {
+                cfg = rcfg;
+                root = r.clone();
+                chosen = Some(rep);
+            }
+            continue;
+        }
+        if let Determination::Known(Some(f)) = &rep.scan {
+            if f.added_impl_lines > 0 {
+                evaluated_something = true;
+            }
+        }
+        if i == 0 {
+            first = Some(rep);
+        }
+    }
+    let verdict = match chosen.or(first) {
+        Some(v) => v,
+        None => {
+            // Every root is disabled in its own config.
+            std::process::exit(0);
+        }
+    };
+    // Only when the session wrote into a root other than the hook cwd: with the
+    // cwd as the sole root, "wrote a file that has no uncommitted implementation
+    // change" is the long-standing allow (tests/session_scope_own.rs).
+    if !verdict.blocks(&cfg)
+        && sr.roots.len() > 1
+        && sr.wrote_any
+        && !evaluated_something
+        && !all_opted_out
+    {
+        let names = sr
+            .roots
+            .iter()
+            .map(|r| r.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        stop_block_now(
+            &format!(
+                "🔴 tdd: the session wrote files but no implementation change was evaluated in \
+                 any root (an empty scan is not a pass). Roots judged: {names}. Run `tdd skip \
+                 --reason \"...\"` if this is intended."
+            ),
+            interactive,
+        );
+    }
     if let Some(note) = gate::attribution_note(&verdict) {
         eprintln!("{note}");
     }
@@ -364,6 +440,17 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
     // Repeat ledger: operator ruling 2026-09-18.
     harness_core::repeat::emit_stop_block("tdd", &reason);
+    std::process::exit(0);
+}
+
+/// Emit a blocking verdict and exit: hook mode prints the Stop `decision:block`
+/// JSON (exit 0 toward Claude), manual CLI mode prints to stderr and exits 1.
+fn stop_block_now(reason: &str, interactive: bool) -> ! {
+    if interactive {
+        eprintln!("{reason}");
+        std::process::exit(1);
+    }
+    harness_core::repeat::emit_stop_block("tdd", reason);
     std::process::exit(0);
 }
 

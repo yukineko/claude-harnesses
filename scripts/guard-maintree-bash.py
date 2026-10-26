@@ -41,8 +41,13 @@ change is reverted or moved into a worktree openly.
 Cannot determine -> 2, never 0 (CLAUDE.md 3): a malformed payload, git failing,
 CLAUDE_PROJECT_DIR not in a repository, a snapshot that cannot be written, read
 or decoded, a Pre snapshot that is missing at Post, a dirty path that cannot be
-hashed, a failing merge/containment check, or a reflog that is missing or
-unreadable when it is needed as integration evidence.
+hashed, a failing merge/containment check, a reflog that is missing or
+unreadable when it is needed as integration evidence, or any uncaught exception.
+
+An uncaught exception (e.g. RecursionError decoding a deeply nested payload,
+AttributeError on a snapshot with wrong field types) exits 2 (blocked), never 1
+(which Claude Code treats as allow). This mirrors deny-no-verify.py and guard-maintree-edit.py: a check
+that crashed has not passed (CLAUDE.md 3), so it resolves to the restricted side.
 
 Known blind spots (not visible to `git status`): files under .git itself
 (.git/config, .git/hooks) and gitignored files. Changes by ANOTHER session
@@ -404,4 +409,17 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        _rc = main()
+    except Exception as _crash:  # noqa: BLE001
+        # An uncaught exception (e.g. RecursionError decoding a deeply nested
+        # payload, or AttributeError when a snapshot field has an unexpected type)
+        # exits 1, which Claude Code treats as a non-blocking error, i.e. the call
+        # proceeds. A check that crashed has not passed (CLAUDE.md 3), so it
+        # resolves to exit 2 (issue 1235; mirrors deny-no-verify.py and
+        # guard-maintree-edit.py).
+        sys.stderr.write(
+            f"Refused: guard-maintree-bash.py crashed ({type(_crash).__name__}: {_crash}); "
+            "a check that could not run has not passed.\n")
+        _rc = 2
+    sys.exit(_rc)

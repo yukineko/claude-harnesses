@@ -344,7 +344,12 @@ fn main() {
                 if !sections.is_empty() {
                     println!(
                         "{}",
-                        serde_json::json!({ "additionalContext": sections.join("\n\n") })
+                        serde_json::json!({
+                            "hookSpecificOutput": {
+                                "hookEventName": "SessionStart",
+                                "additionalContext": sections.join("\n\n")
+                            }
+                        })
                     );
                 }
                 // Nothing to report → stay silent (no output at all).

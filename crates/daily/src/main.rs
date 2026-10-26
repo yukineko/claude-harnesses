@@ -12,7 +12,7 @@
 //!
 //! The runner is a deterministic Rust binary — it never calls an LLM. It runs
 //! each due task as a subprocess and injects a one-line summary of what ran
-//! (`📋 daily: ran a (ok), b (fail exit 1: …)`) as `additionalContext`. It
+//! (`📋 daily: ran a (ok), b (fail exit 1: …)`) as `hookSpecificOutput.additionalContext` (nested; a top-level key is never delivered, GH 1343). It
 //! always exits 0 (never breaks a turn).
 
 use clap::{Parser, Subcommand};
@@ -181,7 +181,13 @@ fn session_start_cmd() -> ! {
                 eprintln!("{msg}");
                 println!(
                     "{}",
-                    json!({ "systemMessage": msg, "additionalContext": msg })
+                    json!({
+                        "systemMessage": msg,
+                        "hookSpecificOutput": {
+                            "hookEventName": "SessionStart",
+                            "additionalContext": msg
+                        }
+                    })
                 );
                 return;
             }
@@ -224,7 +230,15 @@ fn session_start_cmd() -> ! {
         // Per the chosen behavior: always inject a summary of what ran today
         // (both ok and fail). Nothing ran → stay silent.
         if let Some(msg) = summary(&results) {
-            println!("{}", json!({ "additionalContext": msg }));
+            println!(
+                "{}",
+                json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "SessionStart",
+                        "additionalContext": msg
+                    }
+                })
+            );
         }
     })
 }

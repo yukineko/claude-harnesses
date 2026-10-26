@@ -161,10 +161,21 @@ fn recorder_failure_does_not_fail_worktree_add_and_records_nothing() {
     assert!(add.status.success(), "{add:?}");
     assert!(!bad_dir.exists());
     let other_store = fx.base.join("other").join(FILE_NAME);
+    // The real property: the failed recorder wrote no record anywhere.
+    assert!(!other_store.exists(), "no record may exist in other_store");
+    // user ruling 2026-10-27: a removed, unrecorded worktree under a non-repo
+    // base is excluded (Known, roots == [cwd]), no longer Undetermined.
     match resolve_with_store(&fx.repo, &transcript, &other_store) {
-        Determination::Undetermined(_) => {}
-        Determination::Known(sr) => panic!("expected Undetermined, got {sr:?}"),
+        Determination::Known(sr) => {
+            assert_eq!(sr.roots, vec![fx.repo.clone()], "{sr:?}");
+            assert!(sr.wrote_any);
+        }
+        Determination::Undetermined(w) => panic!("expected Known: {}", w.as_str()),
     }
+    assert!(
+        !other_store.exists(),
+        "resolving a removed worktree must not create a record"
+    );
 }
 
 #[test]

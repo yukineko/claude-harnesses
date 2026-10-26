@@ -1,6 +1,6 @@
 [package]
 name = "tdd"
-version = "0.1.52"
+version = "0.1.53"
 edition = "2021"
 rust-version.workspace = true
 description = "Test-first gate for Claude Code: on Stop it blocks when implementation lines were added with no test visible in the uncommitted changes, and red/green/verify subcommands record RED before GREEN."

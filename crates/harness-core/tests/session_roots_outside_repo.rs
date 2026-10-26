@@ -20,8 +20,8 @@
 //! Undetermined (fail-closed, CLAUDE.md section 3).
 //!
 //! RED test: `outside_repo_write_is_excluded_and_roots_are_known` (+ the
-//! mixed-session twin), `#[ignore]`d until fixed: run with `--include-ignored`.
-//! The control tests pass before and must pass after.
+//! mixed-session twin). Both were RED (ignored) before the fix and now run
+//! unignored. The control tests passed before and must keep passing.
 
 use harness_core::session_roots::resolve;
 use harness_core::verdict::Determination;
@@ -114,7 +114,6 @@ fn fixture() -> Fixture {
 // ── RED: must FAIL until the fix lands ───────────────────────────────────────
 
 #[test]
-#[ignore = "open defect: outside-repo write makes session roots Undetermined; remove ignore when fixed"]
 fn outside_repo_write_is_excluded_and_roots_are_known() {
     let f = fixture();
     let written = f.outside.join("config.toml");
@@ -137,7 +136,6 @@ fn outside_repo_write_is_excluded_and_roots_are_known() {
 }
 
 #[test]
-#[ignore = "open defect: outside-repo write makes session roots Undetermined; remove ignore when fixed"]
 fn outside_write_plus_linked_repo_write_keeps_the_repo_root() {
     let f = fixture();
     let other = f.base.join("other");

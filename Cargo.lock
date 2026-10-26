@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.46"
+version = "0.1.47"
 dependencies = [
  "anyhow",
  "chrono",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.65"
+version = "0.2.66"
 dependencies = [
  "anyhow",
  "chrono",
@@ -884,7 +884,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.96"
+version = "0.2.97"
 dependencies = [
  "anyhow",
  "clap",
@@ -1115,7 +1115,7 @@ dependencies = [
 
 [[package]]
 name = "reviewgate"
-version = "0.1.55"
+version = "0.1.56"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "tdd"
-version = "0.1.52"
+version = "0.1.53"
 dependencies = [
  "anyhow",
  "chrono",

@@ -9,7 +9,7 @@ begin が exit 1 + skip JSON を返したら、決して先に進んではいけ
 - stale lease は**すべての** lease 変更操作（`begin` / `run` / `end` / `heartbeat` / `reassign` / `reap`）で削除され、`status` / `sessions` / `lease` では無視される。したがって dead な保持者が `begin` を阻むことはない。変更操作による削除は 1 件ずつ status `reaped` の `ended` イベントとして `events.jsonl` に追記される。
 - `overwatch reap` はその掃除だけを単独で行う。
 
-2 つのフック（SessionStart + Stop、どちらも `overwatch status` を hook timeout 5 秒で実行）がある。キャッシュされた status は、`aggregate::STATUS_CACHE_TTL_SECS` を過ぎたとき、cache 構築と同じ秒以降に `leases.json` が書かれたとき、またはその mtime を観測できないときに破棄される（`aggregate::cache_is_fresh`）。
+フックは 1 つ（SessionStart で `overwatch status` を hook timeout 5 秒で実行）。Stop には意図的に登録しない（毎 Stop で約 25KB の status ダンプ（大半が Compass gap）が出てノイズだったため）。キャッシュされた status は、`aggregate::STATUS_CACHE_TTL_SECS` を過ぎたとき、cache 構築と同じ秒以降に `leases.json` が書かれたとき、またはその mtime を観測できないときに破棄される（`aggregate::cache_is_fresh`）。
 
 `overwatch status` の各セクションは、空のとき `(none)` を出す。
 `(none)` は**実際に観測できた source にしか出さない**。

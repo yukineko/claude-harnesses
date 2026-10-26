@@ -484,7 +484,7 @@ fn claim_rd_stale_dropped_by_every_mutation() {
         ("fresh", "F", t - 10, t - 10, &[]),
     ]);
     let sessions = json_out(&sb.ok(&["sessions", "--json"]));
-    assert_eq!(session_ids(&sessions), vec!["F".to_string()]);
+    assert_eq!(session_ids(&sessions["sessions"]), vec!["F".to_string()]);
     let status = json_out(&sb.ok(&["status", "--json"]));
     assert_eq!(session_ids(&status["sessions"]), vec!["F".to_string()]);
     let l = sb.run(&["lease", "--session", "dead", "--json"]);
@@ -832,7 +832,7 @@ fn claim_rd_sessions_roster_live_only() {
         "{txt}"
     );
     let v = json_out(&sb.ok(&["sessions", "--json"]));
-    assert_eq!(session_ids(&v), vec!["live-sess".to_string()]);
+    assert_eq!(session_ids(&v["sessions"]), vec!["live-sess".to_string()]);
 }
 
 #[test]
@@ -850,7 +850,7 @@ fn claim_sk_sessions_list() {
     let txt = out(&sb.ok(&["sessions"]));
     assert!(txt.contains("s-listed"), "{txt}");
     let v = json_out(&sb.ok(&["sessions", "--json"]));
-    assert!(session_ids(&v).contains(&"s-listed".to_string()));
+    assert!(session_ids(&v["sessions"]).contains(&"s-listed".to_string()));
 }
 
 /// Write the four helper fakes. `origin` is recorded per call (not for --version probes).
@@ -1071,7 +1071,7 @@ fn claim_rd_status_json_undetermined_array() {
 }
 
 #[test]
-fn claim_rd_hooks_json_two_status_hooks() {
+fn claim_rd_hooks_json_status_only_at_session_start() {
     let hooks: Value = serde_json::from_str(
         &std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("hooks/hooks.json"))
             .unwrap(),
@@ -1080,13 +1080,12 @@ fn claim_rd_hooks_json_two_status_hooks() {
     let events = hooks["hooks"].as_object().unwrap();
     let mut names: Vec<&String> = events.keys().collect();
     names.sort();
-    assert_eq!(names, ["PostToolUse", "SessionEnd", "SessionStart", "Stop"]);
+    assert_eq!(names, ["PostToolUse", "SessionEnd", "SessionStart"]);
     let status = json!("${CLAUDE_PLUGIN_ROOT}/bin/overwatch status");
     let presence = json!("${CLAUDE_PLUGIN_ROOT}/bin/overwatch presence");
     // (event, expected commands in order)
-    let expected: [(&str, Vec<&Value>); 4] = [
+    let expected: [(&str, Vec<&Value>); 3] = [
         ("SessionStart", vec![&presence, &status]),
-        ("Stop", vec![&status]),
         ("PostToolUse", vec![&presence]),
         ("SessionEnd", vec![&presence]),
     ];

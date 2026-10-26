@@ -22,13 +22,6 @@
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/overwatch presence", "timeout": 5 }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/overwatch status", "timeout": 5 }
-        ]
-      }
     ]
   }
 }

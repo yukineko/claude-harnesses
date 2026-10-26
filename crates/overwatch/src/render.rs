@@ -50,9 +50,9 @@ fn warn_undetermined(view: &ProgressView) {
 /// Render the full human-readable progress report, or JSON if `json` is true.
 ///
 /// Uses the short-lived status cache (`aggregate::build_cached`): this is the
-/// command wired to BOTH the SessionStart and Stop hooks (see
-/// `hooks/hooks.json`), so a fresh render's cache hit collapses the second
-/// hook invocation's ~5 subprocess spawns when the two fire close together.
+/// command wired to the SessionStart hook (see `hooks/hooks.json`; it is not
+/// run at Stop) and run on demand, so a fresh render's cache hit collapses
+/// repeated invocations' ~5 subprocess spawns when they fire close together.
 pub fn status(json: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let view = aggregate::build_cached(&cwd);
@@ -123,11 +123,24 @@ pub fn sessions(json: bool) -> Result<()> {
     let view = aggregate::build(&cwd);
 
     if json {
-        // The roster alone cannot express "unreadable ledger", so an
-        // undetermined roster is surfaced on stderr rather than being implied by
-        // an empty array. Callers scripting against this should prefer
-        // `status --json`, whose `undetermined` key is machine-readable.
-        println!("{}", serde_json::to_string_pretty(&view.sessions)?);
+        // An object, not a bare array: a bare `[]` cannot distinguish "no
+        // sessions" from "a source could not be read". `sessions` is the lease
+        // roster, `active_sessions` the presence-registered sessions, and
+        // `undetermined` (only the entries for those two sources) is present
+        // exactly when either was unreadable, so empty is never ambiguous.
+        let undetermined: Vec<&crate::aggregate::UndeterminedSource> = view
+            .undetermined
+            .iter()
+            .filter(|u| u.source == SOURCE_SESSIONS || u.source == SOURCE_ACTIVE_SESSIONS)
+            .collect();
+        let mut obj = serde_json::json!({
+            "sessions": view.sessions,
+            "active_sessions": view.active_sessions,
+        });
+        if !undetermined.is_empty() {
+            obj["undetermined"] = serde_json::to_value(&undetermined)?;
+        }
+        println!("{}", serde_json::to_string_pretty(&obj)?);
         warn_undetermined(&view);
         return Ok(());
     }

@@ -66,22 +66,16 @@ fn backlog_b6fdf66b_config_at_project_root_is_read_from_a_subdir_cwd() {
     .unwrap();
     let sub = root.join("crates").join("x");
     std::fs::create_dir_all(&sub).unwrap();
-    let payload = |cwd: &Path| {
-        format!(
-            "{{\"hook_event_name\":\"SessionStart\",\"session_id\":\"s\",\"cwd\":\"{}\"}}",
-            cwd.display()
-        )
-    };
+    // session-start no longer prints, so observe the config through `status`
+    // (which loads Config from the process cwd).
+    let want = format!("progress_file:  {}", custom.display());
     // Control: cwd == root reads the configured file.
-    let (_, ctl) = run(&root, &home, &["session-start"], &payload(&root));
-    assert!(
-        ctl.contains("MARKER_FROM_CUSTOM_PROGRESS_FILE"),
-        "apparatus control failed: {ctl}"
-    );
+    let (_, ctl) = run(&root, &home, &["status"], "");
+    assert!(ctl.contains(&want), "apparatus control failed: {ctl}");
     // Subject: cwd == subdir must see the same config.
-    let (_, out) = run(&sub, &home, &["session-start"], &payload(&sub));
+    let (_, out) = run(&sub, &home, &["status"], "");
     assert!(
-        out.contains("MARKER_FROM_CUSTOM_PROGRESS_FILE"),
+        out.contains(&want),
         "subdir cwd ignored the root taskprog.toml: {out}"
     );
 }

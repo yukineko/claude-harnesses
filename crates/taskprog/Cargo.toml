@@ -2,9 +2,9 @@
 rust-version.workspace = true
 license.workspace = true
 name = "taskprog"
-version = "0.1.18"
+version = "0.1.19"
 edition = "2021"
-description = "Multi-session progress file for Claude Code: injects .claude/progress.md at SessionStart and notifies the user at Stop to keep it current for handoff across sessions."
+description = "Multi-session progress file for Claude Code: keeps .claude/progress.md for handoff across sessions; the Stop hook silently seeds a skeleton when it is missing (hooks print nothing)."
 
 [[bin]]
 name = "taskprog"

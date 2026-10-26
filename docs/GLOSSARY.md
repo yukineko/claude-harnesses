@@ -68,7 +68,7 @@
 | ship | event-scoped | commit・merge・push・plugin-update の出荷儀式を促す（未出荷状態を検出・subscription-native） |
 | specguard | always-on | 仕様↔実装の整合を監査する read-only ハーネス（subscription-native）＋ polarity synonym guard の段階的 ratification ＋ spec-map ストア |
 | stuckguard | always-on | PostToolUse で反復操作・編集スラッシュを検知しエスカレーションする（Jaccard near-repeat ＋ progress-score 3信号 stall advisory ＋ escalation 時の lesson write/retrieve） |
-| taskprog | always-on | `.claude/progress.md` をセッション間で同期し HOTL ハンドオフを支援する |
+| taskprog | always-on | `.claude/progress.md` を跨セッションの進捗ファイルとして保持し HOTL ハンドオフを支援する（hook は無出力。Stop で欠落時に雛形を seed） |
 | tdd | always-on | Stop でテストなし実装を阻止するテストファースト・ゲート（RED before GREEN） |
 | tracekit | manual | condukt run を span 木として記録・描画し OTel GenAI-semconv JSON を export するトレーサ |
 | trajectoryeval | manual | worker が辿った tool-call 経路を期待軌跡と照合する trajectory-match verifier。`tier` サブコマンドはリスク階層化 e2e 検証（core allowlist に載る core フローは毎回 structured-data/fuzzy diff、非 core は existence/seeded sampling）を持ち、fuzzy 閾値超過ドリフトは needs-human（exit3）にエスカレートする |

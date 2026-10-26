@@ -10,7 +10,9 @@ pub struct Config {
     /// Path to the progress file. Defaults to `<project root>/.claude/progress.md`
     /// — the root, NOT the cwd; see [`Config::resolve_progress_path`].
     pub progress_file: Option<String>,
-    /// Max bytes of progress file to inject at SessionStart (0 = no limit).
+    /// Formerly the max bytes injected at SessionStart. **Has no effect**: the
+    /// SessionStart hook no longer injects anything (user ruling). Still parsed
+    /// for backward compatibility and reported by `taskprog status`.
     pub inject_limit: usize,
 }
 
@@ -203,8 +205,8 @@ mod tests {
     }
 
     /// The root itself resolves to the same place a subdirectory does — the two
-    /// entry points must not disagree, or one session would inject a file the
-    /// other never sees.
+    /// entry points must not disagree, or one session would seed or show a file
+    /// the other never sees.
     #[test]
     fn the_root_itself_resolves_to_the_same_file_as_its_subdirectory() {
         let root = temp_dir();

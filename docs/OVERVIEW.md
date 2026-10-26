@@ -124,9 +124,9 @@ Claude Code 組込みコンパクションの薄い制御層。pin + lossless-re
 - **フック**: UserPromptSubmit
 
 #### taskprog
-`.claude/progress.md` をセッション間でつなぎ、複数セッション跨ぎの進捗を管理する。
+`.claude/progress.md` を複数セッション跨ぎの進捗ファイルとして保持する（読み書きは `/taskprog`・`taskprog show`）。
 
-- **フック**: SessionStart（progress.md 注入）、SessionEnd（更新）
+- **フック**: SessionStart（何もしない・無出力）、Stop（progress.md が無ければ雛形を seed・無出力）
 - **スキル**: `/taskprog`
 
 ---
@@ -273,9 +273,9 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
 | PreToolUse | ツール実行前 | blastguard, ctxrot(preguard) |
 | PostToolUse | ツール実行後 | context-governor, ctxrot(toolguard), session-insights, stuckguard |
 | PreCompact | /compact 直前 | autoflow, context-governor, ctxrot(rescue) |
-| Stop | ターン終了前 | autoflow, budgetguard, condukt, context-governor, ctxrot(stop), donegate, precommit-audit, propguard, reviewgate, tdd |
+| Stop | ターン終了前 | autoflow, budgetguard, condukt, context-governor, ctxrot(stop), donegate, precommit-audit, propguard, reviewgate, taskprog, tdd |
 | SubagentStop | サブエージェント終了時 | context-governor |
-| SessionEnd | セッション終了時 | beacon, compass, difflog, gauge, session-insights, taskprog |
+| SessionEnd | セッション終了時 | beacon, compass, difflog, gauge, session-insights |
 | Notification | 外部通知時 | beacon |
 
 ---

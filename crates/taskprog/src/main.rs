@@ -7,7 +7,6 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use harness_core::hook::{read_stdin, run_hook, HookInput};
 use harness_core::verdict::Determination;
-use serde_json::json;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -19,9 +18,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// SessionStart hook: inject progress file as additionalContext
+    /// SessionStart hook: prints nothing (kept registered; injects no context)
     SessionStart,
-    /// Stop hook: seed a skeleton if missing and notify the user (systemMessage)
+    /// Stop hook: seed a skeleton if missing; prints nothing
     Stop,
     /// Print the current progress file
     Show,
@@ -57,31 +56,6 @@ fn current_dir() -> String {
         .unwrap_or_else(|_| ".".to_string())
 }
 
-fn session_start_hook(input: &HookInput) -> Result<Option<String>> {
-    if config::disabled_env() {
-        return Ok(None);
-    }
-    let cwd = if input.cwd.is_empty() {
-        "."
-    } else {
-        &input.cwd
-    };
-    let cfg = config::Config::load(cwd);
-    if !cfg.enabled {
-        return Ok(None);
-    }
-    match cfg.resolve_progress_path(cwd) {
-        Determination::Known(path) => Ok(progress::build_context(&path, cfg.inject_limit)),
-        // Say "I could not look" rather than injecting nothing — an empty
-        // injection is read downstream as "there is no progress to know about",
-        // which is a different claim (CLAUDE.md §1: silence is not a degrade).
-        Determination::Undetermined(why) => Ok(Some(format!(
-            "## Progress file\n\ntaskprog could not locate one: {why}. \
-             No progress context was loaded for this session."
-        ))),
-    }
-}
-
 fn stop_hook(input: &HookInput) -> Result<()> {
     if config::disabled_env() {
         return Ok(());
@@ -95,9 +69,9 @@ fn stop_hook(input: &HookInput) -> Result<()> {
     if !cfg.enabled {
         return Ok(());
     }
-    // The outcome (including `NotAnchored`) is reported on the user's channel
-    // (`systemMessage`) by `on_stop` itself; the Stop hook has no other channel and must not
-    // change its exit status.
+    // By user ruling the Stop hook prints nothing, whatever the outcome
+    // (including `NotAnchored` and a failed skeleton write); its only effect is
+    // the skeleton seed inside `on_stop`.
     update::on_stop(input, &cfg).map(|_| ())
 }
 
@@ -119,20 +93,10 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::SessionStart => {
+            // User ruling: the hook prints nothing and injects no context. It
+            // still drains stdin so the caller's write never hits a closed pipe.
             run_hook(|| {
-                let raw = read_stdin();
-                let input = HookInput::parse(&raw).unwrap_or_default();
-                if let Some(ctx) = session_start_hook(&input).unwrap_or(None) {
-                    println!(
-                        "{}",
-                        json!({
-                            "hookSpecificOutput": {
-                                "hookEventName": "SessionStart",
-                                "additionalContext": ctx
-                            }
-                        })
-                    );
-                }
+                let _ = read_stdin();
             });
         }
         Command::Stop => {
@@ -146,7 +110,7 @@ fn main() {
             let cwd = current_dir();
             let cfg = config::Config::load(&cwd);
             let path = resolve_or_exit(&cfg, &cwd);
-            match progress::read_file(&path, 0) {
+            match progress::read_file(&path) {
                 Some(s) => print!("{s}"),
                 None => eprintln!("No progress file at {}", path.display()),
             }

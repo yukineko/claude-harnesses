@@ -1,29 +1,27 @@
-//! Stop hook: seed `.claude/progress.md` deterministically and tell the USER
-//! (via `systemMessage`) that the progress file should be updated.
+//! Stop hook: seed `.claude/progress.md` deterministically when it is missing
+//! or empty. The hook prints NOTHING (no `systemMessage`, no context) — by user
+//! ruling ("progressはいらない" / "何も表示しないようにして"), which reverses the
+//! Stop `systemMessage` notice of 914ed765. The deterministic skeleton write is
+//! the only effect, and it is what guarantees the file exists.
 //!
-//! Stop has no documented `additionalContext` (top-level or nested), and a
-//! top-level one was measured (claude -p 2.1.284) to reach neither model nor
-//! user. `systemMessage` is shown to the user, NOT the model, so this hook no
-//! longer nudges the model; the deterministic skeleton write is the only
-//! thing that guarantees the file exists.
+//! This hook carries no verdict: nothing downstream reads its output (there is
+//! none), and its return value is consumed only by tests.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use harness_core::hook::HookInput;
 use harness_core::verdict::Determination;
-use serde_json::json;
 
 use crate::config::Config;
 
 /// What [`on_stop`] actually did.
 ///
 /// This exists so that "could not tell where the progress file belongs" is
-/// **distinguishable by the caller** from "wrote one" / "kept one". CLAUDE.md §1
-/// is explicit that silence is not an acceptable degrade: a Stop hook that
-/// writes nothing and says nothing reads downstream as "progress recorded". The
+/// **distinguishable by the caller** from "wrote one" / "kept one", even though
+/// the hook itself prints none of them (user ruling: hooks print nothing). The
 /// third variant is the one that used to not exist — the old code answered an
-/// unanchorable cwd by writing into it, which is the defect this file fixes.
+/// unanchorable cwd by writing into it, which is the defect it guards against.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StopOutcome {
     /// No real content existed, so the deterministic skeleton was seeded here.
@@ -31,13 +29,15 @@ pub enum StopOutcome {
     /// A non-empty progress file already existed here and was left untouched.
     Existing(PathBuf),
     /// The project root could not be determined. **Nothing was written**, by
-    /// design — carries why, so the caller can report it rather than imply
-    /// success.
+    /// design — carries why, so a caller can tell it apart from success.
     NotAnchored(String),
 }
 
-/// Run at Stop. If no progress file exists yet, suggest creating one.
-/// If it does exist, tell the user (systemMessage) it should be kept current.
+/// Run at Stop. Prints nothing. If no non-empty progress file exists yet, seed
+/// the deterministic skeleton; an existing file is left untouched.
+///
+/// A failed skeleton write is returned as `Err` rather than reported as
+/// [`StopOutcome::Seeded`].
 ///
 /// When the progress file cannot be anchored to a project root, this writes
 /// nothing at all and returns [`StopOutcome::NotAnchored`]. It deliberately does
@@ -52,69 +52,24 @@ pub fn on_stop(input: &HookInput, cfg: &Config) -> Result<StopOutcome> {
 
     let path = match cfg.resolve_progress_path(cwd) {
         Determination::Known(p) => p,
+        // Write nothing anywhere, and (by user ruling) print nothing either.
         Determination::Undetermined(why) => {
-            let reason = why.as_str().to_string();
-            // Say so on the user's channel (systemMessage). Writing nothing is
-            // correct; being silent about it is not.
-            let msg = format!(
-                "taskprog: no progress file was written or read this turn — {reason}. \
-                 If this directory should have one, run taskprog from the project root \
-                 or set `progress_file` in taskprog.toml."
-            );
-            println!("{}", json!({ "systemMessage": msg }));
-            return Ok(StopOutcome::NotAnchored(reason));
+            return Ok(StopOutcome::NotAnchored(why.as_str().to_string()));
         }
     };
 
     // Does a *non-empty* progress file already exist? We only treat a file with
     // real content as "present" — an empty/whitespace-only file is as good as
     // missing and should be (re)seeded with the deterministic skeleton below.
-    let has_content = crate::progress::read_file(&path, 0).is_some();
-
-    // Deterministic, LLM-independent write: if there is no real progress content
-    // yet, seed a minimal skeleton ourselves so the file is never left stale/
-    // missing even though the Stop message below only reaches the user, not the model.
-    // Fail-soft: an IO error here must never break the turn (Stop runs under
-    // run_hook, which already guarantees exit 0, but we also swallow the error).
-    if !has_content {
-        let skeleton = build_skeleton(input, &path);
-        let _ = write_progress(&path, &skeleton);
+    if crate::progress::read_file(&path).is_some() {
+        return Ok(StopOutcome::Existing(path));
     }
 
-    let (verb, current_block) = if has_content {
-        let content = crate::progress::read_file(&path, 0).unwrap_or_else(|| "(empty)".to_string());
-        (
-            "update",
-            format!(
-                "\n\nCurrent progress file (`{}`):\n\n```markdown\n{}\n```",
-                path.display(),
-                content
-            ),
-        )
-    } else {
-        // We just seeded a skeleton — tell the user it still needs to be filled in.
-        (
-            "update",
-            format!(
-                "\n\nA minimal skeleton was just written to `{}` — it still needs to be filled in.",
-                path.display()
-            ),
-        )
-    };
-
-    let msg = format!(
-        "taskprog notice (shown to you, not to the model): before ending this session, please {verb} \
-         the progress file with what was accomplished, what is pending, and any blocking \
-         issues (concise bullet points) — ask the agent to write it, or edit it yourself.{current_block}"
-    );
-
-    let out = json!({ "systemMessage": msg });
-    println!("{out}");
-    Ok(if has_content {
-        StopOutcome::Existing(path)
-    } else {
-        StopOutcome::Seeded(path)
-    })
+    // Deterministic, LLM-independent write: seed a minimal skeleton so the file
+    // is never left missing. An IO error is returned, not reported as `Seeded`.
+    let skeleton = build_skeleton(input, &path);
+    write_progress(&path, &skeleton)?;
+    Ok(StopOutcome::Seeded(path))
 }
 
 /// The project's display name for the skeleton header, taken from the directory

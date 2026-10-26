@@ -156,7 +156,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.295",
+      "version": "0.7.296",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -557,7 +557,7 @@
     {
       "name": "reviewgate",
       "description": "Code-review gate for Claude Code whose Stop hook defaults to off; opt in to inject a review rubric for self-review or to spawn an independent reviewer command.",
-      "version": "0.1.57",
+      "version": "0.1.58",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -629,7 +629,7 @@
     {
       "name": "session-insights",
       "description": "Per-session work metrics for Claude Code: PostToolUse and Stop hooks roll up tool calls, turns, files touched, a size class and a work category, with optional Obsidian session logs.",
-      "version": "0.2.37",
+      "version": "0.2.38",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -752,7 +752,7 @@
     {
       "name": "autoflow",
       "description": "Session-end auto-flow gate for Claude Code: a Stop hook that prompts /record once, then keeps looping /condukt while the in-flight run still has pending tasks.",
-      "version": "0.1.38",
+      "version": "0.1.39",
       "category": "orchestration",
       "keywords": [
         "hooks",

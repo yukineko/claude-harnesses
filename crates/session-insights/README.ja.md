@@ -11,7 +11,7 @@ backlog / code / commit から読み直せるものは書かないこと。
 - **PostToolUse フック**（`record`）が各ツール呼び出しを記録する（ツールごとの回数、触れた個別ファイル）。
 - **Stop フック**（`stop`）がターンを 1 つ数える。`obsidian_log = true` なら Obsidian の日付つきセッションノート（`sessions/`）も毎ターン書き直し、`record = true` なら `/record` ノートの数値ブロックも更新する。
 - **SessionEnd フック**（`sessionend`）は `record = true` のときだけ `/record` ノートを書き出す／更新する。
-- フックはブロックせず exit 0 だが、空・パース不能なペイロードを黙って捨てない。各フックはそのイベントを記録しなかったことを stderr に出す。`stop` は加えて `systemMessage` を出す。
+- フックはブロックせず exit 0 だが、空・パース不能なペイロードを黙って捨てない。各フックはそのイベントを記録しなかったことを stderr に出す。`stop` は加えて `<state_dir>/log.jsonl` に `{"event":"unparseable_payload","hook":"stop",...}` の行を追記する（stdout には何も出さず `systemMessage` も出さない。2026-10-27 のユーザー裁定「Stop時に結果の報告はあってもいいがログはいらない」）。
 
 - **size**: 記録したツールイベントの総数による XS / S / M / L / XL（閾値は設定可能）。
 - **category**: `coding`（Edit/Write/MultiEdit/NotebookEdit）、`ops`（Bash）、`research`（Read/Grep/Glob/WebFetch/WebSearch）のうち、分類対象イベントの半分以上を占めるグループ。どれも半分に届かなければ `mixed`、分類対象が 0 件なら `empty`。

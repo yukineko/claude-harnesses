@@ -317,26 +317,30 @@ pub fn waive_stop_decision(
 /// The one-line form every Stop gate calls in place of its own
 /// `println!("{}", json!({"decision":"block", ...}))`.
 ///
-/// # A waiver is announced, never silent
+/// # A waiver is announced, never silent — but in one line
 ///
 /// Printing nothing IS allowing the stop, so a waived block would otherwise be
 /// indistinguishable from a gate that found nothing — the exact "cannot tell
 /// 'checked' from 'could not check'" confusion CLAUDE.md §3 forbids, and the
-/// invisibility §4 forbids. So the waiver path still prints a line: a
+/// invisibility §4 forbids. So the waiver path still prints exactly one line: a
 /// `systemMessage` (user-visible, and NOT a `decision`, so the stop proceeds)
-/// saying which finding was let through and that it is still unresolved. The
-/// gate goes quiet about *blocking*, never about *having found something*.
+/// naming the gate and saying the finding was let through unresolved
+/// (`<gate>: 同じ指摘の2度目のため通しました（未解消）`). The gate goes quiet
+/// about *blocking*, never about *having found something*.
+///
+/// The message deliberately does NOT repeat the reason (operator ruling
+/// 2026-10-27: 「Stop時に結果の報告はあってもいいがログはいらない」 — a long
+/// log at Stop pushes the turn's result report off screen). The user already
+/// saw the full reason on the first block, and the full reason is durable in
+/// the session's `waivers.log` (written by [`must_yield`] via
+/// [`record_waiver`]), readable through [`waivers`].
 pub fn emit_stop_block(gate: &str, reason: &str) {
     match stop_block_or_waive(gate, reason) {
         Some(decision) => println!("{decision}"),
         None => println!(
             "{}",
             serde_json::json!({
-                "systemMessage": format!(
-                    "{gate}: 同じ指摘で2度目のブロックになるため、この stop は通しました\
-                     （2026-09-18 の運用判断「ユーザの指示を2度やぶる gate はいらない」）。\
-                     指摘そのものは解消していません:\n{reason}"
-                )
+                "systemMessage": format!("{gate}: 同じ指摘の2度目のため通しました（未解消）")
             })
         ),
     }

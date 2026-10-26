@@ -22,7 +22,7 @@ LLM  (/condukt スキル + interpreter/researcher/worker/verifier エージェ�
 | イベント | matcher | コマンド |
 |---|---|---|
 | `SessionStart` | `startup\|resume\|clear` | `condukt restore` |
-| `Stop` | — | `condukt state record-run --all` |
+| `Stop` | — | `condukt state record-run --all --stop-hook`（無出力: 失敗と進捗は `<state_dir>/record-run-failures.log` へ、exit 0） |
 | `SubagentStop` | — | `condukt subagent-stop` |
 | `PostToolUse` | `Edit\|Write\|MultiEdit` | `condukt editgate`（edit-time コンパイルゲート） |
 | `PostToolUse` | `*` | `condukt session-heartbeat` |

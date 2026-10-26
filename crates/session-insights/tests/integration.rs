@@ -198,16 +198,22 @@ fn record_hook_survives_garbage_stdin() {
     );
 }
 
-/// The Stop hook's user-visible channel is a `systemMessage`; an unparseable
-/// payload must surface there, not only on stderr.
+/// An unparseable Stop payload prints nothing on stdout (operator ruling
+/// 2026-10-27: no logs at Stop) but is not lost: it is recorded as an
+/// `unparseable_payload` line in `<state_dir>/log.jsonl`.
 #[test]
-fn stop_hook_garbage_payload_emits_system_message() {
-    let (code, stdout) = run(&["stop"], "not json");
+fn stop_hook_garbage_payload_is_logged_not_printed() {
+    let home = temp_home();
+    let (code, stdout) = run_in(&home, &["stop"], "not json");
     assert_eq!(code, 0, "stop must not block");
-    let v: serde_json::Value = serde_json::from_str(stdout.trim())
-        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {stdout:?}"));
-    let msg = v["systemMessage"].as_str().unwrap_or_default();
-    assert!(msg.contains("NOT counted"), "systemMessage: {msg:?}");
+    assert!(stdout.trim().is_empty(), "stdout must be empty: {stdout:?}");
+    let log = home.join(".session-insights/state/log.jsonl");
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_str(text.lines().last().unwrap_or(""))
+        .unwrap_or_else(|e| panic!("log line is not JSON ({e}): {text:?}"));
+    assert_eq!(v["event"], "unparseable_payload", "{v}");
+    let msg = v["message"].as_str().unwrap_or_default();
+    assert!(msg.contains("NOT counted"), "message: {msg:?}");
 }
 
 /// SessionEnd discards stdout, so an unparseable payload must be on stderr.

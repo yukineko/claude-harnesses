@@ -1189,7 +1189,16 @@ fn command_mention_count(done_criteria: &str) -> Option<usize> {
     let prose_re = regex::Regex::new(r"\b(?:cargo test|npm test|pytest|go test)\b").ok()?;
     let prose: std::collections::BTreeSet<&str> =
         prose_re.find_iter(&lower).map(|m| m.as_str()).collect();
-    Some(backticked.max(prose.len()))
+    // Third axis: pytest targets the prose names but `prose_pytest_argv` stops
+    // before ("a.py and b.py pass"). The extracted command runs only the first,
+    // so N dropped targets mean N + 1 targets asserted against one command.
+    let dropped = if prose.contains("pytest") {
+        pytest_dropped_path_count(done_criteria)
+    } else {
+        0
+    };
+    let pytest_targets = if dropped > 0 { dropped + 1 } else { 0 };
+    Some(backticked.max(prose.len()).max(pytest_targets))
 }
 
 /// Decide coverage from the two counts. Split out from [`criteria_coverage`] so
@@ -1482,13 +1491,47 @@ pub fn mechanical_cmd(
 /// flags, and the value of a value-taking flag such as `-k NAME`), stopping at
 /// the first plain prose word or at a punctuation-terminated token. Falls
 /// back to bare `["pytest"]` when nothing else is recognised.
+///
+/// Extraction stopping is NOT silent: `.py` / `::` targets that appear after
+/// the stop (`... a.py and scripts/b.py pass`, or `a.py, b.py`) are appended
+/// to the argv so every named test file runs. Other path-like tokens left
+/// behind (e.g. a directory `tests/`) are counted by
+/// [`pytest_dropped_path_count`], which [`command_mention_count`] turns into a
+/// multi-command coverage so the verifier is not skipped on a partial run.
+/// Prose mentioning an unrelated `.py` path after the command is also run as a
+/// pytest target; that fails the gate (restrictive), never passes it.
 fn prose_pytest_argv(done_criteria: &str) -> Vec<String> {
+    prose_pytest_parse(done_criteria).0
+}
+
+/// Is this prose token shaped like a pytest target (path, `.py` file or node id)?
+fn is_pytest_path_like(tok: &str) -> bool {
+    tok.contains('/') || tok.contains(".py") || tok.contains("::")
+}
+
+/// Number of path-like tokens that follow the point where
+/// [`prose_pytest_argv`] stopped extracting. Each is a pytest target the
+/// criteria names but the extracted command will NOT run, so a non-zero value
+/// means the single command cannot discharge the criteria. Over-counting (a
+/// non-test path mentioned in prose) only costs a verifier run; it errs to the
+/// restrictive side.
+fn pytest_dropped_path_count(done_criteria: &str) -> usize {
+    prose_pytest_parse(done_criteria)
+        .1
+        .iter()
+        .filter(|t| is_pytest_path_like(t))
+        .count()
+}
+
+/// Returns the extracted argv and the path-like-or-not tokens after the stop
+/// point that were NOT appended to the argv.
+fn prose_pytest_parse(done_criteria: &str) -> (Vec<String>, Vec<String>) {
     let bare = vec!["pytest".to_string()];
     let Ok(re) = regex::Regex::new(r"(?i)(?:(python[0-9.]*)\s+-m\s+)?\bpytest\b") else {
-        return bare;
+        return (bare, Vec::new());
     };
     let Some(m) = re.captures(done_criteria) else {
-        return bare;
+        return (bare, Vec::new());
     };
     let mut argv = Vec::new();
     if let Some(py) = m.get(1) {
@@ -1499,6 +1542,7 @@ fn prose_pytest_argv(done_criteria: &str) -> Vec<String> {
     let rest = &done_criteria[m.get(0).map_or(0, |w| w.end())..];
     let punct = |c: char| matches!(c, ',' | '.' | ';' | ')' | ':' | '。' | '、');
     let mut expect_value = false;
+    let mut consumed = 0usize;
     for raw in rest.split_whitespace() {
         let tok = raw.trim_end_matches(punct);
         let terminated = tok.len() != raw.len();
@@ -1508,11 +1552,12 @@ fn prose_pytest_argv(done_criteria: &str) -> Vec<String> {
         let keep = if expect_value {
             true
         } else {
-            tok.starts_with('-') || tok.contains('/') || tok.contains(".py") || tok.contains("::")
+            tok.starts_with('-') || is_pytest_path_like(tok)
         };
         if !keep {
             break;
         }
+        consumed += 1;
         expect_value = !expect_value
             && matches!(
                 tok,
@@ -1523,7 +1568,24 @@ fn prose_pytest_argv(done_criteria: &str) -> Vec<String> {
             break;
         }
     }
-    argv
+    // Targets named after the stop point are not dropped: `.py` files and
+    // `::` node ids are appended to the argv so every named test file runs.
+    // Any other path-like leftover (a directory such as `tests/`) cannot be
+    // safely classified as a pytest argument, so it is returned for
+    // `pytest_dropped_path_count` to veto the verifier skip.
+    let mut leftover = Vec::new();
+    for raw in rest.split_whitespace().skip(consumed) {
+        let tok = raw.trim_end_matches(punct);
+        if tok.is_empty() {
+            continue;
+        }
+        if tok.contains(".py") || tok.contains("::") {
+            argv.push(tok.to_string());
+        } else {
+            leftover.push(tok.to_string());
+        }
+    }
+    (argv, leftover)
 }
 
 fn is_criteria_runner(tok: &str) -> bool {
@@ -2714,6 +2776,59 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
             prose_argv("the test exists and python3 -m pytest scripts/x.py passes"),
             sv(&["python3", "-m", "pytest", "scripts/x.py"])
         );
+    }
+
+    #[test]
+    fn prose_pytest_multi_path_and_form_collects_every_path() {
+        let dc = "python3 -m pytest scripts/test_a.py and scripts/test_b.py pass";
+        assert_eq!(
+            prose_argv(dc),
+            sv(&[
+                "python3",
+                "-m",
+                "pytest",
+                "scripts/test_a.py",
+                "scripts/test_b.py"
+            ])
+        );
+    }
+
+    #[test]
+    fn prose_pytest_multi_path_comma_form_collects_every_path() {
+        assert_eq!(
+            prose_argv("pytest scripts/a.py, scripts/b.py pass"),
+            sv(&["pytest", "scripts/a.py", "scripts/b.py"])
+        );
+        assert_eq!(
+            prose_argv("pytest scripts/a.py::test_one and tests/b.py::test_two"),
+            sv(&["pytest", "scripts/a.py::test_one", "tests/b.py::test_two"])
+        );
+    }
+
+    #[test]
+    fn prose_pytest_uncollectable_path_downgrades_coverage() {
+        // A directory after a plain word is not collected; it must not be
+        // silently dropped, so coverage degrades and the verifier is kept.
+        for dc in [
+            "pytest scripts/a.py and tests/ pass",
+            "pytest scripts/a.py, then scripts/sub/ passes",
+        ] {
+            let cov = criteria_coverage(dc);
+            assert!(!cov.permits_skip(), "{dc}: got {cov:?}");
+            assert!(matches!(cov, CriteriaCoverage::Partial { .. }), "{dc}");
+            assert!(!classify_criteria(dc, None, None).skip_eligible, "{dc}");
+        }
+    }
+
+    #[test]
+    fn prose_pytest_single_path_stays_single_coverage() {
+        for dc in [
+            "python3 -m pytest scripts/test_x.py -k main_guard passes",
+            "the test exists and python3 -m pytest scripts/x.py passes",
+            "pytest tests/a.py passes",
+        ] {
+            assert!(criteria_coverage(dc).permits_skip(), "{dc}");
+        }
     }
 
     #[test]

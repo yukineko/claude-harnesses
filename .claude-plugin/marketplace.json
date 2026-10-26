@@ -331,7 +331,7 @@
     {
       "name": "donegate",
       "description": "Completion-verification gate for Claude Code: on Stop it runs your acceptance commands and blocks until every applicable check is green, feeding failures back for an auto-fix loop.",
-      "version": "0.1.46",
+      "version": "0.1.47",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -557,7 +557,7 @@
     {
       "name": "reviewgate",
       "description": "Code-review gate for Claude Code whose Stop hook defaults to off; opt in to inject a review rubric for self-review or to spawn an independent reviewer command.",
-      "version": "0.1.55",
+      "version": "0.1.56",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -728,7 +728,7 @@
     {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: on Stop it blocks when implementation lines were added with no test visible in the uncommitted changes, and red/green/verify subcommands record RED before GREEN.",
-      "version": "0.1.52",
+      "version": "0.1.53",
       "category": "quality",
       "keywords": [
         "tdd",

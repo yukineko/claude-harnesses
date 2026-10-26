@@ -267,12 +267,20 @@ fn written_root_gone_blocks_naming_the_root() {
     );
 }
 
-/// A written file whose directory exists but is not a git repo: same.
+/// A written file whose directory exists but whose git root cannot be
+/// determined (a corrupt `.git` gitfile pointing nowhere): same.
+///
+/// Re-anchored for backlog 775e5bc8 (GitHub 1459): this test used a plain
+/// non-git directory, which the user ruling now treats as POSITIVELY outside
+/// every repo and excludes from the roots. A corrupt gitfile makes git say
+/// "not a git repository" without "(or any of the parent directories)", so the
+/// root stays undetermined and must still block.
 #[test]
-fn written_root_not_a_git_repo_blocks_naming_the_root() {
+fn written_root_corrupt_gitfile_blocks_naming_the_root() {
     let f = Fixture::new(&exit0_toml(), &exit0_toml());
     let plain = f.home.join("plain-dir-4712");
     std::fs::create_dir_all(&plain).unwrap();
+    std::fs::write(plain.join(".git"), "gitdir: /nonexistent/harness-test\n").unwrap();
     std::fs::write(plain.join("x.rs"), "fn x() {}\n").unwrap();
     let tp = f.transcript(&[edit(&plain.join("x.rs"))]);
     let (decision, reason, out, err) = f.stop(&f.primary, &tp);

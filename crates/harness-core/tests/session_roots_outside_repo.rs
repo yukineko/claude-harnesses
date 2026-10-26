@@ -20,8 +20,8 @@
 //! Undetermined (fail-closed, CLAUDE.md section 3).
 //!
 //! RED test: `outside_repo_write_is_excluded_and_roots_are_known` (+ the
-//! mixed-session twin), `#[ignore]`d until fixed: run with `--include-ignored`.
-//! The control tests pass before and must pass after.
+//! mixed-session twin). Both were RED (ignored) before the fix and now run
+//! unignored. The control tests passed before and must keep passing.
 
 use harness_core::session_roots::resolve;
 use harness_core::verdict::Determination;

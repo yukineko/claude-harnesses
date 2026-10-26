@@ -57,7 +57,6 @@ fn transcript(dir: &Path, written: &Path) -> String {
 }
 
 #[test]
-#[ignore = "RED repro for backlog: a write into a since-removed worktree makes session roots undetermined"]
 fn removed_worktree_write_stays_attributable() {
     let tmp = tempfile::tempdir().unwrap();
     let base = canon(tmp.path());

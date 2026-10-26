@@ -9,7 +9,11 @@ begin が exit 1 + skip JSON を返したら、決して先に進んではいけ
 - stale lease は**すべての** lease 変更操作（`begin` / `run` / `end` / `heartbeat` / `reassign` / `reap`）で削除され、`status` / `sessions` / `lease` では無視される。したがって dead な保持者が `begin` を阻むことはない。変更操作による削除は 1 件ずつ status `reaped` の `ended` イベントとして `events.jsonl` に追記される。
 - `overwatch reap` はその掃除だけを単独で行う。
 
-2 つのフック（SessionStart + Stop、どちらも `overwatch status` を hook timeout 5 秒で実行）がある。キャッシュされた status は、`aggregate::STATUS_CACHE_TTL_SECS` を過ぎたとき、cache 構築と同じ秒以降に `leases.json` が書かれたとき、またはその mtime を観測できないときに破棄される（`aggregate::cache_is_fresh`）。
+フック（すべて hook timeout 5 秒）: SessionStart は `overwatch status` を実行する（Stop では実行しない。必要時に手動で実行）。SessionStart・PostToolUse（matcher `Edit|Write|MultiEdit|NotebookEdit`）・SessionEnd はフック専用の `overwatch presence` を実行し、stdin の Claude Code フック payload JSON を読んで `presence.json` にセッションを記録する（session id・cwd・worktree=cwd の git toplevel・transcript パス・重複排除した書き込みパス・`last_seen`・`ended`）。これにより `overwatch begin` を一度も実行しないセッションも登録される。entry が書き込み時に prune されるのは `last_seen` が 24 時間より古く、かつ live でない（ended・stale・liveness 不明）場合だけで、transcript がまだ新しいセッションは `last_seen` がどれだけ古くても残る。`presence.json` が壊れている／読めないときはフックが stderr にエラーを出して非 0 で終了し、空のレジストリで上書きすることはない。
+
+`status --json` には `active_sessions`（`session_id` / `cwd` / `worktree` / `written_paths` / `liveness` / `last_seen`）が加わる。`liveness` は transcript ファイルの mtime と lease TTL（1800 秒）で判定する: `live`（TTL 内）/ `stale`（それより古い）/ `unknown`（transcript が無い・読めない）/ `ended`（SessionEnd 受信済み）。`presence.json` が読めないときは `undetermined` に source `active_sessions` が入り、テキストの `== Sessions ==` は `(none)` ではなく `(unknown: ...)` を出す。このセクションは lease ロスターに加え、ended でない各 presence セッション（id・liveness・worktree/cwd・書き込みパス）を列挙する。
+
+キャッシュされた status は、`aggregate::STATUS_CACHE_TTL_SECS` を過ぎたとき、cache 構築と同じ秒以降に `leases.json` または `presence.json` が書かれたとき、あるいはどちらかの mtime を観測できないときに破棄される（`aggregate::cache_is_fresh`）。
 
 `overwatch status` の各セクションは、空のとき `(none)` を出す。
 `(none)` は**実際に観測できた source にしか出さない**。
@@ -33,7 +37,8 @@ overwatch begin --key <k> --title <t> [--session <sid>] [--scope <csv>] [--done-
 overwatch lease --session <sid> [--json]     # そのセッションが保持中の live lease（PDO anchor）を表示し、無ければ exit 1（無音）
 overwatch run --key <k> [--note <text>]      # 保持中のリースにハートビート＋イベントを記録
 overwatch status [--json]                    # プロジェクト全体の進捗ビュー: Sessions / PDO hypotheses / Backlog / Condukt runs / Compass gap
-overwatch sessions [--json]                  # Sessions ロスターのみ: live（stale でない）lease を保持するセッション
+overwatch sessions [--json]                  # Sessions ロスターのみ: live lease 保持セッション＋presence 登録セッション。--json は {sessions, active_sessions[, undetermined]}
+overwatch presence                           # フック専用: stdin の hook payload を presence.json に記録
 overwatch pause --run <id>                   # `condukt state pause --run <id>` に委譲し、control イベントを記録
 overwatch resume --run <id>                  # `condukt state resume --run <id>` に委譲し、control イベントを記録
 overwatch reassign --key <k> --to <sid>      # <k> の lease を「解放」し reassign to=<sid> イベントを記録（<sid> 側に lease は作らない）
@@ -115,7 +120,7 @@ overwatch lease --session <sid> [--json]
 - `now - heartbeat_at > 1800s` になると lease は stale になる。次の lease 変更操作（`begin` / `run` / `end` / `heartbeat` / `reassign` / `reap` のいずれか）が `leases.json` から削除し、別セッションによるそのキーの `begin` は成功する。
 - `overwatch reap` はその掃除だけを行う。
 
-状態はリポジトリごとに `~/.overwatch/<project-key>/overwatch/`（`leases.json` + `events.jsonl`）に保存される。キーは MAIN worktree root から導出する。
+状態はリポジトリごとに `~/.overwatch/<project-key>/overwatch/`（`leases.json` + `presence.json` + `events.jsonl`）に保存される。キーは MAIN worktree root から導出する。
 
 main checkout・全 linked `git worktree`・linked worktree の subdirectory は同一の store を共有する（main checkout から `overwatch status` を実行すると linked worktree 側のセッションも見える）。
 
@@ -125,7 +130,7 @@ git repo 外の cwd は cwd 自身がキーになる。
 
 - `<base>`: `~/.overwatch`（`$HOME/.overwatch`）。
 - `<project-key>`: リポジトリの MAIN worktree root の `<basename>-<正規化パスの fnv1a32>`（linked worktree 間で共有）。
-- lease は `end` されるか、`reassign` で解放されるか、後続の lease 変更操作で stale として削除されるまで `leases.json` に残る。overwatch は lease を Claude Code プロセスに紐づけておらず、セッション終了時に lease を消す overwatch フックも無い。
+- lease は `end` されるか、`reassign` で解放されるか、後続の lease 変更操作で stale として削除されるまで `leases.json` に残る。overwatch は lease を Claude Code プロセスに紐づけておらず、セッション終了時に lease を消す overwatch フックも無い（SessionEnd フックは `presence.json` 上でセッションを `ended` にするだけ）。
 
 `overwatch` は project-wide の実行/lease レジストリに加えて、gate 違反イベントを **正規化した signature** 付きで記録し、同一 signature が複数タスク/セッションにまたがって時間窓内に N 件以上再発したら **systemic issue** としてエスカレーションする。
 

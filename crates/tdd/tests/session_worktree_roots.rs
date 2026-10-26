@@ -135,6 +135,7 @@ impl Fixture {
             .env("CLAUDE_CODE_SESSION_ID", "s-wtroots")
             .env_remove("TDD_DISABLE")
             .env_remove("HARNESS_TRUST_ALL")
+            .env_remove("HARNESS_WORKTREE_ORIGIN_DIR")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -169,6 +170,27 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.home);
+    }
+}
+
+/// Creates `dir` with mode 000 on construction and restores 0o755 on drop, so
+/// teardown can delete it even when an assert panics. Only call it after the
+/// transcript (which lives under the same home) is written.
+struct LockedDir(PathBuf);
+
+impl LockedDir {
+    fn new(dir: &Path) -> LockedDir {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        LockedDir(dir.to_path_buf())
+    }
+}
+
+impl Drop for LockedDir {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
     }
 }
 
@@ -242,8 +264,13 @@ fn wrote_files_but_nothing_evaluated_blocks_naming_roots() {
 #[test]
 fn written_root_gone_blocks_naming_the_root() {
     let f = Fixture::new();
-    let gone = f.home.join("gone-root-4711").join("x.rs");
+    // user ruling 2026-10-27: a gone dir under a NON-repo base is now excluded;
+    // this keeps its property (unresolvable written root blocks, naming it) with
+    // a gone dir whose nearest existing ancestor git cannot enter (mode 000).
+    let locked = f.home.join("gone-root-4711");
+    let gone = locked.join("gone").join("x.rs");
     let tp = f.transcript(&[edit(&gone)]);
+    let _unlock = LockedDir::new(&locked);
     let o = f.stop(&f.primary, &tp);
     assert_eq!(
         o.decision, "block",
@@ -253,6 +280,11 @@ fn written_root_gone_blocks_naming_the_root() {
     assert!(
         o.reason.contains("gone-root-4711"),
         "reason must name the root; reason={:?}",
+        o.reason
+    );
+    assert!(
+        o.reason.contains("cannot be determined"),
+        "reason must say the roots are undetermined; reason={:?}",
         o.reason
     );
 }
@@ -294,4 +326,63 @@ fn control_session_with_no_writes_still_allows() {
     let tp = f.transcript(&[read(&f.wt.join("session_edit.rs"))]);
     let o = f.stop(&f.primary, &tp);
     assert_ne!(o.decision, "block", "no writes must allow; {:?}", o.reason);
+}
+
+/// user ruling 2026-10-27: the session wrote into a linked worktree that was
+/// removed before any resolve recorded it (isolated HOME, so no store record).
+/// Its directory is gone under a base that is positively outside every repo:
+/// the path is excluded, so the stop must NOT block with undetermined roots.
+/// RED on the unfixed code. The mode-000 control above still blocks.
+#[test]
+fn removed_unrecorded_worktree_under_non_repo_base_does_not_block() {
+    let f = Fixture::new();
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&f.home)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(128), "precondition: {out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr)
+            .contains("not a git repository (or any of the parent directories)"),
+        "precondition: home must be outside every repo: {out:?}"
+    );
+    let rm = f.home.join("rm-wt");
+    git(
+        &f.primary,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "rm-branch",
+            rm.to_str().unwrap(),
+        ],
+    );
+    let written = rm.join("src").join("a.rs");
+    std::fs::create_dir_all(written.parent().unwrap()).unwrap();
+    std::fs::write(&written, "fn f() {}\n").unwrap();
+    let tp = f.transcript(&[edit(&written)]);
+    git(
+        &f.primary,
+        &["worktree", "remove", "--force", rm.to_str().unwrap()],
+    );
+    assert!(!rm.exists(), "precondition: the worktree dir must be gone");
+    assert!(
+        !f.home.join(".harness/worktree-origins.jsonl").exists(),
+        "precondition: no worktree-origin record"
+    );
+    let o = f.stop(&f.primary, &tp);
+    assert_ne!(
+        o.decision, "block",
+        "a write into a removed worktree under a non-repo base must not block; \
+         stdout={:?} stderr={:?}",
+        o.stdout, o.stderr
+    );
+    assert!(
+        !o.reason.contains("cannot be determined") && !o.stdout.contains("cannot be determined"),
+        "must not report undetermined roots; reason={:?}",
+        o.reason
+    );
 }

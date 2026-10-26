@@ -16,6 +16,7 @@ mod gate_outcomes;
 mod lease;
 mod lock;
 pub mod merge_conflict;
+pub mod presence;
 mod protection;
 mod reconcile;
 mod render;
@@ -99,6 +100,8 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Hook-only: record a Claude Code hook payload (stdin) in presence.json
+    Presence,
     /// List sessions
     Sessions {
         #[arg(long)]
@@ -636,6 +639,9 @@ fn main() -> Result<()> {
         }
         Command::Status { json } => {
             render::status(json)?;
+        }
+        Command::Presence => {
+            presence::run_hook()?;
         }
         Command::Sessions { json } => {
             render::sessions(json)?;

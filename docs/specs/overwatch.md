@@ -101,6 +101,12 @@ CLI は `clap` の `Command` enum（`main.rs`）で定義。ledger/lease 系は�
   `HypoBuckets`/`RunRow`）、純パーサ（`roster_from_leases`/`parse_backlog`/`bucket_hypotheses`/
   `parse_condukt_runs`）、fail-soft シェル（`shell_soft`）、`build`（infallible 集約）。
 - **`render`** — `ProgressView` の人間可読 / JSON 整形（`status`/`sessions` と各 `format_*`）。
+- **`stalled`** — `status` が表示する停滞 subagent の走査（backlog 938e1004）。`$HOME/.claude/projects/<slug>/<session>/subagents/agent-<id>.jsonl` の最終エントリが assistant の
+  `tool_use`（後続の `tool_result` 無し）かつ mtime が `STALL_SECS`(=300) 以上古いものを `Stalled`
+  （agent id・idle 分・pending command）として列挙する。報告のみで kill/restart はしない。signal は
+  transcript の mtime と最終エントリであり output-file サイズではない。読めない・最終エントリを parse
+  できない transcript と NotFound 以外のディレクトリ読み取り失敗は `Unknown`（理由付き）として列挙し、
+  省略も clean 扱いもしない（fail-closed）。projects/subagents ディレクトリが NotFound のときだけ「列挙なし」。
 - **`control`** — 制御面。純 argv ビルダ（`pause_cmd`/`resume_cmd`）、argv 実行（`run_fail_soft`。成否を bool で返し、呼び出し側が失敗を非 0 終了に写す）、
   監査追記（`record_control_event`）、`pause`/`resume`/`reassign`。HOTL 承認は skill 側。
 - **`lib`** — テスト・他クレート向けに `event`/`store` を re-export する薄い公開面。

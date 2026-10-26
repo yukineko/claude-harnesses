@@ -6,7 +6,7 @@ It does **not** register a general-purpose `SessionStart` dashboard hook.
 
 - **Budget** (budgetguard): today's spend and session count, from `~/.budgetguard/state/ledger.json`.
 - **Recent sessions** (gauge): the last N sessions with turns, tokens, and USD cost, from `~/.gauge/store/sessions/`.
-- **Progress** (taskprog): the current `.claude/progress.md` preview.
+- **Progress**: the current `.claude/progress.md` preview.
 - **Stop-hook latency**: per-session totals from `~/.harness/state/hook-latency.jsonl`.
 - **UserPromptSubmit injection size**: per-turn totals from `~/.harness/state/inject-metrics.jsonl`.
 - **Hook binary health**: hooks registered in `~/.claude/settings.json` whose binary is missing on disk.
@@ -31,7 +31,7 @@ Otherwise it is silent (no output, no injected context).
   ----------------------------------------------------------------------
   3c8d91a2         harness                 12        35000    0.1850
 
-── Progress file (taskprog) ──────────────────────
+── Progress file ─────────────────────────────────
   cwd: /repo
   /repo/.claude/progress.md
   │ - specforge ⑤ worktree merge

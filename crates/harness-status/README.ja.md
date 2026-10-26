@@ -6,7 +6,7 @@
 
 - **予算 (budgetguard)**: 今日の支出額とセッション数。`~/.budgetguard/state/ledger.json` から読む。
 - **直近セッション (gauge)**: 直近 N 件のセッションの turn 数・トークン数・USD コスト。`~/.gauge/store/sessions/` から読む。
-- **進捗ファイル (taskprog)**: カレントディレクトリの `.claude/progress.md` のプレビュー。
+- **進捗ファイル**: カレントディレクトリの `.claude/progress.md` のプレビュー。
 - **Stop-hook レイテンシ**: `~/.harness/state/hook-latency.jsonl` からのセッション単位の合計。
 - **UserPromptSubmit 注入サイズ**: `~/.harness/state/inject-metrics.jsonl` からのターン単位の合計。
 - **hook binary の健全性**: `~/.claude/settings.json` に登録された hook のうち、binary がディスク上に無いもの。
@@ -31,7 +31,7 @@ PATH-shadow スキャン自体が完了しなかった場合 (判定不能とし
   ----------------------------------------------------------------------
   3c8d91a2         harness                 12        35000    0.1850
 
-── Progress file (taskprog) ──────────────────────
+── Progress file ─────────────────────────────────
   cwd: /repo
   /repo/.claude/progress.md
   │ - specforge ⑤ worktree merge

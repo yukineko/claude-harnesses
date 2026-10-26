@@ -30,7 +30,7 @@ pub struct GapInputs {
     /// Mid-authority "what the project is actually doing now" fragments
     /// (git log / status / diff), newest/most-relevant first.
     pub recent_activity: Vec<String>,
-    /// The taskprog progress excerpt, if present (the self-feeding "残り" loop).
+    /// The `.claude/progress.md` excerpt, if present (the self-feeding "残り" loop).
     pub progress_excerpt: Option<String>,
     /// What the next move is measured by (charter `measuring_stick`).
     pub measuring_stick: String,
@@ -72,7 +72,7 @@ pub struct OpportunityGap {
 /// The split is purely by provenance, no semantic judgment:
 ///   - `dod` / `measuring_stick` come straight from the charter,
 ///   - `recent_activity` is the Mid-authority git fragments (log/status/diff),
-///   - `progress_excerpt` is the Mid-authority taskprog fragment, if any.
+///   - `progress_excerpt` is the Mid-authority progress-file fragment, if any.
 pub fn assemble_gap_inputs(charter: &Charter, bundle: &Bundle) -> GapInputs {
     let mut recent_activity = Vec::new();
     let mut progress_excerpt = None;
@@ -86,7 +86,7 @@ pub fn assemble_gap_inputs(charter: &Charter, bundle: &Bundle) -> GapInputs {
             "git:log" | "git:status" | "git:diff" => {
                 recent_activity.push(frag.text.clone());
             }
-            // taskprog progress → progress_excerpt (first one wins).
+            // progress file → progress_excerpt (first one wins).
             ".claude/progress.md" | "progress.md" if progress_excerpt.is_none() => {
                 progress_excerpt = Some(frag.text.clone());
             }

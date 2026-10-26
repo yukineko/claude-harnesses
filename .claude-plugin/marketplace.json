@@ -132,7 +132,7 @@
     {
       "name": "compass",
       "description": "Goal re-grounding and next-move derivation for Claude Code, sitting upstream of condukt to decide what to work on.",
-      "version": "0.1.27",
+      "version": "0.1.28",
       "category": "planning",
       "keywords": [
         "compass",
@@ -483,8 +483,8 @@
     },
     {
       "name": "harness-status",
-      "description": "Unified human-on-the-loop status dashboard for Claude Code: a /status command that aggregates budgetguard spend, gauge session records and taskprog progress into one read-only view.",
-      "version": "0.1.26",
+      "description": "Unified human-on-the-loop status dashboard for Claude Code: a /status command that aggregates budgetguard spend, gauge session records and the .claude/progress.md progress file into one read-only view.",
+      "version": "0.1.27",
       "category": "observability",
       "keywords": [
         "status",
@@ -697,31 +697,6 @@
         "source": "git-subdir",
         "url": "https://github.com/yukineko/claude-harnesses.git",
         "path": "crates/stuckguard",
-        "ref": "main"
-      }
-    },
-    {
-      "name": "taskprog",
-      "description": "Multi-session progress file for Claude Code: keeps .claude/progress.md for handoff across sessions; the Stop hook silently seeds a skeleton when it is missing (hooks print nothing).",
-      "version": "0.1.19",
-      "category": "workflow",
-      "keywords": [
-        "hooks",
-        "progress",
-        "session",
-        "hotl",
-        "handoff",
-        "rust"
-      ],
-      "license": "MIT",
-      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/taskprog",
-      "author": {
-        "name": "yukineko"
-      },
-      "source": {
-        "source": "git-subdir",
-        "url": "https://github.com/yukineko/claude-harnesses.git",
-        "path": "crates/taskprog",
         "ref": "main"
       }
     },

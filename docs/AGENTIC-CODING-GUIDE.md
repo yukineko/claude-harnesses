@@ -71,7 +71,6 @@ specforge requirement   →   condukt task
 | **stuckguard** | worker の反復・edit thrash を検出して介入 |
 | **budgetguard** | run 全体のコスト上限で Stop をブロック |
 | **gauge** | トークン・コスト・遅延を記録 |
-| **taskprog** | `.claude/progress.md` に run 進捗を追跡 (跨セッション) |
 
 ### Phase 6 verify — condukt-verifier の「検証コマンド」に使う
 condukt-verifier は `done_criteria` を照合するが、その中身に既存ゲートを流用する:
@@ -215,7 +214,7 @@ condukt state set --run $RID --task t3 --status failed
 
 ### 最小 — condukt + 自走ガード
 ```
-condukt + ctxrot + stuckguard + taskprog
+condukt + ctxrot + stuckguard
 ```
 分解・並列・worktree・gate は condukt が持つので、足すのは自走の安全だけ。
 

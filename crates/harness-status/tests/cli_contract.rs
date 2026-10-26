@@ -554,7 +554,7 @@ fn claim_full_dashboard() {
         vec![
             "── Budget (budgetguard)",
             "── Recent sessions (gauge)",
-            "── Progress file (taskprog)",
+            "── Progress file",
             "── Stop-hook latency (donegate/reviewgate/propguard)",
             "── UserPromptSubmit injection (aggregate budget)",
             "── Hook binary health (settings.json)",

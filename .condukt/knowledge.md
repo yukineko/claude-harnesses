@@ -30,7 +30,6 @@
 | difflog | バイナリ | SessionStart/End: git diff サマリ |
 | deepwiki | バイナリ+スキル | リポジトリ wiki 生成 |
 | harness-status | バイナリ | budget/sessions/progress 統合ダッシュボード |
-| taskprog | バイナリ | SessionStart/Stop: progress.md 注入 |
 | runbook | バイナリ | UserPromptSubmit: !macro 展開 |
 
 ## harness-core の利用規則

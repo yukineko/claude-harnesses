@@ -260,6 +260,11 @@ doc = "docs/specs/overwatch.md"
 reason = "'module 責務' render: human/JSON formatting for status and sessions."
 
 [[spec]]
+path = "crates/overwatch/src/stalled.rs"
+doc = "docs/specs/overwatch.md"
+reason = "'module 責務' stalled: stalled-subagent scan (pending tool_use, idle >= STALL_SECS) shown by status; unreadable or unparseable transcripts are Unknown, never omitted."
+
+[[spec]]
 path = "crates/overwatch/src/control.rs"
 doc = "docs/specs/overwatch.md"
 reason = "'module 責務' control: pause_cmd/resume_cmd argv builders and run_fail_soft; pause/resume bullets."

@@ -62,3 +62,33 @@ exit 1: kt policy answer -> rc=1
   ok:   context-governor rollup -> rc=127
 
 RED: 1 launcher case(s) answer 'fine' when the binary is missing"""
+
+[[task]]
+id = "ba649100"
+title = "tdd がセッション中に commit 済みの実装を評価せず、空スキャンで Stop をブロックする問題を直す"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "tdd",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "2026-10-26 observed: session wrote impl+test in linked worktree, committed+merged, then every Stop blocked with 'no implementation change was evaluated in any root (an empty scan is not a pass)'. tdd scans only the uncommitted diff (crates/tdd/src/gate.rs module doc). Fix must evaluate the session's own commits; design choice open: which commits count as the session's (transcript git commit records / commits since session start / reflog). Anti-vacuity control: committed impl without test must still block (committed_impl_without_test_still_blocks)."
+created_at = 1792989994
+updated_at = 1792989994
+weight = 0.0
+issue_number = 1457
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1457"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test committed_session_work_is_evaluated -- --ignored"
+rev = "5d815a3c32e27b5e50308894dec0489a8526d9e3"
+observed_at = 1792989994
+detail = """
+exit 101:    Compiling tdd v0.1.53 (/home/hiroyuki_nakayama/src/.claude-harnesses-worktrees/session-97394877/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.03s
+     Running tests/committed_session_work_is_evaluated.rs (target/debug/deps/committed_session_work_is_evaluated-4f80511a2f651da5)
+error: test failed, to rerun pass `-p tdd --test committed_session_work_is_evaluated`"""

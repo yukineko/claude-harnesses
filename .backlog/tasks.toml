@@ -27,3 +27,61 @@ exit 1: zjn12xs02k588nyw5txm0000gp/T/condukt-cc-pym.FC6g1P/repo\nplugins: anyio-
 extracted argv: ["pytest"]
 0 passed, 1 failed
 FAIL: extracted command is ["pytest"]; expected it to start with ["python3","-m","pytest"] and include scripts/x.py'''
+
+[[task]]
+id = "58bc638d"
+title = "guard-maintree-bash refuses a genuine two-parent merge when main has any pre-existing untracked path (HEAD-moved branch requires whole-tree-clean porcelain)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "guard-maintree-bash",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """scripts/guard-maintree-bash.py:393 'elif after["head"] != before["head"] and not after["porcelain"]' needs a globally clean tree; an unchanged untracked path (e.g. bare.git/) keeps porcelain non-empty so the merge falls to the final else REFUSE (line 399-400) without integration_head() being consulted. Observed 2026-10-27 on merge 71706f61. Repro: scripts/test_guard_maintree_bash_merge_with_untracked.py"""
+created_at = 1793031488
+updated_at = 1793031488
+weight = 0.0
+issue_number = 1465
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1465"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_merge_with_untracked.py -k test_red"
+rev = "48a728d0e9f50aa6488a4f6dd6e00b8d0a220b52"
+observed_at = 1793031488
+detail = """
+exit 1: ======================
+FAILED scripts/test_guard_maintree_bash_merge_with_untracked.py::MergeWithPreexistingUntracked::test_red_merge_allowed_with_plain_untracked_file
+FAILED scripts/test_guard_maintree_bash_merge_with_untracked.py::MergeWithPreexistingUntracked::test_red_merge_allowed_with_untracked_bare_repo_at_root
+======================= 2 failed, 1 deselected in 0.93s ========================"""
+
+[[task]]
+id = "1fd5a731"
+title = "blastguard reads backtick prose inside a quoted heredoc body as a redirect target"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1793031974
+updated_at = 1793031974
+weight = 0.0
+issue_number = 1466
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1466"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_quoted_body_doc_comment_backtick -- --ignored"
+rev = "8176bc17ef2ff9b6fb2ae1b0d6fa11d3d46a90e4"
+observed_at = 1793031974
+detail = """
+exit 101: t: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.23s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/heredoc_quoted_body_doc_comment_backtick.rs (target/debug/deps/heredoc_quoted_body_doc_comment_backtick-417dcc6ee00ee467)
+error: test failed, to rerun pass `-p blastguard --test heredoc_quoted_body_doc_comment_backtick`"""

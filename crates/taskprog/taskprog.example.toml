@@ -5,9 +5,9 @@
 enabled = true
 
 # Path to the progress markdown file.
-# Default: <cwd>/.claude/progress.md
+# Default: <project root>/.claude/progress.md (nearest ancestor with a .git)
 # progress_file = "~/.claude/progress.md"
 
-# Max bytes of the progress file to inject at SessionStart.
-# 0 = inject the entire file (no limit).
+# No effect: the SessionStart hook no longer injects the progress file (hooks
+# print nothing). Kept for backward compatibility; `taskprog status` shows it.
 inject_limit = 4096

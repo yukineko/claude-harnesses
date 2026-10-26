@@ -1,12 +1,17 @@
 // このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! RED reproduction of the user ruling: a project with NO donegate config at
-//! all (Declaration::Absent) whose session wrote files must ALLOW the stop, but
-//! never silently. The stdout JSON carries a visible `systemMessage` naming the
-//! root ("not configured", "no checks ran") and stderr says "not configured".
-//! Contrast (control): a config that EXISTS but yields an empty check set for a
-//! root the session wrote into still BLOCKS.
+//! SPEC CHANGE (user ruling 2026-10-27), superseding the earlier ruling
+//! "allow but never silently" that this file used to pin (it asserted a visible
+//! `systemMessage` "donegate not configured for <root>: no checks ran").
+//! The user chose to REMOVE that systemMessage. For a project with NO donegate
+//! config at all (Declaration::Absent) whose session wrote files, the Stop hook
+//! still ALLOWS (unchanged), but stdout is EMPTY (no `systemMessage`, no
+//! `decision`). A durable trace replaces the UI message: one JSONL line appended
+//! to `<state_dir>/log.jsonl` (state_dir defaults to `$HOME/.donegate/state`)
+//! with `"verdict":"unconfigured"`, the session id, and each unconfigured root.
+//! Contrast (control, unchanged): a config that EXISTS but yields an empty check
+//! set for a root the session wrote into still BLOCKS.
 //!
 //! Fixture style mirrors `session_worktree_roots.rs`: `$HOME` is a tempdir whose
 //! `.harness/trust.toml` lists the canonical trees, `HARNESS_TRUST_ALL` removed,
@@ -182,7 +187,7 @@ impl Drop for Fixture {
     }
 }
 
-fn assert_visible_allow(o: &Outcome, root: &Path) {
+fn assert_quiet_allow_with_trace(f: &Fixture, o: &Outcome, root: &Path) {
     assert_ne!(
         o.field("decision"),
         "block",
@@ -191,48 +196,46 @@ fn assert_visible_allow(o: &Outcome, root: &Path) {
         o.stderr
     );
     assert!(
-        o.json.is_some(),
-        "stdout must be a JSON object (a silent empty stdout is an invisible green); \
-         stdout={:?} stderr={:?}",
+        o.stdout.trim().is_empty(),
+        "stdout must be empty (no user-visible systemMessage); stdout={:?} stderr={:?}",
         o.stdout,
         o.stderr
     );
-    let msg = o.field("systemMessage");
-    let low = msg.to_lowercase();
+    let log = f.home.join(".donegate/state/log.jsonl");
+    let body = std::fs::read_to_string(&log)
+        .unwrap_or_else(|e| panic!("durable trace {} must exist: {e}", log.display()));
+    let root_s = root.display().to_string();
+    let line = body.lines().find(|l| {
+        serde_json::from_str::<serde_json::Value>(l)
+            .ok()
+            .is_some_and(|v| {
+                v.get("verdict").and_then(|x| x.as_str()) == Some("unconfigured")
+                    && v.get("session").and_then(|x| x.as_str()) == Some("s-nocfg")
+            })
+    });
+    let line = line.unwrap_or_else(|| {
+        panic!("log.jsonl needs a verdict=unconfigured line for session s-nocfg; log={body:?}")
+    });
     assert!(
-        msg.contains(&root.display().to_string()),
-        "systemMessage must name the root {}; msg={msg:?}",
-        root.display()
-    );
-    assert!(
-        low.contains("not configured"),
-        "systemMessage must say 'not configured'; msg={msg:?}"
-    );
-    assert!(
-        low.contains("no checks"),
-        "systemMessage must say no checks ran; msg={msg:?}"
-    );
-    assert!(
-        o.stderr.to_lowercase().contains("not configured"),
-        "stderr must also say 'not configured'; stderr={:?}",
-        o.stderr
+        line.contains(&root_s),
+        "unconfigured log line must name the root {root_s}; line={line:?}"
     );
 }
 
 #[test]
-fn no_config_wrote_files_allows_with_visible_message() {
+fn no_config_wrote_files_allows_quietly_and_logs_trace() {
     let f = Fixture::new(None);
     let tp = f.transcript(&f.primary.join("session_edit.rs"));
     let o = f.stop(&f.primary, &tp);
-    assert_visible_allow(&o, &f.primary);
+    assert_quiet_allow_with_trace(&f, &o, &f.primary);
 }
 
 #[test]
-fn no_config_linked_worktree_allows_with_visible_message() {
+fn no_config_linked_worktree_allows_quietly_and_logs_trace() {
     let f = Fixture::new(None);
     let tp = f.transcript(&f.wt.join("session_edit.rs"));
     let o = f.stop(&f.primary, &tp);
-    assert_visible_allow(&o, &f.wt);
+    assert_quiet_allow_with_trace(&f, &o, &f.wt);
 }
 
 /// CONTROL (already implemented): config exists but declares no checks, the

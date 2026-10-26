@@ -1,0 +1,116 @@
+#!/bin/sh
+# Worktree-origin recorder (creation time).
+#
+# `git worktree add` runs post-checkout inside the NEW worktree (cwd = its
+# toplevel; old ref = the null sha, flag = 1), and this repo's core.hooksPath is
+# shared by every worktree, so this hook sees every linked worktree of the repo
+# while it still exists. It appends the pair (canonical linked-worktree
+# toplevel, canonical main-repository toplevel) to the store that
+# crates/harness-core/src/worktree_origin.rs reads:
+#
+#   $HARNESS_WORKTREE_ORIGIN_DIR/worktree-origins.jsonl   (absolute value only)
+#   <home>/.harness/worktree-origins.jsonl                 otherwise
+#
+# <home> mirrors harness_core::config::resolve_home ($HOME, $HARNESS_SANDBOX_HOME,
+# the passwd home). The record is positive evidence only: it is written when git
+# itself reports a linked worktree whose common dir sits in a repository that is
+# its own toplevel. It runs on every checkout, not only on creation, so a
+# worktree created before this hook existed is recorded at its next checkout.
+#
+# Not a gate and never a verdict: a failure to record is reported on stderr and
+# this hook exits 0, because a non-zero exit would fail `git worktree add` after
+# the worktree already exists. A missing record is read by harness-core as "no
+# record" and stays Undetermined, so a failed record can never be read as
+# evidence. Pinned by crates/harness-core/tests/worktree_origin_post_checkout.rs.
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "warning: post-checkout: python3 not found; worktree origin NOT recorded" >&2
+    exit 0
+fi
+
+python3 - <<'PY' || echo "warning: post-checkout: worktree-origin recorder failed; origin NOT recorded" >&2
+import json, os, pwd, subprocess, sys
+
+def warn(msg):
+    sys.stderr.write("warning: post-checkout: %s; worktree origin NOT recorded\n" % msg)
+    sys.exit(0)
+
+def git(cwd, *args):
+    env = dict(os.environ)
+    if cwd is not None:
+        for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                  "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_CEILING_DIRECTORIES",
+                  "GIT_NAMESPACE", "GIT_OBJECT_DIRECTORY",
+                  "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+            env.pop(k, None)
+    cmd = ["git"] + (["-C", cwd] if cwd is not None else []) + list(args)
+    p = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return p.returncode, p.stdout.decode("utf-8", "strict").splitlines()
+
+try:
+    rc, out = git(None, "rev-parse", "--path-format=absolute",
+                  "--git-dir", "--git-common-dir", "--show-toplevel")
+except UnicodeDecodeError:
+    warn("git printed a non-UTF-8 path")
+if rc != 0 or len(out) != 3:
+    warn("git rev-parse could not describe this checkout (exit %d)" % rc)
+git_dir, common, top = (os.path.realpath(x) for x in out)
+if git_dir == common:
+    sys.exit(0)  # the primary tree: nothing to record
+repo = os.path.dirname(common)
+try:
+    rc, out = git(repo, "rev-parse", "--show-toplevel")
+except UnicodeDecodeError:
+    warn("git printed a non-UTF-8 path")
+if rc != 0 or len(out) != 1 or os.path.realpath(out[0]) != repo:
+    sys.exit(0)  # common dir is not inside a non-bare working tree
+
+def home():
+    h = os.environ.get("HOME") or None
+    sandbox = os.environ.get("HARNESS_SANDBOX_HOME") or None
+    if sandbox:
+        try:
+            acct = pwd.getpwuid(os.getuid()).pw_dir or None
+        except KeyError:
+            acct = None
+        if h and acct and os.path.realpath(h) != os.path.realpath(acct):
+            return h
+        return sandbox
+    return h
+
+d = os.environ.get("HARNESS_WORKTREE_ORIGIN_DIR") or ""
+if not os.path.isabs(d):
+    h = home()
+    if not h:
+        warn("home directory undetermined (HOME unset)")
+    d = os.path.join(h, ".harness")
+store = os.path.join(d, "worktree-origins.jsonl")
+
+rec = {"worktree": top, "repo": repo}
+try:
+    with open(store, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                if json.loads(line) == rec:
+                    sys.exit(0)
+            except ValueError:
+                pass
+except FileNotFoundError:
+    pass
+except (OSError, UnicodeDecodeError):
+    pass  # duplicate check is an optimisation only; append anyway
+
+line = (json.dumps(rec, ensure_ascii=False) + "\n").encode("utf-8")
+try:
+    os.makedirs(d, exist_ok=True)
+    fd = os.open(store, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        n = os.write(fd, line)  # one write(): atomic under O_APPEND
+    finally:
+        os.close(fd)
+    if n != len(line):
+        warn("short write to %s" % store)
+except OSError as e:
+    warn("cannot append to %s (%s)" % (store, e))
+PY
+exit 0

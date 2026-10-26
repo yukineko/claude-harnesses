@@ -1,9 +1,10 @@
 // このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! RED repro: a write into a linked worktree that was removed afterwards makes
-//! `session_roots::resolve` Undetermined, so donegate and tdd block EVERY later
-//! Stop of the session and the only exit is `donegate skip` / `tdd skip`.
+//! Regression test (backlog e31b1b02): a write into a linked worktree that was
+//! removed afterwards used to make `session_roots::resolve` Undetermined, so
+//! donegate and tdd blocked EVERY later Stop of the session and the only exit
+//! was `donegate skip` / `tdd skip`.
 //!
 //! Observed (2026-10-26, session 1a4ac77f), on Stop after a flow loop whose
 //! condukt worktree had been cleaned up:
@@ -18,8 +19,9 @@
 //! Undetermined is fail-closed, so this is not a fail-open; it is a liveness
 //! defect. The property pinned here: the repository a removed linked worktree
 //! belonged to is still attributable, so the roots are Known and contain it.
-//! Whether that is the right fix (versus accepting Undetermined) is open: see
-//! the backlog notes.
+//! User ruling (2026-10-26): keep attribution, option (a). The worktree to repo
+//! mapping is recorded while the worktree still resolves; with no record the
+//! result stays Undetermined (fail-closed).
 
 use harness_core::session_roots::resolve;
 use harness_core::verdict::Determination;

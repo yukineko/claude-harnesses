@@ -61302,3 +61302,123 @@ scripts/test_backlog_audit_b1_0.py .                                     [100%]
 rev = "520446483d198ba9900eacb4ee4685827f069f7a"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "b114a0b3"
+title = "onepass launcher UserPromptSubmit fallback exits 0 with empty stdout when the binary is missing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-25 at main 1f609efe (e753a0b6 worktree, confirmed at 13e1bd83 by stashing the change, and again at 247b3f4a). bash scripts/tests/launcher-missing-binary-failclosed.sh: 'FAIL: onepass UserPromptSubmit: onepass reset -> exit 0 with EMPTY stdout: indistinguishable from the plugin's own nothing to report' / 'RED: 1 launcher case(s) answer fine when the binary is missing'. Reading (a): real fail-open in crates/onepass/bin/onepass fallback (should emit a visible notice like fugu-router prompt). Reading (b): intended because onepass reset carries no verdict; distinguish by checking whether any consumer reads onepass reset's silence as a reset having happened."
+created_at = 1792927378
+updated_at = 1793016077
+weight = 0.0
+issue_number = 1455
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1455"
+issue_closed_at = 1793016081
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/launcher-missing-binary-failclosed.sh"
+rev = "9bab9917213003acd38190d99087e35ab5366d33"
+observed_at = 1792927378
+detail = """
+exit 1: kt policy answer -> rc=1
+  ok:   compass nudge --json -> rc=127
+  ok:   fugu-router route --file x.json -> rc=127
+  ok:   gauge report -> rc=127
+  ok:   ship check -> rc=127
+  ok:   hypothesis list -> rc=127
+  ok:   session-insights report -> rc=127
+  ok:   specguard pending --json -> rc=127
+  ok:   context-governor rollup -> rc=127
+
+RED: 1 launcher case(s) answer 'fine' when the binary is missing"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/launcher-missing-binary-failclosed.sh"
+exit = 0
+passed = 116
+rev = "b44806d712d355967898d5df135e972b62344a57"
+observed_at = 1793016070
+output_digest = "sha256:6847461e50e5adc745fb6e8d1e25457b5a69800a3022c77268d2ecf263861a8d"
+excerpt = """
+ect did NOT run: no bundled binary for da…
+  ok:   session-insights PostToolUse: session-insights record -> silent exit 0 EXEMPT (per-tool-call counter; its only readers are session-insights stop (surfaces a systemMessage every turn) and report (exits 127) — the same missing binary)
+  ok:   session-insights Stop: session-insights stop -> rc=0 stdout={"systemMessage":"session-insights stop did NOT run: no bundled binary…
+  ok:   session-insights SessionEnd: session-insights sessionend -> rc=1 + stderr (SessionEnd: stderr is the only channel)
+  ok:   ship SessionEnd: ship session-end -> rc=1 + stderr (SessionEnd: stderr is the only channel)
+  ok:   specguard SessionStart: specguard pending -> rc=0 stdout={"systemMessage":"specguard pending did NOT run: no bundled binary for…
+  ok:   stuckguard PostToolUse: stuckguard watch -> rc=0 stdout={"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContex…
+  ok:   taskprog SessionStart: taskprog session-start -> rc=0 stdout={"systemMessage":"taskprog session-start did NOT run: no bundled binar…
+  ok:   taskprog Stop: taskprog stop -> rc=0 stdout={"systemMessage":"taskprog stop did NOT run: no bundled binary for dar…
+  ok:   tdd Stop: tdd gate -> rc=0 stdout={"decision":"block","reason":"tdd gate did not run: no bundled binary …
+== CLI verb on every launcher (binary absent) must exit non-zero
+  ok:   autoflow launcher-failclosed-probe -> rc=1
+  ok:   backlog launcher-failclosed-probe -> rc=1
+  ok:   beacon launcher-failclosed-probe -> rc=127
+  ok:   benchkit launcher-failclosed-probe -> rc=127
+  ok:   blastguard launcher-failclosed-probe -> restrictive PreToolUse verdict (unknown args = verdict path)
+  ok:   budgetguard launcher-failclosed-probe -> rc=1
+  ok:   compass launcher-failclosed-probe -> rc=127
+  ok:   condukt launcher-failclosed-probe -> rc=1
+  ok:   context-governor launcher-failclosed-probe -> rc=127
+  ok:   ctxrot launcher-failclosed-probe -> rc=1
+  ok:   curate launcher-failclosed-probe -> rc=1
+  ok:   daily launcher-failclosed-probe -> rc=127
+  ok:   deepwiki launcher-failclosed-probe -> rc=1
+  ok:   difflog launcher-failclosed-probe -> rc=127
+  ok:   donegate launcher-failclosed-probe -> rc=1
+  ok:   evalkit launcher-failclosed-probe -> rc=1
+  ok:   fetchguard launcher-failclosed-probe -> rc=1
+  ok:   fugu-router launcher-failclosed-probe -> rc=127
+  ok:   gauge launcher-failclosed-probe -> rc=127
+  ok:   harness-status launcher-failclosed-probe -> rc=1
+  ok:   hypothesis launcher-failclosed-probe -> rc=127
+  ok:   jev launcher-failclosed-probe -> rc=127
+  ok:   onepass launcher-failclosed-probe -> rc=1
+  ok:   overwatch launcher-failclosed-probe -> rc=1
+  ok:   parallelguard launcher-failclosed-probe -> rc=1
+  ok:   playbook launcher-failclosed-probe -> rc=127
+  ok:   precommit-audit launcher-failclosed-probe -> rc=2
+  ok:   propguard launcher-failclosed-probe -> rc=1
+  ok:   replaykit launcher-failclosed-probe -> rc=1
+  ok:   reviewgate launcher-failclosed-probe -> rc=1
+  ok:   runbook launcher-failclosed-probe -> rc=127
+  ok:   schemaguard launcher-failclosed-probe -> rc=1
+  ok:   session-insights launcher-failclosed-probe -> rc=127
+  ok:   ship launcher-failclosed-probe -> rc=127
+  ok:   specforge launcher-failclosed-probe -> rc=1
+  ok:   specguard launcher-failclosed-probe -> rc=127
+  ok:   stuckguard launcher-failclosed-probe -> rc=1
+  ok:   taskprog launcher-failclosed-probe -> rc=127
+  ok:   tdd launcher-failclosed-probe -> rc=1
+  ok:   tracekit launcher-failclosed-probe -> rc=1
+  ok:   trajectoryeval launcher-failclosed-probe -> rc=1
+== named verdict-by-exit-code CLI verbs
+  ok:   condukt state autonomy-check -> rc=1
+  ok:   condukt policy answer -> rc=1
+  ok:   compass nudge --json -> rc=127
+  ok:   fugu-router route --file x.json -> rc=127
+  ok:   gauge report -> rc=127
+  ok:   ship check -> rc=127
+  ok:   hypothesis list -> rc=127
+  ok:   session-insights report -> rc=127
+  ok:   specguard pending --json -> rc=127
+  ok:   context-governor rollup -> rc=127
+
+GREEN: no launcher answers 'fine' when its binary is missing
+116 passed
+"""
+
+[task.closure.red]
+rev = "520446483d198ba9900eacb4ee4685827f069f7a"
+exit = 1
+kind = "behavioural"

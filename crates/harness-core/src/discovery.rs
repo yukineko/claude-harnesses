@@ -1,14 +1,39 @@
-//! Machine-scope shared "discovery record" store. Append-only JSONL, fully fail-soft.
+//! Machine-scope shared "discovery record" store. Append-only JSONL.
 //!
 //! Concurrent compass/scout sessions on one machine use this to avoid duplicating
 //! discovered tasks. Records are keyed by task fingerprint (content hash of title)
 //! and annotated with the discovering session and current status (Discovered or Selected).
 //!
-//! All operations are fail-soft: on any IO/lock/parse error, operations degrade
-//! silently and never panic. Missing/corrupt files yield sensible defaults. This is
-//! load-bearing — discovery may be called from hooks.
+//! The store lives at `~/.compass/<project_key(main worktree root)>/discovery.jsonl`,
+//! where the root comes from [`crate::projkey::main_worktree_root`]. That identity is
+//! the same from the main checkout, from every linked worktree and from any
+//! subdirectory of either, so all of them share ONE store.
+//!
+//! Failure is reported, never turned into "nothing found" (CLAUDE.md section 3):
+//! - an undetermined main-worktree root has no store path, so every operation is
+//!   `Undetermined` — there is no fallback to `git rev-parse --show-toplevel` or to
+//!   the cwd, because that would write to / read from a guessed store;
+//! - [`load`] returns `Known(vec![])` ONLY for a store that was never written
+//!   (file absent). A read error (permissions, the path being a directory, non-UTF-8
+//!   contents) is `Undetermined`;
+//! - [`already_discovered_by_other`] is a `Determination<bool>`, so an unreadable
+//!   store cannot be read as "no duplicate";
+//! - [`append`] / [`mark_selected`] report a dropped write.
+//!
+//! A corrupt (non-blank, non-record) JSONL line also makes the load `Undetermined`:
+//! a skipped row could be the one that marks a task as a duplicate. Blank lines are fine.
+//!
+//! Legacy records: before the store was keyed on the main worktree root it was keyed
+//! on `git rev-parse --show-toplevel` (see [`resolve_repo_root`]), i.e. on the linked
+//! worktree itself. [`load`] therefore also reads THIS cwd's legacy worktree-keyed
+//! file (when its key differs from the canonical one). Legacy files of OTHER or
+//! since-removed worktrees are not reachable from here and are not read; copy them
+//! into the canonical store with [`migrate_legacy`]. A row present in both files is
+//! listed once.
 
 use std::path::{Path, PathBuf};
+
+use crate::verdict::Determination;
 
 use serde::{Deserialize, Serialize};
 
@@ -30,17 +55,22 @@ pub struct DiscoveryRecord {
     pub title: String,
 }
 
-/// Resolve the canonical git repo root for a cwd so that distinct worktrees /
-/// subdirectories of the SAME repo key to one discovery store (the whole point
-/// of the machine-scoped dedup — two git worktrees of one repo have different
-/// cwds but must share one record file).
+/// Resolve the `git rev-parse --show-toplevel` root for a cwd, canonicalized.
+///
+/// NOTE: in a LINKED worktree this is the worktree itself, NOT the main
+/// checkout — two worktrees of one repo resolve to two different roots. It is the
+/// key the discovery store used before it moved to
+/// [`crate::projkey::main_worktree_root`] (see the module docs, "Legacy records"),
+/// and it is still used by other callers (e.g. backlog) that want the
+/// per-checkout root. The discovery store itself no longer keys on this.
 ///
 /// Strategy: ask git for the toplevel (`git -C <cwd> rev-parse
-/// --show-toplevel`), trim it, and canonicalize. Fully fail-soft: if git is
+/// --show-toplevel`), trim it, and canonicalize. Total (never errors): if git is
 /// missing, the dir isn't a repo, or any IO/parse error occurs, fall back to
 /// `cwd.canonicalize()`, and finally to a purely lexical normalization of the
 /// raw cwd (see [`lexical_normalize`]) for paths that don't exist locally at
-/// all. NEVER panics.
+/// all. NEVER panics. The fallback is a guess, which is why the discovery store
+/// does not use it for its canonical path.
 pub fn resolve_repo_root(cwd: &Path) -> PathBuf {
     if let Some(top) = git_toplevel(cwd) {
         if let Ok(canon) = top.canonicalize() {
@@ -120,15 +150,28 @@ fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(top))
 }
 
-/// Path to the discovery.jsonl store for a given cwd.
-/// Returns `~/.compass/<project_key>/discovery.jsonl`, keyed by the canonical
-/// git repo root (see [`resolve_repo_root`]) so sibling worktrees / subdirs of
-/// one repo share a single store. All other store fns route through this, so
-/// they inherit the canonical-root keying.
-pub fn record_path(cwd: &Path) -> PathBuf {
+/// Path to the CANONICAL discovery.jsonl store for a given cwd:
+/// `~/.compass/<project_key(main worktree root)>/discovery.jsonl`.
+///
+/// `Undetermined` when [`crate::projkey::main_worktree_root`] cannot decide the
+/// root (e.g. a corrupt `.git` gitfile). There is deliberately no fallback to
+/// [`resolve_repo_root`] or to the cwd: a guessed key would silently split or
+/// misplace the shared store.
+pub fn record_path(cwd: &Path) -> Determination<PathBuf> {
+    crate::projkey::main_worktree_root(cwd).map(|root| store_path_for_root(&root))
+}
+
+fn store_path_for_root(root: &Path) -> PathBuf {
     crate::config::base_dir("compass")
-        .join(crate::store::project_key(&resolve_repo_root(cwd)))
+        .join(crate::store::project_key(root))
         .join("discovery.jsonl")
+}
+
+/// The pre-canonical, worktree-keyed store file for this cwd (what an older binary
+/// wrote from a linked worktree), or `None` when it is the same file as `canonical`.
+fn legacy_path(cwd: &Path, canonical: &Path) -> Option<PathBuf> {
+    let legacy = store_path_for_root(&resolve_repo_root(cwd));
+    (legacy != canonical).then_some(legacy)
 }
 
 /// Deterministic content hash of a title. Returns a hex string of the FNV-1a 64-bit
@@ -154,10 +197,16 @@ fn artificial_race_delay() {
     }
 }
 
-/// Append a discovery record to the store. Fails soft: on any IO or serialization
-/// error, the record is silently dropped and discovery continues.
-pub fn append(cwd: &Path, rec: &DiscoveryRecord) {
-    append_at(&record_path(cwd), rec);
+/// Append a discovery record to the canonical store.
+///
+/// `Known(())` once the line is written. `Undetermined` (with the reason) when the
+/// store path cannot be resolved, the lock cannot be taken, or the write fails —
+/// the record is NOT stored in that case and the caller must say so.
+pub fn append(cwd: &Path, rec: &DiscoveryRecord) -> Determination<()> {
+    match record_path(cwd) {
+        Determination::Known(path) => append_at(&path, rec),
+        Determination::Undetermined(why) => why.into_determination(),
+    }
 }
 
 /// Internal: append to an explicit path. Used by append() and by tests.
@@ -168,52 +217,259 @@ pub fn append(cwd: &Path, rec: &DiscoveryRecord) {
 /// file and later rewrites it wholesale — without a shared lock, a rewrite
 /// that started before this append lands would silently clobber it on rename
 /// (lost update, not just a torn write).
-fn append_at(path: &Path, rec: &DiscoveryRecord) {
-    // Ensure parent directory exists.
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    // Serialize the record and append it as one atomic JSON line.
-    let Ok(json) = serde_json::to_string(rec) else {
-        return;
+fn append_at(path: &Path, rec: &DiscoveryRecord) -> Determination<()> {
+    let json = match serde_json::to_string(rec) {
+        Ok(j) => j,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "discovery store: could not serialize the record ({e}); not stored"
+            ))
+        }
     };
 
+    // The lock file lives next to the store; acquire_lock creates the parent dir.
     let Some(_guard) = crate::lessons::acquire_lock(path) else {
-        return;
+        return Determination::undetermined(format!(
+            "discovery store: could not take the lock for {}; record not stored",
+            path.display()
+        ));
     };
     // Single atomic append (body + '\n' in one write) — see issue #15.
-    crate::append::append_line_reporting(path, &json, "discovery store");
+    match crate::append::append_line(path, &json) {
+        Ok(()) => Determination::known(()),
+        Err(e) => Determination::undetermined(format!(
+            "discovery store: could not append to {} ({e}); record not stored",
+            path.display()
+        )),
+    }
 }
 
-/// Load all discovery records from the store, returning only those that parsed
-/// successfully. Missing file, empty file, or blank lines are silently skipped.
-/// Corrupt JSON lines are also skipped. Never panics.
-pub fn load(cwd: &Path) -> Vec<DiscoveryRecord> {
-    load_at(&record_path(cwd))
+/// Load all discovery records visible from `cwd`: the canonical store first, then
+/// this cwd's legacy worktree-keyed file (see the module docs).
+///
+/// `Known(vec![])` only when neither file exists (never written). Any root /
+/// read failure — including a path that is a directory or is unreadable — is
+/// `Undetermined`: an empty `Vec` here would be read downstream as "no duplicates".
+/// A corrupt non-blank line in either file is also `Undetermined`. A row present in
+/// both files (same fingerprint, session, created_at, title) is returned once.
+pub fn load(cwd: &Path) -> Determination<Vec<DiscoveryRecord>> {
+    let canonical = match record_path(cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => return why.into_determination(),
+    };
+    let mut records = match load_path(&canonical) {
+        Determination::Known(r) => r,
+        Determination::Undetermined(why) => return why.into_determination(),
+    };
+    if let Some(legacy) = legacy_path(cwd, &canonical) {
+        match load_path(&legacy) {
+            Determination::Known(r) => {
+                // A migrated row exists in both files; list it once.
+                let seen: std::collections::HashSet<RowId> = records.iter().map(row_id).collect();
+                records.extend(r.into_iter().filter(|x| !seen.contains(&row_id(x))));
+            }
+            Determination::Undetermined(why) => return why.into_determination(),
+        }
+    }
+    Determination::known(records)
 }
 
-/// Internal: load from an explicit path. Used by load() and by tests.
-fn load_at(path: &Path) -> Vec<DiscoveryRecord> {
-    let mut records = Vec::new();
-
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return records;
+/// Internal: load from an explicit path. Absent file => `Known(empty)`; any other
+/// read error or corrupt non-blank line => `Undetermined`.
+fn load_path(path: &Path) -> Determination<Vec<DiscoveryRecord>> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Determination::known(Vec::new())
+        }
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "discovery store: cannot read {} ({e}); whether it holds records cannot be decided",
+                path.display()
+            ))
+        }
     };
 
-    for line in contents.lines() {
+    let mut records = Vec::new();
+    for (idx, line) in contents.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
+        // A non-blank line that is not a record means the store is damaged: a
+        // skipped row could be the very row that makes a task a duplicate, so
+        // the whole load is undetermined rather than silently shorter.
+        match serde_json::from_str::<DiscoveryRecord>(line) {
+            Ok(rec) => records.push(rec),
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "discovery store: {} line {} is not a discovery record ({e}); \
+                     the store's contents cannot be decided",
+                    path.display(),
+                    idx + 1
+                ))
+            }
+        }
+    }
+    Determination::known(records)
+}
 
-        // Skip corrupt/partial lines silently.
-        if let Ok(rec) = serde_json::from_str::<DiscoveryRecord>(line) {
-            records.push(rec);
+/// Row identity used to de-duplicate a legacy row against the canonical store.
+type RowId = (String, String, u64, String);
+
+fn row_id(r: &DiscoveryRecord) -> RowId {
+    (
+        r.fingerprint.clone(),
+        r.session_id.clone(),
+        r.created_at,
+        r.title.clone(),
+    )
+}
+
+/// What [`migrate_legacy`] did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MigrationSummary {
+    /// Legacy rows newly appended to the canonical store.
+    pub migrated: usize,
+    /// Legacy rows skipped because an identical row (fingerprint, session,
+    /// created_at, title) was already in the canonical store or an earlier source.
+    pub already_present: usize,
+    /// Each legacy file that exists, with its parsed row count.
+    pub sources: Vec<MigrationSource>,
+}
+
+/// One legacy file read by [`migrate_legacy`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MigrationSource {
+    pub path: PathBuf,
+    pub rows: usize,
+}
+
+/// Copy the legacy worktree-keyed rows of every LINKED worktree of this repo into
+/// the canonical store. All-or-nothing: if the root, `git worktree list`, any
+/// worktree path, any legacy file (unreadable, or with a corrupt line) or the
+/// canonical store cannot be determined, the result is `Undetermined` and nothing
+/// is written. Legacy files are never modified. Idempotent: rows already present
+/// (identity = fingerprint, session, created_at, title) are not appended again.
+pub fn migrate_legacy(cwd: &Path) -> Determination<MigrationSummary> {
+    let root = match crate::projkey::main_worktree_root(cwd) {
+        Determination::Known(r) => r,
+        Determination::Undetermined(why) => return why.into_determination(),
+    };
+    let canonical = store_path_for_root(&root);
+
+    let out = match std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "discovery migrate: cannot run `git worktree list` ({e})"
+            ))
+        }
+    };
+    if !out.status.success() {
+        return Determination::undetermined(format!(
+            "discovery migrate: `git worktree list --porcelain` failed ({}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let Ok(text) = String::from_utf8(out.stdout) else {
+        return Determination::undetermined(
+            "discovery migrate: `git worktree list` output is not UTF-8",
+        );
+    };
+    let main_canon = match root.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "discovery migrate: cannot canonicalize the main worktree {} ({e})",
+                root.display()
+            ))
+        }
+    };
+
+    let _guard = match crate::lessons::acquire_lock(&canonical) {
+        Some(g) => g,
+        None => {
+            return Determination::undetermined(format!(
+                "discovery migrate: could not take the lock for {}; nothing migrated",
+                canonical.display()
+            ))
+        }
+    };
+    let mut seen: std::collections::HashSet<RowId> = match load_path(&canonical) {
+        Determination::Known(r) => r.iter().map(row_id).collect(),
+        Determination::Undetermined(why) => return why.into_determination(),
+    };
+
+    let mut sources = Vec::new();
+    let mut new_lines = Vec::new();
+    let (mut migrated, mut already_present) = (0usize, 0usize);
+    for wt in text.lines().filter_map(|l| l.strip_prefix("worktree ")) {
+        let wt_canon = match Path::new(wt).canonicalize() {
+            Ok(p) => p,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "discovery migrate: cannot canonicalize worktree {wt} ({e}); its legacy \
+                     file cannot be located (run `git worktree prune` if it was removed)"
+                ))
+            }
+        };
+        if wt_canon == main_canon {
+            continue;
+        }
+        let legacy = store_path_for_root(&wt_canon);
+        if legacy == canonical {
+            continue;
+        }
+        let rows = match load_path(&legacy) {
+            Determination::Known(r) => r,
+            Determination::Undetermined(why) => return why.into_determination(),
+        };
+        if !legacy.exists() {
+            continue;
+        }
+        sources.push(MigrationSource {
+            path: legacy,
+            rows: rows.len(),
+        });
+        for rec in rows {
+            if seen.insert(row_id(&rec)) {
+                match serde_json::to_string(&rec) {
+                    Ok(j) => new_lines.push(j),
+                    Err(e) => {
+                        return Determination::undetermined(format!(
+                            "discovery migrate: cannot serialize a row ({e}); nothing migrated"
+                        ))
+                    }
+                }
+                migrated += 1;
+            } else {
+                already_present += 1;
+            }
         }
     }
 
-    records
+    if !new_lines.is_empty() {
+        // One write for every new row: all of them land, or (on error) the
+        // caller is told and gets nothing reported as migrated.
+        if let Err(e) = crate::append::append_line(&canonical, &new_lines.join("\n")) {
+            return Determination::undetermined(format!(
+                "discovery migrate: could not append to {} ({e}); migration not applied",
+                canonical.display()
+            ));
+        }
+    }
+    Determination::known(MigrationSummary {
+        migrated,
+        already_present,
+        sources,
+    })
 }
 
 /// Whether a *different* session owns `fingerprint` — i.e. should this session
@@ -223,15 +479,20 @@ fn load_at(path: &Path) -> Vec<DiscoveryRecord> {
 /// earliest row for the fingerprint (`created_at`, then `session_id` for a
 /// deterministic tie-break), **regardless of status**. A `Selected` row still
 /// counts, so a task another session is actively working keeps suppressing this
-/// one. Returns true iff that owner is a different session than `my_session`.
+/// one. `Known(true)` iff that owner is a different session than `my_session`.
 ///
 /// This realises the DoD's "the *later* discovery does not re-surface the
 /// duplicate" rule: the first discoverer keeps the task and every later session
 /// drops it (stable single owner — no mutual annihilation where both sessions
-/// see each other's row and both drop it). An absent/empty store has no owner,
-/// so nothing is suppressed (byte-equivalent fallback).
-pub fn already_discovered_by_other(cwd: &Path, fingerprint: &str, my_session: &str) -> bool {
-    owned_by_other(&load(cwd), fingerprint, my_session)
+/// see each other's row and both drop it). A never-written store has no owner:
+/// `Known(false)`. An unreadable / undeterminable store is `Undetermined` — NOT
+/// `false`; the caller decides what to do and must say that dedup did not run.
+pub fn already_discovered_by_other(
+    cwd: &Path,
+    fingerprint: &str,
+    my_session: &str,
+) -> Determination<bool> {
+    load(cwd).map(|records| owned_by_other(&records, fingerprint, my_session))
 }
 
 /// Pure ownership check over an already-loaded record set — the core of
@@ -252,11 +513,19 @@ fn owned_by_other(records: &[DiscoveryRecord], fingerprint: &str, my_session: &s
         .unwrap_or(false)
 }
 
-/// Mark a task as selected, rewriting the store atomically. All records matching
-/// the fingerprint have their status set to Selected; all others remain unchanged.
-/// Fails soft: on any error, leaves the file as-is and returns silently.
-pub fn mark_selected(cwd: &Path, fingerprint: &str) {
-    mark_selected_at(&record_path(cwd), fingerprint);
+/// Mark a task as selected in the CANONICAL store, rewriting it atomically. All
+/// records matching the fingerprint have their status set to Selected; all others
+/// remain unchanged. Legacy worktree-keyed files are not rewritten (ownership is
+/// status-agnostic, so a legacy `Discovered` row still dedups identically).
+///
+/// `Known(())` when the rewrite landed. `Undetermined` when the root cannot be
+/// resolved, the lock or the read fails, or the rewrite fails — in which case the
+/// file is left as it was.
+pub fn mark_selected(cwd: &Path, fingerprint: &str) -> Determination<()> {
+    match record_path(cwd) {
+        Determination::Known(path) => mark_selected_at(&path, fingerprint),
+        Determination::Undetermined(why) => why.into_determination(),
+    }
 }
 
 /// Internal: mark selected on an explicit path. Used by mark_selected() and by tests.
@@ -265,16 +534,22 @@ pub fn mark_selected(cwd: &Path, fingerprint: &str) {
 /// load->mutate->rewrite cycle: without it, a concurrent `append_at` (or
 /// another `mark_selected_at`) landing between this fn's load and its rename
 /// would be silently discarded by the wholesale rewrite (lost update).
-fn mark_selected_at(path: &Path, fingerprint: &str) {
+fn mark_selected_at(path: &Path, fingerprint: &str) -> Determination<()> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     let Some(_guard) = crate::lessons::acquire_lock(path) else {
-        return;
+        return Determination::undetermined(format!(
+            "discovery store: could not take the lock for {}; nothing marked",
+            path.display()
+        ));
     };
 
-    // Load all records.
-    let mut records = load_at(path);
+    // Load all records. An unreadable store must NOT be rewritten as empty.
+    let mut records = match load_path(path) {
+        Determination::Known(r) => r,
+        Determination::Undetermined(why) => return why.into_determination(),
+    };
     artificial_race_delay();
 
     // Update matching records to Selected.
@@ -284,50 +559,70 @@ fn mark_selected_at(path: &Path, fingerprint: &str) {
         }
     }
 
-    // Ensure parent directory exists.
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
     // Atomic write: write to a temp file, then rename.
     // Mirrors the style of store::save_json's atomic write pattern.
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp_path = path.with_extension(format!("jsonl.tmp.{}.{}", std::process::id(), seq));
 
-    // Write all records to the temp file.
-    let Ok(mut tmp_file) = std::fs::File::create(&tmp_path) else {
-        return;
+    let fail = |what: &str, e: &dyn std::fmt::Display| {
+        let _ = std::fs::remove_file(&tmp_path);
+        Determination::undetermined(format!(
+            "discovery store: {what} for {} ({e}); store left unchanged",
+            path.display()
+        ))
     };
 
-    let mut wrote_ok = true;
-    for rec in records {
-        let Ok(json) = serde_json::to_string(&rec) else {
-            wrote_ok = false;
-            break;
+    let mut tmp_file = match std::fs::File::create(&tmp_path) {
+        Ok(f) => f,
+        Err(e) => return fail("cannot create temp file", &e),
+    };
+    for rec in &records {
+        let json = match serde_json::to_string(rec) {
+            Ok(j) => j,
+            Err(e) => return fail("cannot serialize a record", &e),
         };
-        if writeln!(tmp_file, "{}", json).is_err() {
-            wrote_ok = false;
-            break;
+        if let Err(e) = writeln!(tmp_file, "{}", json) {
+            return fail("cannot write temp file", &e);
         }
-    }
-
-    // If write failed, clean up the temp file and return.
-    if !wrote_ok {
-        let _ = std::fs::remove_file(&tmp_path);
-        return;
     }
 
     // Drop the file handle so the rename can succeed on Windows.
     drop(tmp_file);
 
     // Atomically rename the temp file to the target.
-    let _ = std::fs::rename(&tmp_path, path);
+    match std::fs::rename(&tmp_path, path) {
+        Ok(()) => Determination::known(()),
+        Err(e) => fail("cannot rename temp file into place", &e),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Test helper: a write that must have landed.
+    fn stored(d: Determination<()>) {
+        if let Determination::Undetermined(why) = d {
+            panic!("write must succeed: {why}");
+        }
+    }
+
+    /// Test helper: a store path that must be determined.
+    fn known_path(cwd: &Path) -> PathBuf {
+        match record_path(cwd) {
+            Determination::Known(p) => p,
+            Determination::Undetermined(why) => panic!("expected a determined root: {why}"),
+        }
+    }
+
+    /// Test helper: the records of a store that must be Known.
+    fn load_at(path: &Path) -> Vec<DiscoveryRecord> {
+        match load_path(path) {
+            Determination::Known(r) => r,
+            Determination::Undetermined(why) => panic!("expected a determined store: {why}"),
+        }
+    }
 
     #[test]
     fn status_transition_mark_selected_at() {
@@ -358,12 +653,12 @@ mod tests {
             title: "Task C".to_string(),
         };
 
-        append_at(&path, &rec_a);
-        append_at(&path, &rec_b);
-        append_at(&path, &rec_c);
+        stored(append_at(&path, &rec_a));
+        stored(append_at(&path, &rec_b));
+        stored(append_at(&path, &rec_c));
 
         // Mark C as selected.
-        mark_selected_at(&path, "ccc");
+        stored(mark_selected_at(&path, "ccc"));
 
         // Reload and verify: only C should be Selected, A and B remain Discovered.
         let records = load_at(&path);
@@ -388,14 +683,16 @@ mod tests {
         let records = load_at(Path::new("/nonexistent/discovery.jsonl"));
         assert_eq!(records.len(), 0);
 
-        // mark_selected_at on a missing path should not panic.
-        mark_selected_at(Path::new("/nonexistent/discovery.jsonl"), "some-fp");
-        // If we reach here, it didn't panic.
+        // mark_selected_at on an unwritable location must report it, not panic.
+        assert!(matches!(
+            mark_selected_at(Path::new("/nonexistent/discovery.jsonl"), "some-fp"),
+            Determination::Undetermined(_)
+        ));
     }
 
     #[test]
-    fn fail_soft_corrupt_lines() {
-        // Create a temp file with a mix of valid and corrupt JSON lines.
+    fn corrupt_line_is_undetermined_not_skipped() {
+        // Valid / corrupt / valid lines.
         let tempdir = tempfile::tempdir().expect("tempfile::tempdir");
         let path = tempdir.path().join("discovery.jsonl");
 
@@ -413,11 +710,18 @@ mod tests {
         let content = format!("{}\n{}\n{}\n", valid_json, corrupt_line, valid_json);
         std::fs::write(&path, content).expect("write");
 
-        // load_at should skip the corrupt line and return 2 records.
-        let records = load_at(&path);
-        assert_eq!(records.len(), 2);
-        assert_eq!(records[0].fingerprint, "valid");
-        assert_eq!(records[1].fingerprint, "valid");
+        // A corrupt non-blank line makes the whole store undetermined (it is
+        // NOT skipped): the dropped row could be the one that marks a duplicate.
+        match load_path(&path) {
+            Determination::Undetermined(why) => {
+                assert!(why.as_str().contains("line 2"), "reason: {why}")
+            }
+            Determination::Known(r) => panic!("corrupt line must be undetermined, got {r:?}"),
+        }
+
+        // Blank lines are not corrupt.
+        std::fs::write(&path, format!("{valid_json}\n\n  \n{valid_json}\n")).expect("write");
+        assert_eq!(load_at(&path).len(), 2);
     }
 
     #[test]
@@ -486,7 +790,7 @@ mod tests {
         // must be observed by `owned_by_other` via `load_at`.
         let tempdir = tempfile::tempdir().expect("tempfile::tempdir");
         let path = tempdir.path().join("discovery.jsonl");
-        append_at(
+        stored(append_at(
             &path,
             &DiscoveryRecord {
                 fingerprint: "fp".to_string(),
@@ -495,7 +799,7 @@ mod tests {
                 created_at: 5,
                 title: "T".to_string(),
             },
-        );
+        ));
         let records = load_at(&path);
         assert!(owned_by_other(&records, "fp", "latecomer"));
         assert!(!owned_by_other(&records, "fp", "owner"));
@@ -529,8 +833,10 @@ mod tests {
         // prefixes and fails a test that is about project keying, not HOME.
         let _guard = crate::test_env::lock();
         // Two distinct cwds under the SAME git repo root (the repo root itself
-        // and a nested subdir) must map to the SAME record_path — that's the
-        // canonical-root keying that lets sibling worktrees/subdirs dedup.
+        // and a nested subdir) must map to the SAME record_path. This covers
+        // SUBDIRS only. That linked worktrees share the main checkout's store is
+        // NOT checked here; it is covered end to end through the compass binary
+        // by crates/compass/tests/discovery_shared_across_worktrees.rs.
         let tempdir = tempfile::tempdir().expect("tempfile::tempdir");
         let root = tempdir.path();
 
@@ -547,8 +853,8 @@ mod tests {
         std::fs::create_dir_all(&sub).expect("create_dir_all");
 
         assert_eq!(
-            record_path(root),
-            record_path(&sub),
+            known_path(root),
+            known_path(&sub),
             "repo root and a subdir of the same repo must share one record_path"
         );
         assert_eq!(resolve_repo_root(root), resolve_repo_root(&sub));
@@ -557,7 +863,7 @@ mod tests {
     #[test]
     fn record_path_includes_project_key() {
         let cwd = Path::new("/some/project/dir");
-        let path = record_path(cwd);
+        let path = known_path(cwd);
         // Should be ~/.compass/<project_key>/discovery.jsonl
         assert!(path.to_string_lossy().contains(".compass"));
         assert!(path.to_string_lossy().ends_with("discovery.jsonl"));

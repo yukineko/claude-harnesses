@@ -192,6 +192,14 @@ kind = "store-key"
 evidence = "switch_path() — the autonomy switch a worker in a linked worktree cannot see is not a switch, so it is keyed by main_worktree_root and forwards Undetermined verbatim rather than falling back to repo_root. Already correct."
 
 [[consumer]]
+file = "crates/harness-core/src/discovery.rs"
+symbol = "main_worktree_root"
+count = 2
+scope = "shared"
+kind = "store-key"
+evidence = "record_path() and migrate_legacy(): the discovery store ~/.compass/<project_key(main_worktree_root(cwd))>/discovery.jsonl must be one per project from every linked worktree, so cross-session dedup sees rows recorded from any checkout. Undetermined is forwarded verbatim (no show-toplevel or cwd fallback); the pre-canonical per-worktree files are only read, never written, by load() and migrate_legacy()."
+
+[[consumer]]
 file = "crates/harness-core/src/autonomy.rs"
 symbol = "project_key"
 count = 1

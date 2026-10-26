@@ -62,3 +62,30 @@ exit 1: kt policy answer -> rc=1
   ok:   context-governor rollup -> rc=127
 
 RED: 1 launcher case(s) answer 'fine' when the binary is missing"""
+
+[[task]]
+id = "a44c2fd2"
+title = "condukt check-criteria drops the python3 -m prefix and runs bare pytest"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-10-26 on condukt run run-20261026-025716-14405 task t3 (user reported condukt 0.7.295; installed binary at repro time reports 0.7.292). t3 done_criteria (prose, no backticks) contained 'python3 -m pytest scripts/test_backlog_audit_b1_0.py -k main_guard passes'. condukt state check-criteria extracted only the bare command 'pytest'. Because bare pytest does not put cwd on sys.path, it ran over the whole worktree and failed collecting scripts/test_backlog_5461ba1c.py with "ModuleNotFoundError: No module named 'scripts'". Root: prose fallback in verify::mechanical_cmd (crates/condukt/src/verify.rs) returns vec!["pytest"] on any 'pytest' substring, dropping the python3 -m prefix and the target path; a backticked command is preserved (control run: ["python3","-m","pytest","scripts/x.py"]). Repro output at 3488bc34: extracted argv ["pytest"], '0 passed, 1 failed', exit 1. Not fixed here (user ruling: file only)."""
+created_at = 1793016312
+updated_at = 1793016312
+weight = 0.0
+issue_number = 1458
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1458"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/condukt-check-criteria-python-m-prefix.sh"
+rev = "3488bc34b28d894a866b022db0ab9e37af1f0561"
+observed_at = 1793016312
+detail = '''
+exit 1: zjn12xs02k588nyw5txm0000gp/T/condukt-cc-pym.FC6g1P/repo\nplugins: anyio-4.9.0, langsmith-0.4.8\ncollected 0 items\n\n============================ no tests ran in 0.00s =============================\n","passed":false,"skip_verifier":false}
+extracted argv: ["pytest"]
+0 passed, 1 failed
+FAIL: extracted command is ["pytest"]; expected it to start with ["python3","-m","pytest"] and include scripts/x.py'''

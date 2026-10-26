@@ -57,3 +57,31 @@ exit 1: ======================
 FAILED scripts/test_guard_maintree_bash_merge_with_untracked.py::MergeWithPreexistingUntracked::test_red_merge_allowed_with_plain_untracked_file
 FAILED scripts/test_guard_maintree_bash_merge_with_untracked.py::MergeWithPreexistingUntracked::test_red_merge_allowed_with_untracked_bare_repo_at_root
 ======================= 2 failed, 1 deselected in 0.93s ========================"""
+
+[[task]]
+id = "1fd5a731"
+title = "blastguard reads backtick prose inside a quoted heredoc body as a redirect target"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1793031974
+updated_at = 1793031974
+weight = 0.0
+issue_number = 1466
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1466"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_quoted_body_doc_comment_backtick -- --ignored"
+rev = "8176bc17ef2ff9b6fb2ae1b0d6fa11d3d46a90e4"
+observed_at = 1793031974
+detail = """
+exit 101: t: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.23s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/heredoc_quoted_body_doc_comment_backtick.rs (target/debug/deps/heredoc_quoted_body_doc_comment_backtick-417dcc6ee00ee467)
+error: test failed, to rerun pass `-p blastguard --test heredoc_quoted_body_doc_comment_backtick`"""

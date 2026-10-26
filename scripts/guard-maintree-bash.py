@@ -61,10 +61,11 @@ pre-merge-commit), the refusal reports that evidence as AMBIGUOUS: a concurrent
 merge in main is a possible cause, but this command's own reset/merge/rebase
 rewrites ORIG_HEAD too, so the change is not asserted to be this command's (and
 is still refused). Evidence = ORIG_HEAD differs between Pre and Post (including
-absent at Pre and present at Post), HEAD unchanged, no MERGE_HEAD. That evidence changes WORDING only:
+absent OR unreadable at Pre, both stored as None, and readable at Post), HEAD unchanged, no MERGE_HEAD. That evidence changes WORDING only:
 it is recorded in the snapshot as `orig_head` but is excluded from the
 before==after comparison and from every verdict branch; a Pre snapshot without
-the field (key missing, not merely None), or an unreadable ORIG_HEAD, means no evidence (existing wording).
+the field (key missing, not merely None), or an ORIG_HEAD that is absent or unreadable at
+Post, means no evidence (existing wording).
 """
 
 from __future__ import annotations
@@ -407,8 +408,8 @@ def post(payload: dict, common: Path, main: Path) -> int:
                 "Refused: ORIG_HEAD was rewritten during this call while HEAD did "
                 "not move and there is no MERGE_HEAD. That is what another "
                 "session's in-flight `git merge` in this project's MAIN working "
-                "tree looks like (a concurrent merge in main is a possible cause "
-                "that was observed-for), but this command's own reset / merge / "
+                "tree looks like (a concurrent merge in main is one possible "
+                "cause), but this command's own reset / merge / "
                 "rebase produces it too. The change below is therefore NOT "
                 "asserted to be this command's; it is still refused because a "
                 "verdict that cannot be determined resolves to refuse "

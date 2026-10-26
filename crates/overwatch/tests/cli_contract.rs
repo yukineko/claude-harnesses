@@ -1059,7 +1059,7 @@ fn claim_rd_status_json_undetermined_array() {
 }
 
 #[test]
-fn claim_rd_hooks_json_two_status_hooks() {
+fn claim_rd_hooks_json_sessionstart_only_status_hook() {
     let hooks: Value = serde_json::from_str(
         &std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("hooks/hooks.json"))
             .unwrap(),
@@ -1068,8 +1068,13 @@ fn claim_rd_hooks_json_two_status_hooks() {
     let events = hooks["hooks"].as_object().unwrap();
     let mut names: Vec<&String> = events.keys().collect();
     names.sort();
-    assert_eq!(names, ["SessionStart", "Stop"]);
-    for ev in ["SessionStart", "Stop"] {
+    assert!(
+        !events.contains_key("Stop"),
+        "`overwatch status` must NOT be registered on Stop (25KB dump per Stop is noise); got events {names:?}"
+    );
+    assert_eq!(names, ["SessionStart"]);
+    {
+        let ev = "SessionStart";
         let groups = events[ev].as_array().unwrap();
         assert_eq!(groups.len(), 1, "{ev}");
         let hs = groups[0]["hooks"].as_array().unwrap();

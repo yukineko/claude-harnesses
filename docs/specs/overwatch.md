@@ -7,7 +7,7 @@
 `overwatch` は、プロジェクト全体（cross-session）の実行レジストリと dedup ガード、および PDO 進捗ビューを
 束ねるハーネスである。中核は `store::Lease`（key→保有 session の claim）を `<base>/<project-key>/overwatch/`
 配下の `leases.json` に永続化し、ライフサイクルを `events.jsonl`（append-only）へ記録すること。単一 Rust
-バイナリ + 2 フック（SessionStart / Stop、ともに `overwatch status` を注入）で動き、サブスクリプション
+バイナリ + 1 フック（SessionStart で `overwatch status` を注入。Stop には登録しない）で動き、サブスクリプション
 ネイティブ（追加 API key 不要）。dedup 契約は「`begin` が別 live session に保持されたキーへ試行したら
 skip JSON を stdout に出して exit 1」で、呼び出し元は先へ進んではならない。`status`/`sessions` は overwatch
 台帳に加え backlog / hypothesis / condukt / compass を fail-soft にシェルして集約する（`aggregate::build`）。
@@ -75,7 +75,7 @@ CLI は `clap` の `Command` enum（`main.rs`）で定義。ledger/lease 系は�
 - **`reap`** — stale lease を全削除し `{"reaped":N}` を出力。lock 不成立・root 解決不能は非 0。
 - **`status [--json]`** — `aggregate::build` の `ProgressView` を人間可読 5 セクション（Sessions / PDO
   hypotheses / Backlog / Condukt runs / Compass gap）または pretty JSON で表示（`render::status`）。
-  SessionStart / Stop フックの注入先。
+  SessionStart フックの注入先。
 - **`sessions [--json]`** — per-session lease roster のみを表示（`render::sessions`）。
 - **`pause --run` / `resume --run`** — `condukt state pause|resume --run <id>` へ委譲（`control`）。condukt が失敗したら非 0 で終了する。
 - **`reassign --key --to`** — 現 lease を release（load→remove→save）し、新保有者 `to` を監査イベントに記録。キー未保持・lock 不成立・root 解決不能は非 0。

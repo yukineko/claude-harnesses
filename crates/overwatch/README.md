@@ -10,7 +10,7 @@ Do NOT proceed when begin exits 1 with skip JSON (another session has this key).
 - Stale leases are dropped by **every** lease mutation (`begin` / `run` / `end` / `heartbeat` / `reassign` / `reap`), and ignored by `status` / `sessions` / `lease`, so a dead holder never blocks a `begin`. Each drop by a mutation is appended to `events.jsonl` as an `ended` event with status `reaped`.
 - `overwatch reap` just runs that cleanup on its own.
 
-Two hooks (SessionStart + Stop), both running `overwatch status` with a 5s hook timeout. A cached status is discarded once `aggregate::STATUS_CACHE_TTL_SECS` has passed, when `leases.json` was written at or after the second the cache was built, or when its mtime cannot be observed (`aggregate::cache_is_fresh`).
+One hook (SessionStart) running `overwatch status` with a 5s hook timeout. It is deliberately not registered on Stop: the status dump (~25KB, mostly the Compass gap) on every Stop was noise. A cached status is discarded once `aggregate::STATUS_CACHE_TTL_SECS` has passed, when `leases.json` was written at or after the second the cache was built, or when its mtime cannot be observed (`aggregate::cache_is_fresh`).
 
 `(none)` is only printed when the source was actually observed.
 

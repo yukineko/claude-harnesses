@@ -5507,13 +5507,21 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                     let (passed, output) = run_mechanical(cmd, &run_dir);
                     serde_json::json!({ "cmd": cmd, "passed": passed, "output": output })
                 });
-                let out = serde_json::json!({
+                // `passed` mirrors the evidence run's exit verdict at top level
+                // so a consumer reading `passed` and `skip_verifier` together
+                // sees (true, false): ran green, verifier still required. It is
+                // absent (not false, not true) when no command ran.
+                let passed = evidence.as_ref().and_then(|e| e["passed"].as_bool());
+                let mut out = serde_json::json!({
                     "mechanical": cls.mechanical_cmd.is_some(),
                     "behavioral": cls.behavioral,
                     "skip_verifier": false,
                     "coverage": cls.coverage.as_json(),
                     "evidence": evidence,
                 });
+                if let Some(p) = passed {
+                    out["passed"] = serde_json::json!(p);
+                }
                 println!("{}", serde_json::to_string(&out)?);
                 return Ok(());
             }

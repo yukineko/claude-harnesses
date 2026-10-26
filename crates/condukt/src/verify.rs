@@ -1047,7 +1047,10 @@ pub fn criteria_is_behavioral(done_criteria: &str, is_behavioral_hint: Option<bo
 ///
 /// This is a **multiplicity** proxy, not a semantic coverage proof. It answers
 /// "does this text assert more than one thing?" — deterministically, from
-/// structure the author wrote down. It cannot answer "does `cargo test -p x`
+/// structure the author wrote down: enumeration markers, the number of named
+/// commands (pytest counted per occurrence), and, for pytest, whether every
+/// target-like token in the text appears in the argv actually returned by
+/// [`mechanical_cmd`] (any unaccounted target makes it `Partial`). It cannot answer "does `cargo test -p x`
 /// actually establish claim 3?"; nothing short of the LLM verifier can, which
 /// is exactly why the answer here is *whether to run that verifier*.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1149,10 +1152,12 @@ fn enumerated_claim_count(done_criteria: &str) -> Option<usize> {
 /// still under-counted on this axis. It is caught only if the author enumerates.
 ///
 /// [`mechanical_cmd`]'s prose fallback has the same first-wins shape, so bare
-/// unbackticked runner keywords are counted too — word-anchored and by distinct
-/// kind, for reasons recorded at the call site. The larger of the two counts
+/// unbackticked runner keywords are counted too — word-anchored; `cargo test`
+/// / `npm test` / `go test` by distinct kind, `pytest` by occurrence (see
+/// [`pytest_mention_count`]). The larger of the backticked and prose counts
 /// wins (max, never sum: "`cargo test -p x`" hits both axes and is one
-/// command).
+/// command). Unaccounted pytest targets are NOT counted here; they are added
+/// by [`criteria_coverage_for`], which knows the final argv.
 fn command_mention_count(done_criteria: &str) -> Option<usize> {
     let backtick_re = regex::Regex::new(r"`([^`]+)`").ok()?;
     let prog_re = regex::Regex::new(r"^[a-z][a-z0-9_.+-]*$").ok()?;
@@ -1186,19 +1191,227 @@ fn command_mention_count(done_criteria: &str) -> Option<usize> {
     // prose ("cargo test -p a and cargo test -p b") count as one. Backticking
     // them — the form the skill's own examples use — counts them as two.
     let lower = done_criteria.to_lowercase();
-    let prose_re = regex::Regex::new(r"\b(?:cargo test|npm test|pytest|go test)\b").ok()?;
+    let prose_re = regex::Regex::new(r"\b(?:cargo test|npm test|go test)\b").ok()?;
     let prose: std::collections::BTreeSet<&str> =
         prose_re.find_iter(&lower).map(|m| m.as_str()).collect();
-    // Third axis: pytest targets the prose names but `prose_pytest_argv` stops
-    // before ("a.py and b.py pass"). The extracted command runs only the first,
-    // so N dropped targets mean N + 1 targets asserted against one command.
-    let dropped = if prose.contains("pytest") {
-        pytest_dropped_path_count(done_criteria)
-    } else {
-        0
+    // pytest is the exception to "distinct kinds": it is counted by OCCURRENCE
+    // of the word (see [`pytest_mention_count`]), because two pytest
+    // invocations with different targets are two claims. `python3 -m pytest`
+    // is one occurrence, so it is not double-counted.
+    let pytest = pytest_mention_count(done_criteria)?;
+    Some(backticked.max(prose.len() + pytest))
+}
+
+/// Occurrences of the word `pytest` in the criteria (word-anchored; `test_pytest_x`
+/// and `pytest_cache` do not match). `None` on 判定不能 (regex unavailable).
+fn pytest_mention_count(done_criteria: &str) -> Option<usize> {
+    let re = regex::Regex::new(r"(?i)\bpytest\b").ok()?;
+    Some(re.find_iter(done_criteria).count())
+}
+
+/// Words that may sit next to a pytest mention or a conjunction without naming
+/// a target ("pytest passes", "and the", "python3 -m pytest").
+const PYTEST_STOPWORDS: &[&str] = &[
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "also",
+    "too",
+    "as",
+    "well",
+    "so",
+    "does",
+    "do",
+    "is",
+    "are",
+    "be",
+    "must",
+    "should",
+    "shall",
+    "will",
+    "can",
+    "to",
+    "in",
+    "on",
+    "for",
+    "of",
+    "with",
+    "by",
+    "run",
+    "runs",
+    "running",
+    "ran",
+    "execute",
+    "executes",
+    "executed",
+    "executing",
+    "pass",
+    "passes",
+    "passed",
+    "passing",
+    "green",
+    "ok",
+    "succeed",
+    "succeeds",
+    "succeeded",
+    "exit",
+    "exits",
+    "exited",
+    "0",
+    "zero",
+    "python",
+    "python3",
+    "that",
+    "it",
+    "its",
+    "all",
+    "both",
+    "each",
+    "every",
+    "no",
+    "without",
+    "failures",
+    "failure",
+    "errors",
+    "error",
+    "when",
+    "then",
+    "if",
+    "once",
+    "now",
+    "again",
+    "still",
+    "must",
+    "need",
+    "needs",
+    "have",
+    "has",
+    "than",
+    "pytest",
+    "-m",
+    "なお",
+    "も",
+    "が",
+    "は",
+    "を",
+    "に",
+    "で",
+    "通る",
+    "通ること",
+    "パス",
+    "成功",
+];
+
+fn is_conjunction(tok: &str) -> bool {
+    matches!(
+        tok.to_lowercase().as_str(),
+        "and" | "or" | "&" | "&&" | "," | "、" | "と" | "および" | "及び" | "または" | "又は"
+    )
+}
+
+/// Split criteria text into comparable tokens: quotes, backticks, brackets and
+/// list punctuation become separators or are trimmed; `,` / `、` become their
+/// own conjunction tokens.
+fn target_tokens(done_criteria: &str) -> Vec<String> {
+    let mut spaced = String::with_capacity(done_criteria.len() + 16);
+    for c in done_criteria.chars() {
+        match c {
+            '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '（' | '）' | '「' | '」' => {
+                spaced.push(' ')
+            }
+            ',' | '、' => spaced.push_str(" , "),
+            _ => spaced.push(c),
+        }
+    }
+    let trim = |c: char| matches!(c, '.' | ';' | ':' | '。' | '!' | '?' | '、' | '，');
+    spaced
+        .split_whitespace()
+        .map(|t| t.trim_matches(trim).to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// Number of pytest-target-like tokens the criteria names that the final argv
+/// does not contain. Target-like: a token containing `.py`, `::` or `/`, or a
+/// non-stopword word adjacent to a pytest mention or joined to a target (or
+/// following a pytest mention) by a conjunction (and / or / comma / と ...). Returns 0 when pytest is not
+/// mentioned at all. If pytest is mentioned but the argv does not run pytest,
+/// every target-like token is unaccounted, and at least one is reported.
+fn pytest_unaccounted_targets(done_criteria: &str, argv: &[String]) -> usize {
+    let toks = target_tokens(done_criteria);
+    let is_pytest = |t: &str| t.eq_ignore_ascii_case("pytest");
+    if !toks.iter().any(|t| is_pytest(t)) {
+        return 0;
+    }
+    let path_like = |t: &str| is_pytest_path_like(t);
+    let stop = |t: &str| {
+        let l = t.to_lowercase();
+        PYTEST_STOPWORDS.contains(&l.as_str()) || t.starts_with('-') || is_conjunction(t)
     };
-    let pytest_targets = if dropped > 0 { dropped + 1 } else { 0 };
-    Some(backticked.max(prose.len()).max(pytest_targets))
+    let n = toks.len();
+    let mut is_target = vec![false; n];
+    for (i, t) in toks.iter().enumerate() {
+        if path_like(t) {
+            is_target[i] = true;
+        }
+    }
+    // Words adjacent to a pytest mention (either side).
+    for i in 0..n {
+        if is_pytest(&toks[i]) {
+            if i + 1 < n && !stop(&toks[i + 1]) {
+                is_target[i + 1] = true;
+            }
+            if i > 0 && !stop(&toks[i - 1]) {
+                is_target[i - 1] = true;
+            }
+        }
+    }
+    // Words joined to a target (or pytest mention) by a conjunction. Iterate to
+    // a fixpoint so "a.py, b.py and tests" reaches the last word. Stopwords
+    // directly after the conjunction ("and the tests") are skipped.
+    loop {
+        let mut changed = false;
+        for i in 0..n {
+            if !is_conjunction(&toks[i]) {
+                continue;
+            }
+            let mut r = i + 1;
+            while r < n
+                && PYTEST_STOPWORDS.contains(&toks[r].to_lowercase().as_str())
+                && !is_pytest(&toks[r])
+            {
+                r += 1;
+            }
+            let left_hit = i > 0 && (is_target[i - 1] || is_pytest(&toks[i - 1]));
+            let right_hit = r < n && is_target[r];
+            if left_hit && r < n && !stop(&toks[r]) && !is_target[r] {
+                is_target[r] = true;
+                changed = true;
+            }
+            if right_hit && i > 0 && !stop(&toks[i - 1]) && !is_target[i - 1] {
+                is_target[i - 1] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let argv_toks: std::collections::BTreeSet<&str> =
+        argv.iter().flat_map(|a| a.split_whitespace()).collect();
+    let runs_pytest = argv.iter().any(|a| a == "pytest");
+    let mut missing = 0usize;
+    for (i, t) in toks.iter().enumerate() {
+        if is_target[i] && !is_pytest(t) && !argv_toks.contains(t.as_str()) {
+            missing += 1;
+        }
+    }
+    if !runs_pytest {
+        missing = missing.max(1);
+    }
+    missing
 }
 
 /// Decide coverage from the two counts. Split out from [`criteria_coverage`] so
@@ -1228,11 +1441,29 @@ fn coverage_from_counts(enumerated: Option<usize>, commands: Option<usize>) -> C
 /// multiplicity, because a missed detection is a fail-open (a partial check
 /// reported as a complete pass) while a spurious detection only costs one
 /// verifier run.
+#[cfg(test)]
 pub fn criteria_coverage(done_criteria: &str) -> CriteriaCoverage {
-    coverage_from_counts(
-        enumerated_claim_count(done_criteria),
-        command_mention_count(done_criteria),
-    )
+    let argv = mechanical_cmd(done_criteria, None).unwrap_or_default();
+    criteria_coverage_for(done_criteria, &argv)
+}
+
+/// Coverage of `done_criteria` by the argv [`mechanical_cmd`] ACTUALLY
+/// returned (so the decision cannot diverge from what will be run). Besides
+/// the enumeration and command-multiplicity axes, pytest gets a target check:
+/// every pytest-target-like token in the criteria (see
+/// [`pytest_unaccounted_targets`]) must appear in `argv`; each one that does
+/// not counts as one more claim than the single command covers, so the result
+/// is `Partial` and the verifier runs.
+pub fn criteria_coverage_for(done_criteria: &str, argv: &[String]) -> CriteriaCoverage {
+    let unaccounted = pytest_unaccounted_targets(done_criteria, argv);
+    let commands = command_mention_count(done_criteria).map(|c| {
+        if unaccounted > 0 {
+            c.max(unaccounted + 1)
+        } else {
+            c
+        }
+    });
+    coverage_from_counts(enumerated_claim_count(done_criteria), commands)
 }
 
 /// Classification of a done_criteria for the verifier-skip decision.
@@ -1323,7 +1554,7 @@ pub fn classify_criteria(
 ) -> Classification {
     let behavioral = criteria_is_behavioral(done_criteria, is_behavioral_hint);
     let mechanical_cmd = mechanical_cmd(done_criteria, mechanical_check_hint);
-    let coverage = criteria_coverage(done_criteria);
+    let coverage = criteria_coverage_for(done_criteria, mechanical_cmd.as_deref().unwrap_or(&[]));
     let skip_eligible = !behavioral && mechanical_cmd.is_some() && coverage.permits_skip();
     let (expect_exit, expect_substring) = match mechanical_check_hint {
         Some(check) => (check.expect_exit, check.expect_substring.clone()),
@@ -1422,18 +1653,6 @@ pub fn mechanical_skip_verdict(
     (out, !passed)
 }
 
-/// Extract a runnable command from a done_criteria string for mechanical gate
-/// checking. Returns `None` when no mechanical check can be derived (the LLM
-/// verifier is then required). This is intentionally about *runnability* only;
-/// [`classify_criteria`] layers the behavioral veto on top.
-///
-/// `mechanical_check_hint` is the interpreter-declared, structured
-/// [`crate::model::Task::mechanical_check`] fact. When `Some`, its `cmd` is
-/// authoritative and returned as-is (split into argv) — the caller
-/// ([`classify_criteria`]) also threads through its `expect_exit` /
-/// `expect_substring` unchanged. Only when the hint is `None` do we fall back
-/// to the regex/keyword prose extraction below (unchanged from before this
-/// hint existed).
 /// Tokenize a command string into argv respecting shell quoting/escaping
 /// (e.g. `"cargo test -- --path \"a b/c\""` keeps `a b/c` as one token),
 /// unlike `split_whitespace` which would split it into `a`, `b/c"`. Falls
@@ -1444,6 +1663,20 @@ fn parse_argv(s: &str) -> Vec<String> {
     shlex::split(s).unwrap_or_else(|| s.split_whitespace().map(String::from).collect())
 }
 
+/// Extract a runnable command from a done_criteria string for mechanical gate
+/// checking. Returns `None` when no mechanical check can be derived (the LLM
+/// verifier is then required). This is about *runnability* only: it returns
+/// the FIRST runnable command and says nothing about whether that command
+/// discharges the whole criteria. [`classify_criteria`] layers the behavioral
+/// veto and [`criteria_coverage_for`] (fed THIS function's returned argv)
+/// layers the coverage veto on top.
+///
+/// `mechanical_check_hint` is the interpreter-declared, structured
+/// [`crate::model::Task::mechanical_check`] fact. When `Some`, its `cmd` is
+/// authoritative and returned as-is (split into argv). Otherwise: the first
+/// backticked span whose head is an [`is_criteria_runner`], then recognised
+/// runner prose (`cargo test`, `npm test`, pytest via [`prose_pytest_argv`],
+/// `go test`).
 pub fn mechanical_cmd(
     done_criteria: &str,
     mechanical_check_hint: Option<&crate::model::MechanicalCheck>,
@@ -1487,51 +1720,28 @@ pub fn mechanical_cmd(
 }
 
 /// Extract the pytest command as written in prose: keeps an optional
-/// `python[3] -m` prefix and the argument tokens that follow `pytest` (paths,
-/// flags, and the value of a value-taking flag such as `-k NAME`), stopping at
-/// the first plain prose word or at a punctuation-terminated token. Falls
-/// back to bare `["pytest"]` when nothing else is recognised.
+/// `python[3] -m` prefix and the argument tokens that follow the FIRST
+/// `pytest` (paths, flags, and the value of a value-taking flag such as
+/// `-k NAME`), stopping at the first plain prose word or at a
+/// punctuation-terminated token. Falls back to bare `["pytest"]` when nothing
+/// else is recognised.
 ///
-/// Extraction stopping is NOT silent: `.py` / `::` targets that appear after
-/// the stop (`... a.py and scripts/b.py pass`, or `a.py, b.py`) are appended
-/// to the argv so every named test file runs. Other path-like tokens left
-/// behind (e.g. a directory `tests/`) are counted by
-/// [`pytest_dropped_path_count`], which [`command_mention_count`] turns into a
-/// multi-command coverage so the verifier is not skipped on a partial run.
-/// Prose mentioning an unrelated `.py` path after the command is also run as a
-/// pytest target; that fails the gate (restrictive), never passes it.
+/// After the stop, later tokens containing `.py` or `::` are appended so
+/// every named test file runs. That is the ONLY thing this function adds; it
+/// makes no claim about coverage. Whether the returned argv discharges the
+/// criteria is decided separately, from this exact argv, by
+/// [`criteria_coverage_for`] / [`pytest_unaccounted_targets`] (any other
+/// target-like token, e.g. a directory or bare module name, is unaccounted
+/// and vetoes the verifier skip). Prose mentioning an unrelated `.py` path
+/// after the command is also run as a pytest target; that fails the gate
+/// (restrictive), never passes it.
 fn prose_pytest_argv(done_criteria: &str) -> Vec<String> {
-    prose_pytest_parse(done_criteria).0
-}
-
-/// Is this prose token shaped like a pytest target (path, `.py` file or node id)?
-fn is_pytest_path_like(tok: &str) -> bool {
-    tok.contains('/') || tok.contains(".py") || tok.contains("::")
-}
-
-/// Number of path-like tokens that follow the point where
-/// [`prose_pytest_argv`] stopped extracting. Each is a pytest target the
-/// criteria names but the extracted command will NOT run, so a non-zero value
-/// means the single command cannot discharge the criteria. Over-counting (a
-/// non-test path mentioned in prose) only costs a verifier run; it errs to the
-/// restrictive side.
-fn pytest_dropped_path_count(done_criteria: &str) -> usize {
-    prose_pytest_parse(done_criteria)
-        .1
-        .iter()
-        .filter(|t| is_pytest_path_like(t))
-        .count()
-}
-
-/// Returns the extracted argv and the path-like-or-not tokens after the stop
-/// point that were NOT appended to the argv.
-fn prose_pytest_parse(done_criteria: &str) -> (Vec<String>, Vec<String>) {
     let bare = vec!["pytest".to_string()];
     let Ok(re) = regex::Regex::new(r"(?i)(?:(python[0-9.]*)\s+-m\s+)?\bpytest\b") else {
-        return (bare, Vec::new());
+        return bare;
     };
     let Some(m) = re.captures(done_criteria) else {
-        return (bare, Vec::new());
+        return bare;
     };
     let mut argv = Vec::new();
     if let Some(py) = m.get(1) {
@@ -1568,24 +1778,18 @@ fn prose_pytest_parse(done_criteria: &str) -> (Vec<String>, Vec<String>) {
             break;
         }
     }
-    // Targets named after the stop point are not dropped: `.py` files and
-    // `::` node ids are appended to the argv so every named test file runs.
-    // Any other path-like leftover (a directory such as `tests/`) cannot be
-    // safely classified as a pytest argument, so it is returned for
-    // `pytest_dropped_path_count` to veto the verifier skip.
-    let mut leftover = Vec::new();
     for raw in rest.split_whitespace().skip(consumed) {
         let tok = raw.trim_end_matches(punct);
-        if tok.is_empty() {
-            continue;
-        }
         if tok.contains(".py") || tok.contains("::") {
             argv.push(tok.to_string());
-        } else {
-            leftover.push(tok.to_string());
         }
     }
-    (argv, leftover)
+    argv
+}
+
+/// Is this prose token shaped like a pytest target (path, `.py` file or node id)?
+fn is_pytest_path_like(tok: &str) -> bool {
+    tok.contains('/') || tok.contains(".py") || tok.contains("::")
 }
 
 fn is_criteria_runner(tok: &str) -> bool {
@@ -2829,6 +3033,22 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
         ] {
             assert!(criteria_coverage(dc).permits_skip(), "{dc}");
         }
+    }
+
+    #[test]
+    fn pytest_unaccounted_target_or_second_invocation_is_partial() {
+        for dc in [
+            "`python3 -m pytest scripts/a.py` and scripts/b.py pass",
+            "pytest scripts/a.py passes and pytest -k smoke passes",
+            "pytest scripts/a.py and tests pass",
+            "pytest scripts/a.py and the tests directory pass",
+            "pytest scripts/a.py and test_b pass",
+        ] {
+            let cov = criteria_coverage(dc);
+            assert!(!cov.permits_skip(), "{dc}: got {cov:?}");
+            assert!(!classify_criteria(dc, None, None).skip_eligible, "{dc}");
+        }
+        assert!(criteria_coverage("python3 -m pytest scripts/a.py passes").permits_skip());
     }
 
     #[test]

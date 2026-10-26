@@ -53,3 +53,33 @@ exit 101: shed in 0.55s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 3.64s
      Running tests/repro_status_stalled_subagents.rs (target/debug/deps/repro_status_stalled_subagents-b6960b847c79ee95)
 error: test failed, to rerun pass `-p overwatch --test repro_status_stalled_subagents`"""
+
+[[task]]
+id = "82e8c13a"
+title = "session roots: GIT_CEILING_DIRECTORIES makes an in-repo write look outside every repo"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1793023964
+updated_at = 1793023964
+weight = 0.0
+issue_number = 1462
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1462"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test session_roots_git_ceiling -- --include-ignored"
+rev = "69819325f3db50685d4a45697a75af48508fc0e4"
+observed_at = 1793023964
+detail = """
+exit 101: es_not_exclude_an_in_repo_write
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/session_roots_git_ceiling.rs (target/debug/deps/session_roots_git_ceiling-858913acf8de93ba)
+error: test failed, to rerun pass `-p harness-core --test session_roots_git_ceiling`"""

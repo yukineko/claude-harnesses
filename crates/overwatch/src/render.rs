@@ -83,9 +83,38 @@ pub fn status(json: bool) -> Result<()> {
     out.push_str("== Compass gap ==\n");
     out.push_str(&format_compass_gap(&view, view.compass_gap.as_deref()));
 
+    if !view.stalled_subagents.is_empty() {
+        out.push('\n');
+        out.push_str("== Stalled subagents ==\n");
+        out.push_str(&format_stalled(&view.stalled_subagents));
+    }
+
     print!("{out}");
     warn_undetermined(&view);
     Ok(())
+}
+
+fn format_stalled(list: &[crate::stalled::StalledSubagent]) -> String {
+    use crate::stalled::StallState;
+    let mut s = String::new();
+    for e in list {
+        match &e.state {
+            StallState::Stalled {
+                idle_minutes,
+                pending,
+            } => {
+                let _ = writeln!(
+                    s,
+                    "  {} idle {} min, pending: {}",
+                    e.agent_id, idle_minutes, pending
+                );
+            }
+            StallState::Unknown { reason } => {
+                let _ = writeln!(s, "  {} (unknown: {})", e.agent_id, reason);
+            }
+        }
+    }
+    s
 }
 
 /// Render only the per-session roster (section 1 of `status`), or JSON if `json` is true.

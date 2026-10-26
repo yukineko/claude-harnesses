@@ -25,6 +25,7 @@ mod review_gate_decisions;
 mod review_queue;
 pub mod rollback;
 mod rollback_cli;
+pub mod stalled;
 pub mod store;
 pub mod undetermined_metrics;
 pub mod violation;

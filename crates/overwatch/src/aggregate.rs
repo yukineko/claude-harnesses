@@ -108,6 +108,10 @@ pub struct ProgressView {
     /// Compass gap (north_star / current gap).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compass_gap: Option<String>,
+    /// Subagents whose transcript ends in a pending tool_use idle for 5+ min
+    /// (or whose transcript is unknown). Empty = none observed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stalled_subagents: Vec<crate::stalled::StalledSubagent>,
     /// Sources that could NOT be observed on this build, and why.
     ///
     /// This is the field that keeps every other field honest. Each of them is a
@@ -487,6 +491,20 @@ pub fn build(cwd: &Path) -> ProgressView {
             }
         }
         SourceOutput::Undetermined(why) => view.mark_undetermined(SOURCE_COMPASS_GAP, why),
+    }
+
+    // 6. Stalled subagents (transcript mtime + last entry). Report only.
+    if let Some(home) = dirs::home_dir() {
+        // Claude Code keys the project dir on the session's start dir, which
+        // may be cwd or any ancestor (e.g. the repo toplevel): scan each.
+        let canon = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        for r in canon.ancestors() {
+            view.stalled_subagents.extend(crate::stalled::scan(
+                &home,
+                r,
+                std::time::SystemTime::now(),
+            ));
+        }
     }
 
     view

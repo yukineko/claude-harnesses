@@ -19,5 +19,6 @@ pub mod observed_close;
 mod lock;
 pub mod review_finding;
 pub mod rollback;
+pub mod stalled;
 pub mod store;
 pub mod violation;

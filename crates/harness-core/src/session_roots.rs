@@ -7,7 +7,9 @@
 //!
 //! Fail-closed (CLAUDE.md section 3): an unreadable transcript, a written file
 //! whose directory is gone, or one that is not inside a git work tree is
-//! `Undetermined` naming the path. It is never dropped from the set.
+//! `Undetermined` naming the path. It is never dropped from the set. The one
+//! exception is a write outside git that lies in this session's own Claude
+//! Code scratchpad (see `in_own_scratchpad`): that is not a root and not an error.
 //! Bash-derived candidates are heuristic (see
 //! [`crate::attribution::SessionWrites::bash`]): a candidate outside any git
 //! work tree is not a root and is not an error.
@@ -45,6 +47,32 @@ fn toplevel(dir: &Path) -> Result<PathBuf, String> {
         return Err(format!("git printed no toplevel for {}", dir.display()));
     }
     std::fs::canonicalize(s).map_err(|e| format!("cannot canonicalize toplevel {s}: {e}"))
+}
+
+/// Whether `dir` lies inside THIS session's Claude Code scratchpad:
+/// canonically `…/claude-<digits>/<slug>/<SID>/scratchpad[/…]`, where `<SID>`
+/// is the transcript's file stem. Claude Code tells the model to put temporary
+/// files there, and nothing a gate checks lives in it. Another session's
+/// scratchpad, or any other directory outside git, does not match and stays
+/// undetermined. A directory that cannot be canonicalized does not match.
+fn in_own_scratchpad(dir: &Path, transcript_path: &str) -> bool {
+    let Some(sid) = Path::new(transcript_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+    else {
+        return false;
+    };
+    let Ok(canon) = std::fs::canonicalize(dir) else {
+        return false;
+    };
+    let comps: Vec<&std::ffi::OsStr> = canon.iter().collect();
+    comps.windows(4).any(|w| {
+        let uid_ok = w[0]
+            .to_str()
+            .and_then(|s| s.strip_prefix("claude-"))
+            .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()));
+        uid_ok && w[2] == sid && w[3] == "scratchpad"
+    })
 }
 
 /// Resolve the roots for a hook at `cwd` with the session transcript at
@@ -100,6 +128,7 @@ pub fn resolve(cwd: &Path, transcript_path: &str) -> Determination<SessionRoots>
                     roots.push(t);
                 }
             }
+            Err(_) if in_own_scratchpad(parent, transcript_path) => {}
             Err(e) => {
                 return Determination::undetermined(format!(
                     "session roots: the session wrote {} but its git root cannot be \

@@ -26,7 +26,8 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 
-/// Entries whose `last_seen` is older than this are dropped on every write.
+/// Entries whose `last_seen` is older than this AND that are not `live`
+/// (see `prunable`) are dropped on every write.
 pub const PRUNE_AFTER_SECS: i64 = 24 * 3600;
 
 /// Tools whose `tool_input` path is recorded into `written_paths`.
@@ -97,7 +98,27 @@ fn str_field<'a>(payload: &'a Value, key: &str) -> Option<&'a str> {
     payload.get(key).and_then(Value::as_str)
 }
 
-/// Pure registry update for one hook payload. No IO.
+/// Whether `e` may be dropped from the registry on a write.
+///
+/// An entry is prunable only when BOTH hold: `last_seen` is older than
+/// `PRUNE_AFTER_SECS`, AND `liveness` (the same function `aggregate` uses to
+/// label `active_sessions`) says it is anything other than `live`. `last_seen`
+/// only advances on that session's own hooks, so a long-running session that
+/// fired no hook for >24h but whose transcript is still being written is
+/// live and must not be deleted by another session's write.
+///
+/// `unknown` (transcript path empty/missing/unreadable, or an untrustworthy
+/// mtime) is pruned once past the age cutoff. It is never judged live, so it
+/// cannot shield an entry; keeping such entries forever would leak them
+/// unboundedly (a deleted transcript never becomes live again), while the
+/// 24h grace window plus the absence of any hook in that time is the only
+/// evidence we have. Within the window the entry stays visible as `unknown`.
+fn prunable(e: &PresenceEntry, now: i64) -> bool {
+    now - e.last_seen > PRUNE_AFTER_SECS && liveness(e, now) != LIVE
+}
+
+/// Registry update for one hook payload. Pure except that pruning stats the
+/// transcript of entries past the age cutoff (via `liveness`).
 ///
 /// SessionStart (re)opens the session, SessionEnd marks it ended, PostToolUse
 /// of a write tool appends the touched path; any other event only refreshes
@@ -147,7 +168,7 @@ pub fn apply_event(reg: &mut PresenceRegistry, payload: &Value, now: i64) -> Res
         _ => {}
     }
 
-    reg.retain(|_, e| now - e.last_seen <= PRUNE_AFTER_SECS);
+    reg.retain(|_, e| !prunable(e, now));
     Ok(())
 }
 

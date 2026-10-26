@@ -825,7 +825,7 @@
     {
       "name": "overwatch",
       "description": "Lease and event store for condukt task orchestration that manages the claim registry, heartbeat lifecycle and runtime state so parallel sessions do not duplicate work.",
-      "version": "0.2.102",
+      "version": "0.2.103",
       "category": "observability",
       "keywords": [
         "pdo",

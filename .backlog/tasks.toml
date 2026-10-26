@@ -28,37 +28,3 @@ debug SessionEnd lines:
 2026-10-24T23:50:13.079Z [DEBUG] SessionEnd:other [${CLAUDE_PLUGIN_ROOT}/bin/fugu-router harvest; ${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync] cancelled
 sync repo commits ahead of upstream after: 22
 DEFECT: fugu-router SessionEnd hook was cancelled in a headless run"""
-
-[[task]]
-id = "b114a0b3"
-title = "onepass launcher UserPromptSubmit fallback exits 0 with empty stdout when the binary is missing"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-25 at main 1f609efe (e753a0b6 worktree, confirmed at 13e1bd83 by stashing the change, and again at 247b3f4a). bash scripts/tests/launcher-missing-binary-failclosed.sh: 'FAIL: onepass UserPromptSubmit: onepass reset -> exit 0 with EMPTY stdout: indistinguishable from the plugin's own nothing to report' / 'RED: 1 launcher case(s) answer fine when the binary is missing'. Reading (a): real fail-open in crates/onepass/bin/onepass fallback (should emit a visible notice like fugu-router prompt). Reading (b): intended because onepass reset carries no verdict; distinguish by checking whether any consumer reads onepass reset's silence as a reset having happened."
-created_at = 1792927378
-updated_at = 1792927378
-weight = 0.0
-issue_number = 1455
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1455"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/launcher-missing-binary-failclosed.sh"
-rev = "9bab9917213003acd38190d99087e35ab5366d33"
-observed_at = 1792927378
-detail = """
-exit 1: kt policy answer -> rc=1
-  ok:   compass nudge --json -> rc=127
-  ok:   fugu-router route --file x.json -> rc=127
-  ok:   gauge report -> rc=127
-  ok:   ship check -> rc=127
-  ok:   hypothesis list -> rc=127
-  ok:   session-insights report -> rc=127
-  ok:   specguard pending --json -> rc=127
-  ok:   context-governor rollup -> rc=127
-
-RED: 1 launcher case(s) answer 'fine' when the binary is missing"""

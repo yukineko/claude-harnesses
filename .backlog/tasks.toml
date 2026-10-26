@@ -1,35 +1,4 @@
 [[task]]
-id = "8924ca76"
-title = "fugu-router SessionEnd hook (harvest then sync) is cancelled in headless claude -p runs so sync never pulls or pushes (GitHub 1345)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "github-1345",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "claude -p probe 2026-10-25, Claude Code 2.1.284, fugu-router 0.1.60 alone via --plugin-dir: stderr 'SessionEnd hook [...fugu-router harvest; ...fugu-router sync] failed: Hook cancelled'; debug shows cancel about 1.5 s after shutdown began despite timeout 60. Local data: sync made its local commit (no local loss observed; harvest no-op in a non-repo cwd so harvest loss NOT measured). Remote: pull and push did not complete; sync repo stays ahead of upstream (22 before and after). Repro runs the real installed plugin; sync touches ~/.fugu-router/sync as any session end does."
-created_at = 1792885809
-updated_at = 1792885809
-weight = 0.0
-issue_number = 1452
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1452"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/probe_gh1345_fugu_sessionend.sh"
-rev = "cde613ebba64735f747182b6050b9b0ef59437fb"
-observed_at = 1792885809
-detail = """
-exit 1: LAUDE_PLUGIN_ROOT}/bin/fugu-router harvest; ${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync] failed: Hook cancelled
-debug SessionEnd lines:
-2026-10-24T23:50:13.079Z [DEBUG] SessionEnd:other [${CLAUDE_PLUGIN_ROOT}/bin/fugu-router harvest; ${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync] cancelled
-sync repo commits ahead of upstream after: 22
-DEFECT: fugu-router SessionEnd hook was cancelled in a headless run"""
-
-[[task]]
 id = "a44c2fd2"
 title = "condukt check-criteria drops the python3 -m prefix and runs bare pytest"
 project = "/Users/yuki/src/harness"

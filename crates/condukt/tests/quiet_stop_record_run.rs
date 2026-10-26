@@ -18,7 +18,6 @@ struct Env {
     cwd: PathBuf,
     home: PathBuf,
     ctl: PathBuf,
-    log: PathBuf,
     path_env: std::ffi::OsString,
 }
 
@@ -61,7 +60,6 @@ impl Env {
             cwd,
             home,
             ctl,
-            log,
             path_env,
         }
     }
@@ -90,26 +88,6 @@ impl Env {
         }
     }
 
-    fn log_lines(&self) -> Vec<String> {
-        std::fs::read_to_string(&self.log)
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_string)
-            .collect()
-    }
-
-    fn count(&self, title: &str, role: &str) -> usize {
-        self.log_lines()
-            .iter()
-            .filter(|l| {
-                l.starts_with("record")
-                    && l.contains(&format!("--title {title} "))
-                    && l.contains(&format!("--role {role}"))
-            })
-            .count()
-    }
-
-    /// Create a settled run: t1 verified, optionally with a verifier model.
     fn settled_run(&self, with_verifier: bool) -> String {
         let dec = serde_json::json!({
             "goal": "g",

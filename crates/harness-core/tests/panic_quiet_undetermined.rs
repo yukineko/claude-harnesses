@@ -36,7 +36,7 @@ fn scratch(tag: &str) -> PathBuf {
 }
 
 /// No CLAUDE_CODE_SESSION_ID: the panic streak is undetermined.
-fn run(root: &PathBuf, active: bool) -> Output {
+fn run(root: &std::path::Path, active: bool) -> Output {
     Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",

@@ -37,7 +37,7 @@ fn scratch(tag: &str) -> PathBuf {
     d
 }
 
-fn run(root: &PathBuf, times: usize) -> Output {
+fn run(root: &std::path::Path, times: usize) -> Output {
     Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",

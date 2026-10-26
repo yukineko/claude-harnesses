@@ -83,3 +83,33 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
      Running tests/session_roots_git_ceiling.rs (target/debug/deps/session_roots_git_ceiling-858913acf8de93ba)
 error: test failed, to rerun pass `-p harness-core --test session_roots_git_ceiling`"""
+
+[[task]]
+id = "e31b1b02"
+title = "session roots: a write into a since-removed worktree makes donegate/tdd undetermined on every Stop"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-10-26, session 1a4ac77f, on Stop after the flow loop ended. donegate and tdd both blocked: "the session's roots cannot be determined (session roots: the session wrote /Users/yuki/.condukt/worktrees/run-20261015-032632-69063-t1/crates/backlog/src/evidence.rs but its directory does not exist, so its git root cannot be determined)". ls on that dir: No such file or directory (condukt worktree removed after the write). Every later Stop blocks; only exit is donegate skip / tdd skip (user chose: file + skip once). Fail-closed, so a liveness defect not a fail-open. RED repro 72ea063c: crates/harness-core/tests/session_roots_removed_worktree.rs asserts roots stay Known and contain the parent repo after git worktree remove; fails with the same Undetermined message. Design open: (a) record worktree-to-repo at write time so a removed worktree stays attributable; (b) accept Undetermined and change something else (then cancel and drop the test). Related: 775e5bc8 (done), 82e8c13a."""
+created_at = 1793024738
+updated_at = 1793024738
+weight = 0.0
+issue_number = 1463
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1463"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test session_roots_removed_worktree -- --include-ignored"
+rev = "72ea063cbd09dae61beae1b556e1267b1c28c181"
+observed_at = 1793024738
+detail = """
+exit 101: ays_attributable
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/session_roots_removed_worktree.rs (target/debug/deps/session_roots_removed_worktree-f1f17520b1a6aa5b)
+error: test failed, to rerun pass `-p harness-core --test session_roots_removed_worktree`"""

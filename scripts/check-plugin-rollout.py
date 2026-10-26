@@ -260,7 +260,7 @@ PROVENANCE_FILE = ".deployed-from.json"
 # in a deployed tree and must be excluded from both sides of the comparison.
 # `.in_use/` is a runtime marker dir written by live sessions, not payload.
 # `.claude/` is the same kind of thing: `.gitignore` declares `crates/*/.claude/`
-# "crate-local runtime progress artifacts (taskprog etc.) — never track", and
+# "crate-local runtime progress artifacts (.claude/progress.md etc.) — never track", and
 # `git ls-files 'crates/*/.claude/*'` returns 0 files, so nothing in it is
 # payload. It was NOT excluded until 2026-08-20, and the consequence was
 # concrete: taskprog seeded crates/ctxrot/.claude/progress.md (a content-free

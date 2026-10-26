@@ -405,7 +405,6 @@ hypothesis reject <id> --run <RID>   # 仮説を棄却
 | `compass` | 北極星ゴールのリマインド |
 | `daily session-start` | `cargo deny` セキュリティ監査の所見 (1 日 1 回・所見があれば) |
 | `specguard pending` | 未処理 drift sentinel (あれば) |
-| `taskprog` | progress.md の現状 |
 
 これらを読んでから上記パターンのどれかで作業を始める。
 

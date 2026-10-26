@@ -15,7 +15,7 @@
 | Stall検知 | stuckguard |
 | Safety rail | blastguard, budgetguard |
 | Observability | tracekit, gauge, session-insights, overwatch, difflog |
-| HOTL | taskprog, harness-status, beacon, autoflow |
+| HOTL | harness-status, beacon, autoflow |
 
 この repo は「loop engineering」の主要な軸をほぼ網羅している。
 

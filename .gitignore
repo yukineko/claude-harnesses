@@ -38,7 +38,7 @@ Cargo.lock.bak
 __pycache__/
 *.pyc
 
-# crate-local runtime progress artifacts (taskprog etc.) — never track
+# crate-local runtime progress artifacts (.claude/progress.md etc.) — never track
 crates/*/.claude/
 
 # compiled per-platform plugin binaries — NEVER committed (personal repo, no

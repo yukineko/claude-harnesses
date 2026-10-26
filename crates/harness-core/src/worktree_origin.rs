@@ -10,7 +10,9 @@
 //! attribute the write to its repository.
 //!
 //! Limitation: a pair exists only if something recorded it while the worktree
-//! existed (in practice, a `session_roots` resolve that saw a write into it).
+//! existed: a `session_roots` resolve that saw a write into it, or the repo's
+//! `.githooks/post-checkout` hook (run by `git worktree add` inside the new
+//! worktree), which appends the same line format to the same store path.
 //! A worktree removed before any such resolve has no record, and the lookup
 //! answers [`Lookup::NoRecord`]; the caller must then stay undetermined.
 //!

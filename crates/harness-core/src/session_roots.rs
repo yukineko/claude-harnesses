@@ -20,11 +20,15 @@
 //! `Undetermined`: no record (including a missing store), a recorded worktree
 //! that still exists (a deleted subdirectory of a live checkout), a recorded
 //! repository that is gone or no longer a toplevel, or a store that cannot be
-//! read or has an unparsable line. Limitation: the mapping exists only if a
-//! resolve saw a write into the worktree while it still existed; a worktree
-//! removed before that has no record and stays `Undetermined`. A failure to
-//! record a pair never changes the current resolve (its root is already
-//! Known); it is reported on stderr.
+//! read or has an unparsable line. Recording happens for every live linked
+//! worktree the session wrote into, even when another write in the same
+//! session is unresolvable (the verdict is then still `Undetermined`, naming
+//! the first unresolvable write). Limitation: the mapping exists only if
+//! something recorded it while the worktree existed: a resolve that saw a
+//! write into it, or the repo's `.githooks/post-checkout` recorder, which
+//! `git worktree add` runs inside the new worktree. A worktree with neither
+//! has no record and stays `Undetermined`. A failure to record a pair never
+//! changes the current resolve; it is reported on stderr.
 //! The single exclusion: an absolute written path whose existing parent
 //! directory git positively reports as outside every repository (exit 128 and
 //! the full "not a git repository (or any of the parent directories)" message)
@@ -237,6 +241,10 @@ pub fn resolve_with_store(
     };
     let wrote_any = !writes.edited.is_empty() || !writes.bash.is_empty();
     let mut checked_linked: Vec<PathBuf> = Vec::new();
+    // The first unresolvable write decides the verdict (Undetermined), but the
+    // walk continues: every still-live linked worktree the session wrote into
+    // must be recorded now, or it becomes unattributable once removed.
+    let mut first_unresolved: Option<String> = None;
     for p in &writes.edited {
         let parent = match p.parent() {
             Some(d) if d.is_dir() => d,
@@ -248,11 +256,14 @@ pub fn resolve_with_store(
                     continue;
                 }
                 Err(why) => {
-                    return Determination::undetermined(format!(
-                        "session roots: the session wrote {} but its directory does not exist, \
-                         so its git root cannot be determined ({why})",
-                        p.display()
-                    ))
+                    first_unresolved.get_or_insert_with(|| {
+                        format!(
+                            "session roots: the session wrote {} but its directory does not \
+                             exist, so its git root cannot be determined ({why})",
+                            p.display()
+                        )
+                    });
+                    continue;
                 }
             },
         };
@@ -270,13 +281,18 @@ pub fn resolve_with_store(
             // exit 128 with the full message): no checkout to judge, so excluded.
             Err(TopErr::OutsideAnyRepo) if p.is_absolute() => {}
             Err(e) => {
-                return Determination::undetermined(format!(
-                    "session roots: the session wrote {} but its git root cannot be \
-                     determined: {e}",
-                    p.display()
-                ))
+                first_unresolved.get_or_insert_with(|| {
+                    format!(
+                        "session roots: the session wrote {} but its git root cannot be \
+                         determined: {e}",
+                        p.display()
+                    )
+                });
             }
         }
+    }
+    if let Some(why) = first_unresolved {
+        return Determination::undetermined(why);
     }
     for p in &writes.bash {
         let dir = if p.is_dir() {

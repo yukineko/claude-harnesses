@@ -470,7 +470,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "anyhow",
  "chrono",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.70"
+version = "0.2.71"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1364,7 +1364,7 @@ checksum = "c3a6bfce3d99adfa72d24750a61f782f3036a81e7f86d8841ee1326deaebd171"
 
 [[package]]
 name = "taskprog"
-version = "0.1.18"
+version = "0.1.19"
 dependencies = [
  "anyhow",
  "clap",

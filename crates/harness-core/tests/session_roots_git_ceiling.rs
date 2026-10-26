@@ -100,7 +100,6 @@ fn roots_include(got: &Determination<SessionRoots>, repo: &Path) -> Result<(), S
 }
 
 #[test]
-#[ignore = "RED repro for backlog: session roots GIT_CEILING_DIRECTORIES makes an in-repo write look outside every repo"]
 fn ceiling_env_does_not_exclude_an_in_repo_write() {
     let tmp = tempfile::tempdir().unwrap();
     let base = canon(tmp.path());

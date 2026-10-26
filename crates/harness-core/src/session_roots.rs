@@ -12,6 +12,9 @@
 //! directory git positively reports as outside every repository (exit 128 and
 //! the full "not a git repository (or any of the parent directories)" message)
 //! is skipped, not an error. It still counts toward `wrote_any`.
+//! The git child runs with repository-discovery env vars (GIT_CEILING_DIRECTORIES,
+//! GIT_DIR, ...) removed, so inherited env cannot make an in-repo path look
+//! outside every repository.
 //! Bash-derived candidates are heuristic (see
 //! [`crate::attribution::SessionWrites::bash`]): a candidate outside any git
 //! work tree is not a root and is not an error.
@@ -45,8 +48,34 @@ impl std::fmt::Display for TopErr {
     }
 }
 
+/// Environment variables that steer git's repository discovery. They are
+/// inherited from the hook process and must not influence a child that asks
+/// "which repository contains this directory": e.g. `GIT_CEILING_DIRECTORIES`
+/// makes an in-repo directory look outside every repository.
+pub(crate) const GIT_DISCOVERY_ENV: [&str; 9] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_NAMESPACE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+];
+
+/// Remove every [`GIT_DISCOVERY_ENV`] variable from `cmd`'s environment.
+pub(crate) fn clear_git_discovery_env(cmd: &mut Command) -> &mut Command {
+    for k in GIT_DISCOVERY_ENV {
+        cmd.env_remove(k);
+    }
+    cmd
+}
+
 fn toplevel(dir: &Path) -> Result<PathBuf, TopErr> {
-    let out = Command::new("git")
+    let mut cmd = Command::new("git");
+    clear_git_discovery_env(&mut cmd);
+    let out = cmd
         .arg("-C")
         .arg(dir)
         .args(["rev-parse", "--show-toplevel"])

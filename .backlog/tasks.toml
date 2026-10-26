@@ -1,35 +1,4 @@
 [[task]]
-id = "8924ca76"
-title = "fugu-router SessionEnd hook (harvest then sync) is cancelled in headless claude -p runs so sync never pulls or pushes (GitHub 1345)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "github-1345",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "claude -p probe 2026-10-25, Claude Code 2.1.284, fugu-router 0.1.60 alone via --plugin-dir: stderr 'SessionEnd hook [...fugu-router harvest; ...fugu-router sync] failed: Hook cancelled'; debug shows cancel about 1.5 s after shutdown began despite timeout 60. Local data: sync made its local commit (no local loss observed; harvest no-op in a non-repo cwd so harvest loss NOT measured). Remote: pull and push did not complete; sync repo stays ahead of upstream (22 before and after). Repro runs the real installed plugin; sync touches ~/.fugu-router/sync as any session end does."
-created_at = 1792885809
-updated_at = 1792885809
-weight = 0.0
-issue_number = 1452
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1452"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/probe_gh1345_fugu_sessionend.sh"
-rev = "cde613ebba64735f747182b6050b9b0ef59437fb"
-observed_at = 1792885809
-detail = """
-exit 1: LAUDE_PLUGIN_ROOT}/bin/fugu-router harvest; ${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync] failed: Hook cancelled
-debug SessionEnd lines:
-2026-10-24T23:50:13.079Z [DEBUG] SessionEnd:other [${CLAUDE_PLUGIN_ROOT}/bin/fugu-router harvest; ${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync] cancelled
-sync repo commits ahead of upstream after: 22
-DEFECT: fugu-router SessionEnd hook was cancelled in a headless run"""
-
-[[task]]
 id = "a44c2fd2"
 title = "condukt check-criteria drops the python3 -m prefix and runs bare pytest"
 project = "/Users/yuki/src/harness"
@@ -55,3 +24,45 @@ exit 1: zjn12xs02k588nyw5txm0000gp/T/condukt-cc-pym.FC6g1P/repo\nplugins: anyio-
 extracted argv: ["pytest"]
 0 passed, 1 failed
 FAIL: extracted command is ["pytest"]; expected it to start with ["python3","-m","pytest"] and include scripts/x.py'''
+
+[[task]]
+id = "775e5bc8"
+title = "session roots: a written path positively outside every repo makes donegate/tdd undetermined on every Stop"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+Observed (2026-10-26): a session that once wrote /Users/yuki/.budgetguard/config.toml (not inside any git repo) gets on every Stop, from both donegate and tdd: "donegate: BLOCKED - the session's roots cannot be determined (session roots: the session wrote /Users/yuki/.budgetguard/config.toml but its git root cannot be determined: git rev-parse --show-toplevel failed in /Users/yuki/.budgetguard (exit Some(128)): fatal: not a git repository (or any of the parent directories): .git). No checks ran for the roots it wrote into." (same from tdd), then the second-block pass-through.
+
+Code: crates/harness-core/src/session_roots.rs resolve(), edited-files loop: any toplevel() error returns Undetermined. Callers: crates/donegate/src/main.rs:199, crates/tdd/src/main.rs:306, and also crates/reviewgate/src/review.rs:602 (same defect).
+
+User ruling (same principle as GitHub #1180, scripts/deny_ledger.py _outside_repo_write_target()): a written path that is POSITIVELY outside every repo (absolute, and git rev-parse cleanly reports exit 128 with "not a git repository (or any of the parent directories)") is excluded from the session's roots, not Undetermined. Everything else stays Undetermined, which blocks (fail-closed).
+
+Repro: crates/harness-core/tests/session_roots_outside_repo.rs. RED tests (both #[ignore]d; the fix MUST remove both #[ignore] attributes without changing assertions): outside_repo_write_is_excluded_and_roots_are_known, outside_write_plus_linked_repo_write_keeps_the_repo_root.
+
+Controls that pass now and must keep passing (stay Undetermined): control_corrupt_gitfile_stays_undetermined (a .git gitfile pointing nowhere: git also says "not a git repository" with exit 128 but WITHOUT "(or any of the parent directories)", so the fix must match the FULL message, not the exit code or the prefix), control_unenterable_dir_stays_undetermined (mode 000), control_relative_path_stays_undetermined, control_missing_directory_stays_undetermined.
+
+Not covered: git missing from PATH (could not set up without changing PATH for the whole process); must still stay Undetermined.
+
+All-outside case: resolve always puts the hook cwd first, so when every written path is outside a repo the fixed result is roots=[cwd] with wrote_any=true, not an empty set. donegate then skips its early nothing-declared allow (that needs one root and wrote_any=false) and judges the cwd; tdd judges the cwd as in the single-root case. Read from code, not a fail-open; not yet exercised by a donegate/tdd test."""
+created_at = 1793017118
+updated_at = 1793017118
+weight = 0.0
+issue_number = 1459
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1459"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test session_roots_outside_repo -- --include-ignored"
+rev = "1e183294b7b6196903daccb51119e4e225e983b0"
+observed_at = 1793017118
+detail = """
+exit 101: ished in 0.17s
+
+   Compiling harness-core v0.2.65 (/Users/yuki/src/.harness-worktrees/c5b9-sessionroots-red/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/session_roots_outside_repo.rs (target/debug/deps/session_roots_outside_repo-64d6c74858ffb120)
+error: test failed, to rerun pass `-p harness-core --test session_roots_outside_repo`"""

@@ -6,13 +6,16 @@ project_unresolved = false
 tags = ["p2"]
 touched_files = []
 status = "pending"
-notes = """Observed 2026-10-26 on condukt run run-20261026-025716-14405 task t3 (user reported condukt 0.7.295; installed binary at repro time reports 0.7.292). t3 done_criteria (prose, no backticks) contained 'python3 -m pytest scripts/test_backlog_audit_b1_0.py -k main_guard passes'. condukt state check-criteria extracted only the bare command 'pytest'. Because bare pytest does not put cwd on sys.path, it ran over the whole worktree and failed collecting scripts/test_backlog_5461ba1c.py with "ModuleNotFoundError: No module named 'scripts'". Root: prose fallback in verify::mechanical_cmd (crates/condukt/src/verify.rs) returns vec!["pytest"] on any 'pytest' substring, dropping the python3 -m prefix and the target path; a backticked command is preserved (control run: ["python3","-m","pytest","scripts/x.py"]). Repro output at 3488bc34: extracted argv ["pytest"], '0 passed, 1 failed', exit 1. Not fixed here (user ruling: file only)."""
+notes = """
+Observed 2026-10-26 on condukt run run-20261026-025716-14405 task t3 (user reported condukt 0.7.295; installed binary at repro time reports 0.7.292). t3 done_criteria (prose, no backticks) contained 'python3 -m pytest scripts/test_backlog_audit_b1_0.py -k main_guard passes'. condukt state check-criteria extracted only the bare command 'pytest'. Because bare pytest does not put cwd on sys.path, it ran over the whole worktree and failed collecting scripts/test_backlog_5461ba1c.py with "ModuleNotFoundError: No module named 'scripts'". Root: prose fallback in verify::mechanical_cmd (crates/condukt/src/verify.rs) returns vec!["pytest"] on any 'pytest' substring, dropping the python3 -m prefix and the target path; a backticked command is preserved (control run: ["python3","-m","pytest","scripts/x.py"]). Repro output at 3488bc34: extracted argv ["pytest"], '0 passed, 1 failed', exit 1. Not fixed here (user ruling: file only).
+
+ON HOLD (user ruling 2026-10-26, session c5b9c02b): 3 fix rounds on unmerged branch condukt/run-20261026-212750-58817/t2 (worktree run-20261026-212750-58817-t2, head a8ccd9ac, condukt 0.7.298). Round 1 (4525177e) and round 2 (a9cf8fb7) FAILED verification: prose extraction dropped later targets so check-criteria reported passed with skip_verifier=true while a named test never ran (a new fail-open, worse than bare pytest). Round 3 (a8ccd9ac) passes repros scripts/tests/condukt-check-criteria-{python-m-prefix,multi-path,unaccounted-targets}.sh and cargo test, but its verifier was blocked by blastguard (shell-expansion redirect) before adversarial probing; verdict UNVERIFIED. Verifier predicts by reading only (not run) that linking words outside its list still slip: 'plus', 'as well as', juxtaposed targets, 'pytest -x a.py then tests', Japanese 'や'/'。tests も通る', '-k test_a and test_b'. Suggested direction: every non-stopword token outside the final argv counts as unaccounted. Also unverified side finding: run_mechanical indexes cmd[0] (empty mechanical_check cmd may panic)."""
 created_at = 1793016312
-updated_at = 1793016312
+updated_at = 1793026688
 weight = 0.0
 issue_number = 1458
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1458"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

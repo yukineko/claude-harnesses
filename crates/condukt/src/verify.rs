@@ -1469,12 +1469,61 @@ pub fn mechanical_cmd(
         return Some(vec!["npm".to_string(), "test".to_string()]);
     }
     if lower.contains("pytest") {
-        return Some(vec!["pytest".to_string()]);
+        return Some(prose_pytest_argv(done_criteria));
     }
     if lower.contains("go test") {
         return Some(vec!["go".to_string(), "test".to_string()]);
     }
     None
+}
+
+/// Extract the pytest command as written in prose: keeps an optional
+/// `python[3] -m` prefix and the argument tokens that follow `pytest` (paths,
+/// flags, and the value of a value-taking flag such as `-k NAME`), stopping at
+/// the first plain prose word or at a punctuation-terminated token. Falls
+/// back to bare `["pytest"]` when nothing else is recognised.
+fn prose_pytest_argv(done_criteria: &str) -> Vec<String> {
+    let bare = vec!["pytest".to_string()];
+    let Ok(re) = regex::Regex::new(r"(?i)(?:(python[0-9.]*)\s+-m\s+)?\bpytest\b") else {
+        return bare;
+    };
+    let Some(m) = re.captures(done_criteria) else {
+        return bare;
+    };
+    let mut argv = Vec::new();
+    if let Some(py) = m.get(1) {
+        argv.push(py.as_str().to_string());
+        argv.push("-m".to_string());
+    }
+    argv.push("pytest".to_string());
+    let rest = &done_criteria[m.get(0).map_or(0, |w| w.end())..];
+    let punct = |c: char| matches!(c, ',' | '.' | ';' | ')' | ':' | '。' | '、');
+    let mut expect_value = false;
+    for raw in rest.split_whitespace() {
+        let tok = raw.trim_end_matches(punct);
+        let terminated = tok.len() != raw.len();
+        if tok.is_empty() {
+            break;
+        }
+        let keep = if expect_value {
+            true
+        } else {
+            tok.starts_with('-') || tok.contains('/') || tok.contains(".py") || tok.contains("::")
+        };
+        if !keep {
+            break;
+        }
+        expect_value = !expect_value
+            && matches!(
+                tok,
+                "-k" | "-m" | "-p" | "-c" | "--deselect" | "--maxfail" | "--rootdir"
+            );
+        argv.push(tok.to_string());
+        if terminated {
+            break;
+        }
+    }
+    argv
 }
 
 fn is_criteria_runner(tok: &str) -> bool {
@@ -2638,6 +2687,59 @@ note: run with `RUST_BACKTRACE=1` for a backtrace";
             v.get("runtime_digest").is_some(),
             "a fail-soft verdict still carries a digest: {v}"
         );
+    }
+
+    fn prose_argv(dc: &str) -> Option<Vec<String>> {
+        mechanical_cmd(dc, None)
+    }
+
+    fn sv(v: &[&str]) -> Option<Vec<String>> {
+        Some(v.iter().map(|s| s.to_string()).collect())
+    }
+
+    #[test]
+    fn prose_pytest_keeps_python_m_prefix_path_and_k() {
+        assert_eq!(
+            prose_argv("python3 -m pytest scripts/test_x.py -k main_guard passes"),
+            sv(&[
+                "python3",
+                "-m",
+                "pytest",
+                "scripts/test_x.py",
+                "-k",
+                "main_guard"
+            ])
+        );
+        assert_eq!(
+            prose_argv("the test exists and python3 -m pytest scripts/x.py passes"),
+            sv(&["python3", "-m", "pytest", "scripts/x.py"])
+        );
+    }
+
+    #[test]
+    fn prose_pytest_keeps_python_prefix_without_3() {
+        assert_eq!(
+            prose_argv("python -m pytest tests/a.py, and it is green"),
+            sv(&["python", "-m", "pytest", "tests/a.py"])
+        );
+    }
+
+    #[test]
+    fn prose_bare_pytest_with_and_without_path() {
+        assert_eq!(
+            prose_argv("pytest tests/a.py passes"),
+            sv(&["pytest", "tests/a.py"])
+        );
+        assert_eq!(prose_argv("pytest passes"), sv(&["pytest"]));
+        assert_eq!(
+            prose_argv("pytest tests/a.py::test_one. Then done"),
+            sv(&["pytest", "tests/a.py::test_one"])
+        );
+    }
+
+    #[test]
+    fn prose_without_runner_is_still_none() {
+        assert_eq!(prose_argv("the docs are updated and look right"), None);
     }
 
     /// Fail-soft: a long-running command hit with a short timeout must be killed

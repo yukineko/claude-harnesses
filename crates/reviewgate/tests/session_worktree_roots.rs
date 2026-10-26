@@ -140,6 +140,7 @@ impl Fixture {
             .env("CLAUDE_CODE_SESSION_ID", "s-wtroots")
             .env_remove("REVIEWGATE_DISABLE")
             .env_remove("HARNESS_TRUST_ALL")
+            .env_remove("HARNESS_WORKTREE_ORIGIN_DIR")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -197,6 +198,27 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.home);
+    }
+}
+
+/// Creates `dir` with mode 000 on construction and restores 0o755 on drop, so
+/// teardown can delete it even when an assert panics. Only call it after the
+/// transcript (which lives under the same home) is written.
+struct LockedDir(PathBuf);
+
+impl LockedDir {
+    fn new(dir: &Path) -> LockedDir {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        LockedDir(dir.to_path_buf())
+    }
+}
+
+impl Drop for LockedDir {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
     }
 }
 
@@ -280,8 +302,13 @@ fn wrote_files_but_empty_review_set_blocks_naming_roots() {
 #[test]
 fn written_root_gone_blocks_naming_the_root() {
     let f = Fixture::new();
-    let gone = f.home.join("gone-root-4711").join("x.rs");
+    // user ruling 2026-10-27: a gone dir under a NON-repo base is now excluded;
+    // this keeps its property (unresolvable written root blocks, naming it) with
+    // a gone dir whose nearest existing ancestor git cannot enter (mode 000).
+    let locked = f.home.join("gone-root-4711");
+    let gone = locked.join("gone").join("x.rs");
     let tp = f.transcript(&[edit(&gone)]);
+    let _unlock = LockedDir::new(&locked);
     let o = f.stop(&f.primary, &tp);
     assert_eq!(
         o.decision, "block",

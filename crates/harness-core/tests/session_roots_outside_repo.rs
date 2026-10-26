@@ -217,14 +217,21 @@ fn control_relative_path_stays_undetermined() {
     );
 }
 
-/// The written file's directory is gone: still Undetermined.
+/// The written file's directory is gone under a non-repo parent.
+/// user ruling 2026-10-27: the nearest existing ancestor (`outside`) is
+/// positively outside every repo, so this is now EXCLUDED (Known), not
+/// Undetermined. The still-Undetermined gone-dir cases live in
+/// `session_roots_gone_dir.rs`.
 #[test]
-fn control_missing_directory_stays_undetermined() {
+fn missing_directory_under_non_repo_parent_is_excluded() {
     let f = fixture();
     let gone = f.outside.join("gone").join("config.toml");
     let t = transcript(&f.tdir, &[gone.to_str().unwrap()]);
-    assert!(matches!(
-        resolve(&f.repo, &t),
-        Determination::Undetermined(_)
-    ));
+    match resolve(&f.repo, &t) {
+        Determination::Known(sr) => {
+            assert_eq!(sr.roots, vec![canon(&f.repo)]);
+            assert!(sr.wrote_any);
+        }
+        Determination::Undetermined(why) => panic!("{}", why.as_str()),
+    }
 }

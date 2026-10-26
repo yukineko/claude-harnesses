@@ -102,8 +102,8 @@ fn status_lists_idle_pending_tool_use_subagent_and_not_the_controls() {
         .arg("status")
         .output()
         .unwrap();
-    let text = String::from_utf8_lossy(&out.stdout).to_string()
-        + &String::from_utf8_lossy(&out.stderr);
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
 
     assert!(
         text.contains("astalled0000000001"),
@@ -113,10 +113,7 @@ fn status_lists_idle_pending_tool_use_subagent_and_not_the_controls() {
         text.contains("STALLED-CMD-MARKER"),
         "pending command not shown:\n{text}"
     );
-    assert!(
-        text.contains("16"),
-        "minutes idle (16) not shown:\n{text}"
-    );
+    assert!(text.contains("16"), "minutes idle (16) not shown:\n{text}");
     assert!(
         !text.contains("afresh00000000002") && !text.contains("FRESH-CMD-MARKER"),
         "actively growing transcript must not be listed:\n{text}"

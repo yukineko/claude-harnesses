@@ -66,3 +66,32 @@ exit 101: ished in 0.17s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
      Running tests/session_roots_outside_repo.rs (target/debug/deps/session_roots_outside_repo-64d6c74858ffb120)
 error: test failed, to rerun pass `-p harness-core --test session_roots_outside_repo`"""
+
+[[task]]
+id = "938e1004"
+title = "overwatch status: surface subagents idle 5+ min on a pending tool_use"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Decision (user): overwatch status lists a subagent as stalled when its transcript's last entry is a tool_use with no tool_result AND the transcript has not grown for >=5 min. Show agent id, minutes idle, pending command. Long-running commands and permission waits count as stalled too (user chose 'report them too'): report only, never kill or restart. Growing transcript must not be listed. overwatch already runs in SessionStart and Stop hooks (reason chosen). Transcripts: ~/.claude/projects/<slug>/<session>/subagents/agent-<id>.jsonl (layout verified). Signal = transcript mtime+last entry, NOT Agent output-file size (710bc8c7: output size misread as progress, live agent killed). Evidence: agent-af007aac375a7a7a3.jsonl idle 16 min on pending Bash; agent-a53a1b1f825c994de.jsonl gaps 1425s,1571s,13350s,45448s after pending tool_use. Nothing detects today: stuckguard is PostToolUse-only; condukt state probe (crates/condukt/src/main.rs:912) disclaims liveness; overwatch aggregate.rs:471 shows runs only as done/total. RED test: crates/overwatch/tests/repro_status_stalled_subagents.rs (commit d020d850 on branch ow-stalled-subagent); fails because the feature is absent (status prints no stalled-subagent section). Unreadable/unparseable transcript must be reported as unknown, not as clean (CLAUDE.md s3)."
+created_at = 1793022099
+updated_at = 1793022099
+weight = 0.0
+issue_number = 1461
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1461"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_status_stalled_subagents"
+rev = "d020d8504217fa9c16cd305ba9a4273a941a46cb"
+observed_at = 1793022099
+detail = """
+exit 101: shed in 0.55s
+
+   Compiling overwatch v0.2.97 (/Users/yuki/src/.harness-worktrees/ow-stalled-subagent/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.64s
+     Running tests/repro_status_stalled_subagents.rs (target/debug/deps/repro_status_stalled_subagents-b6960b847c79ee95)
+error: test failed, to rerun pass `-p overwatch --test repro_status_stalled_subagents`"""

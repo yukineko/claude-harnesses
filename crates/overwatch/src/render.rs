@@ -13,8 +13,8 @@
 /// This is the same correction the statusline took in `3b1eb24` (CLAUDE.md §1):
 /// a blank render was being read as "plenty of headroom".
 use crate::aggregate::{
-    self, BacklogSummary, HypoBuckets, ProgressView, RunRow, SessionRoster, SOURCE_BACKLOG,
-    SOURCE_COMPASS_GAP, SOURCE_HYPOTHESES, SOURCE_RUNS, SOURCE_SESSIONS,
+    self, BacklogSummary, HypoBuckets, ProgressView, RunRow, SessionRoster, SOURCE_ACTIVE_SESSIONS,
+    SOURCE_BACKLOG, SOURCE_COMPASS_GAP, SOURCE_HYPOTHESES, SOURCE_RUNS, SOURCE_SESSIONS,
 };
 use anyhow::Result;
 use std::fmt::Write as _;
@@ -65,7 +65,7 @@ pub fn status(json: bool) -> Result<()> {
     let mut out = String::new();
 
     out.push_str("== Sessions ==\n");
-    out.push_str(&format_roster(&view, &view.sessions));
+    out.push_str(&format_sessions(&view));
     out.push('\n');
 
     out.push_str("== PDO hypotheses ==\n");
@@ -132,9 +132,53 @@ pub fn sessions(json: bool) -> Result<()> {
         return Ok(());
     }
 
-    print!("{}", format_roster(&view, &view.sessions));
+    print!("{}", format_sessions(&view));
     warn_undetermined(&view);
     Ok(())
+}
+
+/// Max written paths listed per presence session before `+N more`.
+const MAX_PATHS_SHOWN: usize = 10;
+
+/// The `== Sessions ==` body: the lease rosters plus every non-ended
+/// presence-hook session. `(none)` is printed only when BOTH sources were
+/// observed and are empty; an unreadable source prints `(unknown: ...)`.
+fn format_sessions(view: &ProgressView) -> String {
+    let mut out = String::new();
+    if !view.sessions.is_empty() || view.undetermined_reason(SOURCE_SESSIONS).is_some() {
+        out.push_str(&format_roster(view, &view.sessions));
+    }
+    if let Some(reason) = view.undetermined_reason(SOURCE_ACTIVE_SESSIONS) {
+        let _ = writeln!(out, "(unknown: {reason})");
+    }
+    for s in view
+        .active_sessions
+        .iter()
+        .filter(|s| s.liveness != "ended")
+    {
+        let _ = writeln!(
+            out,
+            "session {}  [{}]  worktree {}",
+            s.session_id, s.liveness, s.worktree
+        );
+        if s.cwd != s.worktree {
+            let _ = writeln!(out, "  cwd {}", s.cwd);
+        }
+        for p in s.written_paths.iter().take(MAX_PATHS_SHOWN) {
+            let _ = writeln!(out, "  wrote {p}");
+        }
+        if s.written_paths.len() > MAX_PATHS_SHOWN {
+            let _ = writeln!(
+                out,
+                "  (+{} more written paths)",
+                s.written_paths.len() - MAX_PATHS_SHOWN
+            );
+        }
+    }
+    if out.is_empty() {
+        out.push_str("(none)\n");
+    }
+    out
 }
 
 /// Format the per-session lease roster as a readable table.

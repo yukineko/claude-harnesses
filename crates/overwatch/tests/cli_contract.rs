@@ -579,13 +579,25 @@ fn claim_rd_lease_persists_until_end_reassign_stale() {
     assert!(sb.leases().get("k").is_some());
     let l = sb.ok(&["lease", "--session", "A", "--json"]);
     assert_eq!(json_out(&l)["key"], json!("k"));
-    // no overwatch hook ends a session
+    // no overwatch hook ends a LEASE: the only SessionEnd hook is the
+    // presence recorder, which never touches leases.json
     let hooks: Value = serde_json::from_str(
         &std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("hooks/hooks.json"))
             .unwrap(),
     )
     .unwrap();
-    assert!(hooks["hooks"].get("SessionEnd").is_none());
+    let end_cmds: Vec<&str> = hooks["hooks"]["SessionEnd"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|g| g["hooks"].as_array().unwrap())
+        .map(|h| h["command"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        end_cmds,
+        ["${CLAUDE_PLUGIN_ROOT}/bin/overwatch presence"],
+        "SessionEnd may only record presence"
+    );
     // end releases it
     sb.ok(&["end", "--key", "k", "--status", "done"]);
     assert!(sb.leases().get("k").is_none());
@@ -868,7 +880,7 @@ fn claim_rd_sessionstart_injects_status() {
     )
     .unwrap();
     assert_eq!(
-        hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"],
+        hooks["hooks"]["SessionStart"][0]["hooks"][1]["command"],
         json!("${CLAUDE_PLUGIN_ROOT}/bin/overwatch status")
     );
     let sb = Sb::new().with_fakebin();
@@ -1068,19 +1080,31 @@ fn claim_rd_hooks_json_two_status_hooks() {
     let events = hooks["hooks"].as_object().unwrap();
     let mut names: Vec<&String> = events.keys().collect();
     names.sort();
-    assert_eq!(names, ["SessionStart", "Stop"]);
-    for ev in ["SessionStart", "Stop"] {
+    assert_eq!(names, ["PostToolUse", "SessionEnd", "SessionStart", "Stop"]);
+    let status = json!("${CLAUDE_PLUGIN_ROOT}/bin/overwatch status");
+    let presence = json!("${CLAUDE_PLUGIN_ROOT}/bin/overwatch presence");
+    // (event, expected commands in order)
+    let expected: [(&str, Vec<&Value>); 4] = [
+        ("SessionStart", vec![&presence, &status]),
+        ("Stop", vec![&status]),
+        ("PostToolUse", vec![&presence]),
+        ("SessionEnd", vec![&presence]),
+    ];
+    for (ev, want) in expected {
         let groups = events[ev].as_array().unwrap();
         assert_eq!(groups.len(), 1, "{ev}");
         let hs = groups[0]["hooks"].as_array().unwrap();
-        assert_eq!(hs.len(), 1, "{ev}");
-        assert_eq!(hs[0]["type"], json!("command"));
-        assert_eq!(
-            hs[0]["command"],
-            json!("${CLAUDE_PLUGIN_ROOT}/bin/overwatch status")
-        );
-        assert_eq!(hs[0]["timeout"], json!(5));
+        assert_eq!(hs.len(), want.len(), "{ev}");
+        for (h, w) in hs.iter().zip(want) {
+            assert_eq!(h["type"], json!("command"));
+            assert_eq!(&h["command"], w, "{ev}");
+            assert_eq!(h["timeout"], json!(5));
+        }
     }
+    assert_eq!(
+        events["PostToolUse"][0]["matcher"],
+        json!("Edit|Write|MultiEdit|NotebookEdit")
+    );
 }
 
 #[test]

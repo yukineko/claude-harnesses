@@ -10,7 +10,11 @@ Do NOT proceed when begin exits 1 with skip JSON (another session has this key).
 - Stale leases are dropped by **every** lease mutation (`begin` / `run` / `end` / `heartbeat` / `reassign` / `reap`), and ignored by `status` / `sessions` / `lease`, so a dead holder never blocks a `begin`. Each drop by a mutation is appended to `events.jsonl` as an `ended` event with status `reaped`.
 - `overwatch reap` just runs that cleanup on its own.
 
-Two hooks (SessionStart + Stop), both running `overwatch status` with a 5s hook timeout. A cached status is discarded once `aggregate::STATUS_CACHE_TTL_SECS` has passed, when `leases.json` was written at or after the second the cache was built, or when its mtime cannot be observed (`aggregate::cache_is_fresh`).
+Hooks (all with a 5s hook timeout): SessionStart and Stop run `overwatch status`; SessionStart, PostToolUse (matcher `Edit|Write|MultiEdit|NotebookEdit`) and SessionEnd run the hook-only `overwatch presence`, which reads the Claude Code hook payload JSON from stdin and records the session in `presence.json` (session id, cwd, worktree = git toplevel of cwd, transcript path, deduplicated written paths, `last_seen`, `ended`). This registers sessions that never ran `overwatch begin`. Entries whose `last_seen` is over 24h old are pruned on write. A corrupt or unreadable `presence.json` makes the hook exit non-zero with the error on stderr; it is never overwritten with an empty registry.
+
+`status --json` gains `active_sessions` (`session_id`, `cwd`, `worktree`, `written_paths`, `liveness`, `last_seen`). `liveness` is judged from the transcript file's mtime against the 1800s lease TTL: `live` (within), `stale` (older), `unknown` (transcript missing/unreadable), `ended` (SessionEnd seen). An unreadable `presence.json` adds an `undetermined` entry with source `active_sessions`, and the text `== Sessions ==` section prints `(unknown: ...)` instead of `(none)`. That section lists the lease rosters plus each non-ended presence session (id, liveness, worktree/cwd, written paths).
+
+A cached status is discarded once `aggregate::STATUS_CACHE_TTL_SECS` has passed, when `leases.json` or `presence.json` was written at or after the second the cache was built, or when either mtime cannot be observed (`aggregate::cache_is_fresh`).
 
 `(none)` is only printed when the source was actually observed.
 
@@ -38,6 +42,7 @@ overwatch lease --session <sid> [--json]    # print the live lease (PDO anchor) 
 overwatch run --key <k> [--note <text>]     # record a running heartbeat + event for a held lease
 overwatch status [--json]                   # project-wide progress view: Sessions / PDO hypotheses / Backlog / Condukt runs / Compass gap
 overwatch sessions [--json]                 # only the Sessions roster: sessions holding a live (non-stale) lease
+overwatch presence                           # hook-only: record a hook payload (stdin) in presence.json
 overwatch pause --run <id>                  # delegate to `condukt state pause --run <id>` and record a control event
 overwatch resume --run <id>                 # delegate to `condukt state resume --run <id>` and record a control event
 overwatch reassign --key <k> --to <sid>     # RELEASE the lease on <k> and record a "reassign to=<sid>" event (does not create a lease for <sid>)
@@ -117,7 +122,7 @@ Each lease carries a `heartbeat_at` timestamp (plus `claimed_at`). Staleness is 
 - Once `now - heartbeat_at > 1800s` the lease is stale: the next lease mutation (any of `begin` / `run` / `end` / `heartbeat` / `reassign` / `reap`) drops it from `leases.json`, and a `begin` on that key by another session succeeds.
 - `overwatch reap` is simply that cleanup with nothing else attached.
 
-State lives under `~/.overwatch/<project-key>/overwatch/` (`leases.json` + `events.jsonl`), keyed per repository on the MAIN worktree root.
+State lives under `~/.overwatch/<project-key>/overwatch/` (`leases.json` + `presence.json` + `events.jsonl`), keyed per repository on the MAIN worktree root.
 
 The main checkout, every linked `git worktree`, and any subdirectory of a linked worktree share one store (so `overwatch status` run from the main checkout sees sessions working in linked worktrees).
 
@@ -127,7 +132,7 @@ A cwd outside any git repo is keyed on the cwd itself.
 
 - `<base>` is `~/.overwatch` (`$HOME/.overwatch`).
 - `<project-key>` is `<basename>-<fnv1a32 of the canonical path>` of the repository's MAIN worktree root (shared by all its linked worktrees).
-- A lease stays in `leases.json` until it is `end`ed, released by `reassign`, or dropped as stale by a later lease mutation; overwatch does not tie it to the Claude Code process, and no overwatch hook removes it when the session exits.
+- A lease stays in `leases.json` until it is `end`ed, released by `reassign`, or dropped as stale by a later lease mutation; overwatch does not tie it to the Claude Code process, and no overwatch hook removes it when the session exits (the SessionEnd hook only marks the session `ended` in `presence.json`).
 
 Alongside the lease registry, overwatch records gate-violation events with a **normalized signature** and escalates a signature as a **systemic issue** when it recurs N+ times within a time window across tasks/sessions.
 

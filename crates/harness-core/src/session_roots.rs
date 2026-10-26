@@ -5,9 +5,13 @@
 //! sees a clean tree and allows. The roots here are the hook cwd plus the git
 //! toplevel of every file the session transcript records as written.
 //!
-//! Fail-closed (CLAUDE.md section 3): an unreadable transcript, a written file
-//! whose directory is gone, or one that is not inside a git work tree is
-//! `Undetermined` naming the path. It is never dropped from the set.
+//! Fail-closed (CLAUDE.md section 3): an unreadable transcript, a relative
+//! written path, a written file whose directory is gone or unenterable, or any
+//! git failure other than the one below is `Undetermined` naming the path.
+//! The single exclusion: an absolute written path whose existing parent
+//! directory git positively reports as outside every repository (exit 128 and
+//! the full "not a git repository (or any of the parent directories)" message)
+//! is skipped, not an error. It still counts toward `wrote_any`.
 //! Bash-derived candidates are heuristic (see
 //! [`crate::attribution::SessionWrites::bash`]): a candidate outside any git
 //! work tree is not a root and is not an error.
@@ -24,27 +28,56 @@ pub struct SessionRoots {
     pub wrote_any: bool,
 }
 
-fn toplevel(dir: &Path) -> Result<PathBuf, String> {
+/// Why a toplevel could not be resolved. `OutsideAnyRepo` is a positive
+/// observation (git itself said the directory is in no repository); everything
+/// else is a failure to determine.
+enum TopErr {
+    OutsideAnyRepo,
+    Other(String),
+}
+
+impl std::fmt::Display for TopErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TopErr::OutsideAnyRepo => f.write_str("not inside any git repository"),
+            TopErr::Other(s) => f.write_str(s),
+        }
+    }
+}
+
+fn toplevel(dir: &Path) -> Result<PathBuf, TopErr> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["rev-parse", "--show-toplevel"])
         .output()
-        .map_err(|e| format!("cannot run git in {}: {e}", dir.display()))?;
+        .map_err(|e| TopErr::Other(format!("cannot run git in {}: {e}", dir.display())))?;
     if !out.status.success() {
-        return Err(format!(
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // Positively outside: exit 128 AND the full phrase. A corrupt gitfile
+        // says "not a git repository" without the parenthetical, and stays Other.
+        if out.status.code() == Some(128)
+            && stderr.contains("not a git repository (or any of the parent directories)")
+        {
+            return Err(TopErr::OutsideAnyRepo);
+        }
+        return Err(TopErr::Other(format!(
             "git rev-parse --show-toplevel failed in {} (exit {:?}): {}",
             dir.display(),
             out.status.code(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+            stderr.trim()
+        )));
     }
     let s = String::from_utf8_lossy(&out.stdout);
     let s = s.trim();
     if s.is_empty() {
-        return Err(format!("git printed no toplevel for {}", dir.display()));
+        return Err(TopErr::Other(format!(
+            "git printed no toplevel for {}",
+            dir.display()
+        )));
     }
-    std::fs::canonicalize(s).map_err(|e| format!("cannot canonicalize toplevel {s}: {e}"))
+    std::fs::canonicalize(s)
+        .map_err(|e| TopErr::Other(format!("cannot canonicalize toplevel {s}: {e}")))
 }
 
 /// Resolve the roots for a hook at `cwd` with the session transcript at
@@ -100,6 +133,9 @@ pub fn resolve(cwd: &Path, transcript_path: &str) -> Determination<SessionRoots>
                     roots.push(t);
                 }
             }
+            // Positively outside every repo (absolute path, existing dir, git
+            // exit 128 with the full message): no checkout to judge, so excluded.
+            Err(TopErr::OutsideAnyRepo) if p.is_absolute() => {}
             Err(e) => {
                 return Determination::undetermined(format!(
                     "session roots: the session wrote {} but its git root cannot be \

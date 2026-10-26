@@ -27,3 +27,30 @@ exit 1: zjn12xs02k588nyw5txm0000gp/T/condukt-cc-pym.FC6g1P/repo\nplugins: anyio-
 extracted argv: ["pytest"]
 0 passed, 1 failed
 FAIL: extracted command is ["pytest"]; expected it to start with ["python3","-m","pytest"] and include scripts/x.py'''
+
+[[task]]
+id = "37db5d14"
+title = "overwatch status does not show live sessions that never ran overwatch begin"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1793030339
+updated_at = 1793030339
+weight = 0.0
+issue_number = 1464
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1464"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_status_shows_unregistered_live_sessions"
+rev = "b36c2727cbd92f23d3606d77fdfeccc5fb610480"
+observed_at = 1793030339
+detail = """
+exit 101: sers/yuki/src/.harness-worktrees/c5b9c02b-session-roster/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.45s
+     Running tests/repro_status_shows_unregistered_live_sessions.rs (target/debug/deps/repro_status_shows_unregistered_live_sessions-789ad57a404ad5d2)
+error: test failed, to rerun pass `-p overwatch --test repro_status_shows_unregistered_live_sessions`"""

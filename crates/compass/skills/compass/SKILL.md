@@ -74,7 +74,7 @@ compass charter --write '{"north_star":"...","definition_of_done":["観測可能
 
 ### Step 5 — gap を出す
 ```
-compass gap                      # 決定論的に集めた入力(DoD/直近活動/progress)を JSON で得る
+compass gap                      # 決定論的に集めた入力(DoD/直近活動)を JSON で得る
 ```
 これを読み、**ゴール − 現状** を推論して最大の差分を1〜2行にまとめ、書き戻す:
 ```

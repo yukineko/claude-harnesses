@@ -15,7 +15,7 @@ crate をスキャンし各プラグインを活性化スコープ（always-on /
 
 ## 不変条件
 
-- **read-only 集約境界** — 全モジュール（`budget`/`sessions`/`progress`/`hooks`/`inject`/`plugins`）は
+- **read-only 集約境界** — 全モジュール（`budget`/`sessions`/`hooks`/`inject`/`plugins`）は
   ストアを読むだけで書き込まない。`main` は各 `read`/`recent`/`report` の結果を stdout へ印字するのみ。
   skill（`commands/status.md`）も「binary never writes」を明示する。
 - **hook 非登録（意図的）** — `.claude-plugin/plugin.json` は hook を宣言せず、crate に `hooks/` dir も
@@ -24,7 +24,7 @@ crate をスキャンし各プラグインを活性化スコープ（always-on /
   整合させるため。活性化スコープは **manual（CLI 専用）**。
 - **fail-soft（never panic）** — ストア欠落はエラーでなく「not installed」。`budget::read` は
   `ledger.json` 不在で `ledger_present:false` を返し、`sessions::recent` は records 空で空 vec、
-  `progress::read` は不在で `exists:false`、`hooks::read`/`inject::read` は ledger 欠落/空で空
+  `hooks::read`/`inject::read` は ledger 欠落/空で空
   report（`get(..8)` は境界安全に全文フォールバック）。`plugins::scan` は `read_dir`/JSON 失敗で
   空/スキップ。
 - **canonical schema 共有（drift 防止）** — 各パネルは自前ミラー struct でなく **harness_core の正典型**
@@ -44,7 +44,7 @@ crate をスキャンし各プラグインを活性化スコープ（always-on /
 
 サブコマンドは `clap` の `Command` enum で定義。`--json` と `--sessions N`（既定 5）は global 引数。
 
-- **（引数なし・既定）** — 全 5 パネルを `budget::read`/`sessions::recent`/`progress::read`/`hooks::read`/
+- **（引数なし・既定）** — 全 4 パネルを `budget::read`/`sessions::recent`/`hooks::read`/
   `inject::read` で収集し、`display::print_status`（枠付きテキスト）または `--json` 時 `display::print_json`
   （`{date,budget,recent_sessions,hook_latency,inject}` envelope）で出力。
 - **`budget`** — 今日の支出のみ（`today_usd` × `session_count_today`）。`ledger_present` で未導入を示す。

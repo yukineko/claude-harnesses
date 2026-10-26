@@ -221,7 +221,7 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
 | `plugins` | 全プラグインの activation-scope 分類（always-on / event-scoped / manual） |
 | `session-start` | SessionStart hook 本体（hooks-health を実行し、欠損があるときだけ `additionalContext` を注入） |
 
-- **スキル**: `/harness-status:status`（引数なしは budget/sessions/progress を集約）
+- **スキル**: `/harness-status:status`（引数なしは budget/sessions を集約）
 - **フック**: SessionStart（`harness-status session-start`；欠損 binary が無ければ無出力）
 
 #### daily

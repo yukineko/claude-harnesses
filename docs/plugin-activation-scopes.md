@@ -113,7 +113,7 @@ Note `harness-status` is now listed under **Always-on** (it registers a
 ## Why harness-status registers one narrow SessionStart hook (and nothing louder)
 
 `harness-status` is still, first and foremost, the **manual HOTL inspection
-dashboard**: `harness-status` / `budget` / `sessions` / `progress` / `hooks` /
+dashboard**: `harness-status` / `budget` / `sessions` / `hooks` /
 `inject` / `plugins` / `hooks-health` all remain CLI-only, run on demand. It
 deliberately does **not** auto-inject the full dashboard every session — that
 would grow the always-on injection/hook budget that ADR 0001 and the

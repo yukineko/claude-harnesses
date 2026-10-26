@@ -396,13 +396,20 @@ mod tests {
         }
     }
 
+    // user ruling 2026-10-27: no record + directory gone + nearest existing
+    // ancestor positively outside every repo is excluded, no longer Undetermined.
     #[test]
-    fn no_record_stays_undetermined() {
+    fn no_record_gone_dir_under_non_repo_base_is_excluded() {
         let f = fixture();
         // Never resolved while the worktree existed: nothing recorded.
         remove_wt(&f);
-        let why = undetermined(resolve_with_store(&f.repo, &f.transcript, &f.store));
-        assert!(why.contains("no worktree-origin record"), "{why}");
+        match resolve_with_store(&f.repo, &f.transcript, &f.store) {
+            Determination::Known(sr) => {
+                assert_eq!(sr.roots, vec![std::fs::canonicalize(&f.repo).unwrap()]);
+                assert!(sr.wrote_any);
+            }
+            Determination::Undetermined(w) => panic!("{}", w.as_str()),
+        }
     }
 
     #[test]
@@ -485,13 +492,20 @@ mod tests {
         ));
         assert!(!f.store.exists());
     }
+    // user ruling 2026-10-27: the unresolvable write is now one under a mode-000
+    // directory (a gone dir under a non-repo base is excluded, not an error).
+    #[cfg(unix)]
     #[test]
     fn live_linked_worktree_recorded_despite_unresolvable_write() {
+        use std::os::unix::fs::PermissionsExt;
         let f = fixture();
         let base = f.repo.parent().unwrap().to_path_buf();
-        // Sorts before `wt/...` (the edited set is a sorted BTreeSet of strings),
-        // directory absent, no store record covers it.
-        let gone = base.join("aaa_gone").join("x.rs");
+        // Sorts before `wt/...` (the edited set is a sorted BTreeSet of strings);
+        // its ancestor `aaa_locked` cannot be entered, no store record covers it.
+        let locked = base.join("aaa_locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let gone = locked.join("gone").join("x.rs");
         let live = f.wt.join("src").join("a.rs");
         assert!(gone.to_string_lossy() < live.to_string_lossy());
         assert!(!gone.parent().unwrap().exists());
@@ -508,8 +522,10 @@ mod tests {
             format!("{}\n{}\n", mk("toolu_a", &live), mk("toolu_b", &gone)),
         )
         .unwrap();
-        let why = undetermined(resolve_with_store(&f.repo, &f.transcript, &f.store));
-        assert!(why.contains("aaa_gone"), "{why}");
+        let got = resolve_with_store(&f.repo, &f.transcript, &f.store);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let why = undetermined(got);
+        assert!(why.contains("aaa_locked"), "{why}");
         match crate::worktree_origin::lookup(&f.store, &live).unwrap() {
             crate::worktree_origin::Lookup::Found { worktree, repo } => {
                 assert_eq!(worktree, f.wt);

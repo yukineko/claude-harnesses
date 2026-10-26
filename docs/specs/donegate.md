@@ -22,6 +22,10 @@
   ことで停止をブロックし、exit code 自体は常に 0（`gate_run`）。exit 1 を返すのは interactive（manual CLI）モードのみ。
 - **default-safe（オプトイン）** — `[[check]]` が 1 つも無い、または `enabled=false` なら、ゲートは全停止を通す
   （`gate_run`：`!cfg.enabled || cfg.checks.is_empty()` で exit 0）。フックを入れただけでは決してブロックしない。
+  セッションが書き込んだ root がすべて設定を一切持たない（`Declaration::Absent`）場合も許可し、stdout は空
+  （`systemMessage` なし、2026-10-27 ユーザー裁定）。痕跡は stderr の 1 行と `<state_dir>/log.jsonl` の
+  `"verdict":"unconfigured"` 行（session と `roots`）に残す（`tests/no_config_quiet_allow.rs`）。設定はあるが
+  チェックが空の root に書き込んだ場合はブロックする。
 - **project config はトラストゲート付き** — project の `donegate.toml` が honor されるのは root が信頼済み
   （`harness_core::trust::is_trusted`）のときだけ。未信頼なら無視して home config（`~/.donegate/config.toml`）へ
   フォールバックし、無ければ built-in defaults（`Config::load`）。project の `cmd` は後で `sh -c` で実行されるため、

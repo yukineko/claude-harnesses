@@ -485,4 +485,37 @@ mod tests {
         ));
         assert!(!f.store.exists());
     }
+    #[test]
+    fn live_linked_worktree_recorded_despite_unresolvable_write() {
+        let f = fixture();
+        let base = f.repo.parent().unwrap().to_path_buf();
+        // Sorts before `wt/...` (the edited set is a sorted BTreeSet of strings),
+        // directory absent, no store record covers it.
+        let gone = base.join("aaa_gone").join("x.rs");
+        let live = f.wt.join("src").join("a.rs");
+        assert!(gone.to_string_lossy() < live.to_string_lossy());
+        assert!(!gone.parent().unwrap().exists());
+        let mk = |id: &str, p: &Path| {
+            serde_json::json!({
+                "message": {"role": "assistant", "content": [{
+                    "type": "tool_use", "id": id, "name": "Write",
+                    "input": {"file_path": p.to_str().unwrap(), "content": "x"}
+                }]}
+            })
+        };
+        std::fs::write(
+            &f.transcript,
+            format!("{}\n{}\n", mk("toolu_a", &live), mk("toolu_b", &gone)),
+        )
+        .unwrap();
+        let why = undetermined(resolve_with_store(&f.repo, &f.transcript, &f.store));
+        assert!(why.contains("aaa_gone"), "{why}");
+        match crate::worktree_origin::lookup(&f.store, &live).unwrap() {
+            crate::worktree_origin::Lookup::Found { worktree, repo } => {
+                assert_eq!(worktree, f.wt);
+                assert_eq!(repo, f.repo);
+            }
+            other => panic!("live linked worktree was not recorded: {other:?}"),
+        }
+    }
 }

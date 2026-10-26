@@ -13,8 +13,8 @@
 /// This is the same correction the statusline took in `3b1eb24` (CLAUDE.md §1):
 /// a blank render was being read as "plenty of headroom".
 use crate::aggregate::{
-    self, BacklogSummary, HypoBuckets, ProgressView, RunRow, SessionRoster, SOURCE_BACKLOG,
-    SOURCE_COMPASS_GAP, SOURCE_HYPOTHESES, SOURCE_RUNS, SOURCE_SESSIONS,
+    self, BacklogSummary, HypoBuckets, ProgressView, RunRow, SessionRoster, SOURCE_ACTIVE_SESSIONS,
+    SOURCE_BACKLOG, SOURCE_COMPASS_GAP, SOURCE_HYPOTHESES, SOURCE_RUNS, SOURCE_SESSIONS,
 };
 use anyhow::Result;
 use std::fmt::Write as _;
@@ -50,9 +50,9 @@ fn warn_undetermined(view: &ProgressView) {
 /// Render the full human-readable progress report, or JSON if `json` is true.
 ///
 /// Uses the short-lived status cache (`aggregate::build_cached`): this is the
-/// command wired to BOTH the SessionStart and Stop hooks (see
-/// `hooks/hooks.json`), so a fresh render's cache hit collapses the second
-/// hook invocation's ~5 subprocess spawns when the two fire close together.
+/// command wired to the SessionStart hook (see `hooks/hooks.json`; it is not
+/// run at Stop) and run on demand, so a fresh render's cache hit collapses
+/// repeated invocations' ~5 subprocess spawns when they fire close together.
 pub fn status(json: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let view = aggregate::build_cached(&cwd);
@@ -65,7 +65,7 @@ pub fn status(json: bool) -> Result<()> {
     let mut out = String::new();
 
     out.push_str("== Sessions ==\n");
-    out.push_str(&format_roster(&view, &view.sessions));
+    out.push_str(&format_sessions(&view));
     out.push('\n');
 
     out.push_str("== PDO hypotheses ==\n");
@@ -123,18 +123,75 @@ pub fn sessions(json: bool) -> Result<()> {
     let view = aggregate::build(&cwd);
 
     if json {
-        // The roster alone cannot express "unreadable ledger", so an
-        // undetermined roster is surfaced on stderr rather than being implied by
-        // an empty array. Callers scripting against this should prefer
-        // `status --json`, whose `undetermined` key is machine-readable.
-        println!("{}", serde_json::to_string_pretty(&view.sessions)?);
+        // An object, not a bare array: a bare `[]` cannot distinguish "no
+        // sessions" from "a source could not be read". `sessions` is the lease
+        // roster, `active_sessions` the presence-registered sessions, and
+        // `undetermined` (only the entries for those two sources) is present
+        // exactly when either was unreadable, so empty is never ambiguous.
+        let undetermined: Vec<&crate::aggregate::UndeterminedSource> = view
+            .undetermined
+            .iter()
+            .filter(|u| u.source == SOURCE_SESSIONS || u.source == SOURCE_ACTIVE_SESSIONS)
+            .collect();
+        let mut obj = serde_json::json!({
+            "sessions": view.sessions,
+            "active_sessions": view.active_sessions,
+        });
+        if !undetermined.is_empty() {
+            obj["undetermined"] = serde_json::to_value(&undetermined)?;
+        }
+        println!("{}", serde_json::to_string_pretty(&obj)?);
         warn_undetermined(&view);
         return Ok(());
     }
 
-    print!("{}", format_roster(&view, &view.sessions));
+    print!("{}", format_sessions(&view));
     warn_undetermined(&view);
     Ok(())
+}
+
+/// Max written paths listed per presence session before `+N more`.
+const MAX_PATHS_SHOWN: usize = 10;
+
+/// The `== Sessions ==` body: the lease rosters plus every non-ended
+/// presence-hook session. `(none)` is printed only when BOTH sources were
+/// observed and are empty; an unreadable source prints `(unknown: ...)`.
+fn format_sessions(view: &ProgressView) -> String {
+    let mut out = String::new();
+    if !view.sessions.is_empty() || view.undetermined_reason(SOURCE_SESSIONS).is_some() {
+        out.push_str(&format_roster(view, &view.sessions));
+    }
+    if let Some(reason) = view.undetermined_reason(SOURCE_ACTIVE_SESSIONS) {
+        let _ = writeln!(out, "(unknown: {reason})");
+    }
+    for s in view
+        .active_sessions
+        .iter()
+        .filter(|s| s.liveness != "ended")
+    {
+        let _ = writeln!(
+            out,
+            "session {}  [{}]  worktree {}",
+            s.session_id, s.liveness, s.worktree
+        );
+        if s.cwd != s.worktree {
+            let _ = writeln!(out, "  cwd {}", s.cwd);
+        }
+        for p in s.written_paths.iter().take(MAX_PATHS_SHOWN) {
+            let _ = writeln!(out, "  wrote {p}");
+        }
+        if s.written_paths.len() > MAX_PATHS_SHOWN {
+            let _ = writeln!(
+                out,
+                "  (+{} more written paths)",
+                s.written_paths.len() - MAX_PATHS_SHOWN
+            );
+        }
+    }
+    if out.is_empty() {
+        out.push_str("(none)\n");
+    }
+    out
 }
 
 /// Format the per-session lease roster as a readable table.

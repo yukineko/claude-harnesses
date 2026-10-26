@@ -55,7 +55,7 @@ condukt run の外にも広げる**ことに絞り、新しい検出ロジック
 | `overwatch` lease（`begin`/`heartbeat`/`end`） | project-wide の key 単位 exclusive claim + liveness | 任意のタイミング | key は opaque な文字列のみ。**scope（touched files）を持たない** |
 | `overwatch status` | project-wide の進行中作業の集約ビュー（PDO progress view） | SessionStart / Stop | 「今何が進行中か」の一覧は出せるが、**個々のセッションが自分の担当を忘れないための再注入はしない** |
 | `ctxrot` re-anchor | 既知の決定事項をウィンドウ末尾付近で再注入（lost-in-the-middle 対策）、band≥2 かつ 8 プロンプトに1回 | UserPromptSubmit（`guard`） | **再注入の仕組みは既にある**。対象が「決定事項」全般であり、「このセッションが担当する PDO 単位」に特化していない |
-| `taskprog` | `.claude/progress.md` をセッション間で同期 | SessionStart / SessionEnd | 複数セッション**間**の引き継ぎ用。単一セッション**内**の記憶保持には非対応 |
+| `taskprog` | `.claude/progress.md` を保持（Stop で欠落時に雛形を seed。hook は無出力で、SessionStart で注入しない） | Stop（SessionStart は登録のみ・何もしない） | 複数セッション**間**の引き継ぎ用（`/taskprog`・`taskprog show` で明示的に読む）。単一セッション**内**の記憶保持には非対応 |
 | `compass` breadcrumb | Stop 時に「次の物理的一歩」を charter へ書き戻す | Stop | 次に何をするかの記録であり、今のセッションが今何をしているかの継続的な保持ではない |
 | `stuckguard` PostToolUse | ツール呼び出し列から repeat/oscillation を検出しナッジ。**編集ファイル名は既に signature に含めて追跡している** | PostToolUse（毎ツール呼び出し） | **スコープ逸脱検出に転用できる下地が既にある**（後述 §4.3） |
 

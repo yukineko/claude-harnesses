@@ -1,9 +1,11 @@
-- **SessionStart** で、進捗ファイルを`hookSpecificOutput.additionalContext`（hookEventName `SessionStart`） として注入する。
-- **Stop** で、ファイルが無ければ雛形を書き、`{"systemMessage":"…"}` を出す。これはユーザーにのみ表示され、モデルには届かない（Stop に `additionalContext` は未定義で、トップレベルのものは誰にも届かないことを実測済み）。
+両フックとも**何も出力しない**（stdout・stderr とも空、exit 0）。
+
+- **SessionStart** では何もしない。進捗ファイルをセッションへ注入しない。
+- **Stop** で、ファイルが無い（または空の）ときだけ雛形を書く。既存のファイルには触れない。ユーザーにもモデルにもメッセージは出さない。
 
 2 つのフック（SessionStart + Stop）を登録し、それぞれ `taskprog session-start` と `taskprog stop` を呼ぶ。
 
-管理対象の `.claude/progress.md` は**プロジェクトルート**（セッション cwd の祖先のうち `.git` を持つもの、`.git` がファイルである git worktree のルートも該当する）に置かれる。ルートが見つからない場合、Stop フックは cwd にフォールバックせず、何も書かずにその旨を伝える。Stop が書く雛形には `## Done` セクションがある。
+管理対象の `.claude/progress.md` は**プロジェクトルート**（セッション cwd の祖先のうち `.git` を持つもの、`.git` がファイルである git worktree のルートも該当する）に置かれる。ルートが見つからない場合、Stop フックは cwd にフォールバックせず、何も書かない（何も出力もしない）。Stop が書く雛形には `## Done` セクションがある。進捗ファイルの確認・更新は `taskprog show` か `/taskprog` スキルで行う。
 
 ## インストールすること
 
@@ -21,8 +23,8 @@ taskprog install
 ```
 
 ```sh
-taskprog session-start   # SessionStart フック: 進捗ファイルを注入する
-taskprog stop            # Stop フック: 雛形を書き、進捗ファイルの更新をユーザーに通知する
+taskprog session-start   # SessionStart フック: 何も出力しない
+taskprog stop            # Stop フック: ファイルが無ければ雛形を書く。何も出力しない
 taskprog show            # 現在の進捗ファイルを表示する
 taskprog write --cwd .   # stdin から progress.md を書き込む（--cwd の既定は .）
 taskprog init [TARGET]   # 雛形の設定を書き出す（TARGET の既定は taskprog.toml）
@@ -38,7 +40,7 @@ taskprog status          # 解決済みの設定を表示する
 ```toml
 enabled = true
 # progress_file = "~/.claude/progress.md"   # 既定: <プロジェクトルート>/.claude/progress.md
-inject_limit = 4096                          # SessionStart で注入するファイルのバイト数の上限（0 = 全部）
+inject_limit = 4096                          # 効果なし（何も注入しない）。互換のため残し、`status` で表示される
 ```
 
 `progress_file` を明示した場合はそのまま使い、プロジェクトルートの探索はしない。

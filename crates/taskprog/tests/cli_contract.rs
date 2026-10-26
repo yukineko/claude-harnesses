@@ -68,36 +68,25 @@ fn hook_json(cwd: &Path) -> String {
 }
 
 #[test]
-fn claim_session_start_injects() {
+fn claim_session_start_silent() {
+    // Ruling: hooks print nothing. A present progress file is NOT injected.
     let (root, home) = repo(Some("# Progress\nMARKER-XYZ pending item\n"));
     let o = run(&["session-start"], &root, &home, &hook_json(&root));
     assert_eq!(o.code, 0);
-    let v: Value = serde_json::from_str(o.stdout.trim()).expect("stdout is JSON");
-    // SessionStart: nested `hookSpecificOutput.additionalContext` (a top-level
-    // key is never delivered to the model, GH 1343). Stop uses systemMessage (GH 1344).
-    assert_eq!(
-        v["hookSpecificOutput"]["hookEventName"], "SessionStart",
-        "{v}"
-    );
-    assert!(v.get("additionalContext").is_none(), "{v}");
-    let ctx = v["hookSpecificOutput"]["additionalContext"]
-        .as_str()
-        .expect("additionalContext");
-    assert!(ctx.contains("MARKER-XYZ pending item"), "{ctx}");
+    assert!(o.stdout.trim().is_empty(), "stdout: {:?}", o.stdout);
+    assert!(o.stderr.trim().is_empty(), "stderr: {:?}", o.stderr);
 }
 
 #[test]
-fn claim_stop_prompts_update() {
-    let (root, home) = repo(Some("# Progress\nexisting-content\n"));
+fn claim_stop_silent_keeps_existing_file() {
+    let body = "# Progress\nexisting-content\n";
+    let (root, home) = repo(Some(body));
     let o = run(&["stop"], &root, &home, &hook_json(&root));
-    let v: Value = serde_json::from_str(o.stdout.trim()).expect("stdout is JSON");
-    // Stop has no additionalContext (top-level or nested); systemMessage is
-    // shown to the user only, so the key must be the only message channel.
-    assert!(v.get("additionalContext").is_none(), "{v}");
-    assert!(v.get("hookSpecificOutput").is_none(), "{v}");
-    let ctx = v["systemMessage"].as_str().unwrap();
-    assert!(ctx.contains("please update the progress file"), "{ctx}");
-    assert!(ctx.contains("existing-content"), "{ctx}");
+    assert_eq!(o.code, 0);
+    assert!(o.stdout.trim().is_empty(), "stdout: {:?}", o.stdout);
+    assert!(o.stderr.trim().is_empty(), "stderr: {:?}", o.stderr);
+    let got = std::fs::read_to_string(root.join(".claude/progress.md")).unwrap();
+    assert_eq!(got, body, "existing progress file must be untouched");
 }
 
 #[test]
@@ -232,32 +221,27 @@ fn claim_config_lookup_order() {
     assert!(a.stdout.contains("inject_limit:   111"), "{}", a.stdout);
 }
 
-fn injected(o: &Out) -> String {
-    let v: Value = serde_json::from_str(o.stdout.trim()).expect("JSON");
-    // SessionStart output only (nested); Stop uses systemMessage.
-    v["hookSpecificOutput"]["additionalContext"]
-        .as_str()
-        .unwrap()
-        .to_string()
-}
-
 #[test]
 fn claim_inject_limit_bytes() {
+    // The hook no longer injects, so truncation by inject_limit is unobservable
+    // through it. The config value is still resolved and reported by `status`.
     let body: String = (0..40).map(|i| format!("line-{i:02}-aaaa\n")).collect(); // 13 bytes/line
     let (root, home) = repo(Some(&body));
     std::fs::write(root.join("taskprog.toml"), "inject_limit = 50\n").unwrap();
-    let ctx = injected(&run(&["session-start"], &root, &home, &hook_json(&root)));
-    assert!(ctx.contains("line-00-aaaa"), "{ctx}");
-    assert!(!ctx.contains("line-39-aaaa"), "{ctx}");
-    assert!(!ctx.contains("line-10-aaaa"), "{ctx}"); // beyond 50 bytes
-    assert!(ctx.contains("truncated"), "{ctx}");
+    let s = run(&["status"], &root, &home, "");
+    assert!(s.stdout.contains("inject_limit:   50"), "{}", s.stdout);
+    let o = run(&["session-start"], &root, &home, &hook_json(&root));
+    assert!(o.stdout.trim().is_empty(), "{}", o.stdout);
     std::fs::write(root.join("taskprog.toml"), "inject_limit = 0\n").unwrap();
-    let ctx = injected(&run(&["session-start"], &root, &home, &hook_json(&root)));
+    let s = run(&["status"], &root, &home, "");
+    assert!(s.stdout.contains("inject_limit:   0"), "{}", s.stdout);
+    // `show` prints the whole file regardless of inject_limit.
+    let sh = run(&["show"], &root, &home, "");
     assert!(
-        ctx.contains("line-39-aaaa") && ctx.contains("line-00-aaaa"),
-        "{ctx}"
+        sh.stdout.contains("line-39-aaaa") && sh.stdout.contains("line-00-aaaa"),
+        "{}",
+        sh.stdout
     );
-    assert!(!ctx.contains("truncated"), "{ctx}");
 }
 
 #[test]
@@ -270,8 +254,8 @@ fn claim_tilde_expanded() {
         "progress_file = \"~/x/progress.md\"\n",
     )
     .unwrap();
-    let o = run(&["session-start"], &root, &home, &hook_json(&root));
-    assert!(injected(&o).contains("TILDE-CONTENT"), "{}", o.stdout);
+    let o = run(&["show"], &root, &home, "");
+    assert!(o.stdout.contains("TILDE-CONTENT"), "{}", o.stdout);
     let s = run(&["status"], &root, &home, "");
     let want = format!("progress_file:  {}", home.join("x/progress.md").display());
     assert!(s.stdout.contains(&want), "{}", s.stdout);
@@ -303,16 +287,7 @@ fn claim_disabled_env() {
             "file written with {v}"
         );
     }
-    // =0 is normal behaviour.
-    let (root, home) = repo(Some("# Progress\nSOMETHING\n"));
-    let o = run_env(
-        &["session-start"],
-        &root,
-        &home,
-        &hook_json(&root),
-        &[("TASKPROG_DISABLED", "0")],
-    );
-    assert!(injected(&o).contains("SOMETHING"));
+    // =0 is normal behaviour: the Stop hook still seeds the file (silently).
     let (root2, home2) = repo(None);
     let o = run_env(
         &["stop"],
@@ -321,12 +296,7 @@ fn claim_disabled_env() {
         &hook_json(&root2),
         &[("TASKPROG_DISABLED", "0")],
     );
-    let v: Value = serde_json::from_str(o.stdout.trim()).expect("JSON");
-    assert!(v["systemMessage"]
-        .as_str()
-        .unwrap()
-        .contains("progress file"));
-    assert!(v.get("additionalContext").is_none(), "{v}");
+    assert!(o.stdout.trim().is_empty(), "{}", o.stdout);
     assert!(root2.join(".claude/progress.md").exists());
 }
 
@@ -355,7 +325,7 @@ fn claim_license_mit() {
 }
 
 #[test]
-fn claim_no_root_says_so() {
+fn claim_no_root_is_silent() {
     let dir = fresh_dir("noroot");
     let home = fresh_dir("home");
     let mut p = dir.clone();
@@ -370,7 +340,7 @@ fn claim_no_root_says_so() {
     let o = run(&["stop"], &dir, &home, &hook_json(&dir));
     assert!(!dir.join(".claude").exists(), "wrote into cwd");
     assert!(!dir.join(".claude/progress.md").exists());
-    let all = format!("{}{}", o.stdout, o.stderr);
-    assert!(all.contains("no ancestor") && all.contains(".git"), "{all}");
-    assert!(all.contains("no progress file was written"), "{all}");
+    assert_eq!(o.code, 0);
+    assert!(o.stdout.trim().is_empty(), "stdout: {:?}", o.stdout);
+    assert!(o.stderr.trim().is_empty(), "stderr: {:?}", o.stderr);
 }

@@ -1,6 +1,6 @@
 ---
 name: compass
-description: ゴール（北極星）と完成定義を彫り直して鮮明にし、現状との gap を出し、焦点に合う右サイズの一手だけを condukt へ渡し、それ以外は保留へ流す再オリエンテーション層。「次に何をすればいいか分からなくなった」「一区切りついて次が無い」瞬間に使う。判定(ゴールを彫る/gap を読む/一手を選ぶ)は LLM、状態維持・size routing・保留書き戻しは compass バイナリ。subscription で完結(API キー不要)。
+description: ゴール（北極星）と完成定義を彫り直して鮮明にし、現状との gap を出し、焦点に合う右サイズの一手だけを condukt へ渡し、それ以外は保留へ流す再オリエンテーション層。「次に何をすればいいか分からなくなった」「一区切りついて次が無い」瞬間に使う。判定(ゴールを彫る/gap を読む/一手を選ぶ)は LLM、状態維持・size routing は compass バイナリ。subscription で完結(API キー不要)。
 argument-hint: '[再接地のフォーカス（任意。例: "認証機能のゴール"）]'
 allowed-tools: AskUserQuestion, Bash(compass:*), Bash(git:*), Read, Skill, Task
 ---
@@ -9,11 +9,11 @@ allowed-tools: AskUserQuestion, Bash(compass:*), Bash(git:*), Read, Skill, Task
 目的は「候補を列挙する（症状治療）」ではなく **「ゴールを鋭く保ち、次の一手をそこからの差分として導く」**。
 
 ```
-次の一手 = (鋭いゴール/完成定義) − (現状: git・progress.md・deepwiki) の 最大かつ右サイズな差分
+次の一手 = (鋭いゴール/完成定義) − (現状: git・deepwiki) の 最大かつ右サイズな差分
 ```
 
 **役割分担（外さない）**: 判定（ゴールを彫る・gap を読む・一手を選ぶ・問い方）は **LLM(=この skill)**、
-決定論（C1/C2 floor・状態維持・size routing・保留書き戻し）は `compass` バイナリ。バイナリは LLM も
+決定論（C1/C2 floor・状態維持・size routing）は `compass` バイナリ。バイナリは LLM も
 AskUserQuestion も呼ばない。**矛盾は人間が裁く**（権威で自動解決しない）。**焦点保護**: 今コミットするのは ONE 右サイズの一手だけ。
 
 ## 前提確認
@@ -42,7 +42,7 @@ compass evaluate
 ### Step 2 — LLM ゲート C3–C5 を自分で判定
 `compass charter` で現在の charter を読む（＋必要なら `git log --oneline -20` / `compass gap` の出力）。
 - **C3**: DoD の各項目は観測可能な pass/fail になっているか。「速くする」「きれいにする」のような測れない項目は未達。
-- **C4**: north_star / DoD が直近の実作業（git log・progress.md）と矛盾していないか。矛盾していれば未達（＝糸が動いた疑い）。
+- **C4**: north_star / DoD が直近の実作業（git log）と矛盾していないか。矛盾していれば未達（＝糸が動いた疑い）。
 - **C5**: gap が「次の一手を1つ引ける」具体度を持つか。抽象すぎて手が引けないなら未達。
 
 未達ごとに OpenQuestion を1つ立てる（`gate=C3|C4|C5`, `reference`=どのフィールド/DoD項目, `gap`=何が足りないか）。
@@ -70,7 +70,7 @@ compass apply --answer '{"gate":"C3","reference":"definition_of_done[0]","value"
 ```
 compass charter --write '{"north_star":"...","definition_of_done":["観測可能な条件A","条件B"],"measuring_stick":"擁護可能性 × ゴールへの接近距離 ÷ コスト","current_gap":"","next_action":"","parked":[]}'
 ```
-（`current_gap` は Step 5 で埋める。`parked` は route が書く。）
+（`current_gap` は Step 5 で埋める。`parked` は route が書かない — route は parked を印字するだけ。）
 
 ### Step 5 — gap を出す
 ```
@@ -94,7 +94,7 @@ compass route --file /tmp/compass-decomp.json
 ```
 出力 `{ to_condukt, parked, edge }` を honor する:
 - **`to_condukt`** = 今コミットする一手 → そのまま condukt に実行させる（handoff 課題文が後続に印字される）。
-- **`parked`** = `.claude/progress.md` の「残り」へ自動で書き戻し済み（次回 /compass の gap 入力に再浮上）。
+- **`parked`** = 今回は着手しない一手。route の出力 JSON に印字されるだけで、どこにも保存されず、次回の gap 入力にも再浮上しない（2026-10-27 ユーザー裁定）。残したいものがあれば停止報告に書くこと。
 - **`edge` = `GoalTooBig`** → Step 4 に戻り、ゴールを**より小さく彫り直す**（多くは validate 系の最小スライス）。
 - **`edge` = `OnlyNoise`** → north_star 自体を問い直す（方向が尽きた合図、Step 3 へ）。
 
@@ -112,9 +112,9 @@ compass outcome --verdict <forward|unchanged|backward> --evidence "<観測した
 
 ## 焦点保護（最重要 / B案）
 condukt は並列実行できるが、**compass は「今コミットする一手」を1つに絞る＝糸を増やさない**。
-右サイズが複数あっても、gap の主筋に最も効く1件（＋密結合な最小集合）だけを渡し、残りは保留へ流す。
+右サイズが複数あっても、gap の主筋に最も効く1件（＋密結合な最小集合）だけを渡し、残りは保留する（route が印字するだけで保存はされない）。
 
 ## 失敗モード
 - `compass` 不在 → プラグイン導入を案内。
 - carve をやり直したい → `compass carve-reset` で状態をクリアしてから Step 1 へ。
-- 人間が席を外した（sentinel）→ いま分かっている範囲で charter を保存し、残りは保留に流して次回へ。
+- 人間が席を外した（sentinel）→ いま分かっている範囲で charter を保存し、残りは停止報告に書いて終える（保留ストアは無い）。

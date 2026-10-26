@@ -186,9 +186,6 @@ fn claim_read_only() {
         r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"/no/such/bin/ghost session-start"}]}]}}"#,
     );
     sb.plant_cache("vro");
-    std::fs::create_dir_all(sb.work.join(".claude")).unwrap();
-    std::fs::write(sb.work.join(".claude/progress.md"), "- one\n- two\n").unwrap();
-
     let repo = sb.work.join("repo");
     make_fixture_repo(&repo);
 
@@ -197,7 +194,6 @@ fn claim_read_only() {
         &[],
         &["budget"],
         &["sessions"],
-        &["progress"],
         &["hooks"],
         &["inject"],
         &["hooks-health"],
@@ -333,25 +329,31 @@ fn claim_sessions_from_gauge_limit() {
     assert!(!d.stdout.contains("sessmid2"));
 }
 
+/// User ruling 2026-10-27: the progress-file surface was removed. Even with a
+/// `.claude/progress.md` present, the `progress` subcommand no longer exists
+/// and neither the text dashboard nor `--json` carries a progress section.
 #[test]
-fn claim_progress_preview() {
+fn claim_no_progress_surface() {
     let sb = Sb::new();
     std::fs::create_dir_all(sb.work.join(".claude")).unwrap();
-    let body: String = (1..=12).map(|i| format!("line-{i}\n")).collect();
-    std::fs::write(sb.work.join(".claude/progress.md"), body).unwrap();
+    std::fs::write(sb.work.join(".claude/progress.md"), "line-1\nline-2\n").unwrap();
     sb.ledger(serde_json::json!({"days":{DAY:{"sessions":{"a":1.0}}}}));
 
     let o = sb.run(&["progress"]);
-    assert_eq!(o.code, 0, "{}", o.stderr);
-    // The text view is the preview only: the first 10 lines, no path, no headers.
-    let expect: Vec<String> = (1..=10).map(|i| format!("line-{i}")).collect();
-    assert_eq!(o.stdout.lines().collect::<Vec<_>>(), expect);
-    assert!(!o.stdout.contains("Budget") && !o.stdout.contains("Today"));
+    assert_ne!(
+        o.code, 0,
+        "the progress subcommand must be gone: {}",
+        o.stdout
+    );
 
-    let j = sb.run(&["progress", "--json"]);
+    let full = sb.run(&[]);
+    assert_eq!(full.code, 0, "{}", full.stderr);
+    assert!(!full.stdout.contains("Progress file") && !full.stdout.contains("line-1"));
+
+    let j = sb.run(&["--json"]);
+    assert_eq!(j.code, 0, "{}", j.stderr);
     let v: serde_json::Value = serde_json::from_str(&j.stdout).unwrap();
-    assert_eq!(v["exists"], true);
-    assert!(v["path"].as_str().unwrap().ends_with(".claude/progress.md"));
+    assert!(v.get("progress").is_none(), "no progress key: {v}");
 }
 
 #[test]
@@ -554,7 +556,6 @@ fn claim_full_dashboard() {
         vec![
             "── Budget (budgetguard)",
             "── Recent sessions (gauge)",
-            "── Progress file",
             "── Stop-hook latency (donegate/reviewgate/propguard)",
             "── UserPromptSubmit injection (aggregate budget)",
             "── Hook binary health (settings.json)",
@@ -655,7 +656,6 @@ fn claim_json_any_subcommand() {
         vec![],
         vec!["budget"],
         vec!["sessions"],
-        vec!["progress"],
         vec!["hooks"],
         vec!["inject"],
         vec!["hooks-health"],

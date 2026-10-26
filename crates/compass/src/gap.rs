@@ -30,8 +30,6 @@ pub struct GapInputs {
     /// Mid-authority "what the project is actually doing now" fragments
     /// (git log / status / diff), newest/most-relevant first.
     pub recent_activity: Vec<String>,
-    /// The `.claude/progress.md` excerpt, if present (the self-feeding "残り" loop).
-    pub progress_excerpt: Option<String>,
     /// What the next move is measured by (charter `measuring_stick`).
     pub measuring_stick: String,
     /// The most recently recorded outcome (verdict + evidence + the gap it
@@ -71,11 +69,9 @@ pub struct OpportunityGap {
 ///
 /// The split is purely by provenance, no semantic judgment:
 ///   - `dod` / `measuring_stick` come straight from the charter,
-///   - `recent_activity` is the Mid-authority git fragments (log/status/diff),
-///   - `progress_excerpt` is the Mid-authority progress-file fragment, if any.
+///   - `recent_activity` is the Mid-authority git fragments (log/status/diff).
 pub fn assemble_gap_inputs(charter: &Charter, bundle: &Bundle) -> GapInputs {
     let mut recent_activity = Vec::new();
-    let mut progress_excerpt = None;
 
     for frag in &bundle.fragments {
         if frag.authority != Authority::Mid {
@@ -86,10 +82,6 @@ pub fn assemble_gap_inputs(charter: &Charter, bundle: &Bundle) -> GapInputs {
             "git:log" | "git:status" | "git:diff" => {
                 recent_activity.push(frag.text.clone());
             }
-            // progress file → progress_excerpt (first one wins).
-            ".claude/progress.md" | "progress.md" if progress_excerpt.is_none() => {
-                progress_excerpt = Some(frag.text.clone());
-            }
             // deepwiki and anything else is not gap-input material here.
             _ => {}
         }
@@ -98,7 +90,6 @@ pub fn assemble_gap_inputs(charter: &Charter, bundle: &Bundle) -> GapInputs {
     GapInputs {
         dod: charter.definition_of_done.clone(),
         recent_activity,
-        progress_excerpt,
         measuring_stick: charter.measuring_stick.clone(),
         // The caller (`gap_command`) fills these from the outcomes/opportunity
         // stores; the pure assembly has no repo root to read them from.
@@ -154,7 +145,9 @@ mod tests {
             inputs.recent_activity,
             vec!["abc123 do a thing".to_string(), " M src/lib.rs".to_string()]
         );
-        assert_eq!(inputs.progress_excerpt.as_deref(), Some("- remaining item"));
+        // User ruling 2026-10-27: a progress-file fragment is not gap input.
+        let json = serde_json::to_string(&inputs).expect("serialize");
+        assert!(!json.contains("progress_excerpt") && !json.contains("remaining item"));
     }
 
     #[test]
@@ -163,7 +156,7 @@ mod tests {
         let bundle = Bundle { fragments: vec![] };
         let inputs = assemble_gap_inputs(&charter, &bundle);
         assert!(inputs.recent_activity.is_empty());
-        assert!(inputs.progress_excerpt.is_none());
+        assert!(inputs.last_outcome.is_none());
         assert!(inputs.dod.is_empty());
     }
 

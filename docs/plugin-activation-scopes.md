@@ -132,10 +132,9 @@ actually emits output), so `harness-status` now appears under **Always-on** in
 the table above — but its actual per-turn cost stays at the silent/no-op end of
 that bucket except when something is already broken and worth surfacing.
 
-- `harness-status` — full dashboard (budget + sessions + progress + hook latency + inject)
+- `harness-status` — full dashboard (budget + sessions + hook latency + inject)
 - `harness-status budget` — today's spend
 - `harness-status sessions` — recent sessions
-- `harness-status progress` — current progress file
 - `harness-status hooks` — Stop-hook latency aggregation (budget monitor)
 - `harness-status inject` — UserPromptSubmit injection-size aggregation (budget monitor)
 - `harness-status hooks-health` — hook-binary health check (also run on demand)

@@ -5,7 +5,6 @@
 //!   - the **charter** itself — [`Authority::High`] (the current stated goal),
 //!   - **recent git activity** (commit subjects + uncommitted changes) —
 //!     [`Authority::Mid`] (what the project is actually doing now),
-//!   - the **progress file** `.claude/progress.md` / `progress.md` — [`Authority::Mid`],
 //!   - **deepwiki** `.deepwiki/**/*.md` — [`Authority::Mid`].
 //!
 //! Gathering is deterministic and tolerant of absence: a non-git repo or a
@@ -48,7 +47,6 @@ pub fn gather(repo_root: &Path, charter: &Charter, _cfg: &Config) -> Result<Bund
 
     gather_charter(&mut fragments, charter);
     gather_git(&mut fragments, repo_root);
-    gather_progress(&mut fragments, repo_root);
     gather_deepwiki(&mut fragments, repo_root)?;
 
     Ok(Bundle { fragments })
@@ -131,27 +129,6 @@ fn gather_git(out: &mut Vec<Fragment>, repo_root: &Path) {
                 score: stat.lines().count() as i64,
                 anchor: Some("git diff --stat".to_string()),
             });
-        }
-    }
-}
-
-/// progress file (DESIGN §3): `.claude/progress.md` preferred, else
-/// `progress.md`. Mid authority. Missing file => no fragment.
-fn gather_progress(out: &mut Vec<Fragment>, repo_root: &Path) {
-    for rel in [".claude/progress.md", "progress.md"] {
-        let path = repo_root.join(rel);
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            let text = text.trim();
-            if !text.is_empty() {
-                out.push(Fragment {
-                    text: text.to_string(),
-                    source_path: rel.to_string(),
-                    authority: Authority::Mid,
-                    score: text.lines().count() as i64,
-                    anchor: Some("progress".to_string()),
-                });
-            }
-            return; // first found wins; don't double-count both files.
         }
     }
 }
@@ -284,13 +261,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let charter = Charter::default();
         let cfg = Config::default();
-        // No git, no progress, no deepwiki: must not error, must be empty.
+        // No git, no deepwiki: must not error, must be empty.
         let bundle = gather(dir.path(), &charter, &cfg).expect("gather must not error");
         assert!(bundle.fragments.is_empty());
     }
 
     #[test]
-    fn gather_includes_charter_and_progress() {
+    /// User ruling 2026-10-27: `.claude/progress.md` is no longer a gather
+    /// source. A present progress file must contribute no fragment.
+    fn gather_includes_charter_but_not_progress() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
         std::fs::write(dir.path().join(".claude/progress.md"), "- did a thing\n").unwrap();
@@ -310,7 +289,8 @@ mod tests {
         assert!(bundle
             .fragments
             .iter()
-            .any(|f| f.anchor.as_deref() == Some("progress")));
+            .all(|f| f.anchor.as_deref() != Some("progress")
+                && !f.source_path.ends_with("progress.md")));
     }
 
     /// CA-fail-open: a `.deepwiki/` dir that EXISTS but cannot be read

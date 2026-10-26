@@ -25,7 +25,7 @@
 //! The first physical step to take on resume.
 //!
 //! ## parked
-//! - pointer to a parked item (lives in .claude/progress.md)
+//! - pointer to a parked item (written by the skill; route stores nothing)
 //! ```
 //!
 //! Scalar fields (`north_star`, `measuring_stick`, `current_gap`,
@@ -59,7 +59,8 @@ pub struct Charter {
     pub current_gap: String,
     /// First physical step on resume (written by the breadcrumb step).
     pub next_action: String,
-    /// Pointers to parked items (bodies live in .claude/progress.md).
+    /// Pointers to parked items, written by the skill via `charter --write`
+    /// (route itself stores nothing — user ruling 2026-10-27).
     pub parked: Vec<String>,
 }
 

@@ -61553,3 +61553,60 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "2388882f9c9ed361e0b8c19b291949c0255ba706"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "4807c821"
+title = "guard-maintree-bash blames a concurrent session's merge on the current command"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-26 (session c5b9c02b). scripts/guard-maintree-bash.py (PostToolUse:Bash) refused a command that wrote only inside a scratchpad worktree. Verbatim: Refused: this command modified this project's MAIN working tree outside integration (CLAUDE.md 8: main only receives merges). Changed in /Users/yuki/src/harness: .backlog/tasks.toml ... During that call another session merged into main: 807ca59e (backlog: add 775e5bc8), merge 16f2e9c9 (reflog: merge c5b9-sessionroots-red: Merge made by the 'ort' strategy). Something similar happened earlier the same session. Mechanism (reproduced): the message has no 'HEAD a -> b' line, so HEAD was equal at Pre and Post. The Post snapshot fell inside the other session's git merge window (merged tree already in main's index and worktree, HEAD not yet moved, no MERGE_HEAD; git runs pre-merge-commit there, and .githooks/pre-merge-commit runs gates, so the window is long). post() at scripts/guard-maintree-bash.py:343-357 then falls through to verdict = REFUSE and prints 'this command modified'. A merge that completes between Pre and Post is already allowed (integration_head, :350-355; control test green). Repro: scripts/test_guard_maintree_bash_concurrent_merge.py, committed 0deb7cef, merged 64ca934b; RED 2026-10-26: 1 failed, 2 passed (test_red_post_inside_concurrent_merge_window_does_not_blame_command, guard rc=2 naming tracked.txt). Done when that test is green with both controls still green: the guard allows, or stops claiming 'this command modified' when the change is another session's in-flight merge. The refusal must stay fail-closed when the cause cannot be determined."
+created_at = 1793019226
+updated_at = 1793021500
+weight = 0.0
+issue_number = 1460
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1460"
+issue_closed_at = 1793021504
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_concurrent_merge.py"
+rev = "64ca934bcd74f978c745c10922f0695b45751cc8"
+observed_at = 1793019226
+detail = """
+exit 1: 12xs02k588nyw5txm0000gp/T/mtg-observe-3s2v5orj/main status` before reverting anything.
+
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_concurrent_merge.py::GuardConcurrentMerge::test_red_post_inside_concurrent_merge_window_does_not_blame_command
+========================= 1 failed, 2 passed in 1.57s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_concurrent_merge.py"
+exit = 0
+passed = 3
+rev = "e348dc6246e3a1c06b76d5ce71318274f043753d"
+observed_at = 1793021493
+output_digest = "sha256:9419f93181347f949a5f3a9ee5d02b3c65eda2aa283752d5e1eeb3dcb0cfc33e"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /private/tmp/claude-502/-Users-yuki-src-harness/c5b9c02b-fa72-4037-b204-7cbeca35e520/scratchpad/wt-4807-done
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_guard_maintree_bash_concurrent_merge.py ...                 [100%]
+
+============================== 3 passed in 1.73s ===============================
+"""
+
+[task.closure.red]
+rev = "64ca934bcd74f978c745c10922f0695b45751cc8"
+exit = 1
+kind = "behavioural"

@@ -94,7 +94,7 @@ compass route --file /tmp/compass-decomp.json
 ```
 出力 `{ to_condukt, parked, edge }` を honor する:
 - **`to_condukt`** = 今コミットする一手 → そのまま condukt に実行させる（handoff 課題文が後続に印字される）。
-- **`parked`** = taskprog の「残り」へ自動で書き戻し済み（次回 /compass の gap 入力に再浮上）。
+- **`parked`** = `.claude/progress.md` の「残り」へ自動で書き戻し済み（次回 /compass の gap 入力に再浮上）。
 - **`edge` = `GoalTooBig`** → Step 4 に戻り、ゴールを**より小さく彫り直す**（多くは validate 系の最小スライス）。
 - **`edge` = `OnlyNoise`** → north_star 自体を問い直す（方向が尽きた合図、Step 3 へ）。
 

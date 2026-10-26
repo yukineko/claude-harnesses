@@ -1,4 +1,4 @@
-//! Read taskprog's progress file for the current project.
+//! Read the project's progress file (`<cwd>/.claude/progress.md`) for the current project.
 
 use std::path::Path;
 

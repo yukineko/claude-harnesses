@@ -8,7 +8,7 @@
 判定の根（棄却ループによる "定義を彫る"）は `consulting-agent`
 （`/mnt/c/Users/hiroyuki_nakayama/src/consulting-agent`）から抽出し、
 specguard の specforge intake（[../specguard/DESIGN-INTAKE.md](../specguard/DESIGN-INTAKE.md)）と
-**同一エンジンを共有する**（二重実装しない）。実行は `condukt` に委ね、保留は `taskprog` に書き戻す。
+**同一エンジンを共有する**（二重実装しない）。実行は `condukt` に委ね、保留は `.claude/progress.md` に書き戻す。
 
 ---
 
@@ -34,7 +34,7 @@ specguard の specforge intake（[../specguard/DESIGN-INTAKE.md](../specguard/DE
 
 | 問い | 担当 |
 |---|---|
-| いま何の状態か（完了/残り/ブロッカーを記録） | `taskprog` (progress.md) |
+| いま何の状態か（完了/残り/ブロッカーを記録） | `.claude/progress.md` |
 | 構造はどうなっているか | `deepwiki` |
 | 仕様↔実装はズレていないか | `specguard:run`（drift 監査） |
 | **何のためか・完成とは何か・次の一手は何か** | ← **compass（空き地）** |
@@ -64,7 +64,7 @@ compass は既存シグナルを読む合成器として軽く保ち、重い監
 4. **焦点保護（論点3=B案）** — 一度に進めるのは焦点に合う右サイズの一手だけ。
    大きい寄り道も小さいノイズも保留へ流し、糸を見失わせない。
 5. **二重実装しない** — 棄却ループの "定義を彫る" は specforge intake と同一エンジンを共有。
-   分解は condukt-interpreter、実行は condukt binary、保留は taskprog を再利用。compass は薄いオーケストレータ。
+   分解は condukt-interpreter、実行は condukt binary、保留は `.claude/progress.md` を再利用。compass は薄いオーケストレータ。
 6. **何度でも同意してよい（論点1）** — 合意は1回/2回の固定ゲートではなく、棄却ループの各ラウンドで
    何度でも合意し直せる。「condukt 実行可能状態」はユーザーが go と言ったラウンドで到達する。
 
@@ -90,7 +90,7 @@ compass は既存シグナルを読む合成器として軽く保ち、重い監
    ▼
  ④ routing（B案：焦点保護）──────────────────────── compass の triage（新規・決定的）
    ├─ 焦点に合う右サイズの一手 ──▶ condukt schedule/worktree/state（実行・無改造）
-   └─ それ以外（大きい寄り道＋小ノイズ）─▶ 保留 ─▶ taskprog progress.md「残り」へ書き戻す（再利用）
+   └─ それ以外（大きい寄り道＋小ノイズ）─▶ 保留 ─▶ .claude/progress.md「残り」へ書き戻す（再利用）
                                                        └─ 次回 /compass の gap 入力に再浮上（自己供給ループ）
    │
    ▼
@@ -103,7 +103,7 @@ compass は既存シグナルを読む合成器として軽く保ち、重い監
 
 プロジェクト高度の「北極星＋完成定義＋差分」を持つ**生きた一枚**。
 既存で最も近い specguard canon は*詳細 spec* で高度が違う（霞んだとき戻る一行の北極星ではない）ため、
-別アーティファクトとして持つ。場所は対象リポの `.compass/charter.md`（taskprog/condukt と同じくリポ同居）。
+別アーティファクトとして持つ。場所は対象リポの `.compass/charter.md`（condukt と同じくリポ同居）。
 
 最小フィールド（決定的にパースできる構造を持つ Markdown）：
 
@@ -114,7 +114,7 @@ compass は既存シグナルを読む合成器として軽く保ち、重い監
 | `measuring_stick` | 物差し（§7）。次の一手を何で測るか | プロジェクト方針として固定寄り |
 | `current_gap` | ゴール − 現状 の要約（compass が毎回再生成） | 毎ラウンド再計算 |
 | `next_action` | 再開時の最初の物理的一手（⑤パンくずが書く） | Stop ごとに更新 |
-| `parked` | 保留に回したものへのポインタ（実体は taskprog progress.md「残り」） | routing が追記 |
+| `parked` | 保留に回したものへのポインタ（実体は .claude/progress.md「残り」） | routing が追記 |
 
 charter が無い／古い／薄いときは、compass が起動時に**棄却ループで生成・彫り直す**。
 推論で埋めず、鮮明化できない点は人間に同期で詰める（原則3）。
@@ -166,7 +166,7 @@ triage が読む、将来 condukt 自身も使える）：
   - **大きい寄り道**（`l`/`xl` または gap の主筋から外れるもの）→ いま着手すると焦点を失う。
   - **小さいノイズ**（`xs` の散発、主筋に効かない雑務）→ フローを切ってまで今やらない。
 
-保留は taskprog の `progress.md`「残り」に1行ずつ書き戻す（実体はそこ、charter `parked` はポインタ）。
+保留は `.claude/progress.md`「残り」に1行ずつ書き戻す（実体はそこ、charter `parked` はポインタ）。
 次回 `/compass` がそれを gap 入力として読み直す → **自己供給ループ**。これにより②空白の再発が構造的に減る。
 
 > 注：size の*向き*は B 案＝焦点保護を既定とするが、閾値（どこを s/m と見るか）は `.compass/config.toml` で
@@ -416,7 +416,7 @@ crates/compass/
     freshness.rs             # C2 決定的信号（nudge から単独呼び出し可）
     carve.rs                 # CarveState 永続化（.compass/carve-state.json）＋ evaluate/apply の JSON view
     gap.rs                   # gap 入力の決定的組み立て（意味的 diff は SKILL）＋ current_gap 書き戻し
-    route.rs                 # size triage（§13）→ condukt 課題文 or taskprog 保留書き戻し
+    route.rs                 # size triage（§13）→ condukt 課題文 or progress.md 保留書き戻し
     breadcrumb.rs            # Stop hook：```compass-next``` ブロック抽出 → charter next_action
 
 crates/harness-core/src/
@@ -435,7 +435,7 @@ crates/condukt/src/...       # Task に optional `size`（#[serde(default)]）�
 2. **harness-core `interrogate.rs`**（generic carve engine）— compass と specforge の共通基盤。
 3. **compass crate scaffold**（Cargo.toml / plugin.json / config.rs / charter.rs）。
 4. **gather + gates（C1–C5）+ freshness** — carve に食わせる入力と判定。
-5. **gap + route** — 差分導出と size triage、condukt 受け渡し / taskprog 保留。
+5. **gap + route** — 差分導出と size triage、condukt 受け渡し / progress.md 保留。
 6. **hooks（nudge / breadcrumb）+ skill SKILL.md** — 起動経路（§14）。
 7. **bin クロスコンパイル + README + marketplace 登録**。
 

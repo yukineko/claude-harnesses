@@ -231,7 +231,7 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
                          real case is crates/<c>/.claude/progress.md: a
                          gitignored runtime artifact seeded by taskprog's Stop
                          hook (`.gitignore`: "crate-local runtime progress
-                         artifacts (taskprog etc.) — never track"), which is not
+                         artifacts (.claude/progress.md etc.) — never track"), which is not
                          plugin payload and must not be deployed.
     enabled_extra_keys — literal `enabledPlugins` keys (owner suffix included)
                          merged into the built map. Used for the ORPHAN shape
@@ -1023,7 +1023,7 @@ class CrateLocalRuntimeArtifacts(_FixtureCase):
     because it treated "whatever is lying in the crate dir" as the payload.
 
     `.gitignore` already answers what the payload is: `crates/*/.claude/` is
-    declared "crate-local runtime progress artifacts (taskprog etc.) — never
+    declared "crate-local runtime progress artifacts (.claude/progress.md etc.) — never
     track", and `git ls-files 'crates/*/.claude/*'` returns 0 files. So the
     exclusion belongs on BOTH sides — the rsync must not deploy it, and this
     comparison must not expect it — exactly as target/, .git/ and .in_use/ are

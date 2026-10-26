@@ -24,7 +24,7 @@ only keeps state and renders deterministic context. It never calls an LLM or
 
 | Question | Owner |
 |---|---|
-| What's the current state? (done / left / blockers) | `taskprog` (progress.md) |
+| What's the current state? (done / left / blockers) | `.claude/progress.md` |
 | What's the structure? | `deepwiki` |
 | Has impl drifted from spec? | `specguard` |
 | **What is this for · what is "done" · what's the next move?** | **`compass`** |
@@ -37,7 +37,7 @@ agreed single move) becomes condukt's input.
 ## The charter
 
 The living artifact is `.compass/charter.md` (committed alongside the repo, like
-taskprog/condukt). It holds the project's north star and definition-of-done at a higher
+condukt). It holds the project's north star and definition-of-done at a higher
 altitude than a specguard canon:
 
 | Section | Holds | Freshness |
@@ -47,7 +47,7 @@ altitude than a specguard canon:
 | `measuring_stick` | how to measure the next move (default: *defensibility × closeness-to-goal ÷ cost*) | project-fixed |
 | `current_gap` | goal − reality summary (regenerated each round) | recomputed every round |
 | `next_action` | the first physical step on resume (written by the Stop breadcrumb) | updated each Stop (not in the primary working tree, see below) |
-| `parked` | pointers to deferred work (the bodies live in taskprog progress.md) | appended by routing |
+| `parked` | pointers to deferred work (the bodies live in .claude/progress.md) | appended by routing |
 
 ## The C1–C5 freshness gates
 
@@ -82,7 +82,7 @@ evaluate ─► carve loop ─► charter ─► gap ─► (condukt decompose) 
    │            │            │         │                            │
  C1/C2       ask 1 Q       save the  goal − reality            size triage:
  floor       at a time,   sharpened  largest slice          one right-sized move → condukt
- (binary)    re-check,    charter                           the rest → parked (taskprog)
+ (binary)    re-check,    charter                           the rest → parked (progress.md)
              persist
 ```
 
@@ -110,7 +110,7 @@ evaluate ─► carve loop ─► charter ─► gap ─► (condukt decompose) 
    - **`OnlyNoise`** (everything `xs`, nothing hits the main thread) → re-question the
      north_star itself (the direction is exhausted).
 
-Parked work is written one line at a time into taskprog's progress.md "remaining" sink,
+Parked work is written one line at a time into the .claude/progress.md "remaining" sink,
 so the **next** `/compass` reads it back as gap input — a self-feeding loop that
 structurally reduces the "blank after a checkpoint."
 
@@ -320,7 +320,7 @@ Claude Code セッション内の LLM 労働、バイナリは状態維持と決
 `evaluate`（C1/C2 floor）→ carve ループ（1問ずつ問い、再評価・永続化）→ `charter`（彫れた charter を保存）
 → `gap`（ゴール − 現状）→ condukt 分解（size 付与）→ `route`（size triage）。
 **焦点保護（B案）**: 右サイズ（既定 `s`/`m`）の一手を **1件だけ** condukt へ、残りは保留へ。
-保留は taskprog の progress.md「残り」へ書き戻され、次回 /compass の gap 入力に再浮上する（自己供給ループ）。
+保留は `.claude/progress.md`「残り」へ書き戻され、次回 /compass の gap 入力に再浮上する（自己供給ループ）。
 エッジ: **`GoalTooBig`**（全部 l/xl）→ ゴールを小さく彫り直す、**`OnlyNoise`**（全部 xs）→ north_star を問い直す。
 
 **計測ループ（outcome）**: 一手の完了後 `compass outcome --verdict <forward|unchanged|backward> --evidence <計測値>`

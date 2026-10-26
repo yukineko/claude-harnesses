@@ -15,7 +15,7 @@ compass は、プロジェクトの方向（北極星）と完成定義（defini
 | `measuring_stick` | 次の一手をどう測るか（既定: 防御可能性 × ゴールへの近さ ÷ コスト） |
 | `current_gap` | ゴール − 現状の要約（毎ラウンド再計算） |
 | `next_action` | 再開時の最初の物理的な一歩（Stop の breadcrumb が書く） |
-| `parked` | 保留した仕事へのポインタ（本体は taskprog の progress.md に置く） |
+| `parked` | 保留した仕事へのポインタ（本体は `.claude/progress.md` に置く） |
 
 判定（ゴールを彫る・gap を読む・一手を選ぶ）は Claude Code セッション内の LLM 労働であり、バイナリは状態維持と決定論的な context 生成のみを担う。バイナリ自身は LLM も `AskUserQuestion` も呼ばない。**subscription で完結**し、API キーは不要。
 
@@ -33,7 +33,7 @@ harness 内での住み分け:
 
 | 問い | 担当 |
 |---|---|
-| 現状は？（done / 残り / blocker） | `taskprog`（progress.md） |
+| 現状は？（done / 残り / blocker） | `.claude/progress.md` |
 | 構造は？ | `deepwiki` |
 | 実装は仕様から drift したか？ | `specguard` |
 | **これは何のため・「done」とは・次の一手は？** | **`compass`** |
@@ -56,7 +56,7 @@ evaluate ─► carve ループ ─► charter ─► gap ─► (condukt 分解
 5. **condukt 分解** — 合意した一手をタスク化し、condukt が `size`（xs|s|m|l|xl）付きの分解 JSON に分割する。
 6. **route** — `compass route` が size で triage する。**焦点保護（B案）**: 右サイズ（既定 `s`/`m`）の一手を **1 件だけ** condukt へ、残りは保留へ。エッジは loop に戻る — **`GoalTooBig`**（全部 l/xl）→ ゴールを小さく彫り直す、**`OnlyNoise`**（全部 xs）→ north_star を問い直す。
 
-保留は taskprog の progress.md「残り」へ 1 行ずつ書き戻され、次回 `/compass` の gap 入力に再浮上する（自己供給ループ）。
+保留は `.claude/progress.md`「残り」へ 1 行ずつ書き戻され、次回 `/compass` の gap 入力に再浮上する（自己供給ループ）。
 
 **計測ループ（outcome）**: 一手の完了で出荷はされるが、出荷は検証された学習ではない（build ≠ validate）。`compass outcome --verdict <forward|unchanged|backward> --evidence <計測値>` で measuring_stick 判定を project の main worktree root の `.compass/outcomes.json`（全 linked worktree で共有する1本の履歴。root を判定できなければ拒否し、worktree 毎の store には落とさない）に記録する（**証拠必須**で、計測なしの outcome は拒否される）。次の `compass gap` が `last_outcome` として読み戻すので、各ラウンドが「計測された進捗」を反映する。[`/flow`](../flow) 経由なら sink が自動記録する。
 

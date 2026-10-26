@@ -67,8 +67,7 @@ hits="$(grep -nE 'json!\(\{[^}]*"additionalContext"' \
   "$root/crates/backlog/src/main.rs" \
   "$root/crates/daily/src/main.rs" \
   "$root/crates/harness-status/src/main.rs" \
-  "$root/crates/hypothesis/src/main.rs" \
-  "$root/crates/taskprog/src/main.rs")"
+  "$root/crates/hypothesis/src/main.rs")"
 grep_rc=$?
 if [ "$grep_rc" -gt 1 ]; then echo "UNDETERMINED: emitter scan failed (grep exit $grep_rc)"; exit 126; fi
 if [ -n "$hits" ]; then

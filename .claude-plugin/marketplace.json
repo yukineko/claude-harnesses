@@ -1049,6 +1049,30 @@
         "path": "crates/onepass",
         "ref": "main"
       }
+    },
+    {
+      "name": "webqa",
+      "description": "Web QA gate for Claude Code: blocks a Stop until Playwright specs for changed web code pass, and detects test-weakening edits to Playwright specs.",
+      "version": "0.1.0",
+      "category": "quality",
+      "keywords": [
+        "hooks",
+        "playwright",
+        "e2e",
+        "web",
+        "qa"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/webqa",
+      "author": {
+        "name": "yukineko"
+      },
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/yukineko/claude-harnesses.git",
+        "path": "crates/webqa",
+        "ref": "main"
+      }
     }
   ]
 }

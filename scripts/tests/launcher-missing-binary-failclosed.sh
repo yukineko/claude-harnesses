@@ -38,8 +38,9 @@ cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
 fails=0
+passes=0
 fail() { echo "  FAIL: $*"; fails=$((fails + 1)); }
-pass() { echo "  ok:   $*"; }
+pass() { echo "  ok:   $*"; passes=$((passes + 1)); }
 
 # Hook invocations that may exit 0 with empty stdout, with the reason (the
 # downstream consumers of that silence). Key: "<crate>|<event>|<args>".
@@ -221,8 +222,12 @@ spot specguard specguard pending --json
 spot context-governor context-governor rollup
 
 echo
+# Final pytest-style count line. It only reports the cases above; it never
+# changes the exit status they chose.
 if [ "$fails" -ne 0 ]; then
   echo "RED: $fails launcher case(s) answer 'fine' when the binary is missing"
+  echo "$fails failed, $passes passed"
   exit 1
 fi
 echo "GREEN: no launcher answers 'fine' when its binary is missing"
+echo "$passes passed"

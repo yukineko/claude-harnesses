@@ -7,7 +7,7 @@
 `harness-status` は、harness 一家の各プラグインが個別に持つ状態ストアを **横断して読み取り、
 human-on-the-loop の一画面ダッシュボードに集約する** read-only なバイナリである。集約する情報源は
 5 つ: 今日の支出（budgetguard の ledger）、直近セッションの turn/token/USD（gauge の session records）、
-プロジェクト進捗ファイル（taskprog の `.claude/progress.md`）、Stop-hook レイテンシ（中央 `hook-latency.jsonl`）、
+プロジェクト進捗ファイル（`.claude/progress.md`）、Stop-hook レイテンシ（中央 `hook-latency.jsonl`）、
 UserPromptSubmit 注入サイズ（中央 `inject-metrics.jsonl`）。加えて `plugins` サブコマンドはモノレポの
 crate をスキャンし各プラグインを活性化スコープ（always-on / event-scoped / manual）に分類する dev/HOTL
 ツールを提供する。バイナリ自身は**一切書き込まず**他プラグインのストアを読むだけで、API キーも hook も
@@ -49,7 +49,7 @@ crate をスキャンし各プラグインを活性化スコープ（always-on /
   （`{date,budget,recent_sessions,progress,hook_latency,inject}` envelope）で出力。
 - **`budget`** — 今日の支出のみ（`today_usd` × `session_count_today`）。`ledger_present` で未導入を示す。
 - **`sessions`** — 直近 N セッション（newest-first に `last_ts` でソート → truncate）。id は先頭 8 桁表示。
-- **`progress`** — `<cwd>/.claude/progress.md` を先頭 10 行プレビュー。不在時は path のみ表示し taskprog を案内。
+- **`progress`** — `<cwd>/.claude/progress.md` を先頭 10 行プレビュー。不在時は path のみ表示する。
 - **`hooks`** — 中央 ledger を session 単位に `aggregate` し、`total_ms > budget` の session に ⚠ を付す。
   重い 600s-timeout ゲート（display 上は donegate/reviewgate/propguard と表記）のみが記録する前提。
 - **`inject`** — 中央 ledger を turn（`turn_key = hash(session+prompt)`）単位に `aggregate` し、直近
@@ -65,7 +65,7 @@ crate をスキャンし各プラグインを活性化スコープ（always-on /
   `ledger_present`）を読む。
 - **`sessions`** — `gauge` の `SessionRecord` を newest-first で N 件。cost は ledger 権威源優先で
   `SessionSummary` を組む。
-- **`progress`** — `taskprog` の `.claude/progress.md` を 10 行プレビューで `ProgressStatus` に。
+- **`progress`** — `.claude/progress.md` を 10 行プレビューで `ProgressStatus` に。
 - **`hooks`** — `harness_core::hook_latency` を消費。`budget_ms`/`SessionLatencySummary`/`HookLatencyReport`/
   `sess8`。over-budget 判定と per-hook 内訳。
 - **`inject`** — `harness_core::inject_metrics` を消費。`budget_chars`/`TurnInjectionSummary`/`InjectReport`/

@@ -89,7 +89,7 @@ pub fn print_status(report: &StatusReport, cwd_display: &str) {
     println!();
 
     // Progress file
-    println!("── Progress file (taskprog) ──────────────────────");
+    println!("── Progress file ─────────────────────────────────");
     println!("  cwd: {cwd_display}");
     if progress.exists {
         println!("  {}", progress.path);
@@ -101,7 +101,6 @@ pub fn print_status(report: &StatusReport, cwd_display: &str) {
         }
     } else {
         println!("  [not found] {}", progress.path);
-        println!("  Run `taskprog init` or `/taskprog` to create one.");
     }
     println!();
 

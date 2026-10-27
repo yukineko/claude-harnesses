@@ -61302,3 +61302,750 @@ scripts/test_backlog_audit_b1_0.py .                                     [100%]
 rev = "520446483d198ba9900eacb4ee4685827f069f7a"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "b114a0b3"
+title = "onepass launcher UserPromptSubmit fallback exits 0 with empty stdout when the binary is missing"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-25 at main 1f609efe (e753a0b6 worktree, confirmed at 13e1bd83 by stashing the change, and again at 247b3f4a). bash scripts/tests/launcher-missing-binary-failclosed.sh: 'FAIL: onepass UserPromptSubmit: onepass reset -> exit 0 with EMPTY stdout: indistinguishable from the plugin's own nothing to report' / 'RED: 1 launcher case(s) answer fine when the binary is missing'. Reading (a): real fail-open in crates/onepass/bin/onepass fallback (should emit a visible notice like fugu-router prompt). Reading (b): intended because onepass reset carries no verdict; distinguish by checking whether any consumer reads onepass reset's silence as a reset having happened."
+created_at = 1792927378
+updated_at = 1793016077
+weight = 0.0
+issue_number = 1455
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1455"
+issue_closed_at = 1793016081
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/launcher-missing-binary-failclosed.sh"
+rev = "9bab9917213003acd38190d99087e35ab5366d33"
+observed_at = 1792927378
+detail = """
+exit 1: kt policy answer -> rc=1
+  ok:   compass nudge --json -> rc=127
+  ok:   fugu-router route --file x.json -> rc=127
+  ok:   gauge report -> rc=127
+  ok:   ship check -> rc=127
+  ok:   hypothesis list -> rc=127
+  ok:   session-insights report -> rc=127
+  ok:   specguard pending --json -> rc=127
+  ok:   context-governor rollup -> rc=127
+
+RED: 1 launcher case(s) answer 'fine' when the binary is missing"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/launcher-missing-binary-failclosed.sh"
+exit = 0
+passed = 116
+rev = "b44806d712d355967898d5df135e972b62344a57"
+observed_at = 1793016070
+output_digest = "sha256:6847461e50e5adc745fb6e8d1e25457b5a69800a3022c77268d2ecf263861a8d"
+excerpt = """
+ect did NOT run: no bundled binary for da…
+  ok:   session-insights PostToolUse: session-insights record -> silent exit 0 EXEMPT (per-tool-call counter; its only readers are session-insights stop (surfaces a systemMessage every turn) and report (exits 127) — the same missing binary)
+  ok:   session-insights Stop: session-insights stop -> rc=0 stdout={"systemMessage":"session-insights stop did NOT run: no bundled binary…
+  ok:   session-insights SessionEnd: session-insights sessionend -> rc=1 + stderr (SessionEnd: stderr is the only channel)
+  ok:   ship SessionEnd: ship session-end -> rc=1 + stderr (SessionEnd: stderr is the only channel)
+  ok:   specguard SessionStart: specguard pending -> rc=0 stdout={"systemMessage":"specguard pending did NOT run: no bundled binary for…
+  ok:   stuckguard PostToolUse: stuckguard watch -> rc=0 stdout={"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContex…
+  ok:   taskprog SessionStart: taskprog session-start -> rc=0 stdout={"systemMessage":"taskprog session-start did NOT run: no bundled binar…
+  ok:   taskprog Stop: taskprog stop -> rc=0 stdout={"systemMessage":"taskprog stop did NOT run: no bundled binary for dar…
+  ok:   tdd Stop: tdd gate -> rc=0 stdout={"decision":"block","reason":"tdd gate did not run: no bundled binary …
+== CLI verb on every launcher (binary absent) must exit non-zero
+  ok:   autoflow launcher-failclosed-probe -> rc=1
+  ok:   backlog launcher-failclosed-probe -> rc=1
+  ok:   beacon launcher-failclosed-probe -> rc=127
+  ok:   benchkit launcher-failclosed-probe -> rc=127
+  ok:   blastguard launcher-failclosed-probe -> restrictive PreToolUse verdict (unknown args = verdict path)
+  ok:   budgetguard launcher-failclosed-probe -> rc=1
+  ok:   compass launcher-failclosed-probe -> rc=127
+  ok:   condukt launcher-failclosed-probe -> rc=1
+  ok:   context-governor launcher-failclosed-probe -> rc=127
+  ok:   ctxrot launcher-failclosed-probe -> rc=1
+  ok:   curate launcher-failclosed-probe -> rc=1
+  ok:   daily launcher-failclosed-probe -> rc=127
+  ok:   deepwiki launcher-failclosed-probe -> rc=1
+  ok:   difflog launcher-failclosed-probe -> rc=127
+  ok:   donegate launcher-failclosed-probe -> rc=1
+  ok:   evalkit launcher-failclosed-probe -> rc=1
+  ok:   fetchguard launcher-failclosed-probe -> rc=1
+  ok:   fugu-router launcher-failclosed-probe -> rc=127
+  ok:   gauge launcher-failclosed-probe -> rc=127
+  ok:   harness-status launcher-failclosed-probe -> rc=1
+  ok:   hypothesis launcher-failclosed-probe -> rc=127
+  ok:   jev launcher-failclosed-probe -> rc=127
+  ok:   onepass launcher-failclosed-probe -> rc=1
+  ok:   overwatch launcher-failclosed-probe -> rc=1
+  ok:   parallelguard launcher-failclosed-probe -> rc=1
+  ok:   playbook launcher-failclosed-probe -> rc=127
+  ok:   precommit-audit launcher-failclosed-probe -> rc=2
+  ok:   propguard launcher-failclosed-probe -> rc=1
+  ok:   replaykit launcher-failclosed-probe -> rc=1
+  ok:   reviewgate launcher-failclosed-probe -> rc=1
+  ok:   runbook launcher-failclosed-probe -> rc=127
+  ok:   schemaguard launcher-failclosed-probe -> rc=1
+  ok:   session-insights launcher-failclosed-probe -> rc=127
+  ok:   ship launcher-failclosed-probe -> rc=127
+  ok:   specforge launcher-failclosed-probe -> rc=1
+  ok:   specguard launcher-failclosed-probe -> rc=127
+  ok:   stuckguard launcher-failclosed-probe -> rc=1
+  ok:   taskprog launcher-failclosed-probe -> rc=127
+  ok:   tdd launcher-failclosed-probe -> rc=1
+  ok:   tracekit launcher-failclosed-probe -> rc=1
+  ok:   trajectoryeval launcher-failclosed-probe -> rc=1
+== named verdict-by-exit-code CLI verbs
+  ok:   condukt state autonomy-check -> rc=1
+  ok:   condukt policy answer -> rc=1
+  ok:   compass nudge --json -> rc=127
+  ok:   fugu-router route --file x.json -> rc=127
+  ok:   gauge report -> rc=127
+  ok:   ship check -> rc=127
+  ok:   hypothesis list -> rc=127
+  ok:   session-insights report -> rc=127
+  ok:   specguard pending --json -> rc=127
+  ok:   context-governor rollup -> rc=127
+
+GREEN: no launcher answers 'fine' when its binary is missing
+116 passed
+"""
+
+[task.closure.red]
+rev = "520446483d198ba9900eacb4ee4685827f069f7a"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "8924ca76"
+title = "fugu-router SessionEnd hook (harvest then sync) is cancelled in headless claude -p runs so sync never pulls or pushes (GitHub 1345)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "github-1345",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "claude -p probe 2026-10-25, Claude Code 2.1.284, fugu-router 0.1.60 alone via --plugin-dir: stderr 'SessionEnd hook [...fugu-router harvest; ...fugu-router sync] failed: Hook cancelled'; debug shows cancel about 1.5 s after shutdown began despite timeout 60. Local data: sync made its local commit (no local loss observed; harvest no-op in a non-repo cwd so harvest loss NOT measured). Remote: pull and push did not complete; sync repo stays ahead of upstream (22 before and after). Repro runs the real installed plugin; sync touches ~/.fugu-router/sync as any session end does."
+created_at = 1792885809
+updated_at = 1793017350
+weight = 0.0
+issue_number = 1452
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1452"
+issue_closed_at = 1793017353
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/probe_gh1345_fugu_sessionend.sh"
+rev = "cde613ebba64735f747182b6050b9b0ef59437fb"
+observed_at = 1792885809
+detail = """
+exit 1: LAUDE_PLUGIN_ROOT}/bin/fugu-router harvest; ${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync] failed: Hook cancelled
+debug SessionEnd lines:
+2026-10-24T23:50:13.079Z [DEBUG] SessionEnd:other [${CLAUDE_PLUGIN_ROOT}/bin/fugu-router harvest; ${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync] cancelled
+sync repo commits ahead of upstream after: 22
+DEFECT: fugu-router SessionEnd hook was cancelled in a headless run"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p fugu-router --test session_end_budget"
+exit = 0
+passed = 4
+rev = "16f2e9c907ac5df1b4265c029b8f86e88738e5ac"
+observed_at = 1793017287
+output_digest = "sha256:c6d5935b36dd705e12a7931e617d35623e9f6ec6a9973800e7ad668bd64cb7bf"
+excerpt = """
+
+running 4 tests
+test session_end_hook_returns_within_budget_on_slow_network ... ok
+test prompt_emits_no_sync_notice_without_a_marker ... ok
+test a_killed_session_end_sync_is_reported_by_the_prompt_hook ... ok
+test session_end_hook_work_still_lands_on_the_remote ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.19s
+
+   Compiling libc v0.2.186
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling serde_core v1.0.228
+   Compiling cfg-if v1.0.4
+   Compiling version_check v0.9.5
+   Compiling serde v1.0.228
+   Compiling getrandom v0.3.4
+   Compiling autocfg v1.5.1
+   Compiling memchr v2.8.2
+   Compiling generic-array v0.14.7
+   Compiling typenum v1.20.1
+   Compiling num-traits v0.2.19
+   Compiling hashbrown v0.17.1
+   Compiling utf8parse v0.2.2
+   Compiling zmij v1.0.21
+   Compiling equivalent v1.0.2
+   Compiling regex-syntax v0.8.11
+   Compiling zerocopy v0.8.52
+   Compiling aho-corasick v1.1.4
+   Compiling syn v2.0.118
+   Compiling rand_core v0.9.5
+   Compiling indexmap v2.14.0
+   Compiling anstyle-parse v1.0.0
+   Compiling colorchoice v1.0.5
+   Compiling anyhow v1.0.103
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling serde_json v1.0.150
+   Compiling anstyle v1.0.14
+   Compiling option-ext v0.2.0
+   Compiling winnow v0.7.15
+   Compiling core-foundation-sys v0.8.7
+   Compiling toml_write v0.1.2
+   Compiling anstyle-query v1.1.5
+   Compiling anstream v1.0.0
+   Compiling iana-time-zone v0.1.65
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling dirs-sys v0.4.1
+   Compiling heck v0.5.0
+   Compiling itoa v1.0.18
+   Compiling clap_lex v1.1.0
+   Compiling strsim v0.11.1
+   Compiling clap_builder v4.6.0
+   Compiling dirs v5.0.1
+   Compiling digest v0.10.7
+   Compiling chrono v0.4.45
+   Compiling wait-timeout v0.2.1
+   Compiling cpufeatures v0.2.17
+   Compiling sha2 v0.10.9
+   Compiling rand v0.9.4
+   Compiling regex-automata v0.4.14
+   Compiling rand_xorshift v0.4.0
+   Compiling bitflags v2.13.0
+   Compiling unarray v0.1.4
+   Compiling serde_derive v1.0.228
+   Compiling clap_derive v4.6.1
+   Compiling clap v4.6.1
+   Compiling regex v1.12.4
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.9.0
+   Compiling proptest v1.11.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.65 (/Users/yuki/src/.harness-worktrees/c5b9-done-24ca/crates/harness-core)
+   Compiling fugu-router v0.1.64 (/Users/yuki/src/.harness-worktrees/c5b9-done-24ca/crates/fugu-router)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.60s
+     Running tests/session_end_budget.rs (target/debug/deps/session_end_budget-537a580d055bd608)
+"""
+
+[task.closure.red]
+rev = "2388882f9c9ed361e0b8c19b291949c0255ba706"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "4807c821"
+title = "guard-maintree-bash blames a concurrent session's merge on the current command"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-26 (session c5b9c02b). scripts/guard-maintree-bash.py (PostToolUse:Bash) refused a command that wrote only inside a scratchpad worktree. Verbatim: Refused: this command modified this project's MAIN working tree outside integration (CLAUDE.md 8: main only receives merges). Changed in /Users/yuki/src/harness: .backlog/tasks.toml ... During that call another session merged into main: 807ca59e (backlog: add 775e5bc8), merge 16f2e9c9 (reflog: merge c5b9-sessionroots-red: Merge made by the 'ort' strategy). Something similar happened earlier the same session. Mechanism (reproduced): the message has no 'HEAD a -> b' line, so HEAD was equal at Pre and Post. The Post snapshot fell inside the other session's git merge window (merged tree already in main's index and worktree, HEAD not yet moved, no MERGE_HEAD; git runs pre-merge-commit there, and .githooks/pre-merge-commit runs gates, so the window is long). post() at scripts/guard-maintree-bash.py:343-357 then falls through to verdict = REFUSE and prints 'this command modified'. A merge that completes between Pre and Post is already allowed (integration_head, :350-355; control test green). Repro: scripts/test_guard_maintree_bash_concurrent_merge.py, committed 0deb7cef, merged 64ca934b; RED 2026-10-26: 1 failed, 2 passed (test_red_post_inside_concurrent_merge_window_does_not_blame_command, guard rc=2 naming tracked.txt). Done when that test is green with both controls still green: the guard allows, or stops claiming 'this command modified' when the change is another session's in-flight merge. The refusal must stay fail-closed when the cause cannot be determined."
+created_at = 1793019226
+updated_at = 1793021500
+weight = 0.0
+issue_number = 1460
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1460"
+issue_closed_at = 1793021504
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_concurrent_merge.py"
+rev = "64ca934bcd74f978c745c10922f0695b45751cc8"
+observed_at = 1793019226
+detail = """
+exit 1: 12xs02k588nyw5txm0000gp/T/mtg-observe-3s2v5orj/main status` before reverting anything.
+
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_concurrent_merge.py::GuardConcurrentMerge::test_red_post_inside_concurrent_merge_window_does_not_blame_command
+========================= 1 failed, 2 passed in 1.57s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_concurrent_merge.py"
+exit = 0
+passed = 3
+rev = "e348dc6246e3a1c06b76d5ce71318274f043753d"
+observed_at = 1793021493
+output_digest = "sha256:9419f93181347f949a5f3a9ee5d02b3c65eda2aa283752d5e1eeb3dcb0cfc33e"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /private/tmp/claude-502/-Users-yuki-src-harness/c5b9c02b-fa72-4037-b204-7cbeca35e520/scratchpad/wt-4807-done
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_guard_maintree_bash_concurrent_merge.py ...                 [100%]
+
+============================== 3 passed in 1.73s ===============================
+"""
+
+[task.closure.red]
+rev = "64ca934bcd74f978c745c10922f0695b45751cc8"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "775e5bc8"
+title = "session roots: a written path positively outside every repo makes donegate/tdd undetermined on every Stop"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """
+Observed (2026-10-26): a session that once wrote /Users/yuki/.budgetguard/config.toml (not inside any git repo) gets on every Stop, from both donegate and tdd: "donegate: BLOCKED - the session's roots cannot be determined (session roots: the session wrote /Users/yuki/.budgetguard/config.toml but its git root cannot be determined: git rev-parse --show-toplevel failed in /Users/yuki/.budgetguard (exit Some(128)): fatal: not a git repository (or any of the parent directories): .git). No checks ran for the roots it wrote into." (same from tdd), then the second-block pass-through.
+
+Code: crates/harness-core/src/session_roots.rs resolve(), edited-files loop: any toplevel() error returns Undetermined. Callers: crates/donegate/src/main.rs:199, crates/tdd/src/main.rs:306, and also crates/reviewgate/src/review.rs:602 (same defect).
+
+User ruling (same principle as GitHub #1180, scripts/deny_ledger.py _outside_repo_write_target()): a written path that is POSITIVELY outside every repo (absolute, and git rev-parse cleanly reports exit 128 with "not a git repository (or any of the parent directories)") is excluded from the session's roots, not Undetermined. Everything else stays Undetermined, which blocks (fail-closed).
+
+Repro: crates/harness-core/tests/session_roots_outside_repo.rs. RED tests (both #[ignore]d; the fix MUST remove both #[ignore] attributes without changing assertions): outside_repo_write_is_excluded_and_roots_are_known, outside_write_plus_linked_repo_write_keeps_the_repo_root.
+
+Controls that pass now and must keep passing (stay Undetermined): control_corrupt_gitfile_stays_undetermined (a .git gitfile pointing nowhere: git also says "not a git repository" with exit 128 but WITHOUT "(or any of the parent directories)", so the fix must match the FULL message, not the exit code or the prefix), control_unenterable_dir_stays_undetermined (mode 000), control_relative_path_stays_undetermined, control_missing_directory_stays_undetermined.
+
+Not covered: git missing from PATH (could not set up without changing PATH for the whole process); must still stay Undetermined.
+
+All-outside case: resolve always puts the hook cwd first, so when every written path is outside a repo the fixed result is roots=[cwd] with wrote_any=true, not an empty set. donegate then skips its early nothing-declared allow (that needs one root and wrote_any=false) and judges the cwd; tdd judges the cwd as in the single-root case. Read from code, not a fail-open; not yet exercised by a donegate/tdd test."""
+created_at = 1793017118
+updated_at = 1793023201
+weight = 0.0
+issue_number = 1459
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1459"
+issue_closed_at = 1793023204
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test session_roots_outside_repo -- --include-ignored"
+rev = "1e183294b7b6196903daccb51119e4e225e983b0"
+observed_at = 1793017118
+detail = """
+exit 101: ished in 0.17s
+
+   Compiling harness-core v0.2.65 (/Users/yuki/src/.harness-worktrees/c5b9-sessionroots-red/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running tests/session_roots_outside_repo.rs (target/debug/deps/session_roots_outside_repo-64d6c74858ffb120)
+error: test failed, to rerun pass `-p harness-core --test session_roots_outside_repo`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test session_roots_outside_repo"
+exit = 0
+passed = 6
+rev = "e9d70279f6df9a5b2351908e66c5c6a4b4dd57f3"
+observed_at = 1793023179
+output_digest = "sha256:f83c8a686260994d1a067ae41c2feb5c9b13860d5fe828698d66f5937957473e"
+excerpt = """
+
+running 6 tests
+test control_relative_path_stays_undetermined ... ok
+test control_missing_directory_stays_undetermined ... ok
+test control_unenterable_dir_stays_undetermined ... ok
+test outside_repo_write_is_excluded_and_roots_are_known ... ok
+test control_corrupt_gitfile_stays_undetermined ... ok
+test outside_write_plus_linked_repo_write_keeps_the_repo_root ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+   Compiling libc v0.2.186
+   Compiling serde_core v1.0.228
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling serde v1.0.228
+   Compiling cfg-if v1.0.4
+   Compiling getrandom v0.3.4
+   Compiling memchr v2.8.2
+   Compiling autocfg v1.5.1
+   Compiling num-traits v0.2.19
+   Compiling zerocopy v0.8.52
+   Compiling zmij v1.0.21
+   Compiling equivalent v1.0.2
+   Compiling regex-syntax v0.8.11
+   Compiling syn v2.0.118
+   Compiling serde_json v1.0.150
+   Compiling hashbrown v0.17.1
+   Compiling indexmap v2.14.0
+   Compiling rand_core v0.9.5
+   Compiling aho-corasick v1.1.4
+   Compiling option-ext v0.2.0
+   Compiling getrandom v0.4.3
+   Compiling winnow v0.7.15
+   Compiling toml_write v0.1.2
+   Compiling core-foundation-sys v0.8.7
+   Compiling itoa v1.0.18
+   Compiling anyhow v1.0.103
+   Compiling rustix v1.1.4
+   Compiling serde_derive v1.0.228
+   Compiling bitflags v2.13.0
+   Compiling winnow v1.0.4
+   Compiling target-triple v1.0.1
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling regex-automata v0.4.14
+   Compiling iana-time-zone v0.1.65
+   Compiling dirs-sys v0.4.1
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling errno v0.3.14
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling dirs v5.0.1
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling chrono v0.4.45
+   Compiling rand v0.9.4
+   Compiling rand_xorshift v0.4.0
+   Compiling wait-timeout v0.2.1
+   Compiling regex v1.12.4
+   Compiling ppv-lite86 v0.2.21
+   Compiling unarray v0.1.4
+   Compiling once_cell v1.21.4
+   Compiling rand_chacha v0.9.0
+   Compiling glob v0.3.3
+   Compiling termcolor v1.4.1
+   Compiling fastrand v2.4.1
+   Compiling tempfile v3.27.0
+   Compiling proptest v1.11.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling trybuild v1.0.118
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.66 (/Users/yuki/src/.harness-worktrees/c5b9-b4-done/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.58s
+     Running tests/session_roots_outside_repo.rs (target/debug/deps/session_roots_outside_repo-507b8e2c189838bb)
+"""
+
+[task.closure.red]
+rev = "c384def5b040f4a8d83f15e969cd5e0bfb204921"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "938e1004"
+title = "overwatch status: surface subagents idle 5+ min on a pending tool_use"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Decision (user): overwatch status lists a subagent as stalled when its transcript's last entry is a tool_use with no tool_result AND the transcript has not grown for >=5 min. Show agent id, minutes idle, pending command. Long-running commands and permission waits count as stalled too (user chose 'report them too'): report only, never kill or restart. Growing transcript must not be listed. overwatch already runs in SessionStart and Stop hooks (reason chosen). Transcripts: ~/.claude/projects/<slug>/<session>/subagents/agent-<id>.jsonl (layout verified). Signal = transcript mtime+last entry, NOT Agent output-file size (710bc8c7: output size misread as progress, live agent killed). Evidence: agent-af007aac375a7a7a3.jsonl idle 16 min on pending Bash; agent-a53a1b1f825c994de.jsonl gaps 1425s,1571s,13350s,45448s after pending tool_use. Nothing detects today: stuckguard is PostToolUse-only; condukt state probe (crates/condukt/src/main.rs:912) disclaims liveness; overwatch aggregate.rs:471 shows runs only as done/total. RED test: crates/overwatch/tests/repro_status_stalled_subagents.rs (commit d020d850 on branch ow-stalled-subagent); fails because the feature is absent (status prints no stalled-subagent section). Unreadable/unparseable transcript must be reported as unknown, not as clean (CLAUDE.md s3)."
+created_at = 1793022099
+updated_at = 1793027214
+weight = 0.0
+issue_number = 1461
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1461"
+issue_closed_at = 1793027218
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_status_stalled_subagents"
+rev = "d020d8504217fa9c16cd305ba9a4273a941a46cb"
+observed_at = 1793022099
+detail = """
+exit 101: shed in 0.55s
+
+   Compiling overwatch v0.2.97 (/Users/yuki/src/.harness-worktrees/ow-stalled-subagent/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.64s
+     Running tests/repro_status_stalled_subagents.rs (target/debug/deps/repro_status_stalled_subagents-b6960b847c79ee95)
+error: test failed, to rerun pass `-p overwatch --test repro_status_stalled_subagents`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_status_stalled_subagents"
+exit = 0
+passed = 1
+rev = "83e8ebd29532d35641eda7ac215be3568a7a09da"
+observed_at = 1793027172
+output_digest = "sha256:ccdc4405bb5c0b1a979a20727dd56f068925a31711f6682f366811edafbd9dc9"
+excerpt = """
+
+running 1 test
+test status_lists_idle_pending_tool_use_subagent_and_not_the_controls ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+
+   Compiling harness-core v0.2.68 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
+   Compiling overwatch v0.2.98 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.90s
+     Running tests/repro_status_stalled_subagents.rs (target/debug/deps/repro_status_stalled_subagents-77c595dc6b4535f6)
+"""
+
+[task.closure.red]
+rev = "2792fa5d6933e83420f063ae0289f3d312703ed9"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "82e8c13a"
+title = "session roots: GIT_CEILING_DIRECTORIES makes an in-repo write look outside every repo"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1793023964
+updated_at = 1793027248
+weight = 0.0
+issue_number = 1462
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1462"
+issue_closed_at = 1793027251
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test session_roots_git_ceiling -- --include-ignored"
+rev = "69819325f3db50685d4a45697a75af48508fc0e4"
+observed_at = 1793023964
+detail = """
+exit 101: es_not_exclude_an_in_repo_write
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/session_roots_git_ceiling.rs (target/debug/deps/session_roots_git_ceiling-858913acf8de93ba)
+error: test failed, to rerun pass `-p harness-core --test session_roots_git_ceiling`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test session_roots_git_ceiling -- --include-ignored"
+exit = 0
+passed = 1
+rev = "83e8ebd29532d35641eda7ac215be3568a7a09da"
+observed_at = 1793027218
+output_digest = "sha256:bc350242c1f43e9eb6f98096ebe5fd710e25729714434fe0b98f59ec215f5ef0"
+excerpt = """
+
+running 1 test
+test ceiling_env_does_not_exclude_an_in_repo_write ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+   Compiling harness-core v0.2.68 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.27s
+     Running tests/session_roots_git_ceiling.rs (target/debug/deps/session_roots_git_ceiling-3351e5defc98d368)
+"""
+
+[task.closure.red]
+rev = "2792fa5d6933e83420f063ae0289f3d312703ed9"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "e31b1b02"
+title = "session roots: a write into a since-removed worktree makes donegate/tdd undetermined on every Stop"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """Observed 2026-10-26, session 1a4ac77f, on Stop after the flow loop ended. donegate and tdd both blocked: "the session's roots cannot be determined (session roots: the session wrote /Users/yuki/.condukt/worktrees/run-20261015-032632-69063-t1/crates/backlog/src/evidence.rs but its directory does not exist, so its git root cannot be determined)". ls on that dir: No such file or directory (condukt worktree removed after the write). Every later Stop blocks; only exit is donegate skip / tdd skip (user chose: file + skip once). Fail-closed, so a liveness defect not a fail-open. RED repro 72ea063c: crates/harness-core/tests/session_roots_removed_worktree.rs asserts roots stay Known and contain the parent repo after git worktree remove; fails with the same Undetermined message. Design open: (a) record worktree-to-repo at write time so a removed worktree stays attributable; (b) accept Undetermined and change something else (then cancel and drop the test). Related: 775e5bc8 (done), 82e8c13a."""
+created_at = 1793024738
+updated_at = 1793027272
+weight = 0.0
+issue_number = 1463
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1463"
+issue_closed_at = 1793027276
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test session_roots_removed_worktree -- --include-ignored"
+rev = "72ea063cbd09dae61beae1b556e1267b1c28c181"
+observed_at = 1793024738
+detail = """
+exit 101: ays_attributable
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/session_roots_removed_worktree.rs (target/debug/deps/session_roots_removed_worktree-f1f17520b1a6aa5b)
+error: test failed, to rerun pass `-p harness-core --test session_roots_removed_worktree`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test session_roots_removed_worktree -- --include-ignored"
+exit = 0
+passed = 1
+rev = "83e8ebd29532d35641eda7ac215be3568a7a09da"
+observed_at = 1793027251
+output_digest = "sha256:5e7a0209fa83535af07e4e309e78d3c65a6b1d5edc31e9112106ba2dbf01f534"
+excerpt = """
+
+running 1 test
+test removed_worktree_write_stays_attributable ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+   Compiling harness-core v0.2.68 (/Users/yuki/src/.harness-worktrees/session-1a4ac77f/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/session_roots_removed_worktree.rs (target/debug/deps/session_roots_removed_worktree-7fc0bcf7aef0725b)
+"""
+
+[task.closure.red]
+rev = "df32c2cff1086110bd7f6be6f4b532fe7d26dade"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "37db5d14"
+title = "overwatch status does not show live sessions that never ran overwatch begin"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1793030339
+updated_at = 1793054831
+weight = 0.0
+issue_number = 1464
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1464"
+issue_closed_at = 1793054834
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test repro_status_shows_unregistered_live_sessions"
+rev = "b36c2727cbd92f23d3606d77fdfeccc5fb610480"
+observed_at = 1793030339
+detail = """
+exit 101: sers/yuki/src/.harness-worktrees/c5b9c02b-session-roster/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.45s
+     Running tests/repro_status_shows_unregistered_live_sessions.rs (target/debug/deps/repro_status_shows_unregistered_live_sessions-789ad57a404ad5d2)
+error: test failed, to rerun pass `-p overwatch --test repro_status_shows_unregistered_live_sessions`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test repro_status_shows_unregistered_live_sessions"
+exit = 0
+passed = 3
+rev = "068faae7e2bae44b3b8b8a6f8806f3e38058425e"
+observed_at = 1793054802
+output_digest = "sha256:99a654a714e48fbe3dbcffb47cc1b38c565162a04e09128f1aca97b4dbe67414"
+excerpt = """
+
+running 3 tests
+test corrupt_presence_registry_is_undetermined_not_none ... ok
+test live_session_from_linked_worktree_is_listed_in_main_checkout ... ok
+test stale_ended_and_unknown_sessions_are_not_live ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+
+   Compiling libc v0.2.186
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling cfg-if v1.0.4
+   Compiling autocfg v1.5.1
+   Compiling getrandom v0.3.4
+   Compiling memchr v2.8.2
+   Compiling num-traits v0.2.19
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.17.1
+   Compiling utf8parse v0.2.2
+   Compiling zmij v1.0.21
+   Compiling regex-syntax v0.8.11
+   Compiling anstyle-parse v1.0.0
+   Compiling indexmap v2.14.0
+   Compiling aho-corasick v1.1.4
+   Compiling syn v2.0.118
+   Compiling anyhow v1.0.103
+   Compiling zerocopy v0.8.52
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstyle-query v1.1.5
+   Compiling core-foundation-sys v0.8.7
+   Compiling toml_write v0.1.2
+   Compiling option-ext v0.2.0
+   Compiling colorchoice v1.0.5
+   Compiling anstyle v1.0.14
+   Compiling winnow v0.7.15
+   Compiling serde_json v1.0.150
+   Compiling anstream v1.0.0
+   Compiling regex-automata v0.4.14
+   Compiling dirs-sys v0.4.1
+   Compiling iana-time-zone v0.1.65
+   Compiling rand_core v0.9.5
+   Compiling strsim v0.11.1
+   Compiling itoa v1.0.18
+   Compiling heck v0.5.0
+   Compiling clap_lex v1.1.0
+   Compiling clap_builder v4.6.0
+   Compiling chrono v0.4.45
+   Compiling dirs v5.0.1
+   Compiling wait-timeout v0.2.1
+   Compiling getrandom v0.4.3
+   Compiling rustix v1.1.4
+   Compiling bitflags v2.13.0
+   Compiling regex v1.12.4
+   Compiling errno v0.3.14
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.4
+   Compiling unarray v0.1.4
+   Compiling once_cell v1.21.4
+   Compiling fastrand v2.4.1
+   Compiling serde_derive v1.0.228
+   Compiling clap_derive v4.6.1
+   Compiling tempfile v3.27.0
+   Compiling ppv-lite86 v0.2.21
+   Compiling clap v4.6.1
+   Compiling rand_chacha v0.9.0
+   Compiling proptest v1.11.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.72 (/Users/yuki/src/.harness-worktrees/c5b9c02b-backlog-37db/crates/harness-core)
+   Compiling overwatch v0.2.105 (/Users/yuki/src/.harness-worktrees/c5b9c02b-backlog-37db/crates/overwatch)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.62s
+     Running tests/repro_status_shows_unregistered_live_sessions.rs (target/debug/deps/repro_status_shows_unregistered_live_sessions-b67042a6098bf0c7)
+"""
+
+[task.closure.red]
+rev = "b36c2727cbd92f23d3606d77fdfeccc5fb610480"
+exit = 101
+kind = "behavioural"

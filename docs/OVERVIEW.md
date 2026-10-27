@@ -123,12 +123,6 @@ Claude Code 組込みコンパクションの薄い制御層。pin + lossless-re
 
 - **フック**: UserPromptSubmit
 
-#### taskprog
-`.claude/progress.md` をセッション間でつなぎ、複数セッション跨ぎの進捗を管理する。
-
-- **フック**: SessionStart（progress.md 注入）、SessionEnd（更新）
-- **スキル**: `/taskprog`
-
 ---
 
 ### 検証ゲート（Stop フック群）
@@ -215,13 +209,13 @@ Rust スキャナーがリポジトリ構造をマップし、`.deepwiki/*.md` �
 - **スキル**: `/deepwiki`
 
 #### harness-status
-HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge のセッション記録 + taskprog の progress.md を 1 画面に集約表示するほか、サブコマンドで観測面を切り出せる。意図的に **CLI 専用・read-only**。加えて、登録済み hook の binary がディスク上に無いときだけ警告する軽量な `SessionStart` hook を1本持つ（健全時は無出力・fail-soft）。
+HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge のセッション記録 + `.claude/progress.md` を 1 画面に集約表示するほか、サブコマンドで観測面を切り出せる。意図的に **CLI 専用・read-only**。加えて、登録済み hook の binary がディスク上に無いときだけ警告する軽量な `SessionStart` hook を1本持つ（健全時は無出力・fail-soft）。
 
 | サブコマンド | 表示 |
 |---|---|
 | `budget` | 今日のコスト（budgetguard） |
 | `sessions` | 直近セッション（gauge） |
-| `progress` | 進捗ファイル（taskprog） |
+| `progress` | 進捗ファイル（`.claude/progress.md`） |
 | `hooks` | Stop ゲートの遅延集計 |
 | `inject` | UserPromptSubmit 注入サイズ集計 |
 | `hooks-health` | 登録済み hook の binary 欠損チェック |
@@ -251,7 +245,7 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
   flow（source→executor を束ねるループ。ユーザーが /flow と打ったときだけ走る）
       ↓ 課題文
   condukt（実行の背骨）
-      ├─ [前段] playbook / runbook / ctxrot / taskprog が context を整備
+      ├─ [前段] playbook / runbook / ctxrot が context を整備
       ├─ [Phase 5 並列実装] fugu-router がモデルを選ぶ
       │    stuckguard / ctxrot / budgetguard / gauge が並走監視
       ├─ [Phase 6 検証] donegate / tdd / precommit-audit / reviewgate
@@ -259,7 +253,7 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
       └─ [Phase 8 クローズ] specguard（drift 監査・non-blocking）
 [横断]
   gauge → budgetguard, harness-status, session-insights が数値を読む
-  harness-status → budgetguard + gauge + taskprog の集約ビュー
+  harness-status → budgetguard + gauge + progress.md の集約ビュー
 ```
 
 ---
@@ -268,14 +262,14 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
 
 | Hook | 発火タイミング | 主な登録プラグイン |
 |---|---|---|
-| SessionStart | セッション開始時 | compass, condukt(restore), context-governor, ctxrot(restore), daily, difflog, hypothesis, specguard, taskprog |
+| SessionStart | セッション開始時 | compass, condukt(restore), context-governor, ctxrot(restore), daily, difflog, hypothesis, specguard |
 | UserPromptSubmit | プロンプト送信前 | autoflow, context-governor, ctxrot(guard), fugu-router, playbook, runbook |
 | PreToolUse | ツール実行前 | blastguard, ctxrot(preguard) |
 | PostToolUse | ツール実行後 | context-governor, ctxrot(toolguard), session-insights, stuckguard |
 | PreCompact | /compact 直前 | autoflow, context-governor, ctxrot(rescue) |
 | Stop | ターン終了前 | autoflow, budgetguard, condukt, context-governor, ctxrot(stop), donegate, precommit-audit, propguard, reviewgate, tdd |
 | SubagentStop | サブエージェント終了時 | context-governor |
-| SessionEnd | セッション終了時 | beacon, compass, difflog, gauge, session-insights, taskprog |
+| SessionEnd | セッション終了時 | beacon, compass, difflog, gauge, session-insights |
 | Notification | 外部通知時 | beacon |
 
 ---

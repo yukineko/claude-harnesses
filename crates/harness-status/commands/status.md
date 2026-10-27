@@ -1,5 +1,5 @@
 ---
-description: harness 全プラグインの HOTL ステータスを集約表示する。今日のコスト (budgetguard)、直近セッション (gauge)、進捗ファイル (taskprog) を一画面にまとめる。
+description: harness 全プラグインの HOTL ステータスを集約表示する。今日のコスト (budgetguard)、直近セッション (gauge)、進捗ファイル (.claude/progress.md) を一画面にまとめる。
 argument-hint: [budget|sessions|progress] [--json]
 ---
 
@@ -26,7 +26,6 @@ what the numbers mean.
 
 3. **Interpret briefly (optional).** After the table, add at most 1–2 lines:
    - If today's spend is approaching a known budget limit, say so.
-   - If the progress file is missing, suggest `/taskprog` to create one.
    - If a recent session has unusually high cost/turns, flag it.
 
 ## Notes

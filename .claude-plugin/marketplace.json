@@ -57,7 +57,7 @@
     {
       "name": "blastguard",
       "description": "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary.",
-      "version": "0.2.148",
+      "version": "0.2.149",
       "category": "security",
       "keywords": [
         "hooks",
@@ -132,7 +132,7 @@
     {
       "name": "compass",
       "description": "Goal re-grounding and next-move derivation for Claude Code, sitting upstream of condukt to decide what to work on.",
-      "version": "0.1.27",
+      "version": "0.1.28",
       "category": "planning",
       "keywords": [
         "compass",
@@ -331,7 +331,7 @@
     {
       "name": "donegate",
       "description": "Completion-verification gate for Claude Code: on Stop it runs your acceptance commands and blocks until every applicable check is green, feeding failures back for an auto-fix loop.",
-      "version": "0.1.46",
+      "version": "0.1.49",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -483,8 +483,8 @@
     },
     {
       "name": "harness-status",
-      "description": "Unified human-on-the-loop status dashboard for Claude Code: a /status command that aggregates budgetguard spend, gauge session records and taskprog progress into one read-only view.",
-      "version": "0.1.26",
+      "description": "Unified human-on-the-loop status dashboard for Claude Code: a /status command that aggregates budgetguard spend, gauge session records and the .claude/progress.md progress file into one read-only view.",
+      "version": "0.1.27",
       "category": "observability",
       "keywords": [
         "status",
@@ -557,7 +557,7 @@
     {
       "name": "reviewgate",
       "description": "Code-review gate for Claude Code whose Stop hook defaults to off; opt in to inject a review rubric for self-review or to spawn an independent reviewer command.",
-      "version": "0.1.55",
+      "version": "0.1.57",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -701,34 +701,9 @@
       }
     },
     {
-      "name": "taskprog",
-      "description": "Multi-session progress file for Claude Code: injects .claude/progress.md at SessionStart and notifies the user at Stop to keep it current for handoff across sessions.",
-      "version": "0.1.18",
-      "category": "workflow",
-      "keywords": [
-        "hooks",
-        "progress",
-        "session",
-        "hotl",
-        "handoff",
-        "rust"
-      ],
-      "license": "MIT",
-      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/taskprog",
-      "author": {
-        "name": "yukineko"
-      },
-      "source": {
-        "source": "git-subdir",
-        "url": "https://github.com/yukineko/claude-harnesses.git",
-        "path": "crates/taskprog",
-        "ref": "main"
-      }
-    },
-    {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: on Stop it blocks when implementation lines were added with no test visible in the uncommitted changes, and red/green/verify subcommands record RED before GREEN.",
-      "version": "0.1.53",
+      "version": "0.1.55",
       "category": "quality",
       "keywords": [
         "tdd",
@@ -825,7 +800,7 @@
     {
       "name": "overwatch",
       "description": "Lease and event store for condukt task orchestration that manages the claim registry, heartbeat lifecycle and runtime state so parallel sessions do not duplicate work.",
-      "version": "0.2.97",
+      "version": "0.2.106",
       "category": "observability",
       "keywords": [
         "pdo",

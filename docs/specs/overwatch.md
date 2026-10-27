@@ -7,7 +7,7 @@
 `overwatch` は、プロジェクト全体（cross-session）の実行レジストリと dedup ガード、および PDO 進捗ビューを
 束ねるハーネスである。中核は `store::Lease`（key→保有 session の claim）を `<base>/<project-key>/overwatch/`
 配下の `leases.json` に永続化し、ライフサイクルを `events.jsonl`（append-only）へ記録すること。単一 Rust
-バイナリ + 1 フック（SessionStart で `overwatch status` を注入。Stop には登録しない）で動き、サブスクリプション
+バイナリ + 2 フック（SessionStart / Stop、ともに `overwatch status` を注入）で動き、サブスクリプション
 ネイティブ（追加 API key 不要）。dedup 契約は「`begin` が別 live session に保持されたキーへ試行したら
 skip JSON を stdout に出して exit 1」で、呼び出し元は先へ進んではならない。`status`/`sessions` は overwatch
 台帳に加え backlog / hypothesis / condukt / compass を fail-soft にシェルして集約する（`aggregate::build`）。
@@ -75,8 +75,12 @@ CLI は `clap` の `Command` enum（`main.rs`）で定義。ledger/lease 系は�
 - **`reap`** — stale lease を全削除し `{"reaped":N}` を出力。lock 不成立・root 解決不能は非 0。
 - **`status [--json]`** — `aggregate::build` の `ProgressView` を人間可読 5 セクション（Sessions / PDO
   hypotheses / Backlog / Condukt runs / Compass gap）または pretty JSON で表示（`render::status`）。
-  SessionStart フックの注入先。
-- **`sessions [--json]`** — per-session lease roster のみを表示（`render::sessions`）。
+  SessionStart フックの注入先（Stop フックからは撤去済み。user ruling 2026-10-27）。Sessions セクションは
+  lease roster に加えて presence セッション（下記「session presence」）を表示する。
+- **`sessions [--json]`** — lease roster と presence セッションを表示（`render::sessions`）。`--json` は
+  `{sessions, active_sessions[, undetermined]}`。どちらかの source が読めないときは `undetermined` に載せ、
+  bare な `[]` を出さない。
+- **`presence`** — hook 専用。stdin の Claude Code hook payload を presence registry に記録する（下記）。
 - **`pause --run` / `resume --run`** — `condukt state pause|resume --run <id>` へ委譲（`control`）。condukt が失敗したら非 0 で終了する。
 - **`reassign --key --to`** — 現 lease を release（load→remove→save）し、新保有者 `to` を監査イベントに記録。キー未保持・lock 不成立・root 解決不能は非 0。
 
@@ -101,9 +105,39 @@ CLI は `clap` の `Command` enum（`main.rs`）で定義。ledger/lease 系は�
   `HypoBuckets`/`RunRow`）、純パーサ（`roster_from_leases`/`parse_backlog`/`bucket_hypotheses`/
   `parse_condukt_runs`）、fail-soft シェル（`shell_soft`）、`build`（infallible 集約）。
 - **`render`** — `ProgressView` の人間可読 / JSON 整形（`status`/`sessions` と各 `format_*`）。
+- **`stalled`** — `status` が表示する停滞 subagent の走査（backlog 938e1004）。`$HOME/.claude/projects/<slug>/<session>/subagents/agent-<id>.jsonl` の最終エントリが assistant の
+  `tool_use`（後続の `tool_result` 無し）かつ mtime が `STALL_SECS`(=300) 以上古いものを `Stalled`
+  （agent id・idle 分・pending command）として列挙する。報告のみで kill/restart はしない。signal は
+  transcript の mtime と最終エントリであり output-file サイズではない。読めない・最終エントリを parse
+  できない transcript と NotFound 以外のディレクトリ読み取り失敗は `Unknown`（理由付き）として列挙し、
+  省略も clean 扱いもしない（fail-closed）。projects/subagents ディレクトリが NotFound のときだけ「列挙なし」。
 - **`control`** — 制御面。純 argv ビルダ（`pause_cmd`/`resume_cmd`）、argv 実行（`run_fail_soft`。成否を bool で返し、呼び出し側が失敗を非 0 終了に写す）、
   監査追記（`record_control_event`）、`pause`/`resume`/`reassign`。HOTL 承認は skill 側。
 - **`lib`** — テスト・他クレート向けに `event`/`store` を re-export する薄い公開面。
+- **`presence`** — 自動 session presence（下記「session presence」）。hook payload の parse・
+  `presence.json` の読み書き・`liveness`・`prunable`。
+
+## session presence (自動 session 可視化, backlog 37db5d14)
+
+`overwatch begin` を呼ばない素の対話セッションも `overwatch status` / `sessions` に現れるようにする層。
+
+- **registry** — `presence.json`。`leases.json` と同じ `storage_root`（main worktree root で key した共有
+  store）に置くので、linked worktree で登録したセッションも main checkout から見える。entry は
+  `session_id` → `{session_id, cwd, worktree, transcript_path, written_paths, last_seen, ended}`。
+  `worktree` は `projkey::repo_root(cwd)` で求める per-session の表示用フィールドであって store key ではない。
+- **書き手（hooks）** — `hooks/hooks.json` の `overwatch presence` が SessionStart（登録）・PostToolUse
+  （matcher `Edit|Write|MultiEdit|NotebookEdit`、`tool_input.file_path` / `notebook_path` を
+  `written_paths` に重複なく追加）・SessionEnd（`ended = true`）で走る。書き込みは lease lock
+  （`LeaseLock::acquire_strict`）下で temp + rename。
+- **liveness** — transcript の mtime と `LEASE_TTL_SECS` を比べる: TTL 内 = `live`、超過 = `stale`、
+  transcript が無い・読めない・60 秒超の未来 mtime = `unknown`、SessionEnd 受信済み = `ended`。
+  `unknown` は live として扱わず、黙って省略もしない（表示する）。
+- **pruning** — 書き込みのたびに `prunable`（`last_seen` が `PRUNE_AFTER_SECS`(=24h) より古く、かつ
+  liveness が `live` でない）entry だけを削除する。live な entry は `last_seen` が古くても消さない。
+- **undetermined** — `presence.json` が壊れている・読めないとき、`presence` hook は registry を空で
+  上書きせず stderr に理由を出して非 0 終了する。`status` / `sessions` は source `active_sessions` を
+  undetermined として記録し、テキストは `(unknown: ...)` を出して `(none)` を出さない。status cache は
+  `presence.json` の mtime が cache 構築以降、または観測できないときに無効化される。
 
 ## fleet 相関エラー検知 (violation signatures)
 

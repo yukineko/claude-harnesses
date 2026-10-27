@@ -5,7 +5,7 @@
 //!   - the **charter** itself — [`Authority::High`] (the current stated goal),
 //!   - **recent git activity** (commit subjects + uncommitted changes) —
 //!     [`Authority::Mid`] (what the project is actually doing now),
-//!   - **taskprog** `.claude/progress.md` / `progress.md` — [`Authority::Mid`],
+//!   - the **progress file** `.claude/progress.md` / `progress.md` — [`Authority::Mid`],
 //!   - **deepwiki** `.deepwiki/**/*.md` — [`Authority::Mid`].
 //!
 //! Gathering is deterministic and tolerant of absence: a non-git repo or a
@@ -135,7 +135,7 @@ fn gather_git(out: &mut Vec<Fragment>, repo_root: &Path) {
     }
 }
 
-/// taskprog progress (DESIGN §3): `.claude/progress.md` preferred, else
+/// progress file (DESIGN §3): `.claude/progress.md` preferred, else
 /// `progress.md`. Mid authority. Missing file => no fragment.
 fn gather_progress(out: &mut Vec<Fragment>, repo_root: &Path) {
     for rel in [".claude/progress.md", "progress.md"] {
@@ -148,7 +148,7 @@ fn gather_progress(out: &mut Vec<Fragment>, repo_root: &Path) {
                     source_path: rel.to_string(),
                     authority: Authority::Mid,
                     score: text.lines().count() as i64,
-                    anchor: Some("taskprog".to_string()),
+                    anchor: Some("progress".to_string()),
                 });
             }
             return; // first found wins; don't double-count both files.
@@ -310,7 +310,7 @@ mod tests {
         assert!(bundle
             .fragments
             .iter()
-            .any(|f| f.anchor.as_deref() == Some("taskprog")));
+            .any(|f| f.anchor.as_deref() == Some("progress")));
     }
 
     /// CA-fail-open: a `.deepwiki/` dir that EXISTS but cannot be read

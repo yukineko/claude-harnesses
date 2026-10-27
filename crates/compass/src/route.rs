@@ -253,14 +253,14 @@ fn right_size_zero_edge(tasks: &[Task]) -> Option<RouteEdge> {
     }
 }
 
-/// The taskprog "残り" (remaining) section header in `.claude/progress.md`.
+/// The "残り" (remaining) section header in `.claude/progress.md`.
 const REMAINING_HEADER: &str = "## 残り";
 
 /// Append parked task titles as bullet lines under the "残り" section of
 /// `.claude/progress.md` (the 保留 sink, DESIGN §6 self-feeding loop). Creates
 /// the file/section if absent. Idempotent: a verbatim-existing bullet line is
 /// never duplicated.
-pub fn write_parked_to_taskprog(repo_root: &Path, parked: &[Task]) -> Result<()> {
+pub fn write_parked_to_progress(repo_root: &Path, parked: &[Task]) -> Result<()> {
     let dir = repo_root.join(".claude");
     let path = dir.join("progress.md");
 
@@ -495,7 +495,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let parked = vec![task("a", &[], Some("l")), task("b", &[], Some("xl"))];
 
-        write_parked_to_taskprog(dir.path(), &parked).expect("first write");
+        write_parked_to_progress(dir.path(), &parked).expect("first write");
         let path = dir.path().join(".claude/progress.md");
         let after_first = std::fs::read_to_string(&path).expect("read");
         assert!(after_first.contains(REMAINING_HEADER));
@@ -503,7 +503,7 @@ mod tests {
         assert!(after_first.contains("- title-b"));
 
         // Re-run: no duplication.
-        write_parked_to_taskprog(dir.path(), &parked).expect("second write");
+        write_parked_to_progress(dir.path(), &parked).expect("second write");
         let after_second = std::fs::read_to_string(&path).expect("read");
         assert_eq!(after_first, after_second);
         assert_eq!(after_second.matches("- title-a").count(), 1);
@@ -517,7 +517,7 @@ mod tests {
         let path = dir.path().join(".claude/progress.md");
         std::fs::write(&path, "# progress\n\n## 完了\n- did a thing\n").unwrap();
 
-        write_parked_to_taskprog(dir.path(), &[task("x", &[], Some("l"))]).expect("write");
+        write_parked_to_progress(dir.path(), &[task("x", &[], Some("l"))]).expect("write");
         let content = std::fs::read_to_string(&path).expect("read");
         assert!(content.contains("## 完了"));
         assert!(content.contains("- did a thing"));

@@ -96,6 +96,13 @@ pub struct ProgressView {
     /// emptiness as absence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sessions: Vec<SessionRoster>,
+    /// Sessions seen by the SessionStart/PostToolUse/SessionEnd presence hooks
+    /// (`overwatch presence`), independent of whether they ran `overwatch
+    /// begin`. Empty means "presence.json was read and holds no session"
+    /// ONLY when [`SOURCE_ACTIVE_SESSIONS`] is not in
+    /// [`ProgressView::undetermined`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_sessions: Vec<ActiveSession>,
     /// Backlog summary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backlog: Option<BacklogSummary>,
@@ -108,6 +115,10 @@ pub struct ProgressView {
     /// Compass gap (north_star / current gap).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compass_gap: Option<String>,
+    /// Subagents whose transcript ends in a pending tool_use idle for 5+ min
+    /// (or whose transcript is unknown). Empty = none observed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stalled_subagents: Vec<crate::stalled::StalledSubagent>,
     /// Sources that could NOT be observed on this build, and why.
     ///
     /// This is the field that keeps every other field honest. Each of them is a
@@ -126,6 +137,22 @@ pub struct ProgressView {
     pub undetermined: Vec<UndeterminedSource>,
 }
 
+/// One presence-hook-registered session in [`ProgressView::active_sessions`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActiveSession {
+    pub session_id: String,
+    pub cwd: String,
+    /// Git toplevel of `cwd`.
+    pub worktree: String,
+    #[serde(default)]
+    pub written_paths: Vec<String>,
+    /// `live` | `stale` | `unknown` | `ended` (see `presence::liveness`).
+    pub liveness: String,
+    pub last_seen: i64,
+}
+
+/// Machine key for the presence-hook session source.
+pub const SOURCE_ACTIVE_SESSIONS: &str = "active_sessions";
 /// Machine key for the session-roster source.
 pub const SOURCE_SESSIONS: &str = "sessions";
 /// Machine key for the backlog source.
@@ -433,6 +460,50 @@ pub(crate) fn apply_leases(
     }
 }
 
+/// Fold the presence registry into the view. Same absent-vs-unreadable split as
+/// [`apply_leases`]: an unreadable or corrupt `presence.json` leaves
+/// `active_sessions` empty but marks [`SOURCE_ACTIVE_SESSIONS`] undetermined,
+/// so emptiness is never read as "nobody is here".
+pub(crate) fn apply_presence(
+    view: &mut ProgressView,
+    loaded: anyhow::Result<crate::presence::PresenceRegistry>,
+    now: i64,
+) {
+    match loaded {
+        Ok(reg) => {
+            view.active_sessions = reg
+                .values()
+                .map(|e| ActiveSession {
+                    session_id: e.session_id.clone(),
+                    cwd: e.cwd.clone(),
+                    worktree: e.worktree.clone(),
+                    written_paths: e.written_paths.clone(),
+                    liveness: crate::presence::liveness(e, now).to_string(),
+                    last_seen: e.last_seen,
+                })
+                .collect();
+        }
+        Err(e) => {
+            view.active_sessions = Vec::new();
+            view.mark_undetermined(
+                SOURCE_ACTIVE_SESSIONS,
+                format!("the session presence registry could not be read ({e}); active sessions are UNKNOWN"),
+            );
+        }
+    }
+}
+
+/// Newest write time over every ledger the cached view derives from
+/// (`leases.json` and `presence.json`). Undetermined if either is.
+fn ledgers_mtime(cwd: &Path) -> Determination<i64> {
+    match (store::leases_mtime(cwd), store::presence_mtime(cwd)) {
+        (Determination::Known(a), Determination::Known(b)) => Determination::known(a.max(b)),
+        (Determination::Undetermined(r), _) | (_, Determination::Undetermined(r)) => {
+            Determination::Undetermined(r)
+        }
+    }
+}
+
 /// Build the full ProgressView.
 ///
 /// Infallible in the sense that it always returns a view (this runs from the
@@ -449,6 +520,7 @@ pub fn build(cwd: &Path) -> ProgressView {
     // The absent-vs-unreadable split lives in `apply_leases` so the FAILURE
     // path stays reachable from a test without touching the real store.
     apply_leases(&mut view, store::load_leases(cwd), now);
+    apply_presence(&mut view, crate::presence::load_presence(cwd), now);
 
     // 2. Backlog: `backlog list --json`.
     match shell_source("backlog", &["list", "--json"]) {
@@ -487,6 +559,20 @@ pub fn build(cwd: &Path) -> ProgressView {
             }
         }
         SourceOutput::Undetermined(why) => view.mark_undetermined(SOURCE_COMPASS_GAP, why),
+    }
+
+    // 6. Stalled subagents (transcript mtime + last entry). Report only.
+    if let Some(home) = dirs::home_dir() {
+        // Claude Code keys the project dir on the session's start dir, which
+        // may be cwd or any ancestor (e.g. the repo toplevel): scan each.
+        let canon = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        for r in canon.ancestors() {
+            view.stalled_subagents.extend(crate::stalled::scan(
+                &home,
+                r,
+                std::time::SystemTime::now(),
+            ));
+        }
     }
 
     view
@@ -594,7 +680,7 @@ pub fn build_cached(cwd: &Path) -> ProgressView {
                     cached.built_at,
                     now,
                     STATUS_CACHE_TTL_SECS,
-                    store::leases_mtime(cwd),
+                    ledgers_mtime(cwd),
                 ) {
                     return cached.view;
                 }

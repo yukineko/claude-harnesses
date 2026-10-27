@@ -1,69 +1,4 @@
 [[task]]
-id = "8924ca76"
-title = "fugu-router SessionEnd hook (harvest then sync) is cancelled in headless claude -p runs so sync never pulls or pushes (GitHub 1345)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "github-1345",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "claude -p probe 2026-10-25, Claude Code 2.1.284, fugu-router 0.1.60 alone via --plugin-dir: stderr 'SessionEnd hook [...fugu-router harvest; ...fugu-router sync] failed: Hook cancelled'; debug shows cancel about 1.5 s after shutdown began despite timeout 60. Local data: sync made its local commit (no local loss observed; harvest no-op in a non-repo cwd so harvest loss NOT measured). Remote: pull and push did not complete; sync repo stays ahead of upstream (22 before and after). Repro runs the real installed plugin; sync touches ~/.fugu-router/sync as any session end does."
-created_at = 1792885809
-updated_at = 1792885809
-weight = 0.0
-issue_number = 1452
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1452"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/probe_gh1345_fugu_sessionend.sh"
-rev = "cde613ebba64735f747182b6050b9b0ef59437fb"
-observed_at = 1792885809
-detail = """
-exit 1: LAUDE_PLUGIN_ROOT}/bin/fugu-router harvest; ${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync] failed: Hook cancelled
-debug SessionEnd lines:
-2026-10-24T23:50:13.079Z [DEBUG] SessionEnd:other [${CLAUDE_PLUGIN_ROOT}/bin/fugu-router harvest; ${CLAUDE_PLUGIN_ROOT}/bin/fugu-router sync] cancelled
-sync repo commits ahead of upstream after: 22
-DEFECT: fugu-router SessionEnd hook was cancelled in a headless run"""
-
-[[task]]
-id = "b114a0b3"
-title = "onepass launcher UserPromptSubmit fallback exits 0 with empty stdout when the binary is missing"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-10-25 at main 1f609efe (e753a0b6 worktree, confirmed at 13e1bd83 by stashing the change, and again at 247b3f4a). bash scripts/tests/launcher-missing-binary-failclosed.sh: 'FAIL: onepass UserPromptSubmit: onepass reset -> exit 0 with EMPTY stdout: indistinguishable from the plugin's own nothing to report' / 'RED: 1 launcher case(s) answer fine when the binary is missing'. Reading (a): real fail-open in crates/onepass/bin/onepass fallback (should emit a visible notice like fugu-router prompt). Reading (b): intended because onepass reset carries no verdict; distinguish by checking whether any consumer reads onepass reset's silence as a reset having happened."
-created_at = 1792927378
-updated_at = 1792927378
-weight = 0.0
-issue_number = 1455
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1455"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/launcher-missing-binary-failclosed.sh"
-rev = "9bab9917213003acd38190d99087e35ab5366d33"
-observed_at = 1792927378
-detail = """
-exit 1: kt policy answer -> rc=1
-  ok:   compass nudge --json -> rc=127
-  ok:   fugu-router route --file x.json -> rc=127
-  ok:   gauge report -> rc=127
-  ok:   ship check -> rc=127
-  ok:   hypothesis list -> rc=127
-  ok:   session-insights report -> rc=127
-  ok:   specguard pending --json -> rc=127
-  ok:   context-governor rollup -> rc=127
-
-RED: 1 launcher case(s) answer 'fine' when the binary is missing"""
-
-[[task]]
 id = "ba649100"
 title = "tdd がセッション中に commit 済みの実装を評価せず、空スキャンで Stop をブロックする問題を直す"
 project = "/home/hiroyuki_nakayama/src/claude-harnesses"
@@ -92,3 +27,91 @@ exit 101:    Compiling tdd v0.1.53 (/home/hiroyuki_nakayama/src/.claude-harnesse
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.03s
      Running tests/committed_session_work_is_evaluated.rs (target/debug/deps/committed_session_work_is_evaluated-4f80511a2f651da5)
 error: test failed, to rerun pass `-p tdd --test committed_session_work_is_evaluated`"""
+
+[[task]]
+id = "a44c2fd2"
+title = "condukt check-criteria drops the python3 -m prefix and runs bare pytest"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-10-26 on condukt run run-20261026-025716-14405 task t3 (user reported condukt 0.7.295; installed binary at repro time reports 0.7.292). t3 done_criteria (prose, no backticks) contained 'python3 -m pytest scripts/test_backlog_audit_b1_0.py -k main_guard passes'. condukt state check-criteria extracted only the bare command 'pytest'. Because bare pytest does not put cwd on sys.path, it ran over the whole worktree and failed collecting scripts/test_backlog_5461ba1c.py with "ModuleNotFoundError: No module named 'scripts'". Root: prose fallback in verify::mechanical_cmd (crates/condukt/src/verify.rs) returns vec!["pytest"] on any 'pytest' substring, dropping the python3 -m prefix and the target path; a backticked command is preserved (control run: ["python3","-m","pytest","scripts/x.py"]). Repro output at 3488bc34: extracted argv ["pytest"], '0 passed, 1 failed', exit 1. Not fixed here (user ruling: file only).
+
+ON HOLD (user ruling 2026-10-26, session c5b9c02b): 3 fix rounds on unmerged branch condukt/run-20261026-212750-58817/t2 (worktree run-20261026-212750-58817-t2, head a8ccd9ac, condukt 0.7.298). Round 1 (4525177e) and round 2 (a9cf8fb7) FAILED verification: prose extraction dropped later targets so check-criteria reported passed with skip_verifier=true while a named test never ran (a new fail-open, worse than bare pytest). Round 3 (a8ccd9ac) passes repros scripts/tests/condukt-check-criteria-{python-m-prefix,multi-path,unaccounted-targets}.sh and cargo test, but its verifier was blocked by blastguard (shell-expansion redirect) before adversarial probing; verdict UNVERIFIED. Verifier predicts by reading only (not run) that linking words outside its list still slip: 'plus', 'as well as', juxtaposed targets, 'pytest -x a.py then tests', Japanese 'や'/'。tests も通る', '-k test_a and test_b'. Suggested direction: every non-stopword token outside the final argv counts as unaccounted. Also unverified side finding: run_mechanical indexes cmd[0] (empty mechanical_check cmd may panic)."""
+created_at = 1793016312
+updated_at = 1793026688
+weight = 0.0
+issue_number = 1458
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1458"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/condukt-check-criteria-python-m-prefix.sh"
+rev = "3488bc34b28d894a866b022db0ab9e37af1f0561"
+observed_at = 1793016312
+detail = '''
+exit 1: zjn12xs02k588nyw5txm0000gp/T/condukt-cc-pym.FC6g1P/repo\nplugins: anyio-4.9.0, langsmith-0.4.8\ncollected 0 items\n\n============================ no tests ran in 0.00s =============================\n","passed":false,"skip_verifier":false}
+extracted argv: ["pytest"]
+0 passed, 1 failed
+FAIL: extracted command is ["pytest"]; expected it to start with ["python3","-m","pytest"] and include scripts/x.py'''
+
+[[task]]
+id = "58bc638d"
+title = "guard-maintree-bash refuses a genuine two-parent merge when main has any pre-existing untracked path (HEAD-moved branch requires whole-tree-clean porcelain)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "guard-maintree-bash",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """scripts/guard-maintree-bash.py:393 'elif after["head"] != before["head"] and not after["porcelain"]' needs a globally clean tree; an unchanged untracked path (e.g. bare.git/) keeps porcelain non-empty so the merge falls to the final else REFUSE (line 399-400) without integration_head() being consulted. Observed 2026-10-27 on merge 71706f61. Repro: scripts/test_guard_maintree_bash_merge_with_untracked.py"""
+created_at = 1793031488
+updated_at = 1793031488
+weight = 0.0
+issue_number = 1465
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1465"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_merge_with_untracked.py -k test_red"
+rev = "48a728d0e9f50aa6488a4f6dd6e00b8d0a220b52"
+observed_at = 1793031488
+detail = """
+exit 1: ======================
+FAILED scripts/test_guard_maintree_bash_merge_with_untracked.py::MergeWithPreexistingUntracked::test_red_merge_allowed_with_plain_untracked_file
+FAILED scripts/test_guard_maintree_bash_merge_with_untracked.py::MergeWithPreexistingUntracked::test_red_merge_allowed_with_untracked_bare_repo_at_root
+======================= 2 failed, 1 deselected in 0.93s ========================"""
+
+[[task]]
+id = "1fd5a731"
+title = "blastguard reads backtick prose inside a quoted heredoc body as a redirect target"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1793031974
+updated_at = 1793031974
+weight = 0.0
+issue_number = 1466
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1466"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_quoted_body_doc_comment_backtick -- --ignored"
+rev = "8176bc17ef2ff9b6fb2ae1b0d6fa11d3d46a90e4"
+observed_at = 1793031974
+detail = """
+exit 101: t: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.23s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/heredoc_quoted_body_doc_comment_backtick.rs (target/debug/deps/heredoc_quoted_body_doc_comment_backtick-417dcc6ee00ee467)
+error: test failed, to rerun pass `-p blastguard --test heredoc_quoted_body_doc_comment_backtick`"""

@@ -140,6 +140,7 @@ impl Fixture {
             .env("CLAUDE_CODE_SESSION_ID", "s-wtroots")
             .env_remove("REVIEWGATE_DISABLE")
             .env_remove("HARNESS_TRUST_ALL")
+            .env_remove("HARNESS_WORKTREE_ORIGIN_DIR")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -197,6 +198,27 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.home);
+    }
+}
+
+/// Creates `dir` with mode 000 on construction and restores 0o755 on drop, so
+/// teardown can delete it even when an assert panics. Only call it after the
+/// transcript (which lives under the same home) is written.
+struct LockedDir(PathBuf);
+
+impl LockedDir {
+    fn new(dir: &Path) -> LockedDir {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        LockedDir(dir.to_path_buf())
+    }
+}
+
+impl Drop for LockedDir {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
     }
 }
 
@@ -280,8 +302,13 @@ fn wrote_files_but_empty_review_set_blocks_naming_roots() {
 #[test]
 fn written_root_gone_blocks_naming_the_root() {
     let f = Fixture::new();
-    let gone = f.home.join("gone-root-4711").join("x.rs");
+    // user ruling 2026-10-27: a gone dir under a NON-repo base is now excluded;
+    // this keeps its property (unresolvable written root blocks, naming it) with
+    // a gone dir whose nearest existing ancestor git cannot enter (mode 000).
+    let locked = f.home.join("gone-root-4711");
+    let gone = locked.join("gone").join("x.rs");
     let tp = f.transcript(&[edit(&gone)]);
+    let _unlock = LockedDir::new(&locked);
     let o = f.stop(&f.primary, &tp);
     assert_eq!(
         o.decision, "block",
@@ -295,11 +322,20 @@ fn written_root_gone_blocks_naming_the_root() {
     );
 }
 
+/// A written file whose git root cannot be determined (a corrupt `.git`
+/// gitfile pointing nowhere) must block, naming the root.
+///
+/// Re-anchored for backlog 775e5bc8 (GitHub 1459): this test used a plain
+/// non-git directory, which the user ruling now treats as POSITIVELY outside
+/// every repo and excludes from the roots. A corrupt gitfile makes git say
+/// "not a git repository" without "(or any of the parent directories)", so the
+/// root stays undetermined and must still block.
 #[test]
-fn written_root_not_a_git_repo_blocks_naming_the_root() {
+fn written_root_corrupt_gitfile_blocks_naming_the_root() {
     let f = Fixture::new();
     let plain = f.home.join("plain-dir-4712");
     std::fs::create_dir_all(&plain).unwrap();
+    std::fs::write(plain.join(".git"), "gitdir: /nonexistent/harness-test\n").unwrap();
     std::fs::write(plain.join("x.rs"), BODY).unwrap();
     let tp = f.transcript(&[edit(&plain.join("x.rs"))]);
     let o = f.stop(&f.primary, &tp);

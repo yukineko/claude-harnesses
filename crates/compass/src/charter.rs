@@ -25,7 +25,7 @@
 //! The first physical step to take on resume.
 //!
 //! ## parked
-//! - pointer to a parked item (lives in taskprog progress.md)
+//! - pointer to a parked item (lives in .claude/progress.md)
 //! ```
 //!
 //! Scalar fields (`north_star`, `measuring_stick`, `current_gap`,
@@ -59,7 +59,7 @@ pub struct Charter {
     pub current_gap: String,
     /// First physical step on resume (written by the breadcrumb step).
     pub next_action: String,
-    /// Pointers to parked items (bodies live in taskprog progress.md).
+    /// Pointers to parked items (bodies live in .claude/progress.md).
     pub parked: Vec<String>,
 }
 
@@ -217,8 +217,8 @@ mod tests {
             current_gap: "No crate scaffold yet; workspace build is broken.".to_string(),
             next_action: "Scaffold Cargo.toml + main.rs + config + charter.".to_string(),
             parked: vec![
-                "cross-compile bins (taskprog #7)".to_string(),
-                "hooks + skill (taskprog #6)".to_string(),
+                "cross-compile bins (#7)".to_string(),
+                "hooks + skill (#6)".to_string(),
             ],
         }
     }

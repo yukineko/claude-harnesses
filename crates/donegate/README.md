@@ -31,8 +31,10 @@ and reads exit codes — so it can never hit a rate limit.
    of every written root run, not only the cwd's. An unresolvable written root, or a
    session that wrote files into a root whose config exists but declares no check,
    blocks naming the roots. If every written root has no donegate config at all, the
-   stop is allowed but never silently: a `systemMessage` on stdout and the same text on
-   stderr ("donegate not configured for <roots>: no checks ran") name each such root.
+   stop is allowed with an empty stdout (no `systemMessage`; user ruling 2026-10-27).
+   The allow is still recorded: stderr says "donegate not configured for <roots>: no
+   checks ran", and a `"verdict":"unconfigured"` entry naming the session and each such
+   root (`roots`) is appended to `<state_dir>/log.jsonl`.
    A session with no recorded writes is unaffected;
 2. loads `./donegate.toml` (or `~/.donegate/config.toml`);
 3. asks `git` which files changed, and selects the checks whose `when_changed`

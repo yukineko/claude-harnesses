@@ -250,6 +250,11 @@ doc = "docs/specs/overwatch.md"
 reason = "'module 責務' lease and 'dedup 契約（ハード不変条件）' (lease::begin load -> reap -> is_held_by_other)."
 
 [[spec]]
+path = "crates/overwatch/src/presence.rs"
+doc = "docs/specs/overwatch.md"
+reason = "'session presence (自動 session 可視化, backlog 37db5d14)' section: presence.json registry, the hooks that write it, transcript-mtime liveness, prunable pruning and undetermined handling; plus 'module 責務' presence bullet."
+
+[[spec]]
 path = "crates/overwatch/src/aggregate.rs"
 doc = "docs/specs/overwatch.md"
 reason = "'module 責務' aggregate: ProgressView projection used by status."
@@ -258,6 +263,11 @@ reason = "'module 責務' aggregate: ProgressView projection used by status."
 path = "crates/overwatch/src/render.rs"
 doc = "docs/specs/overwatch.md"
 reason = "'module 責務' render: human/JSON formatting for status and sessions."
+
+[[spec]]
+path = "crates/overwatch/src/stalled.rs"
+doc = "docs/specs/overwatch.md"
+reason = "'module 責務' stalled: stalled-subagent scan (pending tool_use, idle >= STALL_SECS) shown by status; unreadable or unparseable transcripts are Unknown, never omitted."
 
 [[spec]]
 path = "crates/overwatch/src/control.rs"

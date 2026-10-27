@@ -266,6 +266,14 @@ kind = "store-key"
 evidence = "storage_root() = `~/.overwatch/<project-key of main_worktree_root(cwd)>/overwatch/`, holding leases.json. A lease registry exists to make two sessions collide; per-worktree partitioning makes every lease look free."
 
 [[consumer]]
+file = "crates/overwatch/src/presence.rs"
+symbol = "repo_root"
+count = 1
+scope = "worktree-local"
+kind = "tree-locus"
+evidence = "User ruling 2026-10-27: not a store key: computes each presence entry's per-session worktree field; presence.json itself is located via storage_root on the main worktree root (shared). The value is only reported (which checkout a session works in) and never keys a file on disk."
+
+[[consumer]]
 file = "crates/overwatch/src/review_escalation.rs"
 symbol = "project_key"
 count = 1

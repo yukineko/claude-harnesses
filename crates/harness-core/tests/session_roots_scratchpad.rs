@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! A Write/Edit inside THIS session's Claude Code scratchpad is not a root and
-//! not an error; every other write outside git stays Undetermined.
+//! not an error. Since the 2026-10-27 merge, any absolute write git positively
+//! reports as outside every repo is excluded too (see `session_roots_outside_repo.rs`).
 
 use harness_core::session_roots::resolve;
 use harness_core::verdict::Determination;
@@ -90,8 +91,25 @@ fn nested_scratchpad_write_is_known() {
     }
 }
 
+/// Retargeted at the 2026-10-27 merge to the later ruling (87082ebd,
+/// `session_roots_outside_repo.rs`): a write git positively reports as outside
+/// every repo is excluded, so these non-own-scratchpad dirs are Known with no
+/// extra root. The Undetermined controls (corrupt gitfile, unenterable dir,
+/// relative path) live in `session_roots_outside_repo.rs`.
+fn assert_excluded(cwd: &Path, t: &str, what: &str) {
+    match resolve(cwd, t) {
+        Determination::Known(r) => {
+            assert_eq!(r.roots, vec![cwd.to_path_buf()], "{what}");
+            assert!(r.wrote_any, "{what}");
+        }
+        Determination::Undetermined(w) => {
+            panic!("{what}: expected Known, got Undetermined: {}", w.as_str())
+        }
+    }
+}
+
 #[test]
-fn other_sessions_scratchpad_is_undetermined() {
+fn other_sessions_scratchpad_outside_git_is_excluded() {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = git_init(&tmp.path().join("repo"));
     let f = make_file(
@@ -99,40 +117,25 @@ fn other_sessions_scratchpad_is_undetermined() {
         &format!("claude-1000/slug/{OTHER_SID}/scratchpad"),
     );
     let t = transcript(tmp.path(), &[&f]);
-    assert!(
-        matches!(resolve(&cwd, &t), Determination::Undetermined(_)),
-        "a different session's scratchpad must stay Undetermined"
-    );
+    assert_excluded(&cwd, &t, "another session's scratchpad outside git");
 }
 
 #[test]
-fn non_git_non_scratchpad_dir_is_undetermined_naming_path() {
+fn non_git_non_scratchpad_dir_is_excluded() {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = git_init(&tmp.path().join("repo"));
     let f = make_file(tmp.path(), "elsewhere");
     let t = transcript(tmp.path(), &[&f]);
-    match resolve(&cwd, &t) {
-        Determination::Undetermined(w) => {
-            assert!(
-                w.as_str().contains(&*f.to_string_lossy()),
-                "reason: {}",
-                w.as_str()
-            )
-        }
-        Determination::Known(r) => panic!("expected Undetermined, got Known: {r:?}"),
-    }
+    assert_excluded(&cwd, &t, "a plain dir outside git");
 }
 
 #[test]
-fn non_digit_uid_component_is_undetermined() {
+fn non_digit_uid_component_outside_git_is_excluded() {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = git_init(&tmp.path().join("repo"));
     let f = make_file(tmp.path(), &format!("claude-abc/slug/{SID}/scratchpad"));
     let t = transcript(tmp.path(), &[&f]);
-    assert!(
-        matches!(resolve(&cwd, &t), Determination::Undetermined(_)),
-        "claude-<non-digit> is not Claude Code's scratchpad layout"
-    );
+    assert_excluded(&cwd, &t, "claude-<non-digit> dir outside git");
 }
 
 #[test]

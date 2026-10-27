@@ -887,7 +887,7 @@ fn discovery_command(args: DiscoveryArgs) -> Result<()> {
 
 /// route (§13): consume an already-produced condukt decomposition JSON and
 /// triage it deterministically by `size`. Prints the routing as JSON, writes
-/// parked tasks to taskprog, and prints the condukt handoff text. No LLM.
+/// parked tasks to `.claude/progress.md`, and prints the condukt handoff text. No LLM.
 fn route_command(args: RouteArgs) -> Result<()> {
     let root = project_root();
     // route appends parked tasks to <root>/.claude/progress.md.
@@ -914,8 +914,8 @@ fn route_command(args: RouteArgs) -> Result<()> {
     // Print the routing (+ edge) as JSON.
     println!("{}", serde_json::to_string_pretty(&routing)?);
 
-    // Write parked tasks to the taskprog "残り" sink (self-feeding loop, §6).
-    route::write_parked_to_taskprog(&root, &routing.parked)?;
+    // Write parked tasks to the progress-file "残り" sink (self-feeding loop, §6).
+    route::write_parked_to_progress(&root, &routing.parked)?;
 
     // Print the condukt handoff 課題 text (context for the chosen move), with the
     // named opportunities under the active outcome (charter north_star) so the

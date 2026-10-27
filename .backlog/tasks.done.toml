@@ -62114,3 +62114,66 @@ test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "061bb473ae802dd8e73f8b4bcca6e6022bc2409c"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "4d54cd6d"
+title = "rollout checker must flag plugins whose source version is ahead of origin (marketplace autoUpdate reverts them to binary-less dirs)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "rollout",
+    "overwatch",
+    "tdd",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-27: yukineko marketplace (source=directory, autoUpdate=true) auto-updated at 06:06:29Z; 4s later installed_plugins.json repointed overwatch 0.2.106->0.2.105 and tdd 0.1.56->0.1.54 with gitCommitSha e18b2c49 (= origin/main; local main 12 commits ahead, unpushed). Only plugins whose version differed main vs origin were reverted. Reverted dirs held only the launcher -> overwatch SessionStart dark, tdd Stop gate blocked every stop. Side effects: .orphaned_at left in the newer dirs (plain rollout no-ops, --force needed); overwatch --canary used the broken deployed binary (needed OVERWATCH_BIN). Already-running sessions keep the old CLAUDE_PLUGIN_ROOT until restart. Mitigated by push + rollout --force. Repro commit 5d8fdf44 (session-37c2c5ac). Causal claim (autoUpdate reads origin/HEAD) is inferred from sha/version match, not reproduced against Claude Code itself."
+created_at = 1793082054
+updated_at = 1793141662
+weight = 0.0
+issue_number = 1468
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1468"
+issue_closed_at = 1793141666
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_rollout_origin_lag.py"
+rev = "5d8fdf44ef415e38f0ac728931b1881b8a76faf0"
+observed_at = 1793082054
+detail = """
+exit 1: rd/stuckguard/mutategate/overwatch/parallelguard).
+
+scripts/test_rollout_origin_lag.py:111: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_rollout_origin_lag.py::RolloutCheckerFlagsUnpushedPluginVersion::test_source_version_ahead_of_origin_is_flagged
+========================= 1 failed, 1 passed in 0.25s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_rollout_origin_lag.py"
+exit = 0
+passed = 2
+rev = "bfdeeaf4569f4a5baa0d199aa371420ac8a00965"
+observed_at = 1793141659
+output_digest = "sha256:3acb79e3afc1080e5bf08fb7c837b8b18a2fa9fbafa353224388037d472f5e16"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/c5b9c02b-fix-4d54cd6d
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_rollout_origin_lag.py ..                                    [100%]
+
+============================== 2 passed in 0.75s ===============================
+"""
+
+[task.closure.red]
+rev = "5aa7a3cf02c91af98a16a8d4e3c7363d238b6041"
+exit = 1
+kind = "behavioural"

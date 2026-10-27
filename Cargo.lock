@@ -1664,6 +1664,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "webqa"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "harness-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"

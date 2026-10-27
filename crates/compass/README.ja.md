@@ -87,8 +87,8 @@ primary では `compass breadcrumb` は書き込まず、stderr にその旨を�
 | `compass evaluate` | C1/C2 の open questions を JSON 出力し carve 状態を init/load |
 | `compass apply --answer <JSON>` | 人間の回答を 1 つ畳み込み、C1/C2 再評価、永続化 |
 | `compass carve-reset` | 永続化された carve 状態をクリア |
-| `compass gap` / `--write <text>` | gap 入力の組み立て / gap テキストの永続化 |
-| `compass route [--file <path>]` | 分解を size triage し、残りを park |
+| `compass gap` / `--write <text>` | gap 入力の組み立て / gap テキストの永続化。`.compass/opportunities.json` が無ければ opportunity 0 件、読めない・壊れているなら stderr に `undetermined` を出して非0終了（`"opportunities": []` にはしない） |
+| `compass route [--file <path>]` | 分解を size triage し、残りを park。`.compass/opportunities.json` が読めない・壊れているなら stderr に `undetermined` を出して何も出力せず非0終了（opportunity ref を黙って空にした handoff は出さない） |
 | `compass charter` / `--write <JSON>` | charter＋config の表示 / 彫れた charter の永続化 |
 | `compass outcome --verdict <…> --evidence <text>` | 完了した一手の verdict を記録（証拠必須） |
 | `compass pivot-check` | 直近 outcome ストリークから pivot/persevere シグナルを `{recommendation, streak, threshold, reason}` で出力（共有 store = main worktree root を読む。flow の gate 用。未記録は空履歴として exit 0・persevere、root 判定不能や store 破損は recommendation を出さず非0終了） |

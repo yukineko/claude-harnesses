@@ -1,4 +1,4 @@
-//! RED repro (not fixed this round): `compass gap` and `compass route` turn an
+//! Repro (fixed, backlog 2b6db3a7; was RED): `compass gap` and `compass route` turn an
 //! unreadable opportunity store into ZERO candidates.
 //!
 //! `crates/compass/src/main.rs` (gap ~700, route ~960):
@@ -231,7 +231,6 @@ fn control_readable_store_route_lists_the_opportunity_ref() {
 }
 
 #[test]
-#[ignore = "RED repro: backlog 2b6db3a7; gap/route unwrap_or_default on unreadable opportunity store"]
 fn gap_with_opportunity_store_as_directory_does_not_report_zero_opportunities() {
     let fx = fixture();
     break_store(&fx.r, Breakage::Directory);
@@ -247,7 +246,6 @@ fn gap_with_opportunity_store_as_directory_does_not_report_zero_opportunities() 
 }
 
 #[test]
-#[ignore = "RED repro: backlog 2b6db3a7; gap/route unwrap_or_default on unreadable opportunity store"]
 fn gap_with_corrupt_opportunity_store_does_not_report_zero_opportunities() {
     let fx = fixture();
     break_store(&fx.r, Breakage::CorruptJson);
@@ -263,7 +261,6 @@ fn gap_with_corrupt_opportunity_store_does_not_report_zero_opportunities() {
 }
 
 #[test]
-#[ignore = "RED repro: backlog 2b6db3a7; gap/route unwrap_or_default on unreadable opportunity store"]
 fn route_with_corrupt_opportunity_store_does_not_silently_drop_opportunity_refs() {
     // route refuses the primary checkout, so run it from linked worktree W1.
     let fx = fixture();

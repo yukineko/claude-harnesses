@@ -49,7 +49,7 @@ exempt_reason() {
   case "$1" in
     "autoflow|PreCompact|pre-compact"|"autoflow|UserPromptSubmit|prompt-submit")
       echo "writer/reader of the resume marker are the same missing binary; nothing downstream reads its absence" ;;
-    "condukt|Stop|state record-run --all")
+    "condukt|Stop|state record-run --all --stop-hook")
       echo "state gate / check-oracle / reconcile treat an unrecorded task as INCOMPLETE (fails closed downstream)" ;;
     "ctxrot|UserPromptSubmit|guard"|"ctxrot|PreCompact|rescue"|"ctxrot|SessionStart|restore"|"ctxrot|PreToolUse|handoff"|"ctxrot|PostToolUse|handoff-record")
       echo "observability-only per crates/ctxrot/bin/ctxrot; the verdict entrypoints (preguard/toolguard/stop/statusline) are not exempt" ;;

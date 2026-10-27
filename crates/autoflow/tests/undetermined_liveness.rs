@@ -1,8 +1,11 @@
 //! End-to-end: a driver-liveness answer autoflow could NOT obtain must never be
 //! read as "allow the stop". Silence (empty stdout, exit 0) is what Claude Code
 //! reads as a clean pass, so an undetermined liveness has to be visible: a
-//! `block` on the first stop, and a `systemMessage` (no block) once
-//! `stop_hook_active` bounds the loop.
+//! `block` on the first stop. Once `stop_hook_active` bounds the loop the stop
+//! is allowed with nothing on stdout (operator ruling 2026-10-27: no logs at
+//! Stop — the first block already showed the reason) but recorded as a
+//! `bounded_allow` line in `<state_dir>/log.jsonl`, so it stays
+//! distinguishable from a clean pass.
 //!
 //! Controls (`control_*`) prove the harness reaches the branch: real
 //! observations (`none`, a live driver, an explicit user stop) keep their
@@ -166,7 +169,7 @@ fn assert_visible_block(env: &Env, r: (i32, String, String)) {
     );
 }
 
-fn assert_visible_message_no_block(env: &Env, r: (i32, String, String)) {
+fn assert_bounded_allow_logged_no_block(env: &Env, r: (i32, String, String)) {
     let (code, stdout, stderr) = r;
     assert_eq!(code, 0, "stderr: {stderr}");
     assert!(
@@ -174,9 +177,22 @@ fn assert_visible_message_no_block(env: &Env, r: (i32, String, String)) {
         "bounded path must not block; stdout: {stdout:?}"
     );
     assert!(
-        json(&stdout).is_some_and(|v| v.is_object()) && nonempty_str(&stdout, "systemMessage"),
-        "bounded path must be a JSON object with a non-empty systemMessage \
-         (silence reads as clean); stdout: {stdout:?}"
+        stdout.trim().is_empty(),
+        "bounded path prints nothing at Stop (ruling 2026-10-27); stdout: {stdout:?}"
+    );
+    let log = env.home.join(".autoflow").join("state").join("log.jsonl");
+    let text = std::fs::read_to_string(&log).unwrap_or_default();
+    let rec: Option<serde_json::Value> = text
+        .lines()
+        .last()
+        .and_then(|l| serde_json::from_str(l).ok());
+    assert!(
+        rec.as_ref().is_some_and(|v| v["event"] == "bounded_allow"
+            && v["what"].as_str().is_some_and(|s| !s.trim().is_empty())
+            && v["why"].as_str().is_some_and(|s| !s.trim().is_empty())),
+        "bounded allow must be recorded as a bounded_allow line in {} \
+         (otherwise it is indistinguishable from a clean pass); log: {text:?}",
+        log.display()
     );
     assert_ne!(env.phase().as_deref(), Some("done"));
 }
@@ -243,24 +259,24 @@ fn b_no_session_id_blocks() {
 // ---- (C) stop_hook_active bound ---------------------------------------------
 
 #[test]
-fn c1_lock_exit_nonzero_bounded_systemmessage() {
+fn c1_lock_exit_nonzero_bounded_allow_logged() {
     let env = Env::new("c1");
     let path = env.stub_lock("exit 1");
-    assert_visible_message_no_block(&env, env.stop(&path, Some(true)));
+    assert_bounded_allow_logged_no_block(&env, env.stop(&path, Some(true)));
 }
 
 #[test]
-fn c2_lock_garbage_bounded_systemmessage() {
+fn c2_lock_garbage_bounded_allow_logged() {
     let env = Env::new("c2");
     let path = env.stub_lock("echo 'garbage not json'; exit 0");
-    assert_visible_message_no_block(&env, env.stop(&path, Some(true)));
+    assert_bounded_allow_logged_no_block(&env, env.stop(&path, Some(true)));
 }
 
 #[test]
-fn c3_no_session_id_bounded_systemmessage() {
+fn c3_no_session_id_bounded_allow_logged() {
     let env = Env::new("c3");
     let r = env.run("stop", "/usr/bin:/bin", "", Some(true), "");
-    assert_visible_message_no_block(&env, r);
+    assert_bounded_allow_logged_no_block(&env, r);
 }
 
 // ---- (E) PreCompact ---------------------------------------------------------

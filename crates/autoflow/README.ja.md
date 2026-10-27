@@ -31,7 +31,7 @@ backlog が*観測上*インストールされていない場合は撤退しな�
 driver の稼働状況を判定できない場合（`backlog lock status` が非0で終了した・空または解釈不能な出力をした・自身の `undetermined` オブジェクトを返した、または plugin cache が読めない）、Stop は「判定不能」の理由付きで **block** し、フェーズは更新しない。
 session id が無い Stop（payload にも `CLAUDE_CODE_SESSION_ID` にも無い）も同様に block する。
 無限ブロックを避けるため、これらの判定不能 block は `stop_hook_active` で上限が付く。
-そうした block の後の再入時は stop を通すが、判定不能の原因と未解消であることを示す可視の `systemMessage` を出す（`decision` ではない）。
+そうした block の後の再入時は stop を通し、stdout には何も出さない（`systemMessage` も出さない。2026-10-27 のユーザー裁定「Stop時に結果の報告はあってもいいがログはいらない」。理由は最初の block で既に示している）。代わりに `<state_dir>/log.jsonl` へ `{"event":"bounded_allow","session_id","what","why"}` の行を追記し、clean pass と区別できる記録を残す。
 ユーザーの明示的な停止は、稼働状況が判定不能でも優先される。
 
 **PreCompact** では、このセッションが `backlog lock status` 上で排他ロック保持者または登録済み driver の一つであり（＝実際にこのセッションから `/flow` ループを駆動中）、ユーザーが opt-out（`resume_flow_on_compact = false`）していなければ、resume マーカーを書き込む。

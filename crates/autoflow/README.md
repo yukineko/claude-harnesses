@@ -35,7 +35,7 @@ Only a *positive* report of a live driver stands down.
 When liveness cannot be determined (`backlog lock status` exits non-zero, prints empty or uninterpretable output, or reports its own `undetermined` object, or the plugin cache is unreadable), the Stop **blocks** with a "判定不能" (undetermined) reason and leaves the phase untouched.
 A Stop with no session id (none in the payload and `CLAUDE_CODE_SESSION_ID` unset) blocks the same way.
 To avoid an endless block, these undetermined blocks are bounded by `stop_hook_active`.
-On the re-entry after such a block, the stop is allowed with a user-visible `systemMessage` that names the undetermined cause and says it is unresolved, not a `decision`.
+On the re-entry after such a block, the stop is allowed with nothing on stdout (no `systemMessage`; user ruling 2026-10-27: no logs at Stop, the first block already showed the reason), and a `{"event":"bounded_allow","session_id","what","why"}` line is appended to `<state_dir>/log.jsonl` so the allow is still recorded and distinguishable from a clean pass.
 An explicit user stop still takes precedence over an undetermined liveness.
 
 At **PreCompact**, if this session is the exclusive lock holder or one of the registered drivers in `backlog lock status` (that is, a `/flow` loop is actually driving from this session) and the user hasn't opted out (`resume_flow_on_compact = false`), autoflow writes a resume marker.

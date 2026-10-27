@@ -8,7 +8,8 @@
 //! state (and, opt-in, the vault); the hooks never block a turn and always exit
 //! 0. A hook payload that is empty or unparseable is still not dropped silently:
 //! every hook says on stderr that the event was NOT recorded (and `stop` also
-//! emits a `systemMessage`).
+//! appends an `unparseable_payload` line to `<state_dir>/log.jsonl`; it prints
+//! nothing on stdout, per the 2026-10-27 ruling that Stop shows no logs).
 
 mod config;
 mod context;
@@ -140,12 +141,24 @@ fn stop() {
     }
     let raw = read_stdin();
     let Some(input) = HookInput::parse(&raw) else {
-        // Same disclosure as `record`, plus a `systemMessage` (the channel the
-        // user actually sees for a Stop hook — the launcher's missing-binary
-        // fallback uses it for the same reason). No block: no verdict here.
+        // Same disclosure as `record` on stderr, plus a durable
+        // `unparseable_payload` line in `<state_dir>/log.jsonl` (state_dir of
+        // the current dir's config — the payload carried no cwd). Nothing on
+        // stdout: operator ruling 2026-10-27 「Stop時に結果の報告はあってもいい
+        // がログはいらない」 — a Stop-time systemMessage pushes the turn's
+        // result report off screen. No block: no verdict here.
         let msg = unparseable_payload_message("stop", &raw);
         eprintln!("{msg}");
-        println!("{}", serde_json::json!({ "systemMessage": msg }));
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let cfg = Config::load(&cwd);
+        harness_core::gate::run::append_jsonl(
+            &cfg.state_dir,
+            &serde_json::json!({
+                "event": "unparseable_payload",
+                "hook": "stop",
+                "message": msg,
+            }),
+        );
         return;
     };
     let root = input.cwd_or_current();

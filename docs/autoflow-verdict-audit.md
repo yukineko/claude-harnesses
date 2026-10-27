@@ -173,7 +173,7 @@ read-only 監査。**このドキュメントは `crates/autoflow/` を1行も�
 
 ### 3.1 `lock::driver_active_from_status` — 判定不能は `true`（stand down）
 
-> **superseded 2026-10-16（autoflow 0.1.33、ユーザー裁定）**: この節の「判定不能は stand down」は無出力 exit 0＝stop 許可となる fail-open と裁定され、現在の autoflow は driver 稼働状況が判定不能なら「判定不能」で Stop を block し、再入時は可視の systemMessage を出して通す。
+> **superseded 2026-10-16（autoflow 0.1.33、ユーザー裁定）**: この節の「判定不能は stand down」は無出力 exit 0＝stop 許可となる fail-open と裁定され、現在の autoflow は driver 稼働状況が判定不能なら「判定不能」で Stop を block し、再入時は stop を通す（2026-10-27 ユーザー裁定以降、再入時の allow は stdout に何も出さず、`<state_dir>/log.jsonl` に `bounded_allow` 行を残す。それ以前は可視の systemMessage を出していた）。
 
 根拠の逐語引用:
 

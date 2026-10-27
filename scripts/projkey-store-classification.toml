@@ -192,6 +192,22 @@ kind = "store-key"
 evidence = "switch_path() — the autonomy switch a worker in a linked worktree cannot see is not a switch, so it is keyed by main_worktree_root and forwards Undetermined verbatim rather than falling back to repo_root. Already correct."
 
 [[consumer]]
+file = "crates/harness-core/src/discovery.rs"
+symbol = "main_worktree_root"
+count = 2
+scope = "shared"
+kind = "store-key"
+evidence = "record_path() and migrate_legacy(): the discovery store ~/.compass/<project_key(main_worktree_root(cwd))>/discovery.jsonl must be one per project from every linked worktree, so cross-session dedup sees rows recorded from any checkout. Undetermined is forwarded verbatim (no show-toplevel or cwd fallback); the pre-canonical per-worktree files are only read, never written, by load() and migrate_legacy()."
+
+[[consumer]]
+file = "crates/harness-core/src/discovery.rs"
+symbol = "repo_root"
+count = 1
+scope = "worktree-local"
+kind = "tree-locus"
+evidence = "User ruling 2026-10-28: not a store key. legacy_path() calls repo_root(cwd) only when git cannot answer, and uses the result solely for `.join(\".git\").exists()` to detect a `.git` ancestor (inside a checkout -> Undetermined; no checkout -> the old binary's own key). The returned path is never used to key, read or write any store."
+
+[[consumer]]
 file = "crates/harness-core/src/autonomy.rs"
 symbol = "project_key"
 count = 1

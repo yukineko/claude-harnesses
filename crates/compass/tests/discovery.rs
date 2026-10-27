@@ -89,7 +89,11 @@ fn dod4_absent_store_list_json_is_empty_array() {
     let v: Value = serde_json::from_str(out.trim()).expect("valid JSON");
     assert_eq!(v, serde_json::json!([]), "absent store => [], got {out}");
     // The store file must not have been created merely by listing.
-    let store = harness_core::discovery::record_path(env.proj_path());
+    let harness_core::verdict::Determination::Known(store) =
+        harness_core::discovery::record_path(env.proj_path())
+    else {
+        panic!("test project root must be determinate");
+    };
     assert!(!store.exists(), "list must not create the store");
 }
 

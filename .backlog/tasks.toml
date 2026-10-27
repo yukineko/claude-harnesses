@@ -87,6 +87,35 @@ exit 101: t: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; 
 error: test failed, to rerun pass `-p blastguard --test heredoc_quoted_body_doc_comment_backtick`"""
 
 [[task]]
+id = "2b6db3a7"
+title = "compass gap/route turn an unreadable opportunity store into zero candidates (unwrap_or_default)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = "crates/compass/src/main.rs:700 (gap) and :960 (route) call opportunity::list_under_ranked(...).unwrap_or_default(). opportunity::load (crates/compass/src/opportunity.rs:75-86) returns Err for an unreadable (directory) or corrupt opportunities.json, and the unwrap_or_default erases it into zero opportunities with exit 0 — a fail-open (CLAUDE.md 3). Repro: crates/compass/tests/opportunity_store_unreadable_repro.rs (ignored RED tests, committed 0f14dec6)."
+created_at = 1793054011
+updated_at = 1793054011
+weight = 0.0
+issue_number = 1467
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1467"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --test opportunity_store_unreadable_repro -- --include-ignored"
+rev = "0f14dec632a538a4a5bbd0cbdef3dd363dc972f8"
+observed_at = 1793054011
+detail = """
+exit 101: in 0.86s
+
+   Compiling compass v0.1.31 (/Users/yuki/src/.harness-worktrees/c5b9c02b-discovery/crates/compass)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.64s
+     Running tests/opportunity_store_unreadable_repro.rs (target/debug/deps/opportunity_store_unreadable_repro-ad7846ee1365543d)
+error: test failed, to rerun pass `-p compass --test opportunity_store_unreadable_repro`"""
+
+[[task]]
 id = "4d54cd6d"
 title = "rollout checker must flag plugins whose source version is ahead of origin (marketplace autoUpdate reverts them to binary-less dirs)"
 project = "/home/hiroyuki_nakayama/src/claude-harnesses"

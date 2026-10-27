@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Black-box tests for `webqa weaken-check` (independent test author).
 //!
 //! Contract under test:

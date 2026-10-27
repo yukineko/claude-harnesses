@@ -854,7 +854,7 @@
     {
       "name": "scout",
       "description": "Multi-lens project audit skill that fans out read-only sub-agents across five lenses, scores the findings into prioritized tasks, writes them to the backlog and hands execution to /flow.",
-      "version": "0.1.14",
+      "version": "0.1.15",
       "category": "planning",
       "keywords": [
         "scout",

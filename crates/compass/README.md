@@ -95,7 +95,7 @@ evaluate ─► carve loop ─► charter ─► gap ─► (condukt decompose) 
    `compass apply --answer <JSON>` folds it in, persists, and re-checks C1/C2.
 3. **charter** — `compass charter --write <JSON>` saves the sharpened charter with an
    **observable** DoD.
-4. **gap** — `compass gap` assembles the inputs (DoD / recent activity / progress)
+4. **gap** — `compass gap` assembles the inputs (DoD / recent activity)
    deterministically; the skill reasons the goal − reality delta and writes it back with
    `compass gap --write <text>`.
 5. **condukt decompose** — the agreed single move becomes a task, decomposed by condukt

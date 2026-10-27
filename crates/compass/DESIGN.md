@@ -395,7 +395,7 @@ specguard/specforge の段階導入（DESIGN-INTAKE §10-5）に倣う。**動�
 ### 段階 C — PoC（Workflow、crate を作らない）
 carve ループの形と AskUserQuestion の UX を安価に実証する。1本の Workflow スクリプトで
 `gather → C1–C5 ゲート → interrogate（1–2問）→ gap → size triage → condukt 受け渡し` が閉じるか確認。
-- 入力：手で用意した最小 charter.md ＋ 実リポの git/progress。
+- 入力：手で用意した最小 charter.md ＋ 実リポの git（当時は progress.md も入力だったが 2026-10-27 に撤去）。
 - 検証：右サイズ抽出と「右サイズ0」エッジ（§13）が期待通り分岐するか。
 - ここで `harness-core::carve` の I/F（§11）と C ゲートの未達→open_q 変換（§12）を固める。
 

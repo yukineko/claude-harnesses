@@ -1,6 +1,6 @@
 {
   "name": "compass",
-  "version": "0.1.34",
+  "version": "0.1.35",
   "description": "Goal re-grounding and next-move derivation for Claude Code, sitting upstream of condukt to decide what to work on.",
   "author": {
     "name": "yukineko"

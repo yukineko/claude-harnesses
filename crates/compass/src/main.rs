@@ -61,8 +61,12 @@ enum Command {
     /// Clear the persisted CarveState (start a fresh carve).
     CarveReset,
     /// Derive goal - current-state gap and candidate next moves (§3).
+    /// An unreadable or corrupt opportunity store exits non-zero
+    /// (`undetermined`); a missing one lists no opportunities.
     Gap(GapArgs),
     /// Size triage (§13): route the right-sized move / park the rest.
+    /// An unreadable or corrupt opportunity store exits non-zero
+    /// (`undetermined`, nothing printed); a missing one hands off no refs.
     Route(RouteArgs),
     /// Show the parsed charter (+ resolved config), or (--write JSON) persist a
     /// skill-composed charter.
@@ -665,6 +669,25 @@ fn charter_command(args: CharterArgs) -> Result<()> {
     Ok(())
 }
 
+/// The opportunities under `north_star`, ranked, for `gap` and `route`. A
+/// missing `.compass/opportunities.json` is a legitimate empty (no bets
+/// recorded). A store that cannot be read or parsed is UNDETERMINED: it is an
+/// error (non-zero exit, `undetermined` on stderr), never zero opportunities —
+/// an empty list would be indistinguishable from "no bets recorded"
+/// (CLAUDE.md §3; backlog 2b6db3a7).
+fn load_ranked_opportunities(
+    root: &Path,
+    north_star: &str,
+) -> Result<Vec<opportunity::Opportunity>> {
+    opportunity::list_under_ranked(root, north_star).with_context(|| {
+        format!(
+            "opportunity store undetermined ({}): it exists but cannot be read or parsed; \
+             refusing to report zero opportunities",
+            opportunity::store_path(root).display()
+        )
+    })
+}
+
 /// gap (§3): deterministically assemble the inputs the skill reasons over, or
 /// (with `--write <text>`) persist the skill-produced gap into the charter.
 /// No LLM, no semantic derivation here.
@@ -693,13 +716,15 @@ fn gap_command(args: GapArgs) -> Result<()> {
     inputs.last_outcome = outcome::latest(&outcomes_root(&root)?)?;
     // OST (§3): scaffold one gap slot per opportunity under the active outcome
     // so the skill derives a gap per named bet, not one flat gap. Ranked by
-    // weight descending (load-bearing — heaviest bet leads). Tolerant load — a
-    // missing/corrupt store must not break `gap`.
+    // weight descending (load-bearing — heaviest bet leads). A missing store is
+    // a legitimate empty (no bets recorded); an unreadable or corrupt store is
+    // undetermined and fails `gap` non-zero — never reported as zero
+    // opportunities (CLAUDE.md §3; backlog 2b6db3a7).
     // Cross-session dedup (DoD#2): drop any opportunity another session already
     // discovered, so this session doesn't re-surface a duplicate. Byte-equivalent
     // fallback (DoD#4): a never-written discovery store drops nothing; an
     // undetermined one keeps everything and `discovery_dedup` says so.
-    let ranked = opportunity::list_under_ranked(&root, &charter.north_star).unwrap_or_default();
+    let ranked = load_ranked_opportunities(&root, &charter.north_star)?;
     let my_session = discovery::session_from_env();
     let (deduped, dedup_status) =
         discovery::filter_undiscovered_by_others(&root, &my_session, ranked);
@@ -949,17 +974,22 @@ fn route_command(args: RouteArgs) -> Result<()> {
 
     let routing = route::route(&dec, &cfg);
 
+    // The condukt handoff 課題 text (context for the chosen move) carries the
+    // named opportunities under the active outcome (charter north_star) so the
+    // handed-off solution carries its opportunity refs (DoD#2). They are loaded
+    // BEFORE anything is printed: an unreadable/corrupt opportunity store is
+    // undetermined and fails `route` non-zero with no partial output, rather
+    // than handing off with the refs silently empty (backlog 2b6db3a7). A
+    // missing store is a legitimate empty.
+    let charter = Charter::load(&Charter::project_path(&root)).unwrap_or_default();
+    let ranked = load_ranked_opportunities(&root, &charter.north_star)?;
+
     // Print the routing (+ edge) as JSON.
     println!("{}", serde_json::to_string_pretty(&routing)?);
 
-    // Print the condukt handoff 課題 text (context for the chosen move), with the
-    // named opportunities under the active outcome (charter north_star) so the
-    // handed-off solution carries its opportunity refs (DoD#2).
-    let charter = Charter::load(&Charter::project_path(&root)).unwrap_or_default();
     // Cross-session dedup (DoD#2) on the handed-off opportunity refs. A never-
     // written store drops nothing; an undetermined store keeps every ref and the
     // handoff says `dedup unknown`.
-    let ranked = opportunity::list_under_ranked(&root, &charter.north_star).unwrap_or_default();
     let my_session = discovery::session_from_env();
     let (opportunities, dedup_status) =
         discovery::filter_undiscovered_by_others(&root, &my_session, ranked);

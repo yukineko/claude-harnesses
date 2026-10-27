@@ -168,8 +168,8 @@ The binary is thin and deterministic:
 | `compass evaluate` | print the C1/C2 open questions as JSON; init/load carve state |
 | `compass apply --answer <JSON>` | fold one human answer in, re-check C1/C2, persist |
 | `compass carve-reset` | clear the persisted carve state (start fresh) |
-| `compass gap` / `compass gap --write <text>` | assemble gap inputs / persist the gap text |
-| `compass route [--file <path>]` | size-triage a condukt decomposition; park the rest |
+| `compass gap` / `compass gap --write <text>` | assemble gap inputs / persist the gap text. A missing `.compass/opportunities.json` lists no opportunities; an unreadable or corrupt one exits non-zero with `undetermined` on stderr (never `"opportunities": []`) |
+| `compass route [--file <path>]` | size-triage a condukt decomposition; park the rest. An unreadable or corrupt `.compass/opportunities.json` exits non-zero with `undetermined` on stderr and prints nothing (no handoff with silently empty opportunity refs) |
 | `compass charter` / `compass charter --write <JSON>` | show the parsed charter + config / persist a sharpened charter |
 | `compass outcome --verdict <forward\|unchanged\|backward> --evidence <text>…` | record a completed move's verdict vs the `measuring_stick` (evidence required); the next `compass gap` surfaces it as `last_outcome` |
 | `compass pivot-check` | print the pivot-or-persevere signal from the trailing outcome streak as `{recommendation, streak, threshold, reason}` from the shared (main-worktree-root) store, for flow to gate on. A never-written store is an empty history (exit 0, persevere); an undeterminable root or a corrupt store exits non-zero with no recommendation |

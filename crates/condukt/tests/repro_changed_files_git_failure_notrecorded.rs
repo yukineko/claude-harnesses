@@ -84,24 +84,6 @@ impl Fixture {
         );
         wt
     }
-
-    fn set_done(&self, rid: &str, task_id: &str, wt: &Path) {
-        let out = self.condukt(&[
-            "state",
-            "set",
-            "--run",
-            rid,
-            "--task",
-            task_id,
-            "--status",
-            "done",
-            "--worktree",
-            wt.to_str().unwrap(),
-            "--branch",
-            &format!("condukt/{task_id}"),
-        ]);
-        assert!(out.status.success(), "set done {task_id} failed: {out:?}");
-    }
 }
 
 fn run_git(dir: &Path, args: &[&str]) {

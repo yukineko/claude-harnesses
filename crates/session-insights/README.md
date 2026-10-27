@@ -6,8 +6,9 @@
 - The hooks never block and exit 0, but an empty or unparseable payload is not
   dropped silently: each hook says on stderr that the event was NOT recorded,
   and `stop` also appends an `{"event":"unparseable_payload","hook":"stop",...}`
-  line to `<state_dir>/log.jsonl` (nothing on stdout — no `systemMessage`;
-  user ruling 2026-10-27: no logs at Stop).
+  line to `<state_dir>/log.jsonl` and prints exactly one short `systemMessage`
+  line, `session-insights: セッションを記録できませんでした` (user ruling
+  2026-10-27: one-line results at Stop, no logs).
 - **size**: XS / S / M / L / XL by total tool events (thresholds configurable)
 - **category**: `coding` (Edit/Write/MultiEdit/NotebookEdit), `ops` (Bash), `research`
   (Read/Grep/Glob/WebFetch/WebSearch) when that group is at least half of the categorized

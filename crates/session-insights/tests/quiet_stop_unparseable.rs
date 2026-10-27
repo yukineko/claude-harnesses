@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Quiet-stop item 3b: the Stop hook given an empty/unparseable payload prints
-//! NOTHING on stdout (exit 0) and appends an `unparseable_payload` JSON line to
+//! exactly ONE short `systemMessage` line on stdout (exit 0) and appends an `unparseable_payload` JSON line to
 //! `<state_dir>/log.jsonl` (state_dir from Config::load of the cwd).
 
 use std::io::Write;
@@ -34,10 +34,28 @@ fn run_case(tag: &str, payload: &[u8]) {
 
     assert_eq!(out.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        stdout.trim().is_empty(),
-        "stdout must be empty, got: {stdout:?}"
+    assert_eq!(
+        stdout.trim().lines().count(),
+        1,
+        "stdout must be exactly one line, got: {stdout:?}"
     );
+    let msg: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout not JSON ({e}): {stdout:?}"));
+    assert!(msg.get("decision").is_none(), "{msg}");
+    assert_eq!(
+        msg["systemMessage"], "session-insights: セッションを記録できませんでした",
+        "stdout: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("NOT counted"),
+        "long message leaked: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("not json"),
+        "raw payload leaked: {stdout:?}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.trim().is_empty(), "stderr disclosure must remain");
     let rec: serde_json::Value = serde_json::from_str(
         text.lines()
             .last()
@@ -55,11 +73,11 @@ fn run_case(tag: &str, payload: &[u8]) {
 }
 
 #[test]
-fn empty_payload_is_silent_on_stdout_and_logged() {
+fn empty_payload_prints_one_line_and_is_logged() {
     run_case("empty", b"");
 }
 
 #[test]
-fn garbage_payload_is_silent_on_stdout_and_logged() {
+fn garbage_payload_prints_one_line_and_is_logged() {
     run_case("garbage", b"not json");
 }

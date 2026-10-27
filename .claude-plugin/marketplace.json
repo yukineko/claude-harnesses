@@ -629,7 +629,7 @@
     {
       "name": "session-insights",
       "description": "Per-session work metrics for Claude Code: PostToolUse and Stop hooks roll up tool calls, turns, files touched, a size class and a work category, with optional Obsidian session logs.",
-      "version": "0.2.38",
+      "version": "0.2.39",
       "category": "observability",
       "keywords": [
         "hooks",
@@ -752,7 +752,7 @@
     {
       "name": "autoflow",
       "description": "Session-end auto-flow gate for Claude Code: a Stop hook that prompts /record once, then keeps looping /condukt while the in-flight run still has pending tasks.",
-      "version": "0.1.39",
+      "version": "0.1.40",
       "category": "orchestration",
       "keywords": [
         "hooks",

@@ -2,8 +2,8 @@
 //! read as "allow the stop". Silence (empty stdout, exit 0) is what Claude Code
 //! reads as a clean pass, so an undetermined liveness has to be visible: a
 //! `block` on the first stop. Once `stop_hook_active` bounds the loop the stop
-//! is allowed with nothing on stdout (operator ruling 2026-10-27: no logs at
-//! Stop — the first block already showed the reason) but recorded as a
+//! is allowed with exactly one short `systemMessage` line on stdout (operator
+//! ruling 2026-10-27: results in one line, never logs) and recorded as a
 //! `bounded_allow` line in `<state_dir>/log.jsonl`, so it stays
 //! distinguishable from a clean pass.
 //!
@@ -176,9 +176,19 @@ fn assert_bounded_allow_logged_no_block(env: &Env, r: (i32, String, String)) {
         !blocks(&stdout),
         "bounded path must not block; stdout: {stdout:?}"
     );
+    assert_eq!(
+        stdout.trim().lines().count(),
+        1,
+        "bounded path prints exactly one line (ruling 2026-10-27); stdout: {stdout:?}"
+    );
+    let msg = json(&stdout).unwrap_or_else(|| panic!("stdout not JSON: {stdout:?}"));
     assert!(
-        stdout.trim().is_empty(),
-        "bounded path prints nothing at Stop (ruling 2026-10-27); stdout: {stdout:?}"
+        msg.get("decision").is_none(),
+        "must not carry decision: {msg}"
+    );
+    assert_eq!(
+        msg["systemMessage"], "autoflow: 判定不能のまま通しました",
+        "stdout: {stdout:?}"
     );
     let log = env.home.join(".autoflow").join("state").join("log.jsonl");
     let text = std::fs::read_to_string(&log).unwrap_or_default();

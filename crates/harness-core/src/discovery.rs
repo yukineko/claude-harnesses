@@ -26,7 +26,9 @@
 //! Legacy records: before the store was keyed on the main worktree root it was keyed
 //! on `git rev-parse --show-toplevel` (see [`resolve_repo_root`]), i.e. on the linked
 //! worktree itself. [`load`] therefore also reads THIS cwd's legacy worktree-keyed
-//! file (when its key differs from the canonical one). Legacy files of OTHER or
+//! file (when its key differs from the canonical one). Locating that file needs
+//! git: when git cannot answer inside a git checkout, the load is `Undetermined`
+//! rather than looking the file up under a guessed key. Legacy files of OTHER or
 //! since-removed worktrees are not reachable from here and are not read; copy them
 //! into the canonical store with [`migrate_legacy`]. A row present in both files is
 //! listed once.
@@ -132,22 +134,34 @@ fn lexical_normalize(path: &Path) -> PathBuf {
 /// Best-effort `git -C <cwd> rev-parse --show-toplevel`. Returns `None` on any
 /// spawn/exit/parse failure (not a repo, git absent, empty output, ...).
 fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
+    git_toplevel_detailed(cwd).ok()
+}
+
+/// `git -C <cwd> rev-parse --show-toplevel`, with the reason when git could not
+/// answer (spawn failure such as git absent, non-zero exit, non-UTF-8 or empty
+/// output).
+fn git_toplevel_detailed(cwd: &Path) -> Result<PathBuf, String> {
     let output = std::process::Command::new("git")
         .arg("-C")
         .arg(cwd)
         .arg("rev-parse")
         .arg("--show-toplevel")
         .output()
-        .ok()?;
+        .map_err(|e| format!("cannot run `git rev-parse --show-toplevel` ({e})"))?;
     if !output.status.success() {
-        return None;
+        return Err(format!(
+            "`git rev-parse --show-toplevel` failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
-    let top = String::from_utf8(output.stdout).ok()?;
+    let top = String::from_utf8(output.stdout)
+        .map_err(|_| "`git rev-parse --show-toplevel` output is not UTF-8".to_string())?;
     let top = top.trim();
     if top.is_empty() {
-        return None;
+        return Err("`git rev-parse --show-toplevel` printed nothing".to_string());
     }
-    Some(PathBuf::from(top))
+    Ok(PathBuf::from(top))
 }
 
 /// Path to the CANONICAL discovery.jsonl store for a given cwd:
@@ -168,10 +182,38 @@ fn store_path_for_root(root: &Path) -> PathBuf {
 }
 
 /// The pre-canonical, worktree-keyed store file for this cwd (what an older binary
-/// wrote from a linked worktree), or `None` when it is the same file as `canonical`.
-fn legacy_path(cwd: &Path, canonical: &Path) -> Option<PathBuf> {
-    let legacy = store_path_for_root(&resolve_repo_root(cwd));
-    (legacy != canonical).then_some(legacy)
+/// wrote from a linked worktree), or `Known(None)` when it is the same file as
+/// `canonical`.
+///
+/// The legacy key is the `git rev-parse --show-toplevel` root. When git answers,
+/// that root is used. When git cannot answer:
+/// - and no ancestor of `cwd` has a `.git` entry (not a checkout at all), the
+///   older binary's own fallback (`cwd` canonicalized, see [`resolve_repo_root`])
+///   is exactly the key it wrote under, so it is reproduced;
+/// - but the filesystem shows a git checkout, the key the older binary used is
+///   the toplevel git would have printed, and `cwd.canonicalize()` is only a
+///   guess (from a subdirectory it is the subdirectory, so the legacy file would
+///   be looked up under the wrong key and its rows silently dropped). That is
+///   `Undetermined`, never a guessed path.
+fn legacy_path(cwd: &Path, canonical: &Path) -> Determination<Option<PathBuf>> {
+    let root = match git_toplevel_detailed(cwd) {
+        Ok(top) => top.canonicalize().unwrap_or(top),
+        Err(why) => {
+            let fs_root = crate::projkey::repo_root(cwd);
+            if fs_root.join(".git").exists() {
+                return Determination::undetermined(format!(
+                    "discovery store: the legacy worktree-keyed file for {} cannot be \
+                     located: {} is a git checkout but {why}; its rows cannot be read, so \
+                     the store's contents cannot be decided",
+                    cwd.display(),
+                    fs_root.display()
+                ));
+            }
+            resolve_repo_root(cwd)
+        }
+    };
+    let legacy = store_path_for_root(&root);
+    Determination::known((legacy != canonical).then_some(legacy))
 }
 
 /// Deterministic content hash of a title. Returns a hex string of the FNV-1a 64-bit
@@ -248,7 +290,7 @@ fn append_at(path: &Path, rec: &DiscoveryRecord) -> Determination<()> {
 /// this cwd's legacy worktree-keyed file (see the module docs).
 ///
 /// `Known(vec![])` only when neither file exists (never written). Any root /
-/// read failure — including a path that is a directory or is unreadable — is
+/// legacy-path (git unavailable inside a checkout) / read failure — including a path that is a directory or is unreadable — is
 /// `Undetermined`: an empty `Vec` here would be read downstream as "no duplicates".
 /// A corrupt non-blank line in either file is also `Undetermined`. A row present in
 /// both files (same fingerprint, session, created_at, title) is returned once.
@@ -261,7 +303,11 @@ pub fn load(cwd: &Path) -> Determination<Vec<DiscoveryRecord>> {
         Determination::Known(r) => r,
         Determination::Undetermined(why) => return why.into_determination(),
     };
-    if let Some(legacy) = legacy_path(cwd, &canonical) {
+    let legacy = match legacy_path(cwd, &canonical) {
+        Determination::Known(l) => l,
+        Determination::Undetermined(why) => return why.into_determination(),
+    };
+    if let Some(legacy) = legacy {
         match load_path(&legacy) {
             Determination::Known(r) => {
                 // A migrated row exists in both files; list it once.

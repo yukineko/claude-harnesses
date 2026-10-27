@@ -76,9 +76,10 @@ enum Command {
     /// the goal and the single solution `route` hands to condukt.
     Opportunity(OpportunityArgs),
     /// Machine-scope shared discovery store (cross-session dedup): record/select/
-    /// list discovered tasks so concurrent compass/scout sessions don't re-surface
-    /// a task another session already found. Every subcommand is fail-soft and
-    /// exits 0 (called from skills/hooks — must never break a turn).
+    /// list/migrate-legacy discovered tasks so concurrent compass/scout sessions
+    /// don't re-surface a task another session already found. Every subcommand
+    /// exits non-zero with `undetermined` on stderr when the store cannot be
+    /// resolved, read or written; nothing is reported as stored or empty then.
     Discovery(DiscoveryArgs),
     /// Pivot-or-persevere signal from the trailing outcome streak (§7).
     /// Prints `{"recommendation":"persevere"|"pivot","streak":N,"threshold":N,"reason":"…"}` and exits 0.
@@ -257,8 +258,9 @@ enum DiscoveryCmd {
     },
     /// List discovery rows (`--json` => a JSON array, `[]` only for a store that
     /// was never written). Exits non-zero with `undetermined` on stderr, and
-    /// prints no `[]`, when the store cannot be resolved or read, or has a corrupt
-    /// line.
+    /// prints no `[]`, when the store cannot be resolved or read, has a corrupt
+    /// line, or this checkout's legacy worktree-keyed file cannot be located (git
+    /// unavailable inside a git checkout).
     List {
         /// Print the rows as a JSON array instead of human lines.
         #[arg(long)]
@@ -890,7 +892,7 @@ fn opportunity_command(args: OpportunityArgs) -> Result<()> {
     Ok(())
 }
 
-/// discovery (cross-session dedup): record/select/list rows in the machine-scope
+/// discovery (cross-session dedup): record/select/list/migrate-legacy rows in the machine-scope
 /// shared discovery store. The subcommands exit non-zero (`undetermined` on
 /// stderr) when the store cannot be resolved, read or written; nothing is reported
 /// as stored/empty in that case. The main worktree root of the project cwd

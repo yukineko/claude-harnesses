@@ -376,7 +376,6 @@ harness-status は HOTL 点検ダッシュボード（CLI 専用）で、面ご�
 ```
 harness-status budget       # 今日のコスト
 harness-status sessions     # 直近セッション
-harness-status progress     # 進捗ファイル
 harness-status hooks        # Stop ゲートの遅延集計
 harness-status inject       # UserPromptSubmit 注入サイズ集計
 harness-status hooks-health # 登録済み hook の binary 欠損チェック

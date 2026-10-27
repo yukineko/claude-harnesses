@@ -162,7 +162,7 @@ specforge agree    --id feat-x -m "証拠確認"
 condukt state list                 # 開いている run: run_id  done/total  goal
 condukt state show --run $RID      # その run の全タスク状態 (JSON)
 condukt worktree list              # 残っている worktree
-/status                            # run状態 + コスト + progress.md を集約表示
+/status                            # run状態 + コストを集約表示
 ```
 セッションを跨いでも、次回 SessionStart で `condukt restore` が**未完 run と orphan worktree を警告**する。
 

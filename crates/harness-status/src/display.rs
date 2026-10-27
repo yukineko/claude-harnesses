@@ -5,7 +5,6 @@ use crate::hooks::{sess8, HookLatencyReport};
 use crate::hooks_health::HooksHealthReport;
 use crate::inject::{key8, InjectReport};
 use crate::path_shadow::ShadowedBinary;
-use crate::progress::ProgressStatus;
 use crate::sessions::SessionSummary;
 use harness_core::verdict::Determination;
 
@@ -18,7 +17,6 @@ pub struct StatusReport<'a> {
     /// `Undetermined` when gauge's session store could not be read — rendered
     /// as an explicit `unknown`, never as the empty "no session records" state.
     pub sessions: &'a Determination<Vec<SessionSummary>>,
-    pub progress: &'a ProgressStatus,
     pub hooks: &'a HookLatencyReport,
     pub inject: &'a InjectReport,
     pub hooks_health: &'a HooksHealthReport,
@@ -28,12 +26,11 @@ pub struct StatusReport<'a> {
     pub path_shadow: &'a Determination<Vec<ShadowedBinary>>,
 }
 
-pub fn print_status(report: &StatusReport, cwd_display: &str) {
+pub fn print_status(report: &StatusReport) {
     let StatusReport {
         today,
         budget,
         sessions,
-        progress,
         hooks,
         inject,
         hooks_health,
@@ -85,22 +82,6 @@ pub fn print_status(report: &StatusReport, cwd_display: &str) {
                 );
             }
         }
-    }
-    println!();
-
-    // Progress file
-    println!("── Progress file ─────────────────────────────────");
-    println!("  cwd: {cwd_display}");
-    if progress.exists {
-        println!("  {}", progress.path);
-        if let Some(preview) = &progress.preview {
-            println!();
-            for line in preview.lines() {
-                println!("  │ {line}");
-            }
-        }
-    } else {
-        println!("  [not found] {}", progress.path);
     }
     println!();
 
@@ -216,7 +197,6 @@ pub fn print_json(report: &StatusReport) {
                 "reason": why.as_str(),
             }),
         },
-        "progress": report.progress,
         "hook_latency": report.hooks,
         "inject": report.inject,
         "hooks_health": report.hooks_health,

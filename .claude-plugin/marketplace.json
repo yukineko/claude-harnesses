@@ -132,7 +132,7 @@
     {
       "name": "compass",
       "description": "Goal re-grounding and next-move derivation for Claude Code, sitting upstream of condukt to decide what to work on.",
-      "version": "0.1.28",
+      "version": "0.1.31",
       "category": "planning",
       "keywords": [
         "compass",
@@ -405,7 +405,7 @@
     {
       "name": "flow",
       "description": "Backlog-draining loop skill for Claude Code that picks tasks from sources such as compass, backlog and hypothesis and hands them to condukt for execution, without locking the whole queue.",
-      "version": "0.2.30",
+      "version": "0.2.31",
       "category": "orchestration",
       "keywords": [
         "flow",
@@ -483,8 +483,8 @@
     },
     {
       "name": "harness-status",
-      "description": "Unified human-on-the-loop status dashboard for Claude Code: a /status command that aggregates budgetguard spend, gauge session records and the .claude/progress.md progress file into one read-only view.",
-      "version": "0.1.27",
+      "description": "Unified human-on-the-loop status dashboard for Claude Code: a /status command that aggregates budgetguard spend and gauge session records into one read-only view.",
+      "version": "0.1.28",
       "category": "observability",
       "keywords": [
         "status",

@@ -1,7 +1,7 @@
 //! End-to-end tests: run the real built `harness-status` binary as a subcommand
 //! CLI and assert on stdout + exit code. The binary is read-only over an
 //! isolated temp HOME + CWD so it never touches the real home dir or a real
-//! progress file, and `HARNESS_DATE` pins the clock for deterministic output.
+//! working tree, and `HARNESS_DATE` pins the clock for deterministic output.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -64,13 +64,14 @@ fn budget_subcommand_reports_pinned_date() {
 }
 
 #[test]
-fn progress_subcommand_reports_missing_file() {
-    // The sandbox CWD has no .claude/progress.md, so the no-progress branch fires.
+fn progress_subcommand_is_removed() {
+    // User ruling 2026-10-27: the progress-file surface was removed, so clap
+    // must reject the old subcommand rather than print anything for it.
     let (code, stdout) = run(&["progress"], "progress");
-    assert_eq!(code, 0, "progress must exit 0");
+    assert_ne!(code, 0, "progress must no longer be a subcommand");
     assert!(
-        stdout.contains("[no progress file]"),
-        "expected the missing-progress line, got: {stdout}"
+        !stdout.contains("progress file"),
+        "nothing about a progress file may be printed, got: {stdout}"
     );
 }
 

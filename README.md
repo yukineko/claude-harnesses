@@ -42,7 +42,7 @@ Cargo ワークスペース・モノレポ。`yukineko` の Claude Code ハー�
 | flow | source（compass の一手 / backlog キュー / hypothesis の計測待ち仮説）→ executor（condukt）を 1 本のループで束ねる統合 driver。出荷済み仮説を計測して validate/reject する measure step を含む。SessionStart で開いている仕事があれば `/flow` を提案する |
 | fugu-router | 過去タスクの検証実績から cheap-first（最安 Claude ティア優先）でルーティングし、cascade を安全網に据える per-model ルーター |
 | gauge | Stop フックでトークン使用・コスト・ツール呼び出し数をローカルに計測する |
-| harness-status | HOTL 手動点検ダッシュボード（CLI 専用・hook なし）。`budget` / `sessions` / `progress` / `hooks`（Stop ゲート遅延）/ `inject`（UserPromptSubmit 注入予算）/ `plugins`（activation-scope 分類）のサブコマンドを持つ |
+| harness-status | HOTL 手動点検ダッシュボード（CLI 専用・hook なし）。`budget` / `sessions` / `hooks`（Stop ゲート遅延）/ `inject`（UserPromptSubmit 注入予算）/ `plugins`（activation-scope 分類）のサブコマンドを持つ |
 | hypothesis | PDO 仮説ライフサイクル管理。仮説の作成・検証・棄却・compass ゴール紐づけと、出荷済み・未計測（awaiting-measurement）の追跡を行う（出荷 ≠ 検証） |
 | playbook | UserPromptSubmit フックで関連アトミックノートをコンテキストに注入する |
 | precommit-audit | Stop フックで設定ルールと diff を照合し問題がなくなるまで完了を阻止する |

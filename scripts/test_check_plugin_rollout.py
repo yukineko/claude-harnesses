@@ -394,6 +394,30 @@ def _make_fixture(tmp, *, versions=None, registry_versions=None, enabled=None,
     return crates, registry_path, settings_path
 
 
+def _origin_matches_source(mod):
+    """Stand in for the git-origin query: an origin that carries, for every
+    plugin, exactly the plugin.json version the fixture SOURCE tree has.
+
+    Returns a callable matching ORIGIN_PLUGIN_VERSIONS's contract:
+    (crates) -> (ref, {crate: (OK, version) | (ABSENT, None)}, error). The source
+    tree is read at call time from `mod.CRATES`, so it follows whatever the case
+    rebinds. Without this seam bound, the real query runs against the test
+    process's cwd, where origin is whatever the developer's checkout has - or
+    nothing, which the checker (correctly) reports as UNDETERMINED.
+    """
+    def query(crates):
+        versions = {}
+        for crate in crates:
+            pj = Path(mod.CRATES) / crate / ".claude-plugin" / "plugin.json"
+            if pj.is_file():
+                versions[crate] = (mod.OK, json.loads(pj.read_text(encoding="utf-8")).get("version"))
+            else:
+                versions[crate] = (mod.ABSENT, None)
+        return "refs/remotes/origin/main", versions, None
+
+    return query
+
+
 class _FixtureCase(unittest.TestCase):
     """Rebinds the script's path constants at the fixture, restores after."""
 
@@ -420,8 +444,10 @@ class _FixtureCase(unittest.TestCase):
             getattr(cpr, "SOURCE_CORE_VERSION", None),
             cpr.PARKED_PATH,
             getattr(cpr, "RETIRED_PATH", None),
+            getattr(cpr, "ORIGIN_PLUGIN_VERSIONS", _MISSING),
         )
         cpr.CRATES = str(crates)
+        cpr.ORIGIN_PLUGIN_VERSIONS = _origin_matches_source(cpr)
         cpr.REGISTRY_PATH = str(registry_path)
         cpr.SETTINGS_PATH = str(settings_path)
         # Point the parked declaration at the fixture, ALWAYS. Left at its
@@ -465,7 +491,13 @@ class _FixtureCase(unittest.TestCase):
                 cpr.SOURCE_CORE_VERSION,
                 cpr.PARKED_PATH,
                 cpr.RETIRED_PATH,
+                origin_saved,
             ) = saved
+            if origin_saved is _MISSING:
+                if hasattr(cpr, "ORIGIN_PLUGIN_VERSIONS"):
+                    del cpr.ORIGIN_PLUGIN_VERSIONS
+            else:
+                cpr.ORIGIN_PLUGIN_VERSIONS = origin_saved
             if cih_saved is _MISSING:
                 if hasattr(cpr, CORE_IN_HISTORY):
                     delattr(cpr, CORE_IN_HISTORY)
@@ -1636,10 +1668,12 @@ class BinLauncherPresence(_FixtureCase):
             saved = (
                 cpr.CRATES, cpr.REGISTRY_PATH, cpr.SETTINGS_PATH,
                 cpr.SOURCE_CHANGED_SINCE, cpr.PLUGIN_CACHE_ROOT,
+                cpr.ORIGIN_PLUGIN_VERSIONS,
             )
             cpr.CRATES, cpr.REGISTRY_PATH, cpr.SETTINGS_PATH = (
                 str(crates), str(registry_path), str(settings_path),
             )
+            cpr.ORIGIN_PLUGIN_VERSIONS = _origin_matches_source(cpr)
             cpr.SOURCE_CHANGED_SINCE = _changed_stub()
             cpr.PLUGIN_CACHE_ROOT = str(Path(tmp) / "cache")
             out_buf, err_buf = io.StringIO(), io.StringIO()
@@ -1650,6 +1684,7 @@ class BinLauncherPresence(_FixtureCase):
                 (
                     cpr.CRATES, cpr.REGISTRY_PATH, cpr.SETTINGS_PATH,
                     cpr.SOURCE_CHANGED_SINCE, cpr.PLUGIN_CACHE_ROOT,
+                    cpr.ORIGIN_PLUGIN_VERSIONS,
                 ) = saved
             out, err = out_buf.getvalue(), err_buf.getvalue()
             self.assertEqual(rc, 0, f"out={out}\nerr={err}")

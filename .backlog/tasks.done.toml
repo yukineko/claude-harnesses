@@ -62114,3 +62114,62 @@ test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "061bb473ae802dd8e73f8b4bcca6e6022bc2409c"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "58bc638d"
+title = "guard-maintree-bash refuses a genuine two-parent merge when main has any pre-existing untracked path (HEAD-moved branch requires whole-tree-clean porcelain)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "guard-maintree-bash",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """scripts/guard-maintree-bash.py:393 'elif after["head"] != before["head"] and not after["porcelain"]' needs a globally clean tree; an unchanged untracked path (e.g. bare.git/) keeps porcelain non-empty so the merge falls to the final else REFUSE (line 399-400) without integration_head() being consulted. Observed 2026-10-27 on merge 71706f61. Repro: scripts/test_guard_maintree_bash_merge_with_untracked.py"""
+created_at = 1793031488
+updated_at = 1793139624
+weight = 0.0
+issue_number = 1465
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1465"
+issue_closed_at = 1793139627
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_merge_with_untracked.py -k test_red"
+rev = "48a728d0e9f50aa6488a4f6dd6e00b8d0a220b52"
+observed_at = 1793031488
+detail = """
+exit 1: ======================
+FAILED scripts/test_guard_maintree_bash_merge_with_untracked.py::MergeWithPreexistingUntracked::test_red_merge_allowed_with_plain_untracked_file
+FAILED scripts/test_guard_maintree_bash_merge_with_untracked.py::MergeWithPreexistingUntracked::test_red_merge_allowed_with_untracked_bare_repo_at_root
+======================= 2 failed, 1 deselected in 0.93s ========================"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_merge_with_untracked.py"
+exit = 0
+passed = 3
+rev = "72334fa69e256a56db077bb02969a22256ec9c49"
+observed_at = 1793139617
+output_digest = "sha256:332e773bcb2356881980bd62f1daaea58d64b8dc95e4c9f27eaf2d3c0fbd3af7"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/c5b9c02b-fix-58bc638d
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_guard_maintree_bash_merge_with_untracked.py ...             [100%]
+
+============================== 3 passed in 2.32s ===============================
+"""
+
+[task.closure.red]
+rev = "5aa7a3cf02c91af98a16a8d4e3c7363d238b6041"
+exit = 1
+kind = "behavioural"

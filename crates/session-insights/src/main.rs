@@ -8,8 +8,10 @@
 //! state (and, opt-in, the vault); the hooks never block a turn and always exit
 //! 0. A hook payload that is empty or unparseable is still not dropped silently:
 //! every hook says on stderr that the event was NOT recorded (and `stop` also
-//! appends an `unparseable_payload` line to `<state_dir>/log.jsonl`; it prints
-//! nothing on stdout, per the 2026-10-27 ruling that Stop shows no logs).
+//! appends an `unparseable_payload` line to `<state_dir>/log.jsonl` and prints
+//! exactly one short `systemMessage` line, `session-insights: セッションを記録
+//! できませんでした` — a result, not a log, per the 2026-10-27 ruling that Stop
+//! shows one-line results and no logs).
 
 mod config;
 mod context;
@@ -143,10 +145,12 @@ fn stop() {
     let Some(input) = HookInput::parse(&raw) else {
         // Same disclosure as `record` on stderr, plus a durable
         // `unparseable_payload` line in `<state_dir>/log.jsonl` (state_dir of
-        // the current dir's config — the payload carried no cwd). Nothing on
-        // stdout: operator ruling 2026-10-27 「Stop時に結果の報告はあってもいい
-        // がログはいらない」 — a Stop-time systemMessage pushes the turn's
-        // result report off screen. No block: no verdict here.
+        // the current dir's config — the payload carried no cwd), and exactly
+        // one short `systemMessage` line on stdout so the failure to record is
+        // visible to the user (stderr of a Stop hook is not). Operator ruling
+        // 2026-10-27 「Stop時に結果の報告はあってもいいがログはいらない」: the
+        // one-liner is the result; the long message stays in the log.
+        // No block: no verdict here.
         let msg = unparseable_payload_message("stop", &raw);
         eprintln!("{msg}");
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -158,6 +162,10 @@ fn stop() {
                 "hook": "stop",
                 "message": msg,
             }),
+        );
+        println!(
+            "{}",
+            serde_json::json!({ "systemMessage": "session-insights: セッションを記録できませんでした" })
         );
         return;
     };

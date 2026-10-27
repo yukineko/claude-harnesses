@@ -475,14 +475,16 @@ fn block_undetermined(
 /// First stop in the chain (`stop_hook_active == false`): block with the
 /// "判定不能" reason. Post-block re-entry (`stop_hook_active == true`): a
 /// persistent cannot-determine (a broken backlog install, a host that sends no
-/// session id) would otherwise block forever, so the stop is allowed. The
-/// allow prints NOTHING on stdout (operator ruling 2026-10-27:
-/// 「Stop時に結果の報告はあってもいいがログはいらない」 — a Stop-time notice
-/// pushes the turn's result report off screen; the user already saw the
-/// 判定不能 reason on the first block of this chain). It is not unrecorded:
-/// one `{"event":"bounded_allow","session_id","what","why"}` line is appended
-/// to `<state_dir>/log.jsonl` (see [`bounded_allow_entry`]), so the allow
-/// stays distinguishable from a clean pass after the fact.
+/// session id) would otherwise block forever, so the stop is allowed — but
+/// never silently. Per the operator ruling 2026-10-27 (「Stop時に結果の報告は
+/// あってもいいがログはいらない」) the allow prints exactly ONE short
+/// `systemMessage` line, `autoflow: 判定不能のまま通しました` (a result, not a
+/// log — it says the stop passed undetermined, so it does not read as a clean
+/// pass), and the full reason goes to the log: one
+/// `{"event":"bounded_allow","session_id","what","why"}` line is appended to
+/// `<state_dir>/log.jsonl` (see [`bounded_allow_entry`]). The one-liner does
+/// not depend on the user having seen the first block's reason: that block
+/// text may have scrolled away or been read by the model only.
 fn block_undetermined_bounded(
     state_dir: &std::path::Path,
     cwd: &std::path::Path,
@@ -494,9 +496,16 @@ fn block_undetermined_bounded(
 ) {
     if stop_hook_active {
         harness_core::gate::run::append_jsonl(state_dir, &bounded_allow_entry(session, what, why));
+        println!("{}", bounded_allow_message());
         return;
     }
     block_undetermined(cwd, session, check_kind, what, why);
+}
+
+/// The one-line `systemMessage` for the bounded allow (see
+/// [`block_undetermined_bounded`]). Carries no reason text; that is in log.jsonl.
+fn bounded_allow_message() -> serde_json::Value {
+    serde_json::json!({ "systemMessage": "autoflow: 判定不能のまま通しました" })
 }
 
 /// The `log.jsonl` record for the bounded allow (see

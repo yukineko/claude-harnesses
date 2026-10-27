@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Quiet-stop item 3a: autoflow's bounded allow (stop_hook_active=true, an
-//! undetermined observation) prints NOTHING on stdout and appends a
+//! undetermined observation) prints exactly ONE short `systemMessage` line on stdout and appends a
 //! `bounded_allow` JSON line to `<state_dir>/log.jsonl`. First stop still blocks.
 //! Undetermined input: a payload with no session_id and no CLAUDE_CODE_SESSION_ID.
 
@@ -62,16 +62,27 @@ fn first_stop_still_blocks() {
 }
 
 #[test]
-fn bounded_allow_is_silent_on_stdout_and_logged() {
+fn bounded_allow_prints_one_line_system_message_and_is_logged() {
     let h = home("bounded");
     let (code, stdout) = stop(&h, true);
     let log = h.join(".autoflow/state/log.jsonl");
     let text = std::fs::read_to_string(&log).unwrap_or_default();
     let _ = std::fs::remove_dir_all(&h);
     assert_eq!(code, 0);
+    assert_eq!(
+        stdout.trim().lines().count(),
+        1,
+        "bounded allow must print exactly one line, got: {stdout:?}"
+    );
+    let msg: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout not JSON ({e}): {stdout:?}"));
     assert!(
-        stdout.trim().is_empty(),
-        "bounded allow must print nothing on stdout, got: {stdout:?}"
+        msg.get("decision").is_none(),
+        "must not carry decision: {msg}"
+    );
+    assert_eq!(
+        msg["systemMessage"], "autoflow: 判定不能のまま通しました",
+        "stdout: {stdout:?}"
     );
     let rec: serde_json::Value = serde_json::from_str(
         text.lines()
@@ -83,4 +94,9 @@ fn bounded_allow_is_silent_on_stdout_and_logged() {
     assert!(rec.get("session_id").is_some(), "{rec}");
     assert!(rec["what"].as_str().is_some_and(|s| !s.is_empty()), "{rec}");
     assert!(rec["why"].as_str().is_some_and(|s| !s.is_empty()), "{rec}");
+    let why = rec["why"].as_str().unwrap();
+    assert!(
+        !stdout.contains(why),
+        "long why must stay in log.jsonl, not stdout: {stdout:?}"
+    );
 }

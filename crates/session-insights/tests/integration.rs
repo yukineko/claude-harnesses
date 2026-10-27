@@ -198,15 +198,34 @@ fn record_hook_survives_garbage_stdin() {
     );
 }
 
-/// An unparseable Stop payload prints nothing on stdout (operator ruling
-/// 2026-10-27: no logs at Stop) but is not lost: it is recorded as an
-/// `unparseable_payload` line in `<state_dir>/log.jsonl`.
+/// An unparseable Stop payload prints exactly one short `systemMessage` line on
+/// stdout (operator ruling 2026-10-27: results in one line, never logs) and is
+/// also recorded as an `unparseable_payload` line in `<state_dir>/log.jsonl`.
 #[test]
-fn stop_hook_garbage_payload_is_logged_not_printed() {
+fn stop_hook_garbage_payload_prints_one_line_and_is_logged() {
     let home = temp_home();
     let (code, stdout) = run_in(&home, &["stop"], "not json");
     assert_eq!(code, 0, "stop must not block");
-    assert!(stdout.trim().is_empty(), "stdout must be empty: {stdout:?}");
+    assert_eq!(
+        stdout.trim().lines().count(),
+        1,
+        "exactly one line: {stdout:?}"
+    );
+    let out: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout not JSON ({e}): {stdout:?}"));
+    assert!(out.get("decision").is_none(), "{out}");
+    assert_eq!(
+        out["systemMessage"], "session-insights: セッションを記録できませんでした",
+        "stdout: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("NOT counted"),
+        "long message leaked: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("not json"),
+        "raw payload leaked: {stdout:?}"
+    );
     let log = home.join(".session-insights/state/log.jsonl");
     let text = std::fs::read_to_string(&log).unwrap_or_default();
     let v: serde_json::Value = serde_json::from_str(text.lines().last().unwrap_or(""))

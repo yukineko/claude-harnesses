@@ -10,8 +10,9 @@ gate, and still never take effect for any running session — this happened to
 5 plugins in one sitting before this script existed (hypothesis, condukt,
 compass, blastguard, overwatch all sat committed-but-undeployed).
 
-This script checks three independent dimensions of "is it actually live". Two of
-them run crates/ -> settings/registry/cache; the third runs the other way.
+This script checks several independent dimensions of "is it actually live"
+(numbered 1-5 below). Most run crates/ -> settings/registry/cache; dimension 4
+runs the other way, and dimension 5 compares the source with origin.
 
 1. ROLLOUT (hard failure). For every plugin under crates/<name>/, compares:
      - crates/<name>/.claude-plugin/plugin.json  .version       (source of truth)
@@ -72,6 +73,12 @@ fixes and a caller that conflates them sends the reader to the wrong command —
       Same standing as PARKED_CONFIG, one file over.
   7 — USAGE: the command line could not be parsed (see --only below). Nothing
       was checked; never a pass.
+  8 — ORIGIN_LAG class: some plugin's source version differs from the version
+      on origin's default branch (dimension 5 below), OR that comparison could
+      not be made at all (no origin ref, git failure). Fix: push the bump, then
+      fetch. Its own code because a rollout cannot fix it, and rc 1 would make
+      rollout-plugins.sh fail its own verification on every rollout done
+      before the push. Ranked below ENABLEMENT and above RETIRED.
 
   Neither 5 nor 6 has its own branch in .githooks/pre-push, which is not
   editable from a Claude session here (Edit/Write on .githooks/** is denied in
@@ -121,6 +128,26 @@ fixes and a caller that conflates them sends the reader to the wrong command —
    its names must match NO crate), which moves the finding into a RETIRED ON
    PURPOSE report that still prints it verbatim. There is no bypass flag and no
    env-var escape hatch.
+
+5. AHEAD OF ORIGIN (rc 8, see check_origin_lag). A rollout of an UNPUSHED
+   version bump does not stay rolled out. Observed 2026-10-27 (backlog
+   4d54cd6d): the yukineko marketplace (`source: directory`, `autoUpdate:
+   true`) auto-updated and repointed the registry at origin/main's versions
+   (overwatch 0.2.106 -> 0.2.105, tdd 0.1.56 -> 0.1.54). Those cache dirs held
+   only the launcher, so overwatch went dark and tdd blocked every stop, while
+   dimension 1 had been green right after the rollout. Only the plugins whose
+   version differed between local main and origin were reverted. So each plugin's working-tree
+   plugin.json version is compared with the one at refs/remotes/origin/HEAD
+   (or refs/remotes/origin/main when the clone recorded no origin/HEAD). Any
+   difference is reported (ahead / behind / not orderable), and so is a plugin
+   origin does not carry, a plugin.json on origin that cannot be parsed, and
+   (as one unattributed "origin lag UNDETERMINED" line) no origin ref at all or
+   a git failure. Undetermined is never "nothing ahead". The remote-tracking
+   ref is origin as of the last fetch, and a stale one can only make origin
+   look older, which errs toward reporting. Neither a park nor --only scoping
+   moves these findings: an unpushed bump is a property of the source, and
+   autoUpdate acts on it whatever this run targeted. ORIGIN_PLUGIN_VERSIONS is
+   rebindable at a fixture, like SOURCE_CHANGED_SINCE.
 
 The rollout dimension checks FOUR things, because a matching version string is
 not evidence that anything in that directory is current:
@@ -248,6 +275,13 @@ RC_RETIRED_CONFIG = 6
 # verified, so it must not read as any pass; its own code so that a caller
 # cannot mistake it for a fleet-state class with a fleet-state remedy.
 RC_USAGE = 7
+# A plugin's source version differs from the one on origin's default branch
+# (see check_origin_lag), or that comparison could not be made. Its own class
+# because its remedy is `git push`, which neither a rollout nor a settings edit
+# performs - and because folding it into RC_ROLLOUT would make every rollout of
+# an unpushed bump fail its own verification (rollout-plugins.sh treats rc 1 as
+# fatal) for something the rollout cannot fix.
+RC_ORIGIN_LAG = 8
 
 REPO = os.getcwd()
 CRATES = os.path.join(REPO, "crates")
@@ -1302,6 +1336,170 @@ def unaccounted_gate_plugins(plugins):
     return sorted(set(EXPECTED_GATE_PLUGINS) - seen)
 
 
+# The refs the marketplace's autoUpdate reinstalls from, in order. Observed
+# 2026-10-27 (backlog 4d54cd6d): the yukineko marketplace is `source:
+# directory` with `autoUpdate: true`, and its auto-update recorded
+# gitCommitSha == origin/main - it installed the version found on the remote's
+# default branch, not the working tree. origin/HEAD names that default branch
+# when the clone recorded one; a clone of a then-empty remote has no
+# origin/HEAD, so origin/main is the only other ref consulted. Neither present
+# is UNDETERMINED, never "no lag".
+ORIGIN_REFS = ("refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+ORIGIN_LAG_MARK = "<- push before trusting a rollout"
+
+
+def _git_origin_plugin_versions(crates):
+    """plugin.json versions of `crates` as they stand on origin's default branch.
+
+    Returns (ref, versions, error):
+      * error is a string when the comparison could not be made at all (not a
+        git checkout, git missing or failing, no origin ref). The caller reports
+        it as a finding - "could not look" is not "nothing ahead".
+      * versions maps crate -> ABSENT (no plugin.json at that path on origin),
+        MALFORMED-tuple (unparseable there), or (OK, version-or-None).
+
+    Reads the remote-tracking ref, i.e. origin as of the last fetch. A stale
+    tracking ref can only make the remote look OLDER than it is, which reports
+    lag that a fetch would clear - the restrictive direction.
+    """
+    import subprocess
+
+    def run(args, data=None):
+        return subprocess.run(
+            ["git", *args],
+            cwd=REPO,
+            input=data,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    ref = sha = None
+    try:
+        for cand in ORIGIN_REFS:
+            proc = run(["rev-parse", "--verify", "--quiet", f"{cand}^{{commit}}"])
+            if proc.returncode == 0 and proc.stdout.strip():
+                ref, sha = cand, proc.stdout.decode().strip()
+                break
+        if sha is None:
+            return None, {}, (
+                f"none of {', '.join(ORIGIN_REFS)} resolves in {REPO} (not a git "
+                "checkout, no 'origin' remote, or never fetched)"
+            )
+        paths = [f"crates/{c}/.claude-plugin/plugin.json" for c in crates]
+        batch = "".join(f"{sha}:{p}\n" for p in paths).encode()
+        proc = run(["cat-file", "--batch"], data=batch)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return ref, {}, f"git could not be run ({exc})"
+    if proc.returncode != 0:
+        return ref, {}, (
+            f"`git cat-file --batch` exited {proc.returncode} "
+            f"({proc.stderr.decode(errors='replace').strip()})"
+        )
+
+    out = proc.stdout
+    pos = 0
+    versions = {}
+    for crate in crates:
+        nl = out.find(b"\n", pos)
+        if nl < 0:
+            return ref, {}, "`git cat-file --batch` output ended early"
+        header = out[pos:nl].decode(errors="replace").split()
+        pos = nl + 1
+        if header[-1:] == ["missing"]:
+            versions[crate] = (ABSENT, None)
+            continue
+        if len(header) != 3 or not header[2].isdigit():
+            return ref, {}, f"`git cat-file --batch` printed an unexpected header {header!r}"
+        size = int(header[2])
+        blob = out[pos:pos + size]
+        pos += size + 1  # the blob is followed by one LF
+        if len(blob) != size:
+            return ref, {}, "`git cat-file --batch` output ended inside a blob"
+        try:
+            data = json.loads(blob.decode())
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            versions[crate] = (MALFORMED, str(exc))
+            continue
+        if not isinstance(data, dict):
+            versions[crate] = (MALFORMED, "not a JSON object")
+            continue
+        versions[crate] = (OK, data.get("version"))
+    return ref, versions, None
+
+
+# Rebindable at a fixture, like SOURCE_CHANGED_SINCE.
+ORIGIN_PLUGIN_VERSIONS = _git_origin_plugin_versions
+
+
+def check_origin_lag(plugins):
+    """Plugins whose source version differs from the one on origin's default branch.
+
+    A rollout of an UNPUSHED version bump does not stay rolled out: the
+    marketplace's autoUpdate reinstalls each plugin at the version origin
+    carries, into a cache dir that rollout-plugins.sh never filled - so the
+    registry ends up pointing at a dir holding only the launcher. Observed
+    2026-10-27 (backlog 4d54cd6d): local main 12 commits ahead and unpushed;
+    exactly the two plugins whose version differed main vs origin were reverted
+    (overwatch 0.2.106 -> 0.2.105, tdd 0.1.56 -> 0.1.54). overwatch's
+    SessionStart went dark and tdd's Stop gate blocked every stop, while the
+    ROLLOUT dimension had been green right after the rollout.
+
+    Every "cannot tell" is a finding: no origin ref, a git failure, or a
+    plugin.json that origin carries but that cannot be read. A plugin origin
+    does not carry at all is reported too - there is no version on origin for
+    autoUpdate to keep this one at. Lines are prefixed "<crate>: " except the
+    whole-dimension undetermined line, which names no plugin.
+    """
+    crates = [crate for crate, _pname, src_ver in plugins if src_ver is not None]
+    if not crates:
+        return []
+    ref, versions, error = ORIGIN_PLUGIN_VERSIONS(crates)
+    if error:
+        return [
+            f"origin lag UNDETERMINED: {error}. Whether any plugin's source "
+            "version is ahead of origin cannot be told, and undetermined is not "
+            "'nothing ahead' (marketplace autoUpdate reinstalls origin's version)"
+        ]
+    problems = []
+    for crate, _pname, src_ver in plugins:
+        if src_ver is None:
+            continue  # check_rollout already reports the missing version
+        state, origin_ver = versions.get(crate, (None, None))
+        if state == ABSENT:
+            problems.append(
+                f"{crate}: source={src_ver} but {ref} has no "
+                f"crates/{crate}/.claude-plugin/plugin.json - the source is ahead "
+                f"of origin by a whole plugin {ORIGIN_LAG_MARK}"
+            )
+        elif state == MALFORMED:
+            problems.append(
+                f"{crate}: crates/{crate}/.claude-plugin/plugin.json on {ref} is "
+                f"unparseable ({origin_ver}), so whether source={src_ver} is "
+                f"ahead of origin is undetermined {ORIGIN_LAG_MARK}"
+            )
+        elif state != OK:
+            problems.append(
+                f"{crate}: no origin version was returned for this plugin, so "
+                f"whether source={src_ver} is ahead of origin is undetermined"
+            )
+        elif origin_ver != src_ver:
+            order = _compare_versions(src_ver, origin_ver)
+            relation = (
+                "ahead of origin"
+                if order == 1
+                else "behind origin"
+                if order == -1
+                else "different from origin (order undetermined)"
+            )
+            problems.append(
+                f"{crate}: source={src_ver} {ref}={origin_ver} - the source "
+                f"version is {relation}; marketplace autoUpdate will reinstall "
+                f"{origin_ver} into a dir rollout-plugins.sh never filled "
+                f"{ORIGIN_LAG_MARK}"
+            )
+    return problems
+
+
 def check_rollout(plugins):
     """Return (problems, checked) comparing source version to the deployed one.
 
@@ -2106,6 +2304,11 @@ def main(argv=None):
     # rollout verdict + exit code rather than given a fifth code.
     pin_problems, pin_checked = check_settings_pins()
 
+    # Source-vs-origin. Neither parked nor --only scoping touches it: a park is
+    # about deployment, and an unpushed bump is a property of the SOURCE that
+    # autoUpdate acts on whether or not this run targeted the plugin.
+    origin_lag_problems = check_origin_lag(plugins)
+
     # Same reasoning as stale_problems/pin_problems: a missing bin/<crate>
     # launcher is a property of the SOURCE tree, not of the registry, so it is
     # checked even when the registry is absent and folded into the same
@@ -2471,6 +2674,22 @@ def main(argv=None):
             file=sys.stderr,
         )
 
+    if origin_lag_problems:
+        print(
+            f"\nAHEAD OF ORIGIN ({len(origin_lag_problems)} problem(s)): a "
+            "rollout of these does not stay rolled out - marketplace autoUpdate "
+            "reinstalls the version origin's default branch carries:",
+            file=sys.stderr,
+        )
+        for p in origin_lag_problems:
+            print(f"  - {p}", file=sys.stderr)
+        print(
+            "\nFix: push the version bump (then `git fetch` so origin/* reflects "
+            "it). This is NOT fixed by a rollout, and a rollout done before the "
+            "push will be reverted to origin's version by the next auto-update.",
+            file=sys.stderr,
+        )
+
     if gate_failures:
         print(
             # The class now covers three shapes — disabled, unverifiable (no
@@ -2557,6 +2776,8 @@ def main(argv=None):
         return RC_ROLLOUT
     if gate_failures or settings_absent:
         return RC_ENABLEMENT
+    if origin_lag_problems:
+        return RC_ORIGIN_LAG
     if orphan_problems:
         return RC_RETIRED
     return RC_OK

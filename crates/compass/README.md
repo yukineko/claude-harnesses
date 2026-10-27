@@ -12,7 +12,7 @@ Most tools answer the blank by *listing candidates* (symptom). compass instead k
 the **goal sharp** and derives the next move as the **gradient** down from it:
 
 ```
-next move = (sharp goal / definition-of-done) − (reality: git · progress.md · deepwiki) , the largest right-sized slice
+next move = (sharp goal / definition-of-done) − (reality: git · deepwiki) , the largest right-sized slice
 ```
 
 It is **subscription-native**: no API key. The judging (carving the goal, reading the
@@ -24,7 +24,6 @@ only keeps state and renders deterministic context. It never calls an LLM or
 
 | Question | Owner |
 |---|---|
-| What's the current state? (done / left / blockers) | `.claude/progress.md` |
 | What's the structure? | `deepwiki` |
 | Has impl drifted from spec? | `specguard` |
 | **What is this for · what is "done" · what's the next move?** | **`compass`** |
@@ -47,7 +46,7 @@ altitude than a specguard canon:
 | `measuring_stick` | how to measure the next move (default: *defensibility × closeness-to-goal ÷ cost*) | project-fixed |
 | `current_gap` | goal − reality summary (regenerated each round) | recomputed every round |
 | `next_action` | the first physical step on resume (written by the Stop breadcrumb) | updated each Stop (not in the primary working tree, see below) |
-| `parked` | pointers to deferred work (the bodies live in .claude/progress.md) | appended by routing |
+| `parked` | pointers to deferred work, written via `compass charter --write` (route itself stores nothing) | written by the skill |
 
 ## The C1–C5 freshness gates
 
@@ -82,7 +81,7 @@ evaluate ─► carve loop ─► charter ─► gap ─► (condukt decompose) 
    │            │            │         │                            │
  C1/C2       ask 1 Q       save the  goal − reality            size triage:
  floor       at a time,   sharpened  largest slice          one right-sized move → condukt
- (binary)    re-check,    charter                           the rest → parked (progress.md)
+ (binary)    re-check,    charter                           the rest → parked (printed)
              persist
 ```
 
@@ -96,7 +95,7 @@ evaluate ─► carve loop ─► charter ─► gap ─► (condukt decompose) 
    `compass apply --answer <JSON>` folds it in, persists, and re-checks C1/C2.
 3. **charter** — `compass charter --write <JSON>` saves the sharpened charter with an
    **observable** DoD.
-4. **gap** — `compass gap` assembles the inputs (DoD / recent activity / progress)
+4. **gap** — `compass gap` assembles the inputs (DoD / recent activity)
    deterministically; the skill reasons the goal − reality delta and writes it back with
    `compass gap --write <text>`.
 5. **condukt decompose** — the agreed single move becomes a task, decomposed by condukt
@@ -110,9 +109,8 @@ evaluate ─► carve loop ─► charter ─► gap ─► (condukt decompose) 
    - **`OnlyNoise`** (everything `xs`, nothing hits the main thread) → re-question the
      north_star itself (the direction is exhausted).
 
-Parked work is written one line at a time into the .claude/progress.md "remaining" sink,
-so the **next** `/compass` reads it back as gap input — a self-feeding loop that
-structurally reduces the "blank after a checkpoint."
+Parked work is only printed in the routing JSON; it is not stored anywhere and
+does not come back as gap input on the next `/compass` (user ruling 2026-10-27).
 
 ### Closing the loop — `outcome`
 
@@ -298,7 +296,7 @@ MIT
 compass は**ゴールを鋭く保ち、次の一手をそこからの勾配（gap）として導く**。
 
 ```
-次の一手 = (鋭いゴール / 完成定義) − (現状: git・progress.md・deepwiki) の 最大かつ右サイズな差分
+次の一手 = (鋭いゴール / 完成定義) − (現状: git・deepwiki) の 最大かつ右サイズな差分
 ```
 
 **subscription で完結**（API キー不要）。判定（ゴールを彫る・gap を読む・一手を選ぶ）は
@@ -320,7 +318,7 @@ Claude Code セッション内の LLM 労働、バイナリは状態維持と決
 `evaluate`（C1/C2 floor）→ carve ループ（1問ずつ問い、再評価・永続化）→ `charter`（彫れた charter を保存）
 → `gap`（ゴール − 現状）→ condukt 分解（size 付与）→ `route`（size triage）。
 **焦点保護（B案）**: 右サイズ（既定 `s`/`m`）の一手を **1件だけ** condukt へ、残りは保留へ。
-保留は `.claude/progress.md`「残り」へ書き戻され、次回 /compass の gap 入力に再浮上する（自己供給ループ）。
+保留は route の JSON に印字されるだけで保存されず、次回 /compass の gap 入力にも再浮上しない（2026-10-27 ユーザー裁定）。
 エッジ: **`GoalTooBig`**（全部 l/xl）→ ゴールを小さく彫り直す、**`OnlyNoise`**（全部 xs）→ north_star を問い直す。
 
 **計測ループ（outcome）**: 一手の完了後 `compass outcome --verdict <forward|unchanged|backward> --evidence <計測値>`

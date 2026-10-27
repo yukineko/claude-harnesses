@@ -209,20 +209,19 @@ Rust スキャナーがリポジトリ構造をマップし、`.deepwiki/*.md` �
 - **スキル**: `/deepwiki`
 
 #### harness-status
-HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge のセッション記録 + `.claude/progress.md` を 1 画面に集約表示するほか、サブコマンドで観測面を切り出せる。意図的に **CLI 専用・read-only**。加えて、登録済み hook の binary がディスク上に無いときだけ警告する軽量な `SessionStart` hook を1本持つ（健全時は無出力・fail-soft）。
+HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge のセッション記録を 1 画面に集約表示するほか、サブコマンドで観測面を切り出せる。意図的に **CLI 専用・read-only**。加えて、登録済み hook の binary がディスク上に無いときだけ警告する軽量な `SessionStart` hook を1本持つ（健全時は無出力・fail-soft）。
 
 | サブコマンド | 表示 |
 |---|---|
 | `budget` | 今日のコスト（budgetguard） |
 | `sessions` | 直近セッション（gauge） |
-| `progress` | 進捗ファイル（`.claude/progress.md`） |
 | `hooks` | Stop ゲートの遅延集計 |
 | `inject` | UserPromptSubmit 注入サイズ集計 |
 | `hooks-health` | 登録済み hook の binary 欠損チェック |
 | `plugins` | 全プラグインの activation-scope 分類（always-on / event-scoped / manual） |
 | `session-start` | SessionStart hook 本体（hooks-health を実行し、欠損があるときだけ `additionalContext` を注入） |
 
-- **スキル**: `/harness-status:status`（引数なしは budget/sessions/progress を集約）
+- **スキル**: `/harness-status:status`（引数なしは budget/sessions を集約）
 - **フック**: SessionStart（`harness-status session-start`；欠損 binary が無ければ無出力）
 
 #### daily
@@ -253,7 +252,7 @@ HOTL 手動点検ダッシュボード。budgetguard の支出台帳 + gauge の
       └─ [Phase 8 クローズ] specguard（drift 監査・non-blocking）
 [横断]
   gauge → budgetguard, harness-status, session-insights が数値を読む
-  harness-status → budgetguard + gauge + progress.md の集約ビュー
+  harness-status → budgetguard + gauge の集約ビュー
 ```
 
 ---

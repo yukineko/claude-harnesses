@@ -21,7 +21,7 @@
 #                  src/main.rs:317-321). SessionStart cannot block, so speaking
 #                  is the whole of the restrictive resolution.
 #
-#   budget / sessions / progress / hooks / inject / plugins / hooks-health /
+#   budget / sessions / hooks / inject / plugins / hooks-health /
 #   path-shadow -> exit 1. These are read by the /status command and by humans,
 #   and every one of them is a FINDING LIST whose emptiness reads as "nothing
 #   wrong" — the same fail-open one level down (CLAUDE.md §3).

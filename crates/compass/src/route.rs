@@ -9,9 +9,6 @@
 //! "centrality" judgment is a deterministic graph proxy (in-degree), never a
 //! semantic one.
 
-use std::path::Path;
-
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::charter::Charter;
@@ -253,49 +250,6 @@ fn right_size_zero_edge(tasks: &[Task]) -> Option<RouteEdge> {
     }
 }
 
-/// The "残り" (remaining) section header in `.claude/progress.md`.
-const REMAINING_HEADER: &str = "## 残り";
-
-/// Append parked task titles as bullet lines under the "残り" section of
-/// `.claude/progress.md` (the 保留 sink, DESIGN §6 self-feeding loop). Creates
-/// the file/section if absent. Idempotent: a verbatim-existing bullet line is
-/// never duplicated.
-pub fn write_parked_to_progress(repo_root: &Path, parked: &[Task]) -> Result<()> {
-    let dir = repo_root.join(".claude");
-    let path = dir.join("progress.md");
-
-    let mut content = std::fs::read_to_string(&path).unwrap_or_default();
-
-    // Ensure the section header exists.
-    if !content.lines().any(|l| l.trim() == REMAINING_HEADER) {
-        if !content.is_empty() && !content.ends_with('\n') {
-            content.push('\n');
-        }
-        if !content.is_empty() {
-            content.push('\n');
-        }
-        content.push_str(REMAINING_HEADER);
-        content.push('\n');
-    }
-
-    // Append each missing bullet line (idempotent on verbatim match).
-    for task in parked {
-        let bullet = format!("- {}", task.title.trim());
-        let exists = content.lines().any(|l| l.trim_end() == bullet);
-        if !exists {
-            if !content.ends_with('\n') {
-                content.push('\n');
-            }
-            content.push_str(&bullet);
-            content.push('\n');
-        }
-    }
-
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    std::fs::write(&path, content).with_context(|| format!("writing {}", path.display()))?;
-    Ok(())
-}
-
 /// Produce the 課題 statement to hand to condukt (DESIGN §13): the chosen
 /// move(s) + project context (north_star / current_gap / measuring_stick) +
 /// the named opportunities (PDO OST) sitting under the active outcome, so the
@@ -488,41 +442,6 @@ mod tests {
         assert!(r.to_condukt.iter().any(|t| t.id == "u"));
         assert!(r.edge.is_none());
         assert!(r.parked.iter().any(|t| t.id == "a"));
-    }
-
-    #[test]
-    fn write_parked_creates_section_and_is_idempotent() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let parked = vec![task("a", &[], Some("l")), task("b", &[], Some("xl"))];
-
-        write_parked_to_progress(dir.path(), &parked).expect("first write");
-        let path = dir.path().join(".claude/progress.md");
-        let after_first = std::fs::read_to_string(&path).expect("read");
-        assert!(after_first.contains(REMAINING_HEADER));
-        assert!(after_first.contains("- title-a"));
-        assert!(after_first.contains("- title-b"));
-
-        // Re-run: no duplication.
-        write_parked_to_progress(dir.path(), &parked).expect("second write");
-        let after_second = std::fs::read_to_string(&path).expect("read");
-        assert_eq!(after_first, after_second);
-        assert_eq!(after_second.matches("- title-a").count(), 1);
-        assert_eq!(after_second.matches(REMAINING_HEADER).count(), 1);
-    }
-
-    #[test]
-    fn write_parked_preserves_existing_content() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
-        let path = dir.path().join(".claude/progress.md");
-        std::fs::write(&path, "# progress\n\n## 完了\n- did a thing\n").unwrap();
-
-        write_parked_to_progress(dir.path(), &[task("x", &[], Some("l"))]).expect("write");
-        let content = std::fs::read_to_string(&path).expect("read");
-        assert!(content.contains("## 完了"));
-        assert!(content.contains("- did a thing"));
-        assert!(content.contains(REMAINING_HEADER));
-        assert!(content.contains("- title-x"));
     }
 
     #[test]

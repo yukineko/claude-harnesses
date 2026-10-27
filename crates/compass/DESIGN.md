@@ -8,7 +8,7 @@
 判定の根（棄却ループによる "定義を彫る"）は `consulting-agent`
 （`/mnt/c/Users/hiroyuki_nakayama/src/consulting-agent`）から抽出し、
 specguard の specforge intake（[../specguard/DESIGN-INTAKE.md](../specguard/DESIGN-INTAKE.md)）と
-**同一エンジンを共有する**（二重実装しない）。実行は `condukt` に委ね、保留は `.claude/progress.md` に書き戻す。
+**同一エンジンを共有する**（二重実装しない）。実行は `condukt` に委ね、保留は route の JSON に印字するだけで保存しない（2026-10-27 ユーザー裁定）。
 
 ---
 
@@ -27,14 +27,13 @@ specguard の specforge intake（[../specguard/DESIGN-INTAKE.md](../specguard/DE
 **「ゴールを鋭く保ち、次の一手をそこからの差分として導く（勾配の算出）」**。
 
 ```
-次の一手 = (鋭いゴール/完成定義) − (現状: git・progress.md・deepwiki・テスト)  の最大かつ右サイズな差分
+次の一手 = (鋭いゴール/完成定義) − (現状: git・deepwiki・テスト)  の最大かつ右サイズな差分
 ```
 
 ### 既存 harness との棲み分け（再発明しない）
 
 | 問い | 担当 |
 |---|---|
-| いま何の状態か（完了/残り/ブロッカーを記録） | `.claude/progress.md` |
 | 構造はどうなっているか | `deepwiki` |
 | 仕様↔実装はズレていないか | `specguard:run`（drift 監査） |
 | **何のためか・完成とは何か・次の一手は何か** | ← **compass（空き地）** |
@@ -58,13 +57,13 @@ compass は既存シグナルを読む合成器として軽く保ち、重い監
    バイナリは状態維持と context 注入のみ。API を叩かないので 429 が原理的に起きない
    （consulting-agent フック化で実証済みの方針）。
 2. **判定は LLM・ハーネスは決定的** — ゴールを彫る／gap を読む／一手を選ぶのは LLM。
-   size 集約・routing・保留書き戻し・状態管理は決定的バイナリ。
+   size 集約・routing・状態管理は決定的バイナリ。
 3. **棄却ループ（推論で埋めず人間に詰める）** — 曖昧なゴールを機械が勝手に補完しない。
    霞んでいる点は AskUserQuestion 相当で**人間に同期で詰めて彫る**。矛盾は権威で自動解決しない。
 4. **焦点保護（論点3=B案）** — 一度に進めるのは焦点に合う右サイズの一手だけ。
    大きい寄り道も小さいノイズも保留へ流し、糸を見失わせない。
 5. **二重実装しない** — 棄却ループの "定義を彫る" は specforge intake と同一エンジンを共有。
-   分解は condukt-interpreter、実行は condukt binary、保留は `.claude/progress.md` を再利用。compass は薄いオーケストレータ。
+   分解は condukt-interpreter、実行は condukt binary、保留は保存しない（印字のみ）。compass は薄いオーケストレータ。
 6. **何度でも同意してよい（論点1）** — 合意は1回/2回の固定ゲートではなく、棄却ループの各ラウンドで
    何度でも合意し直せる。「condukt 実行可能状態」はユーザーが go と言ったラウンドで到達する。
 
@@ -82,7 +81,7 @@ compass は既存シグナルを読む合成器として軽く保ち、重い監
    │   霞んでいれば → 棄却ループで彫り直す  ←── consulting-agent engine ∪ specforge intake（共有）
    │   （何度でも同意し直せる：原則6）
    ▼
- ② gap を出す ─── ゴール − 現状(git/progress.md/deepwiki/test) の差分
+ ② gap を出す ─── ゴール − 現状(git/deepwiki/test) の差分
    │
    ▼
  ③ 課題化 → 分解 ──────────────────────────────── condukt-interpreter（再利用, Decomposition JSON）
@@ -90,8 +89,7 @@ compass は既存シグナルを読む合成器として軽く保ち、重い監
    ▼
  ④ routing（B案：焦点保護）──────────────────────── compass の triage（新規・決定的）
    ├─ 焦点に合う右サイズの一手 ──▶ condukt schedule/worktree/state（実行・無改造）
-   └─ それ以外（大きい寄り道＋小ノイズ）─▶ 保留 ─▶ .claude/progress.md「残り」へ書き戻す（再利用）
-                                                       └─ 次回 /compass の gap 入力に再浮上（自己供給ループ）
+   └─ それ以外（大きい寄り道＋小ノイズ）─▶ 保留 ─▶ route の JSON に印字のみ（保存しない）
    │
    ▼
  ⑤ パンくず ── Stop 時に「次の物理的一手」を charter に書き戻す（②空白の再発予防）
@@ -114,7 +112,7 @@ compass は既存シグナルを読む合成器として軽く保ち、重い監
 | `measuring_stick` | 物差し（§7）。次の一手を何で測るか | プロジェクト方針として固定寄り |
 | `current_gap` | ゴール − 現状 の要約（compass が毎回再生成） | 毎ラウンド再計算 |
 | `next_action` | 再開時の最初の物理的一手（⑤パンくずが書く） | Stop ごとに更新 |
-| `parked` | 保留に回したものへのポインタ（実体は .claude/progress.md「残り」） | routing が追記 |
+| `parked` | 保留に回したものへのポインタ（`compass charter --write` で skill が書く。route は保存しない） | skill が書く |
 
 charter が無い／古い／薄いときは、compass が起動時に**棄却ループで生成・彫り直す**。
 推論で埋めず、鮮明化できない点は人間に同期で詰める（原則3）。
@@ -128,7 +126,7 @@ charter が無い／古い／薄いときは、compass が起動時に**棄却�
    曖昧・筋の悪い枠組みを棄却して鋭くする。**何度でも同意し直せる**（原則6）。
    consulting-agent の Choice 設計知見を流用：選択肢は具体シナリオ＋オプトアウト、
    **動機の二択は禁止（F1-d）**。
-3. **gap を出す** — 鮮明化したゴール／完成定義と現状（git 直近・progress.md・deepwiki・落ちてるテスト）を
+3. **gap を出す** — 鮮明化したゴール／完成定義と現状（git 直近・deepwiki・落ちてるテスト）を
    diff し、最大の差分を `current_gap` に書く。
 4. **課題化 → 分解** — gap から導いた一手を free-text 課題として condukt-interpreter に渡し、
    Decomposition JSON（＋ size）を得る。
@@ -166,8 +164,8 @@ triage が読む、将来 condukt 自身も使える）：
   - **大きい寄り道**（`l`/`xl` または gap の主筋から外れるもの）→ いま着手すると焦点を失う。
   - **小さいノイズ**（`xs` の散発、主筋に効かない雑務）→ フローを切ってまで今やらない。
 
-保留は `.claude/progress.md`「残り」に1行ずつ書き戻す（実体はそこ、charter `parked` はポインタ）。
-次回 `/compass` がそれを gap 入力として読み直す → **自己供給ループ**。これにより②空白の再発が構造的に減る。
+保留は route の JSON に印字するだけで、どこにも保存しない。次回 `/compass` の gap 入力にも再浮上しない
+（2026-10-27 ユーザー裁定で `.claude/progress.md`「残り」への書き戻しと自己供給ループを撤去）。
 
 > 注：size の*向き*は B 案＝焦点保護を既定とするが、閾値（どこを s/m と見るか）は `.compass/config.toml` で
 > プロジェクトごとに調整可能にする。
@@ -231,7 +229,7 @@ compass の charter 彫り直しは、**機構が同型**である。二重実�
 | | 共有（generic engine） | specforge ローカル | compass ローカル |
 |---|---|---|---|
 | **何を彫るか（対象）** | — | 要件/spec（要望→IR） | プロジェクトの北極星＋完成定義（charter） |
-| **gather ソース** | — | Obsidian>repo canon>prompt（3ソース） | charter + git 直近 + progress.md + deepwiki |
+| **gather ソース** | — | Obsidian>repo canon>prompt（3ソース） | charter + git 直近 + deepwiki |
 | **rigor gate 定義** | — | G1 接地 / G2 沈黙 / G3 矛盾 / G4 反証可能 | C1–C5（§12） |
 | **出力** | — | 要望素材束 → normalize | 彫れた charter → gap 導出 → condukt routing |
 | **ループ駆動** | ✅ `while open_qs && round<max: ask → 再判定 → 更新` | ← 使う | ← 使う |
@@ -397,7 +395,7 @@ specguard/specforge の段階導入（DESIGN-INTAKE §10-5）に倣う。**動�
 ### 段階 C — PoC（Workflow、crate を作らない）
 carve ループの形と AskUserQuestion の UX を安価に実証する。1本の Workflow スクリプトで
 `gather → C1–C5 ゲート → interrogate（1–2問）→ gap → size triage → condukt 受け渡し` が閉じるか確認。
-- 入力：手で用意した最小 charter.md ＋ 実リポの git/progress。
+- 入力：手で用意した最小 charter.md ＋ 実リポの git（当時は progress.md も入力だったが 2026-10-27 に撤去）。
 - 検証：右サイズ抽出と「右サイズ0」エッジ（§13）が期待通り分岐するか。
 - ここで `harness-core::carve` の I/F（§11）と C ゲートの未達→open_q 変換（§12）を固める。
 
@@ -411,12 +409,12 @@ crates/compass/
     main.rs                  # subcommands: nudge / breadcrumb / evaluate / apply / carve-reset / gap / route / charter
     config.rs                # .compass/config.toml（§12）
     charter.rs               # .compass/charter.md の read/write/parse（§4）＋ charter --write 用 serde
-    gather.rs                # charter + git 直近 + progress.md + deepwiki → Bundle
+    gather.rs                # charter + git 直近 + deepwiki → Bundle
     gates.rs                 # RigorGates 実装：C1/C2 のみ（決定的）。C3–C5 は SKILL 側（§11/§12）
     freshness.rs             # C2 決定的信号（nudge から単独呼び出し可）
     carve.rs                 # CarveState 永続化（.compass/carve-state.json）＋ evaluate/apply の JSON view
     gap.rs                   # gap 入力の決定的組み立て（意味的 diff は SKILL）＋ current_gap 書き戻し
-    route.rs                 # size triage（§13）→ condukt 課題文 or progress.md 保留書き戻し
+    route.rs                 # size triage（§13）→ condukt 課題文 / parked は印字のみ
     breadcrumb.rs            # Stop hook：```compass-next``` ブロック抽出 → charter next_action
 
 crates/harness-core/src/
@@ -435,7 +433,7 @@ crates/condukt/src/...       # Task に optional `size`（#[serde(default)]）�
 2. **harness-core `interrogate.rs`**（generic carve engine）— compass と specforge の共通基盤。
 3. **compass crate scaffold**（Cargo.toml / plugin.json / config.rs / charter.rs）。
 4. **gather + gates（C1–C5）+ freshness** — carve に食わせる入力と判定。
-5. **gap + route** — 差分導出と size triage、condukt 受け渡し / progress.md 保留。
+5. **gap + route** — 差分導出と size triage、condukt 受け渡し / parked 印字。
 6. **hooks（nudge / breadcrumb）+ skill SKILL.md** — 起動経路（§14）。
 7. **bin クロスコンパイル + README + marketplace 登録**。
 

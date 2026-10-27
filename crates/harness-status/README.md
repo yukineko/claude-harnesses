@@ -6,7 +6,6 @@ It does **not** register a general-purpose `SessionStart` dashboard hook.
 
 - **Budget** (budgetguard): today's spend and session count, from `~/.budgetguard/state/ledger.json`.
 - **Recent sessions** (gauge): the last N sessions with turns, tokens, and USD cost, from `~/.gauge/store/sessions/`.
-- **Progress**: the current `.claude/progress.md` preview.
 - **Stop-hook latency**: per-session totals from `~/.harness/state/hook-latency.jsonl`.
 - **UserPromptSubmit injection size**: per-turn totals from `~/.harness/state/inject-metrics.jsonl`.
 - **Hook binary health**: hooks registered in `~/.claude/settings.json` whose binary is missing on disk.
@@ -30,11 +29,6 @@ Otherwise it is silent (no output, no injected context).
   Session          Project              Turns       Tokens  Cost USD
   ----------------------------------------------------------------------
   3c8d91a2         harness                 12        35000    0.1850
-
-── Progress file ─────────────────────────────────
-  cwd: /repo
-  /repo/.claude/progress.md
-  │ - specforge ⑤ worktree merge
 ```
 
 ```
@@ -52,13 +46,12 @@ harness-status
 harness-status                       # full dashboard
 harness-status budget                # today's spend only
 harness-status sessions --sessions 10  # recent sessions (limit N)
-harness-status progress              # progress file only
 harness-status hooks                 # Stop-hook latency aggregation (budget monitor)
 harness-status inject                # UserPromptSubmit injection-size aggregation (budget monitor)
 harness-status plugins               # classify every plugin by activation scope
 harness-status hooks-health          # settings.json hooks whose binary is missing
 harness-status path-shadow           # stray PATH binaries shadowing plugin-cache ones
-harness-status --json                # machine-readable output (with the full dashboard, budget, sessions, progress, hooks, inject, plugins, hooks-health, path-shadow)
+harness-status --json                # machine-readable output (with the full dashboard, budget, sessions, hooks, inject, plugins, hooks-health, path-shadow)
 ```
 
 The `plugins` subcommand groups every plugin as **always-on** / **event-scoped** / **manual**.

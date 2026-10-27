@@ -62114,3 +62114,64 @@ test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "061bb473ae802dd8e73f8b4bcca6e6022bc2409c"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "2b6db3a7"
+title = "compass gap/route turn an unreadable opportunity store into zero candidates (unwrap_or_default)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = "crates/compass/src/main.rs:700 (gap) and :960 (route) call opportunity::list_under_ranked(...).unwrap_or_default(). opportunity::load (crates/compass/src/opportunity.rs:75-86) returns Err for an unreadable (directory) or corrupt opportunities.json, and the unwrap_or_default erases it into zero opportunities with exit 0 — a fail-open (CLAUDE.md 3). Repro: crates/compass/tests/opportunity_store_unreadable_repro.rs (ignored RED tests, committed 0f14dec6)."
+created_at = 1793054011
+updated_at = 1793139500
+weight = 0.0
+issue_number = 1467
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1467"
+issue_closed_at = 1793139503
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --test opportunity_store_unreadable_repro -- --include-ignored"
+rev = "0f14dec632a538a4a5bbd0cbdef3dd363dc972f8"
+observed_at = 1793054011
+detail = """
+exit 101: in 0.86s
+
+   Compiling compass v0.1.31 (/Users/yuki/src/.harness-worktrees/c5b9c02b-discovery/crates/compass)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.64s
+     Running tests/opportunity_store_unreadable_repro.rs (target/debug/deps/opportunity_store_unreadable_repro-ad7846ee1365543d)
+error: test failed, to rerun pass `-p compass --test opportunity_store_unreadable_repro`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p compass --test opportunity_store_unreadable_repro"
+exit = 0
+passed = 5
+rev = "0097ea93924a6fa894bb64e12ba36c62a1e5367b"
+observed_at = 1793139484
+output_digest = "sha256:71beb5b94145f0a71c26fc156130429e2f740d806c530c9c6fc2b1c9929e8f14"
+excerpt = """
+
+running 5 tests
+test route_with_corrupt_opportunity_store_does_not_silently_drop_opportunity_refs ... ok
+test gap_with_corrupt_opportunity_store_does_not_report_zero_opportunities ... ok
+test control_readable_store_route_lists_the_opportunity_ref ... ok
+test gap_with_opportunity_store_as_directory_does_not_report_zero_opportunities ... ok
+test control_readable_store_gap_lists_the_opportunity ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/opportunity_store_unreadable_repro.rs (target/debug/deps/opportunity_store_unreadable_repro-6e21d8b16ab75530)
+"""
+
+[task.closure.red]
+rev = "5aa7a3cf02c91af98a16a8d4e3c7363d238b6041"
+exit = 101
+kind = "behavioural"

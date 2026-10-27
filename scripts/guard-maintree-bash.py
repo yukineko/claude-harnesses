@@ -25,7 +25,9 @@ positive or false negative (4a64e6ff and ~30 sibling tickets).
                       `git merge --abort` of an in-progress merge
                                                             -> 0
                       (an unreadable MERGE_HEAD oid at Pre -> not covered)
-                      HEAD moved, tree clean, and the new HEAD is a merge
+                      HEAD moved, tree clean apart from untracked paths
+                      that were already untracked with the same content
+                      hash at Pre, and the new HEAD is a merge
                       commit, or is contained in a ref other than the branch
                       main has checked out, or that branch's reflog has an
                       entry for exactly this old -> new move whose message
@@ -309,6 +311,30 @@ def changed_paths(before: dict, after: dict) -> list[str]:
     return sorted(p for p in paths if a.get(p) != b.get(p) or ra.get(p) != rb.get(p))
 
 
+def only_unchanged_untracked(before: dict, after: dict) -> bool:
+    """True if every path `git status` names at Post is an untracked path that
+    was already untracked at Pre with the same content hash (backlog 58bc638d).
+
+    Such a path (e.g. a stray `bare.git/` at the root) is not a change by this
+    call, so it must not hide an integration HEAD move. Anything else at Post
+    -- a tracked modification, a conflict, an untracked path that is new or
+    whose hash differs from Pre -- means the tree is not "clean apart from
+    pre-existing untracked paths" and the caller refuses. An empty Post
+    porcelain is trivially True (the clean-tree case).
+    """
+    ra, rb = status_records(before["porcelain"]), status_records(after["porcelain"])
+    for p, rec in rb.items():
+        if not rec.startswith("? "):
+            return False
+        if ra.get(p) != rec:
+            return False
+        if p not in before["hashes"] or p not in after["hashes"]:
+            return False
+        if before["hashes"][p] != after["hashes"][p]:
+            return False
+    return True
+
+
 def status_records(porcelain: str) -> dict[str, str]:
     """path -> its status record line, for naming index-only changes."""
     out = {}
@@ -390,7 +416,7 @@ def post(payload: dict, common: Path, main: Path) -> int:
         pass  # a merge / conflict resolution is in progress
     elif merge_abort_back_to_head(main, before, after):
         pass  # aborting one's own in-progress merge back to HEAD
-    elif after["head"] != before["head"] and not after["porcelain"]:
+    elif after["head"] != before["head"] and only_unchanged_untracked(before, after):
         branch = checked_out_branch(main)
         if not integration_head(main, after["head"], branch) and not merge_reflog_entry(
             common, branch, before["head"], after["head"]

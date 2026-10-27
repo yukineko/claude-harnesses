@@ -57772,6 +57772,7 @@ updated_at = 1792429902
 weight = 0.0
 issue_number = 1419
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1419"
+issue_closed_at = 1793139477
 rev = 1
 
 [task.repro]

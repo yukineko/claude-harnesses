@@ -154,6 +154,52 @@ pub fn leases_mtime(cwd: &Path) -> harness_core::verdict::Determination<i64> {
     }
 }
 
+/// Path to the presence.json registry (hook-written session presence; see
+/// `presence`). Beside `leases.json`, so every checkout of one repository
+/// shares it.
+pub fn presence_path(cwd: &Path) -> Result<PathBuf> {
+    Ok(storage_root(cwd)?.join("presence.json"))
+}
+
+/// Last modification time of the presence registry, unix seconds. Same
+/// tri-state contract as [`leases_mtime`]: absent file => `Known(i64::MIN)`
+/// (no write ever happened), every other failure to observe => `Undetermined`.
+pub fn presence_mtime(cwd: &Path) -> harness_core::verdict::Determination<i64> {
+    use harness_core::verdict::Determination;
+
+    let path = match presence_path(cwd) {
+        Ok(p) => p,
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "presence.json path could not be resolved for cwd {}: {e}",
+                cwd.display()
+            ));
+        }
+    };
+    let meta = match std::fs::metadata(&path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Determination::known(i64::MIN);
+        }
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "presence.json metadata unreadable at {}: {e}",
+                path.display()
+            ));
+        }
+    };
+    match meta.modified().map_err(|e| e.to_string()).and_then(|t| {
+        t.duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())
+    }) {
+        Ok(d) => Determination::known(d.as_secs() as i64),
+        Err(e) => Determination::undetermined(format!(
+            "presence.json mtime unobservable at {}: {e}",
+            path.display()
+        )),
+    }
+}
+
 /// Path to the events.jsonl file (append-only).
 pub fn events_path(cwd: &Path) -> Result<PathBuf> {
     Ok(storage_root(cwd)?.join("events.jsonl"))
@@ -244,7 +290,7 @@ fn now_unix_nanos() -> u128 {
 /// publish a half-written file the other renames into place), mirroring
 /// `lock.rs`'s `TMP_SEQ`/`now_unix_nanos` idiom. Replaces the fixed
 /// `path.with_extension("jsonl.tmp")` used by the atomic rewrite helpers.
-fn unique_tmp(path: &Path, tag: &str) -> PathBuf {
+pub(crate) fn unique_tmp(path: &Path, tag: &str) -> PathBuf {
     path.with_extension(format!(
         "{tag}.tmp.{}.{}.{}",
         std::process::id(),

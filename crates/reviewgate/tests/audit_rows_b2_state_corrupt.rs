@@ -192,14 +192,25 @@ fn corrupt_state_file_reads_as_unreviewed_and_blocks() {
     let (code, out2, err2) = stop(&dir);
     assert_eq!(code, 0, "stderr={err2}");
     // The repeat ledger (operator ruling 2026-09-18) turns an identical
-    // SECOND block into a visible `systemMessage` waiver rather than a
-    // `decision:block` line, so the gate's Block decision is observed via
+    // SECOND block into a one-line `systemMessage` waiver rather than a
+    // `decision:block` line; since the 2026-10-27 ruling that one-liner no
+    // longer carries the reason, which is recorded in the session's
+    // `waivers.log` instead. So the gate's Block decision is observed via
     // (a) the review reason (round 1/2: attempts were reset to 0, i.e. the
-    // corrupt state read as "not yet reviewed") being surfaced and (b) a
+    // corrupt state read as "not yet reviewed") being re-issued — on stdout
+    // if it blocked, or in the waiver log if the ledger waived it — and (b) a
     // second violation event, which only the Block arm emits.
+    let waivers = std::fs::read_to_string(
+        dir.join(".claude/harness-state/repeat")
+            .join(SESSION)
+            .join("waivers.log"),
+    )
+    .unwrap_or_default();
     assert!(
-        out2.contains("round 1/2"),
-        "corrupt state must read as unreviewed and re-issue the review, not allow silently: {out2} {err2}"
+        out2.contains("round 1/2")
+            || (out2.contains("同じ指摘の2度目のため通しました") && waivers.contains("round 1/2")),
+        "corrupt state must read as unreviewed and re-issue the review, not allow silently: \
+         stdout={out2} stderr={err2} waivers.log={waivers:?}"
     );
     assert_eq!(
         violation_lines(&dir),

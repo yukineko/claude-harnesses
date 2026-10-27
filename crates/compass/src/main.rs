@@ -919,11 +919,14 @@ fn discovery_command(args: DiscoveryArgs) -> Result<()> {
 }
 
 /// route (§13): consume an already-produced condukt decomposition JSON and
-/// triage it deterministically by `size`. Prints the routing as JSON, writes
-/// parked tasks to taskprog, and prints the condukt handoff text. No LLM.
+/// triage it deterministically by `size`. Prints the routing as JSON (parked
+/// tasks appear there only — user ruling 2026-10-27: they are not stored
+/// anywhere), and prints the condukt handoff text. No LLM.
 fn route_command(args: RouteArgs) -> Result<()> {
     let root = project_root();
-    // route appends parked tasks to <root>/.claude/progress.md.
+    // route no longer writes any file (parked tasks are printed only). The
+    // primary-tree refusal is kept unchanged; whether to drop it is a separate
+    // decision.
     harness_core::primary_tree::refuse_if_primary(&root.join(".claude"), "compass route")
         .map_err(|why| anyhow::anyhow!(why))?;
     let cfg = Config::load(&root);
@@ -946,9 +949,6 @@ fn route_command(args: RouteArgs) -> Result<()> {
 
     // Print the routing (+ edge) as JSON.
     println!("{}", serde_json::to_string_pretty(&routing)?);
-
-    // Write parked tasks to the taskprog "残り" sink (self-feeding loop, §6).
-    route::write_parked_to_taskprog(&root, &routing.parked)?;
 
     // Print the condukt handoff 課題 text (context for the chosen move), with the
     // named opportunities under the active outcome (charter north_star) so the

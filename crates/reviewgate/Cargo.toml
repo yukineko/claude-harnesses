@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "reviewgate"
-version = "0.1.56"
+version = "0.1.59"
 edition = "2021"
 description = "Code-review gate for Claude Code whose Stop hook defaults to off; opt in to inject a review rubric for self-review or to spawn an independent reviewer command."
 license = "MIT"

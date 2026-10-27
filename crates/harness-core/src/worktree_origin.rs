@@ -14,7 +14,10 @@
 //! `.githooks/post-checkout` hook (run by `git worktree add` inside the new
 //! worktree), which appends the same line format to the same store path.
 //! A worktree removed before any such resolve has no record, and the lookup
-//! answers [`Lookup::NoRecord`]; the caller must then stay undetermined.
+//! answers [`Lookup::NoRecord`]; [`crate::session_roots`] then judges the
+//! written path by its nearest existing ancestor (excluded when git positively
+//! reports that ancestor outside every repository, attributed to the repository
+//! containing it, `Undetermined` on any other failure).
 //!
 //! Store location: `$HARNESS_WORKTREE_ORIGIN_DIR/worktree-origins.jsonl` when
 //! that variable is an absolute path (a relative or empty value is ignored),

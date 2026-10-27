@@ -37,9 +37,10 @@ enum PanicAction {
     /// could not be read or cleared, or this panic could not be recorded. A
     /// block here would be unbounded (the next re-entry would be just as
     /// blind, so a deterministic crash plus a persistently broken store would
-    /// loop forever), so the stop is allowed — but never silently: a
-    /// `systemMessage` tells the user this gate did not check the stop, and
-    /// why. Carries that reason.
+    /// loop forever), so the stop is allowed — but never silently: a one-line
+    /// `systemMessage` tells the user this gate did not check the stop, and the
+    /// full explanation (with the reason) is appended to the panic-markers
+    /// `log.jsonl` and to stderr. Carries that reason.
     UndeterminedAllow(String),
 }
 
@@ -285,17 +286,37 @@ fn fail_closed_block_json(name: &str) -> String {
     serde_json::json!({ "decision": "block", "reason": reason }).to_string()
 }
 
-/// The non-silent allow emitted for [`PanicAction::UndeterminedAllow`]: a
-/// `{"systemMessage": ...}` line, so the user sees that this gate did not
-/// check the stop and why the panic streak could not be determined.
-fn undetermined_allow_json(name: &str, why: &str) -> String {
-    let msg = format!(
+/// The full explanation of a [`PanicAction::UndeterminedAllow`]: that the
+/// gate did not check the stop, and why the panic streak could not be
+/// determined. Durable log / stderr text — NOT printed to the user at Stop
+/// (operator ruling 2026-10-27: 「Stop時に結果の報告はあってもいいがログはいらない」;
+/// a long notice at Stop pushes the turn's result report off screen).
+fn undetermined_allow_detail(name: &str, why: &str) -> String {
+    format!(
         "{name}: internal error on a stop re-entry — the gate crashed and did NOT check \
          this stop. Whether its previous stop also crashed could not be determined \
          ({why}), and blocking without that record could loop forever, so this stop is \
          allowed. Treat this stop as unchecked by {name}."
-    );
+    )
+}
+
+/// The non-silent allow emitted for [`PanicAction::UndeterminedAllow`]: one
+/// single-line `{"systemMessage": ...}` naming the gate and saying the stop
+/// went through unchecked (`<gate>: 内部エラーで未検査のまま通しました（判定不能）`).
+/// The allow is still announced — never silent — but the long explanation
+/// ([`undetermined_allow_detail`]) goes to the durable log, not to the user.
+fn undetermined_allow_json(name: &str) -> String {
+    let msg = format!("{name}: 内部エラーで未検査のまま通しました（判定不能）");
     serde_json::json!({ "systemMessage": msg }).to_string()
+}
+
+/// Where [`PanicAction::UndeterminedAllow`] events are logged (as
+/// `log.jsonl` via [`append_jsonl`]): the panic-markers root,
+/// `<base_dir("harness")>/state/panic-markers`.
+fn panic_log_dir() -> PathBuf {
+    crate::config::base_dir("harness")
+        .join("state")
+        .join("panic-markers")
 }
 
 /// Carry out a [`PanicAction`]: emit the appropriate diagnostic/decision and
@@ -327,9 +348,20 @@ fn panic_exit(name: &str, action: PanicAction) -> ! {
             std::process::exit(0);
         }
         PanicAction::UndeterminedAllow(why) => {
-            // Bounded but never silent: the user is told on stdout
-            // (systemMessage) and the hook log gets the same on stderr.
-            println!("{}", undetermined_allow_json(name, &why));
+            // Bounded but never silent: the user gets ONE line on stdout
+            // (systemMessage); the full explanation goes to the panic-markers
+            // log.jsonl (durable) and to stderr (hook log).
+            let detail = undetermined_allow_detail(name, &why);
+            append_jsonl(
+                &panic_log_dir(),
+                &serde_json::json!({
+                    "event": "undetermined_allow",
+                    "gate": name,
+                    "why": why,
+                    "message": detail,
+                }),
+            );
+            println!("{}", undetermined_allow_json(name));
             eprintln!("{name}: internal error on stop re-entry; panic streak undetermined ({why}) — allowing loudly");
             std::process::exit(0);
         }
@@ -799,13 +831,23 @@ mod tests {
     #[test]
     fn undetermined_allow_json_carries_a_system_message_and_no_decision() {
         let v: serde_json::Value =
-            serde_json::from_str(&undetermined_allow_json("donegate", "no session")).unwrap();
+            serde_json::from_str(&undetermined_allow_json("donegate")).unwrap();
         assert!(
             v.get("decision").is_none(),
             "must not carry a decision: {v}"
         );
         let m = v["systemMessage"].as_str().unwrap();
-        assert!(m.contains("donegate") && m.contains("no session") && m.contains("NOT"));
+        assert_eq!(
+            m,
+            "donegate: 内部エラーで未検査のまま通しました（判定不能）"
+        );
+        assert!(!m.contains('\n'), "one line: {m}");
+    }
+
+    #[test]
+    fn undetermined_allow_detail_names_gate_reason_and_unchecked() {
+        let d = undetermined_allow_detail("donegate", "no session");
+        assert!(d.contains("donegate") && d.contains("no session") && d.contains("did NOT check"));
     }
 
     #[test]

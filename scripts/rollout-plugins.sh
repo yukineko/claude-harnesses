@@ -140,7 +140,7 @@
 #     (an unreadable registry keeps every dir). Never touches other
 #     plugins' registry entries, never touches the registry's top-level
 #     "version" field.
-#   - Excludes target/, .git/, .claude/ (crate-local taskprog progress
+#   - Excludes target/, .git/, .claude/ (crate-local progress
 #     artifacts — gitignored, never payload), and .in_use/ (a runtime lock dir the Claude
 #     Code plugin loader creates *inside* a live cache version dir — not part
 #     of repo source, must survive a --force recopy of an in-use version).

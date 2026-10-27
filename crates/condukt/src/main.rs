@@ -1112,7 +1112,8 @@ enum StateAction {
     /// and each run is marked so repeated firings (e.g. the Stop hook) never
     /// double-record. Soft: a no-op when the fugu-router binary is not installed.
     /// A run with any episode that failed to record stays unrecorded (only the
-    /// missing episodes are retried) and the command exits non-zero.
+    /// missing episodes are retried) and the command exits non-zero — except
+    /// under `--stop-hook`, see below.
     RecordRun {
         /// Record one specific run. Omit with --all to sweep every settled run.
         #[arg(long)]
@@ -1120,6 +1121,16 @@ enum StateAction {
         /// Record every settled, not-yet-recorded run for this project.
         #[arg(long)]
         all: bool,
+        /// Stop-hook mode (the form `hooks/hooks.json` runs): print nothing on
+        /// stdout/stderr and exit 0. Every failure and every progress/info line
+        /// (including the fugu-router child's own output) is appended to
+        /// `<state_dir>/record-run-failures.log` instead. Unrecorded episodes
+        /// stay unrecorded and are retried next firing, exactly as without it.
+        /// (Operator ruling 2026-10-27: a Stop-time log pushes the turn's
+        /// result report off screen.) If that log cannot be written, the line
+        /// falls back to stderr rather than being lost.
+        #[arg(long)]
+        stop_hook: bool,
     },
     /// Exit 0 if the run is complete, else print reasons and exit 1.
     Gate {
@@ -5091,8 +5102,19 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             let entries = claim::write_execution_state(cfg, cwd, state::now_secs())?;
             println!("{}", serde_json::to_string_pretty(&entries)?);
         }
-        StateAction::RecordRun { run, all } => {
-            record_runs(cfg, cwd, run, all)?;
+        StateAction::RecordRun {
+            run,
+            all,
+            stop_hook,
+        } => {
+            if stop_hook {
+                let notes = RecordNotes::log(cfg.state_dir.join("record-run-failures.log"));
+                if let Err(e) = record_runs(cfg, cwd, run, all, &notes) {
+                    notes.note(&format!("condukt: record-run failed: {e:#}"));
+                }
+            } else {
+                record_runs(cfg, cwd, run, all, &RecordNotes::Stderr)?;
+            }
         }
         StateAction::Gate { run } => {
             let rs = state::RunState::load(cfg, cwd, &run)?;
@@ -6144,7 +6166,16 @@ fn print_timings(rs: &state::RunState, json: bool) -> Result<()> {
 /// still captures the signal. A failed `fugu-router record` (or a failing
 /// `fingerprint` probe) is not soft: the run stays unrecorded, the episodes
 /// that did land are remembered in `recorded_episodes`, and this returns `Err`.
-fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Result<()> {
+///
+/// Progress/info lines go to `notes` — stderr for the CLI, the
+/// `record-run-failures.log` for `--stop-hook` (see [`RecordNotes`]).
+fn record_runs(
+    cfg: &Config,
+    cwd: &Path,
+    run: Option<String>,
+    all: bool,
+    notes: &RecordNotes,
+) -> Result<()> {
     let run_ids: Vec<String> = match (run, all) {
         (Some(r), _) => vec![r],
         (None, true) => state::all_runs(cfg, cwd)?
@@ -6201,9 +6232,9 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
                             s,
                             "worker",
                             &s.model,
-                            cost.or(s.cost_usd),
-                            tokens,
+                            (cost.or(s.cost_usd), tokens),
                             &fingerprint,
+                            notes,
                         ) {
                             rs.recorded_episodes.push(worker_key);
                             emitted += 1;
@@ -6212,10 +6243,10 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
                         }
                     }
                     Determination::Undetermined(why) => {
-                        eprintln!(
+                        notes.note(&format!(
                             "condukt: '{}' (worker): cost/token accounting undetermined ({why}); episode left unrecorded",
                             s.title
-                        );
+                        ));
                         failures.push((rid.clone(), worker_key));
                     }
                 }
@@ -6243,9 +6274,9 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
                             s,
                             "verifier",
                             vm,
-                            verifier_cost,
-                            tokens,
+                            (verifier_cost, tokens),
                             &fingerprint,
+                            notes,
                         ) {
                             rs.recorded_episodes.push(verifier_key);
                             emitted += 1;
@@ -6254,10 +6285,10 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
                         }
                     }
                     Determination::Undetermined(why) => {
-                        eprintln!(
+                        notes.note(&format!(
                             "condukt: '{}' (verifier): cost/token accounting undetermined ({why}); episode left unrecorded",
                             s.title
-                        );
+                        ));
                         failures.push((rid.clone(), verifier_key));
                     }
                 }
@@ -6274,9 +6305,9 @@ fn record_runs(cfg: &Config, cwd: &Path, run: Option<String>, all: bool) -> Resu
     }
 
     if emitted > 0 {
-        eprintln!(
+        notes.note(&format!(
             "condukt: recorded {emitted} outcome(s); {recorded_runs} run(s) fully recorded to fugu-router"
-        );
+        ));
     }
     if !failures.is_empty() {
         let list: Vec<String> = failures.iter().map(|(r, k)| format!("{r} ({k})")).collect();
@@ -6315,18 +6346,18 @@ fn gauge_accounting(agent_id: Option<&str>) -> Determination<GaugeAccounting> {
 /// Spawn one `<fugu_bin> record --role <role>` for `s` (`fugu_bin` is the
 /// program [`fugu_fingerprint`] resolved), reusing its
 /// title/files/class/done_criteria/status/duration/route-provenance/
-/// lines-changed, but with the given `role`/`model`/`cost`/`tokens` (which
+/// lines-changed, but with the given `role`/`model`/`(cost, tokens)` (which
 /// differ between the worker episode and the optional verifier episode).
-/// Best-effort: a spawn failure or non-zero exit is logged and returns
-/// `false` (never aborts the caller's sweep over other specs/runs).
+/// Best-effort: a spawn failure or non-zero exit is logged to `notes` and
+/// returns `false` (never aborts the caller's sweep over other specs/runs).
 fn spawn_fugu_record(
     fugu_bin: &Path,
     s: &state::RecordSpec,
     role: &str,
     model: &str,
-    cost: Option<f64>,
-    tokens: Option<(u64, u64)>,
+    (cost, tokens): GaugeAccounting,
     fingerprint: &str,
+    notes: &RecordNotes,
 ) -> bool {
     let mut cmd = std::process::Command::new(fugu_bin);
     cmd.arg("record")
@@ -6386,21 +6417,80 @@ fn spawn_fugu_record(
     // status().ok()-only check would silently count a shelled-out
     // `fugu-router record` that exited non-zero (e.g. an old/incompatible
     // binary rejecting a flag) as "emitted".
-    match cmd.status() {
+    //
+    // Under `--stop-hook` the child's stdout/stderr are captured and forwarded
+    // to the notes log (fugu-router prints a `recorded: ...` line per episode),
+    // so nothing reaches the hook's own stdout/stderr; on the CLI they are
+    // inherited as before.
+    let status = if notes.is_quiet() {
+        cmd.output().map(|out| {
+            for stream in [&out.stdout, &out.stderr] {
+                for line in String::from_utf8_lossy(stream).lines() {
+                    if !line.trim().is_empty() {
+                        notes.note(&format!("fugu-router record ({role}): {line}"));
+                    }
+                }
+            }
+            out.status
+        })
+    } else {
+        cmd.status()
+    };
+    match status {
         Ok(status) if status.success() => true,
         Ok(status) => {
-            eprintln!(
+            notes.note(&format!(
                 "condukt: fugu-router record ({role}) failed for '{}': exit status {status}",
                 s.title
-            );
+            ));
             false
         }
         Err(e) => {
-            eprintln!(
+            notes.note(&format!(
                 "condukt: fugu-router record ({role}) failed for '{}': {e}",
                 s.title
-            );
+            ));
             false
+        }
+    }
+}
+
+/// Where `record-run`'s progress/info and failure lines go.
+///
+/// `Stderr` is the CLI (`condukt state record-run`): unchanged behaviour.
+/// `Log` is `--stop-hook`: each line is appended (with a unix timestamp) to
+/// `<state_dir>/record-run-failures.log`, so the Stop hook prints nothing and
+/// the turn's result report is not pushed off screen (operator ruling
+/// 2026-10-27). Not silent: the log is the durable record, and a line that
+/// cannot be appended there is reported on stderr (with the line itself)
+/// instead of dropped.
+enum RecordNotes {
+    Stderr,
+    Log(PathBuf),
+}
+
+impl RecordNotes {
+    fn log(path: PathBuf) -> Self {
+        RecordNotes::Log(path)
+    }
+
+    fn is_quiet(&self) -> bool {
+        matches!(self, RecordNotes::Log(_))
+    }
+
+    fn note(&self, msg: &str) {
+        match self {
+            RecordNotes::Stderr => eprintln!("{msg}"),
+            RecordNotes::Log(path) => {
+                // One record per line: fold embedded newlines.
+                let line = format!("{}\t{}", state::now_secs(), msg.replace('\n', " | "));
+                if let Err(e) = harness_core::append::append_line(path, &line) {
+                    eprintln!(
+                        "condukt: could not append to {} ({e}); record-run note: {msg}",
+                        path.display()
+                    );
+                }
+            }
         }
     }
 }

@@ -11,7 +11,7 @@ that measures the ones that can actually hurt.
 | gate | command | timeout |
 |---|---|---|
 | autoflow | `autoflow stop` | 10s |
-| condukt | `condukt state record-run --all` | 15s |
+| condukt | `condukt state record-run --all --stop-hook` | 15s |
 | ctxrot | `ctxrot stop` | 10s |
 | context-governor | `context-governor` | 10s |
 | budgetguard | `budgetguard gate` | 30s |
@@ -52,14 +52,17 @@ Therefore every gate MUST be:
  .
   If that marker
   cannot be read or written (or there is no session id), a re-entry is allowed
-  with a `systemMessage` saying the gate did not check the stop; the first
+  with a one-line `systemMessage` (`<gate>: 内部エラーで未検査のまま通しました（判定不能）`)
+  saying the gate did not check the stop, the full explanation going to
+  `<base_dir("harness")>/state/panic-markers/log.jsonl`; the first
   stop of a chain always blocks
  .
   This applies to
   donegate, reviewgate, propguard, tdd, budgetguard, autoflow, and ctxrot
  .
   **Never-break-a-turn only applies to gates that carry no verdict** —
-  condukt's `record-run --all` (pure fugu-router bookkeeping), context-governor,
+  condukt's `record-run --all --stop-hook` (pure fugu-router bookkeeping; its
+  failures go to `record-run-failures.log`, nothing printed), context-governor,
   and precommit-audit never emit a block decision, so an internal error there is
   swallowed and the stop allowed (exit 0); the observability write itself failing
   is likewise swallowed, never surfaced.

@@ -177,6 +177,7 @@ fn stop_run(input: HookInput) {
             // it used to return silently (= allow, indistinguishable from a
             // clean pass).
             block_undetermined_bounded(
+                &cfg.state_dir,
                 &cwd,
                 "",
                 "session-id-undetermined",
@@ -201,6 +202,7 @@ fn stop_run(input: HookInput) {
             Determination::Known(false) => {}
             Determination::Undetermined(why) => {
                 block_undetermined_bounded(
+                    &cfg.state_dir,
                     &cwd,
                     &session_id,
                     "driver-liveness-undetermined",
@@ -474,10 +476,17 @@ fn block_undetermined(
 /// "判定不能" reason. Post-block re-entry (`stop_hook_active == true`): a
 /// persistent cannot-determine (a broken backlog install, a host that sends no
 /// session id) would otherwise block forever, so the stop is allowed — but
-/// never silently: a `systemMessage` (user-visible, not a `decision`) names
-/// what could not be determined and says it is unresolved, so the allow does
-/// not read as a clean pass.
+/// never silently. Per the operator ruling 2026-10-27 (「Stop時に結果の報告は
+/// あってもいいがログはいらない」) the allow prints exactly ONE short
+/// `systemMessage` line, `autoflow: 判定不能のまま通しました` (a result, not a
+/// log — it says the stop passed undetermined, so it does not read as a clean
+/// pass), and the full reason goes to the log: one
+/// `{"event":"bounded_allow","session_id","what","why"}` line is appended to
+/// `<state_dir>/log.jsonl` (see [`bounded_allow_entry`]). The one-liner does
+/// not depend on the user having seen the first block's reason: that block
+/// text may have scrolled away or been read by the model only.
 fn block_undetermined_bounded(
+    state_dir: &std::path::Path,
     cwd: &std::path::Path,
     session: &str,
     check_kind: &str,
@@ -486,22 +495,28 @@ fn block_undetermined_bounded(
     stop_hook_active: bool,
 ) {
     if stop_hook_active {
-        println!("{}", bounded_allow_message(what, why));
+        harness_core::gate::run::append_jsonl(state_dir, &bounded_allow_entry(session, what, why));
+        println!("{}", bounded_allow_message());
         return;
     }
     block_undetermined(cwd, session, check_kind, what, why);
 }
 
-/// The `systemMessage` line for the bounded allow (see
-/// [`block_undetermined_bounded`]).
-fn bounded_allow_message(what: &str, why: &str) -> serde_json::Value {
+/// The one-line `systemMessage` for the bounded allow (see
+/// [`block_undetermined_bounded`]). Carries no reason text; that is in log.jsonl.
+fn bounded_allow_message() -> serde_json::Value {
+    serde_json::json!({ "systemMessage": "autoflow: 判定不能のまま通しました" })
+}
+
+/// The `log.jsonl` record for the bounded allow (see
+/// [`block_undetermined_bounded`]). `session_id` may be `""` (the
+/// no-session-id case is one of the bounded paths).
+fn bounded_allow_entry(session: &str, what: &str, why: &str) -> serde_json::Value {
     serde_json::json!({
-        "systemMessage": format!(
-            "autoflow: {what}（判定不能）: {why}\n\
-             直前の stop で既にブロック済みのため、無限ブロックを避けてこの stop は通します。\
-             判定不能は解消していません — 「問題なし」という判定ではありません\
-             （恒久的に解消できない場合の緊急退避は AUTOFLOW_DISABLE=1）。"
-        )
+        "event": "bounded_allow",
+        "session_id": session,
+        "what": what,
+        "why": why,
     })
 }
 

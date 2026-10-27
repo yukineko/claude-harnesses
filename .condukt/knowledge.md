@@ -29,8 +29,7 @@
 | playbook | バイナリ | UserPromptSubmit: 手順ノート注入 |
 | difflog | バイナリ | SessionStart/End: git diff サマリ |
 | deepwiki | バイナリ+スキル | リポジトリ wiki 生成 |
-| harness-status | バイナリ | budget/sessions/progress 統合ダッシュボード |
-| taskprog | バイナリ | SessionStart/Stop: progress.md 注入 |
+| harness-status | バイナリ | budget/sessions 統合ダッシュボード |
 | runbook | バイナリ | UserPromptSubmit: !macro 展開 |
 
 ## harness-core の利用規則

@@ -57,12 +57,12 @@ gap を読む・一手を選ぶ）は `/compass` skill 側の LLM 労働に置�
   を上乗せ・回答を `apply` で1問ずつ High-authority fragment として畳み込む。`carve-reset` は state を冪等に削除。
 - **`charter [--write <JSON>]`** — 既定は resolved config＋parse 済み charter を表示。`--write` は skill 合成 charter
   （`north_star`/`definition_of_done`/`measuring_stick`/`current_gap`/`next_action`/`parked`）を `.compass/charter.md` へ永続化。
-- **`gap [--write <TEXT>]`（§3）** — 既定は `gap::assemble_gap_inputs`（DoD／git activity／progress excerpt／
+- **`gap [--write <TEXT>]`（§3）** — 既定は `gap::assemble_gap_inputs`（DoD／git activity／
   measuring_stick）＋ `outcome::latest`（`last_outcome`）＋ active outcome 配下の opportunity per-bet gap slot を
   weight 降順で組み立て JSON 出力。`--write` は skill 産の gap テキストを `current_gap` へ書き戻す。
 - **`route [--file <path>]`（§13）** — condukt の `Decomposition` JSON を size で triage。`route::route` は right-size
   （既定 `s`/`m`）1件＋その coupled 依存を `to_condukt`、残りを `parked`、右-size-0 端は `RouteEdge::{GoalTooBig(全l/xl),
-  OnlyNoise(全xs)}` を立てる。未知 size は "needs attention" で park せず condukt へ。parked を `write_parked_to_taskprog`、
+  OnlyNoise(全xs)}` を立てる。未知 size は "needs attention" で park せず condukt へ。routing JSON（parked は印字のみで保存しない）と
   `condukt_handoff` 課題テキストを出力。
 - **`outcome --verdict <forward|unchanged|backward> --evidence <…>`（§7）** — 計測証拠付き verdict を
   `.compass/outcomes.json` へ append（`Verdict` は snake_case serde）。
@@ -89,11 +89,11 @@ gap を読む・一手を選ぶ）は `/compass` skill 側の LLM 労働に置�
 - **`gates`** — compass の `RigorGates` 実装（C1 存在＋C2 鮮度のみ）。C3〜C5 は skill 判定なので `CompassGates::evaluate`
   は返さない。C1 失敗時は C2 を回さず早期 return。
 - **`gather`** — 「ゴール vs 現状」の provenance-tagged `Fragment` bundle を組む。charter=High、git activity
-  （直近 `RECENT_COMMITS`=30 subject＋uncommitted）／taskprog progress／deepwiki=Mid。欠落 source は skip（never error）。
+  （直近 `RECENT_COMMITS`=30 subject＋uncommitted）／deepwiki=Mid。欠落 source は skip（never error）。
 - **`gap`** — skill が推論する gap 入力の決定論的 ASSEMBLY（`GapInputs`/`OpportunityGap`）＋ skill 産 gap の write-back
   （`persist_gap`）。意味判断は持たない。
 - **`route`** — size triage（B案＝焦点保護）。`Decomposition`/`Task`/`Routing`/`RouteEdge` と `route`/`centrality_cmp`
-  （in-degree プロキシ）/`right_size_zero_edge`/`write_parked_to_taskprog`/`condukt_handoff`。
+  （in-degree プロキシ）/`right_size_zero_edge`/`condukt_handoff`。
 - **`outcome`** — 計測ループの決定論コア。`Verdict`/`Outcome`/`record`（証拠必須）/`latest`/`pivot_signal`/
   `PivotSignal`/`Recommendation`/`OutcomeFacts`/`suggest_verdict`。`.compass/outcomes.json` へ atomic-write。
 - **`opportunity`** — PDO OST の named-bet store（`Opportunity`。`DEFAULT_WEIGHT`=1.0、legacy 互換）。active outcome

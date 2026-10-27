@@ -4,7 +4,7 @@
 //! `bin/overwatch` (the POSIX launcher) — what happens when NO per-platform
 //! binary is bundled for the host.
 //!
-//! `status` is the SessionStart AND Stop hook (hooks/hooks.json) and also a
+//! `status` is the SessionStart hook (hooks/hooks.json) and also a
 //! plain operator command. It is the FIRST measured consumer of backlog item
 //! a33f644f: at d48c7133 the same `overwatch status` printed "Backlog pending:
 //! 0" against a 219-item queue purely because the backlog launcher exited 0

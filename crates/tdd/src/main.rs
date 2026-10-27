@@ -1,11 +1,14 @@
 //! tdd — a test-first gate for Claude Code.
 //!
 //! `gate` is the **Stop** hook: it blocks the stop when implementation lines
-//! were added and no test is visible in the *uncommitted* changes, and feeds the
-//! reason back so the agent writes one and continues. It reads only the working
-//! tree — the unstaged and staged diffs plus untracked files, all relative to
-//! HEAD (`git.rs`) — and never already-committed tests, so the block reports
-//! "no test in the uncommitted changes", not "this change has no test".
+//! were added and no test is visible in the *uncommitted* changes or the
+//! session's own commits, and feeds the reason back so the agent writes one and
+//! continues. It reads the working tree — the unstaged and staged diffs plus
+//! untracked files, all relative to HEAD (`git.rs`) — plus the non-merge commits
+//! on HEAD made since the session started (`gate::include_committed`), and never
+//! tests committed before the session, so the block reports "no test in the
+//! uncommitted changes [or this session's commits]", not "this change has no
+//! test".
 //! `red` / `green` / `verify` make test-first a *verifiable* artifact for the
 //! `/tdd` skill.
 //!
@@ -59,7 +62,8 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Stop hook: block the stop when implementation changed and no test is
-    /// visible in the uncommitted changes (already-committed tests are not read).
+    /// visible in the uncommitted changes or this session's commits (tests
+    /// committed before the session are not read).
     Gate,
     /// Run the tests and require them to FAIL; record the RED proof (test-first).
     Red {
@@ -378,6 +382,9 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     if let Some(note) = gate::attribution_note(&verdict) {
         eprintln!("{note}");
     }
+    if let Some(note) = gate::committed_note(&verdict) {
+        eprintln!("{note}");
+    }
 
     if !verdict.blocks(&cfg) {
         state::reset(&cfg.state_dir, &session);
@@ -591,6 +598,9 @@ fn status() {
     // whole checkout is scanned (and the note says so).
     let verdict = gate::evaluate(&cfg, &root, "");
     if let Some(note) = gate::attribution_note(&verdict) {
+        println!("{note}");
+    }
+    if let Some(note) = gate::committed_note(&verdict) {
         println!("{note}");
     }
     println!("{}", gate::human_report(&verdict, &cfg));

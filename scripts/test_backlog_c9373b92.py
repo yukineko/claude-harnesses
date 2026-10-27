@@ -129,6 +129,15 @@ class RealCheckerOnly(unittest.TestCase):
         git("add", "crates")
         git("commit", "-q", "-m", "fixture")
         head = git("rev-parse", "HEAD")
+        # An origin whose default branch carries exactly this source, inside the
+        # sandbox: the checker compares each plugin's source version with
+        # refs/remotes/origin/*, and no origin at all is UNDETERMINED (rc 8).
+        bare = t / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], env=genv,
+                       check=True, capture_output=True)
+        git("remote", "add", "origin", str(bare))
+        git("push", "-q", "origin", "HEAD:refs/heads/main")
+        git("fetch", "-q", "origin")
         for mf in (t / "cache").rglob(".deployed-from.json"):
             mf.write_text(json.dumps({"commit": head, "dirty": False, "deployed_at": 0}))
         return t

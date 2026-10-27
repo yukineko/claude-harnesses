@@ -46,6 +46,9 @@
 //! The git child runs with repository-discovery env vars (GIT_CEILING_DIRECTORIES,
 //! GIT_DIR, ...) removed, so inherited env cannot make an in-repo path look
 //! outside every repository.
+//! A write in this session's own Claude Code scratchpad (see
+//! `in_own_scratchpad`) is not a root and not an error, even when git cannot
+//! judge its directory.
 //! Bash-derived candidates are heuristic (see
 //! [`crate::attribution::SessionWrites::bash`]): a candidate outside any git
 //! work tree is not a root and is not an error.
@@ -235,6 +238,32 @@ fn removed_worktree_repo(written: &Path, store: &Path) -> Result<Option<PathBuf>
     }
 }
 
+/// Whether `dir` lies inside THIS session's Claude Code scratchpad:
+/// canonically `…/claude-<digits>/<slug>/<SID>/scratchpad[/…]`, where `<SID>`
+/// is the transcript's file stem. Claude Code tells the model to put temporary
+/// files there, and nothing a gate checks lives in it. Another session's
+/// scratchpad, or any other directory outside git, does not match and stays
+/// undetermined. A directory that cannot be canonicalized does not match.
+fn in_own_scratchpad(dir: &Path, transcript_path: &str) -> bool {
+    let Some(sid) = Path::new(transcript_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+    else {
+        return false;
+    };
+    let Ok(canon) = std::fs::canonicalize(dir) else {
+        return false;
+    };
+    let comps: Vec<&std::ffi::OsStr> = canon.iter().collect();
+    comps.windows(4).any(|w| {
+        let uid_ok = w[0]
+            .to_str()
+            .and_then(|s| s.strip_prefix("claude-"))
+            .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()));
+        uid_ok && w[2] == sid && w[3] == "scratchpad"
+    })
+}
+
 /// Resolve the roots for a hook at `cwd` with the session transcript at
 /// `transcript_path`. An empty `transcript_path` (manual CLI run) records no
 /// writes: the only root is `cwd`.
@@ -354,6 +383,7 @@ pub fn resolve_with_store(
                     roots.push(t);
                 }
             }
+            Err(_) if in_own_scratchpad(parent, transcript_path) => {}
             // Positively outside every repo (absolute path, existing dir, git
             // exit 128 with the full message): no checkout to judge, so excluded.
             Err(TopErr::OutsideAnyRepo) if p.is_absolute() => {}

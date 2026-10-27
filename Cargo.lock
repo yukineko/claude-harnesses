@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "harness-core"
-version = "0.2.73"
+version = "0.2.74"
 dependencies = [
  "anyhow",
  "chrono",
@@ -884,7 +884,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "overwatch"
-version = "0.2.105"
+version = "0.2.106"
 dependencies = [
  "anyhow",
  "clap",
@@ -1364,7 +1364,7 @@ checksum = "c3a6bfce3d99adfa72d24750a61f782f3036a81e7f86d8841ee1326deaebd171"
 
 [[package]]
 name = "tdd"
-version = "0.1.54"
+version = "0.1.56"
 dependencies = [
  "anyhow",
  "chrono",

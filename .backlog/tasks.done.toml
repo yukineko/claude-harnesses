@@ -62049,3 +62049,68 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "b36c2727cbd92f23d3606d77fdfeccc5fb610480"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "ba649100"
+title = "tdd がセッション中に commit 済みの実装を評価せず、空スキャンで Stop をブロックする問題を直す"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "tdd",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "2026-10-26 observed: session wrote impl+test in linked worktree, committed+merged, then every Stop blocked with 'no implementation change was evaluated in any root (an empty scan is not a pass)'. tdd scans only the uncommitted diff (crates/tdd/src/gate.rs module doc). Fix must evaluate the session's own commits; design choice open: which commits count as the session's (transcript git commit records / commits since session start / reflog). Anti-vacuity control: committed impl without test must still block (committed_impl_without_test_still_blocks)."
+created_at = 1792989994
+updated_at = 1793078950
+weight = 0.0
+issue_number = 1457
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1457"
+issue_closed_at = 1793078953
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test committed_session_work_is_evaluated -- --ignored"
+rev = "5d815a3c32e27b5e50308894dec0489a8526d9e3"
+observed_at = 1792989994
+detail = """
+exit 101:    Compiling tdd v0.1.53 (/home/hiroyuki_nakayama/src/.claude-harnesses-worktrees/session-97394877/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.03s
+     Running tests/committed_session_work_is_evaluated.rs (target/debug/deps/committed_session_work_is_evaluated-4f80511a2f651da5)
+error: test failed, to rerun pass `-p tdd --test committed_session_work_is_evaluated`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test committed_session_work_is_evaluated"
+exit = 0
+passed = 8
+rev = "2e83962a4a621b88bcc76a515a986faeae3bfd37"
+observed_at = 1793078924
+output_digest = "sha256:398914f49ffd7b4ed780c2e383c47d8f0ae169b43800429219f2512de2b1d785"
+excerpt = """
+
+running 8 tests
+test single_root_committed_impl_with_test_is_accepted ... ok
+test pre_session_untested_impl_is_not_attributed_to_session ... ok
+test window_uses_committer_date_not_author_date ... ok
+test single_root_committed_impl_without_test_blocks ... ok
+test no_transcript_timestamps_committed_work_is_not_credited ... ok
+test committed_impl_without_test_still_blocks ... ok
+test committed_impl_with_test_is_accepted ... ok
+test pre_session_test_commit_does_not_count_as_evidence ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/committed_session_work_is_evaluated.rs (target/debug/deps/committed_session_work_is_evaluated-3bdcf5a9fb7842f0)
+"""
+
+[task.closure.red]
+rev = "061bb473ae802dd8e73f8b4bcca6e6022bc2409c"
+exit = 101
+kind = "behavioural"

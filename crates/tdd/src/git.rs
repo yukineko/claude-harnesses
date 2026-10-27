@@ -159,6 +159,76 @@ pub fn added_lines(root: &Path) -> AddedScan {
     AddedScan::Lines(out)
 }
 
+/// Added lines from the non-merge commits reachable from HEAD whose committer
+/// date is at or after `since` (unix seconds) — the work committed during the
+/// session (backlog ba649100: a session that committed impl+test before
+/// stopping left an empty uncommitted scan and was blocked). Same tri-state as
+/// [`added_lines`]: a failed `git log` is `Failed` (undetermined → fail closed).
+/// A repo with no commits yet has no committed work: `Lines(vec![])`.
+///
+/// `--since` only bounds the walk; each commit's `%ct` is re-checked here, so
+/// git's date-ordering slop never credits an older commit.
+pub fn committed_added_lines(root: &Path, since: i64) -> AddedScan {
+    match probe_repo(root) {
+        RepoProbe::Repo => {}
+        RepoProbe::NotRepo => return AddedScan::NotRepo,
+        RepoProbe::Undetermined => return AddedScan::Failed,
+    }
+    // `rev-parse --verify -q HEAD` exits 1 with no output on an unborn branch;
+    // `git log HEAD` would error there, and "no commits" is not a failure.
+    let unborn = Command::new("git")
+        .current_dir(root)
+        .args(["rev-parse", "--verify", "-q", "HEAD"])
+        .output();
+    match unborn {
+        Ok(o) if o.status.success() => {}
+        Ok(o) if o.status.code() == Some(1) && o.stdout.is_empty() => {
+            return AddedScan::Lines(Vec::new())
+        }
+        _ => return AddedScan::Failed,
+    }
+    let since_arg = format!("--since=@{since}");
+    let Some(log) = run(
+        root,
+        &[
+            "log",
+            "--no-merges",
+            "--no-color",
+            "--no-ext-diff",
+            &since_arg,
+            "--format=tdd-commit %ct",
+            "-p",
+            "-U0",
+            "HEAD",
+        ],
+    ) else {
+        return AddedScan::Failed;
+    };
+    let mut out = Vec::new();
+    let mut chunk = String::new();
+    let mut keep = false;
+    for line in log.lines() {
+        if let Some(ct) = line.strip_prefix("tdd-commit ") {
+            if keep {
+                parse_unified_diff(&chunk, &mut out);
+            }
+            chunk.clear();
+            // An unparseable date cannot be shown to fall inside the session.
+            let Ok(ct) = ct.trim().parse::<i64>() else {
+                return AddedScan::Failed;
+            };
+            keep = ct >= since;
+            continue;
+        }
+        chunk.push_str(line);
+        chunk.push('\n');
+    }
+    if keep {
+        parse_unified_diff(&chunk, &mut out);
+    }
+    AddedScan::Lines(out)
+}
+
 /// Parse `git diff` unified output, collecting `+` lines tagged with the file
 /// from the most recent `+++ b/<path>` header. `+++`/`---` markers are skipped.
 pub fn parse_unified_diff(diff: &str, out: &mut Vec<AddedLine>) {

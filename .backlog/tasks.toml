@@ -85,3 +85,37 @@ exit 101: t: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
      Running tests/heredoc_quoted_body_doc_comment_backtick.rs (target/debug/deps/heredoc_quoted_body_doc_comment_backtick-417dcc6ee00ee467)
 error: test failed, to rerun pass `-p blastguard --test heredoc_quoted_body_doc_comment_backtick`"""
+
+[[task]]
+id = "4d54cd6d"
+title = "rollout checker must flag plugins whose source version is ahead of origin (marketplace autoUpdate reverts them to binary-less dirs)"
+project = "/home/hiroyuki_nakayama/src/claude-harnesses"
+project_unresolved = false
+tags = [
+    "rollout",
+    "overwatch",
+    "tdd",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-27: yukineko marketplace (source=directory, autoUpdate=true) auto-updated at 06:06:29Z; 4s later installed_plugins.json repointed overwatch 0.2.106->0.2.105 and tdd 0.1.56->0.1.54 with gitCommitSha e18b2c49 (= origin/main; local main 12 commits ahead, unpushed). Only plugins whose version differed main vs origin were reverted. Reverted dirs held only the launcher -> overwatch SessionStart dark, tdd Stop gate blocked every stop. Side effects: .orphaned_at left in the newer dirs (plain rollout no-ops, --force needed); overwatch --canary used the broken deployed binary (needed OVERWATCH_BIN). Already-running sessions keep the old CLAUDE_PLUGIN_ROOT until restart. Mitigated by push + rollout --force. Repro commit 5d8fdf44 (session-37c2c5ac). Causal claim (autoUpdate reads origin/HEAD) is inferred from sha/version match, not reproduced against Claude Code itself."
+created_at = 1793082054
+updated_at = 1793082054
+weight = 0.0
+issue_number = 1468
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1468"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_rollout_origin_lag.py"
+rev = "5d8fdf44ef415e38f0ac728931b1881b8a76faf0"
+observed_at = 1793082054
+detail = """
+exit 1: rd/stuckguard/mutategate/overwatch/parallelguard).
+
+scripts/test_rollout_origin_lag.py:111: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_rollout_origin_lag.py::RolloutCheckerFlagsUnpushedPluginVersion::test_source_version_ahead_of_origin_is_flagged
+========================= 1 failed, 1 passed in 0.25s =========================="""

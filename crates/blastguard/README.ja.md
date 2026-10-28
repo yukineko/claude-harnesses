@@ -523,6 +523,16 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   deny）、それ以外・probe 失敗は `deny`（`src/detect.rs` の切り詰めリダイレクト
 >   アーム、`src/reversible.rs` の `probe`）。D1（`/tmp` prefix の allow 例外）は
 >   撤去されたままである。
+>   0.2.150 以降（backlog 1fd5a731）、`>` / `>>` の走査は、コマンド全体が実質
+>   1 つの**引用付き区切り**の here-document（`<<'EOF'`・`<<"EOF"`・`<<\EOF`）で、
+>   読み手が `cat`・`tee`・`git commit -F -`（`|`・`;`・`&` なし、本文が閉じている、
+>   後続は空行かコメントのみ）のとき、opener の書き込み先に関わらず本文を読まない。
+>   シェルはその本文中のリダイレクトを実行しないため、本文に
+>   `/// corrupt => \`Err\`` を含む `cat > src/x.rs <<'EOF'` が ``> `Err` `` として
+>   deny されることはもう無い。opener 自身の書き込み先は上の順で判定し、他の全ルールは
+>   本文を読む。引用無しの区切り・閉じていない本文・インタプリタ/シェルの読み手・
+>   here-document の後のコマンドがあれば従来通り本文も走査する
+>   （`src/detect.rs` の `redirect_view_without_quoted_here_document_body`）。
 > - **code-interpreter-inline-eval**: 「形」での一律 deny は廃止され、プログラム本文を
 >   監査する（`analyze_code_interpreter` / `interpreter_code_verdict`）。破壊的な呼び出し
 >   や破壊的なシェル行を含めば `deny`、保護パスを名指しすれば `ask`、

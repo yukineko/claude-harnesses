@@ -1714,17 +1714,25 @@ primitive, not a filesystem path",
     // short-circuit: `echo x > target/log && rm -rf /usr` has a confined
     // redirect AND an unconfined delete, and the Deny has to win.
     let mut line_level_asks: Vec<Decision> = Vec::new();
+    // The redirect scans of 2 and 2b read `rcmd`, not `cmd`: the body of a
+    // QUOTED here-document fed to `cat`/`tee`/`git commit -F -` is removed there
+    // whatever the opener writes to, because the shell never reads a `>` in
+    // that body as a redirect (backlog 1fd5a731). The opener line stays, so its
+    // own target is still judged. Every rule from 2c on reads `cmd`. See
+    // `redirect_view_without_quoted_here_document_body` for the shape rule.
+    let redirect_view = redirect_view_without_quoted_here_document_body(cmd);
+    let rcmd: &str = &redirect_view;
     // Per-occurrence segment indices, or `None` when the per-segment scan could
     // not be corroborated against this line-level one. `None` resolves nothing
     // and judges every raw token exactly as before this existed.
-    let redirect_segments = redirect_target_occurrences(cmd);
+    let redirect_segments = redirect_target_occurrences(rcmd);
     // The cwd in force before each segment, so a RELATIVE redirect target can
     // be judged where it actually lands (f1c170ab). See `place_redirect_target`.
-    let seg_cwds = segment_cwd_states(cmd);
+    let seg_cwds = segment_cwd_states(rcmd);
     // Which segments are interpreter program text (4a1cf1ad); see
     // `interpreter_program_body_segments`.
-    let program_body = interpreter_program_body_segments(cmd);
-    for (occurrence, raw_target) in redirect_targets(cmd).into_iter().enumerate() {
+    let program_body = interpreter_program_body_segments(rcmd);
+    for (occurrence, raw_target) in redirect_targets(rcmd).into_iter().enumerate() {
         let seg_idx = redirect_segments
             .as_ref()
             .and_then(|occ| occ.get(occurrence))
@@ -1735,9 +1743,9 @@ primitive, not a filesystem path",
         // `resolve_redirect_target_at`). Falling back to the raw token keeps the
         // pre-existing verdict for everything that cannot be resolved.
         let target = seg_idx
-            .and_then(|seg_idx| resolve_redirect_target_at(cmd, seg_idx, &raw_target))
+            .and_then(|seg_idx| resolve_redirect_target_at(rcmd, seg_idx, &raw_target))
             .unwrap_or(raw_target);
-        let target = match place_redirect_target(cmd, seg_idx, &seg_cwds, target) {
+        let target = match place_redirect_target(rcmd, seg_idx, &seg_cwds, target) {
             Ok(placed) => placed,
             Err(raw) => {
                 if let Some(deny) = protected_path_block(ctx, "redirect", &raw) {
@@ -1936,16 +1944,16 @@ does not parse that body, but blastguard cannot show the program does not use it
     //     The target is resolved exactly like the truncating one above
     //     (a83802ad): `P=/etc/fstab; echo x >> $P` names `/etc/fstab`, and
     //     judging the raw `$P` token instead let it through every axis.
-    let append_segments = append_target_occurrences(cmd);
-    for (occurrence, raw_target) in append_redirect_targets(cmd).into_iter().enumerate() {
+    let append_segments = append_target_occurrences(rcmd);
+    for (occurrence, raw_target) in append_redirect_targets(rcmd).into_iter().enumerate() {
         let seg_idx = append_segments
             .as_ref()
             .and_then(|occ| occ.get(occurrence))
             .map(|(seg_idx, _)| *seg_idx);
         let target = seg_idx
-            .and_then(|seg_idx| resolve_redirect_target_at(cmd, seg_idx, &raw_target))
+            .and_then(|seg_idx| resolve_redirect_target_at(rcmd, seg_idx, &raw_target))
             .unwrap_or(raw_target);
-        let target = match place_redirect_target(cmd, seg_idx, &seg_cwds, target) {
+        let target = match place_redirect_target(rcmd, seg_idx, &seg_cwds, target) {
             Ok(placed) => placed,
             Err(raw) => {
                 if let Some(deny) = protected_path_block(ctx, "append redirect", &raw) {
@@ -3411,6 +3419,54 @@ fn interpreter_program_body_segments(cmd: &str) -> Vec<bool> {
 ///     from the user's profile. A profile that redefines `cat`, `tee` or `git`
 ///     is trusted, and out of scope here.
 fn strip_data_here_document_bodies(cmd: &str) -> std::borrow::Cow<'_, str> {
+    strip_here_document_body(cmd, OutputTargets::DataFilesOnly)
+}
+
+/// Which output targets a here-document opener may write the body to for
+/// [`strip_here_document_body`] to remove that body.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum OutputTargets {
+    /// Only DATA files or `/dev/null` ([`is_data_file_target`]). The removal
+    /// then applies before EVERY rule ([`strip_data_here_document_bodies`]).
+    DataFilesOnly,
+    /// Any literal target. Used ONLY for the redirect view of the line-level
+    /// `>` / `>>` scans ([`redirect_view_without_quoted_here_document_body`]);
+    /// every other rule still reads the body.
+    AnyTarget,
+}
+
+/// The text the line-level truncating (`>`) and append (`>>`) redirect scans
+/// of [`detect_bash`] read (backlog 1fd5a731): `cmd` with the body of a
+/// QUOTED-delimiter here-document removed when that here-document is
+/// effectively the whole command and its reader only stores or prints it.
+///
+/// The bash manual: with a quoted delimiter "the lines in the here-document
+/// are not expanded", and the body is the reader's stdin, so a `>` in it is
+/// never a redirect. Without this view `cat > src/x.rs <<'EOF'` whose body held
+/// the Rust doc comment `/// corrupt => \`Err\`` was denied as the redirect
+/// ``> `Err` ``.
+///
+/// The shape rule is exactly [`strip_data_here_document_bodies`]'s (permitted
+/// lines before the opener, one opener line with no `$`/backtick, a reader on
+/// the closed `cat`/`tee`/`git commit -F -` list, no `|`, `;` or `&`, a CLOSED
+/// body, only blank or comment lines after it), with two differences:
+///   * the delimiter MUST be quoted (`'EOF'`, `"EOF"`, `\EOF`). An unquoted
+///     one lets the shell expand `$(…)` and backticks in the body, so the body
+///     stays in the view;
+///   * the opener's output redirect may name ANY literal target, not only a
+///     data file. Its target is still judged: the opener line stays in the
+///     view, so `> src/x.rs` goes through every redirect axis as before.
+///
+/// Every other rule (the per-segment loop, the interpreter and egress scans)
+/// still reads the full text, body included.
+fn redirect_view_without_quoted_here_document_body(cmd: &str) -> std::borrow::Cow<'_, str> {
+    strip_here_document_body(cmd, OutputTargets::AnyTarget)
+}
+
+/// The shared shape rule of [`strip_data_here_document_bodies`] and
+/// [`redirect_view_without_quoted_here_document_body`]; see those for which
+/// `targets` each passes and what that changes.
+fn strip_here_document_body(cmd: &str, targets: OutputTargets) -> std::borrow::Cow<'_, str> {
     let unchanged = std::borrow::Cow::Borrowed(cmd);
     if !cmd.contains("<<") {
         return unchanged;
@@ -3445,8 +3501,12 @@ fn strip_data_here_document_bodies(cmd: &str) -> std::borrow::Cow<'_, str> {
         || openers[0].delimiter.is_empty()
         || opener_line.contains(['$', '`'])
         || !quotes_balance(&opener_line)
-        || !here_document_consumer_is_data(&opener_line)
+        || !here_document_consumer_is_data(&opener_line, targets)
     {
+        return unchanged;
+    }
+    // The redirect view removes a body only when the shell cannot expand it.
+    if targets == OutputTargets::AnyTarget && !here_document_delimiter_is_quoted(&opener_line) {
         return unchanged;
     }
     // The body, up to the first exact delimiter line.
@@ -3616,7 +3676,15 @@ fn strip_output_redirect_operator(word: &str) -> Option<&str> {
 /// Every other reader, known or not (bash, sh, zsh, python3, node, perl,
 /// eval, xargs, …), answers false. A false here only means the body is judged
 /// as code, as it always was.
-fn here_document_consumer_is_data(line: &str) -> bool {
+///
+/// `targets` picks the output-redirect rule above. [`OutputTargets::DataFilesOnly`]
+/// is the rule as stated (what [`strip_data_here_document_bodies`] passes).
+/// [`OutputTargets::AnyTarget`] (only from
+/// [`redirect_view_without_quoted_here_document_body`]) lets a redirect name
+/// any target word free of shell syntax (`\`, backtick, `(`, `)`, `;`, `&`,
+/// `|`, `<`, `>`, `$`). Everything else, including the `tee` operand rule
+/// (DATA files only), is the same for both.
+fn here_document_consumer_is_data(line: &str, targets: OutputTargets) -> bool {
     let raw = quote_aware_words(line);
     let mut words: Vec<&str> = Vec::new();
     let mut saw_here_document = false;
@@ -3654,7 +3722,14 @@ fn here_document_consumer_is_data(line: &str) -> bool {
             } else {
                 glued
             };
-            if !is_data_file_target(target) {
+            let target_ok = match targets {
+                OutputTargets::DataFilesOnly => is_data_file_target(target),
+                OutputTargets::AnyTarget => {
+                    !target.is_empty()
+                        && !target.contains(['\\', '`', '(', ')', ';', '&', '|', '<', '>', '$'])
+                }
+            };
+            if !target_ok {
                 return false;
             }
             i += 1;

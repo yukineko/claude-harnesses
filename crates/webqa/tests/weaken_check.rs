@@ -693,3 +693,13 @@ fn r4_removing_set_timeout_below_default_is_timeout_raised() {
     let out = run_with_diff("r4-removed-low", d);
     assert_finding(&out, "tests/t.spec.ts", "timeout-raised");
 }
+
+#[test]
+fn removed_non_evaluable_timeout_is_undetermined() {
+    // Removing `test.setTimeout(TWO_MIN)` may raise the effective timeout (the
+    // removed value could have been below the 30000 default). Not evaluable ->
+    // cannot determine -> exit 2, never a silent exit 0.
+    let d = "diff --git a/tests/t.spec.ts b/tests/t.spec.ts\nindex 1111111..2222222 100644\n--- a/tests/t.spec.ts\n+++ b/tests/t.spec.ts\n@@ -1,3 +1,2 @@\n test('x', async () => {\n-  test.setTimeout(TWO_MIN);\n   await page.goto('/');\n";
+    let out = run_with_diff("removed-non-evaluable", d);
+    assert_exit(&out, 2);
+}

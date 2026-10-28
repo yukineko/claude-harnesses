@@ -28,9 +28,9 @@
 #               convention that hook branches exit 0 and carry the verdict in
 #               the body.
 #
-#   everything else (status / trust / init / install / uninstall) is consumed by humans, skills and scripts,
-#   where an EMPTY stdout reads as a real answer (`status` printing nothing reads as "no checks are configured"). Those exit
-#   non-zero — an error must not return an empty set (CLAUDE.md §3), mirroring
+#   everything else (`weaken-check`, or any other subcommand / unknown argument) is consumed by humans, skills
+#   and scripts, where an EMPTY stdout reads as a real answer (`weaken-check` printing nothing reads as "no
+#   weakening found"). Those exit non-zero — an error must not return an empty set (CLAUDE.md §3), mirroring
 #   bin/ctxrot.
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 

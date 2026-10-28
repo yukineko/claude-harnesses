@@ -1,0 +1,28 @@
+# webqa.toml — place at the project root (git top level of the Stop hook's cwd).
+# The gate runs `command` only after `webqa trust` recorded this file's hash;
+# an untrusted or changed file BLOCKS without running anything.
+# No file => the gate is "not configured" and allows (stderr says so).
+# A file that cannot be read/parsed, or is unusable, BLOCKS (undetermined).
+
+# Runner argv (no shell). webqa appends `--reporter=json` and the selected
+# spec paths, runs it in the project root, and requires the JSON report on
+# stdout. Required, non-empty.
+command = ["npx", "playwright", "test"]
+
+# Optional. Defaults shown.
+max_attempts = 3        # blocked stops before the bounded give-up (>= 1)
+reset_after_secs = 1800 # idle seconds after which the attempt counter restarts
+timeout_secs = 540      # runner wall-clock limit (max 540); exceeding it blocks (undetermined)
+
+# At least one [[map]] is required. A map is selected when a touched file
+# (git diff vs HEAD, staged/unstaged/deleted, plus untracked non-ignored files)
+# matches one of `sources` (globset globs, relative to the root) or IS one of
+# `specs`. Every spec of a selected map must exist and is passed to the runner;
+# an empty `specs` list or a missing spec file BLOCKS (undetermined).
+[[map]]
+sources = ["src/login/**", "src/auth/**"]
+specs = ["e2e/login.spec.ts"]
+
+[[map]]
+sources = ["src/cart/**"]
+specs = ["e2e/cart.spec.ts"]

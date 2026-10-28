@@ -297,3 +297,409 @@ fn garbage_non_diff_input_exits_2() {
     let out = run_with_diff("garbage", garbage);
     assert_exit(&out, 2);
 }
+
+// ---------------------------------------------------------------- hardening
+
+#[test]
+fn timeout_raised_across_hunks_of_same_file_is_reported() {
+    let diff = "\
+diff --git a/tests/slow.spec.ts b/tests/slow.spec.ts
+index 1111111..2222222 100644
+--- a/tests/slow.spec.ts
++++ b/tests/slow.spec.ts
+@@ -3,4 +3,3 @@ import { test, expect } from '@playwright/test';
+ test('slow page', async ({ page }) => {
+-  await expect(page.locator('#a')).toBeVisible({ timeout: 1000 });
+   await page.goto('/slow');
+ });
+@@ -20,3 +19,4 @@ test('other', async ({ page }) => {
+   await page.goto('/other');
++  await expect(page.locator('#a')).toBeVisible({ timeout: 60000 });
+ });
+";
+    let out = run_with_diff("timeout-cross-hunk", diff);
+    assert_finding(&out, "tests/slow.spec.ts", "timeout-raised");
+}
+
+#[test]
+fn timeout_raised_via_product_expression_is_reported() {
+    let diff = "\
+diff --git a/tests/prod.spec.ts b/tests/prod.spec.ts
+index 1111111..2222222 100644
+--- a/tests/prod.spec.ts
++++ b/tests/prod.spec.ts
+@@ -4,5 +4,5 @@ import { test, expect } from '@playwright/test';
+ test('prod', async ({ page }) => {
+   await page.goto('/prod');
+-  await expect(page.locator('#x')).toBeVisible({ timeout: 1000 });
++  await expect(page.locator('#x')).toBeVisible({ timeout: 60 * 1000 });
+ });
+";
+    let out = run_with_diff("timeout-product", diff);
+    assert_finding(&out, "tests/prod.spec.ts", "timeout-raised");
+}
+
+#[test]
+fn non_evaluable_timeout_replacing_literal_exits_2() {
+    let diff = "\
+diff --git a/tests/ident.spec.ts b/tests/ident.spec.ts
+index 1111111..2222222 100644
+--- a/tests/ident.spec.ts
++++ b/tests/ident.spec.ts
+@@ -4,5 +4,5 @@ import { test, expect } from '@playwright/test';
+ test('ident', async ({ page }) => {
+   await page.goto('/ident');
+-  await expect(page.locator('#x')).toBeVisible({ timeout: 1000 });
++  await expect(page.locator('#x')).toBeVisible({ timeout: TIMEOUT_MS });
+ });
+";
+    let out = run_with_diff("timeout-ident", diff);
+    assert_exit(&out, 2);
+}
+
+#[test]
+fn new_set_timeout_above_default_is_reported() {
+    let diff = "\
+diff --git a/tests/newset.spec.ts b/tests/newset.spec.ts
+index 1111111..2222222 100644
+--- a/tests/newset.spec.ts
++++ b/tests/newset.spec.ts
+@@ -3,4 +3,5 @@ import { test, expect } from '@playwright/test';
+ test('newset', async ({ page }) => {
++  test.setTimeout(120000);
+   await page.goto('/newset');
+   await expect(page.locator('#t')).toBeVisible();
+ });
+";
+    let out = run_with_diff("setto-new-high", diff);
+    assert_finding(&out, "tests/newset.spec.ts", "timeout-raised");
+}
+
+#[test]
+fn new_set_timeout_below_default_is_clean() {
+    let diff = "\
+diff --git a/tests/newset.spec.ts b/tests/newset.spec.ts
+index 1111111..2222222 100644
+--- a/tests/newset.spec.ts
++++ b/tests/newset.spec.ts
+@@ -3,4 +3,5 @@ import { test, expect } from '@playwright/test';
+ test('newset', async ({ page }) => {
++  test.setTimeout(10000);
+   await page.goto('/newset');
+   await expect(page.locator('#t')).toBeVisible();
+ });
+";
+    let out = run_with_diff("setto-new-low", diff);
+    assert_exit(&out, 0);
+}
+
+#[test]
+fn rename_spec_to_non_spec_removing_expect_is_reported() {
+    let diff = "\
+diff --git a/tests/a.spec.ts b/tests/a.ts
+similarity 80%
+rename from tests/a.spec.ts
+rename to tests/a.ts
+index 1111111..2222222 100644
+--- a/tests/a.spec.ts
++++ b/tests/a.ts
+@@ -3,5 +3,4 @@ import { test, expect } from '@playwright/test';
+ test('a', async ({ page }) => {
+   await page.goto('/a');
+-  await expect(page.locator('#a')).toBeVisible();
+ });
+";
+    let out = run_with_diff("rename", diff);
+    assert_eq!(out.status.code(), Some(1), "{}", describe(&out));
+    assert!(
+        stdout(&out).lines().any(|l| l.contains("expect-removed")),
+        "expected an expect-removed finding\n{}",
+        describe(&out)
+    );
+}
+
+#[test]
+fn binary_spec_diff_exits_2() {
+    let diff = "\
+diff --git a/tests/x.spec.ts b/tests/x.spec.ts
+index 1111111..2222222 100644
+Binary files a/tests/x.spec.ts and b/tests/x.spec.ts differ
+";
+    let out = run_with_diff("binary", diff);
+    assert_exit(&out, 2);
+}
+
+fn skip_diff_for(path: &str) -> String {
+    format!(
+        "\
+diff --git a/{path} b/{path}
+index 1111111..2222222 100644
+--- a/{path}
++++ b/{path}
+@@ -1,4 +1,4 @@
+ import {{ test, expect }} from '@playwright/test';
+
+-test('x works', async ({{ page }}) => {{
++test.skip('x works', async ({{ page }}) => {{
+   await expect(page.locator('#x')).toBeVisible();
+"
+    )
+}
+
+#[test]
+fn spec_jsx_is_inspected() {
+    let out = run_with_diff("jsx", &skip_diff_for("tests/x.spec.jsx"));
+    assert_finding(&out, "tests/x.spec.jsx", "skip-added");
+}
+
+#[test]
+fn spec_mts_is_inspected() {
+    let out = run_with_diff("mts", &skip_diff_for("tests/x.spec.mts"));
+    assert_finding(&out, "tests/x.spec.mts", "skip-added");
+}
+
+#[test]
+fn spec_cts_is_inspected() {
+    let out = run_with_diff("cts", &skip_diff_for("tests/x.spec.cts"));
+    assert_finding(&out, "tests/x.spec.cts", "skip-added");
+}
+
+fn unique_dir(tag: &str) -> PathBuf {
+    let p = unique_path(tag).with_extension("d");
+    std::fs::create_dir_all(&p).expect("mkdir temp dir");
+    p
+}
+
+fn run_staged_in(dir: &std::path::Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_webqa"))
+        .arg("weaken-check")
+        .current_dir(dir)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env("GIT_CEILING_DIRECTORIES", dir.parent().expect("parent"))
+        .output()
+        .expect("spawn webqa")
+}
+
+fn git_in(dir: &std::path::Path, args: &[&str]) {
+    let out = Command::new("git")
+        .current_dir(dir)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .args([
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .output()
+        .expect("spawn git");
+    assert!(
+        out.status.success(),
+        "git {:?}: {}",
+        args,
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn staged_mode_outside_git_repo_exits_2() {
+    let dir = unique_dir("nogit");
+    let out = run_staged_in(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_exit(&out, 2);
+}
+
+#[test]
+fn staged_mode_reports_only_added_in_staged_spec() {
+    let dir = unique_dir("staged");
+    git_in(&dir, &["init", "-q"]);
+    git_in(&dir, &["config", "user.email", "t@example.com"]);
+    git_in(&dir, &["config", "user.name", "t"]);
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::write(
+        dir.join("tests/s.spec.ts"),
+        "import { test, expect } from '@playwright/test';\ntest('s', async ({ page }) => {\n  await expect(page.locator('#s')).toBeVisible();\n});\n",
+    )
+    .unwrap();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "--no-verify", "-m", "init"]);
+    std::fs::write(
+        dir.join("tests/s.spec.ts"),
+        "import { test, expect } from '@playwright/test';\ntest.only('s', async ({ page }) => {\n  await expect(page.locator('#s')).toBeVisible();\n});\n",
+    )
+    .unwrap();
+    git_in(&dir, &["add", "tests/s.spec.ts"]);
+    let out = run_staged_in(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_finding(&out, "tests/s.spec.ts", "only-added");
+}
+
+// ------------------------------------------------ verifier-observed fail-opens
+
+fn assert_not_zero(out: &Output) {
+    let c = out.status.code();
+    assert!(
+        c == Some(1) || c == Some(2),
+        "must never be exit 0\n{}",
+        describe(out)
+    );
+}
+
+#[test]
+fn w1_path_with_space_and_trailing_tab_header_detects_only() {
+    let diff = "diff --git a/e2e/my login.spec.ts b/e2e/my login.spec.ts\n\
+index 1111111..2222222 100644\n\
+--- a/e2e/my login.spec.ts\t\n\
++++ b/e2e/my login.spec.ts\t\n\
+@@ -1,3 +1,3 @@\n\
+ import { test } from '@playwright/test';\n\
+-test('x', async () => {});\n\
++test.only('x', async () => {});\n";
+    let out = run_with_diff("w1-tab", diff);
+    assert_exit(&out, 1);
+    assert!(stdout(&out).contains("only-added"), "{}", describe(&out));
+}
+
+#[test]
+fn w1_quoted_path_header_is_never_exit_zero() {
+    let diff = "diff --git \"a/e2e/q\\\"x.spec.ts\" \"b/e2e/q\\\"x.spec.ts\"\n\
+index 1111111..2222222 100644\n\
+--- \"a/e2e/q\\\"x.spec.ts\"\n\
++++ \"b/e2e/q\\\"x.spec.ts\"\n\
+@@ -1,2 +1,2 @@\n\
+ import { test } from '@playwright/test';\n\
+-test('x', async () => {});\n\
++test.only('x', async () => {});\n";
+    let out = run_with_diff("w1-quoted", diff);
+    assert_not_zero(&out);
+}
+
+fn one_line_change(old: &str, new: &str) -> String {
+    format!(
+        "diff --git a/tests/t.spec.ts b/tests/t.spec.ts\nindex 1111111..2222222 100644\n--- a/tests/t.spec.ts\n+++ b/tests/t.spec.ts\n@@ -1,3 +1,3 @@\n import {{ test, expect }} from '@playwright/test';\n-{old}\n+{new}\n"
+    )
+}
+
+#[test]
+fn w2_timeout_option_set_to_zero_is_timeout_raised() {
+    let d = one_line_change(
+        "  await expect(page.locator('#a')).toBeVisible({ timeout: 5000 });",
+        "  await expect(page.locator('#a')).toBeVisible({ timeout: 0 });",
+    );
+    let out = run_with_diff("w2-opt", &d);
+    assert_finding(&out, "tests/t.spec.ts", "timeout-raised");
+}
+
+#[test]
+fn w2_set_timeout_zero_is_timeout_raised() {
+    let d = one_line_change("test.setTimeout(5000);", "test.setTimeout(0);");
+    let out = run_with_diff("w2-set", &d);
+    assert_finding(&out, "tests/t.spec.ts", "timeout-raised");
+}
+
+#[test]
+fn w3_computed_timeout_expression_is_never_exit_zero() {
+    let d = one_line_change(
+        "  await expect(page.locator('#a')).toBeVisible({ timeout: 5000 });",
+        "  await expect(page.locator('#a')).toBeVisible({ timeout: (5 * 60_000) });",
+    );
+    let out = run_with_diff("w3-expr", &d);
+    assert_not_zero(&out);
+}
+
+#[test]
+fn w3_underscore_literal_is_evaluated() {
+    let d = one_line_change(
+        "  await expect(page.locator('#a')).toBeVisible({ timeout: 5000 });",
+        "  await expect(page.locator('#a')).toBeVisible({ timeout: 60_000 });",
+    );
+    let out = run_with_diff("w3-us", &d);
+    assert_finding(&out, "tests/t.spec.ts", "timeout-raised");
+}
+
+#[test]
+fn w4_test_slow_added_is_reported() {
+    let d = "diff --git a/tests/t.spec.ts b/tests/t.spec.ts\nindex 1111111..2222222 100644\n--- a/tests/t.spec.ts\n+++ b/tests/t.spec.ts\n@@ -1,2 +1,3 @@\n test('x', async () => {\n+  test.slow();\n   await page.goto('/');\n"
+        .to_string();
+    let out = run_with_diff("w4-slow", &d);
+    assert_exit(&out, 1);
+    let so = stdout(&out).to_lowercase();
+    assert!(
+        so.contains("slow") || so.contains("timeout"),
+        "{}",
+        describe(&out)
+    );
+}
+
+// ------------------------------------------------ round-2 verifier-observed fail-opens
+
+#[test]
+fn r1_added_non_evaluable_set_timeout_with_no_removed_timeout_exits_2() {
+    let d = "diff --git a/tests/t.spec.ts b/tests/t.spec.ts\nindex 1111111..2222222 100644\n--- a/tests/t.spec.ts\n+++ b/tests/t.spec.ts\n@@ -1,2 +1,3 @@\n test('x', async () => {\n+  test.setTimeout(TWO_MIN);\n   await page.goto('/');\n";
+    let out = run_with_diff("r1-nonevalnew", d);
+    assert_exit(&out, 2);
+}
+
+/// Stages a spec change in a fresh repo after `setup` ran, returns the output.
+fn staged_only_added_with(tag: &str, setup: impl Fn(&std::path::Path)) -> Output {
+    let dir = unique_dir(tag);
+    git_in(&dir, &["init", "-q"]);
+    git_in(&dir, &["config", "user.email", "t@example.com"]);
+    git_in(&dir, &["config", "user.name", "t"]);
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::write(
+        dir.join("tests/s.spec.ts"),
+        "import { test, expect } from '@playwright/test';\ntest('s', async ({ page }) => {\n  await expect(page.locator('#s')).toBeVisible();\n});\n",
+    )
+    .unwrap();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "--no-verify", "-m", "init"]);
+    setup(&dir);
+    std::fs::write(
+        dir.join("tests/s.spec.ts"),
+        "import { test, expect } from '@playwright/test';\ntest.only('s', async ({ page }) => {\n  await expect(page.locator('#s')).toBeVisible();\n});\n",
+    )
+    .unwrap();
+    git_in(&dir, &["add", "tests/s.spec.ts"]);
+    let out = run_staged_in(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    out
+}
+
+#[test]
+fn r2_staged_mode_ignores_diff_external_driver() {
+    let out = staged_only_added_with("r2-ext", |d| {
+        git_in(d, &["config", "diff.external", "/usr/bin/true"]);
+    });
+    assert_finding(&out, "tests/s.spec.ts", "only-added");
+}
+
+#[test]
+fn r2_staged_mode_ignores_textconv_attribute() {
+    let out = staged_only_added_with("r2-textconv", |d| {
+        std::fs::write(d.join(".gitattributes"), "*.ts diff=tc\n").unwrap();
+        git_in(d, &["config", "diff.tc.textconv", "sh -c 'true'"]);
+    });
+    assert_finding(&out, "tests/s.spec.ts", "only-added");
+}
+
+#[test]
+fn r4_removing_set_timeout_below_default_is_timeout_raised() {
+    let d = "diff --git a/tests/t.spec.ts b/tests/t.spec.ts\nindex 1111111..2222222 100644\n--- a/tests/t.spec.ts\n+++ b/tests/t.spec.ts\n@@ -1,3 +1,2 @@\n test('x', async () => {\n-  test.setTimeout(5000);\n   await page.goto('/');\n";
+    let out = run_with_diff("r4-removed-low", d);
+    assert_finding(&out, "tests/t.spec.ts", "timeout-raised");
+}
+
+#[test]
+fn removed_non_evaluable_timeout_is_undetermined() {
+    // Removing `test.setTimeout(TWO_MIN)` may raise the effective timeout (the
+    // removed value could have been below the 30000 default). Not evaluable ->
+    // cannot determine -> exit 2, never a silent exit 0.
+    let d = "diff --git a/tests/t.spec.ts b/tests/t.spec.ts\nindex 1111111..2222222 100644\n--- a/tests/t.spec.ts\n+++ b/tests/t.spec.ts\n@@ -1,3 +1,2 @@\n test('x', async () => {\n-  test.setTimeout(TWO_MIN);\n   await page.goto('/');\n";
+    let out = run_with_diff("removed-non-evaluable", d);
+    assert_exit(&out, 2);
+}

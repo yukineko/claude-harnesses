@@ -558,6 +558,11 @@ pub struct SafeRoots {
     /// i.e. only by the recursive-`rm` arm (module doc, "Temp and cache
     /// roots"). Kept apart from `roots` for the same reason `worktree_roots` is.
     temp_roots: Vec<String>,
+    /// The members of `roots` that came from [`TEMP_ROOTS`] or `$TMPDIR`
+    /// (resolved exactly as `roots` is). A derived root (cwd / project) that
+    /// is the SAME directory counts as temp here too — the stricter reading.
+    /// Consulted only by [`SafeRoots::is_temp_safe_root`].
+    temp_safe_roots: Vec<String>,
     /// The CACHE deletion roots (`$HOME/.cache`, `$HOME/Library/Caches`), same
     /// discipline as `temp_roots`.
     cache_roots: Vec<String>,
@@ -596,6 +601,7 @@ impl SafeRoots {
             worktree_roots: Vec::new(),
             worktree_refusal: None,
             temp_roots: Vec::new(),
+            temp_safe_roots: Vec::new(),
             cache_roots: Vec::new(),
             home_real: None,
             git_tree_probe: None,
@@ -637,6 +643,7 @@ impl SafeRoots {
     ) -> SafeRoots {
         let home_norm = home.and_then(normalize_abs);
         let mut roots: Vec<String> = Vec::new();
+        let mut temp_safe_roots: Vec<String> = Vec::new();
         for derived in [cwd, project_dir].into_iter().flatten() {
             if let Some(norm) = normalize_abs(derived) {
                 if is_acceptable_derived_root(&norm, home_norm.as_deref()) {
@@ -649,7 +656,8 @@ impl SafeRoots {
                 // A temp root still may not be `/` or a system directory: a
                 // `TMPDIR=/usr` in the environment must not hand out `/usr`.
                 if !NEVER_A_ROOT.contains(&norm.as_str()) {
-                    push_root(&mut roots, norm, resolver);
+                    push_root(&mut roots, norm.clone(), resolver);
+                    push_root(&mut temp_safe_roots, norm, resolver);
                 }
             }
         }
@@ -702,6 +710,7 @@ impl SafeRoots {
             worktree_roots,
             worktree_refusal,
             temp_roots,
+            temp_safe_roots,
             cache_roots,
             home_real,
             git_tree_probe: None,
@@ -735,6 +744,17 @@ impl SafeRoots {
         resolve_with(path, self.resolver)
     }
 
+    /// True ONLY when a resolver was supplied, `path` resolves with it, and
+    /// the resolved real path is an existing real directory (`lstat`). No
+    /// resolver, a path that does not resolve, a path that does not exist, a
+    /// non-directory and any IO error all answer `false`. The resolver
+    /// re-attaches non-existent tail components by name, so resolving alone
+    /// does not prove existence — the `lstat` on the real path does.
+    pub(crate) fn resolves_to_existing_dir(&self, path: &str) -> bool {
+        self.resolver.is_some()
+            && resolve_with(path, self.resolver).is_some_and(|r| is_real_dir(&r))
+    }
+
     /// Why every deletion-class `Allow` is withheld for this session (a raw
     /// payload cwd / `CLAUDE_PROJECT_DIR` with a `..`/`.` component, or a
     /// relative cwd), or `None`.
@@ -756,25 +776,114 @@ impl SafeRoots {
         operand: &str,
         cwd: Option<&str>,
     ) -> Determination<Placement> {
-        if let Some(why) = &self.worktree_refusal {
-            return Determination::undetermined(why.clone());
-        }
         let roots: Vec<String> = self
             .temp_roots
             .iter()
             .chain(self.cache_roots.iter())
             .cloned()
             .collect();
+        self.classify_disposable_in(&roots, "temp or cache", operand, cwd)
+    }
+
+    /// [`SafeRoots::classify_disposable`] restricted to the FIXED temp
+    /// deletion roots — the real paths of `/tmp` and `/private/tmp`
+    /// ([`DELETION_TEMP_ROOTS`]) that are also accepted temp roots. Never
+    /// `$TMPDIR` (unless it IS one of those directories) and never a cache
+    /// root (user ruling 2026-10-28: the truncation relaxation covers
+    /// `/private/tmp`, scratchpad included, and nothing wider). Same pipeline,
+    /// same no-symlink-below rule, same raw-cwd refusal. Used by the
+    /// truncating-redirect rule in `detect.rs`.
+    pub(crate) fn classify_temp(
+        &self,
+        operand: &str,
+        cwd: Option<&str>,
+    ) -> Determination<Placement> {
+        let fixed: Vec<String> = DELETION_TEMP_ROOTS
+            .iter()
+            .filter_map(|r| resolve_with(r, self.resolver))
+            .collect();
+        let roots: Vec<String> = self
+            .temp_roots
+            .iter()
+            .filter(|r| fixed.contains(r))
+            .cloned()
+            .collect();
+        self.classify_disposable_in(&roots, "fixed temp", operand, cwd)
+    }
+
+    /// True when `root` (a root as [`SafeRoots::classify`] reports it) is one
+    /// of the TEMP safe roots (`/tmp`, `/var/tmp`, their `/private` twins,
+    /// `$TMPDIR`), including a derived root that is the same directory as one.
+    pub(crate) fn is_temp_safe_root(&self, root: &str) -> bool {
+        self.temp_safe_roots.iter().any(|r| r == root)
+    }
+
+    /// True ONLY when no directory from the parent of `real` up to `root`
+    /// (both inclusive) holds a `.git` entry — file or directory, observed with
+    /// `lstat` — i.e. `real` is in no git work tree or git dir rooted below or
+    /// at `root`. `real` must be a strict descendant of `root` (both real,
+    /// absolute paths). Any IO error other than "not found", a `real` not
+    /// under `root`, and no resolver all answer `false`.
+    pub(crate) fn no_git_entry_up_to(&self, real: &str, root: &str) -> bool {
+        if self.resolver.is_none() {
+            return false;
+        }
+        let root = root.trim_end_matches('/');
+        if !real.starts_with(&format!("{root}/")) {
+            return false;
+        }
+        let mut dir = std::path::Path::new(real);
+        loop {
+            let Some(parent) = dir.parent() else {
+                return false;
+            };
+            dir = parent;
+            match std::fs::symlink_metadata(dir.join(".git")) {
+                Ok(_) => return false,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return false,
+            }
+            if dir == std::path::Path::new(root) {
+                return true;
+            }
+            if !dir.starts_with(root) {
+                return false;
+            }
+        }
+    }
+
+    /// True ONLY when a resolver was supplied and `path` (`lstat`, never
+    /// followed) is an existing REGULAR file with exactly ONE hard link.
+    /// A second link means truncating this name also destroys the bytes under
+    /// another name, possibly outside every root. Any IO error, a symlink, a
+    /// directory, a device or FIFO, and no resolver all answer `false`.
+    pub(crate) fn is_single_link_regular_file(&self, path: &str) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        self.resolver.is_some()
+            && std::fs::symlink_metadata(path)
+                .is_ok_and(|m| m.file_type().is_file() && m.nlink() == 1)
+    }
+
+    fn classify_disposable_in(
+        &self,
+        roots: &[String],
+        kind: &str,
+        operand: &str,
+        cwd: Option<&str>,
+    ) -> Determination<Placement> {
+        if let Some(why) = &self.worktree_refusal {
+            return Determination::undetermined(why.clone());
+        }
         if roots.is_empty() {
-            return Determination::undetermined(
-                "blastguard has no temp or cache deletion root for this session",
-            );
+            return Determination::undetermined(format!(
+                "blastguard has no {kind} deletion root for this session"
+            ));
         }
         let lexical = match self.lexical_absolute(operand, cwd) {
             Determination::Known(l) => l,
             Determination::Undetermined(u) => return Determination::Undetermined(u),
         };
-        let placement = match self.classify_against(&roots, operand, cwd) {
+        let placement = match self.classify_against(roots, operand, cwd) {
             Determination::Known(p) => p,
             Determination::Undetermined(u) => return Determination::Undetermined(u),
         };

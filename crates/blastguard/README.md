@@ -227,7 +227,9 @@ plus `Undetermined` — and **only `Inside` may relax a verdict**.
   copy strictly inside a linked git worktree checkout under a worktree storage
   root, named by an absolute path in a single plain command or a
   Write/Edit, which is that checkout's own work, per the 2026-10-03 user
-  ruling); **a symlink that leaves the
+  ruling — a relative path after a leading `cd D && ` counts as `D/<path>`
+  when `D` is a literal, existing, absolute directory with no `.`/`..` and
+  the rest is joined by `&&` only, see `literal_cd_and_rest`); **a symlink that leaves the
   tree** (real paths are resolved first); and an unfiltered whole-tree walk such
   as `find . -delete`.
 - **`ask` only where a human can answer.** In headless runs, condukt workers and
@@ -264,13 +266,23 @@ truncating-redirect arm; `src/reversible.rs` `probe`):
    2026-09-18 this covers tracked-clean, tracked-modified **and untracked**
    files alike — `RecoverableFromGit` means "inside a work tree", not "git
    holds these bytes" (see the doc on `reversible::Recovery`).
-4. Otherwise the location axis below applies: confined to a safe root → `ask`
+4. The target exists outside any git work tree and sits strictly inside the
+   real `/tmp` or `/private/tmp` (never `$TMPDIR`) → allowed, unattended (user
+   ruling 2026-10-28: truncation there is disposable work). Only when every
+   one of these is observed: no glob/expansion, no `.git` component and not a
+   protected path, no symlink and no residual `..` between the root and the
+   target, no `.git` entry in any directory from the target up to the root,
+   and the target is a regular file with exactly one hard link
+   (`temp_disposable_redirect_target`). Any IO error keeps step 5.
+5. Otherwise the location axis below applies: confined to a safe root → `ask`
    (deny headless); anything else, including a probe that did not answer, →
    `deny`.
 
 Measured on the 0.2.108 debug build (2026-10-14): `echo hi > existing.txt` on
 an untracked file in the session's git repo → allow; the same to an existing
 file under `/tmp` outside any repo → `ask` (interactive) / `deny` (headless).
+Step 4 (2026-10-28) changed the second case to allow;
+`tests/tmp_truncation_recoverable.rs` pins it.
 
 ## Approval memory: an `Ask` a human answered is not asked again — 0.2.53
 

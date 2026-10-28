@@ -878,7 +878,27 @@ mod tests {
     }
 
     fn git_in(dir: &std::path::Path, args: &[&str]) {
-        let ok = std::process::Command::new("git")
+        // Fixture git must not follow a GIT_DIR/GIT_INDEX_FILE/... inherited
+        // from a git hook running the suite (same list as
+        // tests/support/git_env.rs).
+        let mut cmd = std::process::Command::new("git");
+        for k in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_NAMESPACE",
+            "GIT_PREFIX",
+            "GIT_QUARANTINE_PATH",
+            "GIT_CEILING_DIRECTORIES",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_CONFIG_COUNT",
+        ] {
+            cmd.env_remove(k);
+        }
+        let ok = cmd
             .arg("-C")
             .arg(dir)
             .args(["-c", "user.email=t@t", "-c", "user.name=t"])

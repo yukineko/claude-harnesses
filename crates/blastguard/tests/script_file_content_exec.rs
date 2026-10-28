@@ -41,6 +41,8 @@
 //! resolves the script path against the process cwd instead of the payload
 //! `cwd` does not find the file.
 
+#[path = "support/git_env.rs"]
+mod git_env;
 #[path = "support/neutral_base.rs"]
 mod neutral_base;
 
@@ -74,7 +76,7 @@ impl Fixture {
         std::fs::create_dir_all(f.home.join("Documents")).unwrap();
         std::fs::write(f.home.join("Documents/keep.txt"), "x").unwrap();
         std::fs::create_dir_all(f.proj.join("target")).unwrap();
-        let st = Command::new("git")
+        let st = git_env::scrub(&mut Command::new("git"))
             .args(["init", "-q"])
             .current_dir(&f.proj)
             .status()
@@ -108,7 +110,8 @@ impl Fixture {
         })
         .to_string();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_blastguard"));
-        cmd.stdin(Stdio::piped())
+        git_env::scrub(&mut cmd)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("CLAUDECODE", "1")

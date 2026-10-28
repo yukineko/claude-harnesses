@@ -6,6 +6,9 @@
 //! stays ignored only so the suite is green; the ignore reason names the item.
 //! Remove the ignore when the defect is fixed.
 
+#[path = "support/git_env.rs"]
+mod git_env;
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -839,12 +842,10 @@ fn backlog_d94d05c3_every_test_that_spawns_the_binary_isolates_home() {
 
 // ---------------------------------------------------------------- a529cd11
 fn git_in(dir: &std::path::Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
         .status()
         .unwrap();
     assert!(st.success(), "git {args:?} failed in {dir:?}");

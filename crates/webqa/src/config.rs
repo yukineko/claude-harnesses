@@ -51,6 +51,10 @@ fn default_timeout_secs() -> u64 {
     540
 }
 
+/// Ceiling for `timeout_secs`: below the 600 s Stop-hook timeout in
+/// `hooks/hooks.json`, leaving time to parse and report.
+pub const MAX_TIMEOUT_SECS: u64 = 540;
+
 pub enum Loaded {
     Absent,
     Config(Box<Config>),
@@ -85,6 +89,14 @@ fn parse(text: &str, p: &Path) -> Loaded {
         return Loaded::Undetermined(format!(
             "{}: no [[map]] declared, so no touched file can be tied to a spec",
             p.display()
+        ));
+    }
+    if cfg.timeout_secs > MAX_TIMEOUT_SECS {
+        return Loaded::Undetermined(format!(
+            "{}: `timeout_secs` = {} exceeds {MAX_TIMEOUT_SECS} (the Stop hook itself is killed \
+             at 600s, so a longer runner limit could never be observed)",
+            p.display(),
+            cfg.timeout_secs
         ));
     }
     if cfg.max_attempts == 0 {

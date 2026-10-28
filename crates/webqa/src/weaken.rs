@@ -81,19 +81,113 @@ struct FileDiff {
     hunks: Vec<Hunk>,
 }
 
-fn parse(text: &str) -> Vec<FileDiff> {
+/// Decode a git C-quoted path (`"a/x\"y"`). `None` = malformed quoting.
+fn unquote_c(s: &str) -> Option<String> {
+    let inner = s.strip_prefix('"')?.strip_suffix('"')?;
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut it = inner.bytes();
+    while let Some(b) = it.next() {
+        if b != b'\\' {
+            if b == b'"' {
+                return None;
+            }
+            bytes.push(b);
+            continue;
+        }
+        let e = it.next()?;
+        let v = match e {
+            b'"' => b'"',
+            b'\\' => b'\\',
+            b'a' => 7,
+            b'b' => 8,
+            b'f' => 12,
+            b'n' => b'\n',
+            b'r' => b'\r',
+            b't' => b'\t',
+            b'v' => 11,
+            b'0'..=b'3' => {
+                let mut n = u32::from(e - b'0');
+                for _ in 0..2 {
+                    let d = it.next()?;
+                    if !(b'0'..=b'7').contains(&d) {
+                        return None;
+                    }
+                    n = n * 8 + u32::from(d - b'0');
+                }
+                u8::try_from(n).ok()?
+            }
+            _ => return None,
+        };
+        bytes.push(v);
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Path token of a `--- `/`+++ ` line with its `a/`/`b/` prefix removed.
+/// `Ok(None)` = `/dev/null`. Unquoted paths end at git's trailing TAB.
+fn header_path(raw: &str, prefix: &str) -> Result<Option<String>, String> {
+    let p = if raw.starts_with('"') {
+        // A quoted path may be followed by a TAB too.
+        let tok = raw.trim_end_matches(['\t', ' ', '\r']);
+        unquote_c(tok).ok_or_else(|| format!("malformed quoted path in diff header: {raw}"))?
+    } else {
+        raw.split('\t')
+            .next()
+            .unwrap_or(raw)
+            .trim_end_matches('\r')
+            .to_string()
+    };
+    if p == "/dev/null" {
+        return Ok(None);
+    }
+    Ok(Some(p.strip_prefix(prefix).unwrap_or(&p).to_string()))
+}
+
+/// `(old, new)` from the remainder of a `diff --git ` line.
+fn git_header_paths(rest: &str) -> Result<(String, String), String> {
+    let bad = || format!("cannot parse diff header: diff --git {rest}");
+    let (old, new) = if rest.starts_with('"') {
+        // Find the closing quote of the first token.
+        let b = rest.as_bytes();
+        let mut i = 1;
+        while i < b.len() && b[i] != b'"' {
+            i += if b[i] == b'\\' { 2 } else { 1 };
+        }
+        if i >= b.len() {
+            return Err(bad());
+        }
+        let a = unquote_c(&rest[..=i]).ok_or_else(bad)?;
+        let tail = rest[i + 1..].trim_start();
+        let n = if tail.starts_with('"') {
+            unquote_c(tail.trim_end()).ok_or_else(bad)?
+        } else {
+            tail.to_string()
+        };
+        (a, n)
+    } else if let Some((a, n)) = rest.rsplit_once(" \"") {
+        (a.to_string(), unquote_c(&format!("\"{n}")).ok_or_else(bad)?)
+    } else {
+        match rest.rsplit_once(" b/") {
+            Some((a, n)) => (a.to_string(), format!("b/{n}")),
+            None => (rest.to_string(), rest.to_string()),
+        }
+    };
+    Ok((
+        old.strip_prefix("a/").unwrap_or(&old).to_string(),
+        new.strip_prefix("b/").unwrap_or(&new).to_string(),
+    ))
+}
+
+fn parse(text: &str) -> Result<Vec<FileDiff>, String> {
     let mut files: Vec<FileDiff> = Vec::new();
     let mut in_hunk = false;
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("diff --git ") {
             in_hunk = false;
-            let (old, new) = match rest.rsplit_once(" b/") {
-                Some((a, b)) => (a.strip_prefix("a/").unwrap_or(a), b),
-                None => (rest, rest),
-            };
+            let (old, new) = git_header_paths(rest)?;
             files.push(FileDiff {
-                path: new.trim_matches('"').to_string(),
-                old_path: old.trim_matches('"').to_string(),
+                path: new,
+                old_path: old,
                 binary: false,
                 hunks: Vec::new(),
             });
@@ -108,14 +202,18 @@ fn parse(text: &str) -> Vec<FileDiff> {
             continue;
         }
         if !in_hunk {
-            if let Some(p) = line.strip_prefix("+++ b/") {
-                cur.path = p.to_string();
-            } else if let Some(p) = line.strip_prefix("--- a/") {
-                cur.old_path = p.to_string();
+            if let Some(p) = line.strip_prefix("+++ ") {
+                if let Some(p) = header_path(p, "b/")? {
+                    cur.path = p;
+                }
+            } else if let Some(p) = line.strip_prefix("--- ") {
+                if let Some(p) = header_path(p, "a/")? {
+                    cur.old_path = p;
+                }
             } else if let Some(p) = line.strip_prefix("rename from ") {
-                cur.old_path = p.to_string();
+                cur.old_path = header_path(p, "")?.unwrap_or_default();
             } else if let Some(p) = line.strip_prefix("rename to ") {
-                cur.path = p.to_string();
+                cur.path = header_path(p, "")?.unwrap_or_default();
             } else if line.starts_with("Binary files ") || line.starts_with("GIT binary patch") {
                 cur.binary = true;
             }
@@ -130,14 +228,17 @@ fn parse(text: &str) -> Vec<FileDiff> {
             h.removed.push(r.to_string());
         }
     }
-    files
+    Ok(files)
 }
 
 pub fn check_diff(text: &str) -> Outcome {
     if text.trim().is_empty() {
         return Outcome::Clean;
     }
-    let files = parse(text);
+    let files = match parse(text) {
+        Ok(f) => f,
+        Err(why) => return Outcome::Undetermined(why),
+    };
     if files.is_empty() {
         return Outcome::Undetermined(
             "input is non-empty but contains no `diff --git` header; not a parseable unified diff"
@@ -178,35 +279,65 @@ enum Timeout {
     Opaque(String),
 }
 
-/// Evaluate `123`, `60_000`, `60 * 1000`; anything else is `None`.
+/// Evaluate `123`, `60_000`, `60 * 1000`, `(5 * 60_000)`; anything else is
+/// `None`. `0` disables the timeout in Playwright, so it evaluates to
+/// `u64::MAX` (larger than any finite timeout).
 fn eval_product(expr: &str) -> Option<u64> {
     let mut acc: u64 = 1;
-    for factor in expr.split('*') {
-        let f: String = factor.trim().chars().filter(|c| *c != '_').collect();
+    for factor in strip_parens(expr).split('*') {
+        let f: String = strip_parens(factor).chars().filter(|c| *c != '_').collect();
         if f.is_empty() || !f.chars().all(|c| c.is_ascii_digit()) {
             return None;
         }
         acc = acc.checked_mul(f.parse::<u64>().ok()?)?;
     }
-    Some(acc)
+    Some(if acc == 0 { u64::MAX } else { acc })
 }
 
-/// Timeout expressions following `timeout:` or `setTimeout(` on a line.
+fn strip_parens(e: &str) -> &str {
+    let mut e = e.trim();
+    while let Some(inner) = e.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
+        e = inner.trim();
+    }
+    e
+}
+
+/// The argument expression at the start of `rest`: up to the first `,`, `)`,
+/// `}` or `;` outside brackets/parentheses.
+fn leading_expr(rest: &str) -> &str {
+    let mut depth: i32 = 0;
+    for (i, c) in rest.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' if depth > 0 => depth -= 1,
+            ',' | ')' | '}' | ';' if depth == 0 => return &rest[..i],
+            _ => {}
+        }
+    }
+    rest
+}
+
+/// A `setTimeout(` argument that is a callback (global JS `setTimeout`), not a
+/// test timeout.
+fn is_callback(expr: &str) -> bool {
+    expr.contains("=>") || expr.starts_with("function") || expr.starts_with("async")
+}
+
+/// Timeout expressions following `timeout:` or `setTimeout(` on a line. Any
+/// expression that does not evaluate is [`Timeout::Opaque`], whatever it
+/// starts with; only a `setTimeout(` callback is not a timeout.
 fn timeouts(line: &str) -> Vec<Timeout> {
     let mut out = Vec::new();
     for key in ["timeout:", "setTimeout("] {
         let mut rest = line;
         while let Some(i) = rest.find(key) {
             rest = &rest[i + key.len()..];
-            let end = rest.find([',', ')', '}', ';']).unwrap_or(rest.len());
-            let expr = rest[..end].trim();
+            let expr = leading_expr(rest).trim();
             match eval_product(expr) {
                 Some(n) => out.push(Timeout::Value(n)),
-                // A callback body (`setTimeout(() => ...`) is not a test timeout.
-                None if expr.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$') => {
-                    out.push(Timeout::Opaque(expr.to_string()))
-                }
-                None => {}
+                None if key == "setTimeout(" && is_callback(expr) => {}
+                None if expr.is_empty() => out.push(Timeout::Opaque("<empty>".to_string())),
+                None => out.push(Timeout::Opaque(expr.to_string())),
             }
         }
     }
@@ -249,9 +380,12 @@ fn check_timeouts(f: &FileDiff, out: &mut Vec<Finding>) -> Result<(), String> {
         }
     }
     let raised = match (rv.iter().max(), av.iter().max()) {
-        (Some(r), Some(a)) if a > r => Some(format!("timeout raised {r} -> {a}")),
+        (Some(r), Some(a)) if a > r => {
+            Some(format!("timeout raised {} -> {}", show_ms(*r), show_ms(*a)))
+        }
         (None, Some(a)) if *a > DEFAULT_TIMEOUT_MS => Some(format!(
-            "timeout {a} added (above the {DEFAULT_TIMEOUT_MS} ms default) with none removed"
+            "timeout {} added (above the {DEFAULT_TIMEOUT_MS} ms default) with none removed",
+            show_ms(*a)
         )),
         _ => None,
     };
@@ -263,6 +397,14 @@ fn check_timeouts(f: &FileDiff, out: &mut Vec<Finding>) -> Result<(), String> {
         });
     }
     Ok(())
+}
+
+fn show_ms(v: u64) -> String {
+    if v == u64::MAX {
+        "0 (disabled)".to_string()
+    } else {
+        v.to_string()
+    }
 }
 
 fn count(lines: &[String], needle: &str) -> usize {
@@ -296,6 +438,12 @@ fn check_hunk(path: &str, h: &Hunk, out: &mut Vec<Finding>) {
         }
         if l.contains(".only(") || l.contains(".only.") {
             push("only-added", format!("added: {}", l.trim()));
+        }
+        if l.contains(".slow(") {
+            push(
+                "slow-added",
+                format!("added (triples the timeout): {}", l.trim()),
+            );
         }
         if l.contains("waitForTimeout(") {
             push("wait-timeout-added", format!("added: {}", l.trim()));

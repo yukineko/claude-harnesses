@@ -1,4 +1,6 @@
-# webqa.toml — place at the project root (the Stop hook's cwd).
+# webqa.toml — place at the project root (git top level of the Stop hook's cwd).
+# The gate runs `command` only after `webqa trust` recorded this file's hash;
+# an untrusted or changed file BLOCKS without running anything.
 # No file => the gate is "not configured" and allows (stderr says so).
 # A file that cannot be read/parsed, or is unusable, BLOCKS (undetermined).
 
@@ -10,7 +12,7 @@ command = ["npx", "playwright", "test"]
 # Optional. Defaults shown.
 max_attempts = 3        # blocked stops before the bounded give-up (>= 1)
 reset_after_secs = 1800 # idle seconds after which the attempt counter restarts
-timeout_secs = 540      # runner wall-clock limit; exceeding it blocks (undetermined)
+timeout_secs = 540      # runner wall-clock limit (max 540); exceeding it blocks (undetermined)
 
 # At least one [[map]] is required. A map is selected when a touched file
 # (git diff vs HEAD, staged/unstaged/deleted, plus untracked non-ignored files)

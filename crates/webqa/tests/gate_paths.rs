@@ -201,6 +201,24 @@ impl Fixture {
     }
 }
 
+/// Records trust for `<root>/webqa.toml` (run with cwd = project root).
+fn trust(root: &Path, state: &Path) {
+    let out = Command::new(env!("CARGO_BIN_EXE_webqa"))
+        .arg("trust")
+        .current_dir(root)
+        .env("WEBQA_STATE_DIR", state)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("spawn webqa trust");
+    assert!(
+        out.status.success(),
+        "webqa trust failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 fn describe(out: &Output) -> String {
     format!(
         "status={:?}\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -292,6 +310,7 @@ fn root_not_a_git_repo_blocks() {
         ),
     )
     .unwrap();
+    trust(&plain, &f.state);
     let out = f.gate_in(&plain, "s-nogit", false);
     assert_block(&out);
 }
@@ -303,6 +322,7 @@ fn no_touched_web_files_allows_without_running_stub() {
     let f = fixture("noweb");
     f.stub(&playwright_json(2, 0, 0, 0), 0);
     f.standard_config();
+    trust(&f.root, &f.state);
     write(&f.root, "README.md", "changed\n");
     let out = f.gate("s-noweb", false);
     assert_allow(&out);
@@ -321,6 +341,7 @@ fn touched_source_with_empty_spec_list_blocks_undetermined() {
         "command = [\"{}\"]\n\n[[map]]\nsources = [\"src/login/**\"]\nspecs = []\n",
         f.stub.display()
     ));
+    trust(&f.root, &f.state);
     f.touch_login();
     let out = f.gate("s-emptyspecs", false);
     let so = assert_block(&out);
@@ -335,6 +356,7 @@ fn touched_source_whose_mapped_spec_is_missing_blocks_undetermined() {
         "command = [\"{}\"]\n\n[[map]]\nsources = [\"src/login/**\"]\nspecs = [\"e2e/does-not-exist.spec.ts\"]\n",
         f.stub.display()
     ));
+    trust(&f.root, &f.state);
     f.touch_login();
     let out = f.gate("s-missingspec", false);
     let so = assert_block(&out);
@@ -346,6 +368,7 @@ fn only_mapped_specs_are_passed_to_runner() {
     let f = fixture("selection");
     f.stub(&playwright_json(2, 0, 0, 0), 0);
     f.standard_config();
+    trust(&f.root, &f.state);
     f.touch_login();
     let out = f.gate("s-selection", false);
     assert!(f.stub_invoked(), "stub not invoked\n{}", describe(&out));
@@ -366,6 +389,7 @@ fn untracked_new_file_under_mapped_source_counts_as_touched() {
     let f = fixture("untracked");
     f.stub(&playwright_json(2, 0, 0, 0), 0);
     f.standard_config();
+    trust(&f.root, &f.state);
     write(&f.root, "src/login/brand-new.ts", "export const n = 1;\n");
     let out = f.gate("s-untracked", false);
     assert!(
@@ -385,8 +409,9 @@ fn untracked_new_file_under_mapped_source_counts_as_touched() {
 #[test]
 fn passing_run_allows() {
     let f = fixture("pass");
-    f.stub(&playwright_json(2, 0, 0, 0), 0);
+    f.stub(&suites_json(&["e2e/login.spec.ts"], 2), 0);
     f.standard_config();
+    trust(&f.root, &f.state);
     f.touch_login();
     let out = f.gate("s-pass", false);
     assert!(f.stub_invoked(), "stub not invoked\n{}", describe(&out));
@@ -398,6 +423,7 @@ fn failing_run_blocks_with_failed_reason() {
     let f = fixture("fail");
     f.stub(&playwright_json(1, 1, 0, 0), 1);
     f.standard_config();
+    trust(&f.root, &f.state);
     f.touch_login();
     let out = f.gate("s-fail", false);
     let so = assert_block(&out);
@@ -409,6 +435,7 @@ fn exit_zero_with_unexpected_blocks_as_inconsistent() {
     let f = fixture("inc0");
     f.stub(&playwright_json(1, 1, 0, 0), 0);
     f.standard_config();
+    trust(&f.root, &f.state);
     f.touch_login();
     let out = f.gate("s-inc0", false);
     assert_block(&out);
@@ -419,6 +446,7 @@ fn exit_one_with_zero_unexpected_blocks() {
     let f = fixture("inc1");
     f.stub(&playwright_json(2, 0, 0, 0), 1);
     f.standard_config();
+    trust(&f.root, &f.state);
     f.touch_login();
     let out = f.gate("s-inc1", false);
     assert_block(&out);
@@ -429,6 +457,7 @@ fn flaky_run_blocks_with_flaky_reason() {
     let f = fixture("flaky");
     f.stub(&playwright_json(1, 0, 1, 0), 0);
     f.standard_config();
+    trust(&f.root, &f.state);
     f.touch_login();
     let out = f.gate("s-flaky", false);
     let so = assert_block(&out);
@@ -440,6 +469,7 @@ fn nothing_ran_blocks() {
     let f = fixture("zero");
     f.stub(&playwright_json(0, 0, 0, 0), 0);
     f.standard_config();
+    trust(&f.root, &f.state);
     f.touch_login();
     let out = f.gate("s-zero", false);
     assert_block(&out);
@@ -450,6 +480,7 @@ fn non_json_stdout_blocks() {
     let f = fixture("nonjson");
     f.stub("all good, trust me", 0);
     f.standard_config();
+    trust(&f.root, &f.state);
     f.touch_login();
     let out = f.gate("s-nonjson", false);
     assert_block(&out);
@@ -461,6 +492,7 @@ fn missing_command_binary_blocks() {
     let missing = f.base.join("no-such-runner-binary");
     assert!(!missing.exists());
     f.config_with_command(&format!("[\"{}\"]", missing.display()));
+    trust(&f.root, &f.state);
     f.touch_login();
     let out = f.gate("s-nocmd", false);
     assert_block(&out);
@@ -473,6 +505,7 @@ fn bounded_give_up_after_three_blocks_is_loud_and_per_session() {
     let f = fixture("giveup");
     f.stub(&playwright_json(1, 1, 0, 0), 1);
     f.standard_config();
+    trust(&f.root, &f.state);
     f.touch_login();
 
     let o1 = f.gate("s-giveup", false);
@@ -503,4 +536,157 @@ fn bounded_give_up_after_three_blocks_is_loud_and_per_session() {
 
     let other = f.gate("s-giveup-other", true);
     assert_block(&other);
+}
+
+// ------------------------------------------------------------ verifier-observed fail-opens
+
+fn suites_json(files: &[&str], expected: u32) -> String {
+    let suites: Vec<String> = files
+        .iter()
+        .map(|f| {
+            format!(
+                "{{\"title\":\"{f}\",\"file\":\"{f}\",\"specs\":[{{\"title\":\"t\",\"ok\":true,\"tests\":[{{\"status\":\"expected\"}}]}}],\"suites\":[]}}"
+            )
+        })
+        .collect();
+    format!(
+        "{{\"config\":{{}},\"suites\":[{}],\"errors\":[],\"stats\":{{\"expected\":{expected},\"unexpected\":0,\"flaky\":0,\"skipped\":0,\"duration\":1.0}}}}",
+        suites.join(",")
+    )
+}
+
+fn two_spec_fixture(tag: &str, reported: &[&str]) -> Fixture {
+    let f = fixture(tag);
+    write(&f.root, "e2e/a.spec.ts", "test('a', async () => {});\n");
+    write(&f.root, "e2e/b.spec.ts", "test('b', async () => {});\n");
+    git(&f.root, &["add", "-A"]);
+    git(&f.root, &["commit", "-q", "--no-verify", "-m", "specs"]);
+    f.stub(&suites_json(reported, reported.len() as u32), 0);
+    f.commit_config(&format!(
+        "command = [\"{}\"]\n\n[[map]]\nsources = [\"src/login/**\"]\nspecs = [\"e2e/a.spec.ts\", \"e2e/b.spec.ts\"]\n",
+        f.stub.display()
+    ));
+    trust(&f.root, &f.state);
+    f.touch_login();
+    f
+}
+
+#[test]
+fn g1_selected_spec_missing_from_results_blocks() {
+    let f = two_spec_fixture("g1-miss", &["a.spec.ts"]);
+    let out = f.gate("s-g1-miss", false);
+    assert!(f.stub_invoked(), "stub not invoked\n{}", describe(&out));
+    let so = assert_block(&out);
+    assert!(
+        so.contains("b.spec.ts") || so.contains("not run") || so.contains("missing"),
+        "reason must name the unreported spec\n{}",
+        describe(&out)
+    );
+}
+
+#[test]
+fn g1_control_all_selected_specs_reported_allows() {
+    let f = two_spec_fixture("g1-ok", &["a.spec.ts", "b.spec.ts"]);
+    let out = f.gate("s-g1-ok", false);
+    assert!(f.stub_invoked(), "stub not invoked\n{}", describe(&out));
+    assert_allow(&out);
+}
+
+#[test]
+fn g1_control_results_with_testdir_prefixed_paths_allow() {
+    let f = two_spec_fixture("g1-pfx", &["e2e/a.spec.ts", "e2e/b.spec.ts"]);
+    let out = f.gate("s-g1-pfx", false);
+    assert_allow(&out);
+}
+
+#[test]
+fn g2_gate_from_subdirectory_uses_toplevel_config() {
+    let f = fixture("g2-sub");
+    f.stub(&playwright_json(2, 0, 0, 0), 0);
+    f.standard_config();
+    trust(&f.root, &f.state);
+    f.touch_login();
+    let sub = f.root.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    let out = f.gate_in(&sub, "s-g2-sub", false);
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("not configured"),
+        "config at git top level must be found from a subdir\n{}",
+        describe(&out)
+    );
+    assert!(f.stub_invoked(), "stub not invoked\n{}", describe(&out));
+}
+
+#[test]
+fn g3_timeout_secs_above_hook_budget_blocks() {
+    let f = fixture("g3-timeout");
+    f.stub(&playwright_json(2, 0, 0, 0), 0);
+    f.commit_config(&format!(
+        "command = [\"{}\"]\ntimeout_secs = 1000000\n\n[[map]]\nsources = [\"src/login/**\"]\nspecs = [\"e2e/login.spec.ts\"]\n",
+        f.stub.display()
+    ));
+    trust(&f.root, &f.state);
+    f.touch_login();
+    let out = f.gate("s-g3-timeout", false);
+    assert_block(&out);
+}
+
+#[test]
+fn g4_untrusted_config_blocks_and_does_not_run_command() {
+    let f = fixture("g4-untrusted");
+    f.stub(&playwright_json(2, 0, 0, 0), 0);
+    f.standard_config();
+    f.touch_login();
+    let out = f.gate("s-g4-untrusted", false);
+    let so = assert_block(&out);
+    assert!(so.contains("untrusted"), "{}", describe(&out));
+    assert!(
+        !f.stub_invoked(),
+        "untrusted command must NOT execute; argv={:?}",
+        f.argv()
+    );
+}
+
+#[test]
+fn g4_trusted_config_runs_command() {
+    let f = fixture("g4-trusted");
+    f.stub(&suites_json(&["e2e/login.spec.ts"], 2), 0);
+    f.standard_config();
+    trust(&f.root, &f.state);
+    f.touch_login();
+    let out = f.gate("s-g4-trusted", false);
+    assert!(f.stub_invoked(), "stub not invoked\n{}", describe(&out));
+    assert_allow(&out);
+}
+
+#[test]
+fn g4_config_changed_after_trust_blocks_untrusted() {
+    let f = fixture("g4-changed");
+    f.stub(&playwright_json(2, 0, 0, 0), 0);
+    f.standard_config();
+    trust(&f.root, &f.state);
+    // Change the config (append a harmless comment) after trust was recorded.
+    let p = f.root.join("webqa.toml");
+    let mut s = std::fs::read_to_string(&p).unwrap();
+    s.push_str("\n# changed after trust\n");
+    std::fs::write(&p, s).unwrap();
+    f.touch_login();
+    let out = f.gate("s-g4-changed", false);
+    let so = assert_block(&out);
+    assert!(so.contains("untrusted"), "{}", describe(&out));
+    assert!(!f.stub_invoked(), "changed config must not execute");
+}
+
+#[test]
+fn non_git_cwd_without_config_allows_not_configured() {
+    let f = fixture("nogit-noconf");
+    let plain = f.base.join("plain-noconf");
+    std::fs::create_dir_all(&plain).unwrap();
+    let out = f.gate_in(&plain, "s-nogit-noconf", false);
+    assert_allow(&out);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("not configured"),
+        "expected stderr to mention `not configured`\n{}",
+        describe(&out)
+    );
 }

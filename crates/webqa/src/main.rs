@@ -3,6 +3,7 @@ mod config;
 mod gate;
 mod git;
 mod report;
+mod trust;
 mod weaken;
 
 use clap::{Parser, Subcommand};
@@ -23,6 +24,9 @@ enum Cmd {
     /// Stop hook gate: run the Playwright specs mapped to the touched web files;
     /// block the stop until they pass.
     Gate,
+    /// Record the current `webqa.toml` of this project (git top level of the
+    /// cwd) as trusted. The gate refuses to run an untrusted or changed config.
+    Trust,
     /// Detect test-weakening edits to Playwright specs.
     /// Exit 0 clean, 1 findings, 2 undetermined.
     WeakenCheck {
@@ -36,6 +40,7 @@ fn main() {
     let cli = Cli::parse();
     let code = match cli.cmd {
         Cmd::Gate => gate_command(),
+        Cmd::Trust => trust_command(),
         Cmd::WeakenCheck { diff_file } => weaken::report(&weaken::run(diff_file.as_deref())),
     };
     std::process::exit(code);
@@ -52,6 +57,39 @@ fn state_dir() -> PathBuf {
     }
 }
 
+/// Project root for `webqa trust`: the git top level of the cwd; outside any
+/// repository the cwd itself (the gate still blocks a configured non-git
+/// root, so trusting one grants nothing). Any other git failure is an error.
+fn trust_root() -> Result<PathBuf, String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("cannot read cwd: {e}"))?;
+    match git::toplevel(&cwd) {
+        Ok(r) => Ok(r),
+        Err(git::TopLevelErr::NotARepo(_)) => Ok(cwd),
+        Err(git::TopLevelErr::Failed(e)) => Err(format!("cannot resolve the project root: {e}")),
+    }
+}
+
+fn trust_command() -> i32 {
+    let root = match trust_root() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("webqa trust: {e}");
+            return 1;
+        }
+    };
+    let cfg = config::path_for(&root);
+    match trust::record(&state_dir(), &root, &cfg) {
+        Ok(h) => {
+            println!("webqa: trusted {} (sha256 {h})", cfg.display());
+            0
+        }
+        Err(e) => {
+            eprintln!("webqa trust: {e}");
+            1
+        }
+    }
+}
+
 fn gate_command() -> ! {
     let mut raw = String::new();
     let _ = std::io::stdin().read_to_string(&mut raw);
@@ -65,20 +103,59 @@ fn gate_command() -> ! {
 fn gate_run(hook: Option<HookInput>) -> ! {
     let interactive = hook.is_none();
     let input = hook.unwrap_or_default();
-    let root = input.cwd_or_current();
+    let cwd = input.cwd_or_current();
     let session = input.session_key();
     let dir = state_dir();
+    // The project root is the git top level of the hook cwd, so a stop in a
+    // subdirectory still finds `webqa.toml`. Unresolvable = undetermined.
+    // Outside any repository (observed), the cwd is the only candidate: no
+    // `webqa.toml` there = not configured; one there = undetermined (its
+    // touched files cannot be listed). Any other git failure = undetermined.
+    let root = match git::toplevel(&cwd) {
+        Ok(r) => r,
+        Err(git::TopLevelErr::NotARepo(e)) => match config::load(&cwd) {
+            config::Loaded::Absent => not_configured(&cwd),
+            _ => {
+                let v = harness_core::verdict::Verdict::undetermined(format!(
+                    "{} exists but {} is not a git repository: {e}",
+                    config::FILE_NAME,
+                    cwd.display()
+                ));
+                finish(&v, config_defaults(), &dir, &session, interactive)
+            }
+        },
+        Err(e) => {
+            let v = harness_core::verdict::Verdict::undetermined(format!(
+                "cannot resolve the project root: {}",
+                e.message()
+            ));
+            finish(&v, config_defaults(), &dir, &session, interactive)
+        }
+    };
 
     let cfg = match config::load(&root) {
-        config::Loaded::Absent => {
-            eprintln!(
-                "webqa: not configured ({} not found in {}); nothing to check",
-                config::FILE_NAME,
-                root.display()
-            );
-            std::process::exit(0);
+        config::Loaded::Absent => not_configured(&root),
+        config::Loaded::Config(c) => {
+            // The command is spawned only from content the user approved.
+            let refusal = match trust::check(&dir, &root, &config::path_for(&root)) {
+                trust::Trust::Trusted => None,
+                trust::Trust::Untrusted(why) => Some(format!("untrusted config: {why}")),
+                trust::Trust::Undetermined(why) => Some(format!(
+                    "untrusted config (trust cannot be established): {why}"
+                )),
+            };
+            if let Some(why) = refusal {
+                let v = harness_core::verdict::Verdict::undetermined(why);
+                finish(
+                    &v,
+                    (c.max_attempts, c.reset_after_secs),
+                    &dir,
+                    &session,
+                    interactive,
+                )
+            }
+            *c
         }
-        config::Loaded::Config(c) => *c,
         config::Loaded::Undetermined(why) => {
             // Cannot read the declaration: judge it undetermined, bounded like
             // any other block (default attempt budget).
@@ -95,6 +172,15 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         &session,
         interactive,
     )
+}
+
+fn not_configured(root: &std::path::Path) -> ! {
+    eprintln!(
+        "webqa: not configured ({} not found in {}); nothing to check",
+        config::FILE_NAME,
+        root.display()
+    );
+    std::process::exit(0);
 }
 
 fn config_defaults() -> (u32, i64) {

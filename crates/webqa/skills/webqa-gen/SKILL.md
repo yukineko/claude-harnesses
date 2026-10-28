@@ -2,7 +2,6 @@
 name: webqa-gen
 description: Playwright e2e test 生成スキル。仕様文または URL から、ブラウザ探索 → シナリオ列挙 → test-first な spec 生成 → RED 観測 → 採用 まで一貫して回す。F→P オラクル（tdd red→green）で検証可能なテスト生成を保証する。
 argument-hint: '<仕様文 or URL> [--task "<id>"]'
-allowed-tools: Read, Edit, Write, Bash, WebFetch, Grep
 ---
 
 `/webqa-gen <仕様>` で、**仕様文 or URL → ブラウザ探索 → シナリオ生成 → spec 作成 → RED 観測 → 採用** を1サイクル回す。生成したテストは、実装前の状態で RED（失敗）を観測してから採用する。これにより「推測で locator を書いていないか」「ゆるすぎるマッチャーになっていないか」が検証可能になる。

@@ -48,3 +48,58 @@ pub fn touched_files(root: &Path) -> Result<Vec<String>, String> {
     v.dedup();
     Ok(v)
 }
+
+/// Why the git top level could not be resolved.
+pub enum TopLevelErr {
+    /// Observed: git ran and reported `dir` is not inside a repository, so no
+    /// top level exists and `dir` itself is the only candidate root.
+    NotARepo(String),
+    /// Anything else (git missing, crashed, unexpected output): a top level
+    /// may exist but is unknown.
+    Failed(String),
+}
+
+impl TopLevelErr {
+    pub fn message(&self) -> &str {
+        match self {
+            TopLevelErr::NotARepo(m) | TopLevelErr::Failed(m) => m,
+        }
+    }
+}
+
+/// `git rev-parse --show-toplevel` of `dir`. Runs with `LC_ALL=C` so the
+/// "not a git repository" message is recognisable; an unrecognised failure is
+/// [`TopLevelErr::Failed`].
+pub fn toplevel(dir: &Path) -> Result<std::path::PathBuf, TopLevelErr> {
+    let out = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(dir)
+        .env("LC_ALL", "C")
+        .output()
+        .map_err(|e| TopLevelErr::Failed(format!("cannot run git: {e}")))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let msg = format!(
+            "`git rev-parse --show-toplevel` in {} exited with {:?}: {}",
+            dir.display(),
+            out.status.code(),
+            stderr.trim()
+        );
+        return Err(
+            if out.status.code() == Some(128) && stderr.contains("not a git repository") {
+                TopLevelErr::NotARepo(msg)
+            } else {
+                TopLevelErr::Failed(msg)
+            },
+        );
+    }
+    let s = String::from_utf8(out.stdout)
+        .map_err(|e| TopLevelErr::Failed(format!("git top level is not UTF-8: {e}")))?;
+    let s = s.trim_end_matches(['\n', '\r']);
+    if s.is_empty() {
+        return Err(TopLevelErr::Failed(
+            "`git rev-parse --show-toplevel` printed nothing".to_string(),
+        ));
+    }
+    Ok(std::path::PathBuf::from(s))
+}

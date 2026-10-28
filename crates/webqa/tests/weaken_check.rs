@@ -537,3 +537,100 @@ fn staged_mode_reports_only_added_in_staged_spec() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_finding(&out, "tests/s.spec.ts", "only-added");
 }
+
+// ------------------------------------------------ verifier-observed fail-opens
+
+fn assert_not_zero(out: &Output) {
+    let c = out.status.code();
+    assert!(
+        c == Some(1) || c == Some(2),
+        "must never be exit 0\n{}",
+        describe(out)
+    );
+}
+
+#[test]
+fn w1_path_with_space_and_trailing_tab_header_detects_only() {
+    let diff = "diff --git a/e2e/my login.spec.ts b/e2e/my login.spec.ts\n\
+index 1111111..2222222 100644\n\
+--- a/e2e/my login.spec.ts\t\n\
++++ b/e2e/my login.spec.ts\t\n\
+@@ -1,3 +1,3 @@\n\
+ import { test } from '@playwright/test';\n\
+-test('x', async () => {});\n\
++test.only('x', async () => {});\n";
+    let out = run_with_diff("w1-tab", diff);
+    assert_exit(&out, 1);
+    assert!(stdout(&out).contains("only-added"), "{}", describe(&out));
+}
+
+#[test]
+fn w1_quoted_path_header_is_never_exit_zero() {
+    let diff = "diff --git \"a/e2e/q\\\"x.spec.ts\" \"b/e2e/q\\\"x.spec.ts\"\n\
+index 1111111..2222222 100644\n\
+--- \"a/e2e/q\\\"x.spec.ts\"\n\
++++ \"b/e2e/q\\\"x.spec.ts\"\n\
+@@ -1,2 +1,2 @@\n\
+ import { test } from '@playwright/test';\n\
+-test('x', async () => {});\n\
++test.only('x', async () => {});\n";
+    let out = run_with_diff("w1-quoted", diff);
+    assert_not_zero(&out);
+}
+
+fn one_line_change(old: &str, new: &str) -> String {
+    format!(
+        "diff --git a/tests/t.spec.ts b/tests/t.spec.ts\nindex 1111111..2222222 100644\n--- a/tests/t.spec.ts\n+++ b/tests/t.spec.ts\n@@ -1,3 +1,3 @@\n import {{ test, expect }} from '@playwright/test';\n-{old}\n+{new}\n"
+    )
+}
+
+#[test]
+fn w2_timeout_option_set_to_zero_is_timeout_raised() {
+    let d = one_line_change(
+        "  await expect(page.locator('#a')).toBeVisible({ timeout: 5000 });",
+        "  await expect(page.locator('#a')).toBeVisible({ timeout: 0 });",
+    );
+    let out = run_with_diff("w2-opt", &d);
+    assert_finding(&out, "tests/t.spec.ts", "timeout-raised");
+}
+
+#[test]
+fn w2_set_timeout_zero_is_timeout_raised() {
+    let d = one_line_change("test.setTimeout(5000);", "test.setTimeout(0);");
+    let out = run_with_diff("w2-set", &d);
+    assert_finding(&out, "tests/t.spec.ts", "timeout-raised");
+}
+
+#[test]
+fn w3_computed_timeout_expression_is_never_exit_zero() {
+    let d = one_line_change(
+        "  await expect(page.locator('#a')).toBeVisible({ timeout: 5000 });",
+        "  await expect(page.locator('#a')).toBeVisible({ timeout: (5 * 60_000) });",
+    );
+    let out = run_with_diff("w3-expr", &d);
+    assert_not_zero(&out);
+}
+
+#[test]
+fn w3_underscore_literal_is_evaluated() {
+    let d = one_line_change(
+        "  await expect(page.locator('#a')).toBeVisible({ timeout: 5000 });",
+        "  await expect(page.locator('#a')).toBeVisible({ timeout: 60_000 });",
+    );
+    let out = run_with_diff("w3-us", &d);
+    assert_finding(&out, "tests/t.spec.ts", "timeout-raised");
+}
+
+#[test]
+fn w4_test_slow_added_is_reported() {
+    let d = "diff --git a/tests/t.spec.ts b/tests/t.spec.ts\nindex 1111111..2222222 100644\n--- a/tests/t.spec.ts\n+++ b/tests/t.spec.ts\n@@ -1,2 +1,3 @@\n test('x', async () => {\n+  test.slow();\n   await page.goto('/');\n"
+        .to_string();
+    let out = run_with_diff("w4-slow", &d);
+    assert_exit(&out, 1);
+    let so = stdout(&out).to_lowercase();
+    assert!(
+        so.contains("slow") || so.contains("timeout"),
+        "{}",
+        describe(&out)
+    );
+}

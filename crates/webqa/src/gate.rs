@@ -195,7 +195,43 @@ fn judge(run: &RunOutput, specs: &[String]) -> Verdict {
             st.skipped
         ));
     }
+    let missing: Vec<&String> = specs
+        .iter()
+        .filter(|sel| {
+            !st.file_tests
+                .iter()
+                .any(|(f, n)| *n > 0 && same_spec(sel, f))
+        })
+        .collect();
+    if !missing.is_empty() {
+        return Verdict::undetermined(format!(
+            "selected spec(s) missing from the runner results (not run, or no test ran): {}",
+            missing
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     Verdict::adjudicate(Determination::known(Vec::<Reason>::new()))
+}
+
+/// Does the reporter's `file` denote the selected spec path? The reporter
+/// prints paths relative to Playwright's `testDir`, so either may be a
+/// `/`-boundary suffix of the other.
+fn same_spec(selected: &str, reported: &str) -> bool {
+    let sel = selected.trim_start_matches("./");
+    let rep = reported.trim_start_matches("./");
+    if rep.is_empty() || sel.is_empty() {
+        return false;
+    }
+    let suffix = |long: &str, short: &str| {
+        long == short
+            || long
+                .strip_suffix(short)
+                .is_some_and(|head| head.ends_with('/'))
+    };
+    suffix(sel, rep) || suffix(rep, sel)
 }
 
 /// Full evaluation for `root`. `scratch` holds runner logs.

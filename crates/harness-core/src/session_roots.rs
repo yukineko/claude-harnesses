@@ -7,7 +7,8 @@
 //!
 //! Fail-closed (CLAUDE.md section 3): an unreadable transcript, a relative
 //! written path, a written file whose directory is gone or unenterable (except
-//! the removed-worktree and nearest-existing-ancestor cases below), or any git
+//! the removed-worktree, live-recorded-worktree and nearest-existing-ancestor
+//! cases below), or any git
 //! failure other than the one below is `Undetermined` naming the path.
 //!
 //! Removed linked worktrees: whenever a written file resolves to the toplevel
@@ -25,11 +26,16 @@
 //! and is excluded (Known); inside a repository makes that repository's
 //! toplevel a root (Known); any other git failure (unenterable ancestor,
 //! corrupt gitfile, git missing) stays `Undetermined`. A relative path with no
-//! record stays `Undetermined`. With a record, every other outcome stays
-//! `Undetermined`: a recorded worktree that still exists (a deleted
-//! subdirectory of a live recorded checkout), a recorded repository that is
-//! gone or no longer a toplevel, or a store that cannot be read or has an
-//! unparsable line. Recording happens for every live linked
+//! record stays `Undetermined`. When the longest recorded worktree containing
+//! the path still exists (a deleted subdirectory of a live recorded checkout),
+//! the nearest existing ancestor is found by the same walk; it must
+//! canonicalize to a path inside the recorded worktree (a symlink escaping it
+//! is `Undetermined`), and git's toplevel there becomes a root (Known). Unlike
+//! the no-record case, git reporting that ancestor outside every repository is
+//! `Undetermined`, not excluded, as is any other walk, canonicalize or git
+//! failure. With a record, every other outcome stays `Undetermined`: a
+//! recorded repository that is gone or no longer a toplevel, or a store that
+//! cannot be read or has an unparsable line. Recording happens for every live linked
 //! worktree the session wrote into, even when another write in the same
 //! session is unresolvable (the verdict is then still `Undetermined`, naming
 //! the first unresolvable write). Limitation: the mapping exists only if
@@ -205,20 +211,27 @@ fn nearest_existing_ancestor(written: &Path) -> Result<PathBuf, String> {
     Err("no existing ancestor directory".to_string())
 }
 
-/// The repository a write into a since-removed linked worktree belongs to
-/// (`Ok(Some)`), `Ok(None)` when no worktree-origin record covers it, or why it
-/// cannot be determined (see the module docs).
-fn removed_worktree_repo(written: &Path, store: &Path) -> Result<Option<PathBuf>, String> {
+/// What the worktree-origin store says about a write whose directory is gone.
+enum Recorded {
+    /// No record covers the written path.
+    NoRecord,
+    /// The recorded worktree is gone; the write belongs to this repository.
+    Removed(PathBuf),
+    /// The recorded worktree (canonical) still exists: the write was into a
+    /// since-deleted subdirectory of a live checkout.
+    Live(PathBuf),
+}
+
+/// Consult the worktree-origin store for `written`, or say why it cannot be
+/// determined (see the module docs).
+fn removed_worktree_repo(written: &Path, store: &Path) -> Result<Recorded, String> {
     use crate::worktree_origin::{lookup, Lookup};
     let (worktree, repo) = match lookup(store, written)? {
-        Lookup::NoRecord => return Ok(None),
+        Lookup::NoRecord => return Ok(Recorded::NoRecord),
         Lookup::Found { worktree, repo } => (worktree, repo),
     };
     if worktree.exists() {
-        return Err(format!(
-            "the recorded worktree {} still exists, so this is not a removed worktree",
-            worktree.display()
-        ));
+        return Ok(Recorded::Live(worktree));
     }
     if !repo.is_dir() {
         return Err(format!(
@@ -228,7 +241,7 @@ fn removed_worktree_repo(written: &Path, store: &Path) -> Result<Option<PathBuf>
         ));
     }
     match toplevel(&repo) {
-        Ok(t) if t == repo => Ok(Some(repo)),
+        Ok(t) if t == repo => Ok(Recorded::Removed(repo)),
         Ok(t) => Err(format!(
             "the recorded repository {} is no longer a git toplevel (git reports {})",
             repo.display(),
@@ -236,6 +249,44 @@ fn removed_worktree_repo(written: &Path, store: &Path) -> Result<Option<PathBuf>
         )),
         Err(e) => Err(format!("the recorded repository {}: {e}", repo.display())),
     }
+}
+
+/// The git toplevel for a write into a deleted subdirectory of the live
+/// recorded (canonical) `worktree`: the nearest existing ancestor must
+/// canonicalize to a path inside `worktree` (a symlink escaping it is not
+/// followed), and git at that ancestor must name a toplevel. Every other
+/// outcome, including git reporting the ancestor outside every repository, is
+/// an error: the record says the path belongs to a checkout.
+fn live_worktree_toplevel(written: &Path, worktree: &Path) -> Result<PathBuf, String> {
+    let anc = nearest_existing_ancestor(written).map_err(|e| {
+        format!(
+            "it lies in the live recorded worktree {}, and {e}",
+            worktree.display()
+        )
+    })?;
+    let canon = std::fs::canonicalize(&anc).map_err(|e| {
+        format!(
+            "cannot canonicalize its nearest existing ancestor {}: {e}",
+            anc.display()
+        )
+    })?;
+    if !canon.starts_with(worktree) {
+        return Err(format!(
+            "its nearest existing ancestor {} resolves to {}, outside the live recorded \
+             worktree {}",
+            anc.display(),
+            canon.display(),
+            worktree.display()
+        ));
+    }
+    toplevel(&canon).map_err(|e| {
+        format!(
+            "it lies in the live recorded worktree {}, and its nearest existing ancestor {} \
+             cannot be judged: {e}",
+            worktree.display(),
+            anc.display()
+        )
+    })
 }
 
 /// Whether `dir` lies inside THIS session's Claude Code scratchpad:
@@ -329,17 +380,33 @@ pub fn resolve_with_store(
                     )
                 };
                 let why = match removed_worktree_repo(p, origin_store) {
-                    Ok(Some(repo)) => {
+                    Ok(Recorded::Removed(repo)) => {
                         if !roots.contains(&repo) {
                             roots.push(repo);
                         }
                         continue;
                     }
+                    // A deleted subdirectory of a live recorded worktree: git
+                    // at the nearest existing ancestor inside it names the root.
+                    Ok(Recorded::Live(wt)) => match live_worktree_toplevel(p, &wt) {
+                        Ok(t) => {
+                            if !checked_linked.contains(&t) {
+                                record_if_linked(&t, origin_store);
+                                checked_linked.push(t.clone());
+                            }
+                            if !roots.contains(&t) {
+                                roots.push(t);
+                            }
+                            continue;
+                        }
+                        Err(why) => why,
+                    },
                     // No record: judge the nearest existing ancestor (absolute
                     // paths only). Outside every repo -> excluded; inside a
                     // repo -> that repo is a root; anything else stays
                     // undetermined.
-                    Ok(None) if p.is_absolute() => match nearest_existing_ancestor(p) {
+                    Ok(Recorded::NoRecord) if p.is_absolute() => match nearest_existing_ancestor(p)
+                    {
                         Ok(anc) => match toplevel(&anc) {
                             Ok(t) => {
                                 if !checked_linked.contains(&t) {
@@ -360,7 +427,7 @@ pub fn resolve_with_store(
                         },
                         Err(e) => format!("{}, and {e}", no_record()),
                     },
-                    Ok(None) => no_record(),
+                    Ok(Recorded::NoRecord) => no_record(),
                     Err(why) => why,
                 };
                 first_unresolved.get_or_insert_with(|| {
@@ -585,16 +652,292 @@ mod tests {
         assert!(why.contains("no longer a git toplevel"), "{why}");
     }
 
+    // user ruling 2026-10-29: 直す — a deleted subdirectory of a still-live
+    // recorded worktree is no longer Undetermined. The nearest existing ancestor
+    // (inside the recorded worktree) is judged by git, and its toplevel is a root.
     #[test]
-    fn deleted_subdir_of_live_recorded_worktree_stays_undetermined() {
+    fn deleted_subdir_of_live_recorded_worktree_resolves_to_the_worktree() {
         let f = fixture();
         assert!(matches!(
             resolve_with_store(&f.repo, &f.transcript, &f.store),
             Determination::Known(_)
         ));
         std::fs::remove_dir_all(f.wt.join("src")).unwrap();
+        assert!(f.wt.is_dir());
+        match resolve_with_store(&f.repo, &f.transcript, &f.store) {
+            Determination::Known(sr) => {
+                assert!(
+                    sr.roots.contains(&std::fs::canonicalize(&f.wt).unwrap()),
+                    "{sr:?}"
+                );
+                assert!(
+                    sr.roots.contains(&std::fs::canonicalize(&f.repo).unwrap()),
+                    "{sr:?}"
+                );
+                assert!(sr.wrote_any);
+            }
+            Determination::Undetermined(w) => panic!("{}", w.as_str()),
+        }
+    }
+
+    /// Resolve once with everything present so the worktree-origin record for
+    /// `wt` is stored.
+    fn record_wt(f: &Fixture) {
+        assert!(matches!(
+            resolve_with_store(&f.repo, &f.transcript, &f.store),
+            Determination::Known(_)
+        ));
+        assert!(matches!(
+            crate::worktree_origin::lookup(&f.store, &f.wt.join("src").join("a.rs")).unwrap(),
+            crate::worktree_origin::Lookup::Found { .. }
+        ));
+    }
+
+    // Guard for the 2026-10-29 ruling: only NotFound continues the ancestor walk;
+    // a stat that fails with EACCES leaves the gone path's location unknown.
+    #[cfg(unix)]
+    #[test]
+    fn deleted_subdir_of_live_recorded_worktree_unstatable_is_undetermined() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = fixture();
+        record_wt(&f);
+        std::fs::remove_dir_all(f.wt.join("src")).unwrap();
+        std::fs::set_permissions(&f.wt, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let pre = std::fs::symlink_metadata(f.wt.join("src"));
+        if !matches!(pre, Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied) {
+            std::fs::set_permissions(&f.wt, std::fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!("skip: mode 000 does not deny stat here (root?): {pre:?}");
+            return;
+        }
+        let got = resolve_with_store(&f.repo, &f.transcript, &f.store);
+        std::fs::set_permissions(&f.wt, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let why = undetermined(got);
+        assert!(why.contains("a.rs"), "{why}");
+    }
+
+    // Guard for the 2026-10-29 ruling: a git failure at the ancestor (corrupt
+    // gitfile) is not a root and not excluded.
+    #[test]
+    fn deleted_subdir_of_live_recorded_worktree_with_broken_gitfile_is_undetermined() {
+        let f = fixture();
+        record_wt(&f);
+        std::fs::remove_dir_all(f.wt.join("src")).unwrap();
+        std::fs::write(f.wt.join(".git"), "gitdir: /nonexistent/x\n").unwrap();
         let why = undetermined(resolve_with_store(&f.repo, &f.transcript, &f.store));
-        assert!(why.contains("still exists"), "{why}");
+        assert!(why.contains("a.rs"), "{why}");
+    }
+
+    // Guard for the 2026-10-29 ruling: unlike the no-record branch, an ancestor
+    // of a recorded worktree that git places outside every repo is NOT excluded.
+    #[test]
+    fn deleted_subdir_of_live_recorded_worktree_outside_any_repo_is_undetermined() {
+        let f = fixture();
+        record_wt(&f);
+        std::fs::remove_dir_all(f.wt.join("src")).unwrap();
+        std::fs::remove_file(f.wt.join(".git")).unwrap();
+        let o = Command::new("git")
+            .arg("-C")
+            .arg(&f.wt)
+            .args(["rev-parse", "--show-toplevel"])
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_CEILING_DIRECTORIES")
+            .env_remove("GIT_DISCOVERY_ACROSS_FILESYSTEM")
+            .output()
+            .unwrap();
+        assert_eq!(o.status.code(), Some(128), "{o:?}");
+        assert!(
+            String::from_utf8_lossy(&o.stderr)
+                .contains("not a git repository (or any of the parent directories)"),
+            "{o:?}"
+        );
+        assert!(f.wt.is_dir());
+        let why = undetermined(resolve_with_store(&f.repo, &f.transcript, &f.store));
+        assert!(why.contains("a.rs"), "{why}");
+    }
+
+    // Guard for the 2026-10-29 ruling: an ancestor reached through a symlink that
+    // points outside the recorded worktree must not resolve to the symlink's
+    // target repo (`other`).
+    #[cfg(unix)]
+    #[test]
+    fn deleted_subdir_via_symlink_escaping_live_recorded_worktree_is_undetermined() {
+        let f = fixture();
+        record_wt(&f);
+        let base = f.repo.parent().unwrap().to_path_buf();
+        let other = base.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        git(&other, &["init", "-q"]);
+        git(
+            &other,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@e",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "i",
+            ],
+        );
+        std::fs::remove_dir_all(f.wt.join("src")).unwrap();
+        let link = f.wt.join("link");
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+        let written = link.join("gone").join("a.rs");
+        assert!(!written.parent().unwrap().exists());
+        // Precondition: the record covers the written path, and git at the
+        // ancestor would name `other` — so only an escape check makes this
+        // Undetermined.
+        assert!(matches!(
+            crate::worktree_origin::lookup(&f.store, &written).unwrap(),
+            crate::worktree_origin::Lookup::Found { .. }
+        ));
+        assert_eq!(
+            toplevel(&link).unwrap_or_else(|e| panic!("{e}")),
+            std::fs::canonicalize(&other).unwrap()
+        );
+        let line = serde_json::json!({
+            "message": {"role": "assistant", "content": [{
+                "type": "tool_use", "id": "toolu_2", "name": "Write",
+                "input": {"file_path": written.to_str().unwrap(), "content": "x"}
+            }]}
+        });
+        std::fs::write(&f.transcript, format!("{line}\n")).unwrap();
+        let why = undetermined(resolve_with_store(&f.repo, &f.transcript, &f.store));
+        assert!(why.contains("gone"), "{why}");
+    }
+
+    /// Replace the transcript with a single Write of `p`.
+    fn write_only(f: &Fixture, p: &Path) {
+        let line = serde_json::json!({
+            "message": {"role": "assistant", "content": [{
+                "type": "tool_use", "id": "toolu_k", "name": "Write",
+                "input": {"file_path": p.to_str().unwrap(), "content": "x"}
+            }]}
+        });
+        std::fs::write(&f.transcript, format!("{line}\n")).unwrap();
+    }
+
+    // Kill test for mutant A (a failed ancestor walk inside a live recorded
+    // worktree falls back to the worktree root). The worktree root stays
+    // readable, so git at the root would succeed; only the walk's EACCES on an
+    // ancestor below it keeps this Undetermined.
+    #[cfg(unix)]
+    #[test]
+    fn live_recorded_worktree_walk_failure_below_root_is_undetermined() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = fixture();
+        record_wt(&f);
+        let src = f.wt.join("src");
+        let written = src.join("sub").join("x.rs");
+        write_only(&f, &written);
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let pre = std::fs::symlink_metadata(src.join("sub"));
+        if !matches!(pre, Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied) {
+            std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!("skip: mode 000 does not deny stat here (root?): {pre:?}");
+            return;
+        }
+        // Precondition: the record covers the write, and the root itself is
+        // still judgeable by git (so a fallback to it would be Known).
+        assert!(matches!(
+            crate::worktree_origin::lookup(&f.store, &written).unwrap(),
+            crate::worktree_origin::Lookup::Found { .. }
+        ));
+        let root_ok = toplevel(&f.wt).is_ok();
+        let got = resolve_with_store(&f.repo, &f.transcript, &f.store);
+        std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(root_ok);
+        let why = undetermined(got);
+        assert!(why.contains("x.rs"), "{why}");
+        assert!(why.contains("cannot stat ancestor"), "{why}");
+    }
+
+    // Kill test for mutant B (a canonicalize failure on the found ancestor is
+    // swallowed). Reachable without a race: an ancestor reached through short
+    // relative symlinks stats fine (the kernel only ever holds the remaining
+    // path) while its canonical path exceeds PATH_MAX, so realpath fails with
+    // ENAMETOOLONG.
+    #[cfg(unix)]
+    #[test]
+    fn live_recorded_worktree_uncanonicalizable_ancestor_is_undetermined() {
+        let f = fixture();
+        record_wt(&f);
+        let mut access = f.wt.clone();
+        // One long component per hop: the kernel's buffer after a hop holds
+        // only the link text plus the short remaining tail. Stop once realpath
+        // fails, well under the symlink-hop limit (32 on macOS, 40 on Linux).
+        let mut k = 0;
+        while std::fs::canonicalize(&access).is_ok() {
+            assert!(k < 30, "canonical path never exceeded PATH_MAX");
+            let long = "a".repeat(250);
+            std::fs::create_dir(access.join(&long)).unwrap();
+            let s = format!("s{k}");
+            std::os::unix::fs::symlink(&long, access.join(&s)).unwrap();
+            access = access.join(s);
+            k += 1;
+        }
+        let anc = access.join("d");
+        std::fs::create_dir(&anc).unwrap();
+        let written = anc.join("gone").join("x.rs");
+        // Preconditions: the walk finds `anc` (a real directory), yet it cannot
+        // be canonicalized.
+        assert!(std::fs::symlink_metadata(&anc).unwrap().is_dir());
+        assert!(!written.parent().unwrap().exists());
+        assert_eq!(nearest_existing_ancestor(&written).unwrap(), anc);
+        let ce = std::fs::canonicalize(&anc).unwrap_err();
+        assert!(ce.to_string().contains("too long"), "{ce}");
+        assert!(matches!(
+            crate::worktree_origin::lookup(&f.store, &written).unwrap(),
+            crate::worktree_origin::Lookup::Found { .. }
+        ));
+        write_only(&f, &written);
+        let why = undetermined(resolve_with_store(&f.repo, &f.transcript, &f.store));
+        assert!(why.contains("x.rs"), "{why}");
+        assert!(why.contains("cannot canonicalize"), "{why}");
+    }
+
+    // Kill test for mutant E (the Live arm skips record_if_linked). A linked
+    // worktree nested inside the recorded one is not itself recorded; a write
+    // into a deleted subdirectory of it resolves through the Live arm, which
+    // must record the nested toplevel, as the other arms do.
+    #[test]
+    fn live_recorded_worktree_arm_records_the_resolved_toplevel() {
+        let f = fixture();
+        record_wt(&f);
+        let nested = f.wt.join("nested");
+        git(
+            &f.repo,
+            &["worktree", "add", "-q", "-b", "n", nested.to_str().unwrap()],
+        );
+        let written = nested.join("gone").join("x.rs");
+        assert!(!written.parent().unwrap().exists());
+        write_only(&f, &written);
+        // Precondition: before resolving, only the outer worktree covers it.
+        match crate::worktree_origin::lookup(&f.store, &written).unwrap() {
+            crate::worktree_origin::Lookup::Found { worktree, .. } => {
+                assert_eq!(worktree, f.wt)
+            }
+            other => panic!("expected the outer record: {other:?}"),
+        }
+        match resolve_with_store(&f.repo, &f.transcript, &f.store) {
+            Determination::Known(sr) => {
+                assert!(
+                    sr.roots.contains(&std::fs::canonicalize(&nested).unwrap()),
+                    "{sr:?}"
+                );
+            }
+            Determination::Undetermined(w) => panic!("{}", w.as_str()),
+        }
+        match crate::worktree_origin::lookup(&f.store, &written).unwrap() {
+            crate::worktree_origin::Lookup::Found { worktree, repo } => {
+                assert_eq!(worktree, nested);
+                assert_eq!(repo, f.repo);
+            }
+            other => panic!("nested worktree was not recorded: {other:?}"),
+        }
     }
 
     #[test]

@@ -558,11 +558,6 @@ pub struct SafeRoots {
     /// i.e. only by the recursive-`rm` arm (module doc, "Temp and cache
     /// roots"). Kept apart from `roots` for the same reason `worktree_roots` is.
     temp_roots: Vec<String>,
-    /// The members of `roots` that came from [`TEMP_ROOTS`] or `$TMPDIR`
-    /// (resolved exactly as `roots` is). A derived root (cwd / project) that
-    /// is the SAME directory counts as temp here too — the stricter reading.
-    /// Consulted only by [`SafeRoots::is_temp_safe_root`].
-    temp_safe_roots: Vec<String>,
     /// The CACHE deletion roots (`$HOME/.cache`, `$HOME/Library/Caches`), same
     /// discipline as `temp_roots`.
     cache_roots: Vec<String>,
@@ -601,7 +596,6 @@ impl SafeRoots {
             worktree_roots: Vec::new(),
             worktree_refusal: None,
             temp_roots: Vec::new(),
-            temp_safe_roots: Vec::new(),
             cache_roots: Vec::new(),
             home_real: None,
             git_tree_probe: None,
@@ -643,7 +637,6 @@ impl SafeRoots {
     ) -> SafeRoots {
         let home_norm = home.and_then(normalize_abs);
         let mut roots: Vec<String> = Vec::new();
-        let mut temp_safe_roots: Vec<String> = Vec::new();
         for derived in [cwd, project_dir].into_iter().flatten() {
             if let Some(norm) = normalize_abs(derived) {
                 if is_acceptable_derived_root(&norm, home_norm.as_deref()) {
@@ -656,8 +649,7 @@ impl SafeRoots {
                 // A temp root still may not be `/` or a system directory: a
                 // `TMPDIR=/usr` in the environment must not hand out `/usr`.
                 if !NEVER_A_ROOT.contains(&norm.as_str()) {
-                    push_root(&mut roots, norm.clone(), resolver);
-                    push_root(&mut temp_safe_roots, norm, resolver);
+                    push_root(&mut roots, norm, resolver);
                 }
             }
         }
@@ -710,7 +702,6 @@ impl SafeRoots {
             worktree_roots,
             worktree_refusal,
             temp_roots,
-            temp_safe_roots,
             cache_roots,
             home_real,
             git_tree_probe: None,
@@ -809,13 +800,6 @@ impl SafeRoots {
             .cloned()
             .collect();
         self.classify_disposable_in(&roots, "fixed temp", operand, cwd)
-    }
-
-    /// True when `root` (a root as [`SafeRoots::classify`] reports it) is one
-    /// of the TEMP safe roots (`/tmp`, `/var/tmp`, their `/private` twins,
-    /// `$TMPDIR`), including a derived root that is the same directory as one.
-    pub(crate) fn is_temp_safe_root(&self, root: &str) -> bool {
-        self.temp_safe_roots.iter().any(|r| r == root)
     }
 
     /// True ONLY when no directory from the parent of `real` up to `root`

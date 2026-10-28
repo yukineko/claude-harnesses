@@ -1,8 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Refusal guards for the "truncating redirect onto an EXISTING regular file under
-//! /tmp or /private/tmp is Allow" ruling: multi-link files, anything inside a git
-//! work tree / linked worktree, and a $TMPDIR outside the temp roots must stay
-//! non-Allow. c1 is the Allow control.
+//! /tmp or /private/tmp is Allow" ruling: multi-link files and a $TMPDIR outside
+//! the temp roots must stay non-Allow. c1 is the Allow control. (An untracked or
+//! gitignored file in a git tree under a temp root keeps its existing Allow, per
+//! the 2026-09-18 ruling; see the 2026-10-28 revert.)
 
 #[path = "support/neutral_base.rs"]
 mod neutral_base;
@@ -109,29 +110,6 @@ impl Fx {
         s
     }
 
-    fn git(&self, dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
-            .args([
-                "-c",
-                "commit.gpgsign=false",
-                "-c",
-                "init.defaultBranch=main",
-            ])
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env("HOME", &self.home)
-            .output()
-            .expect("git runs");
-        assert!(
-            out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-
     fn write(&self, p: &Path, body: &str) {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, body).unwrap();
@@ -176,46 +154,6 @@ fn h1_hardlink_to_file_outside_tmp_not_allow() {
     std::fs::hard_link(&outside, &link).unwrap();
     let out = f.run(&format!("echo a > {}", link.display()));
     assert_not_allow("h1", &out);
-}
-
-/// Repo under tmp with a committed `.gitignore` naming `ignored`; git holds none
-/// of the ignored files, so truncating one is NOT recoverable from git.
-fn ignored_repo(f: &Fx, ignored: &[&str]) -> PathBuf {
-    let repo = f.tmp.join("repo");
-    std::fs::create_dir_all(&repo).unwrap();
-    f.git(&repo, &["init", "-q"]);
-    f.write(&repo.join("tracked.txt"), "t\n");
-    f.write(
-        &repo.join(".gitignore"),
-        &format!("{}\n", ignored.join("\n")),
-    );
-    f.git(&repo, &["add", "tracked.txt", ".gitignore"]);
-    f.git(&repo, &["commit", "-q", "-m", "init"]);
-    repo
-}
-
-#[test]
-fn g1_gitignored_file_in_git_repo_under_tmp_not_allow() {
-    let f = Fx::new("g1");
-    let repo = ignored_repo(&f, &["notes.txt", "sub/deep.txt"]);
-    f.write(&repo.join("notes.txt"), "n\n");
-    f.write(&repo.join("sub/deep.txt"), "d\n");
-    let out = f.run(&format!("echo a > {}/notes.txt", repo.display()));
-    assert_not_allow("g1 top-level", &out);
-    let out = f.run(&format!("echo a > {}/sub/deep.txt", repo.display()));
-    assert_not_allow("g1 nested", &out);
-}
-
-#[test]
-fn g2_gitignored_file_in_linked_worktree_under_tmp_not_allow() {
-    let f = Fx::new("g2");
-    let repo = ignored_repo(&f, &["u.txt"]);
-    let wt = f.tmp.join("wt");
-    f.git(&repo, &["worktree", "add", "-q", wt.to_str().unwrap()]);
-    assert!(wt.join(".git").is_file(), "linked worktree has a .git FILE");
-    f.write(&wt.join("u.txt"), "u\n");
-    let out = f.run(&format!("echo a > {}/u.txt", wt.display()));
-    assert_not_allow("g2", &out);
 }
 
 #[test]

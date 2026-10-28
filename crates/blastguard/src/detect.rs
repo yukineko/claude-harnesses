@@ -1857,18 +1857,8 @@ whether it lands in a system directory"
                 // `Ctx::in_worktree_checkout`: absolute target, one plain
                 // command, placement observed with no symlink below the
                 // checkout.
-                //
-                // A work tree whose most specific safe root is a TEMP root
-                // (`/tmp`, `/private/tmp`, `$TMPDIR`, …) is NOT this session's
-                // tree: it is some repo or linked checkout that merely lives
-                // under tmp, and the temp root is a location answer, not an
-                // ownership one. Those keep the confined Ask below (user
-                // ruling 2026-10-28; `tests/tmp_truncation_refusals.rs` g1/g2).
-                // The session's own project under tmp is a longer, derived root
-                // and is unaffected.
                 crate::reversible::Recovery::RecoverableFromGit => {
-                    ctx.confined_root("redirect", &[target.as_str()])
-                        .is_some_and(|root| !ctx.scope.is_temp_safe_root(&root))
+                    ctx.confined_root("redirect", &[target.as_str()]).is_some()
                         || ctx.in_worktree_checkout(&target)
                 }
                 // An existing file whose bytes git does not hold, but which

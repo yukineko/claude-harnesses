@@ -27,3 +27,60 @@ exit 1: zjn12xs02k588nyw5txm0000gp/T/condukt-cc-pym.FC6g1P/repo\nplugins: anyio-
 extracted argv: ["pytest"]
 0 passed, 1 failed
 FAIL: extracted command is ["pytest"]; expected it to start with ["python3","-m","pytest"] and include scripts/x.py'''
+
+[[task]]
+id = "9451b280"
+title = "blastguard approve unit tests share a fixed temp dir; concurrent test runs clobber it"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+DEFECT: crates/blastguard/src/approve.rs:557-563 test helper store_dir(name) uses a FIXED path std::env::temp_dir()/blastguard-approve-unit/<name> and remove_dir_all's it first. Concurrent `cargo test -p blastguard --lib` processes sharing $TMPDIR (all worktrees share it; e.g. donegate Stop check in one worktree + an agent's run in another) clobber each other's store. Observed originally 2026-10-29 in worktree c5b9c02b-cd-ask: pending_is_not_an_approval_until_promoted failed `left: Undetermined(Undet(Reason("pending did not parse: EOF while parsing a value at line 1 column 0"))) right: Known("fp1")` at approve.rs:577; promote_consumes_the_pending_entry failed `Os { code: 2, kind: NotFound }` at approve.rs:584; neither reproduced in a single isolated run.
+
+REPRO: bash scripts/tests/blastguard-approve-unit-tmpdir-race.sh (committed 13afeb0c). Builds the lib test binary once, runs it N=16 x ROUNDS=5 concurrently with --exact on those two tests, all sharing TMPDIR=target/blastguard-approve-race-tmp. exit 1 = any run failed, 0 = all passed, 2 = undetermined (binary not built/located).
+
+RED EVIDENCE (rev 3e590f4791a6524b707ff63da015c246a26bed08 = main at time of filing, script at 13afeb0c, 2026-10-29 06:27 JST), verbatim excerpt:
+  --- FAILED run 5/13 ---
+  thread 'approve::tests::promote_consumes_the_pending_entry' (129701699) panicked at crates/blastguard/src/approve.rs:584:42:
+  called `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+  thread 'approve::tests::pending_is_not_an_approval_until_promoted' (129701698) panicked at crates/blastguard/src/approve.rs:575:55:
+  called `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+  --- FAILED run 5/10 ---
+  thread 'approve::tests::pending_is_not_an_approval_until_promoted' (129701689) panicked at crates/blastguard/src/approve.rs:576:9:
+    left: Approved
+   right: NotRecorded
+  --- FAILED run 5/14 ---
+  thread 'approve::tests::pending_is_not_an_approval_until_promoted' (129701702) panicked at crates/blastguard/src/approve.rs:577:9:
+    left: Undetermined(Undet(Reason("approval not writable: No such file or directory (os error 2)")))
+   right: Known("fp1")
+  FAIL: 59/80 concurrent runs failed (shared TMPDIR clobber)
+  (exit 1)
+CONTROL (same rev, same date): N=1 ROUNDS=5 (serial, same shared TMPDIR) -> `PASS: 5/5 concurrent runs passed`, exit 0.
+
+TWO READINGS and how to tell them apart:
+(a) test-fixture isolation defect (likely): the failures come from the fixed shared path + remove_dir_all in store_dir, i.e. process B deletes/overwrites process A's fixture dir mid-test. Discriminator: give each process a distinct TMPDIR (e.g. run the repro with a per-run TMPDIR, or make store_dir use a per-process/unique dir such as tempfile or pid+nonce) -> if 80/80 pass under concurrency, it is (a) only; fix = unique per-test dir, no Store change.
+(b) real Store concurrency bug: Store's put_pending/promote are not safe against concurrent writers on the SAME store dir (non-atomic write -> "EOF while parsing" on a partially written pending file; `left: Approved right: NotRecorded` = another process's promote leaking into this lookup). Discriminator: with unique per-process dirs, any remaining failure points at (b); separately, a test that has two threads/processes put_pending+promote on one store WITHOUT deleting the dir, and checks for parse errors / torn reads, isolates whether Store writes are atomic (temp+rename) — the "EOF while parsing a value at line 1 column 0" in the original observation is a truncated-file read, which a remove_dir_all race alone can also produce (file created then emptied by recreate), so it does not by itself decide (b).
+Note: the production Store is per-$HOME/session, so (b) matters only if concurrent hook processes can share one store dir; check that before fixing in Store.
+
+Do NOT weaken the repro: the fix is in the fixture (or Store), not N/ROUNDS."""
+created_at = 1793223213
+updated_at = 1793223213
+weight = 0.0
+issue_number = 1469
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1469"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/blastguard-approve-unit-tmpdir-race.sh"
+rev = "13afeb0c62453522481c8d3b235853ecd08fb85e"
+observed_at = 1793223213
+detail = """
+exit 1: test approve::tests::pending_is_not_an_approval_until_promoted ... FAILED
+thread 'approve::tests::pending_is_not_an_approval_until_promoted' (129757985) panicked at crates/blastguard/src/approve.rs:576:9:
+  left: Approved
+ right: NotRecorded
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 394 filtered out; finished in 0.00s
+FAIL: 67/80 concurrent runs failed (shared TMPDIR clobber)"""

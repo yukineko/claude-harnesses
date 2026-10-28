@@ -1,6 +1,6 @@
 # webqa
 
-Playwright による Web QA を Claude Code の Stop ゲートとして強制するプラグイン（v0.1.3）。
+Playwright による Web QA を Claude Code の Stop ゲートとして強制するプラグイン（v0.1.6）。
 `gate`（Stop hook）・`trust`・`weaken-check`・skill `webqa-gen` がすべて実装・同梱済み。
 
 | サブコマンド | 内容 |
@@ -83,7 +83,9 @@ spec 名なら検査する（spec から非 spec 名へのリネームで回避�
 `2` = 判定不能（diff ファイルが読めない、空でない入力にパース可能な diff ヘッダが無い、
 `git diff --cached` の起動失敗・非 0 終了、spec の binary diff、評価不能な timeout 式の追加
 （識別子・括弧式・演算子始まり・空など。リテラルの置換でも、何も削除しない新規追加でも — 既定 30000 ms を
-超えうるため。`setTimeout(` のコールバックだけは timeout とみなさない））。判定不能を 0 に写さない。
+超えうるため。`setTimeout(` のコールバックだけは timeout とみなさない）、評価不能な timeout 式の削除
+（何も追加しない場合も、リテラルに置換する場合も — 削除された値が不明なので、置換後の値や既定 30000 ms の方が
+大きい可能性がある））。判定不能を 0 に写さない。
 
 ## skill: webqa-gen
 

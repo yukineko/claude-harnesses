@@ -410,6 +410,20 @@ fn check_timeouts(f: &FileDiff, out: &mut Vec<Finding>) -> Result<(), String> {
             f.path
         ));
     }
+    // A removed timeout we cannot evaluate has an unknown value: whatever
+    // replaces it (a literal, or the 30 s default when nothing is added) may
+    // be larger, so the comparison is undetermined either way.
+    if let Some(Timeout::Opaque(e)) = rem_t.iter().find(|t| matches!(t, Timeout::Opaque(_))) {
+        let what = if add_t.is_empty() {
+            format!("is removed (no timeout added, so it reverts to the {DEFAULT_TIMEOUT_MS} ms default)")
+        } else {
+            "is replaced by a literal timeout".to_string()
+        };
+        return Err(format!(
+            "{}: timeout expression `{e}` {what} and its removed value cannot be evaluated",
+            f.path
+        ));
+    }
     let raised = match (rv.iter().max(), av.iter().max()) {
         (Some(r), Some(a)) if a > r => {
             Some(format!("timeout raised {} -> {}", show_ms(*r), show_ms(*a)))

@@ -1,6 +1,6 @@
 # webqa
 
-Claude Code plugin enforcing Playwright-based web QA on Stop (v0.1.3).
+Claude Code plugin enforcing Playwright-based web QA on Stop (v0.1.6).
 
 - `webqa gate` — Stop hook. Reads `webqa.toml` from the project root (`git rev-parse
   --show-toplevel` of the hook cwd; outside any repository the cwd itself), maps the files touched
@@ -38,7 +38,9 @@ Claude Code plugin enforcing Playwright-based web QA on Stop (v0.1.3).
   Exit 0 clean, 1 findings (one stdout line per finding with path and rule id), 2 undetermined
   (unreadable file, unparseable input, git failure, binary diff of a spec, any non-evaluable
   added timeout expression — identifier, parenthesized, operator-leading or empty — whether it
-  replaces a literal or is added with none removed (it may exceed the 30000 ms default);
+  replaces a literal or is added with none removed (it may exceed the 30000 ms default), and any
+  non-evaluable removed timeout expression, whether nothing or a literal is added in its place (its
+  value is unknown, so the replacement or the 30000 ms default may be larger);
   only a `setTimeout(` callback is not treated as a timeout). Errors never map to 0.
 - `webqa-gen` skill — shipped (`skills/webqa-gen/SKILL.md`): spec/URL -> browser exploration ->
   test-first Playwright spec -> RED observation -> adoption.

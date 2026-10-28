@@ -1,6 +1,6 @@
 {
   "name": "webqa",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Web QA gate for Claude Code: blocks a Stop until Playwright specs for changed web code pass, and detects test-weakening edits to Playwright specs.",
   "author": {
     "name": "yukineko"

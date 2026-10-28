@@ -62298,3 +62298,62 @@ scripts/test_rollout_origin_lag.py ..                                    [100%]
 rev = "5aa7a3cf02c91af98a16a8d4e3c7363d238b6041"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "1fd5a731"
+title = "blastguard reads backtick prose inside a quoted heredoc body as a redirect target"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1793031974
+updated_at = 1793196589
+weight = 0.0
+issue_number = 1466
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1466"
+issue_closed_at = 1793196593
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_quoted_body_doc_comment_backtick -- --ignored"
+rev = "8176bc17ef2ff9b6fb2ae1b0d6fa11d3d46a90e4"
+observed_at = 1793031974
+detail = """
+exit 101: t: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.23s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/heredoc_quoted_body_doc_comment_backtick.rs (target/debug/deps/heredoc_quoted_body_doc_comment_backtick-417dcc6ee00ee467)
+error: test failed, to rerun pass `-p blastguard --test heredoc_quoted_body_doc_comment_backtick`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test heredoc_quoted_body_doc_comment_backtick -- --include-ignored"
+exit = 0
+passed = 3
+rev = "92c8cd0f20420120a5e3cabb32109ce5f55e1829"
+observed_at = 1793196575
+output_digest = "sha256:3fb393e745fd9c2a30741a658689e0e2ad5d19751672211989cddcbac63162fb"
+excerpt = """
+
+running 3 tests
+test control_real_unquoted_expansion_redirect_outside_heredoc_is_blocking ... ok
+test control_plain_body_baseline_does_not_cite_body_text ... ok
+test quoted_heredoc_body_doc_comment_backtick_is_not_a_redirect_target ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/heredoc_quoted_body_doc_comment_backtick.rs (target/debug/deps/heredoc_quoted_body_doc_comment_backtick-e4bb11bd0344d20c)
+"""
+
+[task.closure.red]
+rev = "5aa7a3cf02c91af98a16a8d4e3c7363d238b6041"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/blastguard/tests/heredoc_quoted_body_doc_comment_backtick.rs"]

@@ -209,14 +209,23 @@ fn redirect_target_undeterminable(target: &str, base: Option<&str>) -> bool {
 impl<'a> Ctx<'a> {
     /// The context for a segment at the start of a command line: no `cd` seen
     /// yet, so both bases are the session's own working directory.
+    ///
+    /// Each eligibility predicate is read on the whole `command` and, when the
+    /// line is `cd D && REST` with `D` a literal, existing, absolute directory
+    /// tied to `REST` by `&&` alone ([`literal_cd_and_rest`]), ALSO on `REST`;
+    /// either acceptance makes the line eligible. The second reading only
+    /// removes the tying `cd` from the text the predicate sees — `REST`'s
+    /// relative operands are still judged at `D/<operand>`.
     fn new(scope: &'a SafeRoots, command: &str) -> Ctx<'a> {
+        let tied_rest = literal_cd_and_rest(scope, command);
+        let eligible = |pred: fn(&str) -> bool| pred(command) || tied_rest.is_some_and(pred);
         Ctx {
             scope,
             rewritten_base: scope.session_cwd(),
             raw_base: scope.session_cwd().map(str::to_string),
-            worktree_rm_eligible: worktree_rm_eligible(command),
-            deletion_rm_eligible: deletion_rm_eligible(command),
-            checkout_exempt_eligible: checkout_exempt_eligible(command),
+            worktree_rm_eligible: eligible(worktree_rm_eligible),
+            deletion_rm_eligible: eligible(deletion_rm_eligible),
+            checkout_exempt_eligible: eligible(checkout_exempt_eligible),
             program_text_redirects: None,
         }
     }
@@ -238,6 +247,11 @@ impl<'a> Ctx<'a> {
     /// is this analysis' model of the cwd, and a cwd change it does not model
     /// (`env -C`, `git -C`, a `cd` that fails) would place a main-tree file
     /// inside a checkout. An absolute operand's placement depends on no base.
+    /// (After a `cd D &&` that [`literal_cd_and_rest`] accepts, a relative
+    /// redirect target, and a relative operand of the verbs the cwd walk
+    /// rewrites ([`verb_targets`]), reach here already re-expressed as the
+    /// absolute `D/<operand>`; any other relative operand is still relative
+    /// and still refused by the check below.)
     /// The placement (symlinks included) is observed at JUDGE time; that is
     /// why the whole line must be one plain command — see
     /// [`checkout_exempt_eligible`].
@@ -1847,8 +1861,18 @@ whether it lands in a system directory"
                     ctx.confined_root("redirect", &[target.as_str()]).is_some()
                         || ctx.in_worktree_checkout(&target)
                 }
-                // Unrecoverable / Undetermined keep falling through, per
-                // CLAUDE.md §3.
+                // An existing file whose bytes git does not hold, but which
+                // sits in a fixed temp root (`/tmp`, `/private/tmp`; never
+                // `$TMPDIR`) outside any git tree: disposable work (user ruling
+                // 2026-10-28: a truncating redirect inside /private/tmp is
+                // recoverable work and must not ask). Only for a fully
+                // determined placement — see `temp_disposable_redirect_target`;
+                // and never when where it really lands could not be determined.
+                crate::reversible::Recovery::Unrecoverable(_) => {
+                    landing_undetermined.is_none() && temp_disposable_redirect_target(&target, ctx)
+                }
+                // Undetermined keeps falling through, per CLAUDE.md §3, and so
+                // does every Unrecoverable target the arm above refuses.
                 _ => false,
             };
             if runs_unattended {
@@ -2510,6 +2534,62 @@ fn place_redirect_target(
         ))),
         CwdState::Unknown => Err(target),
     }
+}
+
+/// True ONLY when a truncating-redirect `target` (already placed by
+/// [`place_redirect_target`]) names an existing file whose truncation is
+/// disposable temp work (user ruling 2026-10-28): ALL of
+///   * no glob meta and no shell expansion in the spelling;
+///   * no path component is exactly `.git`, in the spelling or in the real
+///     path, and the normalised spelling is not a protected path
+///     ([`exclude::is_protected_path`]; the caller has already refused those,
+///     this re-check keeps the rule closed on its own);
+///   * [`SafeRoots::classify_temp`] places it `Inside` a FIXED temp root
+///     (the real `/tmp` or `/private/tmp` — never `$TMPDIR`, never a cache
+///     root, never the root itself), which also refuses a residual `..`,
+///     any symlink between the root and the target (the target included) and a
+///     non-canonical payload cwd;
+///   * no directory from the target's real parent up to that root holds a
+///     `.git` entry ([`SafeRoots::no_git_entry_up_to`]; any IO error answers
+///     false), so a file inside a git work tree or git dir under tmp keeps the
+///     verdict it had before this rule;
+///   * its real path is an existing regular file with exactly one hard link
+///     ([`SafeRoots::is_single_link_regular_file`]): a second link would let
+///     the truncation destroy bytes under a name outside the root.
+///
+/// Every other answer — including every `Undetermined` — is `false`, and the
+/// caller keeps the verdict it had before this rule (the confined Ask or the
+/// Deny). There is no default that answers `true`.
+fn temp_disposable_redirect_target(target: &str, ctx: &Ctx<'_>) -> bool {
+    if has_glob_meta(target) || has_unresolvable_expansion(target) {
+        return false;
+    }
+    let has_git_component = |p: &str| p.split('/').any(|c| c == ".git");
+    if has_git_component(target) || exclude::is_protected_path(&exclude::normalize(target)) {
+        return false;
+    }
+    let Determination::Known(Placement::Inside { root, .. }) =
+        ctx.scope.classify_temp(target, ctx.raw_base.as_deref())
+    else {
+        return false;
+    };
+    let absolute = if target.starts_with('/') {
+        exclude::normalize(target)
+    } else {
+        match ctx.raw_base.as_deref() {
+            Some(base) if base.starts_with('/') => {
+                exclude::normalize(&format!("{}/{target}", base.trim_end_matches('/')))
+            }
+            _ => return false,
+        }
+    };
+    let Some(real) = ctx.scope.resolve(&absolute) else {
+        return false;
+    };
+    !has_git_component(&real)
+        && !exclude::is_protected_path(&real)
+        && ctx.scope.no_git_entry_up_to(&real, &root)
+        && ctx.scope.is_single_link_regular_file(&real)
 }
 
 /// The Ask for a relative redirect target [`place_redirect_target`] could not
@@ -3388,7 +3468,10 @@ fn interpreter_program_body_segments(cmd: &str) -> Vec<bool> {
 ///     backtick, a single here-document with a plain delimiter
 ///     ([`plain_here_document_delimiter`]) and a data-only consumer
 ///     ([`here_document_consumer_is_data`]: `cat`, `tee` to data files,
-///     `git commit -F -`, with output redirects only to data files);
+///     `git commit -F -`, with output redirects only to data files). The opener
+///     line may begin with `cd <literal path> && ` ([`opener_consumer`]), the
+///     same-line spelling of a permitted `cd` line before it; the consumer
+///     check then reads the part after the `&&`;
 ///   * the body is CLOSED by an exact delimiter line
 ///     ([`segment_closes_here_document`]);
 ///   * the delimiter is quoted, OR the body contains no `$`, backtick or
@@ -3501,7 +3584,7 @@ fn strip_here_document_body(cmd: &str, targets: OutputTargets) -> std::borrow::C
         || openers[0].delimiter.is_empty()
         || opener_line.contains(['$', '`'])
         || !quotes_balance(&opener_line)
-        || !here_document_consumer_is_data(&opener_line, targets)
+        || !here_document_consumer_is_data(opener_consumer(&opener_line), targets)
     {
         return unchanged;
     }
@@ -3529,6 +3612,31 @@ fn strip_here_document_body(cmd: &str, targets: OutputTargets) -> std::borrow::C
     let mut out: String = lines[..=idx].concat();
     out.push_str(&lines[close..].concat());
     std::borrow::Cow::Owned(out)
+}
+
+/// The part of the opener line [`here_document_consumer_is_data`] judges: the
+/// whole line, or — when the line is `cd <literal path> && <rest>` and the
+/// `cd <literal path>` part is accepted by [`permitted_prefix_line`] —
+/// `<rest>`. `cd X && cat <<'EOF'` is the same-line spelling of a permitted
+/// `cd X` line before the opener (and a stricter one: a failed `cd` skips the
+/// reader instead of running it in the old directory), so its body is data
+/// exactly when the body of `cat <<'EOF'` is. Only that one shape is split; any
+/// other prefix leaves the whole line, which the consumer check then refuses
+/// (`&` is shell syntax there). The opener line itself — `cd` included — stays
+/// in the command, so the cwd walk and every redirect rule still see it.
+fn opener_consumer(line: &str) -> &str {
+    let Some((head, rest)) = line.split_once("&&") else {
+        return line;
+    };
+    let starts_with_cd = head
+        .split([' ', '\t'])
+        .find(|w| !w.is_empty())
+        .is_some_and(|w| w == "cd");
+    if starts_with_cd && permitted_prefix_line(head) {
+        rest
+    } else {
+        line
+    }
 }
 
 /// True when `line` has no unterminated `'` or `"` quote.
@@ -8729,6 +8837,13 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
 ///
 /// Over-matching only withholds the exemption, which is the restrictive
 /// direction: the protected-path rule then applies exactly as before.
+///
+/// [`Ctx::new`] ALSO evaluates this on `REST` alone for a line `cd D && REST`
+/// accepted by [`literal_cd_and_rest`]: a `cd` neither creates, links nor moves
+/// anything, and `&&` guarantees `REST` runs only in `D`, so `REST` is still
+/// the one plain command that mutates the tree. Its relative targets have been
+/// placed at `D/<target>` by then, so [`Ctx::in_worktree_checkout`] still sees
+/// only absolute paths.
 fn checkout_exempt_eligible(command: &str) -> bool {
     if command.trim().is_empty() {
         return true;
@@ -8754,6 +8869,70 @@ const CHECKOUT_EXEMPT_VERBS: &[&str] = &[
     "install", "echo", "printf", "cat", "sort", "uniq", "touch", "truncate",
 ];
 
+/// The command `REST` of a line `cd D && REST` whose `cd` provably ties `REST`
+/// to the directory `D`, or `None`.
+///
+/// `cd D && CMD` used to be judged stricter than `CMD` with its relative
+/// operands written as `D/<operand>`: the three whole-command eligibility
+/// predicates ([`worktree_rm_eligible`], [`deletion_rm_eligible`],
+/// [`checkout_exempt_eligible`]) refuse a relative operand whenever ANY `cd` is
+/// on the line, because with `;`, `||`, `|` or `&` a `cd` may fail or run in a
+/// different shell while the later command still runs in the ORIGINAL cwd (see
+/// the cd rule of [`worktree_rm_eligible`]). With `&&` alone neither can
+/// happen: a failed `cd` aborts the rest, and nothing runs in another shell.
+/// For exactly that shape [`Ctx::new`] also evaluates the three predicates on
+/// `REST` alone — `REST`'s relative operands have already been re-expressed as
+/// `D/<operand>` by the cwd walk ([`advance_cwd_and_rewrite`],
+/// [`place_redirect_target`]) by the time any per-operand rule judges them, so
+/// the verdict is the one the absolute spelling gets. Each predicate still has
+/// to accept `REST` on its own terms; this only removes the `cd` from the text
+/// they read.
+///
+/// `Some(REST)` only when ALL of these hold; anything else is `None` and every
+/// predicate reads the whole line exactly as before:
+///   * the line starts with exactly `cd `, then one word `D`, then `&&`, then a
+///     non-empty `REST` (no leading spaces, no `cd` option, no `cd -`, no
+///     second `cd` operand);
+///   * `D` is absolute (starts with `/`) and every character is a Unicode
+///     alphanumeric or one of `/ . _ - + , @ %` — no quote, `$`, backtick,
+///     glob, `~`, brace, escape or separator — and no component of `D` is
+///     exactly `.` or `..` (the cwd walk collapses those lexically, the kernel
+///     physically);
+///   * `D` resolves, through the injected resolver, to an existing real
+///     directory ([`SafeRoots::resolves_to_existing_dir`]; no resolver = `None`);
+///   * `REST` contains no `;`, `|`, newline, carriage return or `..`, and every
+///     `&` in it is part of an `&&` (so `2>&1`, `&>` and a trailing `&` also
+///     answer `None`). Every command of `REST` therefore runs only after the
+///     `cd` succeeded, in the same shell, in `D`.
+///
+/// Over-matching here would be a weakening, so every rule is a refusal: an
+/// unusual-but-harmless spelling simply keeps its old (stricter) verdict.
+fn literal_cd_and_rest<'c>(scope: &SafeRoots, command: &'c str) -> Option<&'c str> {
+    let after_cd = command.strip_prefix("cd ")?;
+    let (dir, after_dir) = after_cd.split_once(' ')?;
+    let rest = after_dir.trim_start_matches(' ').strip_prefix("&&")?;
+    let rest = rest.trim_start_matches(' ');
+    let dir_char_ok =
+        |c: char| c.is_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | '+' | ',' | '@' | '%');
+    if !dir.starts_with('/')
+        || !dir.chars().all(dir_char_ok)
+        || dir.split('/').any(|c| c == "." || c == "..")
+    {
+        return None;
+    }
+    if rest.trim().is_empty()
+        || rest.contains([';', '|', '\n', '\r'])
+        || rest.contains("..")
+        || rest.replace("&&", "").contains('&')
+    {
+        return None;
+    }
+    if !scope.resolves_to_existing_dir(dir) {
+        return None;
+    }
+    Some(rest)
+}
+
 /// Whole-command precondition for the worktree-storage `Allow` (backlog
 /// 873651b9, second pass).
 ///
@@ -8778,7 +8957,12 @@ const CHECKOUT_EXEMPT_VERBS: &[&str] = &[
 ///     [`rm_words_are_flags_then_absolute`]) or an ABSOLUTE path (starts with
 ///     `/`). A relative `rm` operand is eligible only in a command with no
 ///     `cd` at all, where it is judged against the payload cwd — which is the
-///     runtime cwd;
+///     runtime cwd. ONE exception lives in [`Ctx::new`], not here: for a line
+///     `cd D && REST` that [`literal_cd_and_rest`] accepts (literal, existing,
+///     absolute `D` with no `.`/`..`, tied to `REST` by `&&` only), this
+///     function is ALSO evaluated on `REST` alone, so `REST`'s relative `rm`
+///     operands — already rewritten to `D/<operand>` by the cwd walk — are
+///     eligible exactly as their absolute spelling is;
 ///   * THE `..` RULE: no word of any `rm` segment after `rm` (option or
 ///     operand) has a component that is exactly `..` ([`has_dotdot_component`]:
 ///     `..`, `../x`, `a/../b`, `a/..`, `--opt=../x`). `cd` words are not
@@ -8808,8 +8992,10 @@ const CHECKOUT_EXEMPT_VERBS: &[&str] = &[
 /// run `rm` after a FAILED `cd`, and `cd X | rm -rf src` runs each side in its
 /// own subshell. In every one of them `rm` deletes `<original cwd>/src`, which
 /// was never judged. An absolute operand names the same path whatever the cwd
-/// is, so it is immune to all four separators and to a failing `cd`. The rule
-/// does not try to tell `&&` apart from the others: blunt and closed wins.
+/// is, so it is immune to all four separators and to a failing `cd`. This
+/// function does not try to tell `&&` apart from the others: blunt and closed
+/// wins. The `&&`-only literal-directory shape is recognised separately and
+/// strictly by [`literal_cd_and_rest`] (see the exception under THE cd RULE).
 ///
 /// What this function actually guarantees, and nothing more: neither `rm` nor
 /// `cd` can create, link or move a path, so no segment of an eligible command
@@ -8892,6 +9078,11 @@ fn worktree_rm_eligible(command: &str) -> bool {
 ///     list would never see).
 ///
 /// Anything else is `false`, and the rm arm keeps its pre-existing verdict.
+///
+/// Like [`worktree_rm_eligible`], [`Ctx::new`] ALSO evaluates this on `REST`
+/// alone for a line `cd D && REST` accepted by [`literal_cd_and_rest`], so a
+/// relative `rm` operand there (already rewritten to `D/<operand>`) is eligible
+/// exactly as its absolute spelling is.
 fn deletion_rm_eligible(command: &str) -> bool {
     if !worktree_rm_eligible(command) {
         return false;
@@ -15800,11 +15991,13 @@ and must not be Allowed: {failing:?}"
             format!("rm -rf -- {}/a", f.tmp),
             format!("rm -rf - {}/a", f.tmp),
             format!("rm -rf {}/a 2>/dev/null", f.tmp),
-            format!("cd {} && rm -rf a", f.tmp),
             format!("rm -rf \"{}/a\"", f.tmp),
         ] {
             assert_ne!(verdict_name(&f.run(&cmd)), "allow", "{cmd}");
         }
+        // User ruling 2026-10-28: cd <literal safe root> && rm -rf <relative> must match the absolute spelling.
+        let cd_rel = format!("cd {} && rm -rf a", f.tmp);
+        assert_eq!(f.run(&cd_rel), Decision::Allow, "{cd_rel}");
         // `.` relative spelling, cwd in the temp root.
         let dot = detect_scoped(
             "Bash",

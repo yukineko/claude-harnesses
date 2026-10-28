@@ -1548,8 +1548,9 @@ run_canary() {
 # certifying an outcome it did not achieve. So the gate runs here and its
 # rollout-class verdict becomes this script's exit code.
 #
-# Only rc=1 (ROLLOUT class) is fatal. rc=2 (a plugin is not enabled) and rc=3 (an
-# unreadable plugin.json) are real problems with real remedies, but neither is a
+# Only rc=1 (ROLLOUT class) is fatal. rc=2 (a plugin is not enabled), rc=3 (an
+# unreadable plugin.json) and rc=8 (a source version ahead of origin, or origin
+# unreadable: fixed by a push) are real problems with real remedies, but none is a
 # remedy a rollout can perform, so failing on them would block this script on
 # something it cannot fix. They are printed in full instead.
 verify_rollout_complete() {
@@ -1606,8 +1607,9 @@ verify_rollout_complete() {
       ;;
     *)
       echo >&2
-      echo "rollout: the check exited $rc — not a rollout-class failure (enablement, or" >&2
-      echo "         an unreadable plugin.json), which a rollout cannot fix. Reported," >&2
+      echo "rollout: the check exited $rc — not a rollout-class failure (enablement, an" >&2
+      echo "         unreadable plugin.json, or a version ahead of origin that must be" >&2
+      echo "         pushed), which a rollout cannot fix. Reported," >&2
       echo "         not fatal here." >&2
       return 0
       ;;

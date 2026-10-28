@@ -278,6 +278,18 @@ truncating-redirect arm; `src/reversible.rs` `probe`):
    (deny headless); anything else, including a probe that did not answer, →
    `deny`.
 
+Since 0.2.150 (backlog 1fd5a731) the `>` and `>>` scans do not read the body
+of a **quoted-delimiter** here-document (`<<'EOF'`, `<<"EOF"`, `<<\EOF`) that is
+effectively the whole command and is fed to `cat`, `tee` or `git commit -F -`
+(no `|`, `;` or `&`, a closed body, only blank or comment lines after it),
+whatever file the opener writes to. The shell never runs a redirect in that
+body, so `cat > src/x.rs <<'EOF'` whose body holds `/// corrupt => \`Err\`` is no
+longer denied as ``> `Err` ``. The opener's own target is still judged by the
+steps above, and every other rule still reads the body. An unquoted delimiter,
+an unterminated body, an interpreter or shell reader, or any command after the
+here-document keeps the body in the scan, as before
+(`redirect_view_without_quoted_here_document_body` in `src/detect.rs`).
+
 Measured on the 0.2.108 debug build (2026-10-14): `echo hi > existing.txt` on
 an untracked file in the session's git repo → allow; the same to an existing
 file under `/tmp` outside any repo → `ask` (interactive) / `deny` (headless).

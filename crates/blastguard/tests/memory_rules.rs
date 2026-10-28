@@ -9,8 +9,11 @@
 //!    disappears from the stored text -> Ask. Single-quoted stays Allow.
 //! 2. `git checkout -- <file>` on a file with uncommitted changes destroys
 //!    them -> blocked; a clean file stays Allow; undeterminable -> blocked.
-//! 3. GitHub Actions is banned: `gh run ...` / `gh workflow ...` -> Deny;
-//!    `gh pr ...` / `gh issue ...` stay Allow.
+//! 3. GitHub Actions is banned IN claude-harnesses (its CLAUDE.md §7), not in
+//!    every repository: `gh run ...` / `gh workflow ...` aimed at that
+//!    repository (a remote of the cwd's repo, `-R`/`--repo`, or `GH_REPO`) ->
+//!    Deny; aimed at any other repository -> Allow; target undeterminable ->
+//!    Deny. `gh pr ...` / `gh issue ...` stay Allow.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -178,13 +181,14 @@ fn rule2_git_checkout_of_a_dirty_file_is_blocked_clean_file_allowed() {
 #[test]
 fn rule3_github_actions_commands_are_denied_pr_and_issue_allowed() {
     let f = Fx::new("r3");
-    for cmd in [
-        "gh run list",
-        "gh run watch 123",
-        "gh run view 123 --log",
-        "gh workflow run ci.yml",
-        "gh workflow list",
-    ] {
+    f.git(&["init", "-q", "-b", "main"]);
+    f.git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/yukineko/claude-harnesses.git",
+    ]);
+    for cmd in GH_ACTIONS_CMDS {
         let out = f.run(cmd);
         assert_eq!(decision(&out), "deny", "`{cmd}` must Deny; got {out:?}");
     }
@@ -195,5 +199,99 @@ fn rule3_github_actions_commands_are_denied_pr_and_issue_allowed() {
             "allow",
             "`{cmd}` must stay Allow; got {out:?}"
         );
+    }
+}
+
+const GH_ACTIONS_CMDS: [&str; 5] = [
+    "gh run list",
+    "gh run watch 123",
+    "gh run view 123 --log",
+    "gh workflow run ci.yml",
+    "gh workflow list",
+];
+
+#[test]
+fn rule3_github_actions_commands_are_allowed_in_other_repositories() {
+    let f = Fx::new("r3-other");
+    f.git(&["init", "-q", "-b", "main"]);
+    f.git(&[
+        "remote",
+        "add",
+        "origin",
+        "git@github.com:Org/medipartner_transaction.git",
+    ]);
+    for cmd in GH_ACTIONS_CMDS {
+        let out = f.run(cmd);
+        assert_eq!(decision(&out), "allow", "`{cmd}` must Allow; got {out:?}");
+    }
+    // Another repository named explicitly is not claude-harnesses either.
+    let out = f.run("gh run list -R someone/other-repo");
+    assert_eq!(decision(&out), "allow", "got {out:?}");
+}
+
+#[test]
+fn rule3_not_a_git_repository_is_not_claude_harnesses() {
+    let f = Fx::new("r3-nogit");
+    let out = f.run("gh run list");
+    assert_eq!(decision(&out), "allow", "got {out:?}");
+}
+
+#[test]
+fn rule3_claude_harnesses_reached_any_way_is_denied() {
+    // gh may resolve to any remote, not just origin.
+    let g = Fx::new("r3-upstream");
+    g.git(&["init", "-q", "-b", "main"]);
+    g.git(&["remote", "add", "origin", "https://github.com/me/fork.git"]);
+    g.git(&[
+        "remote",
+        "add",
+        "upstream",
+        "git@github.com:yukineko/Claude-Harnesses",
+    ]);
+    let out = g.run("gh run list");
+    assert_eq!(decision(&out), "deny", "upstream remote; got {out:?}");
+
+    let f = Fx::new("r3-named");
+    f.git(&["init", "-q", "-b", "main"]);
+    f.git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/Org/medipartner_transaction.git",
+    ]);
+    for cmd in [
+        "gh run list -R yukineko/claude-harnesses",
+        "gh run list --repo yukineko/claude-harnesses",
+        "gh run list --repo=github.com/yukineko/claude-harnesses",
+        "gh -R yukineko/claude-harnesses workflow list",
+        "GH_REPO=yukineko/claude-harnesses gh run list",
+        "export GH_REPO=yukineko/claude-harnesses; gh run list",
+    ] {
+        let out = f.run(cmd);
+        assert_eq!(decision(&out), "deny", "`{cmd}` must Deny; got {out:?}");
+    }
+    // A `cd` into claude-harnesses earlier on the line moves where gh runs.
+    let cmd = format!("cd {} && gh run list", g.repo.display());
+    let out = f.run(&cmd);
+    assert_eq!(decision(&out), "deny", "`{cmd}` must Deny; got {out:?}");
+}
+
+#[test]
+fn rule3_undeterminable_repository_is_denied() {
+    let f = Fx::new("r3-undet");
+    f.git(&["init", "-q", "-b", "main"]);
+    f.git(&[
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/Org/medipartner_transaction.git",
+    ]);
+    for cmd in [
+        "gh run list -R \"$R\"",
+        "gh run list --repo \"$(cat r)\"",
+        "gh run list -R",
+    ] {
+        let out = f.run(cmd);
+        assert_eq!(decision(&out), "deny", "`{cmd}` must Deny; got {out:?}");
     }
 }

@@ -532,6 +532,7 @@ fn safe_roots(input: &HookInput) -> SafeRoots {
         Some(real_path),
     )
     .with_git_tree_probe(blastguard::reversible::probe_tree)
+    .with_gh_remote_probe(blastguard::reversible::probe_gh_remotes)
 }
 
 /// Resolve `path` to its real path — symlinked components included — WITHOUT

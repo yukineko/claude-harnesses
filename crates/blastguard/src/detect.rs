@@ -177,6 +177,12 @@ struct Ctx<'a> {
     /// but it cannot be shown NOT to be one, so it is never cleared to Allow.
     /// `None` everywhere else: an ordinary command line keeps today's Deny.
     program_text_redirects: Option<&'a std::cell::RefCell<Vec<String>>>,
+    /// Whether the TOP-LEVEL command line mentions `GH_REPO` anywhere. A
+    /// `GH_REPO` set by an earlier segment (`export GH_REPO=...; gh ...`) is not
+    /// visible to the segment that runs `gh`, so [`analyze_gh`] treats any
+    /// mention as "the target repository cannot be told". Computed once in
+    /// [`Ctx::new`], carried unchanged into derived contexts.
+    mentions_gh_repo: bool,
 }
 
 /// Marker every Ask produced under the user's 2026-10-14 rulings R1/R2 carries
@@ -218,6 +224,7 @@ impl<'a> Ctx<'a> {
             deletion_rm_eligible: deletion_rm_eligible(command),
             checkout_exempt_eligible: checkout_exempt_eligible(command),
             program_text_redirects: None,
+            mentions_gh_repo: command.contains("GH_REPO"),
         }
     }
 
@@ -272,6 +279,7 @@ impl<'a> Ctx<'a> {
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
             program_text_redirects: self.program_text_redirects,
+            mentions_gh_repo: self.mentions_gh_repo,
         }
     }
 
@@ -288,6 +296,7 @@ impl<'a> Ctx<'a> {
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
             program_text_redirects: self.program_text_redirects,
+            mentions_gh_repo: self.mentions_gh_repo,
         }
     }
 
@@ -7977,7 +7986,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         // scan for the `\;` form without depending on where the split fell.
         "-exec" | "-execdir" | "-ok" | "-okdir" => analyze_find(&tokens[idx..], depth, ctx),
         "rm" => analyze_rm(rest, ctx),
-        "gh" => analyze_gh(rest),
+        "gh" => analyze_gh(rest, ctx),
         "git" => {
             // daf7611b: `git -c core.pager="rm -rf ~/x" log` — command-valued
             // config set for this one command. Either side's Deny wins.
@@ -9371,12 +9380,15 @@ them first.",
     ))
 }
 
-/// GitHub Actions is banned in this repository: every `gh run …` and
-/// `gh workflow …` is denied. Other `gh` subcommands (`pr`, `issue`, …) are not
-/// this rule's concern.
-fn analyze_gh(rest: &[&str]) -> Decision {
-    // `-R/--repo <owner/repo>` is the one value-taking flag that may precede
-    // the subcommand; skip its value so it is not read as the subcommand.
+/// GitHub Actions is banned in the claude-harnesses repository (its CLAUDE.md
+/// §7) — and only there: other repositories may use it on purpose. A
+/// `gh run …` / `gh workflow …` is denied when the repository it acts on is
+/// claude-harnesses (an explicit `-R`/`--repo`, else any git remote of the
+/// directory it runs in, or an inherited `GH_REPO`), and also when that
+/// repository cannot be told (a shell-expanded `-R`, `GH_REPO` on the command
+/// line, unknown cwd, a failed probe) — the restrictive side, §3. Other `gh`
+/// subcommands (`pr`, `issue`, …) are not this rule's concern.
+fn analyze_gh(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     let mut i = 0;
     while i < rest.len() {
         let t = rest[i];
@@ -9390,12 +9402,111 @@ fn analyze_gh(rest: &[&str]) -> Decision {
         }
         break;
     }
-    match rest.get(i).map(|t| normalized_command(t)) {
-        Some(sub) if sub == "run" || sub == "workflow" => Decision::deny(format!(
-            "`gh {sub}` operates GitHub Actions, which is banned in this repository"
-        )),
-        _ => Decision::Allow,
+    let sub = match rest.get(i).map(|t| normalized_command(t)) {
+        Some(sub) if sub == "run" || sub == "workflow" => sub,
+        _ => return Decision::Allow,
+    };
+    let banned = || {
+        Decision::deny(format!(
+            "`gh {sub}` operates GitHub Actions, which is banned in the claude-harnesses repository"
+        ))
+    };
+    let unknown = |why: &str| {
+        Decision::deny(format!(
+            "`gh {sub}` operates GitHub Actions, which is banned in the claude-harnesses \
+repository, and which repository this one acts on cannot be told ({why})"
+        ))
+    };
+    if ctx.mentions_gh_repo {
+        return unknown("the command line sets GH_REPO");
     }
+    match gh_repo_flag(rest) {
+        GhRepoFlag::Named(repo) => {
+            return if names_claude_harnesses(&repo) {
+                banned()
+            } else {
+                Decision::Allow
+            };
+        }
+        GhRepoFlag::Unknown(why) => return unknown(why),
+        GhRepoFlag::Absent => {}
+    }
+    let Some(dir) = ctx.raw_base.as_deref() else {
+        return unknown("the working directory is not known");
+    };
+    let Some(probe) = ctx.scope.gh_remote_probe() else {
+        return unknown("no remote probe is attached");
+    };
+    match probe(dir) {
+        Determination::Known(urls) => {
+            if urls.iter().any(|u| names_claude_harnesses(u)) {
+                banned()
+            } else {
+                Decision::Allow
+            }
+        }
+        Determination::Undetermined(u) => unknown(u.as_str()),
+    }
+}
+
+/// The `-R`/`--repo` a `gh` invocation names, anywhere among its arguments.
+enum GhRepoFlag {
+    Absent,
+    Named(String),
+    Unknown(&'static str),
+}
+
+fn gh_repo_flag(rest: &[&str]) -> GhRepoFlag {
+    let mut found = GhRepoFlag::Absent;
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        let value = if t == "-R" || t == "--repo" {
+            i += 1;
+            match rest.get(i) {
+                Some(v) => Some(*v),
+                None => return GhRepoFlag::Unknown("`-R` has no value"),
+            }
+        } else if let Some(v) = t.strip_prefix("--repo=") {
+            Some(v)
+        } else if let Some(v) = t.strip_prefix("-R").filter(|v| !v.is_empty()) {
+            Some(v.strip_prefix('=').unwrap_or(v))
+        } else {
+            None
+        };
+        if let Some(v) = value {
+            if v.contains('$') || v.contains('`') {
+                return GhRepoFlag::Unknown("the `-R` value is a shell expansion");
+            }
+            let plain = v.trim_matches(|c| c == '"' || c == '\'');
+            if plain.is_empty() {
+                return GhRepoFlag::Unknown("the `-R` value is empty");
+            }
+            // A repeated flag: the last one wins in gh, but any one naming
+            // claude-harnesses is enough to refuse.
+            match &found {
+                GhRepoFlag::Named(prev) if names_claude_harnesses(prev) => {}
+                _ => found = GhRepoFlag::Named(plain.to_string()),
+            }
+        }
+        i += 1;
+    }
+    found
+}
+
+/// Whether a repository reference — `OWNER/REPO`, `HOST/OWNER/REPO`, an
+/// https or ssh remote URL — names the claude-harnesses repository (by its
+/// repository name, any owner, case-insensitive, `.git` and trailing `/`
+/// ignored).
+fn names_claude_harnesses(reference: &str) -> bool {
+    let r = reference.trim().trim_end_matches('/');
+    let r = if r.len() >= 4 && r[r.len() - 4..].eq_ignore_ascii_case(".git") {
+        &r[..r.len() - 4]
+    } else {
+        r
+    };
+    let name = r.rsplit(['/', ':']).next().unwrap_or(r);
+    name.eq_ignore_ascii_case("claude-harnesses")
 }
 
 /// A backtick inside a DOUBLE-quoted argument of `backlog add|edit` or

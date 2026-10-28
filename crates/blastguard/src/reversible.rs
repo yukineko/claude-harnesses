@@ -568,6 +568,55 @@ pub(crate) fn probe_tree_with(
     })
 }
 
+/// "Which GitHub repositories could `gh` act on from directory `dir`?" — the
+/// injected probe behind the claude-harnesses-only GitHub Actions ban
+/// ([`crate::scope::SafeRoots::with_gh_remote_probe`]). Answers every remote
+/// URL of the repository containing `dir` (gh may resolve to any remote, not
+/// only `origin`) plus the `GH_REPO` the hook inherited, if any.
+pub type GhRemoteProbe = fn(&str) -> Determination<Vec<String>>;
+
+/// The wired [`GhRemoteProbe`]. `Known(empty)` when `dir` is not inside a git
+/// repository or the repository has no remotes; `Undetermined` — which the
+/// caller reads as "may be claude-harnesses" — when git fails, times out or
+/// prints something unparseable. Bounded by [`TREE_GIT_TIMEOUT`].
+pub fn probe_gh_remotes(dir: &str) -> Determination<Vec<String>> {
+    probe_gh_remotes_with(std::ffi::OsStr::new("git"), dir)
+}
+
+/// [`probe_gh_remotes`] with the `git` program named explicitly — the seam for
+/// failure-mode tests. Production always passes `git`.
+pub(crate) fn probe_gh_remotes_with(
+    git: &std::ffi::OsStr,
+    dir: &str,
+) -> Determination<Vec<String>> {
+    let mut urls = Vec::new();
+    if let Ok(v) = std::env::var("GH_REPO") {
+        if !v.trim().is_empty() {
+            urls.push(v);
+        }
+    }
+    // `config --get-regexp` exits 1 when nothing matches: outside a repository
+    // (only global/system config is read) or a repository with no remotes.
+    let out = match run_tree_git(
+        tree_git(git, Path::new(dir), false).args(["config", "--get-regexp", r"^remote\..*\.url$"]),
+        &[0, 1],
+    ) {
+        Determination::Known((_, stdout)) => stdout,
+        Determination::Undetermined(u) => return Determination::Undetermined(u),
+    };
+    for line in out.lines().filter(|l| !l.trim().is_empty()) {
+        match line.split_once(' ') {
+            Some((_, url)) => urls.push(url.trim().to_string()),
+            None => {
+                return Determination::undetermined(format!(
+                    "unexpected `git config --get-regexp` line {line:?}"
+                ))
+            }
+        }
+    }
+    Determination::known(urls)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

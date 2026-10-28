@@ -577,6 +577,12 @@ pub struct SafeRoots {
     /// `None` (always for [`SafeRoots::none`]) means no operand is ever placed
     /// inside a checkout.
     checkout_probe: Option<CheckoutProbe>,
+    /// The remote probe behind the claude-harnesses-only GitHub Actions ban
+    /// (`detect::analyze_gh`). `None` (the default, and always for
+    /// [`SafeRoots::none`]) means the target repository of a cwd-relative
+    /// `gh run`/`gh workflow` is unknown, which that rule reads as Deny. Set
+    /// only by the hook binary through [`SafeRoots::with_gh_remote_probe`].
+    gh_remote_probe: Option<crate::reversible::GhRemoteProbe>,
 }
 
 impl SafeRoots {
@@ -599,6 +605,7 @@ impl SafeRoots {
             cache_roots: Vec::new(),
             home_real: None,
             git_tree_probe: None,
+            gh_remote_probe: None,
             checkout_probe: None,
         }
     }
@@ -705,6 +712,7 @@ impl SafeRoots {
             cache_roots,
             home_real,
             git_tree_probe: None,
+            gh_remote_probe: None,
             checkout_probe: resolver.map(|_| is_linked_checkout as CheckoutProbe),
         }
     }
@@ -717,6 +725,21 @@ impl SafeRoots {
     pub fn with_git_tree_probe(mut self, probe: crate::reversible::GitTreeProbe) -> SafeRoots {
         self.git_tree_probe = Some(probe);
         self
+    }
+
+    /// Attach the remote probe the GitHub Actions rule needs to tell whether a
+    /// `gh run`/`gh workflow` would act on claude-harnesses. Only the hook
+    /// binary does this; without it every such command without an explicit
+    /// `-R` is denied.
+    #[must_use]
+    pub fn with_gh_remote_probe(mut self, probe: crate::reversible::GhRemoteProbe) -> SafeRoots {
+        self.gh_remote_probe = Some(probe);
+        self
+    }
+
+    /// The attached remote probe, if any.
+    pub(crate) fn gh_remote_probe(&self) -> Option<crate::reversible::GhRemoteProbe> {
+        self.gh_remote_probe
     }
 
     /// The attached git work-tree probe, if any.

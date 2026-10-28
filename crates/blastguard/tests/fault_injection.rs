@@ -12,6 +12,9 @@
 //! Needs `harness-core = { path = "../harness-core", features =
 //! ["fault-injection"] }` under blastguard's `[dev-dependencies]`.
 
+#[path = "support/git_env.rs"]
+mod git_env;
+
 use blastguard::approve::{command_key, Store};
 use harness_core::degrade::assert_fails_closed;
 
@@ -46,7 +49,7 @@ fn blind_boundary_never_leaves_a_recoverability_probe_permissive() {
     use std::process::Command;
     let repo = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| {
-        let st = Command::new("git")
+        let st = git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(repo.path())
             .status()

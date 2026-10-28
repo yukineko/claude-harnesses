@@ -7,6 +7,8 @@
 //! spelling alone. `g*` cases are fail-closed guards: undeterminable or
 //! non-tying input must never be Allow.
 
+#[path = "support/git_env.rs"]
+mod git_env;
 #[path = "support/neutral_base.rs"]
 mod neutral_base;
 
@@ -25,7 +27,7 @@ enum V {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_AUTHOR_NAME", "t")
@@ -113,7 +115,8 @@ impl Fx {
         })
         .to_string();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_blastguard"));
-        cmd.stdin(Stdio::piped())
+        git_env::scrub(&mut cmd)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("CLAUDE_PROJECT_DIR", cwd)
@@ -434,4 +437,89 @@ fn g6_cd_cat_redirect_onto_protected_path_matches_no_cd() {
         "cd <wt> && redirect onto protected path must NOT be Allow"
     );
     assert_eq!(with_cd, plain, "cd form must match no-cd form");
+}
+
+// ---- fixture isolation: inherited GIT_* must not reach the repo under test ------
+
+const GIT_ENV: [&str; 6] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+];
+
+/// Plain git call with every inherited `GIT_*` repo-locating variable removed;
+/// returns stdout. Independent of the `git` helper under test.
+fn clean_git(dir: &Path, args: &[&str]) -> String {
+    let mut c = Command::new("git");
+    c.args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com");
+    for k in GIT_ENV {
+        c.env_remove(k);
+    }
+    let out = c.output().expect("git runs");
+    assert!(
+        out.status.success(),
+        "clean git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn repo_state(outer: &Path) -> String {
+    format!(
+        "HEAD={}\nbranches:\n{}\nworktrees:\n{}",
+        clean_git(outer, &["rev-parse", "HEAD"]).trim(),
+        clean_git(outer, &["branch", "--list"]),
+        clean_git(outer, &["worktree", "list", "--porcelain"]),
+    )
+}
+
+/// The fixture's `git` helper must not follow an inherited `GIT_DIR` (as set
+/// when the suite runs under a git hook): the fixture repo is under the
+/// fixture base, never whatever repo the environment points at. The child
+/// re-runs one existing `Fx::new` test with `GIT_DIR` aimed at a scratch outer
+/// repo; that outer repo must come back unchanged.
+#[test]
+fn fixture_git_ignores_inherited_git_dir() {
+    let nonce = SEQ.fetch_add(1, Ordering::SeqCst);
+    let outer = neutral_base::neutral_base()
+        .join("cd_and_chain_equivalence")
+        .join(format!("gitenv-outer-{}-{nonce}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&outer);
+    std::fs::create_dir_all(&outer).unwrap();
+    clean_git(&outer, &["init", "-q"]);
+    std::fs::write(outer.join("f.txt"), "o\n").unwrap();
+    clean_git(&outer, &["add", "f.txt"]);
+    clean_git(&outer, &["commit", "-q", "-m", "outer"]);
+    let before = repo_state(&outer);
+
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "c3_repo_absolute_form_allow", "--test-threads=1"])
+        .env("GIT_DIR", outer.join(".git"))
+        .output()
+        .expect("child test binary runs");
+
+    let after = repo_state(&outer);
+    assert_eq!(
+        before,
+        after,
+        "outer repo was mutated by the fixture git helper following inherited GIT_DIR.\n\
+         --- before ---\n{before}\n--- after ---\n{after}\n\
+         --- child stdout ---\n{}\n--- child stderr ---\n{}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+    assert!(
+        child.status.success(),
+        "child test run failed: {:?}\n{}",
+        child.status,
+        String::from_utf8_lossy(&child.stderr)
+    );
 }

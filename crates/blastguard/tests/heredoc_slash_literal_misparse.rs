@@ -21,6 +21,9 @@
 //! End-to-end against the built binary, same harness as
 //! `heredoc_quoted_body_redirect_false_positive.rs`.
 
+#[path = "support/git_env.rs"]
+mod git_env;
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -32,7 +35,7 @@ fn verdict(command: &str) -> (String, String) {
         "tool_input": { "command": command },
     })
     .to_string();
-    let mut child = Command::new(bin)
+    let mut child = git_env::scrub(&mut Command::new(bin))
         .env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .env_remove("CLAUDE_CODE_SESSION_ID")
@@ -77,7 +80,7 @@ fn repo_tests_dir(tag: &str) -> String {
     let tests = root.join("crates/backlog/tests");
     std::fs::create_dir_all(&tests).unwrap();
     std::fs::write(tests.join("cancel_evidence.rs"), "// x\n").unwrap();
-    let st = Command::new("git")
+    let st = git_env::scrub(&mut Command::new("git"))
         .arg("init")
         .arg("-q")
         .arg(&root)

@@ -25,6 +25,8 @@
 //! a second identical Deny into Ask (still not Allow, but it would blur what
 //! the assertions observe).
 
+#[path = "support/git_env.rs"]
+mod git_env;
 #[path = "support/neutral_base.rs"]
 mod neutral_base;
 
@@ -43,7 +45,7 @@ enum V {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_AUTHOR_NAME", "t")
@@ -133,7 +135,8 @@ impl Fx {
         })
         .to_string();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_blastguard"));
-        cmd.stdin(Stdio::piped())
+        git_env::scrub(&mut cmd)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("CLAUDE_PROJECT_DIR", &self.proj)

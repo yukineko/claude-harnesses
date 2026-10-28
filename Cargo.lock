@@ -1665,10 +1665,11 @@ dependencies = [
 
 [[package]]
 name = "webqa"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
+ "globset",
  "harness-core",
  "serde",
  "serde_json",

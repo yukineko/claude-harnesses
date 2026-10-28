@@ -60,7 +60,7 @@ pub fn run(diff_file: Option<&Path>) -> Outcome {
 pub fn is_spec_path(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     ["spec", "test"].iter().any(|k| {
-        ["ts", "js", "tsx", "mjs"]
+        ["ts", "js", "tsx", "jsx", "mjs", "mts", "cjs", "cts"]
             .iter()
             .any(|e| name.ends_with(&format!(".{k}.{e}")))
     })
@@ -73,7 +73,11 @@ struct Hunk {
 }
 
 struct FileDiff {
+    /// Post-image path (what the finding is reported against).
     path: String,
+    /// Pre-image path (differs from `path` on a rename).
+    old_path: String,
+    binary: bool,
     hunks: Vec<Hunk>,
 }
 
@@ -83,9 +87,14 @@ fn parse(text: &str) -> Vec<FileDiff> {
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("diff --git ") {
             in_hunk = false;
-            let path = rest.rsplit_once(" b/").map(|(_, b)| b).unwrap_or(rest);
+            let (old, new) = match rest.rsplit_once(" b/") {
+                Some((a, b)) => (a.strip_prefix("a/").unwrap_or(a), b),
+                None => (rest, rest),
+            };
             files.push(FileDiff {
-                path: path.trim_matches('"').to_string(),
+                path: new.trim_matches('"').to_string(),
+                old_path: old.trim_matches('"').to_string(),
+                binary: false,
                 hunks: Vec::new(),
             });
             continue;
@@ -101,6 +110,14 @@ fn parse(text: &str) -> Vec<FileDiff> {
         if !in_hunk {
             if let Some(p) = line.strip_prefix("+++ b/") {
                 cur.path = p.to_string();
+            } else if let Some(p) = line.strip_prefix("--- a/") {
+                cur.old_path = p.to_string();
+            } else if let Some(p) = line.strip_prefix("rename from ") {
+                cur.old_path = p.to_string();
+            } else if let Some(p) = line.strip_prefix("rename to ") {
+                cur.path = p.to_string();
+            } else if line.starts_with("Binary files ") || line.starts_with("GIT binary patch") {
+                cur.binary = true;
             }
             continue;
         }
@@ -128,9 +145,21 @@ pub fn check_diff(text: &str) -> Outcome {
         );
     }
     let mut findings = Vec::new();
-    for f in files.iter().filter(|f| is_spec_path(&f.path)) {
+    for f in files
+        .iter()
+        .filter(|f| is_spec_path(&f.path) || is_spec_path(&f.old_path))
+    {
+        if f.binary {
+            return Outcome::Undetermined(format!(
+                "binary diff of spec file {}; its content cannot be inspected",
+                f.path
+            ));
+        }
         for h in &f.hunks {
             check_hunk(&f.path, h, &mut findings);
+        }
+        if let Err(why) = check_timeouts(f, &mut findings) {
+            return Outcome::Undetermined(why);
         }
     }
     if findings.is_empty() {
@@ -140,25 +169,100 @@ pub fn check_diff(text: &str) -> Outcome {
     }
 }
 
-/// Numbers following `timeout:` or `setTimeout(` on a line.
-fn timeouts(line: &str) -> Vec<u64> {
+/// One timeout expression found on a line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Timeout {
+    /// Evaluated value (integer literal or product of integer literals).
+    Value(u64),
+    /// An expression we cannot evaluate (identifier, sum, overflow, ...).
+    Opaque(String),
+}
+
+/// Evaluate `123`, `60_000`, `60 * 1000`; anything else is `None`.
+fn eval_product(expr: &str) -> Option<u64> {
+    let mut acc: u64 = 1;
+    for factor in expr.split('*') {
+        let f: String = factor.trim().chars().filter(|c| *c != '_').collect();
+        if f.is_empty() || !f.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        acc = acc.checked_mul(f.parse::<u64>().ok()?)?;
+    }
+    Some(acc)
+}
+
+/// Timeout expressions following `timeout:` or `setTimeout(` on a line.
+fn timeouts(line: &str) -> Vec<Timeout> {
     let mut out = Vec::new();
     for key in ["timeout:", "setTimeout("] {
         let mut rest = line;
         while let Some(i) = rest.find(key) {
             rest = &rest[i + key.len()..];
-            let digits: String = rest
-                .trim_start()
-                .chars()
-                .take_while(|c| c.is_ascii_digit() || *c == '_')
-                .filter(|c| *c != '_')
-                .collect();
-            if let Ok(n) = digits.parse::<u64>() {
-                out.push(n);
+            let end = rest.find([',', ')', '}', ';']).unwrap_or(rest.len());
+            let expr = rest[..end].trim();
+            match eval_product(expr) {
+                Some(n) => out.push(Timeout::Value(n)),
+                // A callback body (`setTimeout(() => ...`) is not a test timeout.
+                None if expr.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$') => {
+                    out.push(Timeout::Opaque(expr.to_string()))
+                }
+                None => {}
             }
         }
     }
     out
+}
+
+/// Playwright's default per-test timeout.
+const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+
+/// File-level timeout comparison across all hunks. `Err` = cannot determine.
+fn check_timeouts(f: &FileDiff, out: &mut Vec<Finding>) -> Result<(), String> {
+    let removed: Vec<&String> = f.hunks.iter().flat_map(|h| &h.removed).collect();
+    let added: Vec<&String> = f.hunks.iter().flat_map(|h| &h.added).collect();
+    // Lines identical on both sides merely moved.
+    let rem_t: Vec<Timeout> = removed
+        .iter()
+        .filter(|l| !added.iter().any(|a| a.trim() == l.trim()))
+        .flat_map(|l| timeouts(l))
+        .collect();
+    let add_t: Vec<Timeout> = added
+        .iter()
+        .filter(|l| !removed.iter().any(|r| r.trim() == l.trim()))
+        .flat_map(|l| timeouts(l))
+        .collect();
+    let vals = |v: &[Timeout]| -> Vec<u64> {
+        v.iter()
+            .filter_map(|t| match t {
+                Timeout::Value(n) => Some(*n),
+                Timeout::Opaque(_) => None,
+            })
+            .collect()
+    };
+    let (rv, av) = (vals(&rem_t), vals(&add_t));
+    if let Some(Timeout::Opaque(e)) = add_t.iter().find(|t| matches!(t, Timeout::Opaque(_))) {
+        if !rv.is_empty() {
+            return Err(format!(
+                "{}: timeout expression `{e}` replaces a literal timeout and cannot be evaluated",
+                f.path
+            ));
+        }
+    }
+    let raised = match (rv.iter().max(), av.iter().max()) {
+        (Some(r), Some(a)) if a > r => Some(format!("timeout raised {r} -> {a}")),
+        (None, Some(a)) if *a > DEFAULT_TIMEOUT_MS => Some(format!(
+            "timeout {a} added (above the {DEFAULT_TIMEOUT_MS} ms default) with none removed"
+        )),
+        _ => None,
+    };
+    if let Some(detail) = raised {
+        out.push(Finding {
+            path: f.path.clone(),
+            rule: "timeout-raised",
+            detail,
+        });
+    }
+    Ok(())
 }
 
 fn count(lines: &[String], needle: &str) -> usize {
@@ -207,14 +311,6 @@ fn check_hunk(path: &str, h: &Hunk, out: &mut Vec<Finding>) {
                 exp_r, exp_a
             ),
         );
-    }
-
-    let rem_t: Vec<u64> = h.removed.iter().flat_map(|l| timeouts(l)).collect();
-    let add_t: Vec<u64> = h.added.iter().flat_map(|l| timeouts(l)).collect();
-    if let (Some(r), Some(a)) = (rem_t.iter().max(), add_t.iter().max()) {
-        if a > r {
-            push("timeout-raised", format!("timeout raised {r} -> {a}"));
-        }
     }
 
     if h.removed.iter().any(|l| l.contains("expect(")) {

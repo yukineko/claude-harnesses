@@ -703,6 +703,20 @@ or disarms it, so it refuses to guess"
     }
 }
 
+/// GitHub Actions workflow configuration requires explicit user request. Writes to
+/// files under `.github/workflows/` are always considered GHA configuration, whether
+/// they create new workflows, modify existing ones, or target paths like `.github/workflows/new.yml`.
+fn github_actions_workflow_ask(action: &str, path: &str) -> Option<Decision> {
+    if path.contains(".github/workflows/") {
+        Some(Decision::ask(format!(
+            "{action} targets a GitHub Actions workflow file ({path}) — GHA \
+configuration requires explicit user request"
+        )))
+    } else {
+        None
+    }
+}
+
 /// Deny reason for a write that lands in a SYSTEM directory, or `None` when the
 /// target is elsewhere.
 ///
@@ -1348,6 +1362,9 @@ fn detect_write(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
     if let Some(deny) = protected_path_block(ctx, "Write", &path) {
         return deny;
     }
+    if let Some(ask) = github_actions_workflow_ask("Write", &path) {
+        return ask;
+    }
     if exclude::is_config_file(&path) {
         return Decision::Allow;
     }
@@ -1380,6 +1397,9 @@ fn detect_edit(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
     };
     if let Some(deny) = protected_path_block(ctx, "Edit", &path) {
         return deny;
+    }
+    if let Some(ask) = github_actions_workflow_ask("Edit", &path) {
+        return ask;
     }
     Decision::Allow
 }
@@ -1765,12 +1785,20 @@ primitive, not a filesystem path",
                 if let Some(deny) = protected_path_block(ctx, "redirect", &raw) {
                     return deny;
                 }
+                if let Some(ask) = github_actions_workflow_ask("Bash redirect", &raw) {
+                    line_level_asks.push(ask);
+                    continue;
+                }
                 line_level_asks.push(unplaceable_redirect_ask(">", &raw));
                 continue;
             }
         };
         if let Some(deny) = protected_path_block(ctx, "redirect", &target) {
             return deny;
+        }
+        if let Some(ask) = github_actions_workflow_ask("Bash redirect", &target) {
+            line_level_asks.push(ask);
+            continue;
         }
         if !redirect_target_is_safe(&target, ctx) {
             // SYSTEM-DIRECTORY axis, checked BEFORE recoverability for the same
@@ -1983,12 +2011,20 @@ does not parse that body, but blastguard cannot show the program does not use it
                 if let Some(deny) = protected_path_block(ctx, "append redirect", &raw) {
                     return deny;
                 }
+                if let Some(ask) = github_actions_workflow_ask("Bash redirect", &raw) {
+                    line_level_asks.push(ask);
+                    continue;
+                }
                 line_level_asks.push(unplaceable_redirect_ask(">>", &raw));
                 continue;
             }
         };
         if let Some(deny) = protected_path_block(ctx, "append redirect", &target) {
             return deny;
+        }
+        if let Some(ask) = github_actions_workflow_ask("Bash redirect", &target) {
+            line_level_asks.push(ask);
+            continue;
         }
         // The system-directory axis does not care about the truncate/append
         // distinction either: `>>` is how a `paths.d` entry or an
@@ -8355,6 +8391,13 @@ analyse — it cannot tell what this would do, so it refuses to guess"
             {
                 return deny;
             }
+            // GITHUB ACTIONS WORKFLOWS: tee writes to .github/workflows/ should Ask
+            if let Some(ask) = targets
+                .iter()
+                .find_map(|t| github_actions_workflow_ask("tee command", t))
+            {
+                return ask;
+            }
             // SYSTEM DIRECTORY next, and BEFORE recoverability — the probe
             // answers `NothingToDestroy` for a path that does not exist yet,
             // which is the correct answer to the question it was asked and the
@@ -9407,11 +9450,17 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
         if let Some(deny) = protected_glob_deny(&action, &dir) {
             return deny;
         }
+        if let Some(ask) = github_actions_workflow_ask(cmd, &dir) {
+            return ask;
+        }
         let base = dir.trim_end_matches('/');
         for src in sources {
             let landed = format!("{base}/{}", basename(src));
             if let Some(deny) = protected_path_block(ctx, &action, &landed) {
                 return deny;
+            }
+            if let Some(ask) = github_actions_workflow_ask(cmd, &landed) {
+                return ask;
             }
         }
         // SYSTEM-DIRECTORY axis, after the protected one (the redirect rule's
@@ -9432,6 +9481,7 @@ path — blastguard cannot tell what it expands to, and mv unlinks it, so it ref
     match operands.last() {
         Some(dest) => protected_path_block(ctx, &action, dest)
             .or_else(|| protected_glob_deny(&action, dest))
+            .or_else(|| github_actions_workflow_ask(cmd, dest))
             .or_else(|| system_path_block(&action, dest, ctx))
             .unwrap_or(Decision::Allow),
         // One operand or none: nothing is being written over (`cp a` is an
@@ -9637,17 +9687,36 @@ them first.",
     ))
 }
 
-/// GitHub Actions is banned in this repository: every `gh run …` and
-/// `gh workflow …` is denied. Other `gh` subcommands (`pr`, `issue`, …) are not
-/// this rule's concern.
+/// Analyze `gh` commands: read-only operations Allow, remote-mutating Ask,
+/// undeterminable Ask (fail-closed). Never Deny.
+///
+/// Classification by spec (user ruling 2026-10-29):
+/// - R (read-only): `list|view|status|diff|checks|watch|download` subcommands, plus
+///   special cases `search`, `auth status`, `help`, `--version`, `config get|list`,
+///   `extension list`, `browse`, `repo clone`. → Allow
+/// - M (mutating): `create|merge|close|comment|edit|review|delete|fork|login|logout`
+///   subcommands, and `gh api` with POST/PUT/PATCH/DELETE or field flags without GET.
+///   → Ask, reason names what changes
+/// - G (GitHub Actions observation): `gh run list|view|watch|download`, `gh workflow list|view`,
+///   `gh cache list`, `gh api GET /actions/…`. → Allow
+/// - G (GHA execution/config): `gh workflow run|enable|disable`, `gh run rerun|cancel|delete`,
+///   `gh cache delete`, `gh secret|variable set|delete`, `gh api` mutating `/actions/`.
+///   → Ask with "explicit user request" reason
+/// - W (workflow files): `.github/workflows/` edits (handled elsewhere; sets Ask)
+/// - U (undeterminable): unknown group, subcommand, missing args, unreadable.
+///   → Ask (fail-closed)
 fn analyze_gh(rest: &[&str]) -> Decision {
-    // `-R/--repo <owner/repo>` is the one value-taking flag that may precede
-    // the subcommand; skip its value so it is not read as the subcommand.
+    // `-R/--repo <owner/repo>` and `--repo=<value>` are value-taking flags that may
+    // appear before the subcommand; skip them to find the group.
     let mut i = 0;
     while i < rest.len() {
         let t = rest[i];
         if t == "-R" || t == "--repo" {
             i += 2;
+            continue;
+        }
+        if t.starts_with("--repo=") {
+            i += 1;
             continue;
         }
         if t.starts_with('-') {
@@ -9656,11 +9725,246 @@ fn analyze_gh(rest: &[&str]) -> Decision {
         }
         break;
     }
-    match rest.get(i).map(|t| normalized_command(t)) {
-        Some(sub) if sub == "run" || sub == "workflow" => Decision::deny(format!(
-            "`gh {sub}` operates GitHub Actions, which is banned in this repository"
-        )),
-        _ => Decision::Allow,
+
+    // Extract group (first non-flag token after gh).
+    let group = match rest.get(i).map(|t| normalized_command(t)) {
+        None => return Decision::ask("gh: missing subcommand"),
+        Some(g) => g,
+    };
+
+    // Special handling for `gh api`: check method and field flags.
+    if group == "api" {
+        return analyze_gh_api(&rest[i + 1..]);
+    }
+
+    // For `gh <group> <subcommand>`, extract subcommand (second non-flag, after group).
+    let mut j = i + 1;
+    while j < rest.len() {
+        let t = rest[j];
+        if t == "-R" || t == "--repo" {
+            j += 2;
+            continue;
+        }
+        if t.starts_with("--repo=") {
+            j += 1;
+            continue;
+        }
+        if t.starts_with('-') {
+            j += 1;
+            continue;
+        }
+        break;
+    }
+
+    let subcommand = rest.get(j).map(|t| normalized_command(t));
+
+    match group.as_str() {
+        // Read-only subcommands.
+        "pr" | "issue" | "run" | "workflow" | "release" | "repo" | "label" | "gist"
+        | "cache" | "secret" | "variable" | "ruleset" | "project" | "codespace" | "org" => {
+            match subcommand.as_deref() {
+                Some("list") | Some("view") | Some("status") | Some("diff") | Some("checks")
+                | Some("watch") | Some("download") => Decision::Allow,
+
+                // GHA execution/configuration subcommands.
+                Some("run") | Some("enable") | Some("disable") if group == "workflow" => {
+                    Decision::ask(
+                        "gh workflow run/enable/disable modifies GitHub Actions configuration; \
+                         this needs explicit user request"
+                    )
+                }
+                Some("rerun") | Some("cancel") | Some("delete") if group == "run" => {
+                    Decision::ask(
+                        "gh run rerun/cancel/delete modifies GitHub Actions execution; \
+                         this needs explicit user request"
+                    )
+                }
+                Some("delete") if group == "cache" => {
+                    Decision::ask("gh cache delete modifies GitHub Actions; this needs explicit user request")
+                }
+                Some("set") | Some("delete") if group == "secret" || group == "variable" => {
+                    Decision::ask(
+                        "gh secret/variable set/delete modifies GitHub Actions configuration; \
+                         this needs explicit user request"
+                    )
+                }
+
+                // Mutating subcommands.
+                Some("create") => Decision::ask(format!("gh {group} create modifies the repository")),
+                Some("merge") => Decision::ask(format!("gh {group} merge modifies the repository")),
+                Some("close") => Decision::ask(format!("gh {group} close modifies the repository")),
+                Some("comment") => {
+                    Decision::ask(format!("gh {group} comment adds content to the repository"))
+                }
+                Some("edit") => Decision::ask(format!("gh {group} edit modifies the repository")),
+                Some("review") => Decision::ask(format!("gh {group} review modifies the repository")),
+                Some("fork") => Decision::ask(format!("gh {group} fork modifies the repository")),
+                Some("upload") => {
+                    Decision::ask(format!("gh {group} upload adds content to the repository"))
+                }
+
+                // Missing or unknown subcommand.
+                None => Decision::ask(format!("gh {group}: missing subcommand")),
+                Some(unknown) => Decision::ask(format!("gh {group} {unknown}: unknown subcommand")),
+            }
+        }
+
+        // `gh search`: always read-only.
+        "search" => Decision::Allow,
+
+        // `gh status`: read current login status.
+        "status" => Decision::Allow,
+
+        // `gh auth`: login/logout mutate, status reads.
+        "auth" => match subcommand.as_deref() {
+            Some("status") => Decision::Allow,
+            Some("login") | Some("logout") => {
+                Decision::ask("gh auth login/logout modifies authentication")
+            }
+            None => Decision::ask("gh auth: missing subcommand"),
+            Some(sub) => Decision::ask(format!("gh auth {sub}: unknown subcommand")),
+        },
+
+        // `gh config`: get/list read, set writes.
+        "config" => match subcommand.as_deref() {
+            Some("get") | Some("list") => Decision::Allow,
+            Some("set") => Decision::ask("gh config set modifies configuration"),
+            None => Decision::ask("gh config: missing subcommand"),
+            Some(sub) => Decision::ask(format!("gh config {sub}: unknown subcommand")),
+        },
+
+        // `gh extension`: list reads, install writes.
+        "extension" => match subcommand.as_deref() {
+            Some("list") => Decision::Allow,
+            Some("install") => Decision::ask("gh extension install modifies extensions"),
+            None => Decision::ask("gh extension: missing subcommand"),
+            Some(sub) => Decision::ask(format!("gh extension {sub}: unknown subcommand")),
+        },
+
+        // `gh browse`: read-only (opens in browser).
+        "browse" => Decision::Allow,
+
+        // `gh help` and `gh --version`: read-only.
+        "help" => Decision::Allow,
+        "-version" | "--version" => Decision::Allow, // normalized name is "-version"
+
+        // Unknown group.
+        _ => Decision::ask(format!("gh {group}: unknown group")),
+    }
+}
+
+/// Analyze `gh api` commands. Return Allow for GET (implicit or explicit),
+/// Ask for POST/PUT/PATCH/DELETE, and Ask (fail-closed) for undeterminable.
+fn analyze_gh_api(rest: &[&str]) -> Decision {
+    // Parse for method flags and field flags.
+    let mut explicit_method: Option<&str> = None;
+    let mut has_fields = false;
+    let mut path_index: Option<usize> = None;
+
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+
+        // Handle `-X <method>` (space-separated).
+        if t == "-X" {
+            if i + 1 < rest.len() {
+                explicit_method = Some(rest[i + 1]);
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Handle `-XMETHOD` (no space).
+        if t.starts_with("-X") && t.len() > 2 {
+            explicit_method = Some(&t[2..]);
+            i += 1;
+            continue;
+        }
+
+        // Handle `--method <method>` (space-separated).
+        if t == "--method" {
+            if i + 1 < rest.len() {
+                explicit_method = Some(rest[i + 1]);
+                i += 2;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Handle `--method=METHOD`.
+        if t.starts_with("--method=") {
+            explicit_method = Some(&t[9..]);
+            i += 1;
+            continue;
+        }
+
+        // Field flags: -f, -F, --field, --raw-field, --input.
+        if t == "-f" || t == "-F" || t == "--field" || t == "--raw-field" || t == "--input" {
+            has_fields = true;
+            if (t == "-f" || t == "-F" || t == "--field" || t == "--raw-field") && i + 1 < rest.len() {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+
+        // Other flags: skip them (and their values for flags like --jq, --paginate).
+        if t.starts_with('-') {
+            // For simplicity, assume non-value flags. Some flags take values, but
+            // we're conservative: if unsure, move on.
+            i += 1;
+            continue;
+        }
+
+        // First non-flag token is the API path.
+        if path_index.is_none() {
+            path_index = Some(i);
+        }
+
+        i += 1;
+    }
+
+    // Determine the method: explicit takes precedence, then check fields.
+    let method = explicit_method.unwrap_or_else(|| {
+        if has_fields {
+            "POST" // gh api defaults to POST when fields are given
+        } else {
+            "GET" // gh api defaults to GET with no fields
+        }
+    });
+
+    // Extract the API path if available.
+    let api_path = path_index.and_then(|idx| rest.get(idx).copied());
+
+    match method.to_uppercase().as_str() {
+        "GET" => Decision::Allow,
+        "POST" | "PUT" | "PATCH" | "DELETE" => {
+            // Check if this is a GitHub Actions endpoint.
+            let is_actions = api_path
+                .map(|p| p.contains("/actions/"))
+                .unwrap_or(false);
+            if is_actions {
+                Decision::ask(
+                    "gh api mutation on /actions/ endpoint: GitHub Actions execution/configuration \
+requires explicit user request"
+                )
+            } else {
+                Decision::ask(format!(
+                    "gh api -{} mutates the GitHub repository; this needs explicit user request",
+                    method.to_uppercase()
+                ))
+            }
+        }
+        unknown => {
+            // Unknown method: fail-closed.
+            Decision::ask(format!(
+                "gh api: unknown HTTP method {unknown}; cannot determine if it is safe"
+            ))
+        }
     }
 }
 

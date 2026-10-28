@@ -84,3 +84,63 @@ thread 'approve::tests::pending_is_not_an_approval_until_promoted' (129757985) p
  right: NotRecorded
 test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 394 filtered out; finished in 0.00s
 FAIL: 67/80 concurrent runs failed (shared TMPDIR clobber)"""
+
+[[task]]
+id = "6067a527"
+title = "blastguard allows rm of irreplaceable $HOME asset ~/.ssh/id_rsa (absolute and tilde)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "DEFECT: rm <HOME>/.ssh/id_rsa and rm ~/.ssh/id_rsa produce empty hook output (= Allow). Deletion policy denies removing irreplaceable $HOME-level assets. Repro: crates/blastguard/tests/backlog_ssh_private_key_rm.rs (#[ignore]d, RED with --ignored; control rm of project work file GREEN). Filed in merge 84b01984."
+created_at = 1793225238
+updated_at = 1793225238
+weight = 0.0
+issue_number = 1470
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1470"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_ssh_private_key_rm -- --ignored"
+rev = "914eacf6fdf0fcdb839bfae3912b98607210814a"
+observed_at = 1793225238
+detail = """
+exit 101: private_key_tilde_is_not_allow
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_ssh_private_key_rm.rs (target/debug/deps/backlog_ssh_private_key_rm-66c7edec0d584aa5)
+error: test failed, to rerun pass `-p blastguard --test backlog_ssh_private_key_rm`"""
+
+[[task]]
+id = "a03fe3cd"
+title = "blastguard misparses $(ls -d GLOB | ...) command substitution: asks naming -d as the command word"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "DEFECT: B=$(ls -d <HOME>/.claude/plugins/cache/yukineko/backlog/*/bin/backlog | sort -V | tail -1); echo $B is asked with reason '`-d` is a command blastguard has no rule for, and <glob> is a protected gate/config path'. The substitution is misparsed so -d is taken as the command word; bare ls -d <glob> is Allow. Repro: crates/blastguard/tests/backlog_ls_d_cmdsubst_misparse.rs (#[ignore]d, RED with --ignored). Filed in merge 84b01984."
+created_at = 1793225247
+updated_at = 1793225247
+weight = 0.0
+issue_number = 1471
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1471"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_ls_d_cmdsubst_misparse -- --ignored"
+rev = "914eacf6fdf0fcdb839bfae3912b98607210814a"
+observed_at = 1793225247
+detail = """
+exit 101: _dash_d_as_command
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_ls_d_cmdsubst_misparse.rs (target/debug/deps/backlog_ls_d_cmdsubst_misparse-4e4897afb3558dd9)
+error: test failed, to rerun pass `-p blastguard --test backlog_ls_d_cmdsubst_misparse`"""

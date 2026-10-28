@@ -142,7 +142,10 @@ fn verdict_inside_repo_ignores_inherited_git_dir_for_status() {
         &base,
         &proj,
         &command,
-        &[("GIT_DIR", &repo_b.join(".git")), ("GIT_WORK_TREE", &repo_b)],
+        &[
+            ("GIT_DIR", &repo_b.join(".git")),
+            ("GIT_WORK_TREE", &repo_b),
+        ],
     );
     let _ = std::fs::remove_dir_all(&base);
 

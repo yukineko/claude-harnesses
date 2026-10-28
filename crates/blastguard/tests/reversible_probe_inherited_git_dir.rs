@@ -29,6 +29,11 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 fn run(base: &Path, proj: &Path, command: &str, git_dir: Option<&Path>) -> String {
+    let envs: Vec<(&str, &Path)> = git_dir.map(|g| ("GIT_DIR", g)).into_iter().collect();
+    run_with_env(base, proj, command, &envs)
+}
+
+fn run_with_env(base: &Path, proj: &Path, command: &str, envs: &[(&str, &Path)]) -> String {
     let payload = serde_json::json!({
         "session_id": "reversible-probe-gitdir",
         "cwd": proj.display().to_string(),
@@ -49,8 +54,8 @@ fn run(base: &Path, proj: &Path, command: &str, git_dir: Option<&Path>) -> Strin
         .env_remove("TMPDIR")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .current_dir(base);
-    if let Some(g) = git_dir {
-        cmd.env("GIT_DIR", g);
+    for (k, v) in envs {
+        cmd.env(k, v);
     }
     let mut child = cmd.spawn().unwrap();
     child
@@ -99,6 +104,51 @@ fn truncating_non_repo_file_verdict_ignores_inherited_git_dir() {
     assert_eq!(
         control, with_git_dir,
         "verdict changed when GIT_DIR pointed at an unrelated repo: the probe judged the wrong repo.\n\
+         control    = {control}\nwith GIT_DIR = {with_git_dir}"
+    );
+}
+
+/// Site B in isolation: the victim's parent IS a real repo A, so the repo probe
+/// (site A, scrubbed) finds A with or without the inherited variables and the
+/// control verdict is whatever policy says for a file inside a work tree.
+/// What is left to judge is the `git status` call. A hook-style
+/// `GIT_DIR=<B>/.git` + `GIT_WORK_TREE=<B>` leaking into it makes git refuse
+/// the path ("outside repository", exit 128), which resolves restrictively, so
+/// the verdict differs from the control run unless `git status` is scrubbed.
+#[test]
+fn verdict_inside_repo_ignores_inherited_git_dir_for_status() {
+    let base: PathBuf = std::env::temp_dir()
+        .canonicalize()
+        .unwrap()
+        .join("bg-reversible-probe-gitdir-status")
+        .join(format!("{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let proj = base.join("src/proj");
+    let repo_a = proj.join("repo-a");
+    let repo_b = base.join("repo-b");
+    for d in [&repo_a, &repo_b, &base.join("home")] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(repo_a.join("f.txt"), "x\n").unwrap();
+    std::fs::write(repo_b.join("f.txt"), "x\n").unwrap();
+    git(&repo_a, &["init", "-q"]);
+    git(&repo_b, &["init", "-q"]);
+    git(&repo_b, &["add", "f.txt"]);
+    git(&repo_b, &["commit", "-q", "-m", "b"]);
+
+    let command = format!(": > {}/f.txt", repo_a.display());
+    let control = run(&base, &proj, &command, None);
+    let with_git_dir = run_with_env(
+        &base,
+        &proj,
+        &command,
+        &[("GIT_DIR", &repo_b.join(".git")), ("GIT_WORK_TREE", &repo_b)],
+    );
+    let _ = std::fs::remove_dir_all(&base);
+
+    assert_eq!(
+        control, with_git_dir,
+        "git status judged the wrong repo when GIT_DIR/GIT_WORK_TREE pointed at an unrelated repo.\n\
          control    = {control}\nwith GIT_DIR = {with_git_dir}"
     );
 }

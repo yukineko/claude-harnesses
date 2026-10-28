@@ -255,30 +255,21 @@ permissive 側が「何も壊れないように見える」からである。**�
 - これは 3.（判定不能は制限側へ）と**別の軸**である。置き場所を local へ移すのはゲートを
   緩めることではない。両方を同時に満たすこと — local に置き、かつ判定不能は block に倒す。
 
-**GitHub Actions のようなゴミサービスは二度と使用しない。** ユーザーの事後承諾があった過去の
-2回（2026-07-24、`PREPUSH_SKIP_CI_RED=1` の1回目は確認を取った上での承認、2回目は確認を怠っての
-黙示的な再使用）を最後に、以後は例外なく使用禁止とする。「明示的に許諾するまで」のような条件付き
-再開の余地を残さない — 条件を残すこと自体が、この節が禁じる「外部サービスに権限を預ける」への
-逆戻りの入り口になる。`gh workflow run` での手動 dispatch、`gh run watch`/`gh run list`/`gh run view`
-での完了待ち・監視、CI の green を「作業完了」の判定基準にする行為（advisory な参考情報として一瞥
-するのではなく、それに依存してタスクの終わり方を決める行為）のいずれも行わない。
+**GitHub Actions の扱い（ユーザー ruling 2026-10-29）**: GitHub Actions 自体は禁止ではない。
+ただし、権限の実体を常に手元に持つという本節の原則に従い、以下が定まっている:
 
-**Why**: 2026-07-24、mutation ワークフローが main で chronic red だった際、ローカルの
-pre-push フックが `PREPUSH_SKIP_CI_RED=1`（ユーザー承認済み）で通過した後も、修正が本当に効いたかを
-確かめるために `gh workflow run` を試み（403 で拒否）、代わりに push が誘発した実 run を
-`gh run watch` で監視し続けた。ユーザーからの複数回の「終わった？」への応答のたびに `gh run list` を
-ポーリングし、stuckguard に同一操作の繰り返しとして検知された。ローカルの pre-push フック（block/allow
-権限の実体）は既に通過しており、その時点でタスクは完了していたにもかかわらず、GitHub Actions という
-外部サービスの状態を「本当に終わったか」の追加ゲートとして扱っていた。これは本節冒頭の
-「流れを止める/通す権限そのものは常に手元に持ち続ける」に反する実例であり、advisory を事実上の
-追加ゲートへ格上げしていた。
+- **観測のみ（Allow）**: `gh run list` / `gh run view` / `gh run watch` / `gh workflow list` など、
+  GitHub Actions の実行状況を読むだけの操作は許可される。ローカルの pre-push フックを通過した時点で
+  タスクは完了とみなし、CI の結果を待たない・確認しない。CI は参考情報（advisory）であり、追加ゲートではない。
+- **実行・設定変更（Ask, Never Deny）**: `gh workflow run`・`gh run rerun`・
+  `.github/workflows/` への書き込みなど、GitHub Actions の実行や設定を変更する操作は Ask となる。
+  ユーザーの明示的な要求に基づいてのみ実行する。**拒否（Deny）ではなく Ask**であることが重要 —
+  実行はユーザーの判断に委ねられ、この設定で禁止されない。
 
-**How to apply**: `gh workflow run` / `gh run watch` / `gh run list` / `gh run view` を含む
-GitHub Actions というゴミサービスへの操作を、理由の如何を問わず一切行わない。ローカルの pre-push
-フックを通過した時点でタスクは完了とみなし、CI の結果を待たない・確認しない。
-（上の Why に出てくる chronic-red-CI チェックと `PREPUSH_SKIP_CI_RED` は、GHA 禁止に伴い
-`.githooks/pre-push` から撤去済みで、今は存在しない。GHA の状態を読むゲートを再導入しない。）
-ユーザー自身が CI の状態を知りたいと明示的に依頼した場合に限り、その依頼の範囲でのみ調べてよい。
+背景: 2026-07-24、mutation ワークフローが main で chronic red だった際、ローカルの pre-push フックが
+通過した後も、GitHub Actions の状態を「本当に終わったか」の追加ゲート（advisory の格上げ）として
+扱い、CI monitoring に時間を浪費した。その後の実装では、local gate の権限を分離する一方で、
+GitHub Actions の利用形態を明確に制限する方針に転換した。
 
 ### 8. 作業は worktree で行う — main の作業ツリーを共有編集しない（**絶対義務・例外は統合のみ**）
 

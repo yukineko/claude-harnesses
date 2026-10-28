@@ -74,6 +74,7 @@ pub mod trust;
 pub mod undetermined;
 pub mod usage;
 pub mod verdict;
+pub mod worktree_origin;
 
 // The one bundled transcript → (usage, cost) estimator, re-exported at the crate
 // root so consumers call a single API instead of pairing usage::aggregate with

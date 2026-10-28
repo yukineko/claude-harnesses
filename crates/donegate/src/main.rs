@@ -377,16 +377,24 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             stop_block_now(&blocks.join("\n\n"), interactive);
         }
         if roots.wrote_any && !any_ran && !all_opted_out && !configured_empty {
-            // Every written root has no donegate config at all: allow, but
-            // visibly (never a silent green) on stdout and stderr.
+            // Every written root has no donegate config at all: allow (donegate is
+            // opt-in per project). User ruling 2026-10-27 removed the user-visible
+            // `systemMessage` that used to accompany this allow: stdout stays
+            // empty. The allow is not silent in the record, though — the
+            // stderr line names the roots, and a durable `verdict:"unconfigured"`
+            // entry naming each root is appended to `<state_dir>/log.jsonl`
+            // (`tests/no_config_quiet_allow.rs`).
             let msg = format!(
                 "donegate not configured for {}: no checks ran",
                 unconfigured.join(", ")
             );
             eprintln!("{msg}");
-            if !interactive {
-                println!("{}", serde_json::json!({ "systemMessage": msg }));
-            }
+            log_unconfigured(&cfg, &session, &unconfigured);
+            harness_core::hook_latency::record(
+                "donegate",
+                &session,
+                __start.elapsed().as_millis() as u64,
+            );
             std::process::exit(0);
         }
         if roots.wrote_any && !any_ran && !all_opted_out {
@@ -846,6 +854,21 @@ fn log_event(cfg: &Config, session: &str, verdict: &str, names: &[String], attem
         "verdict": verdict,
         "checks": names,
         "attempt": attempt,
+    });
+    harness_core::gate::run::append_jsonl(&cfg.state_dir, &entry);
+}
+
+/// The durable trace of an allow on roots with no donegate config at all (user
+/// ruling 2026-10-27: no `systemMessage`, the record lives in `log.jsonl`).
+/// Same shape as [`log_event`] plus the unconfigured `roots`.
+fn log_unconfigured(cfg: &Config, session: &str, roots: &[String]) {
+    let entry = json!({
+        "ts": chrono::Local::now().to_rfc3339(),
+        "session": session,
+        "verdict": "unconfigured",
+        "checks": [],
+        "attempt": 0,
+        "roots": roots,
     });
     harness_core::gate::run::append_jsonl(&cfg.state_dir, &entry);
 }

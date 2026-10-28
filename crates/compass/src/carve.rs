@@ -8,7 +8,7 @@
 //! # State keying / location
 //!
 //! State is repo-colocated at `.compass/carve-state.json` (same directory as the
-//! charter, matching taskprog/condukt's "live next to the repo" convention).
+//! charter, matching condukt's "live next to the repo" convention).
 //! One carve is in flight per repo at a time: the skill drives a single
 //! `/compass` run start-to-finish, and `carve-reset` clears it for a fresh
 //! start. We do not key by session because the skill calls the binary directly

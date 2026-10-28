@@ -231,7 +231,7 @@ class ConcurrentRolloutIsExcluded(unittest.TestCase):
     fails closed (non-zero, before touching registry/cache) on contention,
     including a STALE lock (holder pid dead): never stolen silently."""
 
-    PLUGIN = "taskprog"  # non-gate crate: no canary requirement
+    PLUGIN = "tracekit"  # non-gate crate: no canary requirement
 
     def _sandbox(self, tmp):
         tmp = Path(tmp)

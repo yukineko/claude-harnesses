@@ -5,7 +5,6 @@ mod hooks_health;
 mod inject;
 mod path_shadow;
 mod plugins;
-mod progress;
 mod sessions;
 
 use clap::{Parser, Subcommand};
@@ -34,8 +33,6 @@ enum Command {
     Budget,
     /// Show recent sessions only
     Sessions,
-    /// Show progress file only
-    Progress,
     /// Show Stop-hook latency aggregation only
     Hooks,
     /// Show UserPromptSubmit injection-size aggregation only
@@ -159,16 +156,6 @@ fn main() {
                         sessions::cost_cell(sess.cost_usd)
                     );
                 }
-            }
-        }
-        Some(Command::Progress) => {
-            let p = progress::read(&cwd);
-            if cli.json {
-                println!("{}", serde_json::to_string_pretty(&p).unwrap_or_default());
-            } else if p.exists {
-                println!("{}", p.preview.as_deref().unwrap_or("(empty)"));
-            } else {
-                println!("[no progress file] {}", p.path);
             }
         }
         Some(Command::Hooks) => {
@@ -358,7 +345,6 @@ fn main() {
         None => {
             let b = budget::read(&today);
             let s = sessions::recent(cli.sessions);
-            let p = progress::read(&cwd);
             let h = hooks::read();
             let i = inject::read();
             let hh = hooks_health::read();
@@ -367,7 +353,6 @@ fn main() {
                 today: &today,
                 budget: &b,
                 sessions: &s,
-                progress: &p,
                 hooks: &h,
                 inject: &i,
                 hooks_health: &hh,
@@ -376,7 +361,7 @@ fn main() {
             if cli.json {
                 display::print_json(&report);
             } else {
-                display::print_status(&report, &cwd.to_string_lossy());
+                display::print_status(&report);
             }
         }
     }

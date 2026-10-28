@@ -19,7 +19,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 ROLLOUT = HERE / "rollout-plugins.sh"
 
-TARGET = "taskprog"
+TARGET = "tracekit"
 BYSTANDER = "hypothesis"
 
 
@@ -56,7 +56,7 @@ class FilteredRolloutLeavesOthersAlone(unittest.TestCase):
             )
             log = r.stdout + r.stderr
             # c9373b92 contract: a filtered rollout verifies the TARGETED plugin.
-            # --no-rebuild leaves taskprog deployed dark (no binary), so the run
+            # --no-rebuild leaves tracekit deployed dark (no binary), so the run
             # must fail on exactly that, and must report the bystander's drift
             # as out of scope (not fatal, not enforced) rather than fail on it.
             self.assertEqual(r.returncode, 1, log)

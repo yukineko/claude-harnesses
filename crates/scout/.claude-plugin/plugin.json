@@ -1,6 +1,6 @@
 {
   "name": "scout",
-  "version": "0.1.13",
+  "version": "0.1.15",
   "description": "Multi-lens project audit skill that fans out read-only sub-agents across five lenses, scores the findings into prioritized tasks, writes them to the backlog and hands execution to /flow.",
   "author": { "name": "yukineko" },
   "keywords": ["scout", "audit", "security", "review", "backlog", "tasks", "condukt", "flow"]

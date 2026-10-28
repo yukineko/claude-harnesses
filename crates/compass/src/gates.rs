@@ -94,7 +94,7 @@ fn charter_fragments(bundle: &Bundle) -> Vec<harness_core::interrogate::Fragment
         .collect()
 }
 
-/// Fragments describing recent activity (git / progress / deepwiki) — the
+/// Fragments describing recent activity (git / deepwiki) — the
 /// "what the project is doing now" evidence behind a drift question.
 #[allow(dead_code)]
 fn recent_activity_fragments(bundle: &Bundle) -> Vec<harness_core::interrogate::Fragment> {

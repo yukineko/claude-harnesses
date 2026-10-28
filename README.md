@@ -42,7 +42,7 @@ Cargo ワークスペース・モノレポ。`yukineko` の Claude Code ハー�
 | flow | source（compass の一手 / backlog キュー / hypothesis の計測待ち仮説）→ executor（condukt）を 1 本のループで束ねる統合 driver。出荷済み仮説を計測して validate/reject する measure step を含む。SessionStart で開いている仕事があれば `/flow` を提案する |
 | fugu-router | 過去タスクの検証実績から cheap-first（最安 Claude ティア優先）でルーティングし、cascade を安全網に据える per-model ルーター |
 | gauge | Stop フックでトークン使用・コスト・ツール呼び出し数をローカルに計測する |
-| harness-status | HOTL 手動点検ダッシュボード（CLI 専用・hook なし）。`budget` / `sessions` / `progress` / `hooks`（Stop ゲート遅延）/ `inject`（UserPromptSubmit 注入予算）/ `plugins`（activation-scope 分類）のサブコマンドを持つ |
+| harness-status | HOTL 手動点検ダッシュボード（CLI 専用・hook なし）。`budget` / `sessions` / `hooks`（Stop ゲート遅延）/ `inject`（UserPromptSubmit 注入予算）/ `plugins`（activation-scope 分類）のサブコマンドを持つ |
 | hypothesis | PDO 仮説ライフサイクル管理。仮説の作成・検証・棄却・compass ゴール紐づけと、出荷済み・未計測（awaiting-measurement）の追跡を行う（出荷 ≠ 検証） |
 | playbook | UserPromptSubmit フックで関連アトミックノートをコンテキストに注入する |
 | precommit-audit | Stop フックで設定ルールと diff を照合し問題がなくなるまで完了を阻止する |
@@ -55,7 +55,6 @@ Cargo ワークスペース・モノレポ。`yukineko` の Claude Code ハー�
 | session-insights | ツール呼び出し・ターン数・ファイル数を集計し Obsidian vault に記録。クロスセッション backlog 管理も担う |
 | specguard | 仕様と実装の整合を監査する read-only ハーネス |
 | stuckguard | PostToolUse フックで繰り返し操作・編集スラッシュを検知しエスカレーションする |
-| taskprog | `.claude/progress.md` をセッション間で同期し HOTL ハンドオフを支援する |
 | tdd | Stop フックでテストなし実装を阻止するテストファースト・ゲート |
 | tracekit | condukt run の interpreter→worker→verifier を親子リンクした span 木（phase/model/ms/cost/status）として記録し、`tracekit trace <RID>` で描画、OTel GenAI semconv JSON を export するトレーサ。失敗 run のどの段が遅い/高い/落ちたかを可視化（file-only・ネットワーク無し） |
 | trajectoryeval | エージェントの tool-call 経路を検証する trajectory-match verifier。condukt の verifier が出力（done_criteria）を見るのに対し、worker が辿った経路を見る。`check` が実 tool 列を期待軌跡（strict/unordered/subsequence）と照合し {pass, missing, unexpected, out_of_order} を 0/1/2 ゲート終了で返し、`extract` が transcript をストリームして順序付き tool_use 名に変換。done-criteria 検証の経路面の姉妹（agentevals 流） |

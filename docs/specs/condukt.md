@@ -71,7 +71,7 @@
   hashkey を、別 run_id が **この run の `claimed_at` より後に** 同じく done/verified にしていないか兄弟 run を
   横断走査し、見つかれば何も変更せず `{"duplicate_completion":[{hashkey,runs:[run_id...]}]}` を出力して **exit 2**
   （escalate = 人間/HOTL がどちらの実装を残すか選ぶ。exit code 契約 0=auto/2=escalate/3=block に従う）。重複が無い
-  通常パス（自動 verified・exit 0）は不変。`record-run --all` は fugu-router 向けに outcome を冪等記録（Stop hook）。`test` は
+  通常パス（自動 verified・exit 0）は不変。`record-run --all` は fugu-router 向けに outcome を冪等記録（Stop hook は `record-run --all --stop-hook`: stdout/stderr 無出力・exit 0 で、失敗と進捗行は `<state_dir>/record-run-failures.log` へ追記。未記録 episode は次回再試行。`--stop-hook` 無しの CLI は失敗時 exit 1 のまま。2026-10-27 ユーザー裁定）。`test` は
   `[test].command`→自動検出（cargo/npm/pytest）で `sh -c` 実行し exit code 伝播。
 - **`state check-oracle|check-criteria`** — F→P 再現証明の判定 / `done_criteria` の機械ゲート＋`skip_verifier`
   導出。`verify::classify_criteria` は **3 つの veto の AND**（振る舞い系 / 実行可能コマンド無し /

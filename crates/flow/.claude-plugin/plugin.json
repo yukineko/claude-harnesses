@@ -1,6 +1,6 @@
 {
   "name": "flow",
-  "version": "0.2.30",
+  "version": "0.2.31",
   "description": "Backlog-draining loop skill for Claude Code that picks tasks from sources such as compass, backlog and hypothesis and hands them to condukt for execution, without locking the whole queue.",
   "author": {
     "name": "yukineko"

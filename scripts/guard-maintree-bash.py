@@ -25,7 +25,9 @@ positive or false negative (4a64e6ff and ~30 sibling tickets).
                       `git merge --abort` of an in-progress merge
                                                             -> 0
                       (an unreadable MERGE_HEAD oid at Pre -> not covered)
-                      HEAD moved, tree clean, and the new HEAD is a merge
+                      HEAD moved, tree clean apart from untracked paths
+                      that were already untracked with the same content
+                      hash at Pre, and the new HEAD is a merge
                       commit, or is contained in a ref other than the branch
                       main has checked out, or that branch's reflog has an
                       entry for exactly this old -> new move whose message
@@ -51,7 +53,21 @@ that crashed has not passed (CLAUDE.md 3), so it resolves to the restricted side
 
 Known blind spots (not visible to `git status`): files under .git itself
 (.git/config, .git/hooks) and gitignored files. Changes by ANOTHER session
-between this call's Pre and Post are attributed to this call; the message says so.
+between this call's Pre and Post are still REFUSED (they cannot be told apart
+from this call's own writes) and the message says so. When the Post lands in
+another session's `git merge` window (merged tree already in main's index and
+working tree, HEAD not moved, no MERGE_HEAD yet because git is running
+pre-merge-commit) and ORIG_HEAD was rewritten between Pre and Post with HEAD
+unchanged (observed: git writes ORIG_HEAD at merge start, MERGE_HEAD only after
+pre-merge-commit), the refusal reports that evidence as AMBIGUOUS: a concurrent
+merge in main is a possible cause, but this command's own reset/merge/rebase
+rewrites ORIG_HEAD too, so the change is not asserted to be this command's (and
+is still refused). Evidence = ORIG_HEAD differs between Pre and Post (including
+absent OR unreadable at Pre, both stored as None, and readable at Post), HEAD unchanged, no MERGE_HEAD. That evidence changes WORDING only:
+it is recorded in the snapshot as `orig_head` but is excluded from the
+before==after comparison and from every verdict branch; a Pre snapshot without
+the field (key missing, not merely None), or an ORIG_HEAD that is absent or unreadable at
+Post, means no evidence (existing wording).
 """
 
 from __future__ import annotations
@@ -152,12 +168,28 @@ def snapshot(main: Path, common: Path) -> dict:
             raise Undetermined("cannot hash dirty path %s: %s" % (rel, exc)) from exc
     merge_head = (common / "MERGE_HEAD").exists()
     return {
+        "orig_head": orig_head_identity(common),
         "porcelain": porcelain,
         "hashes": hashes,
         "head": git(main, "rev-parse", "HEAD").strip(),
         "merge_head": merge_head,
         "merge_head_oid": merge_head_oid(common) if merge_head else None,
     }
+
+
+def orig_head_identity(common: Path) -> list | None:
+    """[content, mtime_ns, inode] of ORIG_HEAD, or None when absent/unreadable.
+
+    Wording evidence only (see post()): None means "no evidence", never a verdict.
+    git rewrites ORIG_HEAD via a lockfile rename, so the inode/mtime change even
+    when the oid is the same as before.
+    """
+    try:
+        path = common / "ORIG_HEAD"
+        st = path.stat()
+        return [path.read_text().strip(), st.st_mtime_ns, st.st_ino]
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def merge_head_oid(common: Path) -> str | None:
@@ -279,6 +311,30 @@ def changed_paths(before: dict, after: dict) -> list[str]:
     return sorted(p for p in paths if a.get(p) != b.get(p) or ra.get(p) != rb.get(p))
 
 
+def only_unchanged_untracked(before: dict, after: dict) -> bool:
+    """True if every path `git status` names at Post is an untracked path that
+    was already untracked at Pre with the same content hash (backlog 58bc638d).
+
+    Such a path (e.g. a stray `bare.git/` at the root) is not a change by this
+    call, so it must not hide an integration HEAD move. Anything else at Post
+    -- a tracked modification, a conflict, an untracked path that is new or
+    whose hash differs from Pre -- means the tree is not "clean apart from
+    pre-existing untracked paths" and the caller refuses. An empty Post
+    porcelain is trivially True (the clean-tree case).
+    """
+    ra, rb = status_records(before["porcelain"]), status_records(after["porcelain"])
+    for p, rec in rb.items():
+        if not rec.startswith("? "):
+            return False
+        if ra.get(p) != rec:
+            return False
+        if p not in before["hashes"] or p not in after["hashes"]:
+            return False
+        if before["hashes"][p] != after["hashes"][p]:
+            return False
+    return True
+
+
 def status_records(porcelain: str) -> dict[str, str]:
     """path -> its status record line, for naming index-only changes."""
     out = {}
@@ -339,6 +395,19 @@ def post(payload: dict, common: Path, main: Path) -> int:
     if not isinstance(before, dict) or not {"porcelain", "hashes", "head", "merge_head"} <= set(before):
         raise Undetermined("Pre snapshot %s is malformed" % path)
     after = snapshot(main, common)
+    # Wording evidence only: stripped so it never enters the verdict logic.
+    # A MISSING key (old-format Pre snapshot) is no evidence; a present None
+    # (ORIG_HEAD absent at Pre) is a real value.
+    has_orig_field = "orig_head" in before
+    before_orig = before.pop("orig_head", None)
+    after_orig = after.pop("orig_head", None)
+    concurrent_merge = (
+        has_orig_field
+        and after_orig is not None
+        and before_orig != after_orig
+        and after["head"] == before["head"]
+        and not after["merge_head"]
+    )
 
     verdict = ALLOW
     if before == after:
@@ -347,7 +416,7 @@ def post(payload: dict, common: Path, main: Path) -> int:
         pass  # a merge / conflict resolution is in progress
     elif merge_abort_back_to_head(main, before, after):
         pass  # aborting one's own in-progress merge back to HEAD
-    elif after["head"] != before["head"] and not after["porcelain"]:
+    elif after["head"] != before["head"] and only_unchanged_untracked(before, after):
         branch = checked_out_branch(main)
         if not integration_head(main, after["head"], branch) and not merge_reflog_entry(
             common, branch, before["head"], after["head"]
@@ -360,16 +429,32 @@ def post(payload: dict, common: Path, main: Path) -> int:
         changed = changed_paths(before, after)
         if after["head"] != before["head"]:
             changed.insert(0, "HEAD %s -> %s (not a merge / fast-forward)" % (before["head"][:12], after["head"][:12]))
-        print(
-            "Refused: this command modified this project's MAIN working tree "
-            "outside integration (CLAUDE.md 8: main only receives merges).\n"
-            "Changed in %s:\n  %s\n"
-            "Revert it, or redo the work in a worktree and merge. If you did not "
-            "touch main, another session may have modified it during this call — "
-            "check `git -C %s status` before reverting anything."
-            % (main, "\n  ".join(changed), main),
-            file=sys.stderr,
-        )
+        if concurrent_merge:
+            msg = (
+                "Refused: ORIG_HEAD was rewritten during this call while HEAD did "
+                "not move and there is no MERGE_HEAD. That is what another "
+                "session's in-flight `git merge` in this project's MAIN working "
+                "tree looks like (a concurrent merge in main is one possible "
+                "cause), but this command's own reset / merge / "
+                "rebase produces it too. The change below is therefore NOT "
+                "asserted to be this command's; it is still refused because a "
+                "verdict that cannot be determined resolves to refuse "
+                "(CLAUDE.md 3).\n"
+                "Changed in %s:\n  %s\n"
+                "Check `git -C %s status` / `git log` after the other session's "
+                "merge would have finished; if this command did write into main, "
+                "revert it or move the work into a worktree."
+            )
+        else:
+            msg = (
+                "Refused: this command modified this project's MAIN working tree "
+                "outside integration (CLAUDE.md 8: main only receives merges).\n"
+                "Changed in %s:\n  %s\n"
+                "Revert it, or redo the work in a worktree and merge. If you did not "
+                "touch main, another session may have modified it during this call — "
+                "check `git -C %s status` before reverting anything."
+            )
+        print(msg % (main, "\n  ".join(changed), main), file=sys.stderr)
     try:
         path.unlink()
     except OSError:

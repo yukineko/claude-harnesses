@@ -250,22 +250,26 @@ esac
 
 ### Phase 5 — backlog へ書き出し
 
-承認された施策を 1 件ずつ backlog に積む。同時に、**機械スコープ共有発見ストア（discovery store）に記録し、並行セッションの重複を回避**する（fail-soft）:
+承認された施策を 1 件ずつ backlog に積む。同時に、**機械スコープ共有発見ストア（discovery store）に記録し、並行セッションの重複を回避**する。
+発見ストアの呼び出しが失敗したら（`compass` が非 0 終了し stderr に `undetermined` 等の理由を出す）、**そこで Phase 5 を止める**（下記「発見ストアが判定不能のとき」）:
 
 ```bash
 # 既に他セッションが発見した施策をスキップ（発見ストア確認）
-DISCOVERED=$(compass discovery list --json 2>/dev/null || echo '[]')
+DISCOVERED=$(compass discovery list --json) || { echo "scout: 発見ストアを読めない（判定不能）— 重複判定ができないので Phase 5 を中止する。compass の stderr を添えてユーザーに報告すること" >&2; exit 1; }
 
 # 各承認施策について
 for 施策名 in "${APPROVED_TASKS[@]}"; do
   # 他セッションが既に所有している場合は skip（同じ title の行を探し、session_id が異なれば他セッション所有）
-  if echo "$DISCOVERED" | jq -e --arg title "$施策名" '.[] | select(.title == $title and .session_id != env.SESSION_ID)' >/dev/null 2>&1; then
+  # jq が失敗した / true でも false でもない（DISCOVERED が空・JSON 配列でない等）なら判定不能 — 「重複なし」として扱わず中止する
+  OWNED=$(printf '%s' "$DISCOVERED" | jq --arg title "$施策名" --arg me "$SESSION_ID" 'any(.[]; .title == $title and .session_id != $me)') && { [ "$OWNED" = true ] || [ "$OWNED" = false ]; } || { echo "scout: 発見ストアの内容を判定できない — Phase 5 を中止してユーザーに報告する" >&2; exit 1; }
+  if [ "$OWNED" = true ]; then
     echo "（スキップ: $施策名 は他セッションで既に発見）"
     continue
   fi
   
-  # 本セッションの発見ストアに記録（失敗しても scout 続行 = fail-soft）
-  compass discovery record --session-id "$SESSION_ID" --title "$施策名" 2>/dev/null || true
+  # 本セッションの発見ストアに記録。記録できなかったら backlog add へ進まず中止する
+  # （記録の無い起票は他セッションから重複判定できない）
+  compass discovery record --session-id "$SESSION_ID" --title "$施策名" || { echo "scout: 発見ストアに記録できなかった — '$施策名' は起票せず Phase 5 を中止する。compass の stderr を添えてユーザーに報告すること" >&2; exit 1; }
   
   # backlog に積む — 再現テスト（RED）が書けた施策だけが起票される（2026-10-04 裁定「testがないなら起票してはならない」）。
   # --repro-test が無い / 再現しない施策は拒否され、store に何も書かれない。
@@ -277,7 +281,15 @@ for 施策名 in "${APPROVED_TASKS[@]}"; do
 done
 ```
 
-**発見ストア**（`~/.compass/<project_key>/discovery.jsonl`）は、同一機械上の複数 scout セッションが**同じ施策を重複 backlog 追加する**のを防ぐ side-channel（repo 書き込みではない）。ストア呼び出しが失敗しても scout は常に続行する（**never break a turn**）。
+**発見ストア**（`~/.compass/<project_key>/discovery.jsonl`）は、同一機械上の複数 scout セッションが**同じ施策を重複 backlog 追加する**のを防ぐ side-channel（repo 書き込みではない）。
+
+**発見ストアが判定不能のとき**: `compass discovery list` / `record` は、ストアの位置を決められない
+（例: git が使えず legacy の worktree 別ファイルを特定できない）・読めない・壊れた行がある・書き込めない場合に
+**非 0 で終了し stderr に `undetermined` と理由を出す**。このとき `list` は `[]` を出さない。
+これを「誰も発見していない」（`[]`）や「記録できた」として扱ってはならない — 重複起票や、他セッションから見えない起票になる。
+`2>/dev/null` / `|| true` / `|| echo '[]'` で失敗を消さないこと。判定不能なら**残りの施策の起票を止め**、
+compass の stderr を逐語でユーザーに報告し、どうするか（ストアを直して再実行 / 重複判定なしで起票するか）を Ask する。
+既に起票した施策はそのまま報告に含める。
 
 `--tag scout` を付け、scout 由来の施策と分かるようにする。`--notes` に証拠と完了条件を残し、
 実行時（condukt の interpreter）が done_criteria を引けるようにする。クロスプロジェクトで

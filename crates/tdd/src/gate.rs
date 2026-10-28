@@ -1,11 +1,16 @@
-//! The test-existence gate: does the UNCOMMITTED diff add implementation code
+//! The test-existence gate: does the session's change add implementation code
 //! with no test in it? Deterministic — it reads git, never runs the suite
-//! (that's donegate's job). Its scope is the working tree only: the unstaged
-//! and staged diffs plus untracked files, all relative to HEAD. Tests that are
-//! already committed are never consulted, so every message this module renders
-//! says "no test in the uncommitted changes" and not "this change has no
-//! test" — the latter is an absence the gate never checked (CLAUDE.md §4).
-//! The verdict drives whether the Stop hook blocks.
+//! (that's donegate's job). Its scope is the working tree (the unstaged and
+//! staged diffs plus untracked files, all relative to HEAD) plus the non-merge
+//! commits on HEAD made since the session started — the earliest record
+//! timestamp in the transcript ([`include_committed`], backlog ba649100: a
+//! session that committed impl+test before stopping used to leave an empty
+//! scan and be blocked). When that start is undetermined, committed work is
+//! not scanned and the message says so ([`Committed`]). Tests committed before
+//! the session are never consulted, so every message this module renders says
+//! "no test in the uncommitted changes [or this session's commits]" and not
+//! "this change has no test" — the latter is an absence the gate never checked
+//! (CLAUDE.md §4). The verdict drives whether the Stop hook blocks.
 //!
 //! **The other axis is authorship.** The scan is `git status --porcelain` plus
 //! `git diff -U0` / `git diff --cached -U0` / `git ls-files --others` (see
@@ -84,6 +89,44 @@ pub struct Report {
     pub scan: Scan,
     /// Whose changes `scan` covers — see [`Authorship`].
     pub authorship: Authorship,
+    /// Whether the session's committed work is in `scan` — see [`Committed`].
+    pub committed: Committed,
+}
+
+/// Whether `scan` includes the work this session committed.
+///
+/// * `Included { since, lines }` — added lines of non-merge commits on HEAD
+///   dated at or after `since` (the session start) were scanned, before
+///   attribution narrowed them.
+/// * `NotCredited { why }` — the session start was undetermined, so no
+///   committed work was scanned; `why` is said in the message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Committed {
+    Included { since: i64, lines: usize },
+    NotCredited { why: String },
+}
+
+impl Committed {
+    fn not_attempted() -> Self {
+        Committed::NotCredited {
+            why: "committed work was not scanned".to_string(),
+        }
+    }
+
+    /// What the scan covered, for every message that reports an absence: the
+    /// uncommitted changes always, this session's own commits only when they
+    /// were actually scanned. Tests committed before the session are never read.
+    pub fn scope(&self) -> &'static str {
+        match self {
+            Committed::Included { .. } => {
+                "the uncommitted changes and this session's own commits (tests already committed \
+                 before the session started were not consulted)"
+            }
+            Committed::NotCredited { .. } => {
+                "the uncommitted changes (already-committed tests were not consulted)"
+            }
+        }
+    }
 }
 
 /// Whether the scan was scoped to the stopping session's own writes.
@@ -126,16 +169,17 @@ impl Report {
                 if blocks {
                     // State the observation, not an absence that was never
                     // checked. The scan reads `git status` + the unstaged and
-                    // staged diffs + untracked files (`git.rs`) — all relative
-                    // to HEAD — so it can report that no test appears in the
-                    // uncommitted changes, and nothing about tests that are
-                    // already committed. This reason travels to overwatch as a
-                    // recorded finding, so the distinction has to survive here
-                    // too, not only in the model-facing message.
+                    // staged diffs + untracked files (`git.rs`), plus this
+                    // session's own commits when its start is known
+                    // ([`Committed`]) — so it can report that no test appears
+                    // there, and nothing about tests committed before the
+                    // session. This reason travels to overwatch as a recorded
+                    // finding, so the distinction has to survive here too, not
+                    // only in the model-facing message.
                     Verdict::violation(format!(
-                        "{} new implementation line(s) added, with no test visible in the \
-                         uncommitted changes (already-committed tests were not consulted)",
-                        f.added_impl_lines
+                        "{} new implementation line(s) added, with no test visible in {}",
+                        f.added_impl_lines,
+                        self.committed.scope()
                     ))
                 } else {
                     Verdict::from_findings(Vec::new())
@@ -191,6 +235,7 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
                 "a `git` command failed while scanning the changeset",
             ),
             authorship: Authorship::not_attempted(),
+            committed: Committed::not_attempted(),
         };
     }
 
@@ -200,6 +245,7 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
         return Report {
             scan: Determination::known(None),
             authorship: Authorship::not_attempted(),
+            committed: Committed::not_attempted(),
         };
     };
 
@@ -254,6 +300,7 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
             impl_files,
         })),
         authorship: Authorship::not_attempted(),
+        committed: Committed::not_attempted(),
     }
 }
 
@@ -267,10 +314,95 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
 pub fn evaluate(cfg: &Config, root: &Path, transcript_path: &str) -> Report {
     let changed = git::changed_files(root);
     let added = git::added_lines(root);
+    let (changed, added, committed) = include_committed(root, transcript_path, changed, added);
     let (changed, added, authorship) = scope_to_session(root, transcript_path, changed, added);
     let mut report = classify(cfg, &changed, &added);
     report.authorship = authorship;
+    report.committed = committed;
     report
+}
+
+/// The session's start: the earliest RFC3339 `timestamp` on any record of the
+/// transcript, as unix seconds. No transcript, an unreadable one, or one
+/// carrying no timestamp at all is `Undetermined` — never "the epoch", which
+/// would credit every commit in history to this session.
+pub fn session_start(transcript_path: &str) -> Determination<i64> {
+    if transcript_path.is_empty() {
+        return Determination::undetermined("no transcript (manual run)");
+    }
+    let text = match std::fs::read_to_string(transcript_path) {
+        Ok(t) => t,
+        Err(e) => return Determination::undetermined(format!("transcript unreadable: {e}")),
+    };
+    let earliest = text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter_map(|v| {
+            v.get("timestamp")
+                .and_then(|t| t.as_str())
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .map(|t| t.timestamp())
+        })
+        .min();
+    match earliest {
+        Some(t) => Determination::known(t),
+        None => Determination::undetermined("the transcript carries no record timestamp"),
+    }
+}
+
+/// Fold the work this session COMMITTED into the uncommitted scan (backlog
+/// ba649100, user ruling 2026-10-27 "Hybrid"): added lines of non-merge commits
+/// on HEAD dated at or after [`session_start`]. They then go through
+/// [`scope_to_session`] like any uncommitted line, so only files the
+/// transcript shows this session writing count — a peer's commit in the same
+/// window is excluded by the same rule.
+///
+/// A failed `git log` makes the whole added scan `Failed` (fail closed). An
+/// undetermined session start credits NO committed work and says so: that can
+/// only remove lines — evidence included — so it never turns a block into an
+/// allow by itself.
+pub fn include_committed(
+    root: &Path,
+    transcript_path: &str,
+    changed: ChangeScan,
+    added: AddedScan,
+) -> (ChangeScan, AddedScan, Committed) {
+    let (ChangeScan::Files(mut files), AddedScan::Lines(mut lines)) =
+        (changed.clone(), added.clone())
+    else {
+        return (changed, added, Committed::not_attempted());
+    };
+    let since = match session_start(transcript_path) {
+        Determination::Known(t) => t,
+        Determination::Undetermined(why) => {
+            return (
+                changed,
+                added,
+                Committed::NotCredited {
+                    why: why.to_string(),
+                },
+            );
+        }
+    };
+    match git::committed_added_lines(root, since) {
+        AddedScan::Lines(committed) => {
+            for l in &committed {
+                if !files.contains(&l.file) {
+                    files.push(l.file.clone());
+                }
+            }
+            files.sort();
+            let n = committed.len();
+            lines.extend(committed);
+            (
+                ChangeScan::Files(files),
+                AddedScan::Lines(lines),
+                Committed::Included { since, lines: n },
+            )
+        }
+        AddedScan::Failed => (changed, AddedScan::Failed, Committed::not_attempted()),
+        AddedScan::NotRepo => (changed, added, Committed::not_attempted()),
+    }
 }
 
 /// Narrow a successful scan to the files the stopping session wrote (user
@@ -327,6 +459,19 @@ pub fn scope_to_session(
     }
 }
 
+/// The stderr line saying committed work was NOT credited to this session —
+/// printed on every run like [`attribution_note`], so an allow or block that
+/// ignored commits says so. `None` when committed work was scanned.
+pub fn committed_note(v: &Report) -> Option<String> {
+    match &v.committed {
+        Committed::Included { .. } => None,
+        Committed::NotCredited { why } => Some(format!(
+            "tdd: work committed during this session was NOT scanned ({why}) — only the \
+             uncommitted changes were judged"
+        )),
+    }
+}
+
 /// The stderr line that makes the exclusion visible on EVERY run, including
 /// the allowing one — an exclusion that only surfaces when the gate blocks is
 /// invisible exactly when it silenced the gate. `None` when nothing was
@@ -378,11 +523,14 @@ pub fn block_reason(v: &Report, attempt: u32, max: u32) -> String {
         // Neither reachable in practice (a non-blocking report never reaches
         // `block_reason`), but resolved to the same loud message rather than an
         // empty string, since an empty block reason would be worse than either.
-        Determination::Known(None) => generic_block_reason(0, &[], &v.authorship, attempt, max),
+        Determination::Known(None) => {
+            generic_block_reason(0, &[], &v.authorship, &v.committed, attempt, max)
+        }
         Determination::Known(Some(f)) => generic_block_reason(
             f.added_impl_lines,
             &f.impl_files,
             &v.authorship,
+            &v.committed,
             attempt,
             max,
         ),
@@ -391,8 +539,9 @@ pub fn block_reason(v: &Report, attempt: u32, max: u32) -> String {
 
 /// The model-facing block reason. It states two scope limits, and they are
 /// **different claims that do not substitute for each other**: what tdd looked
-/// at (the uncommitted changes — already-committed tests were not consulted)
-/// and *whose* changes those are (see [`Authorship`]: either the files this
+/// at (the uncommitted changes, plus this session's own commits when its start
+/// is known — see [`Committed`]; tests committed before the session were not
+/// consulted) and *whose* changes those are (see [`Authorship`]: either the files this
 /// session's transcript shows it writing — inferred, not verified — with the
 /// excluded rest named, or, when attribution was undetermined, the whole
 /// checkout with authorship NOT verified). Neither is decoration: this string
@@ -404,6 +553,7 @@ fn generic_block_reason(
     added_impl_lines: usize,
     impl_files: &[String],
     authorship: &Authorship,
+    committed: &Committed,
     attempt: u32,
     max: u32,
 ) -> String {
@@ -449,13 +599,28 @@ fn generic_block_reason(
         let shown: Vec<&str> = impl_files.iter().take(6).map(String::as_str).collect();
         format!("\n  implementation changed: {}", shown.join(", "))
     };
+    let inspected = match committed {
+        Committed::Included { .. } => {
+            "Scope actually inspected: the working tree — the unstaged and staged diffs plus \
+             untracked files, relative to HEAD — and the non-merge commits on HEAD made since this \
+             session started. tdd did NOT read tests committed before the session, so this is \
+             \"no test in the uncommitted changes or this session's commits\", not \"this change \
+             has no test\". If the test covering this change is already committed from earlier, \
+             say so and take the one-shot skip below."
+                .to_string()
+        }
+        Committed::NotCredited { why } => format!(
+            "Scope actually inspected: the working tree only — the unstaged and staged diffs plus \
+             untracked files, all relative to HEAD. Work committed during this session was NOT \
+             scanned ({why}), and tdd did NOT read already-committed tests, so this is \"no test \
+             in the uncommitted changes\", not \"this change has no test\". If the test covering \
+             this change is already committed, say so and take the one-shot skip below."
+        ),
+    };
     format!(
         "🔴 tdd: write a test first — {added_impl_lines} new implementation line(s) added, and no \
-         test is visible in the uncommitted changes (attempt {attempt}/{max}).{sample}\n\n\
-         Scope actually inspected: the working tree only — the unstaged and staged diffs plus \
-         untracked files, all relative to HEAD. tdd did NOT read already-committed tests, so this \
-         is \"no test in the uncommitted changes\", not \"this change has no test\". If the test \
-         covering this change is already committed, say so and take the one-shot skip below.\n\n\
+         test is visible in {scope} (attempt {attempt}/{max}).{sample}\n\n\
+         {inspected}\n\n\
          {whose}\n\n\
          Add a test that exercises this change (a `#[test]`, `def test_…`, `func Test…`, \
          `it(...)`, or a file under tests/), then finish. Prefer test-first: run \
@@ -465,6 +630,7 @@ fn generic_block_reason(
          `tdd skip --reason \"...\"` — one stop, THIS session only, and recorded. Disable \
          entirely: TDD_DISABLE=1 in the environment Claude Code itself was started with \
          (exporting it from a tool call does not reach this hook).",
+        scope = committed.scope(),
     )
 }
 
@@ -476,8 +642,9 @@ fn generic_block_reason(
 pub fn concession_reentry_notice() -> String {
     "tdd: already gave up on this stop (max_attempts exhausted) and another gate \
      blocked it, so the concession is still owed — allowing stop. When the give-up \
-     was recorded, no test was visible in the uncommitted changes; already-committed \
-     tests were not consulted, and the scan has not been re-run since."
+     was recorded, no test was visible in the uncommitted changes (nor in this \
+     session's own commits, when its start time was known); already-committed tests \
+     from before the session were not consulted, and the scan has not been re-run since."
         .to_string()
 }
 
@@ -487,8 +654,9 @@ pub fn concession_reentry_notice() -> String {
 pub fn giveup_notice(max_attempts: u32) -> String {
     format!(
         "tdd: after {max_attempts} attempts a test is still not visible in the uncommitted \
-         changes (already-committed tests were not consulted) — allowing stop. Add one, or set \
-         TDD_DISABLE=1."
+         changes (nor in this session's own commits, when its start time was known; \
+         already-committed tests from before the session were not consulted) — allowing stop. \
+         Add one, or set TDD_DISABLE=1."
     )
 }
 
@@ -521,7 +689,12 @@ pub fn human_report(v: &Report, cfg: &Config) -> String {
                     // otherwise assume was a bug.
                     "none — a test file changed, but no added line matched a test marker"
                 } else {
-                    "none in the uncommitted changes"
+                    match v.committed {
+                        Committed::Included { .. } => {
+                            "none in the uncommitted changes or this session's commits"
+                        }
+                        Committed::NotCredited { .. } => "none in the uncommitted changes",
+                    }
                 }
             ));
             // Still reported, because it is a true fact about the changeset and
@@ -538,10 +711,10 @@ pub fn human_report(v: &Report, cfg: &Config) -> String {
                 }
             ));
             if v.blocks(cfg) {
-                s.push_str(
-                    "\n🔴 would BLOCK: implementation lines added and no test visible in \
-                     the uncommitted changes (already-committed tests were not consulted)",
-                );
+                s.push_str(&format!(
+                    "\n🔴 would BLOCK: implementation lines added and no test visible in {}",
+                    v.committed.scope()
+                ));
             } else {
                 s.push_str("\n✓ would allow the stop");
             }
@@ -933,6 +1106,7 @@ mod tests {
                 impl_files: vec!["src/foo.rs".to_string(), "src/bar.rs".to_string()],
             })),
             authorship: Authorship::not_attempted(),
+            committed: Committed::not_attempted(),
         }
     }
 
@@ -947,6 +1121,7 @@ mod tests {
                 impl_files: vec!["src/foo.rs".to_string()],
             })),
             authorship: Authorship::not_attempted(),
+            committed: Committed::not_attempted(),
         }
     }
 
@@ -1243,6 +1418,7 @@ mod tests {
                 impl_files: vec!["src/foo.rs".to_string(), ".githooks/pre-push".to_string()],
             })),
             authorship: Authorship::not_attempted(),
+            committed: Committed::not_attempted(),
         }
     }
 
@@ -1453,6 +1629,7 @@ mod tests {
                 impl_files: vec!["src/foo.rs".to_string()],
             })),
             authorship: Authorship::not_attempted(),
+            committed: Committed::not_attempted(),
         };
         let out = human_report(&report, &cfg);
         assert!(

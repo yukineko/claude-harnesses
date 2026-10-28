@@ -308,7 +308,9 @@ class TestGapRoute(unittest.TestCase):
     backlog acf4f7ba, is fixed and scripts/test_backlog_acf4f7ba.py now guards
     the prose against naming gap fields that gap does not output.)"""
 
-    GAP_KEYS = {"dod", "recent_activity", "progress_excerpt", "measuring_stick",
+    # progress_excerpt was removed by user ruling 2026-10-27 (progress.md is no
+    # longer a gap input); it is pinned ABSENT below.
+    GAP_KEYS = {"dod", "recent_activity", "measuring_stick",
                 "last_outcome", "opportunities"}
 
     def test_claim_gap_route_gap_keys(self):
@@ -316,7 +318,7 @@ class TestGapRoute(unittest.TestCase):
         r = sb.run(skill_cmd("compass gap"), linked)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(set(json.loads(r.stdout)), self.GAP_KEYS)
-        for absent in ("to_condukt", "north_star", "current_gap"):
+        for absent in ("to_condukt", "north_star", "current_gap", "progress_excerpt"):
             self.assertNotIn(absent, json.loads(r.stdout))
 
     def test_claim_gap_route_route_emits_to_condukt_and_context(self):
@@ -334,12 +336,15 @@ class TestGapRoute(unittest.TestCase):
         self.assertIn("- north_star: ship it", r.stdout)
         self.assertIn("- current_gap: gap", r.stdout)
         self.assertIn("- measuring_stick: tests passing", r.stdout)
-        # route writes parked tasks to .claude/progress.md of the worktree
-        self.assertIn("huge", (linked / ".claude" / "progress.md").read_text())
+        # user ruling 2026-10-27: parked tasks are printed only and stored
+        # nowhere — route no longer writes .claude/progress.md
+        self.assertIn("huge", r.stdout)
+        self.assertFalse((linked / ".claude" / "progress.md").exists())
         # route needs a decomposition JSON on stdin (or --file); without one it fails
         bad = sb.run(["compass", "route"], linked, stdin="")
         self.assertNotEqual(bad.returncode, 0)
-        # and, being a writer, it is refused from the primary checkout
+        # and it is still refused from the primary checkout (the refusal was
+        # kept unchanged when the progress.md write was removed)
         before = tree_snapshot(primary)
         pr = sb.run(["compass", "route"], primary, stdin=json.dumps(dec))
         self.assertNotEqual(pr.returncode, 0)

@@ -15,7 +15,7 @@ compass は、プロジェクトの方向（北極星）と完成定義（defini
 | `measuring_stick` | 次の一手をどう測るか（既定: 防御可能性 × ゴールへの近さ ÷ コスト） |
 | `current_gap` | ゴール − 現状の要約（毎ラウンド再計算） |
 | `next_action` | 再開時の最初の物理的な一歩（Stop の breadcrumb が書く） |
-| `parked` | 保留した仕事へのポインタ（本体は taskprog の progress.md に置く） |
+| `parked` | 保留した仕事へのポインタ（`compass charter --write` で skill が書く。route 自身は何も保存しない） |
 
 判定（ゴールを彫る・gap を読む・一手を選ぶ）は Claude Code セッション内の LLM 労働であり、バイナリは状態維持と決定論的な context 生成のみを担う。バイナリ自身は LLM も `AskUserQuestion` も呼ばない。**subscription で完結**し、API キーは不要。
 
@@ -26,14 +26,13 @@ compass は、プロジェクトの方向（北極星）と完成定義（defini
 多くのツールは候補を列挙して空白に答える（対症療法）。compass はそうではなく、ゴールを鋭く保ち、次の一手をそこからの勾配（gap）として導く:
 
 ```
-次の一手 = (鋭いゴール / 完成定義) − (現状: git・progress.md・deepwiki) の 最大かつ右サイズな差分
+次の一手 = (鋭いゴール / 完成定義) − (現状: git・deepwiki) の 最大かつ右サイズな差分
 ```
 
 harness 内での住み分け:
 
 | 問い | 担当 |
 |---|---|
-| 現状は？（done / 残り / blocker） | `taskprog`（progress.md） |
 | 構造は？ | `deepwiki` |
 | 実装は仕様から drift したか？ | `specguard` |
 | **これは何のため・「done」とは・次の一手は？** | **`compass`** |
@@ -52,11 +51,11 @@ evaluate ─► carve ループ ─► charter ─► gap ─► (condukt 分解
 1. **evaluate** — バイナリが C1/C2 の決定的 floor を `{open_questions, status, round}` として出力し、carve 状態を初期化/ロードする。skill が C3〜C5 の問いを上乗せする。
 2. **carve ループ** — 問いが残り round 予算がある間、skill が **1 問ずつ** `AskUserQuestion` で問う。`compass apply --answer <JSON>` が回答を畳み込み、永続化し、C1/C2 を再評価する。
 3. **charter** — `compass charter --write <JSON>` で、観測可能な DoD を持つ彫れた charter を保存する。
-4. **gap** — `compass gap` が入力（DoD / 直近の活動 / progress）を決定論的に組み立て、skill が delta を推論して `compass gap --write <text>` で書き戻す。
+4. **gap** — `compass gap` が入力（DoD / 直近の活動）を決定論的に組み立て、skill が delta を推論して `compass gap --write <text>` で書き戻す。
 5. **condukt 分解** — 合意した一手をタスク化し、condukt が `size`（xs|s|m|l|xl）付きの分解 JSON に分割する。
 6. **route** — `compass route` が size で triage する。**焦点保護（B案）**: 右サイズ（既定 `s`/`m`）の一手を **1 件だけ** condukt へ、残りは保留へ。エッジは loop に戻る — **`GoalTooBig`**（全部 l/xl）→ ゴールを小さく彫り直す、**`OnlyNoise`**（全部 xs）→ north_star を問い直す。
 
-保留は taskprog の progress.md「残り」へ 1 行ずつ書き戻され、次回 `/compass` の gap 入力に再浮上する（自己供給ループ）。
+保留は route の JSON に印字されるだけで保存されず、次回 `/compass` の gap 入力にも再浮上しない（2026-10-27 ユーザー裁定）。
 
 **計測ループ（outcome）**: 一手の完了で出荷はされるが、出荷は検証された学習ではない（build ≠ validate）。`compass outcome --verdict <forward|unchanged|backward> --evidence <計測値>` で measuring_stick 判定を project の main worktree root の `.compass/outcomes.json`（全 linked worktree で共有する1本の履歴。root を判定できなければ拒否し、worktree 毎の store には落とさない）に記録する（**証拠必須**で、計測なしの outcome は拒否される）。次の `compass gap` が `last_outcome` として読み戻すので、各ラウンドが「計測された進捗」を反映する。[`/flow`](../flow) 経由なら sink が自動記録する。
 
@@ -88,16 +87,17 @@ primary では `compass breadcrumb` は書き込まず、stderr にその旨を�
 | `compass evaluate` | C1/C2 の open questions を JSON 出力し carve 状態を init/load |
 | `compass apply --answer <JSON>` | 人間の回答を 1 つ畳み込み、C1/C2 再評価、永続化 |
 | `compass carve-reset` | 永続化された carve 状態をクリア |
-| `compass gap` / `--write <text>` | gap 入力の組み立て / gap テキストの永続化 |
-| `compass route [--file <path>]` | 分解を size triage し、残りを park |
+| `compass gap` / `--write <text>` | gap 入力の組み立て / gap テキストの永続化。`.compass/opportunities.json` が無ければ opportunity 0 件、読めない・壊れているなら stderr に `undetermined` を出して非0終了（`"opportunities": []` にはしない） |
+| `compass route [--file <path>]` | 分解を size triage し、残りを park。`.compass/opportunities.json` が読めない・壊れているなら stderr に `undetermined` を出して何も出力せず非0終了（opportunity ref を黙って空にした handoff は出さない） |
 | `compass charter` / `--write <JSON>` | charter＋config の表示 / 彫れた charter の永続化 |
 | `compass outcome --verdict <…> --evidence <text>` | 完了した一手の verdict を記録（証拠必須） |
 | `compass pivot-check` | 直近 outcome ストリークから pivot/persevere シグナルを `{recommendation, streak, threshold, reason}` で出力（共有 store = main worktree root を読む。flow の gate 用。未記録は空履歴として exit 0・persevere、root 判定不能や store 破損は recommendation を出さず非0終了） |
 | `compass opportunity add --title <T> [--outcome <ref>] [--weight <f>]` | active outcome（既定は charter `north_star`）配下に named bet（PDO OST）を記録 |
 | `compass opportunity list [--json] [--outcome <ref>]` | active outcome 配下の named bet を一覧。`--json` は JSON 配列で出力 |
-| `compass discovery record --title <T> [--session-id <ID>]` | 指定（または env 由来）のセッション配下に discovery 行を追記（cross-session dedup 用）。fail-soft、常に exit 0 |
-| `compass discovery select [--fingerprint <FP>] [--title <T>]` | 発見済みタスクを `Selected` にする（fingerprint は verbatim か `--title` から導出）。fail-soft |
-| `compass discovery list [--json]` | discovery 行を一覧。`--json` は JSON 配列（空なら `[]`。store が無い/読めない場合も `[]` になり、壊れた行は読み飛ばされるので、`[]` は store が空であることの証明ではない） |
+| `compass discovery record --title <T> [--session-id <ID>]` | 指定（または env 由来）のセッション配下に discovery 行を追記（cross-session dedup 用）。行を保存できなかった場合（main worktree root を決められない・store が読めない・lock/書き込み失敗）は非 0 で終了し stderr に `undetermined` を出す |
+| `compass discovery select [--fingerprint <FP>] [--title <T>]` | 発見済みタスクを `Selected` にする（fingerprint は verbatim か `--title` から導出）。どちらも無ければ usage を出して exit 0（no-op）。store を更新できなかった場合は非 0 で終了し stderr に `undetermined` を出す |
+| `compass discovery list [--json]` | discovery 行を一覧（共有 store ＋ この checkout の legacy worktree 別ファイル）。`--json` は JSON 配列で、`[]` は store ファイルが一度も書かれていない場合だけ。store を判定できない場合 — root を決められない・読めない・壊れた行がある・legacy ファイルを特定できない（git checkout 内で git が使えない）— は非 0 で終了し stderr に `undetermined` を出し、stdout には何も出さない（`[]` も部分的な一覧も出さない） |
+| `compass discovery migrate-legacy` | 全 linked worktree の legacy worktree 別の行を共有 store へコピー。all-or-nothing・冪等で legacy ファイルは変更しない。JSON サマリ（`migrated` / `already_present` / `sources`）を 1 つ出す。root・`git worktree list`（git が使えない等）・worktree パス・legacy ファイル・共有 store のいずれかを判定できなければ非 0 で終了し stderr に `undetermined` を出し、何も書かない |
 | `compass c3-screen` | C3「観測可能な DoD」ゲートの advisory 決定的スクリーン。曖昧/非観測可能な `definition_of_done` 項目を `{"flagged":[{"index","item","reason"}...]}` で出す。skill の C3 判定を補完するのみで、ブロックはしない |
 | `compass suggest-verdict --tests-delta <N> [--regressions <N>] [--gap-closed]` | `compass outcome` の advisory な決定的デフォルト verdict を観測事実から導出。`{"suggested":"forward\|unchanged\|backward"}` を出力（skill は `outcome --verdict` で上書き可） |
 | `compass score --severity <high\|medium\|low> --effort <xs\|s\|m\|l\|xl> --lens <l1..l5> --goal-proximity <f64>` | harness-core のスコアラーを公開した決定的優先度スコア — `(severity × goal_proximity) ÷ effort`、L2（security）/L5（safety）レンズは 1.5 倍で up-weight — scout skill が LLM の手計算なしで候補を順位付けできる。`{"score": f64}` を出力 |

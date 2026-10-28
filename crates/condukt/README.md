@@ -25,7 +25,7 @@ users — the work runs inside Claude Code via two skills (`/condukt`,
 | event | matcher | command |
 |---|---|---|
 | `SessionStart` | `startup\|resume\|clear` | `condukt restore` |
-| `Stop` | — | `condukt state record-run --all` |
+| `Stop` | — | `condukt state record-run --all --stop-hook` (silent: failures and progress go to `<state_dir>/record-run-failures.log`, exit 0) |
 | `SubagentStop` | — | `condukt subagent-stop` |
 | `PostToolUse` | `Edit\|Write\|MultiEdit` | `condukt editgate` (edit-time compile gate) |
 | `PostToolUse` | `*` | `condukt session-heartbeat` |

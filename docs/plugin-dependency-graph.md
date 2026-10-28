@@ -70,7 +70,6 @@ graph TD
   evalkit[evalkit]
   playbook[playbook]
   budgetguard[budgetguard]
-  taskprog[taskprog]
 
   %% ---- scout (multi-lens SOURCE) ----
   scout --> backlog
@@ -91,7 +90,6 @@ graph TD
   %% ---- compass (re-orientation SOURCE) ----
   compass --> condukt
   compass -.-> deepwiki
-  compass -.-> taskprog
 
   %% ---- hypothesis (PDO SOURCE) ----
   hypothesis -.-> compass
@@ -113,20 +111,20 @@ graph TD
 
 ### Adjacency list (survives where mermaid does not render)
 
-Every directed caller → callee edge (**30 total**). `[H]` = hard/primary,
+Every directed caller → callee edge (**29 total**). `[H]` = hard/primary,
 `[S]` = soft/optional, `[B]` = back-edge (creates a cycle; see next section).
 
 ```
 scout      → backlog[H], flow[H], condukt[S], compass[S], specguard[S], deepwiki[S]
 flow       → condukt[H], backlog[H], compass[H], fugu-router[S], hypothesis[S], budgetguard[S]
-compass    → condukt[H], deepwiki[S], taskprog[S]
+compass    → condukt[H], deepwiki[S]
 hypothesis → compass[S]
 condukt    → fugu-router[S], hypothesis[S][B], tracekit[S], gauge[S], deepwiki[S],
              specguard[S], schemaguard[S], replaykit[S], trajectoryeval[S],
              curate[S], evalkit[S], playbook[S], compass[S][B], backlog[S][B]
 ```
 
-Out-degree: condukt 14 · flow 6 · scout 6 · compass 3 · hypothesis 1. Every
+Out-degree: condukt 14 · flow 6 · scout 6 · compass 2 · hypothesis 1. Every
 other plugin has out-degree 0 (they never invoke a sibling plugin).
 
 ### Cycles / back-edges
@@ -224,13 +222,12 @@ the DAG edges above). Sorted alphabetically.
 | session-insights | always-on | `PostToolUse`, `Stop`, `SessionEnd` hooks | — |
 | specguard | always-on | `SessionStart` hook; `/specguard` skill; `specguard-auditor` agent; `specguard` CLI | condukt, scout |
 | stuckguard | always-on | `PostToolUse` hook | — |
-| taskprog | always-on | `SessionStart`, `Stop` hooks; `/taskprog` skill | compass |
 | tdd | always-on | `Stop` hook; `/tdd` skill | — at the SKILL level (condukt only mentions it); condukt's **binary** does spawn `tdd oracle` — see §4 |
 | tracekit | manual | CLI only | condukt |
 | trajectoryeval | manual | CLI only | condukt |
 
-Counts reconcile with `plugin-activation-scopes.md`: **always-on 25 ·
-event-scoped 0 · manual 10 · total 35** (library crates `harness-core`,
+Counts reconcile with `plugin-activation-scopes.md`: **always-on 24 ·
+event-scoped 0 · manual 10 · total 34** (library crates `harness-core`,
 `mutategate` excluded). The activation-scope / entry-point columns are taken
 verbatim from `harness-status plugins`; the "+ skill / + CLI / + agent" suffixes
 only add the secondary surfaces that make the "Called-by" invocations possible

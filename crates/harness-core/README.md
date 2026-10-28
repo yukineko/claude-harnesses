@@ -34,7 +34,7 @@ harness-core ships no `plugin.json`, no hooks, and no binary.
 - `git_probe`: Git-repository probe that reports `Undetermined`, not "not a repo", when git fails but `.git` exists, and "not a repo" when git fails and no `.git` exists.
 - `primary_tree`: Three-valued primary/linked working-tree classification by git-dir vs git-common-dir; `refuse_if_primary` treats `Undetermined` as a refusal.
 - `attribution`: Only files a peer session claims and this session does not are excluded; an unreadable transcript narrows nothing.
-- `repeat`: Session-scoped repeat ledger: the first occurrence of a finding stands and the second yields; a missing session id is undetermined, not a repeat.
+- `repeat`: Session-scoped repeat ledger: the first occurrence of a finding stands and the second yields; a missing session id is undetermined, not a repeat. A yielded Stop block prints one line, `{"systemMessage":"<gate>: 同じ指摘の2度目のため通しました（未解消）"}` (no reason text; the full reason is in the session's `waivers.log`).
 - `fleet`: Canonical fleet GATE-crate name set (`GATE_CRATES`) and `BLOCKING_GATES`, a superset of it.
 - `autonomy`: Autonomy switch: mode parses only `on` and `off`, and the switch-file payload round-trips.
 - `parallel`: Session-wide concurrency ceiling of 3, never exceeded by `clamp` and floored at 1.

@@ -12,7 +12,7 @@ Most tools answer the blank by *listing candidates* (symptom). compass instead k
 the **goal sharp** and derives the next move as the **gradient** down from it:
 
 ```
-next move = (sharp goal / definition-of-done) − (reality: git · progress.md · deepwiki) , the largest right-sized slice
+next move = (sharp goal / definition-of-done) − (reality: git · deepwiki) , the largest right-sized slice
 ```
 
 It is **subscription-native**: no API key. The judging (carving the goal, reading the
@@ -24,7 +24,6 @@ only keeps state and renders deterministic context. It never calls an LLM or
 
 | Question | Owner |
 |---|---|
-| What's the current state? (done / left / blockers) | `taskprog` (progress.md) |
 | What's the structure? | `deepwiki` |
 | Has impl drifted from spec? | `specguard` |
 | **What is this for · what is "done" · what's the next move?** | **`compass`** |
@@ -37,7 +36,7 @@ agreed single move) becomes condukt's input.
 ## The charter
 
 The living artifact is `.compass/charter.md` (committed alongside the repo, like
-taskprog/condukt). It holds the project's north star and definition-of-done at a higher
+condukt). It holds the project's north star and definition-of-done at a higher
 altitude than a specguard canon:
 
 | Section | Holds | Freshness |
@@ -47,7 +46,7 @@ altitude than a specguard canon:
 | `measuring_stick` | how to measure the next move (default: *defensibility × closeness-to-goal ÷ cost*) | project-fixed |
 | `current_gap` | goal − reality summary (regenerated each round) | recomputed every round |
 | `next_action` | the first physical step on resume (written by the Stop breadcrumb) | updated each Stop (not in the primary working tree, see below) |
-| `parked` | pointers to deferred work (the bodies live in taskprog progress.md) | appended by routing |
+| `parked` | pointers to deferred work, written via `compass charter --write` (route itself stores nothing) | written by the skill |
 
 ## The C1–C5 freshness gates
 
@@ -82,7 +81,7 @@ evaluate ─► carve loop ─► charter ─► gap ─► (condukt decompose) 
    │            │            │         │                            │
  C1/C2       ask 1 Q       save the  goal − reality            size triage:
  floor       at a time,   sharpened  largest slice          one right-sized move → condukt
- (binary)    re-check,    charter                           the rest → parked (taskprog)
+ (binary)    re-check,    charter                           the rest → parked (printed)
              persist
 ```
 
@@ -96,7 +95,7 @@ evaluate ─► carve loop ─► charter ─► gap ─► (condukt decompose) 
    `compass apply --answer <JSON>` folds it in, persists, and re-checks C1/C2.
 3. **charter** — `compass charter --write <JSON>` saves the sharpened charter with an
    **observable** DoD.
-4. **gap** — `compass gap` assembles the inputs (DoD / recent activity / progress)
+4. **gap** — `compass gap` assembles the inputs (DoD / recent activity)
    deterministically; the skill reasons the goal − reality delta and writes it back with
    `compass gap --write <text>`.
 5. **condukt decompose** — the agreed single move becomes a task, decomposed by condukt
@@ -110,9 +109,8 @@ evaluate ─► carve loop ─► charter ─► gap ─► (condukt decompose) 
    - **`OnlyNoise`** (everything `xs`, nothing hits the main thread) → re-question the
      north_star itself (the direction is exhausted).
 
-Parked work is written one line at a time into taskprog's progress.md "remaining" sink,
-so the **next** `/compass` reads it back as gap input — a self-feeding loop that
-structurally reduces the "blank after a checkpoint."
+Parked work is only printed in the routing JSON; it is not stored anywhere and
+does not come back as gap input on the next `/compass` (user ruling 2026-10-27).
 
 ### Closing the loop — `outcome`
 
@@ -170,16 +168,17 @@ The binary is thin and deterministic:
 | `compass evaluate` | print the C1/C2 open questions as JSON; init/load carve state |
 | `compass apply --answer <JSON>` | fold one human answer in, re-check C1/C2, persist |
 | `compass carve-reset` | clear the persisted carve state (start fresh) |
-| `compass gap` / `compass gap --write <text>` | assemble gap inputs / persist the gap text |
-| `compass route [--file <path>]` | size-triage a condukt decomposition; park the rest |
+| `compass gap` / `compass gap --write <text>` | assemble gap inputs / persist the gap text. A missing `.compass/opportunities.json` lists no opportunities; an unreadable or corrupt one exits non-zero with `undetermined` on stderr (never `"opportunities": []`) |
+| `compass route [--file <path>]` | size-triage a condukt decomposition; park the rest. An unreadable or corrupt `.compass/opportunities.json` exits non-zero with `undetermined` on stderr and prints nothing (no handoff with silently empty opportunity refs) |
 | `compass charter` / `compass charter --write <JSON>` | show the parsed charter + config / persist a sharpened charter |
 | `compass outcome --verdict <forward\|unchanged\|backward> --evidence <text>…` | record a completed move's verdict vs the `measuring_stick` (evidence required); the next `compass gap` surfaces it as `last_outcome` |
 | `compass pivot-check` | print the pivot-or-persevere signal from the trailing outcome streak as `{recommendation, streak, threshold, reason}` from the shared (main-worktree-root) store, for flow to gate on. A never-written store is an empty history (exit 0, persevere); an undeterminable root or a corrupt store exits non-zero with no recommendation |
 | `compass opportunity add --title <T> [--outcome <ref>] [--weight <f>]` | record a named bet (PDO OST) under the active outcome (charter `north_star` unless `--outcome` overrides) |
 | `compass opportunity list [--json] [--outcome <ref>]` | list the named bets under the active outcome; `--json` prints a JSON array |
-| `compass discovery record --title <T> [--session-id <ID>]` | append a discovery row for `<T>` under the given (or env-derived) session, for cross-session dedup; fail-soft, always exits 0 |
-| `compass discovery select [--fingerprint <FP>] [--title <T>]` | mark a discovered task `Selected` (fingerprint given verbatim, or derived from `--title`); fail-soft |
-| `compass discovery list [--json]` | list discovery rows; `--json` prints a JSON array (`[]` when empty — and also when the store is missing/unreadable, and corrupt lines are skipped, so `[]` is not proof of an empty store) |
+| `compass discovery record --title <T> [--session-id <ID>]` | append a discovery row for `<T>` under the given (or env-derived) session, for cross-session dedup; exits non-zero with `undetermined` on stderr when the row was not stored (unresolvable main worktree root, unreadable store, lock/write failure) |
+| `compass discovery select [--fingerprint <FP>] [--title <T>]` | mark a discovered task `Selected` (fingerprint given verbatim, or derived from `--title`); with neither flag it prints a usage note and exits 0 (no-op); exits non-zero with `undetermined` on stderr when the store could not be updated |
+| `compass discovery list [--json]` | list discovery rows (the shared store plus this checkout's legacy worktree-keyed file); `--json` prints a JSON array, `[]` only when no store file was ever written. When the store cannot be determined — unresolvable root, unreadable file, a corrupt line, or the legacy file cannot be located (git unavailable inside a git checkout) — it exits non-zero with `undetermined` on stderr and prints nothing on stdout (no `[]`, no partial list) |
+| `compass discovery migrate-legacy` | copy the legacy worktree-keyed rows of every linked worktree into the shared store; all-or-nothing and idempotent, legacy files untouched; prints one JSON summary (`migrated` / `already_present` / `sources`); exits non-zero with `undetermined` on stderr and writes nothing when the root, `git worktree list` (e.g. git unavailable), a worktree path, a legacy file or the shared store cannot be determined |
 | `compass c3-screen` | advisory deterministic screen for the C3 "observable DoD" gate: flags vague/non-observable `definition_of_done` items as `{"flagged":[{"index","item","reason"}...]}`; SUPPLEMENTS the skill's C3 judgment, never blocks |
 | `compass suggest-verdict --tests-delta <N> [--regressions <N>] [--gap-closed]` | advisory deterministic DEFAULT verdict for `compass outcome`, derived from observed facts; prints `{"suggested":"forward\|unchanged\|backward"}` (the skill can still override via `outcome --verdict`) |
 | `compass score --severity <high\|medium\|low> --effort <xs\|s\|m\|l\|xl> --lens <l1..l5> --goal-proximity <f64>` | deterministic priority score exposing the harness-core scorer — `(severity × goal_proximity) ÷ effort`, with L2/security and L5/safety lenses up-weighted 1.5× — so the scout skill can rank candidates without LLM hand-arithmetic; prints `{"score": f64}` |
@@ -298,7 +297,7 @@ MIT
 compass は**ゴールを鋭く保ち、次の一手をそこからの勾配（gap）として導く**。
 
 ```
-次の一手 = (鋭いゴール / 完成定義) − (現状: git・progress.md・deepwiki) の 最大かつ右サイズな差分
+次の一手 = (鋭いゴール / 完成定義) − (現状: git・deepwiki) の 最大かつ右サイズな差分
 ```
 
 **subscription で完結**（API キー不要）。判定（ゴールを彫る・gap を読む・一手を選ぶ）は
@@ -320,7 +319,7 @@ Claude Code セッション内の LLM 労働、バイナリは状態維持と決
 `evaluate`（C1/C2 floor）→ carve ループ（1問ずつ問い、再評価・永続化）→ `charter`（彫れた charter を保存）
 → `gap`（ゴール − 現状）→ condukt 分解（size 付与）→ `route`（size triage）。
 **焦点保護（B案）**: 右サイズ（既定 `s`/`m`）の一手を **1件だけ** condukt へ、残りは保留へ。
-保留は taskprog の progress.md「残り」へ書き戻され、次回 /compass の gap 入力に再浮上する（自己供給ループ）。
+保留は route の JSON に印字されるだけで保存されず、次回 /compass の gap 入力にも再浮上しない（2026-10-27 ユーザー裁定）。
 エッジ: **`GoalTooBig`**（全部 l/xl）→ ゴールを小さく彫り直す、**`OnlyNoise`**（全部 xs）→ north_star を問い直す。
 
 **計測ループ（outcome）**: 一手の完了後 `compass outcome --verdict <forward|unchanged|backward> --evidence <計測値>`

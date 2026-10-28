@@ -329,9 +329,9 @@ class H5RolloutWritesLedger(unittest.TestCase):
     """Drives the REAL repoint path: scripts/rollout-plugins.sh -> its
     registry_patch python heredoc, against temp HOME/cache/registry (same
     hermetic recipe as test_rollout_registry_safety.ConcurrentRolloutIsExcluded;
-    taskprog is a non-gate crate so no canary/overwatch is needed)."""
+    tracekit is a non-gate crate so no canary/overwatch is needed)."""
 
-    NAME = "taskprog"
+    NAME = "tracekit"
 
     def _setup(self, tmp, with_prior=True):
         home, cache = tmp / "home", tmp / "cache" / "yukineko"

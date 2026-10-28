@@ -6,7 +6,6 @@
 
 - **予算 (budgetguard)**: 今日の支出額とセッション数。`~/.budgetguard/state/ledger.json` から読む。
 - **直近セッション (gauge)**: 直近 N 件のセッションの turn 数・トークン数・USD コスト。`~/.gauge/store/sessions/` から読む。
-- **進捗ファイル (taskprog)**: カレントディレクトリの `.claude/progress.md` のプレビュー。
 - **Stop-hook レイテンシ**: `~/.harness/state/hook-latency.jsonl` からのセッション単位の合計。
 - **UserPromptSubmit 注入サイズ**: `~/.harness/state/inject-metrics.jsonl` からのターン単位の合計。
 - **hook binary の健全性**: `~/.claude/settings.json` に登録された hook のうち、binary がディスク上に無いもの。
@@ -30,11 +29,6 @@ PATH-shadow スキャン自体が完了しなかった場合 (判定不能とし
   Session          Project              Turns       Tokens  Cost USD
   ----------------------------------------------------------------------
   3c8d91a2         harness                 12        35000    0.1850
-
-── Progress file (taskprog) ──────────────────────
-  cwd: /repo
-  /repo/.claude/progress.md
-  │ - specforge ⑤ worktree merge
 ```
 
 ```
@@ -52,13 +46,12 @@ harness-status
 harness-status                       # フルダッシュボード
 harness-status budget                # 今日の支出のみ
 harness-status sessions --sessions 10  # 直近セッション (件数 N を指定)
-harness-status progress              # 進捗ファイルのみ
 harness-status hooks                 # Stop-hook レイテンシ集約 (予算モニタ)
 harness-status inject                # UserPromptSubmit 注入サイズ集約 (予算モニタ)
 harness-status plugins               # 全プラグインを活性化スコープで分類
 harness-status hooks-health          # settings.json の hook のうち binary 欠落のもの
 harness-status path-shadow           # plugin cache 版を覆う PATH 上の binary
-harness-status --json                # 機械可読出力 (フルダッシュボード・budget・sessions・progress・hooks・inject・plugins・hooks-health・path-shadow で有効)
+harness-status --json                # 機械可読出力 (フルダッシュボード・budget・sessions・hooks・inject・plugins・hooks-health・path-shadow で有効)
 ```
 
 `plugins` サブコマンドは全プラグインを **always-on** / **event-scoped** / **manual** に分類する。

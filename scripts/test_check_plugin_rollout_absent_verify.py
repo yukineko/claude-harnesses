@@ -94,6 +94,7 @@ class AbsentInputIsNotExitZero(unittest.TestCase):
             cpr.CRATES = str(crates)
             cpr.PLUGIN_CACHE_ROOT = str(tmp / "cache")
             cpr.SOURCE_CHANGED_SINCE = lambda commit, crate: False
+            cpr.ORIGIN_PLUGIN_VERSIONS = fixture_mod._origin_matches_source(cpr)
             cpr.SOURCE_CORE_VERSION = lambda: "0.2.1"
             cpr.CORE_VERSION_IN_HISTORY = lambda version: None
             out, err = io.StringIO(), io.StringIO()

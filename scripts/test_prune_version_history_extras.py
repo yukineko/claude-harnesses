@@ -274,7 +274,7 @@ class DAppendFailureRollsBack(unittest.TestCase):
     H5. Two plugins are repointed in one registry_patch; one has a DIRECTORY at
     its ledger path so the append fails (EISDIR)."""
 
-    NAMES = ("taskprog", "difflog")
+    NAMES = ("tracekit", "difflog")
 
     def _run(self, tmp, fail_name):
         home, cache, reg = tmp / "home", tmp / "cache" / "yukineko", tmp / "installed_plugins.json"
@@ -325,17 +325,17 @@ class DAppendFailureRollsBack(unittest.TestCase):
                                  f"{n}: this run's ledger line must be truncated away\n{log}")
             self.assertTrue((cache / fail_name / LEDGER).is_dir(), log)
 
-    # The rollout processes difflog before taskprog (observed), so failing on
-    # taskprog is "append OK for difflog, then fail" (needs the undo), failing
+    # The rollout processes difflog before tracekit (marketplace order), so failing on
+    # tracekit is "append OK for difflog, then fail" (needs the undo), failing
     # on difflog is "fail before anything was appended".
     def test_d_failure_after_an_earlier_append_truncates_it(self):
-        self._check("taskprog")
+        self._check("tracekit")
 
     def test_d_failure_before_any_append_leaves_state_untouched(self):
         self._check("difflog")
 
     def test_d_ledger_created_by_this_run_is_removed_on_failure(self):
-        # difflog has NO ledger before and is appended first; taskprog's ledger
+        # difflog has NO ledger before and is appended first; tracekit's ledger
         # path is a directory so its append fails: the ledger difflog just
         # CREATED must not survive.
         with tempfile.TemporaryDirectory() as t:
@@ -351,7 +351,7 @@ class DAppendFailureRollsBack(unittest.TestCase):
                     "scope": "user", "installPath": str(d), "version": "0.0.1-prior",
                     "lastUpdated": "2026-01-01T00:00:00.000Z"}]
             reg.write_text(json.dumps({"version": 1, "plugins": entries}))
-            (cache / "taskprog" / LEDGER).mkdir()
+            (cache / "tracekit" / LEDGER).mkdir()
             env = dict(os.environ)
             env.update(HOME=str(home), CLAUDE_PLUGIN_CACHE=str(cache),
                        CLAUDE_PLUGIN_REGISTRY=str(reg),
@@ -359,7 +359,7 @@ class DAppendFailureRollsBack(unittest.TestCase):
                        PLUGIN_CACHE_PROC_LIST_PROBE="echo '1 1 python3'")
             r = subprocess.run(
                 ["bash", str(ROLLOUT), "--no-rebuild", "--no-sync",
-                 "--plugin", "taskprog", "--plugin", "difflog"],
+                 "--plugin", "tracekit", "--plugin", "difflog"],
                 env=env, capture_output=True, text=True, cwd=str(REPO), timeout=300)
             log = f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
             self.assertEqual(r.returncode, 1, log)

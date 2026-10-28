@@ -61,8 +61,12 @@ enum Command {
     /// Clear the persisted CarveState (start a fresh carve).
     CarveReset,
     /// Derive goal - current-state gap and candidate next moves (§3).
+    /// An unreadable or corrupt opportunity store exits non-zero
+    /// (`undetermined`); a missing one lists no opportunities.
     Gap(GapArgs),
     /// Size triage (§13): route the right-sized move / park the rest.
+    /// An unreadable or corrupt opportunity store exits non-zero
+    /// (`undetermined`, nothing printed); a missing one hands off no refs.
     Route(RouteArgs),
     /// Show the parsed charter (+ resolved config), or (--write JSON) persist a
     /// skill-composed charter.
@@ -76,9 +80,10 @@ enum Command {
     /// the goal and the single solution `route` hands to condukt.
     Opportunity(OpportunityArgs),
     /// Machine-scope shared discovery store (cross-session dedup): record/select/
-    /// list discovered tasks so concurrent compass/scout sessions don't re-surface
-    /// a task another session already found. Every subcommand is fail-soft and
-    /// exits 0 (called from skills/hooks — must never break a turn).
+    /// list/migrate-legacy discovered tasks so concurrent compass/scout sessions
+    /// don't re-surface a task another session already found. Every subcommand
+    /// exits non-zero with `undetermined` on stderr when the store cannot be
+    /// resolved, read or written; nothing is reported as stored or empty then.
     Discovery(DiscoveryArgs),
     /// Pivot-or-persevere signal from the trailing outcome streak (§7).
     /// Prints `{"recommendation":"persevere"|"pivot","streak":N,"threshold":N,"reason":"…"}` and exits 0.
@@ -229,7 +234,8 @@ struct DiscoveryArgs {
 enum DiscoveryCmd {
     /// Append a `Discovered` row for `--title` (fingerprinted) under the given
     /// session (`--session-id` else `CLAUDE_CODE_SESSION_ID` else `local`).
-    /// Fail-soft: store errors are swallowed and the command still exits 0.
+    /// Exits non-zero (`undetermined` on stderr) if the row could not be stored
+    /// (unresolvable repo root, unreadable store, lock/write failure).
     Record {
         /// The discovered task title (fingerprinted deterministically).
         #[arg(long, value_name = "TITLE")]
@@ -241,7 +247,8 @@ enum DiscoveryCmd {
     },
     /// Mark a discovered task `Selected`, resolving the fingerprint from
     /// `--fingerprint` else `fingerprint(--title)`. With neither, prints a usage
-    /// note and exits 0 (never breaks a caller turn). Fail-soft.
+    /// note and exits 0 (a usage no-op). Exits non-zero (`undetermined` on stderr)
+    /// if the store could not be updated.
     Select {
         /// The fingerprint to select (used verbatim if given).
         #[arg(long, value_name = "FP")]
@@ -253,13 +260,22 @@ enum DiscoveryCmd {
         #[arg(long, value_name = "ID")]
         session_id: Option<String>,
     },
-    /// List discovery rows (`--json` => a JSON array, `[]` when empty/absent).
-    /// Fail-soft; always exits 0.
+    /// List discovery rows (`--json` => a JSON array, `[]` only for a store that
+    /// was never written). Exits non-zero with `undetermined` on stderr, and
+    /// prints no `[]`, when the store cannot be resolved or read, has a corrupt
+    /// line, or this checkout's legacy worktree-keyed file cannot be located (git
+    /// unavailable inside a git checkout).
     List {
         /// Print the rows as a JSON array instead of human lines.
         #[arg(long)]
         json: bool,
     },
+    /// Copy the legacy worktree-keyed rows of every linked worktree of this repo
+    /// into the shared (main worktree root) store. All-or-nothing, idempotent,
+    /// legacy files are left untouched. Prints one JSON summary object; exits
+    /// non-zero (`undetermined` on stderr, nothing written) if any source or the
+    /// root cannot be determined.
+    MigrateLegacy,
 }
 
 fn main() {
@@ -653,6 +669,25 @@ fn charter_command(args: CharterArgs) -> Result<()> {
     Ok(())
 }
 
+/// The opportunities under `north_star`, ranked, for `gap` and `route`. A
+/// missing `.compass/opportunities.json` is a legitimate empty (no bets
+/// recorded). A store that cannot be read or parsed is UNDETERMINED: it is an
+/// error (non-zero exit, `undetermined` on stderr), never zero opportunities —
+/// an empty list would be indistinguishable from "no bets recorded"
+/// (CLAUDE.md §3; backlog 2b6db3a7).
+fn load_ranked_opportunities(
+    root: &Path,
+    north_star: &str,
+) -> Result<Vec<opportunity::Opportunity>> {
+    opportunity::list_under_ranked(root, north_star).with_context(|| {
+        format!(
+            "opportunity store undetermined ({}): it exists but cannot be read or parsed; \
+             refusing to report zero opportunities",
+            opportunity::store_path(root).display()
+        )
+    })
+}
+
 /// gap (§3): deterministically assemble the inputs the skill reasons over, or
 /// (with `--write <text>`) persist the skill-produced gap into the charter.
 /// No LLM, no semantic derivation here.
@@ -681,14 +716,19 @@ fn gap_command(args: GapArgs) -> Result<()> {
     inputs.last_outcome = outcome::latest(&outcomes_root(&root)?)?;
     // OST (§3): scaffold one gap slot per opportunity under the active outcome
     // so the skill derives a gap per named bet, not one flat gap. Ranked by
-    // weight descending (load-bearing — heaviest bet leads). Tolerant load — a
-    // missing/corrupt store must not break `gap`.
+    // weight descending (load-bearing — heaviest bet leads). A missing store is
+    // a legitimate empty (no bets recorded); an unreadable or corrupt store is
+    // undetermined and fails `gap` non-zero — never reported as zero
+    // opportunities (CLAUDE.md §3; backlog 2b6db3a7).
     // Cross-session dedup (DoD#2): drop any opportunity another session already
     // discovered, so this session doesn't re-surface a duplicate. Byte-equivalent
-    // fallback (DoD#4): an absent/corrupt discovery store drops nothing.
-    let ranked = opportunity::list_under_ranked(&root, &charter.north_star).unwrap_or_default();
+    // fallback (DoD#4): a never-written discovery store drops nothing; an
+    // undetermined one keeps everything and `discovery_dedup` says so.
+    let ranked = load_ranked_opportunities(&root, &charter.north_star)?;
     let my_session = discovery::session_from_env();
-    inputs.opportunities = discovery::filter_undiscovered_by_others(&root, &my_session, ranked)
+    let (deduped, dedup_status) =
+        discovery::filter_undiscovered_by_others(&root, &my_session, ranked);
+    inputs.opportunities = deduped
         .into_iter()
         .map(|o| gap::OpportunityGap {
             id: o.id,
@@ -697,7 +737,16 @@ fn gap_command(args: GapArgs) -> Result<()> {
             gap: None,
         })
         .collect();
-    println!("{}", serde_json::to_string_pretty(&inputs)?);
+    // `discovery_dedup` says whether cross-session dedup actually ran; when the
+    // store is undetermined every candidate was kept and the reason is here.
+    let mut out = serde_json::to_value(&inputs)?;
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert(
+            "discovery_dedup".to_string(),
+            serde_json::to_value(&dedup_status)?,
+        );
+    }
+    println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
 }
 
@@ -833,9 +882,16 @@ fn opportunity_command(args: OpportunityArgs) -> Result<()> {
             let weight = weight.unwrap_or(opportunity::DEFAULT_WEIGHT);
             let rec = opportunity::record(&root, &title, &outcome_ref, weight)?;
             // DoD#1: a named bet is also a discovered task — emit a discovery row
-            // for it under the current session. Fail-soft: this must NOT change
-            // the `opportunity add` behavior/output/exit if the store errors.
-            discovery::append_discovered(&root, &rec.title, &discovery::session_from_env());
+            // for it under the current session. A store failure must NOT fail the
+            // `opportunity add` (the opportunity is already recorded), but it is
+            // never silent: warn on stderr that the row was not stored.
+            if let Err(e) =
+                discovery::append_discovered(&root, &rec.title, &discovery::session_from_env())
+            {
+                eprintln!(
+                    "compass: warning: opportunity recorded but its discovery row was NOT stored ({e})"
+                );
+            }
             println!(
                 "compass: recorded opportunity [{}] \"{}\" (weight {}) under outcome — {}",
                 rec.id,
@@ -861,36 +917,43 @@ fn opportunity_command(args: OpportunityArgs) -> Result<()> {
     Ok(())
 }
 
-/// discovery (cross-session dedup): record/select/list rows in the machine-scope
-/// shared discovery store. All three subcommands are fail-soft — the store calls
-/// swallow their own errors — so a skill/hook invocation always exits 0. The
-/// project cwd ([`project_root`]) keys the per-project store.
+/// discovery (cross-session dedup): record/select/list/migrate-legacy rows in the machine-scope
+/// shared discovery store. The subcommands exit non-zero (`undetermined` on
+/// stderr) when the store cannot be resolved, read or written; nothing is reported
+/// as stored/empty in that case. The main worktree root of the project cwd
+/// ([`project_root`]) keys the store, so all linked worktrees share it.
 fn discovery_command(args: DiscoveryArgs) -> Result<()> {
     let cwd = project_root();
     match args.cmd {
         DiscoveryCmd::Record { title, session_id } => {
-            discovery::record_command(&cwd, title, session_id);
+            discovery::record_command(&cwd, title, session_id)?;
         }
         DiscoveryCmd::Select {
             fingerprint,
             title,
             session_id: _,
         } => {
-            discovery::select_command(&cwd, fingerprint, title);
+            discovery::select_command(&cwd, fingerprint, title)?;
         }
         DiscoveryCmd::List { json } => {
             discovery::list_command(&cwd, json)?;
+        }
+        DiscoveryCmd::MigrateLegacy => {
+            discovery::migrate_legacy_command(&cwd)?;
         }
     }
     Ok(())
 }
 
 /// route (§13): consume an already-produced condukt decomposition JSON and
-/// triage it deterministically by `size`. Prints the routing as JSON, writes
-/// parked tasks to taskprog, and prints the condukt handoff text. No LLM.
+/// triage it deterministically by `size`. Prints the routing as JSON (parked
+/// tasks appear there only — user ruling 2026-10-27: they are not stored
+/// anywhere), and prints the condukt handoff text. No LLM.
 fn route_command(args: RouteArgs) -> Result<()> {
     let root = project_root();
-    // route appends parked tasks to <root>/.claude/progress.md.
+    // route no longer writes any file (parked tasks are printed only). The
+    // primary-tree refusal is kept unchanged; whether to drop it is a separate
+    // decision.
     harness_core::primary_tree::refuse_if_primary(&root.join(".claude"), "compass route")
         .map_err(|why| anyhow::anyhow!(why))?;
     let cfg = Config::load(&root);
@@ -911,21 +974,29 @@ fn route_command(args: RouteArgs) -> Result<()> {
 
     let routing = route::route(&dec, &cfg);
 
+    // The condukt handoff 課題 text (context for the chosen move) carries the
+    // named opportunities under the active outcome (charter north_star) so the
+    // handed-off solution carries its opportunity refs (DoD#2). They are loaded
+    // BEFORE anything is printed: an unreadable/corrupt opportunity store is
+    // undetermined and fails `route` non-zero with no partial output, rather
+    // than handing off with the refs silently empty (backlog 2b6db3a7). A
+    // missing store is a legitimate empty.
+    let charter = Charter::load(&Charter::project_path(&root)).unwrap_or_default();
+    let ranked = load_ranked_opportunities(&root, &charter.north_star)?;
+
     // Print the routing (+ edge) as JSON.
     println!("{}", serde_json::to_string_pretty(&routing)?);
 
-    // Write parked tasks to the taskprog "残り" sink (self-feeding loop, §6).
-    route::write_parked_to_taskprog(&root, &routing.parked)?;
-
-    // Print the condukt handoff 課題 text (context for the chosen move), with the
-    // named opportunities under the active outcome (charter north_star) so the
-    // handed-off solution carries its opportunity refs (DoD#2).
-    let charter = Charter::load(&Charter::project_path(&root)).unwrap_or_default();
-    // Cross-session dedup (DoD#2) on the handed-off opportunity refs; byte-equiv
-    // fallback (DoD#4) when the discovery store is absent/corrupt.
-    let ranked = opportunity::list_under_ranked(&root, &charter.north_star).unwrap_or_default();
+    // Cross-session dedup (DoD#2) on the handed-off opportunity refs. A never-
+    // written store drops nothing; an undetermined store keeps every ref and the
+    // handoff says `dedup unknown`.
     let my_session = discovery::session_from_env();
-    let opportunities = discovery::filter_undiscovered_by_others(&root, &my_session, ranked);
+    let (opportunities, dedup_status) =
+        discovery::filter_undiscovered_by_others(&root, &my_session, ranked);
+    if let discovery::DedupStatus::Undetermined { reason } = &dedup_status {
+        // Refs are kept (nothing dropped), but say plainly that dedup did not run.
+        println!("compass: cross-session dedup unknown, all opportunity refs kept ({reason})");
+    }
     println!();
     print!(
         "{}",

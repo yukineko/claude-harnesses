@@ -51,7 +51,7 @@ overwatch begin --key <k>
 
 #### `overwatch sessions [--json]`
 
-live（stale でない）lease を保持するセッションの一覧。
+live（stale でない）lease を保持するセッションと、presence hook 登録セッションの一覧。`--json` は `{sessions, active_sessions}` のオブジェクトで、どちらかのソースが読めないときは `undetermined` を含む（空配列は「0件」を意味し、「不明」ではない）。
 
 
 すべてのデータは `<base>/<project-key>/overwatch/` に格納される（`<base>` は `~/.overwatch` 固定）。

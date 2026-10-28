@@ -14,7 +14,7 @@
 - **driver（ドライバ）** — source→executor を回す統合ループ層。`/flow` が現行のドライバ。
 - **PDO（Parallel Development Orchestration）** — 仮説駆動で並列に開発施策を回す枠組み。hypothesis がそのライフサイクル（作成・検証・棄却・出荷≠検証の追跡）を担う。
 - **PDO session anchor（セッションアンカー）** — 各セッションが「今どの PDO 単位を担当し（scope＝触るファイル/glob・done_criteria＝完了定義）」を保持する仕組み。overwatch の `Lease` に scope/done_criteria を持たせ、flow が pick 時に `overwatch begin --scope/--done-criteria` で登録（`overwatch status` に可視化）、ctxrot が guard で再注入（記憶喪失対策）、stuckguard が scope 逸脱を検知（drift 対策）＋heartbeat 便乗（誤 reap・奪取防止）、overwatch begin が scope_overlap/possible_duplicate を早期警告、condukt reconcile が二重完了を検知（exit 2）。設計は `docs/DESIGN-pdo-session-anchor.md`。
-- **HOTL（Human On The Loop）** — 人間が随時点検・介入する運用モデル。harness-status / taskprog がハンドオフを支援する。
+- **HOTL（Human On The Loop）** — 人間が随時点検・介入する運用モデル。harness-status がハンドオフを支援する。
 - **autonomy gate / switch** — 自律運転時に人間ゲートを縮退させる仕組み。condukt の `state autonomy-check` / env `CONDUKT_AUTONOMOUS` / config で切替。
 - **fail-closed（フェイルクローズド）** — **判定を持つ全コードに適用する不変条件**として扱い、特定クレートの閾値挙動の名前として扱わないこと。**判定不能（IO 失敗 / ロック取得失敗 / subprocess の異常終了 / パース不能 / panic / 空集合）を clean に写さず、必ず block か ask に解決する**こと。Result・Option を bool へ潰すときは、unwrap_or の既定値を必ず制限側（deny・block・true＝違反あり）にすること。反対の **fail-open**（「わからない」を「大丈夫」と記録してしまう既定バイアス）に倒さないこと。二値の verdict 型そのものが原因になりうる点は `crates/blastguard/src/model.rs:5`（「Three answers, not two.」＝二値型が「解析できない」を `Allow` に強制していた）が名指ししている。だから判定型は三値（`Allow`/`Ask`/`Deny`、`Clean`/`Violation`/`Undetermined` 等）を持つ。適用例: propguard の閾値ゲート、Stop ゲートの panic barrier（`crates/harness-core/src/gate/run.rs:186`「**fail closed**: block the stop and surface the crash」）、blastguard の `Decision::Ask`。
 - **fail-soft（フェイルソフト）** — **前提ツールが不在**（＝存在しないことが判明している）ときに、機能を縮退させて継続すること。oracle は `tdd` 不在時に fail-soft。**fail-closed の例外ではない**: 「ツールが無い」は判定済みの事実であり「判定不能」ではない。**判定不能を fail-soft と呼んで通すのが典型的な誤用**なので、fail-soft を主張するコードは「無いことをどう確かめたか」を書くこと（spawn 失敗・空 stdout・非 0 終了は "無い" ではなく "わからない" 側）。
@@ -68,7 +68,6 @@
 | ship | event-scoped | commit・merge・push・plugin-update の出荷儀式を促す（未出荷状態を検出・subscription-native） |
 | specguard | always-on | 仕様↔実装の整合を監査する read-only ハーネス（subscription-native）＋ polarity synonym guard の段階的 ratification ＋ spec-map ストア |
 | stuckguard | always-on | PostToolUse で反復操作・編集スラッシュを検知しエスカレーションする（Jaccard near-repeat ＋ progress-score 3信号 stall advisory ＋ escalation 時の lesson write/retrieve） |
-| taskprog | always-on | `.claude/progress.md` をセッション間で同期し HOTL ハンドオフを支援する |
 | tdd | always-on | Stop でテストなし実装を阻止するテストファースト・ゲート（RED before GREEN） |
 | tracekit | manual | condukt run を span 木として記録・描画し OTel GenAI-semconv JSON を export するトレーサ |
 | trajectoryeval | manual | worker が辿った tool-call 経路を期待軌跡と照合する trajectory-match verifier。`tier` サブコマンドはリスク階層化 e2e 検証（core allowlist に載る core フローは毎回 structured-data/fuzzy diff、非 core は existence/seeded sampling）を持ち、fuzzy 閾値超過ドリフトは needs-human（exit3）にエスカレートする |

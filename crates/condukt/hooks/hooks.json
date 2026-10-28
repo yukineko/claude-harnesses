@@ -11,7 +11,7 @@
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/condukt state record-run --all", "timeout": 15 }
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/condukt state record-run --all --stop-hook", "timeout": 15 }
         ]
       }
     ],

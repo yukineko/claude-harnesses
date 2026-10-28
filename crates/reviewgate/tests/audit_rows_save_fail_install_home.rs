@@ -160,9 +160,23 @@ fn unwritable_state_dir_repeat_blocks_again() {
 
     let (code, out2, err2) = stop(&dir);
     assert_eq!(code, 0, "stderr={err2}");
+    // The second identical Block is waived by the repeat ledger (harness-core
+    // repeat.rs). Since the 2026-10-27 quiet-stop ruling the waiver prints only
+    // a one-liner and the re-issued review text lives in waivers.log, so the
+    // "review was re-issued" property is anchored there, not on stdout.
     assert!(
-        out2.contains("round 1/2"),
-        "unpersisted state must NOT reach already-reviewed; review must be re-issued: {out2} {err2}"
+        out2.contains("reviewgate: 同じ指摘の2度目のため通しました（未解消）"),
+        "unpersisted state must NOT reach a silent already-reviewed; the re-taken Block must surface as a waiver: {out2} {err2}"
+    );
+    let waivers = std::fs::read_to_string(
+        dir.join(".claude/harness-state/repeat")
+            .join(SESSION)
+            .join("waivers.log"),
+    )
+    .unwrap_or_default();
+    assert!(
+        waivers.contains("round 1/2"),
+        "unpersisted state must NOT reach already-reviewed; review must be re-issued (durable in waivers.log): {waivers:?} {out2} {err2}"
     );
     assert_eq!(
         violation_lines(&dir),

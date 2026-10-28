@@ -1,7 +1,8 @@
 //! Backlog 1e6f00ae, round 2 (compass side): the primary-tree boundary is
 //! decided by the PATH, not by ambient git environment (`GIT_DIR` /
 //! `GIT_WORK_TREE`), a cwd inside `<primary>/.git` is not a free pass, `route`
-//! (which appends to `.claude/progress.md`) is covered, and an undetermined
+//! (which used to append to `.claude/progress.md` and, since the 2026-10-27
+//! user ruling, writes nothing) is covered, and an undetermined
 //! boundary (a `.git` file pointing at a missing gitdir) is refused.
 //!
 //! Every spawned process has GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR /
@@ -224,12 +225,12 @@ fn route_from_primary_checkout_is_refused_and_writes_nothing_under_claude() {
     );
     assert!(
         !fx.primary.join(".claude").exists(),
-        "refused route must not write .claude/progress.md; out={out:?} err={err:?}"
+        "refused route must not create .claude/; out={out:?} err={err:?}"
     );
 }
 
 #[test]
-fn route_from_linked_worktree_succeeds_and_parks_there_only() {
+fn route_from_linked_worktree_succeeds_and_prints_parked_without_storing() {
     let fx = fixture();
     let f = route_file(&fx);
     let (code, out, err) = run(
@@ -239,9 +240,16 @@ fn route_from_linked_worktree_succeeds_and_parks_there_only() {
         &[],
     );
     assert_eq!(code, 0, "out={out:?} err={err:?}");
-    let body = std::fs::read_to_string(fx.linked.join(".claude/progress.md"))
-        .expect("progress.md written in the worktree");
-    assert!(body.contains("parked-big-move"), "{body}");
+    // User ruling 2026-10-27: parked tasks are printed in the routing JSON and
+    // stored nowhere.
+    assert!(
+        out.contains("parked-big-move"),
+        "parked task must be printed: {out}"
+    );
+    assert!(
+        !fx.linked.join(".claude/progress.md").exists(),
+        "route must not write .claude/progress.md"
+    );
     assert!(!fx.primary.join(".claude").exists());
 }
 

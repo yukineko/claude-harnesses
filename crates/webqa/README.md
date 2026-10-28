@@ -15,23 +15,30 @@ Claude Code plugin enforcing Playwright-based web QA on Stop (v0.1.3).
   missing/empty spec mapping, spawn failure, timeout, non-JSON stdout, nothing ran,
   exit/stats mismatch, runner errors); flaky tests block.
   Panics go through `harness_core::gate::run::run_guarded` (fail-closed, bounded). After
-  `max_attempts` (default 3) blocked stops in one session the gate gives up with a loud
-  `systemMessage` ("NOTHING WAS VERIFIED"). State: `$WEBQA_STATE_DIR`, else `~/.webqa`.
+  `max_attempts` blocked stops in one session the gate gives up with a loud
+  `systemMessage` ("NOTHING WAS VERIFIED"). Only a trusted config sets `max_attempts` (clamped to
+  1..=10) and `reset_after_secs`; an untrusted, unreadable or unparseable config never sets its own
+  budget — the built-in default (3 attempts, 1800 s) applies. The config is read once and the same
+  bytes are hashed for trust and parsed. State: `$WEBQA_STATE_DIR`, else `~/.webqa`.
   Config format: `webqa.example.toml`.
 - `webqa trust` — records the sha256 of `<root>/webqa.toml` (root resolved like the gate) keyed by
   the canonical root in `<state>/trust.json`. Re-run after every config change. A corrupt store is
   never overwritten (the command fails).
-- `webqa weaken-check [--diff-file PATH]` — scans a unified diff (default `git diff --cached`) of
+- `webqa weaken-check [--diff-file PATH]` — scans a unified diff (default `git diff --cached`, run with `--no-ext-diff --no-textconv
+  --no-color --no-relative`, fixed `a/`/`b/` prefixes and `core.quotePath=true`, so no external diff
+  driver, textconv attribute or prefix config can change the patch) of
   Playwright spec files (`.spec`/`.test` + ts/js/tsx/jsx/mjs/mts/cjs/cts; matched on the old or the new
   path, so a rename out of a spec name is still inspected). Paths in `---`/`+++` headers are read
   up to git's trailing TAB; C-quoted paths (`"a/x\"y.spec.ts"`) are decoded (malformed quoting
   = undetermined). Rules: `skip-added`, `only-added`, `slow-added` (`test.slow()`),
   `expect-removed`, `wait-timeout-added`, `timeout-raised` (file-level; evaluates `60_000`,
   `60 * 1000`, `(5 * 60_000)`; `0` disables the timeout and counts as infinite; a new timeout
-  above 30000 ms with none removed also counts), `matcher-weakened`.
+  above 30000 ms with none removed also counts, and so does removing a timeout below 30000 ms with
+  none added, since it reverts to the default), `matcher-weakened`.
   Exit 0 clean, 1 findings (one stdout line per finding with path and rule id), 2 undetermined
   (unreadable file, unparseable input, git failure, binary diff of a spec, any non-evaluable
-  timeout expression — identifier, parenthesized, operator-leading or empty — replacing a literal;
+  added timeout expression — identifier, parenthesized, operator-leading or empty — whether it
+  replaces a literal or is added with none removed (it may exceed the 30000 ms default);
   only a `setTimeout(` callback is not treated as a timeout). Errors never map to 0.
 - `webqa-gen` skill — shipped (`skills/webqa-gen/SKILL.md`): spec/URL -> browser exploration ->
   test-first Playwright spec -> RED observation -> adoption.

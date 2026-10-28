@@ -690,3 +690,28 @@ fn non_git_cwd_without_config_allows_not_configured() {
         describe(&out)
     );
 }
+
+// ------------------------------------------------------------ round-2 verifier-observed fail-opens
+
+#[test]
+fn r3_untrusted_config_cannot_set_its_own_give_up_budget() {
+    let f = fixture("r3-untrusted-budget");
+    f.stub(&playwright_json(2, 0, 0, 0), 0);
+    f.commit_config(&format!(
+        "command = [\"{}\"]\nmax_attempts = 1\n\n[[map]]\nsources = [\"src/login/**\"]\nspecs = [\"e2e/login.spec.ts\"]\n",
+        f.stub.display()
+    ));
+    // deliberately NOT trusted
+    f.touch_login();
+    let o1 = f.gate("s-r3", false);
+    assert_block(&o1);
+    let o2 = f.gate("s-r3", true);
+    assert_block(&o2);
+    let o3 = f.gate("s-r3", true);
+    assert_block(&o3);
+    assert!(
+        !f.stub_invoked(),
+        "untrusted command must NOT execute; argv={:?}",
+        f.argv()
+    );
+}

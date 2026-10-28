@@ -57,7 +57,10 @@ pub const MAX_TIMEOUT_SECS: u64 = 540;
 
 pub enum Loaded {
     Absent,
-    Config(Box<Config>),
+    /// The parsed config and the exact bytes it was parsed from (the trust
+    /// check hashes these same bytes, so the approved content and the
+    /// executed content cannot diverge between two reads).
+    Config(Box<Config>, Vec<u8>),
     Undetermined(String),
 }
 
@@ -67,32 +70,40 @@ pub fn path_for(root: &Path) -> PathBuf {
 
 pub fn load(root: &Path) -> Loaded {
     let p = path_for(root);
-    let text = match std::fs::read_to_string(&p) {
-        Ok(t) => t,
+    // Read once: these bytes are both parsed and hashed for trust.
+    let bytes = match std::fs::read(&p) {
+        Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Loaded::Absent,
         Err(e) => return Loaded::Undetermined(format!("cannot read {}: {e}", p.display())),
     };
-    parse(&text, &p)
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(t) => t,
+        Err(e) => return Loaded::Undetermined(format!("{} is not UTF-8: {e}", p.display())),
+    };
+    match parse(text, &p) {
+        Ok(c) => Loaded::Config(Box::new(c), bytes),
+        Err(why) => Loaded::Undetermined(why),
+    }
 }
 
-fn parse(text: &str, p: &Path) -> Loaded {
+fn parse(text: &str, p: &Path) -> Result<Config, String> {
     let cfg: Config = match toml::from_str(text) {
         Ok(c) => c,
         Err(e) => {
-            return Loaded::Undetermined(format!("cannot parse {}: {e}", p.display()));
+            return Err(format!("cannot parse {}: {e}", p.display()));
         }
     };
     if cfg.command.is_empty() || cfg.command[0].trim().is_empty() {
-        return Loaded::Undetermined(format!("{}: `command` is empty", p.display()));
+        return Err(format!("{}: `command` is empty", p.display()));
     }
     if cfg.maps.is_empty() {
-        return Loaded::Undetermined(format!(
+        return Err(format!(
             "{}: no [[map]] declared, so no touched file can be tied to a spec",
             p.display()
         ));
     }
     if cfg.timeout_secs > MAX_TIMEOUT_SECS {
-        return Loaded::Undetermined(format!(
+        return Err(format!(
             "{}: `timeout_secs` = {} exceeds {MAX_TIMEOUT_SECS} (the Stop hook itself is killed \
              at 600s, so a longer runner limit could never be observed)",
             p.display(),
@@ -100,10 +111,10 @@ fn parse(text: &str, p: &Path) -> Loaded {
         ));
     }
     if cfg.max_attempts == 0 {
-        return Loaded::Undetermined(format!(
+        return Err(format!(
             "{}: `max_attempts` must be at least 1 (0 would disable the gate)",
             p.display()
         ));
     }
-    Loaded::Config(Box::new(cfg))
+    Ok(cfg)
 }

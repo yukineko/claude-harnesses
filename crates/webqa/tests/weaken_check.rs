@@ -634,3 +634,62 @@ fn w4_test_slow_added_is_reported() {
         describe(&out)
     );
 }
+
+// ------------------------------------------------ round-2 verifier-observed fail-opens
+
+#[test]
+fn r1_added_non_evaluable_set_timeout_with_no_removed_timeout_exits_2() {
+    let d = "diff --git a/tests/t.spec.ts b/tests/t.spec.ts\nindex 1111111..2222222 100644\n--- a/tests/t.spec.ts\n+++ b/tests/t.spec.ts\n@@ -1,2 +1,3 @@\n test('x', async () => {\n+  test.setTimeout(TWO_MIN);\n   await page.goto('/');\n";
+    let out = run_with_diff("r1-nonevalnew", d);
+    assert_exit(&out, 2);
+}
+
+/// Stages a spec change in a fresh repo after `setup` ran, returns the output.
+fn staged_only_added_with(tag: &str, setup: impl Fn(&std::path::Path)) -> Output {
+    let dir = unique_dir(tag);
+    git_in(&dir, &["init", "-q"]);
+    git_in(&dir, &["config", "user.email", "t@example.com"]);
+    git_in(&dir, &["config", "user.name", "t"]);
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::write(
+        dir.join("tests/s.spec.ts"),
+        "import { test, expect } from '@playwright/test';\ntest('s', async ({ page }) => {\n  await expect(page.locator('#s')).toBeVisible();\n});\n",
+    )
+    .unwrap();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "--no-verify", "-m", "init"]);
+    setup(&dir);
+    std::fs::write(
+        dir.join("tests/s.spec.ts"),
+        "import { test, expect } from '@playwright/test';\ntest.only('s', async ({ page }) => {\n  await expect(page.locator('#s')).toBeVisible();\n});\n",
+    )
+    .unwrap();
+    git_in(&dir, &["add", "tests/s.spec.ts"]);
+    let out = run_staged_in(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    out
+}
+
+#[test]
+fn r2_staged_mode_ignores_diff_external_driver() {
+    let out = staged_only_added_with("r2-ext", |d| {
+        git_in(d, &["config", "diff.external", "/usr/bin/true"]);
+    });
+    assert_finding(&out, "tests/s.spec.ts", "only-added");
+}
+
+#[test]
+fn r2_staged_mode_ignores_textconv_attribute() {
+    let out = staged_only_added_with("r2-textconv", |d| {
+        std::fs::write(d.join(".gitattributes"), "*.ts diff=tc\n").unwrap();
+        git_in(d, &["config", "diff.tc.textconv", "sh -c 'true'"]);
+    });
+    assert_finding(&out, "tests/s.spec.ts", "only-added");
+}
+
+#[test]
+fn r4_removing_set_timeout_below_default_is_timeout_raised() {
+    let d = "diff --git a/tests/t.spec.ts b/tests/t.spec.ts\nindex 1111111..2222222 100644\n--- a/tests/t.spec.ts\n+++ b/tests/t.spec.ts\n@@ -1,3 +1,2 @@\n test('x', async () => {\n-  test.setTimeout(5000);\n   await page.goto('/');\n";
+    let out = run_with_diff("r4-removed-low", d);
+    assert_finding(&out, "tests/t.spec.ts", "timeout-raised");
+}

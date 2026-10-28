@@ -36,11 +36,16 @@ Stop hook。project root（hook の cwd の `git rev-parse --show-toplevel`。re
 | 選択した spec のどれかが report の `suites[].file`（ネストした suite も再帰。`/` 境界の suffix 一致）に無い、または skip 以外の test が 1 件も無い | block (undetermined、欠けた spec 名付き) |
 | 上記のいずれでもない（`expected > 0`, `unexpected = 0`, `flaky = 0`, exit 0、全 spec が結果に出現） | 許可 |
 
-block が同一 session で `max_attempts`（既定 3）回続いた次の stop は有界に許可するが、
+block が同一 session で `max_attempts` 回続いた次の stop は有界に許可するが、
 `{"systemMessage": "... NOTHING WAS VERIFIED ..."}` を必ず出す（黙って通さない）。attempt カウンタは
 `$WEBQA_STATE_DIR`、無ければ `~/.webqa` に session 別で保存し、`reset_after_secs`（既定 1800）の
 無操作で 0 に戻る。session id が違えば別カウンタ。許可 = exit 0 かつ stdout 空、block = exit 0 かつ
 `{"decision":"block","reason":...}`（hook プロトコル）。手動実行（stdin が hook JSON でない）は block 時に exit 1。
+
+`max_attempts` / `reset_after_secs` を設定できるのは **trust 済みの config だけ**（`max_attempts` は
+1〜10 に clamp）。untrusted・読めない・パース不能な config の値は一切使わず、組み込み既定
+（3 回・1800 秒）で有界にする（未承認ファイルが自分の give-up 予算を 1 にして素通りさせるのを防ぐ）。
+`webqa.toml` は 1 回だけ読み、その同じバイト列を trust の hash とパースの両方に使う。
 
 `timeout_secs` の上限は 540（hooks.json の Stop hook timeout 600 秒より下。超えると runner の
 タイムアウトを観測できないため undetermined）。下限は従来どおり 1 秒に切り上げ。
@@ -61,7 +66,8 @@ Playwright spec への diff だけを検査し、テストを「通りやすく�
 `*.spec.*` / `*.test.*`（拡張子 `ts` `js` `tsx` `jsx` `mjs` `mts` `cjs` `cts`）で、旧パス・新パスのどちらかが
 spec 名なら検査する（spec から非 spec 名へのリネームで回避できない）。`---`/`+++` ヘッダのパスは git が
 付ける末尾 TAB の手前までを読み、C-quote されたパス（`"a/x\"y.spec.ts"`）はデコードする（不正な quote は判定不能）。diff は `--diff-file` か、省略時は
-`git diff --cached`。
+`git diff --cached`（`--no-ext-diff --no-textconv --no-color --no-relative`、`a/`/`b/` prefix 固定、
+`core.quotePath=true` 付きで実行。`diff.external`・textconv 属性・prefix 系設定で patch を差し替えられない）。
 
 | ルール | 検出対象 |
 |---|---|
@@ -70,13 +76,14 @@ spec 名なら検査する（spec から非 spec 名へのリネームで回避�
 | `only-added` | `.only` の追加 |
 | `expect-removed` | hunk 内で `expect(` が純減 |
 | `wait-timeout-added` | `waitForTimeout(` の追加 |
-| `timeout-raised` | `timeout: N` / `setTimeout(N)` の引き上げ。**ファイル単位**（hunk をまたいで比較）。`60_000`・`60 * 1000`・`(5 * 60_000)` のような整数（積・括弧）は評価する。`0` は timeout 無効化なので無限大として扱う（正の値を `0` に置換すれば検出）。削除された timeout が無くても、新規追加が 30000 ms（Playwright 既定）を超えれば検出 |
+| `timeout-raised` | `timeout: N` / `setTimeout(N)` の引き上げ。**ファイル単位**（hunk をまたいで比較）。`60_000`・`60 * 1000`・`(5 * 60_000)` のような整数（積・括弧）は評価する。`0` は timeout 無効化なので無限大として扱う（正の値を `0` に置換すれば検出）。削除された timeout が無くても、新規追加が 30000 ms（Playwright 既定）を超えれば検出。逆に 30000 ms 未満の timeout を削除して何も追加しない場合も既定へ戻る＝引き上げとして検出 |
 | `matcher-weakened` | `expect` が `toBeTruthy` / `toBeDefined` / `not.toBeNull` 等の弱いマッチャへ置換 |
 
 終了コード（三値）: `0` = 問題なし / `1` = 検出あり（stdout に `パス: ルールID: 詳細` を 1 行ずつ）/
 `2` = 判定不能（diff ファイルが読めない、空でない入力にパース可能な diff ヘッダが無い、
-`git diff --cached` の起動失敗・非 0 終了、spec の binary diff、リテラル timeout を評価不能な式
-（識別子・括弧式・演算子始まり・空など。`setTimeout(` のコールバックだけは timeout とみなさない）で置換した場合）。判定不能を 0 に写さない。
+`git diff --cached` の起動失敗・非 0 終了、spec の binary diff、評価不能な timeout 式の追加
+（識別子・括弧式・演算子始まり・空など。リテラルの置換でも、何も削除しない新規追加でも — 既定 30000 ms を
+超えうるため。`setTimeout(` のコールバックだけは timeout とみなさない））。判定不能を 0 に写さない。
 
 ## skill: webqa-gen
 

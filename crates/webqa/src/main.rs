@@ -135,9 +135,10 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 
     let cfg = match config::load(&root) {
         config::Loaded::Absent => not_configured(&root),
-        config::Loaded::Config(c) => {
-            // The command is spawned only from content the user approved.
-            let refusal = match trust::check(&dir, &root, &config::path_for(&root)) {
+        config::Loaded::Config(c, bytes) => {
+            // The command is spawned only from content the user approved;
+            // the hashed bytes are the parsed bytes (one read).
+            let refusal = match trust::check_bytes(&dir, &root, &config::path_for(&root), &bytes) {
                 trust::Trust::Trusted => None,
                 trust::Trust::Untrusted(why) => Some(format!("untrusted config: {why}")),
                 trust::Trust::Undetermined(why) => Some(format!(
@@ -145,14 +146,10 @@ fn gate_run(hook: Option<HookInput>) -> ! {
                 )),
             };
             if let Some(why) = refusal {
+                // Nothing from an unapproved file is honoured, including its
+                // give-up budget: the built-in default bounds this block.
                 let v = harness_core::verdict::Verdict::undetermined(why);
-                finish(
-                    &v,
-                    (c.max_attempts, c.reset_after_secs),
-                    &dir,
-                    &session,
-                    interactive,
-                )
+                finish(&v, config_defaults(), &dir, &session, interactive)
             }
             *c
         }
@@ -165,12 +162,20 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     };
 
     let v = gate::evaluate(&cfg, &root, &dir.join("runs"));
-    finish(
-        &v,
-        (cfg.max_attempts, cfg.reset_after_secs),
-        &dir,
-        &session,
-        interactive,
+    finish(&v, trusted_budget(&cfg), &dir, &session, interactive)
+}
+
+/// Bounds for a trusted `max_attempts` (a sane floor and ceiling).
+const MIN_ATTEMPTS: u32 = 1;
+const MAX_ATTEMPTS: u32 = 10;
+
+/// Give-up budget from a *trusted* config: `max_attempts` clamped to
+/// `MIN_ATTEMPTS..=MAX_ATTEMPTS`. Untrusted/undetermined configs never reach
+/// this; they use [`config_defaults`].
+fn trusted_budget(cfg: &config::Config) -> (u32, i64) {
+    (
+        cfg.max_attempts.clamp(MIN_ATTEMPTS, MAX_ATTEMPTS),
+        cfg.reset_after_secs,
     )
 }
 
@@ -183,6 +188,8 @@ fn not_configured(root: &std::path::Path) -> ! {
     std::process::exit(0);
 }
 
+/// Built-in give-up budget, used whenever the config is absent from trust
+/// (untrusted, unreadable, unparseable, undetermined).
 fn config_defaults() -> (u32, i64) {
     (3, 1800)
 }

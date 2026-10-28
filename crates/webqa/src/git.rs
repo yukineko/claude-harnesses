@@ -5,7 +5,11 @@ use std::path::Path;
 use std::process::Command;
 
 fn git_z(root: &Path, args: &[&str]) -> Result<Vec<String>, String> {
+    // No pager, and quoting pinned to git's default (irrelevant under `-z`,
+    // pinned anyway). Diff calls additionally pass `--no-ext-diff
+    // --no-textconv --no-color` so no config-defined driver shapes the output.
     let out = Command::new("git")
+        .args(["-c", "core.quotePath=true", "--no-pager"])
         .args(args)
         .current_dir(root)
         .output()
@@ -33,6 +37,9 @@ pub fn touched_files(root: &Path) -> Result<Vec<String>, String> {
         root,
         &[
             "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
             "--name-only",
             "-z",
             "--no-renames",

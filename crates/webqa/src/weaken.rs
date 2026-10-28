@@ -34,18 +34,43 @@ impl Outcome {
     }
 }
 
-/// Run the check against a diff file, or `git diff --cached` when `None`.
+/// `git diff --cached`, hardened against repository/user config that would
+/// change what the parser sees: an external diff driver (`diff.external`,
+/// `GIT_EXTERNAL_DIFF`) or a `textconv` attribute can replace the real patch
+/// with arbitrary output (e.g. nothing, which would read as clean); colour,
+/// `diff.noprefix` / `diff.mnemonicPrefix` and `diff.relative` change the
+/// header and line shapes. Each is pinned off here.
+const STAGED_DIFF_ARGS: &[&str] = &[
+    "-c",
+    "core.quotePath=true",
+    "-c",
+    "diff.noprefix=false",
+    "-c",
+    "diff.mnemonicPrefix=false",
+    "diff",
+    "--cached",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--no-relative",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+];
+
+/// Run the check against a diff file, or the hardened `git diff --cached`
+/// ([`STAGED_DIFF_ARGS`]) when `None`.
 pub fn run(diff_file: Option<&Path>) -> Outcome {
     let text = match diff_file {
         Some(p) => match std::fs::read(p) {
             Ok(b) => String::from_utf8_lossy(&b).into_owned(),
             Err(e) => return Outcome::Undetermined(format!("cannot read {}: {e}", p.display())),
         },
-        None => match Command::new("git").args(["diff", "--cached"]).output() {
+        None => match Command::new("git").args(STAGED_DIFF_ARGS).output() {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).into_owned(),
             Ok(o) => {
                 return Outcome::Undetermined(format!(
-                    "`git diff --cached` exited with {:?}: {}",
+                    "`git {}` exited with {:?}: {}",
+                    STAGED_DIFF_ARGS.join(" "),
                     o.status.code(),
                     String::from_utf8_lossy(&o.stderr).trim()
                 ))
@@ -371,13 +396,19 @@ fn check_timeouts(f: &FileDiff, out: &mut Vec<Finding>) -> Result<(), String> {
             .collect()
     };
     let (rv, av) = (vals(&rem_t), vals(&add_t));
+    // An added timeout we cannot evaluate may be larger than whatever it
+    // replaces (a literal, or the 30 s default when nothing was removed), so
+    // it is undetermined either way.
     if let Some(Timeout::Opaque(e)) = add_t.iter().find(|t| matches!(t, Timeout::Opaque(_))) {
-        if !rv.is_empty() {
-            return Err(format!(
-                "{}: timeout expression `{e}` replaces a literal timeout and cannot be evaluated",
-                f.path
-            ));
-        }
+        let what = if rv.is_empty() {
+            format!("is added (no literal timeout removed, so it replaces the {DEFAULT_TIMEOUT_MS} ms default)")
+        } else {
+            "replaces a literal timeout".to_string()
+        };
+        return Err(format!(
+            "{}: timeout expression `{e}` {what} and cannot be evaluated",
+            f.path
+        ));
     }
     let raised = match (rv.iter().max(), av.iter().max()) {
         (Some(r), Some(a)) if a > r => {
@@ -387,6 +418,18 @@ fn check_timeouts(f: &FileDiff, out: &mut Vec<Finding>) -> Result<(), String> {
             "timeout {} added (above the {DEFAULT_TIMEOUT_MS} ms default) with none removed",
             show_ms(*a)
         )),
+        // Removing a timeout below the default with nothing added reverts it
+        // to the 30 s default: a raise.
+        (Some(_), None) => rv
+            .iter()
+            .min()
+            .filter(|r| **r < DEFAULT_TIMEOUT_MS)
+            .map(|r| {
+                format!(
+                    "timeout {} removed with none added, reverting to the {DEFAULT_TIMEOUT_MS} ms default",
+                    show_ms(*r)
+                )
+            }),
         _ => None,
     };
     if let Some(detail) = raised {

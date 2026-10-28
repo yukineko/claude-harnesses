@@ -34,10 +34,16 @@ fn key(root: &Path) -> Result<String, String> {
         .map_err(|e| format!("cannot canonicalize {}: {e}", root.display()))
 }
 
+fn hash_bytes(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 fn hash_file(p: &Path) -> Result<String, String> {
     let bytes = std::fs::read(p).map_err(|e| format!("cannot read {}: {e}", p.display()))?;
-    let d = Sha256::digest(&bytes);
-    Ok(d.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(hash_bytes(&bytes))
 }
 
 /// `Ok(None)` only when the store file does not exist.
@@ -75,25 +81,44 @@ pub fn record(state: &Path, root: &Path, config: &Path) -> Result<String, String
     Ok(h)
 }
 
-/// Is the current content of `config` the one recorded for `root`?
-pub fn check(state: &Path, root: &Path, config: &Path) -> Trust {
-    let k = match key(root) {
-        Ok(k) => k,
-        Err(e) => return Trust::Undetermined(e),
-    };
-    let store = match read_store(state) {
-        Ok(s) => s,
-        Err(e) => return Trust::Undetermined(e),
-    };
-    let Some(recorded) = store.as_ref().and_then(|m| m.get(&k)) else {
-        return Trust::Untrusted(format!(
+/// Are `bytes` (the content of `config`, as already read by the caller) the
+/// content recorded for `root`? The caller parses the same bytes, so the
+/// approved and the executed content are one read.
+pub fn check_bytes(state: &Path, root: &Path, config: &Path, bytes: &[u8]) -> Trust {
+    match recorded_hash(state, root, config) {
+        Err(t) => t,
+        Ok(recorded) if hash_bytes(bytes) == recorded => Trust::Trusted,
+        Ok(_) => Trust::Untrusted(format!(
+            "{} changed since it was trusted; review it and run `webqa trust` again",
+            config.display()
+        )),
+    }
+}
+
+/// The recorded hash for `root`, or the non-`Trusted` answer.
+fn recorded_hash(state: &Path, root: &Path, config: &Path) -> Result<String, Trust> {
+    let k = key(root).map_err(Trust::Undetermined)?;
+    let store = read_store(state).map_err(Trust::Undetermined)?;
+    match store.as_ref().and_then(|m| m.get(&k)) {
+        Some(h) => Ok(h.clone()),
+        None => Err(Trust::Untrusted(format!(
             "{} has never been trusted; review it and run `webqa trust` in {}",
             config.display(),
             k
-        ));
+        ))),
+    }
+}
+
+/// Is the current content of `config` the one recorded for `root`? (Reads
+/// the file; an unreadable config is undetermined.)
+#[cfg(test)]
+pub fn check(state: &Path, root: &Path, config: &Path) -> Trust {
+    let recorded = match recorded_hash(state, root, config) {
+        Ok(h) => h,
+        Err(t) => return t,
     };
     match hash_file(config) {
-        Ok(h) if &h == recorded => Trust::Trusted,
+        Ok(h) if h == recorded => Trust::Trusted,
         Ok(_) => Trust::Untrusted(format!(
             "{} changed since it was trusted; review it and run `webqa trust` again",
             config.display()

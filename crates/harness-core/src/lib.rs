@@ -132,16 +132,4 @@ pub(crate) mod test_env {
     pub(crate) fn lock() -> MutexGuard<'static, ()> {
         ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
     }
-
-    /// Remove the inherited `GIT_*` repo-selecting variables from THIS
-    /// process's environment. For tests whose code under test spawns `git`
-    /// itself (so a per-`Command` `git_env::scrub` on the fixture cannot reach
-    /// it): under a hook-driven `cargo test` those would act on the hook's
-    /// repository. Idempotent, and every caller wants the variables absent, so
-    /// concurrent callers cannot disagree.
-    pub(crate) fn clear_inherited_git_env() {
-        for k in crate::git_env::INHERITED_GIT_ENV {
-            std::env::remove_var(k);
-        }
-    }
 }

@@ -33,11 +33,6 @@ fn git(dir: &Path, args: &[&str]) {
 
 /// A git repo with one tracked `.rs` file and freshly built indexes.
 fn built_repo() -> tempfile::TempDir {
-    // `index_store` spawns an unscrubbed `git ls-files`; keep it off the
-    // hook's repository.
-    for k in harness_core::git_env::INHERITED_GIT_ENV {
-        std::env::remove_var(k);
-    }
     let dir = tempfile::tempdir().unwrap();
     git(dir.path(), &["init", "-q"]);
     git(dir.path(), &["config", "user.email", "t@example.com"]);

@@ -676,7 +676,6 @@ mod tests {
 
     #[test]
     fn git_head_signal_is_known_and_advances_on_commit() {
-        crate::test_env::clear_inherited_git_env();
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();
         git(d, &["init", "-q"]);

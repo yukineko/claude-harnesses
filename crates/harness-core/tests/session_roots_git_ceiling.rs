@@ -112,12 +112,6 @@ fn roots_include(got: &Determination<SessionRoots>, repo: &Path) -> Result<(), S
 
 #[test]
 fn ceiling_env_does_not_exclude_an_in_repo_write() {
-    // `session_roots::resolve` spawns an unscrubbed `git`; keep the control
-    // and the setup off any hook-inherited repository. This binary holds
-    // exactly one test, so mutating the process env cannot race.
-    for k in harness_core::git_env::INHERITED_GIT_ENV {
-        std::env::remove_var(k);
-    }
     let tmp = tempfile::tempdir().unwrap();
     let base = canon(tmp.path());
     // Hook cwd: the primary tree. The session wrote into a DIFFERENT repo, so

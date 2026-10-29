@@ -246,7 +246,7 @@ mod tests {
     }
 
     fn git(cwd: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
+        let out = crate::git_env::scrub(&mut std::process::Command::new("git"))
             .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
             .args(args)
             .current_dir(cwd)
@@ -336,7 +336,7 @@ mod tests {
     fn caller_git_env_does_not_change_the_answer() {
         let (_t, primary, linked) = repo();
         // Point GIT_DIR at the linked worktree's gitdir while standing in primary.
-        let lg = std::process::Command::new("git")
+        let lg = crate::git_env::scrub(&mut std::process::Command::new("git"))
             .args(["rev-parse", "--path-format=absolute", "--git-dir"])
             .current_dir(&linked)
             .output()
@@ -344,7 +344,7 @@ mod tests {
         let lg = String::from_utf8_lossy(&lg.stdout).trim().to_string();
         // Run the classifier in a child so the env mutation cannot race other tests.
         let exe = std::env::current_exe().unwrap();
-        let out = std::process::Command::new(exe)
+        let out = crate::git_env::scrub(&mut std::process::Command::new(exe))
             .args(["--exact", "primary_tree::tests::env_child", "--nocapture"])
             .env("PT_CHILD_PATH", &primary)
             .env("GIT_DIR", &lg)

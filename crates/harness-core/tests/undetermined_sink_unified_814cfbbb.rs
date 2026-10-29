@@ -65,7 +65,7 @@ impl Drop for EnvGuard {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")

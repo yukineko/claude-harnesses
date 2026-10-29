@@ -878,6 +878,7 @@ mod tests {
         // set_var("HOME", ..) between them gives the two sides different
         // prefixes and fails a test that is about project keying, not HOME.
         let _guard = crate::test_env::lock();
+        crate::test_env::clear_inherited_git_env();
         // Two distinct cwds under the SAME git repo root (the repo root itself
         // and a nested subdir) must map to the SAME record_path. This covers
         // SUBDIRS only. That linked worktrees share the main checkout's store is
@@ -886,7 +887,7 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempfile::tempdir");
         let root = tempdir.path();
 
-        let status = std::process::Command::new("git")
+        let status = crate::git_env::scrub(&mut std::process::Command::new("git"))
             .arg("-C")
             .arg(root)
             .arg("init")

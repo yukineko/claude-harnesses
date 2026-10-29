@@ -94,7 +94,7 @@ fn backlog_814cfbbb_default_sink_is_shared_across_worktrees() {
     let wt = td.path().join("wt");
     std::fs::create_dir_all(&main).unwrap();
     let run = |dir: &Path, args: &[&str]| {
-        let o = Command::new("git")
+        let o = harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(dir)
             .args(args)
             .output()

@@ -35,6 +35,17 @@ use std::process::Command;
 const CEILING: &str = "GIT_CEILING_DIRECTORIES";
 
 fn git(dir: &Path, args: &[&str]) -> std::process::Output {
+    harness_core::git_env::scrub(&mut Command::new("git"))
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("git must be runnable for this test")
+}
+
+/// Deliberately NOT scrubbed: the precondition below needs the process-env
+/// `GIT_CEILING_DIRECTORIES` this test sets itself to reach the git child.
+fn git_inheriting_env(dir: &Path, args: &[&str]) -> std::process::Output {
     Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -101,6 +112,12 @@ fn roots_include(got: &Determination<SessionRoots>, repo: &Path) -> Result<(), S
 
 #[test]
 fn ceiling_env_does_not_exclude_an_in_repo_write() {
+    // `session_roots::resolve` spawns an unscrubbed `git`; keep the control
+    // and the setup off any hook-inherited repository. This binary holds
+    // exactly one test, so mutating the process env cannot race.
+    for k in harness_core::git_env::INHERITED_GIT_ENV {
+        std::env::remove_var(k);
+    }
     let tmp = tempfile::tempdir().unwrap();
     let base = canon(tmp.path());
     // Hook cwd: the primary tree. The session wrote into a DIFFERENT repo, so
@@ -141,7 +158,7 @@ fn ceiling_env_does_not_exclude_an_in_repo_write() {
 
     let _g = EnvGuard::set(CEILING, &other_c);
     // Precondition: git now says the exact "outside" phrase for an in-repo dir.
-    let out = git(&sub, &["rev-parse", "--show-toplevel"]);
+    let out = git_inheriting_env(&sub, &["rev-parse", "--show-toplevel"]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(128), "precondition: {out:?}");
     assert!(

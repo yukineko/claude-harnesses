@@ -448,6 +448,9 @@ mod tests {
     /// A throwaway git repo with two Rust files. `git ls-files` only reports
     /// tracked paths, so the files must actually be added.
     fn repo() -> tempfile::TempDir {
+        // `rs_files` spawns an unscrubbed `git ls-files`; keep it off the
+        // hook's repository.
+        crate::test_env::clear_inherited_git_env();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("src")).unwrap();
@@ -474,7 +477,7 @@ mod tests {
                 "x",
             ],
         ] {
-            let ok = std::process::Command::new("git")
+            let ok = crate::git_env::scrub(&mut std::process::Command::new("git"))
                 .arg("-C")
                 .arg(root)
                 .args(&args)

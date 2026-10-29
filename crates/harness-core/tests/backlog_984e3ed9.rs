@@ -21,7 +21,7 @@ use harness_core::index_store::{self, IndexPaths};
 use harness_core::verdict::Determination;
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .stdout(Stdio::null())
@@ -33,6 +33,11 @@ fn git(dir: &Path, args: &[&str]) {
 
 /// A git repo with one tracked `.rs` file and freshly built indexes.
 fn built_repo() -> tempfile::TempDir {
+    // `index_store` spawns an unscrubbed `git ls-files`; keep it off the
+    // hook's repository.
+    for k in harness_core::git_env::INHERITED_GIT_ENV {
+        std::env::remove_var(k);
+    }
     let dir = tempfile::tempdir().unwrap();
     git(dir.path(), &["init", "-q"]);
     git(dir.path(), &["config", "user.email", "t@example.com"]);

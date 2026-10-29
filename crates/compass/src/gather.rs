@@ -186,8 +186,15 @@ fn collect_md(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<()> {
 /// Run `git <args>` in `repo_root`, returning trimmed stdout on success.
 /// Returns `None` for any failure (non-git dir, missing git, non-zero exit, or
 /// timeout) so callers can treat git as an optional source.
+///
+/// The repository is selected only by `-C repo_root`: every inherited
+/// `GIT_*` location/config variable (`GIT_DIR`, `GIT_WORK_TREE`,
+/// `GIT_INDEX_FILE`, ... — see [`harness_core::git_env::INHERITED_GIT_ENV`]) is
+/// removed from the child, so a hook invoked under another git's environment
+/// cannot gather another repository's log/status/diff for `repo_root`.
 fn git_stdout(repo_root: &Path, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new("git");
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("-C").arg(repo_root).args(args);
     run_bounded(cmd, GIT_TIMEOUT)
 }

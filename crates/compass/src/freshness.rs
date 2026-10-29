@@ -289,8 +289,15 @@ fn is_cjk(ch: char) -> bool {
 
 /// Run `git <args>` in `repo_root`, returning trimmed stdout on success, or
 /// `None` for any failure (non-git, missing git, non-zero exit, or timeout).
+///
+/// The repository is selected only by `-C repo_root`: every inherited
+/// `GIT_*` location/config variable (`GIT_DIR`, `GIT_WORK_TREE`,
+/// `GIT_INDEX_FILE`, ... — see [`harness_core::git_env::INHERITED_GIT_ENV`]) is
+/// removed from the child, so a hook invoked under another git's environment
+/// cannot have a non-repo `repo_root` answered by that other repository.
 fn git_stdout(repo_root: &Path, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new("git");
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("-C").arg(repo_root).args(args);
     run_bounded(cmd, GIT_TIMEOUT)
 }

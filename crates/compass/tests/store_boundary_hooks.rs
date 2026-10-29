@@ -6,7 +6,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 fn git(cwd: &std::path::Path, args: &[&str]) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .current_dir(cwd)
@@ -32,7 +32,7 @@ fn breadcrumb_in_primary_declines_visibly_and_writes_nothing() {
         "transcript_path": transcript.to_str().unwrap(),
     })
     .to_string();
-    let mut c = Command::new(env!("CARGO_BIN_EXE_compass"))
+    let mut c = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_compass")))
         .arg("breadcrumb")
         .env("HOME", tmp.path())
         .env("GIT_CONFIG_GLOBAL", "/dev/null")

@@ -70,7 +70,7 @@ fn fx(tag: &str) -> Fx {
             "repro",
         ],
     ] {
-        let ok = Command::new("git")
+        let ok = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(&repo)
             .status()
@@ -82,7 +82,7 @@ fn fx(tag: &str) -> Fx {
 }
 
 fn run(f: &Fx, args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .args(args)
         .env("HOME", &f.home)
         .env("PATH", common::path_with_condukt_shim())

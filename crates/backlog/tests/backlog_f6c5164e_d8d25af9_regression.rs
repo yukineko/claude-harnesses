@@ -76,7 +76,7 @@ impl Fixture {
                 "repro",
             ],
         ] {
-            assert!(Command::new("git")
+            assert!(harness_core::git_env::scrub(&mut Command::new("git"))
                 .args(args)
                 .current_dir(&repo)
                 .status()
@@ -87,7 +87,7 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str]) -> Out {
-        let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+        let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
             .env("PATH", common::path_with_condukt_shim())
             .args(args)
             .env("HOME", &self.home)

@@ -78,7 +78,7 @@ fn setup(tag: &str) -> Env {
     .unwrap();
 
     let g = |a: &[&str]| {
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .args(a)
             .current_dir(&repo)
             .env("PATH", std::env::var("PATH").unwrap())

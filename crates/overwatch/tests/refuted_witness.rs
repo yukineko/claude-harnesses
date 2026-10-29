@@ -28,7 +28,7 @@ fn probe(dir: &Path, name: &str, body: &str) -> String {
 }
 
 fn record(home: &TempDir, project: &TempDir, id: &str, verdict: &str, extra: &[&str]) -> Output {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .args([
             "record-finding",
             "--finding-id",
@@ -65,7 +65,7 @@ fn stored_verdict(out: &Output) -> String {
 }
 
 fn queue(home: &TempDir, project: &TempDir) -> String {
-    let out = Command::new(bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(bin()))
         .arg("review-queue")
         .current_dir(project.path())
         .env("HOME", home.path())

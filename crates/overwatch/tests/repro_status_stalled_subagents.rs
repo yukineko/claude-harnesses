@@ -49,7 +49,7 @@ fn status_lists_idle_pending_tool_use_subagent_and_not_the_controls() {
     let proj = t.path().join("proj");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&proj).unwrap();
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(&proj)
         .args(["init", "-q"])
         .status()
@@ -92,7 +92,7 @@ fn status_lists_idle_pending_tool_use_subagent_and_not_the_controls() {
         16 * 60,
     );
 
-    let out = Command::new(BIN)
+    let out = harness_core::git_env::scrub(&mut Command::new(BIN))
         .current_dir(&proj)
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")

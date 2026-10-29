@@ -22,7 +22,7 @@ fn sandbox(tag: &str) -> (PathBuf, PathBuf) {
     let work = base.join("work");
     fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(work.join(".backlog")).unwrap();
-    let st = Command::new("git")
+    let st = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["init", "-q"])
         .current_dir(&work)
         .status()
@@ -39,7 +39,7 @@ fn task(id: &str, title: &str, status: &str, extra: &str) -> String {
 }
 
 fn ow(home: &Path, work: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_overwatch"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
         .args(args)
         .env("HOME", home)
         .env_remove("CLAUDE_CODE_SESSION_ID")

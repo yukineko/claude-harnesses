@@ -24,7 +24,7 @@ use std::process::{Command, Output};
 const ESC_ID: &str = "esc-dod14-1";
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args([
             "-c",
             "user.name=t",
@@ -103,7 +103,7 @@ fn seed_open_escalation(file: &Path) {
 }
 
 fn review_queue(home: &Path, cwd: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_overwatch"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
         .args(["review-queue", "--json"])
         .env("HOME", home)
         .env_remove("HARNESS_SANDBOX_HOME")

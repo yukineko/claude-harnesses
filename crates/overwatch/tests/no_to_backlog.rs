@@ -57,7 +57,7 @@ fn run(fx: &Fx, args: &[&str]) -> Output {
         fx.bindir.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .args(args)
         .current_dir(&fx.project)
         .env("HOME", &fx.home)

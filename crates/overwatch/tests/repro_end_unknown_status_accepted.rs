@@ -6,7 +6,7 @@ use std::process::{Command, Output};
 use tempfile::TempDir;
 
 fn run(home: &TempDir, project: &TempDir, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_overwatch"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
         .args(args)
         .current_dir(project.path())
         .env("HOME", home.path())

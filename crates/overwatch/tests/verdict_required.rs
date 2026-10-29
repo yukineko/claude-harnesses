@@ -30,6 +30,7 @@ fn record(
     verdict: Option<&str>,
 ) -> std::process::Output {
     let mut cmd = Command::new(bin());
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("record-finding")
         .arg("--finding-id")
         .arg(id)

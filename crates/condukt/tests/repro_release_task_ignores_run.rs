@@ -90,3 +90,75 @@ fn release_task_by_another_run_does_not_release_the_holders_claim() {
         "run-B released run-A's claim via release-task --run run-B: {still:?}"
     );
 }
+
+// ---- fixture isolation: inherited GIT_* must not reach the repo under test ------
+
+/// Scrubbed git call (independent of the fixture `git` helper under test);
+/// returns stdout.
+fn clean_git(dir: &Path, args: &[&str]) -> String {
+    let mut c = Command::new("git");
+    c.args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@t.t")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@t.t");
+    harness_core::git_env::scrub(&mut c);
+    let out = c.output().expect("git runs");
+    assert!(
+        out.status.success(),
+        "clean git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn repo_state(outer: &Path) -> String {
+    format!(
+        "HEAD={}\nbranches:\n{}\nworktrees:\n{}",
+        clean_git(outer, &["rev-parse", "HEAD"]).trim(),
+        clean_git(outer, &["branch", "--list"]),
+        clean_git(outer, &["worktree", "list", "--porcelain"]),
+    )
+}
+
+/// The fixture's `git` helper must not follow an inherited `GIT_DIR` (as set
+/// when the suite runs under a git hook). The child re-runs one existing
+/// `Fx::new` test with `GIT_DIR` aimed at a scratch outer repo; that outer
+/// repo must come back unchanged.
+#[test]
+fn fixture_git_ignores_inherited_git_dir() {
+    let outer = std::env::temp_dir().join(format!(
+        "condukt-relrun-gitenv-outer-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&outer).unwrap();
+    clean_git(&outer, &["init", "-q", "-b", "main"]);
+    std::fs::write(outer.join("f.txt"), "o\n").unwrap();
+    clean_git(&outer, &["add", "f.txt"]);
+    clean_git(&outer, &["commit", "-q", "-m", "outer"]);
+    let before = repo_state(&outer);
+
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "release_task_by_another_run_does_not_release_the_holders_claim",
+            "--test-threads=1",
+        ])
+        .env("GIT_DIR", outer.join(".git"))
+        .output()
+        .expect("child test binary runs");
+
+    let after = repo_state(&outer);
+    let _ = std::fs::remove_dir_all(&outer);
+    assert_eq!(
+        before,
+        after,
+        "outer repo mutated by fixture git under inherited GIT_DIR\nchild stderr: {}",
+        String::from_utf8_lossy(&child.stderr)
+    );
+}

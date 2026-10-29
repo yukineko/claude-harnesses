@@ -447,4 +447,93 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(root);
     }
+
+    fn gitenv_git(dir: &Path, args: &[&str]) {
+        let st = harness_core::git_env::scrub(&mut Command::new("git"))
+            .current_dir(dir)
+            .args(args)
+            .status()
+            .expect("git");
+        assert!(st.success(), "fixture git {args:?} failed");
+    }
+
+    /// Child half of `inherited_git_dir_must_not_change_verdict`. Inert unless
+    /// `GITENV_CHILD=1`; then prints the production verdicts for the clean
+    /// repo A (`GITENV_REPO_A`) and the non-repo dir (`GITENV_PLAIN`).
+    #[test]
+    fn gitenv_child_probe() {
+        if std::env::var("GITENV_CHILD").as_deref() != Ok("1") {
+            return;
+        }
+        let a = std::path::PathBuf::from(std::env::var("GITENV_REPO_A").unwrap());
+        let plain = std::path::PathBuf::from(std::env::var("GITENV_PLAIN").unwrap());
+        println!("VERDICT_A={:?}", changed_files(&a));
+        println!("VERDICT_PLAIN={:?}", changed_files(&plain));
+    }
+
+    /// An inherited `GIT_DIR` naming an unrelated dirty repo B must not change
+    /// the verdict for clean repo A or for a non-repo dir: the verdict equals
+    /// the one from a run without `GIT_DIR`.
+    #[test]
+    fn inherited_git_dir_must_not_change_verdict() {
+        if std::env::var("GITENV_CHILD").as_deref() == Ok("1") {
+            return;
+        }
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let base = scratch_dir();
+        let a = base.join("repo_a");
+        let b = base.join("repo_b");
+        let plain = base.join("plain");
+        for d in [&a, &b, &plain] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        for r in [&a, &b] {
+            gitenv_git(r, &["init", "-q"]);
+            gitenv_git(r, &["config", "user.email", "t@t.com"]);
+            gitenv_git(r, &["config", "user.name", "t"]);
+            std::fs::write(r.join("f.txt"), "x\n").unwrap();
+            gitenv_git(r, &["add", "f.txt"]);
+            gitenv_git(r, &["commit", "-qm", "init"]);
+        }
+        // B is dirty; A is clean.
+        std::fs::write(b.join("f.txt"), "changed in B\n").unwrap();
+        std::fs::write(b.join("only_b.txt"), "b\n").unwrap();
+
+        let run = |git_dir: Option<&Path>| -> String {
+            let mut c = Command::new(std::env::current_exe().unwrap());
+            c.args([
+                "--exact",
+                "git::tests::gitenv_child_probe",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env("GITENV_CHILD", "1")
+            .env("GITENV_REPO_A", &a)
+            .env("GITENV_PLAIN", &plain);
+            if let Some(g) = git_dir {
+                c.env("GIT_DIR", g);
+            }
+            let o = c.output().expect("spawn child");
+            assert!(o.status.success(), "child failed: {o:?}");
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter_map(|l| l.find("VERDICT_").map(|i| &l[i..]))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let control = run(None);
+        let with_git_dir = run(Some(&b.join(".git")));
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(
+            control.contains("VERDICT_A=Files([])") && control.contains("VERDICT_PLAIN=NotRepo"),
+            "control run unexpected: {control}"
+        );
+        assert_eq!(
+            with_git_dir, control,
+            "inherited GIT_DIR (repo B) changed the verdict for repo A / non-repo dir"
+        );
+    }
 }

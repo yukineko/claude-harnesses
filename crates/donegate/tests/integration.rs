@@ -42,7 +42,7 @@ fn isolated_dir(tag: &str) -> std::path::PathBuf {
 fn run(args: &[&str]) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_donegate");
     let dir = isolated_dir("cli");
-    let out = Command::new(bin)
+    let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(args)
         .current_dir(&dir)
         .env("HOME", &dir)
@@ -58,7 +58,7 @@ fn run(args: &[&str]) -> (i32, String) {
 fn run_gate(payload: &str) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_donegate");
     let dir = isolated_dir("gate");
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .arg("gate")
         .current_dir(&dir)
         .env("HOME", &dir)
@@ -123,7 +123,7 @@ fn gate_with_empty_stdin_still_exits_zero() {
 /// (code, stdout).
 fn run_gate_in(dir: &std::path::Path, payload: &str) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_donegate");
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .arg("gate")
         .current_dir(dir)
         .env("HOME", dir)
@@ -199,7 +199,7 @@ fn run_donegate_untrusted(
     payload: &str,
 ) -> (i32, String, String) {
     let bin = env!("CARGO_BIN_EXE_donegate");
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(args)
         .current_dir(dir)
         .env("HOME", dir)
@@ -364,7 +364,7 @@ fn status_does_not_render_an_untrusted_refusal_as_no_checks() {
 // ---------------------------------------------------------------------------
 
 fn git(cwd: &std::path::Path, args: &[&str]) -> bool {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(cwd)
         .output()
@@ -373,7 +373,7 @@ fn git(cwd: &std::path::Path, args: &[&str]) -> bool {
 }
 
 fn git_available() -> bool {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("--version")
         .output()
         .map(|o| o.status.success())
@@ -434,7 +434,7 @@ fn worktree_of_a_trusted_repo_inherits_trust() {
     std::fs::create_dir_all(&home).unwrap();
     let with_home = |dir: &std::path::Path, args: &[&str], payload: &str| {
         let bin = env!("CARGO_BIN_EXE_donegate");
-        let mut child = Command::new(bin)
+        let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
             .args(args)
             .current_dir(dir)
             .env("HOME", &home)
@@ -491,7 +491,7 @@ fn worktree_of_an_untrusted_repo_is_still_refused() {
     std::fs::create_dir_all(&home).unwrap();
 
     let bin = env!("CARGO_BIN_EXE_donegate");
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .arg("gate")
         .current_dir(&wt)
         .env("HOME", &home)

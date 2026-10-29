@@ -137,7 +137,7 @@ fn every_declared_subcommand_exists_in_the_binary() {
                     .split_whitespace()
                     .nth(1)
                     .unwrap_or_else(|| panic!("{event} command {part:?} passes no subcommand"));
-                let out = Command::new(exe)
+                let out = harness_core::git_env::scrub(&mut Command::new(exe))
                     .args([sub, "--help"])
                     .output()
                     .unwrap_or_else(|e| panic!("could not run {exe} {sub} --help: {e}"));
@@ -196,7 +196,7 @@ fn session_end_runs_harvest_before_sync_in_one_command() {
     )
     .unwrap();
 
-    let out = Command::new("sh")
+    let out = harness_core::git_env::scrub(&mut Command::new("sh"))
         .args(["-c", cmd])
         .env("HOME", &home)
         .env("CLAUDE_PLUGIN_ROOT", &plugin)

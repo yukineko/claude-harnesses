@@ -25,7 +25,7 @@ fn temp_home(tag: &str) -> PathBuf {
 }
 
 fn record(home: &Path, extra: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_fugu-router"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_fugu-router")))
         .env("HOME", home)
         .env_remove("FUGU_ROUTER_DISABLED")
         .args([

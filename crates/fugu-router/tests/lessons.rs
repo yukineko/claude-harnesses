@@ -29,7 +29,7 @@ fn temp_store_dir(tag: &str) -> PathBuf {
 /// Returns (exit_code, stdout).
 fn run(store_dir: &PathBuf, args: &[&str]) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_fugu-router");
-    let out = Command::new(bin)
+    let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(args)
         .env("LESSONS_STORE_DIR", store_dir)
         .stdin(Stdio::null())

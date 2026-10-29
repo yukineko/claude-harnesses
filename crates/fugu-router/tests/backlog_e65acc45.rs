@@ -27,7 +27,7 @@ impl TempRepo {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let git = |args: &[&str]| {
-            let st = Command::new("git")
+            let st = harness_core::git_env::scrub(&mut Command::new("git"))
                 .args(args)
                 .current_dir(&dir)
                 .stdout(Stdio::null())
@@ -59,7 +59,7 @@ impl Drop for TempRepo {
 }
 
 fn build(root: &Path) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_fugu-router"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_fugu-router")))
         .args(["code-index", "build", "--root"])
         .arg(root)
         .stdin(Stdio::null())

@@ -78,16 +78,17 @@ fn stop_payload(main_t: &Path, agent_t: &Path) -> String {
 }
 
 fn spawn_child(home: &Path, payload: &str) -> std::process::Child {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_fugu-router"))
-        .arg("agent-record")
-        .env("HOME", home)
-        .env_remove("FUGU_ROUTER_AUTO_MODEL")
-        .current_dir(home)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_fugu-router")))
+            .arg("agent-record")
+            .env("HOME", home)
+            .env_remove("FUGU_ROUTER_AUTO_MODEL")
+            .current_dir(home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
     child
         .stdin
         .take()

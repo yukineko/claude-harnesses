@@ -427,8 +427,15 @@ fn doc_problem(repo_root: &Path, doc: &str) -> Determination<Option<String>> {
     }
 }
 
+/// `git -C repo_root <args>` with inherited `GIT_*` scrubbed, so an inherited
+/// `GIT_DIR` cannot redirect it to another repository.
 fn git(repo_root: &Path, args: &[&str]) -> Determination<String> {
-    match boundary::run(Command::new("git").arg("-C").arg(repo_root).args(args)).require() {
+    let mut cmd = Command::new("git");
+    harness_core::git_env::scrub(&mut cmd)
+        .arg("-C")
+        .arg(repo_root)
+        .args(args);
+    match boundary::run(&mut cmd).require() {
         Required::Determined(out) => out.stdout_on_success(),
         Required::Blocked(v) => v.into_determination(),
     }

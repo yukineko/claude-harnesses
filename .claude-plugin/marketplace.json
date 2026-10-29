@@ -653,7 +653,7 @@
     {
       "name": "specguard",
       "description": "Project-agnostic spec and implementation drift audit harness that drives a read-only LLM agent to check an implementation against its canonical specs and the specs against each other.",
-      "version": "0.2.101",
+      "version": "0.2.102",
       "category": "quality",
       "keywords": [
         "spec",

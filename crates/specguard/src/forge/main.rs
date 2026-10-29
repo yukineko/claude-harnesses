@@ -859,7 +859,8 @@ fn write_sentinel(l: &Loaded, id: &str, summary: &str, body: &str) -> Result<()>
 }
 
 fn current_head(repo_root: &Path) -> Result<String> {
-    let out = std::process::Command::new("git")
+    // Inherited GIT_* scrubbed: an inherited GIT_DIR would override `-C`.
+    let out = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
         .arg("-C")
         .arg(repo_root)
         .args(["rev-parse", "HEAD"])
@@ -1089,8 +1090,9 @@ fn cmd_merge(l: &Loaded, id: &str, req_filter: Option<&str>) -> Result<u8> {
             }
         };
         let branch = format!("specforge/{id}/{}", item.req_id);
-        // git merge --no-ff the worktree branch into HEAD.
-        let out = std::process::Command::new("git")
+        // git merge --no-ff the worktree branch into HEAD. Inherited GIT_* are
+        // scrubbed so the merge lands in `repo_root`, not an inherited GIT_DIR.
+        let out = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
             .arg("-C")
             .arg(&l.repo_root)
             .args(["merge", "--no-ff", "-m"])
@@ -1104,7 +1106,7 @@ fn cmd_merge(l: &Loaded, id: &str, req_filter: Option<&str>) -> Result<u8> {
         if out.status.success() {
             println!("  ✔ merged {}", item.req_id);
             // Clean up the worktree.
-            let _ = std::process::Command::new("git")
+            let _ = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
                 .arg("-C")
                 .arg(&l.repo_root)
                 .args(["worktree", "remove", "--force"])

@@ -145,8 +145,11 @@ pub fn changed_files(
     Ok((files, ALL_TRACKED.to_string(), true))
 }
 
+// Every git spawn in this module passes through `harness_core::git_env::scrub`:
+// an inherited `GIT_DIR` (hook-driven run, user shell) overrides `-C`, so
+// without the scrub these would answer about an unrelated repository.
 fn git_diff_names(repo_root: &Path, baseline: &str) -> Result<Vec<String>> {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo_root)
         .arg("diff")
@@ -165,7 +168,7 @@ fn git_diff_names(repo_root: &Path, baseline: &str) -> Result<Vec<String>> {
 
 /// All files tracked at HEAD. Used as the final fallback ("audit everything").
 fn all_tracked_files(repo_root: &Path) -> Result<Vec<String>> {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo_root)
         .args(["ls-tree", "-r", "--name-only", "HEAD"])
@@ -190,7 +193,7 @@ fn parse_name_list(stdout: &[u8]) -> Vec<String> {
 
 /// Record HEAD of `repo_root`, used to advance the baseline after a run.
 pub fn current_head(repo_root: &Path) -> Result<String> {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo_root)
         .arg("rev-parse")

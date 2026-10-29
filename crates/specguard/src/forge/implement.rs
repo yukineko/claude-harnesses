@@ -261,9 +261,11 @@ pub fn run_task(
     let wt_name = format!("{spec_id}-{req_id}");
     let wt_path = worktree_base.join(&wt_name);
 
-    // Create worktree on a detached branch.
+    // Create worktree on a detached branch. Inherited GIT_* are scrubbed: an
+    // inherited GIT_DIR overrides `-C`, and would create the branch and
+    // worktree in that unrelated repository instead of `repo_root`.
     let wt_branch = format!("specforge/{spec_id}/{req_id}");
-    let add = std::process::Command::new("git")
+    let add = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
         .arg("-C")
         .arg(repo_root)
         .args(["worktree", "add", "-b", &wt_branch])

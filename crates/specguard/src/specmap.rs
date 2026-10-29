@@ -395,6 +395,9 @@ fn review_git(
     args: &[&str],
 ) -> Determination<harness_core::boundary::CommandOutput> {
     let mut cmd = Command::new("git");
+    // Scrub inherited GIT_* so `-C repo_root` decides the repository; an
+    // inherited GIT_DIR would otherwise override it.
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("-C").arg(repo_root).args(args);
     harness_core::boundary::run_with_timeout(&mut cmd, REVIEW_GIT_TIMEOUT)
 }
@@ -1381,7 +1384,9 @@ fn git_log_name_status(repo_root: &Path, baseline: &str) -> Result<String> {
             "refusing unsafe baseline ref '{baseline}': only [A-Za-z0-9_./~^-] are allowed and it must not start with '-'"
         );
     }
-    let out = Command::new("git")
+    // Inherited GIT_* scrubbed so `-C repo_root` (not an inherited GIT_DIR)
+    // picks the repository.
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo_root)
         .arg("log")

@@ -37,7 +37,7 @@ struct Fixture {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .args(args)
         .stdout(Stdio::null())
@@ -129,19 +129,20 @@ impl Fixture {
             "stop_hook_active": false,
         })
         .to_string();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_donegate"))
-            .arg("gate")
-            .current_dir(cwd)
-            .env("HOME", &self.home)
-            .env("CLAUDE_CODE_SESSION_ID", "s-wtroots")
-            .env_remove("DONEGATE_DISABLE")
-            .env_remove("HARNESS_TRUST_ALL")
-            .env_remove("HARNESS_WORKTREE_ORIGIN_DIR")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("donegate spawns");
+        let mut child =
+            harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_donegate")))
+                .arg("gate")
+                .current_dir(cwd)
+                .env("HOME", &self.home)
+                .env("CLAUDE_CODE_SESSION_ID", "s-wtroots")
+                .env_remove("DONEGATE_DISABLE")
+                .env_remove("HARNESS_TRUST_ALL")
+                .env_remove("HARNESS_WORKTREE_ORIGIN_DIR")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("donegate spawns");
         child
             .stdin
             .take()
@@ -355,7 +356,7 @@ fn control_session_with_no_writes_still_allows() {
 #[test]
 fn removed_unrecorded_worktree_under_non_repo_base_does_not_block() {
     let f = Fixture::new(&exit0_toml(), &exit0_toml());
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(&f.home)
         .args(["rev-parse", "--show-toplevel"])

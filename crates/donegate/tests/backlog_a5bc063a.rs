@@ -19,7 +19,7 @@ fn run_gate(home: &Path, root: &Path, session: &str) -> (i32, String, String) {
         r#"{{"session_id":"{session}","cwd":"{}","hook_event_name":"Stop"}}"#,
         root.display()
     );
-    let mut child = Command::new(env!("CARGO_BIN_EXE_donegate"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_donegate")))
         .arg("gate")
         .current_dir(root)
         .env("HOME", home)

@@ -111,6 +111,7 @@ impl Run {
 fn run(home: &Path, root: &Path, args: &[&str], session: Option<&str>, stdin: &str) -> Run {
     let bin = env!("CARGO_BIN_EXE_donegate");
     let mut cmd = Command::new(bin);
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args(args)
         .current_dir(root)
         .env("HOME", home)

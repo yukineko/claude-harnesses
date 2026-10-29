@@ -150,7 +150,9 @@ mod tests {
 
         let old = std::env::var_os("PATH");
         std::env::set_var("PATH", &empty_bin);
-        let spawned = Command::new("git").arg("--version").output();
+        let spawned = harness_core::git_env::scrub(&mut Command::new("git"))
+            .arg("--version")
+            .output();
         match old {
             Some(p) => std::env::set_var("PATH", p),
             None => std::env::remove_var("PATH"),
@@ -249,7 +251,7 @@ mod tests {
     }
 
     fn git_available() -> bool {
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("--version")
             .output()
             .map(|o| o.status.success())
@@ -292,7 +294,7 @@ mod tests {
             &["config", "user.email", "t@t.com"][..],
             &["config", "user.name", "t"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(harness_core::git_env::scrub(&mut Command::new("git"))
                 .current_dir(root)
                 .args(args)
                 .status()
@@ -301,7 +303,7 @@ mod tests {
         }
         std::fs::write(root.join("a.txt"), "x\n").unwrap();
         for args in [&["add", "a.txt"][..], &["commit", "-qm", "init"][..]] {
-            assert!(Command::new("git")
+            assert!(harness_core::git_env::scrub(&mut Command::new("git"))
                 .current_dir(root)
                 .args(args)
                 .status()
@@ -332,7 +334,7 @@ mod tests {
         }
         let root = scratch_dir("collect");
         let root = root.as_path();
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(root)
             .args(["init", "-q"])
             .status()

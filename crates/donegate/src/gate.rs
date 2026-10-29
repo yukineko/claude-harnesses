@@ -348,7 +348,7 @@ mod tests {
     }
 
     fn git_available() -> bool {
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("--version")
             .output()
             .map(|o| o.status.success())
@@ -503,7 +503,7 @@ mod tests {
             &["config", "user.email", "t@t.com"][..],
             &["config", "user.name", "t"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(harness_core::git_env::scrub(&mut Command::new("git"))
                 .current_dir(&work)
                 .args(args)
                 .status()

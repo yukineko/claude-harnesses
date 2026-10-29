@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -61,7 +61,7 @@ sentinel = ".forge-pending"
 }
 
 fn forge(repo: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_specforge"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specforge")))
         .current_dir(repo)
         .args(["--config", "specforge.toml", "--date", "2026-01-01"])
         .args(args)

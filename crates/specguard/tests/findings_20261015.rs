@@ -11,7 +11,7 @@ use std::process::{Command, Output};
 const DATE: &str = "2026-01-01";
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
@@ -27,7 +27,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 /// Run the built binary in `repo` with an isolated HOME (the overwatch review
 /// store lives under `$HOME/.overwatch`, so findings never touch the real one).
 fn sg(repo: &Path, home: &Path, baseline: &str, sub: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_specguard"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .current_dir(repo)
         .env("HOME", home)
         .env_remove("SPECGUARD_BASELINE_REF")
@@ -352,7 +352,7 @@ fn long_flags(help: &str) -> Vec<String> {
 }
 
 fn bin_help(args: &[&str]) -> String {
-    let o = Command::new(env!("CARGO_BIN_EXE_specguard"))
+    let o = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .args(args)
         .output()
         .expect("specguard --help runs");

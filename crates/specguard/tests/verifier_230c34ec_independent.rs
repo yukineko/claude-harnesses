@@ -50,7 +50,7 @@ fn repo(tag: &str, spec_docs: &str) -> PathBuf {
 }
 
 fn brief(dir: &Path, task: &str) -> (String, i32, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_specguard"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")

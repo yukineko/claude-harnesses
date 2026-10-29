@@ -35,6 +35,7 @@ impl Env {
     /// fixed project cwd. Returns (stdout, success).
     fn run(&self, session: Option<&str>, args: &[&str]) -> (String, bool) {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_compass"));
+        harness_core::git_env::scrub(&mut cmd);
         cmd.current_dir(self.proj.path())
             .env("HOME", self.home.path())
             .args(args);

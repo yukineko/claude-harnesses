@@ -257,7 +257,7 @@
     {
       "name": "deepwiki",
       "description": "Deterministic repo mapper for Claude Code that scans a repository into a structured map and tracks wiki freshness against git, so a subagent can generate and refresh an architecture wiki.",
-      "version": "0.1.15",
+      "version": "0.1.16",
       "category": "knowledge",
       "keywords": [
         "wiki",

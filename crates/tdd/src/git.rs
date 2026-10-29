@@ -1,8 +1,16 @@
 //! Talk to `git` to learn what changed: the set of changed paths (for test-file
 //! evidence) and the *added* lines with their file (for inline-test detection
 //! and counting newly added implementation lines). Pure subprocess calls.
+//!
+//! Every `git` child spawned here has the inherited repo-relocating `GIT_*`
+//! variables removed (`harness_core::git_env::scrub`) and is pointed at the
+//! repo explicitly via `current_dir(root)`, and the "is this a repo" probe is
+//! `probe_repo_scrubbed`. An inherited `GIT_DIR` / `GIT_INDEX_FILE` (e.g. from
+//! a pre-commit hook or the user's shell) therefore cannot make the gate judge
+//! some other repository's changes instead of the one containing `root`.
+//! Error mapping is unchanged: a failed git command is still `Failed`.
 
-use harness_core::git_probe::{probe_repo, RepoProbe};
+use harness_core::git_probe::{probe_repo_scrubbed, RepoProbe};
 use std::path::Path;
 use std::process::Command;
 
@@ -46,8 +54,10 @@ pub enum AddedScan {
     Lines(Vec<AddedLine>),
 }
 
+/// Run `git <args>` in `root` with the inherited `GIT_*` env scrubbed.
+/// `None` on spawn failure or non-zero exit (callers map that to `Failed`).
 fn run(root: &Path, args: &[&str]) -> Option<String> {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(root)
         .args(args)
         .output()
@@ -75,7 +85,7 @@ fn run(root: &Path, args: &[&str]) -> Option<String> {
 /// field ahead of the (new) path in the record stream; we keep only the new
 /// path, matching what `git diff --name-only` reports for a rename.
 pub fn changed_files(root: &Path) -> ChangeScan {
-    match probe_repo(root) {
+    match probe_repo_scrubbed(root) {
         RepoProbe::Repo => {}
         // Genuinely out of scope: git said so, or git could not answer and no
         // `.git` exists anywhere above to contradict it.
@@ -123,7 +133,7 @@ pub fn changed_files(root: &Path) -> ChangeScan {
 /// `Lines(v)` (the possibly-empty added-line set). A failed git *command* is
 /// `Failed`; an individual untracked-file *read* error is best-effort (skipped).
 pub fn added_lines(root: &Path) -> AddedScan {
-    match probe_repo(root) {
+    match probe_repo_scrubbed(root) {
         RepoProbe::Repo => {}
         // Genuinely out of scope: git said so, or git could not answer and no
         // `.git` exists anywhere above to contradict it.
@@ -169,14 +179,14 @@ pub fn added_lines(root: &Path) -> AddedScan {
 /// `--since` only bounds the walk; each commit's `%ct` is re-checked here, so
 /// git's date-ordering slop never credits an older commit.
 pub fn committed_added_lines(root: &Path, since: i64) -> AddedScan {
-    match probe_repo(root) {
+    match probe_repo_scrubbed(root) {
         RepoProbe::Repo => {}
         RepoProbe::NotRepo => return AddedScan::NotRepo,
         RepoProbe::Undetermined => return AddedScan::Failed,
     }
     // `rev-parse --verify -q HEAD` exits 1 with no output on an unborn branch;
     // `git log HEAD` would error there, and "no commits" is not a failure.
-    let unborn = Command::new("git")
+    let unborn = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(root)
         .args(["rev-parse", "--verify", "-q", "HEAD"])
         .output();
@@ -273,7 +283,7 @@ fn strip_diff_prefix(path: &str) -> String {
 /// call. Tests assert the batched path yields an identical set.
 #[cfg(test)]
 fn changed_files_legacy(root: &Path) -> Option<Vec<String>> {
-    if probe_repo(root) != RepoProbe::Repo {
+    if probe_repo_scrubbed(root) != RepoProbe::Repo {
         return None;
     }
     let mut out = Vec::new();

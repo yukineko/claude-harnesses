@@ -121,3 +121,68 @@ fn driver_registered_in_one_worktree_is_live_from_main_and_every_worktree() {
         "an unrelated, never-registered repo must read exactly `none`"
     );
 }
+
+// ---- fixture isolation: inherited GIT_* must not reach the repo under test ------
+
+/// Git call with every inherited `GIT_*` repo-locating variable removed;
+/// returns stdout. Independent of the `git` helper under test.
+fn clean_git(dir: &Path, args: &[&str]) -> String {
+    let mut c = Command::new("git");
+    c.args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null");
+    harness_core::git_env::scrub(&mut c);
+    let out = c.output().expect("git runs");
+    assert!(
+        out.status.success(),
+        "clean git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn repo_state(outer: &Path) -> String {
+    format!(
+        "HEAD={}\nbranches:\n{}\nworktrees:\n{}",
+        clean_git(outer, &["rev-parse", "HEAD"]).trim(),
+        clean_git(outer, &["branch", "--list"]),
+        clean_git(outer, &["worktree", "list", "--porcelain"]),
+    )
+}
+
+/// The fixture's `git` helper must not follow an inherited `GIT_DIR` (as set
+/// when the suite runs under a git hook): the fixture repos are under the
+/// fixture root, never whatever repo the environment points at. The child
+/// re-runs the existing worktree-liveness test with `GIT_DIR` aimed at a
+/// scratch outer repo; that outer repo must come back unchanged.
+#[test]
+fn fixture_git_ignores_inherited_git_dir() {
+    let outer = temp_root("gitenv-outer");
+    clean_git(&outer, &["init", "-q", "-b", "main"]);
+    std::fs::write(outer.join("f.txt"), "o\n").unwrap();
+    clean_git(&outer, &["add", "f.txt"]);
+    clean_git(&outer, &["commit", "-q", "-m", "outer"]);
+    let before = repo_state(&outer);
+
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "driver_registered_in_one_worktree_is_live_from_main_and_every_worktree",
+            "--test-threads=1",
+        ])
+        .env("GIT_DIR", outer.join(".git"))
+        .output()
+        .expect("child test binary runs");
+
+    let after = repo_state(&outer);
+    assert_eq!(
+        before,
+        after,
+        "fixture git mutated the outer repo named by inherited GIT_DIR \
+         (child exit {:?}):\n{}",
+        child.status.code(),
+        String::from_utf8_lossy(&child.stdout)
+    );
+}

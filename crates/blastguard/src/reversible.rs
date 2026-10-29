@@ -42,7 +42,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use harness_core::git_probe::{probe_repo, RepoProbe};
+use harness_core::git_probe::{probe_repo_scrubbed, RepoProbe};
 use harness_core::verdict::Determination;
 
 /// Whether the bytes at a path survive being destroyed.
@@ -265,6 +265,13 @@ const GIT_TIMEOUT: Duration = Duration::from_millis(1500);
 /// The wired probe. One `git status` spawn, bounded, and only when the path
 /// actually exists — the non-existent case is answered by the filesystem alone
 /// and costs nothing.
+///
+/// Both git children (the repo probe and `git status`) run with the inherited
+/// `GIT_*` relocation variables removed ([`harness_core::git_env::scrub`]):
+/// the question is which repository, if any, contains `path` on disk, and a
+/// hook-inherited `GIT_DIR` would otherwise make git answer about an unrelated
+/// repository — a non-repo file read as a clean tracked one and its truncation
+/// was allowed (`tests/reversible_probe_inherited_git_dir.rs`).
 pub fn probe(target: &str, base: Option<&str>) -> Recovery {
     // AN UNEXPANDED TARGET IS NOT AN ABSENT ONE. `$HOME/.ssh/id_ed25519` names
     // a real file, but the literal text with `$HOME` still in it names nothing,
@@ -292,12 +299,13 @@ relative to, so it cannot tell whether these bytes are recoverable"
         return decide_recovery(false, RepoProbe::NotRepo, GitState::Undetermined);
     }
     let dir = path.parent().unwrap_or(Path::new("/"));
-    let repo = probe_repo(dir);
+    let repo = probe_repo_scrubbed(dir);
     if !matches!(repo, RepoProbe::Repo) {
         return decide_recovery(true, repo, GitState::Undetermined);
     }
     let mut cmd = std::process::Command::new("git");
-    cmd.current_dir(dir)
+    harness_core::git_env::scrub(&mut cmd)
+        .current_dir(dir)
         .args(["status", "--porcelain", "--ignored", "--"])
         .arg(&path);
     let git = match harness_core::boundary::run_with_timeout(&mut cmd, GIT_TIMEOUT) {
@@ -358,23 +366,12 @@ pub type GitTreeProbe = fn(&str, &[String]) -> Determination<TreeGitFacts>;
 /// Timeout for each git invocation of [`probe_tree`].
 const TREE_GIT_TIMEOUT: Duration = Duration::from_millis(1500);
 
-/// Environment variables that would point git at a different repository,
-/// index or object store than the one the path lives in. Removed so the probe
-/// answers about the tree on disk and not about whatever the hook inherited.
-const GIT_REDIRECT_ENV: &[&str] = &[
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_INDEX_FILE",
-    "GIT_COMMON_DIR",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "GIT_NAMESPACE",
-    "GIT_CONFIG_PARAMETERS",
-    "GIT_CONFIG_COUNT",
-];
-
-/// A `git` command for `dir` with the settings that can make `git status`
-/// under-report switched off (`core.fsmonitor`, `core.untrackedCache`) and,
+/// A `git` command for `dir` with the inherited `GIT_*` variables that would
+/// point git at a different repository, index or object store removed
+/// ([`harness_core::git_env::scrub`] — so the probe answers about the tree on
+/// disk and not about whatever the hook inherited), the settings that can make
+/// `git status` under-report switched off (`core.fsmonitor`,
+/// `core.untrackedCache`) and,
 /// when `literal`, pathspec magic disabled (`--literal-pathspecs`).
 /// `check-ignore` rejects `--literal-pathspecs` outright (exit 128, "pathspec
 /// magic not supported by this command" — observed), so it is called with
@@ -382,9 +379,7 @@ const GIT_REDIRECT_ENV: &[&str] = &[
 /// operands (no glob characters reach here — `scope`'s literal-path check).
 fn tree_git(git: &std::ffi::OsStr, dir: &Path, literal: bool) -> std::process::Command {
     let mut cmd = std::process::Command::new(git);
-    for var in GIT_REDIRECT_ENV {
-        cmd.env_remove(var);
-    }
+    harness_core::git_env::scrub(&mut cmd);
     if literal {
         cmd.arg("--literal-pathspecs");
     }
@@ -879,26 +874,9 @@ mod tests {
 
     fn git_in(dir: &std::path::Path, args: &[&str]) {
         // Fixture git must not follow a GIT_DIR/GIT_INDEX_FILE/... inherited
-        // from a git hook running the suite (same list as
-        // tests/support/git_env.rs).
+        // from a git hook running the suite.
         let mut cmd = std::process::Command::new("git");
-        for k in [
-            "GIT_DIR",
-            "GIT_WORK_TREE",
-            "GIT_INDEX_FILE",
-            "GIT_COMMON_DIR",
-            "GIT_OBJECT_DIRECTORY",
-            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-            "GIT_NAMESPACE",
-            "GIT_PREFIX",
-            "GIT_QUARANTINE_PATH",
-            "GIT_CEILING_DIRECTORIES",
-            "GIT_CONFIG_PARAMETERS",
-            "GIT_CONFIG_COUNT",
-        ] {
-            cmd.env_remove(k);
-        }
-        let ok = cmd
+        let ok = harness_core::git_env::scrub(&mut cmd)
             .arg("-C")
             .arg(dir)
             .args(["-c", "user.email=t@t", "-c", "user.name=t"])

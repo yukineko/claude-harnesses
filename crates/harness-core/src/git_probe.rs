@@ -140,7 +140,36 @@ pub fn dot_git_present(root: &Path) -> bool {
 /// credible reading.
 pub fn probe_repo(root: &Path) -> RepoProbe {
     let evidence = dot_git_present(root) || std::env::var_os("GIT_DIR").is_some();
-    match std::process::Command::new("git")
+    let mut cmd = std::process::Command::new("git");
+    run_repo_probe(&mut cmd, root, evidence)
+}
+
+/// Discovery-only variant of [`probe_repo`]: "is `root` on disk inside a git
+/// work tree?", independent of any repository the calling process was pointed
+/// at.
+///
+/// The child has every [`crate::git_env::INHERITED_GIT_ENV`] variable removed
+/// ([`crate::git_env::scrub`]), so an inherited `GIT_DIR` / `GIT_WORK_TREE` /
+/// ceiling cannot relocate the answer to another repository. For the same
+/// reason the env `GIT_DIR` is **not** counted as evidence here — only
+/// [`dot_git_present`] is: the question is about the filesystem, and a
+/// `GIT_DIR` naming some other repository says nothing about `root`.
+///
+/// Use this where the path being judged is arbitrary (blastguard's
+/// recoverability probes). Gates that deliberately act on the repository their
+/// hook was invoked for keep [`probe_repo`]. The decision table
+/// ([`decide_repo_probe`]) is shared, so `Undetermined` stays restrictive.
+pub fn probe_repo_scrubbed(root: &Path) -> RepoProbe {
+    let evidence = dot_git_present(root);
+    let mut cmd = std::process::Command::new("git");
+    crate::git_env::scrub(&mut cmd);
+    run_repo_probe(&mut cmd, root, evidence)
+}
+
+/// Shared body of [`probe_repo`] / [`probe_repo_scrubbed`]: run
+/// `git rev-parse --is-inside-work-tree` via `cmd` in `root` and adjudicate.
+fn run_repo_probe(cmd: &mut std::process::Command, root: &Path, evidence: bool) -> RepoProbe {
+    match cmd
         .current_dir(root)
         .args(["rev-parse", "--is-inside-work-tree"])
         .output()

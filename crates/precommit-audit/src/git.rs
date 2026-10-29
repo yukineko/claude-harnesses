@@ -280,7 +280,7 @@ mod tests {
     }
 
     fn git_in(dir: &Path, args: &[&str]) {
-        let o = Command::new("git")
+        let o = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(dir)
             .output()
@@ -338,7 +338,7 @@ mod tests {
         // an empty one. It must stay on the fail-closed path.
         let dir = scratch("hs-corrupt");
         git_in(&dir, &["init", "-q"]);
-        let o = Command::new("git")
+        let o = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["symbolic-ref", "HEAD"])
             .current_dir(&dir)
             .output()

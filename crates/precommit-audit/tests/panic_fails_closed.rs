@@ -35,6 +35,7 @@ fn unique_root(tag: &str) -> PathBuf {
 fn run_forced_panic(mode: Option<&str>, tag: &str) -> i32 {
     let root = unique_root(tag);
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_precommit-audit"));
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("--root").arg(&root);
     if let Some(m) = mode {
         cmd.arg("--mode").arg(m);

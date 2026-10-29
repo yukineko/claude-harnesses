@@ -25,26 +25,27 @@ fn run_check(cwd: &Path, home: &Path, payload_cwd: &Path, sid: &str) -> (i32, St
         "cwd": payload_cwd.to_string_lossy(),
     })
     .to_string();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_propguard"))
-        .arg("check")
-        .current_dir(cwd)
-        .env("HOME", home)
-        // Hermetic session: the repeat ledger keys on CLAUDE_CODE_SESSION_ID,
-        // so the parent's value leaking in made the control's block and this
-        // run's identical block look like one session's repeat (waived). In a
-        // real hook the env var and the payload session agree.
-        .env("CLAUDE_CODE_SESSION_ID", sid)
-        .env("PROPGUARD_STATE_DIR", home.join(".propguard-state"))
-        .env(
-            "PROPGUARD_CRITERIA",
-            "idempotent; never panic; stable output schema",
-        )
-        .env_remove("PROPGUARD_DISABLE")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_propguard")))
+            .arg("check")
+            .current_dir(cwd)
+            .env("HOME", home)
+            // Hermetic session: the repeat ledger keys on CLAUDE_CODE_SESSION_ID,
+            // so the parent's value leaking in made the control's block and this
+            // run's identical block look like one session's repeat (waived). In a
+            // real hook the env var and the payload session agree.
+            .env("CLAUDE_CODE_SESSION_ID", sid)
+            .env("PROPGUARD_STATE_DIR", home.join(".propguard-state"))
+            .env(
+                "PROPGUARD_CRITERIA",
+                "idempotent; never panic; stable output schema",
+            )
+            .env_remove("PROPGUARD_DISABLE")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("binary spawns");
     child
         .stdin
         .take()

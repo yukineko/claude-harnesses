@@ -39,7 +39,7 @@ impl Fx {
             vec!["config", "user.email", "t@t"],
             vec!["config", "user.name", "t"],
         ] {
-            let o = Command::new("git")
+            let o = harness_core::git_env::scrub(&mut Command::new("git"))
                 .current_dir(&fx.dir)
                 .args(&args)
                 .output()
@@ -120,6 +120,7 @@ impl Out {
 
 fn run_opts(fx: &Fx, args: &[&str], stdin: &str, envs: &[(&str, &str)], pin_state: bool) -> Out {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_propguard"));
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args(args)
         .current_dir(&fx.dir)
         .env("HOME", &fx.dir)

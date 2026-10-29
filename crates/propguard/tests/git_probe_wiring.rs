@@ -57,6 +57,7 @@ fn hook_payload(session: &str, cwd: &Path) -> String {
 fn run_check(cwd: &Path, home: &Path, path: &Path, criteria: &str, payload: &str) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_propguard");
     let mut cmd = Command::new(bin);
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("check")
         .current_dir(cwd)
         .env("HOME", home)

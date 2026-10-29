@@ -752,7 +752,7 @@
     {
       "name": "autoflow",
       "description": "Session-end auto-flow gate for Claude Code: a Stop hook that prompts /record once, then keeps looping /condukt while the in-flight run still has pending tasks.",
-      "version": "0.1.40",
+      "version": "0.1.41",
       "category": "orchestration",
       "keywords": [
         "hooks",

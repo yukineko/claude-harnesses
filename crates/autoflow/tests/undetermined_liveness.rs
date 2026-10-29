@@ -108,16 +108,17 @@ impl Env {
             r#"{{"hook_event_name":"{event}","session_id":"{session_in_payload}","cwd":"{}","transcript_path":"{transcript}"{active_field}}}"#,
             self.repo.to_string_lossy()
         );
-        let mut child = Command::new(env!("CARGO_BIN_EXE_autoflow"))
-            .arg(sub)
-            .env("HOME", &self.home)
-            .env("PATH", path)
-            .env_remove("CLAUDE_CODE_SESSION_ID")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("autoflow spawns");
+        let mut child =
+            harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_autoflow")))
+                .arg(sub)
+                .env("HOME", &self.home)
+                .env("PATH", path)
+                .env_remove("CLAUDE_CODE_SESSION_ID")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("autoflow spawns");
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(payload.as_bytes());
         }

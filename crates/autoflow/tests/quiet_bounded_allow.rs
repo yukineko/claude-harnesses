@@ -26,7 +26,7 @@ fn stop(home: &PathBuf, active: bool) -> (i32, String) {
         r#"{{"hook_event_name":"Stop","cwd":"{}","transcript_path":"","stop_hook_active":{active}}}"#,
         home.join("repo").to_string_lossy()
     );
-    let mut child = Command::new(env!("CARGO_BIN_EXE_autoflow"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_autoflow")))
         .arg("stop")
         .env("HOME", home)
         .env("PATH", "/usr/bin:/bin")

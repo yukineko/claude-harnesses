@@ -72,7 +72,7 @@ fn path_with_backlog_bin() -> std::ffi::OsString {
 }
 
 fn run_backlog(args: &[&str], home: &Path) -> (i32, String) {
-    let out = Command::new(backlog_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(backlog_bin()))
         .args(args)
         .env("HOME", home)
         .output()
@@ -84,7 +84,7 @@ fn run_backlog(args: &[&str], home: &Path) -> (i32, String) {
 }
 
 fn run_autoflow(args: &[&str], payload: &str, home: &Path) -> (i32, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_autoflow"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_autoflow")))
         .args(args)
         .env("HOME", home)
         .env("PATH", path_with_backlog_bin())

@@ -624,7 +624,11 @@ mod gitenv_inherited_git_dir {
         }
         let dir = std::env::var(CHILD_DIR).expect("target dir");
         let p = Path::new(&dir);
-        println!("VERDICT changed={:?} added={:?}", changed_files(p), added_lines(p));
+        println!(
+            "VERDICT changed={:?} added={:?}",
+            changed_files(p),
+            added_lines(p)
+        );
     }
 
     fn child_verdict(target: &Path, git_dir: Option<&Path>) -> String {

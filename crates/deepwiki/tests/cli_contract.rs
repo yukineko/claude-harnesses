@@ -6,13 +6,16 @@ use std::process::Command;
 
 use tempfile::TempDir;
 
+mod support;
+use support::git_env::scrub;
+
 struct Out {
     code: i32,
     stdout: String,
 }
 
 fn git(dir: &Path, home: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
@@ -29,7 +32,7 @@ fn git(dir: &Path, home: &Path, args: &[&str]) {
 }
 
 fn dw(cwd: &Path, home: &Path, args: &[&str]) -> Out {
-    let out = Command::new(env!("CARGO_BIN_EXE_deepwiki"))
+    let out = scrub(&mut Command::new(env!("CARGO_BIN_EXE_deepwiki")))
         .args(args)
         .current_dir(cwd)
         .env("HOME", home)
@@ -57,7 +60,7 @@ fn git_repo(home: &Path) -> TempDir {
 }
 
 fn head(dir: &Path, home: &Path) -> String {
-    let out = Command::new("git")
+    let out = scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(dir)
         .args(["rev-parse", "HEAD"])
@@ -230,7 +233,7 @@ fn claim_launcher_tracked_bins_ignored() {
     let m = manifest();
     let home = tempfile::tempdir().unwrap();
     let run = |args: &[&str]| {
-        Command::new("git")
+        scrub(&mut Command::new("git"))
             .arg("-C")
             .arg(&m)
             .args(args)
@@ -280,7 +283,7 @@ fn claim_launcher_tracked_bins_ignored() {
 /// `bin_rel`. A failing git fails the test; it never yields an empty list.
 fn tracked_bin_entries(repo: &Path, bin_rel: &str) -> Vec<String> {
     let home = tempfile::tempdir().unwrap();
-    let out = Command::new("git")
+    let out = scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo)
         .args(["ls-files", "--", bin_rel])

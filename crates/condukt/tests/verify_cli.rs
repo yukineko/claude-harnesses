@@ -33,7 +33,7 @@ fn write(dir: &Path, name: &str, body: &str) -> PathBuf {
 }
 
 fn run_regressions(baseline: &Path, current: &Path) -> (String, i32) {
-    let out = Command::new(bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(bin()))
         .args([
             "verify",
             "regressions",
@@ -103,7 +103,7 @@ fn verify_regressions_cli_passes_when_no_new_failure() {
 #[test]
 fn verify_confidence_cli_derives_token() {
     // ran + exit0 + no regressions -> high.
-    let high = Command::new(bin())
+    let high = harness_core::git_env::scrub(&mut Command::new(bin()))
         .args([
             "verify",
             "confidence",
@@ -117,7 +117,7 @@ fn verify_confidence_cli_derives_token() {
     assert_eq!(String::from_utf8_lossy(&high.stdout).trim(), "high");
 
     // no check executed -> low.
-    let low = Command::new(bin())
+    let low = harness_core::git_env::scrub(&mut Command::new(bin()))
         .args(["verify", "confidence"])
         .output()
         .expect("spawn confidence low");
@@ -125,7 +125,7 @@ fn verify_confidence_cli_derives_token() {
     assert_eq!(String::from_utf8_lossy(&low.stdout).trim(), "low");
 
     // ran but regressed -> medium.
-    let med = Command::new(bin())
+    let med = harness_core::git_env::scrub(&mut Command::new(bin()))
         .args(["verify", "confidence", "--check-executed", "--exit-zero"])
         .output()
         .expect("spawn confidence medium");

@@ -28,7 +28,7 @@ fn report_without_journal(tag: &str) -> (Fx, serde_json::Value) {
     let home = base.join("home");
     std::fs::create_dir_all(&repo).unwrap();
     std::fs::create_dir_all(&home).unwrap();
-    let o = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let o = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(["diffrisk-report", "--json"])
         .current_dir(&repo)
         .env("HOME", &home)

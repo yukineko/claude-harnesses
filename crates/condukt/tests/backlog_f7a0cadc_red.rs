@@ -128,6 +128,7 @@ fn unresolvable_toolchain_blocks_with_an_undetermined_reason_not_a_compile_claim
     );
 
     let mut cmd = Command::new(BIN);
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("editgate")
         .current_dir(repo.path())
         .env("HOME", home.path())

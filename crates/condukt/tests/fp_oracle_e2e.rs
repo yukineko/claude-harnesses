@@ -77,7 +77,7 @@ fn run_condukt(dir: &Path, home: &Path, extra_path: &Path, args: &[&str]) -> (i3
     paths.extend(std::env::split_paths(&existing_path));
     let new_path = std::env::join_paths(paths).expect("join PATH");
 
-    let out = Command::new(bin)
+    let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(args)
         .current_dir(dir)
         .env("HOME", home)

@@ -50,7 +50,7 @@ fn answer_in(
     confidence: &str,
     recommend: &str,
 ) -> Run {
-    let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args([
             "policy",
             "answer",
@@ -258,7 +258,7 @@ fn answers_reader_surfaces_escalate_and_block_rows() {
     let _ = escalate(dir.path());
     let _ = block(dir.path());
 
-    let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args([
             "policy",
             "answers",

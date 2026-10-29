@@ -57,7 +57,7 @@ impl Fixture {
     }
 
     fn condukt(&self, args: &[&str]) -> Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -77,7 +77,7 @@ impl Fixture {
     }
 
     fn branches(&self) -> String {
-        let out = Command::new("git")
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["branch", "--list", "--format=%(refname:short)"])
             .current_dir(&self.repo)
             .output()
@@ -86,7 +86,7 @@ impl Fixture {
     }
 
     fn rev(&self, refname: &str) -> Option<String> {
-        let out = Command::new("git")
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["rev-parse", "--verify", "--quiet", refname])
             .current_dir(&self.repo)
             .output()
@@ -104,7 +104,7 @@ impl Fixture {
 }
 
 fn git_ok(dir: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -239,7 +239,7 @@ fn concurrent_state_init_calls_get_distinct_run_ids() {
     // Back-to-back spawn: both processes init within the same wall-clock second,
     // which is precisely the window a second-granular id cannot separate.
     let spawn = || {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(["state", "init", "--file", dec.to_str().unwrap()])
             .current_dir(&fx.repo)
             .env("HOME", &fx.home)

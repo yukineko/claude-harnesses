@@ -66,7 +66,7 @@ impl Fixture {
     }
 
     fn condukt(&self, args: &[&str]) -> std::process::Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -129,7 +129,7 @@ impl Fixture {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()

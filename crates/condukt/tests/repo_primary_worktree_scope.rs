@@ -39,7 +39,7 @@ fn bin() -> PathBuf {
 }
 
 fn git(repo: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(repo)
         .args(args)
         .stdout(Stdio::null())
@@ -137,7 +137,7 @@ struct Run {
 }
 
 fn reconcile(cwd: &Path, home: &Path) -> Run {
-    let out = Command::new(bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(cwd)
         .env("HOME", home)
         .args(["worktree", "reconcile"])

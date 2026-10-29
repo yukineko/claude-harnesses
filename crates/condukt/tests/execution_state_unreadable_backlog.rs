@@ -23,7 +23,7 @@ fn bin() -> &'static str {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -93,6 +93,7 @@ impl Fx {
 
     fn run(&self, args: &[&str], path_prefix: Option<&Path>) -> Output {
         let mut c = Command::new(bin());
+        harness_core::git_env::scrub(&mut c);
         c.args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)

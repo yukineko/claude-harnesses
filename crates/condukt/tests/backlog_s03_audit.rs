@@ -15,7 +15,7 @@ fn bin() -> &'static str {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -62,6 +62,7 @@ impl Fx {
 
     fn run(&self, args: &[&str], path_prefix: Option<&Path>) -> std::process::Output {
         let mut c = Command::new(bin());
+        harness_core::git_env::scrub(&mut c);
         c.args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -245,7 +246,7 @@ fn abandon_all_stuck_dirtiness_undetermined_exits_3() {
 
     // Corrupt the worktree's index: HEAD stays readable, `git status` fails.
     std::fs::write(wt.join(".git").join("index"), "garbage-not-an-index").unwrap();
-    let probe = Command::new("git")
+    let probe = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["status", "--porcelain"])
         .current_dir(&wt)
         .output()
@@ -254,7 +255,7 @@ fn abandon_all_stuck_dirtiness_undetermined_exits_3() {
         !probe.status.success(),
         "fixture void: git status still works in the worktree"
     );
-    let head = Command::new("git")
+    let head = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["rev-parse", "HEAD"])
         .current_dir(&wt)
         .output()

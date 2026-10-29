@@ -2750,7 +2750,7 @@ mod worktree_remove_tests {
     /// stdout, which would silently drop a preserved file's trailing newline and
     /// turn a byte-for-byte content assertion into an approximate one.
     fn git_raw(dir: &Path, args: &[&str]) -> (bool, Vec<u8>, String) {
-        let out = std::process::Command::new("git")
+        let out = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
             .current_dir(dir)
             .args(args)
             .output()
@@ -4764,7 +4764,7 @@ mod backlog_4be23458 {
         let refs = git(repo, &["for-each-ref", "--format=%(refname)"]).unwrap_or_default();
         refs.lines()
             .filter(|r| {
-                Command::new("git")
+                harness_core::git_env::scrub(&mut Command::new("git"))
                     .arg("-C")
                     .arg(repo)
                     .args(["show", &format!("{r}:{file}")])
@@ -4838,7 +4838,7 @@ mod backlog_09d17bb6 {
         let gd = tmp.path().join("gitdir-store").join("gd");
         let wt = tmp.path().join("main-wt");
         fs::create_dir_all(gd.parent().unwrap()).unwrap();
-        let out = Command::new("git")
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["init", "-q", "-b", "main", "--separate-git-dir"])
             .arg(&gd)
             .arg(&wt)

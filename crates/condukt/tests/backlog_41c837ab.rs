@@ -34,7 +34,7 @@ impl Drop for Fixture {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -81,7 +81,7 @@ impl Fixture {
     }
 
     fn condukt(&self, args: &[&str]) -> Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -159,7 +159,7 @@ fn failed_unmerged_task_is_not_promoted_to_verified_by_reconcile() {
     git(&wt, &["add", "work.txt"]);
     git(&wt, &["commit", "-q", "-m", "task work"]);
     let branch_tip = git(&fx.repo, &["rev-parse", "condukt/r1/t1"]);
-    let merged = Command::new("git")
+    let merged = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["merge-base", "--is-ancestor", &branch_tip, "main"])
         .current_dir(&fx.repo)
         .status()

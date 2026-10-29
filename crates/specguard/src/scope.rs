@@ -880,6 +880,7 @@ mod tests {
     /// A throwaway git repo standing in for the audited tree. `git ls-files`
     /// only reports tracked paths, so the sources must actually be committed.
     fn indexed_repo() -> tempfile::TempDir {
+        crate::clear_inherited_git_env();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("src")).unwrap();
         std::fs::write(tmp.path().join("src/x.rs"), "pub fn signature_check() {}\n").unwrap();
@@ -902,14 +903,16 @@ mod tests {
                 "x",
             ],
         ] {
-            assert!(std::process::Command::new("git")
-                .arg("-C")
-                .arg(tmp.path())
-                .args(&args)
-                .output()
-                .unwrap()
-                .status
-                .success());
+            assert!(
+                harness_core::git_env::scrub(&mut std::process::Command::new("git"))
+                    .arg("-C")
+                    .arg(tmp.path())
+                    .args(&args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
         }
         tmp
     }
@@ -952,6 +955,7 @@ mod tests {
     /// an empty list, which reads as "the index looked and found nothing".
     #[test]
     fn code_index_files_is_undetermined_when_the_index_cannot_answer() {
+        crate::clear_inherited_git_env();
         let tmp = tempfile::tempdir().unwrap();
         let not_a_repo = tmp.path().join("no-git-here");
         std::fs::create_dir_all(&not_a_repo).unwrap();
@@ -1065,6 +1069,7 @@ mod tests {
     /// drawn from an actual index rather than a stub binary's canned JSON.
     #[test]
     fn relevant_file_map_is_bounded_and_contains_base_plus_extras() {
+        crate::clear_inherited_git_env();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("src")).unwrap();
         // More candidate .rs files than the map can hold, so the bound bites.
@@ -1114,7 +1119,8 @@ mod tests {
     // -- whole-tree fallback budget guard -----------------------------------
 
     fn test_git(repo: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        crate::clear_inherited_git_env();
+        let status = harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("-C")
             .arg(repo)
             .args(args)

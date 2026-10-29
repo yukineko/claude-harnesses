@@ -45,7 +45,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -62,7 +62,7 @@ fn init_repo(repo: &Path) -> String {
     fs::write(repo.join("README.md"), "seed\n").unwrap();
     git(repo, &["add", "-A"]);
     git(repo, &["commit", "-q", "-m", "seed"]);
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -101,22 +101,23 @@ canon = ["docs/spec.md"]
 
 fn specguard(repo: &Path, baseline: &str, sub: &[&str], stdin_data: &str) -> std::process::Output {
     use std::io::Write;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_specguard"))
-        .current_dir(repo)
-        .args([
-            "--config",
-            "specguard.toml",
-            "--baseline",
-            baseline,
-            "--date",
-            "2026-01-01",
-        ])
-        .args(sub)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("specguard spawns");
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
+            .current_dir(repo)
+            .args([
+                "--config",
+                "specguard.toml",
+                "--baseline",
+                baseline,
+                "--date",
+                "2026-01-01",
+            ])
+            .args(sub)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("specguard spawns");
     if let Some(mut si) = child.stdin.take() {
         let _ = si.write_all(stdin_data.as_bytes());
     }

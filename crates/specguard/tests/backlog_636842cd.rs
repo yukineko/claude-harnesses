@@ -21,7 +21,7 @@ const DOC: &str = "docs/specs/blastguard.md";
 const DOC_BODY: &str = "# blastguard spec\n\nThe gate decides Deny > Ask > Allow.\n";
 
 fn git(repo: &Path, args: &[&str]) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -37,7 +37,7 @@ fn write(repo: &Path, rel: &str, body: &str) {
 }
 
 fn base_rev(repo: &Path) -> String {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -84,7 +84,7 @@ fn run(place_doc: impl FnOnce(&Path)) -> Output {
     git(repo, &["add", "-A"]);
     git(repo, &["commit", "-q", "-m", "change"]);
 
-    let o = Command::new(env!("CARGO_BIN_EXE_specguard"))
+    let o = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .current_dir(repo)
         .args([
             "--config",

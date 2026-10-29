@@ -11,7 +11,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -82,7 +82,7 @@ canon = ["docs/spec.md"]
 fn specguard(repo: &Path, seed: &str, sub: &[&str]) -> std::process::Output {
     let home = repo.join(".fake-home");
     fs::create_dir_all(&home).unwrap();
-    Command::new(env!("CARGO_BIN_EXE_specguard"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .current_dir(repo)
         .env("HOME", &home)
         .env_remove("SPECGUARD_BASELINE_REF")

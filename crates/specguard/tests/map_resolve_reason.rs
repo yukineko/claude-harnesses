@@ -14,7 +14,7 @@ fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     let git = |args: &[&str]| {
-        let s = Command::new("git")
+        let s = harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("-C")
             .arg(repo)
             .args(args)
@@ -47,7 +47,7 @@ fn fixture() -> tempfile::TempDir {
 }
 
 fn sg(repo: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_specguard"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .current_dir(repo)
         .args(["--config", "specguard.toml", "--date", "2026-01-01", "map"])
         .args(args)

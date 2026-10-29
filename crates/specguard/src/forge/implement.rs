@@ -644,6 +644,14 @@ mod tests {
         // the task being skipped fail-closed.
         use std::os::unix::fs::PermissionsExt;
 
+        // `run_task` (production) spawns an unscrubbed `git worktree add` that
+        // honours the caller's GIT_DIR; under a hook-driven `cargo test` it
+        // would succeed against the hook's repository instead of failing on
+        // the plain directory below. Keep this test process off it.
+        for k in harness_core::git_env::INHERITED_GIT_ENV {
+            std::env::remove_var(k);
+        }
+
         // `repo_root` is a plain directory with no `.git` — `git worktree add`
         // deterministically fails against it ("fatal: not a git repository").
         let repo_root = tempfile::tempdir().unwrap();

@@ -34,7 +34,7 @@ const ACKS: &str = ".specguard/spec-doc-acks.toml";
 const DOC: &str = "docs/specs/blastguard.md";
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -106,7 +106,7 @@ fn write_doc(repo: &Path, rel: &str) {
 }
 
 fn gate_check(repo: &Path, base: &str) -> Output {
-    let o = Command::new(env!("CARGO_BIN_EXE_specguard"))
+    let o = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .current_dir(repo)
         .args([
             "--config",

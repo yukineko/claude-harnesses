@@ -21,7 +21,7 @@ use harness_core::index_store::{self, IndexPaths};
 use harness_core::verdict::Determination;
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .stdout(Stdio::null())

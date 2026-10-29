@@ -659,7 +659,7 @@ mod tests {
     // --- signal readers (real git / filesystem) ---------------------------
 
     fn git(dir: &Path, args: &[&str]) {
-        let ok = std::process::Command::new("git")
+        let ok = crate::git_env::scrub(&mut std::process::Command::new("git"))
             .arg("-C")
             .arg(dir)
             .args(args)

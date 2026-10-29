@@ -475,7 +475,7 @@ fn probe_repo_is_not_repo_when_git_unspawnable_and_no_dot_git() {
 // ─── preserved behaviour with a REAL git on PATH ───────────────────────────
 
 fn git_available() -> bool {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("--version")
         .output()
         .map(|o| o.status.success())
@@ -493,7 +493,7 @@ fn probe_repo_reports_repo_for_a_real_repository() {
         return;
     }
     let root = scratch_dir("real-repo");
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(&root)
         .args(["init", "-q"])
         .status()

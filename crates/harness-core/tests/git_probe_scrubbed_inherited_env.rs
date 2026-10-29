@@ -61,7 +61,7 @@ fn probe_repo_scrubbed_ignores_inherited_git_dir() {
     std::fs::create_dir_all(&repo_b).unwrap();
     git(&repo_b, &["init", "-q"]);
 
-    let out = Command::new(std::env::current_exe().unwrap())
+    let out = harness_core::git_env::scrub(&mut Command::new(std::env::current_exe().unwrap()))
         .args(["--exact", INNER, "--test-threads=1", "--nocapture"])
         .env(CHILD_FLAG, &plain)
         .env("GIT_DIR", repo_b.join(".git"))

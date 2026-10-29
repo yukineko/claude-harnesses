@@ -596,6 +596,92 @@ diff --git a/old.rs b/old.rs
     }
 }
 
+/// Production `changed_files` / `added_lines` must judge the repo that contains
+/// the given path, not whatever repo an inherited `GIT_DIR` names. The env is
+/// set by re-executing this test binary as a child (no `set_var` in-process).
+#[cfg(test)]
+mod gitenv_inherited_git_dir {
+    use super::*;
+
+    const CHILD_FLAG: &str = "GITENV_CHILD";
+    const CHILD_DIR: &str = "GITENV_TARGET";
+
+    fn scrubbed_git(dir: &Path, args: &[&str]) {
+        let st = harness_core::git_env::scrub(&mut Command::new("git"))
+            .current_dir(dir)
+            .args(args)
+            .status()
+            .expect("spawn git");
+        assert!(st.success(), "git {args:?} should succeed");
+    }
+
+    /// Inner test: only acts inside the re-exec'd child. Prints the verdicts
+    /// of the production fns for the directory in GITENV_TARGET.
+    #[test]
+    fn inner_print_verdict() {
+        if std::env::var(CHILD_FLAG).is_err() {
+            return;
+        }
+        let dir = std::env::var(CHILD_DIR).expect("target dir");
+        let p = Path::new(&dir);
+        println!("VERDICT changed={:?} added={:?}", changed_files(p), added_lines(p));
+    }
+
+    fn child_verdict(target: &Path, git_dir: Option<&Path>) -> String {
+        let mut cmd = Command::new(std::env::current_exe().unwrap());
+        cmd.args([
+            "--exact",
+            "git::gitenv_inherited_git_dir::inner_print_verdict",
+            "--test-threads=1",
+            "--nocapture",
+        ])
+        .env(CHILD_FLAG, "1")
+        .env(CHILD_DIR, target);
+        harness_core::git_env::scrub(&mut cmd);
+        if let Some(g) = git_dir {
+            cmd.env("GIT_DIR", g);
+        }
+        let o = cmd.output().expect("spawn child");
+        assert!(o.status.success(), "child failed: {o:?}");
+        let out = String::from_utf8_lossy(&o.stdout).into_owned();
+        let at = out
+            .find("VERDICT")
+            .unwrap_or_else(|| panic!("no VERDICT line in {o:?}"));
+        out[at..].lines().next().unwrap().to_string()
+    }
+
+    #[test]
+    fn production_git_ignores_inherited_git_dir() {
+        let base = std::env::temp_dir().join(format!(
+            "tdd-gitenv-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let repo_b = base.join("repo_b");
+        let plain = base.join("plain_dir");
+        std::fs::create_dir_all(&repo_b).unwrap();
+        std::fs::create_dir_all(&plain).unwrap();
+        scrubbed_git(&repo_b, &["init", "-q"]);
+        std::fs::write(repo_b.join("b_dirty.txt"), "dirty in B\n").unwrap();
+
+        let control = child_verdict(&plain, None);
+        let with_git_dir = child_verdict(&plain, Some(&repo_b.join(".git")));
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(
+            control.contains("changed=NotRepo"),
+            "control (scrubbed) must say plain dir is not a repo: {control}"
+        );
+        assert_eq!(
+            with_git_dir, control,
+            "inherited GIT_DIR=repo B made a non-repo dir be judged by repo B's changes"
+        );
+    }
+}
+
 #[cfg(test)]
 mod backlog_845475af {
     use super::*;

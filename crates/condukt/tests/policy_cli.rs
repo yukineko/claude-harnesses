@@ -12,7 +12,7 @@
 use std::process::Command;
 
 fn decide(risk: &str, reversible: &str, confidence: &str) -> (String, i32) {
-    let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args([
             "policy",
             "decide",
@@ -77,7 +77,7 @@ fn answer_in(
     confidence: &str,
     recommend: &str,
 ) -> (String, i32) {
-    let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args([
             "policy",
             "answer",
@@ -173,7 +173,7 @@ fn answers_reader_replays_the_audit_trail() {
     // ...and an escalate, which is logged too (as a consultation)...
     let _ = answer_in(dir.path(), "medium", "medium", "medium", "0");
     // ...then the reader replays all three as JSONL.
-    let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args([
             "policy",
             "answers",
@@ -200,7 +200,7 @@ fn answers_reader_replays_the_audit_trail() {
 #[test]
 fn answers_reader_is_empty_when_no_log_exists() {
     let dir = tempfile::tempdir().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args([
             "policy",
             "answers",

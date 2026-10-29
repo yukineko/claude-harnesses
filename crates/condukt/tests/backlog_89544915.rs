@@ -84,6 +84,7 @@ impl Fx {
 
     fn run(&self, args: &[&str], now: Option<i64>) -> Output {
         let mut c = Command::new(bin());
+        harness_core::git_env::scrub(&mut c);
         c.args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -192,7 +193,7 @@ impl Fx {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -483,7 +484,7 @@ fn restore_hook_runs_the_reconcile() {
     fx.set_status(&rid, "t1", "done");
     let id = format!("gate-exec:{rid}:t1");
     fx.seed_finding(&id);
-    let mut child = Command::new(bin())
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin()))
         .arg("restore")
         .current_dir(&fx.repo)
         .env("HOME", &fx.home)

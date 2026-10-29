@@ -35,7 +35,7 @@ fn unique_dir(tag: &str) -> PathBuf {
 }
 
 fn condukt(dir: &Path, home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_condukt"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(args)
         .current_dir(dir)
         .env("HOME", home)
@@ -50,7 +50,7 @@ fn s(b: &[u8]) -> String {
 }
 
 fn git_ok(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")

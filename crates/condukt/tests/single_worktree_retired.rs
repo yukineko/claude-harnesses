@@ -14,6 +14,7 @@ use std::process::{Command, Output};
 
 fn run_mode_check(home: &Path, cwd: &Path, env: &[(&str, &str)]) -> Output {
     let mut c = Command::new(env!("CARGO_BIN_EXE_condukt"));
+    harness_core::git_env::scrub(&mut c);
     c.args(["state", "worktree-mode-check"])
         .current_dir(cwd)
         .env("HOME", home)

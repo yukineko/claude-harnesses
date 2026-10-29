@@ -41,7 +41,7 @@ fn spawn_claim(
     hashkey: &str,
     session: &str,
 ) -> std::process::Child {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(cwd)
         .env("HOME", home)
         // Widens the load->check->save race window (held inside RunLock) past

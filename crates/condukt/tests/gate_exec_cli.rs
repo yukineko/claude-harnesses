@@ -51,7 +51,7 @@ impl Fixture {
     /// Run the binary with the isolated HOME. `autonomous` toggles
     /// `CONDUKT_AUTONOMOUS` (the env the autonomy predicate reads).
     fn condukt(&self, args: &[&str], autonomous: bool) -> std::process::Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -101,7 +101,7 @@ impl Fixture {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -466,7 +466,7 @@ fn run_verify_checks(tag: &str, checks_json: &str) -> (std::process::Output, ser
     let file = dir.join("checks.json");
     std::fs::write(&file, checks_json).unwrap();
 
-    let out = Command::new(bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(bin()))
         .args(["verify", "checks", "--file", file.to_str().unwrap()])
         .current_dir(&dir)
         .output()

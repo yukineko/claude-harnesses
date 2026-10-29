@@ -46,7 +46,7 @@ fn project_key(root: &Path) -> String {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -108,7 +108,7 @@ fn unrecorded_conflict_is_not_reported_as_recorded() {
     std::fs::write(&ledger, "").unwrap();
     std::fs::set_permissions(&ledger, std::fs::Permissions::from_mode(0o444)).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(["worktree", "merge", "--branch", "feat"])
         .current_dir(&repo)
         .env("HOME", &home)
@@ -170,7 +170,7 @@ fn refused_trial_without_merge_state_is_still_recorded_conflict() {
     run_git(&repo, &["commit", "-q", "-am", "ours"]);
     std::fs::write(repo.join("g.txt"), "untracked\n").unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(["worktree", "merge", "--branch", "feat"])
         .current_dir(&repo)
         .env("HOME", &home)

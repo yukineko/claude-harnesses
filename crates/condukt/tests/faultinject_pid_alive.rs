@@ -91,6 +91,7 @@ fn claims_lock_path(home: &Path, cwd: &Path) -> PathBuf {
 
 fn spawn_claim_task(cwd: &Path, home: &Path, path_override: Option<&Path>) -> std::process::Child {
     let mut cmd = Command::new(bin());
+    harness_core::git_env::scrub(&mut cmd);
     cmd.current_dir(cwd)
         .env("HOME", home)
         .args([

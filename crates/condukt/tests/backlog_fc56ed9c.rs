@@ -91,7 +91,7 @@ fn a_panicking_editgate_does_not_exit_zero() {
         "tool_input": { "file_path": file.to_string_lossy() },
     })
     .to_string();
-    let mut child = Command::new(BIN)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(BIN))
         .arg("editgate")
         .current_dir(&repo_path)
         .env("HOME", home.path())

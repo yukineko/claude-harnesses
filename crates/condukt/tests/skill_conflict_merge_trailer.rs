@@ -11,7 +11,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn sh(dir: &Path, script: &str, task: &str) -> Output {
-    Command::new("sh")
+    harness_core::git_env::scrub(&mut Command::new("sh"))
         .args(["-c", script])
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -61,7 +61,7 @@ fn skill_conflict_step_yields_a_mergeable_branch() {
     ok(&repo, "git add . && git commit -q -m init");
 
     let condukt = |args: &[&str], dir: &Path| {
-        Command::new(env!("CARGO_BIN_EXE_condukt"))
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
             .args(args)
             .current_dir(dir)
             .env("HOME", &home)

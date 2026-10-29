@@ -33,7 +33,7 @@
     {
       "name": "beacon",
       "description": "Desktop and webhook notifications for Claude Code: Stop and Notification hooks that ping you via desktop, Slack, webhook or a custom command when a turn finishes or input is needed.",
-      "version": "0.1.15",
+      "version": "0.1.16",
       "category": "notifications",
       "keywords": [
         "hooks",

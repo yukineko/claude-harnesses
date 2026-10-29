@@ -24,7 +24,7 @@ fn unique_dir() -> PathBuf {
 }
 
 fn tdd(dir: &PathBuf, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_tdd"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_tdd")))
         .args(args)
         .current_dir(dir)
         .env("HOME", dir)

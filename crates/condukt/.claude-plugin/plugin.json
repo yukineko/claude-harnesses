@@ -1,6 +1,6 @@
 {
   "name": "condukt",
-  "version": "0.7.300",
+  "version": "0.7.301",
   "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
   "author": {
     "name": "yukineko"

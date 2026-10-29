@@ -4941,3 +4941,124 @@ mod large_output_tests {
         assert_eq!(out.stdout.len(), big.len(), "stdout truncated");
     }
 }
+
+#[cfg(test)]
+mod inherited_git_dir_tests {
+    use super::*;
+    use std::process::Command;
+
+    /// Fixture git call: always scrubbed, so the fixture itself is immune to
+    /// an inherited GIT_DIR.
+    fn fx(dir: &Path, args: &[&str]) -> String {
+        let mut cmd = Command::new("git");
+        harness_core::git_env::scrub(&mut cmd);
+        let out = cmd
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .expect("spawn fixture git");
+        assert!(
+            out.status.success(),
+            "fixture git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    fn init_repo(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        fx(dir, &["init", "-q", "-b", "main"]);
+        fx(dir, &["config", "user.email", "t@example.com"]);
+        fx(dir, &["config", "user.name", "T"]);
+        std::fs::write(dir.join("f.txt"), "x\n").unwrap();
+        fx(dir, &["add", "."]);
+        fx(dir, &["commit", "-q", "-m", "init"]);
+    }
+
+    /// Inner half: only acts in the re-exec'd child (GITENV_CHILD=1), where
+    /// GIT_DIR points at unrelated repo B. Calls production `create` on A.
+    #[test]
+    fn gitenv_child_create_on_repo_a() {
+        if std::env::var("GITENV_CHILD").as_deref() != Ok("1") {
+            return;
+        }
+        let repo_a = PathBuf::from(std::env::var("GITENV_REPO_A").unwrap());
+        let base = PathBuf::from(std::env::var("GITENV_BASE").unwrap());
+        create(&repo_a, &base, "gitenvtopic", "condukt/gitenvtask")
+            .expect("create on repo A must succeed");
+    }
+
+    /// Production `worktree::create` for repo A must not mutate repo B just
+    /// because GIT_DIR (inherited, e.g. from a git hook) points at B.
+    #[test]
+    fn create_ignores_inherited_git_dir() {
+        if std::env::var("GITENV_CHILD").as_deref() == Ok("1") {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!(
+            "condukt-gitenv-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let repo_a = root.join("a");
+        let repo_b = root.join("b");
+        let base = root.join("wt");
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        init_repo(&repo_a);
+        init_repo(&repo_b);
+
+        let snapshot = |r: &Path| {
+            (
+                fx(r, &["for-each-ref"]),
+                fx(r, &["worktree", "list", "--porcelain"]),
+                fx(r, &["config", "--local", "--list"]),
+            )
+        };
+        let before = snapshot(&repo_b);
+
+        let out = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "worktree::inherited_git_dir_tests::gitenv_child_create_on_repo_a",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env("GITENV_CHILD", "1")
+            .env("GITENV_REPO_A", &repo_a)
+            .env("GITENV_BASE", &base)
+            .env("HOME", &home)
+            .env("GIT_DIR", repo_b.join(".git"))
+            .output()
+            .expect("re-exec test binary");
+        let child_log = format!(
+            "child status={:?}\nstdout={}\nstderr={}",
+            out.status,
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let after = snapshot(&repo_b);
+        let result = std::panic::catch_unwind(|| {
+            assert_eq!(
+                before.0, after.0,
+                "repo B refs changed by create() on repo A\n{child_log}"
+            );
+            assert_eq!(
+                before.1, after.1,
+                "repo B worktree list changed by create() on repo A\n{child_log}"
+            );
+            assert_eq!(
+                before.2, after.2,
+                "repo B local config changed by create() on repo A\n{child_log}"
+            );
+        });
+        let _ = std::fs::remove_dir_all(&root);
+        if let Err(e) = result {
+            std::panic::resume_unwind(e);
+        }
+    }
+}

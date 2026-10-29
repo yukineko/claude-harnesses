@@ -458,7 +458,7 @@
     {
       "name": "gauge",
       "description": "Local LLMOps telemetry for Claude Code: a Stop hook that records each session's token usage, tool calls, latency and cost to a local store and reports it, with no API key.",
-      "version": "0.3.30",
+      "version": "0.3.31",
       "category": "observability",
       "keywords": [
         "hooks",

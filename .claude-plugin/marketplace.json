@@ -208,7 +208,7 @@
     {
       "name": "ctxrot",
       "description": "Context-rot guard for Claude Code that detects, rescues, restores and distills conversation context to fight attention decay in long sessions.",
-      "version": "0.5.37",
+      "version": "0.5.38",
       "category": "context",
       "keywords": [
         "context",

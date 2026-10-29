@@ -31,7 +31,7 @@ struct Sandbox {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .env("HOME", dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -80,6 +80,7 @@ fn sandbox() -> Sandbox {
 
 fn base_cmd(sb: &Sandbox, cwd: &Path) -> Command {
     let mut c = Command::new("sh");
+    harness_core::git_env::scrub(&mut c);
     c.current_dir(cwd)
         .env("HOME", &sb.home)
         .env("PATH", "/usr/bin:/bin")
@@ -177,7 +178,7 @@ fn touch_now(path: &Path) {
 }
 
 fn run_sessions_json(sb: &Sandbox, cwd: &Path) -> (Output, String) {
-    let out = Command::new(BIN)
+    let out = harness_core::git_env::scrub(&mut Command::new(BIN))
         .current_dir(cwd)
         .env("HOME", &sb.home)
         .env("PATH", "/usr/bin:/bin")

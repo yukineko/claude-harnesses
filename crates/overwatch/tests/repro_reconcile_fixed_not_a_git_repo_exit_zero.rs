@@ -20,7 +20,7 @@ fn reconcile_fixed_outside_git_repo_must_be_nonzero() {
     std::fs::create_dir_all(&work).unwrap();
 
     // Control: this really is not a git repository.
-    let g = Command::new("git")
+    let g = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(&work)
         .args(["rev-parse", "--git-dir"])
         .output()
@@ -30,7 +30,7 @@ fn reconcile_fixed_outside_git_repo_must_be_nonzero() {
         "control failed: sandbox is inside a git repo"
     );
 
-    let out = Command::new(env!("CARGO_BIN_EXE_overwatch"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
         .args(["reconcile-fixed", "--last-n", "10", "--json"])
         .env("HOME", &home)
         .env_remove("CLAUDE_CODE_SESSION_ID")

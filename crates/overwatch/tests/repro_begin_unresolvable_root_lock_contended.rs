@@ -24,7 +24,7 @@ fn begin_on_unresolvable_root_must_not_claim_lock_contended() {
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::write(cwd.join(".git"), "garbage").unwrap();
 
-    let out = Command::new(bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(&cwd)
         .env("HOME", &home)
         .args(["begin", "--key", "k1", "--title", "t", "--session", "s1"])

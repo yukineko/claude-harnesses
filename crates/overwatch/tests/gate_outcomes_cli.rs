@@ -72,7 +72,7 @@ fn run(home: &Path, work: &Path, json: bool) -> Output {
     if json {
         args.push("--json");
     }
-    Command::new(overwatch_bin())
+    harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
         .args(&args)
         .env("HOME", home)
         .env_remove("CLAUDE_CODE_SESSION_ID")

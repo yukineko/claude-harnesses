@@ -43,7 +43,7 @@ fn overwatch_bin() -> &'static str {
 }
 
 fn run_ow(home: &Path, work: &Path, args: &[&str]) -> String {
-    let out = Command::new(overwatch_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
         .args(args)
         .env("HOME", home)
         .env_remove("CLAUDE_CODE_SESSION_ID")

@@ -40,7 +40,7 @@ fn overwatch_bin() -> &'static str {
 }
 
 fn run_ow(home: &Path, work: &Path, args: &[&str]) -> String {
-    let out = Command::new(overwatch_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
         .args(args)
         .env("HOME", home)
         .env_remove("CLAUDE_CODE_SESSION_ID")
@@ -57,7 +57,7 @@ fn run_ow(home: &Path, work: &Path, args: &[&str]) -> String {
 }
 
 fn git(work: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .env("GIT_AUTHOR_NAME", "test")
         .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
@@ -276,7 +276,7 @@ fn reconcile_fixed_undetermined_when_not_a_git_repo() {
     // in `undetermined_sources`.
     let (home, work) = make_sandbox("no-repo");
 
-    let out = Command::new(overwatch_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
         .args(["reconcile-fixed", "--last-n", "10", "--json"])
         .env("HOME", &home)
         .env_remove("CLAUDE_CODE_SESSION_ID")

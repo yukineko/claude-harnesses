@@ -37,7 +37,7 @@ fn rollout_requires_canary_for_gate_crates() {
     // to rebuild (and so it tests the code under test, not a stale install).
     let ow = env!("CARGO_BIN_EXE_overwatch");
 
-    let out = Command::new("bash")
+    let out = harness_core::git_env::scrub(&mut Command::new("bash"))
         .arg(&script)
         .env("OVERWATCH_BIN", ow)
         .current_dir(&repo)

@@ -20,7 +20,7 @@ const SHARED_ID: &str = "esc-in-both-1";
 const CANON_ID: &str = "esc-canonical-1";
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args([
             "-c",
             "user.name=t",
@@ -114,7 +114,7 @@ fn write_registry(file: &Path, rows: &[String]) {
 }
 
 fn review_queue(home: &Path, cwd: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_overwatch"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
         .args(["review-queue", "--json"])
         .env("HOME", home)
         .env_remove("HARNESS_SANDBOX_HOME")

@@ -88,7 +88,7 @@ fn script_test_must_not_pass_when_bash_is_unavailable() {
     std::fs::create_dir_all(&empty).unwrap();
 
     // Control: with a normal PATH the same binary really runs and passes.
-    let ok = Command::new(&bin)
+    let ok = harness_core::git_env::scrub(&mut Command::new(&bin))
         .args(["continuous_audit_script_behaves", "--exact"])
         .env("PATH", "/usr/bin:/bin")
         .current_dir(&empty)
@@ -99,7 +99,7 @@ fn script_test_must_not_pass_when_bash_is_unavailable() {
         "control failed: {ok:?}"
     );
 
-    let out = Command::new(&bin)
+    let out = harness_core::git_env::scrub(&mut Command::new(&bin))
         .args(["continuous_audit_script_behaves", "--exact"])
         .env_clear()
         .env("PATH", "")

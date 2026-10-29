@@ -1968,7 +1968,6 @@ impl_files = [\"src/x.rs\"]
     /// `load` (shared with `noise.rs`, so ambiguous), with `caller.rs` calling
     /// both from outside.
     fn enrich_repo() -> tempfile::TempDir {
-        crate::clear_inherited_git_env();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("src")).unwrap();
         std::fs::write(
@@ -2074,7 +2073,6 @@ impl_files = [\"src/x.rs\"]
     fn enrich_leaves_the_map_untouched_when_the_index_cannot_answer() {
         // The fail-closed contract: a map that was asked and a map that could
         // not be asked must not serialize to the same thing.
-        crate::clear_inherited_git_env();
         let tmp = tempfile::tempdir().unwrap();
         let not_a_repo = tmp.path().join("no-git-here");
         std::fs::create_dir_all(&not_a_repo).unwrap();

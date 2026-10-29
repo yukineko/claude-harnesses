@@ -3584,19 +3584,6 @@ fn canonicalize(p: &Path) -> Result<PathBuf> {
     std::fs::canonicalize(p).or_else(|_| Ok(p.to_path_buf()))
 }
 
-/// Remove the inherited `GIT_*` repo-selecting variables from THIS test
-/// process. Production code under test (`scope`, `specmap`, `ack`) spawns
-/// `git` and deliberately honours the caller's `GIT_DIR`, so a per-fixture
-/// `harness_core::git_env::scrub` cannot reach it; under a hook-driven
-/// `cargo test` it would answer for the hook's repository. Every caller wants
-/// the variables absent, so clearing is idempotent across concurrent tests.
-#[cfg(test)]
-pub(crate) fn clear_inherited_git_env() {
-    for k in harness_core::git_env::INHERITED_GIT_ENV {
-        std::env::remove_var(k);
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::panic)]
 mod tests {
@@ -3663,7 +3650,6 @@ mod tests {
 
     // repo_root for git operations — use the harness workspace root.
     fn repo_root() -> PathBuf {
-        crate::clear_inherited_git_env();
         let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         p.pop(); // up from crates/specguard → crates/
         p.pop(); // up from crates/ → workspace root

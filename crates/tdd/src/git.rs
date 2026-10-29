@@ -347,7 +347,7 @@ diff --git a/old.rs b/old.rs
             &["config", "user.email", "t@t.com"][..],
             &["config", "user.name", "t"][..],
         ] {
-            let status = Command::new("git")
+            let status = harness_core::git_env::scrub(&mut Command::new("git"))
                 .current_dir(root)
                 .args(args)
                 .status()
@@ -366,7 +366,7 @@ diff --git a/old.rs b/old.rs
     }
 
     fn git(root: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        let status = harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(root)
             .args(args)
             .status()
@@ -602,7 +602,7 @@ mod backlog_845475af {
     use std::process::Command;
 
     fn sh(root: &Path, args: &[&str]) {
-        let st = Command::new("git")
+        let st = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(root)
             .status()

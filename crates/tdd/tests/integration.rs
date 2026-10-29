@@ -20,7 +20,7 @@ fn run(args: &[&str], payload: &str) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_tdd");
     let dir = unique_dir();
     std::fs::create_dir_all(&dir).unwrap();
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(args)
         .current_dir(&dir)
         .env("HOME", &dir)
@@ -119,7 +119,7 @@ fn run_oracle(task: &str, red: Option<bool>, green: Option<bool>) -> (i32, Value
     if let Some(passed) = green {
         write_proof(&dir, task, "green", passed);
     }
-    let child = Command::new(bin)
+    let child = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(["oracle", "--task", task])
         .current_dir(&dir)
         .env("HOME", &dir)
@@ -190,7 +190,7 @@ fn oracle_unreadable_proof_exits_2_undetermined() {
     std::fs::create_dir_all(&dir).unwrap();
     write_proof(&dir, "demo-unreadable", "red", false);
     std::fs::create_dir_all(dir.join(".tdd").join("demo-unreadable.green.json")).unwrap();
-    let out = Command::new(bin)
+    let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(["oracle", "--task", "demo-unreadable"])
         .current_dir(&dir)
         .env("HOME", &dir)

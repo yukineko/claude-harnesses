@@ -13,7 +13,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 fn git_init(p: &std::path::Path) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["init", "-q"])
         .current_dir(p)
         .output()
@@ -33,7 +33,7 @@ fn repo_with_script(name: &str, body: &str) -> tempfile::TempDir {
 }
 
 fn run(args: &[&str], dir: &std::path::Path) -> (Option<i32>, String) {
-    let o = Command::new(env!("CARGO_BIN_EXE_ship"))
+    let o = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_ship")))
         .args(args)
         .current_dir(dir)
         .output()

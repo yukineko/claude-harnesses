@@ -135,7 +135,7 @@ mod tests {
         let repo_path = dir.path();
 
         // Initialize git repo on `main` (the branch the detections compare to)
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("init")
             .arg("-b")
             .arg("main")
@@ -144,7 +144,7 @@ mod tests {
             .unwrap();
 
         // Set user config
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("config")
             .arg("user.email")
             .arg("t@t")
@@ -152,7 +152,7 @@ mod tests {
             .output()
             .unwrap();
 
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("config")
             .arg("user.name")
             .arg("t")
@@ -165,13 +165,13 @@ mod tests {
 
     fn commit_file(repo_path: &Path, name: &str) {
         fs::write(repo_path.join(name), "content").unwrap();
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("add")
             .arg(name)
             .current_dir(repo_path)
             .output()
             .unwrap();
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("-c")
             .arg("user.email=t@t")
             .arg("-c")
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn test_unmerged_condukt_branches_no_main_is_undetermined() {
         let dir = TempDir::new().unwrap();
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("init")
             .arg("-b")
             .arg("trunk")

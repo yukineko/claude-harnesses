@@ -17,7 +17,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Output {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -82,6 +82,7 @@ fn fixture() -> Fixture {
 
 fn ship_cmd(f: &Fixture, cwd: &Path, args: &[&str]) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_ship"));
+    harness_core::git_env::scrub(&mut c);
     c.args(args)
         .current_dir(cwd)
         .env("HOME", f.home.path())
@@ -705,7 +706,7 @@ fn claim_hooks_json_sessionend() {
 #[test]
 fn claim_platform_bins_gitignored() {
     let ignored = |p: &str| {
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["check-ignore", "-q", p])
             .current_dir(repo_root())
             .output()

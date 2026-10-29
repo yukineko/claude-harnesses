@@ -313,14 +313,6 @@ mod tests {
     /// `tempfile` dev-dependency; mirrors this crate-family's existing test
     /// style). Caller is responsible for cleanup.
     fn scratch_dir() -> std::path::PathBuf {
-        // `run_git` (production) deliberately honours the caller's GIT_DIR, so
-        // a per-fixture `scrub` cannot reach it; under a hook-driven
-        // `cargo test` it would answer for the hook's repository instead of
-        // this scratch dir. Every caller wants the variables absent, so
-        // clearing them here is idempotent across concurrent tests.
-        for k in harness_core::git_env::INHERITED_GIT_ENV {
-            std::env::remove_var(k);
-        }
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let p = std::env::temp_dir().join(format!(

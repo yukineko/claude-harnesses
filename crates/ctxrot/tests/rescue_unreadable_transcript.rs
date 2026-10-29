@@ -74,7 +74,7 @@ fn run_rescue(home: &Path, cwd: &Path, transcript: &Path, session: &str) -> Run 
     })
     .to_string();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ctxrot"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_ctxrot")))
         .arg("rescue")
         .env("HOME", home)
         .env("CTXROT_DISTILL_ON_COMPACT", "0")

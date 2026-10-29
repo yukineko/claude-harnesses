@@ -107,7 +107,7 @@ struct Sandbox {
 
 fn init_git_repo(dir: &Path) {
     let run = |args: &[&str]| {
-        let st = Command::new("git")
+        let st = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(dir)
             .env("GIT_AUTHOR_NAME", "test")
@@ -150,7 +150,7 @@ fn sandbox() -> Sandbox {
 /// to `ctxrot`'s sandbox (same HOME + HARNESS_AUTONOMY_DIR + cwd) so both
 /// crates resolve the same durable file.
 fn condukt_autonomy_set(sb: &Sandbox, mode: &str) {
-    let out = Command::new(condukt_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(condukt_bin()))
         .args(["state", "autonomy-set", mode])
         .current_dir(&sb.cwd)
         .env("HOME", &sb.home)
@@ -176,7 +176,7 @@ fn condukt_autonomy_set(sb: &Sandbox, mode: &str) {
 /// untouched while still giving `--explain`/`autonomy-path` a place to name
 /// which layer decided).
 fn condukt_autonomy_path(sb: &Sandbox) -> PathBuf {
-    let out = Command::new(condukt_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(condukt_bin()))
         .args(["state", "autonomy-path"])
         .current_dir(&sb.cwd)
         .env("HOME", &sb.home)
@@ -205,6 +205,7 @@ fn condukt_autonomy_path(sb: &Sandbox) -> PathBuf {
 /// ctxrot's own autonomy-relevant env vars scrubbed unless explicitly passed.
 fn run_ctxrot_autonomy(sb: &Sandbox, env: &[(&str, &str)]) -> Run {
     let mut cmd = Command::new(ctxrot_bin());
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("autonomy")
         .current_dir(&sb.cwd)
         .env("HOME", &sb.home)

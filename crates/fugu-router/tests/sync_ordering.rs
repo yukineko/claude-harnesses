@@ -74,7 +74,7 @@ const EXE: &str = env!("CARGO_BIN_EXE_fugu-router");
 /// the test does not depend on the developer's `~/.gitconfig` (the fake HOME
 /// these tests install has none).
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .args(args)
         .env("GIT_AUTHOR_NAME", "t")
@@ -119,7 +119,7 @@ fn run(home: &Path, args: &[&str], stdin: Option<&str>) -> std::process::Output 
     use std::io::Write;
     use std::process::Stdio;
 
-    let mut child = Command::new(EXE)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(EXE))
         .args(args)
         .env("HOME", home)
         .env("GIT_AUTHOR_NAME", "t")

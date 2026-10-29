@@ -17,7 +17,7 @@ fn home() -> PathBuf {
 }
 
 fn run(home: &Path, args: &[&str], payload: &str) -> (i32, String, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_gauge"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_gauge")))
         .args(args)
         .current_dir(home)
         .env("HOME", home)
@@ -234,6 +234,7 @@ fn backlog_c444cd8e_status_does_not_claim_no_config_when_home_config_is_untraver
     // Control: readable -> status names the config file.
     let (_, ctl, _) = run(&proj, &["status"], "");
     let mut ctl_cmd = Command::new(env!("CARGO_BIN_EXE_gauge"));
+    harness_core::git_env::scrub(&mut ctl_cmd);
     ctl_cmd.arg("status").current_dir(&proj).env("HOME", &h);
     let ctl_out = String::from_utf8_lossy(&ctl_cmd.output().unwrap().stdout).into_owned();
     assert!(
@@ -244,6 +245,7 @@ fn backlog_c444cd8e_status_does_not_claim_no_config_when_home_config_is_untraver
     std::fs::set_permissions(&gdir, std::fs::Permissions::from_mode(0o000)).unwrap();
     let denied = std::fs::metadata(gdir.join("config.toml")).is_err();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_gauge"));
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("status").current_dir(&proj).env("HOME", &h);
     let out = String::from_utf8_lossy(&cmd.output().unwrap().stdout).into_owned();
     std::fs::set_permissions(&gdir, std::fs::Permissions::from_mode(0o755)).unwrap();

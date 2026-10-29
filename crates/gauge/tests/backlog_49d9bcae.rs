@@ -23,7 +23,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn gauge(home: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_gauge"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_gauge")))
         .args(args)
         .env("HOME", home)
         .current_dir(home)
@@ -86,7 +86,7 @@ fn sandboxed(cwd: &Path, prog: &str, args: &[&str]) -> std::process::Output {
          (deny mach-lookup (global-name \"com.apple.system.opendirectoryd.libinfo\"))\
          (deny file-write* (subpath \"{real_home}\"))"
     );
-    Command::new("/usr/bin/sandbox-exec")
+    harness_core::git_env::scrub(&mut Command::new("/usr/bin/sandbox-exec"))
         .arg("-p")
         .arg(profile)
         .arg(prog)

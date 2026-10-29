@@ -21,12 +21,19 @@
 //! `diff_text` sets `fetch_failed`, both of which `review::evaluate` resolves
 //! to the bounded `git-scan-failed` block.
 //!
-//! Not covered by this module: the repo probe itself
-//! (`harness_core::git_probe::probe_repo`, one `git rev-parse`) still runs as
-//! a raw `Command::output()` inside harness-core with no time limit.
+//! Every spawn also has the inherited repo-locating `GIT_*` variables removed
+//! (`harness_core::git_env::scrub`), so the repository is always the one
+//! discovered from the `root` passed in, never one an inherited `GIT_DIR` /
+//! `GIT_WORK_TREE` / `GIT_INDEX_FILE` points at.
+//!
+//! Not covered by the time bound: the repo probe itself
+//! (`harness_core::git_probe::probe_repo_scrubbed`, one `git rev-parse`) still
+//! runs as a raw `Command::output()` inside harness-core with no time limit.
+//! It is env-scrubbed too and does not count an env `GIT_DIR` as evidence of a
+//! repository at `root`.
 
 use harness_core::boundary;
-use harness_core::git_probe::{probe_repo, RepoProbe};
+use harness_core::git_probe::{probe_repo_scrubbed, RepoProbe};
 use harness_core::verdict::Determination;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -69,6 +76,10 @@ fn timeout_from(raw: Option<&str>) -> Duration {
 /// here, so the give-up telemetry counts each event once.
 fn run_git(root: &Path, args: &[&str]) -> Determination<String> {
     let mut cmd = Command::new("git");
+    // Drop every inherited `GIT_*` repo-locating variable so the repository
+    // is the one found from `root`, never one an inherited `GIT_DIR` /
+    // `GIT_WORK_TREE` / `GIT_INDEX_FILE` points at.
+    harness_core::git_env::scrub(&mut cmd);
     cmd.current_dir(root)
         .args(args)
         .stdin(Stdio::null())
@@ -99,7 +110,7 @@ pub enum ChangeScan {
 /// is no git repo, `Failed` when any sub-command errored (non-zero exit / spawn
 /// failure / timeout / unreadable output) inside a real repo, or `Files(v)` on success (possibly empty).
 pub fn changed_files(root: &Path) -> ChangeScan {
-    match probe_repo(root) {
+    match probe_repo_scrubbed(root) {
         RepoProbe::Repo => {}
         // Genuinely out of scope: git said so, or git could not answer and no
         // `.git` exists anywhere above to contradict it.

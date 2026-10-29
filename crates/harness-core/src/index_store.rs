@@ -474,7 +474,7 @@ mod tests {
                 "x",
             ],
         ] {
-            let ok = std::process::Command::new("git")
+            let ok = crate::git_env::scrub(&mut std::process::Command::new("git"))
                 .arg("-C")
                 .arg(root)
                 .args(&args)

@@ -1,6 +1,6 @@
 {
   "name": "schemaguard",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "description": "Schema-validation gate for LLM structured outputs: validates a JSON value against a named declared schema (such as verdict or undetermined-probe) and emits structured errors for one re-ask.",
   "author": {
     "name": "yukineko"

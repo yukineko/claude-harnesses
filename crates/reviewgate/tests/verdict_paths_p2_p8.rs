@@ -35,7 +35,7 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn git_available() -> bool {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("--version")
         .output()
         .map(|o| o.status.success())
@@ -67,7 +67,7 @@ fn write_exec(path: &Path, contents: &str) {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .args(args)
         .stdout(Stdio::null())
@@ -149,6 +149,7 @@ fn run_review(home: &Path, cwd: &Path, path: &std::ffi::OsStr, payload: &str) ->
     ensure_inject_config(home);
     let bin = env!("CARGO_BIN_EXE_reviewgate");
     let mut cmd = Command::new(bin);
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("review")
         .current_dir(cwd)
         .env("HOME", home)
@@ -175,7 +176,7 @@ fn run_review(home: &Path, cwd: &Path, path: &std::ffi::OsStr, payload: &str) ->
 /// Run `reviewgate status` with the given HOME/cwd.
 fn run_status(home: &Path, cwd: &Path) -> Run {
     let bin = env!("CARGO_BIN_EXE_reviewgate");
-    let out = Command::new(bin)
+    let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .arg("status")
         .current_dir(cwd)
         .env("HOME", home)

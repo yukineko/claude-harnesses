@@ -11,7 +11,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 fn run_gate(cwd: &Path, home: &Path, path: &Path, payload: &str) -> (i32, String, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tdd"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_tdd")))
         .arg("gate")
         .current_dir(cwd)
         .env("HOME", home)

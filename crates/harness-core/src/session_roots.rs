@@ -490,7 +490,7 @@ mod tests {
     use super::*;
 
     fn git(dir: &Path, args: &[&str]) {
-        let o = Command::new("git")
+        let o = crate::git_env::scrub(&mut Command::new("git"))
             .arg("-C")
             .arg(dir)
             .args(args)
@@ -735,7 +735,7 @@ mod tests {
         record_wt(&f);
         std::fs::remove_dir_all(f.wt.join("src")).unwrap();
         std::fs::remove_file(f.wt.join(".git")).unwrap();
-        let o = Command::new("git")
+        let o = crate::git_env::scrub(&mut Command::new("git"))
             .arg("-C")
             .arg(&f.wt)
             .args(["rev-parse", "--show-toplevel"])

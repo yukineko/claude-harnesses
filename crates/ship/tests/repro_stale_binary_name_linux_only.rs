@@ -18,7 +18,7 @@ use std::time::{Duration, SystemTime};
 fn stale_darwin_arm64_binary_is_not_reported_clean() {
     let repo = tempfile::TempDir::new().unwrap();
     let p = repo.path();
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["init", "-q"])
         .current_dir(p)
         .output()
@@ -46,7 +46,7 @@ fn stale_darwin_arm64_binary_is_not_reported_clean() {
         .set_modified(now)
         .unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_ship"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_ship")))
         .arg("check")
         .current_dir(p)
         .output()

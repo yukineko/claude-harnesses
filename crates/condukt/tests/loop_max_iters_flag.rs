@@ -16,7 +16,7 @@ fn fixture(tag: &str, config: &str) -> (PathBuf, PathBuf) {
     let home = base.join("home");
     std::fs::create_dir_all(&repo).unwrap();
     std::fs::create_dir_all(home.join(".condukt")).unwrap();
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["init", "-q"])
         .current_dir(&repo)
         .status()
@@ -27,7 +27,7 @@ fn fixture(tag: &str, config: &str) -> (PathBuf, PathBuf) {
 }
 
 fn run(repo: &Path, home: &Path, extra: &[&str]) -> (Output, serde_json::Value) {
-    let o = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let o = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(["loop", "--module", "client", "--prev-failures", "9"])
         .args(extra)
         .current_dir(repo)
@@ -86,7 +86,7 @@ fn unparseable_config_refuses_instead_of_running_uncapped() {
 #[test]
 fn loop_without_module_is_rejected() {
     let (repo, home) = fixture("nomodule", FAILING);
-    let o = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let o = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(["loop", "--iteration", "1"])
         .current_dir(&repo)
         .env("HOME", &home)

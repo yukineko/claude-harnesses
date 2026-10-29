@@ -25,7 +25,7 @@ fn temp_home(tag: &str) -> PathBuf {
 
 fn run_in(home: &Path, args: &[&str]) -> (i32, String, String) {
     let bin = env!("CARGO_BIN_EXE_fugu-router");
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(args)
         .env("HOME", home)
         .stdin(Stdio::piped())

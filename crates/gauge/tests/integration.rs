@@ -25,7 +25,7 @@ fn temp_home(tag: &str) -> PathBuf {
 /// CWD (so no stray project `gauge.toml` is picked up). Returns (exit_code, stdout).
 fn run_in(home: &PathBuf, args: &[&str], payload: &str) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_gauge");
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(args)
         .current_dir(home)
         .env("HOME", home)

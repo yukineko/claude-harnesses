@@ -48,7 +48,7 @@ fn hung_gh_is_not_reported_as_gh_not_found() {
         &["remote", "add", "origin", "https://github.com/o/r.git"],
     ] {
         assert!(
-            Command::new(&git)
+            harness_core::git_env::scrub(&mut Command::new(&git))
                 .args(a)
                 .current_dir(&repo)
                 .env("HOME", &home)
@@ -64,7 +64,7 @@ fn hung_gh_is_not_reported_as_gh_not_found() {
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     let proj = repo.to_str().unwrap().to_string();
-    let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .args(["add", "--title", "hung gh probe", "--project", &proj])
         .env("HOME", &home)
         .env(

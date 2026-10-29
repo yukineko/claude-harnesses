@@ -23,7 +23,7 @@ fn bin() -> &'static str {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -145,6 +145,7 @@ impl Fixture {
     fn guard(&self, dir: &Path, envs: &[(&str, &str)]) -> Output {
         let path = format!("{}:{}", self.stubs.display(), git_dir_on_path().display());
         let mut cmd = Command::new(bin());
+        harness_core::git_env::scrub(&mut cmd);
         cmd.args(["guard", "main-tree"])
             .current_dir(dir)
             .env("PATH", path)
@@ -212,7 +213,7 @@ fn passes_for_an_integration_commit_in_the_primary_tree() {
     f.stub_peer();
     f.stage_a_change(&f.repo);
     // A real merge marker in the real git dir.
-    let head = Command::new("git")
+    let head = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["rev-parse", "HEAD"])
         .current_dir(&f.repo)
         .output()
@@ -339,7 +340,7 @@ fn json_reports_the_real_verdict_under_an_override() {
     f.stub_peer();
     f.stage_a_change(&f.repo);
     let path = format!("{}:{}", f.stubs.display(), git_dir_on_path().display());
-    let out = Command::new(bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(bin()))
         .args(["guard", "main-tree", "--json"])
         .current_dir(&f.repo)
         .env("PATH", path)

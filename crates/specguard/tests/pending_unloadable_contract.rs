@@ -19,7 +19,7 @@ fn project(name: &str) -> PathBuf {
 }
 
 fn pending(dir: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_specguard"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .current_dir(dir)
         .arg("pending")
         .output()
@@ -68,7 +68,7 @@ fn notice_survives_the_hook_command_line() {
     let d = project("hookline");
     fs::write(d.join("specguard.toml"), "this is = = not [ toml\n").unwrap();
     let bin = env!("CARGO_BIN_EXE_specguard");
-    let o = Command::new("sh")
+    let o = harness_core::git_env::scrub(&mut Command::new("sh"))
         .current_dir(&d)
         .arg("-c")
         .arg(format!("'{bin}' pending 2>/dev/null || true"))

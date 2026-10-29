@@ -33,7 +33,7 @@ fn temp_home(tag: &str) -> PathBuf {
     // and `--repro-test` rightly refuses a dirty tree. Exclude them locally.
     // `dir` is a LINKED worktree (store writes are refused in a primary tree,
     // 1e6f00ae), so `.git` is a file: ask git where `info/exclude` lives.
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args([
             "rev-parse",
             "--path-format=absolute",
@@ -63,7 +63,7 @@ fn temp_home(tag: &str) -> PathBuf {
 /// the same queue behaviour as before.
 fn commit_repro_script(repo: &std::path::Path) {
     let git = |args: &[&str]| {
-        let out = std::process::Command::new("git")
+        let out = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
             .args(args)
             .current_dir(repo)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -107,7 +107,7 @@ fn spawn(args: &[&str], home: &Path) -> Child {
     // `HOME` it already uses — none of those commands are cwd-sensitive
     // (`driver`/`lock` resolve via `base_dir("backlog")`, keyed off `HOME`
     // only), so pinning cwd changes no other test's behavior.
-    Command::new(env!("CARGO_BIN_EXE_backlog"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)

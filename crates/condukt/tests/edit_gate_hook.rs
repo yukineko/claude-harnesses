@@ -143,7 +143,7 @@ fn setup() -> Fixture {
 /// Spawn `condukt editgate` with `cwd == repo`, `HOME == fixture home`, and the
 /// given stdin payload. Returns the completed process output.
 fn run_editgate(fx: &Fixture, stdin: &str) -> Output {
-    let mut child = Command::new(BIN)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(BIN))
         .arg("editgate")
         .current_dir(&fx.repo)
         .env("HOME", &fx.home)

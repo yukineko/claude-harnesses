@@ -39,7 +39,7 @@ fn unique_root(tag: &str) -> PathBuf {
 }
 
 fn spawn(args: &[&str], cwd: &Path, home: &Path) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_backlog"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
@@ -66,7 +66,7 @@ fn run(args: &[&str], cwd: &Path, home: &Path) -> (i32, String, String) {
 /// must FAIL loudly, never quietly skip: a skipped exclusion test would be
 /// indistinguishable from a passing one.
 fn git(args: &[&str], cwd: &Path, home: &Path) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .env("HOME", home)
         .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -122,7 +122,7 @@ impl Fixture {
 /// the same queue behaviour as before.
 fn commit_repro_script(repo: &std::path::Path) {
     let git = |args: &[&str]| {
-        let out = std::process::Command::new("git")
+        let out = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
             .args(args)
             .current_dir(repo)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

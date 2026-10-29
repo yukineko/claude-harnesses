@@ -48,6 +48,7 @@ fn seed(home: &Path, class: &str, model: &str, n: usize) {
 
 fn run(home: &Path, args: &[&str], payload: &str, envs: &[(&str, &str)]) -> (i32, String, String) {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_fugu-router"));
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args(args)
         .env("HOME", home)
         .env_remove("FUGU_ROUTER_AUTO_MODEL")

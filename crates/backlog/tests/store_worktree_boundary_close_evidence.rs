@@ -18,7 +18,7 @@ struct Fx {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .current_dir(cwd)
@@ -105,7 +105,7 @@ fn run(fx: &Fx, cwd: &Path, args: &[&str]) -> (i32, String, String) {
         fx.shim.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .args(args)
         .env("HOME", &fx.home)
         .env("PATH", path)

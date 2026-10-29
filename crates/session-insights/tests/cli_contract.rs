@@ -58,6 +58,7 @@ impl Env {
 
     fn run(&self, args: &[&str], stdin: &str, envs: &[(&str, &str)]) -> Out {
         let mut cmd = Command::new(BIN);
+        harness_core::git_env::scrub(&mut cmd);
         cmd.args(args)
             .current_dir(&self.proj)
             .env("HOME", &self.home)
@@ -929,7 +930,7 @@ fn claim_kill_switch_env() {
 // ---------------------------------------------------------------- git / launcher
 
 fn git(args: &[&str]) -> (i32, String) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
@@ -973,7 +974,7 @@ fn claim_launcher_missing_binary() {
     )
     .unwrap();
     let run = |arg: &str| -> Out {
-        let o = Command::new(&launcher)
+        let o = harness_core::git_env::scrub(&mut Command::new(&launcher))
             .arg(arg)
             .stdin(Stdio::null())
             .output()

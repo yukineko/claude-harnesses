@@ -17,7 +17,7 @@ fn session_start(cwd: &Path, home: &Path) -> (i32, String, String) {
         r#"{{"hook_event_name":"SessionStart","session_id":"s","cwd":"{}"}}"#,
         cwd.display()
     );
-    let mut c = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let mut c = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .arg("session-start")
         .env("HOME", home)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")

@@ -1,6 +1,6 @@
 {
   "name": "benchkit",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "External-benchmark (SWE-bench Verified) runner skeleton: a typed instance model, a fixture-based JSONL loader, and a gated download subcommand that fetches the dataset only on explicit request.",
   "author": {
     "name": "yukineko"

@@ -26,7 +26,7 @@ struct Fx {
 }
 
 fn git_out(dir: &Path, args: &[&str]) -> Output {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -83,6 +83,7 @@ impl Fx {
 
     fn condukt_with_path(&self, args: &[&str], path: Option<&str>) -> Output {
         let mut c = Command::new(env!("CARGO_BIN_EXE_condukt"));
+        harness_core::git_env::scrub(&mut c);
         c.args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)

@@ -27,7 +27,7 @@ fn bin() -> PathBuf {
 }
 
 fn git(repo: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(repo)
         .args(args)
         .stdout(Stdio::null())
@@ -49,7 +49,7 @@ fn init_repo(repo: &Path) {
 }
 
 fn spawn_cleanup(cwd: &Path, home: &Path) -> std::process::Child {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(cwd)
         .env("HOME", home)
         .args(["worktree", "cleanup"])
@@ -129,7 +129,7 @@ fn worktree_cleanup_refuses_when_repo_primary_lock_cannot_be_acquired() {
     std::fs::write(home.join(".condukt").join("state"), b"not a directory\n").unwrap();
     init_repo(&repo);
 
-    let out = Command::new(bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(&repo)
         .env("HOME", &home)
         .args(["worktree", "cleanup"])

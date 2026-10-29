@@ -27,7 +27,7 @@ fn spawn_begin(
     key: &str,
     session: &str,
 ) -> std::process::Child {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(cwd)
         .env("HOME", home)
         // Widens the load->check->save race window past real process-spawn
@@ -56,7 +56,7 @@ fn spawn_begin(
 /// could load a pre-begin snapshot, sleep past the racing begin's save, then
 /// save the stale snapshot back — silently freeing the just-claimed key.
 fn spawn_end(cwd: &std::path::Path, home: &std::path::Path, key: &str) -> std::process::Child {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(cwd)
         .env("HOME", home)
         // Hold end()'s stale in-memory snapshot well past begin()'s save so the
@@ -82,7 +82,7 @@ fn spawn_reassign(
     key: &str,
     to: &str,
 ) -> std::process::Child {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(cwd)
         .env("HOME", home)
         // Hold reassign()'s stale in-memory snapshot well past begin()'s save so
@@ -104,7 +104,7 @@ fn spawn_reassign(
 /// load a pre-begin snapshot, sleep past the racing begin's save, then save the
 /// stale snapshot back, silently dropping the just-committed lease.
 fn spawn_reap(cwd: &std::path::Path, home: &std::path::Path) -> std::process::Child {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(cwd)
         .env("HOME", home)
         // Hold reap()'s stale in-memory snapshot well past begin()'s save so the
@@ -173,7 +173,7 @@ fn concurrent_reap_does_not_clobber_racing_begin() {
         // Oracle: key2's holder (sess-b) must still have a live anchor. The
         // `lease` subcommand exits 0 with the lease when present, 1 when the
         // session holds nothing — so a non-zero exit means key2 was clobbered.
-        let status = Command::new(bin())
+        let status = harness_core::git_env::scrub(&mut Command::new(bin()))
             .current_dir(&cwd)
             .env("HOME", &home)
             .args(["lease", "--session", "sess-b", "--json"])
@@ -244,7 +244,7 @@ fn concurrent_reassign_does_not_clobber_racing_begin() {
         // Oracle: key2's holder (sess-b) must still have a live anchor. The
         // `lease` subcommand exits 0 with the lease when present, 1 when the
         // session holds nothing — so a non-zero exit means key2 was clobbered.
-        let status = Command::new(bin())
+        let status = harness_core::git_env::scrub(&mut Command::new(bin()))
             .current_dir(&cwd)
             .env("HOME", &home)
             .args(["lease", "--session", "sess-b", "--json"])
@@ -314,7 +314,7 @@ fn concurrent_end_does_not_clobber_racing_begin() {
         // Oracle: key2's holder (sess-b) must still have a live anchor. The
         // `lease` subcommand exits 0 with the lease when present, 1 when the
         // session holds nothing — so a non-zero exit means key2 was clobbered.
-        let status = Command::new(bin())
+        let status = harness_core::git_env::scrub(&mut Command::new(bin()))
             .current_dir(&cwd)
             .env("HOME", &home)
             .args(["lease", "--session", "sess-b", "--json"])

@@ -92,7 +92,7 @@ fn binary_missing_tdd_blocks_regardless_of_reproduction_tests() {
     std::fs::create_dir_all(&repo).unwrap();
     std::fs::create_dir_all(&home).unwrap();
     let git = |args: &[&str]| {
-        let st = Command::new("git")
+        let st = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(&repo)
             .output()
@@ -103,7 +103,7 @@ fn binary_missing_tdd_blocks_regardless_of_reproduction_tests() {
     let empty_path = base.join("emptybin");
     std::fs::create_dir_all(&empty_path).unwrap();
     let run = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_condukt"))
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
             .args(args)
             .current_dir(&repo)
             .env("HOME", &home)

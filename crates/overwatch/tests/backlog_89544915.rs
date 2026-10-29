@@ -62,7 +62,7 @@ fn git_repo_with_one_commit(work: &Path) {
             "init",
         ][..],
     ] {
-        let ok = Command::new("git")
+        let ok = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(work)
             .status()
@@ -73,7 +73,7 @@ fn git_repo_with_one_commit(work: &Path) {
 }
 
 fn ow_raw(home: &Path, work: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_overwatch"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
         .args(args)
         .env("HOME", home)
         .env_remove("CLAUDE_CODE_SESSION_ID")
@@ -356,7 +356,7 @@ fn t9_resolved_excluded_from_human_rate_denominator() {
 // ----------------------------------------------------------------- T8
 
 fn git(work: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .env("GIT_AUTHOR_NAME", "test")
         .env("GIT_AUTHOR_EMAIL", "test@example.invalid")

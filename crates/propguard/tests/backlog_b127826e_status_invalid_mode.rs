@@ -14,7 +14,7 @@ fn status_names_an_invalid_mode_instead_of_showing_the_default() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("propguard.toml"), "mode = \"subproces\"\n").unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_propguard"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_propguard")))
         .arg("status")
         .current_dir(&dir)
         .env("HOME", &dir)

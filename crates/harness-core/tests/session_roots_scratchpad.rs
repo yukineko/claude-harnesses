@@ -13,7 +13,7 @@ const OTHER_SID: &str = "11111111-2222-3333-4444-555555555555";
 
 fn git_init(dir: &Path) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
-    let st = Command::new("git")
+    let st = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("init")
         .arg("-q")
         .arg(dir)

@@ -39,7 +39,7 @@ const A_RS: &str = "fn helper() -> i32 {\n    42\n}\n";
 const B_RS: &str = "fn user() {\n    let _ = helper();\n}\n";
 
 fn run_review_order(cwd: &std::path::Path, diff_path: &std::path::Path) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_condukt"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .arg("review-order")
         .arg("--diff-file")
         .arg(diff_path)

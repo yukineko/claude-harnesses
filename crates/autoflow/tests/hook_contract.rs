@@ -170,6 +170,7 @@ impl Env {
     fn run(&self, sub: &str, payload: Value, extra_env: &[(&str, &str)]) -> Out {
         let path = format!("{}:/usr/bin:/bin", self.bin_dir.display());
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_autoflow"));
+        harness_core::git_env::scrub(&mut cmd);
         cmd.arg(sub)
             .env("HOME", &self.home)
             .env("PATH", path)
@@ -775,7 +776,7 @@ fn claim_disable_env() {
 #[test]
 fn claim_only_launcher_committed() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let ls = Command::new("git")
+    let ls = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["ls-files", "crates/autoflow/bin"])
         .current_dir(&root)
         .output()
@@ -789,7 +790,7 @@ fn claim_only_launcher_committed() {
     let files: Vec<&str> = listed.lines().collect();
     assert_eq!(files, vec!["crates/autoflow/bin/autoflow"]);
 
-    let ig = Command::new("git")
+    let ig = harness_core::git_env::scrub(&mut Command::new("git"))
         .args([
             "check-ignore",
             "-q",
@@ -801,7 +802,7 @@ fn claim_only_launcher_committed() {
     assert_eq!(ig.code(), Some(0), "per-platform binary must be gitignored");
 
     // and the launcher itself is not ignored
-    let ig = Command::new("git")
+    let ig = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["check-ignore", "-q", "crates/autoflow/bin/autoflow"])
         .current_dir(&root)
         .status()

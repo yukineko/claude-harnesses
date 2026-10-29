@@ -85,6 +85,7 @@ fn repo_root() -> PathBuf {
 /// explicit `CONDUKT_AUTONOMOUS` env state. Returns (exit_code, trimmed stdout).
 fn run_autonomy_check(home: &Path, autonomous_env: Option<&str>) -> (i32, String) {
     let mut cmd = Command::new(condukt_bin());
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args(["state", "autonomy-check"]).env("HOME", home);
     match autonomous_env {
         Some(v) => {
@@ -178,7 +179,7 @@ fn gated_task_is_isolated_and_never_batched() {
     let f = tmp.path().join("dec.json");
     std::fs::write(&f, dec).unwrap();
 
-    let out = Command::new(condukt_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(condukt_bin()))
         .args(["schedule", "--file"])
         .arg(&f)
         .env("HOME", tmp.path())
@@ -243,6 +244,7 @@ fn gated_task_is_isolated_and_never_batched() {
 /// with or without `--untestable`. Returns (exit_code, trimmed stdout).
 fn run_policy_answer_untestable(dir: &Path, untestable: bool) -> (i32, String) {
     let mut cmd = Command::new(condukt_bin());
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args([
         "policy",
         "answer",
@@ -326,6 +328,7 @@ fn run_policy_answer_approval(
     extra: &[&str],
 ) -> (i32, String) {
     let mut cmd = Command::new(condukt_bin());
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args([
         "policy",
         "answer",

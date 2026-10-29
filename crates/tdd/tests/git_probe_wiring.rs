@@ -37,7 +37,7 @@ fn unique_dir(tag: &str) -> PathBuf {
 /// the child's PATH. Returns (exit_code, stdout).
 fn run_gate(cwd: &Path, home: &Path, path: &Path, payload: &str) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_tdd");
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .arg("gate")
         .current_dir(cwd)
         .env("HOME", home)

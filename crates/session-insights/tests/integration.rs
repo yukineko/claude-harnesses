@@ -24,7 +24,7 @@ fn temp_home() -> PathBuf {
 /// shared `home` keeps record→report in the same store.
 fn run_in(home: &PathBuf, args: &[&str], payload: &str) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_session-insights");
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(args)
         .current_dir(home)
         .env("HOME", home)
@@ -145,7 +145,7 @@ fn report_context_joins_synthetic_ledger() {
     let payload = r#"{"hook_event_name":"PostToolUse","session_id":"it-ctx-join","tool_name":"Read","tool_input":{"file_path":"a.rs"}}"#;
 
     let bin = env!("CARGO_BIN_EXE_session-insights");
-    let rec = Command::new(bin)
+    let rec = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(["record"])
         .current_dir(&home)
         .env("HOME", &home)
@@ -164,7 +164,7 @@ fn report_context_joins_synthetic_ledger() {
         let _ = child.wait_with_output().expect("record runs");
     }
 
-    let out = Command::new(bin)
+    let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(["report", "--session", sid, "--context"])
         .current_dir(&home)
         .env("HOME", &home)
@@ -239,21 +239,22 @@ fn stop_hook_garbage_payload_prints_one_line_and_is_logged() {
 #[test]
 fn sessionend_hook_garbage_payload_is_reported_on_stderr() {
     let home = temp_home();
-    let out = Command::new(env!("CARGO_BIN_EXE_session-insights"))
-        .arg("sessionend")
-        .current_dir(&home)
-        .env("HOME", &home)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .and_then(|mut c| {
-            if let Some(mut si) = c.stdin.take() {
-                let _ = si.write_all(b"not json");
-            }
-            c.wait_with_output()
-        })
-        .expect("binary runs");
+    let out =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_session-insights")))
+            .arg("sessionend")
+            .current_dir(&home)
+            .env("HOME", &home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .and_then(|mut c| {
+                if let Some(mut si) = c.stdin.take() {
+                    let _ = si.write_all(b"not json");
+                }
+                c.wait_with_output()
+            })
+            .expect("binary runs");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(0));
     assert!(

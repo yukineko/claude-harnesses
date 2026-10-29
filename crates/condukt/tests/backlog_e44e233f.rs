@@ -10,7 +10,7 @@ use std::process::Command;
 #[test]
 fn shadow_run_finish_does_not_require_unmeasured_cost_and_duration() {
     let home = tempfile::tempdir().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args([
             "shadow-run",
             "finish",

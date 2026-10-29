@@ -15,7 +15,7 @@ fn bin() -> &'static str {
 }
 
 fn run(home: &TempDir, project: &TempDir, args: &[&str]) -> Output {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .args(args)
         .current_dir(project.path())
         .env("HOME", home.path())

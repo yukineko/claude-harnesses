@@ -27,7 +27,7 @@ fn temp_repo(tag: &str) -> (PathBuf, PathBuf) {
 }
 
 fn list(home: &PathBuf, repo: &PathBuf, status: &str) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .args(["list", "--status", status])
         .env("HOME", home)
         .current_dir(repo)

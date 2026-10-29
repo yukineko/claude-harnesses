@@ -46,7 +46,7 @@ fn unique_dir(tag: &str) -> PathBuf {
 /// anything.
 fn run_condukt(dir: &Path, home: &Path, args: &[&str]) -> (i32, String, String) {
     let bin = env!("CARGO_BIN_EXE_condukt");
-    let out = Command::new(bin)
+    let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(args)
         .current_dir(dir)
         .env("HOME", home)

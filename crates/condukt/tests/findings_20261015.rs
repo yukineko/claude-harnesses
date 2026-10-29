@@ -24,7 +24,7 @@ fn fixture(tag: &str, config: &str) -> (PathBuf, PathBuf) {
     let home = b.join("home");
     std::fs::create_dir_all(&repo).unwrap();
     std::fs::create_dir_all(home.join(".condukt")).unwrap();
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["init", "-q"])
         .current_dir(&repo)
         .status()
@@ -35,7 +35,7 @@ fn fixture(tag: &str, config: &str) -> (PathBuf, PathBuf) {
 }
 
 fn condukt(repo: &Path, home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_condukt"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(args)
         .current_dir(repo)
         .env("HOME", home)

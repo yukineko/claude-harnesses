@@ -20,7 +20,7 @@ fn seeded_repo(tag: &str) -> PathBuf {
     std::fs::create_dir_all(&dir).expect("create temp repo dir");
 
     let run_git = |args: &[&str]| {
-        let status = Command::new("git")
+        let status = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(&dir)
             .status()
@@ -47,7 +47,7 @@ fn seeded_repo(tag: &str) -> PathBuf {
 /// Run the binary with `args`. Returns (exit_code, stdout).
 fn run(args: &[&str]) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_fugu-router");
-    let out = Command::new(bin)
+    let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

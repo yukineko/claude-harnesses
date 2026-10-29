@@ -24,7 +24,7 @@ fn bin() -> &'static str {
 }
 
 fn run_git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -125,7 +125,7 @@ impl Fx {
     }
 
     fn heartbeat(&self, sid: &str, cwd: &Path) -> Output {
-        let mut child = Command::new(bin())
+        let mut child = harness_core::git_env::scrub(&mut Command::new(bin()))
             .arg("session-heartbeat")
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -154,7 +154,7 @@ impl Fx {
     }
 
     fn reap(&self) -> Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(["worktree", "reap"])
             .current_dir(&self.repo)
             .env("HOME", &self.home)

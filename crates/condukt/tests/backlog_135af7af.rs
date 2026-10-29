@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn git(dir: &Path, args: &[&str]) -> Output {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -31,7 +31,7 @@ fn run_git(dir: &Path, args: &[&str]) -> String {
 }
 
 fn condukt(repo: &Path, home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_condukt"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(args)
         .current_dir(repo)
         .env("HOME", home)

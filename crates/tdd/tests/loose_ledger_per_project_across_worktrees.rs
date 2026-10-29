@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 const IMPL_BODY: &str = "fn f() {\n    let x = 1;\n    println!(\"{}\", x);\n}\n";
 
 fn git(dir: &Path, args: &[&str]) {
-    let s = Command::new("git")
+    let s = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .stdout(Stdio::null())
@@ -32,7 +32,7 @@ fn stop(home: &Path, cwd: &Path, session: &str) -> serde_json::Value {
         "stop_hook_active": false,
     })
     .to_string();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_tdd"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_tdd")))
         .arg("gate")
         .current_dir(cwd)
         .env("HOME", home)

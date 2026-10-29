@@ -19,7 +19,7 @@ fn run(home: &Path, shim: &Path, cwd: &Path, args: &[&str]) -> (i32, String, Str
         shim.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let out = Command::new(env!("CARGO_BIN_EXE_compass"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_compass")))
         .args(args)
         .env("HOME", home)
         .env("PATH", path)

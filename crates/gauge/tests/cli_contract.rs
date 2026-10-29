@@ -75,6 +75,7 @@ impl Env {
         envs: &[(&str, &str)],
     ) -> (i32, String, String) {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_gauge"));
+        harness_core::git_env::scrub(&mut cmd);
         cmd.args(args)
             .current_dir(cwd)
             .env("HOME", &self.home)
@@ -1234,7 +1235,7 @@ fn claim_unreadable_config_refuses() {
 fn claim_bundled_bins_gitignored() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for bin in ["bin/gauge-darwin-arm64", "bin/gauge-linux-x86_64"] {
-        let st = Command::new("git")
+        let st = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["check-ignore", "-q", bin])
             .current_dir(root)
             .status()
@@ -1247,7 +1248,7 @@ fn claim_bundled_bins_gitignored() {
         );
     }
     // The tracked part of bin/ is only the hand-written launcher.
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["ls-files", "bin"])
         .current_dir(root)
         .output()

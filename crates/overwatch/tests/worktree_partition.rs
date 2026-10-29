@@ -26,7 +26,7 @@ fn scratch(tag: &str) -> PathBuf {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .args(args)
         .env("GIT_AUTHOR_NAME", "t")
@@ -62,7 +62,7 @@ fn add_worktree(repo: &Path, path: &Path) {
 }
 
 fn ow(home: &Path, cwd: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_overwatch"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
         .current_dir(cwd)
         .env("HOME", home)
         .args(args)

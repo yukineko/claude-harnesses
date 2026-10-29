@@ -3418,14 +3418,16 @@ mod tests {
         // of a repo lands on the same string.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        assert!(std::process::Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .arg("init")
-            .arg("-q")
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            harness_core::git_env::scrub(&mut std::process::Command::new("git"))
+                .arg("-C")
+                .arg(&root)
+                .arg("init")
+                .arg("-q")
+                .status()
+                .unwrap()
+                .success()
+        );
         let sub = root.join("a/b");
         std::fs::create_dir_all(&sub).unwrap();
         assert_eq!(
@@ -3442,14 +3444,16 @@ mod tests {
         let path = tmp_path();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        assert!(std::process::Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .arg("init")
-            .arg("-q")
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            harness_core::git_env::scrub(&mut std::process::Command::new("git"))
+                .arg("-C")
+                .arg(&root)
+                .arg("init")
+                .arg("-q")
+                .status()
+                .unwrap()
+                .success()
+        );
         let sub = root.join("nested");
         std::fs::create_dir_all(&sub).unwrap();
         let id = add(&path, "Task", sub.to_str().unwrap(), vec![], "", 100).unwrap();
@@ -3473,14 +3477,16 @@ mod tests {
         let path = tmp_path();
         let real_dir = tempfile::tempdir().unwrap();
         let real_root = real_dir.path().canonicalize().unwrap();
-        assert!(std::process::Command::new("git")
-            .arg("-C")
-            .arg(&real_root)
-            .arg("init")
-            .arg("-q")
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            harness_core::git_env::scrub(&mut std::process::Command::new("git"))
+                .arg("-C")
+                .arg(&real_root)
+                .arg("init")
+                .arg("-q")
+                .status()
+                .unwrap()
+                .success()
+        );
 
         let link_parent = tempfile::tempdir().unwrap();
         let link_path = link_parent.path().join("via-symlink");

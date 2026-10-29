@@ -44,7 +44,7 @@ const HOOK_BUDGET: Duration = Duration::from_millis(1000);
 const SHIM_SLEEP_SECS: u32 = 3;
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .args(args)
         .env("GIT_AUTHOR_NAME", "t")
@@ -152,7 +152,7 @@ fn setup(name: &str) -> Env {
 }
 
 fn real_git() -> String {
-    let out = Command::new("sh")
+    let out = harness_core::git_env::scrub(&mut Command::new("sh"))
         .args(["-c", "command -v git"])
         .output()
         .unwrap();
@@ -251,6 +251,7 @@ fn session_end_payload(env: &Env) -> String {
 /// Spawn one SessionEnd command via `sh -c`, the way Claude Code runs it.
 fn spawn_hook(env: &Env, command: &str) -> std::process::Child {
     let mut cmd = Command::new("sh");
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args(["-c", command]);
     apply_env(&mut cmd, env);
     let mut child = cmd
@@ -271,6 +272,7 @@ fn spawn_hook(env: &Env, command: &str) -> std::process::Child {
 
 fn run_prompt(env: &Env) -> std::process::Output {
     let mut cmd = Command::new(EXE);
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("prompt");
     apply_env(&mut cmd, env);
     let mut child = cmd
@@ -293,7 +295,7 @@ fn run_prompt(env: &Env) -> std::process::Output {
 }
 
 fn remote_has_episode(env: &Env) -> bool {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(&env.remote)
         .args(["show", "main:episodes.jsonl"])
         .output()
@@ -345,7 +347,7 @@ fn session_end_hook_work_still_lands_on_the_remote() {
         std::thread::sleep(Duration::from_millis(200));
     }
     let log = String::from_utf8_lossy(
-        &Command::new("git")
+        &harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(&env.remote)
             .args(["log", "--oneline", "main"])
             .output()

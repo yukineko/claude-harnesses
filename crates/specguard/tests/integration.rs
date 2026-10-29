@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -27,7 +27,7 @@ fn init_repo(repo: &Path) -> String {
     fs::write(repo.join("README.md"), "seed\n").unwrap();
     git(repo, &["add", "-A"]);
     git(repo, &["commit", "-q", "-m", "seed"]);
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])
@@ -65,7 +65,7 @@ canon = ["docs/spec.md"]
 }
 
 fn run_specguard(repo: &Path, baseline: &str, sub: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_specguard"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .current_dir(repo)
         .args([
             "--config",
@@ -85,7 +85,7 @@ fn run_specguard(repo: &Path, baseline: &str, sub: &[&str]) -> std::process::Out
 /// `fallback_ref`) runs for real — needed to exercise `map sync`'s baseline
 /// wiring, which `run_specguard`'s always-explicit `--baseline` bypasses.
 fn run_specguard_no_baseline(repo: &Path, sub: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_specguard"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .current_dir(repo)
         .args(["--config", "specguard.toml", "--date", "2026-01-01"])
         .args(sub)
@@ -641,7 +641,7 @@ fn brief_renders_prompt_and_runs_agent() {
 // --- `specguard init`: scaffold config + Claude Code SessionStart hook. ---
 
 fn specguard_init(repo: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_specguard"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .current_dir(repo)
         .args(["--config", "specguard.toml", "init"])
         .args(args)
@@ -1401,22 +1401,23 @@ fn run_specguard_stdin(
     stdin_data: &str,
 ) -> std::process::Output {
     use std::io::Write;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_specguard"))
-        .current_dir(repo)
-        .args([
-            "--config",
-            "specguard.toml",
-            "--baseline",
-            baseline,
-            "--date",
-            "2026-01-01",
-        ])
-        .args(sub)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .expect("specguard spawns");
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
+            .current_dir(repo)
+            .args([
+                "--config",
+                "specguard.toml",
+                "--baseline",
+                baseline,
+                "--date",
+                "2026-01-01",
+            ])
+            .args(sub)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("specguard spawns");
     if let Some(mut child_stdin) = child.stdin.take() {
         let _ = child_stdin.write_all(stdin_data.as_bytes());
     }
@@ -1970,13 +1971,14 @@ fn brief_reads_the_spec_map_exactly_once_per_invocation() {
         .spawn()
         .expect("writer spawns");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_specguard"))
-        .current_dir(repo)
-        .args(["--config", "specguard.toml", "--date", "2026-01-01"])
-        .args(["brief", task, "--prompt"])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .expect("specguard spawns");
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
+            .current_dir(repo)
+            .args(["--config", "specguard.toml", "--date", "2026-01-01"])
+            .args(["brief", task, "--prompt"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("specguard spawns");
 
     // Poll rather than wait(): a second read would never return.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);

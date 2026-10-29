@@ -18,7 +18,7 @@ fn reassign_of_unheld_key_must_be_nonzero() {
     let cwd = t.join("proj");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&cwd).unwrap();
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(&cwd)
         .args(["init", "-q"])
         .status()
@@ -26,7 +26,7 @@ fn reassign_of_unheld_key_must_be_nonzero() {
         .success());
 
     // Control: `end` of the same unheld key is already non-zero.
-    let end = Command::new(bin())
+    let end = harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(&cwd)
         .env("HOME", &home)
         .args(["end", "--key", "never-begun"])
@@ -37,7 +37,7 @@ fn reassign_of_unheld_key_must_be_nonzero() {
         "control: end of an unheld key must be non-zero: {end:?}"
     );
 
-    let out = Command::new(bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(&cwd)
         .env("HOME", &home)
         .args(["reassign", "--key", "never-begun", "--to", "other"])

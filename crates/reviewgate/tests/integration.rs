@@ -28,7 +28,7 @@ fn temp_home() -> PathBuf {
 fn run(args: &[&str], payload: &str) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_reviewgate");
     let home = temp_home();
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(args)
         .current_dir(&home)
         .env("HOME", &home)

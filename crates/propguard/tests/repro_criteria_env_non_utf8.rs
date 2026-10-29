@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn git(work: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(work)
         .args(args)
         .status()
@@ -27,19 +27,20 @@ fn run_check(work: &Path, home: &Path, criteria: OsString) -> (i32, String, Stri
         "cwd": work.to_string_lossy(),
     })
     .to_string();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_propguard"))
-        .arg("check")
-        .current_dir(work)
-        .env("HOME", home)
-        .env("PROPGUARD_STATE_DIR", home.join(".propguard-state"))
-        .env("PROPGUARD_CRITERIA", criteria)
-        .env("CLAUDE_CODE_SESSION_ID", "repro-p1")
-        .env_remove("PROPGUARD_DISABLE")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_propguard")))
+            .arg("check")
+            .current_dir(work)
+            .env("HOME", home)
+            .env("PROPGUARD_STATE_DIR", home.join(".propguard-state"))
+            .env("PROPGUARD_CRITERIA", criteria)
+            .env("CLAUDE_CODE_SESSION_ID", "repro-p1")
+            .env_remove("PROPGUARD_DISABLE")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("binary spawns");
     if let Some(mut si) = child.stdin.take() {
         let _ = si.write_all(payload.as_bytes());
     }

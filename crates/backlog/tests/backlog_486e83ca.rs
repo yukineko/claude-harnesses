@@ -65,6 +65,7 @@ struct Out {
 /// sees; `None` REMOVES it (the test runner itself may run inside a session).
 fn run(args: &[&str], cwd: &Path, home: &Path, session: Option<&str>) -> Out {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_backlog"));
+    harness_core::git_env::scrub(&mut cmd);
     cmd.env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
@@ -86,7 +87,7 @@ fn run(args: &[&str], cwd: &Path, home: &Path, session: Option<&str>) -> Out {
 }
 
 fn git(args: &[&str], cwd: &Path, home: &Path) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .env("HOME", home)
         .env("GIT_CONFIG_NOSYSTEM", "1")

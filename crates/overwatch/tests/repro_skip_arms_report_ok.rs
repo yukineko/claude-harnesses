@@ -31,7 +31,7 @@ fn git_repo(name: &str) -> PathBuf {
     let home = sandbox_home();
     let cwd = home.join("proj").join(name);
     std::fs::create_dir_all(&cwd).unwrap();
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(&cwd)
         .args(["init", "-q"])
         .status()

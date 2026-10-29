@@ -16,16 +16,17 @@ fn run_case(tag: &str, payload: &[u8]) {
             .as_nanos()
     ));
     std::fs::create_dir_all(&home).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_session-insights"))
-        .arg("stop")
-        .current_dir(&home)
-        .env("HOME", &home)
-        .env_remove("SESSION_INSIGHTS_DISABLE")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_session-insights")))
+            .arg("stop")
+            .current_dir(&home)
+            .env("HOME", &home)
+            .env_remove("SESSION_INSIGHTS_DISABLE")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
     child.stdin.take().unwrap().write_all(payload).unwrap();
     let out = child.wait_with_output().unwrap();
     let log = home.join(".session-insights/state/log.jsonl");

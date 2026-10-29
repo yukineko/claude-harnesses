@@ -1,6 +1,6 @@
 {
   "name": "backlog",
-  "version": "0.3.75",
+  "version": "0.3.76",
   "description": "Cross-project task queue for Claude Code with cycle-type tags, a SessionStart hook that injects pending work, and subcommands to add, list, claim and finish tasks.",
   "author": {
     "name": "yukineko"

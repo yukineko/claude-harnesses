@@ -21,7 +21,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 fn run(args: &[&str], cwd: &Path, home: &Path) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
@@ -71,7 +71,7 @@ fn a_task_listed_as_deferred_is_deferred_in_the_json_feed_too() {
             "repro",
         ],
     ] {
-        let o = Command::new("git")
+        let o = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(&args)
             .current_dir(&repo)
             .env("HOME", &home)

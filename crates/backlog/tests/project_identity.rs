@@ -58,6 +58,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 fn run_in(args: &[&str], payload: &str, home: &PathBuf, cwd: &PathBuf) -> (i32, String, String) {
     let bin = env!("CARGO_BIN_EXE_backlog");
     let mut cmd = Command::new(bin);
+    harness_core::git_env::scrub(&mut cmd);
     cmd.env("PATH", common::path_with_condukt_shim());
     cmd.args(args)
         .env("HOME", home)
@@ -83,7 +84,7 @@ fn run_in(args: &[&str], payload: &str, home: &PathBuf, cwd: &PathBuf) -> (i32, 
 /// they fail loudly instead (see call sites below), but this lets us produce
 /// a clear diagnostic rather than an opaque panic from deep inside setup.
 fn git_available() -> bool {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -105,7 +106,7 @@ fn setup_repo_with_worktree(tag: &str) -> (PathBuf, PathBuf) {
     let main_repo = temp_dir(&format!("repo-main-{tag}"));
 
     assert!(
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["init", "-q"])
             .current_dir(&main_repo)
             .status()
@@ -114,19 +115,19 @@ fn setup_repo_with_worktree(tag: &str) -> (PathBuf, PathBuf) {
         "git init failed"
     );
 
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["config", "user.email", "test@test.local"])
         .current_dir(&main_repo)
         .status()
         .unwrap();
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["config", "user.name", "Test User"])
         .current_dir(&main_repo)
         .status()
         .unwrap();
 
     assert!(
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["commit", "--allow-empty", "-m", "initial", "-q"])
             .current_dir(&main_repo)
             .status()
@@ -141,7 +142,7 @@ fn setup_repo_with_worktree(tag: &str) -> (PathBuf, PathBuf) {
     // so `git worktree add <path>` can create it fresh.
     std::fs::remove_dir(&worktree_root).unwrap();
     assert!(
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["worktree", "add", "-q", worktree_root.to_str().unwrap()])
             .current_dir(&main_repo)
             .status()
@@ -500,7 +501,7 @@ fn a_dangling_git_link_no_longer_hides_an_existing_task() {
     // ---- The CONTROL: observation B, "genuinely zero tasks" ----
     let empty_repo = temp_dir("genuinely-empty-repo");
     assert!(
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["init", "-q"])
             .current_dir(&empty_repo)
             .status()
@@ -577,7 +578,7 @@ fn a_dangling_git_link_no_longer_hides_an_existing_task() {
     // `89feaddb`). It must be LISTED.
     let other_checkout_repo = temp_dir("other-checkout-label-repo");
     assert!(
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["init", "-q"])
             .current_dir(&other_checkout_repo)
             .status()
@@ -646,7 +647,7 @@ fn next_and_list_agree_on_scope_for_a_repo_store() {
     let home = temp_home("next-default-scope");
     let local_repo = temp_dir("next-default-scope-local");
     assert!(
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["init", "-q"])
             .current_dir(&local_repo)
             .status()
@@ -772,7 +773,7 @@ fn next_claim_fails_closed_when_the_project_identity_cannot_be_determined() {
     // undetermined case apart from THIS, not about making `next` noisy.
     let empty_repo = temp_dir("next-undetermined-control");
     assert!(
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["init", "-q"])
             .current_dir(&empty_repo)
             .status()
@@ -980,7 +981,7 @@ fn default_list_does_not_silently_drop_a_task_written_under_an_undetermined_scop
     let home = temp_home("undetermined-read-visible");
     let repo = temp_dir("undetermined-read-visible-repo");
     assert!(
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["init", "-q"])
             .current_dir(&repo)
             .status()
@@ -1118,7 +1119,7 @@ fn a_legacy_tasks_toml_without_the_marker_still_loads() {
     let home = temp_home("legacy-no-marker");
     let repo = temp_dir("legacy-no-marker-repo");
     assert!(
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["init", "-q"])
             .current_dir(&repo)
             .status()

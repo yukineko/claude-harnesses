@@ -73,7 +73,7 @@ fn lock_path(home: &Path) -> PathBuf {
 /// Run `backlog <args>` under an isolated HOME. Returns (exit_code, stdout).
 fn run(args: &[&str], home: &Path) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_backlog");
-    let child = Command::new(bin)
+    let child = harness_core::git_env::scrub(&mut Command::new(bin))
         .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
@@ -303,7 +303,7 @@ fn git_repo(tag: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let git = |args: &[&str]| {
-        let ok = Command::new("git")
+        let ok = harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("-C")
             .arg(&dir)
             .args(args)
@@ -339,7 +339,7 @@ fn frozen_signals_across_the_window_are_confirmed_stalled_and_reaped() {
 
     let acquire = |session: &str| -> (i32, String) {
         let bin = env!("CARGO_BIN_EXE_backlog");
-        let out = Command::new(bin)
+        let out = harness_core::git_env::scrub(&mut Command::new(bin))
             .env("PATH", common::path_with_condukt_shim())
             .args([
                 "lock",

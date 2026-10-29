@@ -26,7 +26,7 @@ fn temp_root(tag: &str) -> PathBuf {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .current_dir(cwd)
@@ -42,7 +42,7 @@ fn git(cwd: &Path, args: &[&str]) {
 }
 
 fn backlog(home: &Path, args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .args(args)
         .env("HOME", home)
         .env_remove("CLAUDE_CODE_SESSION_ID")

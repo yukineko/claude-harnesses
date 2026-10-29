@@ -56,7 +56,7 @@ fn setup(tag: &str) -> Env {
     let (home, repo) = (t.join("home"), t.join("repo"));
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(repo.join(".backlog")).unwrap();
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["init", "-q", "."])
         .current_dir(&repo)
         .env("HOME", &home)

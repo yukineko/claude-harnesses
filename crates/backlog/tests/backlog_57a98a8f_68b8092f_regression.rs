@@ -33,7 +33,7 @@ fn unique_dir(tag: &str) -> PathBuf {
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(repo)
         .output()
@@ -57,7 +57,7 @@ fn install_from_versioned_cache(tag: &str) -> (String, PathBuf) {
     std::fs::create_dir_all(verdir.join("bin")).unwrap();
     let exe = verdir.join("bin").join("backlog-test");
     std::fs::copy(env!("CARGO_BIN_EXE_backlog"), &exe).unwrap();
-    let out = Command::new(&exe)
+    let out = harness_core::git_env::scrub(&mut Command::new(&exe))
         .args(["merge-driver", "--install"])
         .current_dir(&repo)
         .output()

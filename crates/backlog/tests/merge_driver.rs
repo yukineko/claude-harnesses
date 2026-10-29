@@ -41,7 +41,7 @@ fn file(tasks: &[(&str, &str)]) -> String {
 }
 
 fn git(repo: &Path, args: &[&str]) -> (i32, String) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(repo)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -225,7 +225,7 @@ fn unparseable_theirs_fails_and_leaves_ours_untouched() {
     std::fs::write(&base, file(&[("aaaaaaaa", "A")])).unwrap();
     std::fs::write(&ours, &ours_t).unwrap();
     std::fs::write(&theirs, "[[task]\nid = = broken").unwrap();
-    let o = Command::new(BIN)
+    let o = harness_core::git_env::scrub(&mut Command::new(BIN))
         .arg("merge-driver")
         .arg(&base)
         .arg(&ours)
@@ -258,7 +258,7 @@ fn direct_clean_merge_writes_union_into_ours() {
     std::fs::write(&base, file(&[("aaaaaaaa", "A")])).unwrap();
     std::fs::write(&ours, file(&[("aaaaaaaa", "A"), ("11111111", "one")])).unwrap();
     std::fs::write(&theirs, file(&[("aaaaaaaa", "A"), ("22222222", "two")])).unwrap();
-    let o = Command::new(BIN)
+    let o = harness_core::git_env::scrub(&mut Command::new(BIN))
         .arg("merge-driver")
         .arg(&base)
         .arg(&ours)

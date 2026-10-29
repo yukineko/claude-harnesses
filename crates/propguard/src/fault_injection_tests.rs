@@ -49,7 +49,9 @@ fn run(cmd: &mut Command) -> CommandOutput {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let o = run(Command::new("git").args(args).current_dir(dir));
+    let o = run(harness_core::git_env::scrub(&mut Command::new("git"))
+        .args(args)
+        .current_dir(dir));
     assert_eq!(o.code(), 0, "git {args:?}: {}", o.stderr());
 }
 

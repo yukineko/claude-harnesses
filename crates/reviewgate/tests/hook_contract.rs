@@ -48,7 +48,7 @@ struct Sandbox {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .args(args)
         .output()
@@ -140,6 +140,7 @@ impl Sandbox {
         envs: &[(&str, &str)],
     ) -> Run {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_reviewgate"));
+        harness_core::git_env::scrub(&mut cmd);
         cmd.args(args)
             .current_dir(cwd)
             .env("HOME", &self.home)

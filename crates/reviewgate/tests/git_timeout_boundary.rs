@@ -51,7 +51,7 @@ fn real_git() -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new(real_git())
+    let st = harness_core::git_env::scrub(&mut Command::new(real_git()))
         .current_dir(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
@@ -125,6 +125,7 @@ fn run_review(work: &Path, home: &Path, fake_dir: &Path, timeout_ms: Option<&str
         serde_json::to_string(&work.to_string_lossy()).unwrap()
     );
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_reviewgate"));
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("review")
         .current_dir(work)
         .env("HOME", home)

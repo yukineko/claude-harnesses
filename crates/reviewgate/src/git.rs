@@ -302,7 +302,7 @@ mod tests {
     // ── changed_files tri-state: NotRepo / Failed / Files ──────────────────
 
     fn git_available() -> bool {
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("--version")
             .output()
             .map(|o| o.status.success())
@@ -385,7 +385,7 @@ mod tests {
             &["config", "user.email", "t@t.com"][..],
             &["config", "user.name", "t"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(harness_core::git_env::scrub(&mut Command::new("git"))
                 .current_dir(root)
                 .args(args)
                 .status()
@@ -393,13 +393,13 @@ mod tests {
                 .success());
         }
         std::fs::write(root.join("a.txt"), "x\n").unwrap();
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(root)
             .args(["add", "a.txt"])
             .status()
             .unwrap()
             .success());
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(root)
             .args(["commit", "-qm", "init"])
             .status()
@@ -426,7 +426,7 @@ mod tests {
         }
         let root = scratch_dir();
         let root = root.as_path();
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(root)
             .args(["init", "-q"])
             .status()

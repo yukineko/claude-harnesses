@@ -129,7 +129,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
 fn git_available() -> bool {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("--version")
         .output()
         .map(|o| o.status.success())
@@ -300,7 +300,7 @@ impl Fixture {
     /// NotRepo / Failed regression controls).
     fn run_in(&self, cwd: &Path, session: &str, payload: &str) -> Outcome {
         let bin = env!("CARGO_BIN_EXE_reviewgate");
-        let mut child = Command::new(bin)
+        let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
             .arg("review")
             .current_dir(cwd)
             .env("HOME", &self.home)
@@ -384,7 +384,7 @@ impl Drop for Fixture {
 }
 
 fn git(dir: &Path, args: &[&str]) -> std::process::ExitStatus {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .args(args)
         .stdout(Stdio::null())

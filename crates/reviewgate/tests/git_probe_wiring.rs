@@ -42,7 +42,7 @@ fn unique_dir(tag: &str) -> PathBuf {
 fn run_review(cwd: &Path, home: &Path, path: &Path, payload: &str) -> (i32, String) {
     ensure_inject_config(home);
     let bin = env!("CARGO_BIN_EXE_reviewgate");
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .arg("review")
         .current_dir(cwd)
         .env("HOME", home)

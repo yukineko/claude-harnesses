@@ -165,13 +165,19 @@ fn answer_ok(choices: &[String], answer: &str) -> bool {
 
 /// Structural consistency of a record against the catalog: every area id is a
 /// catalog area, every recorded catalog answer belongs to a question of its
-/// area and is one of its choices, domain questions have unique non-empty
+/// area, is one of its choices and is active (answers exist only in relevant
+/// areas, never for inactive follow-ups), domain questions have unique non-empty
 /// ids/texts and valid answers, features have non-empty names.
 fn validate(d: &Decisions, catalog: &[Area]) -> Result<(), String> {
     for (area_id, ad) in &d.areas {
         let Some(area) = catalog.iter().find(|a| &a.id == area_id) else {
             return Err(format!("`{area_id}` under [areas] is not a catalog area"));
         };
+        if !ad.answers.is_empty() && ad.relevance != Some(Relevance::Relevant) {
+            return Err(format!(
+                "areas.{area_id}.answers is present but the area is not judged relevant (answers only count for a relevant area)"
+            ));
+        }
         for (qid, ans) in &ad.answers {
             let Some(q) = area.questions.iter().find(|q| &q.id == qid) else {
                 return Err(format!(
@@ -182,6 +188,11 @@ fn validate(d: &Decisions, catalog: &[Area]) -> Result<(), String> {
                 return Err(format!(
                     "areas.{area_id}.answers.{qid} = {ans:?} is not one of its choices {:?}",
                     q.choices
+                ));
+            }
+            if !catalog::is_active(q, &ad.answers) {
+                return Err(format!(
+                    "areas.{area_id}.answers.{qid} answers a question that is not active for the other recorded answers (stale answer)"
                 ));
             }
         }
@@ -226,13 +237,28 @@ fn validated(d: &Decisions, label: &str) -> Determination<()> {
 /// Load the record.
 ///
 /// Contract: file absent (`NotFound`) → `Known(None)`; read error, non-UTF-8,
-/// TOML error, unknown key, unknown area id, or an answer not among its
-/// question's choices → `Undetermined`; else `Known(Some(_))`.
+/// TOML error, unknown key, unknown area id, an answer not among its
+/// question's choices, an answer to an inactive question or a non-relevant
+/// area, or an entry that exists but cannot be read (e.g. a dangling
+/// symlink) → `Undetermined`; else `Known(Some(_))`.
 pub fn load(root: &Path) -> Determination<Option<Decisions>> {
     let path = path_for(root);
     let bytes = match std::fs::read(&path) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Determination::known(None),
+        // `NotFound` from `read` also covers a dangling symlink; only "no
+        // directory entry at all" is an absent record.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return match std::fs::symlink_metadata(&path) {
+                Err(m) if m.kind() == std::io::ErrorKind::NotFound => Determination::known(None),
+                Ok(_) => Determination::undetermined(format!(
+                    "{} exists but cannot be read (dangling symlink?): {e}",
+                    path.display()
+                )),
+                Err(m) => {
+                    Determination::undetermined(format!("cannot inspect {}: {m}", path.display()))
+                }
+            };
+        }
         Err(e) => {
             return Determination::undetermined(format!("cannot read {}: {e}", path.display()))
         }
@@ -374,7 +400,9 @@ pub fn next(decisions: &Decisions) -> Determination<Next> {
 /// not among a non-empty `choices` → `Err` (record unchanged). A catalog
 /// question can only be answered once its area is judged relevant and the
 /// question is active (its condition holds); free-text answers must be
-/// non-blank.
+/// non-blank. Changing an answer drops (transitively) every answer whose
+/// question is no longer active; changing the relevance clears the area's
+/// answers — a stale answer is never counted.
 pub fn record_answer(
     decisions: &mut Decisions,
     area: &str,
@@ -422,6 +450,11 @@ pub fn record_answer(
                 relevance: None,
                 answers: BTreeMap::new(),
             });
+        if ad.relevance != Some(rel) {
+            // Answers were given for the previous relevance state; they do not
+            // count for the new one.
+            ad.answers.clear();
+        }
         ad.relevance = Some(rel);
         return Ok(());
     }
@@ -453,7 +486,28 @@ pub fn record_answer(
     }
     ad.answers
         .insert(question_id.to_string(), answer.to_string());
+    prune_inactive(&a, &mut ad.answers);
     Ok(())
+}
+
+/// Drop every answer whose question is no longer active, repeatedly, so a
+/// follow-up of a dropped follow-up goes too. An answer only counts if it was
+/// given for the current state of its gates.
+fn prune_inactive(area: &Area, answers: &mut BTreeMap<String, String>) {
+    loop {
+        let stale: Vec<String> = area
+            .questions
+            .iter()
+            .filter(|q| answers.contains_key(&q.id) && !catalog::is_active(q, answers))
+            .map(|q| q.id.clone())
+            .collect();
+        if stale.is_empty() {
+            return;
+        }
+        for id in stale {
+            answers.remove(&id);
+        }
+    }
 }
 
 /// Add an (unanswered) domain question. Duplicate `id` or empty `id`/`text`

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Black-box tests for `sitecraft.toml` loading and content-pinned trust.
 //! Every test pins SITECRAFT_STATE_DIR to a tempdir (under a lock, since the
 //! environment is process-wide) and derives the state dir via `state_dir()`.

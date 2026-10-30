@@ -812,3 +812,154 @@ fn marketplace_plugins_reads_names_and_rejects_bad_files() {
         );
     }
 }
+
+// ---------------------------------------------------------------- stale answers
+//
+// User ruling: unanswered is Ask, and an answer the human did not give for the
+// *current* state never counts. A follow-up answered under one gate value, or
+// a question answered while its area was relevant, must be asked again after
+// the gate / relevance flips away and back.
+
+/// Root with every area but `auth` irrelevant and `auth` judged relevant.
+fn auth_relevant_root() -> TempDir {
+    let t = TempDir::new().unwrap();
+    let others: Vec<&str> = AREA_IDS.iter().copied().filter(|a| *a != "auth").collect();
+    write_record(t.path(), &irrelevant_toml(&others));
+    expect_code(
+        &record(t.path(), "auth", "relevance", "relevant"),
+        0,
+        "auth relevant",
+    );
+    t
+}
+
+#[test]
+fn gate_flip_no_then_yes_reasks_auth_follow_ups() {
+    let t = auth_relevant_root();
+    let root = t.path();
+    expect_code(&record(root, "auth", "needs-login", "yes"), 0, "login yes");
+    expect_code(&record(root, "auth", "mfa", "required"), 0, "mfa");
+    expect_code(
+        &record(root, "auth", "auth-method", "passkey"),
+        0,
+        "auth-method",
+    );
+    // Positive control: with the follow-ups answered under `yes` it is done.
+    expect_code(&check(root), 0, "auth fully answered under yes");
+    assert!(next_q(root).is_none(), "fully answered record must be done");
+
+    expect_code(&record(root, "auth", "needs-login", "no"), 0, "login no");
+    expect_code(&check(root), 0, "needs-login=no settles auth");
+    expect_code(
+        &record(root, "auth", "needs-login", "yes"),
+        0,
+        "login yes again",
+    );
+
+    // The old mfa / auth-method answers were given for a previous state; they
+    // must not count for the current `yes`.
+    let (a, q, ..) = next_q(root)
+        .expect("after flipping needs-login back to yes the auth follow-ups must be asked again");
+    assert_eq!(a, "auth", "expected an auth follow-up, got {a}/{q}");
+    assert!(
+        q == "mfa" || q == "auth-method",
+        "expected mfa or auth-method to be re-asked, got auth/{q}"
+    );
+    let o = check(root);
+    expect_code(&o, 1, "stale follow-up answers after a gate flip");
+    assert!(
+        o.all().contains("auth"),
+        "pending `auth` not named:\n{}",
+        o.all()
+    );
+
+    // Re-answering both settles it again.
+    expect_code(&record(root, "auth", "mfa", "none"), 0, "mfa again");
+    expect_code(&check(root), 1, "auth-method still stale");
+    expect_code(
+        &record(root, "auth", "auth-method", "sso"),
+        0,
+        "auth-method again",
+    );
+    expect_code(&check(root), 0, "follow-ups re-answered");
+    assert!(next_q(root).is_none(), "re-answered record must be done");
+}
+
+#[test]
+fn relevance_flip_irrelevant_then_relevant_reasks_area_questions() {
+    let t = auth_relevant_root();
+    let root = t.path();
+    expect_code(&record(root, "auth", "needs-login", "no"), 0, "login no");
+    // Positive control: auth is settled while relevant.
+    expect_code(&check(root), 0, "auth answered while relevant");
+
+    expect_code(
+        &record(root, "auth", "relevance", "irrelevant"),
+        0,
+        "auth irrelevant",
+    );
+    expect_code(&check(root), 0, "irrelevant auth is settled");
+    expect_code(
+        &record(root, "auth", "relevance", "relevant"),
+        0,
+        "auth relevant again",
+    );
+
+    let (a, q, ..) = next_q(root)
+        .expect("after flipping auth back to relevant its questions must be asked again");
+    assert_eq!(
+        (a.as_str(), q.as_str()),
+        ("auth", "needs-login"),
+        "needs-login answered before the relevance flip must be asked again"
+    );
+    expect_code(&check(root), 1, "stale answers after a relevance flip");
+
+    expect_code(
+        &record(root, "auth", "needs-login", "no"),
+        0,
+        "login no again",
+    );
+    expect_code(&check(root), 0, "auth re-answered");
+}
+
+// ---------------------------------------------------------------- dangling symlink
+
+#[cfg(unix)]
+#[test]
+fn dangling_record_symlink_is_undetermined_for_next_and_record() {
+    let t = TempDir::new().unwrap();
+    let root = t.path();
+    // Positive control: with no record at all, `next` asks (exit 0).
+    expect_code(&next(root), 0, "next with absent record");
+
+    std::fs::create_dir_all(root.join("sitecraft")).unwrap();
+    let target = root.join("missing-target.toml");
+    let link = record_path(root);
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert!(!target.exists());
+
+    expect_code(&check(root), 2, "check on dangling symlink");
+    let o = next(root);
+    expect_code(&o, 2, "next on dangling symlink (not an absent record)");
+
+    let o = record(root, "auth", "relevance", "relevant");
+    expect_code(&o, 2, "record onto a dangling symlink");
+    let meta = std::fs::symlink_metadata(&link).expect("record link must still exist");
+    assert!(
+        meta.file_type().is_symlink(),
+        "record replaced the symlink with a regular file"
+    );
+    assert_eq!(
+        std::fs::read_link(&link).unwrap(),
+        target,
+        "record retargeted the symlink"
+    );
+    assert!(
+        !target.exists(),
+        "record wrote through the dangling symlink"
+    );
+
+    // Positive control in the same root: removing the link makes it absent again.
+    std::fs::remove_file(&link).unwrap();
+    expect_code(&next(root), 0, "next after removing the dangling link");
+}

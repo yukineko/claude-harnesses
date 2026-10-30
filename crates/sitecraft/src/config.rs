@@ -108,8 +108,57 @@ pub fn path_for(root: &Path) -> PathBuf {
 /// otherwise [`Loaded::Config`]. No error maps to `Absent` or `Config`.
 #[must_use]
 pub fn load(root: &Path) -> Loaded {
-    Loaded::Undetermined(format!(
-        "sitecraft: config loading is not implemented yet (cannot judge {})",
-        path_for(root).display()
-    ))
+    let p = path_for(root);
+    let bytes = match std::fs::read(&p) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Loaded::Absent,
+        Err(e) => return Loaded::Undetermined(format!("cannot read {}: {e}", p.display())),
+    };
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(t) => t,
+        Err(e) => return Loaded::Undetermined(format!("{} is not valid UTF-8: {e}", p.display())),
+    };
+    let cfg: Config = match toml::from_str(text) {
+        Ok(c) => c,
+        Err(e) => return Loaded::Undetermined(format!("cannot parse {}: {e}", p.display())),
+    };
+    match validate(&cfg) {
+        Ok(()) => Loaded::Config(Box::new(cfg), bytes),
+        Err(why) => Loaded::Undetermined(format!("{} is unusable: {why}", p.display())),
+    }
+}
+
+/// Semantic validation; `Err` carries why the config cannot be used.
+fn validate(c: &Config) -> Result<(), String> {
+    match c.command.first() {
+        None => return Err("`command` is empty".into()),
+        Some(prog) if prog.trim().is_empty() => return Err("`command` has a blank program".into()),
+        Some(_) => {}
+    }
+    if c.port == 0 {
+        return Err("`port` must be non-zero".into());
+    }
+    if c.pages.is_empty() {
+        return Err("`pages` is empty".into());
+    }
+    if c.build_dir.trim().is_empty() {
+        return Err("`build_dir` is empty".into());
+    }
+    if c.web_globs.is_empty() {
+        return Err("`web_globs` is empty".into());
+    }
+    for g in &c.web_globs {
+        if let Err(e) = globset::Glob::new(g) {
+            return Err(format!("web glob {g:?} does not compile: {e}"));
+        }
+    }
+    if c.ready_timeout_secs == 0 || c.ready_timeout_secs > MAX_READY_TIMEOUT_SECS {
+        return Err(format!(
+            "`ready_timeout_secs` must be 1..={MAX_READY_TIMEOUT_SECS}"
+        ));
+    }
+    if c.max_attempts == 0 {
+        return Err("`max_attempts` must be at least 1".into());
+    }
+    Ok(())
 }

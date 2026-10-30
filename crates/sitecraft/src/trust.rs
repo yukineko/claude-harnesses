@@ -10,7 +10,10 @@
 //! the hash changed), `Undetermined` (the store or the config cannot be read
 //! or parsed). Both non-`Trusted` answers block; no error maps to `Trusted`.
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
 
 /// File name of the trust store inside the state dir.
 pub const STORE: &str = "trust.json";
@@ -27,6 +30,36 @@ pub enum Trust {
     Undetermined(String),
 }
 
+fn store_path(state: &Path) -> PathBuf {
+    state.join(STORE)
+}
+
+fn key(root: &Path) -> Result<String, String> {
+    std::fs::canonicalize(root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|e| format!("cannot canonicalize {}: {e}", root.display()))
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// `Ok(None)` only when the store file does not exist.
+fn read_store(state: &Path) -> Result<Option<BTreeMap<String, String>>, String> {
+    let p = store_path(state);
+    let text = match std::fs::read_to_string(&p) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("cannot read trust store {}: {e}", p.display())),
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|e| format!("cannot parse trust store {}: {e}", p.display()))
+}
+
 /// Record trust for the current bytes of `config` under `root` in
 /// `<state>/trust.json`; returns the recorded sha256 hex.
 ///
@@ -35,25 +68,56 @@ pub enum Trust {
 /// yields `Err` (it may hold other roots' records); an unreadable `config` or
 /// uncanonicalizable `root` yields `Err`.
 pub fn record(state: &Path, root: &Path, config: &Path) -> Result<String, String> {
-    Err(format!(
-        "sitecraft trust: not implemented yet (state {}, root {}, config {})",
-        state.display(),
-        root.display(),
-        config.display()
-    ))
+    let k = key(root)?;
+    let bytes =
+        std::fs::read(config).map_err(|e| format!("cannot read {}: {e}", config.display()))?;
+    let h = hash_bytes(&bytes);
+    let mut m = match read_store(state)? {
+        Some(m) => m,
+        // Only a store that does not exist yet starts empty.
+        None => BTreeMap::new(),
+    };
+    m.insert(k, h.clone());
+    std::fs::create_dir_all(state)
+        .map_err(|e| format!("cannot create {}: {e}", state.display()))?;
+    let text =
+        serde_json::to_string_pretty(&m).map_err(|e| format!("cannot encode trust store: {e}"))?;
+    let p = store_path(state);
+    let tmp = state.join(format!("{STORE}.tmp-{}", std::process::id()));
+    std::fs::write(&tmp, text).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    if let Err(e) = std::fs::rename(&tmp, &p) {
+        // Best-effort cleanup of our own tmp file; the rename error is reported.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("cannot write {}: {e}", p.display()));
+    }
+    Ok(h)
 }
 
 /// Are `bytes` (the content of `config`, as already read by the caller) the
 /// content recorded for `root` in `<state>/trust.json`?
 ///
-/// Contract: no record → `Untrusted`; recorded hash differs → `Untrusted`;
-/// equal → `Trusted`; store unreadable / not JSON, or `root` cannot be
-/// canonicalized → `Undetermined`.
+/// Contract: no record -> `Untrusted`; recorded hash differs -> `Untrusted`;
+/// equal -> `Trusted`; store unreadable / not JSON, or `root` cannot be
+/// canonicalized -> `Undetermined`.
 #[must_use]
 pub fn check_bytes(state: &Path, root: &Path, config: &Path, bytes: &[u8]) -> Trust {
-    let _ = (state, root, bytes);
-    Trust::Undetermined(format!(
-        "trust check for {} is not implemented yet",
-        config.display()
-    ))
+    let k = match key(root) {
+        Ok(k) => k,
+        Err(e) => return Trust::Undetermined(e),
+    };
+    let store = match read_store(state) {
+        Ok(s) => s,
+        Err(e) => return Trust::Undetermined(e),
+    };
+    match store.as_ref().and_then(|m| m.get(&k)) {
+        None => Trust::Untrusted(format!(
+            "{} has never been trusted; review it and run `sitecraft trust` in {k}",
+            config.display()
+        )),
+        Some(recorded) if *recorded == hash_bytes(bytes) => Trust::Trusted,
+        Some(_) => Trust::Untrusted(format!(
+            "{} changed since it was trusted; review it and run `sitecraft trust` again",
+            config.display()
+        )),
+    }
 }

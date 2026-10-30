@@ -114,7 +114,9 @@ pub(crate) fn clear_git_discovery_env(cmd: &mut Command) -> &mut Command {
 
 fn toplevel(dir: &Path) -> Result<PathBuf, TopErr> {
     let mut cmd = Command::new("git");
-    clear_git_discovery_env(&mut cmd);
+    // All 13 inherited repo-selecting vars (crate::git_env), not only the 9
+    // discovery vars of GIT_DISCOVERY_ENV.
+    crate::git_env::scrub(&mut cmd);
     let out = cmd
         .arg("-C")
         .arg(dir)

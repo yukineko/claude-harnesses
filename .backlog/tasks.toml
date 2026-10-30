@@ -144,3 +144,31 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
      Running tests/backlog_ls_d_cmdsubst_misparse.rs (target/debug/deps/backlog_ls_d_cmdsubst_misparse-4e4897afb3558dd9)
 error: test failed, to rerun pass `-p blastguard --test backlog_ls_d_cmdsubst_misparse`"""
+
+[[task]]
+id = "2dee8b0e"
+title = "guard-maintree-bash refuses a merge command whose PostToolUse fires mid-merge (backgrounded multi-merge): first merge commit read as not-a-merge"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-10-29: a Bash command looping 3x git merge --no-ff hit the 600s timeout, was backgrounded, and Post fired during the 2nd merge's pre-merge-commit window (HEAD = 1st merge commit, 2nd branch files in index/worktree, no MERGE_HEAD) -> refused 'HEAD d51cebe3 -> a8b441c5 (not a merge / fast-forward)'. Several merges completing between Pre and Post is allowed (shape 1 GREEN). Repro commit 016858f5."
+created_at = 1793312796
+updated_at = 1793312796
+weight = 0.0
+issue_number = 1472
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1472"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_multi_merge.py"
+rev = "016858f5aed89239c2c1ac81fba1f1287e2e0fbc"
+observed_at = 1793312796
+detail = """
+exit 1: var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T/mtg-observe-dnz0myws/main status` before reverting anything.
+
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_multi_merge.py::MultiMerge::test_shape2_post_inside_second_merge_pre_merge_commit_window
+========================= 1 failed, 1 passed in 4.01s =========================="""

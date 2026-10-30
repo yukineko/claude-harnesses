@@ -323,8 +323,11 @@ pub fn sample(
 /// The repo's git HEAD as a durable progress signal: a new commit advances it.
 /// `Undetermined` when the directory is not a git repo, git is absent, the
 /// command failed, or the output was empty — none of which is "HEAD is frozen".
+/// Inherited `GIT_*` repo-selecting variables are scrubbed
+/// ([`crate::git_env::scrub`]), so the HEAD read is that of `repo`, not of a
+/// repository named by an inherited `GIT_DIR`.
 pub fn git_head_signal(repo: &Path) -> Determination<Vec<u8>> {
-    let output = std::process::Command::new("git")
+    let output = crate::git_env::scrub(&mut std::process::Command::new("git"))
         .arg("-C")
         .arg(repo)
         .args(["rev-parse", "HEAD"])

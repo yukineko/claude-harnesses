@@ -81,6 +81,11 @@ fn run_git_bounded_with(
         .unwrap_or_else(|e| e.into_inner());
 
     let mut cmd = Command::new(git_bin);
+    // Strip inherited GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE / ... first so
+    // the repository is discovered from `dir` alone (a hook-launched condukt
+    // must not act on the hook's repo). The caller's explicit `envs` are
+    // applied AFTER the scrub, so `git_env`'s throwaway GIT_INDEX_FILE wins.
+    harness_core::git_env::scrub(&mut cmd);
     cmd.current_dir(dir)
         .args(args)
         .stdin(Stdio::null())
@@ -1556,7 +1561,9 @@ fn capture_pending_store_diff(
         .tempfile()
         .context("could not create a temporary patch file")?;
     let run = |args: &[&str]| -> Result<()> {
-        let out = std::process::Command::new("git")
+        // Scrub inherited GIT_* first; the throwaway GIT_INDEX_FILE below is
+        // set after the scrub, so it still applies.
+        let out = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
             .args(args)
             .current_dir(&wt)
             .env("GIT_INDEX_FILE", idx.path())

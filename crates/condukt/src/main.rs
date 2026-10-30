@@ -3163,7 +3163,7 @@ fn gather_review_worthiness_inputs_from_git(
     head: &str,
 ) -> review_worthiness::ReviewWorthinessInputs {
     let numstat_range = format!("{base}..{head}");
-    let numstat = std::process::Command::new("git")
+    let numstat = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
         .args(["diff", "--numstat", base, head])
         .current_dir(cwd)
         .output()
@@ -3173,7 +3173,7 @@ fn gather_review_worthiness_inputs_from_git(
         .unwrap_or_default();
     let totals = review_worthiness::parse_numstat(&numstat);
 
-    let log = std::process::Command::new("git")
+    let log = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
         .args(["log", "--format=%B", &numstat_range])
         .current_dir(cwd)
         .output()
@@ -3322,7 +3322,7 @@ fn run_review_order(
 /// mirroring [`gather_review_worthiness_inputs_from_git`]'s soft-probe
 /// pattern.
 fn gather_review_order_diff_from_git(cwd: &Path, base: &str, head: &str) -> String {
-    std::process::Command::new("git")
+    harness_core::git_env::scrub(&mut std::process::Command::new("git"))
         .args(["diff", base, head])
         .current_dir(cwd)
         .output()
@@ -4311,7 +4311,7 @@ fn run_gh_create(args: &[String]) -> pr::PrOutcome {
 /// Best-effort current git branch (`git rev-parse --abbrev-ref HEAD`), trimmed.
 /// Empty string on any failure — gh then infers the current branch itself.
 fn current_branch() -> String {
-    std::process::Command::new("git")
+    harness_core::git_env::scrub(&mut std::process::Command::new("git"))
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()
         .ok()

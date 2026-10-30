@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "condukt"
-version = "0.7.301"
+version = "0.7.302"
 edition = "2021"
 license = "MIT"
 description = "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion."

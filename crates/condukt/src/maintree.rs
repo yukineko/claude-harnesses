@@ -808,6 +808,13 @@ fn run_located(repo: &Path, program: &Path, args: &[&str]) -> Determination<Stri
 
 /// Run a tool and take its stdout only when it exited 0. Only for non-plugin
 /// tools (`git`); harness plugins go through [`located`] + [`run_located`].
+///
+/// Deliberately NOT passed through `harness_core::git_env::scrub`: this guard
+/// runs inside the `pre-commit` hook and must answer about the commit git is
+/// making, which git describes via the inherited `GIT_DIR` / `GIT_INDEX_FILE`
+/// (e.g. `git commit <paths>` stages into a temporary index that only
+/// `GIT_INDEX_FILE` names; scrubbing it would make `observe_staged` read the
+/// real index instead).
 fn run_tool(repo: &Path, program: &str, args: &[&str]) -> Determination<String> {
     let mut cmd = Command::new(program);
     cmd.args(args).current_dir(repo);

@@ -47,16 +47,16 @@ fn hash_bytes(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// `Ok(None)` only when the store file does not exist.
-fn read_store(state: &Path) -> Result<Option<BTreeMap<String, String>>, String> {
+/// An empty map only when the store file does not exist (NotFound); any
+/// other read or parse failure is `Err`.
+fn read_store(state: &Path) -> Result<BTreeMap<String, String>, String> {
     let p = store_path(state);
     let text = match std::fs::read_to_string(&p) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
         Err(e) => return Err(format!("cannot read trust store {}: {e}", p.display())),
     };
     serde_json::from_str(&text)
-        .map(Some)
         .map_err(|e| format!("cannot parse trust store {}: {e}", p.display()))
 }
 
@@ -72,11 +72,7 @@ pub fn record(state: &Path, root: &Path, config: &Path) -> Result<String, String
     let bytes =
         std::fs::read(config).map_err(|e| format!("cannot read {}: {e}", config.display()))?;
     let h = hash_bytes(&bytes);
-    let mut m = match read_store(state)? {
-        Some(m) => m,
-        // Only a store that does not exist yet starts empty.
-        None => BTreeMap::new(),
-    };
+    let mut m = read_store(state)?;
     m.insert(k, h.clone());
     std::fs::create_dir_all(state)
         .map_err(|e| format!("cannot create {}: {e}", state.display()))?;
@@ -109,7 +105,7 @@ pub fn check_bytes(state: &Path, root: &Path, config: &Path, bytes: &[u8]) -> Tr
         Ok(s) => s,
         Err(e) => return Trust::Undetermined(e),
     };
-    match store.as_ref().and_then(|m| m.get(&k)) {
+    match store.get(&k) {
         None => Trust::Untrusted(format!(
             "{} has never been trusted; review it and run `sitecraft trust` in {k}",
             config.display()

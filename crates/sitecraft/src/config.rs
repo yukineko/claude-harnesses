@@ -111,7 +111,7 @@ pub fn load(root: &Path) -> Loaded {
     let p = path_for(root);
     let bytes = match std::fs::read(&p) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Loaded::Absent,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return not_found(root, &p),
         Err(e) => return Loaded::Undetermined(format!("cannot read {}: {e}", p.display())),
     };
     let text = match std::str::from_utf8(&bytes) {
@@ -125,6 +125,38 @@ pub fn load(root: &Path) -> Loaded {
     match validate(&cfg) {
         Ok(()) => Loaded::Config(Box::new(cfg), bytes),
         Err(why) => Loaded::Undetermined(format!("{} is unusable: {why}", p.display())),
+    }
+}
+
+/// A read hit NotFound. That is `Absent` only when the root is an existing
+/// directory and the path has no directory entry at all; a dangling symlink,
+/// a missing or non-directory root, or any other error is `Undetermined`.
+fn not_found(root: &Path, p: &Path) -> Loaded {
+    match std::fs::metadata(root) {
+        Ok(m) if m.is_dir() => {}
+        Ok(_) => {
+            return Loaded::Undetermined(format!(
+                "project root {} is not a directory; pass --root <existing project directory>",
+                root.display()
+            ))
+        }
+        Err(e) => {
+            return Loaded::Undetermined(format!(
+                "cannot access project root {}: {e}; pass --root <existing project directory>",
+                root.display()
+            ))
+        }
+    }
+    match std::fs::symlink_metadata(p) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Loaded::Absent,
+        Ok(_) => Loaded::Undetermined(format!(
+            "{} exists as a link whose target cannot be read (dangling symlink?); fix or remove the link",
+            p.display()
+        )),
+        Err(e) => Loaded::Undetermined(format!(
+            "cannot inspect {}: {e}; fix the permissions or the path",
+            p.display()
+        )),
     }
 }
 

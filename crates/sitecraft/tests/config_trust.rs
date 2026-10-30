@@ -185,3 +185,26 @@ fn trust_corrupt_store_is_undetermined_and_record_does_not_overwrite() {
         "store must not be overwritten"
     );
 }
+
+/// Verifier finding (t2-config): a `sitecraft.toml` entry that exists but
+/// whose target does not (dangling symlink) is a config the project put
+/// there and we cannot read. It must not be read as "never opted in".
+#[cfg(unix)]
+#[test]
+fn config_dangling_symlink_is_undetermined_not_absent() {
+    let (_g, td, _st, root) = setup();
+    std::os::unix::fs::symlink(td.path().join("nowhere.toml"), config::path_for(&root)).unwrap();
+    assert!(
+        undetermined(&root),
+        "dangling symlink must be Undetermined (not Absent)"
+    );
+}
+
+/// A project root that does not exist cannot be judged at all; Absent would
+/// let the Stop gate allow a repo it never looked at.
+#[test]
+fn config_missing_root_is_undetermined_not_absent() {
+    let (_g, td, _st, _root) = setup();
+    let gone = td.path().join("no-such-project");
+    assert!(undetermined(&gone), "missing root must be Undetermined");
+}

@@ -14,7 +14,7 @@ fn loop_refuses_iteration_beyond_configured_max_iters() {
     let home = base.join("home");
     std::fs::create_dir_all(&repo).unwrap();
     std::fs::create_dir_all(home.join(".condukt")).unwrap();
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["init", "-q"])
         .current_dir(&repo)
         .status()
@@ -27,7 +27,7 @@ fn loop_refuses_iteration_beyond_configured_max_iters() {
     )
     .unwrap();
     let run = |iter: &str, prev: &str| {
-        Command::new(env!("CARGO_BIN_EXE_condukt"))
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
             .args([
                 "loop",
                 "--module",

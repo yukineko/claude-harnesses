@@ -56,16 +56,17 @@ fn layout(home: &Path, with_transcript: bool, transcript: &str) -> (PathBuf, Pat
 }
 
 fn spawn(home: &Path, args: &[&str], payload: &str) -> (i32, String, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_fugu-router"))
-        .args(args)
-        .env("HOME", home)
-        .env_remove("FUGU_ROUTER_AUTO_MODEL")
-        .current_dir(home)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_fugu-router")))
+            .args(args)
+            .env("HOME", home)
+            .env_remove("FUGU_ROUTER_AUTO_MODEL")
+            .current_dir(home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
     child
         .stdin
         .take()

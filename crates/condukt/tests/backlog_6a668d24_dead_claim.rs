@@ -53,7 +53,7 @@ fn set_mode(p: &Path, mode: u32) -> std::io::Result<()> {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -85,7 +85,7 @@ impl Fixture {
     }
 
     fn condukt(&self, args: &[&str]) -> Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -276,7 +276,7 @@ fn live_holder_under_config_dir(extra_claim_args: &[&str]) {
     let transcript = slug.join(format!("{SESSION}.jsonl"));
     std::fs::write(&transcript, "{\"n\":0}\n").unwrap();
     let run = |args: &[&str]| -> Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&fx.repo)
             .env("HOME", &fx.home)

@@ -65,7 +65,7 @@ impl Env {
     }
 
     fn run(&self, args: &[&str]) -> (i32, String, String) {
-        let out = Command::new(BIN)
+        let out = harness_core::git_env::scrub(&mut Command::new(BIN))
             .args(args)
             .current_dir(&self.cwd)
             .env("HOME", &self.home)

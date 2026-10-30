@@ -30,7 +30,7 @@ fn omitted_models_must_not_be_indistinguishable_from_verified_distinct() {
     std::fs::create_dir_all(&work).unwrap();
 
     let ow = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_overwatch"))
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
             .args(args)
             .env("HOME", &home)
             .env_remove("CLAUDE_CODE_SESSION_ID")

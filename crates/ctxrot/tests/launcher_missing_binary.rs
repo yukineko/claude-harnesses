@@ -55,7 +55,7 @@ fn run_in(home: &std::path::Path, args: &[&str], stdin: &str) -> Run {
     )
     .expect("copy launcher");
 
-    let mut child = Command::new("sh")
+    let mut child = harness_core::git_env::scrub(&mut Command::new("sh"))
         .arg(&launcher)
         .args(args)
         .env("HOME", home)
@@ -353,7 +353,7 @@ fn present_binary_is_execed_with_args_passed_through() {
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     }
 
-    let out = Command::new("sh")
+    let out = harness_core::git_env::scrub(&mut Command::new("sh"))
         .arg(dir.path().join("ctxrot"))
         .args(["note", "list", "--cwd", "/tmp"])
         .output()

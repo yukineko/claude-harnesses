@@ -7,14 +7,15 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn run(arg: &str) -> (Option<i32>, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_overwatch"))
-        .arg(arg)
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn overwatch");
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
+            .arg(arg)
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn overwatch");
     let deadline = Instant::now() + Duration::from_secs(10);
     while child.try_wait().expect("poll").is_none() {
         if Instant::now() > deadline {

@@ -27,7 +27,7 @@ fn run_policy_gate_launch(
     divergence: &str,
     change_risk: &str,
 ) -> (serde_json::Value, i32) {
-    let out = Command::new(BIN)
+    let out = harness_core::git_env::scrub(&mut Command::new(BIN))
         .args([
             "verify",
             "launch",
@@ -138,7 +138,7 @@ fn run_policy_gate_ask_human_no_container() {
 /// with NO run-policy fields (no `verdict`/`container_launched` keys).
 #[test]
 fn run_policy_gate_absent_flag_keeps_legacy_launch() {
-    let out = Command::new(BIN)
+    let out = harness_core::git_env::scrub(&mut Command::new(BIN))
         .args(["verify", "launch", "--cmd", "true", "--timeout", "5"])
         .output()
         .expect("spawn condukt verify launch");
@@ -163,7 +163,7 @@ fn run_policy_gate_absent_flag_keeps_legacy_launch() {
 fn run_policy_gate_records_verdict_with_run_flag() {
     let home = tempfile::tempdir().unwrap();
     let work = tempfile::tempdir().unwrap();
-    let out = Command::new(BIN)
+    let out = harness_core::git_env::scrub(&mut Command::new(BIN))
         .args([
             "verify",
             "launch",

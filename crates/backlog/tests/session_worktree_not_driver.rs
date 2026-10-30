@@ -28,7 +28,7 @@ fn scratch(tag: &str) -> PathBuf {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(cwd)
         .env("GIT_AUTHOR_NAME", "t")
@@ -66,7 +66,7 @@ fn register_session_worktree(home: &Path, repo: &Path, session_id: &str) -> Path
         "{{\"session_id\":\"{session_id}\",\"cwd\":{}}}",
         serde_json::to_string(repo.to_str().unwrap()).unwrap()
     );
-    let mut child = Command::new("python3")
+    let mut child = harness_core::git_env::scrub(&mut Command::new("python3"))
         .arg(&script)
         .env("HOME", home)
         .current_dir(repo)
@@ -127,7 +127,7 @@ fn driver_files(home: &Path) -> usize {
 }
 
 fn backlog(home: &Path, cwd: &Path, args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)

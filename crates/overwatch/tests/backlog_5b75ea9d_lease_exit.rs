@@ -26,7 +26,7 @@ fn find(root: &Path, name: &str, out: &mut Vec<PathBuf>) {
 }
 
 fn lease(cwd: &Path, home: &Path) -> std::process::Output {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(cwd)
         .env("HOME", home)
         .args(["lease", "--session", "sess-probe", "--json"])
@@ -43,7 +43,7 @@ fn no_lease_and_internal_error_have_distinct_exit_codes() {
     let cwd = t.join("proj");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&cwd).unwrap();
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(&cwd)
         .args(["init", "-q"])
         .status()
@@ -52,7 +52,7 @@ fn no_lease_and_internal_error_have_distinct_exit_codes() {
 
     // Materialise a real registry via `begin` for a DIFFERENT session, so the
     // probe session legitimately has no lease.
-    let b = Command::new(bin())
+    let b = harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(&cwd)
         .env("HOME", &home)
         .args(["begin", "--key", "k1", "--title", "t", "--session", "other"])

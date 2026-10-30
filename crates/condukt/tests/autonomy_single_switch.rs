@@ -86,7 +86,7 @@ struct Sandbox {
 
 fn init_git_repo(dir: &Path) {
     let run = |args: &[&str]| {
-        let st = Command::new("git")
+        let st = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(dir)
             .env("GIT_AUTHOR_NAME", "test")
@@ -131,6 +131,7 @@ fn sandbox() -> Sandbox {
 /// override).
 fn run_in(sb: &Sandbox, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> Run {
     let mut cmd = Command::new(condukt_bin());
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args(args)
         .current_dir(cwd)
         .env("HOME", &sb.home)
@@ -413,7 +414,7 @@ fn a9_switch_set_in_main_tree_is_visible_from_a_linked_worktree() {
 
     // Create a linked worktree of the sandbox repo on a new branch.
     let worktree_dir = sb._tmp.path().join("linked-worktree");
-    let add = Command::new("git")
+    let add = harness_core::git_env::scrub(&mut Command::new("git"))
         .args([
             "worktree",
             "add",

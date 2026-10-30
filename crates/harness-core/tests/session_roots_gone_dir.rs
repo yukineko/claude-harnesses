@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn git(dir: &Path, args: &[&str]) -> std::process::Output {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(dir)
         .args(args)

@@ -211,7 +211,7 @@ mod tests {
     fn git_init_with_charter(root: &Path) {
         use std::process::Command;
         let run = |args: &[&str]| {
-            Command::new("git")
+            harness_core::git_env::scrub(&mut Command::new("git"))
                 .arg("-C")
                 .arg(root)
                 .args(args)

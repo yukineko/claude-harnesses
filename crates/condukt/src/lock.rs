@@ -877,7 +877,7 @@ mod tests {
     /// Run `git` in `dir`, failing the test loudly on a non-zero exit (a
     /// half-built fixture must never be mistaken for the property under test).
     fn git(dir: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
+        let out = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
             .args(args)
             .current_dir(dir)
             .output()

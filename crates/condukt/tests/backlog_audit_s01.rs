@@ -26,7 +26,7 @@ impl Drop for Fx {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -53,7 +53,7 @@ impl Fx {
     }
 
     fn run_in(&self, dir: &Path, args: &[&str]) -> Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(dir)
             .env("HOME", &self.home)
@@ -104,7 +104,7 @@ fn worktree_create_does_not_double_the_run_prefix() {
         "condukt/run-X/t3",
     ]);
     assert!(o.status.success(), "create failed: {}", text(&o));
-    let br = Command::new("git")
+    let br = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["branch", "--list"])
         .current_dir(&f.repo)
         .output()

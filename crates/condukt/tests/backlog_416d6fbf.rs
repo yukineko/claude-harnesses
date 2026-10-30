@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 fn condukt(dir: &Path, home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_condukt"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(args)
         .current_dir(dir)
         .env("HOME", home)
@@ -30,7 +30,7 @@ fn s(b: &[u8]) -> String {
 fn repo(base: &Path) -> PathBuf {
     let repo = base.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
-    let ok = Command::new("git")
+    let ok = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["init", "-q", "-b", "main"])
         .current_dir(&repo)
         .env("GIT_CONFIG_NOSYSTEM", "1")

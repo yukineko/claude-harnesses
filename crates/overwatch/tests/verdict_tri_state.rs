@@ -36,6 +36,7 @@ fn unverified_findings_stay_pending_and_visible() {
 
     let record = |id: &str, summary: &str, verdict: Option<&str>| {
         let mut cmd = Command::new(bin());
+        harness_core::git_env::scrub(&mut cmd);
         cmd.arg("record-finding")
             .arg("--finding-id")
             .arg(id)
@@ -79,7 +80,7 @@ fn unverified_findings_stay_pending_and_visible() {
     // 2. review-queue: ALL THREE are visible (nothing is silently discarded),
     //    and the two undetermined ones are labelled so they can never be read
     //    as established findings.
-    let out = Command::new(bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(bin()))
         .arg("review-queue")
         .current_dir(&project)
         .env("HOME", &home)

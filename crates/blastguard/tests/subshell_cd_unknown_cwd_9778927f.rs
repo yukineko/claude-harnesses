@@ -285,9 +285,10 @@ fn control_subshell_without_cd_keeps_outer_cwd() {
             "cd /etc && ( echo hi ) && echo x > hosts",
             "cd /etc && echo x > hosts",
         ),
+        // User ruling 2026-10-28: reference is the subject's own absolute spelling.
         (
             "cd /tmp && ( echo hi ) && rm -rf lib",
-            "cd /tmp && rm -rf lib",
+            "( echo hi ) && rm -rf /tmp/lib",
         ),
     ]);
 }
@@ -304,5 +305,6 @@ fn control_benign_subshell_cd_stays_allowed() {
 /// Control: a cd INSIDE the subshell still applies inside it.
 #[test]
 fn control_cd_applies_inside_its_own_subshell() {
-    check_same_decision(&[("(cd /tmp && rm -rf lib)", "cd /tmp && rm -rf lib")]);
+    // User ruling 2026-10-28: reference is the subject's own absolute spelling.
+    check_same_decision(&[("(cd /tmp && rm -rf lib)", "(rm -rf /tmp/lib)")]);
 }

@@ -26,7 +26,7 @@ fn help_of(
     if let Some(v) = cache.get(path) {
         return v.clone();
     }
-    let out = Command::new(bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(bin()))
         .args(path)
         .arg("--help")
         .env("HOME", home)

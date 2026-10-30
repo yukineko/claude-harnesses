@@ -1996,7 +1996,7 @@ impl_files = [\"src/x.rs\"]
                 "x",
             ],
         ] {
-            assert!(Command::new("git")
+            assert!(harness_core::git_env::scrub(&mut Command::new("git"))
                 .arg("-C")
                 .arg(tmp.path())
                 .args(&args)

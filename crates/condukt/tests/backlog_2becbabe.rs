@@ -28,7 +28,7 @@ impl Drop for Fixture {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -69,7 +69,7 @@ impl Fixture {
     }
 
     fn condukt(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_condukt"))
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)

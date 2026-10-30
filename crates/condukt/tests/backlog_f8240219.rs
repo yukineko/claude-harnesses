@@ -23,7 +23,7 @@ fn spec_loop_r4_grading_escalates_and_is_recorded() {
             .as_nanos()
     ));
     let d = dir.to_str().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args([
             "policy",
             "answer",
@@ -54,7 +54,7 @@ fn spec_loop_r4_grading_escalates_and_is_recorded() {
         "precondition: this grading must escalate: {out:?}"
     );
 
-    let answers = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let answers = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(["policy", "answers", "--journal-dir", d])
         .output()
         .expect("spawn condukt");

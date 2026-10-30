@@ -68,7 +68,7 @@ impl Fixture {
     }
 
     fn schedule(&self, decomp_path: &PathBuf) -> Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .arg("schedule")
             .arg("--file")
             .arg(decomp_path)

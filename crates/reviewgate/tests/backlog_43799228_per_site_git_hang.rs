@@ -34,7 +34,7 @@ fn real_git() -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .args(args)
         .status()
@@ -87,18 +87,19 @@ fn review(work: &Path, home: &Path, fake: &Path) -> (String, String, bool) {
         r#"{{"hook_event_name":"Stop","session_id":"persite","stop_hook_active":false,"cwd":{}}}"#,
         serde_json::to_string(&work.to_string_lossy()).unwrap()
     );
-    let mut child = Command::new(env!("CARGO_BIN_EXE_reviewgate"))
-        .arg("review")
-        .current_dir(work)
-        .env("HOME", home)
-        .env("PATH", std::env::join_paths(paths).unwrap())
-        .env("REVIEWGATE_GIT_TIMEOUT_MS", "300")
-        .env_remove("REVIEWGATE_DISABLE")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_reviewgate")))
+            .arg("review")
+            .current_dir(work)
+            .env("HOME", home)
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .env("REVIEWGATE_GIT_TIMEOUT_MS", "300")
+            .env_remove("REVIEWGATE_DISABLE")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
     child
         .stdin
         .take()

@@ -10,7 +10,7 @@ fn scratch() -> PathBuf {
     let d = std::env::temp_dir().join(format!("runbook-s10-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["init", "-q"])
         .current_dir(&d)
         .output()
@@ -20,7 +20,7 @@ fn scratch() -> PathBuf {
 }
 
 fn run(home: &Path, args: &[&str], stdin: &str) -> (i32, String, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_runbook"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_runbook")))
         .args(args)
         .current_dir(home)
         .env("HOME", home)

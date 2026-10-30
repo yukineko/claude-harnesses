@@ -84,7 +84,7 @@ fn review_queue_surfaces_exactly_one_open_condukt_escalation() {
     }"#;
     std::fs::write(&escalations_path, body).unwrap();
 
-    let out = Command::new(overwatch_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
         .args(["review-queue", "--json"])
         .env("HOME", &home)
         .env_remove("CLAUDE_CODE_SESSION_ID")

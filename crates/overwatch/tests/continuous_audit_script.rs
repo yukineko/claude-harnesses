@@ -38,7 +38,7 @@ fn continuous_audit_script_behaves() {
     // tests the code under test, not a stale install, and doesn't rebuild.
     let ow = env!("CARGO_BIN_EXE_overwatch");
 
-    let out = Command::new("bash")
+    let out = harness_core::git_env::scrub(&mut Command::new("bash"))
         .arg(&script)
         .env("OVERWATCH_BIN", ow)
         .current_dir(&repo)

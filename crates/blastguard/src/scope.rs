@@ -735,6 +735,17 @@ impl SafeRoots {
         resolve_with(path, self.resolver)
     }
 
+    /// True ONLY when a resolver was supplied, `path` resolves with it, and
+    /// the resolved real path is an existing real directory (`lstat`). No
+    /// resolver, a path that does not resolve, a path that does not exist, a
+    /// non-directory and any IO error all answer `false`. The resolver
+    /// re-attaches non-existent tail components by name, so resolving alone
+    /// does not prove existence — the `lstat` on the real path does.
+    pub(crate) fn resolves_to_existing_dir(&self, path: &str) -> bool {
+        self.resolver.is_some()
+            && resolve_with(path, self.resolver).is_some_and(|r| is_real_dir(&r))
+    }
+
     /// Why every deletion-class `Allow` is withheld for this session (a raw
     /// payload cwd / `CLAUDE_PROJECT_DIR` with a `..`/`.` component, or a
     /// relative cwd), or `None`.
@@ -756,25 +767,107 @@ impl SafeRoots {
         operand: &str,
         cwd: Option<&str>,
     ) -> Determination<Placement> {
-        if let Some(why) = &self.worktree_refusal {
-            return Determination::undetermined(why.clone());
-        }
         let roots: Vec<String> = self
             .temp_roots
             .iter()
             .chain(self.cache_roots.iter())
             .cloned()
             .collect();
+        self.classify_disposable_in(&roots, "temp or cache", operand, cwd)
+    }
+
+    /// [`SafeRoots::classify_disposable`] restricted to the FIXED temp
+    /// deletion roots — the real paths of `/tmp` and `/private/tmp`
+    /// ([`DELETION_TEMP_ROOTS`]) that are also accepted temp roots. Never
+    /// `$TMPDIR` (unless it IS one of those directories) and never a cache
+    /// root (user ruling 2026-10-28: the truncation relaxation covers
+    /// `/private/tmp`, scratchpad included, and nothing wider). Same pipeline,
+    /// same no-symlink-below rule, same raw-cwd refusal. Used by the
+    /// truncating-redirect rule in `detect.rs`.
+    pub(crate) fn classify_temp(
+        &self,
+        operand: &str,
+        cwd: Option<&str>,
+    ) -> Determination<Placement> {
+        let fixed: Vec<String> = DELETION_TEMP_ROOTS
+            .iter()
+            .filter_map(|r| resolve_with(r, self.resolver))
+            .collect();
+        let roots: Vec<String> = self
+            .temp_roots
+            .iter()
+            .filter(|r| fixed.contains(r))
+            .cloned()
+            .collect();
+        self.classify_disposable_in(&roots, "fixed temp", operand, cwd)
+    }
+
+    /// True ONLY when no directory from the parent of `real` up to `root`
+    /// (both inclusive) holds a `.git` entry — file or directory, observed with
+    /// `lstat` — i.e. `real` is in no git work tree or git dir rooted below or
+    /// at `root`. `real` must be a strict descendant of `root` (both real,
+    /// absolute paths). Any IO error other than "not found", a `real` not
+    /// under `root`, and no resolver all answer `false`.
+    pub(crate) fn no_git_entry_up_to(&self, real: &str, root: &str) -> bool {
+        if self.resolver.is_none() {
+            return false;
+        }
+        let root = root.trim_end_matches('/');
+        if !real.starts_with(&format!("{root}/")) {
+            return false;
+        }
+        let mut dir = std::path::Path::new(real);
+        loop {
+            let Some(parent) = dir.parent() else {
+                return false;
+            };
+            dir = parent;
+            match std::fs::symlink_metadata(dir.join(".git")) {
+                Ok(_) => return false,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return false,
+            }
+            if dir == std::path::Path::new(root) {
+                return true;
+            }
+            if !dir.starts_with(root) {
+                return false;
+            }
+        }
+    }
+
+    /// True ONLY when a resolver was supplied and `path` (`lstat`, never
+    /// followed) is an existing REGULAR file with exactly ONE hard link.
+    /// A second link means truncating this name also destroys the bytes under
+    /// another name, possibly outside every root. Any IO error, a symlink, a
+    /// directory, a device or FIFO, and no resolver all answer `false`.
+    pub(crate) fn is_single_link_regular_file(&self, path: &str) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        self.resolver.is_some()
+            && std::fs::symlink_metadata(path)
+                .is_ok_and(|m| m.file_type().is_file() && m.nlink() == 1)
+    }
+
+    fn classify_disposable_in(
+        &self,
+        roots: &[String],
+        kind: &str,
+        operand: &str,
+        cwd: Option<&str>,
+    ) -> Determination<Placement> {
+        if let Some(why) = &self.worktree_refusal {
+            return Determination::undetermined(why.clone());
+        }
         if roots.is_empty() {
-            return Determination::undetermined(
-                "blastguard has no temp or cache deletion root for this session",
-            );
+            return Determination::undetermined(format!(
+                "blastguard has no {kind} deletion root for this session"
+            ));
         }
         let lexical = match self.lexical_absolute(operand, cwd) {
             Determination::Known(l) => l,
             Determination::Undetermined(u) => return Determination::Undetermined(u),
         };
-        let placement = match self.classify_against(&roots, operand, cwd) {
+        let placement = match self.classify_against(roots, operand, cwd) {
             Determination::Known(p) => p,
             Determination::Undetermined(u) => return Determination::Undetermined(u),
         };
@@ -2013,5 +2106,88 @@ mod tests {
         assert!(raw_session_path_refusal("a/b", true).is_some());
         assert!(raw_session_path_refusal("", true).is_some());
         assert!(raw_session_path_refusal("a/../b", false).is_none());
+    }
+
+    // ---- mutation kill tests (c5b9c02b-bg-kill): `no_git_entry_up_to` --------
+    //
+    // A real directory under `/private/tmp` (the fixed temp root this check is
+    // used for) with no `.git` entry anywhere from it up to `/`; each test
+    // removes only the directory it created.
+
+    struct GitWalkFx {
+        root: String,
+    }
+
+    impl GitWalkFx {
+        fn new(tag: &str) -> GitWalkFx {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = format!(
+                "/private/tmp/bg-mutkill-gitwalk-{tag}-{}-{nanos}",
+                std::process::id()
+            );
+            std::fs::create_dir_all(format!("{root}/a")).unwrap();
+            std::fs::write(format!("{root}/a/f"), "x\n").unwrap();
+            std::fs::write(format!("{root}/plain"), "x\n").unwrap();
+            GitWalkFx { root }
+        }
+
+        fn with_resolver() -> SafeRoots {
+            SafeRoots::new(None, None, None, None, Some(identity))
+        }
+    }
+
+    impl Drop for GitWalkFx {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn mutkill_no_git_entry_up_to_control_is_true() {
+        let fx = GitWalkFx::new("ctl");
+        let s = GitWalkFx::with_resolver();
+        assert!(s.no_git_entry_up_to(&format!("{}/a/f", fx.root), &fx.root));
+    }
+
+    /// N1: no resolver answers false even for a walk that would find nothing.
+    #[test]
+    fn mutkill_no_git_entry_up_to_without_resolver_is_false() {
+        let fx = GitWalkFx::new("nores");
+        let real = format!("{}/a/f", fx.root);
+        assert!(GitWalkFx::with_resolver().no_git_entry_up_to(&real, &fx.root));
+        assert!(!SafeRoots::none().no_git_entry_up_to(&real, &fx.root));
+    }
+
+    /// N2: `real` must be a strict descendant of `root` AS A STRING. A spelling
+    /// with a `.` component is not, although `Path` comparison (which drops
+    /// interior `.`) would walk up to `root` and answer true.
+    #[test]
+    fn mutkill_no_git_entry_up_to_requires_real_spelled_under_root() {
+        let fx = GitWalkFx::new("under");
+        let s = GitWalkFx::with_resolver();
+        let (parent, name) = fx.root.rsplit_once('/').unwrap();
+        let dotted = format!("{parent}/./{name}/a/f");
+        assert!(!s.no_git_entry_up_to(&dotted, &fx.root), "{dotted}");
+        // `real` equal to `root` is not a strict descendant either.
+        assert!(!s.no_git_entry_up_to(&fx.root, &fx.root));
+    }
+
+    /// N3: an lstat error other than NotFound on the walk (here ENOTDIR: an
+    /// ancestor of `real` is a regular file) answers false.
+    #[test]
+    fn mutkill_no_git_entry_up_to_metadata_error_is_false() {
+        let fx = GitWalkFx::new("enotdir");
+        let s = GitWalkFx::with_resolver();
+        let real = format!("{}/plain/x", fx.root);
+        let err = std::fs::symlink_metadata(format!("{}/plain/.git", fx.root)).unwrap_err();
+        assert_ne!(
+            err.kind(),
+            std::io::ErrorKind::NotFound,
+            "precondition: {err}"
+        );
+        assert!(!s.no_git_entry_up_to(&real, &fx.root), "{real}");
     }
 }

@@ -50,7 +50,7 @@ fn restore_modes(dir: &Path) {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -85,7 +85,7 @@ impl Fx {
         slug
     }
     fn condukt(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_condukt"))
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)

@@ -49,7 +49,7 @@ fn temp_repo(tag: &str) -> PathBuf {
 /// the same queue behaviour as before.
 fn commit_repro_script(repo: &std::path::Path) {
     let git = |args: &[&str]| {
-        let out = std::process::Command::new("git")
+        let out = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
             .args(args)
             .current_dir(repo)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -107,6 +107,7 @@ fn run(args: &[&str], payload: &str, home: &PathBuf) -> (i32, String) {
 fn run_in(args: &[&str], payload: &str, home: &PathBuf, cwd: Option<&PathBuf>) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_backlog");
     let mut cmd = Command::new(bin);
+    harness_core::git_env::scrub(&mut cmd);
     cmd.env("PATH", common::path_with_condukt_shim());
     cmd.args(args)
         .env("HOME", home)

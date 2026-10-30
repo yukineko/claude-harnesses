@@ -175,7 +175,7 @@ fn record_run_populates_model_route_basis_and_tokens_in_episode() {
     let combined_path = std::env::join_paths(paths).expect("join PATH");
     let condukt_bin = env!("CARGO_BIN_EXE_condukt");
     let run_condukt_multi = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(condukt_bin)
+        let out = harness_core::git_env::scrub(&mut Command::new(condukt_bin))
             .args(args)
             .current_dir(&dir)
             .env("HOME", &home)
@@ -310,7 +310,7 @@ fn record_run_emits_worker_and_verifier_episodes_when_verifier_model_set() {
     let combined_path = std::env::join_paths(paths).expect("join PATH");
     let condukt_bin = env!("CARGO_BIN_EXE_condukt");
     let run_condukt = |args: &[&str]| -> (i32, String, String) {
-        let out = Command::new(condukt_bin)
+        let out = harness_core::git_env::scrub(&mut Command::new(condukt_bin))
             .args(args)
             .current_dir(&dir)
             .env("HOME", &home)

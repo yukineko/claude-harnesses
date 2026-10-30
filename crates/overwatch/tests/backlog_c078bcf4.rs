@@ -18,7 +18,7 @@ fn stored_refuted_row_keeps_probe_path_and_signer() {
     std::fs::write(&probe, r#"{"result":"not_reproduced"}"#).unwrap();
     let probe_s = probe.to_string_lossy().into_owned();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_overwatch"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
         .args([
             "record-finding",
             "--finding-id",

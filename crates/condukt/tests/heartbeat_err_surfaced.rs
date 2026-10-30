@@ -66,7 +66,7 @@ impl Fixture {
     }
 
     fn condukt(&self, args: &[&str]) -> Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -159,7 +159,7 @@ fn find_named(dir: &Path, name: &str) -> Option<PathBuf> {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()

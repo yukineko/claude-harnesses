@@ -107,7 +107,7 @@ fn setup(tag: &str) -> Env {
     install_stub(&e, true);
 
     let g = |a: &[&str]| {
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .args(a)
             .current_dir(&e.repo)
             .env("PATH", std::env::var("PATH").unwrap())
@@ -145,7 +145,7 @@ fn seed_duplicate_target(done_file: &Path) {
 }
 
 fn bl(e: &Env, args: &[&str]) -> (i32, String, String) {
-    let o = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let o = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .args(args)
         .current_dir(&e.repo)
         .env_clear()

@@ -18,7 +18,7 @@
 use std::process::Command;
 
 fn run_worthiness(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_condukt"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .arg("review-worthiness")
         .args(args)
         .output()

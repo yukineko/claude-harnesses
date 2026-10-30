@@ -23,7 +23,7 @@ struct Fixture {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .current_dir(cwd)
@@ -134,7 +134,7 @@ fn run(fx_home: &Path, shim: &Path, cwd: &Path, args: &[&str]) -> (i32, String, 
         shim.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .args(args)
         .env("HOME", fx_home)
         .env("PATH", path)
@@ -395,7 +395,7 @@ fn next_claim_from_primary_checkout_is_allowed_and_never_dirties_main() {
         std::fs::read(store(&fx.primary)).unwrap(),
         "primary tasks.toml must be byte-identical"
     );
-    let st = Command::new("git")
+    let st = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["status", "--porcelain"])
         .current_dir(&fx.primary)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")

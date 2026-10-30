@@ -19,7 +19,7 @@ fn spec_must_not_claim_corrupt_leases_json_loads_as_empty_registry() {
     std::fs::create_dir_all(&cwd).unwrap();
     std::env::set_var("HOME", &home);
     std::env::remove_var("HARNESS_SANDBOX_HOME");
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(&cwd)
         .args(["init", "-q"])
         .status()

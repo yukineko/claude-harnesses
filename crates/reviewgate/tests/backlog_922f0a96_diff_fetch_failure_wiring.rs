@@ -64,7 +64,7 @@ fn write_fake_git(dir: &Path, real_git: &str, fail_script: &str) {
 fn run_review(cwd: &Path, home: &Path, path: &Path, payload: &str) -> (i32, String, String) {
     ensure_inject_config(home);
     let bin = env!("CARGO_BIN_EXE_reviewgate");
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .arg("review")
         .current_dir(cwd)
         .env("HOME", home)
@@ -98,7 +98,7 @@ fn setup_repo_with_a_tracked_edit(work: &Path) {
         &["config", "user.email", "t@t.com"][..],
         &["config", "user.name", "t"][..],
     ] {
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(work)
             .args(args)
             .status()
@@ -106,13 +106,13 @@ fn setup_repo_with_a_tracked_edit(work: &Path) {
             .success());
     }
     std::fs::write(work.join("a.rs"), "fn a() {}\n").unwrap();
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(work)
         .args(["add", "a.rs"])
         .status()
         .unwrap()
         .success());
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(work)
         .args(["commit", "-qm", "init"])
         .status()

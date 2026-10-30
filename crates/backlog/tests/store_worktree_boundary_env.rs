@@ -31,6 +31,7 @@ struct Fixture {
 
 fn git(cwd: &Path, args: &[&str]) {
     let mut c = Command::new("git");
+    harness_core::git_env::scrub(&mut c);
     c.args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .current_dir(cwd)
@@ -126,6 +127,7 @@ fn run(fx: &Fixture, cwd: &Path, args: &[&str], envs: &[(&str, &Path)]) -> (i32,
         std::env::var("PATH").unwrap_or_default()
     );
     let mut c = Command::new(env!("CARGO_BIN_EXE_backlog"));
+    harness_core::git_env::scrub(&mut c);
     c.args(args)
         .env("HOME", &fx.home)
         .env("PATH", path)

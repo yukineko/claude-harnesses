@@ -62,7 +62,7 @@ fn home() -> PathBuf {
 }
 
 fn run(home: &Path, args: &[&str], payload: &str) -> (i32, String, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_gauge"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_gauge")))
         .args(args)
         .current_dir(home)
         .env("HOME", home)

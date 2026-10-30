@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -57,7 +57,7 @@ fn commit(repo: &Path, files: &[(&str, &str)]) {
 fn specguard(repo: &Path, seed: &str, sub: &[&str]) -> Output {
     let home = repo.join(".fake-home");
     fs::create_dir_all(&home).unwrap();
-    Command::new(env!("CARGO_BIN_EXE_specguard"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .current_dir(repo)
         .env("HOME", &home)
         .env_remove("SPECGUARD_BASELINE_REF")
@@ -79,7 +79,7 @@ fn specguard(repo: &Path, seed: &str, sub: &[&str]) -> Output {
 fn specguard_unpinned(repo: &Path, sub: &[&str]) -> Output {
     let home = repo.join(".fake-home");
     fs::create_dir_all(&home).unwrap();
-    Command::new(env!("CARGO_BIN_EXE_specguard"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .current_dir(repo)
         .env("HOME", &home)
         .env_remove("SPECGUARD_BASELINE_REF")

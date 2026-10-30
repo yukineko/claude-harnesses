@@ -16,7 +16,7 @@ fn unique_dir() -> PathBuf {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let status = Command::new("git")
+    let status = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -58,7 +58,7 @@ fn run(dir: &Path) -> (i32, String) {
     // spawned binary; never touches the real trust list). The untrusted path is
     // covered separately by `untrusted_repo_config_is_ignored`.
     let bin = env!("CARGO_BIN_EXE_precommit-audit");
-    let out = Command::new(bin)
+    let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .arg("--mode")
         .arg("precommit")
         .arg("--root")
@@ -80,7 +80,7 @@ fn run(dir: &Path) -> (i32, String) {
 fn run_stop_event(dir: &Path, event: &str) -> (i32, String) {
     use std::io::Write;
     let bin = env!("CARGO_BIN_EXE_precommit-audit");
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .arg("--mode")
         .arg("stop")
         .arg("--root")
@@ -298,7 +298,7 @@ message = "Resolve TODO/FIXME before committing."
     // Untrusted run: NO HARNESS_TRUST_ALL, so the project config is dropped and
     // the custom rule never fires.
     let bin = env!("CARGO_BIN_EXE_precommit-audit");
-    let out = Command::new(bin)
+    let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .arg("--mode")
         .arg("precommit")
         .arg("--root")

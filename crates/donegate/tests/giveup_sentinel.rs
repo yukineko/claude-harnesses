@@ -94,7 +94,7 @@ fn run_gate(home: &Path, root: &Path, session: &str) -> GateRun {
         r#"{{"session_id":"{session}","cwd":"{}","hook_event_name":"Stop"}}"#,
         root.display()
     );
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .arg("gate")
         .current_dir(root)
         .env("HOME", home)

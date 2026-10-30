@@ -34,7 +34,7 @@ fn make_sandbox(tag: &str) -> (PathBuf, PathBuf) {
 }
 
 fn run_ow(home: &Path, work: &Path, args: &[&str]) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_overwatch"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
         .args(args)
         .env("HOME", home)
         .env_remove("CLAUDE_CODE_SESSION_ID")

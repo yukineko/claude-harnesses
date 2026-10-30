@@ -196,7 +196,7 @@ fn run_gate_over_events(
     std::fs::create_dir_all(vpath.parent().unwrap()).unwrap();
     std::fs::write(&vpath, events_jsonl).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_overwatch"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
         .env("HOME", home)
         .current_dir(&cwd)
         .args([

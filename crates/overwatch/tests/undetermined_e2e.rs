@@ -80,7 +80,7 @@ fn git_repo_with_one_commit(work: &Path) {
             "init",
         ][..],
     ] {
-        let ok = Command::new("git")
+        let ok = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(work)
             .status()
@@ -98,7 +98,7 @@ fn overwatch_bin() -> &'static str {
 /// The process HOME of the TEST is never mutated, so these tests cannot race
 /// each other or any other test binary over a process-global env var.
 fn run_ow_raw(home: &Path, work: &Path, args: &[&str]) -> Output {
-    Command::new(overwatch_bin())
+    harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
         .args(args)
         .env("HOME", home)
         .env_remove("CLAUDE_CODE_SESSION_ID")
@@ -438,7 +438,7 @@ fn limit_zero_on_a_readable_store_sheds_every_row_and_exits_zero() {
 // ===========================================================================
 
 fn git(work: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .env("GIT_AUTHOR_NAME", "test")
         .env("GIT_AUTHOR_EMAIL", "test@example.invalid")

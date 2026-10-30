@@ -20,7 +20,7 @@ fn run_in_bad_root(tag: &str, args: &[&str]) -> (Option<i32>, String, String) {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::write(cwd.join(".git"), "garbage").unwrap();
-    let out = Command::new(bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(&cwd)
         .env("HOME", &home)
         .args(args)

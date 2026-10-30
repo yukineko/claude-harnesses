@@ -13,7 +13,7 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_condukt");
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .status()
@@ -60,7 +60,7 @@ fn finish_spawns_the_resolved_plugin_binary_not_the_path_one() {
     let path_env = std::env::join_paths(paths).unwrap();
 
     let run = |args: &[&str]| {
-        Command::new(BIN)
+        harness_core::git_env::scrub(&mut Command::new(BIN))
             .args(args)
             .current_dir(&repo)
             .env("HOME", &home)

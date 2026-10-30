@@ -135,7 +135,7 @@ fn run_stop(session: &str, cwd: &Path, home: &Path, path: &str) -> (i32, String,
         session,
         cwd.to_string_lossy()
     );
-    let mut child = Command::new(env!("CARGO_BIN_EXE_autoflow"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_autoflow")))
         .arg("stop")
         .env("HOME", home)
         .env("PATH", path)

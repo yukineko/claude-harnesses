@@ -63,7 +63,7 @@ fn no_runtime_artifacts_are_tracked() {
         return;
     };
 
-    let out = match Command::new("git")
+    let out = match harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(&root)
         .args(["ls-files", "--cached"])
         .output()

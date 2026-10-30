@@ -1,6 +1,6 @@
 {
   "name": "runbook",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "Reusable procedure includes for Claude Code: a UserPromptSubmit hook that expands !name macros in a prompt into the matching repo-committed procedure under .runbook.",
   "author": {
     "name": "yukineko"

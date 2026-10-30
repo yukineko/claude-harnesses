@@ -48,7 +48,7 @@ struct Fixture {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .current_dir(cwd)
@@ -72,7 +72,7 @@ struct Out {
 }
 
 fn run(home: &Path, cwd: &Path, session: &str, args: &[&str]) -> Out {
-    let out = Command::new(env!("CARGO_BIN_EXE_compass"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_compass")))
         .args(args)
         .env("HOME", home)
         .env("CLAUDE_CODE_SESSION_ID", session)

@@ -41,6 +41,7 @@ fn home(tag: &str) -> Home {
 
 fn plan(h: &Home, adversarial_env: Option<&str>) -> Output {
     let mut cmd = Command::new(bin());
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args([
         "adversarial",
         "plan",

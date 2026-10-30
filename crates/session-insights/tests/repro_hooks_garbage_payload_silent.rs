@@ -6,16 +6,17 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 fn run3(home: &Path, args: &[&str], payload: &str) -> (i32, String, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_session-insights"))
-        .args(args)
-        .current_dir(home)
-        .env("HOME", home)
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_session-insights")))
+            .args(args)
+            .current_dir(home)
+            .env("HOME", home)
+            .env_remove("CLAUDE_CODE_SESSION_ID")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("binary spawns");
     if let Some(mut si) = child.stdin.take() {
         let _ = si.write_all(payload.as_bytes());
     }

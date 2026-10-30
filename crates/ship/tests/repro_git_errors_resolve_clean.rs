@@ -18,7 +18,7 @@
 use std::process::Command;
 
 fn ship_check(dir: &std::path::Path) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_ship"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_ship")))
         .arg("check")
         .current_dir(dir)
         .output()
@@ -27,7 +27,7 @@ fn ship_check(dir: &std::path::Path) -> String {
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["-c", "user.name=t", "-c", "user.email=t@t"])
         .args(args)
         .current_dir(dir)

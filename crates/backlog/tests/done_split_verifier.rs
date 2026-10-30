@@ -54,7 +54,7 @@ fn unique_dir(tag: &str) -> PathBuf {
 /// closes with `--doc-only`. What these tests pin (the done-file split) is
 /// unchanged.
 fn fixture_git(repo: &std::path::Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(repo)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -115,7 +115,7 @@ impl Fixture {
 
     fn run(&self, args: &[&str]) -> Out {
         let bin = env!("CARGO_BIN_EXE_backlog");
-        let mut child = Command::new(bin)
+        let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
             .env("PATH", common::path_with_condukt_shim())
             .args(args)
             .env("HOME", &self.home)

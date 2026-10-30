@@ -28,7 +28,7 @@ fn unique(tag: &str) -> PathBuf {
 }
 
 fn backlog(args: &[&str], home: &Path, cwd: &Path, stdin: &str) -> (i32, String, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
@@ -54,7 +54,7 @@ fn backlog(args: &[&str], home: &Path, cwd: &Path, stdin: &str) -> (i32, String,
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()

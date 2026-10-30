@@ -49,7 +49,7 @@ impl Sb {
         let cwd = t.join("proj");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&cwd).unwrap();
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(&cwd)
             .args(["init", "-q"])
             .status()
@@ -58,7 +58,7 @@ impl Sb {
         Sb { t, home, cwd }
     }
     fn run(&self, args: &[&str]) -> std::process::Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .current_dir(&self.cwd)
             .env("HOME", &self.home)
             .args(args)

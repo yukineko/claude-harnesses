@@ -886,7 +886,7 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempfile::tempdir");
         let root = tempdir.path();
 
-        let status = std::process::Command::new("git")
+        let status = crate::git_env::scrub(&mut std::process::Command::new("git"))
             .arg("-C")
             .arg(root)
             .arg("init")

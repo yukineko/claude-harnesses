@@ -15,7 +15,7 @@ fn library_signal_is_visible_and_marked_unverified() {
     fs::create_dir_all(&project).unwrap();
     std::env::set_var("HOME", &home);
     let run = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_overwatch"))
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
             .args(args)
             .current_dir(&project)
             .env("HOME", &home)

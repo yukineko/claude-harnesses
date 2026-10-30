@@ -78,7 +78,7 @@ impl Fixture {
     }
 
     fn condukt(&self, args: &[&str]) -> Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -91,7 +91,7 @@ impl Fixture {
     /// the autonomy precondition can be asserted without depending on the
     /// fixture home's (nonexistent) `config.toml`.
     fn condukt_autonomous(&self, args: &[&str]) -> Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -103,7 +103,7 @@ impl Fixture {
     /// Spawn `condukt editgate` with `cwd == repo`, `HOME == fixture home`,
     /// and the given PostToolUse stdin payload.
     fn editgate(&self, stdin: &str) -> Output {
-        let mut child = Command::new(bin())
+        let mut child = harness_core::git_env::scrub(&mut Command::new(bin()))
             .arg("editgate")
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -132,7 +132,7 @@ impl Fixture {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()

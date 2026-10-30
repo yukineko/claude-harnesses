@@ -68,6 +68,7 @@ fn git(dir: &Path, args: &[&str]) {
 
 fn git_env(dir: &Path, args: &[&str], env: &[(&str, &str)]) {
     let mut c = Command::new("git");
+    harness_core::git_env::scrub(&mut c);
     c.current_dir(dir).args(args);
     for (k, v) in env {
         c.env(k, v);
@@ -253,7 +254,7 @@ impl Fixture {
             "stop_hook_active": false,
         })
         .to_string();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_tdd"))
+        let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_tdd")))
             .arg("gate")
             .current_dir(&self.primary)
             .env("HOME", &self.home)

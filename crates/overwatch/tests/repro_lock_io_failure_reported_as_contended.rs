@@ -23,7 +23,7 @@ fn sandbox(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     let cwd = t.join("proj");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&cwd).unwrap();
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(&cwd)
         .args(["init", "-q"])
         .status()
@@ -33,7 +33,7 @@ fn sandbox(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
 }
 
 fn run(home: &Path, cwd: &Path, args: &[&str]) -> Output {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(cwd)
         .env("HOME", home)
         .env_remove("HARNESS_SANDBOX_HOME")

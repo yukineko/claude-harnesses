@@ -15,7 +15,10 @@ fn project(tag: &str) -> PathBuf {
         vec!["config", "user.email", "t@t"],
         vec!["config", "user.name", "t"],
     ] {
-        let _ = Command::new("git").current_dir(&dir).args(&args).output();
+        let _ = harness_core::git_env::scrub(&mut Command::new("git"))
+            .current_dir(&dir)
+            .args(&args)
+            .output();
     }
     std::fs::write(dir.join("a.rs"), "fn f() { panic!() }\n").unwrap();
     std::fs::write(
@@ -27,20 +30,21 @@ fn project(tag: &str) -> PathBuf {
 }
 
 fn run(dir: &Path, args: &[&str], stdin: &str) -> (String, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_propguard"))
-        .args(args)
-        .current_dir(dir)
-        .env("HOME", dir)
-        .env("PROPGUARD_STATE_DIR", dir.join(".propguard-state"))
-        .env("CLAUDE_CODE_SESSION_ID", "s10-sess")
-        .env_remove("HARNESS_TRUST_ALL")
-        .env_remove("PROPGUARD_CRITERIA")
-        .env_remove("PROPGUARD_DISABLE")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_propguard")))
+            .args(args)
+            .current_dir(dir)
+            .env("HOME", dir)
+            .env("PROPGUARD_STATE_DIR", dir.join(".propguard-state"))
+            .env("CLAUDE_CODE_SESSION_ID", "s10-sess")
+            .env_remove("HARNESS_TRUST_ALL")
+            .env_remove("PROPGUARD_CRITERIA")
+            .env_remove("PROPGUARD_DISABLE")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
     child
         .stdin
         .take()

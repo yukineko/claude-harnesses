@@ -133,15 +133,16 @@ impl Env {
             self.session,
             self.repo.to_string_lossy()
         );
-        let mut child = Command::new(env!("CARGO_BIN_EXE_autoflow"))
-            .arg("stop")
-            .env("HOME", &self.home)
-            .env("PATH", "/usr/bin:/bin")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("autoflow spawns");
+        let mut child =
+            harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_autoflow")))
+                .arg("stop")
+                .env("HOME", &self.home)
+                .env("PATH", "/usr/bin:/bin")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("autoflow spawns");
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(payload.as_bytes());
         }

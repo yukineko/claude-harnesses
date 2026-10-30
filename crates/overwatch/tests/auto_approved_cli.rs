@@ -69,7 +69,7 @@ fn auto_approved_reports_only_auto_rows_and_is_deterministic() {
     std::fs::write(&decisions_path, lines.join("\n")).unwrap();
 
     let run = |seed: &str| {
-        let out = Command::new(overwatch_bin())
+        let out = harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
             .args([
                 "auto-approved",
                 "--json",
@@ -124,7 +124,7 @@ fn auto_approved_missing_journal_reports_zero() {
     let (home, work) = make_sandbox("missing");
     // Intentionally never seed gate-decisions.jsonl.
 
-    let out = Command::new(overwatch_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
         .args(["auto-approved", "--json"])
         .env("HOME", &home)
         .env_remove("CLAUDE_CODE_SESSION_ID")
@@ -185,7 +185,7 @@ fn run_auto_approved_cli(
     work: &std::path::Path,
     args: &[&str],
 ) -> (Option<i32>, String, String) {
-    let out = Command::new(overwatch_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
         .arg("auto-approved")
         .args(args)
         .env("HOME", home)

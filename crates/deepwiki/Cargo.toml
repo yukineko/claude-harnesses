@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "deepwiki"
-version = "0.1.15"
+version = "0.1.16"
 edition = "2021"
 description = "Deterministic repo mapper for Claude Code that scans a repository into a structured map and tracks wiki freshness against git, so a subagent can generate and refresh an architecture wiki."
 license = "MIT"

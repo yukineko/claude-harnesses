@@ -37,7 +37,7 @@ fn editgate_with_deleted_cwd_does_not_silently_allow() {
 
     // Enter the directory, remove it, then exec condukt: the process starts
     // with a cwd that no longer exists, so `current_dir()` fails.
-    let mut child = Command::new("/bin/sh")
+    let mut child = harness_core::git_env::scrub(&mut Command::new("/bin/sh"))
         .arg("-c")
         .arg("cd \"$GONE\" && rmdir \"$GONE\" && exec \"$BIN\" editgate")
         .env("GONE", &gone)

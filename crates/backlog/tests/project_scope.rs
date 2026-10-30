@@ -53,6 +53,7 @@ fn unique(tag: &str) -> PathBuf {
 fn run_in(args: &[&str], home: &Path, cwd: &Path) -> (i32, String, String) {
     let bin = env!("CARGO_BIN_EXE_backlog");
     let mut cmd = Command::new(bin);
+    harness_core::git_env::scrub(&mut cmd);
     cmd.env("PATH", common::path_with_condukt_shim());
     cmd.args(args)
         .env("HOME", home)
@@ -73,7 +74,7 @@ fn run_in(args: &[&str], home: &Path, cwd: &Path) -> (i32, String, String) {
 }
 
 fn git_available() -> bool {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -91,7 +92,7 @@ fn init_repo(tag: &str) -> PathBuf {
          than reporting green"
     );
     let root = unique(tag);
-    let ok = Command::new("git")
+    let ok = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["init", "-q"])
         .current_dir(&root)
         .status()

@@ -97,7 +97,7 @@ impl Fixture {
             "stop_hook_active": false,
         })
         .to_string();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_tdd"))
+        let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_tdd")))
             .arg("gate")
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -138,7 +138,7 @@ impl Drop for Fixture {
 }
 
 fn git(dir: &Path, args: &[&str]) -> bool {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .args(args)
         .stdout(Stdio::null())

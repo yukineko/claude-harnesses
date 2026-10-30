@@ -72,7 +72,7 @@ fn fx(tag: &str) -> Fx {
     common::linked_checkout(&f.repo);
     {
         let a = &["remote", "add", "origin", "https://github.com/o/r.git"][..];
-        let ok = Command::new(&git)
+        let ok = harness_core::git_env::scrub(&mut Command::new(&git))
             .args(a)
             .current_dir(&f.repo)
             .env("HOME", &f.home)
@@ -111,7 +111,7 @@ fn fx(tag: &str) -> Fx {
 }
 
 fn run(f: &Fx, args: &[&str], path: &Path) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .args(args)
         .env("HOME", &f.home)
         .env(
@@ -187,7 +187,7 @@ fn control_done_closes_the_issue_when_the_remote_is_readable() {
         &["add", "docs/note.md"],
         &["commit", "-q", "-m", "doc only"],
     ] {
-        let ok = Command::new(&git)
+        let ok = harness_core::git_env::scrub(&mut Command::new(&git))
             .args(ident)
             .args(a)
             .current_dir(&f.repo)

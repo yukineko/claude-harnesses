@@ -25,7 +25,7 @@ use std::process::{Command, Output};
 use std::time::{Duration, Instant};
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -44,7 +44,7 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 fn condukt(cwd: &Path, home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_condukt"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(args)
         .current_dir(cwd)
         .env("HOME", home)

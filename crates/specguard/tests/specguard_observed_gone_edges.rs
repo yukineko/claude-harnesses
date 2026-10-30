@@ -28,7 +28,7 @@ struct Fx {
 }
 
 fn git(repo: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
@@ -127,7 +127,7 @@ impl Fx {
     }
 
     fn sg(&self, sub: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_specguard"))
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
             .current_dir(&self.repo)
             .env("HOME", &self.home)
             .env_remove("SPECGUARD_BASELINE_REF")
@@ -199,7 +199,7 @@ impl Fx {
     }
 
     fn overwatch(&self, args: &[&str]) -> Output {
-        Command::new(overwatch_bin())
+        harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
             .current_dir(&self.repo)
             .env("HOME", &self.home)
             .env_remove("GIT_DIR")

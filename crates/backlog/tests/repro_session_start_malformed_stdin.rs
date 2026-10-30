@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 fn run_hook(payload: &str, home: &PathBuf, cwd: &PathBuf) -> (i32, String, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .arg("session-start")
         .env("HOME", home)
         .current_dir(cwd)

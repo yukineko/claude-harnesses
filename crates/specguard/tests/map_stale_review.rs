@@ -35,7 +35,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
@@ -113,6 +113,7 @@ fn sg(repo: &Path, args: &[&str]) -> Output {
 
 fn sg_cmd(repo: &Path, args: &[&str]) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_specguard"));
+    harness_core::git_env::scrub(&mut c);
     // A test run inside a git hook inherits GIT_DIR / GIT_WORK_TREE, which
     // would point every git call at the outer repo.
     c.env_remove("GIT_DIR")

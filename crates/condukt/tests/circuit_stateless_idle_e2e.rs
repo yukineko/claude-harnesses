@@ -66,6 +66,7 @@ impl Fixture {
 
     fn cmd(&self, args: &[&str]) -> Command {
         let mut c = Command::new(bin());
+        harness_core::git_env::scrub(&mut c);
         c.args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -134,7 +135,7 @@ impl Fixture {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()

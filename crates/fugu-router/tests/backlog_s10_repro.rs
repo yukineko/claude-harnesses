@@ -17,15 +17,16 @@ fn temp_dir(tag: &str) -> PathBuf {
 }
 
 fn run_in(home: &Path, cwd: &Path, args: &[&str], payload: &str) -> (i32, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_fugu-router"))
-        .args(args)
-        .current_dir(cwd)
-        .env("HOME", home)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_fugu-router")))
+            .args(args)
+            .current_dir(cwd)
+            .env("HOME", home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
     if let Some(mut si) = child.stdin.take() {
         let _ = si.write_all(payload.as_bytes());
     }
@@ -79,7 +80,7 @@ fn backlog_ceb0a9bf_prompt_hook_nests_additional_context() {
 fn seeded_repo(tag: &str) -> PathBuf {
     let dir = temp_dir(tag);
     let git = |args: &[&str]| {
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(&dir)
             .status()

@@ -50,11 +50,17 @@ fn project(tag: &str) -> PathBuf {
         vec!["config", "user.email", "t@t"],
         vec!["config", "user.name", "t"],
     ] {
-        let _ = Command::new("git").current_dir(&dir).args(&args).output();
+        let _ = harness_core::git_env::scrub(&mut Command::new("git"))
+            .current_dir(&dir)
+            .args(&args)
+            .output();
     }
     std::fs::write(dir.join("seed.rs"), "fn a() {}\n").expect("write seed");
     for args in [vec!["add", "-A"], vec!["commit", "-qm", "seed"]] {
-        let _ = Command::new("git").current_dir(&dir).args(&args).output();
+        let _ = harness_core::git_env::scrub(&mut Command::new("git"))
+            .current_dir(&dir)
+            .args(&args)
+            .output();
     }
     std::fs::write(
         dir.join("impl_new.rs"),
@@ -79,6 +85,7 @@ impl Run {
 fn run(dir: &Path, args: &[&str], session: Option<&str>, stdin: &str) -> Run {
     let bin = env!("CARGO_BIN_EXE_tdd");
     let mut cmd = Command::new(bin);
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args(args)
         .current_dir(dir)
         .env("HOME", dir)

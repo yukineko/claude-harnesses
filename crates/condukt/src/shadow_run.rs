@@ -251,7 +251,7 @@ mod tests {
     }
 
     fn git(dir: &Path, args: &[&str]) -> std::process::Output {
-        std::process::Command::new("git")
+        harness_core::git_env::scrub(&mut std::process::Command::new("git"))
             .args(args)
             .current_dir(dir)
             .output()
@@ -362,7 +362,7 @@ mod backlog_f31dd957 {
     use std::process::Command;
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("-C")
             .arg(dir)
             .args(args)

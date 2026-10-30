@@ -33,11 +33,13 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_condukt");
 
 fn condukt() -> Command {
-    Command::new(BIN)
+    let mut c = Command::new(BIN);
+    harness_core::git_env::scrub(&mut c);
+    c
 }
 
 fn git(dir: &Path, args: &[&str]) -> std::process::Output {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()

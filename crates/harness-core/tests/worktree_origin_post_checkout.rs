@@ -15,6 +15,7 @@ fn hook_src() -> PathBuf {
 
 fn git_cmd(dir: &Path, origin_dir: Option<&Path>, args: &[&str]) -> Output {
     let mut c = Command::new("git");
+    harness_core::git_env::scrub(&mut c);
     for k in [
         "GIT_DIR",
         "GIT_WORK_TREE",

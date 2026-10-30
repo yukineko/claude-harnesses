@@ -30,7 +30,7 @@ fn scratch() -> PathBuf {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -43,7 +43,7 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 fn pca(root: &Path, args: &[&str]) -> (i32, String) {
-    let o = Command::new(env!("CARGO_BIN_EXE_precommit-audit"))
+    let o = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_precommit-audit")))
         .args(args)
         .current_dir(root.join("repo"))
         .env("HOME", root.join("home"))

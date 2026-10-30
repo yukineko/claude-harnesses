@@ -26,7 +26,7 @@ fn bin() -> PathBuf {
 }
 
 fn run(home: &Path, proj: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(proj)
         .env("HOME", home)
         .args(args)
@@ -35,7 +35,7 @@ fn run(home: &Path, proj: &Path, args: &[&str]) -> std::process::Output {
 }
 
 fn spawn_record(home: &Path, proj: &Path, title: &str) -> std::process::Child {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(proj)
         .env("HOME", home)
         .args([
@@ -53,7 +53,7 @@ fn spawn_record(home: &Path, proj: &Path, title: &str) -> std::process::Child {
 }
 
 fn spawn_select(home: &Path, proj: &Path, title: &str, delay_ms: &str) -> std::process::Child {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(proj)
         .env("HOME", home)
         // Widens the load->mutate->rewrite race window (held inside the

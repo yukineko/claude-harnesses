@@ -56,7 +56,7 @@ impl Sb {
         let proj = root.join("proj");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&proj).unwrap();
-        let st = Command::new("git")
+        let st = harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(&proj)
             .args(["init", "-q"])
             .status()
@@ -80,6 +80,7 @@ impl Sb {
 
     fn cmd(&self, args: &[&str]) -> Command {
         let mut c = Command::new(BIN);
+        harness_core::git_env::scrub(&mut c);
         let path = match &self.fakebin {
             Some(d) => format!("{}:{BASE_PATH}", d.display()),
             None => BASE_PATH.to_string(),
@@ -2014,7 +2015,7 @@ fn claim_rd_review_surface_defaults() {
 
     // reconcile-fixed with no range flag scans the last 50 commits
     let git = |args: &[&str]| {
-        let st = Command::new("git")
+        let st = harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(&sb.proj)
             .env("GIT_AUTHOR_NAME", "a")
             .env("GIT_AUTHOR_EMAIL", "a@a")

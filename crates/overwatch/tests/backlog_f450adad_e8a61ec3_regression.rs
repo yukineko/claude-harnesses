@@ -32,7 +32,7 @@ fn fixture(tag: &str) -> PathBuf {
     let repo = root.join("repo");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&repo).unwrap();
-    let st = std::process::Command::new("git")
+    let st = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
         .args(["init", "-q"])
         .current_dir(&repo)
         .status()

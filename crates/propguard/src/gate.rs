@@ -2328,7 +2328,7 @@ PROP output-schema: PASS";
 
     #[track_caller]
     fn git_in(root: &Path, args: &[&str]) {
-        let ok = Command::new("git")
+        let ok = harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(root)
             .args(args)
             .stdout(Stdio::null())

@@ -29,7 +29,10 @@ const PROJECT_TOML: &str = "checker_cmd = \"wt-checker\"\n";
 const DEFAULT_CMD: &str = "claude -p";
 
 fn git(dir: &Path, args: &[&str]) {
-    let o = run(Command::new("git").args(args).current_dir(dir)).expect("git runs");
+    let o = run(harness_core::git_env::scrub(&mut Command::new("git"))
+        .args(args)
+        .current_dir(dir))
+    .expect("git runs");
     assert_eq!(o.code(), 0, "git {args:?}: {}", o.stderr());
 }
 
@@ -74,6 +77,7 @@ fn child_probe() {
 /// Parent half: returns the `checker_cmd` the child observed.
 fn observe(root: &Path, trust: Option<&Path>, home: &Path) -> String {
     let mut cmd = Command::new(std::env::current_exe().unwrap());
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args([
         "trust_worktree_tests::child_probe",
         "--exact",

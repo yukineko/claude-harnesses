@@ -6376,7 +6376,7 @@ mod tests {
         let repo = base.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         let git = |dir: &Path, args: &[&str]| {
-            let out = std::process::Command::new("git")
+            let out = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
                 .args(args)
                 .current_dir(dir)
                 .env("GIT_AUTHOR_NAME", "t")

@@ -540,7 +540,7 @@ mod tests {
     }
 
     fn git(cwd: &Path, args: &[&str]) -> bool {
-        std::process::Command::new("git")
+        crate::git_env::scrub(&mut std::process::Command::new("git"))
             .args(args)
             .current_dir(cwd)
             .output()
@@ -549,7 +549,7 @@ mod tests {
     }
 
     fn git_available() -> bool {
-        std::process::Command::new("git")
+        crate::git_env::scrub(&mut std::process::Command::new("git"))
             .arg("--version")
             .output()
             .map(|o| o.status.success())

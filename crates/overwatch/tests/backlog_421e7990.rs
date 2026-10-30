@@ -30,7 +30,7 @@ fn stale_undisposed_join_undetermined_arm_is_reachable_and_not_silent() {
     let bin = env!("CARGO_BIN_EXE_overwatch");
 
     // Materialise the store dir with one finding.
-    let out = Command::new(bin)
+    let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .args([
             "record-finding",
             "--finding-id",
@@ -73,7 +73,7 @@ fn stale_undisposed_join_undetermined_arm_is_reachable_and_not_silent() {
         }
     });
 
-    let out = Command::new(bin)
+    let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .args(["review-metrics", "--json"])
         .current_dir(proj.path())
         .env("HOME", home.path())

@@ -41,7 +41,7 @@ fn dry_run_sync(tag: &str) -> String {
     }
     symlink(tool_path("git"), bin.join("git")).unwrap();
     common::linked_checkout(&repo);
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["remote", "add", "origin", "https://github.com/o/r.git"])
         .current_dir(&repo)
         .env("HOME", &home)

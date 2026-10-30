@@ -570,7 +570,7 @@ mod tests {
             &["config", "user.email", "t@t.com"][..],
             &["config", "user.name", "t"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(harness_core::git_env::scrub(&mut Command::new("git"))
                 .current_dir(root)
                 .args(args)
                 .status()
@@ -578,13 +578,13 @@ mod tests {
                 .success());
         }
         std::fs::write(root.join("a.txt"), "x\n").unwrap();
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(root)
             .args(["add", "a.txt"])
             .status()
             .unwrap()
             .success());
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(root)
             .args(["commit", "-qm", "init"])
             .status()
@@ -611,7 +611,7 @@ mod tests {
         }
         let root = scratch_dir();
         let root = root.as_path();
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(root)
             .args(["init", "-q"])
             .status()
@@ -669,7 +669,7 @@ mod tests {
     #[cfg(unix)]
     fn init_repo() -> std::path::PathBuf {
         let root = scratch_dir();
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(&root)
             .args(["init", "-q"])
             .status()
@@ -798,7 +798,7 @@ mod tests {
             &["config", "user.email", "t@t.com"][..],
             &["config", "user.name", "t"][..],
         ] {
-            assert!(Command::new("git")
+            assert!(harness_core::git_env::scrub(&mut Command::new("git"))
                 .current_dir(&root)
                 .args(args)
                 .status()
@@ -807,14 +807,14 @@ mod tests {
         }
         for (name, body) in files {
             std::fs::write(root.join(name), body).expect("write");
-            assert!(Command::new("git")
+            assert!(harness_core::git_env::scrub(&mut Command::new("git"))
                 .current_dir(&root)
                 .args(["add", name])
                 .status()
                 .unwrap()
                 .success());
         }
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(&root)
             .args(["commit", "-qm", "init"])
             .status()
@@ -889,7 +889,7 @@ mod tests {
         let root = repo_with(&[("a.rs", b"fn a() {}\n"), ("b.rs", b"fn b() {}\n")]);
         std::fs::write(root.join("a.rs"), b"fn a() { let x = 1; }\n").expect("write a");
         std::fs::write(root.join("b.rs"), BAD_BYTES).expect("write b");
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(&root)
             .args(["add", "b.rs"])
             .status()
@@ -918,7 +918,7 @@ mod tests {
         let root = repo_with(&[("a.rs", b"fn a() {}\n"), ("b.rs", b"fn b() {}\n")]);
         std::fs::write(root.join("a.rs"), b"fn a() { let x = 1; }\n").expect("write a");
         std::fs::write(root.join("b.rs"), GOOD_BYTES).expect("write b");
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .current_dir(&root)
             .args(["add", "b.rs"])
             .status()

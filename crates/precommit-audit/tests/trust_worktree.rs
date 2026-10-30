@@ -24,7 +24,7 @@ message = "Resolve TODO/FIXME before committing."
 "#;
 
 fn git(dir: &Path, args: &[&str]) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -63,6 +63,7 @@ fn fixture(base: &Path) -> (PathBuf, PathBuf) {
 
 fn bin() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_precommit-audit"));
+    harness_core::git_env::scrub(&mut c);
     c.env_remove("HARNESS_TRUST_ALL");
     c
 }

@@ -26,6 +26,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+#[path = "support/git_env.rs"]
+mod git_env;
+
 /// Same Ask-producing command as `ask_hardening_invariant.rs`.
 const ASK_PRODUCING_COMMAND: &str = "my-cleanup-wrapper rm -rf /some/path";
 
@@ -72,7 +75,7 @@ impl Drop for LiveRegistryCleanup {
 }
 
 fn git_init(dir: &Path) {
-    let st = Command::new("git")
+    let st = git_env::scrub(&mut Command::new("git"))
         .arg("init")
         .arg("-q")
         .arg(dir)
@@ -88,6 +91,8 @@ fn run_blastguard(repo: &Path, clear_env: bool) -> String {
     let mut cmd = Command::new(bin);
     if clear_env {
         cmd.env_clear();
+    } else {
+        git_env::scrub(&mut cmd);
     }
     cmd.current_dir(repo)
         .stdin(Stdio::piped())

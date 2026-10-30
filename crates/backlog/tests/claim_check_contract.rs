@@ -25,7 +25,7 @@ struct Fx {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -108,7 +108,7 @@ impl Fx {
             REPRO_CMD,
         ];
         args.extend_from_slice(extra);
-        let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+        let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
             .args(&args)
             .env("HOME", &self.home)
             // Shim + minimal system dirs only: an inherited PATH could hold a

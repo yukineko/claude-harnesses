@@ -45,6 +45,7 @@ fn payload(root: &std::path::Path) -> String {
 
 fn cmd(root: &std::path::Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_ctxrot"));
+    harness_core::git_env::scrub(&mut c);
     c.arg("preguard")
         .env("HOME", root.join("home"))
         .env_remove("GUARD_DISABLE")

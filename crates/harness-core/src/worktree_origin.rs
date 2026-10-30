@@ -294,7 +294,7 @@ mod tests {
         let wt = base.join("wt");
         std::fs::create_dir_all(&repo).unwrap();
         let git = |dir: &Path, args: &[&str]| {
-            let o = Command::new("git")
+            let o = crate::git_env::scrub(&mut Command::new("git"))
                 .arg("-C")
                 .arg(dir)
                 .args(args)

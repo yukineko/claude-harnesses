@@ -20,7 +20,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn git(repo: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
@@ -34,7 +34,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
 }
 
 fn sg(repo: &Path, baseline: &str, sub: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_specguard"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .current_dir(repo)
         .args([
             "--config",

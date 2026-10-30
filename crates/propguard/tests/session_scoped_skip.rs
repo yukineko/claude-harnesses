@@ -51,7 +51,10 @@ fn project(tag: &str) -> PathBuf {
         vec!["config", "user.email", "t@t"],
         vec!["config", "user.name", "t"],
     ] {
-        let _ = Command::new("git").current_dir(&dir).args(&args).output();
+        let _ = harness_core::git_env::scrub(&mut Command::new("git"))
+            .current_dir(&dir)
+            .args(&args)
+            .output();
     }
     std::fs::write(dir.join("a.rs"), "fn f() { panic!() }\n").expect("write source");
     dir
@@ -73,6 +76,7 @@ impl Run {
 fn run(dir: &Path, args: &[&str], session: Option<&str>, stdin: &str) -> Run {
     let bin = env!("CARGO_BIN_EXE_propguard");
     let mut cmd = Command::new(bin);
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args(args)
         .current_dir(dir)
         .env("HOME", dir)

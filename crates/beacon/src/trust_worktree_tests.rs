@@ -17,7 +17,7 @@ const PROJECT_TOML: &str = "command = \"wt-hook\"\n";
 const DEFAULT_CMD: &str = "<none>";
 
 fn git(dir: &Path, args: &[&str]) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -72,6 +72,7 @@ fn child_probe() {
 /// Parent half: returns the `command` the child observed.
 fn observe(root: &Path, trust: Option<&Path>, home: &Path) -> String {
     let mut cmd = Command::new(std::env::current_exe().unwrap());
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args([
         "trust_worktree_tests::child_probe",
         "--exact",

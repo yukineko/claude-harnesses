@@ -17,7 +17,7 @@ use std::process::{Command, Stdio};
 fn session_end_emits_reminder_for_unshipped_work_when_piped() {
     let repo = tempfile::TempDir::new().unwrap();
     let p = repo.path();
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["init", "-q"])
         .current_dir(p)
         .output()
@@ -25,7 +25,7 @@ fn session_end_emits_reminder_for_unshipped_work_when_piped() {
     assert!(o.status.success());
     std::fs::write(p.join("dirty.txt"), "uncommitted").unwrap();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_ship"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_ship")))
         .arg("session-end")
         .current_dir(p)
         .stdin(Stdio::piped())

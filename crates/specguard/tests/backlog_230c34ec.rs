@@ -27,7 +27,7 @@ fn scratch(tag: &str) -> PathBuf {
 }
 
 fn git(repo: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
@@ -85,7 +85,7 @@ fn repo(tag: &str, spec_doc_in_map: bool) -> PathBuf {
 }
 
 fn brief_verdict(dir: &Path) -> (String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_specguard"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")

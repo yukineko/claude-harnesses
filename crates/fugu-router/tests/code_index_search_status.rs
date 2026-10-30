@@ -33,7 +33,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 
 /// Run the binary with an isolated HOME and cwd. Returns (exit, stdout, stderr).
 fn run(home: &Path, cwd: &Path, args: &[&str]) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_fugu-router"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_fugu-router")))
         .args(args)
         .current_dir(cwd)
         .env("HOME", home)
@@ -79,7 +79,7 @@ fn build(root: &Path) {
 fn git_repo(tag: &str, files: &[(&str, &str)]) -> PathBuf {
     let dir = temp_dir(tag);
     let git = |args: &[&str]| {
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(&dir)
             .stdout(Stdio::null())

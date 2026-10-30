@@ -25,7 +25,7 @@ fn run_status_without_binary() -> String {
         &launcher,
     )
     .expect("copy launcher");
-    let out = Command::new("sh")
+    let out = harness_core::git_env::scrub(&mut Command::new("sh"))
         .arg(&launcher)
         .arg("status")
         .stdin(Stdio::null())

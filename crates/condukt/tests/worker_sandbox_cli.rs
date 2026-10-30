@@ -19,7 +19,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_condukt");
 /// marks the verdict `"sandboxed": false`, exit 0.
 #[test]
 fn sandbox_disabled_runs_on_host_and_marks_verdict() {
-    let out = Command::new(BIN)
+    let out = harness_core::git_env::scrub(&mut Command::new(BIN))
         .args(["sandbox", "run", "--cmd", "printf hello", "--timeout", "10"])
         // Force sandbox OFF regardless of any ambient config.toml.
         .env("CONDUKT_WORKER_SANDBOX", "0")
@@ -67,7 +67,7 @@ fn sandbox_enabled_fails_soft_when_docker_absent() {
         return;
     }
 
-    let out = Command::new(BIN)
+    let out = harness_core::git_env::scrub(&mut Command::new(BIN))
         .args(["sandbox", "run", "--cmd", "printf hello", "--timeout", "10"])
         .env("CONDUKT_WORKER_SANDBOX", "1")
         .output()

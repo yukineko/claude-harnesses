@@ -50,6 +50,7 @@ fn hook_payload(session: &str, cwd: &Path) -> String {
 fn run_in(dir: &Path, args: &[&str], payload: &str, extra_env: &[(&str, &str)]) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_propguard");
     let mut cmd = Command::new(bin);
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args(args)
         .current_dir(dir)
         .env("HOME", dir)
@@ -81,7 +82,10 @@ fn git_init(dir: &Path) {
         vec!["config", "user.email", "t@t"],
         vec!["config", "user.name", "t"],
     ] {
-        let _ = Command::new("git").current_dir(dir).args(&args).output();
+        let _ = harness_core::git_env::scrub(&mut Command::new("git"))
+            .current_dir(dir)
+            .args(&args)
+            .output();
     }
 }
 

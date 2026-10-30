@@ -35,7 +35,7 @@ fn unique(tag: &str) -> PathBuf {
 }
 
 fn git(repo: &Path, home: &Path, args: &[&str]) -> (bool, String) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(repo)
         .env("HOME", home)
@@ -58,7 +58,7 @@ fn must(repo: &Path, home: &Path, args: &[&str]) {
 }
 
 fn add(repo: &Path, home: &Path, title: &str) {
-    let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .env("PATH", common::path_with_condukt_shim())
         .args(["add", "--title", title, "--project", repo.to_str().unwrap()])
         .env("HOME", home)

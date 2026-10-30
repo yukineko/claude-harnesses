@@ -13,6 +13,9 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
+mod support;
+use support::git_env::scrub;
+
 #[derive(Debug)]
 struct Run {
     code: i32,
@@ -45,7 +48,7 @@ fn run(args: &[&str], stdin: &str) -> Run {
     let launcher = dir.path().join("deepwiki");
     std::fs::copy(launcher_src(), &launcher).expect("copy launcher");
 
-    let mut child = Command::new("sh")
+    let mut child = scrub(&mut Command::new("sh"))
         .arg(&launcher)
         .args(args)
         .stdin(Stdio::piped())
@@ -111,7 +114,7 @@ fn control_launcher_still_execs_the_host_binary_when_it_is_present() {
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).expect("chmod");
     }
 
-    let out = Command::new("sh")
+    let out = scrub(&mut Command::new("sh"))
         .arg(&launcher)
         .args(["search", "q"])
         .stdin(Stdio::null())

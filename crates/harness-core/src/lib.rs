@@ -42,6 +42,7 @@ pub mod discovery;
 pub mod estimate;
 pub mod fleet;
 pub mod gate;
+pub mod git_env;
 pub mod git_probe;
 pub mod hash;
 pub mod hook;

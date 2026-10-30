@@ -64,7 +64,7 @@ fn git_repo_with_one_commit(work: &Path) {
             "init",
         ][..],
     ] {
-        let ok = Command::new("git")
+        let ok = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(work)
             .status()
@@ -81,7 +81,7 @@ fn overwatch_bin() -> &'static str {
 
 /// Run the overwatch binary with a sandboxed HOME + cwd, returning stdout.
 fn run_ow(home: &Path, work: &Path, args: &[&str]) -> String {
-    let out = Command::new(overwatch_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
         .args(args)
         .env("HOME", home)
         .env("CLAUDE_CODE_SESSION_ID", "")
@@ -259,7 +259,7 @@ fn review_metrics_empty_store_is_zeros_and_nulls_not_an_error() {
 #[test]
 fn record_disposition_rejects_unknown_verdict() {
     let (home, work) = make_sandbox("bad-verdict");
-    let out = Command::new(overwatch_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
         .args([
             "record-disposition",
             "--finding-id",

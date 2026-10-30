@@ -111,7 +111,7 @@ impl Fixture {
 
     /// git with the real environment (used for setup, where hooks are bypassed).
     fn git(&self, args: &[&str]) {
-        let out = Command::new("git")
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(args)
             .current_dir(&self.repo)
             .output()
@@ -150,6 +150,7 @@ impl Fixture {
     fn gated_git(&self, args: &[&str], envs: &[(&str, &str)]) -> Output {
         let path = format!("{}:{}", self.stubs.display(), git_dir_on_path().display());
         let mut cmd = Command::new("git");
+        harness_core::git_env::scrub(&mut cmd);
         cmd.args(args)
             .current_dir(&self.repo)
             .env("PATH", path)
@@ -217,7 +218,7 @@ fn a_clean_no_ff_merge_completes_in_the_primary_tree_with_a_peer_live() {
     );
 
     // It really was a merge commit: two parents.
-    let parents = Command::new("git")
+    let parents = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["log", "-1", "--format=%P"])
         .current_dir(&f.repo)
         .output()

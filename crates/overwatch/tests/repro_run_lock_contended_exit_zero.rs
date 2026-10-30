@@ -35,7 +35,7 @@ fn run_under_real_lock_contention_must_be_nonzero() {
     let cwd = t.join("proj");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&cwd).unwrap();
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(&cwd)
         .args(["init", "-q"])
         .status()
@@ -43,7 +43,7 @@ fn run_under_real_lock_contention_must_be_nonzero() {
         .success());
 
     // Materialise the store with a real begin.
-    let b = Command::new(bin())
+    let b = harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(&cwd)
         .env("HOME", &home)
         .args(["begin", "--key", "k1", "--title", "t", "--session", "s1"])
@@ -70,7 +70,7 @@ fn run_under_real_lock_contention_must_be_nonzero() {
     .unwrap();
 
     // Control: `end` reports the same contention as a failure.
-    let end = Command::new(bin())
+    let end = harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(&cwd)
         .env("HOME", &home)
         .args(["end", "--key", "k1"])
@@ -81,7 +81,7 @@ fn run_under_real_lock_contention_must_be_nonzero() {
         "control: end must be non-zero under contention: {end:?}"
     );
 
-    let out = Command::new(bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(&cwd)
         .env("HOME", &home)
         .args(["run", "--key", "k1", "--note", "n"])

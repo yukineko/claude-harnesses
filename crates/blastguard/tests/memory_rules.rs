@@ -16,6 +16,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+#[path = "support/git_env.rs"]
+mod git_env;
+
 struct Fx {
     base: PathBuf,
     home: PathBuf,
@@ -40,7 +43,7 @@ impl Fx {
     }
 
     fn git(&self, args: &[&str]) {
-        let out = Command::new("git")
+        let out = git_env::scrub(&mut Command::new("git"))
             .arg("-C")
             .arg(&self.repo)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -71,7 +74,7 @@ impl Fx {
             "tool_input": { "command": command },
         })
         .to_string();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
+        let mut child = git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_blastguard")))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

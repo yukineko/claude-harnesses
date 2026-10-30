@@ -136,6 +136,7 @@ fn real_toolchain_env() -> Vec<(&'static str, PathBuf)> {
 
 fn run_hook(fx: &Fixture, file: &Path, path_override: Option<&str>) -> Output {
     let mut cmd = Command::new(BIN);
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("editgate")
         .current_dir(&fx.repo)
         .env("HOME", &fx.home)

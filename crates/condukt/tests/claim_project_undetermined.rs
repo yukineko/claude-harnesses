@@ -45,7 +45,7 @@ fn tmp_base(tag: &str) -> PathBuf {
 }
 
 fn claim(cwd: &Path, home: &Path, run: &str, hashkey: &str) -> Output {
-    Command::new(bin())
+    harness_core::git_env::scrub(&mut Command::new(bin()))
         .args(["state", "claim-task", "--run", run, "--hashkey", hashkey])
         .current_dir(cwd)
         .env("HOME", home)
@@ -65,7 +65,7 @@ fn json_of(o: &Output) -> serde_json::Value {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()

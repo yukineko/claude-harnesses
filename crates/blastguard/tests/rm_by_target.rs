@@ -23,6 +23,9 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+#[path = "support/git_env.rs"]
+mod git_env;
+
 struct Fx {
     base: PathBuf,
     home: PathBuf,
@@ -70,7 +73,7 @@ impl Fx {
     }
 
     fn git(&self, args: &[&str]) {
-        let out = Command::new("git")
+        let out = git_env::scrub(&mut Command::new("git"))
             .arg("-C")
             .arg(&self.repo)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
@@ -132,7 +135,8 @@ impl Fx {
         })
         .to_string();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_blastguard"));
-        cmd.stdin(Stdio::piped())
+        git_env::scrub(&mut cmd)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("CLAUDE_PROJECT_DIR", &self.repo)

@@ -15,7 +15,7 @@ fn real_git() -> PathBuf {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -77,7 +77,7 @@ fn run_with_shim(fail_probe: bool) -> (std::process::Output, PathBuf, tempfile::
     std::fs::set_permissions(&shim_path, std::fs::Permissions::from_mode(0o755)).unwrap();
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
 
-    let out = Command::new(env!("CARGO_BIN_EXE_condukt"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_condukt")))
         .args(["worktree", "merge", "--branch", "feat"])
         .current_dir(&repo)
         .env("PATH", path)

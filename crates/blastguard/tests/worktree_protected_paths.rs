@@ -34,6 +34,8 @@
 //! blastguard temp safe root, so the fixture layout — not where the test binary
 //! happens to run — decides the verdict.
 
+#[path = "support/git_env.rs"]
+mod git_env;
 #[path = "support/neutral_base.rs"]
 mod neutral_base;
 
@@ -57,7 +59,7 @@ struct Fixture {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = git_env::scrub(&mut Command::new("git"))
         .args([
             "-c",
             "user.name=t",
@@ -161,7 +163,8 @@ impl Fixture {
         })
         .to_string();
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_blastguard"));
-        cmd.stdin(Stdio::piped())
+        git_env::scrub(&mut cmd)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("CLAUDE_PROJECT_DIR", project_dir)

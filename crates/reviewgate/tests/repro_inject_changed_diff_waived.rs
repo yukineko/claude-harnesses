@@ -30,7 +30,7 @@ fn unique_dir(tag: &str) -> PathBuf {
 }
 
 fn git(work: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(work)
         .args(args)
         .status()
@@ -54,17 +54,18 @@ fn run_review(cwd: &Path, home: &Path, session: &str) -> (i32, String, String) {
         r#"{{"hook_event_name":"Stop","session_id":"{session}","stop_hook_active":false,"cwd":{}}}"#,
         serde_json::to_string(&cwd.to_string_lossy()).unwrap()
     );
-    let mut child = Command::new(env!("CARGO_BIN_EXE_reviewgate"))
-        .arg("review")
-        .current_dir(cwd)
-        .env("HOME", home)
-        .env("CLAUDE_CODE_SESSION_ID", session)
-        .env_remove("REVIEWGATE_DISABLE")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_reviewgate")))
+            .arg("review")
+            .current_dir(cwd)
+            .env("HOME", home)
+            .env("CLAUDE_CODE_SESSION_ID", session)
+            .env_remove("REVIEWGATE_DISABLE")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("binary spawns");
     if let Some(mut si) = child.stdin.take() {
         let _ = si.write_all(payload.as_bytes());
     }

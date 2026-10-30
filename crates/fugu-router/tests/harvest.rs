@@ -34,7 +34,7 @@ fn scratch(name: &str) -> PathBuf {
 
 fn git_at(dir: &Path, ts: u64, args: &[&str]) -> String {
     let date = format!("@{ts} +0000");
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .args([
             "-c",
@@ -128,7 +128,7 @@ impl Fixture {
     }
 
     fn run_in(&self, cwd: &Path, base: &[&str], extra: &[&str]) -> Output {
-        Command::new(EXE)
+        harness_core::git_env::scrub(&mut Command::new(EXE))
             .current_dir(cwd)
             .args(base)
             .args(extra)
@@ -457,7 +457,7 @@ fn corrupt_cursor_fails_loudly_surfaces_in_prompt_and_clears_after_success() {
     let payload = r#"{"session_id":"s1","prompt":"refactor the parser in src/lib.rs"}"#;
     let prompt = |fx: &Fixture| {
         use std::io::Write;
-        let mut c = Command::new(EXE)
+        let mut c = harness_core::git_env::scrub(&mut Command::new(EXE))
             .arg("prompt")
             .env("HOME", &fx.home)
             .stdin(Stdio::piped())

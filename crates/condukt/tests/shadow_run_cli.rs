@@ -15,7 +15,9 @@ use std::process::Command;
 const BIN: &str = env!("CARGO_BIN_EXE_condukt");
 
 fn condukt() -> Command {
-    Command::new(BIN)
+    let mut c = Command::new(BIN);
+    harness_core::git_env::scrub(&mut c);
+    c
 }
 
 #[test]
@@ -56,28 +58,28 @@ fn enable_then_status_reports_enabled_and_exits_zero() {
 fn exec_refuses_to_fire_while_disabled() {
     let dir = tempfile::tempdir().unwrap();
     let repo = tempfile::tempdir().unwrap();
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["init", "-b", "main"])
         .current_dir(repo.path())
         .status()
         .unwrap();
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["config", "user.email", "test@example.com"])
         .current_dir(repo.path())
         .status()
         .unwrap();
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["config", "user.name", "Test"])
         .current_dir(repo.path())
         .status()
         .unwrap();
     std::fs::write(repo.path().join("base.txt"), "base\n").unwrap();
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["add", "."])
         .current_dir(repo.path())
         .status()
         .unwrap();
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["commit", "-m", "init"])
         .current_dir(repo.path())
         .status()
@@ -109,7 +111,7 @@ fn exec_refuses_to_fire_while_disabled() {
         "error should mention the flag being disabled: {stderr}"
     );
     // No worktree should have been created under the repo's default worktree_base.
-    let list = Command::new("git")
+    let list = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["worktree", "list"])
         .current_dir(repo.path())
         .output()
@@ -133,19 +135,19 @@ fn exec_creates_worktree_when_enabled() {
         vec!["config", "user.email", "test@example.com"],
         vec!["config", "user.name", "Test"],
     ] {
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .args(&args)
             .current_dir(repo.path())
             .status()
             .unwrap();
     }
     std::fs::write(repo.path().join("base.txt"), "base\n").unwrap();
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["add", "."])
         .current_dir(repo.path())
         .status()
         .unwrap();
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["commit", "-m", "init"])
         .current_dir(repo.path())
         .status()

@@ -23,7 +23,7 @@ fn run_with_failing_condukt(tag: &str, verb: &str) -> (Option<i32>, String, Stri
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&cwd).unwrap();
     std::fs::create_dir_all(&stubs).unwrap();
-    assert!(Command::new("git")
+    assert!(harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(&cwd)
         .args(["init", "-q"])
         .status()
@@ -37,7 +37,7 @@ fn run_with_failing_condukt(tag: &str, verb: &str) -> (Option<i32>, String, Stri
         stubs.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let out = Command::new(bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(bin()))
         .current_dir(&cwd)
         .env("HOME", &home)
         .env("PATH", path)

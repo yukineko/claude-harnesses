@@ -57,17 +57,18 @@ fn plant_budgetguard(home: &Path, body: &str, mode: u32) {
 /// Run `fugu-router route --report <report>` under `home`. Returns (exit code,
 /// stderr, report JSON).
 fn route(home: &Path, report: &Path) -> (i32, String, serde_json::Value) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_fugu-router"))
-        .args(["route", "--report"])
-        .arg(report)
-        .env("HOME", home)
-        .env("PATH", "/usr/bin:/bin")
-        .current_dir(home)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("fugu-router spawns");
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_fugu-router")))
+            .args(["route", "--report"])
+            .arg(report)
+            .env("HOME", home)
+            .env("PATH", "/usr/bin:/bin")
+            .current_dir(home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("fugu-router spawns");
     child
         .stdin
         .take()

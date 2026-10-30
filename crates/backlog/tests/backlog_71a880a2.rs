@@ -14,7 +14,7 @@ mod common;
 use std::process::{Command, Stdio};
 
 fn help(sub: &str) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .env("PATH", common::path_with_condukt_shim())
         .args([sub, "--help"])
         .stdin(Stdio::null())

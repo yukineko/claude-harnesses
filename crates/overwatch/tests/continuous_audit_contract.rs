@@ -58,7 +58,7 @@ fn sandbox() -> Sandbox {
 impl Sandbox {
     /// Run the real script with the freshly built overwatch binary.
     fn ca(&self, args: &[&str]) -> Output {
-        Command::new("bash")
+        harness_core::git_env::scrub(&mut Command::new("bash"))
             .arg(script())
             .args(args)
             .env("OVERWATCH_BIN", ow_bin())
@@ -68,7 +68,7 @@ impl Sandbox {
             .unwrap()
     }
     fn ow(&self, args: &[&str]) -> Output {
-        Command::new(ow_bin())
+        harness_core::git_env::scrub(&mut Command::new(ow_bin()))
             .args(args)
             .env("HOME", &self.home)
             .current_dir(&self.work)
@@ -265,6 +265,7 @@ fn claim_ca_binary_resolution() {
 
     let run = |ovbin: Option<&Path>| -> String {
         let mut c = Command::new("/bin/bash");
+        harness_core::git_env::scrub(&mut c);
         c.arg(repo.join("scripts/continuous-audit.sh"))
             .arg("--dry-run")
             .env("PATH", format!("{}:/usr/bin:/bin", pathdir.display()))
@@ -544,7 +545,7 @@ fn claim_ca_script_never_writes_refuted() {
             "--unverified-finding",
             "U-1|high|refuted?|g.rs|verdict refuted",
         ]);
-        let o = Command::new("bash")
+        let o = harness_core::git_env::scrub(&mut Command::new("bash"))
             .arg(script())
             .args(&args)
             .env("OVERWATCH_BIN", &fake)
@@ -782,7 +783,7 @@ fn claim_ca_automation_templates_exist() {
     // Run inside a fresh git repo with a gate-crate change after a base commit
     // and no upstream: the hook must still exit 0 (never blocks the push).
     let git = |a: &[&str]| {
-        Command::new("git")
+        harness_core::git_env::scrub(&mut Command::new("git"))
             .args(a)
             .current_dir(tmp.path())
             .env("HOME", tmp.path())
@@ -798,7 +799,7 @@ fn claim_ca_automation_templates_exist() {
     fs::write(tmp.path().join("crates/specguard/x"), "x").unwrap();
     git(&["add", "-A"]);
     git(&["-c", "commit.gpgsign=false", "commit", "-qm", "c"]);
-    let o = Command::new("bash")
+    let o = harness_core::git_env::scrub(&mut Command::new("bash"))
         .arg(&hook)
         .current_dir(tmp.path())
         .output()

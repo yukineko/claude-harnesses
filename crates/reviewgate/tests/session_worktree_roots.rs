@@ -36,7 +36,7 @@ struct Fixture {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let st = Command::new("git")
+    let st = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .args(args)
         .stdout(Stdio::null())
@@ -133,19 +133,20 @@ impl Fixture {
             "stop_hook_active": false,
         })
         .to_string();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_reviewgate"))
-            .arg("review")
-            .current_dir(cwd)
-            .env("HOME", &self.home)
-            .env("CLAUDE_CODE_SESSION_ID", "s-wtroots")
-            .env_remove("REVIEWGATE_DISABLE")
-            .env_remove("HARNESS_TRUST_ALL")
-            .env_remove("HARNESS_WORKTREE_ORIGIN_DIR")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("reviewgate spawns");
+        let mut child =
+            harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_reviewgate")))
+                .arg("review")
+                .current_dir(cwd)
+                .env("HOME", &self.home)
+                .env("CLAUDE_CODE_SESSION_ID", "s-wtroots")
+                .env_remove("REVIEWGATE_DISABLE")
+                .env_remove("HARNESS_TRUST_ALL")
+                .env_remove("HARNESS_WORKTREE_ORIGIN_DIR")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("reviewgate spawns");
         child
             .stdin
             .take()

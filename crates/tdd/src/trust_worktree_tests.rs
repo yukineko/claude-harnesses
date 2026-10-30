@@ -11,7 +11,7 @@ use std::process::Command;
 const PROJECT_TOML: &str = "test_cmd = \"wt-cmd\"\n";
 
 fn git(dir: &Path, args: &[&str]) {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()

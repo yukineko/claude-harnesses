@@ -92,7 +92,7 @@ impl Fixture {
     }
 
     fn condukt_in(&self, cwd: &Path, args: &[&str]) -> Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(args)
             .current_dir(cwd)
             .env("HOME", &self.home)
@@ -107,7 +107,7 @@ impl Fixture {
 }
 
 fn run_git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -272,7 +272,7 @@ fn p4_two_unrelated_repos_still_get_separate_claims_json_files() {
     }
 
     let run = |cwd: &Path, run_id: &str, hk: &str| -> Output {
-        Command::new(bin())
+        harness_core::git_env::scrub(&mut Command::new(bin()))
             .args(["state", "claim-task", "--run", run_id, "--hashkey", hk])
             .current_dir(cwd)
             .env("HOME", &home)
@@ -376,7 +376,7 @@ fn p5_claim_from_main_tree_contends_on_the_same_claims_lock_as_the_linked_worktr
 
     // Holder: claims from the LINKED WORKTREE and parks inside the
     // `__claims__`-locked critical section for longer than RunLock::DEADLINE.
-    let holder = Command::new(bin())
+    let holder = harness_core::git_env::scrub(&mut Command::new(bin()))
         .args([
             "state",
             "claim-task",

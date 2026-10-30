@@ -27,7 +27,7 @@ fn unique(tag: &str) -> PathBuf {
 }
 
 fn run_with_stdin(args: &[&str], cwd: &Path, home: &Path, stdin: &str) -> (i32, String, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)
@@ -69,7 +69,7 @@ fn commit_repro_script(cwd: &Path, home: &Path) {
 }
 
 fn git(args: &[&str], cwd: &Path, home: &Path) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .env("HOME", home)
         .env("GIT_CONFIG_NOSYSTEM", "1")

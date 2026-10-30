@@ -60,7 +60,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 }
 
 fn git_available() -> bool {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("--version")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -116,7 +116,7 @@ fn run_in(args: &[&str], home: &Path, cwd: &Path) -> (i32, String, String) {
 fn run_with_stdin(args: &[&str], payload: &str, home: &Path, cwd: &Path) -> (i32, String, String) {
     use std::io::Write;
     let bin = env!("CARGO_BIN_EXE_backlog");
-    let mut child = Command::new(bin)
+    let mut child = harness_core::git_env::scrub(&mut Command::new(bin))
         .env("PATH", common::path_with_condukt_shim())
         .args(args)
         .env("HOME", home)

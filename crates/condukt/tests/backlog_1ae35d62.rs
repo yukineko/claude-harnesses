@@ -42,7 +42,7 @@ impl Drop for Fx {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let o = Command::new(real_git())
+    let o = harness_core::git_env::scrub(&mut Command::new(real_git()))
         .args(args)
         .current_dir(dir)
         .output()
@@ -124,6 +124,7 @@ impl Fx {
 
     fn merge(&self, hang: bool) -> Output {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_condukt"));
+        harness_core::git_env::scrub(&mut cmd);
         cmd.args(["worktree", "merge", "--branch", "feat"])
             .current_dir(&self.repo)
             .env("HOME", &self.home)

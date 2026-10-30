@@ -30,11 +30,17 @@ fn project(tag: &str, with_change: bool) -> PathBuf {
         vec!["config", "user.email", "t@t"],
         vec!["config", "user.name", "t"],
     ] {
-        let _ = Command::new("git").current_dir(&dir).args(&args).output();
+        let _ = harness_core::git_env::scrub(&mut Command::new("git"))
+            .current_dir(&dir)
+            .args(&args)
+            .output();
     }
     std::fs::write(dir.join("seed.rs"), "fn a() {}\n").unwrap();
     for args in [vec!["add", "-A"], vec!["commit", "-qm", "seed"]] {
-        let _ = Command::new("git").current_dir(&dir).args(&args).output();
+        let _ = harness_core::git_env::scrub(&mut Command::new("git"))
+            .current_dir(&dir)
+            .args(&args)
+            .output();
     }
     if with_change {
         std::fs::write(
@@ -57,18 +63,19 @@ fn stop(dir: &Path) -> (i32, String, String) {
         "hook_event_name": "Stop",
     })
     .to_string();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_reviewgate"))
-        .arg("review")
-        .current_dir(dir)
-        .env("HOME", dir)
-        .env("CLAUDE_CODE_SESSION_ID", SESSION)
-        .env_remove("REVIEWGATE_DISABLE")
-        .env_remove("HARNESS_TRUST_ALL")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_reviewgate")))
+            .arg("review")
+            .current_dir(dir)
+            .env("HOME", dir)
+            .env("CLAUDE_CODE_SESSION_ID", SESSION)
+            .env_remove("REVIEWGATE_DISABLE")
+            .env_remove("HARNESS_TRUST_ALL")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
     child
         .stdin
         .take()

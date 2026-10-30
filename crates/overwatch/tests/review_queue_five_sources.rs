@@ -16,7 +16,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn ow(home: &Path, work: &Path, args: &[&str]) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_overwatch"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_overwatch")))
         .args(args)
         .env("HOME", home)
         .env_remove("CLAUDE_CODE_SESSION_ID")
@@ -38,7 +38,7 @@ fn review_queue_merges_exactly_five_sources() {
     let work = base.join("work");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(work.join(".backlog")).unwrap();
-    let st = Command::new("git")
+    let st = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["init", "-q"])
         .current_dir(&work)
         .status()

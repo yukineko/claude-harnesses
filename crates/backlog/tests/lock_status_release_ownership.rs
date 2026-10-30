@@ -23,6 +23,7 @@ fn temp_home(tag: &str) -> PathBuf {
 
 fn run(args: &[&str], home: &Path, session: Option<&str>) -> (i32, String, String) {
     let mut c = Command::new(env!("CARGO_BIN_EXE_backlog"));
+    harness_core::git_env::scrub(&mut c);
     c.args(args)
         .env("HOME", home)
         .env_remove("CLAUDE_CODE_SESSION_ID")

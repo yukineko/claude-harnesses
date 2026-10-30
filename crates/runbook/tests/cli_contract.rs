@@ -68,6 +68,7 @@ impl Env {
 
     fn run(&self, args: &[&str], stdin: &str, env: &[(&str, &str)]) -> Out {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_runbook"));
+        harness_core::git_env::scrub(&mut cmd);
         cmd.args(args)
             .current_dir(&self.repo)
             .env("HOME", &self.home)
@@ -563,7 +564,7 @@ fn repo_root() -> PathBuf {
 #[test]
 fn claim_platform_bins_not_committed() {
     let root = repo_root();
-    let ls = Command::new("git")
+    let ls = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["-C"])
         .arg(&root)
         .args(["ls-files", "crates/runbook/bin"])
@@ -580,7 +581,7 @@ fn claim_platform_bins_not_committed() {
         "runbook-linux-arm64",
         "runbook-linux-x86_64",
     ] {
-        let st = Command::new("git")
+        let st = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["-C"])
             .arg(&root)
             .args(["check-ignore", "-q"])

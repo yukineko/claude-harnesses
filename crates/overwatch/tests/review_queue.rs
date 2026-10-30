@@ -40,7 +40,7 @@ fn overwatch_bin() -> &'static str {
 
 /// Run the overwatch binary with a sandboxed HOME + cwd, returning stdout.
 fn run_ow(home: &Path, work: &Path, args: &[&str]) -> String {
-    let out = Command::new(overwatch_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
         .args(args)
         .env("HOME", home)
         // Ensure session id is deterministic-ish / not read from the ambient env.
@@ -330,7 +330,7 @@ fn review_queue_degrades_gracefully_when_a_source_is_empty() {
 /// Run the binary in a sandbox and return the whole `Output` (status included),
 /// unlike [`run_ow`] which asserts success and returns stdout only.
 fn run_ow_raw(home: &Path, work: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(overwatch_bin())
+    harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
         .args(args)
         .env("HOME", home)
         .env_remove("CLAUDE_CODE_SESSION_ID")
@@ -715,7 +715,7 @@ fn review_queue_review_findings_unreadable_surfaces_warning_not_empty() {
     std::fs::create_dir(&findings_path)
         .expect("replace it with a directory (present, unreadable-as-file)");
 
-    let out = Command::new(overwatch_bin())
+    let out = harness_core::git_env::scrub(&mut Command::new(overwatch_bin()))
         .args(["review-queue"])
         .env("HOME", &home)
         .env("CLAUDE_CODE_SESSION_ID", "")

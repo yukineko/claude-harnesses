@@ -28,15 +28,16 @@ struct Out {
 }
 
 fn run_in(home: &Path, args: &[&str], payload: &str) -> Out {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_schemaguard"))
-        .args(args)
-        .current_dir(home)
-        .env("HOME", home)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_schemaguard")))
+            .args(args)
+            .current_dir(home)
+            .env("HOME", home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("binary spawns");
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(payload.as_bytes());
     }
@@ -50,15 +51,16 @@ fn run_in(home: &Path, args: &[&str], payload: &str) -> Out {
 
 fn run_bytes(args: &[&str], payload: &[u8]) -> Out {
     let home = temp_dir();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_schemaguard"))
-        .args(args)
-        .current_dir(&home)
-        .env("HOME", &home)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_schemaguard")))
+            .args(args)
+            .current_dir(&home)
+            .env("HOME", &home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("binary spawns");
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(payload);
     }
@@ -463,7 +465,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn git(args: &[&str]) -> Out {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(repo_root())
         .output()

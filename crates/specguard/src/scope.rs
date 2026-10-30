@@ -902,14 +902,16 @@ mod tests {
                 "x",
             ],
         ] {
-            assert!(std::process::Command::new("git")
-                .arg("-C")
-                .arg(tmp.path())
-                .args(&args)
-                .output()
-                .unwrap()
-                .status
-                .success());
+            assert!(
+                harness_core::git_env::scrub(&mut std::process::Command::new("git"))
+                    .arg("-C")
+                    .arg(tmp.path())
+                    .args(&args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
         }
         tmp
     }
@@ -1114,7 +1116,7 @@ mod tests {
     // -- whole-tree fallback budget guard -----------------------------------
 
     fn test_git(repo: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        let status = harness_core::git_env::scrub(&mut Command::new("git"))
             .arg("-C")
             .arg(repo)
             .args(args)

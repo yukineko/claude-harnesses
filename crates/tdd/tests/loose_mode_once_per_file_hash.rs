@@ -17,7 +17,7 @@ struct Fx {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let s = Command::new("git")
+    let s = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .stdout(Stdio::null())
@@ -77,7 +77,7 @@ impl Fx {
             "stop_hook_active": false,
         })
         .to_string();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_tdd"))
+        let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_tdd")))
             .arg("gate")
             .current_dir(&self.repo)
             .env("HOME", &self.home)

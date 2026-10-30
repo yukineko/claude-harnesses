@@ -12,6 +12,8 @@ use std::process::{Command, Output, Stdio};
 
 use benchkit::{dashboard, loader, scorer};
 
+mod support;
+
 const BIN: &str = env!("CARGO_BIN_EXE_benchkit");
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 const ASTROPY: &str = "astropy__astropy-12907";
@@ -443,7 +445,7 @@ fn dataset_violations(tracked: &[String], fixture_text: &str) -> Vec<String> {
 
 #[test]
 fn claim_no_redistribution() {
-    let out = Command::new("git")
+    let out = support::git_env::scrub(&mut Command::new("git"))
         .args(["ls-files", "--", "."])
         .current_dir(ROOT)
         .output()

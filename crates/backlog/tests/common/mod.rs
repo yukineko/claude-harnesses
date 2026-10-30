@@ -166,6 +166,7 @@ impl Fixture {
 
     fn git_cmd(&self) -> Command {
         let mut c = Command::new("git");
+        harness_core::git_env::scrub(&mut c);
         c.current_dir(&self.repo)
             .env("HOME", &self.home)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -257,6 +258,7 @@ impl Fixture {
             std::env::var("PATH").unwrap_or_default()
         );
         let mut cmd = Command::new(bin);
+        harness_core::git_env::scrub(&mut cmd);
         cmd.args(args)
             .env("HOME", &self.home)
             .env("PATH", path)
@@ -462,7 +464,7 @@ pub fn linked_checkout(dir: &Path) -> PathBuf {
     let main = dir.with_file_name(name);
     std::fs::create_dir_all(&main).expect("mkdir main");
     let git = |cwd: &Path, args: &[&str]| {
-        let out = Command::new("git")
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
             .args(args)
             .current_dir(cwd)
@@ -507,7 +509,7 @@ pub fn linked_checkout_of_bare(dir: &Path) -> PathBuf {
         dir.file_name().unwrap().to_string_lossy()
     ));
     let run = |cwd: &Path, args: &[&str]| {
-        let out = Command::new("git")
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
             .args(args)
             .current_dir(cwd)
@@ -547,7 +549,7 @@ pub fn seed_worktree(primary: &Path) -> PathBuf {
         "{}.seed",
         primary.file_name().unwrap().to_string_lossy()
     ));
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["worktree", "add", "-q", "--detach", seed.to_str().unwrap()])
         .current_dir(primary)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -572,7 +574,7 @@ pub fn adopt_store(seed: &Path, primary: &Path) {
             std::fs::copy(e.path(), dst.join(e.file_name())).expect("copy");
         }
     }
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["worktree", "remove", "--force", seed.to_str().unwrap()])
         .current_dir(primary)
         .output()
@@ -645,7 +647,7 @@ pub fn commit_repro(dir: &Path) -> &'static str {
     .expect("write repro");
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod repro");
     let git = |args: &[&str]| {
-        let out = Command::new("git")
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
             .args(args)
             .current_dir(dir)

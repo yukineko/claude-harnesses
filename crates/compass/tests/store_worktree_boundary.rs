@@ -25,7 +25,7 @@ struct Fixture {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .current_dir(cwd)
@@ -121,7 +121,7 @@ fn run_raw(home: &Path, shim: &Path, cwd: &Path, args: &[&str]) -> (i32, String,
         shim.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    let out = Command::new(env!("CARGO_BIN_EXE_compass"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_compass")))
         .args(args)
         .env("HOME", home)
         .env("PATH", path)

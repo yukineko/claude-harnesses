@@ -123,7 +123,6 @@ const PLAIN_BODY: &str = "//! Presence ledger.\n\
 pub fn read() {}";
 
 #[test]
-#[ignore = "RED repro: blastguard reads backtick prose inside a quoted heredoc body as a redirect target (run with -- --ignored)"]
 fn quoted_heredoc_body_doc_comment_backtick_is_not_a_redirect_target() {
     let proj = fresh_project("prose");
     let (base_d, base_r) = verdict(&proj, &heredoc_write(PLAIN_BODY));

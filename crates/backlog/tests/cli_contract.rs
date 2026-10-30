@@ -726,6 +726,7 @@ fn claim_r_limit() {
 
 fn lock_cmd(home: &Path, args: &[&str], envs: &[(&str, &str)]) -> Out {
     let mut c = Command::new(env!("CARGO_BIN_EXE_backlog"));
+    harness_core::git_env::scrub(&mut c);
     c.args(args)
         .env("HOME", home)
         .env("PATH", common::path_with_condukt_shim())
@@ -744,7 +745,7 @@ fn lock_cmd(home: &Path, args: &[&str], envs: &[(&str, &str)]) -> Out {
 }
 
 fn plain_git(repo: &Path, args: &[&str]) {
-    let ok = Command::new("git")
+    let ok = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -960,6 +961,7 @@ fn pending_block_with_repro(id: &str, title: &str, project: &str) -> String {
 
 fn run_in(home: &Path, cwd: &Path, args: &[&str]) -> Out {
     let mut c = Command::new(env!("CARGO_BIN_EXE_backlog"));
+    harness_core::git_env::scrub(&mut c);
     c.args(args)
         .env("HOME", home)
         .env("PATH", common::path_with_condukt_shim())
@@ -1310,7 +1312,7 @@ fn md_files(dir: &Path, base: &str, ours: &str, theirs: &str) -> [PathBuf; 3] {
 }
 
 fn md_exec(dir: &Path, files: &[PathBuf; 3]) -> Out {
-    let out = Command::new(env!("CARGO_BIN_EXE_backlog"))
+    let out = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .args(["merge-driver"])
         .args(files)
         .env("HOME", dir)
@@ -1391,7 +1393,7 @@ fn claim_r_the_same_holds_for_edit_delete() {
 }
 
 fn gitc(repo: &Path, args: &[&str]) -> Out {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(repo)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -1658,7 +1660,7 @@ fn spawn_claim(f: &Fixture) -> std::process::Child {
         f.shim.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    Command::new(env!("CARGO_BIN_EXE_backlog"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_backlog")))
         .args(["next", "--claim"])
         .env("HOME", &f.home)
         .env("PATH", path)
@@ -2291,7 +2293,7 @@ fn claim_s_kind_undetermined_backlog_regi() {
 /// README.md:269 -- only the `bin/backlog` launcher is tracked in git.
 #[test]
 fn claim_r_only_the_bin_backlog_launcher_is_tracked() {
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["ls-files", "--", "bin"])
         .current_dir(manifest_dir())
         .output()

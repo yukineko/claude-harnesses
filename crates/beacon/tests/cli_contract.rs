@@ -111,6 +111,7 @@ impl Env {
         envs: &[(&str, &str)],
     ) -> Out {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_beacon"));
+        harness_core::git_env::scrub(&mut cmd);
         cmd.args(args)
             .current_dir(cwd)
             .env("HOME", self.home.path())
@@ -1038,7 +1039,7 @@ fn claim_make_targets() {
 #[test]
 fn claim_platform_bins_untracked() {
     let dir = manifest();
-    let tracked = Command::new("git")
+    let tracked = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["ls-files", "--", "bin"])
         .current_dir(&dir)
         .output()
@@ -1051,7 +1052,7 @@ fn claim_platform_bins_untracked() {
     assert_eq!(tracked, vec!["bin/beacon".to_string()]);
 
     for f in ["bin/beacon-darwin-arm64", "bin/beacon-linux-x86_64"] {
-        let o = Command::new("git")
+        let o = harness_core::git_env::scrub(&mut Command::new("git"))
             .args(["check-ignore", "-q", "--no-index", f])
             .current_dir(&dir)
             .status()
@@ -1059,7 +1060,7 @@ fn claim_platform_bins_untracked() {
         assert_eq!(o.code(), Some(0), "{f} must be git-ignored");
     }
     // negative control: a tracked file is not ignored
-    let o = Command::new("git")
+    let o = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["check-ignore", "-q", "--no-index", "bin/beacon"])
         .current_dir(&dir)
         .status()

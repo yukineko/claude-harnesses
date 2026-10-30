@@ -50,7 +50,7 @@ fn bin() -> &'static str {
 }
 
 fn run_git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -65,7 +65,7 @@ fn run_git(dir: &Path, args: &[&str]) -> String {
 }
 
 fn git_output(dir: &Path, args: &[&str]) -> Output {
-    Command::new("git")
+    harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(dir)
         .output()
@@ -155,6 +155,7 @@ impl Fixture {
 
     fn condukt_env_in(&self, dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
         let mut cmd = Command::new(bin());
+        harness_core::git_env::scrub(&mut cmd);
         cmd.args(args)
             .current_dir(dir)
             .env("HOME", &self.home)

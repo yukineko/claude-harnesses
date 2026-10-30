@@ -33,7 +33,7 @@ fn project(name: &str) -> PathBuf {
 
 /// Runs exactly as the hook does: `specguard pending`, default `--config`.
 fn pending(dir: &PathBuf) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_specguard"))
+    harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_specguard")))
         .current_dir(dir)
         .arg("pending")
         .output()

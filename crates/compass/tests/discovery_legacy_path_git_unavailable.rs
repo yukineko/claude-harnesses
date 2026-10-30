@@ -40,7 +40,7 @@ struct Fixture {
 }
 
 fn git(cwd: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .current_dir(cwd)
@@ -67,6 +67,7 @@ struct Out {
 /// so no `git` can be spawned; the binary itself is exec'd by absolute path.
 fn run(home: &Path, cwd: &Path, session: &str, args: &[&str], git_on_path: bool) -> Out {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_compass"));
+    harness_core::git_env::scrub(&mut cmd);
     cmd.args(args)
         .env("HOME", home)
         .env("CLAUDE_CODE_SESSION_ID", session)

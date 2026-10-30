@@ -30,7 +30,7 @@ struct Sandbox {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .current_dir(dir)
         .env("HOME", dir)
         .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -102,7 +102,7 @@ fn has_subcommand(cmds: &[String], sub: &str) -> bool {
 }
 
 fn run_shell(sb: &Sandbox, cmd: &str, payload: &Value) -> (Option<i32>, String, String) {
-    let mut child = Command::new("sh")
+    let mut child = harness_core::git_env::scrub(&mut Command::new("sh"))
         .current_dir(&sb.repo)
         .env("HOME", &sb.home)
         .env("PATH", "/usr/bin:/bin")

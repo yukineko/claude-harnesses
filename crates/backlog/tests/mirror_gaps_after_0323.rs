@@ -146,7 +146,7 @@ fn setup(tag: &str) -> Env {
     install_stub(&e, true);
 
     let g = |a: &[&str]| {
-        assert!(Command::new("git")
+        assert!(harness_core::git_env::scrub(&mut Command::new("git"))
             .args(a)
             .current_dir(&e.repo)
             .env("PATH", std::env::var("PATH").unwrap())
@@ -432,7 +432,7 @@ fn add_pending(e: &Env, title: &str, notes: &str) -> String {
                 "repro",
             ][..],
         ] {
-            assert!(Command::new("git")
+            assert!(harness_core::git_env::scrub(&mut Command::new("git"))
                 .args(a)
                 .current_dir(&e.repo)
                 .env("PATH", std::env::var("PATH").unwrap())

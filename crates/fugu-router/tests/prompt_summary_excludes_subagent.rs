@@ -37,16 +37,17 @@ fn prompt_summary_counts_only_condukt_episodes() {
     s.push('\n');
     std::fs::write(home.join(".fugu-router").join("episodes.jsonl"), s).unwrap();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_fugu-router"))
-        .arg("prompt")
-        .env("HOME", &home)
-        .env_remove("FUGU_ROUTER_DISABLED")
-        .current_dir(&home)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child =
+        harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_fugu-router")))
+            .arg("prompt")
+            .env("HOME", &home)
+            .env_remove("FUGU_ROUTER_DISABLED")
+            .current_dir(&home)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
     child
         .stdin
         .take()

@@ -5,10 +5,16 @@
 use std::path::Path;
 use std::process::Command;
 
+mod support;
+use support::git_env::scrub;
+
 /// Run `deepwiki <args...>`. Returns (exit_code, stdout).
 fn run(args: &[&str]) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_deepwiki");
-    let out = Command::new(bin).args(args).output().expect("binary runs");
+    let out = scrub(&mut Command::new(bin))
+        .args(args)
+        .output()
+        .expect("binary runs");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),

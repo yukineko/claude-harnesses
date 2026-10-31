@@ -917,3 +917,117 @@ fn r_cd_roundtrip_protected_symlink_dir_asks() {
     );
     assert_protected_ask(&out, "`cd sub && cd .. && echo x > cl/settings.json`");
 }
+
+// Mutant (c) guard: `file_tool_system_block` must run BEFORE the
+// `is_config_file` allowlist in `detect_write`. `/etc/<x>.toml` is a config
+// file by name and a system-directory drop-in by location. Each case has its
+// own fixture (fresh HOME), so a repeated deny cannot downgrade to Ask.
+const ORDER_ETC: &str = "/etc/blastguard-sysdir-order-c5b9c02b";
+
+fn order_case(name: &str, tool: &str, links: &[(&str, &str)], path: &str) {
+    assert!(std::fs::symlink_metadata(ORDER_ETC).is_err());
+    assert!(std::fs::symlink_metadata(format!("{ORDER_ETC}.toml")).is_err());
+    tool_sys_case(name, tool, links, path);
+}
+
+#[test]
+fn o_write_etc_toml_denies() {
+    order_case(
+        "o01",
+        "Write",
+        &[],
+        "/etc/blastguard-sysdir-order-c5b9c02b.toml",
+    );
+}
+#[test]
+fn o_write_etc_json_denies() {
+    order_case(
+        "o02",
+        "Write",
+        &[],
+        "/etc/blastguard-sysdir-order-c5b9c02b.json",
+    );
+}
+#[test]
+fn o_write_etc_yaml_denies() {
+    order_case(
+        "o03",
+        "Write",
+        &[],
+        "/etc/blastguard-sysdir-order-c5b9c02b.yaml",
+    );
+}
+#[test]
+fn o_write_etc_yml_denies() {
+    order_case(
+        "o04",
+        "Write",
+        &[],
+        "/etc/blastguard-sysdir-order-c5b9c02b.yml",
+    );
+}
+#[test]
+fn o_write_etc_lock_denies() {
+    order_case(
+        "o05",
+        "Write",
+        &[],
+        "/etc/blastguard-sysdir-order-c5b9c02b.lock",
+    );
+}
+#[test]
+fn o_write_etc_package_json_denies() {
+    order_case(
+        "o06",
+        "Write",
+        &[],
+        "/etc/blastguard-sysdir-order-c5b9c02b/package.json",
+    );
+}
+#[test]
+fn o_write_etc_dot_config_tree_denies() {
+    order_case(
+        "o08",
+        "Write",
+        &[],
+        "/etc/.config/blastguard-sysdir-order-c5b9c02b",
+    );
+}
+#[test]
+fn o_write_usr_toml_denies() {
+    order_case(
+        "o09",
+        "Write",
+        &[],
+        "/usr/blastguard-sysdir-order-c5b9c02b.toml",
+    );
+}
+#[test]
+fn o_write_via_dangling_toml_symlink_denies() {
+    order_case(
+        "o10",
+        "Write",
+        &[("/etc/blastguard-sysdir-order-c5b9c02b.toml", "cfg.toml")],
+        "cfg.toml",
+    );
+}
+#[test]
+fn o_write_via_dangling_yaml_symlink_denies() {
+    order_case(
+        "o11",
+        "Write",
+        &[("/etc/blastguard-sysdir-order-c5b9c02b.yaml", "cfg.yaml")],
+        "cfg.yaml",
+    );
+}
+// Edit has no config-file allowlist (detect_edit goes straight to the
+// system-directory axis), so this pins the Edit side of the same names.
+#[test]
+fn o_edit_etc_toml_denies() {
+    order_case(
+        "o12",
+        "Edit",
+        &[],
+        "/etc/blastguard-sysdir-order-c5b9c02b.toml",
+    );
+}

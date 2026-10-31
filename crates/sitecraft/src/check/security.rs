@@ -70,41 +70,91 @@ fn walk(
     skip: &dyn Fn(&Path, &str) -> bool,
     out: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
-    let mut visited = std::collections::HashSet::new();
-    walk_inner(dir, skip, out, &mut visited)
+    let mut stack = Vec::new();
+    walk_inner(dir, skip, out, &mut stack)
 }
 
+/// `stack` holds the canonical paths of the directories currently being
+/// walked (the ancestors of `dir`, inclusive). A link back to one of them is
+/// a loop whose contents are already being scanned; any other directory
+/// (including an alias of a sibling) is walked, so every path under which a
+/// file is reachable is reported. Callers dedupe by canonical file path
+/// AFTER their own path filter.
 fn walk_inner(
     dir: &Path,
     skip: &dyn Fn(&Path, &str) -> bool,
     out: &mut Vec<PathBuf>,
-    visited: &mut std::collections::HashSet<PathBuf>,
+    stack: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
-    let canon = std::fs::canonicalize(dir)
-        .map_err(|e| format!("cannot resolve directory {}: {e}", dir.display()))?;
-    if !visited.insert(canon) {
-        return Ok(()); // already scanned via another path (symlink loop / alias)
+    let canon = std::fs::canonicalize(dir).map_err(|e| {
+        format!(
+            "cannot resolve directory {}: {e}; fix permissions or remove the broken link",
+            dir.display()
+        )
+    })?;
+    if stack.contains(&canon) {
+        return Ok(()); // symlink loop: already being scanned via the ancestor
     }
-    let rd = std::fs::read_dir(dir)
-        .map_err(|e| format!("cannot read directory {}: {e}", dir.display()))?;
+    stack.push(canon);
+    let rd = std::fs::read_dir(dir).map_err(|e| {
+        format!(
+            "cannot read directory {}: {e}; fix permissions",
+            dir.display()
+        )
+    })?;
     for ent in rd {
-        let ent = ent.map_err(|e| format!("cannot list {}: {e}", dir.display()))?;
+        let ent =
+            ent.map_err(|e| format!("cannot list {}: {e}; fix permissions", dir.display()))?;
         let path = ent.path();
-        // Follows symlinks for files; a dangling link is an error, not a skip.
-        let meta =
-            std::fs::metadata(&path).map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
+        // Follows symlinks; a dangling link is an error, not a skip.
+        let meta = match std::fs::metadata(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                // Hint only; both arms are errors (Undetermined) either way.
+                let link_hint = matches!(
+                    std::fs::symlink_metadata(&path),
+                    Ok(m) if m.file_type().is_symlink()
+                );
+                return Err(if link_hint {
+                    format!(
+                        "dangling or unreadable symlink {}: {e}; remove the link or fix its target",
+                        path.display()
+                    )
+                } else {
+                    format!("cannot stat {}: {e}; fix permissions", path.display())
+                });
+            }
+        };
         if meta.is_dir() {
-            // Directory links are followed; `visited` (canonical paths) stops loops.
             let name = ent.file_name().to_string_lossy().into_owned();
             if skip(&path, &name) {
                 continue;
             }
-            walk_inner(&path, skip, out, visited)?;
+            walk_inner(&path, skip, out, stack)?;
         } else if meta.is_file() {
             out.push(path);
         }
     }
+    stack.pop();
     Ok(())
+}
+
+/// Keep the first path per canonical file (aliases reach the same file).
+fn dedup_canonical(files: Vec<PathBuf>) -> Result<Vec<PathBuf>, String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for f in files {
+        let c = std::fs::canonicalize(&f).map_err(|e| {
+            format!(
+                "cannot resolve {}: {e}; fix permissions or remove the broken link",
+                f.display()
+            )
+        })?;
+        if seen.insert(c) {
+            out.push(f);
+        }
+    }
+    Ok(out)
 }
 
 fn read_lossy(path: &Path) -> Result<String, String> {
@@ -184,8 +234,11 @@ fn scan_secrets(config: &Config, root: &Path) -> Verdict {
         ));
     }
     let mut files = Vec::new();
-    if let Err(e) = walk(&build, &|_, _| false, &mut files) {
-        return Verdict::undetermined(format!("sitecraft check security: {e}; fix permissions"));
+    if let Err(e) = walk(&build, &|_, _| false, &mut files).and_then(|()| {
+        files = dedup_canonical(std::mem::take(&mut files))?;
+        Ok(())
+    }) {
+        return Verdict::undetermined(format!("sitecraft check security: {e}"));
     }
     if files.is_empty() {
         return Verdict::undetermined(format!(
@@ -194,6 +247,10 @@ fn scan_secrets(config: &Config, root: &Path) -> Verdict {
         ));
     }
     files.sort();
+    let env_values = match env_candidates(root) {
+        Ok(v) => v,
+        Err(e) => return Verdict::undetermined(format!("sitecraft check security: {e}")),
+    };
     let mut findings = Vec::new();
     for f in &files {
         let text = match read_lossy(f) {
@@ -204,6 +261,16 @@ fn scan_secrets(config: &Config, root: &Path) -> Verdict {
                 ))
             }
         };
+        for (env_file, key, value) in &env_values {
+            if let Some(off) = text.find(value.as_str()) {
+                findings.push(Reason::new(format!(
+                    "{}:{}: the value of {key} from {env_file} appears in build output ({} chars, redacted); keep it server-side, remove it from client code, rotate it, and rebuild",
+                    rel(root, f),
+                    line_of(&text, off),
+                    value.chars().count()
+                )));
+            }
+        }
         for p in pats {
             for m in p.re.find_iter(&text) {
                 let shown = if p.label_only {
@@ -223,6 +290,68 @@ fn scan_secrets(config: &Config, root: &Path) -> Verdict {
     Verdict::from_findings(findings)
 }
 
+const ENV_FILES: [&str; 3] = [".env", ".env.local", ".env.production"];
+
+/// `(file, key, value)` for every `.env*` value that is a leak candidate:
+/// at least 8 chars, not boolean, not numeric. A present-but-unreadable file
+/// is an error (its values were never compared).
+fn env_candidates(root: &Path) -> Result<Vec<(String, String, String)>, String> {
+    let mut out = Vec::new();
+    for name in ENV_FILES {
+        let path = root.join(name);
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::symlink_metadata(&path) {
+                    Err(e2) if e2.kind() == std::io::ErrorKind::NotFound => continue,
+                    _ => {
+                        return Err(format!(
+                            "{} is a dangling symlink; remove the link or fix its target",
+                            path.display()
+                        ))
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(format!(
+                    "cannot read {}: {e}; fix its permissions (its values were not compared with the build output)",
+                    path.display()
+                ))
+            }
+        };
+        for line in String::from_utf8_lossy(&bytes).lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let line = line.strip_prefix("export ").unwrap_or(line);
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            let mut v = value.trim();
+            for q in ['"', '\''] {
+                if v.len() >= 2 && v.starts_with(q) && v.ends_with(q) {
+                    v = &v[1..v.len() - 1];
+                    break;
+                }
+            }
+            if v.chars().count() < 8 || is_trivial_env_value(v) {
+                continue;
+            }
+            out.push((name.to_string(), key.trim().to_string(), v.to_string()));
+        }
+    }
+    Ok(out)
+}
+
+fn is_trivial_env_value(v: &str) -> bool {
+    let l = v.to_ascii_lowercase();
+    matches!(l.as_str(), "true" | "false" | "yes" | "no" | "on" | "off")
+        || l.parse::<f64>().is_ok()
+        || l.chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
+}
+
 // ---------------------------------------------------------------------------
 // dangerous sinks
 // ---------------------------------------------------------------------------
@@ -230,6 +359,9 @@ fn scan_secrets(config: &Config, root: &Path) -> Verdict {
 struct Sinks {
     inner_html: Regex,
     constant: Regex,
+    obj_html: Regex,
+    adjacent: Regex,
+    doc_write: Regex,
     others: Vec<(&'static str, Regex)>,
 }
 
@@ -239,8 +371,13 @@ fn sinks() -> Result<&'static Sinks, String> {
         let mk =
             |p: &str| Regex::new(p).map_err(|e| format!("internal sink pattern {p} invalid: {e}"));
         Ok(Sinks {
-            inner_html: mk(r#"\binnerHTML(?:['"]\s*\])?\s*(\+=|\|\|=|&&=|\?\?=|=+)\s*(.*)"#)?,
-            constant: mk(r#"^(?:"[^"\\]*"|'[^'\\]*'|`[^`$\\]*`)\s*;?\s*$"#)?,
+            inner_html: mk(
+                r#"\b((?:inner|outer)HTML)(?:['"`]\s*\])?\s*(\+=|\|\|=|&&=|\?\?=|=+)\s*(.*)"#,
+            )?,
+            constant: mk(r#"^(?:"[^"\\]*"|'[^'\\]*'|`[^`$\\]*`)[\s;,)}]*$"#)?,
+            obj_html: mk(r#"\b((?:inner|outer)HTML)\s*:\s*(.*)"#)?,
+            adjacent: mk(r#"\binsertAdjacentHTML\s*\(\s*[^,()]*,\s*(.*)"#)?,
+            doc_write: mk(r#"\bdocument\s*\.\s*write(?:ln)?\s*\(\s*(.*)"#)?,
             others: vec![
                 (
                     "dangerouslySetInnerHTML",
@@ -281,7 +418,7 @@ fn scan_sinks(config: &Config, root: &Path) -> Verdict {
     };
     let mut all = Vec::new();
     if let Err(e) = walk(root, &skip, &mut all) {
-        return Verdict::undetermined(format!("sitecraft check security: {e}; fix permissions"));
+        return Verdict::undetermined(format!("sitecraft check security: {e}"));
     }
     let mut sources: Vec<PathBuf> = all
         .into_iter()
@@ -300,6 +437,10 @@ fn scan_sinks(config: &Config, root: &Path) -> Verdict {
         ));
     }
     sources.sort();
+    let sources = match dedup_canonical(sources) {
+        Ok(v) => v,
+        Err(e) => return Verdict::undetermined(format!("sitecraft check security: {e}")),
+    };
     let mut findings = Vec::new();
     for f in &sources {
         let text = match read_lossy(f) {
@@ -313,16 +454,43 @@ fn scan_sinks(config: &Config, root: &Path) -> Verdict {
         for (i, line) in text.lines().enumerate() {
             let n = i + 1;
             for c in sk.inner_html.captures_iter(line) {
-                let op = c.get(1).map_or("", |m| m.as_str());
+                let prop = c.get(1).map_or("", |m| m.as_str());
+                let op = c.get(2).map_or("", |m| m.as_str());
                 if op == "==" || op == "===" {
                     continue; // comparison, not assignment
                 }
-                let rhs = c.get(2).map_or("", |m| m.as_str()).trim();
+                let rhs = c.get(3).map_or("", |m| m.as_str()).trim();
                 if !sk.constant.is_match(rhs) {
                     findings.push(Reason::new(format!(
-                        "{}:{n}: innerHTML assigned a non-constant value; use textContent, or sanitize with a vetted sanitizer (e.g. DOMPurify) before assignment",
+                        "{}:{n}: {prop} assigned a non-constant value; use textContent, or sanitize with a vetted sanitizer (e.g. DOMPurify) before assignment",
                         rel(root, f)
                     )));
+                }
+            }
+            if line.contains("Object.assign") {
+                for c in sk.obj_html.captures_iter(line) {
+                    let prop = c.get(1).map_or("", |m| m.as_str());
+                    let rhs = c.get(2).map_or("", |m| m.as_str()).trim();
+                    if !sk.constant.is_match(rhs) {
+                        findings.push(Reason::new(format!(
+                            "{}:{n}: Object.assign sets {prop} to a non-constant value; use textContent, or sanitize with a vetted sanitizer (e.g. DOMPurify)",
+                            rel(root, f)
+                        )));
+                    }
+                }
+            }
+            for (label, re) in [
+                ("insertAdjacentHTML", &sk.adjacent),
+                ("document.write", &sk.doc_write),
+            ] {
+                for c in re.captures_iter(line) {
+                    let arg = c.get(1).map_or("", |m| m.as_str()).trim();
+                    if !sk.constant.is_match(arg) {
+                        findings.push(Reason::new(format!(
+                            "{}:{n}: {label} called with a non-constant argument; use textContent / DOM construction, or sanitize with a vetted sanitizer (e.g. DOMPurify)",
+                            rel(root, f)
+                        )));
+                    }
                 }
             }
             for (label, re) in &sk.others {
@@ -352,17 +520,35 @@ fn audit_undet(why: impl std::fmt::Display) -> Verdict {
 /// grandchild still holding stdout means the output is not known complete.
 const PIPE_GRACE: Duration = Duration::from_secs(2);
 
-/// Kill npm and everything in its process group (it is spawned as a group
-/// leader), then reap npm.
-fn kill_group(child: &mut std::process::Child) {
+/// True once the child has exited but is NOT yet reaped (`WNOWAIT`), so its
+/// pid/pgid cannot be recycled while we still signal the group.
+fn exited_unreaped(pid: u32) -> Result<bool, String> {
+    // SAFETY: waitid(2) with a zeroed siginfo_t we own; WNOWAIT leaves the
+    // child waitable, WNOHANG makes it non-blocking.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let r = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if r != 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(info.si_signo != 0)
+}
+
+/// SIGKILL npm's process group. Call only while the leader is unreaped (or
+/// still running) so the group id cannot belong to anyone else.
+fn kill_group(child: &std::process::Child) {
     if let Ok(pid) = i32::try_from(child.id()) {
-        // SAFETY: plain kill(2) on the process group we created; no memory is touched.
+        // SAFETY: plain kill(2) on the process group we created.
         unsafe {
             libc::kill(-pid, libc::SIGKILL);
         }
     }
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 fn audit(root: &Path) -> Verdict {
@@ -382,7 +568,8 @@ fn audit(root: &Path) -> Verdict {
         Err(e) => return audit_undet(format!("cannot run {}: {e}", npm.to_string_lossy())),
     };
     let Some(mut stdout) = child.stdout.take() else {
-        kill_group(&mut child);
+        kill_group(&child);
+        let _ = child.wait();
         return audit_undet("no stdout pipe");
     };
     let (tx, rx) = std::sync::mpsc::channel();
@@ -393,25 +580,31 @@ fn audit(root: &Path) -> Verdict {
         let _ = tx.send(r);
     });
     let start = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break s,
-            Ok(None) => {
+    loop {
+        match exited_unreaped(child.id()) {
+            Ok(true) => break,
+            Ok(false) => {
                 if start.elapsed() > AUDIT_TIMEOUT {
-                    kill_group(&mut child);
+                    kill_group(&child);
+                    let _ = child.wait();
                     return audit_undet(format!("timed out after {}s", AUDIT_TIMEOUT.as_secs()));
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(e) => {
-                kill_group(&mut child);
+                kill_group(&child);
+                let _ = child.wait();
                 return audit_undet(format!("cannot wait for npm: {e}"));
             }
         }
-    };
+    }
     let received = rx.recv_timeout(PIPE_GRACE);
-    // Whatever is left in npm's group is no longer needed.
-    kill_group(&mut child);
+    // npm is a zombie here, so its group id is still ours: clean up the group.
+    kill_group(&child);
+    let status = match child.wait() {
+        Ok(s) => s,
+        Err(e) => return audit_undet(format!("cannot reap npm: {e}")),
+    };
     let bytes = match received {
         Ok(Ok(b)) => b,
         Ok(Err(e)) => return audit_undet(format!("cannot read npm output: {e}")),

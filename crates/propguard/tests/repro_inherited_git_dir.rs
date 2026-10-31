@@ -56,7 +56,10 @@ fn run_check(cwd: &Path, home: &Path, git_dir: Option<&Path>) -> (i32, String) {
         .current_dir(cwd)
         .env("HOME", home)
         .env("PROPGUARD_STATE_DIR", home.join(".propguard-state"))
-        .env("PROPGUARD_CRITERIA", "idempotent; never panic; stable output schema")
+        .env(
+            "PROPGUARD_CRITERIA",
+            "idempotent; never panic; stable output schema",
+        )
         .env_remove("PROPGUARD_DISABLE");
     if let Some(g) = git_dir {
         // Re-applied AFTER scrub so only this child sees it.

@@ -1,6 +1,6 @@
 {
   "name": "propguard",
-  "version": "0.1.73",
+  "version": "0.1.74",
   "description": "Property gate for Claude Code that derives invariants from a task's done_criteria and checks the code against them; its Stop hook is not wired by default and must be installed explicitly.",
   "author": {
     "name": "yukineko"

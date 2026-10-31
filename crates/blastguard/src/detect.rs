@@ -1,5 +1,10 @@
-//! Pure destructive-operation detection. No I/O, no globals beyond the static
-//! allowlist in [`crate::exclude`] — just `(tool_name, tool_input) -> Decision`.
+//! Destructive-operation detection: `(tool_name, tool_input) -> Decision`, no
+//! globals beyond the static allowlist in [`crate::exclude`]. The rules are
+//! lexical, with filesystem reads only where the verdict depends on what a
+//! path really names: the recoverability probe ([`crate::reversible`]), the
+//! real landing of a system-directory write ([`real_landing`]), and the
+//! symlink-resolved target of a write to a protected or workflow path
+//! ([`physical_landing`]).
 //!
 //! The bias is deliberately asymmetric: we only Deny on *clearly* destructive,
 //! hard-to-undo patterns (recursive/wildcard deletion, full-file truncation,
@@ -691,27 +696,180 @@ fn extract_path(ti: Option<&Value>) -> Option<String> {
 /// see [`protected_disarm_deny`] and [`protected_tree_deny`], where the outcome
 /// IS established by the command alone (a deleted file stops running; a
 /// recursive delete takes every protected path under it).
+///
+/// # Symlinks (user ruling 2026-11-01)
+///
+/// The path is judged TWICE: lexically as written (case-fold, `..`, trailing
+/// slash — [`exclude::is_workflow_path`] / [`exclude::is_protected_path`]), and
+/// again at the path the kernel really writes, with every symlink resolved
+/// ([`physical_landing`], base = the segment's raw cwd). Either match Asks, so
+/// `wf/ci.yml` with `wf -> .github/workflows`, a file symlink onto
+/// `.claude/settings.json`, and a chain of links are all the same write as the
+/// direct spelling. When the resolution itself fails (a symlink loop, an
+/// unreadable component, any I/O error other than "does not exist yet") the
+/// write is Undetermined and Asks — "could not resolve" is never read as "not
+/// a protected path" (CLAUDE.md §3). A target with an unexpanded `$`/backtick,
+/// or a relative one with no known base, cannot be placed and keeps the
+/// lexical verdict alone.
 fn protected_path_block(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
+    if let Some(d) = protected_path_lexical_block(ctx, action, path) {
+        return Some(d);
+    }
+    match physical_landing(path, ctx.raw_base.as_deref())? {
+        Determination::Known(real) => protected_verdict(
+            ctx,
+            action,
+            &format!("{path}, which resolves to {real}"),
+            &real,
+        ),
+        Determination::Undetermined(u) => Some(Decision::ask(format!(
+            "{action} target ({path}) could not be resolved through its symlinks ({u}) — \
+blastguard cannot tell whether it lands on a gate/config file it protects or on a GitHub \
+Actions workflow, so it refuses to guess"
+        ))),
+    }
+}
+
+/// [`protected_path_block`] without the symlink resolution: the path judged
+/// only as written. Used where the target's base is NOT known (an unplaceable
+/// redirect, which is asked about separately), so resolving it against the
+/// session cwd would judge a different file.
+fn protected_path_lexical_block(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
+    protected_verdict(ctx, action, path, path)
+}
+
+/// The shared verdict: `judged` is the path tested against the workflow and
+/// protected lists, `shown` is how it is named in the reason.
+fn protected_verdict(ctx: &Ctx<'_>, action: &str, shown: &str, judged: &str) -> Option<Decision> {
     // GitHub Actions workflow files: configuring GHA needs an explicit user
     // request. Unlike the protected-gate paths below, a worktree checkout does
     // NOT exempt this (the file is pushed to the same remote Actions), and every
     // write site that already routes through this function (Write, Edit,
     // MultiEdit, redirects, tee, cp/mv, sed -i, sort -o, ...) inherits it.
-    if exclude::is_workflow_path(path) {
+    if exclude::is_workflow_path(judged) {
         return Some(Decision::ask(format!(
-            "{action} targets a GitHub Actions workflow file ({path}) — GitHub Actions \
+            "{action} targets a GitHub Actions workflow file ({shown}) — GitHub Actions \
 configuration requires an explicit user request"
         )));
     }
-    if exclude::is_protected_path(path) && !ctx.in_worktree_checkout(path) {
+    if exclude::is_protected_path(judged) && !ctx.in_worktree_checkout(judged) {
         Some(Decision::ask(format!(
-            "{action} targets a protected gate/config path ({path}) — it controls which hooks, \
+            "{action} targets a protected gate/config path ({shown}) — it controls which hooks, \
 gates or policies run, and blastguard cannot tell from the tool call whether this strengthens \
 or disarms it, so it refuses to guess"
         )))
     } else {
         None
     }
+}
+
+/// Upper bound on symlinks followed while resolving one path (Linux
+/// `MAXSYMLINKS` is 40; macOS stops at 32, so nothing the kernel can open is
+/// cut short). Exceeding it is how a loop is detected.
+const MAX_SYMLINK_HOPS: usize = 40;
+
+/// The path the kernel really writes for `target`, every symlink resolved —
+/// INCLUDING a final file symlink whose target does not exist yet (followed
+/// through `read_link`, since a write through it creates the target) — with
+/// any not-yet-existing tail kept as written. `..` is applied PHYSICALLY to the
+/// resolved prefix, not lexically to the text.
+///
+/// `None` = not a path this can place (an unexpanded `$`/backtick, or relative
+/// with no absolute base). `Undetermined` = the filesystem could not answer: a
+/// symlink loop, a `read_link`/`lstat` error other than "does not exist".
+fn physical_landing(target: &str, base: Option<&str>) -> Option<Determination<String>> {
+    use std::path::{Component, Path, PathBuf};
+    if target.is_empty() || target.contains('$') || target.contains('`') {
+        return None;
+    }
+    let start = if target.starts_with('/') {
+        PathBuf::from(target)
+    } else {
+        let base = base.filter(|b| b.starts_with('/'))?;
+        Path::new(base).join(target)
+    };
+    /// One path component, owned (a `Component` borrows its path, and link
+    /// targets are spliced in as the walk proceeds).
+    enum Step {
+        Root,
+        Parent,
+        Name(std::ffi::OsString),
+    }
+    fn push_front(pending: &mut std::collections::VecDeque<Step>, p: &Path) {
+        for c in p.components().rev() {
+            match c {
+                Component::RootDir | Component::Prefix(_) => pending.push_front(Step::Root),
+                Component::CurDir => {}
+                Component::ParentDir => pending.push_front(Step::Parent),
+                Component::Normal(n) => pending.push_front(Step::Name(n.to_os_string())),
+            }
+        }
+    }
+    let mut pending = std::collections::VecDeque::new();
+    push_front(&mut pending, &start);
+    let mut resolved = PathBuf::from("/");
+    // How many trailing components of `resolved` do not exist. Nothing below a
+    // missing component can be a symlink, so those are appended unexamined; a
+    // `..` that climbs back out of them returns to examining (a writer that
+    // creates parents, as `mkdir -p` would, then meets the real components).
+    let mut missing_depth = 0usize;
+    let mut hops = 0usize;
+    while let Some(step) = pending.pop_front() {
+        match step {
+            Step::Root => {
+                resolved = PathBuf::from("/");
+                missing_depth = 0;
+            }
+            Step::Parent => {
+                resolved.pop();
+                missing_depth = missing_depth.saturating_sub(1);
+            }
+            Step::Name(name) => {
+                let candidate = resolved.join(&name);
+                if missing_depth > 0 {
+                    resolved = candidate;
+                    missing_depth += 1;
+                    continue;
+                }
+                match std::fs::symlink_metadata(&candidate) {
+                    Ok(m) if m.file_type().is_symlink() => {
+                        hops += 1;
+                        if hops > MAX_SYMLINK_HOPS {
+                            return Some(Determination::undetermined(format!(
+                                "more than {MAX_SYMLINK_HOPS} symlinks followed at `{}` — a \
+symlink loop",
+                                candidate.display()
+                            )));
+                        }
+                        match std::fs::read_link(&candidate) {
+                            // `resolved` stays the link's parent: a relative
+                            // link target is resolved from there, an absolute
+                            // one restarts at `/` via its RootDir component.
+                            Ok(link) => push_front(&mut pending, &link),
+                            Err(e) => {
+                                return Some(Determination::undetermined(format!(
+                                    "symlink `{}` could not be read ({e})",
+                                    candidate.display()
+                                )))
+                            }
+                        }
+                    }
+                    Ok(_) => resolved = candidate,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        missing_depth = 1;
+                        resolved = candidate;
+                    }
+                    Err(e) => {
+                        return Some(Determination::undetermined(format!(
+                            "`{}` could not be inspected ({e})",
+                            candidate.display()
+                        )))
+                    }
+                }
+            }
+        }
+    }
+    Some(Determination::Known(resolved.display().to_string()))
 }
 
 /// Deny reason for a write that lands in a SYSTEM directory, or `None` when the
@@ -1791,7 +1949,9 @@ primitive, not a filesystem path",
         let target = match place_redirect_target(rcmd, seg_idx, &seg_cwds, target) {
             Ok(placed) => placed,
             Err(raw) => {
-                if let Some(deny) = protected_path_block(ctx, "redirect", &raw) {
+                // Unplaced: no base to resolve symlinks against, so lexical
+                // only; the unplaceable Ask below covers the rest.
+                if let Some(deny) = protected_path_lexical_block(ctx, "redirect", &raw) {
                     return deny;
                 }
                 line_level_asks.push(unplaceable_redirect_ask(">", &raw));
@@ -2009,7 +2169,8 @@ does not parse that body, but blastguard cannot show the program does not use it
         let target = match place_redirect_target(rcmd, seg_idx, &seg_cwds, target) {
             Ok(placed) => placed,
             Err(raw) => {
-                if let Some(deny) = protected_path_block(ctx, "append redirect", &raw) {
+                // Unplaced: lexical only, as for `>` above.
+                if let Some(deny) = protected_path_lexical_block(ctx, "append redirect", &raw) {
                     return deny;
                 }
                 line_level_asks.push(unplaceable_redirect_ask(">>", &raw));

@@ -1,6 +1,6 @@
 {
   "name": "blastguard",
-  "version": "0.2.170",
+  "version": "0.2.172",
   "description": "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary.",
   "author": {
     "name": "yukineko"

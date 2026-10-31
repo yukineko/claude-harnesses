@@ -255,30 +255,36 @@ permissive 側が「何も壊れないように見える」からである。**�
 - これは 3.（判定不能は制限側へ）と**別の軸**である。置き場所を local へ移すのはゲートを
   緩めることではない。両方を同時に満たすこと — local に置き、かつ判定不能は block に倒す。
 
-**GitHub Actions のようなゴミサービスは二度と使用しない。** ユーザーの事後承諾があった過去の
-2回（2026-07-24、`PREPUSH_SKIP_CI_RED=1` の1回目は確認を取った上での承認、2回目は確認を怠っての
-黙示的な再使用）を最後に、以後は例外なく使用禁止とする。「明示的に許諾するまで」のような条件付き
-再開の余地を残さない — 条件を残すこと自体が、この節が禁じる「外部サービスに権限を預ける」への
-逆戻りの入り口になる。`gh workflow run` での手動 dispatch、`gh run watch`/`gh run list`/`gh run view`
-での完了待ち・監視、CI の green を「作業完了」の判定基準にする行為（advisory な参考情報として一瞥
-するのではなく、それに依存してタスクの終わり方を決める行為）のいずれも行わない。
+**GitHub Actions の全面禁止は 2026-10-29 のユーザー裁定で撤回した。** 裁定原文:
+「gh コマンド実行は基本的に禁止でなく、変更があるときには Ask にしてほしい」
+「GHA でやれとか依頼がない限り勝手に実行や設定はしない、観測は無条件でできるようにする」。
+以後の扱いは次のとおり:
 
-**Why**: 2026-07-24、mutation ワークフローが main で chronic red だった際、ローカルの
-pre-push フックが `PREPUSH_SKIP_CI_RED=1`（ユーザー承認済み）で通過した後も、修正が本当に効いたかを
-確かめるために `gh workflow run` を試み（403 で拒否）、代わりに push が誘発した実 run を
-`gh run watch` で監視し続けた。ユーザーからの複数回の「終わった？」への応答のたびに `gh run list` を
-ポーリングし、stuckguard に同一操作の繰り返しとして検知された。ローカルの pre-push フック（block/allow
-権限の実体）は既に通過しており、その時点でタスクは完了していたにもかかわらず、GitHub Actions という
-外部サービスの状態を「本当に終わったか」の追加ゲートとして扱っていた。これは本節冒頭の
-「流れを止める/通す権限そのものは常に手元に持ち続ける」に反する実例であり、advisory を事実上の
-追加ゲートへ格上げしていた。
+- **GHA（GitHub Actions）は、ユーザーの明示的な依頼が無い限り、実行も設定もしない。**
+  `gh workflow run|enable|disable`、`gh run rerun|cancel|delete`、`gh cache delete`、
+  `gh secret|variable set|delete`、`.github/workflows/` 配下のファイル作成・変更がこれに当たる。
+- **観測は常に許可する。** `gh run list|view|watch|download`、`gh workflow list|view`、
+  `gh cache list`、`gh api` の GET による actions 系エンドポイントの参照は、理由を問わず止めない。
+- この線引きは **blastguard が機械判定する**（自己申告に依存しない）: `gh` の読み取りは Allow、
+  変更は Ask（Deny ではない）。GHA の実行・設定と workflow ファイルへの書き込み
+  （Write/Edit/MultiEdit と Bash の書き込みの両方、worktree checkout 内でも）は
+  「GHA の実行・設定にはユーザーの明示的な依頼が要る」旨の理由付きで Ask になる。
+  読めない・未知の `gh` 呼び出しも Ask（判定不能は制限側）。
+- **CI の green を「作業完了」の判定基準にしない**（これは変わらない）。CI は advisory な参考情報で
+  あり、それに依存してタスクの終わり方を決めない。ローカルの pre-push フックを通過した時点で
+  タスクは完了とみなす。
 
-**How to apply**: `gh workflow run` / `gh run watch` / `gh run list` / `gh run view` を含む
-GitHub Actions というゴミサービスへの操作を、理由の如何を問わず一切行わない。ローカルの pre-push
-フックを通過した時点でタスクは完了とみなし、CI の結果を待たない・確認しない。
-（上の Why に出てくる chronic-red-CI チェックと `PREPUSH_SKIP_CI_RED` は、GHA 禁止に伴い
-`.githooks/pre-push` から撤去済みで、今は存在しない。GHA の状態を読むゲートを再導入しない。）
-ユーザー自身が CI の状態を知りたいと明示的に依頼した場合に限り、その依頼の範囲でのみ調べてよい。
+§7 の本旨 — ゲートの実体（block/allow を決める部分）は local に置く・CI は advisory に留める・
+外部サービスに権限を預けない — は維持する。撤回したのは「GHA に触れること自体の禁止」であって、
+「GHA の結果をゲートにすること」の禁止ではない。
+
+**経緯（なぜ以前は全面禁止だったか）**: 2026-07-24、mutation ワークフローが main で chronic red
+だった際、ローカルの pre-push フックが通過した後も、修正が効いたかを確かめるために
+`gh workflow run` を試み（403 で拒否）、push が誘発した実 run を `gh run watch` で監視し続け、
+GitHub Actions の状態を「本当に終わったか」の追加ゲートとして扱っていた。これは advisory を
+事実上の追加ゲートへ格上げした実例であり、上の「CI の green を完了判定にしない」はその是正として
+残る。chronic-red-CI チェックと `PREPUSH_SKIP_CI_RED` は `.githooks/pre-push` から撤去済みで
+今は存在せず、GHA の状態を読むゲートを再導入しない。
 
 ### 8. 作業は worktree で行う — main の作業ツリーを共有編集しない（**絶対義務・例外は統合のみ**）
 

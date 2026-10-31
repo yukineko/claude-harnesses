@@ -34,10 +34,6 @@
 //! [`harness_core::verdict::Determination`] (observed values). "Could not
 //! determine" is always its own answer and resolves to the restricted side.
 //!
-//! # Scaffold status
-//!
-//! Module bodies are stubs that return `Undetermined` (exit 2) until each is
-//! implemented; none returns `Clean` or an empty collection.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::ffi::OsString;

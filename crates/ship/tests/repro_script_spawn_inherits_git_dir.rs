@@ -1,8 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! RED repro: `checklist::run_safe` / `rollout` (src/checklist.rs) spawn
-//! `scripts/rebuild-plugins.sh` / `scripts/rollout-plugins.sh` without
-//! `harness_core::git_env::scrub`, so any `git` run inside those scripts
-//! follows an inherited `GIT_DIR`.
+//! Regression (was RED repro 9d54eb34): `checklist::run_safe` / `rollout`
+//! (src/checklist.rs) spawn `scripts/rebuild-plugins.sh` /
+//! `scripts/rollout-plugins.sh`; without `harness_core::git_env::scrub` any
+//! `git` run inside those scripts follows an inherited `GIT_DIR`.
 //!
 //! Observable wrong effect: the stub script runs `git tag from-ship-script`
 //! (a stand-in for the real scripts' git calls). With `GIT_DIR=<B>/.git`
@@ -82,13 +82,11 @@ fn check_script_git_stays_in_repo(script: &str, args: &[&str]) {
     );
 }
 
-#[ignore = "RED repro: checklist::run_safe spawns rebuild-plugins.sh without git_env::scrub, git in the script follows inherited GIT_DIR"]
 #[test]
 fn run_safe_script_git_ignores_inherited_git_dir() {
     check_script_git_stays_in_repo("rebuild-plugins.sh", &["check", "--run-safe"]);
 }
 
-#[ignore = "RED repro: checklist::rollout spawns rollout-plugins.sh without git_env::scrub, git in the script follows inherited GIT_DIR"]
 #[test]
 fn rollout_script_git_ignores_inherited_git_dir() {
     check_script_git_stays_in_repo("rollout-plugins.sh", &["rollout"]);

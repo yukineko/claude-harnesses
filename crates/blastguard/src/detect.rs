@@ -6968,6 +6968,67 @@ fn inline_command_payloads(rest: &[&str], pos: usize, inline: &str) -> Vec<Strin
     payloads_after(&synthetic, 0)
 }
 
+/// Split a leading assignment whose value OPENS a command substitution that
+/// the token itself does not close — `B=$(ls`, `B="$(ls`, `` B=`ls `` — into
+/// the assignment-with-opener (`B=$(`) and the substitution's first word
+/// (`ls`).
+///
+/// Backlog a03fe3cd (#1471): the tokeniser splits on whitespace, so
+/// `B=$(ls -d GLOB | sort -V | tail -1)` reached [`analyze_segment`] (cut at
+/// the `|` by [`split_segments`]) as `B=$(ls`, `-d`, `GLOB`.
+/// [`command_candidates`] skips `B=$(ls` as an assignment and took `-d` as the
+/// command word, so the line asked "`-d` is a command blastguard has no rule
+/// for". The word that actually runs there is the substitution's first word,
+/// `ls`; `B=$( ls …` (a space after the opener) already parsed that way.
+///
+/// Only LEADING assignment tokens are rewritten (command position), and only
+/// when the opener is unclosed within the token, so `B=$(pwd)` stays a pure
+/// assignment. Exposing the body's first word as a command candidate only
+/// ever adds a word for the rule engine to judge; the body is still also
+/// re-analysed through [`executed_substitution_payloads`] when it is closed.
+fn split_substitution_opening_assignments(tokens: Vec<&str>) -> Vec<&str> {
+    let mut out = Vec::with_capacity(tokens.len() + 1);
+    let mut leading = true;
+    for tok in tokens {
+        if leading && is_assignment(tok) {
+            if let Some(cut) = unclosed_substitution_opener_end(tok) {
+                out.push(&tok[..cut]);
+                out.push(&tok[cut..]);
+                leading = false;
+                continue;
+            }
+            out.push(tok);
+            continue;
+        }
+        leading = false;
+        out.push(tok);
+    }
+    out
+}
+
+/// Byte index just past the `$(` / backtick that opens an assignment token's
+/// value (optionally inside a leading `"`), when the rest of the token is a
+/// non-empty word that does not close that substitution. `None` otherwise.
+fn unclosed_substitution_opener_end(tok: &str) -> Option<usize> {
+    let eq = tok.find('=')?;
+    let value = &tok[eq + 1..];
+    let quote = usize::from(value.starts_with('"'));
+    let after_quote = &value[quote..];
+    let (opener_len, closer) = if after_quote.starts_with("$(") {
+        (2, ')')
+    } else if after_quote.starts_with('`') {
+        (1, '`')
+    } else {
+        return None;
+    };
+    let cut = eq + 1 + quote + opener_len;
+    let body = &tok[cut..];
+    if body.is_empty() || body.contains(closer) {
+        return None;
+    }
+    Some(cut)
+}
+
 /// Judge ONE `;`/`&&`/`|`-separated segment of a command line.
 ///
 /// `line`/`seg_idx` locate this segment inside the command line it came from,
@@ -6976,7 +7037,7 @@ fn inline_command_payloads(rest: &[&str], pos: usize, inline: &str) -> Vec<Strin
 /// the line (see [`resolve_expanded_command_word`]). Nothing else here uses
 /// them, and `seg` remains the only thing judged.
 fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ctx<'_>) -> Decision {
-    let tokens: Vec<&str> = seg.split_whitespace().collect();
+    let tokens = split_substitution_opening_assignments(seg.split_whitespace().collect());
     let mut acc = VerdictAcc::default();
 
     // D2: a wrapper that takes a shell command string via `-c` (flock) runs that

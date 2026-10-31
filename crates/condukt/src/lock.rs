@@ -419,6 +419,21 @@ impl RunLock {
         deadline: Duration,
         kill_path: Option<&std::ffi::OsStr>,
     ) -> Self {
+        Self::acquire_at_with_probe_interval(path, deadline, kill_path, LIVENESS_PROBE_INTERVAL)
+    }
+
+    /// [`RunLock::acquire_at_with_env_path`] with the same-holder probe
+    /// throttle as a parameter. Production always passes
+    /// [`LIVENESS_PROBE_INTERVAL`] (via the wrapper above); the seam exists so
+    /// a test can pin "a CHANGED holder pid bypasses the throttle" with an
+    /// interval far above its deadline, which no amount of scheduling delay
+    /// can blur (backlog c77cdc98).
+    fn acquire_at_with_probe_interval(
+        path: PathBuf,
+        deadline: Duration,
+        kill_path: Option<&std::ffi::OsStr>,
+        probe_interval: Duration,
+    ) -> Self {
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!(
@@ -481,7 +496,8 @@ impl RunLock {
         let start = Instant::now();
         // The holder pid we last probed and when. A new holder pid is probed
         // immediately; the same holder is re-probed at most once per
-        // `LIVENESS_PROBE_INTERVAL` (backlog e9262d91).
+        // `probe_interval` (= `LIVENESS_PROBE_INTERVAL` in production;
+        // backlog e9262d91).
         let mut last_probe: Option<(u32, Instant)> = None;
         loop {
             match std::fs::hard_link(&tmp_path, &path) {
@@ -502,7 +518,7 @@ impl RunLock {
                         Some(existing) => {
                             let due = match last_probe {
                                 Some((pid, at)) => {
-                                    pid != existing.pid || at.elapsed() >= LIVENESS_PROBE_INTERVAL
+                                    pid != existing.pid || at.elapsed() >= probe_interval
                                 }
                                 None => true,
                             };
@@ -1401,31 +1417,36 @@ mod backlog_e9262d91 {
     }
 
     /// A holder pid that CHANGES mid-wait is probed at once, not after the
-    /// same-holder throttle interval (`LIVENESS_PROBE_INTERVAL`).
+    /// same-holder throttle interval.
     ///
     /// Choreography, driven by the fake `kill` itself (no sleeps, no helper
     /// thread): the lock starts held by a live foreign pid A. The FIRST probe
     /// of A answers "alive" and, before returning, atomically renames a lock
     /// naming a dead pid B into place. A correct waiter then probes B on the
-    /// next poll (~10ms), reaps it, and acquires. A waiter that treats B as
-    /// the same holder cannot probe again until `LIVENESS_PROBE_INTERVAL`
-    /// after A's probe started, which is past the deadline below, so it must
-    /// give up WITHOUT ever probing B.
+    /// next poll, reaps it, and acquires. A waiter that treats B as the same
+    /// holder cannot probe again until the throttle interval after A's probe
+    /// started, which is past the deadline below, so it must give up WITHOUT
+    /// ever probing B.
     ///
-    /// The deadline must sit below `LIVENESS_PROBE_INTERVAL`, so this test is
-    /// timing-bound in one direction: if A's probe alone takes longer than
-    /// the deadline (heavy load), the waiter gives up before it can probe B
-    /// even when correct. That case is detected (A's marker mtime vs. the
-    /// wait start) and reported as INCONCLUSIVE — still a failure, never a
-    /// pass.
+    /// The wait runs through `acquire_at_with_probe_interval` (the same loop
+    /// production runs with `LIVENESS_PROBE_INTERVAL`) with an interval of an
+    /// hour and a deadline of 30s. With the 200ms production interval the
+    /// deadline had to sit below 200ms, and under CPU load A's probe alone
+    /// outran it, failing a correct waiter (backlog c77cdc98). With the
+    /// interval far above the deadline the discrimination no longer depends
+    /// on scheduling: a correct waiter acquires as soon as it gets to run two
+    /// probes, a same-holder waiter can never probe B inside the deadline. If
+    /// A's probe alone still took longer than the deadline, that is reported
+    /// as INCONCLUSIVE — a failure, never a pass.
     #[cfg(unix)]
     #[test]
     fn lock_wait_probes_a_changed_holder_pid_immediately() {
         use std::os::unix::fs::PermissionsExt;
         let _serial = serial();
-        const DEADLINE: Duration = Duration::from_millis(120);
+        const DEADLINE: Duration = Duration::from_secs(30);
+        const PROBE_INTERVAL: Duration = Duration::from_secs(3600);
         assert!(
-            DEADLINE < LIVENESS_PROBE_INTERVAL,
+            DEADLINE < PROBE_INTERVAL,
             "fixture: the deadline must be below the same-holder throttle interval"
         );
 
@@ -1490,7 +1511,12 @@ mod backlog_e9262d91 {
         let kill_path = std::env::join_paths(parts).unwrap();
 
         let wall_start = std::time::SystemTime::now();
-        let got = RunLock::acquire_at_with_env_path(lock.clone(), DEADLINE, Some(&kill_path));
+        let got = RunLock::acquire_at_with_probe_interval(
+            lock.clone(),
+            DEADLINE,
+            Some(&kill_path),
+            PROBE_INTERVAL,
+        );
 
         let probes: Vec<String> = std::fs::read_to_string(&log)
             .unwrap_or_default()

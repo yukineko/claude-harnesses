@@ -22,9 +22,10 @@ pub const PROTECTION: Protection = Protection {
         disarms them: a Bash command doing recursive or wildcard rm, git reset \
         --hard, git clean -fd/-fdx, working-tree discard, a truncating > \
         redirect, truncate/shred, mkfs or dd of=, recursive chmod/chown, or \
-        find -delete; a Write that empties a file or writes into .git/ or a \
-        system directory; an Edit/MultiEdit/NotebookEdit of a protected \
-        gate/hook/policy path (other partial edits are allowed); and any \
+        find -delete; a Write that empties a file or writes into .git/; a \
+        Write/Edit/MultiEdit/NotebookEdit into a system directory (also \
+        through symlinks) or of a protected gate/hook/policy path (other \
+        partial edits are allowed); and any \
         matched call blastguard cannot read or analyse, which it refuses (ask, \
         hardened to deny with no human present) rather than allows.",
     grounds: "Rationale, not a recorded data-loss incident: README.md 'Why it \

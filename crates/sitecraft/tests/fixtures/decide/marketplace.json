@@ -1,0 +1,8 @@
+{
+  "name": "fixture-marketplace",
+  "owner": { "name": "fixture" },
+  "plugins": [
+    { "name": "authkit", "source": "./crates/authkit", "version": "0.1.0" },
+    { "name": "vrmforge", "source": "./crates/vrmforge", "version": "0.2.0" }
+  ]
+}

@@ -32,6 +32,9 @@
 mod config;
 mod gate;
 mod git;
+#[cfg(test)]
+#[path = "gitenv_red.rs"]
+mod git_env_red_tests;
 mod install;
 mod model;
 mod runner;

@@ -76,8 +76,12 @@ impl IndexPaths {
 /// `Undetermined`. Silently treating "git did not answer" as "this repo has no
 /// Rust files" would build an empty index that then reports every query as a
 /// miss.
+///
+/// The child's inherited `GIT_*` repo-selecting variables are scrubbed
+/// ([`crate::git_env::scrub`]) so the listing is of the repository containing
+/// `root`, not of one named by an inherited `GIT_DIR`.
 pub fn rs_files(root: &Path) -> Determination<Vec<String>> {
-    let out = std::process::Command::new("git")
+    let out = crate::git_env::scrub(&mut std::process::Command::new("git"))
         .arg("-C")
         .arg(root)
         .arg("ls-files")

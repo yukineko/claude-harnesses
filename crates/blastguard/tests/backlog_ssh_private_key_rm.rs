@@ -89,7 +89,6 @@ fn control_rm_project_work_file_is_allow() {
 }
 
 #[test]
-#[ignore = "backlog repro: rm of <HOME>/.ssh/id_rsa (absolute) is Allow; irreplaceable $HOME asset must not be"]
 fn rm_ssh_private_key_absolute_is_not_allow() {
     let f = Fx::new("abs");
     let out = f.run(&format!("rm {}/.ssh/id_rsa", f.home.display()));
@@ -100,7 +99,6 @@ fn rm_ssh_private_key_absolute_is_not_allow() {
 }
 
 #[test]
-#[ignore = "backlog repro: rm of ~/.ssh/id_rsa is Allow; irreplaceable $HOME asset must not be"]
 fn rm_ssh_private_key_tilde_is_not_allow() {
     let f = Fx::new("tilde");
     let out = f.run("rm ~/.ssh/id_rsa");

@@ -1232,8 +1232,26 @@ fn analyze_unlink_rmdir(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         if let Some(deny) = protected_glob_deny(&format!("{cmd} operand"), op) {
             return deny;
         }
+        if let Some(deny) = home_asset_deny(ctx, cmd, op) {
+            return deny;
+        }
     }
     Decision::Allow
+}
+
+/// Deny for a single-entry delete (`rm` without `-r`, `unlink`, `rmdir`) whose
+/// operand is an irreplaceable `$HOME`-level asset — a credential store entry
+/// (`~/.ssh/id_rsa`) or a home-level dotfile (backlog 6067a527). Deletion
+/// policy: system configuration and irreplaceable assets are never deleted;
+/// work files stay deletable, so every other operand is `None`.
+fn home_asset_deny(ctx: &Ctx<'_>, action: &str, operand: &str) -> Option<Decision> {
+    let path = ctx
+        .scope
+        .irreplaceable_home_asset(operand, ctx.base_for(action))?;
+    Some(Decision::deny(format!(
+        "{action} {operand} deletes `{path}`, an irreplaceable home-level asset (credential \
+store or home-level config) that cannot be restored, so blastguard refuses"
+    )))
 }
 
 /// Deny for a single-file delete whose operand IS a `.git` entry (not a path
@@ -8729,6 +8747,10 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         // Only the recursive arm below has a deletion classifier for `.git`
         // directories, so the non-recursive arm answers here.
         if let Some(deny) = operands.iter().find_map(|o| dotgit_link_deny("rm", o)) {
+            return deny;
+        }
+        // Backlog 6067a527: one file can be irreplaceable (`rm ~/.ssh/id_rsa`).
+        if let Some(deny) = operands.iter().find_map(|o| home_asset_deny(ctx, "rm", o)) {
             return deny;
         }
         // Single, non-recursive rm of named files — below the destructive bar.

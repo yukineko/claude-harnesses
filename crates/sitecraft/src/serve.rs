@@ -273,52 +273,100 @@ fn write_state(path: &Path, st: &ServerState) -> Result<(), String> {
     Ok(())
 }
 
-/// Is `port` free on 127.0.0.1? Free only when we can bind it **and** a
-/// connect is refused; anything else is in use or undetermined (`Err`).
-fn check_port_free(port: u16) -> Result<(), String> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let fix = format!("stop whatever listens on port {port} or change `port` in sitecraft.toml (then `sitecraft trust`)");
+/// The loopback families a dev server may bind. A listener on only one of
+/// them is still a listener on "localhost", so every family must be checked.
+fn loopbacks(port: u16) -> [(SocketAddr, bool); 2] {
+    [
+        (SocketAddr::from(([127, 0, 0, 1], port)), false),
+        (
+            SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, port)),
+            true,
+        ),
+    ]
+}
+
+/// `EADDRNOTAVAIL` / `EAFNOSUPPORT`: the host has no such address family.
+fn family_missing(e: &std::io::Error) -> bool {
+    matches!(
+        e.raw_os_error(),
+        Some(libc::EADDRNOTAVAIL) | Some(libc::EAFNOSUPPORT)
+    )
+}
+
+/// Outcome of probing one loopback family.
+enum Probe {
+    /// Connect refused (and, when asked, bind succeeded).
+    Free,
+    /// The family does not exist on this host: a `::1` socket cannot be
+    /// connected/bound with EADDRNOTAVAIL/EAFNOSUPPORT, and a bind fails the
+    /// same way, so nothing can be held there. Only ever returned for `::1`.
+    Absent,
+    /// Held, or unknown (every other error): not free.
+    NotFree(String),
+}
+
+fn probe_family(addr: SocketAddr, v6: bool, bind: bool) -> Probe {
+    let absent_by_bind = |why: String| match TcpListener::bind(addr) {
+        Err(be) if v6 && family_missing(&be) => Probe::Absent,
+        _ => Probe::NotFree(why),
+    };
     match TcpStream::connect_timeout(&addr, PROBE_TIMEOUT) {
-        Ok(_) => {
-            return Err(format!(
-                "port {port} is already in use (a connect succeeded); {fix}"
-            ))
-        }
+        Ok(_) => return Probe::NotFree("still accepting connections".to_string()),
         Err(e) if e.kind() == ErrorKind::ConnectionRefused => {}
-        Err(e) => {
-            return Err(format!(
-                "cannot tell whether port {port} is free (connect probe: {e}); {fix}"
-            ))
+        Err(e) if v6 && family_missing(&e) => {
+            return absent_by_bind(format!("cannot be probed ({e})"))
         }
+        Err(e) => return Probe::NotFree(format!("cannot be probed ({e})")),
+    }
+    if !bind {
+        return Probe::Free;
     }
     match TcpListener::bind(addr) {
         Ok(l) => {
             drop(l);
-            Ok(())
+            Probe::Free
         }
-        Err(e) => Err(format!("port {port} is not bindable ({e}); {fix}")),
+        Err(e) if v6 && family_missing(&e) => Probe::Absent,
+        Err(e) => Probe::NotFree(format!("not bindable ({e})")),
     }
 }
 
-/// After the group kill, confirm nothing still accepts on `port`. Polls (up to
-/// ~2 s) until a connect is refused. Anything else — a connect that succeeds
-/// or any other error — is not a confirmation, so it stays `Err` (fail-closed).
-fn confirm_port_released(port: u16) -> Result<(), String> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let last = loop {
-        let why = match TcpStream::connect_timeout(&addr, PROBE_TIMEOUT) {
-            Err(e) if e.kind() == ErrorKind::ConnectionRefused => return Ok(()),
-            Ok(_) => "still accepting connections".to_string(),
-            Err(e) => format!("cannot be probed ({e})"),
-        };
-        if Instant::now() >= deadline {
-            break why;
+/// Is `port` free on every loopback family (127.0.0.1 and [::1])? Free only
+/// when each existing family refuses a connect **and** can be bound; anything
+/// else is in use or undetermined (`Err`).
+fn check_port_free(port: u16) -> Result<(), String> {
+    let fix = format!("stop whatever listens on port {port} or change `port` in sitecraft.toml (then `sitecraft trust`)");
+    for (addr, v6) in loopbacks(port) {
+        if let Probe::NotFree(why) = probe_family(addr, v6, true) {
+            return Err(format!(
+                "port {port} is already in use or not probeable on {addr} ({why}); {fix}"
+            ));
         }
-        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
+/// After the group kill, confirm nothing still accepts on `port` on any
+/// loopback family. Polls (up to ~2 s) until every family refuses. Anything
+/// else is not a confirmation, so it stays `Err` (fail-closed).
+fn confirm_port_released(port: u16) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let held = loop {
+        let mut held = None;
+        for (addr, v6) in loopbacks(port) {
+            if let Probe::NotFree(why) = probe_family(addr, v6, false) {
+                held = Some(format!("{addr}: {why}"));
+                break;
+            }
+        }
+        match held {
+            None => return Ok(()),
+            Some(h) if Instant::now() >= deadline => break h,
+            Some(_) => std::thread::sleep(Duration::from_millis(50)),
+        }
     };
     Err(format!(
-        "port {port} is still in use ({last}) after the process group was killed; \
+        "port {port} is still in use ({held}) after the process group was killed; \
          a process that escaped the group (e.g. via setsid) may survive; \
          find and kill the listener (`lsof -iTCP:{port} -sTCP:LISTEN`), then retry"
     ))

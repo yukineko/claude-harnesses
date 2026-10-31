@@ -53,3 +53,32 @@ detail = """
 exit 1: ness: fatal: Unable to read current working directory: No such file or directory
    1 git ["add", "-A"] failed in /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T/blastguard-wtfix-f2942edba375ef77/worktree_protected_paths_adversarial/a_dotgit_bogus/src/harness: fatal: unable to stat '.claude/settings.json': No such file or directory
 FAIL: 42/48 concurrent runs failed (shared fixture dir clobbered)"""
+
+[[task]]
+id = "61666b2f"
+title = "guard-maintree-bash refuses a command that never touches main when another process's git merge is in its pre-merge-commit window"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-01 ~01:18: cargo test --manifest-path <own worktree>/Cargo.toml -p blastguard refused by scripts/guard-maintree-bash.py (concurrent_merge wording: ORIG_HEAD rewritten, HEAD unmoved, no MERGE_HEAD) while another agent's git merge --no-ff into main was in flight. 2dee8b0e/in_flight_merge_window covers only a later merge of the SAME command after an integration HEAD move. Limit: on-disk state alone is identical for foreign vs own-command window; fix needs another signal (e.g. cwd/command not in main, or merge-process liveness). Control test (own write in main stays refused) passes today. NOT FIXED BY USER RULING 2026-11-01 (session c5b9c02b): no sound signal proves the in-flight merge belongs to another process. Each candidate was tested and found unsound: (a) process ancestry, since a backgrounded child is reparented to pid 1, a merge can be delegated to a pre-existing daemon, and all agent shells share one claude parent; (b) Pre-recorded markers, since a terminal merge leaves none and an orphan persists up to 24h; (c) cwd and argv. The disk-only extension is unsafe: `git reset -q HEAD; git cherry-pick -n <branch>` in main reproduces every in_flight_merge_window disk signal with HEAD unmoved, and that state never resolves. The user declined the relaxed rule (disk evidence plus a live `git merge` process in main). The guard stays fail-closed; the false refusal is accepted."
+created_at = 1793464948
+updated_at = 1793466384
+weight = 0.0
+issue_number = 1481
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1481"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_foreign_merge_window.py"
+rev = "d50ec5554b0a01b0df54bcb945f5cfa7df142899"
+observed_at = 1793464948
+detail = """
+exit 1: nto a worktree.
+
+scripts/test_guard_maintree_bash_foreign_merge_window.py:100: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_foreign_merge_window.py::ForeignMergeWindow::test_foreign_merge_window_does_not_refuse_unrelated_command
+========================= 1 failed, 1 passed in 2.09s =========================="""

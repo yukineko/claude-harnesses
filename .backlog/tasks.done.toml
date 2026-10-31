@@ -62802,3 +62802,71 @@ test result: ok. 12 passed; 0 failed
 rev = "d8050cc623c0fab84067acbb306bfd733229790d"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "7f64d096"
+title = "blastguard asks inside a background subagent; the prompt stalls for hours"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Subagent PreToolUse payload has non-empty agent_id/agent_type (main thread has neither); env is identical so ask_available() says interactive. Ruling: in a subagent Ask becomes Deny and repeat-deny must stay Deny; main thread unchanged. Fix sites: crates/blastguard/src/main.rs emit + downgrade_on_repeat. RED tests (ignored): subagent_ask_becomes_deny, subagent_repeated_deny_stays_deny in crates/blastguard/tests/subagent_no_ask.rs; remove #[ignore] when fixing."
+created_at = 1793460591
+updated_at = 1793462579
+weight = 0.0
+issue_number = 1476
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1476"
+issue_closed_at = 1793462581
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test subagent_no_ask -- --include-ignored"
+rev = "8778b3e271cf1b80c0aee0ea09de278cd93536e2"
+observed_at = 1793460591
+detail = """
+exit 101: subagent_ask_becomes_deny
+    subagent_repeated_deny_stays_deny
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/subagent_no_ask.rs (target/debug/deps/subagent_no_ask-b0b7f3c4f2c02b83)
+error: test failed, to rerun pass `-p blastguard --test subagent_no_ask`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test subagent_no_ask"
+exit = 0
+passed = 7
+rev = "7de4f1925180e91cf67335f8313b88408a8ee234"
+observed_at = 1793462557
+output_digest = "sha256:b403f316360f1b9c0454b3da22ded50b2446279828fd8bd10de61815eab62050"
+excerpt = """
+
+running 7 tests
+test main_thread_unreadable_payload_asks ... ok
+test subagent_plain_deny_is_deny ... ok
+test subagent_unreadable_payload_is_deny ... ok
+test subagent_repeated_deny_stays_deny ... ok
+test subagent_ask_becomes_deny ... ok
+test subagent_with_null_agent_id_ask_becomes_deny ... ok
+test main_thread_ask_is_unchanged ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/subagent_no_ask.rs (target/debug/deps/subagent_no_ask-432e9a92a0f2d84d)
+"""
+
+[task.closure.red]
+rev = "8778b3e271cf1b80c0aee0ea09de278cd93536e2"
+exit = 101
+kind = "behavioural"

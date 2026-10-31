@@ -62977,3 +62977,80 @@ test result: ok. 3 passed; 0 failed
 rev = "7e1d03710709411ebee39232eb842c12ff05bf8e"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "3f621c04"
+title = "no way to tell a stalled subagent's state (ask / running / rate-limit / sleep / dead)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1793462469
+updated_at = 1793471014
+weight = 0.0
+issue_number = 1478
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1478"
+issue_closed_at = 1793471017
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-status --test agent_state -- --include-ignored"
+rev = "43beb5ab75887326c6a5ee565c33817ae2c63071"
+observed_at = 1793462469
+detail = """
+exit 101: en_pending_and_process_matches
+    tool_use_with_result_is_not_pending
+
+test result: FAILED. 0 passed; 17 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/agent_state.rs (target/debug/deps/agent_state-3cafe8000178feec)
+error: test failed, to rerun pass `-p harness-status --test agent_state`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-status --test agent_state"
+exit = 0
+passed = 19
+rev = "47d7e925b0b9011eeccd4215bd123e915d04c03b"
+observed_at = 1793471001
+output_digest = "sha256:9b6e27a8a9937b7b7668d7ff80073163796efcfb20d60b766dce89f8007b1308"
+excerpt = """
+
+running 19 tests
+test end_turn_without_subagent_stop_is_not_finished ... ok
+test ask_pending_when_pretooluse_asked_and_no_result ... ok
+test ask_for_a_different_tool_use_does_not_make_this_one_ask_pending ... ok
+test asleep_when_pmset_shows_machine_sleeping_at_now ... ok
+test garbage_input_is_unknown_cannot_read ... ok
+test collision_pending_tool_with_ps_absent_is_unknown_not_tool_running ... ok
+test finished_when_end_turn_then_subagent_stop ... ok
+test partially_garbage_transcript_is_never_finished ... ok
+test nothing_pending_no_error_no_stop_is_unknown_listing_candidates ... ok
+test overloaded_error_candidates_name_the_error ... ok
+test none_pmset_is_unknown_cannot_read_not_not_asleep ... ok
+test none_ps_never_yields_confident_state_for_idle_transcript ... ok
+test pending_tool_without_matching_process_is_unknown_died_or_not_spawned ... ok
+test rate_limited_when_last_entry_is_rate_limit_error ... ok
+test tool_running_when_pending_and_process_matches ... ok
+test non_rate_limit_api_errors_are_unknown_never_rate_limited ... ok
+test tool_use_with_result_is_not_pending ... ok
+test cli_session_filter_excludes_other_sessions ... ok
+test cli_prints_one_line_per_subagent_with_id_description_state ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/agent_state.rs (target/debug/deps/agent_state-d6fac60a3a146b41)
+"""
+
+[task.closure.red]
+rev = "43beb5ab75887326c6a5ee565c33817ae2c63071"
+exit = 101
+kind = "behavioural"

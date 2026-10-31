@@ -100,7 +100,6 @@ fn subagent_plain_deny_is_deny() {
 }
 
 #[test]
-#[ignore = "RED repro: blastguard emits ask for a subagent Bash call (agent_id present) when the inherited env looks interactive; should be deny"]
 fn subagent_ask_becomes_deny() {
     let home = scratch_home("sub-ask");
     assert_eq!(
@@ -111,7 +110,6 @@ fn subagent_ask_becomes_deny() {
 }
 
 #[test]
-#[ignore = "RED repro: repeat-deny to ask downgrade fires inside a subagent; the second identical deny must stay deny"]
 fn subagent_repeated_deny_stays_deny() {
     let home = scratch_home("sub-repeat");
     let agent = Some("ab0687739fbba8a8b");

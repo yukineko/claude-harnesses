@@ -427,8 +427,15 @@ fn doc_problem(repo_root: &Path, doc: &str) -> Determination<Option<String>> {
     }
 }
 
+/// `git -C repo_root <args>` with inherited `GIT_*` scrubbed, so an inherited
+/// `GIT_DIR` cannot redirect it to another repository.
 fn git(repo_root: &Path, args: &[&str]) -> Determination<String> {
-    match boundary::run(Command::new("git").arg("-C").arg(repo_root).args(args)).require() {
+    let mut cmd = Command::new("git");
+    harness_core::git_env::scrub(&mut cmd)
+        .arg("-C")
+        .arg(repo_root)
+        .args(args);
+    match boundary::run(&mut cmd).require() {
         Required::Determined(out) => out.stdout_on_success(),
         Required::Blocked(v) => v.into_determination(),
     }
@@ -600,5 +607,26 @@ mod tests {
             &[ch("crates/g/src/a.rs", false)],
         );
         assert!(matches!(v, Verdict::Violation(_)));
+    }
+
+    // ── inherited GIT_DIR must not redirect `git -C repo_root` ──────────────
+
+    use crate::gitenv_testutil as ge;
+
+    #[test]
+    fn gitenv_git_answers_about_repo_root_not_inherited_git_dir() {
+        let (_root, a, b) = ge::two_repos();
+        ge::run_child("gatecheck::tests::gitenv_child_git", &a, &b);
+    }
+
+    #[test]
+    fn gitenv_child_git() {
+        let Some(a) = ge::child_repo_a() else { return };
+        let want = ge::git(&a, &["rev-parse", "HEAD"]).trim().to_string();
+        assert_eq!(
+            git(&a, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string()),
+            Determination::known(want),
+            "HEAD must be repo A's"
+        );
     }
 }

@@ -395,6 +395,9 @@ fn review_git(
     args: &[&str],
 ) -> Determination<harness_core::boundary::CommandOutput> {
     let mut cmd = Command::new("git");
+    // Scrub inherited GIT_* so `-C repo_root` decides the repository; an
+    // inherited GIT_DIR would otherwise override it.
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("-C").arg(repo_root).args(args);
     harness_core::boundary::run_with_timeout(&mut cmd, REVIEW_GIT_TIMEOUT)
 }
@@ -1381,7 +1384,9 @@ fn git_log_name_status(repo_root: &Path, baseline: &str) -> Result<String> {
             "refusing unsafe baseline ref '{baseline}': only [A-Za-z0-9_./~^-] are allowed and it must not start with '-'"
         );
     }
-    let out = Command::new("git")
+    // Inherited GIT_* scrubbed so `-C repo_root` (not an inherited GIT_DIR)
+    // picks the repository.
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo_root)
         .arg("log")
@@ -2254,6 +2259,45 @@ impl_files = ["src/legacy.rs"]
         assert!(!is_hex_object_name("HEAD"));
         assert!(!is_hex_object_name("abc"));
         assert!(!is_hex_object_name(""));
+    }
+
+    // ── inherited GIT_DIR must not redirect `git -C repo_root` ──────────────
+
+    use crate::gitenv_testutil as ge;
+
+    #[test]
+    fn gitenv_review_git_answers_about_repo_root_not_inherited_git_dir() {
+        let (_root, a, b) = ge::two_repos();
+        ge::run_child("specmap::tests::gitenv_child_review_git", &a, &b);
+    }
+
+    #[test]
+    fn gitenv_child_review_git() {
+        let Some(a) = ge::child_repo_a() else { return };
+        let want = ge::git(&a, &["rev-parse", "HEAD"]).trim().to_string();
+        let got = match review_git(&a, &["rev-parse", "HEAD"]) {
+            Determination::Known(out) => out.stdout_on_success(),
+            Determination::Undetermined(u) => Determination::Undetermined(u),
+        };
+        assert_eq!(
+            got.map(|s| s.trim().to_string()),
+            Determination::known(want),
+            "HEAD must be repo A's"
+        );
+    }
+
+    #[test]
+    fn gitenv_git_log_name_status_logs_repo_root_not_inherited_git_dir() {
+        let (_root, a, b) = ge::two_repos();
+        ge::run_child("specmap::tests::gitenv_child_git_log_name_status", &a, &b);
+    }
+
+    #[test]
+    fn gitenv_child_git_log_name_status() {
+        let Some(a) = ge::child_repo_a() else { return };
+        let log = git_log_name_status(&a, "HEAD~1").unwrap();
+        assert!(log.contains("A\ta2.txt"), "log must be repo A's: {log}");
+        assert!(!log.contains("b2.txt"), "log leaked repo B: {log}");
     }
 }
 

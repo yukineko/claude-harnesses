@@ -524,3 +524,216 @@ fn p_symlink_loop_write_asks() {
         "Write through a symlink loop must Ask; got {out:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Gap closure (user ruling 2026-11-01), RED tests against 0.2.178.
+// ---------------------------------------------------------------------------
+
+// (1) `cd <symlink-dir> && ... ../x`: the kernel resolves `..` AFTER following
+// the symlink, so `link3/..` is the link TARGET's parent, not the cwd. A
+// lexical collapse of `..` after `cd` lands on the wrong file.
+fn cd_dotdot_case(name: &str, links: &[(&str, &str)], mkdirs: &[&str], cmd: &str) -> String {
+    let f = Fx::new(name);
+    protected_repo(&f);
+    symlink_repo(&f.repo);
+    for d in mkdirs {
+        std::fs::create_dir_all(f.repo.join(d)).unwrap();
+    }
+    for (target, link) in links {
+        std::os::unix::fs::symlink(target, f.repo.join(link)).unwrap();
+    }
+    f.run(cmd)
+}
+
+#[test]
+fn q_cd_symlink_dotdot_redirect_settings_asks() {
+    let out = cd_dotdot_case(
+        "q1",
+        &[(".claude/sub", "link3")],
+        &[".claude/sub"],
+        "cd link3 && echo x > ../settings.json",
+    );
+    assert_protected_ask(&out, "`cd link3 && echo x > ../settings.json`");
+}
+
+#[test]
+fn q_cd_symlink_dotdot_append_settings_asks() {
+    let out = cd_dotdot_case(
+        "q2",
+        &[(".claude/sub", "link3")],
+        &[".claude/sub"],
+        "cd link3 && echo x >> ../settings.json",
+    );
+    assert_protected_ask(&out, "`cd link3 && echo x >> ../settings.json`");
+}
+
+#[test]
+fn q_cd_symlink_dotdot_tee_settings_asks() {
+    let out = cd_dotdot_case(
+        "q3",
+        &[(".claude/sub", "link3")],
+        &[".claude/sub"],
+        "cd link3 && echo x | tee ../settings.json",
+    );
+    assert_protected_ask(&out, "`cd link3 && echo x | tee ../settings.json`");
+}
+
+#[test]
+fn q_cd_symlink_dotdot_workflows_asks() {
+    let out = cd_dotdot_case(
+        "q4",
+        &[(".github/workflows/sub", "link")],
+        &[".github/workflows/sub"],
+        "cd link && echo x > ../ci.yml",
+    );
+    assert_gha_ask(&out, "`cd link && echo x > ../ci.yml`");
+}
+
+// Control: a plain (non-symlink) dir. `../x` from `plain/` is `<repo>/x`,
+// outside every protected path, so the protected reason must not appear.
+#[test]
+fn q_cd_plain_dir_dotdot_is_not_protected() {
+    let out = cd_dotdot_case(
+        "q5",
+        &[],
+        &["plain"],
+        "cd plain && echo x > ../settings.json",
+    );
+    assert!(
+        !out.contains("protected gate/config path") && !out.to_lowercase().contains("github actions"),
+        "plain-dir `../settings.json` is <repo>/settings.json and must not carry a protected reason; got {out:?}"
+    );
+}
+
+// (2) Dangling file symlink into a system directory. The target name cannot
+// exist, and nothing here ever writes: the hook only judges the payload.
+const ABSENT_SYS: &str = "/etc/blastguard-symlink2-c5b9c02b-absent.conf";
+
+fn sys_fixture(name: &str, links: &[(&str, &str)]) -> Fx {
+    assert!(
+        std::fs::symlink_metadata(ABSENT_SYS).is_err(),
+        "fixture: {ABSENT_SYS} must not exist"
+    );
+    let f = Fx::new(name);
+    for (target, link) in links {
+        std::os::unix::fs::symlink(target, f.repo.join(link)).unwrap();
+    }
+    f
+}
+
+fn assert_system_deny(out: &str, what: &str) {
+    assert_eq!(decision(out), "deny", "{what} must Deny; got {out:?}");
+    assert!(
+        out.contains("writes into a system directory"),
+        "{what}: reason must be the system-directory reason; got {out:?}"
+    );
+}
+
+#[test]
+fn s_control_direct_redirect_to_absent_system_file_denies() {
+    let f = sys_fixture("s0", &[]);
+    assert_system_deny(&f.run(&format!("echo x > {ABSENT_SYS}")), "direct `>`");
+    assert_system_deny(&f.run(&format!("echo x >> {ABSENT_SYS}")), "direct `>>`");
+}
+
+#[test]
+fn s_dangling_file_symlink_redirect_denies() {
+    let f = sys_fixture("s1", &[(ABSENT_SYS, "sysln")]);
+    assert_system_deny(&f.run("echo x > sysln"), "`echo x > sysln`");
+}
+
+#[test]
+fn s_dangling_file_symlink_append_denies() {
+    let f = sys_fixture("s2", &[(ABSENT_SYS, "sysln")]);
+    assert_system_deny(&f.run("echo x >> sysln"), "`echo x >> sysln`");
+}
+
+#[test]
+fn s_dangling_symlink_chain_redirect_denies() {
+    let f = sys_fixture("s3", &[(ABSENT_SYS, "sysb"), ("sysb", "sysa")]);
+    assert_system_deny(
+        &f.run("echo x > sysa"),
+        "`echo x > sysa` (sysa -> sysb -> /etc/..)",
+    );
+}
+
+#[test]
+fn s_dangling_symlink_chain_append_denies() {
+    let f = sys_fixture("s4", &[(ABSENT_SYS, "sysb"), ("sysb", "sysa")]);
+    assert_system_deny(
+        &f.run("echo x >> sysa"),
+        "`echo x >> sysa` (sysa -> sysb -> /etc/..)",
+    );
+}
+
+// Write/Edit have no system-directory rule even for a DIRECT path (observed:
+// `Write /etc/<absent>` is Allow on 0.2.178), so the property pinned here is
+// parity: the symlink spelling must be judged exactly as the direct one is.
+#[test]
+fn s_dangling_file_symlink_file_tools_match_direct() {
+    let f = sys_fixture("s5", &[(ABSENT_SYS, "sysln")]);
+    for tool in ["Write", "Edit"] {
+        let direct = f.call(tool, wf_input(tool, Path::new(ABSENT_SYS)), &f.repo);
+        let via = f.call(tool, wf_input(tool, &f.repo.join("sysln")), &f.repo);
+        assert_eq!(
+            decision(&via),
+            decision(&direct),
+            "{tool} via dangling symlink must be judged like the direct path; direct={direct:?} via={via:?}"
+        );
+    }
+}
+
+// (3) The hop limit must be bounded. If it is not, the loop spins forever;
+// this test must FAIL within a bounded time instead of hanging.
+#[test]
+fn p_symlink_loop_write_is_answered_within_bound() {
+    let f = Fx::new("p10");
+    protected_repo(&f);
+    std::os::unix::fs::symlink("loop2", f.repo.join("loop1")).unwrap();
+    std::os::unix::fs::symlink("loop1", f.repo.join("loop2")).unwrap();
+    let p = f.repo.join("loop1/x");
+    let payload = serde_json::json!({
+        "session_id": "gha-workflows",
+        "cwd": f.repo.display().to_string(),
+        "tool_name": "Write",
+        "tool_input": wf_input("Write", &p),
+    })
+    .to_string();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .env("CLAUDE_PROJECT_DIR", &f.repo)
+        .env("BLASTGUARD_APPROVALS_DIR", f.base.join("store"))
+        .env("HOME", &f.home)
+        .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+        .env_remove("BLASTGUARD_ASK")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .current_dir(&f.base)
+        .spawn()
+        .expect("binary spawns");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("symlink loop was not answered within 30s: the hop limit is unbounded");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(
+        decision(&String::from_utf8_lossy(&out.stdout)),
+        "ask",
+        "symlink loop must Ask"
+    );
+}

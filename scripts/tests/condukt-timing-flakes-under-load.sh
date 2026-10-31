@@ -60,4 +60,5 @@ if [ "$fail" -gt 0 ]; then
   exit 1
 fi
 echo "GREEN: all runs passed under $LOADERS busy loops"
+echo "test result: ok. $((2 * ROUNDS)) passed; 0 failed"
 exit 0

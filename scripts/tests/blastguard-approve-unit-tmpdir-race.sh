@@ -62,3 +62,4 @@ if [ "$fails" -ne 0 ]; then
   exit 1
 fi
 echo "PASS: $total/$total concurrent runs passed"
+echo "test result: ok. $total passed; 0 failed"

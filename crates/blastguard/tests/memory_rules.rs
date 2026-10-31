@@ -43,9 +43,7 @@ impl Fx {
     }
 
     fn git(&self, args: &[&str]) {
-        let out = git_env::scrub(&mut Command::new("git"))
-            .arg("-C")
-            .arg(&self.repo)
+        let out = git_env::pinned(&self.repo)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
             .args([
                 "-c",

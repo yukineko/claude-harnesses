@@ -29,6 +29,32 @@ extracted argv: ["pytest"]
 FAIL: extracted command is ["pytest"]; expected it to start with ["python3","-m","pytest"] and include scripts/x.py'''
 
 [[task]]
+id = "84a90410"
+title = "blastguard worktree_protected_paths tests share one fixture dir; concurrent runs clobber each other"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "crates/blastguard/tests/support/neutral_base.rs + worktree_protected_paths_adversarial.rs: Fixture::new remove_dir_all's a fixed per-test dir under a shared base, so concurrent runs delete each other's fixtures mid-setup (observed: 'fatal: unable to get current working directory', index.lock exists, 'does not have a commit checked out'). ESCAPE REPRODUCED (2026-11-01) under the original incident's conditions: clone with a STAGED file, 6 concurrent runs x12 of the real test binary, default fixture location, cwd=clone -> clone HEAD gained 'init' by t <t@example.invalid> containing exactly the staged file (matches stray 91546870). Second repro: bash scripts/tests/blastguard-wtfix-escape-staged-index.sh (exit 1 = escape). First repro (collision only): scripts/tests/blastguard-wtfix-escape-concurrent.sh."
+created_at = 1793462753
+updated_at = 1793463062
+weight = 0.0
+issue_number = 1479
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1479"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/blastguard-wtfix-escape-concurrent.sh"
+rev = "22e07ab8d533a69b59f1fd513391deee6176373c"
+observed_at = 1793462753
+detail = """
+exit 1: ness: fatal: Unable to read current working directory: No such file or directory
+   1 git ["add", "-A"] failed in /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T/blastguard-wtfix-f2942edba375ef77/worktree_protected_paths_adversarial/a_dotgit_bogus/src/harness: fatal: unable to stat '.claude/settings.json': No such file or directory
+FAIL: 42/48 concurrent runs failed (shared fixture dir clobbered)"""
+
+[[task]]
 id = "61666b2f"
 title = "guard-maintree-bash refuses a command that never touches main when another process's git merge is in its pre-merge-commit window"
 project = "/Users/yuki/src/harness"

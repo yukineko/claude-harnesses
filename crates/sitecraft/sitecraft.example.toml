@@ -1,0 +1,25 @@
+# sitecraft.toml — put it at the project root (all keys are top-level).
+# After writing or editing it, a human reviews it and runs `sitecraft trust`:
+# `command` is spawned by `sitecraft serve start` and by the Stop gate, and an
+# untrusted (or changed) file is never run.
+
+# Dev-server argv. Pin the port so the server cannot drift to another one.
+command = ["npm", "run", "dev", "--", "--port", "5173", "--strictPort"]
+# Fixed port the dev server listens on (`serve start` refuses a taken port).
+port = 5173
+# Path probed on http://127.0.0.1:<port> to decide the server is ready.
+ready_path = "/"
+# Ready-probe deadline in seconds (1..=300).
+ready_timeout_secs = 60
+# Same-origin paths `check pages` opens (at least one).
+pages = ["/", "/about"]
+# Build output scanned by `check security` for leaked secrets and .env values.
+build_dir = "dist"
+# Web source files. The Stop gate runs `check pages` only when the session
+# wrote a file matching one of these (or when that cannot be determined), and
+# `check security` scans them for dangerous HTML sinks.
+web_globs = ["src/**", "index.html", "public/**"]
+# Stop-gate give-up budget (consecutive blocked stops; clamped to 1..=10).
+max_attempts = 3
+# Idle seconds after which the attempt counter restarts.
+reset_after_secs = 1800

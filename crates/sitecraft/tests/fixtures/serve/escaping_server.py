@@ -1,6 +1,6 @@
 """Dev server whose listener escapes the process group (standard library only).
 
-Used by crates/sitecraft/tests/serve_stop_port.rs.
+Used by crates/sitecraft/tests/serve_stop_port.rs and serve_ipv6_port.rs.
 
 Usage: python3 escaping_server.py <mode> <port> <outdir>
 
@@ -19,6 +19,13 @@ Modes:
   exit   the daemon only listens (never answers HTTP); the leader exits
          right after the daemon is in place, so `serve start` takes the
          "exited before it was ready" path while the daemon holds the port.
+  idle6  the daemon only listens on [::1]:<port> with IPV6_V6ONLY=1 (never
+         answers HTTP, never touches 127.0.0.1); the leader (inside the
+         recorded group) answers HTTP 200 on 127.0.0.1:<port>, so `serve
+         start` succeeds. `serve stop` kills the leader's group, which frees
+         127.0.0.1, while the escaped daemon keeps [::1]:<port>.
+  exit6  like idle6 for the daemon; the leader exits right after the daemon
+         is in place (early-exit path) while [::1]:<port> stays held.
 
 Safety net against orphans: both processes exit on their own after LIFETIME
 seconds; the tests also SIGKILL daemon.pid / pgid in a drop guard.
@@ -61,6 +68,12 @@ def daemon(mode, port, outdir, wfd):
     if mode == "idle":
         server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Ok)
         server.daemon_threads = True
+    elif mode in ("idle6", "exit6"):
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("::1", port))
+        sock.listen(64)
     else:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -92,9 +105,13 @@ def main():
     # Wait until the daemon has left the group and holds the port.
     os.read(rfd, 1)
     os.close(rfd)
-    if mode == "exit":
+    if mode in ("exit", "exit6"):
         os._exit(1)
     threading.Timer(LIFETIME, lambda: os._exit(3)).start()
+    if mode == "idle6":
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Ok)
+        server.daemon_threads = True
+        server.serve_forever()
     time.sleep(LIFETIME)
     os._exit(3)
 

@@ -608,4 +608,25 @@ mod tests {
         );
         assert!(matches!(v, Verdict::Violation(_)));
     }
+
+    // ── inherited GIT_DIR must not redirect `git -C repo_root` ──────────────
+
+    use crate::gitenv_testutil as ge;
+
+    #[test]
+    fn gitenv_git_answers_about_repo_root_not_inherited_git_dir() {
+        let (_root, a, b) = ge::two_repos();
+        ge::run_child("gatecheck::tests::gitenv_child_git", &a, &b);
+    }
+
+    #[test]
+    fn gitenv_child_git() {
+        let Some(a) = ge::child_repo_a() else { return };
+        let want = ge::git(&a, &["rev-parse", "HEAD"]).trim().to_string();
+        assert_eq!(
+            git(&a, &["rev-parse", "HEAD"]).map(|s| s.trim().to_string()),
+            Determination::known(want),
+            "HEAD must be repo A's"
+        );
+    }
 }

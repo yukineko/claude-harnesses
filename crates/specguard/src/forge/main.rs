@@ -24,6 +24,9 @@ mod agent;
 mod config;
 mod evidence;
 mod gather;
+#[cfg(test)]
+#[path = "../gitenv_testutil.rs"]
+mod gitenv_testutil;
 mod impl_prompt;
 mod implement;
 mod ir;
@@ -1123,4 +1126,121 @@ fn cmd_merge(l: &Loaded, id: &str, req_filter: Option<&str>) -> Result<u8> {
         items_to_merge.len()
     );
     Ok(EXIT_OK)
+}
+
+#[cfg(test)]
+mod tests {
+    // ── inherited GIT_DIR must not redirect `git -C repo_root` ──────────────
+    // Each parent runs its child under GIT_DIR=<B>/.git; the child calls the
+    // production function on A (see crate::gitenv_testutil).
+
+    use super::*;
+    use crate::gitenv_testutil as ge;
+
+    #[test]
+    fn gitenv_current_head_reads_repo_root_not_inherited_git_dir() {
+        let (_root, a, b) = ge::two_repos();
+        ge::run_child("tests::gitenv_child_current_head", &a, &b);
+    }
+
+    #[test]
+    fn gitenv_child_current_head() {
+        let Some(a) = ge::child_repo_a() else { return };
+        let want = ge::git(&a, &["rev-parse", "HEAD"]).trim().to_string();
+        assert_eq!(current_head(&a).unwrap(), want, "HEAD must be repo A's");
+    }
+
+    /// Repos A and B plus a worktree `<root>/wt` of A on branch
+    /// `specforge/S1/R1` carrying one extra commit (`r1.txt`).
+    fn merge_fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
+        let (root, a, b) = ge::two_repos();
+        let wt = root.path().canonicalize().unwrap().join("wt");
+        let wt_s = wt.to_str().unwrap();
+        ge::git(
+            &a,
+            &["worktree", "add", "-q", "-b", "specforge/S1/R1", wt_s],
+        );
+        std::fs::write(wt.join("r1.txt"), "r1\n").unwrap();
+        ge::git(&wt, &["add", "r1.txt"]);
+        ge::git(&wt, &["commit", "-q", "-m", "r1"]);
+        (root, a, b, wt)
+    }
+
+    fn snapshot(repo: &Path) -> (String, String, String) {
+        (
+            ge::git(repo, &["rev-parse", "HEAD"]),
+            ge::git(repo, &["branch", "--list"]),
+            ge::git(repo, &["worktree", "list", "--porcelain"]),
+        )
+    }
+
+    #[test]
+    fn gitenv_cmd_merge_merges_into_repo_root_not_inherited_git_dir() {
+        let (_root, a, b, _wt) = merge_fixture();
+        let b_before = snapshot(&b);
+        ge::run_child("tests::gitenv_child_cmd_merge", &a, &b);
+        assert!(
+            ge::git(&a, &["ls-tree", "-r", "--name-only", "HEAD"])
+                .lines()
+                .any(|l| l == "r1.txt"),
+            "the worktree branch must be merged into repo A"
+        );
+        assert!(
+            ge::git(&a, &["log", "-1", "--format=%s"]).starts_with("specforge: merge S1/R1"),
+            "repo A's HEAD must be the specforge merge commit"
+        );
+        assert_eq!(
+            snapshot(&b),
+            b_before,
+            "cmd_merge mutated the GIT_DIR repo B"
+        );
+    }
+
+    #[test]
+    fn gitenv_cmd_merge_removes_worktree_of_repo_root_not_inherited_git_dir() {
+        let (_root, a, b, wt) = merge_fixture();
+        ge::run_child("tests::gitenv_child_cmd_merge", &a, &b);
+        assert!(
+            !wt.exists(),
+            "merged worktree {} must be removed",
+            wt.display()
+        );
+        assert!(
+            !ge::git(&a, &["worktree", "list", "--porcelain"]).contains(wt.to_str().unwrap()),
+            "repo A must no longer list the merged worktree"
+        );
+    }
+
+    #[test]
+    fn gitenv_child_cmd_merge() {
+        let Some(a) = ge::child_repo_a() else { return };
+        let wt = a.parent().unwrap().canonicalize().unwrap().join("wt");
+        let cfg: Config = toml::from_str("[project]\nname = \"t\"\n").unwrap();
+        let l = Loaded {
+            cfg,
+            repo_root: a.clone(),
+            config_dir: a.clone(),
+            date: "2026-01-01".to_string(),
+        };
+        let report = evidence::EvidenceReport {
+            spec_id: "S1".to_string(),
+            date: l.date.clone(),
+            gate_status: "agreed".to_string(),
+            total: 1,
+            passed: 1,
+            partial: 0,
+            failed: 0,
+            no_marker: 0,
+            items: vec![evidence::EvidenceItem {
+                req_id: "R1".to_string(),
+                status: "done".to_string(),
+                test_result: Some("pass".to_string()),
+                evidence_note: None,
+                worktree: Some(wt.to_str().unwrap().to_string()),
+            }],
+            agreement_reason: Some("test".to_string()),
+        };
+        evidence::write(&impl_dir(&l), &report).unwrap();
+        assert_eq!(cmd_merge(&l, "S1", None).unwrap(), EXIT_OK);
+    }
 }

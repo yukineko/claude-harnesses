@@ -1184,6 +1184,55 @@ mod tests {
         assert_eq!(baseline, ALL_TRACKED);
         assert!(fell_back);
     }
+
+    // ── inherited GIT_DIR must not redirect `git -C repo_root` ──────────────
+    // Each parent runs its child under GIT_DIR=<B>/.git; the child asserts the
+    // production function answered about A (see crate::gitenv_testutil).
+
+    use crate::gitenv_testutil as ge;
+
+    #[test]
+    fn gitenv_current_head_reads_repo_root_not_inherited_git_dir() {
+        let (_root, a, b) = ge::two_repos();
+        ge::run_child("scope::tests::gitenv_child_current_head", &a, &b);
+    }
+
+    #[test]
+    fn gitenv_child_current_head() {
+        let Some(a) = ge::child_repo_a() else { return };
+        let want = ge::git(&a, &["rev-parse", "HEAD"]).trim().to_string();
+        assert_eq!(current_head(&a).unwrap(), want, "HEAD must be repo A's");
+    }
+
+    #[test]
+    fn gitenv_all_tracked_files_lists_repo_root_not_inherited_git_dir() {
+        let (_root, a, b) = ge::two_repos();
+        ge::run_child("scope::tests::gitenv_child_all_tracked_files", &a, &b);
+    }
+
+    #[test]
+    fn gitenv_child_all_tracked_files() {
+        let Some(a) = ge::child_repo_a() else { return };
+        assert_eq!(
+            all_tracked_files(&a).unwrap(),
+            vec!["a1.txt".to_string(), "a2.txt".to_string()]
+        );
+    }
+
+    #[test]
+    fn gitenv_git_diff_names_diffs_repo_root_not_inherited_git_dir() {
+        let (_root, a, b) = ge::two_repos();
+        ge::run_child("scope::tests::gitenv_child_git_diff_names", &a, &b);
+    }
+
+    #[test]
+    fn gitenv_child_git_diff_names() {
+        let Some(a) = ge::child_repo_a() else { return };
+        assert_eq!(
+            git_diff_names(&a, "HEAD~1").unwrap(),
+            vec!["a2.txt".to_string()]
+        );
+    }
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "sitecraft"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Site-building harness for Claude Code: records design decisions asked from the user, manages the dev server, and blocks a Stop on broken pages or security findings."
 license = "MIT"

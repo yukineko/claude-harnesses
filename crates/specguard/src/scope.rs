@@ -1256,6 +1256,38 @@ mod prop_tests {
             .collect()
     }
 
+    /// Deterministic repro of the `no_file_in_multiple_hits` proptest failure:
+    /// the shrunk input `["wsb", "aaa", "wsb"]` maps to a duplicated changed
+    /// file `src/a0/wsb.rs`, which then appears twice across the hits.
+    #[test]
+    #[ignore = "RED repro: duplicate file input breaks no_file_in_multiple_hits"]
+    fn no_file_in_multiple_hits_duplicate_input_repro() {
+        let areas = vec![
+            mk_area("a0", vec!["src/a0/**".into()]),
+            mk_area("a1", vec!["src/a1/**".into()]),
+        ];
+        let files = ["wsb", "aaa", "wsb"];
+        let changed: Vec<String> = files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                if i % 2 == 0 {
+                    format!("src/a0/{f}.rs")
+                } else {
+                    format!("src/a1/{f}.rs")
+                }
+            })
+            .collect();
+        let (hits, _) = classify(&changed, &areas).unwrap();
+        let all: Vec<String> = all_hit_files(&hits);
+        let unique: HashSet<&String> = all.iter().collect();
+        assert_eq!(
+            all.len(),
+            unique.len(),
+            "a file appeared in multiple hits: {all:?}"
+        );
+    }
+
     proptest! {
         /// With no areas, no changed files are classified into any area hit.
         #[test]

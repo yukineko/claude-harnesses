@@ -7034,7 +7034,11 @@ mod inherited_git_env_tests {
         );
         init_repo(&b, "bbranch", &["b_only.txt"], "change B");
         let marker = format!("GITENV_MAIN_CHILD_OK {child_test}");
-        let out = Command::new(std::env::current_exe().unwrap())
+        // Drop the outer run's GIT_* so the decoy GIT_DIR below is the only
+        // inherited git variable the child sees.
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        harness_core::git_env::scrub(&mut child);
+        let out = child
             .args([
                 "--exact",
                 &format!("inherited_git_env_tests::{child_test}"),

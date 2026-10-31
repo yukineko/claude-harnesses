@@ -5132,6 +5132,9 @@ mod inherited_git_env_site_tests {
         std::fs::create_dir_all(&home).unwrap();
         let marker = format!("GITENV_SITE_CHILD_OK {child_test}");
         let mut cmd = Command::new(std::env::current_exe().unwrap());
+        // Drop the outer run's GIT_* so the decoy GIT_DIR below is the only
+        // inherited git variable the child sees.
+        harness_core::git_env::scrub(&mut cmd);
         cmd.args([
             "--exact",
             &format!("worktree::inherited_git_env_site_tests::{child_test}"),

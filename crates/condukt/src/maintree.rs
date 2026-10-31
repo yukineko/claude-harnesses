@@ -1507,7 +1507,12 @@ mod inherited_index_tests {
         fx(&repo, &["add", "f.txt"], Some(&temp_index));
         fx(&repo, &["add", "g.txt"], None);
 
-        let out = Command::new(std::env::current_exe().unwrap())
+        // Scrub the OUTER run's GIT_* (e.g. a GIT_DIR the whole `cargo test`
+        // inherited) from the child, then set only GIT_INDEX_FILE, so the
+        // child's environment is exactly the hook's and nothing else.
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        harness_core::git_env::scrub(&mut child);
+        let out = child
             .args([
                 "--exact",
                 "maintree::inherited_index_tests::child_observe_staged_reads_inherited_index",

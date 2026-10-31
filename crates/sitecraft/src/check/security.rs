@@ -70,6 +70,21 @@ fn walk(
     skip: &dyn Fn(&Path, &str) -> bool,
     out: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
+    let mut visited = std::collections::HashSet::new();
+    walk_inner(dir, skip, out, &mut visited)
+}
+
+fn walk_inner(
+    dir: &Path,
+    skip: &dyn Fn(&Path, &str) -> bool,
+    out: &mut Vec<PathBuf>,
+    visited: &mut std::collections::HashSet<PathBuf>,
+) -> Result<(), String> {
+    let canon = std::fs::canonicalize(dir)
+        .map_err(|e| format!("cannot resolve directory {}: {e}", dir.display()))?;
+    if !visited.insert(canon) {
+        return Ok(()); // already scanned via another path (symlink loop / alias)
+    }
     let rd = std::fs::read_dir(dir)
         .map_err(|e| format!("cannot read directory {}: {e}", dir.display()))?;
     for ent in rd {
@@ -78,19 +93,13 @@ fn walk(
         // Follows symlinks for files; a dangling link is an error, not a skip.
         let meta =
             std::fs::metadata(&path).map_err(|e| format!("cannot stat {}: {e}", path.display()))?;
-        let is_link = ent
-            .file_type()
-            .map_err(|e| format!("cannot stat {}: {e}", path.display()))?
-            .is_symlink();
         if meta.is_dir() {
-            if is_link {
-                continue; // do not follow directory links (loops)
-            }
+            // Directory links are followed; `visited` (canonical paths) stops loops.
             let name = ent.file_name().to_string_lossy().into_owned();
             if skip(&path, &name) {
                 continue;
             }
-            walk(&path, skip, out)?;
+            walk_inner(&path, skip, out, visited)?;
         } else if meta.is_file() {
             out.push(path);
         }
@@ -125,21 +134,20 @@ struct SecretPattern {
 fn secret_patterns() -> Result<&'static Vec<SecretPattern>, String> {
     static P: OnceLock<Result<Vec<SecretPattern>, String>> = OnceLock::new();
     P.get_or_init(|| {
-        let defs: [(&str, &str, bool); 6] = [
+        let defs: [(&str, &str, bool); 5] = [
             ("AWS access key", r"AKIA[0-9A-Z]{16}", false),
             (
                 "GitHub token",
-                r"(?:gh[po]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})",
+                r"(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})",
                 false,
             ),
             ("Stripe secret key", r"sk_(?:live|test)_[A-Za-z0-9]{24,}", false),
             ("Google API key", r"AIza[0-9A-Za-z_\-]{35}", false),
             (
                 "private key block",
-                r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\s|\\n|\\r)*(?:Proc-Type|DEK-Info|[A-Za-z0-9+/]{16,})",
+                r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\s|\\+[nr])*(?:Proc-Type|DEK-Info|[A-Za-z0-9+/]{16,})",
                 true,
             ),
-            ("GitHub token", r"\bghs_[A-Za-z0-9]{36,}", false),
         ];
         defs.iter()
             .map(|(label, pat, label_only)| {
@@ -231,7 +239,7 @@ fn sinks() -> Result<&'static Sinks, String> {
         let mk =
             |p: &str| Regex::new(p).map_err(|e| format!("internal sink pattern {p} invalid: {e}"));
         Ok(Sinks {
-            inner_html: mk(r"\binnerHTML\s*(\+?=+)\s*(.*)")?,
+            inner_html: mk(r#"\binnerHTML(?:['"]\s*\])?\s*(\+=|\|\|=|&&=|\?\?=|=+)\s*(.*)"#)?,
             constant: mk(r#"^(?:"[^"\\]*"|'[^'\\]*'|`[^`$\\]*`)\s*;?\s*$"#)?,
             others: vec![
                 (
@@ -306,7 +314,7 @@ fn scan_sinks(config: &Config, root: &Path) -> Verdict {
             let n = i + 1;
             for c in sk.inner_html.captures_iter(line) {
                 let op = c.get(1).map_or("", |m| m.as_str());
-                if op != "=" && op != "+=" {
+                if op == "==" || op == "===" {
                     continue; // comparison, not assignment
                 }
                 let rhs = c.get(2).map_or("", |m| m.as_str()).trim();
@@ -340,7 +348,26 @@ fn audit_undet(why: impl std::fmt::Display) -> Verdict {
     ))
 }
 
+/// How long the output pipe may stay open after npm itself has exited. A
+/// grandchild still holding stdout means the output is not known complete.
+const PIPE_GRACE: Duration = Duration::from_secs(2);
+
+/// Kill npm and everything in its process group (it is spawned as a group
+/// leader), then reap npm.
+fn kill_group(child: &mut std::process::Child) {
+    if let Ok(pid) = i32::try_from(child.id()) {
+        // SAFETY: plain kill(2) on the process group we created; no memory is touched.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn audit(root: &Path) -> Verdict {
+    use std::os::unix::process::CommandExt;
+
     let npm = crate::program_from_env(crate::ENV_NPM, "npm");
     let mut child = match Command::new(&npm)
         .args(["audit", "--json"])
@@ -348,19 +375,22 @@ fn audit(root: &Path) -> Verdict {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()
     {
         Ok(c) => c,
         Err(e) => return audit_undet(format!("cannot run {}: {e}", npm.to_string_lossy())),
     };
     let Some(mut stdout) = child.stdout.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
+        kill_group(&mut child);
         return audit_undet("no stdout pipe");
     };
-    let reader = std::thread::spawn(move || {
+    let (tx, rx) = std::sync::mpsc::channel();
+    // Detached on purpose: if the pipe never closes we do not join it.
+    std::thread::spawn(move || {
         let mut buf = Vec::new();
-        stdout.read_to_end(&mut buf).map(|_| buf)
+        let r = stdout.read_to_end(&mut buf).map(|_| buf);
+        let _ = tx.send(r);
     });
     let start = Instant::now();
     let status = loop {
@@ -368,23 +398,28 @@ fn audit(root: &Path) -> Verdict {
             Ok(Some(s)) => break s,
             Ok(None) => {
                 if start.elapsed() > AUDIT_TIMEOUT {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_group(&mut child);
                     return audit_undet(format!("timed out after {}s", AUDIT_TIMEOUT.as_secs()));
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_group(&mut child);
                 return audit_undet(format!("cannot wait for npm: {e}"));
             }
         }
     };
-    let bytes = match reader.join() {
+    let received = rx.recv_timeout(PIPE_GRACE);
+    // Whatever is left in npm's group is no longer needed.
+    kill_group(&mut child);
+    let bytes = match received {
         Ok(Ok(b)) => b,
         Ok(Err(e)) => return audit_undet(format!("cannot read npm output: {e}")),
-        Err(_) => return audit_undet("output reader panicked"),
+        Err(_) => {
+            return audit_undet(
+                "npm exited but its output pipe stayed open (a background process holds stdout), so the output is not known complete",
+            )
+        }
     };
     // npm audit exits 1 whenever vulnerabilities exist; the JSON decides.
     // Anything other than 0/1 (signal, 97, ...) is not an audit result.

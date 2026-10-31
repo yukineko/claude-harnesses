@@ -1030,7 +1030,7 @@
     {
       "name": "onepass",
       "description": "PreToolUse gate on Agent and Task that allows at most one refutation, verification or audit subagent spawn per user prompt, failing closed when state is unreadable.",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "category": "quality",
       "keywords": [
         "hooks",

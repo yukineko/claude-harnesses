@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/sitecraft gate", "timeout": 600 }
+        ]
+      }
+    ]
+  }
+}

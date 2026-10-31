@@ -842,8 +842,7 @@ fn backlog_d94d05c3_every_test_that_spawns_the_binary_isolates_home() {
 
 // ---------------------------------------------------------------- a529cd11
 fn git_in(dir: &std::path::Path, args: &[&str]) {
-    let st = git_env::scrub(&mut Command::new("git"))
-        .current_dir(dir)
+    let st = git_env::pinned(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
         .status()

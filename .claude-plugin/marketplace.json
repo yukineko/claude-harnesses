@@ -57,7 +57,7 @@
     {
       "name": "blastguard",
       "description": "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary.",
-      "version": "0.2.172",
+      "version": "0.2.174",
       "category": "security",
       "keywords": [
         "hooks",
@@ -1071,6 +1071,30 @@
         "source": "git-subdir",
         "url": "https://github.com/yukineko/claude-harnesses.git",
         "path": "crates/webqa",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "sitecraft",
+      "description": "Site-building harness for Claude Code: records design decisions asked from the user, manages the dev server, and blocks a Stop on broken pages or security findings.",
+      "version": "0.1.3",
+      "category": "quality",
+      "keywords": [
+        "hooks",
+        "skills",
+        "web",
+        "prototype",
+        "security"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/sitecraft",
+      "author": {
+        "name": "yukineko"
+      },
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/yukineko/claude-harnesses.git",
+        "path": "crates/sitecraft",
         "ref": "main"
       }
     }

@@ -300,6 +300,30 @@ fn check_port_free(port: u16) -> Result<(), String> {
     }
 }
 
+/// After the group kill, confirm nothing still accepts on `port`. Polls (up to
+/// ~2 s) until a connect is refused. Anything else — a connect that succeeds
+/// or any other error — is not a confirmation, so it stays `Err` (fail-closed).
+fn confirm_port_released(port: u16) -> Result<(), String> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let last = loop {
+        let why = match TcpStream::connect_timeout(&addr, PROBE_TIMEOUT) {
+            Err(e) if e.kind() == ErrorKind::ConnectionRefused => return Ok(()),
+            Ok(_) => "still accepting connections".to_string(),
+            Err(e) => format!("cannot be probed ({e})"),
+        };
+        if Instant::now() >= deadline {
+            break why;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    Err(format!(
+        "port {port} is still in use ({last}) after the process group was killed; \
+         a process that escaped the group (e.g. via setsid) may survive; \
+         find and kill the listener (`lsof -iTCP:{port} -sTCP:LISTEN`), then retry"
+    ))
+}
+
 /// One HTTP probe. `Some(code)` when an HTTP status line was read; `None`
 /// when nothing answered with HTTP yet (refused / reset / timeout / garbage).
 /// `None` only ever means "not ready": the caller keeps waiting until its
@@ -453,10 +477,15 @@ fn start_inner(state: &Path, root: &Path) -> Result<ServerState, String> {
 
     let fail = |child: &mut Child, why: String| -> String {
         match terminate_group(pgid, Some(child)) {
-            Ok(()) => format!(
-                "{why} (process group {pgid} terminated; log: {})",
-                log_path.display()
-            ),
+            // Only claim success when the port is observed free: a daemon that
+            // escaped the group (setsid) can survive a confirmed group kill.
+            Ok(()) => match confirm_port_released(cfg.port) {
+                Ok(()) => format!(
+                    "{why} (process group {pgid} terminated; log: {})",
+                    log_path.display()
+                ),
+                Err(held) => format!("{why}; {held} (log: {})", log_path.display()),
+            },
             Err(kill_err) => format!("{why}; additionally, cleanup failed: {kill_err}"),
         }
     };
@@ -545,7 +574,8 @@ fn start_inner(state: &Path, root: &Path) -> Result<ServerState, String> {
 ///
 /// Contract: no state file → `Known(NotRunning)`; state file unreadable or
 /// invalid JSON → `Undetermined` (nothing killed); group terminated → state
-/// file removed, `Known(Stopped)`; group survives SIGKILL → `Undetermined`.
+/// file removed, `Known(Stopped)` only once the recorded port is observed free;
+/// group survives SIGKILL, or the port still accepts → `Undetermined` (state kept).
 pub fn stop(state: &Path, root: &Path) -> Determination<Stopped> {
     lift(stop_inner(state, root))
 }
@@ -558,6 +588,11 @@ fn stop_inner(state: &Path, root: &Path) -> Result<Stopped, String> {
         OnDisk::Present(st) => st,
     };
     terminate_group(st.pgid, None)?;
+    // "The group is gone" is not "the server is stopped": a daemon that
+    // escaped the group may still hold the port. Undetermined, and the state
+    // file is deliberately KEPT so `stop`/`status` can be retried once the
+    // listener is dealt with (removing it would lose the only record of the port).
+    confirm_port_released(st.port)?;
     std::fs::remove_file(&sf).map_err(|e| {
         format!(
             "process group {} stopped but the state file {} cannot be removed: {e}; delete it by hand",

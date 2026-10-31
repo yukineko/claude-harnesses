@@ -2,9 +2,8 @@
 //! globals beyond the static allowlist in [`crate::exclude`]. The rules are
 //! lexical, with filesystem reads only where the verdict depends on what a
 //! path really names: the recoverability probe ([`crate::reversible`]), the
-//! real landing of a system-directory write ([`real_landing`]), and the
-//! symlink-resolved target of a write to a protected or workflow path
-//! ([`physical_landing`]).
+//! symlink-resolved landing ([`physical_landing`]) of a write to a system
+//! directory and of a write to a protected or workflow path.
 //!
 //! The bias is deliberately asymmetric: we only Deny on *clearly* destructive,
 //! hard-to-undo patterns (recursive/wildcard deletion, full-file truncation,
@@ -705,17 +704,34 @@ fn extract_path(ti: Option<&Value>) -> Option<String> {
 /// ([`physical_landing`], base = the segment's raw cwd). Either match Asks, so
 /// `wf/ci.yml` with `wf -> .github/workflows`, a file symlink onto
 /// `.claude/settings.json`, and a chain of links are all the same write as the
-/// direct spelling. When the resolution itself fails (a symlink loop, an
+/// direct spelling. A redirect after a `cd` is resolved from the `cd`'s
+/// directory with its own `..` applied after the symlinks
+/// ([`protected_path_block_at`]), so `cd link3 && echo x > ../settings.json`
+/// is judged where it lands. When the resolution itself fails (a symlink loop, an
 /// unreadable component, any I/O error other than "does not exist yet") the
 /// write is Undetermined and Asks — "could not resolve" is never read as "not
 /// a protected path" (CLAUDE.md §3). A target with an unexpanded `$`/backtick,
 /// or a relative one with no known base, cannot be placed and keeps the
 /// lexical verdict alone.
 fn protected_path_block(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
+    protected_path_block_at(ctx, action, path, path)
+}
+
+/// [`protected_path_block`] with the two judgements fed different spellings:
+/// `path` is judged lexically, `physical` is resolved through its symlinks.
+/// They differ for a redirect after a `cd` ([`physical_redirect_spelling`]):
+/// the lexical form has `..` collapsed against the `cd` text, the physical one
+/// keeps it so it is applied to the directory the `cd` really entered.
+fn protected_path_block_at(
+    ctx: &Ctx<'_>,
+    action: &str,
+    path: &str,
+    physical: &str,
+) -> Option<Decision> {
     if let Some(d) = protected_path_lexical_block(ctx, action, path) {
         return Some(d);
     }
-    match physical_landing(path, ctx.raw_base.as_deref())? {
+    match physical_landing(physical, ctx.raw_base.as_deref())? {
         Determination::Known(real) => protected_verdict(
             ctx,
             action,
@@ -903,8 +919,10 @@ $PATH), so whether the old bytes were recoverable does not make it safe"
     )))
 }
 
-/// Where `target` REALLY lands to the kernel: its deepest existing ancestor
-/// canonicalised (symlinks resolved), with the not-yet-existing tail appended.
+/// [`system_path_block`] applied to the path the kernel will really write
+/// ([`physical_landing`]) instead of the text. `Err(reason)` when the real
+/// landing could not be determined (a symlink loop, an unreadable link, an
+/// `lstat` error other than "does not exist").
 ///
 /// Backlog 2287ebae: [`system_path_block`] judges the LEXICAL path, so
 /// `: > <proj>/esc/etc/new.conf` with `esc -> /` was Allow — the file does not
@@ -912,57 +930,21 @@ $PATH), so whether the old bytes were recoverable does not make it safe"
 /// directory, yet the kernel creates `/etc/new.conf`. The literal spelling of
 /// the same file is Deny.
 ///
-/// `None` = not a path this can place (an unexpanded `$`/backtick target, or a
-/// relative one with no known base) — the caller's existing rules for those
-/// stand. `Undetermined` = the filesystem could not answer (EACCES on an
-/// ancestor, …); the caller must NOT read that as "not a system directory".
-fn real_landing(target: &str, base: Option<&str>) -> Option<Determination<String>> {
-    if target.contains('$') || target.contains('`') {
-        return None;
-    }
-    let path = crate::reversible::resolve(target, base)?;
-    let mut existing: &std::path::Path = path.as_path();
-    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
-    loop {
-        match std::fs::canonicalize(existing) {
-            Ok(mut real) => {
-                for comp in tail.iter().rev() {
-                    real.push(comp);
-                }
-                return Some(Determination::Known(real.display().to_string()));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                match (existing.parent(), existing.file_name()) {
-                    (Some(parent), Some(name)) => {
-                        tail.push(name);
-                        existing = parent;
-                    }
-                    _ => {
-                        return Some(Determination::undetermined(format!(
-                            "no ancestor of `{target}` could be resolved"
-                        )))
-                    }
-                }
-            }
-            Err(e) => {
-                return Some(Determination::undetermined(format!(
-                    "`{}` could not be resolved ({e}), so where `{target}` really lands is unknown",
-                    existing.display()
-                )))
-            }
-        }
-    }
-}
-
-/// [`system_path_block`] applied to the path the kernel will really write
-/// ([`real_landing`]) instead of the text. `Err(reason)` when the real landing
-/// could not be determined.
+/// The landing is the same resolver the protected-path axis uses, so a FINAL
+/// file symlink whose target does not exist yet is followed too (`sysln ->
+/// /etc/<absent>`, and chains of such links): a write through it creates that
+/// target. Resolving only the deepest existing ancestor (the previous
+/// `canonicalize` walk) stopped at the dangling link and never saw `/etc`.
+///
+/// `Ok(None)` also covers a target that cannot be placed (an unexpanded
+/// `$`/backtick, or relative with no known base) — the caller's existing rules
+/// for those stand.
 fn real_system_path_block(
     action: &str,
     target: &str,
     ctx: &Ctx,
 ) -> Result<Option<Decision>, String> {
-    match real_landing(target, ctx.raw_base.as_deref()) {
+    match physical_landing(target, ctx.raw_base.as_deref()) {
         None => Ok(None),
         // macOS: the writable data volume is mounted at `/` through firmlinks,
         // and some of its symlinks (`/home -> /System/Volumes/Data/home`)
@@ -1964,6 +1946,8 @@ primitive, not a filesystem path",
         let target = seg_idx
             .and_then(|seg_idx| resolve_redirect_target_at(rcmd, seg_idx, &raw_target))
             .unwrap_or(raw_target);
+        // `..` kept for the symlink resolver (see `physical_redirect_spelling`).
+        let physical = physical_redirect_spelling(seg_idx, &seg_cwds, &target);
         let target = match place_redirect_target(rcmd, seg_idx, &seg_cwds, target) {
             Ok(placed) => placed,
             Err(raw) => {
@@ -1976,7 +1960,7 @@ primitive, not a filesystem path",
                 continue;
             }
         };
-        if let Some(deny) = protected_path_block(ctx, "redirect", &target) {
+        if let Some(deny) = protected_path_block_at(ctx, "redirect", &target, &physical) {
             return deny;
         }
         if !redirect_target_is_safe(&target, ctx) {
@@ -1991,7 +1975,7 @@ primitive, not a filesystem path",
             // The same axis on the path the kernel really writes (2287ebae):
             // a symlink in the text can land a NEW file in `/etc` that the
             // lexical check above never sees.
-            let landing_undetermined = match real_system_path_block("redirect", &target, ctx) {
+            let landing_undetermined = match real_system_path_block("redirect", &physical, ctx) {
                 Ok(Some(deny)) => return deny,
                 Ok(None) => None,
                 Err(why) => Some(why),
@@ -2184,6 +2168,7 @@ does not parse that body, but blastguard cannot show the program does not use it
         let target = seg_idx
             .and_then(|seg_idx| resolve_redirect_target_at(rcmd, seg_idx, &raw_target))
             .unwrap_or(raw_target);
+        let physical = physical_redirect_spelling(seg_idx, &seg_cwds, &target);
         let target = match place_redirect_target(rcmd, seg_idx, &seg_cwds, target) {
             Ok(placed) => placed,
             Err(raw) => {
@@ -2195,7 +2180,7 @@ does not parse that body, but blastguard cannot show the program does not use it
                 continue;
             }
         };
-        if let Some(deny) = protected_path_block(ctx, "append redirect", &target) {
+        if let Some(deny) = protected_path_block_at(ctx, "append redirect", &target, &physical) {
             return deny;
         }
         // The system-directory axis does not care about the truncate/append
@@ -2207,7 +2192,7 @@ does not parse that body, but blastguard cannot show the program does not use it
         }
         // ...and on the path the kernel really writes (2287ebae): a symlink in
         // the text hides the system directory from the lexical check.
-        match real_system_path_block("append redirect", &target, ctx) {
+        match real_system_path_block("append redirect", &physical, ctx) {
             Ok(Some(deny)) => return deny,
             Ok(None) => {}
             Err(why) => line_level_asks.push(Decision::ask(format!(
@@ -2741,6 +2726,36 @@ fn place_redirect_target(
             target
         ))),
         CwdState::Unknown => Err(target),
+    }
+}
+
+/// The spelling of a redirect target that [`physical_landing`] should resolve:
+/// `<dir>/<target>` with the target's `..` left UNcollapsed when a `cd` placed
+/// the segment in `dir`, otherwise the target unchanged.
+///
+/// [`place_redirect_target`] collapses `..` lexically, which is right for the
+/// `cd` chain itself (a shell's `cd` is logical by default: `cd link && cd ..`
+/// returns to where it started) but wrong for the redirect: the kernel opens
+/// `../x` from the directory the `cd` really entered, so `cd link3 && echo x >
+/// ../settings.json` with `link3 -> .claude/sub` writes `.claude/settings.json`,
+/// not `settings.json`. Keeping `dir` (logical) and the raw target lets the
+/// resolver follow `link3` before it applies `..`. Only meaningful when
+/// [`place_redirect_target`] returned `Ok` for the same target.
+fn physical_redirect_spelling(
+    seg_idx: Option<usize>,
+    seg_cwds: &[CwdState],
+    target: &str,
+) -> String {
+    if !is_relative_operand(target) || has_unresolvable_expansion(target) {
+        return target.to_string();
+    }
+    match seg_idx.and_then(|idx| seg_cwds.get(idx)) {
+        // `cd link && cd ..` tracks as `Known("")`: the line's own base, so
+        // the target is already relative to it (never `/<target>`).
+        Some(CwdState::Known(dir)) if !dir.is_empty() => {
+            format!("{}/{}", dir.trim_end_matches('/'), target)
+        }
+        _ => target.to_string(),
     }
 }
 

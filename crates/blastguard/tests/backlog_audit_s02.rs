@@ -382,13 +382,20 @@ struct Tree {
     proj: PathBuf,
     base: PathBuf,
     store: PathBuf,
+    /// Owns `base`: a unique directory per fixture instance, so concurrent
+    /// runs of this binary never share (and clobber) one fixture path
+    /// (backlog b6ce7f76). Removed on drop.
+    _dir: tempfile::TempDir,
 }
 
 fn tree(name: &str) -> Tree {
-    let base = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("backlog_audit_s02")
-        .join(name);
-    let _ = std::fs::remove_dir_all(&base);
+    let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("backlog_audit_s02");
+    std::fs::create_dir_all(&parent).unwrap();
+    let dir = tempfile::Builder::new()
+        .prefix(&format!("{name}-"))
+        .tempdir_in(&parent)
+        .unwrap();
+    let base = dir.path().to_path_buf();
     let proj = base.join("proj");
     std::fs::create_dir_all(proj.join("s")).unwrap();
     std::fs::create_dir_all(base.join("outside/deep")).unwrap();
@@ -396,7 +403,12 @@ fn tree(name: &str) -> Tree {
     #[cfg(unix)]
     std::os::unix::fs::symlink(base.join("outside/deep"), proj.join("lnk")).unwrap();
     let store = base.join("store");
-    Tree { proj, base, store }
+    Tree {
+        proj,
+        base,
+        store,
+        _dir: dir,
+    }
 }
 
 /// Run the hook (or `record-approval` when `record`) against the fixture;

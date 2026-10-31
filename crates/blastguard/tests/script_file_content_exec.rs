@@ -76,9 +76,8 @@ impl Fixture {
         std::fs::create_dir_all(f.home.join("Documents")).unwrap();
         std::fs::write(f.home.join("Documents/keep.txt"), "x").unwrap();
         std::fs::create_dir_all(f.proj.join("target")).unwrap();
-        let st = git_env::scrub(&mut Command::new("git"))
+        let st = git_env::pinned(&f.proj)
             .args(["init", "-q"])
-            .current_dir(&f.proj)
             .status()
             .expect("git runs");
         assert!(st.success(), "git init failed in {}", f.proj.display());

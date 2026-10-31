@@ -184,8 +184,13 @@ test('same-origin broken links are findings; other-origin links are not requeste
     describe(r)
   );
   assert.equal(f.length, 2, describe(r));
-  assert.ok(
-    !r.calls.some((c) => c.op === 'request' && c.url.startsWith('https://other.example')),
+  // Compare parsed origins, not a URL prefix: a prefix check misses the same
+  // host under another scheme or spelling.
+  const requests = r.calls.filter((c) => c.op === 'request');
+  assert.ok(requests.length > 0, `same-origin links must be requested: ${describe(r)}`);
+  assert.deepEqual(
+    requests.filter((c) => new URL(c.url).origin !== new URL(BASE).origin).map((c) => c.url),
+    [],
     'cross-origin links must not be requested'
   );
 });

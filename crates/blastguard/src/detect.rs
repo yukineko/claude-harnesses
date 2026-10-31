@@ -1601,6 +1601,18 @@ thread_local! {
     static ANALYSIS_BUDGET: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only work probe: when installed, counts EVERY `detect_bash` entry
+    /// (admitted or budget-rejected) on this thread. It is an atomic shared via
+    /// `Arc` so a watcher thread can observe the count while the analysis is
+    /// still running, and fail on an unbounded tree instead of hanging. It is
+    /// deliberately independent of `ANALYSIS_BUDGET`: removing the budget must
+    /// make this count explode, not leave it untouched.
+    static VISIT_PROBE: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicU64>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 /// Consume one unit of the analysis budget. Returns false when it is exhausted.
 fn take_budget() -> bool {
     ANALYSIS_BUDGET.with(|b| {
@@ -1860,6 +1872,12 @@ fn denoised_eval_rescan(region: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
 }
 
 fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    #[cfg(test)]
+    VISIT_PROBE.with(|p| {
+        if let Some(c) = p.borrow().as_ref() {
+            c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
     // D4: when the budget is exhausted we never Allow. A command too complex to
     // analyse within a bounded amount of work must not be waved through
     // unanalysed — an unanalysed destructive command is exactly the fail-open
@@ -14080,13 +14098,45 @@ mod tests {
         for _ in 0..33 {
             cmd.push_str("+ ");
         }
-        let start = std::time::Instant::now();
-        let d = bash(&cmd);
-        let elapsed = start.elapsed();
-        // Availability: a PreToolUse hook must never hang the user's turn.
+        // Availability: a PreToolUse hook must never hang the user's turn. That
+        // is a property of the AMOUNT OF WORK, not of wall time: a wall-clock
+        // bound (formerly `< 2s`) measures the scheduler, and failed under CPU
+        // load at 25s-170s with the budget fully in force
+        // (`scripts/tests/blastguard-d4-timing-under-load.sh`, backlog
+        // 75b48877). So count `detect_bash` entries instead. The analysis runs
+        // on a worker thread while this thread watches the count, so an
+        // unbounded tree (budget removed: O(33^8) entries) FAILS here as soon
+        // as it crosses the bound rather than hanging the test.
+        //
+        // The bound: at most `MAX_ANALYSIS_NODES` entries are admitted; every
+        // further entry is a budget-rejected leaf called by an admitted parent.
+        // Measured for this input: 2199 total (2000 admitted + 199 rejected
+        // leaves). The bound allows 250 rejected leaves — tight against the
+        // ~10^12 entries an unbudgeted run would need. The analysis is
+        // deterministic, so this count does not vary with load.
+        const REJECTED_LEAF_SLACK: u64 = 250;
+        let visit_bound = u64::from(MAX_ANALYSIS_NODES) + REJECTED_LEAF_SLACK;
+        let visits = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let worker_visits = std::sync::Arc::clone(&visits);
+        let worker = std::thread::spawn(move || {
+            VISIT_PROBE.with(|p| *p.borrow_mut() = Some(worker_visits));
+            bash(&cmd)
+        });
+        let d = loop {
+            let seen = visits.load(std::sync::atomic::Ordering::Relaxed);
+            assert!(
+                seen <= visit_bound,
+                "analysis is unbounded: {seen} detect_bash entries so far, bound {visit_bound}"
+            );
+            if worker.is_finished() {
+                break worker.join().expect("analysis worker panicked");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let total = visits.load(std::sync::atomic::Ordering::Relaxed);
         assert!(
-            elapsed < std::time::Duration::from_secs(2),
-            "analysis took {elapsed:?}, expected well under 2s"
+            total <= visit_bound,
+            "analysis did {total} detect_bash entries, bound {visit_bound}"
         );
         // Correctness: budget exhaustion BLOCKS. A command too complex to
         // analyse must never be waved through unanalysed.

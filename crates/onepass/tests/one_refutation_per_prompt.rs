@@ -129,7 +129,7 @@ fn second_matching_spawn_in_same_prompt_is_denied_quoting_the_rule() {
 #[test]
 fn match_is_case_insensitive_and_covers_subagent_type_and_japanese() {
     for (desc, ty) in [
-        ("plain task", "condukt:condukt-VERIFIER"),
+        ("plain task", "my-VERIFIER"),
         ("ADVERSARIAL pass", "general-purpose"),
         ("反証する", "general-purpose"),
         ("検証", "general-purpose"),

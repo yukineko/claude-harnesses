@@ -5,6 +5,8 @@
 //!   `description` or `subagent_type` matches (case-insensitive)
 //!   refut|verif|audit|adversar|反証|検証|監査 takes this prompt's single slot;
 //!   a second one is denied. Non-matching spawns produce no output.
+//!   Spawns whose `subagent_type` starts with `condukt:` are exempt: never
+//!   denied and never counted.
 //! * `onepass reset` (UserPromptSubmit): frees the session's slot.
 //!
 //! The slot is a per-session marker file taken with `create_new`, so two
@@ -89,6 +91,12 @@ fn gate() {
         deny("[onepass] description/subagent_type is not a string: cannot judge this spawn, so it is denied (fail-closed).");
         return;
     };
+    // condukt's own roles (researcher, interpreter, worker, verifier) are the
+    // orchestrator's pipeline, not an extra refutation layer over a finding:
+    // they are never denied and never take the slot (user ruling 2026-11-01).
+    if ty.starts_with("condukt:") {
+        return;
+    }
     if !is_refutation(desc) && !is_refutation(ty) {
         return;
     }

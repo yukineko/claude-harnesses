@@ -45,9 +45,8 @@ enum V {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = git_env::scrub(&mut Command::new("git"))
+    let out = git_env::pinned(dir)
         .args(args)
-        .current_dir(dir)
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@example.com")
         .env("GIT_COMMITTER_NAME", "t")

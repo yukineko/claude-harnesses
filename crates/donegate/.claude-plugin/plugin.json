@@ -1,6 +1,6 @@
 {
   "name": "donegate",
-  "version": "0.1.50",
+  "version": "0.1.52",
   "description": "Completion-verification gate for Claude Code: on Stop it runs your acceptance commands and blocks until every applicable check is green, feeding failures back for an auto-fix loop.",
   "author": {
     "name": "yukineko"

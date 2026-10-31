@@ -8,7 +8,7 @@
 //! reviewgate is bin-only, so the binary is driven as a CHILD process with a
 //! fake `git` first on PATH. The fake answers `rev-parse` (and, in the
 //! control/clamp cases, everything) by exec'ing the REAL git, and hangs only on
-//! the sub-commands under test — `harness_core::git_probe::probe_repo` runs
+//! the sub-commands under test — `harness_core::git_probe::probe_repo_scrubbed` runs
 //! `rev-parse` with no timeout, so hanging that would hang the test for a
 //! reason outside this bug.
 //!

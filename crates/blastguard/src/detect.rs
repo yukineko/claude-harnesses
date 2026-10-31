@@ -16346,4 +16346,178 @@ and must not be Allowed: {failing:?}"
             assert!(!deletion_rm_eligible(bad), "{bad}");
         }
     }
+
+    // ---- mutation kill tests (c5b9c02b-bg-kill): helper-level guards ------------
+    //
+    // `literal_cd_and_rest`, `opener_consumer` and `temp_disposable_redirect_target`
+    // judged directly, for the guards whose Decision-level effect another layer
+    // masks (or which only matter for an input the hook never produces). Real
+    // fixtures live under `/private/tmp`, the fixed temp root the truncation
+    // relaxation is about; each test removes only the directory it created.
+
+    struct MutKillTmp {
+        dir: String,
+    }
+
+    impl MutKillTmp {
+        fn new(tag: &str) -> MutKillTmp {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let dir = format!(
+                "/private/tmp/bg-mutkill-unit-{tag}-{}-{nanos}",
+                std::process::id()
+            );
+            std::fs::create_dir_all(&dir).unwrap();
+            MutKillTmp {
+                dir: del_real(&dir).unwrap(),
+            }
+        }
+
+        fn file(&self, rel: &str) -> String {
+            let p = format!("{}/{rel}", self.dir);
+            std::fs::create_dir_all(std::path::Path::new(&p).parent().unwrap()).unwrap();
+            std::fs::write(&p, "x\n").unwrap();
+            p
+        }
+
+        fn mkdir(&self, rel: &str) -> String {
+            let p = format!("{}/{rel}", self.dir);
+            std::fs::create_dir_all(&p).unwrap();
+            p
+        }
+
+        fn scope_at(&self, cwd: &str) -> SafeRoots {
+            SafeRoots::new(Some(cwd), Some(cwd), None, None, Some(del_real))
+        }
+    }
+
+    impl Drop for MutKillTmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn mutkill_literal_cd_and_rest_accepts_only_the_tied_literal_shape() {
+        let t = MutKillTmp::new("cdrest");
+        let d = t.mkdir("d");
+        let s = t.scope_at(&t.dir);
+        // Control: the accepted shape.
+        assert_eq!(
+            literal_cd_and_rest(&s, &format!("cd {d} && rm -rf sub")),
+            Some("rm -rf sub")
+        );
+        // LA: a RELATIVE dir, even one that resolves to an existing directory
+        // (relative to this test process's cwd, the crate dir, `src` exists).
+        assert!(
+            s.resolves_to_existing_dir("src"),
+            "precondition: `src` resolves"
+        );
+        assert_eq!(literal_cd_and_rest(&s, "cd src && rm -rf x"), None);
+        // LB: a character outside the literal set, on a dir that exists.
+        for name in ["a:b", "w*", "q=r", "t~u"] {
+            let dd = t.mkdir(name);
+            assert!(s.resolves_to_existing_dir(&dd), "precondition: {dd} exists");
+            let cmd = format!("cd {dd} && rm -rf x");
+            assert_eq!(literal_cd_and_rest(&s, &cmd), None, "{cmd}");
+        }
+        // L3a: a `.` component, on a spelling that resolves to an existing dir.
+        let dotted = format!("{}/./d", t.dir);
+        assert!(
+            s.resolves_to_existing_dir(&dotted),
+            "precondition: {dotted}"
+        );
+        assert_eq!(
+            literal_cd_and_rest(&s, &format!("cd {dotted} && rm -rf x")),
+            None
+        );
+        // LE: an empty or whitespace-only REST.
+        for rest in ["", " ", "   ", " \t"] {
+            let cmd = format!("cd {d} &&{rest}");
+            assert_eq!(literal_cd_and_rest(&s, &cmd), None, "{cmd:?}");
+        }
+        // LS1..LS4: `;`, `|`, newline, carriage return in REST.
+        for sep in [";", " | ", "\n", "\r"] {
+            let cmd = format!("cd {d} && rm -rf a{sep}rm -rf b");
+            assert_eq!(literal_cd_and_rest(&s, &cmd), None, "{cmd:?}");
+        }
+        // LAMP: an `&` that is not part of `&&`.
+        for rest in [
+            "rm -rf a & rm -rf b",
+            "rm -rf a &",
+            "rm -rf a 2>&1",
+            "rm -rf a &> l",
+        ] {
+            let cmd = format!("cd {d} && {rest}");
+            assert_eq!(literal_cd_and_rest(&s, &cmd), None, "{cmd:?}");
+        }
+        // `&&` inside REST stays accepted (the `&` rule only removes `&&` pairs).
+        assert_eq!(
+            literal_cd_and_rest(&s, &format!("cd {d} && rm -rf a && rm -rf b")),
+            Some("rm -rf a && rm -rf b")
+        );
+    }
+
+    #[test]
+    fn mutkill_opener_consumer_splits_only_a_permitted_cd_head() {
+        // Control: `cd <literal> && <rest>` yields `<rest>`.
+        assert_eq!(opener_consumer("cd /x/y && cat <<'EOF'"), " cat <<'EOF'");
+        // O1: a permitted prefix line that is NOT a `cd` keeps the whole line.
+        for line in ["mkdir -p /x/y && cat <<'EOF'", "set -e && cat <<'EOF'"] {
+            assert!(permitted_prefix_line(line.split_once("&&").unwrap().0));
+            assert_eq!(opener_consumer(line), line, "{line}");
+        }
+        // O2: a `cd` head that is not a permitted literal keeps the whole line.
+        for line in [
+            "cd \"/x/y\" && cat <<'EOF'",
+            "cd $D && cat <<'EOF'",
+            "cd /x/y z && cat <<'EOF'",
+        ] {
+            assert_eq!(opener_consumer(line), line, "{line}");
+        }
+    }
+
+    #[test]
+    fn mutkill_temp_disposable_refuses_git_and_protected_spellings() {
+        let t = MutKillTmp::new("tdisp");
+        let plain = t.file("f.txt");
+        let s = t.scope_at(&t.dir);
+        let ctx = Ctx::new(&s, "echo a > f");
+        // Control: a plain single-link file under the fixed temp root.
+        assert!(temp_disposable_redirect_target(&plain, &ctx), "{plain}");
+        // T2: a `.git` component in the SPELLING that `..` collapses away. No
+        // `.git` exists on disk, so only the spelling check can refuse it.
+        let via_git = format!("{}/.git/../f.txt", t.dir);
+        assert!(!std::path::Path::new(&format!("{}/.git", t.dir)).exists());
+        assert!(
+            !temp_disposable_redirect_target(&via_git, &ctx),
+            "{via_git}"
+        );
+        // T7: a file under a directory holding a `.git` entry (no `.git`
+        // component in its path).
+        t.mkdir("r/.git");
+        let in_tree = t.file("r/w.txt");
+        assert!(
+            !temp_disposable_redirect_target(&in_tree, &ctx),
+            "{in_tree}"
+        );
+        // T6: a RELATIVE target whose spelling is not protected but whose real
+        // path (`<cwd>/settings.json` with cwd `<tmp>/.claude`) is.
+        let claude = t.mkdir(".claude");
+        t.file(".claude/settings.json");
+        assert!(!exclude::is_protected_path(&exclude::normalize(
+            "settings.json"
+        )));
+        let s2 = t.scope_at(&claude);
+        let ctx2 = Ctx::new(&s2, "echo a > settings.json");
+        assert!(
+            !temp_disposable_redirect_target("settings.json", &ctx2),
+            "settings.json from cwd {claude}"
+        );
+        // Control for T6: an unprotected relative name from the same cwd.
+        t.file(".claude/notes.txt");
+        assert!(temp_disposable_redirect_target("notes.txt", &ctx2));
+    }
 }

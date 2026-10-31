@@ -2107,4 +2107,87 @@ mod tests {
         assert!(raw_session_path_refusal("", true).is_some());
         assert!(raw_session_path_refusal("a/../b", false).is_none());
     }
+
+    // ---- mutation kill tests (c5b9c02b-bg-kill): `no_git_entry_up_to` --------
+    //
+    // A real directory under `/private/tmp` (the fixed temp root this check is
+    // used for) with no `.git` entry anywhere from it up to `/`; each test
+    // removes only the directory it created.
+
+    struct GitWalkFx {
+        root: String,
+    }
+
+    impl GitWalkFx {
+        fn new(tag: &str) -> GitWalkFx {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = format!(
+                "/private/tmp/bg-mutkill-gitwalk-{tag}-{}-{nanos}",
+                std::process::id()
+            );
+            std::fs::create_dir_all(format!("{root}/a")).unwrap();
+            std::fs::write(format!("{root}/a/f"), "x\n").unwrap();
+            std::fs::write(format!("{root}/plain"), "x\n").unwrap();
+            GitWalkFx { root }
+        }
+
+        fn with_resolver() -> SafeRoots {
+            SafeRoots::new(None, None, None, None, Some(identity))
+        }
+    }
+
+    impl Drop for GitWalkFx {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn mutkill_no_git_entry_up_to_control_is_true() {
+        let fx = GitWalkFx::new("ctl");
+        let s = GitWalkFx::with_resolver();
+        assert!(s.no_git_entry_up_to(&format!("{}/a/f", fx.root), &fx.root));
+    }
+
+    /// N1: no resolver answers false even for a walk that would find nothing.
+    #[test]
+    fn mutkill_no_git_entry_up_to_without_resolver_is_false() {
+        let fx = GitWalkFx::new("nores");
+        let real = format!("{}/a/f", fx.root);
+        assert!(GitWalkFx::with_resolver().no_git_entry_up_to(&real, &fx.root));
+        assert!(!SafeRoots::none().no_git_entry_up_to(&real, &fx.root));
+    }
+
+    /// N2: `real` must be a strict descendant of `root` AS A STRING. A spelling
+    /// with a `.` component is not, although `Path` comparison (which drops
+    /// interior `.`) would walk up to `root` and answer true.
+    #[test]
+    fn mutkill_no_git_entry_up_to_requires_real_spelled_under_root() {
+        let fx = GitWalkFx::new("under");
+        let s = GitWalkFx::with_resolver();
+        let (parent, name) = fx.root.rsplit_once('/').unwrap();
+        let dotted = format!("{parent}/./{name}/a/f");
+        assert!(!s.no_git_entry_up_to(&dotted, &fx.root), "{dotted}");
+        // `real` equal to `root` is not a strict descendant either.
+        assert!(!s.no_git_entry_up_to(&fx.root, &fx.root));
+    }
+
+    /// N3: an lstat error other than NotFound on the walk (here ENOTDIR: an
+    /// ancestor of `real` is a regular file) answers false.
+    #[test]
+    fn mutkill_no_git_entry_up_to_metadata_error_is_false() {
+        let fx = GitWalkFx::new("enotdir");
+        let s = GitWalkFx::with_resolver();
+        let real = format!("{}/plain/x", fx.root);
+        let err = std::fs::symlink_metadata(format!("{}/plain/.git", fx.root)).unwrap_err();
+        assert_ne!(
+            err.kind(),
+            std::io::ErrorKind::NotFound,
+            "precondition: {err}"
+        );
+        assert!(!s.no_git_entry_up_to(&real, &fx.root), "{real}");
+    }
 }

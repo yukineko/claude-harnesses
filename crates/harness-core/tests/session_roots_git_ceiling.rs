@@ -43,11 +43,17 @@ fn git(dir: &Path, args: &[&str]) -> std::process::Output {
         .expect("git must be runnable for this test")
 }
 
-/// Deliberately NOT scrubbed: the precondition below needs the process-env
-/// `GIT_CEILING_DIRECTORIES` this test sets itself to reach the git child.
+/// Scrubbed, then the process-env `GIT_CEILING_DIRECTORIES` this test sets
+/// itself is passed through explicitly: the precondition below needs the
+/// ceiling to reach the git child, but an inherited `GIT_DIR` (a hook-driven
+/// `cargo test`) would override discovery and mask the ceiling.
 fn git_inheriting_env(dir: &Path, args: &[&str]) -> std::process::Output {
-    Command::new("git")
-        .arg("-C")
+    let mut cmd = Command::new("git");
+    harness_core::git_env::scrub(&mut cmd);
+    if let Some(v) = std::env::var_os(CEILING) {
+        cmd.env(CEILING, v);
+    }
+    cmd.arg("-C")
         .arg(dir)
         .args(args)
         .output()

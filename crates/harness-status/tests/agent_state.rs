@@ -95,7 +95,6 @@ fn is_unknown_with_candidates(s: &AgentState) -> bool {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn finished_when_end_turn_then_subagent_stop() {
     let t = format!(
         "{}{}{}",
@@ -108,7 +107,6 @@ fn finished_when_end_turn_then_subagent_stop() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn end_turn_without_subagent_stop_is_not_finished() {
     let t = format!("{}{}", user_prompt(), assistant_end_turn());
     let s = classify(&t, Some(PS_OTHER), Some(PMSET_AWAKE), NOW);
@@ -117,7 +115,6 @@ fn end_turn_without_subagent_stop_is_not_finished() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn ask_pending_when_pretooluse_asked_and_no_result() {
     let t = format!(
         "{}{}{}",
@@ -138,7 +135,6 @@ fn ask_pending_when_pretooluse_asked_and_no_result() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn ask_for_a_different_tool_use_does_not_make_this_one_ask_pending() {
     let t = format!(
         "{}{}{}",
@@ -152,7 +148,6 @@ fn ask_for_a_different_tool_use_does_not_make_this_one_ask_pending() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn rate_limited_when_last_entry_is_rate_limit_error() {
     let t = format!("{}{}", user_prompt(), rate_limit_error());
     let s = classify(&t, Some(PS_OTHER), Some(PMSET_AWAKE), NOW);
@@ -163,7 +158,6 @@ fn rate_limited_when_last_entry_is_rate_limit_error() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn tool_running_when_pending_and_process_matches() {
     let t = format!("{}{}", user_prompt(), assistant_tool_use("toolu_A", CMD));
     let s = classify(&t, Some(&ps_with(CMD)), Some(PMSET_AWAKE), NOW);
@@ -174,7 +168,6 @@ fn tool_running_when_pending_and_process_matches() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn pending_tool_without_matching_process_is_unknown_died_or_not_spawned() {
     let t = format!("{}{}", user_prompt(), assistant_tool_use("toolu_A", CMD));
     let s = classify(&t, Some(PS_OTHER), Some(PMSET_AWAKE), NOW);
@@ -184,7 +177,6 @@ fn pending_tool_without_matching_process_is_unknown_died_or_not_spawned() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn collision_pending_tool_with_ps_absent_is_unknown_not_tool_running() {
     // ps unreadable: a confident "running" would be a guess.
     let t = format!("{}{}", user_prompt(), assistant_tool_use("toolu_A", CMD));
@@ -197,7 +189,6 @@ fn collision_pending_tool_with_ps_absent_is_unknown_not_tool_running() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn none_ps_never_yields_confident_state_for_idle_transcript() {
     let t = format!("{}{}", user_prompt(), assistant_end_turn());
     let s = classify(&t, None, Some(PMSET_AWAKE), NOW);
@@ -205,7 +196,6 @@ fn none_ps_never_yields_confident_state_for_idle_transcript() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn none_pmset_is_unknown_cannot_read_not_not_asleep() {
     // Nothing pending, no error, no SubagentStop: the answer hinges on whether the
     // machine slept. pmset unreadable => cannot claim "slow model / died".
@@ -224,7 +214,6 @@ fn none_pmset_is_unknown_cannot_read_not_not_asleep() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn nothing_pending_no_error_no_stop_is_unknown_listing_candidates() {
     let t = format!("{}{}", user_prompt(), assistant_end_turn());
     let s = classify(&t, Some(PS_OTHER), Some(PMSET_AWAKE), NOW);
@@ -234,7 +223,6 @@ fn nothing_pending_no_error_no_stop_is_unknown_listing_candidates() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn tool_use_with_result_is_not_pending() {
     // The process list even contains the command text: still not ToolRunning,
     // because the tool_use already has a tool_result.
@@ -251,7 +239,6 @@ fn tool_use_with_result_is_not_pending() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn asleep_when_pmset_shows_machine_sleeping_at_now() {
     // last entry 15:00Z = 00:00 +0900; Sleep at 00:05 +0900, no Wake => asleep at now.
     let pmset = "2026-11-01 00:05:00 +0900 Sleep  Entering Sleep state due to 'Clamshell Sleep'\n";
@@ -273,7 +260,6 @@ fn asleep_when_pmset_shows_machine_sleeping_at_now() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn garbage_input_is_unknown_cannot_read() {
     for bad in ["", "not json at all\n{{{ nope\n", "\u{0}\u{1}\u{2}"] {
         let s = classify(bad, Some(PS_OTHER), Some(PMSET_AWAKE), NOW);
@@ -287,7 +273,6 @@ fn garbage_input_is_unknown_cannot_read() {
 }
 
 #[test]
-#[ignore = "RED repro: classify is a stub (no way to tell a stalled subagent's state)"]
 fn partially_garbage_transcript_is_never_finished() {
     let t = format!("{}{}garbage line\n", user_prompt(), assistant_end_turn());
     let s = classify(&t, Some(PS_OTHER), Some(PMSET_AWAKE), NOW);
@@ -319,7 +304,6 @@ fn run_agents(dir: &std::path::Path, extra: &[&str]) -> std::process::Output {
 }
 
 #[test]
-#[ignore = "RED repro: agents CLI is a stub (no way to tell a stalled subagent's state)"]
 fn cli_prints_one_line_per_subagent_with_id_description_state() {
     let tmp = tempfile::tempdir().unwrap();
     let fin = format!(
@@ -357,7 +341,6 @@ fn cli_prints_one_line_per_subagent_with_id_description_state() {
 }
 
 #[test]
-#[ignore = "RED repro: agents CLI is a stub (no way to tell a stalled subagent's state)"]
 fn cli_session_filter_excludes_other_sessions() {
     let tmp = tempfile::tempdir().unwrap();
     let fin = format!(

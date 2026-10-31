@@ -203,3 +203,60 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 315 filtered out
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
      Running unittests src/main.rs (target/debug/deps/specguard-daa8883ecd136a59)
 error: test failed, to rerun pass `-p specguard --bin specguard`"""
+
+[[task]]
+id = "9d54eb34"
+title = "ship: run_safe/rollout spawn plugin scripts without git_env::scrub (inherited GIT_DIR redirects script git into wrong repo)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1793432624
+updated_at = 1793432624
+weight = 0.0
+issue_number = 1474
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1474"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_script_spawn_inherits_git_dir -- --ignored"
+rev = "ecc5dc70bc43eb328b8d3bf6831582516f085d95"
+observed_at = 1793432624
+detail = """
+exit 101: d_git_dir
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/repro_script_spawn_inherits_git_dir.rs (target/debug/deps/repro_script_spawn_inherits_git_dir-316e76beb65c4f90)
+error: test failed, to rerun pass `-p ship --test repro_script_spawn_inherits_git_dir`"""
+
+[[task]]
+id = "c77cdc98"
+title = "condukt: wall-clock-bound tests (git_fast_subprocess_returns_output_without_timing_out, lock_wait_probes_a_changed_holder_pid_immediately) fail under CPU load"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1793432628
+updated_at = 1793432628
+weight = 0.0
+issue_number = 1475
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1475"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/condukt-timing-flakes-under-load.sh"
+rev = "ecc5dc70bc43eb328b8d3bf6831582516f085d95"
+observed_at = 1793432628
+detail = """
+exit 1: ately' (147828478) panicked at crates/condukt/src/lock.rs:1506:17:
+INCONCLUSIVE (not a pass): A's first probe alone took 106.751904709s >= the 120ms deadline, so the waiter could not reach B's probe in time even if correct (probes: ["alive 7375"])
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+RED: 12 timing-bound run(s) failed under 1200 busy loops (load, not logic)"""

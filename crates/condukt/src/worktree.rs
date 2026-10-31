@@ -4198,7 +4198,14 @@ mod tests {
         let cwd = tmp.path().join("cwd");
         fs::create_dir_all(&cwd).unwrap();
 
-        let out = run_git_bounded_with(&fake_git, &cwd, &["status"], Duration::from_secs(3), &[])
+        // The property is the classification "exited before the deadline =>
+        // not timed out, stdout captured", not how tight the deadline is: a
+        // runner that misreports a completed child as timed out (or drops its
+        // output) fails at any deadline. The deadline is generous so CPU load
+        // cannot make the `sh` child legitimately miss it; at 3s it did under
+        // load, failing a correct runner (backlog c77cdc98). The hanging-child
+        // sibling tests pin the timeout side.
+        let out = run_git_bounded_with(&fake_git, &cwd, &["status"], Duration::from_secs(120), &[])
             .expect("bounded run itself ok");
         assert!(
             !out.timed_out,

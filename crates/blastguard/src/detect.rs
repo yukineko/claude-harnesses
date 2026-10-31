@@ -1232,8 +1232,26 @@ fn analyze_unlink_rmdir(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         if let Some(deny) = protected_glob_deny(&format!("{cmd} operand"), op) {
             return deny;
         }
+        if let Some(deny) = home_asset_deny(ctx, cmd, op) {
+            return deny;
+        }
     }
     Decision::Allow
+}
+
+/// Deny for a single-entry delete (`rm` without `-r`, `unlink`, `rmdir`) whose
+/// operand is an irreplaceable `$HOME`-level asset — a credential store entry
+/// (`~/.ssh/id_rsa`) or a home-level dotfile (backlog 6067a527). Deletion
+/// policy: system configuration and irreplaceable assets are never deleted;
+/// work files stay deletable, so every other operand is `None`.
+fn home_asset_deny(ctx: &Ctx<'_>, action: &str, operand: &str) -> Option<Decision> {
+    let path = ctx
+        .scope
+        .irreplaceable_home_asset(operand, ctx.base_for(action))?;
+    Some(Decision::deny(format!(
+        "{action} {operand} deletes `{path}`, an irreplaceable home-level asset (credential \
+store or home-level config) that cannot be restored, so blastguard refuses"
+    )))
 }
 
 /// Deny for a single-file delete whose operand IS a `.git` entry (not a path
@@ -6950,6 +6968,67 @@ fn inline_command_payloads(rest: &[&str], pos: usize, inline: &str) -> Vec<Strin
     payloads_after(&synthetic, 0)
 }
 
+/// Split a leading assignment whose value OPENS a command substitution that
+/// the token itself does not close — `B=$(ls`, `B="$(ls`, `` B=`ls `` — into
+/// the assignment-with-opener (`B=$(`) and the substitution's first word
+/// (`ls`).
+///
+/// Backlog a03fe3cd (#1471): the tokeniser splits on whitespace, so
+/// `B=$(ls -d GLOB | sort -V | tail -1)` reached [`analyze_segment`] (cut at
+/// the `|` by [`split_segments`]) as `B=$(ls`, `-d`, `GLOB`.
+/// [`command_candidates`] skips `B=$(ls` as an assignment and took `-d` as the
+/// command word, so the line asked "`-d` is a command blastguard has no rule
+/// for". The word that actually runs there is the substitution's first word,
+/// `ls`; `B=$( ls …` (a space after the opener) already parsed that way.
+///
+/// Only LEADING assignment tokens are rewritten (command position), and only
+/// when the opener is unclosed within the token, so `B=$(pwd)` stays a pure
+/// assignment. Exposing the body's first word as a command candidate only
+/// ever adds a word for the rule engine to judge; the body is still also
+/// re-analysed through [`executed_substitution_payloads`] when it is closed.
+fn split_substitution_opening_assignments(tokens: Vec<&str>) -> Vec<&str> {
+    let mut out = Vec::with_capacity(tokens.len() + 1);
+    let mut leading = true;
+    for tok in tokens {
+        if leading && is_assignment(tok) {
+            if let Some(cut) = unclosed_substitution_opener_end(tok) {
+                out.push(&tok[..cut]);
+                out.push(&tok[cut..]);
+                leading = false;
+                continue;
+            }
+            out.push(tok);
+            continue;
+        }
+        leading = false;
+        out.push(tok);
+    }
+    out
+}
+
+/// Byte index just past the `$(` / backtick that opens an assignment token's
+/// value (optionally inside a leading `"`), when the rest of the token is a
+/// non-empty word that does not close that substitution. `None` otherwise.
+fn unclosed_substitution_opener_end(tok: &str) -> Option<usize> {
+    let eq = tok.find('=')?;
+    let value = &tok[eq + 1..];
+    let quote = usize::from(value.starts_with('"'));
+    let after_quote = &value[quote..];
+    let (opener_len, closer) = if after_quote.starts_with("$(") {
+        (2, ')')
+    } else if after_quote.starts_with('`') {
+        (1, '`')
+    } else {
+        return None;
+    };
+    let cut = eq + 1 + quote + opener_len;
+    let body = &tok[cut..];
+    if body.is_empty() || body.contains(closer) {
+        return None;
+    }
+    Some(cut)
+}
+
 /// Judge ONE `;`/`&&`/`|`-separated segment of a command line.
 ///
 /// `line`/`seg_idx` locate this segment inside the command line it came from,
@@ -6958,7 +7037,7 @@ fn inline_command_payloads(rest: &[&str], pos: usize, inline: &str) -> Vec<Strin
 /// the line (see [`resolve_expanded_command_word`]). Nothing else here uses
 /// them, and `seg` remains the only thing judged.
 fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ctx<'_>) -> Decision {
-    let tokens: Vec<&str> = seg.split_whitespace().collect();
+    let tokens = split_substitution_opening_assignments(seg.split_whitespace().collect());
     let mut acc = VerdictAcc::default();
 
     // D2: a wrapper that takes a shell command string via `-c` (flock) runs that
@@ -8729,6 +8808,10 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         // Only the recursive arm below has a deletion classifier for `.git`
         // directories, so the non-recursive arm answers here.
         if let Some(deny) = operands.iter().find_map(|o| dotgit_link_deny("rm", o)) {
+            return deny;
+        }
+        // Backlog 6067a527: one file can be irreplaceable (`rm ~/.ssh/id_rsa`).
+        if let Some(deny) = operands.iter().find_map(|o| home_asset_deny(ctx, "rm", o)) {
             return deny;
         }
         // Single, non-recursive rm of named files — below the destructive bar.

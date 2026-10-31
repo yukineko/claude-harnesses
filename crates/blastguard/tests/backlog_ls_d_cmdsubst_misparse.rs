@@ -117,7 +117,6 @@ fn control_bare_ls_d_verdict_pinned() {
 }
 
 #[test]
-#[ignore = "backlog repro: `$(ls -d ...)` substitution is misparsed so `-d` is reported as the command word"]
 fn cmdsubst_ls_d_does_not_name_dash_d_as_command() {
     let f = Fx::new("subst");
     let out = f.run(&format!(

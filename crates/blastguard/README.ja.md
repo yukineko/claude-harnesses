@@ -29,10 +29,15 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
 - **ファイル操作**: 既存ファイルを**空内容で置き換える** Write（＝ファイルの抹消）、
   および **git 内部**（`.git/**`）を上書きする Write は deny。**保護パス**（下記）への
   Write / Edit / MultiEdit / NotebookEdit は `ask`（人間が答えられない場では deny）。
-  それ以外の Edit / MultiEdit / NotebookEdit は部分編集なので allow。なお Write
-  ツールでシステムディレクトリへ書く場合（`/etc/paths.d/x` 等）は Write の判定では
-  止めていない（`detect_write` は `system_path_block` を呼ばない。0.2.108 の debug
-  ビルドで allow を観測、2026-10-14）。
+  **システムディレクトリ**への Write / Edit / MultiEdit / NotebookEdit
+  （`/etc/paths.d/x`、`/Library/LaunchDaemons/x.plist`、`/usr/local/bin/x` 等。Bash
+  リダイレクトと同じ `SYSTEM_DIRS` と理由文）は deny（2026-11-01 ユーザー裁定、
+  0.2.184）。書かれたパスと、カーネルが実際に書く実パスの両方で判定するので、
+  dangling なファイル symlink・その連鎖・`/etc` へのディレクトリ symlink 経由も
+  同じ deny。安全ルート内（`/opt` 配下に checkout したプロジェクト等）はリダイレクトと
+  同じく除外。symlink を解決できない（ループ・読めないリンク）なら `ask`。`/var`
+  （`$TMPDIR`、`/var/tmp`）は対象外。それ以外の Edit / MultiEdit / NotebookEdit は
+  部分編集なので allow。
 
 **この一覧は「形」であって「判定」ではない。** 上記のうち削除・切り詰め系
 （`rm` / `find -delete` / `truncate` / `shred` / `>` / `git clean -f` /

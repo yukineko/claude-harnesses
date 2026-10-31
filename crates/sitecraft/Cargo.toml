@@ -1,0 +1,36 @@
+[package]
+rust-version.workspace = true
+name = "sitecraft"
+version = "0.1.0"
+edition = "2021"
+description = "Site-building harness for Claude Code: records design decisions asked from the user, manages the dev server, and blocks a Stop on broken pages or security findings."
+license = "MIT"
+
+[lib]
+name = "sitecraft"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sitecraft"
+path = "src/main.rs"
+
+# Every dependency the follow-up tasks (config/trust, decide, serve, check
+# pages, check security, gate) need is declared here once, so none of them has
+# to touch Cargo.lock.
+[dependencies]
+harness-core = { path = "../harness-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+sha2 = { workspace = true }
+regex = { workspace = true }
+globset = "0.4"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

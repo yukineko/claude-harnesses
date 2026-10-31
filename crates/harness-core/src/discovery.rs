@@ -139,9 +139,11 @@ fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
 
 /// `git -C <cwd> rev-parse --show-toplevel`, with the reason when git could not
 /// answer (spawn failure such as git absent, non-zero exit, non-UTF-8 or empty
-/// output).
+/// output). Inherited `GIT_*` repo-selecting variables are scrubbed
+/// ([`crate::git_env::scrub`]) so the answer is the repository containing
+/// `cwd`, not one named by an inherited `GIT_DIR`.
 fn git_toplevel_detailed(cwd: &Path) -> Result<PathBuf, String> {
-    let output = std::process::Command::new("git")
+    let output = crate::git_env::scrub(&mut std::process::Command::new("git"))
         .arg("-C")
         .arg(cwd)
         .arg("rev-parse")
@@ -404,7 +406,8 @@ pub fn migrate_legacy(cwd: &Path) -> Determination<MigrationSummary> {
     };
     let canonical = store_path_for_root(&root);
 
-    let out = match std::process::Command::new("git")
+    // Scrub inherited GIT_* so the worktree list is that of `root`'s repository.
+    let out = match crate::git_env::scrub(&mut std::process::Command::new("git"))
         .arg("-C")
         .arg(&root)
         .args(["worktree", "list", "--porcelain"])

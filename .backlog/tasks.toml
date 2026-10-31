@@ -29,37 +29,6 @@ extracted argv: ["pytest"]
 FAIL: extracted command is ["pytest"]; expected it to start with ["python3","-m","pytest"] and include scripts/x.py'''
 
 [[task]]
-id = "75b48877"
-title = "blastguard d4_exponential_find_exec test is wall-clock bound; fails donegate under load"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "flake",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Test detect::tests::d4_exponential_find_exec_is_bounded_and_denies is meant to prove that analysis of an exponential find -exec is BOUNDED (budget exhaustion yields Ask/Deny, never a hang or Allow). It asserts wall time under 2s, which is load-sensitive: observed 2.29s, 3.5s, 6.43s under machine load, about 0.6s alone; fails on main; repeatedly fails donegate Stop checks. Repro: 40 busy loops on 8 cpu gave 3/3 failures at 25-29s. Fix direction: measure work done (steps or nodes visited) instead of wall time, without weakening the bound (keep the bound tight, assert still Ask/never Allow)."
-created_at = 1793464809
-updated_at = 1793464809
-weight = 0.0
-issue_number = 1480
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1480"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/blastguard-d4-timing-under-load.sh"
-rev = "7e1d03710709411ebee39232eb842c12ff05bf8e"
-observed_at = 1793464809
-detail = """
-exit 1: ::d4_exponential_find_exec_is_bounded_and_denies] round 3:
-thread 'detect::tests::d4_exponential_find_exec_is_bounded_and_denies' (3693475) panicked at crates/blastguard/src/detect.rs:13687:9:
-analysis took 25.228126541s, expected well under 2s
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-RED: 3/3 run(s) failed under 40 busy loops (wall-clock bound, load not logic)"""
-
-[[task]]
 id = "61666b2f"
 title = "guard-maintree-bash refuses a command that never touches main when another process's git merge is in its pre-merge-commit window"
 project = "/Users/yuki/src/harness"

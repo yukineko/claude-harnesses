@@ -157,6 +157,53 @@ fn rate_limited_when_last_entry_is_rate_limit_error() {
     }
 }
 
+fn api_error_entry(error: Option<&str>) -> String {
+    let mut v = json!({"type":"assistant","isSidechain":true,"agentId":"a1",
+        "isApiErrorMessage":true,
+        "message":{"role":"assistant","content":[
+            {"type":"text","text":"API Error: something went wrong"}]},
+        "timestamp":T0});
+    if let Some(e) = error {
+        v["error"] = json!(e);
+    }
+    line(v)
+}
+
+#[test]
+fn non_rate_limit_api_errors_are_unknown_never_rate_limited() {
+    for err in [
+        Some("overloaded_error"),
+        Some("authentication_error"),
+        Some("server_error"),
+        Some("rate_limit_error"),
+        Some("RATE_LIMIT"),
+        Some(""),
+        None,
+    ] {
+        let t = format!("{}{}", user_prompt(), api_error_entry(err));
+        let s = classify(&t, Some(PS_OTHER), Some(PMSET_AWAKE), NOW);
+        assert!(
+            !matches!(s, AgentState::RateLimited { .. }),
+            "error {err:?} must not be a confident RateLimited, got {s:?}"
+        );
+        assert!(
+            is_unknown_with_candidates(&s),
+            "error {err:?} must be Unknown with candidates, got {s:?}"
+        );
+    }
+}
+
+#[test]
+fn overloaded_error_candidates_name_the_error() {
+    let t = format!(
+        "{}{}",
+        user_prompt(),
+        api_error_entry(Some("overloaded_error"))
+    );
+    let s = classify(&t, Some(PS_OTHER), Some(PMSET_AWAKE), NOW);
+    assert!(candidates_mention(&s, "overloaded_error"), "got {s:?}");
+}
+
 #[test]
 fn tool_running_when_pending_and_process_matches() {
     let t = format!("{}{}", user_prompt(), assistant_tool_use("toolu_A", CMD));

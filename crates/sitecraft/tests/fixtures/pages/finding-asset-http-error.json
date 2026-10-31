@@ -1,0 +1,1 @@
+{"schema": "sitecraft-check-pages/1", "status": "ok", "pages_checked": 2, "findings": [{"page": "http://127.0.0.1:5173/about", "kind": "asset-http-error", "detail": "GET http://127.0.0.1:5173/assets/app.js -> 404", "url": "http://127.0.0.1:5173/assets/app.js", "status": 404}]}

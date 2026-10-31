@@ -243,7 +243,8 @@ pub(crate) fn invariants_in_scope<'a>(cfg: &'a Config, scope: &Scope) -> Vec<&'a
 /// Pure: map changed files onto configured areas. Returns (in-scope hits,
 /// skipped area names). An area is in scope iff a changed file matches its globs
 /// OR one of its canon pointers' files changed (so a pure-spec edit re-triggers
-/// the audit). Errors only on an invalid glob pattern in the config.
+/// the audit). Each hit's `matched_files` is deduped (a file repeated in
+/// `changed` appears once). Errors only on an invalid glob pattern in the config.
 pub fn classify(changed: &[String], areas: &[Area]) -> Result<(Vec<AreaHit>, Vec<String>)> {
     let mut in_scope = Vec::new();
     let mut skipped = Vec::new();
@@ -259,9 +260,12 @@ pub fn classify(changed: &[String], areas: &[Area]) -> Result<(Vec<AreaHit>, Vec
         }
         let set = builder.build().context("building glob set")?;
 
+        // Deduped (first-occurrence order): a file repeated in `changed` is
+        // still one matched file, never listed twice in the same hit.
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
         let matched: Vec<String> = changed
             .iter()
-            .filter(|f| set.is_match(f.as_str()))
+            .filter(|f| set.is_match(f.as_str()) && seen.insert(f.as_str()))
             .cloned()
             .collect();
 
@@ -1260,7 +1264,6 @@ mod prop_tests {
     /// the shrunk input `["wsb", "aaa", "wsb"]` maps to a duplicated changed
     /// file `src/a0/wsb.rs`, which then appears twice across the hits.
     #[test]
-    #[ignore = "RED repro: duplicate file input breaks no_file_in_multiple_hits"]
     fn no_file_in_multiple_hits_duplicate_input_repro() {
         let areas = vec![
             mk_area("a0", vec!["src/a0/**".into()]),

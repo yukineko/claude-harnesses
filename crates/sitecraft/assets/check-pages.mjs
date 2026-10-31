@@ -98,6 +98,24 @@ async function checkPage(browser, pageUrl, origin) {
     await page.goto(pageUrl, { waitUntil: 'load', timeout: NAV_TIMEOUT_MS });
     await page.waitForTimeout(SETTLE_MS);
 
+    // A redirect off the configured origin would make every later failure
+    // look cross-origin (and so be filtered out): that is itself a finding.
+    // `page-error` is the closest of the four contracted kinds.
+    let landed;
+    try {
+      landed = new URL(page.url());
+    } catch (e) {
+      add({ kind: 'page-error', detail: `final page URL ${JSON.stringify(page.url())} is not a URL: ${errText(e)}` });
+      return;
+    }
+    if (landed.origin !== origin) {
+      add({
+        kind: 'page-error',
+        detail: `navigated off the configured origin ${origin}: ${pageUrl} ended at ${landed.href}`,
+      });
+      return;
+    }
+
     const hrefs = await page.$$eval('a[href]', (els) => els.map((e) => e.href));
     const links = [...new Set(hrefs.filter((h) => typeof h === 'string' && sameOrigin(h, origin)).map(stripFragment))];
     for (const link of links) {
@@ -123,6 +141,27 @@ async function main() {
     return emit('error', `bad input: ${errText(e)}`);
   }
   if (input.pages.length === 0) return emit('error', 'no pages to check (sitecraft.toml `pages` is empty)');
+
+  // Every entry must stay on the configured origin; an absolute or
+  // protocol-relative entry to another host would be checked with all of its
+  // failures filtered out as cross-origin.
+  const pageUrls = [];
+  for (const p of input.pages) {
+    let u;
+    try {
+      u = new URL(p, input.base);
+    } catch (e) {
+      return emit('error', `pages entry ${JSON.stringify(p)} is not a valid URL path: ${errText(e)}`);
+    }
+    if (u.origin !== input.origin) {
+      return emit(
+        'error',
+        `pages entry ${JSON.stringify(p)} resolves to ${u.href}, outside the configured origin ${input.origin}; ` +
+          'use a same-origin path such as "/about" in sitecraft.toml `pages`'
+      );
+    }
+    pageUrls.push(u.href);
+  }
 
   // Whole-run ceiling, armed before anything that can hang. Never unref'd:
   // it must be able to fire while an await is stuck.
@@ -154,8 +193,7 @@ async function main() {
   // is closed (emit exits the process).
   let result = ['ok'];
   try {
-    for (const p of input.pages) {
-      const pageUrl = new URL(p, input.base).href;
+    for (const pageUrl of pageUrls) {
       try {
         await checkPage(browser, pageUrl, input.origin);
       } catch (e) {

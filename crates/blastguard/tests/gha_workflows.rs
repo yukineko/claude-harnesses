@@ -357,3 +357,91 @@ fn w_dotdot_variant_in_git_worktree_asks() {
         assert_gha_ask(&out, &format!("`{cmd}` in worktree"));
     }
 }
+
+// Symlink spellings of a workflow path (user ruling 2026-11-01): blastguard
+// must resolve symlinks before judging a write to `.github/workflows`, and
+// Ask when resolution is impossible. A purely lexical check lets `wf/ci.yml`
+// (with `wf -> .github/workflows`) through.
+fn symlink_repo(root: &Path) {
+    std::fs::create_dir_all(root.join(".github/workflows")).unwrap();
+    std::fs::write(root.join(".github/workflows/ci.yml"), "on: push\n").unwrap();
+}
+
+#[test]
+fn w_symlinked_dir_file_tools_and_bash_ask() {
+    let f = Fx::new("w11");
+    f.git(&["init", "-q", "-b", "main"]);
+    symlink_repo(&f.repo);
+    std::os::unix::fs::symlink(".github/workflows", f.repo.join("wf")).unwrap();
+    let p = f.repo.join("wf/ci.yml");
+    for tool in ["Write", "Edit"] {
+        let out = f.call(tool, wf_input(tool, &p), &f.repo);
+        assert_gha_ask(&out, &format!("{tool} on wf/ci.yml via dir symlink"));
+    }
+    let out = f.run("echo x > wf/ci.yml");
+    assert_gha_ask(&out, "`echo x > wf/ci.yml` via dir symlink");
+}
+
+#[test]
+fn w_symlinked_file_file_tools_ask() {
+    let f = Fx::new("w12");
+    f.git(&["init", "-q", "-b", "main"]);
+    symlink_repo(&f.repo);
+    std::os::unix::fs::symlink(".github/workflows/ci.yml", f.repo.join("link.yml")).unwrap();
+    let p = f.repo.join("link.yml");
+    for tool in ["Write", "Edit"] {
+        let out = f.call(tool, wf_input(tool, &p), &f.repo);
+        assert_gha_ask(&out, &format!("{tool} on link.yml via file symlink"));
+    }
+}
+
+#[test]
+fn w_symlink_chain_file_tools_ask() {
+    let f = Fx::new("w13");
+    f.git(&["init", "-q", "-b", "main"]);
+    symlink_repo(&f.repo);
+    std::os::unix::fs::symlink(".github/workflows", f.repo.join("b")).unwrap();
+    std::os::unix::fs::symlink("b", f.repo.join("a")).unwrap();
+    let p = f.repo.join("a/ci.yml");
+    let out = f.call("Write", wf_input("Write", &p), &f.repo);
+    assert_gha_ask(&out, "Write on a/ci.yml via a -> b -> .github/workflows");
+}
+
+#[test]
+fn w_symlinked_dir_in_git_worktree_asks() {
+    let f = Fx::new("w14");
+    f.git(&["init", "-q", "-b", "main"]);
+    std::fs::write(f.repo.join("a.txt"), "x\n").unwrap();
+    f.git(&["add", "-A"]);
+    f.git(&["commit", "-q", "-m", "init"]);
+    let wt = f.base.join("wt1");
+    f.git(&["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "feat"]);
+    symlink_repo(&wt);
+    std::os::unix::fs::symlink(".github/workflows", wt.join("wf")).unwrap();
+    let p = wt.join("wf/ci.yml");
+    for tool in ["Write", "Edit"] {
+        let out = f.call(tool, wf_input(tool, &p), &wt);
+        assert_gha_ask(&out, &format!("{tool} in worktree via dir symlink"));
+    }
+    let out = f.call(
+        "Bash",
+        serde_json::json!({ "command": "echo x > wf/ci.yml" }),
+        &wt,
+    );
+    assert_gha_ask(&out, "`echo x > wf/ci.yml` in worktree via dir symlink");
+}
+
+#[test]
+fn w_symlink_to_unrelated_dir_is_not_a_workflow_write() {
+    let f = Fx::new("w15");
+    f.git(&["init", "-q", "-b", "main"]);
+    symlink_repo(&f.repo);
+    std::fs::create_dir_all(f.repo.join("docs")).unwrap();
+    std::os::unix::fs::symlink("docs", f.repo.join("docs2")).unwrap();
+    let p = f.repo.join("docs2/x.md");
+    let out = f.call("Write", wf_input("Write", &p), &f.repo);
+    assert!(
+        !out.to_lowercase().contains("github actions"),
+        "symlink to unrelated dir must not carry the GitHub Actions reason; got {out:?}"
+    );
+}

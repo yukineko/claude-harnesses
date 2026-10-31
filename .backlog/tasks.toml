@@ -27,3 +27,37 @@ exit 1: zjn12xs02k588nyw5txm0000gp/T/condukt-cc-pym.FC6g1P/repo\nplugins: anyio-
 extracted argv: ["pytest"]
 0 passed, 1 failed
 FAIL: extracted command is ["pytest"]; expected it to start with ["python3","-m","pytest"] and include scripts/x.py'''
+
+[[task]]
+id = "7f64d096"
+title = "blastguard asks inside a background subagent; the prompt stalls for hours"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Subagent PreToolUse payload has non-empty agent_id/agent_type (main thread has neither); env is identical so ask_available() says interactive. Ruling: in a subagent Ask becomes Deny and repeat-deny must stay Deny; main thread unchanged. Fix sites: crates/blastguard/src/main.rs emit + downgrade_on_repeat. RED tests (ignored): subagent_ask_becomes_deny, subagent_repeated_deny_stays_deny in crates/blastguard/tests/subagent_no_ask.rs; remove #[ignore] when fixing."
+created_at = 1793460591
+updated_at = 1793460591
+weight = 0.0
+issue_number = 1476
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1476"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test subagent_no_ask -- --include-ignored"
+rev = "8778b3e271cf1b80c0aee0ea09de278cd93536e2"
+observed_at = 1793460591
+detail = """
+exit 101: subagent_ask_becomes_deny
+    subagent_repeated_deny_stays_deny
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/subagent_no_ask.rs (target/debug/deps/subagent_no_ask-b0b7f3c4f2c02b83)
+error: test failed, to rerun pass `-p blastguard --test subagent_no_ask`"""

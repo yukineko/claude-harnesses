@@ -3,6 +3,10 @@
 //! * secrets in build output (`build_dir`, including `*.map`): fixed-prefix
 //!   patterns (AWS access key, GitHub tokens, Stripe secret keys, private-key
 //!   blocks with a body, Google API keys); matches are printed redacted;
+//! * values from the root `.env` / `.env.*` files (templates `.env.example`,
+//!   `.env.sample`, `.env.template` excluded; keys `NODE_ENV`, `VITE_*`,
+//!   `NEXT_PUBLIC_*`, `PUBLIC_*` excluded as public by convention), parsed
+//!   with dotenv semantics, appearing in build output;
 //! * dangerous HTML sinks in sources (`innerHTML` assignment of a
 //!   non-constant, `dangerouslySetInnerHTML`, `v-html`, `{@html}`, `eval`,
 //!   `new Function`), excluding `node_modules` and `dist`;
@@ -11,7 +15,7 @@
 //!
 //! Undetermined: audit JSON without all six `metadata.vulnerabilities` keys,
 //! an `error` object (including ENOLOCK), empty or invalid stdout, missing
-//! npm, or zero files to scan.
+//! npm, zero files to scan, or a file walk exceeding its entry limit.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -63,15 +67,32 @@ pub fn check_security(config: &Config, root: &Path) -> Verdict {
 // file walking
 // ---------------------------------------------------------------------------
 
+/// Upper bound on directory entries one walk visits. Aliased directories are
+/// walked under every path (see [`walk_inner`]), so a chain of directories
+/// each holding several links to the next grows exponentially; past this
+/// bound the walk gives up with an error (Undetermined), never a partial list.
+const MAX_WALK_ENTRIES: usize = 100_000;
+
 /// Recursively list regular files under `dir`. `skip` decides, per directory
-/// name, whether to prune. Any IO error is returned (never a partial list).
+/// name, whether to prune. Any IO error, or visiting more than
+/// [`MAX_WALK_ENTRIES`] entries, is returned as an error (never a partial list).
 fn walk(
     dir: &Path,
     skip: &dyn Fn(&Path, &str) -> bool,
     out: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
     let mut stack = Vec::new();
-    walk_inner(dir, skip, out, &mut stack)
+    let mut budget = MAX_WALK_ENTRIES;
+    walk_inner(dir, skip, out, &mut stack, &mut budget).map_err(|e| {
+        if budget == 0 {
+            format!(
+                "too many paths under {} (walk limit {MAX_WALK_ENTRIES} entries reached, likely a chain of directory symlinks or a large non-source directory), so the scan did not complete; remove the symlink aliases or move the large directory out of the project",
+                dir.display()
+            )
+        } else {
+            e
+        }
+    })
 }
 
 /// `stack` holds the canonical paths of the directories currently being
@@ -85,6 +106,7 @@ fn walk_inner(
     skip: &dyn Fn(&Path, &str) -> bool,
     out: &mut Vec<PathBuf>,
     stack: &mut Vec<PathBuf>,
+    budget: &mut usize,
 ) -> Result<(), String> {
     let canon = std::fs::canonicalize(dir).map_err(|e| {
         format!(
@@ -105,6 +127,10 @@ fn walk_inner(
     for ent in rd {
         let ent =
             ent.map_err(|e| format!("cannot list {}: {e}; fix permissions", dir.display()))?;
+        if *budget == 0 {
+            return Err("walk limit reached".to_string());
+        }
+        *budget -= 1;
         let path = ent.path();
         // Follows symlinks; a dangling link is an error, not a skip.
         let meta = match std::fs::metadata(&path) {
@@ -130,7 +156,7 @@ fn walk_inner(
             if skip(&path, &name) {
                 continue;
             }
-            walk_inner(&path, skip, out, stack)?;
+            walk_inner(&path, skip, out, stack, budget)?;
         } else if meta.is_file() {
             out.push(path);
         }
@@ -290,27 +316,131 @@ fn scan_secrets(config: &Config, root: &Path) -> Verdict {
     Verdict::from_findings(findings)
 }
 
-const ENV_FILES: [&str; 3] = [".env", ".env.local", ".env.production"];
+/// Committed-on-purpose placeholder files: never read.
+const ENV_TEMPLATES: [&str; 3] = [".env.example", ".env.sample", ".env.template"];
 
-/// `(file, key, value)` for every `.env*` value that is a leak candidate:
-/// at least 8 chars, not boolean, not numeric. A present-but-unreadable file
-/// is an error (its values were never compared).
+/// Keys public by framework convention (bundled on purpose): `NODE_ENV` and
+/// the `VITE_` / `NEXT_PUBLIC_` / `PUBLIC_` prefixes.
+fn is_public_env_key(key: &str) -> bool {
+    key == "NODE_ENV"
+        || ["VITE_", "NEXT_PUBLIC_", "PUBLIC_"]
+            .iter()
+            .any(|p| key.starts_with(p))
+}
+
+/// The `.env` files at the project root: `.env` and every `.env.*` except
+/// [`ENV_TEMPLATES`], sorted. A root that cannot be listed is an error.
+fn env_files(root: &Path) -> Result<Vec<String>, String> {
+    let rd = std::fs::read_dir(root).map_err(|e| {
+        format!(
+            "cannot list {} to find .env files: {e}; fix permissions",
+            root.display()
+        )
+    })?;
+    let mut names = Vec::new();
+    for ent in rd {
+        let ent = ent.map_err(|e| {
+            format!(
+                "cannot list {} to find .env files: {e}; fix permissions",
+                root.display()
+            )
+        })?;
+        let name = ent.file_name().to_string_lossy().into_owned();
+        if (name == ".env" || name.starts_with(".env.")) && !ENV_TEMPLATES.contains(&name.as_str())
+        {
+            names.push(name);
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Parse dotenv text into `(key, value)` pairs, following dotenv semantics:
+/// lines end at `\r\n`, `\n` or a lone `\r`; `export ` is optional; the
+/// separator is `=` or `:`; a value in matching `'`, `"` or `` ` `` quotes is
+/// the quoted content (a `#` inside it is part of the value, and a double
+/// quoted value may span lines); an unquoted value ends at the first `#`
+/// and is trimmed.
+fn parse_dotenv(text: &str) -> Vec<(String, String)> {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i].trim_start();
+        i += 1;
+        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+        let key_len = line
+            .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')))
+            .unwrap_or(line.len());
+        if key_len == 0 {
+            continue; // blank, comment, or not a KEY=VALUE line
+        }
+        let key = &line[..key_len];
+        let rest = line[key_len..].trim_start();
+        let Some(value) = rest.strip_prefix('=').or_else(|| rest.strip_prefix(':')) else {
+            continue;
+        };
+        let value = value.trim_start();
+        let quote = value
+            .chars()
+            .next()
+            .filter(|c| matches!(c, '"' | '\'' | '`'));
+        let parsed = match quote {
+            Some(q) => {
+                let body = &value[1..];
+                if let Some(end) = body.find(q) {
+                    Some(body[..end].to_string())
+                } else if q == '"' {
+                    // multi-line double-quoted value: join until the closing quote
+                    let mut acc = body.to_string();
+                    let mut j = i;
+                    let mut closed = None;
+                    while j < lines.len() {
+                        acc.push('\n');
+                        if let Some(end) = lines[j].find(q) {
+                            acc.push_str(&lines[j][..end]);
+                            closed = Some(j + 1);
+                            break;
+                        }
+                        acc.push_str(lines[j]);
+                        j += 1;
+                    }
+                    closed.map(|next| {
+                        i = next;
+                        acc
+                    })
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+        let v = match parsed {
+            Some(v) => v,
+            // unquoted (or unterminated quote, kept literally like dotenv)
+            None => value.split('#').next().unwrap_or("").trim().to_string(),
+        };
+        out.push((key.to_string(), v));
+    }
+    out
+}
+
+/// `(file, key, value)` for every root `.env` / `.env.*` value (templates
+/// excluded) that is a leak candidate: key not public by convention, value at
+/// least 8 chars, not boolean, not numeric. A present-but-unreadable file is
+/// an error (its values were never compared).
 fn env_candidates(root: &Path) -> Result<Vec<(String, String, String)>, String> {
     let mut out = Vec::new();
-    for name in ENV_FILES {
-        let path = root.join(name);
+    for name in env_files(root)? {
+        let path = root.join(&name);
         let bytes = match std::fs::read(&path) {
             Ok(b) => b,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                match std::fs::symlink_metadata(&path) {
-                    Err(e2) if e2.kind() == std::io::ErrorKind::NotFound => continue,
-                    _ => {
-                        return Err(format!(
-                            "{} is a dangling symlink; remove the link or fix its target",
-                            path.display()
-                        ))
-                    }
-                }
+                return Err(format!(
+                    "{} is a dangling symlink; remove the link or fix its target",
+                    path.display()
+                ))
             }
             Err(e) => {
                 return Err(format!(
@@ -319,26 +449,11 @@ fn env_candidates(root: &Path) -> Result<Vec<(String, String, String)>, String> 
                 ))
             }
         };
-        for line in String::from_utf8_lossy(&bytes).lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
+        for (key, v) in parse_dotenv(&String::from_utf8_lossy(&bytes)) {
+            if is_public_env_key(&key) || v.chars().count() < 8 || is_trivial_env_value(&v) {
                 continue;
             }
-            let line = line.strip_prefix("export ").unwrap_or(line);
-            let Some((key, value)) = line.split_once('=') else {
-                continue;
-            };
-            let mut v = value.trim();
-            for q in ['"', '\''] {
-                if v.len() >= 2 && v.starts_with(q) && v.ends_with(q) {
-                    v = &v[1..v.len() - 1];
-                    break;
-                }
-            }
-            if v.chars().count() < 8 || is_trivial_env_value(v) {
-                continue;
-            }
-            out.push((name.to_string(), key.trim().to_string(), v.to_string()));
+            out.push((name.clone(), key, v));
         }
     }
     Ok(out)
@@ -356,9 +471,14 @@ fn is_trivial_env_value(v: &str) -> bool {
 // dangerous sinks
 // ---------------------------------------------------------------------------
 
+/// Sink patterns. The assignment / call patterns are matched against the
+/// whole file (so Prettier-style multi-line forms are seen); the value they
+/// receive is the first non-blank text after the operator or argument
+/// separator, up to the end of that line ([`value_after`]).
 struct Sinks {
     inner_html: Regex,
     constant: Regex,
+    obj_assign: Regex,
     obj_html: Regex,
     adjacent: Regex,
     doc_write: Regex,
@@ -371,13 +491,12 @@ fn sinks() -> Result<&'static Sinks, String> {
         let mk =
             |p: &str| Regex::new(p).map_err(|e| format!("internal sink pattern {p} invalid: {e}"));
         Ok(Sinks {
-            inner_html: mk(
-                r#"\b((?:inner|outer)HTML)(?:['"`]\s*\])?\s*(\+=|\|\|=|&&=|\?\?=|=+)\s*(.*)"#,
-            )?,
+            inner_html: mk(r#"\b((?:inner|outer)HTML)(?:['"`]\s*\])?\s*(\+=|\|\|=|&&=|\?\?=|=+)"#)?,
             constant: mk(r#"^(?:"[^"\\]*"|'[^'\\]*'|`[^`$\\]*`)[\s;,)}]*$"#)?,
-            obj_html: mk(r#"\b((?:inner|outer)HTML)\s*:\s*(.*)"#)?,
-            adjacent: mk(r#"\binsertAdjacentHTML\s*\(\s*[^,()]*,\s*(.*)"#)?,
-            doc_write: mk(r#"\bdocument\s*\.\s*write(?:ln)?\s*\(\s*(.*)"#)?,
+            obj_assign: mk(r"\bObject\s*\.\s*assign\s*\(")?,
+            obj_html: mk(r#"\b((?:inner|outer)HTML)\s*:"#)?,
+            adjacent: mk(r"\binsertAdjacentHTML\s*\(")?,
+            doc_write: mk(r"\bdocument\s*\.\s*write(?:ln)?\s*\(")?,
             others: vec![
                 (
                     "dangerouslySetInnerHTML",
@@ -392,6 +511,59 @@ fn sinks() -> Result<&'static Sinks, String> {
     })
     .as_ref()
     .map_err(Clone::clone)
+}
+
+/// The value text starting at byte `from`: skip whitespace (including line
+/// breaks), then everything up to the end of that line.
+fn value_after(text: &str, from: usize) -> &str {
+    let rest = text[from..].trim_start();
+    rest.split('\n').next().unwrap_or("").trim()
+}
+
+/// Scan JS from byte `from` (just inside an opening bracket), skipping string
+/// literals and nested brackets. Returns `(index, byte)` of the first
+/// top-level `,` or the closing bracket, or `None` at end of text.
+fn scan_top_level(text: &str, from: usize) -> Option<(usize, u8)> {
+    let b = text.as_bytes();
+    let mut depth = 0usize;
+    let mut i = from;
+    while i < b.len() {
+        match b[i] {
+            q @ (b'"' | b'\'' | b'`') => {
+                i += 1;
+                while i < b.len() && b[i] != q {
+                    if b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            c @ (b')' | b']' | b'}') => {
+                if depth == 0 {
+                    return Some((i, c));
+                }
+                depth -= 1;
+            }
+            b',' if depth == 0 => return Some((i, b',')),
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// End (exclusive) of the call whose arguments start at `from`; end of text
+/// when unbalanced, so an unterminated call is still scanned to the end.
+fn call_end(text: &str, from: usize) -> usize {
+    let mut i = from;
+    loop {
+        match scan_top_level(text, i) {
+            Some((j, b',')) => i = j + 1,
+            Some((j, _)) => return j,
+            None => return text.len(),
+        }
+    }
 }
 
 fn source_globs(config: &Config) -> Result<GlobSet, String> {
@@ -451,48 +623,64 @@ fn scan_sinks(config: &Config, root: &Path) -> Verdict {
                 ))
             }
         };
-        for (i, line) in text.lines().enumerate() {
-            let n = i + 1;
-            for c in sk.inner_html.captures_iter(line) {
-                let prop = c.get(1).map_or("", |m| m.as_str());
-                let op = c.get(2).map_or("", |m| m.as_str());
-                if op == "==" || op == "===" {
-                    continue; // comparison, not assignment
-                }
-                let rhs = c.get(3).map_or("", |m| m.as_str()).trim();
-                if !sk.constant.is_match(rhs) {
+        let file = rel(root, f);
+        for c in sk.inner_html.captures_iter(&text) {
+            let (Some(whole), Some(prop), Some(op)) = (c.get(0), c.get(1), c.get(2)) else {
+                continue;
+            };
+            if op.as_str() == "==" || op.as_str() == "===" {
+                continue; // comparison, not assignment
+            }
+            if !sk.constant.is_match(value_after(&text, whole.end())) {
+                findings.push(Reason::new(format!(
+                    "{file}:{}: {} assigned a non-constant value; use textContent, or sanitize with a vetted sanitizer (e.g. DOMPurify) before assignment",
+                    line_of(&text, whole.start()),
+                    prop.as_str()
+                )));
+            }
+        }
+        for call in sk.obj_assign.find_iter(&text) {
+            let span = &text[call.end()..call_end(&text, call.end())];
+            for c in sk.obj_html.captures_iter(span) {
+                let (Some(whole), Some(prop)) = (c.get(0), c.get(1)) else {
+                    continue;
+                };
+                if !sk.constant.is_match(value_after(span, whole.end())) {
                     findings.push(Reason::new(format!(
-                        "{}:{n}: {prop} assigned a non-constant value; use textContent, or sanitize with a vetted sanitizer (e.g. DOMPurify) before assignment",
-                        rel(root, f)
+                        "{file}:{}: Object.assign sets {} to a non-constant value; use textContent, or sanitize with a vetted sanitizer (e.g. DOMPurify)",
+                        line_of(&text, call.end() + whole.start()),
+                        prop.as_str()
                     )));
                 }
             }
-            if line.contains("Object.assign") {
-                for c in sk.obj_html.captures_iter(line) {
-                    let prop = c.get(1).map_or("", |m| m.as_str());
-                    let rhs = c.get(2).map_or("", |m| m.as_str()).trim();
-                    if !sk.constant.is_match(rhs) {
-                        findings.push(Reason::new(format!(
-                            "{}:{n}: Object.assign sets {prop} to a non-constant value; use textContent, or sanitize with a vetted sanitizer (e.g. DOMPurify)",
-                            rel(root, f)
-                        )));
+        }
+        for (label, re, skip_first_arg) in [
+            ("insertAdjacentHTML", &sk.adjacent, true),
+            ("document.write", &sk.doc_write, false),
+        ] {
+            for m in re.find_iter(&text) {
+                let arg_start = if skip_first_arg {
+                    match scan_top_level(&text, m.end()) {
+                        Some((comma, b',')) => Some(comma + 1),
+                        // no second argument found: the HTML argument cannot be
+                        // shown constant, so it is reported (restrictive side)
+                        _ => None,
                     }
+                } else {
+                    Some(m.end())
+                };
+                let constant =
+                    arg_start.is_some_and(|s| sk.constant.is_match(value_after(&text, s)));
+                if !constant {
+                    findings.push(Reason::new(format!(
+                        "{file}:{}: {label} called with a non-constant argument; use textContent / DOM construction, or sanitize with a vetted sanitizer (e.g. DOMPurify)",
+                        line_of(&text, m.start())
+                    )));
                 }
             }
-            for (label, re) in [
-                ("insertAdjacentHTML", &sk.adjacent),
-                ("document.write", &sk.doc_write),
-            ] {
-                for c in re.captures_iter(line) {
-                    let arg = c.get(1).map_or("", |m| m.as_str()).trim();
-                    if !sk.constant.is_match(arg) {
-                        findings.push(Reason::new(format!(
-                            "{}:{n}: {label} called with a non-constant argument; use textContent / DOM construction, or sanitize with a vetted sanitizer (e.g. DOMPurify)",
-                            rel(root, f)
-                        )));
-                    }
-                }
-            }
+        }
+        for (i, line) in text.lines().enumerate() {
+            let n = i + 1;
             for (label, re) in &sk.others {
                 if re.is_match(line) {
                     findings.push(Reason::new(format!(

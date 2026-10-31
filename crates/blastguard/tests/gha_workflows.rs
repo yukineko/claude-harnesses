@@ -666,9 +666,10 @@ fn s_dangling_symlink_chain_append_denies() {
     );
 }
 
-// Write/Edit have no system-directory rule even for a DIRECT path (observed:
-// `Write /etc/<absent>` is Allow on 0.2.178), so the property pinned here is
-// parity: the symlink spelling must be judged exactly as the direct one is.
+// User ruling 2026-11-01: Write/Edit into a system directory Deny exactly like
+// a Bash redirect. Deny-parity: the symlink spelling is judged like the direct
+// path, and both are the system-directory Deny (was Allow-parity while the
+// file tools had no system-directory rule at all).
 #[test]
 fn s_dangling_file_symlink_file_tools_match_direct() {
     let f = sys_fixture("s5", &[(ABSENT_SYS, "sysln")]);
@@ -680,7 +681,142 @@ fn s_dangling_file_symlink_file_tools_match_direct() {
             decision(&direct),
             "{tool} via dangling symlink must be judged like the direct path; direct={direct:?} via={via:?}"
         );
+        assert_system_deny(&direct, &format!("{tool} direct {ABSENT_SYS}"));
+        assert_system_deny(&via, &format!("{tool} via dangling symlink"));
     }
+}
+
+// File tools x system directories (one test per case).
+const ABSENT_USR: &str = "/Library/LaunchDaemons/blastguard-sysdir-tools-absent.plist";
+const ABSENT_ETC_NAME: &str = "blastguard-sysdir-tools-absent.conf";
+
+fn tool_sys_case(name: &str, tool: &str, links: &[(&str, &str)], rel_or_abs: &str) {
+    assert!(std::fs::symlink_metadata(ABSENT_USR).is_err());
+    assert!(std::fs::symlink_metadata(format!("/etc/{ABSENT_ETC_NAME}")).is_err());
+    let f = sys_fixture(name, links);
+    let p = if rel_or_abs.starts_with('/') {
+        PathBuf::from(rel_or_abs)
+    } else {
+        f.repo.join(rel_or_abs)
+    };
+    let input = if tool == "NotebookEdit" {
+        serde_json::json!({
+            "notebook_path": p.display().to_string(),
+            "new_source": "x",
+            "cell_id": "a"
+        })
+    } else if tool == "MultiEdit" {
+        wf_input("MultiEdit", &p)
+    } else {
+        wf_input(tool, &p)
+    };
+    let out = f.call(tool, input, &f.repo);
+    assert_system_deny(&out, &format!("{tool} on {rel_or_abs}"));
+}
+
+#[test]
+fn t_write_etc_absent_denies() {
+    tool_sys_case("t01", "Write", &[], ABSENT_SYS);
+}
+#[test]
+fn t_edit_etc_absent_denies() {
+    tool_sys_case("t02", "Edit", &[], ABSENT_SYS);
+}
+#[test]
+fn t_multiedit_etc_absent_denies() {
+    tool_sys_case("t03", "MultiEdit", &[], ABSENT_SYS);
+}
+#[test]
+fn t_notebookedit_etc_absent_denies() {
+    tool_sys_case("t04", "NotebookEdit", &[], ABSENT_SYS);
+}
+#[test]
+fn t_write_launchdaemons_absent_denies() {
+    tool_sys_case("t05", "Write", &[], ABSENT_USR);
+}
+#[test]
+fn t_edit_launchdaemons_absent_denies() {
+    tool_sys_case("t06", "Edit", &[], ABSENT_USR);
+}
+#[test]
+fn t_write_via_dangling_symlink_denies() {
+    tool_sys_case("t07", "Write", &[(ABSENT_SYS, "sysln")], "sysln");
+}
+#[test]
+fn t_edit_via_dangling_symlink_denies() {
+    tool_sys_case("t08", "Edit", &[(ABSENT_SYS, "sysln")], "sysln");
+}
+#[test]
+fn t_write_via_symlink_chain_denies() {
+    tool_sys_case(
+        "t09",
+        "Write",
+        &[(ABSENT_SYS, "sysb"), ("sysb", "sysa")],
+        "sysa",
+    );
+}
+#[test]
+fn t_write_via_dir_symlink_denies() {
+    tool_sys_case(
+        "t10",
+        "Write",
+        &[("/etc", "etcln")],
+        "etcln/blastguard-sysdir-tools-absent.conf",
+    );
+}
+#[test]
+fn t_edit_via_dir_symlink_denies() {
+    tool_sys_case(
+        "t11",
+        "Edit",
+        &[("/etc", "etcln")],
+        "etcln/blastguard-sysdir-tools-absent.conf",
+    );
+}
+
+#[test]
+fn t_control_write_tmp_allows() {
+    let f = Fx::new("t20");
+    let out = f.call(
+        "Write",
+        wf_input("Write", Path::new("/tmp/blastguard-sysdir-tools-x")),
+        &f.repo,
+    );
+    assert_eq!(
+        decision(&out),
+        "allow",
+        "Write /tmp/x must Allow; got {out:?}"
+    );
+}
+
+#[test]
+fn t_control_write_in_repo_allows() {
+    let f = Fx::new("t21");
+    let out = f.call(
+        "Write",
+        wf_input("Write", &f.repo.join("src_x.txt")),
+        &f.repo,
+    );
+    assert_eq!(
+        decision(&out),
+        "allow",
+        "Write in-repo file must Allow; got {out:?}"
+    );
+}
+
+#[test]
+fn t_control_write_home_project_path_allows() {
+    let f = Fx::new("t22");
+    let out = f.call(
+        "Write",
+        wf_input("Write", &f.home.join("proj/notes.md")),
+        &f.repo,
+    );
+    assert_eq!(
+        decision(&out),
+        "allow",
+        "Write $HOME/proj/notes.md must Allow; got {out:?}"
+    );
 }
 
 // (3) The hop limit must be bounded. If it is not, the loop spins forever;

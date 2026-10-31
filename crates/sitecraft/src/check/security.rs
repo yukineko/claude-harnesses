@@ -81,9 +81,15 @@ fn walk(
     skip: &dyn Fn(&Path, &str) -> bool,
     out: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
+    let canon = std::fs::canonicalize(dir).map_err(|e| {
+        format!(
+            "cannot resolve directory {}: {e}; fix permissions or remove the broken link",
+            dir.display()
+        )
+    })?;
     let mut stack = Vec::new();
     let mut budget = MAX_WALK_ENTRIES;
-    walk_inner(dir, skip, out, &mut stack, &mut budget).map_err(|e| {
+    walk_inner(dir, canon, skip, out, &mut stack, &mut budget).map_err(|e| {
         if budget == 0 {
             format!(
                 "too many paths under {} (walk limit {MAX_WALK_ENTRIES} entries reached, likely a chain of directory symlinks or a large non-source directory), so the scan did not complete; remove the symlink aliases or move the large directory out of the project",
@@ -101,29 +107,30 @@ fn walk(
 /// (including an alias of a sibling) is walked, so every path under which a
 /// file is reachable is reported. Callers dedupe by canonical file path
 /// AFTER their own path filter.
+///
+/// `dir` is the path reported to callers (it may run through any number of
+/// directory symlinks); `canon` is the same directory's canonical path. All
+/// IO goes through `canon`, so each syscall resolves at most one link instead
+/// of every link along an aliased `dir`, which is what made a long alias
+/// chain slow to walk even within [`MAX_WALK_ENTRIES`].
 fn walk_inner(
     dir: &Path,
+    canon: PathBuf,
     skip: &dyn Fn(&Path, &str) -> bool,
     out: &mut Vec<PathBuf>,
     stack: &mut Vec<PathBuf>,
     budget: &mut usize,
 ) -> Result<(), String> {
-    let canon = std::fs::canonicalize(dir).map_err(|e| {
-        format!(
-            "cannot resolve directory {}: {e}; fix permissions or remove the broken link",
-            dir.display()
-        )
-    })?;
     if stack.contains(&canon) {
         return Ok(()); // symlink loop: already being scanned via the ancestor
     }
-    stack.push(canon);
-    let rd = std::fs::read_dir(dir).map_err(|e| {
+    let rd = std::fs::read_dir(&canon).map_err(|e| {
         format!(
             "cannot read directory {}: {e}; fix permissions",
             dir.display()
         )
     })?;
+    stack.push(canon.clone());
     for ent in rd {
         let ent =
             ent.map_err(|e| format!("cannot list {}: {e}; fix permissions", dir.display()))?;
@@ -131,33 +138,42 @@ fn walk_inner(
             return Err("walk limit reached".to_string());
         }
         *budget -= 1;
-        let path = ent.path();
-        // Follows symlinks; a dangling link is an error, not a skip.
-        let meta = match std::fs::metadata(&path) {
-            Ok(m) => m,
-            Err(e) => {
-                // Hint only; both arms are errors (Undetermined) either way.
-                let link_hint = matches!(
-                    std::fs::symlink_metadata(&path),
-                    Ok(m) if m.file_type().is_symlink()
-                );
-                return Err(if link_hint {
-                    format!(
-                        "dangling or unreadable symlink {}: {e}; remove the link or fix its target",
-                        path.display()
-                    )
-                } else {
-                    format!("cannot stat {}: {e}; fix permissions", path.display())
-                });
-            }
+        let file_name = ent.file_name();
+        let path = dir.join(&file_name);
+        let real = canon.join(&file_name);
+        let ft = ent
+            .file_type()
+            .map_err(|e| format!("cannot stat {}: {e}; fix permissions", path.display()))?;
+        let (is_dir, is_file, child_canon) = if ft.is_symlink() {
+            // Follows the link; a dangling link is an error, not a skip.
+            let meta = std::fs::metadata(&real).map_err(|e| {
+                format!(
+                    "dangling or unreadable symlink {}: {e}; remove the link or fix its target",
+                    path.display()
+                )
+            })?;
+            (meta.is_dir(), meta.is_file(), None)
+        } else {
+            // Not a link: its canonical path is the canonical parent joined
+            // with its name.
+            (ft.is_dir(), ft.is_file(), Some(real.clone()))
         };
-        if meta.is_dir() {
-            let name = ent.file_name().to_string_lossy().into_owned();
+        if is_dir {
+            let name = file_name.to_string_lossy().into_owned();
             if skip(&path, &name) {
                 continue;
             }
-            walk_inner(&path, skip, out, stack, budget)?;
-        } else if meta.is_file() {
+            let child_canon = match child_canon {
+                Some(c) => c,
+                None => std::fs::canonicalize(&real).map_err(|e| {
+                    format!(
+                        "cannot resolve directory {}: {e}; fix permissions or remove the broken link",
+                        path.display()
+                    )
+                })?,
+            };
+            walk_inner(&path, child_canon, skip, out, stack, budget)?;
+        } else if is_file {
             out.push(path);
         }
     }

@@ -132,7 +132,7 @@
     {
       "name": "compass",
       "description": "Goal re-grounding and next-move derivation for Claude Code, sitting upstream of condukt to decide what to work on.",
-      "version": "0.1.36",
+      "version": "0.1.39",
       "category": "planning",
       "keywords": [
         "compass",
@@ -306,7 +306,7 @@
     {
       "name": "ship",
       "description": "Nudges the commit, merge, push and plugin-update shipping ritual and detects unshipped state using read-only git checks, never auto-running a mutating command.",
-      "version": "0.1.23",
+      "version": "0.1.25",
       "category": "workflow",
       "keywords": [
         "hooks",

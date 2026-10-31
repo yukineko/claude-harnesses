@@ -289,8 +289,15 @@ fn is_cjk(ch: char) -> bool {
 
 /// Run `git <args>` in `repo_root`, returning trimmed stdout on success, or
 /// `None` for any failure (non-git, missing git, non-zero exit, or timeout).
+///
+/// The repository is selected only by `-C repo_root`: every inherited
+/// `GIT_*` location/config variable (`GIT_DIR`, `GIT_WORK_TREE`,
+/// `GIT_INDEX_FILE`, ... — see [`harness_core::git_env::INHERITED_GIT_ENV`]) is
+/// removed from the child, so a hook invoked under another git's environment
+/// cannot have a non-repo `repo_root` answered by that other repository.
 fn git_stdout(repo_root: &Path, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new("git");
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("-C").arg(repo_root).args(args);
     run_bounded(cmd, GIT_TIMEOUT)
 }
@@ -364,6 +371,71 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         // Not a git repo: rev-parse should fail (non-zero exit) => None.
         assert!(git_stdout(dir.path(), &["rev-parse", "--git-dir"]).is_none());
+    }
+
+    /// Inner half of the GIT_DIR re-exec test below; inert unless the parent
+    /// sets GITENV_CHILD=1. A non-repo dir must be answered `None`, never with
+    /// the output of whatever repo an inherited GIT_DIR points at.
+    #[test]
+    fn gitenv_inner_non_repo_dir_is_not_answered_by_inherited_git_dir() {
+        if std::env::var_os("GITENV_CHILD").is_none() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "compass-gitenv-nonrepo-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let got = git_stdout(&dir, &["rev-parse", "--git-dir"]);
+        let _ = std::fs::remove_dir(&dir);
+        assert!(
+            got.is_none(),
+            "non-repo dir was answered with another repo's git output: {got:?}"
+        );
+    }
+
+    #[test]
+    fn production_git_stdout_ignores_inherited_git_dir() {
+        if std::env::var_os("GITENV_CHILD").is_some() {
+            return;
+        }
+        let nonce = format!("{}-{:?}", std::process::id(), std::time::SystemTime::now());
+        let repo_b = std::env::temp_dir().join(format!("compass-gitenv-b-{nonce}"));
+        std::fs::create_dir_all(&repo_b).unwrap();
+        let mut init = Command::new("git");
+        init.arg("-C").arg(&repo_b).arg("init").arg("-q");
+        harness_core::git_env::scrub(&mut init);
+        assert!(init.status().expect("git init").success());
+
+        let run = |with_git_dir: bool| {
+            let mut c = Command::new(std::env::current_exe().unwrap());
+            c.args([
+                "--exact",
+                "freshness::tests::gitenv_inner_non_repo_dir_is_not_answered_by_inherited_git_dir",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env("GITENV_CHILD", "1");
+            harness_core::git_env::scrub(&mut c);
+            if with_git_dir {
+                c.env("GIT_DIR", repo_b.join(".git"));
+            }
+            c.output().expect("spawn child test binary")
+        };
+        let control = run(false);
+        let polluted = run(true);
+        let _ = std::fs::remove_dir_all(&repo_b);
+        assert!(
+            control.status.success(),
+            "control (GIT_DIR scrubbed) must pass: {}",
+            String::from_utf8_lossy(&control.stdout)
+        );
+        assert!(
+            polluted.status.success(),
+            "with GIT_DIR pointing at repo B the verdict differs from the scrubbed control: {}",
+            String::from_utf8_lossy(&polluted.stdout)
+        );
     }
 
     #[test]

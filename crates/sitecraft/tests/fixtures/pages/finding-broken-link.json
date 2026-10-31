@@ -1,0 +1,1 @@
+{"schema": "sitecraft-check-pages/1", "status": "ok", "pages_checked": 2, "findings": [{"page": "http://127.0.0.1:5173/about", "kind": "broken-link", "detail": "link http://127.0.0.1:5173/missing -> 404", "url": "http://127.0.0.1:5173/missing", "status": 404}]}

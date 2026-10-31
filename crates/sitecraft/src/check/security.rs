@@ -89,7 +89,8 @@ fn walk(
     })?;
     let mut stack = Vec::new();
     let mut budget = MAX_WALK_ENTRIES;
-    walk_inner(dir, canon, skip, out, &mut stack, &mut budget).map_err(|e| {
+    let mut cache = WalkCache::default();
+    walk_inner(dir, canon, skip, out, &mut stack, &mut budget, &mut cache).map_err(|e| {
         if budget == 0 {
             format!(
                 "too many paths under {} (walk limit {MAX_WALK_ENTRIES} entries reached, likely a chain of directory symlinks or a large non-source directory), so the scan did not complete; remove the symlink aliases or move the large directory out of the project",
@@ -101,6 +102,81 @@ fn walk(
     })
 }
 
+/// One `read_dir` item of a real directory, as first observed. IO errors are
+/// kept as the error text and turned into the caller-facing message (which
+/// names the alias path) only when the walk reaches the item, so a cached
+/// listing fails at the same point and with the same text as a live one.
+enum Listed {
+    Entry {
+        name: std::ffi::OsString,
+        file_type: Result<std::fs::FileType, String>,
+    },
+    ListError(String),
+}
+
+/// Per-walk memo keyed by canonical path. An aliased directory is entered
+/// once per path that reaches it (see [`walk_inner`]); without the memo every
+/// entry repeats the same `read_dir` / `metadata` / `canonicalize` syscalls.
+/// Each value is filled the first time the walk needs it, never ahead of it.
+#[derive(Default)]
+struct WalkCache {
+    listings: std::collections::HashMap<PathBuf, std::rc::Rc<Result<Vec<Listed>, String>>>,
+    /// Symlink `real` path -> (is_dir, is_file) of its target.
+    link_meta: std::collections::HashMap<PathBuf, Result<(bool, bool), String>>,
+    /// Linked directory `real` path -> its canonical path.
+    link_canon: std::collections::HashMap<PathBuf, Result<PathBuf, String>>,
+}
+
+impl WalkCache {
+    fn listing(&mut self, canon: &Path) -> std::rc::Rc<Result<Vec<Listed>, String>> {
+        if let Some(l) = self.listings.get(canon) {
+            return std::rc::Rc::clone(l);
+        }
+        let l = std::rc::Rc::new(match std::fs::read_dir(canon) {
+            Err(e) => Err(e.to_string()),
+            Ok(rd) => {
+                let mut items = Vec::new();
+                for ent in rd {
+                    match ent {
+                        Ok(ent) => items.push(Listed::Entry {
+                            name: ent.file_name(),
+                            file_type: ent.file_type().map_err(|e| e.to_string()),
+                        }),
+                        Err(e) => {
+                            // The live iterator stops being useful here too:
+                            // the walk errors when it reaches this item.
+                            items.push(Listed::ListError(e.to_string()));
+                            break;
+                        }
+                    }
+                }
+                Ok(items)
+            }
+        });
+        self.listings
+            .insert(canon.to_path_buf(), std::rc::Rc::clone(&l));
+        l
+    }
+
+    fn link_meta(&mut self, real: &Path) -> Result<(bool, bool), String> {
+        self.link_meta
+            .entry(real.to_path_buf())
+            .or_insert_with(|| {
+                std::fs::metadata(real)
+                    .map(|m| (m.is_dir(), m.is_file()))
+                    .map_err(|e| e.to_string())
+            })
+            .clone()
+    }
+
+    fn link_canon(&mut self, real: &Path) -> Result<PathBuf, String> {
+        self.link_canon
+            .entry(real.to_path_buf())
+            .or_insert_with(|| std::fs::canonicalize(real).map_err(|e| e.to_string()))
+            .clone()
+    }
+}
+
 /// `stack` holds the canonical paths of the directories currently being
 /// walked (the ancestors of `dir`, inclusive). A link back to one of them is
 /// a loop whose contents are already being scanned; any other directory
@@ -110,9 +186,9 @@ fn walk(
 ///
 /// `dir` is the path reported to callers (it may run through any number of
 /// directory symlinks); `canon` is the same directory's canonical path. All
-/// IO goes through `canon`, so each syscall resolves at most one link instead
-/// of every link along an aliased `dir`, which is what made a long alias
-/// chain slow to walk even within [`MAX_WALK_ENTRIES`].
+/// IO goes through `canon` and is memoized in `cache`, so a directory reached
+/// under many alias paths is read once: a long alias chain still costs one
+/// budget unit per reported path, but no longer one syscall per path.
 fn walk_inner(
     dir: &Path,
     canon: PathBuf,
@@ -120,39 +196,50 @@ fn walk_inner(
     out: &mut Vec<PathBuf>,
     stack: &mut Vec<PathBuf>,
     budget: &mut usize,
+    cache: &mut WalkCache,
 ) -> Result<(), String> {
     if stack.contains(&canon) {
         return Ok(()); // symlink loop: already being scanned via the ancestor
     }
-    let rd = std::fs::read_dir(&canon).map_err(|e| {
-        format!(
-            "cannot read directory {}: {e}; fix permissions",
-            dir.display()
-        )
-    })?;
+    let listing = cache.listing(&canon);
+    let items = match &*listing {
+        Ok(items) => items,
+        Err(e) => {
+            return Err(format!(
+                "cannot read directory {}: {e}; fix permissions",
+                dir.display()
+            ));
+        }
+    };
     stack.push(canon.clone());
-    for ent in rd {
-        let ent =
-            ent.map_err(|e| format!("cannot list {}: {e}; fix permissions", dir.display()))?;
+    for item in items {
+        let (file_name, file_type) = match item {
+            Listed::ListError(e) => {
+                return Err(format!(
+                    "cannot list {}: {e}; fix permissions",
+                    dir.display()
+                ));
+            }
+            Listed::Entry { name, file_type } => (name, file_type),
+        };
         if *budget == 0 {
             return Err("walk limit reached".to_string());
         }
         *budget -= 1;
-        let file_name = ent.file_name();
-        let path = dir.join(&file_name);
-        let real = canon.join(&file_name);
-        let ft = ent
-            .file_type()
+        let path = dir.join(file_name);
+        let real = canon.join(file_name);
+        let ft = file_type
+            .as_ref()
             .map_err(|e| format!("cannot stat {}: {e}; fix permissions", path.display()))?;
         let (is_dir, is_file, child_canon) = if ft.is_symlink() {
             // Follows the link; a dangling link is an error, not a skip.
-            let meta = std::fs::metadata(&real).map_err(|e| {
+            let (is_dir, is_file) = cache.link_meta(&real).map_err(|e| {
                 format!(
                     "dangling or unreadable symlink {}: {e}; remove the link or fix its target",
                     path.display()
                 )
             })?;
-            (meta.is_dir(), meta.is_file(), None)
+            (is_dir, is_file, None)
         } else {
             // Not a link: its canonical path is the canonical parent joined
             // with its name.
@@ -165,14 +252,14 @@ fn walk_inner(
             }
             let child_canon = match child_canon {
                 Some(c) => c,
-                None => std::fs::canonicalize(&real).map_err(|e| {
+                None => cache.link_canon(&real).map_err(|e| {
                     format!(
                         "cannot resolve directory {}: {e}; fix permissions or remove the broken link",
                         path.display()
                     )
                 })?,
             };
-            walk_inner(&path, child_canon, skip, out, stack, budget)?;
+            walk_inner(&path, child_canon, skip, out, stack, budget, cache)?;
         } else if is_file {
             out.push(path);
         }

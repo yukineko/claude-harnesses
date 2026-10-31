@@ -254,3 +254,55 @@ fn w_reading_workflow_files_allows() {
         assert_eq!(decision(&out), "allow", "`{cmd}` must Allow; got {out:?}");
     }
 }
+
+// Case-insensitivity of `exclude::is_workflow_path`: a case-variant spelling
+// is not a bypass on a case-folding filesystem.
+const CASE_VARIANTS: [&str; 3] = [
+    ".GitHub/Workflows/x.yml",
+    ".GITHUB/WORKFLOWS/x.yml",
+    ".github/WorkFlows/x.yml",
+];
+
+#[test]
+fn w_case_variant_file_tools_ask() {
+    let f = Fx::new("w5");
+    for v in CASE_VARIANTS {
+        let p = f.repo.join(v);
+        for tool in ["Write", "Edit"] {
+            let out = f.call(tool, wf_input(tool, &p), &f.repo);
+            assert_gha_ask(&out, &format!("{tool} on case-variant {v}"));
+        }
+    }
+}
+
+#[test]
+fn w_case_variant_bash_redirect_asks() {
+    let f = Fx::new("w6");
+    for v in CASE_VARIANTS {
+        for cmd in [format!("echo x > {v}"), format!("echo x >> {v}")] {
+            let out = f.run(&cmd);
+            assert_gha_ask(&out, &format!("`{cmd}`"));
+        }
+    }
+}
+
+#[test]
+fn w_case_variant_in_git_worktree_asks() {
+    let f = Fx::new("w7");
+    f.git(&["init", "-q", "-b", "main"]);
+    std::fs::write(f.repo.join("a.txt"), "x\n").unwrap();
+    f.git(&["add", "-A"]);
+    f.git(&["commit", "-q", "-m", "init"]);
+    let wt = f.base.join("wt1");
+    f.git(&["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "feat"]);
+    for v in CASE_VARIANTS {
+        let p = wt.join(v);
+        for tool in ["Write", "Edit"] {
+            let out = f.call(tool, wf_input(tool, &p), &wt);
+            assert_gha_ask(&out, &format!("{tool} in worktree on case-variant {v}"));
+        }
+        let cmd = format!("echo x > {v}");
+        let out = f.call("Bash", serde_json::json!({ "command": cmd }), &wt);
+        assert_gha_ask(&out, &format!("`{cmd}` in worktree"));
+    }
+}

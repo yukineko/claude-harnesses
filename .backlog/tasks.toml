@@ -36,13 +36,13 @@ project_unresolved = false
 tags = ["p1"]
 touched_files = []
 status = "pending"
-notes = "crates/blastguard/tests/support/neutral_base.rs + worktree_protected_paths_adversarial.rs: Fixture::new remove_dir_all's a fixed per-test dir under a shared base, so concurrent runs delete each other's fixtures mid-setup (observed: 'fatal: unable to get current working directory', index.lock exists, 'does not have a commit checked out'). Suspected related: stray fixture commit 91546870 (t@example.invalid, 'init') on a real branch; escape itself NOT reproduced in a sandbox yet."
+notes = "crates/blastguard/tests/support/neutral_base.rs + worktree_protected_paths_adversarial.rs: Fixture::new remove_dir_all's a fixed per-test dir under a shared base, so concurrent runs delete each other's fixtures mid-setup (observed: 'fatal: unable to get current working directory', index.lock exists, 'does not have a commit checked out'). ESCAPE REPRODUCED (2026-11-01) under the original incident's conditions: clone with a STAGED file, 6 concurrent runs x12 of the real test binary, default fixture location, cwd=clone -> clone HEAD gained 'init' by t <t@example.invalid> containing exactly the staged file (matches stray 91546870). Second repro: bash scripts/tests/blastguard-wtfix-escape-staged-index.sh (exit 1 = escape). First repro (collision only): scripts/tests/blastguard-wtfix-escape-concurrent.sh."
 created_at = 1793462753
-updated_at = 1793462753
+updated_at = 1793463062
 weight = 0.0
 issue_number = 1479
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1479"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

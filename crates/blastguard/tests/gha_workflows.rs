@@ -445,3 +445,82 @@ fn w_symlink_to_unrelated_dir_is_not_a_workflow_write() {
         "symlink to unrelated dir must not carry the GitHub Actions reason; got {out:?}"
     );
 }
+
+// Symlink spellings of blastguard's protected gate/config paths (user ruling
+// 2026-11-01): `.claude/settings.json` and `.githooks/<file>` must Ask with the
+// same protected-path reason as a direct write, through dir symlinks, file
+// symlinks and chains. CLAUDE.md stays unprotected. Each spelling x tool is
+// its own test so a RED run shows every case.
+fn assert_protected_ask(out: &str, what: &str) {
+    assert_eq!(decision(out), "ask", "{what} must Ask; got {out:?}");
+    assert!(
+        out.contains("protected gate/config path"),
+        "{what}: reason must be the protected-path reason; got {out:?}"
+    );
+}
+
+fn protected_repo(f: &Fx) {
+    f.git(&["init", "-q", "-b", "main"]);
+    std::fs::create_dir_all(f.repo.join(".claude")).unwrap();
+    std::fs::write(f.repo.join(".claude/settings.json"), "{}\n").unwrap();
+    std::fs::create_dir_all(f.repo.join(".githooks")).unwrap();
+    std::fs::write(f.repo.join(".githooks/pre-commit"), "x\n").unwrap();
+}
+
+fn protected_case(name: &str, tool: &str, rel: &str, links: &[(&str, &str)]) {
+    let f = Fx::new(name);
+    protected_repo(&f);
+    for (target, link) in links {
+        std::os::unix::fs::symlink(target, f.repo.join(link)).unwrap();
+    }
+    let what = format!("{tool} on {rel}");
+    let out = if tool == "Bash" {
+        f.run(&format!("echo x > {rel}"))
+    } else {
+        let p = f.repo.join(rel);
+        f.call(tool, wf_input(tool, &p), &f.repo)
+    };
+    assert_protected_ask(&out, &what);
+}
+
+macro_rules! protected_tests {
+    ($($test:ident: $name:literal, $rel:literal, [$(($t:literal, $l:literal)),*];)*) => {$(
+        mod $test {
+            use super::*;
+            #[test]
+            fn write() { protected_case(concat!($name, "w"), "Write", $rel, &[$(($t, $l)),*]); }
+            #[test]
+            fn edit() { protected_case(concat!($name, "e"), "Edit", $rel, &[$(($t, $l)),*]); }
+            #[test]
+            fn bash() { protected_case(concat!($name, "b"), "Bash", $rel, &[$(($t, $l)),*]); }
+        }
+    )*};
+}
+
+protected_tests! {
+    p_direct_settings: "p1", ".claude/settings.json", [];
+    p_direct_githooks: "p2", ".githooks/pre-commit", [];
+    p_dir_symlink_settings: "p3", "cl/settings.json", [(".claude", "cl")];
+    p_dir_symlink_githooks: "p4", "gh2/pre-commit", [(".githooks", "gh2")];
+    p_file_symlink_settings: "p5", "st", [(".claude/settings.json", "st")];
+    p_file_symlink_githooks: "p6", "hk", [(".githooks/pre-commit", "hk")];
+    p_chain_settings: "p7", "ca/settings.json", [(".claude", "cb"), ("cb", "ca")];
+    p_chain_githooks: "p8", "ga/pre-commit", [(".githooks", "gb"), ("gb", "ga")];
+}
+
+// Fail-closed: an unresolvable path (symlink loop) is "cannot determine" and
+// must Ask, never Allow.
+#[test]
+fn p_symlink_loop_write_asks() {
+    let f = Fx::new("p9");
+    protected_repo(&f);
+    std::os::unix::fs::symlink("loop2", f.repo.join("loop1")).unwrap();
+    std::os::unix::fs::symlink("loop1", f.repo.join("loop2")).unwrap();
+    let p = f.repo.join("loop1/x");
+    let out = f.call("Write", wf_input("Write", &p), &f.repo);
+    assert_eq!(
+        decision(&out),
+        "ask",
+        "Write through a symlink loop must Ask; got {out:?}"
+    );
+}

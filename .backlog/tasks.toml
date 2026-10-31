@@ -172,3 +172,34 @@ exit 1: var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T/mtg-observe-dnz0myws/mai
 =========================== short test summary info ============================
 FAILED scripts/test_guard_maintree_bash_multi_merge.py::MultiMerge::test_shape2_post_inside_second_merge_pre_merge_commit_window
 ========================= 1 failed, 1 passed in 4.01s =========================="""
+
+[[task]]
+id = "c2b8f126"
+title = "specguard scope: duplicate file input breaks no_file_in_multiple_hits"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1793415246
+updated_at = 1793415246
+weight = 0.0
+issue_number = 1473
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1473"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p specguard --bin specguard scope::prop_tests::no_file_in_multiple_hits_duplicate_input_repro -- --exact --ignored"
+rev = "dee72faa5c66a6f14d953e25295270c7fc68d02e"
+observed_at = 1793415246
+detail = """
+exit 101: ailures:
+    scope::prop_tests::no_file_in_multiple_hits_duplicate_input_repro
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 315 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/main.rs (target/debug/deps/specguard-daa8883ecd136a59)
+error: test failed, to rerun pass `-p specguard --bin specguard`"""

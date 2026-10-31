@@ -145,8 +145,11 @@ pub fn changed_files(
     Ok((files, ALL_TRACKED.to_string(), true))
 }
 
+// Every git spawn in this module passes through `harness_core::git_env::scrub`:
+// an inherited `GIT_DIR` (hook-driven run, user shell) overrides `-C`, so
+// without the scrub these would answer about an unrelated repository.
 fn git_diff_names(repo_root: &Path, baseline: &str) -> Result<Vec<String>> {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo_root)
         .arg("diff")
@@ -165,7 +168,7 @@ fn git_diff_names(repo_root: &Path, baseline: &str) -> Result<Vec<String>> {
 
 /// All files tracked at HEAD. Used as the final fallback ("audit everything").
 fn all_tracked_files(repo_root: &Path) -> Result<Vec<String>> {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo_root)
         .args(["ls-tree", "-r", "--name-only", "HEAD"])
@@ -190,7 +193,7 @@ fn parse_name_list(stdout: &[u8]) -> Vec<String> {
 
 /// Record HEAD of `repo_root`, used to advance the baseline after a run.
 pub fn current_head(repo_root: &Path) -> Result<String> {
-    let out = Command::new("git")
+    let out = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("-C")
         .arg(repo_root)
         .arg("rev-parse")
@@ -1181,6 +1184,55 @@ mod tests {
         assert_eq!(baseline, ALL_TRACKED);
         assert!(fell_back);
     }
+
+    // ── inherited GIT_DIR must not redirect `git -C repo_root` ──────────────
+    // Each parent runs its child under GIT_DIR=<B>/.git; the child asserts the
+    // production function answered about A (see crate::gitenv_testutil).
+
+    use crate::gitenv_testutil as ge;
+
+    #[test]
+    fn gitenv_current_head_reads_repo_root_not_inherited_git_dir() {
+        let (_root, a, b) = ge::two_repos();
+        ge::run_child("scope::tests::gitenv_child_current_head", &a, &b);
+    }
+
+    #[test]
+    fn gitenv_child_current_head() {
+        let Some(a) = ge::child_repo_a() else { return };
+        let want = ge::git(&a, &["rev-parse", "HEAD"]).trim().to_string();
+        assert_eq!(current_head(&a).unwrap(), want, "HEAD must be repo A's");
+    }
+
+    #[test]
+    fn gitenv_all_tracked_files_lists_repo_root_not_inherited_git_dir() {
+        let (_root, a, b) = ge::two_repos();
+        ge::run_child("scope::tests::gitenv_child_all_tracked_files", &a, &b);
+    }
+
+    #[test]
+    fn gitenv_child_all_tracked_files() {
+        let Some(a) = ge::child_repo_a() else { return };
+        assert_eq!(
+            all_tracked_files(&a).unwrap(),
+            vec!["a1.txt".to_string(), "a2.txt".to_string()]
+        );
+    }
+
+    #[test]
+    fn gitenv_git_diff_names_diffs_repo_root_not_inherited_git_dir() {
+        let (_root, a, b) = ge::two_repos();
+        ge::run_child("scope::tests::gitenv_child_git_diff_names", &a, &b);
+    }
+
+    #[test]
+    fn gitenv_child_git_diff_names() {
+        let Some(a) = ge::child_repo_a() else { return };
+        assert_eq!(
+            git_diff_names(&a, "HEAD~1").unwrap(),
+            vec!["a2.txt".to_string()]
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1202,6 +1254,38 @@ mod prop_tests {
         hits.iter()
             .flat_map(|h| h.matched_files.iter().cloned())
             .collect()
+    }
+
+    /// Deterministic repro of the `no_file_in_multiple_hits` proptest failure:
+    /// the shrunk input `["wsb", "aaa", "wsb"]` maps to a duplicated changed
+    /// file `src/a0/wsb.rs`, which then appears twice across the hits.
+    #[test]
+    #[ignore = "RED repro: duplicate file input breaks no_file_in_multiple_hits"]
+    fn no_file_in_multiple_hits_duplicate_input_repro() {
+        let areas = vec![
+            mk_area("a0", vec!["src/a0/**".into()]),
+            mk_area("a1", vec!["src/a1/**".into()]),
+        ];
+        let files = ["wsb", "aaa", "wsb"];
+        let changed: Vec<String> = files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                if i % 2 == 0 {
+                    format!("src/a0/{f}.rs")
+                } else {
+                    format!("src/a1/{f}.rs")
+                }
+            })
+            .collect();
+        let (hits, _) = classify(&changed, &areas).unwrap();
+        let all: Vec<String> = all_hit_files(&hits);
+        let unique: HashSet<&String> = all.iter().collect();
+        assert_eq!(
+            all.len(),
+            unique.len(),
+            "a file appeared in multiple hits: {all:?}"
+        );
     }
 
     proptest! {

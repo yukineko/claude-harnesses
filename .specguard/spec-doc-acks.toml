@@ -186,3 +186,7 @@ reason = "`specguard reconcile-findings`: closes structural findings by re-runni
 [[ack]]
 path = "crates/stuckguard/src/fault_injection_tests.rs"
 reason = "Unit-test submodule (classified impl by the path heuristic) blinding boundary::read_to_string under state::load and pinning that an unreadable history yields allowed_to_carry_on == None (nudge out of caution), never the permissive Some(true) (8696dd7e slice 4). stuckguard.md describes the watch pipeline through state::load but not what an unreadable history resolves to; its fail-soft bullet covers only stdin/sig/config (grep -ci on docs/specs/stuckguard.md, 2026-10-04 @5af9693e: caution 0, unread 0, fault_injection 0; the only 'fault' hits are DefaultHasher). Spec debt."
+
+[[ack]]
+path = "crates/specguard/src/gitenv_testutil.rs"
+reason = "test-only fixture (#[cfg(test)]) for GIT_DIR scrub tests; no production behaviour to specify"

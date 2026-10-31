@@ -292,7 +292,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "compass"
-version = "0.1.36"
+version = "0.1.39"
 dependencies = [
  "anyhow",
  "clap",
@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "propguard"
-version = "0.1.71"
+version = "0.1.75"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1275,7 +1275,7 @@ dependencies = [
 
 [[package]]
 name = "ship"
-version = "0.1.23"
+version = "0.1.26"
 dependencies = [
  "anyhow",
  "clap",
@@ -1322,7 +1322,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "specguard"
-version = "0.2.100"
+version = "0.2.104"
 dependencies = [
  "anyhow",
  "blastguard",

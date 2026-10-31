@@ -1,0 +1,2 @@
+{"schema": "sitecraft-check-pages/1", "status": "ok", "pages_checked": 2, "findings": []}
+extra line

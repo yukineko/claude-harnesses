@@ -737,3 +737,47 @@ fn p_symlink_loop_write_is_answered_within_bound() {
         "symlink loop must Ask"
     );
 }
+
+// Mutant (d) guard: `cd sub && cd ..` tracks the cwd as `Known("")` (back at the
+// project root). The physical spelling must not become `/sysln` there.
+fn cd_roundtrip_case(name: &str, links: &[(&str, &str)], cmd: &str) -> String {
+    let f = Fx::new(name);
+    protected_repo(&f);
+    std::fs::create_dir_all(f.repo.join("sub")).unwrap();
+    for (target, link) in links {
+        std::os::unix::fs::symlink(target, f.repo.join(link)).unwrap();
+    }
+    f.run(cmd)
+}
+
+#[test]
+fn r_cd_roundtrip_dangling_system_symlink_redirect_denies() {
+    assert!(std::fs::symlink_metadata(ABSENT_SYS).is_err());
+    let out = cd_roundtrip_case(
+        "r1",
+        &[(ABSENT_SYS, "sysln")],
+        "cd sub && cd .. && echo x > sysln",
+    );
+    assert_system_deny(&out, "`cd sub && cd .. && echo x > sysln`");
+}
+
+#[test]
+fn r_cd_roundtrip_dangling_system_symlink_append_denies() {
+    assert!(std::fs::symlink_metadata(ABSENT_SYS).is_err());
+    let out = cd_roundtrip_case(
+        "r2",
+        &[(ABSENT_SYS, "sysln")],
+        "cd sub && cd .. && echo x >> sysln",
+    );
+    assert_system_deny(&out, "`cd sub && cd .. && echo x >> sysln`");
+}
+
+#[test]
+fn r_cd_roundtrip_protected_symlink_dir_asks() {
+    let out = cd_roundtrip_case(
+        "r3",
+        &[(".claude", "cl")],
+        "cd sub && cd .. && echo x > cl/settings.json",
+    );
+    assert_protected_ask(&out, "`cd sub && cd .. && echo x > cl/settings.json`");
+}

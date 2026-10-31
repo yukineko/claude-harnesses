@@ -18,7 +18,7 @@
 //! names a file under `/etc` that the test first proves absent.
 //!
 //! Repro: `cargo test -p blastguard --test backlog_2287ebae` (was `#[ignore]`d
-//! RED until the redirect axes judged the real landing, `detect::real_landing`).
+//! RED until the redirect axes judged the real landing, `detect::physical_landing`).
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 

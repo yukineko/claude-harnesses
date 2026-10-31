@@ -62357,3 +62357,448 @@ rev = "5aa7a3cf02c91af98a16a8d4e3c7363d238b6041"
 exit = 101
 kind = "behavioural"
 overlay = ["crates/blastguard/tests/heredoc_quoted_body_doc_comment_backtick.rs"]
+
+[[task]]
+id = "6067a527"
+title = "blastguard allows rm of irreplaceable $HOME asset ~/.ssh/id_rsa (absolute and tilde)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "DEFECT: rm <HOME>/.ssh/id_rsa and rm ~/.ssh/id_rsa produce empty hook output (= Allow). Deletion policy denies removing irreplaceable $HOME-level assets. Repro: crates/blastguard/tests/backlog_ssh_private_key_rm.rs (#[ignore]d, RED with --ignored; control rm of project work file GREEN). Filed in merge 84b01984."
+created_at = 1793225238
+updated_at = 1793444108
+weight = 0.0
+issue_number = 1470
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1470"
+issue_closed_at = 1793444111
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_ssh_private_key_rm -- --ignored"
+rev = "914eacf6fdf0fcdb839bfae3912b98607210814a"
+observed_at = 1793225238
+detail = """
+exit 101: private_key_tilde_is_not_allow
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/backlog_ssh_private_key_rm.rs (target/debug/deps/backlog_ssh_private_key_rm-66c7edec0d584aa5)
+error: test failed, to rerun pass `-p blastguard --test backlog_ssh_private_key_rm`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_ssh_private_key_rm"
+exit = 0
+passed = 3
+rev = "689472493d5f6925bddf60379f26944a648e8106"
+observed_at = 1793444086
+output_digest = "sha256:d6e29e705d95f94064a0944f4bd57d5f7c00776244a76d33aead0eafab34cbd4"
+excerpt = """
+
+running 3 tests
+test control_rm_project_work_file_is_allow ... ok
+test rm_ssh_private_key_tilde_is_not_allow ... ok
+test rm_ssh_private_key_absolute_is_not_allow ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+   Compiling serde_core v1.0.228
+   Compiling target-triple v1.0.1
+   Compiling winnow v1.0.4
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling glob v0.3.3
+   Compiling termcolor v1.4.1
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling serde v1.0.228
+   Compiling serde_json v1.0.150
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling toml_edit v0.22.27
+   Compiling trybuild v1.0.118
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.82 (/Users/yuki/src/.harness-worktrees/c5b9c02b-flakes2/crates/harness-core)
+   Compiling overwatch v0.2.107 (/Users/yuki/src/.harness-worktrees/c5b9c02b-flakes2/crates/overwatch)
+   Compiling blastguard v0.2.167 (/Users/yuki/src/.harness-worktrees/c5b9c02b-flakes2/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.17s
+     Running tests/backlog_ssh_private_key_rm.rs (target/debug/deps/backlog_ssh_private_key_rm-efb69a5a33586514)
+"""
+
+[task.closure.red]
+rev = "ebf54d20dac7b68237d19b6dd1fcf8a5dfc7ef69"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "a03fe3cd"
+title = "blastguard misparses $(ls -d GLOB | ...) command substitution: asks naming -d as the command word"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "DEFECT: B=$(ls -d <HOME>/.claude/plugins/cache/yukineko/backlog/*/bin/backlog | sort -V | tail -1); echo $B is asked with reason '`-d` is a command blastguard has no rule for, and <glob> is a protected gate/config path'. The substitution is misparsed so -d is taken as the command word; bare ls -d <glob> is Allow. Repro: crates/blastguard/tests/backlog_ls_d_cmdsubst_misparse.rs (#[ignore]d, RED with --ignored). Filed in merge 84b01984."
+created_at = 1793225247
+updated_at = 1793444132
+weight = 0.0
+issue_number = 1471
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1471"
+issue_closed_at = 1793444135
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_ls_d_cmdsubst_misparse -- --ignored"
+rev = "914eacf6fdf0fcdb839bfae3912b98607210814a"
+observed_at = 1793225247
+detail = """
+exit 101: _dash_d_as_command
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.44s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/backlog_ls_d_cmdsubst_misparse.rs (target/debug/deps/backlog_ls_d_cmdsubst_misparse-4e4897afb3558dd9)
+error: test failed, to rerun pass `-p blastguard --test backlog_ls_d_cmdsubst_misparse`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_ls_d_cmdsubst_misparse"
+exit = 0
+passed = 2
+rev = "689472493d5f6925bddf60379f26944a648e8106"
+observed_at = 1793444117
+output_digest = "sha256:61e78e30af6aee42f52122d7961f9ee05c501614d244a1ee4e01df091be51aeb"
+excerpt = """
+
+running 2 tests
+test control_bare_ls_d_verdict_pinned ... ok
+test cmdsubst_ls_d_does_not_name_dash_d_as_command ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+   Compiling blastguard v0.2.167 (/Users/yuki/src/.harness-worktrees/c5b9c02b-flakes2/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running tests/backlog_ls_d_cmdsubst_misparse.rs (target/debug/deps/backlog_ls_d_cmdsubst_misparse-b2ca6db064e2f6ca)
+"""
+
+[task.closure.red]
+rev = "c0433410ed23358f46f8319c12fa42442484072f"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "9d54eb34"
+title = "ship: run_safe/rollout spawn plugin scripts without git_env::scrub (inherited GIT_DIR redirects script git into wrong repo)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1793432624
+updated_at = 1793444171
+weight = 0.0
+issue_number = 1474
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1474"
+issue_closed_at = 1793444173
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p ship --test repro_script_spawn_inherits_git_dir -- --ignored"
+rev = "ecc5dc70bc43eb328b8d3bf6831582516f085d95"
+observed_at = 1793432624
+detail = """
+exit 101: d_git_dir
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/repro_script_spawn_inherits_git_dir.rs (target/debug/deps/repro_script_spawn_inherits_git_dir-316e76beb65c4f90)
+error: test failed, to rerun pass `-p ship --test repro_script_spawn_inherits_git_dir`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p ship --test repro_script_spawn_inherits_git_dir"
+exit = 0
+passed = 2
+rev = "689472493d5f6925bddf60379f26944a648e8106"
+observed_at = 1793444157
+output_digest = "sha256:1c3e128dbd2bf909deeb52589b71b5f06ae2b74b2b6cf1217c0fbb0012fed183"
+excerpt = """
+
+running 2 tests
+test rollout_script_git_ignores_inherited_git_dir ... ok
+test run_safe_script_git_ignores_inherited_git_dir ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+
+   Compiling ship v0.1.28 (/Users/yuki/src/.harness-worktrees/c5b9c02b-flakes2/crates/ship)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/repro_script_spawn_inherits_git_dir.rs (target/debug/deps/repro_script_spawn_inherits_git_dir-061c3bfb01dabc80)
+"""
+
+[task.closure.red]
+rev = "9d9f8a1f648c529bbf29cb9eca2646fe2d1e7c94"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "c2b8f126"
+title = "specguard scope: duplicate file input breaks no_file_in_multiple_hits"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1793415246
+updated_at = 1793444202
+weight = 0.0
+issue_number = 1473
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1473"
+issue_closed_at = 1793444206
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p specguard --bin specguard scope::prop_tests::no_file_in_multiple_hits_duplicate_input_repro -- --exact --ignored"
+rev = "dee72faa5c66a6f14d953e25295270c7fc68d02e"
+observed_at = 1793415246
+detail = """
+exit 101: ailures:
+    scope::prop_tests::no_file_in_multiple_hits_duplicate_input_repro
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 315 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/main.rs (target/debug/deps/specguard-daa8883ecd136a59)
+error: test failed, to rerun pass `-p specguard --bin specguard`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p specguard --bin specguard no_file_in_multiple_hits_duplicate_input_repro -- --include-ignored"
+exit = 0
+passed = 1
+rev = "689472493d5f6925bddf60379f26944a648e8106"
+observed_at = 1793444187
+output_digest = "sha256:efef225be7e59d066b32d1bd2a006146024022f75baa11f114975b268fb70196"
+excerpt = """
+
+running 1 test
+test scope::prop_tests::no_file_in_multiple_hits_duplicate_input_repro ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 315 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/main.rs (target/debug/deps/specguard-08e4b9f57c96a4ca)
+"""
+
+[task.closure.red]
+rev = "ebf54d20dac7b68237d19b6dd1fcf8a5dfc7ef69"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/specguard/tests/backlog_03f563ba.rs"]
+
+[[task]]
+id = "2dee8b0e"
+title = "guard-maintree-bash refuses a merge command whose PostToolUse fires mid-merge (backgrounded multi-merge): first merge commit read as not-a-merge"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-10-29: a Bash command looping 3x git merge --no-ff hit the 600s timeout, was backgrounded, and Post fired during the 2nd merge's pre-merge-commit window (HEAD = 1st merge commit, 2nd branch files in index/worktree, no MERGE_HEAD) -> refused 'HEAD d51cebe3 -> a8b441c5 (not a merge / fast-forward)'. Several merges completing between Pre and Post is allowed (shape 1 GREEN). Repro commit 016858f5."
+created_at = 1793312796
+updated_at = 1793444216
+weight = 0.0
+issue_number = 1472
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1472"
+issue_closed_at = 1793444220
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_multi_merge.py"
+rev = "016858f5aed89239c2c1ac81fba1f1287e2e0fbc"
+observed_at = 1793312796
+detail = """
+exit 1: var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T/mtg-observe-dnz0myws/main status` before reverting anything.
+
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_multi_merge.py::MultiMerge::test_shape2_post_inside_second_merge_pre_merge_commit_window
+========================= 1 failed, 1 passed in 4.01s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_multi_merge.py"
+exit = 0
+passed = 2
+rev = "689472493d5f6925bddf60379f26944a648e8106"
+observed_at = 1793444211
+output_digest = "sha256:c8b188177b827f9ed730af7e95522119a43171ed8c4f02e4a32952fe3354f4db"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/c5b9c02b-flakes2
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_guard_maintree_bash_multi_merge.py ..                       [100%]
+
+============================== 2 passed in 1.76s ===============================
+"""
+
+[task.closure.red]
+rev = "ebf54d20dac7b68237d19b6dd1fcf8a5dfc7ef69"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "9451b280"
+title = "blastguard approve unit tests share a fixed temp dir; concurrent test runs clobber it"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = """
+DEFECT: crates/blastguard/src/approve.rs:557-563 test helper store_dir(name) uses a FIXED path std::env::temp_dir()/blastguard-approve-unit/<name> and remove_dir_all's it first. Concurrent `cargo test -p blastguard --lib` processes sharing $TMPDIR (all worktrees share it; e.g. donegate Stop check in one worktree + an agent's run in another) clobber each other's store. Observed originally 2026-10-29 in worktree c5b9c02b-cd-ask: pending_is_not_an_approval_until_promoted failed `left: Undetermined(Undet(Reason("pending did not parse: EOF while parsing a value at line 1 column 0"))) right: Known("fp1")` at approve.rs:577; promote_consumes_the_pending_entry failed `Os { code: 2, kind: NotFound }` at approve.rs:584; neither reproduced in a single isolated run.
+
+REPRO: bash scripts/tests/blastguard-approve-unit-tmpdir-race.sh (committed 13afeb0c). Builds the lib test binary once, runs it N=16 x ROUNDS=5 concurrently with --exact on those two tests, all sharing TMPDIR=target/blastguard-approve-race-tmp. exit 1 = any run failed, 0 = all passed, 2 = undetermined (binary not built/located).
+
+RED EVIDENCE (rev 3e590f4791a6524b707ff63da015c246a26bed08 = main at time of filing, script at 13afeb0c, 2026-10-29 06:27 JST), verbatim excerpt:
+  --- FAILED run 5/13 ---
+  thread 'approve::tests::promote_consumes_the_pending_entry' (129701699) panicked at crates/blastguard/src/approve.rs:584:42:
+  called `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+  thread 'approve::tests::pending_is_not_an_approval_until_promoted' (129701698) panicked at crates/blastguard/src/approve.rs:575:55:
+  called `Result::unwrap()` on an `Err` value: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+  --- FAILED run 5/10 ---
+  thread 'approve::tests::pending_is_not_an_approval_until_promoted' (129701689) panicked at crates/blastguard/src/approve.rs:576:9:
+    left: Approved
+   right: NotRecorded
+  --- FAILED run 5/14 ---
+  thread 'approve::tests::pending_is_not_an_approval_until_promoted' (129701702) panicked at crates/blastguard/src/approve.rs:577:9:
+    left: Undetermined(Undet(Reason("approval not writable: No such file or directory (os error 2)")))
+   right: Known("fp1")
+  FAIL: 59/80 concurrent runs failed (shared TMPDIR clobber)
+  (exit 1)
+CONTROL (same rev, same date): N=1 ROUNDS=5 (serial, same shared TMPDIR) -> `PASS: 5/5 concurrent runs passed`, exit 0.
+
+TWO READINGS and how to tell them apart:
+(a) test-fixture isolation defect (likely): the failures come from the fixed shared path + remove_dir_all in store_dir, i.e. process B deletes/overwrites process A's fixture dir mid-test. Discriminator: give each process a distinct TMPDIR (e.g. run the repro with a per-run TMPDIR, or make store_dir use a per-process/unique dir such as tempfile or pid+nonce) -> if 80/80 pass under concurrency, it is (a) only; fix = unique per-test dir, no Store change.
+(b) real Store concurrency bug: Store's put_pending/promote are not safe against concurrent writers on the SAME store dir (non-atomic write -> "EOF while parsing" on a partially written pending file; `left: Approved right: NotRecorded` = another process's promote leaking into this lookup). Discriminator: with unique per-process dirs, any remaining failure points at (b); separately, a test that has two threads/processes put_pending+promote on one store WITHOUT deleting the dir, and checks for parse errors / torn reads, isolates whether Store writes are atomic (temp+rename) — the "EOF while parsing a value at line 1 column 0" in the original observation is a truncated-file read, which a remove_dir_all race alone can also produce (file created then emptied by recreate), so it does not by itself decide (b).
+Note: the production Store is per-$HOME/session, so (b) matters only if concurrent hook processes can share one store dir; check that before fixing in Store.
+
+Do NOT weaken the repro: the fix is in the fixture (or Store), not N/ROUNDS."""
+created_at = 1793223213
+updated_at = 1793444264
+weight = 0.0
+issue_number = 1469
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1469"
+issue_closed_at = 1793444267
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/blastguard-approve-unit-tmpdir-race.sh"
+rev = "13afeb0c62453522481c8d3b235853ecd08fb85e"
+observed_at = 1793223213
+detail = """
+exit 1: test approve::tests::pending_is_not_an_approval_until_promoted ... FAILED
+thread 'approve::tests::pending_is_not_an_approval_until_promoted' (129757985) panicked at crates/blastguard/src/approve.rs:576:9:
+  left: Approved
+ right: NotRecorded
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 394 filtered out; finished in 0.00s
+FAIL: 67/80 concurrent runs failed (shared TMPDIR clobber)"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/blastguard-approve-unit-tmpdir-race.sh"
+exit = 0
+passed = 80
+rev = "bcba1cbbaf9f5022c3f85f3b108033b0e589fc14"
+observed_at = 1793444251
+output_digest = "sha256:c4f028910e9d13097824646970a3fbc2c12971daec702dbaa8c2630a63e9a6a0"
+excerpt = """
+PASS: 80/80 concurrent runs passed
+test result: ok. 80 passed; 0 failed
+"""
+
+[task.closure.red]
+rev = "b395d871a30e89bccad4d4a5b157b2410dee8419"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "c77cdc98"
+title = "condukt: wall-clock-bound tests (git_fast_subprocess_returns_output_without_timing_out, lock_wait_probes_a_changed_holder_pid_immediately) fail under CPU load"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1793432628
+updated_at = 1793444614
+weight = 0.0
+issue_number = 1475
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1475"
+issue_closed_at = 1793444617
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/condukt-timing-flakes-under-load.sh"
+rev = "ecc5dc70bc43eb328b8d3bf6831582516f085d95"
+observed_at = 1793432628
+detail = """
+exit 1: ately' (147828478) panicked at crates/condukt/src/lock.rs:1506:17:
+INCONCLUSIVE (not a pass): A's first probe alone took 106.751904709s >= the 120ms deadline, so the waiter could not reach B's probe in time even if correct (probes: ["alive 7375"])
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+RED: 12 timing-bound run(s) failed under 1200 busy loops (load, not logic)"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/condukt-timing-flakes-under-load.sh"
+exit = 0
+passed = 12
+rev = "bcba1cbbaf9f5022c3f85f3b108033b0e589fc14"
+observed_at = 1793444270
+output_digest = "sha256:c1ee482e6681cb9800e86e5571eab2b4afdd4c7703d2d8c88e8b4d0239513efe"
+excerpt = """
+GREEN: all runs passed under 1200 busy loops
+test result: ok. 12 passed; 0 failed
+"""
+
+[task.closure.red]
+rev = "d8050cc623c0fab84067acbb306bfd733229790d"
+exit = 1
+kind = "behavioural"

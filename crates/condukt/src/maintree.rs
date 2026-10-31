@@ -808,6 +808,13 @@ fn run_located(repo: &Path, program: &Path, args: &[&str]) -> Determination<Stri
 
 /// Run a tool and take its stdout only when it exited 0. Only for non-plugin
 /// tools (`git`); harness plugins go through [`located`] + [`run_located`].
+///
+/// Deliberately NOT passed through `harness_core::git_env::scrub`: this guard
+/// runs inside the `pre-commit` hook and must answer about the commit git is
+/// making, which git describes via the inherited `GIT_DIR` / `GIT_INDEX_FILE`
+/// (e.g. `git commit <paths>` stages into a temporary index that only
+/// `GIT_INDEX_FILE` names; scrubbing it would make `observe_staged` read the
+/// real index instead).
 fn run_tool(repo: &Path, program: &str, args: &[&str]) -> Determination<String> {
     let mut cmd = Command::new(program);
     cmd.args(args).current_dir(repo);
@@ -1419,5 +1426,115 @@ mod tests {
             }
             other => panic!("expected Known roster, got {other:?}"),
         }
+    }
+}
+
+/// Pins the deliberate NON-scrub of [`run_tool`]: inside `pre-commit`, a
+/// `git commit <paths>` describes the commit being made only through the
+/// inherited `GIT_INDEX_FILE` (a temporary `next-index-*.lock`), so the guard's
+/// `observe_staged` must follow it. Fixture: the real index stages `g.txt`, a
+/// temporary index stages `f.txt`; the re-exec'd child inherits
+/// `GIT_INDEX_FILE=<temp>` (as the hook does) and must see `f.txt`.
+#[cfg(test)]
+mod inherited_index_tests {
+    use super::*;
+
+    const CHILD: &str = "GITENV_MAINTREE_CHILD";
+
+    fn fx(dir: &Path, args: &[&str], index: Option<&Path>) {
+        let mut cmd = Command::new("git");
+        harness_core::git_env::scrub(&mut cmd);
+        if let Some(i) = index {
+            cmd.env("GIT_INDEX_FILE", i);
+        }
+        let out = cmd
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .expect("spawn fixture git");
+        assert!(
+            out.status.success(),
+            "fixture git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn child_observe_staged_reads_inherited_index() {
+        if std::env::var(CHILD).as_deref() != Ok("1") {
+            return;
+        }
+        let repo = std::path::PathBuf::from(std::env::var("GITENV_REPO").unwrap());
+        match observe_staged(&repo) {
+            Determination::Known(paths) => assert_eq!(
+                paths,
+                vec!["f.txt".to_string()],
+                "observe_staged did not follow the inherited GIT_INDEX_FILE"
+            ),
+            other => panic!("observe_staged did not conclude: {other:?}"),
+        }
+        println!("GITENV_MAINTREE_CHILD_OK");
+    }
+
+    #[test]
+    fn observe_staged_follows_inherited_git_index_file() {
+        if std::env::var(CHILD).as_deref() == Ok("1") {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!(
+            "condukt-gitenv-maintree-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let repo = root.join("r");
+        let home = root.join("home");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        fx(&repo, &["init", "-q", "-b", "main"], None);
+        fx(&repo, &["config", "user.email", "t@example.com"], None);
+        fx(&repo, &["config", "user.name", "T"], None);
+        std::fs::write(repo.join("f.txt"), "f\n").unwrap();
+        std::fs::write(repo.join("g.txt"), "g\n").unwrap();
+        fx(&repo, &["add", "."], None);
+        fx(&repo, &["commit", "-q", "-m", "init"], None);
+        std::fs::write(repo.join("f.txt"), "f2\n").unwrap();
+        std::fs::write(repo.join("g.txt"), "g2\n").unwrap();
+        let temp_index = root.join("next-index.lock");
+        std::fs::copy(repo.join(".git").join("index"), &temp_index).unwrap();
+        fx(&repo, &["add", "f.txt"], Some(&temp_index));
+        fx(&repo, &["add", "g.txt"], None);
+
+        // Scrub the OUTER run's GIT_* (e.g. a GIT_DIR the whole `cargo test`
+        // inherited) from the child, then set only GIT_INDEX_FILE, so the
+        // child's environment is exactly the hook's and nothing else.
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        harness_core::git_env::scrub(&mut child);
+        let out = child
+            .args([
+                "--exact",
+                "maintree::inherited_index_tests::child_observe_staged_reads_inherited_index",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("GITENV_REPO", &repo)
+            .env("HOME", &home)
+            .env("GIT_INDEX_FILE", &temp_index)
+            .output()
+            .expect("re-exec test binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let log = format!(
+            "child status={:?}\nstdout={stdout}\nstderr={}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            out.status.success() && stdout.contains("GITENV_MAINTREE_CHILD_OK"),
+            "the guard did not see the commit's temporary index\n{log}"
+        );
     }
 }

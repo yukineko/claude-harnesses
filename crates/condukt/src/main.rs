@@ -3163,7 +3163,7 @@ fn gather_review_worthiness_inputs_from_git(
     head: &str,
 ) -> review_worthiness::ReviewWorthinessInputs {
     let numstat_range = format!("{base}..{head}");
-    let numstat = std::process::Command::new("git")
+    let numstat = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
         .args(["diff", "--numstat", base, head])
         .current_dir(cwd)
         .output()
@@ -3173,7 +3173,7 @@ fn gather_review_worthiness_inputs_from_git(
         .unwrap_or_default();
     let totals = review_worthiness::parse_numstat(&numstat);
 
-    let log = std::process::Command::new("git")
+    let log = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
         .args(["log", "--format=%B", &numstat_range])
         .current_dir(cwd)
         .output()
@@ -3322,7 +3322,7 @@ fn run_review_order(
 /// mirroring [`gather_review_worthiness_inputs_from_git`]'s soft-probe
 /// pattern.
 fn gather_review_order_diff_from_git(cwd: &Path, base: &str, head: &str) -> String {
-    std::process::Command::new("git")
+    harness_core::git_env::scrub(&mut std::process::Command::new("git"))
         .args(["diff", base, head])
         .current_dir(cwd)
         .output()
@@ -4311,7 +4311,7 @@ fn run_gh_create(args: &[String]) -> pr::PrOutcome {
 /// Best-effort current git branch (`git rev-parse --abbrev-ref HEAD`), trimmed.
 /// Empty string on any failure — gh then infers the current branch itself.
 fn current_branch() -> String {
-    std::process::Command::new("git")
+    harness_core::git_env::scrub(&mut std::process::Command::new("git"))
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .output()
         .ok()
@@ -6961,5 +6961,206 @@ mod state_set_tests {
 
         assert!(t.worktree.is_none(), "worktree must be cleared");
         assert!(t.branch.is_none(), "branch must be cleared");
+    }
+}
+
+/// One test per scrubbed git spawn site in this file. The parent builds repo A
+/// (target, branch `abranch`, HEAD commit touches 3 files incl. `a_only.txt`,
+/// message with a body and a backlog link) and repo B (decoy, branch
+/// `bbranch`, HEAD commit touches 1 file `b_only.txt`, summary-only message),
+/// then re-execs this binary with `GIT_DIR=<B>/.git` inherited and cwd = A. The
+/// child calls the production function on A and asserts A's answer. The child
+/// prints a marker so "no test matched" (exit 0) is not read as a pass.
+#[cfg(test)]
+mod inherited_git_env_tests {
+    use super::*;
+    use std::process::Command;
+
+    const CHILD: &str = "GITENV_MAIN_CHILD";
+
+    fn fx(dir: &Path, args: &[&str]) -> String {
+        let mut cmd = Command::new("git");
+        harness_core::git_env::scrub(&mut cmd);
+        let out = cmd
+            .current_dir(dir)
+            .args(args)
+            .output()
+            .expect("spawn fixture git");
+        assert!(
+            out.status.success(),
+            "fixture git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    fn is_child() -> bool {
+        std::env::var(CHILD).as_deref() == Ok("1")
+    }
+
+    fn init_repo(dir: &Path, branch: &str, changed: &[&str], message: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        fx(dir, &["init", "-q", "-b", branch]);
+        fx(dir, &["config", "user.email", "t@example.com"]);
+        fx(dir, &["config", "user.name", "T"]);
+        std::fs::write(dir.join("base.txt"), "base\n").unwrap();
+        fx(dir, &["add", "."]);
+        fx(dir, &["commit", "-q", "-m", "init"]);
+        for f in changed {
+            std::fs::write(dir.join(f), format!("{f}\n")).unwrap();
+        }
+        fx(dir, &["add", "."]);
+        fx(dir, &["commit", "-q", "-m", message]);
+    }
+
+    /// Build A and B, re-exec `child_test` in A with `GIT_DIR=<B>/.git`, and
+    /// fail unless the child ran and passed.
+    fn run_child(tag: &str, child_test: &str) {
+        let root = std::env::temp_dir().join(format!(
+            "condukt-gitenv-main-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let (a, b, home) = (root.join("a"), root.join("b"), root.join("home"));
+        std::fs::create_dir_all(&home).unwrap();
+        init_repo(
+            &a,
+            "abranch",
+            &["a_only.txt", "a2.txt", "a3.txt"],
+            "change A\n\nRationale: why A changed (backlog: abcd1234)",
+        );
+        init_repo(&b, "bbranch", &["b_only.txt"], "change B");
+        let marker = format!("GITENV_MAIN_CHILD_OK {child_test}");
+        // Drop the outer run's GIT_* so the decoy GIT_DIR below is the only
+        // inherited git variable the child sees.
+        let mut child = Command::new(std::env::current_exe().unwrap());
+        harness_core::git_env::scrub(&mut child);
+        let out = child
+            .args([
+                "--exact",
+                &format!("inherited_git_env_tests::{child_test}"),
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .current_dir(&a)
+            .env(CHILD, "1")
+            .env("GITENV_REPO_A", &a)
+            .env("HOME", &home)
+            .env("GIT_DIR", b.join(".git"))
+            .output()
+            .expect("re-exec test binary");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let log = format!(
+            "child status={:?}\nstdout={stdout}\nstderr={}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(
+            out.status.success() && stdout.contains(&marker),
+            "child {child_test} did not pass under an inherited GIT_DIR\n{log}"
+        );
+    }
+
+    fn repo_a() -> PathBuf {
+        PathBuf::from(std::env::var("GITENV_REPO_A").expect("GITENV_REPO_A"))
+    }
+
+    // ---- site: gather_review_worthiness_inputs_from_git, `git diff --numstat`
+
+    #[test]
+    fn child_review_worthiness_numstat_reads_target() {
+        if !is_child() {
+            return;
+        }
+        let got = gather_review_worthiness_inputs_from_git(&repo_a(), "HEAD~1", "HEAD");
+        assert_eq!(
+            got.files_changed, 3,
+            "numstat came from the inherited GIT_DIR repo (B touches 1 file), not A"
+        );
+        println!("GITENV_MAIN_CHILD_OK child_review_worthiness_numstat_reads_target");
+    }
+
+    #[test]
+    fn review_worthiness_numstat_ignores_inherited_git_dir() {
+        if is_child() {
+            return;
+        }
+        run_child("numstat", "child_review_worthiness_numstat_reads_target");
+    }
+
+    // ---- site: gather_review_worthiness_inputs_from_git, `git log --format=%B`
+
+    #[test]
+    fn child_review_worthiness_log_reads_target() {
+        if !is_child() {
+            return;
+        }
+        let got = gather_review_worthiness_inputs_from_git(&repo_a(), "HEAD~1", "HEAD");
+        assert!(
+            got.has_rationale && got.has_task_link,
+            "commit log came from the inherited GIT_DIR repo (B: summary only), not A \
+             (rationale={}, task_link={})",
+            got.has_rationale,
+            got.has_task_link
+        );
+        println!("GITENV_MAIN_CHILD_OK child_review_worthiness_log_reads_target");
+    }
+
+    #[test]
+    fn review_worthiness_log_ignores_inherited_git_dir() {
+        if is_child() {
+            return;
+        }
+        run_child("log", "child_review_worthiness_log_reads_target");
+    }
+
+    // ---- site: gather_review_order_diff_from_git
+
+    #[test]
+    fn child_review_order_diff_reads_target() {
+        if !is_child() {
+            return;
+        }
+        let diff = gather_review_order_diff_from_git(&repo_a(), "HEAD~1", "HEAD");
+        assert!(
+            diff.contains("a_only.txt") && !diff.contains("b_only.txt"),
+            "review-order diff came from the inherited GIT_DIR repo, not A:\n{diff}"
+        );
+        println!("GITENV_MAIN_CHILD_OK child_review_order_diff_reads_target");
+    }
+
+    #[test]
+    fn review_order_diff_ignores_inherited_git_dir() {
+        if is_child() {
+            return;
+        }
+        run_child("order", "child_review_order_diff_reads_target");
+    }
+
+    // ---- site: current_branch (uses the process cwd = repo A)
+
+    #[test]
+    fn child_current_branch_reads_target() {
+        if !is_child() {
+            return;
+        }
+        assert_eq!(
+            current_branch(),
+            "abranch",
+            "current_branch answered about the inherited GIT_DIR repo, not the cwd repo"
+        );
+        println!("GITENV_MAIN_CHILD_OK child_current_branch_reads_target");
+    }
+
+    #[test]
+    fn current_branch_ignores_inherited_git_dir() {
+        if is_child() {
+            return;
+        }
+        run_child("branch", "child_current_branch_reads_target");
     }
 }

@@ -63054,3 +63054,52 @@ test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 rev = "43beb5ab75887326c6a5ee565c33817ae2c63071"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "b6ce7f76"
+title = "blastguard test SymlinkFx uses fixed CARGO_TARGET_TMPDIR path; concurrent runs collide (AlreadyExists at redirect_target_suffix_resolution.rs:922)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "Same class as 9451b280 (approve.rs). SymlinkFx::new(name) joins CARGO_TARGET_TMPDIR/redirect_target_suffix_symlink/name (identical per worktree), remove_dir_all then symlink().unwrap(). Concurrent runs race. Same pattern (CARGO_TARGET_TMPDIR fixed path + remove_dir_all) also in tests/backlog_audit_s02.rs:388 and tests/worktree_root_payload_cwd_dotdot.rs:23; others with remove_dir_all unchecked. Fix: per-process unique dir (pid+counter) for every such fixture."
+created_at = 1793462316
+updated_at = 1793477808
+weight = 0.0
+issue_number = 1477
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1477"
+issue_closed_at = 1793477812
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/blastguard-symlink-fixture-race.sh"
+rev = "ff7986271d087dbd73b37cd5fedf2518debb182a"
+observed_at = 1793462316
+detail = """
+exit 1: otdot_in_a_suffix_must_not_be_resolved' (2828111) panicked at crates/blastguard/tests/redirect_target_suffix_resolution.rs:922:42:
+called `Result::unwrap()` on an `Err` value: Os { code: 17, kind: AlreadyExists, message: "File exists" }
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.10s
+FAIL: 53/80 concurrent runs failed (shared fixture path clobber)"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/blastguard-symlink-fixture-race.sh"
+exit = 0
+passed = 80
+rev = "aa28c88d3e3fd62b08c09814b974a73f966a8065"
+observed_at = 1793477792
+output_digest = "sha256:c4f028910e9d13097824646970a3fbc2c12971daec702dbaa8c2630a63e9a6a0"
+excerpt = """
+PASS: 80/80 concurrent runs passed
+test result: ok. 80 passed; 0 failed
+"""
+
+[task.closure.red]
+rev = "ff7986271d087dbd73b37cd5fedf2518debb182a"
+exit = 1
+kind = "behavioural"

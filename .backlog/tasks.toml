@@ -29,33 +29,6 @@ extracted argv: ["pytest"]
 FAIL: extracted command is ["pytest"]; expected it to start with ["python3","-m","pytest"] and include scripts/x.py'''
 
 [[task]]
-id = "b6ce7f76"
-title = "blastguard test SymlinkFx uses fixed CARGO_TARGET_TMPDIR path; concurrent runs collide (AlreadyExists at redirect_target_suffix_resolution.rs:922)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Same class as 9451b280 (approve.rs). SymlinkFx::new(name) joins CARGO_TARGET_TMPDIR/redirect_target_suffix_symlink/name (identical per worktree), remove_dir_all then symlink().unwrap(). Concurrent runs race. Same pattern (CARGO_TARGET_TMPDIR fixed path + remove_dir_all) also in tests/backlog_audit_s02.rs:388 and tests/worktree_root_payload_cwd_dotdot.rs:23; others with remove_dir_all unchecked. Fix: per-process unique dir (pid+counter) for every such fixture."
-created_at = 1793462316
-updated_at = 1793462316
-weight = 0.0
-issue_number = 1477
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1477"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/blastguard-symlink-fixture-race.sh"
-rev = "ff7986271d087dbd73b37cd5fedf2518debb182a"
-observed_at = 1793462316
-detail = """
-exit 1: otdot_in_a_suffix_must_not_be_resolved' (2828111) panicked at crates/blastguard/tests/redirect_target_suffix_resolution.rs:922:42:
-called `Result::unwrap()` on an `Err` value: Os { code: 17, kind: AlreadyExists, message: "File exists" }
-test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.10s
-FAIL: 53/80 concurrent runs failed (shared fixture path clobber)"""
-
-[[task]]
 id = "61666b2f"
 title = "guard-maintree-bash refuses a command that never touches main when another process's git merge is in its pre-merge-commit window"
 project = "/Users/yuki/src/harness"

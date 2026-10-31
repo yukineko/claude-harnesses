@@ -29,40 +29,6 @@ extracted argv: ["pytest"]
 FAIL: extracted command is ["pytest"]; expected it to start with ["python3","-m","pytest"] and include scripts/x.py'''
 
 [[task]]
-id = "7f64d096"
-title = "blastguard asks inside a background subagent; the prompt stalls for hours"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Subagent PreToolUse payload has non-empty agent_id/agent_type (main thread has neither); env is identical so ask_available() says interactive. Ruling: in a subagent Ask becomes Deny and repeat-deny must stay Deny; main thread unchanged. Fix sites: crates/blastguard/src/main.rs emit + downgrade_on_repeat. RED tests (ignored): subagent_ask_becomes_deny, subagent_repeated_deny_stays_deny in crates/blastguard/tests/subagent_no_ask.rs; remove #[ignore] when fixing."
-created_at = 1793460591
-updated_at = 1793460591
-weight = 0.0
-issue_number = 1476
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1476"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test subagent_no_ask -- --include-ignored"
-rev = "8778b3e271cf1b80c0aee0ea09de278cd93536e2"
-observed_at = 1793460591
-detail = """
-exit 101: subagent_ask_becomes_deny
-    subagent_repeated_deny_stays_deny
-
-test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
-     Running tests/subagent_no_ask.rs (target/debug/deps/subagent_no_ask-b0b7f3c4f2c02b83)
-error: test failed, to rerun pass `-p blastguard --test subagent_no_ask`"""
-
-[[task]]
 id = "b6ce7f76"
 title = "blastguard test SymlinkFx uses fixed CARGO_TARGET_TMPDIR path; concurrent runs collide (AlreadyExists at redirect_target_suffix_resolution.rs:922)"
 project = "/Users/yuki/src/harness"
@@ -88,3 +54,32 @@ exit 1: otdot_in_a_suffix_must_not_be_resolved' (2828111) panicked at crates/bla
 called `Result::unwrap()` on an `Err` value: Os { code: 17, kind: AlreadyExists, message: "File exists" }
 test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.10s
 FAIL: 53/80 concurrent runs failed (shared fixture path clobber)"""
+
+[[task]]
+id = "61666b2f"
+title = "guard-maintree-bash refuses a command that never touches main when another process's git merge is in its pre-merge-commit window"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-01 ~01:18: cargo test --manifest-path <own worktree>/Cargo.toml -p blastguard refused by scripts/guard-maintree-bash.py (concurrent_merge wording: ORIG_HEAD rewritten, HEAD unmoved, no MERGE_HEAD) while another agent's git merge --no-ff into main was in flight. 2dee8b0e/in_flight_merge_window covers only a later merge of the SAME command after an integration HEAD move. Limit: on-disk state alone is identical for foreign vs own-command window; fix needs another signal (e.g. cwd/command not in main, or merge-process liveness). Control test (own write in main stays refused) passes today. NOT FIXED BY USER RULING 2026-11-01 (session c5b9c02b): no sound signal proves the in-flight merge belongs to another process. Each candidate was tested and found unsound: (a) process ancestry, since a backgrounded child is reparented to pid 1, a merge can be delegated to a pre-existing daemon, and all agent shells share one claude parent; (b) Pre-recorded markers, since a terminal merge leaves none and an orphan persists up to 24h; (c) cwd and argv. The disk-only extension is unsafe: `git reset -q HEAD; git cherry-pick -n <branch>` in main reproduces every in_flight_merge_window disk signal with HEAD unmoved, and that state never resolves. The user declined the relaxed rule (disk evidence plus a live `git merge` process in main). The guard stays fail-closed; the false refusal is accepted."
+created_at = 1793464948
+updated_at = 1793466384
+weight = 0.0
+issue_number = 1481
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1481"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_foreign_merge_window.py"
+rev = "d50ec5554b0a01b0df54bcb945f5cfa7df142899"
+observed_at = 1793464948
+detail = """
+exit 1: nto a worktree.
+
+scripts/test_guard_maintree_bash_foreign_merge_window.py:100: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_foreign_merge_window.py::ForeignMergeWindow::test_foreign_merge_window_does_not_refuse_unrelated_command
+========================= 1 failed, 1 passed in 2.09s =========================="""

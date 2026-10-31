@@ -62802,3 +62802,255 @@ test result: ok. 12 passed; 0 failed
 rev = "d8050cc623c0fab84067acbb306bfd733229790d"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "7f64d096"
+title = "blastguard asks inside a background subagent; the prompt stalls for hours"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Subagent PreToolUse payload has non-empty agent_id/agent_type (main thread has neither); env is identical so ask_available() says interactive. Ruling: in a subagent Ask becomes Deny and repeat-deny must stay Deny; main thread unchanged. Fix sites: crates/blastguard/src/main.rs emit + downgrade_on_repeat. RED tests (ignored): subagent_ask_becomes_deny, subagent_repeated_deny_stays_deny in crates/blastguard/tests/subagent_no_ask.rs; remove #[ignore] when fixing."
+created_at = 1793460591
+updated_at = 1793462579
+weight = 0.0
+issue_number = 1476
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1476"
+issue_closed_at = 1793462581
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test subagent_no_ask -- --include-ignored"
+rev = "8778b3e271cf1b80c0aee0ea09de278cd93536e2"
+observed_at = 1793460591
+detail = """
+exit 101: subagent_ask_becomes_deny
+    subagent_repeated_deny_stays_deny
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/subagent_no_ask.rs (target/debug/deps/subagent_no_ask-b0b7f3c4f2c02b83)
+error: test failed, to rerun pass `-p blastguard --test subagent_no_ask`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test subagent_no_ask"
+exit = 0
+passed = 7
+rev = "7de4f1925180e91cf67335f8313b88408a8ee234"
+observed_at = 1793462557
+output_digest = "sha256:b403f316360f1b9c0454b3da22ded50b2446279828fd8bd10de61815eab62050"
+excerpt = """
+
+running 7 tests
+test main_thread_unreadable_payload_asks ... ok
+test subagent_plain_deny_is_deny ... ok
+test subagent_unreadable_payload_is_deny ... ok
+test subagent_repeated_deny_stays_deny ... ok
+test subagent_ask_becomes_deny ... ok
+test subagent_with_null_agent_id_ask_becomes_deny ... ok
+test main_thread_ask_is_unchanged ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/subagent_no_ask.rs (target/debug/deps/subagent_no_ask-432e9a92a0f2d84d)
+"""
+
+[task.closure.red]
+rev = "8778b3e271cf1b80c0aee0ea09de278cd93536e2"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "84a90410"
+title = "blastguard worktree_protected_paths tests share one fixture dir; concurrent runs clobber each other"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "crates/blastguard/tests/support/neutral_base.rs + worktree_protected_paths_adversarial.rs: Fixture::new remove_dir_all's a fixed per-test dir under a shared base, so concurrent runs delete each other's fixtures mid-setup (observed: 'fatal: unable to get current working directory', index.lock exists, 'does not have a commit checked out'). Escape into an enclosing checkout with a staged index was reproduced 2026-11-01 under the original incident conditions (matches stray 91546870). Fix: per-run run-<pid>-<nanos> base (neutral_base.rs) + git_env::pinned (current_dir + GIT_CEILING_DIRECTORIES). EVIDENCE: RED = scripts/tests/blastguard-wtfix-escape-concurrent.sh (shared-base mutant: FAIL 48/48) plus crates/blastguard/tests/git_env_pinned_no_escape.rs (pinned without the ceiling: 'outer HEAD moved'). The staged-index script scripts/tests/blastguard-wtfix-escape-staged-index.sh was REMOVED as non-RED: it stayed green on the pre-fix commit (480 runs) and could not distinguish the mutant. Verifier note: -C in pinned() is redundant with current_dir; the ceiling is the load-bearing part."
+created_at = 1793462753
+updated_at = 1793468544
+weight = 0.0
+issue_number = 1479
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1479"
+issue_closed_at = 1793468547
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/blastguard-wtfix-escape-concurrent.sh"
+rev = "22e07ab8d533a69b59f1fd513391deee6176373c"
+observed_at = 1793462753
+detail = """
+exit 1: ness: fatal: Unable to read current working directory: No such file or directory
+   1 git ["add", "-A"] failed in /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T/blastguard-wtfix-f2942edba375ef77/worktree_protected_paths_adversarial/a_dotgit_bogus/src/harness: fatal: unable to stat '.claude/settings.json': No such file or directory
+FAIL: 42/48 concurrent runs failed (shared fixture dir clobbered)"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/blastguard-wtfix-escape-concurrent.sh"
+exit = 0
+passed = 48
+rev = "ad0ccb78c20606e0229f0b28909e780f3b9ba612"
+observed_at = 1793468439
+output_digest = "sha256:2066041948295f328a5bc8465f3fe492e3dbd8989404ad1e61bae0b1e5a5fb2d"
+excerpt = """
+sample errors seen:
+6211 fatal: unable to get current working directory: No such file or directory
+   9 git ["add", "-A"] failed in /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T/blastguard-wtfix-f2942edba375ef77/worktree_protected_paths_adversarial/a_below_dotgit/src/harness: fatal: Unable to read current working directory: No such file or directory
+  13 git ["add", "-A"] failed in /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T/blastguard-wtfix-f2942edba375ef77/worktree_protected_paths_adversarial/a_below_dotgit/src/harness: shell-init: error retrieving current directory: getcwd: cannot access parent directories: No such file or directory
+  19 git ["add", "-A"] failed in /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T/blastguard-wtfix-f2942edba375ef77/worktree_protected_paths_adversarial/a_dotgit_bogus/src/harness: fatal: Unable to read current working directory: No such file or directory
+   1 git ["add", "-A"] failed in /var/folders/0z/hjt9zjn12xs02k588nyw5txm0000gp/T/blastguard-wtfix-f2942edba375ef77/worktree_protected_paths_adversarial/a_dotgit_bogus/src/harness: fatal: unable to stat '.claude/settings.json': No such file or directory
+no fixture commit escaped in 48 concurrent runs
+test result: ok. 48 passed; 0 failed
+"""
+
+[task.closure.red]
+rev = "56766a90cdb18efeb1224bfbf4b9244a6a08f816"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "75b48877"
+title = "blastguard d4_exponential_find_exec test is wall-clock bound; fails donegate under load"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "flake",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Test detect::tests::d4_exponential_find_exec_is_bounded_and_denies is meant to prove that analysis of an exponential find -exec is BOUNDED (budget exhaustion yields Ask/Deny, never a hang or Allow). It asserts wall time under 2s, which is load-sensitive: observed 2.29s, 3.5s, 6.43s under machine load, about 0.6s alone; fails on main; repeatedly fails donegate Stop checks. Repro: 40 busy loops on 8 cpu gave 3/3 failures at 25-29s. Fix direction: measure work done (steps or nodes visited) instead of wall time, without weakening the bound (keep the bound tight, assert still Ask/never Allow)."
+created_at = 1793464809
+updated_at = 1793470569
+weight = 0.0
+issue_number = 1480
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1480"
+issue_closed_at = 1793470572
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/blastguard-d4-timing-under-load.sh"
+rev = "7e1d03710709411ebee39232eb842c12ff05bf8e"
+observed_at = 1793464809
+detail = """
+exit 1: ::d4_exponential_find_exec_is_bounded_and_denies] round 3:
+thread 'detect::tests::d4_exponential_find_exec_is_bounded_and_denies' (3693475) panicked at crates/blastguard/src/detect.rs:13687:9:
+analysis took 25.228126541s, expected well under 2s
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+RED: 3/3 run(s) failed under 40 busy loops (wall-clock bound, load not logic)"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/blastguard-d4-timing-under-load.sh"
+exit = 0
+passed = 3
+rev = "df0ef48f6881f0bc46301874cf8384e95d0925c4"
+observed_at = 1793470452
+output_digest = "sha256:36c9c7fbde83ef55b4c4f57415c7feaa8950d35e9022ca29d6426c64c41670dd"
+excerpt = """
+GREEN: all runs passed under 40 busy loops
+test result: ok. 3 passed; 0 failed
+"""
+
+[task.closure.red]
+rev = "7e1d03710709411ebee39232eb842c12ff05bf8e"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "3f621c04"
+title = "no way to tell a stalled subagent's state (ask / running / rate-limit / sleep / dead)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1793462469
+updated_at = 1793471014
+weight = 0.0
+issue_number = 1478
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1478"
+issue_closed_at = 1793471017
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-status --test agent_state -- --include-ignored"
+rev = "43beb5ab75887326c6a5ee565c33817ae2c63071"
+observed_at = 1793462469
+detail = """
+exit 101: en_pending_and_process_matches
+    tool_use_with_result_is_not_pending
+
+test result: FAILED. 0 passed; 17 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/agent_state.rs (target/debug/deps/agent_state-3cafe8000178feec)
+error: test failed, to rerun pass `-p harness-status --test agent_state`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-status --test agent_state"
+exit = 0
+passed = 19
+rev = "47d7e925b0b9011eeccd4215bd123e915d04c03b"
+observed_at = 1793471001
+output_digest = "sha256:9b6e27a8a9937b7b7668d7ff80073163796efcfb20d60b766dce89f8007b1308"
+excerpt = """
+
+running 19 tests
+test end_turn_without_subagent_stop_is_not_finished ... ok
+test ask_pending_when_pretooluse_asked_and_no_result ... ok
+test ask_for_a_different_tool_use_does_not_make_this_one_ask_pending ... ok
+test asleep_when_pmset_shows_machine_sleeping_at_now ... ok
+test garbage_input_is_unknown_cannot_read ... ok
+test collision_pending_tool_with_ps_absent_is_unknown_not_tool_running ... ok
+test finished_when_end_turn_then_subagent_stop ... ok
+test partially_garbage_transcript_is_never_finished ... ok
+test nothing_pending_no_error_no_stop_is_unknown_listing_candidates ... ok
+test overloaded_error_candidates_name_the_error ... ok
+test none_pmset_is_unknown_cannot_read_not_not_asleep ... ok
+test none_ps_never_yields_confident_state_for_idle_transcript ... ok
+test pending_tool_without_matching_process_is_unknown_died_or_not_spawned ... ok
+test rate_limited_when_last_entry_is_rate_limit_error ... ok
+test tool_running_when_pending_and_process_matches ... ok
+test non_rate_limit_api_errors_are_unknown_never_rate_limited ... ok
+test tool_use_with_result_is_not_pending ... ok
+test cli_session_filter_excludes_other_sessions ... ok
+test cli_prints_one_line_per_subagent_with_id_description_state ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/agent_state.rs (target/debug/deps/agent_state-d6fac60a3a146b41)
+"""
+
+[task.closure.red]
+rev = "43beb5ab75887326c6a5ee565c33817ae2c63071"
+exit = 101
+kind = "behavioural"

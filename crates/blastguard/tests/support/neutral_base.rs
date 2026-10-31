@@ -25,6 +25,17 @@
 //! so the alias changes only the spelling the root derivation reads, not where
 //! anything resolves.
 //!
+//! Every test-binary RUN gets its own base: `<parent>/run-<pid>-<nanos>[-n]`
+//! under the candidate's `blastguard-worktree-root-fixtures` directory, created
+//! with `create_dir` (never reused). Fixtures `remove_dir_all` their own
+//! `<base>/<test>/<name>` before rebuilding it, so a base shared by concurrent
+//! runs let one run delete another's fixture mid-setup (backlog 84a90410, RED
+//! repro `scripts/tests/blastguard-wtfix-escape-concurrent.sh`). The per-run
+//! directory sits below the same physical parent and the same alias, so both
+//! location properties above are unchanged: its real path is the parent's
+//! plus one `run-*` component, and its lexical spelling is the alias plus that
+//! component. `run-*` directories older than [`STALE_RUN`] are pruned.
+//!
 //! Physical candidates, in order: `$BLASTGUARD_TEST_FIXTURE_DIR` when set (then
 //! the ONLY candidate — an explicit choice that fails is reported, never
 //! silently replaced), `CARGO_TARGET_TMPDIR`, `<workspace>/target`.
@@ -44,8 +55,12 @@ use std::sync::OnceLock;
 
 const OVERRIDE_ENV: &str = "BLASTGUARD_TEST_FIXTURE_DIR";
 const WORKTREE_DIR_NAME: &str = ".harness-worktrees";
+const RUN_PREFIX: &str = "run-";
+/// A `run-*` base untouched this long belongs to a finished run.
+const STALE_RUN: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
-/// The calibrated base (lexical spelling). Computed once per test binary.
+/// The calibrated base (lexical spelling). Computed once per test binary
+/// process, and private to it (see the module docs).
 pub fn neutral_base() -> &'static Path {
     static BASE: OnceLock<PathBuf> = OnceLock::new();
     BASE.get_or_init(pick)
@@ -83,15 +98,77 @@ fn pick() -> PathBuf {
     );
 }
 
-/// Create the physical directory and return its lexical spelling.
+/// Create this run's private physical directory and return its lexical
+/// spelling.
 fn prepare(dir: &Path) -> Result<PathBuf, String> {
     let physical_parent = dir.join("blastguard-worktree-root-fixtures");
     std::fs::create_dir_all(&physical_parent).map_err(|e| format!("create: {e}"))?;
     let physical = physical_parent
         .canonicalize()
         .map_err(|e| format!("canonicalize: {e}"))?;
-    if !has_worktree_component(&physical) {
-        return Ok(physical);
+    prune_stale_runs(&physical);
+    let run = create_run_dir(&physical)?;
+    Ok(alias_parent(&physical)?.join(run))
+}
+
+/// Create a fresh `run-<pid>-<nanos>[-n]` directory under `parent`; returns its
+/// name. `create_dir` fails on an existing name, so no two runs share one.
+fn create_run_dir(parent: &Path) -> Result<String, String> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("clock: {e}"))?
+        .as_nanos();
+    let stem = format!("{RUN_PREFIX}{}-{nanos}", std::process::id());
+    for n in 0..100u32 {
+        let name = if n == 0 {
+            stem.clone()
+        } else {
+            format!("{stem}-{n}")
+        };
+        match std::fs::create_dir(parent.join(&name)) {
+            Ok(()) => return Ok(name),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                return Err(format!(
+                    "create run dir {}: {e}",
+                    parent.join(&name).display()
+                ))
+            }
+        }
+    }
+    Err(format!(
+        "no free run dir name for {stem} under {}",
+        parent.display()
+    ))
+}
+
+/// Remove `run-*` bases not modified for [`STALE_RUN`]. Best effort: a base
+/// that cannot be inspected or removed is left alone (it only costs disk), and
+/// a live run's base is never older than that.
+fn prune_stale_runs(parent: &Path) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry.file_name().to_string_lossy().starts_with(RUN_PREFIX) {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > STALE_RUN);
+        if stale {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// The lexical spelling of the physical parent: itself, or its alias.
+fn alias_parent(physical: &Path) -> Result<PathBuf, String> {
+    if !has_worktree_component(physical) {
+        return Ok(physical.to_path_buf());
     }
     let tmp = std::env::temp_dir();
     if has_worktree_component(&tmp) {
@@ -101,14 +178,14 @@ fn prepare(dir: &Path) -> Result<PathBuf, String> {
             tmp.display()
         ));
     }
-    // One alias per physical directory: concurrent runs from different
-    // checkouts get different aliases; runs sharing a target dir already share
-    // the physical fixtures.
+    // One alias per physical parent: concurrent runs from different checkouts
+    // get different aliases; runs sharing a target dir share the alias but
+    // each lives in its own `run-*` directory below it.
     let alias = tmp.join(format!(
         "blastguard-wtfix-{:016x}",
         fnv1a(physical.to_string_lossy().as_bytes())
     ));
-    if std::fs::read_link(&alias).ok().as_deref() != Some(physical.as_path()) {
+    if std::fs::read_link(&alias).ok().as_deref() != Some(physical) {
         // Build the link under a private name, then rename over the alias:
         // atomic, so a concurrent test binary never sees a half-made alias.
         let staging = tmp.join(format!(
@@ -117,7 +194,7 @@ fn prepare(dir: &Path) -> Result<PathBuf, String> {
             std::process::id()
         ));
         let _ = std::fs::remove_file(&staging);
-        std::os::unix::fs::symlink(&physical, &staging)
+        std::os::unix::fs::symlink(physical, &staging)
             .map_err(|e| format!("alias symlink {}: {e}", staging.display()))?;
         std::fs::rename(&staging, &alias)
             .map_err(|e| format!("alias rename {}: {e}", alias.display()))?;

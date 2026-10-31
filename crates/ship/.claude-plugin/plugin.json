@@ -1,6 +1,6 @@
 {
   "name": "ship",
-  "version": "0.1.23",
+  "version": "0.1.26",
   "description": "Nudges the commit, merge, push and plugin-update shipping ritual and detects unshipped state using read-only git checks, never auto-running a mutating command.",
   "author": {
     "name": "yukineko"

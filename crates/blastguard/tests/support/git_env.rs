@@ -16,7 +16,8 @@
 //! vanishes or is recreated without its `.git` (a concurrent run clobbering a
 //! shared fixture, backlog 84a90410), that walk reaches the checkout the
 //! target dir lives in, and a fixture `git commit -m init` commits ITS staged
-//! index (RED repro: `scripts/tests/blastguard-wtfix-escape-staged-index.sh`).
+//! index (RED proof: `tests/git_env_pinned_no_escape.rs`, which fails when
+//! `pinned` is reduced to `current_dir` only).
 
 use std::path::Path;
 use std::process::Command;

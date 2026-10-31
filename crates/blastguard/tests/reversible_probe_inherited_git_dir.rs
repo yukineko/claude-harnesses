@@ -17,10 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn git(dir: &Path, args: &[&str]) {
-    let mut c = Command::new("git");
-    git_env::scrub(&mut c);
-    let out = c
-        .current_dir(dir)
+    let out = git_env::pinned(dir)
         .args(["-c", "user.name=t", "-c", "user.email=t@t"])
         .args(args)
         .output()

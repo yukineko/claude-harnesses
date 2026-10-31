@@ -27,9 +27,8 @@ enum V {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = git_env::scrub(&mut Command::new("git"))
+    let out = git_env::pinned(dir)
         .args(args)
-        .current_dir(dir)
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@example.com")
         .env("GIT_COMMITTER_NAME", "t")
@@ -451,11 +450,19 @@ const GIT_ENV: [&str; 6] = [
 ];
 
 /// Plain git call with every inherited `GIT_*` repo-locating variable removed;
-/// returns stdout. Independent of the `git` helper under test.
+/// returns stdout. Independent of the `git` helper under test, but pinned to
+/// `dir` the same way (`-C`, and `GIT_CEILING_DIRECTORIES` at its parent so a
+/// `dir` without `.git` fails instead of discovering an enclosing repo).
 fn clean_git(dir: &Path, args: &[&str]) -> String {
+    let real = dir
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("clean git dir {} is unusable: {e}", dir.display()));
     let mut c = Command::new("git");
-    c.args(args)
-        .current_dir(dir)
+    c.arg("-C")
+        .arg(&real)
+        .args(args)
+        .current_dir(&real)
+        .env("GIT_CEILING_DIRECTORIES", real.parent().unwrap())
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@example.com")
         .env("GIT_COMMITTER_NAME", "t")

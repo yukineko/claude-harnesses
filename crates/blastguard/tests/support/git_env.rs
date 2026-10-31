@@ -10,6 +10,15 @@
 //! whose `reversible.rs` probes run `git` — passes its `Command` through
 //! [`scrub`] so the repo is found from `current_dir` / `-C` alone.
 
+//!
+//! [`pinned`] goes further for fixture git: scrubbing alone still lets git
+//! DISCOVER a repo by walking up from `current_dir`. When a fixture directory
+//! vanishes or is recreated without its `.git` (a concurrent run clobbering a
+//! shared fixture, backlog 84a90410), that walk reaches the checkout the
+//! target dir lives in, and a fixture `git commit -m init` commits ITS staged
+//! index (RED repro: `scripts/tests/blastguard-wtfix-escape-staged-index.sh`).
+
+use std::path::Path;
 use std::process::Command;
 
 /// Variables that select the repo, its index/object store or the config the
@@ -34,5 +43,39 @@ pub fn scrub(cmd: &mut Command) -> &mut Command {
     for k in INHERITED_GIT_ENV {
         cmd.env_remove(k);
     }
+    cmd
+}
+
+/// A scrubbed `git` command that can only ever operate on `dir` itself.
+///
+/// * `dir` must exist NOW: it is canonicalised, and a missing directory
+///   panics (loudly, naming it) instead of running git anywhere else.
+/// * `-C <dir>` plus `current_dir(<dir>)` start git there.
+/// * `GIT_CEILING_DIRECTORIES=<parent of dir>` stops repository discovery at
+///   `dir`: if `dir` has no `.git` (never had one, or was deleted/recreated
+///   mid-run) git fails with "not a git repository" instead of walking up into
+///   an enclosing checkout. A `dir` deleted after this call makes git fail on
+///   its cwd; neither case can reach a repo outside `dir`.
+///
+/// Callers add their own `-c`/env configuration and arguments after this.
+#[allow(dead_code)] // not every test that includes this module runs fixture git
+pub fn pinned(dir: &Path) -> Command {
+    let real = dir.canonicalize().unwrap_or_else(|e| {
+        panic!(
+            "fixture git dir {} is unusable ({e}); refusing to run git where it could \
+             discover an enclosing repository",
+            dir.display()
+        )
+    });
+    let ceiling = real
+        .parent()
+        .unwrap_or_else(|| panic!("fixture git dir {} has no parent", real.display()))
+        .to_path_buf();
+    let mut cmd = Command::new("git");
+    scrub(&mut cmd);
+    cmd.current_dir(&real)
+        .env("GIT_CEILING_DIRECTORIES", &ceiling)
+        .arg("-C")
+        .arg(&real);
     cmd
 }

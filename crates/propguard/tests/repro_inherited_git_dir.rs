@@ -119,3 +119,58 @@ fn inherited_git_dir_must_not_make_a_clean_repo_judged_as_another_repos_changes(
          and judged B's changes as A's. control stdout: {ctl_out:?}; GIT_DIR stdout: {env_out:?}"
     );
 }
+
+fn is_block(stdout: &str) -> bool {
+    stdout.contains("\"decision\":\"block\"") || stdout.contains("\"decision\": \"block\"")
+}
+
+/// Kill test for the repo probe in `git::scan_changed`: it must be the
+/// scrubbed probe. The cwd is a plain directory that is NOT a git repo, while
+/// an inherited `GIT_DIR` names an unrelated dirty repo B. The scrubbed probe
+/// answers "not a repo" from the filesystem, so the gate allows (no git scope)
+/// exactly like the control without `GIT_DIR`. An unscrubbed probe would let
+/// the inherited `GIT_DIR` make the non-repo cwd look like a repo, and the
+/// (scrubbed) change scan inside it would then fail — a block for a directory
+/// that has no repository at all.
+#[test]
+fn inherited_git_dir_must_not_make_a_non_repo_cwd_judged_as_a_repo() {
+    let root = std::env::temp_dir().join(format!(
+        "propguard-inherited-gitdir-nonrepo-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let home_ctl = root.join("home-ctl");
+    let home_env = root.join("home-env");
+    std::fs::create_dir_all(&home_ctl).unwrap();
+    std::fs::create_dir_all(&home_env).unwrap();
+
+    let b = make_repo(&root, "repo-b", "b.rs");
+    std::fs::write(b.join("b.rs"), "fn f() { panic!() }\n").unwrap();
+    std::fs::write(b.join("new_b.rs"), "fn g() {}\n").unwrap();
+
+    // Plain non-repo directory with a source file in it.
+    let c = root.join("not-a-repo");
+    std::fs::create_dir_all(&c).unwrap();
+    std::fs::write(c.join("c.rs"), "fn h() {}\n").unwrap();
+
+    let (ctl_code, ctl_out) = run_check(&c, &home_ctl, None);
+    let (env_code, env_out) = run_check(&c, &home_env, Some(&b.join(".git")));
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert_eq!(ctl_code, 0, "control: hook exits 0; stdout: {ctl_out:?}");
+    assert!(
+        !is_block(&ctl_out),
+        "control (no GIT_DIR, non-repo cwd) must allow; stdout: {ctl_out:?}"
+    );
+    assert_eq!(env_code, 0, "hook exits 0; stdout: {env_out:?}");
+    assert!(
+        !is_block(&env_out),
+        "with GIT_DIR pointing at unrelated repo B, the verdict for non-repo cwd C must equal \
+         the control (allow). control stdout: {ctl_out:?}; GIT_DIR stdout: {env_out:?}"
+    );
+}

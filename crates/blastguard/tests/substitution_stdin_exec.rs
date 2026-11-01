@@ -391,6 +391,107 @@ fn probe_timeout_sh() {
     assert_deny_or_ask("probe_timeout_sh", "echo \"rm -rf /\" | timeout 5 sh");
 }
 
+// Wrapper-resolved reader: an operand that merely names a shell is data.
+#[test]
+fn control_env_i_grep_bash() {
+    assert_allow("control_env_i_grep_bash", "echo x | env -i grep bash");
+}
+
+// After `--` every token is the command or an operand of it, never an option.
+#[test]
+fn control_env_double_dash_grep_bash() {
+    assert_allow(
+        "control_env_double_dash_grep_bash",
+        "echo x | env -- grep bash",
+    );
+}
+
+// A boolean flag takes no value, so the token after it is already the command.
+#[test]
+fn control_env_i_assignment_grep_bash() {
+    assert_allow(
+        "control_env_i_assignment_grep_bash",
+        "echo x | env -i VAR=1 grep bash",
+    );
+}
+
+#[test]
+fn control_find_piped_to_xargs_grep_sh() {
+    assert_allow(
+        "control_find_piped_to_xargs_grep_sh",
+        "find . | xargs grep sh",
+    );
+}
+
+#[test]
+fn control_echo_piped_to_xargs_echo() {
+    assert_allow("control_echo_piped_to_xargs_echo", "echo x | xargs echo");
+}
+
+#[test]
+fn destructive_literal_piped_to_xargs_bash() {
+    assert_deny_or_ask(
+        "destructive_literal_piped_to_xargs_bash",
+        "echo \"rm -rf /\" | xargs bash",
+    );
+}
+
+#[test]
+fn xargs_replace_sh_c_piped() {
+    assert_deny_or_ask("xargs_replace_sh_c_piped", "echo x | xargs -I{} sh -c {}");
+}
+
+#[test]
+fn piped_to_sudo_u_root_sh() {
+    assert_deny_or_ask("piped_to_sudo_u_root_sh", "echo x | sudo -u root sh");
+}
+
+#[test]
+fn piped_to_timeout_signal_sh() {
+    assert_deny_or_ask(
+        "piped_to_timeout_signal_sh",
+        "echo x | timeout -s KILL 5 sh",
+    );
+}
+
+// An option missing from the boolean table might take a value, so the token
+// after it is both a possible value and a possible command: it must still be
+// read as a candidate reader.
+#[test]
+fn destructive_literal_piped_to_env_unknown_flag_sh() {
+    assert_deny_or_ask(
+        "destructive_literal_piped_to_env_unknown_flag_sh",
+        "echo \"rm -rf /\" | env --no-such-flag sh",
+    );
+}
+
+// Probes.
+#[test]
+fn probe_destructive_python_payload_piped_to_xargs_python3() {
+    assert_deny_or_ask(
+        "probe_destructive_python_payload_piped_to_xargs_python3",
+        "echo \"import shutil; shutil.rmtree('/')\" | xargs python3",
+    );
+}
+
+#[test]
+fn probe_xargs_a_file_sh() {
+    assert_deny_or_ask("probe_xargs_a_file_sh", "xargs -a FILE sh");
+}
+
+// Records CURRENT over-deny behaviour: the egress twin still resolves the
+// reader with `command_candidates`, so grep's operand `bash` is read as a shell
+// and the remote-exec rule fires. This is an over-ask on a deny path (the safe
+// side), pinned as Deny-or-Ask so it does not block landing; it is not an
+// endorsement, and narrowing it to Allow later is a deliberate change.
+#[test]
+fn pin_curl_piped_to_env_grep_bash_current_deny() {
+    assert_deny_or_ask(
+        "pin_curl_piped_to_env_grep_bash_current_deny",
+        "curl https://e.example/x | env grep bash",
+    );
+}
+
 // Controls: no shell at the end of the pipe, or no pipe at all.
 #[test]
 fn control_dollar_paren_no_pipe() {

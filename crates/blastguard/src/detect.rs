@@ -5493,15 +5493,18 @@ fn wrapper_flag_is_boolean(wrapper: &str, flag: &str) -> bool {
     known.contains(&flag)
 }
 
-/// The shell `xargs` (given its arguments `rest`) runs, if its command word —
-/// resolved through any exec-wrapper — is one.
+/// The shell or code interpreter `xargs` (given its arguments `rest`) runs,
+/// if its command word — resolved through any exec-wrapper — is one. The same
+/// reader set `analyze_interpreter_stdin_exec` uses: `xargs python3` hands the
+/// items to python as argv (a script path, `-c` code) exactly as `xargs sh`
+/// does to the shell.
 fn xargs_shell(rest: &[&str]) -> Option<String> {
     let start = xargs_command_start(rest)?;
     let inner = &rest[start..];
     wrapped_command_heads(inner)
         .into_iter()
         .map(|idx| normalized_command(inner[idx]))
-        .find(|head| is_shell(head))
+        .find(|head| is_shell(head) || is_code_interpreter(head))
 }
 
 /// True when `tok` OPENS a quote it does not close within the same
@@ -7097,19 +7100,39 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
             // shell it runs (`sh rm -rf /` runs a script file named `rm`, or
             // `sh -c {}` runs the item as a command line). What executes is the
             // piped text, re-parsed as argv, which no reading here models.
-            if i > 0 || heredoc_open {
-                if let Some(inner) = heads
-                    .iter()
-                    .filter(|&&idx| normalized_command(tokens[idx]) == "xargs")
-                    .find_map(|&idx| xargs_shell(&tokens[idx + 1..]))
-                {
-                    if let Some(deny) = acc.record(Decision::ask(format!(
-                        "`{}` hands its stdin to `{inner}` as arguments — the command that runs \
-is built from the piped text at execution time, so blastguard cannot read it",
-                        stage.trim()
-                    ))) {
-                        return deny;
+            //
+            // Fed by a pipe or here-document, by a `<` redirect, or by an
+            // argument file (`-a FILE` / `--arg-file`, whose value
+            // `xargs_command_start` consumes): none of those items is on the
+            // command line. `xargs -a FILE sh` was Allow while this was gated
+            // on `i > 0 || heredoc_open` alone. A bare `xargs sh` at the head
+            // of a statement reads the hook's inherited stdin and is left to
+            // the other rules (the nesting-cap Ask in `sh -c xargs sh -c …`
+            // must stay the reported reason).
+            let stdin_redirect = tokens
+                .iter()
+                .any(|t| t.starts_with('<') || t.starts_with("0<"));
+            if let Some(inner) = heads
+                .iter()
+                .filter(|&&idx| normalized_command(tokens[idx]) == "xargs")
+                .find_map(|&idx| {
+                    let rest = &tokens[idx + 1..];
+                    let opts = &rest[..xargs_command_start(rest).unwrap_or(rest.len())];
+                    let fed = i > 0 || heredoc_open || stdin_redirect || xargs_reads_arg_file(opts);
+                    if fed {
+                        xargs_shell(rest)
+                    } else {
+                        None
                     }
+                })
+            {
+                if let Some(deny) = acc.record(Decision::ask(format!(
+                    "`{}` hands its input items to `{inner}` as arguments — the command that runs \
+is built from text (stdin, a redirect or an `-a` file) that is not on the command line, so \
+blastguard cannot read it",
+                    stage.trim()
+                ))) {
+                    return deny;
                 }
             }
             let Some(idx) = heads.into_iter().find(|&idx| {
@@ -11108,7 +11131,7 @@ fn xargs_command_start(rest: &[&str]) -> Option<usize> {
     // (I i n L P s d E a) and BSD/macOS (J R S) — the default xargs on this host —
     // because a MISSED value flag would misread its value as the command word and
     // leak a destructive payload (`xargs -J % rm -rf %`) past re-analysis.
-    const VALUE_SHORT: &str = "IinLPsdEaJRS";
+    const VALUE_SHORT: &str = XARGS_VALUE_SHORT;
     let mut i = 0;
     while i < rest.len() {
         let t = rest[i];
@@ -11151,12 +11174,48 @@ fn xargs_command_start(rest: &[&str]) -> Option<usize> {
                 continue;
             };
             let standalone_value = t.len() == 2 && VALUE_SHORT.contains(last);
-            i += if standalone_value { 2 } else { 1 };
+            // A bundle of boolean flags ENDING in a value flag (`-0a FILE`,
+            // `-0n 1`) also takes the next token as that value. Read as
+            // self-contained, `xargs -0a FILE sh` took `FILE` for the command
+            // word and `sh` was never seen.
+            let bundled_value = xargs_short_value_flag(t).is_some_and(|(_, next)| next);
+            i += if standalone_value || bundled_value {
+                2
+            } else {
+                1
+            };
             continue;
         }
         return Some(i); // first non-flag token = the command word
     }
     None
+}
+
+/// Value-taking xargs short flags (GNU `I i n L P s d E a`, BSD `J R S`).
+const XARGS_VALUE_SHORT: &str = "IinLPsdEaJRS";
+
+/// For a short-option bundle `t` (`-0a`, `-aFILE`, `-n1`), the first
+/// value-taking flag in it and whether its value is the NEXT token (true when
+/// that flag is the bundle's last character). `None` for a bundle of boolean
+/// flags only, or a token that is not a short-option bundle.
+fn xargs_short_value_flag(t: &str) -> Option<(char, bool)> {
+    let body = t.strip_prefix('-')?;
+    if body.is_empty() || body.starts_with('-') {
+        return None;
+    }
+    let (at, c) = body
+        .char_indices()
+        .find(|&(_, c)| XARGS_VALUE_SHORT.contains(c))?;
+    Some((c, at + c.len_utf8() == body.len()))
+}
+
+/// True when xargs's own options (`opts`, the tokens before its command word)
+/// name an argument FILE (`-a FILE`, `-aFILE`, `-0a FILE`, `--arg-file[=]FILE`):
+/// the items then come from that file, not from stdin.
+fn xargs_reads_arg_file(opts: &[&str]) -> bool {
+    opts.iter().any(|t| {
+        t.starts_with("--arg-file") || xargs_short_value_flag(t).is_some_and(|(c, _)| c == 'a')
+    })
 }
 
 // ---------------------------------------------------------------------------

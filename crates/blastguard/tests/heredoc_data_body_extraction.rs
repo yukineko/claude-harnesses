@@ -10,7 +10,9 @@
 //! that runs the body, an unquoted body with `$(…)`, a script file, and the
 //! quote-desync shape the old per-segment skip got wrong.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::process::{Command, Stdio};
 
 /// Run the hook as a non-interactive session (an Ask hardens to Deny), with an
@@ -26,23 +28,15 @@ fn verdict(command: &str) -> (String, String) {
         "tool_input": {"command": command},
     })
     .to_string();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
-        .env_clear()
+    let mut hook = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+    hook.env_clear()
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin")
         .env("CLAUDECODE", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
+        .stderr(Stdio::piped());
+    let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(
         out.status.code(),
         Some(0),

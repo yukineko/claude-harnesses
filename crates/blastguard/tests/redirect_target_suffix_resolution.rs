@@ -889,7 +889,9 @@ fn decoy_inside_a_here_document_body_must_not_excuse_the_real_suffixed_redirect(
 // Allow would cement the bug. What IS asserted is the filesystem fact that
 // makes the hazard real, so the rows below cannot pass by accident.
 
-use std::io::Write as _;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -990,11 +992,7 @@ impl SymlinkFx {
             // this reason.
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .current_dir(&self.base);
-        let mut child = cmd.spawn().expect("binary spawns");
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(payload.as_bytes());
-        }
-        let out = child.wait_with_output().expect("binary runs");
+        let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
         assert_eq!(
             out.status.code(),
             Some(0),

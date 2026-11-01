@@ -28,7 +28,9 @@
 //! depend on the ambient run environment instead of on the scenario under
 //! test -- i.e. prove nothing.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::process::{Command, Stdio};
 
 /// A Bash command guaranteed to produce `Decision::Ask` (never `Allow` or an
@@ -59,13 +61,7 @@ fn permission_decision_with_env(envs: &[(&str, &str)]) -> String {
         .stderr(Stdio::piped())
         // Repeat-ledger test isolation — see the note in integration.rs.
         .env_remove("CLAUDE_CODE_SESSION_ID");
-    let mut child = cmd.spawn().expect("binary spawns");
-    if let Some(mut child_stdin) = child.stdin.take() {
-        child_stdin
-            .write_all(ask_payload().as_bytes())
-            .expect("write payload to stdin");
-    }
-    let out = child.wait_with_output().expect("binary runs");
+    let out = bounded::run_bounded(&mut cmd, ask_payload().as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(
         out.status.code(),
         Some(0),

@@ -3,7 +3,9 @@
 //! Spec tests for gh handling: read-only Allow (R), remote-mutating Ask (M),
 //! `gh api` method/field logic, undeterminable Ask (U). Never Deny.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -46,8 +48,8 @@ impl Fx {
             "tool_input": input,
         })
         .to_string();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
-            .stdin(Stdio::piped())
+        let mut hook = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+        hook.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("CLAUDE_PROJECT_DIR", &self.repo)
@@ -57,13 +59,8 @@ impl Fx {
             .env_remove("BLASTGUARD_ASK")
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .env_remove("TMPDIR")
-            .current_dir(&self.base)
-            .spawn()
-            .expect("binary spawns");
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(payload.as_bytes());
-        }
-        let out = child.wait_with_output().expect("binary runs");
+            .current_dir(&self.base);
+        let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
         assert_eq!(
             out.status.code(),
             Some(0),

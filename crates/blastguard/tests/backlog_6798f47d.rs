@@ -12,7 +12,9 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use std::io::Write as _;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -31,8 +33,8 @@ fn verdict(command: &str) -> String {
         "tool_input": { "command": command },
     })
     .to_string();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
-        .stdin(Stdio::piped())
+    let mut hook = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+    hook.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("CLAUDE_PROJECT_DIR", &proj)
@@ -42,13 +44,8 @@ fn verdict(command: &str) -> String {
         .env_remove("BLASTGUARD_ASK")
         .env_remove("TMPDIR")
         .env_remove("CLAUDE_CODE_SESSION_ID")
-        .current_dir(&base)
-        .spawn()
-        .expect("binary spawns");
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(payload.as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .current_dir(&base);
+    let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(out.status.code(), Some(0));
     String::from_utf8_lossy(&out.stdout).into_owned()
 }

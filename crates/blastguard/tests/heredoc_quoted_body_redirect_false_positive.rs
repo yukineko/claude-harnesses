@@ -39,7 +39,9 @@
 //! `heredoc_safe_reader_body.rs` (CLAUDECODE=1, ENTRYPOINT=cli so Ask is not
 //! hardened, no session id so the repeat-downgrade cannot fire).
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::process::{Command, Stdio};
 
 fn verdict(command: &str) -> (String, String) {
@@ -50,19 +52,14 @@ fn verdict(command: &str) -> (String, String) {
         "tool_input": { "command": command },
     })
     .to_string();
-    let mut child = Command::new(bin)
-        .env("CLAUDECODE", "1")
+    let mut hook = Command::new(bin);
+    hook.env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(payload.as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .stderr(Stdio::piped());
+    let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(
         out.status.code(),
         Some(0),

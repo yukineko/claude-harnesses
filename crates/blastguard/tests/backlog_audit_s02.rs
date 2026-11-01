@@ -6,6 +6,8 @@
 //! stays ignored only so the suite is green; the ignore reason names the item.
 //! Remove the ignore when the defect is fixed.
 
+#[path = "support/bounded.rs"]
+mod bounded;
 #[path = "support/git_env.rs"]
 mod git_env;
 
@@ -46,24 +48,16 @@ fn run_in(command: &str, cwd: &str, home: &Home) -> (String, String, String) {
         "tool_input": {"command": command},
     })
     .to_string();
-    let mut child = Command::new(bin())
-        .env_clear()
+    let mut cmd = Command::new(bin());
+    cmd.env_clear()
         .env("HOME", &home.0)
         .env("PATH", "/usr/bin:/bin")
         .env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
+        .stderr(Stdio::piped());
+    let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     if stdout.trim().is_empty() {
@@ -427,8 +421,7 @@ fn run_tree(t: &Tree, command: &str, record: bool, interactive: bool) -> (String
     if record {
         cmd.arg("record-approval");
     }
-    let mut child = cmd
-        .env_clear()
+    cmd.env_clear()
         .env("HOME", t.base.join("home"))
         .env("PATH", "/usr/bin:/bin")
         .env("CLAUDE_PROJECT_DIR", &t.proj)
@@ -441,16 +434,8 @@ fn run_tree(t: &Tree, command: &str, record: bool, interactive: bool) -> (String
         .current_dir(&t.base)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
+        .stderr(Stdio::piped());
+    let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     if stdout.trim().is_empty() {
         return ("allow".into(), String::new());
@@ -618,24 +603,20 @@ fn backlog_dc236085_launcher_missing_binary_record_approval_is_not_pretooluse_sh
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    let mut child = Command::new(&launcher)
-        .arg("record-approval")
+    let mut cmd = Command::new(&launcher);
+    cmd.arg("record-approval")
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(b"{\"tool_name\":\"Bash\"}")
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
+        .stderr(Stdio::piped());
+    let out = bounded::run_bounded(
+        &mut cmd,
+        b"{\"tool_name\":\"Bash\"}",
+        bounded::HOOK_DEADLINE,
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         !stdout.contains("\"hookEventName\":\"PreToolUse\""),
@@ -736,24 +717,16 @@ fn backlog_be9627da_is_protected_path_doc_matches_the_ask_behaviour() {
         "tool_input": {"file_path": repo_root().join(".githooks/pre-commit"), "old_string": "a", "new_string": "b"},
     })
     .to_string();
-    let mut child = Command::new(bin())
-        .env_clear()
+    let mut cmd = Command::new(bin());
+    cmd.env_clear()
         .env("HOME", &home.0)
         .env("PATH", "/usr/bin:/bin")
         .env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
+        .stderr(Stdio::piped());
+    let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(
         stdout.contains("\"permissionDecision\":\"ask\""),

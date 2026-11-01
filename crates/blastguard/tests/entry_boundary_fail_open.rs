@@ -20,7 +20,9 @@
 //! `interactive::ask_available()` is false and an `Ask` hardens to `deny` in
 //! the output — that hardening is itself the contract being relied on here.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::process::{Command, Stdio};
 
 /// Run the binary with its ask-availability PINNED, never inherited.
@@ -40,8 +42,8 @@ use std::process::{Command, Stdio};
 /// this process's own environment.
 fn run_with_ask(payload: &str, ask: &str) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_blastguard");
-    let mut child = Command::new(bin)
-        .env("BLASTGUARD_ASK", ask)
+    let mut hook = Command::new(bin);
+    hook.env("BLASTGUARD_ASK", ask)
         // Hold the repeat ledger out of a test about the entry boundary. Since
         // 2026-09-18 a second identical refusal in one session downgrades to an
         // `Ask` (`harness_core::repeat`), and these cases deliberately feed the
@@ -53,13 +55,8 @@ fn run_with_ask(payload: &str, ask: &str) -> (i32, String) {
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
-    if let Some(mut child_stdin) = child.stdin.take() {
-        let _ = child_stdin.write_all(payload.as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .stderr(Stdio::piped());
+    let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),

@@ -6,7 +6,9 @@
 //! identical with vs without the emit path being writable, and an
 //! unwritable store never panics or changes the exit code.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::process::{Command, Stdio};
 
 fn bin() -> &'static str {
@@ -23,11 +25,7 @@ fn run_with_home(payload: &str, home: &std::path::Path) -> (i32, String) {
         .stderr(Stdio::piped())
         // Repeat-ledger test isolation — see the note in integration.rs.
         .env_remove("CLAUDE_CODE_SESSION_ID");
-    let mut child = cmd.spawn().expect("binary spawns");
-    if let Some(mut child_stdin) = child.stdin.take() {
-        let _ = child_stdin.write_all(payload.as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+    let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -172,11 +170,7 @@ fn unwritable_store_does_not_panic_and_stays_exit_zero() {
         .stderr(Stdio::piped())
         // Repeat-ledger test isolation — see the note in integration.rs.
         .env_remove("CLAUDE_CODE_SESSION_ID");
-    let mut child = cmd.spawn().expect("binary spawns");
-    if let Some(mut child_stdin) = child.stdin.take() {
-        let _ = child_stdin.write_all(deny_payload().as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+    let out = bounded::run_bounded(&mut cmd, deny_payload().as_bytes(), bounded::HOOK_DEADLINE);
 
     let mut restore = perms;
     std::os::unix::fs::PermissionsExt::set_mode(&mut restore, 0o700);

@@ -67,6 +67,7 @@ fn verdict(tag: &str, command: &str) -> (String, String) {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    eprintln!("[{tag}] {decision}: {reason}");
     (decision, reason)
 }
 
@@ -111,13 +112,35 @@ fn control_real_backtick_redirect_outside_heredoc_stays_blocked() {
     assert!(d == "deny" || d == "ask", "got {d} ({r})");
 }
 
-/// CONTROL (pinned today's behaviour): an UNQUOTED heredoc body really
-/// undergoes command substitution, so it must stay blocking.
+/// CONTROL (PINNED CURRENT BEHAVIOUR, observed 0.2.185: exactly `deny` with
+/// the redirect/expansion reason): an UNQUOTED heredoc body really undergoes
+/// command substitution, so it must stay blocking.
 #[test]
 fn control_unquoted_heredoc_backtick_body_stays_blocked() {
     let (d, r) = verdict(
         "unq",
         "git add a.txt && git commit -F - <<EOF\nrun from > `.`\nEOF",
     );
-    assert!(d == "deny" || d == "ask", "got {d} ({r})");
+    assert_eq!(d, "deny", "reason: {r}");
+    assert!(r.contains("shell expansion"), "reason: {r}");
+}
+
+/// Isolation: `&&` chain kept, single-line body.
+#[test]
+fn isolate_chain_with_single_line_body_is_data() {
+    let (d, r) = verdict(
+        "iso-chain-1line",
+        "git add a.txt && git commit -F - <<'EOF'\nrun from > `.`\nEOF",
+    );
+    assert_eq!(d, "allow", "reason: {r}");
+}
+
+/// Isolation: no chain, multi-line body.
+#[test]
+fn isolate_no_chain_with_multiline_body_is_data() {
+    let (d, r) = verdict(
+        "iso-nochain-multi",
+        &format!("git commit -F - <<'EOF'\n{BODY}\nEOF"),
+    );
+    assert_eq!(d, "allow", "reason: {r}");
 }

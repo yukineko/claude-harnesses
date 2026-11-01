@@ -7016,9 +7016,74 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
             )) {
                 return deny;
             }
+            // The quoted literals above are NOT everything the upstream stage
+            // emits: an UNQUOTED expansion beside them (`echo "a" $(ls) | sh`)
+            // is dropped by `quoted_string_literals`, so the program judged was
+            // `a` alone and the line was allowed — while `echo "a $(ls)" | sh`,
+            // whose substitution sits inside the literal, asked. The output of
+            // that expansion is part of the program and is not on the command
+            // line. Recorded after the literal verdict so a Deny found there
+            // still wins.
+            if i > 0 {
+                if let Some(word) =
+                    unquoted_expansion(&backticks_as_dollar_paren(&statement[i - 1]))
+                {
+                    if let Some(deny) = acc.record(Decision::ask(format!(
+                        "{shape}, and the stage piping into it emits the output of an unquoted \
+shell expansion (`{word}`) — that output is the program, it is not on the command line, so \
+blastguard cannot tell whether anything here is irreversible"
+                    ))) {
+                        return deny;
+                    }
+                }
+            }
         }
     }
     acc.finish()
+}
+
+/// The first shell expansion in `stage` that sits OUTSIDE every quote — a
+/// `$(`, `${`, `$NAME` / special parameter, or a backtick — as a short sample
+/// of the text from that point. `None` when every expansion is inside quotes
+/// (those reach the program through [`quoted_string_literals`]) or there is
+/// none. An unquoted backslash-escaped `$` or backtick COUNTS: the escape only
+/// stops THIS stage from expanding it, so the stage emits a literal `$(ls)` /
+/// `` `ls` `` that the shell reading the pipe then runs (`echo "a" \$(ls) | sh`
+/// executes `ls`). `$'…'` / `$"…"` are quoting, not expansion. An unclosed
+/// backtick counts: what it emits cannot be read either.
+fn unquoted_expansion(stage: &str) -> Option<String> {
+    let chars: Vec<char> = stage.chars().collect();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut k = 0;
+    while k < chars.len() {
+        let c = chars[k];
+        if c == '\\' && !in_s {
+            if !in_d && matches!(chars.get(k + 1), Some('$' | '`')) {
+                return Some(chars[k..].iter().take(40).collect());
+            }
+            k += 2;
+            continue;
+        }
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if !in_s && !in_d {
+            let expands = match c {
+                '`' => true,
+                '$' => chars.get(k + 1).is_some_and(|n| {
+                    matches!(n, '(' | '{' | '_' | '@' | '*' | '#' | '?' | '$' | '!' | '-')
+                        || n.is_ascii_alphanumeric()
+                }),
+                _ => false,
+            };
+            if expands {
+                return Some(chars[k..].iter().take(40).collect());
+            }
+        }
+        k += 1;
+    }
+    None
 }
 
 /// `stage` with every closed, unescaped backtick substitution outside single

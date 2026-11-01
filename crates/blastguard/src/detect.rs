@@ -17266,6 +17266,51 @@ and must not be Allowed: {failing:?}"
         }
     }
 
+    static SLOW_GIT_DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+    /// The probe seam the flaky test uses, with a generous bound instead of
+    /// the production `TREE_GIT_TIMEOUT`.
+    fn slow_clean_git(p: &str, c: &[String]) -> Determination<crate::reversible::TreeGitFacts> {
+        crate::reversible::probe_tree_with_timeout(
+            std::ffi::OsStr::new(&format!("{}/git-slow", SLOW_GIT_DIR.get().expect("set"))),
+            p,
+            c,
+            std::time::Duration::from_secs(30),
+        )
+    }
+
+    /// Test-harness defect, not a claim about production: the Allow control of
+    /// `deletion_failing_git_probe_never_allows` must not depend on the fake git
+    /// answering within the production 1.5 s `TREE_GIT_TIMEOUT` (it flaked under
+    /// load: 3 of 12 concurrent suite runs). A clean fake git that is slow (2 s,
+    /// inside a 30 s bound, so any drift within that range passes) must still
+    /// yield Allow through the probe seam.
+    #[test]
+    fn fake_git_control_allow_does_not_depend_on_the_production_timeout() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = DelFx::new_in(std::path::Path::new("/var/tmp"), "slowgit");
+        std::fs::create_dir_all(format!("{}/src", f.proj)).unwrap();
+        let bin = format!("{}/bin", f.scratch);
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = format!(
+            "#!/bin/sh\nsleep 2\ncase \"$*\" in\n  *rev-parse*) echo '{}' ;;\n  *\" status \"*) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+            f.proj
+        );
+        let p = format!("{bin}/git-slow");
+        std::fs::write(&p, script).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = SLOW_GIT_DIR.set(bin);
+        let roots = f
+            .roots_with_cwd(&f.proj.clone())
+            .with_git_tree_probe(slow_clean_git);
+        let d = detect_scoped(
+            "Bash",
+            Some(&json!({ "command": format!("rm -rf {}/src", f.proj) })),
+            &roots,
+        );
+        assert_eq!(d, Decision::Allow);
+    }
+
     #[test]
     fn deletion_without_a_resolver_changes_nothing() {
         // The library entry (`detect`, SafeRoots::none) keeps the shape Deny.

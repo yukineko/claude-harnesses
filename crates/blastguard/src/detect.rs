@@ -7210,10 +7210,49 @@ blastguard cannot tell whether anything here is irreversible"
                         return deny;
                     }
                 }
+                // The quoted literals are the WHOLE program only when the
+                // upstream stage emits nothing but its own arguments (`echo`,
+                // `printf`). Any other upstream — `grep -E "a" f`, `jq -r . f`,
+                // `tr a b < f` — emits text from a file or from stdin, and its
+                // quoted words are a pattern or a filter, not the program:
+                // `grep -E "a" f | sh` judged `a` as the program and was
+                // allowed, while `cat f | sh` (no literal at all) asked.
+                // Recorded after the literal verdict so a Deny found in a
+                // literal still wins.
+                if !stage_emits_only_its_arguments(&statement[i - 1]) {
+                    if let Some(deny) = acc.record(Decision::ask(format!(
+                        "{shape}, and the stage piping into it (`{}`) is not a literal emitter \
+(`echo` / `printf`) — what it emits can include text from a file or from stdin, which is not on \
+the command line, so blastguard cannot read the program",
+                        statement[i - 1].trim()
+                    ))) {
+                        return deny;
+                    }
+                }
             }
         }
     }
     acc.finish()
+}
+
+/// True when `stage` emits only text spelled in its own arguments: its
+/// command, behind any exec-wrapper chain, is `echo` or `printf`. Every head
+/// candidate [`wrapped_command_heads`] yields must be a wrapper or one of
+/// those two, so an ambiguous chain resolves to "not a literal emitter" (the
+/// restrictive side). A stage that is not a simple command (`(cat f)`,
+/// `{ cat f; }`) has no such head and is likewise not a literal emitter.
+fn stage_emits_only_its_arguments(stage: &str) -> bool {
+    let tokens: Vec<&str> = stage.split_whitespace().collect();
+    let heads = wrapped_command_heads(&tokens);
+    let Some(&last) = heads.last() else {
+        return false;
+    };
+    let is_emitter =
+        |idx: usize| matches!(normalized_command(tokens[idx]).as_str(), "echo" | "printf");
+    is_emitter(last)
+        && heads
+            .iter()
+            .all(|&idx| is_emitter(idx) || is_exec_wrapper(&normalized_command(tokens[idx])))
 }
 
 /// The first shell expansion in `stage` that sits OUTSIDE every quote — a

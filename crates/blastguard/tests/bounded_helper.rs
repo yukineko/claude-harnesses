@@ -77,20 +77,25 @@ fn pids_in(file: &Path, want: usize) -> Vec<u32> {
 }
 
 fn alive(pid: u32) -> bool {
-    Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(true)
+    let mut cmd = Command::new("kill");
+    cmd.arg("-0").arg(pid.to_string());
+    bounded::run_bounded_stdin(
+        &mut cmd,
+        bounded::ChildStdin::Inherit,
+        bounded::TOOL_DEADLINE,
+    )
+    .status
+    .success()
 }
 
 fn kill(pid: u32) {
-    let _ = Command::new("kill")
-        .arg(pid.to_string())
-        .stderr(std::process::Stdio::null())
-        .status();
+    let mut cmd = Command::new("kill");
+    cmd.arg(pid.to_string());
+    let _ = bounded::run_bounded_stdin(
+        &mut cmd,
+        bounded::ChildStdin::Inherit,
+        bounded::TOOL_DEADLINE,
+    );
 }
 
 /// Poll up to `limit` for `pid` to be gone.

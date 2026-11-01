@@ -7,9 +7,8 @@
 #[path = "support/bounded.rs"]
 mod bounded;
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::time::Duration;
 
 /// Upper bound on one hook invocation in `Fx::call`. Well under the 60s
@@ -43,8 +42,8 @@ impl Fx {
     }
 
     fn git(&self, args: &[&str]) {
-        let out = Command::new("git")
-            .arg("-C")
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
             .arg(&self.repo)
             .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
             .args([
@@ -56,9 +55,9 @@ impl Fx {
             .args(args)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("HOME", &self.home)
-            .output()
-            .expect("git runs");
+            .env("HOME", &self.home);
+        let out =
+            bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
         assert!(
             out.status.success(),
             "git {args:?} failed: {}",
@@ -848,38 +847,17 @@ fn p_symlink_loop_write_is_answered_within_bound() {
         "tool_input": wf_input("Write", &p),
     })
     .to_string();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .env("CLAUDE_PROJECT_DIR", &f.repo)
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+    cmd.env("CLAUDE_PROJECT_DIR", &f.repo)
         .env("BLASTGUARD_APPROVALS_DIR", f.base.join("store"))
         .env("HOME", &f.home)
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .env_remove("BLASTGUARD_ASK")
         .env_remove("CLAUDE_CODE_SESSION_ID")
-        .current_dir(&f.base)
-        .spawn()
-        .expect("binary spawns");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.as_bytes())
-        .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        if child.try_wait().unwrap().is_some() {
-            break;
-        }
-        if std::time::Instant::now() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("symlink loop was not answered within 30s: the hop limit is unbounded");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    let out = child.wait_with_output().unwrap();
+        .current_dir(&f.base);
+    // A symlink loop not answered within 30s (the hop limit is unbounded)
+    // panics in run_bounded, naming the deadline and the phase.
+    let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), Duration::from_secs(30));
     assert_eq!(
         decision(&String::from_utf8_lossy(&out.stdout)),
         "ask",

@@ -11,7 +11,6 @@ mod bounded;
 #[path = "support/git_env.rs"]
 mod git_env;
 
-use std::io::Write;
 use std::process::{Command, Stdio};
 
 fn bin() -> &'static str {
@@ -827,11 +826,15 @@ fn backlog_d94d05c3_every_test_that_spawns_the_binary_isolates_home() {
 
 // ---------------------------------------------------------------- a529cd11
 fn git_in(dir: &std::path::Path, args: &[&str]) {
-    let st = git_env::pinned(dir)
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-        .args(args)
-        .status()
-        .unwrap();
+    let mut cmd = git_env::pinned(dir);
+    cmd.args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(args);
+    let st = bounded::run_bounded_stdin(
+        &mut cmd,
+        bounded::ChildStdin::Inherit,
+        bounded::TOOL_DEADLINE,
+    )
+    .status;
     assert!(st.success(), "git {args:?} failed in {dir:?}");
 }
 
@@ -857,22 +860,11 @@ fn backlog_a529cd11_guard_maintree_bsd_sed_empty_suffix_with_worktree_path_is_al
             "tool_name": "Bash", "tool_input": {"command": cmd},
         })
         .to_string();
-        let mut child = Command::new("python3")
-            .arg(&guard)
+        let mut cmd = Command::new("python3");
+        cmd.arg(&guard)
             .current_dir(&wt)
-            .env("CLAUDE_PROJECT_DIR", &main)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(payload.as_bytes())
-            .unwrap();
-        let o = child.wait_with_output().unwrap();
+            .env("CLAUDE_PROJECT_DIR", &main);
+        let o = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
         (
             o.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&o.stderr).into_owned(),

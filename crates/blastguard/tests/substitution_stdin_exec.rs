@@ -129,6 +129,146 @@ fn assigned_backtick_echoed_into_bash() {
     );
 }
 
+// Escaped spellings: the escape only stops the upstream stage from expanding
+// the text; the shell reading the pipe still runs it.
+#[test]
+fn literal_then_escaped_dollar_paren_piped_to_sh() {
+    assert_deny_or_ask(
+        "literal_then_escaped_dollar_paren_piped_to_sh",
+        "echo \"a\" \\$(ls) | sh",
+    );
+}
+
+#[test]
+fn literal_then_escaped_backtick_piped_to_sh() {
+    assert_deny_or_ask(
+        "literal_then_escaped_backtick_piped_to_sh",
+        "echo \"a\" \\`ls\\` | sh",
+    );
+}
+
+// An unclosed backtick is not rewritten as `$( )`; what it emits still cannot
+// be read, so it is judged by the backtick arm of the expansion scan.
+#[test]
+fn literal_then_unclosed_backtick_piped_to_sh() {
+    assert_deny_or_ask(
+        "literal_then_unclosed_backtick_piped_to_sh",
+        "echo \"a\" `ls | sh",
+    );
+}
+
+// An unquoted variable expands to text the command line does not show.
+#[test]
+fn literal_then_variable_piped_to_sh() {
+    assert_deny_or_ask("literal_then_variable_piped_to_sh", "echo \"a\" $X | sh");
+}
+
+// Adversarial probes: other spellings of the same unreadable program.
+#[test]
+fn probe_printf_dollar_paren_piped_to_sh() {
+    assert_deny_or_ask(
+        "probe_printf_dollar_paren_piped_to_sh",
+        "printf \"%s\" $(ls) | sh",
+    );
+}
+
+#[test]
+fn probe_quoted_dollar_paren_as_own_word_piped_to_sh() {
+    assert_deny_or_ask(
+        "probe_quoted_dollar_paren_as_own_word_piped_to_sh",
+        "echo \"a\" \"$(ls)\" | sh",
+    );
+}
+
+#[test]
+fn probe_braced_variable_piped_to_sh() {
+    assert_deny_or_ask("probe_braced_variable_piped_to_sh", "echo \"a\" ${X} | sh");
+}
+
+#[test]
+fn probe_dollar_paren_first_word_piped_to_sh() {
+    assert_deny_or_ask("probe_dollar_paren_first_word_piped_to_sh", "$(ls) | sh");
+}
+
+#[test]
+fn probe_single_quoted_literal_then_substitution_piped_to_sh() {
+    assert_deny_or_ask(
+        "probe_single_quoted_literal_then_substitution_piped_to_sh",
+        "echo 'a' $(ls) | sh",
+    );
+}
+
+#[test]
+fn probe_literal_then_substitution_piped_to_sh_dash_s() {
+    assert_deny_or_ask(
+        "probe_literal_then_substitution_piped_to_sh_dash_s",
+        "echo \"a\" $(ls) | sh -s",
+    );
+}
+
+#[test]
+fn probe_literal_then_substitution_piped_to_zsh() {
+    assert_deny_or_ask(
+        "probe_literal_then_substitution_piped_to_zsh",
+        "echo \"a\" $(ls) | zsh",
+    );
+}
+
+#[test]
+fn probe_literal_then_substitution_piped_to_env_sh() {
+    assert_deny_or_ask(
+        "probe_literal_then_substitution_piped_to_env_sh",
+        "echo \"a\" $(ls) | env sh",
+    );
+}
+
+#[test]
+fn probe_plain_literal_piped_to_env_sh() {
+    assert_deny_or_ask(
+        "probe_plain_literal_piped_to_env_sh",
+        "echo \"rm -rf /\" | env sh",
+    );
+}
+
+#[test]
+fn probe_literal_then_substitution_piped_through_cat_to_sh() {
+    assert_deny_or_ask(
+        "probe_literal_then_substitution_piped_through_cat_to_sh",
+        "echo \"a\" $(ls) | cat | sh",
+    );
+}
+
+#[test]
+fn probe_here_string_substitution_into_sh() {
+    assert_deny_or_ask(
+        "probe_here_string_substitution_into_sh",
+        "sh <<< \"a $(ls)\"",
+    );
+}
+
+#[test]
+fn probe_arithmetic_then_piped_to_sh() {
+    assert_deny_or_ask(
+        "probe_arithmetic_then_piped_to_sh",
+        "echo \"a\" $((1+1)) | sh",
+    );
+}
+
+#[test]
+fn probe_tilde_then_piped_to_sh() {
+    assert_deny_or_ask("probe_tilde_then_piped_to_sh", "echo \"a\" ~ | sh");
+}
+
+#[test]
+fn probe_glob_then_piped_to_sh() {
+    assert_deny_or_ask("probe_glob_then_piped_to_sh", "echo \"a\" * | sh");
+}
+
+#[test]
+fn probe_positional_then_piped_to_sh() {
+    assert_deny_or_ask("probe_positional_then_piped_to_sh", "echo \"a\" $1 | sh");
+}
+
 // Controls: no shell at the end of the pipe, or no pipe at all.
 #[test]
 fn control_dollar_paren_no_pipe() {

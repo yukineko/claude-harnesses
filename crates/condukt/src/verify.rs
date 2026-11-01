@@ -1751,9 +1751,17 @@ fn prose_pytest_argv(done_criteria: &str) -> Vec<String> {
     argv.push("pytest".to_string());
     let rest = &done_criteria[m.get(0).map_or(0, |w| w.end())..];
     let punct = |c: char| matches!(c, ',' | '.' | ';' | ')' | ':' | '。' | '、');
+    // A Japanese sentence break (`。`/`、`) is written with no space after it,
+    // so it separates tokens exactly like whitespace: otherwise
+    // `が通る。scripts/test_b.py` is one token and pytest is handed a path
+    // that does not exist (a green criteria reported as failed).
+    let words = || {
+        rest.split(|c: char| c.is_whitespace() || matches!(c, '。' | '、'))
+            .filter(|w| !w.is_empty())
+    };
     let mut expect_value = false;
     let mut consumed = 0usize;
-    for raw in rest.split_whitespace() {
+    for raw in words() {
         let tok = raw.trim_end_matches(punct);
         let terminated = tok.len() != raw.len();
         if tok.is_empty() {
@@ -1778,7 +1786,7 @@ fn prose_pytest_argv(done_criteria: &str) -> Vec<String> {
             break;
         }
     }
-    for raw in rest.split_whitespace().skip(consumed) {
+    for raw in words().skip(consumed) {
         let tok = raw.trim_end_matches(punct);
         if tok.contains(".py") || tok.contains("::") {
             argv.push(tok.to_string());

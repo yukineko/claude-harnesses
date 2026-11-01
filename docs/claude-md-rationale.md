@@ -16,18 +16,7 @@
 
 ### 移行済みの実体
 
-**移行済みの実体**: 7 ゲート（donegate / reviewgate / propguard / tdd、および budgetguard / autoflow /
-ctxrot の Stop hook 各 `main.rs`）が通る panic barrier は fail-closed へ移行した（前者4つは `d6db4670`、
-後者3つ=budgetguard/autoflow/ctxrotは判定〈`{"decision":"block"}` を実際に返す〉を持ちながら
-`harness_core::hook::run_hook`〈panic握り潰し→常時exit0〉経由のまま取り残されていたのを本節の是正として
-`harness_core::gate::run::run_guarded` へ移行）。gate 本体が panic した＝判定不能は block に
-解決する: `crates/harness-core/src/gate/run.rs:186`「**fail closed**: block the stop and surface the crash」。
-同一ゲート・同一セッションの連続 2 回目の panic だけが bounded に allow へ落ちる。
-その allow には `stop_hook_active` に加え、直前の stop もそのゲートの panic だったことを示す
-per-gate・per-session marker が要り、別ゲートの block による re-entry 中の初回 panic や、
-panic しなかった run を挟んだ後の panic は block する。
-marker を読めない・書けない（またはセッション id が無い）ときの re-entry は `systemMessage` 付きの明示的な allow になり、
-chain 最初の stop は常に block する。
+本文（panic barrier の fail-closed 契約）は規範なので CLAUDE.md §1 に置く。ここには経緯だけを残す。
 
 ## 2. 判断は予測にすぎない。fail はテストで決着させる
 

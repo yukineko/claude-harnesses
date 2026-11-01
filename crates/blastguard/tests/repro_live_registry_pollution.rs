@@ -77,12 +77,14 @@ impl Drop for LiveRegistryCleanup {
 }
 
 fn git_init(dir: &Path) {
-    let st = git_env::scrub(&mut Command::new("git"))
-        .arg("init")
-        .arg("-q")
-        .arg(dir)
-        .status()
-        .expect("git init spawns");
+    let mut cmd = Command::new("git");
+    git_env::scrub(&mut cmd).arg("init").arg("-q").arg(dir);
+    let st = bounded::run_bounded_stdin(
+        &mut cmd,
+        bounded::ChildStdin::Inherit,
+        bounded::TOOL_DEADLINE,
+    )
+    .status;
     assert!(st.success(), "git init failed in {}", dir.display());
 }
 

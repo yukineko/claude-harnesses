@@ -149,14 +149,14 @@ fn not_allow(case: &str, got: V) {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = git_env::pinned(dir)
-        .args(args)
+    let mut cmd = git_env::pinned(dir);
+    cmd.args(args)
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@example.com")
         .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@example.com")
-        .output()
-        .expect("git runs");
+        .env("GIT_COMMITTER_EMAIL", "t@example.com");
+    let out =
+        bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
     assert!(
         out.status.success(),
         "git {args:?} failed: {}",

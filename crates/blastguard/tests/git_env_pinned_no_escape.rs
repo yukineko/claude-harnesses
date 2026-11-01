@@ -8,6 +8,9 @@
 #[path = "support/git_env.rs"]
 mod git_env;
 
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
@@ -15,7 +18,9 @@ use tempfile::TempDir;
 fn git_out(dir: &Path, args: &[&str]) -> (bool, String) {
     let mut cmd = Command::new("git");
     git_env::scrub(&mut cmd);
-    let out = cmd.arg("-C").arg(dir).args(args).output().unwrap();
+    cmd.arg("-C").arg(dir).args(args);
+    let out =
+        bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).trim().to_string(),
@@ -59,22 +64,31 @@ fn snap(d: &Path) -> Snapshot {
 /// (a fixture whose `.git` vanished must fail, not escape).
 fn fixture_init_commit(dir: &Path, with_init: bool) {
     if with_init {
-        let _ = git_env::pinned(dir).args(["init", "-q"]).output().unwrap();
+        let mut init = git_env::pinned(dir);
+        init.args(["init", "-q"]);
+        let _ = bounded::run_bounded_stdin(
+            &mut init,
+            bounded::ChildStdin::Null,
+            bounded::TOOL_DEADLINE,
+        );
     }
-    let _ = git_env::pinned(dir)
-        .args([
-            "-c",
-            "user.email=t@example.com",
-            "-c",
-            "user.name=t",
-            "commit",
-            "--allow-empty",
-            "-q",
-            "-m",
-            "init",
-        ])
-        .output()
-        .unwrap();
+    let mut commit = git_env::pinned(dir);
+    commit.args([
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "commit",
+        "--allow-empty",
+        "-q",
+        "-m",
+        "init",
+    ]);
+    let _ = bounded::run_bounded_stdin(
+        &mut commit,
+        bounded::ChildStdin::Null,
+        bounded::TOOL_DEADLINE,
+    );
 }
 
 fn assert_outer_untouched(outer: &Path, before: &Snapshot) {

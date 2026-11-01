@@ -137,18 +137,73 @@ pub struct ProgressView {
     pub undetermined: Vec<UndeterminedSource>,
 }
 
-/// One presence-hook-registered session in [`ProgressView::active_sessions`].
+/// One presence-hook-registered (session id, worktree) pair in
+/// [`ProgressView::active_sessions`]. A session id seen from several
+/// worktrees (several processes sharing the id) yields one row per worktree,
+/// each listing only the paths written by events whose cwd was in it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActiveSession {
     pub session_id: String,
     pub cwd: String,
-    /// Git toplevel of `cwd`.
+    /// Git toplevel of `cwd`: the worktree that wrote `written_paths`.
+    /// Empty exactly when `worktree_undetermined` is set.
     pub worktree: String,
     #[serde(default)]
     pub written_paths: Vec<String>,
     /// `live` | `stale` | `unknown` | `ended` (see `presence::liveness`).
     pub liveness: String,
     pub last_seen: i64,
+    /// Set when the worktree that wrote `written_paths` was not recorded
+    /// (legacy pre-0.2.109 `presence.json` entries): the reason. The paths are
+    /// still listed, but are attributed to NO worktree rather than a guessed one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_undetermined: Option<String>,
+}
+
+/// Reason attached to legacy rows whose writing worktree is unknown.
+pub const LEGACY_UNATTRIBUTED_REASON: &str =
+    "legacy presence.json entry: the worktree that wrote these paths was not recorded";
+
+/// Rows of [`ProgressView::active_sessions`] for one presence entry: one per
+/// worktree slot, plus (legacy entries only) one row with an undetermined
+/// worktree carrying the unattributed paths, or the entry itself when it has
+/// neither (a legacy entry that never wrote). Never drops a path.
+fn presence_rows(e: &crate::presence::PresenceEntry, now: i64) -> Vec<ActiveSession> {
+    let mut rows: Vec<ActiveSession> = e
+        .worktrees
+        .iter()
+        .map(|(wt, slot)| ActiveSession {
+            session_id: e.session_id.clone(),
+            cwd: slot.cwd.clone(),
+            worktree: wt.clone(),
+            written_paths: slot.written_paths.clone(),
+            liveness: crate::presence::worktree_liveness(e, slot, now).to_string(),
+            last_seen: slot.last_seen,
+            worktree_undetermined: None,
+        })
+        .collect();
+    if !e.written_paths.is_empty() {
+        rows.push(ActiveSession {
+            session_id: e.session_id.clone(),
+            cwd: e.cwd.clone(),
+            worktree: String::new(),
+            written_paths: e.written_paths.clone(),
+            liveness: crate::presence::liveness(e, now).to_string(),
+            last_seen: e.last_seen,
+            worktree_undetermined: Some(LEGACY_UNATTRIBUTED_REASON.to_string()),
+        });
+    } else if rows.is_empty() {
+        rows.push(ActiveSession {
+            session_id: e.session_id.clone(),
+            cwd: e.cwd.clone(),
+            worktree: e.worktree.clone(),
+            written_paths: Vec::new(),
+            liveness: crate::presence::liveness(e, now).to_string(),
+            last_seen: e.last_seen,
+            worktree_undetermined: None,
+        });
+    }
+    rows
 }
 
 /// Machine key for the presence-hook session source.
@@ -471,17 +526,7 @@ pub(crate) fn apply_presence(
 ) {
     match loaded {
         Ok(reg) => {
-            view.active_sessions = reg
-                .values()
-                .map(|e| ActiveSession {
-                    session_id: e.session_id.clone(),
-                    cwd: e.cwd.clone(),
-                    worktree: e.worktree.clone(),
-                    written_paths: e.written_paths.clone(),
-                    liveness: crate::presence::liveness(e, now).to_string(),
-                    last_seen: e.last_seen,
-                })
-                .collect();
+            view.active_sessions = reg.values().flat_map(|e| presence_rows(e, now)).collect();
         }
         Err(e) => {
             view.active_sessions = Vec::new();

@@ -169,11 +169,22 @@ fn format_sessions(view: &ProgressView) -> String {
         .iter()
         .filter(|s| s.liveness != "ended")
     {
-        let _ = writeln!(
-            out,
-            "session {}  [{}]  worktree {}",
-            s.session_id, s.liveness, s.worktree
-        );
+        match &s.worktree_undetermined {
+            Some(reason) => {
+                let _ = writeln!(
+                    out,
+                    "session {}  [{}]  worktree (unknown: {reason})",
+                    s.session_id, s.liveness
+                );
+            }
+            None => {
+                let _ = writeln!(
+                    out,
+                    "session {}  [{}]  worktree {}",
+                    s.session_id, s.liveness, s.worktree
+                );
+            }
+        }
         if s.cwd != s.worktree {
             let _ = writeln!(out, "  cwd {}", s.cwd);
         }

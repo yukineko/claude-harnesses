@@ -43,7 +43,8 @@ pub enum CircuitReason {
     Stall,
     /// How idle the run is could **not be measured** (no task carries an
     /// `updated_at`, or the run state could not be loaded) while the idle axis
-    /// was switched on.
+    /// was switched on. Also used, with the idle axis on or off, when the
+    /// session transcript was located but its compactions could not be counted.
     ///
     /// # Why this trips rather than continuing
     ///
@@ -567,8 +568,8 @@ impl TranscriptAxes<'_> {
 /// [`CircuitReason::SessionCompacted`], checked after every other reason.
 /// A run measured from run state has no transcript: `compactions` is `null`.
 /// A transcript that cannot be counted (`compactions: null` plus
-/// `compactions_unknown_reason`) trips `idle_unmeasured` while the idle axis is
-/// on. The stdout JSON carries `compactions` and `max_compactions`, and so does
+/// `compactions_unknown_reason`) trips `idle_unmeasured` even with the idle axis
+/// off. The stdout JSON carries `compactions` and `max_compactions`, and so does
 /// the journal record.
 pub fn run_circuit_check(
     cfg: &Config,
@@ -690,9 +691,9 @@ pub fn run_circuit_check(
             CircuitVerdict::Trip(CircuitReason::StreakUnmeasured)
         }
         // A transcript that was located but could not be counted is not a
-        // session with 0 compactions: with the idle axis on it trips under the
-        // same label the idle axis uses for an unreadable transcript.
-        CircuitVerdict::Continue if idle_ttl_secs > 0 && compactions_unknown_reason.is_some() => {
+        // session with 0 compactions: it trips whether or not the idle axis is
+        // on, under the label the idle axis uses for an unreadable transcript.
+        CircuitVerdict::Continue if compactions_unknown_reason.is_some() => {
             CircuitVerdict::Trip(CircuitReason::IdleUnmeasured)
         }
         v => v,

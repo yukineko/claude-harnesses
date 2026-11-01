@@ -12,6 +12,8 @@ struct Fx {
     base: PathBuf,
     home: PathBuf,
     repo: PathBuf,
+    /// Per-fixture override of the spawned binary (None = the real blastguard).
+    bin: Option<PathBuf>,
 }
 
 impl Fx {
@@ -25,6 +27,7 @@ impl Fx {
             home: base.join("home"),
             repo: base.join("proj"),
             base,
+            bin: None,
         };
         std::fs::create_dir_all(&f.home).unwrap();
         std::fs::create_dir_all(&f.repo).unwrap();
@@ -71,7 +74,11 @@ impl Fx {
             "tool_input": input,
         })
         .to_string();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
+        let bin = self
+            .bin
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_blastguard")));
+        let mut child = Command::new(bin)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1020,6 +1027,30 @@ fn o_write_via_dangling_yaml_symlink_denies() {
         "cfg.yaml",
     );
 }
+// `Fx::call` must bound its wait: a spawned binary that never answers (an
+// orphaned busy-loop was observed living 8h45m) must make the call return, as a
+// panic, instead of blocking in `wait_with_output` forever. The stub exits on
+// its own after 300s, so nothing outlives this test long-term.
+#[test]
+fn call_with_never_answering_binary_returns_within_60s() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = Fx::new("hang1");
+    let stub = f.base.join("never-answers.sh");
+    std::fs::write(&stub, "#!/bin/sh\nsleep 300\n").unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    f.bin = Some(stub);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f.run("gh run list")));
+        let _ = tx.send(());
+    });
+    let got = rx.recv_timeout(std::time::Duration::from_secs(60));
+    assert!(
+        got.is_ok(),
+        "Fx::call did not return within 60s for a binary that never answers: its wait is unbounded"
+    );
+}
+
 // Edit has no config-file allowlist (detect_edit goes straight to the
 // system-directory axis), so this pins the Edit side of the same names.
 #[test]

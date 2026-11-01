@@ -600,6 +600,38 @@ fn pin_curl_piped_to_env_grep_bash_current_deny() {
     );
 }
 
+// Ported from the discarded c5b9c02b-stdin-subst branch: a printf format
+// word plus a substitution word, piped to an interpreter.
+#[test]
+fn printf_literal_then_dollar_paren_pipe_bash() {
+    assert_deny_or_ask(
+        "printf_literal_then_dollar_paren_pipe_bash",
+        "printf '%s' \"a\" $(cat x) | bash",
+    );
+}
+
+#[test]
+fn echo_literal_then_quoted_dollar_paren_pipe_sh() {
+    assert_deny_or_ask(
+        "echo_literal_then_quoted_dollar_paren_pipe_sh",
+        "echo a \"$(ls)\" | sh",
+    );
+}
+
+// The bare substitution form (no literal word at all).
+#[test]
+fn control_echo_dollar_paren_pipe_sh() {
+    assert_deny_or_ask("control_echo_dollar_paren_pipe_sh", "echo $(ls) | sh");
+}
+
+// Pin at today's verdict: a pure literal piped to sh has no substitution, so
+// the executed text is fully visible in the command and is allowed today.
+// This pins the current observed verdict, not a claim that it is the ideal.
+#[test]
+fn pin_echo_pure_literal_pipe_sh_today() {
+    assert_allow("pin_echo_pure_literal_pipe_sh_today", "echo \"a\" | sh");
+}
+
 // Controls: no shell at the end of the pipe, or no pipe at all.
 #[test]
 fn control_dollar_paren_no_pipe() {

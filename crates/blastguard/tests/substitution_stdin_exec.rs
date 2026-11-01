@@ -491,6 +491,94 @@ fn control_xargs_a_file_grep() {
     assert_allow("control_xargs_a_file_grep", "xargs -a FILE grep x");
 }
 
+// GNU xargs -i / -e / -l (and --replace / --eof / --max-lines) take only an
+// ATTACHED value, so the next token is the command word.
+#[test]
+fn xargs_ia_attached_replace_sh() {
+    assert_deny_or_ask("xargs_ia_attached_replace_sh", "echo x | xargs -ia sh");
+}
+
+#[test]
+fn xargs_long_replace_sh_c() {
+    assert_deny_or_ask(
+        "xargs_long_replace_sh_c",
+        "echo x | xargs --replace sh -c {}",
+    );
+}
+
+#[test]
+fn xargs_lower_e_sh() {
+    assert_deny_or_ask("xargs_lower_e_sh", "echo x | xargs -e sh");
+}
+
+#[test]
+fn xargs_lower_l_bash() {
+    assert_deny_or_ask("xargs_lower_l_bash", "echo x | xargs -l bash");
+}
+
+#[test]
+fn xargs_zero_i_sh_c() {
+    assert_deny_or_ask("xargs_zero_i_sh_c", "echo x | xargs -0i sh -c {}");
+}
+
+#[test]
+fn destructive_literal_piped_to_xargs_i_sh_c() {
+    assert_deny_or_ask(
+        "destructive_literal_piped_to_xargs_i_sh_c",
+        "echo \"rm -rf /\" | xargs -i sh -c {}",
+    );
+}
+
+#[test]
+fn control_xargs_i_grep() {
+    assert_allow("control_xargs_i_grep", "echo x | xargs -i grep {} f");
+}
+
+// Further xargs-family probes.
+#[test]
+fn probe_xargs_p4_sh() {
+    assert_deny_or_ask("probe_xargs_p4_sh", "echo \"rm -rf /\" | xargs -P4 sh");
+}
+
+#[test]
+fn probe_xargs_n1_sh() {
+    assert_deny_or_ask("probe_xargs_n1_sh", "echo \"rm -rf /\" | xargs -n1 sh");
+}
+
+#[test]
+fn probe_xargs_zero_r_bash() {
+    assert_deny_or_ask(
+        "probe_xargs_zero_r_bash",
+        "echo \"rm -rf /\" | xargs -0 -r bash",
+    );
+}
+
+#[test]
+fn probe_xargs_env_sh() {
+    assert_deny_or_ask("probe_xargs_env_sh", "echo \"rm -rf /\" | xargs env sh");
+}
+
+#[test]
+fn probe_xargs_uppercase_i_sh_c() {
+    assert_deny_or_ask(
+        "probe_xargs_uppercase_i_sh_c",
+        "echo \"rm -rf /\" | xargs -I {} sh -c {}",
+    );
+}
+
+#[test]
+fn probe_xargs_long_max_args_sh() {
+    assert_deny_or_ask(
+        "probe_xargs_long_max_args_sh",
+        "echo \"rm -rf /\" | xargs --max-args=1 sh",
+    );
+}
+
+#[test]
+fn probe_xargs_sudo_sh() {
+    assert_deny_or_ask("probe_xargs_sudo_sh", "echo \"rm -rf /\" | xargs sudo sh");
+}
+
 // Probes.
 #[test]
 fn probe_destructive_python_payload_piped_to_xargs_python3() {

@@ -12,7 +12,9 @@
 #[path = "support/git_env.rs"]
 mod git_env;
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -54,14 +56,7 @@ fn run_with_env(base: &Path, proj: &Path, command: &str, envs: &[(&str, &Path)])
     for (k, v) in envs {
         cmd.env(k, v);
     }
-    let mut child = cmd.spawn().unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
+    let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     String::from_utf8_lossy(&out.stdout).into_owned()
 }

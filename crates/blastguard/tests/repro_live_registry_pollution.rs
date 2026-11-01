@@ -22,7 +22,9 @@
 //! Anything they do create under the real `~/.overwatch` is removed by a drop
 //! guard -- only the exact project-key dir derived from the temp repo.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -99,14 +101,7 @@ fn run_blastguard(repo: &Path, clear_env: bool) -> String {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_remove("CLAUDE_CODE_SESSION_ID");
-    let mut child = cmd.spawn().expect("binary spawns");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(ask_payload().as_bytes())
-        .expect("write payload");
-    let out = child.wait_with_output().expect("binary runs");
+    let out = bounded::run_bounded(&mut cmd, ask_payload().as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(out.status.code(), Some(0), "hook exits 0");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let v: serde_json::Value = serde_json::from_str(stdout.trim())

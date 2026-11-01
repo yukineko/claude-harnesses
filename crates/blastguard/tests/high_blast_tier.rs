@@ -51,6 +51,9 @@
 //! (`assert_eq!`, not just "not Ask") to pin the tier's bounds precisely,
 //! not just "roughly".
 
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use blastguard::detect::detect;
 use blastguard::model::Decision;
 use serde_json::json;
@@ -124,7 +127,6 @@ fn git_force_refspec_ask_hardens_to_deny_when_no_human_is_present() {
     // Same env-driven pattern as `ask_hardens_to_deny_when_no_human_is_present`
     // above: with no positive proof of an interactive human present, the Ask
     // must collapse to a Deny in the emitted hookSpecificOutput JSON.
-    use std::io::Write;
     use std::process::{Command, Stdio};
 
     let cases = [
@@ -136,8 +138,8 @@ fn git_force_refspec_ask_hardens_to_deny_when_no_human_is_present() {
             r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{{"command":"{cmd}"}}}}"#
         );
         let bin = env!("CARGO_BIN_EXE_blastguard");
-        let mut child = Command::new(bin)
-            .env_clear()
+        let mut hook = Command::new(bin);
+        hook.env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -150,15 +152,8 @@ fn git_force_refspec_ask_hardens_to_deny_when_no_human_is_present() {
             // suite. An unattributable run resolves to `Undetermined` = no
             // downgrade, which is the condition these tests mean to measure.
             // `repeat_downgrade.rs` sets the variable explicitly instead.
-            .env_remove("CLAUDE_CODE_SESSION_ID")
-            .spawn()
-            .expect("binary spawns");
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(payload.as_bytes())
-                .expect("write payload to stdin");
-        }
-        let out = child.wait_with_output().expect("binary runs");
+            .env_remove("CLAUDE_CODE_SESSION_ID");
+        let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
         assert_eq!(out.status.code(), Some(0), "hook must always exit 0");
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let v: serde_json::Value = serde_json::from_str(stdout.trim())
@@ -175,27 +170,19 @@ fn git_force_refspec_ask_hardens_to_deny_when_no_human_is_present() {
 
 #[test]
 fn git_force_refspec_ask_stays_ask_in_an_interactive_cli_session() {
-    use std::io::Write;
     use std::process::{Command, Stdio};
 
     let payload = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push origin +main"}}"#;
     let bin = env!("CARGO_BIN_EXE_blastguard");
-    let mut child = Command::new(bin)
-        .env_clear()
+    let mut hook = Command::new(bin);
+    hook.env_clear()
         .env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .spawn()
-        .expect("binary spawns");
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(payload.as_bytes())
-            .expect("write payload to stdin");
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .env_remove("CLAUDE_CODE_SESSION_ID");
+    let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(out.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let v: serde_json::Value = serde_json::from_str(stdout.trim())
@@ -282,7 +269,6 @@ fn ask_hardens_to_deny_when_no_human_is_present() {
     // positive proof of an interactive human present, `Decision::hardened()`
     // (wired in `main.rs`) must collapse the Ask to a Deny in the emitted
     // hookSpecificOutput JSON.
-    use std::io::Write;
     use std::process::{Command, Stdio};
 
     let cases = [
@@ -295,20 +281,13 @@ fn ask_hardens_to_deny_when_no_human_is_present() {
             r#"{{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{{"command":"{cmd}"}}}}"#
         );
         let bin = env!("CARGO_BIN_EXE_blastguard");
-        let mut child = Command::new(bin)
-            .env_clear()
+        let mut hook = Command::new(bin);
+        hook.env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .env_remove("CLAUDE_CODE_SESSION_ID")
-            .spawn()
-            .expect("binary spawns");
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(payload.as_bytes())
-                .expect("write payload to stdin");
-        }
-        let out = child.wait_with_output().expect("binary runs");
+            .env_remove("CLAUDE_CODE_SESSION_ID");
+        let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
         assert_eq!(out.status.code(), Some(0), "hook must always exit 0");
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let v: serde_json::Value = serde_json::from_str(stdout.trim())
@@ -325,27 +304,19 @@ fn ask_hardens_to_deny_when_no_human_is_present() {
 
 #[test]
 fn ask_stays_ask_in_an_interactive_cli_session() {
-    use std::io::Write;
     use std::process::{Command, Stdio};
 
     let payload = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}"#;
     let bin = env!("CARGO_BIN_EXE_blastguard");
-    let mut child = Command::new(bin)
-        .env_clear()
+    let mut hook = Command::new(bin);
+    hook.env_clear()
         .env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .spawn()
-        .expect("binary spawns");
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(payload.as_bytes())
-            .expect("write payload to stdin");
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .env_remove("CLAUDE_CODE_SESSION_ID");
+    let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(out.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let v: serde_json::Value = serde_json::from_str(stdout.trim())

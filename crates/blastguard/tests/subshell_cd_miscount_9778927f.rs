@@ -18,7 +18,9 @@
 //! reported as a violation for EVERY expectation, including Allow controls, so
 //! a crashing binary can never be mistaken for a clean allow nor for a block.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::process::{Command, Stdio};
 
 fn bin() -> &'static str {
@@ -64,24 +66,16 @@ fn verdict(command: &str) -> Outcome {
         "tool_input": {"command": command},
     })
     .to_string();
-    let mut child = Command::new(bin())
-        .env_clear()
+    let mut hook = Command::new(bin());
+    hook.env_clear()
         .env("HOME", &home.0)
         .env("PATH", "/usr/bin:/bin")
         .env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
+        .stderr(Stdio::piped());
+    let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     if !out.status.success() {

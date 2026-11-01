@@ -13,7 +13,9 @@
 //! User ruling: inside a subagent Ask becomes Deny, and the repeated-deny to
 //! ask downgrade must also stay Deny. The main thread keeps its behaviour.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -46,21 +48,20 @@ fn payload(command: &str, agent_id: Option<&str>) -> String {
 /// it) and return the `permissionDecision` (`"allow"` when nothing printed).
 fn verdict(home: &PathBuf, session: &str, command: &str, agent_id: Option<&str>) -> String {
     let bin = env!("CARGO_BIN_EXE_blastguard");
-    let mut child = Command::new(bin)
-        .env("HOME", home)
+    let mut hook = Command::new(bin);
+    hook.env("HOME", home)
         .env("CLAUDE_CODE_SESSION_ID", session)
         .env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .env_remove("BLASTGUARD_ASK")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
-    if let Some(mut si) = child.stdin.take() {
-        let _ = si.write_all(payload(command, agent_id).as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .stderr(Stdio::piped());
+    let out = bounded::run_bounded(
+        &mut hook,
+        payload(command, agent_id).as_bytes(),
+        bounded::HOOK_DEADLINE,
+    );
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     if stdout.trim().is_empty() {
         return "allow".to_string();
@@ -124,21 +125,16 @@ fn subagent_repeated_deny_stays_deny() {
 /// Like `verdict`, but sends `raw` verbatim as the stdin payload.
 fn verdict_raw(home: &PathBuf, raw: &str) -> String {
     let bin = env!("CARGO_BIN_EXE_blastguard");
-    let mut child = Command::new(bin)
-        .env("HOME", home)
+    let mut hook = Command::new(bin);
+    hook.env("HOME", home)
         .env("CLAUDE_CODE_SESSION_ID", "sessRaw")
         .env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .env_remove("BLASTGUARD_ASK")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
-    if let Some(mut si) = child.stdin.take() {
-        let _ = si.write_all(raw.as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .stderr(Stdio::piped());
+    let out = bounded::run_bounded(&mut hook, raw.as_bytes(), bounded::HOOK_DEADLINE);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     if stdout.trim().is_empty() {
         return "allow".to_string();

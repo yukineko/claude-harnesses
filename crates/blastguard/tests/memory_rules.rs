@@ -13,7 +13,9 @@
 //!    or configuring it (`gh workflow run`, `gh run rerun`) is Ask, never Deny
 //!    (user ruling 2026-10-29). `gh pr ...` / `gh issue ...` reads stay Allow.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -73,7 +75,8 @@ impl Fx {
             "tool_input": { "command": command },
         })
         .to_string();
-        let mut child = git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_blastguard")))
+        let mut hook = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+        git_env::scrub(&mut hook)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -84,13 +87,8 @@ impl Fx {
             .env_remove("BLASTGUARD_ASK")
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .env_remove("TMPDIR")
-            .current_dir(&self.base)
-            .spawn()
-            .expect("binary spawns");
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(payload.as_bytes());
-        }
-        let out = child.wait_with_output().expect("binary runs");
+            .current_dir(&self.base);
+        let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
         assert_eq!(
             out.status.code(),
             Some(0),

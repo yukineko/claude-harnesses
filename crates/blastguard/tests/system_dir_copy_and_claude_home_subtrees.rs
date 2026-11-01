@@ -24,6 +24,9 @@ use blastguard::detect;
 use blastguard::model::Decision;
 use blastguard::scope::SafeRoots;
 use serde_json::json;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -220,19 +223,14 @@ fn control_verdict_is_printed_when_stdout_is_open() {
         "tool_input": { "command": "rm -rf /usr/lib" },
     })
     .to_string();
-    let mut child = Command::new(bin)
-        .env("CLAUDECODE", "1")
+    let mut hook = Command::new(bin);
+    hook.env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(payload.as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .stderr(Stdio::piped());
+    let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         stdout.contains("\"permissionDecision\":\"deny\""),

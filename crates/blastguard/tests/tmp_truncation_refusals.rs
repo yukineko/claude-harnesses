@@ -8,7 +8,9 @@
 #[path = "support/neutral_base.rs"]
 mod neutral_base;
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -94,11 +96,7 @@ impl Fx {
                 cmd.env("TMPDIR", t);
             }
         }
-        let mut child = cmd.spawn().expect("binary spawns");
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(payload.as_bytes());
-        }
-        let out = child.wait_with_output().expect("binary runs");
+        let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
         assert_eq!(
             out.status.code(),
             Some(0),

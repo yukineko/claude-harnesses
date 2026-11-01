@@ -2929,6 +2929,37 @@ fn ampersand_is_redirect_operator(chars: &[char], i: usize) -> bool {
     i > 0 && matches!(chars[i - 1], '>' | '<')
 }
 
+/// When `chars[i]` OPENS a command substitution — a backtick or `$(` that is
+/// not backslash-escaped — and that substitution is closed later in `chars`,
+/// the index of its closing `` ` ``/`)`. `None` otherwise.
+///
+/// Used by [`split_segments`] and [`split_segments_with_separators`] (outside
+/// single quotes only; the caller checks that) to keep a substitution's body
+/// in ONE segment. A `;`/`&&`/`||`/`|`/`&`/newline inside the body separates
+/// commands of the BODY, not of the outer line, and bash parses it that way.
+/// Cutting there left two fragments, neither of them a real command: the
+/// tail of `` B=`ls | sort` `` became the segment ``sort` ``, whose command
+/// word carries the closing backtick and was asked about as an "expansion",
+/// and the tail of `echo $(curl … | sh)` became `sh)`, which is not read as
+/// `sh`, so that fetch-and-execute reached Allow. Kept whole, the segment's
+/// body is judged as the complete command line it is by
+/// [`executed_substitution_payloads`].
+///
+/// An UNCLOSED substitution yields `None`, and the caller then splits exactly
+/// as before this existed, so every fragment of a line this cannot parse is
+/// still judged on its own; nothing becomes invisible.
+fn closed_substitution_end(chars: &[char], i: usize) -> Option<usize> {
+    let escaped = chars[..i].iter().rev().take_while(|&&c| c == '\\').count() % 2 == 1;
+    if escaped {
+        return None;
+    }
+    match chars[i] {
+        '`' => scan_balanced(chars, i + 1, Stop::Backtick, 0),
+        '$' if chars.get(i + 1) == Some(&'(') => scan_balanced(chars, i + 2, Stop::Paren, 0),
+        _ => None,
+    }
+}
+
 /// Quote-aware split of a command line into individual simple-command segments
 /// on `;`, newline, `&&`, `||`, `|`, `&`.
 ///
@@ -2958,6 +2989,13 @@ fn split_segments(cmd: &str) -> Vec<String> {
             cur.push(c);
             i += 1;
             continue;
+        }
+        if !in_s {
+            if let Some(end) = closed_substitution_end(&chars, i) {
+                cur.extend(&chars[i..=end]);
+                i = end + 1;
+                continue;
+            }
         }
         if !in_s && !in_d && !(c == '&' && ampersand_is_redirect_operator(&chars, i)) {
             // Two-char operators.
@@ -3025,6 +3063,15 @@ fn split_segments_paren_aware(cmd: &str) -> Vec<String> {
             cur.push(c);
             i += 1;
             continue;
+        }
+        // Backtick bodies too (paren depth does not see them); see
+        // `closed_substitution_end`.
+        if !in_s {
+            if let Some(end) = closed_substitution_end(&chars, i) {
+                cur.extend(&chars[i..=end]);
+                i = end + 1;
+                continue;
+            }
         }
         if !in_s && !in_d {
             if c == '(' {
@@ -3235,6 +3282,15 @@ fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment> {
             cur.push(c);
             i += 1;
             continue;
+        }
+        // Same substitution span as `split_segments`, so the two stay
+        // element-for-element equal.
+        if !in_s {
+            if let Some(end) = closed_substitution_end(&chars, i) {
+                cur.extend(&chars[i..=end]);
+                i = end + 1;
+                continue;
+            }
         }
         if !in_s && !in_d && !(c == '&' && ampersand_is_redirect_operator(&chars, i)) {
             let two_char_conditional = (c == '&' && chars.get(i + 1) == Some(&'&'))
@@ -6941,7 +6997,14 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
             if i > 0 {
                 // Piped in: the program is whatever the upstream stage of THIS
                 // statement emits, which is readable when it emits a literal.
-                program_texts.extend(quoted_string_literals(&statement[i - 1]));
+                // A backtick there is a command SUBSTITUTION, not a quote: the
+                // stage emits the body's OUTPUT, not its text. Read as a quote,
+                // `echo \`ls\` | sh` offered `ls` as the program and was
+                // allowed, while `echo $(ls) | sh` asked. Spelled as its
+                // `$( )` twin, it gets the twin's verdict.
+                program_texts.extend(quoted_string_literals(&backticks_as_dollar_paren(
+                    &statement[i - 1],
+                )));
             }
             let shape = format!("`{}` takes its program from stdin", stage.trim());
             if let Some(deny) = acc.record(interpreter_code_verdict(
@@ -6956,6 +7019,43 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
         }
     }
     acc.finish()
+}
+
+/// `stage` with every closed, unescaped backtick substitution outside single
+/// quotes rewritten as the `$( )` substitution it is equivalent to. Used where
+/// a reader treats a backtick as a quote character ([`quoted_string_literals`])
+/// but the text is a shell stage, in which a backtick runs its body. An
+/// unclosed backtick is left as written.
+fn backticks_as_dollar_paren(stage: &str) -> String {
+    let chars: Vec<char> = stage.chars().collect();
+    let mut out = String::with_capacity(stage.len() + 8);
+    let (mut in_s, mut in_d) = (false, false);
+    let mut k = 0;
+    while k < chars.len() {
+        let c = chars[k];
+        if c == '\\' && !in_s && k + 1 < chars.len() {
+            out.push(c);
+            out.push(chars[k + 1]);
+            k += 2;
+            continue;
+        }
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if c == '`' && !in_s {
+            if let Some(end) = scan_balanced(&chars, k + 1, Stop::Backtick, 0) {
+                out.push_str("$(");
+                out.push_str(&backtick_body_as_run(&chars[k + 1..end]));
+                out.push(')');
+                k = end + 1;
+                continue;
+            }
+        }
+        out.push(c);
+        k += 1;
+    }
+    out
 }
 
 /// A here-string fed to a SHELL is shell code: `bash <<< 'rm -rf ~'` runs
@@ -10892,6 +10992,16 @@ fn split_statements_into_pipe_stages(cmd: &str) -> Vec<Vec<String>> {
             i += 1;
             continue;
         }
+        // A closed backtick/`$(` body stays inside its stage, as in
+        // `split_segments` (see `closed_substitution_end`); paren depth alone
+        // does not see a backtick.
+        if !in_s {
+            if let Some(end) = closed_substitution_end(&chars, i) {
+                cur.extend(&chars[i..=end]);
+                i = end + 1;
+                continue;
+            }
+        }
         if !in_s && !in_d {
             if c == '(' {
                 paren_depth += 1;
@@ -11347,8 +11457,9 @@ fn backtick_payloads(stage: &str) -> Vec<String> {
 /// feeds the FULL rule engine, so literal single-quoted text must not be
 /// mistaken for code. Each body is found with [`scan_balanced`], so quoting
 /// and nesting inside the body cannot end it early. An unterminated
-/// substitution ends the scan: [`split_segments`] can cut a `$(a; b)` apart,
-/// and the pieces after the cut are analysed as segments of their own.
+/// substitution ends the scan: [`split_segments`] keeps a CLOSED `$(a; b)` in
+/// one segment (see [`closed_substitution_end`]) but cuts an unclosed one
+/// apart, and those pieces are analysed as segments of their own.
 fn executed_substitution_payloads(seg: &str) -> Vec<String> {
     let chars: Vec<char> = seg.chars().collect();
     let mut out = Vec::new();
@@ -11381,12 +11492,33 @@ fn executed_substitution_payloads(seg: &str) -> Vec<String> {
                 let Some(end) = scan_balanced(&chars, k + 1, Stop::Backtick, 0) else {
                     break;
                 };
-                out.push(chars[k + 1..end].iter().collect());
+                out.push(backtick_body_as_run(&chars[k + 1..end]));
                 k = end + 1;
                 continue;
             }
             _ => {}
         }
+        k += 1;
+    }
+    out
+}
+
+/// The command text bash actually runs for a backtick body: inside backticks
+/// a backslash followed by `` ` ``, `$` or `\` is removed before the body is
+/// parsed, so `` `echo \`rm -rf ~\`` `` runs `` echo `rm -rf ~` `` — a NESTED
+/// substitution. Passing the body through with its `` \` `` intact hid that
+/// inner command: the analyser read `` \` `` as an escaped, literal backtick
+/// and allowed it. Any other backslash is kept, as bash keeps it.
+fn backtick_body_as_run(body: &[char]) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut k = 0;
+    while k < body.len() {
+        if body[k] == '\\' && matches!(body.get(k + 1), Some('`' | '$' | '\\')) {
+            out.push(body[k + 1]);
+            k += 2;
+            continue;
+        }
+        out.push(body[k]);
         k += 1;
     }
     out

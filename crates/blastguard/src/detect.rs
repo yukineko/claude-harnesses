@@ -6960,14 +6960,21 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
                 return deny;
             }
             let tokens: Vec<&str> = stage.split_whitespace().collect();
-            let Some(first) = tokens.first() else {
+            // The interpreter may sit behind an exec-wrapper (`env sh`,
+            // `env -i bash`, `/usr/bin/env python3`, `command sh`): reading
+            // token 0 alone took `env` for the program and let
+            // `echo "rm -rf /" | env sh` through unjudged, while the egress
+            // twin `stage_is_interpreter_terminal` and the here-string twin
+            // `shell_here_string_verdict` already resolve the wrapper through
+            // `command_candidates`. Same resolution here: the first candidate
+            // that is a shell or interpreter is the program reader.
+            let Some(idx) = command_candidates(&tokens).into_iter().find(|&idx| {
+                let head = normalized_command(tokens[idx]);
+                is_shell(&head) || is_code_interpreter(&head)
+            }) else {
                 continue;
             };
-            let head = normalized_command(first);
-            if !is_shell(&head) && !is_code_interpreter(&head) {
-                continue;
-            }
-            let rest = &tokens[1..];
+            let rest = &tokens[idx + 1..];
             let has_program_file = stage_has_program_operand(rest);
             let takes_stdin_program = interpreter_stdin_operand(rest).is_some()
                 || (!has_program_file && (i > 0 || heredoc_open));
@@ -7051,6 +7058,11 @@ blastguard cannot tell whether anything here is irreversible"
 /// `` `ls` `` that the shell reading the pipe then runs (`echo "a" \$(ls) | sh`
 /// executes `ls`). `$'…'` / `$"…"` are quoting, not expansion. An unclosed
 /// backtick counts: what it emits cannot be read either.
+///
+/// PATHNAME and TILDE expansion count too: an unquoted `*`, `?` or `[` turns
+/// into whatever file names exist when the line runs, and a word-initial `~`
+/// into a home directory, so `echo "a" * | sh` hands the shell a program made
+/// of file names that are not on the command line.
 fn unquoted_expansion(stage: &str) -> Option<String> {
     let chars: Vec<char> = stage.chars().collect();
     let (mut in_s, mut in_d) = (false, false);
@@ -7058,7 +7070,9 @@ fn unquoted_expansion(stage: &str) -> Option<String> {
     while k < chars.len() {
         let c = chars[k];
         if c == '\\' && !in_s {
-            if !in_d && matches!(chars.get(k + 1), Some('$' | '`')) {
+            // An escaped glob or tilde is likewise emitted literally and
+            // expanded by the reading shell (`echo "a" \* | sh`).
+            if !in_d && matches!(chars.get(k + 1), Some('$' | '`' | '*' | '?' | '[' | '~')) {
                 return Some(chars[k..].iter().take(40).collect());
             }
             k += 2;
@@ -7070,7 +7084,8 @@ fn unquoted_expansion(stage: &str) -> Option<String> {
             in_d = !in_d;
         } else if !in_s && !in_d {
             let expands = match c {
-                '`' => true,
+                '`' | '*' | '?' | '[' => true,
+                '~' => k == 0 || chars[k - 1].is_whitespace(),
                 '$' => chars.get(k + 1).is_some_and(|n| {
                     matches!(n, '(' | '{' | '_' | '@' | '*' | '#' | '?' | '$' | '!' | '-')
                         || n.is_ascii_alphanumeric()

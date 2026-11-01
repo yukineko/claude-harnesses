@@ -4,14 +4,22 @@
 //! execution / configuration is Ask with an "explicit user request" reason,
 //! and writes to `.github/workflows/` (W) Ask too. Never Deny.
 
-use std::io::Write;
+use std::io::{Read, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Upper bound on one hook invocation in `Fx::call`. Well under the 60s
+/// watchdog of `call_with_never_answering_binary_returns_within_60s`.
+const CALL_DEADLINE: Duration = Duration::from_secs(20);
 
 struct Fx {
     base: PathBuf,
     home: PathBuf,
     repo: PathBuf,
+    /// Per-fixture override of the spawned binary (None = the real blastguard).
+    bin: Option<PathBuf>,
 }
 
 impl Fx {
@@ -25,6 +33,7 @@ impl Fx {
             home: base.join("home"),
             repo: base.join("proj"),
             base,
+            bin: None,
         };
         std::fs::create_dir_all(&f.home).unwrap();
         std::fs::create_dir_all(&f.repo).unwrap();
@@ -71,7 +80,11 @@ impl Fx {
             "tool_input": input,
         })
         .to_string();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
+        let bin = self
+            .bin
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_blastguard")));
+        let mut child = Command::new(bin)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -83,19 +96,76 @@ impl Fx {
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .env_remove("TMPDIR")
             .current_dir(&self.base)
+            // Own process group, so a timeout can signal the child and every
+            // descendant it spawned (killing only a `sh` would orphan its children).
+            .process_group(0)
             .spawn()
             .expect("binary spawns");
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(payload.as_bytes());
         }
-        let out = child.wait_with_output().expect("binary runs");
+        // Drain both pipes on their own threads so a large output can never
+        // block the child while we poll for its exit.
+        let drain = |pipe: Option<Box<dyn Read + Send>>| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut p) = pipe {
+                    let _ = p.read_to_end(&mut buf);
+                }
+                buf
+            })
+        };
+        let out_reader = drain(
+            child
+                .stdout
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        );
+        let err_reader = drain(
+            child
+                .stderr
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        );
+        let deadline = Instant::now() + CALL_DEADLINE;
+        let status = loop {
+            if let Some(st) = child.try_wait().expect("try_wait on the hook binary") {
+                break st;
+            }
+            if Instant::now() >= deadline {
+                let pgid = child.id();
+                let killed = Command::new("kill")
+                    .arg("-TERM")
+                    .arg(format!("-{pgid}"))
+                    .status();
+                // Reap within a bounded window; a child that ignores SIGTERM is
+                // reported, not waited on forever.
+                let reap_deadline = Instant::now() + Duration::from_secs(5);
+                let reaped = loop {
+                    match child.try_wait() {
+                        Ok(Some(st)) => break Some(st),
+                        Ok(None) if Instant::now() < reap_deadline => {
+                            std::thread::sleep(Duration::from_millis(20))
+                        }
+                        _ => break None,
+                    }
+                };
+                panic!(
+                    "hook binary did not exit within {CALL_DEADLINE:?} (tool={tool}); \
+                     sent SIGTERM to process group {pgid} (kill: {killed:?}); reaped: {reaped:?}"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let stdout = out_reader.join().expect("stdout reader thread");
+        let stderr = err_reader.join().expect("stderr reader thread");
         assert_eq!(
-            out.status.code(),
+            status.code(),
             Some(0),
             "hook must exit 0; stderr: {}",
-            String::from_utf8_lossy(&out.stderr)
+            String::from_utf8_lossy(&stderr)
         );
-        String::from_utf8_lossy(&out.stdout).into_owned()
+        String::from_utf8_lossy(&stdout).into_owned()
     }
 }
 
@@ -1020,6 +1090,30 @@ fn o_write_via_dangling_yaml_symlink_denies() {
         "cfg.yaml",
     );
 }
+// `Fx::call` must bound its wait: a spawned binary that never answers (an
+// orphaned busy-loop was observed living 8h45m) must make the call return, as a
+// panic, instead of blocking in `wait_with_output` forever. The stub exits on
+// its own after 300s, so nothing outlives this test long-term.
+#[test]
+fn call_with_never_answering_binary_returns_within_60s() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = Fx::new("hang1");
+    let stub = f.base.join("never-answers.sh");
+    std::fs::write(&stub, "#!/bin/sh\nsleep 300\n").unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    f.bin = Some(stub);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f.run("gh run list")));
+        let _ = tx.send(());
+    });
+    let got = rx.recv_timeout(std::time::Duration::from_secs(60));
+    assert!(
+        got.is_ok(),
+        "Fx::call did not return within 60s for a binary that never answers: its wait is unbounded"
+    );
+}
+
 // Edit has no config-file allowlist (detect_edit goes straight to the
 // system-directory axis), so this pins the Edit side of the same names.
 #[test]

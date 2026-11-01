@@ -18,7 +18,19 @@
 - ゲートが自分の変更を止めたら、まずゲートが正しい可能性を疑う。ゲートの側を疑うのはその後。
 
 **「ターンを壊すな」を判定の正当化に使ってはならない（撤去する *方針*。実体は一部のみ移行済み）。**
-（経緯・移行済みの実体〈panic barrier の fail-closed 化〉: docs/claude-md-rationale.md §1）
+（経緯: docs/claude-md-rationale.md §1）
+**移行済みの実体**: 7 ゲート（donegate / reviewgate / propguard / tdd、および budgetguard / autoflow /
+ctxrot の Stop hook 各 `main.rs`）が通る panic barrier は fail-closed へ移行した（前者4つは `d6db4670`、
+後者3つ=budgetguard/autoflow/ctxrotは判定〈`{"decision":"block"}` を実際に返す〉を持ちながら
+`harness_core::hook::run_hook`〈panic握り潰し→常時exit0〉経由のまま取り残されていたのを本節の是正として
+`harness_core::gate::run::run_guarded` へ移行）。gate 本体が panic した＝判定不能は block に
+解決する: `crates/harness-core/src/gate/run.rs:186`「**fail closed**: block the stop and surface the crash」。
+同一ゲート・同一セッションの連続 2 回目の panic だけが bounded に allow へ落ちる。
+その allow には `stop_hook_active` に加え、直前の stop もそのゲートの panic だったことを示す
+per-gate・per-session marker が要り、別ゲートの block による re-entry 中の初回 panic や、
+panic しなかった run を挟んだ後の panic は block する。
+marker を読めない・書けない（またはセッション id が無い）ときの re-entry は `systemMessage` 付きの明示的な allow になり、
+chain 最初の stop は常に block する。
 （`crates/harness-core/src/hook.rs:245`「exits 0 so the turn is never broken」の `run_hook` は今も存在するが、
 判定を持たない純粋な observability hook（ctxrot の Guard/Rescue/Restore 等）専用の入口であり、
 下の carve-out の側に属する。判定を持つコードが `run_hook` を使っていないかは、新しい Stop hook を
@@ -89,6 +101,8 @@ fail が出たとき、**判断で片付けない**。次の順で必ず事実�
 
 この不変条件の最良の説明は blastguard の三値 `Decision`（`Allow`/`Deny`/`Ask`、`crates/blastguard/src/model.rs:5`）
 （根拠: docs/claude-md-rationale.md §3）。
+`Decision::Ask` はその欠けた第三の答えで、`crates/blastguard/src/model.rs:9`（「it is NOT a verdict about the command, it is a refusal」）
+のとおり**コマンドについての判定ではなく、判定を推測することの拒否**である。
 **これは blastguard 固有の設計ではなく、判定を持つ全コードへの要求**である（用語定義は `docs/GLOSSARY.md` の fail-closed 項）。
 
 - `Result`/`Option` を bool へ潰すとき、`unwrap_or` の既定値は**必ず制限側**（`deny`/`block`/`true`=違反あり）にする。

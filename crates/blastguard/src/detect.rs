@@ -3715,8 +3715,8 @@ fn interpreter_program_body_segments(cmd: &str) -> Vec<bool> {
 ///
 /// The body is removed only when ALL of these hold:
 ///   * every line BEFORE the opener is blank, a comment (`#` first), `set -e`,
-///     `set -eu`, `set -euo pipefail`, `cd <literal path>` or
-///     `mkdir -p <literal path>…`. A literal path is letters, digits and
+///     `set -eu`, `set -euo pipefail`, `cd <literal path>`,
+///     `mkdir -p <literal path>…` or `git add <literal path>…`. A literal path is letters, digits and
 ///     `/ . _ - + , @ % : =`, with `~` allowed only as its first character.
 ///     Anything else — an assignment, `eval`, `source`, `.`, a function, an
 ///     alias, `PATH`, any other command — keeps the body;
@@ -3725,9 +3725,10 @@ fn interpreter_program_body_segments(cmd: &str) -> Vec<bool> {
 ///     ([`plain_here_document_delimiter`]) and a data-only consumer
 ///     ([`here_document_consumer_is_data`]: `cat`, `tee` to data files,
 ///     `git commit -F -`, with output redirects only to data files). The opener
-///     line may begin with `cd <literal path> && ` ([`opener_consumer`]), the
-///     same-line spelling of a permitted `cd` line before it; the consumer
-///     check then reads the part after the `&&`;
+///     line may begin with `cd <literal path> && ` and/or
+///     `git add <literal path>… && ` heads ([`opener_consumer`]), the
+///     same-line spelling of a permitted `cd` / `git add` line before it; the
+///     consumer check then reads the part after the last such `&&`;
 ///   * the body is CLOSED by an exact delimiter line
 ///     ([`segment_closes_here_document`]);
 ///   * the delimiter is quoted, OR the body contains no `$`, backtick or
@@ -3876,23 +3877,35 @@ fn strip_here_document_body(cmd: &str, targets: OutputTargets) -> std::borrow::C
 /// `<rest>`. `cd X && cat <<'EOF'` is the same-line spelling of a permitted
 /// `cd X` line before the opener (and a stricter one: a failed `cd` skips the
 /// reader instead of running it in the old directory), so its body is data
-/// exactly when the body of `cat <<'EOF'` is. Only that one shape is split; any
-/// other prefix leaves the whole line, which the consumer check then refuses
+/// exactly when the body of `cat <<'EOF'` is. Only `cd` and `git add` heads
+/// (below) are split; any other prefix stays in the judged text, which the
+/// consumer check then refuses
 /// (`&` is shell syntax there). The opener line itself — `cd` included — stays
 /// in the command, so the cwd walk and every redirect rule still see it.
+///
+/// A `git add <literal path>… && ` head is split the same way (backlog
+/// c5b9c02b: `git add a.txt && git commit -F - <<'EOF'` had its quoted body
+/// read as a redirect, ``> `.` `` in the commit message, and was DENIED). It is
+/// the same-line spelling of a permitted `git add` line before the opener:
+/// `git add` runs BEFORE the reader and never sees the body, so it cannot make
+/// the body code. Heads chain (`cd X && git add a && git commit -F - <<'EOF'`);
+/// the first head that is neither a permitted `cd` nor a permitted `git add`
+/// stops the split, and the text from that head on is what gets judged (so the
+/// consumer check sees its `&&` and refuses). Only `&&` is split: `;`, `||`,
+/// `|` and `&` stay inside the judged text, where the consumer check refuses
+/// them.
 fn opener_consumer(line: &str) -> &str {
-    let Some((head, rest)) = line.split_once("&&") else {
-        return line;
-    };
-    let starts_with_cd = head
-        .split([' ', '\t'])
-        .find(|w| !w.is_empty())
-        .is_some_and(|w| w == "cd");
-    if starts_with_cd && permitted_prefix_line(head) {
-        rest
-    } else {
-        line
+    let mut rest = line;
+    while let Some((head, tail)) = rest.split_once("&&") {
+        let words: Vec<&str> = head.split([' ', '\t']).filter(|w| !w.is_empty()).collect();
+        let splittable_head = matches!(words.as_slice(), ["cd", ..] | ["git", "add", ..])
+            && permitted_prefix_line(head);
+        if !splittable_head {
+            break;
+        }
+        rest = tail;
     }
+    rest
 }
 
 /// True when `line` has no unterminated `'` or `"` quote.
@@ -3909,8 +3922,10 @@ fn quotes_balance(line: &str) -> bool {
 }
 
 /// The lines [`strip_data_here_document_bodies`] permits BEFORE the opener:
-/// `set -e`, `set -eu`, `set -euo pipefail`, `cd <literal path>`, and
-/// `mkdir -p <literal path>…`. Nothing else.
+/// `set -e`, `set -eu`, `set -euo pipefail`, `cd <literal path>`,
+/// `mkdir -p <literal path>…`, and `git add <literal path>…` (stages files; it
+/// runs before the reader and never reads the body). Nothing else: a `git`
+/// with global options (`git -c …`) is not `git add` here.
 fn permitted_prefix_line(line: &str) -> bool {
     let literal = |w: &str| {
         let rest = w.strip_prefix('~').unwrap_or(w);
@@ -3924,7 +3939,9 @@ fn permitted_prefix_line(line: &str) -> bool {
     match words.as_slice() {
         ["set", "-e"] | ["set", "-eu"] | ["set", "-euo", "pipefail"] => true,
         ["cd", path] => literal(path),
-        ["mkdir", "-p", paths @ ..] => !paths.is_empty() && paths.iter().all(|p| literal(p)),
+        ["mkdir", "-p", paths @ ..] | ["git", "add", paths @ ..] => {
+            !paths.is_empty() && paths.iter().all(|p| literal(p))
+        }
         _ => false,
     }
 }

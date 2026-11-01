@@ -8,7 +8,10 @@
 //! PostToolUse (Edit|Write|MultiEdit|NotebookEdit) and SessionEnd hooks, reads
 //! the hook payload JSON on stdin, and records it in `presence.json` beside
 //! `leases.json` (same store, keyed by the main worktree root, so every
-//! checkout of the repository shares it).
+//! checkout of the repository shares it). Entries are keyed by session id,
+//! and inside each entry by the worktree of each event's own cwd (see
+//! [`WorktreeActivity`]), so processes sharing a session id from different
+//! worktrees keep their writes attributed to their own worktree.
 //!
 //! Fail-closed contract (CLAUDE.md section 3): an existing `presence.json`
 //! that cannot be read or parsed aborts the hook with a non-zero exit and is
@@ -33,29 +36,73 @@ pub const PRUNE_AFTER_SECS: i64 = 24 * 3600;
 /// Tools whose `tool_input` path is recorded into `written_paths`.
 const WRITE_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 
-/// One session as recorded by the hooks.
+/// What one session did from one worktree: the attribution unit for
+/// written paths.
+///
+/// Several Claude Code processes can share one session id (e.g. a
+/// `claude --continue` picked up by a second process in another checkout).
+/// Their hook payloads carry the same `session_id` and may carry the same
+/// `transcript_path`, so the only per-event signal of WHERE a write happened
+/// is the payload's own `cwd`. Each write is therefore recorded under the
+/// worktree (`projkey::repo_root`) of the cwd of the very event that reported
+/// it, never under a session-wide "current" worktree that a later event from
+/// another process could overwrite. Process ancestry is deliberately NOT used
+/// as an identity signal (backgrounded children reparent to pid 1, and agent
+/// shells share one parent).
+///
+/// Limit: two processes sharing one session id AND one worktree are still one
+/// slot; their writes are correctly attributed to that worktree, but a
+/// SessionEnd from either ends the slot for both.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PresenceEntry {
-    pub session_id: String,
-    /// cwd of the most recent hook payload.
+pub struct WorktreeActivity {
+    /// cwd of the most recent hook payload whose worktree is this slot's.
     pub cwd: String,
-    /// Git toplevel of `cwd` (`projkey::repo_root`), i.e. the checkout or
-    /// linked worktree the session works in.
-    pub worktree: String,
-    /// Claude Code transcript file; its mtime is the liveness signal.
-    #[serde(default)]
-    pub transcript_path: String,
-    /// Deduplicated paths from PostToolUse Edit/Write/MultiEdit/NotebookEdit.
+    /// Deduplicated paths from PostToolUse Edit/Write/MultiEdit/NotebookEdit
+    /// events whose cwd resolved to this worktree.
     #[serde(default)]
     pub written_paths: Vec<String>,
-    /// Unix seconds of the most recent hook for this session.
+    /// Unix seconds of the most recent hook from this worktree.
     pub last_seen: i64,
-    /// Set by SessionEnd.
+    /// Set by a SessionEnd whose cwd resolved to this worktree.
     #[serde(default)]
     pub ended: bool,
 }
 
-/// session_id -> entry.
+/// One session as recorded by the hooks.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PresenceEntry {
+    pub session_id: String,
+    /// cwd of the most recent hook payload for this session id (from any
+    /// process). Location hint only; NOT the attribution of `worktrees` paths.
+    pub cwd: String,
+    /// Git toplevel of `cwd` (`projkey::repo_root`). Same caveat as `cwd`:
+    /// with several processes per session id this is merely the last one seen.
+    pub worktree: String,
+    /// Claude Code transcript file; its mtime is the liveness signal.
+    #[serde(default)]
+    pub transcript_path: String,
+    /// LEGACY ONLY. Entries written before overwatch 0.2.109 accumulated every
+    /// written path of the session here, with no record of which worktree
+    /// wrote it (the session-wide `worktree` was overwritten by each event).
+    /// These paths are kept and reported, but with the writing worktree
+    /// UNDETERMINED, never attributed to `worktree`. New events never append
+    /// here; they append to the matching `worktrees` slot.
+    #[serde(default)]
+    pub written_paths: Vec<String>,
+    /// worktree (git toplevel of the event cwd) -> activity from it.
+    /// Absent in legacy entries (deserializes as empty).
+    #[serde(default)]
+    pub worktrees: BTreeMap<String, WorktreeActivity>,
+    /// Unix seconds of the most recent hook for this session.
+    pub last_seen: i64,
+    /// True when every `worktrees` slot has seen SessionEnd (legacy entries:
+    /// set by SessionEnd).
+    #[serde(default)]
+    pub ended: bool,
+}
+
+/// session_id -> entry. The on-disk top level stays keyed by session id (the
+/// pre-0.2.109 format); per-worktree attribution lives inside each entry.
 pub type PresenceRegistry = BTreeMap<String, PresenceEntry>;
 
 /// Load `presence.json`. Absent => empty registry (nothing was ever
@@ -120,9 +167,12 @@ fn prunable(e: &PresenceEntry, now: i64) -> bool {
 /// Registry update for one hook payload. Pure except that pruning stats the
 /// transcript of entries past the age cutoff (via `liveness`).
 ///
-/// SessionStart (re)opens the session, SessionEnd marks it ended, PostToolUse
-/// of a write tool appends the touched path; any other event only refreshes
-/// `last_seen`/`cwd`/`transcript_path`.
+/// Every event is recorded in the `worktrees` slot of the worktree its OWN
+/// payload cwd resolves to. In that slot: SessionStart (re)opens it,
+/// SessionEnd marks it ended, PostToolUse of a write tool appends the touched
+/// path; any other event only refreshes `last_seen`/`cwd`. The entry-level
+/// `cwd`/`worktree`/`transcript_path`/`last_seen` are refreshed by every
+/// event, and the entry is `ended` only when all its slots are.
 pub fn apply_event(reg: &mut PresenceRegistry, payload: &Value, now: i64) -> Result<()> {
     let sid = match str_field(payload, "session_id") {
         Some(s) if !s.is_empty() => s,
@@ -133,13 +183,14 @@ pub fn apply_event(reg: &mut PresenceRegistry, payload: &Value, now: i64) -> Res
         _ => bail!("hook payload has no cwd"),
     };
     let event = str_field(payload, "hook_event_name").unwrap_or("");
+    let worktree = harness_core::projkey::repo_root(Path::new(cwd))
+        .to_string_lossy()
+        .into_owned();
 
     let entry = reg.entry(sid.to_string()).or_default();
     entry.session_id = sid.to_string();
     entry.cwd = cwd.to_string();
-    entry.worktree = harness_core::projkey::repo_root(Path::new(cwd))
-        .to_string_lossy()
-        .into_owned();
+    entry.worktree = worktree.clone();
     if let Some(t) = str_field(payload, "transcript_path") {
         if !t.is_empty() {
             entry.transcript_path = t.to_string();
@@ -147,11 +198,14 @@ pub fn apply_event(reg: &mut PresenceRegistry, payload: &Value, now: i64) -> Res
     }
     entry.last_seen = now;
 
+    let slot = entry.worktrees.entry(worktree).or_default();
+    slot.cwd = cwd.to_string();
+    slot.last_seen = now;
     match event {
-        "SessionStart" => entry.ended = false,
-        "SessionEnd" => entry.ended = true,
+        "SessionStart" => slot.ended = false,
+        "SessionEnd" => slot.ended = true,
         "PostToolUse" => {
-            entry.ended = false;
+            slot.ended = false;
             let tool = str_field(payload, "tool_name").unwrap_or("");
             if WRITE_TOOLS.contains(&tool) {
                 let input = payload.get("tool_input");
@@ -159,14 +213,16 @@ pub fn apply_event(reg: &mut PresenceRegistry, payload: &Value, now: i64) -> Res
                     .and_then(|i| i.get("file_path").or_else(|| i.get("notebook_path")))
                     .and_then(Value::as_str);
                 if let Some(p) = path {
-                    if !p.is_empty() && !entry.written_paths.iter().any(|w| w == p) {
-                        entry.written_paths.push(p.to_string());
+                    if !p.is_empty() && !slot.written_paths.iter().any(|w| w == p) {
+                        slot.written_paths.push(p.to_string());
                     }
                 }
             }
         }
         _ => {}
     }
+    // Non-empty: the slot above was just inserted or updated.
+    entry.ended = entry.worktrees.values().all(|w| w.ended);
 
     reg.retain(|_, e| !prunable(e, now));
     Ok(())
@@ -209,10 +265,24 @@ pub fn liveness(entry: &PresenceEntry, now: i64) -> &'static str {
     if entry.ended {
         return ENDED;
     }
-    if entry.transcript_path.is_empty() {
+    transcript_liveness(&entry.transcript_path, now)
+}
+
+/// Liveness of one worktree slot of `entry`: `ended` when THAT slot saw
+/// SessionEnd (another process's SessionEnd in a different worktree does not
+/// end it), otherwise the session transcript's liveness as in [`liveness`].
+pub fn worktree_liveness(entry: &PresenceEntry, slot: &WorktreeActivity, now: i64) -> &'static str {
+    if slot.ended {
+        return ENDED;
+    }
+    transcript_liveness(&entry.transcript_path, now)
+}
+
+fn transcript_liveness(transcript_path: &str, now: i64) -> &'static str {
+    if transcript_path.is_empty() {
         return UNKNOWN;
     }
-    let mtime = std::fs::metadata(&entry.transcript_path)
+    let mtime = std::fs::metadata(transcript_path)
         .and_then(|m| m.modified())
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -265,7 +335,10 @@ mod tests {
             p["tool_input"] = tool_input;
             apply_event(&mut reg, &p, 11).unwrap();
         }
-        assert_eq!(reg["a"].written_paths, vec!["/r/a.rs", "/r/n.ipynb"]);
+        assert_eq!(
+            reg["a"].worktrees["/nonexistent/x"].written_paths,
+            vec!["/r/a.rs", "/r/n.ipynb"]
+        );
     }
 
     #[test]
@@ -276,6 +349,9 @@ mod tests {
         p["tool_input"] = json!({"file_path":"/r/a.rs"});
         apply_event(&mut reg, &p, 1).unwrap();
         assert!(reg["a"].written_paths.is_empty());
+        assert!(reg["a"].worktrees["/nonexistent/x"]
+            .written_paths
+            .is_empty());
     }
 
     #[test]

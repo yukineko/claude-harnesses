@@ -123,12 +123,20 @@ CLI は `clap` の `Command` enum（`main.rs`）で定義。ledger/lease 系は�
 
 - **registry** — `presence.json`。`leases.json` と同じ `storage_root`（main worktree root で key した共有
   store）に置くので、linked worktree で登録したセッションも main checkout から見える。entry は
-  `session_id` → `{session_id, cwd, worktree, transcript_path, written_paths, last_seen, ended}`。
-  `worktree` は `projkey::repo_root(cwd)` で求める per-session の表示用フィールドであって store key ではない。
-- **書き手（hooks）** — `hooks/hooks.json` の `overwatch presence` が SessionStart（登録）・PostToolUse
+  `session_id` → `{session_id, cwd, worktree, transcript_path, written_paths, worktrees, last_seen, ended}`。
+  top-level の `cwd` / `worktree` は「その session id で最後に見た payload」の表示用であって書き込みパスの帰属ではない。
+  帰属は `worktrees`: `projkey::repo_root(各イベント自身の cwd)` → `{cwd, written_paths, last_seen, ended}`。
+  同じ session id を複数プロセスが共有しても（例: 別 checkout での `claude --continue`）、各書き込みは
+  そのイベントの cwd の worktree に記録される（プロセス祖先は識別に使わない）。top-level `written_paths` は
+  0.2.109 より前の legacy entry 専用で、書いた worktree が記録されていないため `status` は
+  `worktree_undetermined`（worktree 空）として列挙する — どの worktree にも推測で帰属させない。
+- **書き手（hooks）** — `hooks/hooks.json` の `overwatch presence` が SessionStart（slot 登録）・PostToolUse
   （matcher `Edit|Write|MultiEdit|NotebookEdit`、`tool_input.file_path` / `notebook_path` を
-  `written_paths` に重複なく追加）・SessionEnd（`ended = true`）で走る。書き込みは lease lock
+  該当 worktree slot の `written_paths` に重複なく追加）・SessionEnd（その worktree slot の `ended = true`。
+  entry の `ended` は全 slot が ended のときだけ true）で走る。同一 worktree・同一 session id の 2 プロセスは
+  1 slot に合流するので、片方の SessionEnd で両方 ended になる（既知の限界）。書き込みは lease lock
   （`LeaseLock::acquire_strict`）下で temp + rename。
+- **active_sessions** — `(session_id, worktree)` ごとに 1 行。legacy の未帰属パスは別行（`worktree_undetermined`）。
 - **liveness** — transcript の mtime と `LEASE_TTL_SECS` を比べる: TTL 内 = `live`、超過 = `stale`、
   transcript が無い・読めない・60 秒超の未来 mtime = `unknown`、SessionEnd 受信済み = `ended`。
   `unknown` は live として扱わず、黙って省略もしない（表示する）。

@@ -16,9 +16,14 @@
 //! Scope of the line match:
 //! - A line whose first non-blank characters are `//` is skipped (docs and
 //!   comments name the constructs without running them).
-//! - The child-wait construct matches only when the receiver identifier
-//!   contains `child`; a `Barrier::wait` on `b` is not a child wait.
+//! - The child-wait construct matches when the receiver is an identifier bound
+//!   by a `let` statement that contains a spawn call (the statement may span
+//!   lines), or whose name contains `child`. A `Barrier::wait` is neither.
+//!   The bound set is per file.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 const THIS_FILE: &str = "no_unbounded_child_wait.rs";
@@ -115,14 +120,108 @@ fn no_wait_with_output_outside_the_bounded_helper() {
     assert_none(&needle, flagged(|l| l.contains(&needle)));
 }
 
+fn wait_needle() -> String {
+    format!(".wait{}", "()")
+}
+
+fn spawn_needle() -> String {
+    format!(".spa{}", "wn(")
+}
+
+/// 1-based line numbers of child waits in `src`: `<recv>.wait()` where `recv`
+/// was bound by a `let` statement containing a spawn call, or contains `child`.
+fn child_wait_lines(src: &str) -> Vec<usize> {
+    let (wait, spawn) = (wait_needle(), spawn_needle());
+    let mut bound: HashSet<String> = HashSet::new();
+    // The identifier of the `let` statement currently open (no `;` seen yet).
+    let mut open_let: Option<String> = None;
+    let mut waits: Vec<(usize, String)> = Vec::new();
+    for (i, line) in src.lines().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("//") {
+            continue;
+        }
+        if let Some(rest) = t.strip_prefix("let ") {
+            let rest = rest.strip_prefix("mut ").unwrap_or(rest);
+            let ident: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            open_let = Some(ident);
+        }
+        if line.contains(&spawn) {
+            if let Some(id) = &open_let {
+                bound.insert(id.clone());
+            }
+        }
+        for (at, _) in line.match_indices(&wait) {
+            waits.push((i + 1, receiver(line, at).to_string()));
+        }
+        if t.trim_end().ends_with(';') {
+            open_let = None;
+        }
+    }
+    waits
+        .into_iter()
+        .filter(|(_, r)| bound.contains(r) || r.contains("child"))
+        .map(|(n, _)| n)
+        .collect()
+}
+
 #[test]
 fn no_child_wait_outside_the_bounded_helper() {
-    let needle = format!(".wait{}", "()");
-    let found = flagged(|l| {
-        l.match_indices(&needle)
-            .any(|(at, _)| receiver(l, at).contains("child"))
-    });
-    assert_none(&format!("child{needle}"), found);
+    let mut found = Vec::new();
+    for (rel, src) in scanned_files() {
+        let lines: Vec<&str> = src.lines().collect();
+        for n in child_wait_lines(&src) {
+            found.push(format!("{rel}:{n}: {}", lines[n - 1].trim()));
+        }
+    }
+    assert_none(&format!("child{}", wait_needle()), found);
+}
+
+#[test]
+fn detector_flags_a_child_bound_to_another_name() {
+    let fixture = [
+        format!("let mut p = cmd{}).unwrap();", spawn_needle()),
+        format!("p{};", wait_needle()),
+    ]
+    .join("\n");
+    assert_eq!(child_wait_lines(&fixture), vec![2]);
+}
+
+#[test]
+fn detector_flags_a_renamed_child_spawned_across_lines() {
+    let fixture = [
+        "let proc = Command::new(bin)".to_string(),
+        "    .env(\"A\", \"b\")".to_string(),
+        format!("    {})", spawn_needle()),
+        "    .unwrap();".to_string(),
+        format!("let _ = proc{};", wait_needle()),
+    ]
+    .join("\n");
+    assert_eq!(child_wait_lines(&fixture), vec![5]);
+}
+
+#[test]
+fn detector_does_not_flag_barrier_wait() {
+    let fixture = [
+        "let b = barrier.clone();".to_string(),
+        format!("b{};", wait_needle()),
+    ]
+    .join("\n");
+    assert_eq!(child_wait_lines(&fixture), Vec::<usize>::new());
+}
+
+#[test]
+fn detector_does_not_flag_a_wait_on_a_name_bound_after_an_unrelated_let() {
+    let fixture = [
+        format!("let mut p = cmd{}).unwrap();", spawn_needle()),
+        "let q = other.clone();".to_string(),
+        format!("q{};", wait_needle()),
+    ]
+    .join("\n");
+    assert_eq!(child_wait_lines(&fixture), Vec::<usize>::new());
 }
 
 #[test]

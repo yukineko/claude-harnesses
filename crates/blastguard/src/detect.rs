@@ -5384,6 +5384,126 @@ fn command_candidates(tokens: &[&str]) -> Vec<usize> {
     Vec::new()
 }
 
+/// Indices of the command words an exec-wrapper chain can actually run —
+/// `env [opts] [VAR=val] [--] CMD`, `command CMD`, `nice -n 5 CMD`,
+/// `timeout 5 CMD`, `sudo -u root CMD`, nested wrappers — WITHOUT the operands
+/// of the command finally reached. The last index is that command; earlier
+/// ones are the wrappers and any token that may be either an option's value or
+/// the command.
+///
+/// Unlike [`command_candidates`], which makes EVERY token behind a wrapper a
+/// candidate (sound for deny-if-ANY destructive checks, where a false
+/// candidate only adds a false positive), this is for asking "what program
+/// reads this stage's stdin", where grep's operand in `env grep bash` must
+/// not be read as a shell.
+///
+/// Ambiguity resolves to MORE candidates, never fewer: an option token not
+/// known to take no value (see [`wrapper_flag_is_boolean`]) makes the next
+/// token a candidate AND keeps scanning past it, so a value-taking option
+/// missing from any table widens the set instead of hiding the command.
+fn wrapped_command_heads(tokens: &[&str]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() && (tokens[i].is_empty() || is_assignment(tokens[i])) {
+        i += 1;
+    }
+    while i < tokens.len() {
+        out.push(i);
+        let wrapper = normalized_command(tokens[i]);
+        if !is_exec_wrapper(&wrapper) {
+            return out;
+        }
+        // Wrappers whose syntax puts one positional operand before the
+        // command: `timeout DURATION`, `chroot NEWROOT`, `flock FILE`.
+        let mut positional =
+            usize::from(matches!(wrapper.as_str(), "timeout" | "chroot" | "flock"));
+        let (mut value_pending, mut opts_done) = (false, false);
+        let mut j = i + 1;
+        let next_head = loop {
+            let Some(&t) = tokens.get(j) else {
+                break None;
+            };
+            j += 1;
+            if t.is_empty() {
+                continue;
+            }
+            if !opts_done && t == "--" {
+                opts_done = true;
+                value_pending = false;
+                continue;
+            }
+            if !opts_done && t.starts_with('-') && t.len() > 1 {
+                value_pending = !t.contains('=') && !wrapper_flag_is_boolean(&wrapper, t);
+                continue;
+            }
+            if value_pending {
+                // An option value, or the command itself: both.
+                out.push(j - 1);
+                value_pending = false;
+                continue;
+            }
+            if wrapper == "env" && is_assignment(t) {
+                continue;
+            }
+            if positional > 0 {
+                positional -= 1;
+                continue;
+            }
+            break Some(j - 1);
+        };
+        match next_head {
+            Some(h) => i = h,
+            None => return out,
+        }
+    }
+    out
+}
+
+/// True when `flag` is an option of `wrapper` KNOWN to take no separate value.
+/// A flag missing here is treated as possibly value-taking, which only adds a
+/// candidate in [`wrapped_command_heads`] — the restrictive direction.
+fn wrapper_flag_is_boolean(wrapper: &str, flag: &str) -> bool {
+    let known: &[&str] = match wrapper {
+        "env" => &[
+            "-i",
+            "-0",
+            "-v",
+            "--ignore-environment",
+            "--null",
+            "--debug",
+        ],
+        "command" => &["-p", "-v", "-V"],
+        "sudo" => &[
+            "-E",
+            "-H",
+            "-n",
+            "-S",
+            "-k",
+            "-b",
+            "-i",
+            "-s",
+            "--preserve-env",
+        ],
+        "timeout" => &["-v", "--verbose", "--foreground", "--preserve-status"],
+        "setsid" => &["-f", "-w", "-c", "--fork", "--wait", "--ctty"],
+        "time" => &["-p", "-v"],
+        "exec" => &["-c", "-l"],
+        _ => &[],
+    };
+    known.contains(&flag)
+}
+
+/// The shell `xargs` (given its arguments `rest`) runs, if its command word —
+/// resolved through any exec-wrapper — is one.
+fn xargs_shell(rest: &[&str]) -> Option<String> {
+    let start = xargs_command_start(rest)?;
+    let inner = &rest[start..];
+    wrapped_command_heads(inner)
+        .into_iter()
+        .map(|idx| normalized_command(inner[idx]))
+        .find(|head| is_shell(head))
+}
+
 /// True when `tok` OPENS a quote it does not close within the same
 /// whitespace-delimited token — i.e. the token is the first fragment of a
 /// multi-word quoted STRING (`'rm` in `grep -rn 'rm -rf' src/`), not a command
@@ -6965,10 +7085,34 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
             // token 0 alone took `env` for the program and let
             // `echo "rm -rf /" | env sh` through unjudged, while the egress
             // twin `stage_is_interpreter_terminal` and the here-string twin
-            // `shell_here_string_verdict` already resolve the wrapper through
-            // `command_candidates`. Same resolution here: the first candidate
-            // that is a shell or interpreter is the program reader.
-            let Some(idx) = command_candidates(&tokens).into_iter().find(|&idx| {
+            // `shell_here_string_verdict` already resolve the wrapper.
+            //
+            // Resolved with `wrapped_command_heads`, NOT `command_candidates`:
+            // the latter makes every token behind a wrapper a candidate, so
+            // grep's OPERAND in `echo x | env grep bash` was taken for the
+            // reader and the line asked. Only a head the wrapper chain can
+            // actually exec counts here.
+            let heads = wrapped_command_heads(&tokens);
+            // `… | xargs sh`: xargs turns its stdin into ARGUMENTS of the
+            // shell it runs (`sh rm -rf /` runs a script file named `rm`, or
+            // `sh -c {}` runs the item as a command line). What executes is the
+            // piped text, re-parsed as argv, which no reading here models.
+            if i > 0 || heredoc_open {
+                if let Some(inner) = heads
+                    .iter()
+                    .filter(|&&idx| normalized_command(tokens[idx]) == "xargs")
+                    .find_map(|&idx| xargs_shell(&tokens[idx + 1..]))
+                {
+                    if let Some(deny) = acc.record(Decision::ask(format!(
+                        "`{}` hands its stdin to `{inner}` as arguments — the command that runs \
+is built from the piped text at execution time, so blastguard cannot read it",
+                        stage.trim()
+                    ))) {
+                        return deny;
+                    }
+                }
+            }
+            let Some(idx) = heads.into_iter().find(|&idx| {
                 let head = normalized_command(tokens[idx]);
                 is_shell(&head) || is_code_interpreter(&head)
             }) else {

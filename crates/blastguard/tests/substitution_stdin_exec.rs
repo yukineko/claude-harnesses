@@ -269,6 +269,128 @@ fn probe_positional_then_piped_to_sh() {
     assert_deny_or_ask("probe_positional_then_piped_to_sh", "echo \"a\" $1 | sh");
 }
 
+// Escaped and bracket/question spellings of pathname and tilde expansion.
+#[test]
+fn literal_then_escaped_glob_piped_to_sh() {
+    assert_deny_or_ask(
+        "literal_then_escaped_glob_piped_to_sh",
+        "echo \"a\" \\* | sh",
+    );
+}
+
+#[test]
+fn literal_then_escaped_tilde_piped_to_sh() {
+    assert_deny_or_ask(
+        "literal_then_escaped_tilde_piped_to_sh",
+        "echo \"a\" \\~ | sh",
+    );
+}
+
+#[test]
+fn literal_then_question_glob_piped_to_sh() {
+    assert_deny_or_ask(
+        "literal_then_question_glob_piped_to_sh",
+        "echo \"a\" ? | sh",
+    );
+}
+
+#[test]
+fn literal_then_bracket_glob_piped_to_sh() {
+    assert_deny_or_ask(
+        "literal_then_bracket_glob_piped_to_sh",
+        "echo \"a\" [ab] | sh",
+    );
+}
+
+// Exec-wrapped readers: the wrapper is not the program.
+#[test]
+fn destructive_literal_piped_to_env_i_bash() {
+    assert_deny_or_ask(
+        "destructive_literal_piped_to_env_i_bash",
+        "echo \"rm -rf /\" | env -i bash",
+    );
+}
+
+#[test]
+fn destructive_literal_piped_to_usr_bin_env_sh() {
+    assert_deny_or_ask(
+        "destructive_literal_piped_to_usr_bin_env_sh",
+        "echo \"rm -rf /\" | /usr/bin/env sh",
+    );
+}
+
+#[test]
+fn destructive_literal_piped_to_command_sh() {
+    assert_deny_or_ask(
+        "destructive_literal_piped_to_command_sh",
+        "echo \"rm -rf /\" | command sh",
+    );
+}
+
+#[test]
+fn destructive_python_payload_piped_to_env_python3() {
+    assert_deny_or_ask(
+        "destructive_python_payload_piped_to_env_python3",
+        "echo \"import shutil; shutil.rmtree('/')\" | env python3",
+    );
+}
+
+// Over-ask controls: wrappers around non-interpreters, expansions into
+// non-shell readers.
+#[test]
+fn control_env_grep_bash() {
+    assert_allow("control_env_grep_bash", "echo x | env grep bash");
+}
+
+#[test]
+fn control_ls_glob_piped_to_wc() {
+    assert_allow("control_ls_glob_piped_to_wc", "ls *.rs | wc -l");
+}
+
+#[test]
+fn control_glob_piped_to_sort() {
+    assert_allow("control_glob_piped_to_sort", "echo \"a\" * | sort");
+}
+
+#[test]
+fn control_tilde_piped_to_sort() {
+    assert_allow("control_tilde_piped_to_sort", "echo \"a\" ~ | sort");
+}
+
+#[test]
+fn control_env_grep_x() {
+    assert_allow("control_env_grep_x", "echo hi | env grep x");
+}
+
+// Further wrapper probes.
+#[test]
+fn probe_env_assignment_sh() {
+    assert_deny_or_ask(
+        "probe_env_assignment_sh",
+        "echo \"rm -rf /\" | env VAR=1 sh",
+    );
+}
+
+#[test]
+fn probe_env_double_dash_sh() {
+    assert_deny_or_ask("probe_env_double_dash_sh", "echo \"rm -rf /\" | env -- sh");
+}
+
+#[test]
+fn probe_xargs_sh() {
+    assert_deny_or_ask("probe_xargs_sh", "echo \"rm -rf /\" | xargs sh");
+}
+
+#[test]
+fn probe_nice_sh() {
+    assert_deny_or_ask("probe_nice_sh", "echo \"rm -rf /\" | nice sh");
+}
+
+#[test]
+fn probe_timeout_sh() {
+    assert_deny_or_ask("probe_timeout_sh", "echo \"rm -rf /\" | timeout 5 sh");
+}
+
 // Controls: no shell at the end of the pipe, or no pipe at all.
 #[test]
 fn control_dollar_paren_no_pipe() {

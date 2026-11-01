@@ -75,8 +75,8 @@ impl Fx {
     }
 
     fn git(&self, args: &[&str]) {
-        let out = git_env::pinned(&self.repo)
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+        let mut cmd = git_env::pinned(&self.repo);
+        cmd.args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
             .args([
                 "-c",
                 "commit.gpgsign=false",
@@ -86,9 +86,9 @@ impl Fx {
             .args(args)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("HOME", &self.home)
-            .output()
-            .expect("git runs");
+            .env("HOME", &self.home);
+        let out =
+            bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
         assert!(
             out.status.success(),
             "git {args:?} failed: {}",

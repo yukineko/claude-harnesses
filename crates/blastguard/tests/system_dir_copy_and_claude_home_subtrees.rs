@@ -27,7 +27,6 @@ use serde_json::json;
 #[path = "support/bounded.rs"]
 mod bounded;
 
-use std::io::Write;
 use std::process::{Command, Stdio};
 
 const PROJECT: &str = "/home/yuki/proj";
@@ -190,22 +189,14 @@ fn run_with_closed_stdout(command: &str) -> (Option<i32>, String) {
         "tool_input": { "command": command },
     })
     .to_string();
-    let mut child = Command::new(bin)
-        .env("CLAUDECODE", "1")
+    let mut cmd = Command::new(bin);
+    cmd.env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
-    // Close the read end BEFORE the child can possibly print: it is blocked
-    // reading stdin until we write below.
-    drop(child.stdout.take());
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(payload.as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .env_remove("CLAUDE_CODE_SESSION_ID");
+    // The read end is closed BEFORE the child can possibly print: it is
+    // blocked reading stdin until the payload is written.
+    let out =
+        bounded::run_bounded_closed_stdout(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
     (
         out.status.code(),
         String::from_utf8_lossy(&out.stderr).into_owned(),

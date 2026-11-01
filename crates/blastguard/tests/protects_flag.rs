@@ -3,27 +3,18 @@
 //! adopter). Independent author (CLAUDE.md 2(a)). Refusal-line summary and
 //! taxonomy column are deferred to a later slice.
 
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+#[path = "support/bounded.rs"]
+mod bounded;
+
+use std::process::Command;
+use std::time::Duration;
 
 fn run(arg: &str) -> (Option<i32>, String) {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
-        .arg(arg)
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn blastguard");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while child.try_wait().expect("poll").is_none() {
-        if Instant::now() > deadline {
-            let _ = child.kill();
-            panic!("blastguard {arg} did not exit within 10s");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let out = child.wait_with_output().expect("output");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+    cmd.arg(arg).env_clear();
+    // Not exited within 10s: run_bounded kills the group and panics.
+    let out =
+        bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, Duration::from_secs(10));
     (
         out.status.code(),
         String::from_utf8_lossy(&out.stdout).into_owned(),

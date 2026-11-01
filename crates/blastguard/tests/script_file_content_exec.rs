@@ -78,10 +78,14 @@ impl Fixture {
         std::fs::create_dir_all(f.home.join("Documents")).unwrap();
         std::fs::write(f.home.join("Documents/keep.txt"), "x").unwrap();
         std::fs::create_dir_all(f.proj.join("target")).unwrap();
-        let st = git_env::pinned(&f.proj)
-            .args(["init", "-q"])
-            .status()
-            .expect("git runs");
+        let mut cmd = git_env::pinned(&f.proj);
+        cmd.args(["init", "-q"]);
+        let st = bounded::run_bounded_stdin(
+            &mut cmd,
+            bounded::ChildStdin::Inherit,
+            bounded::TOOL_DEADLINE,
+        )
+        .status;
         assert!(st.success(), "git init failed in {}", f.proj.display());
         f
     }

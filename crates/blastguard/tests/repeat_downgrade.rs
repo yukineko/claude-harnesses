@@ -21,7 +21,9 @@
 //! Each test gets its own `HOME`, so the repeat ledger starts empty and tests
 //! cannot see each other's markers.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -51,18 +53,17 @@ fn payload(command: &str) -> String {
 /// (`"allow"` when it printed nothing).
 fn verdict(home: &PathBuf, session: &str, command: &str) -> String {
     let bin = env!("CARGO_BIN_EXE_blastguard");
-    let mut child = Command::new(bin)
-        .env("HOME", home)
+    let mut hook = Command::new(bin);
+    hook.env("HOME", home)
         .env("CLAUDE_CODE_SESSION_ID", session)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
-    if let Some(mut si) = child.stdin.take() {
-        let _ = si.write_all(payload(command).as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .stderr(Stdio::piped());
+    let out = bounded::run_bounded(
+        &mut hook,
+        payload(command).as_bytes(),
+        bounded::HOOK_DEADLINE,
+    );
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     if stdout.trim().is_empty() {
         return "allow".to_string();

@@ -48,7 +48,9 @@
 //! with every rejection — the tests fail loudly rather than run somewhere their
 //! assertions stop observing the property.
 
-use std::io::Write;
+// A test that includes this module must also include `support/bounded.rs` as
+// `mod bounded` at its crate root (the calibration spawn below uses it).
+use crate::bounded;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
@@ -235,8 +237,8 @@ fn calibrate(lexical: &Path) -> Result<(), String> {
         "tool_input": { "command": format!("rm -rf {}", victim.display()) },
     })
     .to_string();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
-        .stdin(Stdio::piped())
+    let mut hook = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+    hook.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("CLAUDE_PROJECT_DIR", &proj)
@@ -246,15 +248,11 @@ fn calibrate(lexical: &Path) -> Result<(), String> {
         .env_remove("BLASTGUARD_ASK")
         .env_remove("TMPDIR")
         .env_remove("CLAUDE_CODE_SESSION_ID")
-        .current_dir(&calib)
-        .spawn()
-        .map_err(|e| format!("spawn hook: {e}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(payload.as_bytes());
-    }
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("wait hook: {e}"))?;
+        .current_dir(&calib);
+    // Bounded (support/bounded.rs): a spawn failure, a `try_wait` failure or
+    // a hook that does not exit within the deadline PANICS here rather than
+    // returning Err, so it is never mistaken for "this candidate base leaks".
+    let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     if out.status.code() != Some(0) {
         return Err(format!(

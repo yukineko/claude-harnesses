@@ -16,7 +16,9 @@
 //! (`tests/repeat_downgrade.rs`) cannot fire and turn an expected `deny` into
 //! an `ask` on a second identical command within one `cargo test` run.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::process::{Command, Stdio};
 
 /// Run the binary with a Bash `command` on stdin. Returns
@@ -30,21 +32,16 @@ fn verdict(command: &str) -> (String, String) {
         "tool_input": { "command": command },
     })
     .to_string();
-    let mut child = Command::new(bin)
-        .stdin(Stdio::piped())
+    let mut hook = Command::new(bin);
+    hook.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Test isolation for the repeat ledger — see tests/integration.rs's
         // `run()` for the full rationale. None of the commands in this file
         // repeat verbatim, but this keeps the suite robust to reordering and
         // to whoever's environment `cargo test` inherits.
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .spawn()
-        .expect("binary spawns");
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(payload.as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .env_remove("CLAUDE_CODE_SESSION_ID");
+    let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(
         out.status.code(),
         Some(0),

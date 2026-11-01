@@ -15,7 +15,9 @@
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::process::{Command, Stdio};
 
 #[derive(Debug)]
@@ -56,14 +58,11 @@ fn run(envs: &[(&str, &str)]) -> Run {
     for (k, v) in envs {
         cmd.env(k, v);
     }
-    let mut child = cmd.spawn().expect("spawn sh");
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(br#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#)
-        .expect("write stdin");
-    let out = child.wait_with_output().expect("wait");
+    let out = bounded::run_bounded(
+        &mut cmd,
+        br#"{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}"#,
+        bounded::HOOK_DEADLINE,
+    );
     Run {
         code: out.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),

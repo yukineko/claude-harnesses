@@ -21,6 +21,9 @@
 //! blocking" cannot masquerade as a real fix — a fix that over-blocks is
 //! wrong per this task's own done_criteria.
 
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use blastguard::detect::detect;
 use blastguard::model::Decision;
 use serde_json::json;
@@ -76,7 +79,6 @@ fn assert_undeterminable_here_string_asks(cmd: &str) {
 /// `CLAUDE_CODE_ENTRYPOINT=cli` so an Ask is not hardened to Deny; no session
 /// id so the repeat-refusal downgrade cannot fire.
 fn hook_verdict(cmd: &str) -> (String, String) {
-    use std::io::Write;
     use std::process::{Command, Stdio};
     let payload = json!({
         "hook_event_name": "PreToolUse",
@@ -84,20 +86,15 @@ fn hook_verdict(cmd: &str) -> (String, String) {
         "tool_input": { "command": cmd },
     })
     .to_string();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
-        .env("CLAUDECODE", "1")
+    let mut hook = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+    hook.env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .env_remove("BLASTGUARD_ASK")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(payload.as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .stderr(Stdio::piped());
+    let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(out.status.code(), Some(0), "hook must exit 0 for {cmd:?}");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     if stdout.trim().is_empty() {

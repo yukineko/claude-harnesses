@@ -204,3 +204,148 @@ fn stdin_write_failure_is_reported() {
         "expected a panic mentioning the stdin write failure, got {msg:?}"
     );
 }
+
+/// Run `cmd` through `run_bounded` behind a watchdog; return the outcome and
+/// how long it took.
+fn timed_run(
+    mut cmd: Command,
+    payload: Vec<u8>,
+    deadline: Duration,
+    limit: Duration,
+) -> (Outcome<std::process::Output>, Duration) {
+    let started = Instant::now();
+    let outcome = watchdog(limit, move || {
+        bounded::run_bounded(&mut cmd, &payload, deadline)
+    });
+    (outcome, started.elapsed())
+}
+
+#[test]
+fn slow_stdin_read_then_overrun_is_cut_at_the_deadline() {
+    let dir = fresh_dir("slow-read-overrun");
+    let pidfile = dir.join("pids");
+    // Reads its 1MB stdin only after 2s (finishing inside the 3s deadline),
+    // then keeps running far past it.
+    let cmd = stub(
+        &dir,
+        &format!(
+            "echo $$ > {}\nsleep 2\ncat > /dev/null\nsleep 120",
+            pidfile.display()
+        ),
+    );
+    let (outcome, took) = timed_run(
+        cmd,
+        vec![b'x'; 1024 * 1024],
+        Duration::from_secs(3),
+        Duration::from_secs(12),
+    );
+    for p in pids_in(&pidfile, 1) {
+        kill(p);
+    }
+    let msg = match outcome {
+        Outcome::Panicked(m) => Some(m),
+        _ => None,
+    };
+    assert!(
+        msg.as_deref().is_some_and(|m| m.contains("timed out")),
+        "expected a timeout panic for a child that overran the deadline after reading stdin, got {msg:?}"
+    );
+    assert!(
+        took < Duration::from_secs(6),
+        "the single 3s deadline was not honoured: run_bounded took {took:?}"
+    );
+}
+
+#[test]
+fn slow_stdin_read_plus_slow_exit_is_charged_to_one_deadline() {
+    let dir = fresh_dir("slow-read-slow-exit");
+    let pidfile = dir.join("pids");
+    // 2s before reading stdin plus 2s more before exiting: each phase fits in
+    // the 3s deadline, their sum (4s) does not.
+    let cmd = stub(
+        &dir,
+        &format!(
+            "echo $$ > {}\nsleep 2\ncat > /dev/null\nsleep 2\nexit 0",
+            pidfile.display()
+        ),
+    );
+    let (outcome, took) = timed_run(
+        cmd,
+        vec![b'x'; 1024 * 1024],
+        Duration::from_secs(3),
+        Duration::from_secs(12),
+    );
+    for p in pids_in(&pidfile, 1) {
+        kill(p);
+    }
+    let returned = matches!(outcome, Outcome::Returned(_));
+    assert!(
+        !returned,
+        "run_bounded returned after {took:?}, past its single 3s deadline: phase time was not summed"
+    );
+}
+
+#[test]
+fn slow_stdin_read_then_slow_stdout_close_is_charged_to_one_deadline() {
+    let dir = fresh_dir("slow-read-slow-drain");
+    let pidfile = dir.join("pids");
+    // Exits after 2s of reading delay, but a grandchild keeps stdout open for
+    // 2 more seconds: write+wait fit the 3s deadline, the drain does not.
+    let cmd = stub(
+        &dir,
+        &format!(
+            "echo $$ > {}\nsleep 2\ncat > /dev/null\n(sleep 2) &\nexit 0",
+            pidfile.display()
+        ),
+    );
+    let (outcome, took) = timed_run(
+        cmd,
+        vec![b'x'; 1024 * 1024],
+        Duration::from_secs(3),
+        Duration::from_secs(12),
+    );
+    for p in pids_in(&pidfile, 1) {
+        kill(p);
+    }
+    let returned = matches!(outcome, Outcome::Returned(_));
+    assert!(
+        !returned,
+        "run_bounded returned after {took:?}, past its single 3s deadline: the drain was given a fresh budget"
+    );
+}
+
+#[test]
+fn exit_after_slow_read_with_stdin_held_by_a_grandchild_is_cut_at_the_deadline() {
+    let dir = fresh_dir("slow-read-stdin-held");
+    let pidfile = dir.join("pids");
+    // The stub exits at 2s (inside the 3s deadline) while a grandchild keeps
+    // the stdin pipe open and never reads it: the 1MB write stays blocked.
+    let cmd = stub(
+        &dir,
+        &format!(
+            "sleep 120 <&0 &\necho $! > {}\nsleep 2\nexit 0",
+            pidfile.display()
+        ),
+    );
+    let (outcome, took) = timed_run(
+        cmd,
+        vec![b'x'; 1024 * 1024],
+        Duration::from_secs(3),
+        Duration::from_secs(12),
+    );
+    for p in pids_in(&pidfile, 1) {
+        kill(p);
+    }
+    let msg = match outcome {
+        Outcome::Panicked(m) => Some(m),
+        _ => None,
+    };
+    assert!(
+        msg.as_deref().is_some_and(|m| m.contains("timed out")),
+        "expected a timeout panic naming the stdin write, got {msg:?} after {took:?}"
+    );
+    assert!(
+        took < Duration::from_secs(6),
+        "the single 3s deadline was not honoured: run_bounded took {took:?}"
+    );
+}

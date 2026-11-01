@@ -82,6 +82,11 @@ impl Fixture {
     /// Run `circuit check --run flow-S --session S` plus `extra` flags and
     /// return the exit code and parsed stdout JSON.
     fn circuit(&self, extra: &[&str]) -> (i32, serde_json::Value) {
+        self.circuit_with_idle_ttl("1800", extra)
+    }
+
+    /// Run `circuit check` with a custom idle-ttl-secs (overrides default 1800).
+    fn circuit_with_idle_ttl(&self, idle_ttl: &str, extra: &[&str]) -> (i32, serde_json::Value) {
         let run = format!("flow-{SESSION}");
         let mut args = vec![
             "circuit",
@@ -89,7 +94,7 @@ impl Fixture {
             "--run",
             run.as_str(),
             "--idle-ttl-secs",
-            "1800",
+            idle_ttl,
             "--session",
             SESSION,
         ];
@@ -214,4 +219,30 @@ fn compacted_reason_slug_is_stable_and_distinct_from_idle() {
     assert_trips_compacted(code, &v);
     assert_ne!(v["reason"], "stall", "{v}");
     assert_ne!(v["reason"], "idle_unmeasured", "{v}");
+}
+
+#[test]
+fn unreadable_transcript_trips_even_with_idle_axis_off() {
+    let fx = Fixture::new("unreadable-idle-off");
+    let transcript_path = fx.write_transcript(&[USER]);
+
+    // Make the transcript unreadable (chmod 000).
+    #[cfg(unix)]
+    {
+        use std::fs::Permissions;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&transcript_path, Permissions::from_mode(0o000)).unwrap();
+    }
+
+    // Run with idle-ttl-secs 0 (idle axis off).
+    // This should still trip because compactions_unknown_reason is present.
+    let (code, v) = fx.circuit_with_idle_ttl("0", &[]);
+
+    // Expected: trips because compactions is unmeasurable, regardless of idle setting
+    assert_ne!(code, 0, "should trip even with idle axis off: {v}");
+    assert_eq!(v["verdict"], "trip", "{v}");
+    assert!(
+        v["compactions_unknown_reason"].is_string(),
+        "compactions_unknown_reason should be non-null: {v}"
+    );
 }

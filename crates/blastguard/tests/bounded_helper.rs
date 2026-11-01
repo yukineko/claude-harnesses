@@ -64,6 +64,17 @@ fn stub(dir: &Path, body: &str) -> Command {
     Command::new(script)
 }
 
+/// Like [`stub`], but runs the script as `/bin/sh <script>` instead of executing
+/// the freshly written file: the first exec of a new file can stall for seconds
+/// under load, which eats into a deadline that starts at spawn.
+fn sh_stub(dir: &Path, body: &str) -> Command {
+    let script = dir.join("stub.sh");
+    std::fs::write(&script, format!("{body}\n")).unwrap();
+    let mut cmd = Command::new("/bin/sh");
+    cmd.arg(script);
+    cmd
+}
+
 fn pids_in(file: &Path, want: usize) -> Vec<u32> {
     let until = Instant::now() + Duration::from_secs(5);
     loop {
@@ -286,52 +297,26 @@ fn slow_stdin_read_plus_slow_exit_is_charged_to_one_deadline() {
 }
 
 #[test]
-fn slow_stdin_read_then_slow_stdout_close_is_charged_to_one_deadline() {
-    let dir = fresh_dir("slow-read-slow-drain");
+fn drain_after_a_long_wait_is_cut_at_the_one_deadline_not_a_fresh_one() {
+    let dir = fresh_dir("slow-wait-slow-drain");
     let pidfile = dir.join("pids");
-    // Exits after 2s of reading delay, but a grandchild keeps stdout open for
-    // 2 more seconds: write+wait fit the 3s deadline, the drain does not.
-    let cmd = stub(
+    // No stdin payload. The stub exits 3s after it starts (the deadline is 6s
+    // from spawn, so process-start latency under load of up to ~3s is
+    // tolerated) while a grandchild holds stdout open for 120s. Correct: cut
+    // at ~6s while draining stdout, whatever the start latency. A drain given
+    // a fresh 6s budget would be cut at start latency + 3s + 6s >= 9s.
+    let cmd = sh_stub(
         &dir,
         &format!(
-            "echo $$ > {}\nsleep 2\ncat > /dev/null\n(sleep 2) &\nexit 0",
+            "sleep 120 &\necho $! > {}\nsleep 3\nexit 0",
             pidfile.display()
         ),
     );
     let (outcome, took) = timed_run(
         cmd,
-        vec![b'x'; 1024 * 1024],
-        Duration::from_secs(3),
-        Duration::from_secs(12),
-    );
-    for p in pids_in(&pidfile, 1) {
-        kill(p);
-    }
-    let returned = matches!(outcome, Outcome::Returned(_));
-    assert!(
-        !returned,
-        "run_bounded returned after {took:?}, past its single 3s deadline: the drain was given a fresh budget"
-    );
-}
-
-#[test]
-fn exit_after_slow_read_with_stdin_held_by_a_grandchild_is_cut_at_the_deadline() {
-    let dir = fresh_dir("slow-read-stdin-held");
-    let pidfile = dir.join("pids");
-    // The stub exits at 2s (inside the 3s deadline) while a grandchild keeps
-    // the stdin pipe open and never reads it: the 1MB write stays blocked.
-    let cmd = stub(
-        &dir,
-        &format!(
-            "sleep 120 <&0 &\necho $! > {}\nsleep 2\nexit 0",
-            pidfile.display()
-        ),
-    );
-    let (outcome, took) = timed_run(
-        cmd,
-        vec![b'x'; 1024 * 1024],
-        Duration::from_secs(3),
-        Duration::from_secs(12),
+        Vec::new(),
+        Duration::from_secs(6),
+        Duration::from_secs(25),
     );
     for p in pids_in(&pidfile, 1) {
         kill(p);
@@ -341,11 +326,53 @@ fn exit_after_slow_read_with_stdin_held_by_a_grandchild_is_cut_at_the_deadline()
         _ => None,
     };
     assert!(
-        msg.as_deref().is_some_and(|m| m.contains("timed out")),
+        msg.as_deref()
+            .is_some_and(|m| m.contains("timed out draining stdout")),
+        "expected a timeout panic naming the stdout drain, got {msg:?} after {took:?}"
+    );
+    assert!(
+        took < Duration::from_millis(7500),
+        "the single 6s deadline was not honoured (a fresh drain budget would cut at >= 9s): run_bounded took {took:?}"
+    );
+}
+
+#[test]
+fn exit_after_slow_read_with_stdin_held_by_a_grandchild_is_cut_at_the_deadline() {
+    let dir = fresh_dir("slow-read-stdin-held");
+    let pidfile = dir.join("pids");
+    // The stub exits 3s after it starts (the deadline is 6s from spawn, so
+    // process-start latency under load of up to ~3s is tolerated) while a
+    // grandchild keeps the stdin pipe open and never reads it: the 1MB write
+    // stays blocked. Correct: cut at ~6s, whatever the start latency. A
+    // stdin-write wait given a fresh 6s budget after the exit would be cut at
+    // start latency + 3s + 6s >= 9s.
+    let cmd = sh_stub(
+        &dir,
+        &format!(
+            "sleep 120 <&0 &\necho $! > {}\nsleep 3\nexit 0",
+            pidfile.display()
+        ),
+    );
+    let (outcome, took) = timed_run(
+        cmd,
+        vec![b'x'; 1024 * 1024],
+        Duration::from_secs(6),
+        Duration::from_secs(25),
+    );
+    for p in pids_in(&pidfile, 1) {
+        kill(p);
+    }
+    let msg = match outcome {
+        Outcome::Panicked(m) => Some(m),
+        _ => None,
+    };
+    assert!(
+        msg.as_deref()
+            .is_some_and(|m| m.contains("timed out writing stdin")),
         "expected a timeout panic naming the stdin write, got {msg:?} after {took:?}"
     );
     assert!(
-        took < Duration::from_secs(6),
-        "the single 3s deadline was not honoured: run_bounded took {took:?}"
+        took < Duration::from_millis(7500),
+        "the single 6s deadline was not honoured (a fresh write-wait budget would cut at >= 9s): run_bounded took {took:?}"
     );
 }

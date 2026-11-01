@@ -220,6 +220,13 @@ pub struct CircuitRecord {
     pub idle_secs: i64,
     /// The idle TTL the decision used (0 disables the stall axis).
     pub idle_ttl_secs: i64,
+    /// `compact_boundary` lines counted in the session transcript, `None` when
+    /// no transcript applied or it could not be counted.
+    #[serde(default)]
+    pub compactions: Option<u32>,
+    /// The compaction cap the decision used (clamped to at least 1).
+    #[serde(default)]
+    pub max_compactions: u32,
     /// Unix seconds when the verdict was recorded.
     pub recorded_at: i64,
 }
@@ -628,6 +635,8 @@ mod tests {
             budget_over_cap: false,
             idle_secs: 0,
             idle_ttl_secs: 1800,
+            compactions: Some(1),
+            max_compactions: 2,
             recorded_at: 42,
         };
         append_circuit(dir.path(), "r1", &rec);

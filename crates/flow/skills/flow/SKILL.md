@@ -446,6 +446,8 @@ condukt circuit check --run "flow-$CLAUDE_CODE_SESSION_ID" --session "$CLAUDE_CO
 ```
 nonzero（trip）なら人にも policy にも聞かず即 Step 4 へ進むこと。stop 理由 slug は JSONL に記録される。exit 0 なら 3-1 に戻ること。
 
+ブレーカーは session の transcript が `--max-compactions`（既定 2）回 compact された後にも `session_compacted` で trip する。長寿命 session は毎ターン全 context を再送するためである。この trip でも Step 4 へ進み、最終報告に「残キューは新しい session で `/flow` を再実行して続ける」と明記すること。
+
 3-1 に戻ること。早期脱出条件に当たれば Step 4 へ進むこと。
 
 ### Step 4 — driver 登録を解除してサマリを報告すること
@@ -505,6 +507,7 @@ claim が無ければ、`--session` で渡した session の transcript の mtim
 JSON の `idle_source` が `session_flag` になる。
 transcript が見つからない場合は `idle_unmeasured` で trip する。
 HOME 未設定・claim registry が読めない場合も `idle_unmeasured` で trip する。
+session の transcript が `--max-compactions`（既定 2、0 は 1 に丸める）回 compact されたら `session_compacted` で trip する。この trip も Step 4 へ進み、最終報告で残キューは新しい session での `/flow` 再実行（FRESH session）で続くと述べること。
 
 - ユーザーが中断を指示したら、直ちに Step 4（driver 登録の解除）へ進むこと。
 - 循環ブレーカーが trip（毎イテレーション `condukt circuit check --run RID` を実行し nonzero）したら、決定論的に clean stop すること（ループを止めて Step 4 へ進み、人にも policy にも聞かない hard stop）。

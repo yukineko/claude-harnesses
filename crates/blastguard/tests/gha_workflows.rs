@@ -4,9 +4,15 @@
 //! execution / configuration is Ask with an "explicit user request" reason,
 //! and writes to `.github/workflows/` (W) Ask too. Never Deny.
 
-use std::io::Write;
+use std::io::{Read, Write};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// Upper bound on one hook invocation in `Fx::call`. Well under the 60s
+/// watchdog of `call_with_never_answering_binary_returns_within_60s`.
+const CALL_DEADLINE: Duration = Duration::from_secs(20);
 
 struct Fx {
     base: PathBuf,
@@ -90,19 +96,76 @@ impl Fx {
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .env_remove("TMPDIR")
             .current_dir(&self.base)
+            // Own process group, so a timeout can signal the child and every
+            // descendant it spawned (killing only a `sh` would orphan its children).
+            .process_group(0)
             .spawn()
             .expect("binary spawns");
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(payload.as_bytes());
         }
-        let out = child.wait_with_output().expect("binary runs");
+        // Drain both pipes on their own threads so a large output can never
+        // block the child while we poll for its exit.
+        let drain = |pipe: Option<Box<dyn Read + Send>>| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Some(mut p) = pipe {
+                    let _ = p.read_to_end(&mut buf);
+                }
+                buf
+            })
+        };
+        let out_reader = drain(
+            child
+                .stdout
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        );
+        let err_reader = drain(
+            child
+                .stderr
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        );
+        let deadline = Instant::now() + CALL_DEADLINE;
+        let status = loop {
+            if let Some(st) = child.try_wait().expect("try_wait on the hook binary") {
+                break st;
+            }
+            if Instant::now() >= deadline {
+                let pgid = child.id();
+                let killed = Command::new("kill")
+                    .arg("-TERM")
+                    .arg(format!("-{pgid}"))
+                    .status();
+                // Reap within a bounded window; a child that ignores SIGTERM is
+                // reported, not waited on forever.
+                let reap_deadline = Instant::now() + Duration::from_secs(5);
+                let reaped = loop {
+                    match child.try_wait() {
+                        Ok(Some(st)) => break Some(st),
+                        Ok(None) if Instant::now() < reap_deadline => {
+                            std::thread::sleep(Duration::from_millis(20))
+                        }
+                        _ => break None,
+                    }
+                };
+                panic!(
+                    "hook binary did not exit within {CALL_DEADLINE:?} (tool={tool}); \
+                     sent SIGTERM to process group {pgid} (kill: {killed:?}); reaped: {reaped:?}"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let stdout = out_reader.join().expect("stdout reader thread");
+        let stderr = err_reader.join().expect("stderr reader thread");
         assert_eq!(
-            out.status.code(),
+            status.code(),
             Some(0),
             "hook must exit 0; stderr: {}",
-            String::from_utf8_lossy(&out.stderr)
+            String::from_utf8_lossy(&stderr)
         );
-        String::from_utf8_lossy(&out.stdout).into_owned()
+        String::from_utf8_lossy(&stdout).into_owned()
     }
 }
 

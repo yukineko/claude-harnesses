@@ -35,18 +35,26 @@ struct Fx {
     base: PathBuf,
     home: PathBuf,
     proj: PathBuf,
+    /// Owns `base`: a unique directory per fixture instance, so concurrent
+    /// runs of this binary never share (and clobber) one fixture path
+    /// (backlog b6ce7f76). Removed on drop.
+    _dir: tempfile::TempDir,
 }
 
 impl Fx {
     fn new(name: &str) -> Fx {
-        let base = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("backlog_2287ebae")
-            .join(name);
-        let _ = std::fs::remove_dir_all(&base);
+        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("backlog_2287ebae");
+        std::fs::create_dir_all(&parent).unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("{name}-"))
+            .tempdir_in(&parent)
+            .unwrap();
+        let base = dir.path().to_path_buf();
         let f = Fx {
             home: base.join("home"),
             proj: base.join("src/proj"),
             base,
+            _dir: dir,
         };
         std::fs::create_dir_all(&f.home).unwrap();
         std::fs::create_dir_all(&f.proj).unwrap();

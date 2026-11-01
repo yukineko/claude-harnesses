@@ -616,6 +616,12 @@ fn policy_answer_conflict_beats_approval() {
 ///   reorientation layer, not part of the autonomy self-driving loop.
 /// tdd SKILL (1): HOTL (L39, optional confirmation while authoring a test).
 /// hypothesis add SKILL (1): HOTL (L14, prompt for a missing argument).
+/// sitecraft SKILL (4): arrived with f87de40b unregistered (main was red);
+///   audited 2026-11-01. PROSE x1 (L23, the ban on filling an unanswered question
+///   with a default) + HOTL x3 (L32 purpose, L68 an unanswered `decide` question,
+///   L109 framework choice). All are judgment requests about WHAT site to build,
+///   never permission approvals; sitecraft is a human-driven build surface, not
+///   part of the scout/condukt/flow autonomy loop.
 const ASK_ALLOWLIST: &[(&str, usize)] = &[
     ("compass/skills/compass/SKILL.md", 3),
     ("condukt/skills/condukt/SKILL.md", 25),
@@ -625,6 +631,7 @@ const ASK_ALLOWLIST: &[(&str, usize)] = &[
     // covering the same five commands (pause/resume/reassign/reap/end).
     ("overwatch/skills/overwatch/SKILL.md", 2),
     ("scout/skills/scout/SKILL.md", 10),
+    ("sitecraft/skills/sitecraft/SKILL.md", 4),
     ("tdd/skills/tdd/SKILL.md", 1),
 ];
 

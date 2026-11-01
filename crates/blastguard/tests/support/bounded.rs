@@ -20,15 +20,41 @@ use std::time::{Duration, Instant};
 #[allow(dead_code)] // a file that passes its own deadline does not use it
 pub const HOOK_DEADLINE: Duration = Duration::from_secs(20);
 
+/// The deadline for the fixture tools a test runs (`git`, `sh`, ...). Like
+/// [`HOOK_DEADLINE`] it is the hang bound, not a performance budget.
+#[allow(dead_code)] // a file that runs no fixture tool does not use it
+pub const TOOL_DEADLINE: Duration = Duration::from_secs(60);
+
+/// What the child's stdin is connected to, for [`run_bounded_stdin`].
+#[allow(dead_code)] // not every including file uses every variant
+#[derive(Clone, Copy, Debug)]
+pub enum ChildStdin<'a> {
+    /// A pipe that receives these bytes and is then closed ([`run_bounded`]).
+    Bytes(&'a [u8]),
+    /// `/dev/null`: what `Command::output` sets by default.
+    Null,
+    /// The test process's own stdin: what `Command::status` sets by default.
+    Inherit,
+}
+
 /// Spawn `cmd`, feed it `stdin`, wait for it to exit and collect its output,
-/// all within one `deadline`.
+/// all within one `deadline`. Same as
+/// `run_bounded_stdin(cmd, ChildStdin::Bytes(stdin), deadline)`.
+#[allow(dead_code)] // a file that only uses run_bounded_stdin does not use it
+pub fn run_bounded(cmd: &mut Command, stdin: &[u8], deadline: Duration) -> Output {
+    run_bounded_stdin(cmd, ChildStdin::Bytes(stdin), deadline)
+}
+
+/// Spawn `cmd` with its stdin connected as `stdin` says, wait for it to exit
+/// and collect its output, all within one `deadline`.
 ///
 /// What it does, in order:
 ///
-/// 1. Sets `cmd`'s stdin, stdout and stderr to piped and puts the child in its
-///    own process group (`process_group(0)`), overriding whatever the caller
-///    set for those. Every other setting of `cmd` (program, args, env, cwd) is
-///    used as given.
+/// 1. Sets `cmd`'s stdin as `stdin` says (a pipe for `Bytes`, `/dev/null` for
+///    `Null`, the test's own stdin for `Inherit`), stdout and stderr to piped,
+///    and puts the child in its own process group (`process_group(0)`),
+///    overriding whatever the caller set for those. Every other setting of
+///    `cmd` (program, args, env, cwd) is used as given.
 /// 2. Spawns it; a spawn failure panics. The `deadline` starts right after
 ///    the spawn and covers every later phase (write, wait, drain).
 /// 3. Writes `stdin` to the child's stdin on its own thread, then closes it.
@@ -41,7 +67,8 @@ pub const HOOK_DEADLINE: Duration = Duration::from_secs(20);
 ///    drain. A write error panics naming the stdin write, including the case
 ///    of a child that exited without reading all of its stdin (EPIPE): the
 ///    caller handed the child input it did not consume, which is reported,
-///    not ignored. An empty `stdin` performs no write and cannot fail.
+///    not ignored. An empty `Bytes`, `Null` and `Inherit` perform no write and
+///    cannot fail.
 /// 6. On a timeout in any phase (the child still running, the stdin write
 ///    still blocked, or a drain still open because a descendant outlived the
 ///    child and holds the pipe): runs `kill -TERM -<pgid>` (the child and
@@ -52,10 +79,35 @@ pub const HOOK_DEADLINE: Duration = Duration::from_secs(20);
 ///    the process group is not signalled.
 /// 7. Otherwise returns the exit status with the full stdout and stderr. It
 ///    does not judge the status; the caller asserts on it.
-pub fn run_bounded(cmd: &mut Command, stdin: &[u8], deadline: Duration) -> Output {
+#[allow(dead_code)] // a file that only uses run_bounded does not use it
+pub fn run_bounded_stdin(cmd: &mut Command, stdin: ChildStdin<'_>, deadline: Duration) -> Output {
+    run_with(cmd, stdin, false, deadline)
+}
+
+/// [`run_bounded`], except that the read end of the child's stdout is closed
+/// right after the spawn, before any stdin byte is written: a child that
+/// waits for its stdin before printing finds its stdout reader already gone
+/// (EPIPE on write). The returned `stdout` is empty. Every other step and
+/// guarantee of [`run_bounded_stdin`] applies.
+#[allow(dead_code)] // only a closed-stdout test uses it
+pub fn run_bounded_closed_stdout(cmd: &mut Command, stdin: &[u8], deadline: Duration) -> Output {
+    run_with(cmd, ChildStdin::Bytes(stdin), true, deadline)
+}
+
+fn run_with(
+    cmd: &mut Command,
+    stdin: ChildStdin<'_>,
+    close_stdout: bool,
+    deadline: Duration,
+) -> Output {
     let program = cmd.get_program().to_string_lossy().into_owned();
+    let (stdio, stdin): (Stdio, &[u8]) = match stdin {
+        ChildStdin::Bytes(b) => (Stdio::piped(), b),
+        ChildStdin::Null => (Stdio::null(), &[]),
+        ChildStdin::Inherit => (Stdio::inherit(), &[]),
+    };
     let mut child = cmd
-        .stdin(Stdio::piped())
+        .stdin(stdio)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Own process group, so a timeout can signal the child and every
@@ -65,6 +117,10 @@ pub fn run_bounded(cmd: &mut Command, stdin: &[u8], deadline: Duration) -> Outpu
         .unwrap_or_else(|e| panic!("spawn {program}: {e}"));
     let until = Instant::now() + deadline;
     let pgid = child.id();
+    if close_stdout {
+        // Before the stdin writer starts, so the child cannot print first.
+        drop(child.stdout.take());
+    }
 
     // stdin on its own thread: a child that never reads a payload larger than
     // the pipe buffer blocks this write, and the deadline must still apply.

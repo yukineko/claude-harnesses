@@ -15,6 +15,9 @@
 #[path = "support/git_env.rs"]
 mod git_env;
 
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use blastguard::approve::{command_key, Store};
 use harness_core::degrade::assert_fails_closed;
 
@@ -48,7 +51,14 @@ fn blind_boundary_never_leaves_an_approval_lookup_permissive() {
 fn blind_boundary_never_leaves_a_recoverability_probe_permissive() {
     let repo = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| {
-        let st = git_env::pinned(repo.path()).args(args).status().unwrap();
+        let mut cmd = git_env::pinned(repo.path());
+        cmd.args(args);
+        let st = bounded::run_bounded_stdin(
+            &mut cmd,
+            bounded::ChildStdin::Inherit,
+            bounded::TOOL_DEADLINE,
+        )
+        .status;
         assert!(st.success(), "setup: git {args:?}");
     };
     git(&["init", "-q"]);

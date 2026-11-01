@@ -78,12 +78,14 @@ fn repo_tests_dir(tag: &str) -> String {
     let tests = root.join("crates/backlog/tests");
     std::fs::create_dir_all(&tests).unwrap();
     std::fs::write(tests.join("cancel_evidence.rs"), "// x\n").unwrap();
-    let st = git_env::scrub(&mut Command::new("git"))
-        .arg("init")
-        .arg("-q")
-        .arg(&root)
-        .status()
-        .expect("git init");
+    let mut cmd = Command::new("git");
+    git_env::scrub(&mut cmd).arg("init").arg("-q").arg(&root);
+    let st = bounded::run_bounded_stdin(
+        &mut cmd,
+        bounded::ChildStdin::Inherit,
+        bounded::TOOL_DEADLINE,
+    )
+    .status;
     assert!(st.success(), "git init must succeed");
     tests.to_string_lossy().into_owned()
 }

@@ -19,11 +19,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = git_env::pinned(dir)
-        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-        .args(args)
-        .output()
-        .unwrap();
+    let mut cmd = git_env::pinned(dir);
+    cmd.args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(args);
+    let out =
+        bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
     assert!(out.status.success(), "git {args:?}: {out:?}");
 }
 

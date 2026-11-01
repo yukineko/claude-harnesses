@@ -8,8 +8,10 @@
 //! One test per command, one assertion per test. Each case runs with a fresh
 //! HOME so the repeat-deny downgrade cannot change a verdict.
 
-use std::io::Write;
-use std::process::{Command, Stdio};
+#[path = "support/bounded.rs"]
+mod bounded;
+
+use std::process::Command;
 
 fn decision(tag: &str, command: &str) -> (String, String) {
     let home = std::env::temp_dir().join(format!(
@@ -25,20 +27,12 @@ fn decision(tag: &str, command: &str) -> (String, String) {
         "tool_input": { "command": command },
     })
     .to_string();
-    let mut child = Command::new(bin)
-        .env("HOME", &home)
+    let mut cmd = Command::new(bin);
+    cmd.env("HOME", &home)
         .env("CLAUDECODE", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary spawns");
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(payload.as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .env_remove("CLAUDE_CODE_SESSION_ID");
+    let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(out.status.code(), Some(0), "hook must exit 0 ({command:?})");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let _ = std::fs::remove_dir_all(&home);

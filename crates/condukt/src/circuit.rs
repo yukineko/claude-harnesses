@@ -6,7 +6,9 @@
 //! consulted by `condukt circuit check` on each loop iteration: given a handful
 //! of already-gathered signals (a consecutive-failure streak, a
 //! budget-over-cap flag, and an idle duration) it decides whether to `Continue`
-//! the loop or `Trip` the breaker with a stable reason.
+//! the loop or `Trip` the breaker with a stable reason. A fourth axis
+//! ([`decide_session_circuit`]) trips `session_compacted` once the owning
+//! session's transcript has been compacted `--max-compactions` times.
 //!
 //! The idle signal is a [`Determination<i64>`], not an `i64`: "this run last
 //! progressed 30s ago" and "how idle this run is cannot be measured at all" are
@@ -41,7 +43,8 @@ pub enum CircuitReason {
     Stall,
     /// How idle the run is could **not be measured** (no task carries an
     /// `updated_at`, or the run state could not be loaded) while the idle axis
-    /// was switched on.
+    /// was switched on. Also used, with the idle axis on or off, when the
+    /// session transcript was located but its compactions could not be counted.
     ///
     /// # Why this trips rather than continuing
     ///
@@ -66,11 +69,20 @@ pub enum CircuitReason {
     /// [`CircuitReason::IdleUnmeasured`]: an uncountable streak is not a streak
     /// of 0, so it trips, under its own label (backlog cccc9c43).
     StreakUnmeasured,
+    /// The owning session's transcript holds at least `max_compactions`
+    /// `compact_boundary` lines: the session has been compacted that many
+    /// times, and a long-lived session replays its whole (compacted) context on
+    /// every turn. The remedy is a hand-off to a FRESH session, not a retry, so
+    /// this is its own reason rather than a `Stall`. Lowest precedence: every
+    /// other reason (cost, failures, stall, unmeasurable idle) is reported
+    /// under its own label first.
+    SessionCompacted,
 }
 
 impl CircuitReason {
     /// A stable lowercase slug for journaling (`"failure_streak"` /
-    /// `"budget_over_cap"` / `"stall"` / `"idle_unmeasured"`).
+    /// `"budget_over_cap"` / `"stall"` / `"idle_unmeasured"` /
+    /// `"streak_unmeasured"` / `"session_compacted"`).
     pub fn as_str(&self) -> &'static str {
         match self {
             CircuitReason::FailureStreak => "failure_streak",
@@ -78,6 +90,7 @@ impl CircuitReason {
             CircuitReason::Stall => "stall",
             CircuitReason::IdleUnmeasured => "idle_unmeasured",
             CircuitReason::StreakUnmeasured => "streak_unmeasured",
+            CircuitReason::SessionCompacted => "session_compacted",
         }
     }
 }
@@ -149,6 +162,113 @@ pub fn decide_circuit(
             Required::Blocked(_) => CircuitVerdict::Trip(CircuitReason::IdleUnmeasured),
         }
     }
+}
+
+/// Default `--max-compactions`: the session is handed off once its transcript
+/// holds this many compactions.
+pub const DEFAULT_MAX_COMPACTIONS: u32 = 2;
+
+/// [`decide_circuit`] plus the compaction axis. Pure and deterministic.
+///
+/// The three original axes decide first (precedence 1-6 above); only when they
+/// say `Continue` does the compaction axis apply: `compactions >=
+/// max_compactions.max(1)` → `Trip(SessionCompacted)`. `max_compactions` is
+/// clamped to at least 1 — 0 never disables the axis (and never trips a
+/// session that has not been compacted at all). A caller whose session has no
+/// transcript to count passes `compactions = 0`.
+pub fn decide_session_circuit(
+    streak: u32,
+    streak_cap: u32,
+    budget_over_cap: bool,
+    idle: Determination<i64>,
+    idle_ttl_secs: i64,
+    compactions: u32,
+    max_compactions: u32,
+) -> CircuitVerdict {
+    match decide_circuit(streak, streak_cap, budget_over_cap, idle, idle_ttl_secs) {
+        CircuitVerdict::Continue if compactions >= max_compactions.max(1) => {
+            CircuitVerdict::Trip(CircuitReason::SessionCompacted)
+        }
+        v => v,
+    }
+}
+
+/// Count the top-level `{"type":"system","subtype":"compact_boundary"}` lines
+/// of a transcript. Each line is parsed as JSON and only its top-level `type`
+/// and `subtype` fields are consulted, so the phrase inside message content
+/// (escaped or not) never counts. An unparseable line cannot be a boundary and
+/// is skipped.
+pub(crate) fn count_compact_boundaries(transcript: &[u8]) -> u32 {
+    #[derive(serde::Deserialize)]
+    struct Line {
+        #[serde(rename = "type")]
+        kind: Option<String>,
+        subtype: Option<String>,
+    }
+    let mut n: u32 = 0;
+    for raw in transcript.split(|b| *b == b'\n') {
+        if let Ok(Line {
+            kind: Some(k),
+            subtype: Some(st),
+        }) = serde_json::from_slice::<Line>(raw)
+        {
+            if k == "system" && st == "compact_boundary" {
+                n = n.saturating_add(1);
+            }
+        }
+    }
+    n
+}
+
+/// Compactions of ONE session: locate its transcript (the same lookup the idle
+/// axis uses) and count boundaries. Every failure is `Undetermined`.
+pub(crate) fn session_compactions(session_id: &str) -> Determination<u32> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Determination::undetermined("HOME unset: cannot locate the session transcript");
+    };
+    let projects = std::path::PathBuf::from(home)
+        .join(".claude")
+        .join("projects");
+    let path = match harness_core::transcript::locate_session_transcript_in(&projects, session_id) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Determination::undetermined(format!(
+                "session transcript unreadable: {}",
+                why.as_str()
+            ))
+        }
+    };
+    match std::fs::read(&path) {
+        Ok(bytes) => Determination::known(count_compact_boundaries(&bytes)),
+        Err(e) => Determination::undetermined(format!(
+            "session transcript {} unreadable: {e}",
+            path.display()
+        )),
+    }
+}
+
+/// Compactions across the sessions whose transcript the idle axis resolved:
+/// the largest per-session count (the run is as long-lived as its most
+/// compacted session). One unmeasurable session makes the whole answer
+/// `Undetermined`. Empty `sessions` is not a measurement — callers pass
+/// `None` for "no transcript applies" instead.
+pub(crate) fn gather_compactions(
+    sessions: &[String],
+    count: impl Fn(&str) -> Determination<u32>,
+) -> Determination<u32> {
+    if sessions.is_empty() {
+        return Determination::undetermined("no session transcript to count compactions in");
+    }
+    let mut max = 0;
+    for sid in sessions {
+        match count(sid) {
+            Determination::Known(n) => max = max.max(n),
+            Determination::Undetermined(why) => {
+                return Determination::undetermined(format!("{} (session {sid})", why.as_str()))
+            }
+        }
+    }
+    Determination::known(max)
 }
 
 // ── signal gathering (the CLI layer; clock/FS live HERE, not in the core) ────
@@ -360,7 +480,28 @@ pub(crate) fn circuit_report(
     })
 }
 
-/// Handler for `condukt circuit check --run RID`. Gathers the three signals,
+/// The two caller inputs that concern the session transcript, bundled so
+/// [`run_circuit_check`] stays within clippy's argument limit.
+#[derive(Debug, Clone, Copy)]
+pub struct TranscriptAxes<'a> {
+    /// `--session S`: the vouched owning session (see `run_circuit_check`).
+    pub session: Option<&'a str>,
+    /// `--max-compactions N`; values below 1 are clamped to 1.
+    pub max_compactions: u32,
+}
+
+impl TranscriptAxes<'_> {
+    /// No session vouch, default compaction cap.
+    #[cfg(test)]
+    pub(crate) fn unvouched() -> TranscriptAxes<'static> {
+        TranscriptAxes {
+            session: None,
+            max_compactions: DEFAULT_MAX_COMPACTIONS,
+        }
+    }
+}
+
+/// Handler for `condukt circuit check --run RID`. Gathers the four signals,
 /// runs the pure [`decide_circuit`] core, prints the verdict + signals as JSON
 /// on stdout, journals the same record fail-soft, and returns the process exit
 /// code (`0` = continue, `1` = trip) so the loops can do
@@ -417,6 +558,19 @@ pub(crate) fn circuit_report(
 /// unreadable transcript still trips `idle_unmeasured`. An unreadable registry
 /// trips regardless of the flag. The stdout JSON's `idle_source` key names the
 /// source used (`run_state` / `claim_registry` / `session_flag`).
+///
+/// # The compaction axis (`--max-compactions`)
+///
+/// Whenever the idle axis resolved a session transcript (`session_flag` or a
+/// live stateless claim), the `"type":"system","subtype":"compact_boundary"`
+/// lines in that same transcript are counted ([`count_compact_boundaries`]);
+/// `compactions >= max(max_compactions, 1)` trips
+/// [`CircuitReason::SessionCompacted`], checked after every other reason.
+/// A run measured from run state has no transcript: `compactions` is `null`.
+/// A transcript that cannot be counted (`compactions: null` plus
+/// `compactions_unknown_reason`) trips `idle_unmeasured` even with the idle axis
+/// off. The stdout JSON carries `compactions` and `max_compactions`, and so does
+/// the journal record.
 pub fn run_circuit_check(
     cfg: &Config,
     cwd: &Path,
@@ -424,8 +578,13 @@ pub fn run_circuit_check(
     streak_cap: u32,
     idle_ttl_secs: i64,
     budget_cap_usd: Option<f64>,
-    session: Option<&str>,
+    transcript: TranscriptAxes<'_>,
 ) -> i32 {
+    let TranscriptAxes {
+        session,
+        max_compactions,
+    } = transcript;
+    let max_compactions = max_compactions.max(1);
     // 1. failure-streak — load the run; an unloadable run's streak is
     //    Undetermined (trips `streak_unmeasured`). Whether the load failed because the file is ABSENT (as opposed to
     //    unreadable/corrupt) is kept: only an absent run state may be a
@@ -494,12 +653,34 @@ pub fn run_circuit_check(
         (gather_idle_secs(run.as_ref(), now), IdleSource::RunState)
     };
 
-    let verdict = match decide_circuit(
+    // 4. compactions — counted in the SAME transcript(s) the idle axis
+    //    resolved: the vouched session (`session_flag`) or the live stateless
+    //    claims' sessions (`claim_registry`). A run measured from run state has
+    //    no transcript, so the axis does not apply (`None`, reported as null).
+    let compaction_sessions: Option<Vec<String>> = match idle_source {
+        IdleSource::SessionFlag => session_vouches_for_run(run_id, session).map(|s| vec![s]),
+        IdleSource::ClaimRegistry => {
+            crate::claim::stateless_live_sessions(cfg, cwd, run_id, now).ok()
+        }
+        IdleSource::RunState => None,
+    };
+    let compactions_det: Option<Determination<u32>> = compaction_sessions
+        .as_deref()
+        .map(|s| gather_compactions(s, session_compactions));
+    let (compactions, compactions_unknown_reason) = match &compactions_det {
+        Some(Determination::Known(n)) => (Some(*n), None),
+        Some(Determination::Undetermined(why)) => (None, Some(why.as_str().to_string())),
+        None => (None, None),
+    };
+
+    let verdict = match decide_session_circuit(
         streak,
         streak_cap,
         budget_over_cap,
         idle.clone(),
         idle_ttl_secs,
+        compactions.unwrap_or(0),
+        max_compactions,
     ) {
         // An uncountable streak with the streak axis on cannot continue; only
         // a budget trip (higher precedence) keeps its own label.
@@ -508,6 +689,12 @@ pub fn run_circuit_check(
         }
         _ if streak_cap > 0 && streak_unknown_reason.is_some() => {
             CircuitVerdict::Trip(CircuitReason::StreakUnmeasured)
+        }
+        // A transcript that was located but could not be counted is not a
+        // session with 0 compactions: it trips whether or not the idle axis is
+        // on, under the label the idle axis uses for an unreadable transcript.
+        CircuitVerdict::Continue if compactions_unknown_reason.is_some() => {
+            CircuitVerdict::Trip(CircuitReason::IdleUnmeasured)
         }
         v => v,
     };
@@ -526,6 +713,15 @@ pub fn run_circuit_check(
         obj.insert(
             "idle_source".to_string(),
             serde_json::json!(idle_source.as_str()),
+        );
+        obj.insert("compactions".to_string(), serde_json::json!(compactions));
+        obj.insert(
+            "max_compactions".to_string(),
+            serde_json::json!(max_compactions),
+        );
+        obj.insert(
+            "compactions_unknown_reason".to_string(),
+            serde_json::json!(compactions_unknown_reason),
         );
         obj.insert(
             "streak_source".to_string(),
@@ -575,6 +771,8 @@ pub fn run_circuit_check(
         budget_over_cap,
         idle_secs: journaled_idle_secs,
         idle_ttl_secs,
+        compactions,
+        max_compactions,
         recorded_at: state::now_secs(),
     };
     // The run's own dir (see `state::run_dir`), so a legacy-keyed run's
@@ -594,6 +792,86 @@ pub fn run_circuit_check(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── compaction axis (pure core) ────────────────────────────────────────
+
+    fn compacted(compactions: u32, max: u32) -> CircuitVerdict {
+        decide_session_circuit(0, 5, false, Determination::known(0), 1800, compactions, max)
+    }
+
+    #[test]
+    fn compactions_at_cap_trip_and_below_cap_continue() {
+        assert_eq!(
+            compacted(2, 2),
+            CircuitVerdict::Trip(CircuitReason::SessionCompacted)
+        );
+        assert_eq!(compacted(1, 2), CircuitVerdict::Continue);
+    }
+
+    #[test]
+    fn max_compactions_zero_is_clamped_to_one() {
+        assert_eq!(
+            compacted(1, 0),
+            CircuitVerdict::Trip(CircuitReason::SessionCompacted)
+        );
+        assert_eq!(compacted(0, 0), CircuitVerdict::Continue);
+    }
+
+    #[test]
+    fn other_reasons_outrank_session_compacted() {
+        let v = decide_session_circuit(0, 5, true, Determination::known(0), 1800, 9, 2);
+        assert_eq!(v, CircuitVerdict::Trip(CircuitReason::BudgetOverCap));
+        let v = decide_session_circuit(0, 5, false, Determination::known(9999), 1800, 9, 2);
+        assert_eq!(v, CircuitVerdict::Trip(CircuitReason::Stall));
+    }
+
+    #[test]
+    fn compaction_axis_applies_even_with_the_idle_axis_off() {
+        let v = decide_session_circuit(0, 5, false, Determination::known(0), 0, 3, 2);
+        assert_eq!(v, CircuitVerdict::Trip(CircuitReason::SessionCompacted));
+    }
+
+    #[test]
+    fn session_compacted_slug_is_stable() {
+        assert_eq!(
+            CircuitReason::SessionCompacted.as_str(),
+            "session_compacted"
+        );
+    }
+
+    #[test]
+    fn boundary_counting_uses_top_level_fields_only() {
+        let b = br#"{"type":"system","subtype":"compact_boundary"}"#;
+        let text = br#"{"type":"user","message":{"content":"\"subtype\":\"compact_boundary\""}}"#;
+        let wrong_type = br#"{"type":"user","subtype":"compact_boundary"}"#;
+        let mut t = Vec::new();
+        for l in [&b[..], text, wrong_type, b"not json", b"", b] {
+            t.extend_from_slice(l);
+            t.push(b'\n');
+        }
+        assert_eq!(count_compact_boundaries(&t), 2);
+    }
+
+    #[test]
+    fn gather_compactions_takes_the_max_and_fails_on_any_unknown() {
+        let sessions = vec!["a".to_string(), "b".to_string()];
+        let k = gather_compactions(&sessions, |s| {
+            Determination::known(if s == "a" { 1 } else { 3 })
+        });
+        assert!(matches!(k, Determination::Known(3)));
+        let u = gather_compactions(&sessions, |s| {
+            if s == "a" {
+                Determination::known(1)
+            } else {
+                Determination::undetermined("gone")
+            }
+        });
+        assert!(matches!(u, Determination::Undetermined(_)));
+        assert!(matches!(
+            gather_compactions(&[], |_| Determination::known(0)),
+            Determination::Undetermined(_)
+        ));
+    }
 
     // ── each trip reason reachable ─────────────────────────────────────────
 
@@ -839,7 +1117,15 @@ mod tests {
             ],
         );
         run.save(&cfg, cwd).unwrap();
-        let code = run_circuit_check(&cfg, cwd, "trip-run", 3, 1800, None, None);
+        let code = run_circuit_check(
+            &cfg,
+            cwd,
+            "trip-run",
+            3,
+            1800,
+            None,
+            TranscriptAxes::unvouched(),
+        );
         assert_eq!(code, 1, "beyond-cap failure streak must trip (exit 1)");
         // and it journaled a trip record with the failure_streak reason.
         let recs = crate::gatelog::load_circuit_records(
@@ -867,7 +1153,15 @@ mod tests {
         );
         run.save(&cfg, cwd).unwrap();
         // No cap on budget (None → non-trip); fresh timestamps → no stall.
-        let code = run_circuit_check(&cfg, cwd, "healthy", 3, 1800, None, None);
+        let code = run_circuit_check(
+            &cfg,
+            cwd,
+            "healthy",
+            3,
+            1800,
+            None,
+            TranscriptAxes::unvouched(),
+        );
         assert_eq!(code, 0, "a healthy run must continue (exit 0)");
     }
 
@@ -882,7 +1176,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
         let cfg = test_cfg(cwd);
-        let code = run_circuit_check(&cfg, cwd, "does-not-exist", 3, 1800, None, None);
+        let code = run_circuit_check(
+            &cfg,
+            cwd,
+            "does-not-exist",
+            3,
+            1800,
+            None,
+            TranscriptAxes::unvouched(),
+        );
         assert_eq!(
             code, 1,
             "an unloadable run's idleness is unmeasurable, which must not exit 0"
@@ -902,7 +1204,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
         let cfg = test_cfg(cwd);
-        let code = run_circuit_check(&cfg, cwd, "does-not-exist-either", 3, 0, None, None);
+        let code = run_circuit_check(
+            &cfg,
+            cwd,
+            "does-not-exist-either",
+            3,
+            0,
+            None,
+            TranscriptAxes::unvouched(),
+        );
         assert_eq!(code, 0);
     }
 
@@ -915,7 +1225,15 @@ mod tests {
         // last progress 2h ago, no failures → stall axis (idle_ttl 1800s) trips.
         let run = run_with("stale", vec![task("a", Status::Running, Some(now - 7200))]);
         run.save(&cfg, cwd).unwrap();
-        let code = run_circuit_check(&cfg, cwd, "stale", 3, 1800, None, None);
+        let code = run_circuit_check(
+            &cfg,
+            cwd,
+            "stale",
+            3,
+            1800,
+            None,
+            TranscriptAxes::unvouched(),
+        );
         assert_eq!(code, 1);
         let recs = crate::gatelog::load_circuit_records(
             &state::run_dir(&cfg, cwd, "stale").unwrap(),
@@ -1109,7 +1427,15 @@ mod tests {
         // Legacy run-state: tasks exist, none carries `updated_at`.
         let run = run_with("no-ts", vec![task("a", Status::Running, None)]);
         run.save(&cfg, cwd).unwrap();
-        let code = run_circuit_check(&cfg, cwd, "no-ts", 3, 1800, None, None);
+        let code = run_circuit_check(
+            &cfg,
+            cwd,
+            "no-ts",
+            3,
+            1800,
+            None,
+            TranscriptAxes::unvouched(),
+        );
         assert_eq!(
             code, 1,
             "unmeasurable idleness must not exit 0 (that is the fail-open)"
@@ -1209,7 +1535,15 @@ mod backlog_a81911ee {
                 ),
                 "fixture precondition: idleness must be unmeasurable"
             );
-            let _ = run_circuit_check(&cfg, cwd, &run_id, 3, ttl, None, None);
+            let _ = run_circuit_check(
+                &cfg,
+                cwd,
+                &run_id,
+                3,
+                ttl,
+                None,
+                TranscriptAxes::unvouched(),
+            );
             let lines = journal_lines(&cfg, cwd, &run_id);
             assert_eq!(lines.len(), 1);
             assert!(

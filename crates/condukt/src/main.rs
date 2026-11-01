@@ -1739,8 +1739,8 @@ enum RunPolicyAction {
 
 #[derive(Subcommand)]
 enum CircuitAction {
-    /// Gather the streak/budget/stall signals for a run (an uncountable streak
-    /// or unmeasurable idle trips; budget is opt-in), run the
+    /// Gather the streak/budget/stall/compaction signals for a run (an
+    /// uncountable streak or unmeasurable idle trips; budget is opt-in), run the
     /// deterministic `decide_circuit` core, print the verdict + gathered signals
     /// as JSON on stdout, append the same record to the run's append-only
     /// circuit-verdict journal (fail-soft), and EXIT 1 when the breaker trips /
@@ -1772,6 +1772,13 @@ enum CircuitAction {
         /// `--session "$CLAUDE_CODE_SESSION_ID"`.
         #[arg(long)]
         session: Option<String>,
+        /// Compaction cap: once the transcript the idle axis resolved (the
+        /// `--session` one, or a live stateless claim's) holds this many
+        /// top-level `compact_boundary` system lines, the breaker trips
+        /// `session_compacted` so the caller hands off to a FRESH session.
+        /// 0 is clamped to 1 (it never disables the axis).
+        #[arg(long, default_value_t = circuit::DEFAULT_MAX_COMPACTIONS)]
+        max_compactions: u32,
     },
 }
 
@@ -2138,6 +2145,7 @@ fn refuse_undetermined_config(cmd: &Command, err: &str) -> Result<()> {
             CircuitAction::Check {
                 streak_cap,
                 idle_ttl_secs,
+                max_compactions,
                 ..
             },
     } = cmd
@@ -2159,6 +2167,8 @@ fn refuse_undetermined_config(cmd: &Command, err: &str) -> Result<()> {
             "idle_secs": serde_json::Value::Null,
             "idle_unknown_reason": why,
             "idle_ttl_secs": idle_ttl_secs,
+            "compactions": serde_json::Value::Null,
+            "max_compactions": (*max_compactions).max(1),
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
         eprintln!("condukt circuit check: {why}; tripping");
@@ -2497,6 +2507,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 idle_ttl_secs,
                 budget_cap_usd,
                 session,
+                max_compactions,
             } => {
                 // The handler prints the verdict JSON + journals fail-soft and
                 // returns the exit code (0 = continue, 1 = trip). Exit directly
@@ -2508,7 +2519,10 @@ fn run_user(cmd: Command) -> Result<()> {
                     streak_cap,
                     idle_ttl_secs,
                     budget_cap_usd,
-                    session.as_deref(),
+                    circuit::TranscriptAxes {
+                        session: session.as_deref(),
+                        max_compactions,
+                    },
                 );
                 std::process::exit(code);
             }

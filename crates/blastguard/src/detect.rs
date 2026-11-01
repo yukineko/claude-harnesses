@@ -17179,17 +17179,29 @@ and must not be Allowed: {failing:?}"
     /// `deletion_failing_git_probe_never_allows` (set once by that test).
     static FAKE_GIT_DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+    /// The fake gits that must ANSWER (clean / fail / garbage) run under a
+    /// generous bound, so CPU load cannot turn the clean control's answer into
+    /// a timeout (it did: the control's Allow flaked under concurrent runs).
+    /// Only `hang` keeps the production `TREE_GIT_TIMEOUT` (via
+    /// `probe_tree_with`), because exercising that timeout is its point.
     fn fake_git_probe(
         mode: &str,
         path: &str,
         cands: &[String],
     ) -> Determination<crate::reversible::TreeGitFacts> {
         let dir = FAKE_GIT_DIR.get().expect("fake git dir set");
-        crate::reversible::probe_tree_with(
-            std::ffi::OsStr::new(&format!("{dir}/git-{mode}")),
-            path,
-            cands,
-        )
+        let git = format!("{dir}/git-{mode}");
+        let git = std::ffi::OsStr::new(&git);
+        if mode == "hang" {
+            crate::reversible::probe_tree_with(git, path, cands)
+        } else {
+            crate::reversible::probe_tree_with_timeout(
+                git,
+                path,
+                cands,
+                std::time::Duration::from_secs(30),
+            )
+        }
     }
     fn fake_git_clean(p: &str, c: &[String]) -> Determination<crate::reversible::TreeGitFacts> {
         fake_git_probe("clean", p, c)

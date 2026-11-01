@@ -11128,9 +11128,11 @@ fn xargs_command_start(rest: &[&str]) -> Option<usize> {
     // Value-taking xargs short flags whose value is the NEXT token when the flag
     // is given standalone (`-I {}`, `-n 1`, BSD `-J %`). Bundled forms (`-I{}`,
     // `-n1`, `-J%`) embed the value and consume only themselves. Covers both GNU
-    // (I i n L P s d E a) and BSD/macOS (J R S) — the default xargs on this host —
+    // (I n L P s d E a) and BSD/macOS (J R S) — the default xargs on this host —
     // because a MISSED value flag would misread its value as the command word and
-    // leak a destructive payload (`xargs -J % rm -rf %`) past re-analysis.
+    // leak a destructive payload (`xargs -J % rm -rf %`) past re-analysis. An
+    // EXTRA one is the same leak the other way: it swallows the command word
+    // (GNU `-i`/`-e`/`-l` take only an attached value; see XARGS_VALUE_SHORT).
     const VALUE_SHORT: &str = XARGS_VALUE_SHORT;
     let mut i = 0;
     while i < rest.len() {
@@ -11144,16 +11146,17 @@ fn xargs_command_start(rest: &[&str]) -> Option<usize> {
         }
         if let Some(stripped) = t.strip_prefix("--") {
             // Long flag: value-taking ones consume the next token unless `=`-joined.
+            // NOT `--replace`, `--eof`, `--max-lines`: GNU gives those an
+            // OPTIONAL value that is only ever `=`-attached, so the next token
+            // is the command word (`xargs --replace sh -c {}` runs `sh`).
+            // Listed here, they swallowed it.
             let takes = matches!(
                 stripped.split('=').next().unwrap_or(""),
                 "max-args"
-                    | "max-lines"
                     | "max-procs"
                     | "max-chars"
                     | "delimiter"
-                    | "eof"
                     | "arg-file"
-                    | "replace"
                     | "process-slot-var"
             );
             i += if takes && !t.contains('=') { 2 } else { 1 };
@@ -11191,13 +11194,26 @@ fn xargs_command_start(rest: &[&str]) -> Option<usize> {
     None
 }
 
-/// Value-taking xargs short flags (GNU `I i n L P s d E a`, BSD `J R S`).
-const XARGS_VALUE_SHORT: &str = "IinLPsdEaJRS";
+/// Value-taking xargs short flags whose value may be the NEXT token (GNU
+/// `I n L P s d E a`, BSD `J R S`).
+///
+/// NOT GNU `-i`, `-e`, `-l`: their value (`-i[REPL]`, `-e[EOF]`, `-l[N]`) is
+/// OPTIONAL and only ever attached, so a separate next token is never theirs.
+/// `-i` used to be listed here, and `xargs -i sh -c {}` read `sh` as its
+/// value, never saw the shell, and was allowed. Those three live in
+/// [`XARGS_OPTIONAL_ATTACHED`].
+const XARGS_VALUE_SHORT: &str = "InLPsdEaJRS";
+
+/// GNU xargs short flags with an optional ATTACHED value: the rest of the
+/// bundle after one of these is its value, and it never takes the next token.
+const XARGS_OPTIONAL_ATTACHED: &str = "iel";
 
 /// For a short-option bundle `t` (`-0a`, `-aFILE`, `-n1`), the first
 /// value-taking flag in it and whether its value is the NEXT token (true when
 /// that flag is the bundle's last character). `None` for a bundle of boolean
-/// flags only, or a token that is not a short-option bundle.
+/// flags only, for one whose first value flag is optional-attached (`-0i`,
+/// `-ia`: everything after the `i` is its replace string), or for a token
+/// that is not a short-option bundle.
 fn xargs_short_value_flag(t: &str) -> Option<(char, bool)> {
     let body = t.strip_prefix('-')?;
     if body.is_empty() || body.starts_with('-') {
@@ -11205,7 +11221,10 @@ fn xargs_short_value_flag(t: &str) -> Option<(char, bool)> {
     }
     let (at, c) = body
         .char_indices()
-        .find(|&(_, c)| XARGS_VALUE_SHORT.contains(c))?;
+        .find(|&(_, c)| XARGS_VALUE_SHORT.contains(c) || XARGS_OPTIONAL_ATTACHED.contains(c))?;
+    if XARGS_OPTIONAL_ATTACHED.contains(c) {
+        return None;
+    }
     Some((c, at + c.len_utf8() == body.len()))
 }
 

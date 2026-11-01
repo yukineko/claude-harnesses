@@ -465,6 +465,32 @@ fn destructive_literal_piped_to_env_unknown_flag_sh() {
     );
 }
 
+// xargs fed from somewhere other than a pipe: a redirect or an argument file.
+#[test]
+fn xargs_sh_fed_by_redirect() {
+    assert_deny_or_ask("xargs_sh_fed_by_redirect", "xargs sh < list");
+}
+
+#[test]
+fn xargs_bundled_zero_a_file_sh() {
+    assert_deny_or_ask("xargs_bundled_zero_a_file_sh", "xargs -0a FILE sh");
+}
+
+#[test]
+fn xargs_long_arg_file_sh() {
+    assert_deny_or_ask("xargs_long_arg_file_sh", "xargs --arg-file=FILE sh");
+}
+
+#[test]
+fn xargs_lower_i_sh_c_piped() {
+    assert_deny_or_ask("xargs_lower_i_sh_c_piped", "echo x | xargs -i sh -c {}");
+}
+
+#[test]
+fn control_xargs_a_file_grep() {
+    assert_allow("control_xargs_a_file_grep", "xargs -a FILE grep x");
+}
+
 // Probes.
 #[test]
 fn probe_destructive_python_payload_piped_to_xargs_python3() {

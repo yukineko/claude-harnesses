@@ -22,7 +22,7 @@ if [ "$#" -gt 0 ]; then
 else
   bins=(worktree_root_symlink_dotdot backlog_audit_s02 worktree_root_payload_cwd_dotdot \
     heredoc_data_body_extraction backlog_2287ebae approval_memory backlog_6798f47d \
-    heredoc_data_body_verify heredoc_data_body_verify2)
+    heredoc_data_body_verify heredoc_data_body_verify2 overwatch_violation)
 fi
 
 targs=()

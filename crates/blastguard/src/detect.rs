@@ -5384,6 +5384,129 @@ fn command_candidates(tokens: &[&str]) -> Vec<usize> {
     Vec::new()
 }
 
+/// Indices of the command words an exec-wrapper chain can actually run —
+/// `env [opts] [VAR=val] [--] CMD`, `command CMD`, `nice -n 5 CMD`,
+/// `timeout 5 CMD`, `sudo -u root CMD`, nested wrappers — WITHOUT the operands
+/// of the command finally reached. The last index is that command; earlier
+/// ones are the wrappers and any token that may be either an option's value or
+/// the command.
+///
+/// Unlike [`command_candidates`], which makes EVERY token behind a wrapper a
+/// candidate (sound for deny-if-ANY destructive checks, where a false
+/// candidate only adds a false positive), this is for asking "what program
+/// reads this stage's stdin", where grep's operand in `env grep bash` must
+/// not be read as a shell.
+///
+/// Ambiguity resolves to MORE candidates, never fewer: an option token not
+/// known to take no value (see [`wrapper_flag_is_boolean`]) makes the next
+/// token a candidate AND keeps scanning past it, so a value-taking option
+/// missing from any table widens the set instead of hiding the command.
+fn wrapped_command_heads(tokens: &[&str]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() && (tokens[i].is_empty() || is_assignment(tokens[i])) {
+        i += 1;
+    }
+    while i < tokens.len() {
+        out.push(i);
+        let wrapper = normalized_command(tokens[i]);
+        if !is_exec_wrapper(&wrapper) {
+            return out;
+        }
+        // Wrappers whose syntax puts one positional operand before the
+        // command: `timeout DURATION`, `chroot NEWROOT`, `flock FILE`.
+        let mut positional =
+            usize::from(matches!(wrapper.as_str(), "timeout" | "chroot" | "flock"));
+        let (mut value_pending, mut opts_done) = (false, false);
+        let mut j = i + 1;
+        let next_head = loop {
+            let Some(&t) = tokens.get(j) else {
+                break None;
+            };
+            j += 1;
+            if t.is_empty() {
+                continue;
+            }
+            if !opts_done && t == "--" {
+                opts_done = true;
+                value_pending = false;
+                continue;
+            }
+            if !opts_done && t.starts_with('-') && t.len() > 1 {
+                value_pending = !t.contains('=') && !wrapper_flag_is_boolean(&wrapper, t);
+                continue;
+            }
+            if value_pending {
+                // An option value, or the command itself: both.
+                out.push(j - 1);
+                value_pending = false;
+                continue;
+            }
+            if wrapper == "env" && is_assignment(t) {
+                continue;
+            }
+            if positional > 0 {
+                positional -= 1;
+                continue;
+            }
+            break Some(j - 1);
+        };
+        match next_head {
+            Some(h) => i = h,
+            None => return out,
+        }
+    }
+    out
+}
+
+/// True when `flag` is an option of `wrapper` KNOWN to take no separate value.
+/// A flag missing here is treated as possibly value-taking, which only adds a
+/// candidate in [`wrapped_command_heads`] — the restrictive direction.
+fn wrapper_flag_is_boolean(wrapper: &str, flag: &str) -> bool {
+    let known: &[&str] = match wrapper {
+        "env" => &[
+            "-i",
+            "-0",
+            "-v",
+            "--ignore-environment",
+            "--null",
+            "--debug",
+        ],
+        "command" => &["-p", "-v", "-V"],
+        "sudo" => &[
+            "-E",
+            "-H",
+            "-n",
+            "-S",
+            "-k",
+            "-b",
+            "-i",
+            "-s",
+            "--preserve-env",
+        ],
+        "timeout" => &["-v", "--verbose", "--foreground", "--preserve-status"],
+        "setsid" => &["-f", "-w", "-c", "--fork", "--wait", "--ctty"],
+        "time" => &["-p", "-v"],
+        "exec" => &["-c", "-l"],
+        _ => &[],
+    };
+    known.contains(&flag)
+}
+
+/// The shell or code interpreter `xargs` (given its arguments `rest`) runs,
+/// if its command word — resolved through any exec-wrapper — is one. The same
+/// reader set `analyze_interpreter_stdin_exec` uses: `xargs python3` hands the
+/// items to python as argv (a script path, `-c` code) exactly as `xargs sh`
+/// does to the shell.
+fn xargs_shell(rest: &[&str]) -> Option<String> {
+    let start = xargs_command_start(rest)?;
+    let inner = &rest[start..];
+    wrapped_command_heads(inner)
+        .into_iter()
+        .map(|idx| normalized_command(inner[idx]))
+        .find(|head| is_shell(head) || is_code_interpreter(head))
+}
+
 /// True when `tok` OPENS a quote it does not close within the same
 /// whitespace-delimited token — i.e. the token is the first fragment of a
 /// multi-word quoted STRING (`'rm` in `grep -rn 'rm -rf' src/`), not a command
@@ -6960,14 +7083,65 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
                 return deny;
             }
             let tokens: Vec<&str> = stage.split_whitespace().collect();
-            let Some(first) = tokens.first() else {
+            // The interpreter may sit behind an exec-wrapper (`env sh`,
+            // `env -i bash`, `/usr/bin/env python3`, `command sh`): reading
+            // token 0 alone took `env` for the program and let
+            // `echo "rm -rf /" | env sh` through unjudged, while the egress
+            // twin `stage_is_interpreter_terminal` and the here-string twin
+            // `shell_here_string_verdict` already resolve the wrapper.
+            //
+            // Resolved with `wrapped_command_heads`, NOT `command_candidates`:
+            // the latter makes every token behind a wrapper a candidate, so
+            // grep's OPERAND in `echo x | env grep bash` was taken for the
+            // reader and the line asked. Only a head the wrapper chain can
+            // actually exec counts here.
+            let heads = wrapped_command_heads(&tokens);
+            // `… | xargs sh`: xargs turns its stdin into ARGUMENTS of the
+            // shell it runs (`sh rm -rf /` runs a script file named `rm`, or
+            // `sh -c {}` runs the item as a command line). What executes is the
+            // piped text, re-parsed as argv, which no reading here models.
+            //
+            // Fed by a pipe or here-document, by a `<` redirect, or by an
+            // argument file (`-a FILE` / `--arg-file`, whose value
+            // `xargs_command_start` consumes): none of those items is on the
+            // command line. `xargs -a FILE sh` was Allow while this was gated
+            // on `i > 0 || heredoc_open` alone. A bare `xargs sh` at the head
+            // of a statement reads the hook's inherited stdin and is left to
+            // the other rules (the nesting-cap Ask in `sh -c xargs sh -c …`
+            // must stay the reported reason).
+            let stdin_redirect = tokens
+                .iter()
+                .any(|t| t.starts_with('<') || t.starts_with("0<"));
+            if let Some(inner) = heads
+                .iter()
+                .filter(|&&idx| normalized_command(tokens[idx]) == "xargs")
+                .find_map(|&idx| {
+                    let rest = &tokens[idx + 1..];
+                    let opts = &rest[..xargs_command_start(rest).unwrap_or(rest.len())];
+                    let fed = i > 0 || heredoc_open || stdin_redirect || xargs_reads_arg_file(opts);
+                    if fed {
+                        xargs_shell(rest)
+                    } else {
+                        None
+                    }
+                })
+            {
+                if let Some(deny) = acc.record(Decision::ask(format!(
+                    "`{}` hands its input items to `{inner}` as arguments — the command that runs \
+is built from text (stdin, a redirect or an `-a` file) that is not on the command line, so \
+blastguard cannot read it",
+                    stage.trim()
+                ))) {
+                    return deny;
+                }
+            }
+            let Some(idx) = heads.into_iter().find(|&idx| {
+                let head = normalized_command(tokens[idx]);
+                is_shell(&head) || is_code_interpreter(&head)
+            }) else {
                 continue;
             };
-            let head = normalized_command(first);
-            if !is_shell(&head) && !is_code_interpreter(&head) {
-                continue;
-            }
-            let rest = &tokens[1..];
+            let rest = &tokens[idx + 1..];
             let has_program_file = stage_has_program_operand(rest);
             let takes_stdin_program = interpreter_stdin_operand(rest).is_some()
                 || (!has_program_file && (i > 0 || heredoc_open));
@@ -7016,9 +7190,82 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
             )) {
                 return deny;
             }
+            // The quoted literals above are NOT everything the upstream stage
+            // emits: an UNQUOTED expansion beside them (`echo "a" $(ls) | sh`)
+            // is dropped by `quoted_string_literals`, so the program judged was
+            // `a` alone and the line was allowed — while `echo "a $(ls)" | sh`,
+            // whose substitution sits inside the literal, asked. The output of
+            // that expansion is part of the program and is not on the command
+            // line. Recorded after the literal verdict so a Deny found there
+            // still wins.
+            if i > 0 {
+                if let Some(word) =
+                    unquoted_expansion(&backticks_as_dollar_paren(&statement[i - 1]))
+                {
+                    if let Some(deny) = acc.record(Decision::ask(format!(
+                        "{shape}, and the stage piping into it emits the output of an unquoted \
+shell expansion (`{word}`) — that output is the program, it is not on the command line, so \
+blastguard cannot tell whether anything here is irreversible"
+                    ))) {
+                        return deny;
+                    }
+                }
+            }
         }
     }
     acc.finish()
+}
+
+/// The first shell expansion in `stage` that sits OUTSIDE every quote — a
+/// `$(`, `${`, `$NAME` / special parameter, or a backtick — as a short sample
+/// of the text from that point. `None` when every expansion is inside quotes
+/// (those reach the program through [`quoted_string_literals`]) or there is
+/// none. An unquoted backslash-escaped `$` or backtick COUNTS: the escape only
+/// stops THIS stage from expanding it, so the stage emits a literal `$(ls)` /
+/// `` `ls` `` that the shell reading the pipe then runs (`echo "a" \$(ls) | sh`
+/// executes `ls`). `$'…'` / `$"…"` are quoting, not expansion. An unclosed
+/// backtick counts: what it emits cannot be read either.
+///
+/// PATHNAME and TILDE expansion count too: an unquoted `*`, `?` or `[` turns
+/// into whatever file names exist when the line runs, and a word-initial `~`
+/// into a home directory, so `echo "a" * | sh` hands the shell a program made
+/// of file names that are not on the command line.
+fn unquoted_expansion(stage: &str) -> Option<String> {
+    let chars: Vec<char> = stage.chars().collect();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut k = 0;
+    while k < chars.len() {
+        let c = chars[k];
+        if c == '\\' && !in_s {
+            // An escaped glob or tilde is likewise emitted literally and
+            // expanded by the reading shell (`echo "a" \* | sh`).
+            if !in_d && matches!(chars.get(k + 1), Some('$' | '`' | '*' | '?' | '[' | '~')) {
+                return Some(chars[k..].iter().take(40).collect());
+            }
+            k += 2;
+            continue;
+        }
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if !in_s && !in_d {
+            let expands = match c {
+                '`' | '*' | '?' | '[' => true,
+                '~' => k == 0 || chars[k - 1].is_whitespace(),
+                '$' => chars.get(k + 1).is_some_and(|n| {
+                    matches!(n, '(' | '{' | '_' | '@' | '*' | '#' | '?' | '$' | '!' | '-')
+                        || n.is_ascii_alphanumeric()
+                }),
+                _ => false,
+            };
+            if expands {
+                return Some(chars[k..].iter().take(40).collect());
+            }
+        }
+        k += 1;
+    }
+    None
 }
 
 /// `stage` with every closed, unescaped backtick substitution outside single
@@ -10881,10 +11128,12 @@ fn xargs_command_start(rest: &[&str]) -> Option<usize> {
     // Value-taking xargs short flags whose value is the NEXT token when the flag
     // is given standalone (`-I {}`, `-n 1`, BSD `-J %`). Bundled forms (`-I{}`,
     // `-n1`, `-J%`) embed the value and consume only themselves. Covers both GNU
-    // (I i n L P s d E a) and BSD/macOS (J R S) — the default xargs on this host —
+    // (I n L P s d E a) and BSD/macOS (J R S) — the default xargs on this host —
     // because a MISSED value flag would misread its value as the command word and
-    // leak a destructive payload (`xargs -J % rm -rf %`) past re-analysis.
-    const VALUE_SHORT: &str = "IinLPsdEaJRS";
+    // leak a destructive payload (`xargs -J % rm -rf %`) past re-analysis. An
+    // EXTRA one is the same leak the other way: it swallows the command word
+    // (GNU `-i`/`-e`/`-l` take only an attached value; see XARGS_VALUE_SHORT).
+    const VALUE_SHORT: &str = XARGS_VALUE_SHORT;
     let mut i = 0;
     while i < rest.len() {
         let t = rest[i];
@@ -10897,16 +11146,17 @@ fn xargs_command_start(rest: &[&str]) -> Option<usize> {
         }
         if let Some(stripped) = t.strip_prefix("--") {
             // Long flag: value-taking ones consume the next token unless `=`-joined.
+            // NOT `--replace`, `--eof`, `--max-lines`: GNU gives those an
+            // OPTIONAL value that is only ever `=`-attached, so the next token
+            // is the command word (`xargs --replace sh -c {}` runs `sh`).
+            // Listed here, they swallowed it.
             let takes = matches!(
                 stripped.split('=').next().unwrap_or(""),
                 "max-args"
-                    | "max-lines"
                     | "max-procs"
                     | "max-chars"
                     | "delimiter"
-                    | "eof"
                     | "arg-file"
-                    | "replace"
                     | "process-slot-var"
             );
             i += if takes && !t.contains('=') { 2 } else { 1 };
@@ -10927,12 +11177,64 @@ fn xargs_command_start(rest: &[&str]) -> Option<usize> {
                 continue;
             };
             let standalone_value = t.len() == 2 && VALUE_SHORT.contains(last);
-            i += if standalone_value { 2 } else { 1 };
+            // A bundle of boolean flags ENDING in a value flag (`-0a FILE`,
+            // `-0n 1`) also takes the next token as that value. Read as
+            // self-contained, `xargs -0a FILE sh` took `FILE` for the command
+            // word and `sh` was never seen.
+            let bundled_value = xargs_short_value_flag(t).is_some_and(|(_, next)| next);
+            i += if standalone_value || bundled_value {
+                2
+            } else {
+                1
+            };
             continue;
         }
         return Some(i); // first non-flag token = the command word
     }
     None
+}
+
+/// Value-taking xargs short flags whose value may be the NEXT token (GNU
+/// `I n L P s d E a`, BSD `J R S`).
+///
+/// NOT GNU `-i`, `-e`, `-l`: their value (`-i[REPL]`, `-e[EOF]`, `-l[N]`) is
+/// OPTIONAL and only ever attached, so a separate next token is never theirs.
+/// `-i` used to be listed here, and `xargs -i sh -c {}` read `sh` as its
+/// value, never saw the shell, and was allowed. Those three live in
+/// [`XARGS_OPTIONAL_ATTACHED`].
+const XARGS_VALUE_SHORT: &str = "InLPsdEaJRS";
+
+/// GNU xargs short flags with an optional ATTACHED value: the rest of the
+/// bundle after one of these is its value, and it never takes the next token.
+const XARGS_OPTIONAL_ATTACHED: &str = "iel";
+
+/// For a short-option bundle `t` (`-0a`, `-aFILE`, `-n1`), the first
+/// value-taking flag in it and whether its value is the NEXT token (true when
+/// that flag is the bundle's last character). `None` for a bundle of boolean
+/// flags only, for one whose first value flag is optional-attached (`-0i`,
+/// `-ia`: everything after the `i` is its replace string), or for a token
+/// that is not a short-option bundle.
+fn xargs_short_value_flag(t: &str) -> Option<(char, bool)> {
+    let body = t.strip_prefix('-')?;
+    if body.is_empty() || body.starts_with('-') {
+        return None;
+    }
+    let (at, c) = body
+        .char_indices()
+        .find(|&(_, c)| XARGS_VALUE_SHORT.contains(c) || XARGS_OPTIONAL_ATTACHED.contains(c))?;
+    if XARGS_OPTIONAL_ATTACHED.contains(c) {
+        return None;
+    }
+    Some((c, at + c.len_utf8() == body.len()))
+}
+
+/// True when xargs's own options (`opts`, the tokens before its command word)
+/// name an argument FILE (`-a FILE`, `-aFILE`, `-0a FILE`, `--arg-file[=]FILE`):
+/// the items then come from that file, not from stdin.
+fn xargs_reads_arg_file(opts: &[&str]) -> bool {
+    opts.iter().any(|t| {
+        t.starts_with("--arg-file") || xargs_short_value_flag(t).is_some_and(|(c, _)| c == 'a')
+    })
 }
 
 // ---------------------------------------------------------------------------

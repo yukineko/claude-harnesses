@@ -196,34 +196,20 @@ fn unwritable_store_does_not_panic_and_stays_exit_zero() {
 }
 
 // ---------------------------------------------------------------------------
-// Minimal tempdir helper (avoid pulling in a dev-dependency just for this).
+// Per-call unique HOME.
+//
+// The previous helper named the dir `<pid>-<SystemTime nanos>`. On macOS the
+// wall clock has microsecond granularity, so two test threads of one process
+// could get the SAME name and share one HOME: a concurrent writable-HOME deny
+// (e.g. `deny_decision_is_byte_identical_regardless_of_store_writability`)
+// then appended a second identical line to `deny_appends_one_violation_line`'s
+// violations.jsonl. `tempfile` creates the directory atomically with a random
+// name (retrying on collision), so every call gets its own HOME. Removed on drop.
 // ---------------------------------------------------------------------------
 
-struct TempDir(std::path::PathBuf);
-
-impl TempDir {
-    fn path(&self) -> &std::path::Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn tempdir() -> TempDir {
-    let mut dir = std::env::temp_dir();
-    let unique = format!(
-        "blastguard-overwatch-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    );
-    dir.push(unique);
-    std::fs::create_dir_all(&dir).unwrap();
-    TempDir(dir)
+fn tempdir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("blastguard-overwatch-test-")
+        .tempdir()
+        .unwrap()
 }

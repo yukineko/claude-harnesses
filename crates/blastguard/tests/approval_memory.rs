@@ -31,13 +31,15 @@
 //! invocations (PreToolUse stashes a pending fingerprint, PostToolUse promotes
 //! it) and a library-level test could not observe that boundary at all.
 //!
-//! # Why not a `TempDir`
+//! # Why not a `TempDir` in `/tmp`
 //!
 //! `/tmp` is a blastguard SAFE ROOT ([`blastguard::scope`]'s `TEMP_ROOTS`), so a
 //! project built under it has every sibling directory "inside a safe root" too
 //! — and control (iv) needs a directory that is genuinely OUTSIDE. Cargo's
 //! `CARGO_TARGET_TMPDIR` sits under `target/`, which is not a safe root, so the
-//! outside/inside distinction survives there.
+//! outside/inside distinction survives there. Each fixture is a unique
+//! `TempDir` created *inside* `CARGO_TARGET_TMPDIR` (not the system temp dir),
+//! so concurrent runs never share one fixture path (backlog b6ce7f76).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -55,22 +57,32 @@ struct Fixture {
     /// `SafeRoots::new` refuses to treat the home directory as a root.
     home: PathBuf,
     base: PathBuf,
+    /// Owns `base`: a unique directory per fixture instance, so concurrent
+    /// runs of this binary never share (and clobber) one fixture path
+    /// (backlog b6ce7f76). Removed on drop.
+    _dir: tempfile::TempDir,
 }
 
 impl Fixture {
     fn new(name: &str) -> Fixture {
-        let base = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("approval_memory")
-            .join(name);
+        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("approval_memory");
+        std::fs::create_dir_all(&parent).unwrap();
         // Deterministic: a leftover store from a previous run would make (i)
-        // pass without the current binary ever writing anything.
-        let _ = std::fs::remove_dir_all(&base);
+        // pass without the current binary ever writing anything. A freshly
+        // created, uniquely named directory can hold no leftover store, and
+        // its store / home are private to this instance.
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("{name}-"))
+            .tempdir_in(&parent)
+            .unwrap();
+        let base = dir.path().to_path_buf();
         let f = Fixture {
             proj: base.join("proj"),
             outside: base.join("outside"),
             store: base.join("store"),
             home: base.join("home"),
             base,
+            _dir: dir,
         };
         std::fs::create_dir_all(f.proj.join(".claude")).unwrap();
         std::fs::create_dir_all(f.proj.join("sub")).unwrap();

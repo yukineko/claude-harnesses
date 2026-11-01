@@ -120,24 +120,57 @@ fn dead_within(pid: u32, limit: Duration) -> bool {
 fn timeout_kills_the_child_and_its_descendants() {
     let dir = fresh_dir("group-kill");
     let pidfile = dir.join("pids");
-    let mut cmd = stub(
+    // The deadline runs from spawn, so it must outlast process-start latency
+    // under load (the stub has to have written both pids before the timeout
+    // for the test to see them): 6s tolerates seconds of latency, and the
+    // result is judged on ranges, not on tight instants.
+    let deadline = Duration::from_secs(6);
+    let mut cmd = sh_stub(
         &dir,
         &format!(
             "echo $$ > {p}\nsleep 120 &\necho $! >> {p}\nwait",
             p = pidfile.display()
         ),
     );
-    let outcome = watchdog(Duration::from_secs(30), move || {
-        bounded::run_bounded(&mut cmd, b"", Duration::from_secs(2))
-    });
+    let (outcome, took) = {
+        let started = Instant::now();
+        let o = watchdog(Duration::from_secs(40), move || {
+            bounded::run_bounded(&mut cmd, b"", deadline)
+        });
+        (o, started.elapsed())
+    };
     let pids = pids_in(&pidfile, 2);
-    let both_dead = pids.len() == 2 && pids.iter().all(|p| dead_within(*p, Duration::from_secs(3)));
+    let alive_after: Vec<u32> = pids
+        .iter()
+        .copied()
+        .filter(|p| !dead_within(*p, Duration::from_secs(10)))
+        .collect();
     for p in &pids {
         kill(*p);
     }
+    assert_eq!(
+        pids.len(),
+        2,
+        "the stub never recorded both pids (stub and its sleep child) within the {deadline:?} deadline plus 5s: it did not start in time, so nothing was proven; pids={pids:?}"
+    );
+    let msg = match outcome {
+        Outcome::Panicked(m) => m,
+        Outcome::Returned(_) => {
+            panic!("run_bounded returned instead of timing out a child that never exits")
+        }
+        Outcome::TimedOut => panic!("run_bounded hung past the 40s watchdog"),
+    };
     assert!(
-        matches!(outcome, Outcome::Panicked(_)) && both_dead,
-        "after a timeout the helper must panic and leave neither the stub nor its sleep child alive; pids={pids:?}"
+        msg.contains("timed out waiting for exit"),
+        "the panic must name the exit-wait phase, got {msg:?}"
+    );
+    assert!(
+        took >= deadline && took < deadline + Duration::from_secs(8),
+        "the timeout must fire within [{deadline:?}, {deadline:?}+8s), took {took:?}"
+    );
+    assert!(
+        alive_after.is_empty(),
+        "after a timeout neither the stub nor its sleep child may stay alive; still alive: {alive_after:?} of {pids:?}"
     );
 }
 

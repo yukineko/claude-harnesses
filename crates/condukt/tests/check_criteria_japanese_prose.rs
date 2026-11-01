@@ -196,7 +196,11 @@ fn case1_single_path_then_japanese_word() {
 
 #[test]
 fn case2_python_m_pytest_then_japanese_word() {
-    let o = run_case("c2", "python3 -m pytest scripts/test_a.py が通ること", false);
+    let o = run_case(
+        "c2",
+        "python3 -m pytest scripts/test_a.py が通ること",
+        false,
+    );
     assert!(
         o.argv.starts_with(&[
             "python3".to_string(),

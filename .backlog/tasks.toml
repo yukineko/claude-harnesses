@@ -93,3 +93,34 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
      Running tests/hooks_health_unverifiable.rs (target/debug/deps/hooks_health_unverifiable-fa1012a0d142e315)
 error: test failed, to rerun pass `-p harness-status --test hooks_health_unverifiable`"""
+
+[[task]]
+id = "adf43a69"
+title = "condukt capstone e2e tests leave their fixture dirs in the temp dir after every run"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "tests",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "crates/condukt/tests/foundation_capstone_e2e.rs and schedule_conflict_capstone_e2e.rs build Fixture under std::env::temp_dir() (condukt-capstone-e2e-<pid>-<tag>, condukt-schedule-capstone-e2e-<pid>-<tag>); Fixture::new only removes a stale same-pid dir at the start, there is no Drop / end-of-test cleanup. Observed 2026-11-02: 190 condukt-capstone-e2e-*-capstone dirs (119M total, 07-10..10-06) in /tmp, deleted by the user. Repro (RED, exit 1): scripts/tests/condukt-capstone-e2e-tmp-leak.sh runs both test targets with TMPDIR=fresh dir; after a passing run 3 fixtures remain. Fix direction: tempfile::TempDir (or Drop) so cleanup also happens on panic; keep the fixture on failure only if a debugging env var asks for it. Exit 2 = cargo did not run the tests (undetermined)."
+created_at = 1793595655
+updated_at = 1793595655
+weight = 0.0
+issue_number = 1485
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1485"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/condukt-capstone-e2e-tmp-leak.sh"
+rev = "91bcea639e4eea7a2008e1f83755fb01e0030d59"
+observed_at = 1793595655
+detail = """
+exit 1: LEAK: capstone e2e fixtures left in TMPDIR after the run (cargo rc=0):
+  condukt-schedule-capstone-e2e-106529-assertions
+  condukt-schedule-capstone-e2e-106529-writes
+  condukt-capstone-e2e-106468-capstone"""

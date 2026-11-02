@@ -858,3 +858,73 @@ fn bounded_give_up_is_loud_and_per_session() {
     let other = f.gate("s-giveup-other", true);
     assert_block(&other);
 }
+
+// ---------------------------------------------------------------- Bash edits of web files
+
+impl Fixture {
+    /// Transcript whose only tool call is a Bash command (no Write/Edit).
+    fn transcript_with_bash(&self, command: &str) {
+        let lines = [
+            user_line("change the page"),
+            tool_use_line("t1", "Bash", serde_json::json!({"command": command})),
+        ];
+        write(&self.transcript, &(lines.join("\n") + "\n"));
+    }
+}
+
+/// A web file edited through Bash (`sed -i`) is a web change the transcript
+/// shows only as an opaque command. Judging it `Known(false)` skips the pages
+/// check, which reads as "no web changes" -- permissive on a case that cannot
+/// be ruled out. It must run pages (the control is the Write case above).
+#[test]
+fn bash_sed_in_place_on_web_file_runs_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("sed -i '' 's/42/43/' src/main.js");
+    let out = f.gate("s-bash-sed", false);
+    assert!(
+        f.pages_ran(),
+        "a Bash `sed -i` on a web_globs file cannot be ruled out as a web change: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// Same gap through a shell redirect.
+#[test]
+fn bash_redirect_into_web_file_runs_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("echo 'export const answer = 43;' > src/main.js");
+    let out = f.gate("s-bash-redir", false);
+    assert!(
+        f.pages_ran(),
+        "a Bash redirect into a web_globs file cannot be ruled out as a web change: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+// ---------------------------------------------------------------- node stub schema
+
+/// The fixture's `node` stub reports a console error. The block it provokes
+/// must be that page finding. The stub's payload carries no `schema` /
+/// `status` / `pages_checked`, so pages are judged Undetermined ("output does
+/// not match sitecraft-check-pages/1") and the test above that reads as
+/// "findings block" is really blocking on a schema mismatch.
+#[test]
+fn web_edit_block_reason_is_the_page_finding_not_a_schema_mismatch() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with("Write", "src/main.js");
+    let out = f.gate("s-stub-schema", false);
+    let reason = assert_block(&out);
+    assert!(
+        !reason.contains("does not match"),
+        "the stub's pages payload must be valid for the check-pages schema; the block is a schema mismatch\n{}",
+        describe(&out)
+    );
+    assert!(
+        reason.contains("uncaught typeerror: boom"),
+        "the block must carry the stub's console-error finding\n{}",
+        describe(&out)
+    );
+}

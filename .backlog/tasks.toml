@@ -26,3 +26,70 @@ scripts/test_guard_maintree_bash_foreign_merge_window.py:100: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_guard_maintree_bash_foreign_merge_window.py::ForeignMergeWindow::test_foreign_merge_window_does_not_refuse_unrelated_command
 ========================= 1 failed, 1 passed in 2.09s =========================="""
+
+[[task]]
+id = "a7950779"
+title = "hooks-health summarises an unverifiable hook target (relative script after an interpreter) as 'all present'"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "harness-status",
+    "harness-core",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Left by the 0.2.83 fix (6f89b169, backlog 59c6d0e4). harness_core::hook::extract_binary_path returns None for targets it cannot resolve (relative script after an interpreter, inline code, unresolved $VAR, builtin head); binary_present maps None -> present; missing_hook_binaries drops it; hooks-health then prints '[all registered hook binaries present]'. A typo like 'bash hooks/gaurd.sh' is never reported. Undetermined is collapsed into clean (CLAUDE.md §3). Fix direction (undecided): a third bucket 'unverifiable' in MissingHookBinary/HooksHealthReport rendered separately and never summarised as 'all present'. Inline code (-c) may be a legitimate 'nothing to check' vs relative script 'could not check' — decide the split. Repro: crates/harness-status/tests/hooks_health_unverifiable.rs (#[ignore]d, RED with --ignored), 7171cb76."
+created_at = 1793595186
+updated_at = 1793595186
+weight = 0.0
+issue_number = 1483
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1483"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-status --test hooks_health_unverifiable unresolvable_target_is_not_reported_as_all_present -- --ignored"
+rev = "7171cb76577ffcb256ff0220fcfb11a986132caa"
+observed_at = 1793595186
+detail = """
+exit 101: .00s
+
+   Compiling harness-status v0.1.32 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-06e1b4b9/crates/harness-status)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/hooks_health_unverifiable.rs (target/debug/deps/hooks_health_unverifiable-fa1012a0d142e315)
+error: test failed, to rerun pass `-p harness-status --test hooks_health_unverifiable`"""
+
+[[task]]
+id = "dbc35817"
+title = "hooks-health reports a non-executable hook target as present"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "harness-status",
+    "harness-core",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "harness_core::hook::binary_present checks only Path::exists (and resolve_on_path only is_file), never the exec bit. A hook command pointing at a 0644 file is summarised as present although Claude Code cannot exec it (same dark-hook class as check-launcher-exec-bit.py). Note: for an interpreter-wrapped script (bash /abs/x.sh) the exec bit is NOT required — only direct-exec targets and PATH-resolved names need it. Repro: crates/harness-status/tests/hooks_health_unverifiable.rs (#[ignore]d, RED with --ignored), 7171cb76."
+created_at = 1793595188
+updated_at = 1793595188
+weight = 0.0
+issue_number = 1484
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1484"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-status --test hooks_health_unverifiable non_executable_target_is_flagged -- --ignored"
+rev = "7171cb76577ffcb256ff0220fcfb11a986132caa"
+observed_at = 1793595188
+detail = """
+exit 101: _executable_target_is_flagged
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/hooks_health_unverifiable.rs (target/debug/deps/hooks_health_unverifiable-fa1012a0d142e315)
+error: test failed, to rerun pass `-p harness-status --test hooks_health_unverifiable`"""

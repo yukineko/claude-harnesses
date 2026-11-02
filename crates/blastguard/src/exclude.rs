@@ -631,6 +631,25 @@ pub fn is_protected_path(path: &str) -> bool {
     !resolved.is_empty() && resolved != collapsed && set.is_match(&resolved)
 }
 
+/// True when `path` is, or lies under, a `.github/workflows` directory (GitHub
+/// Actions workflow configuration). Matched on both the [`collapse`]d and the
+/// `..`-resolved spelling (union = restrictive direction) and
+/// case-insensitively, so `.GitHub/Workflows/x.yml` on a case-folding
+/// filesystem is not a bypass. The directory itself (e.g. a `mv x
+/// .github/workflows` destination) counts.
+pub fn is_workflow_path(path: &str) -> bool {
+    fn hit(p: &str) -> bool {
+        let l = p.to_lowercase();
+        let l = l.trim_end_matches('/');
+        l == ".github/workflows"
+            || l.ends_with("/.github/workflows")
+            || l.starts_with(".github/workflows/")
+            || l.contains("/.github/workflows/")
+    }
+    let collapsed = collapse(path);
+    hit(&collapsed) || hit(&resolve_parents(&collapsed))
+}
+
 /// True when `path` names, or lexically contains, anything protected — the union
 /// of [`is_protected_path`] and [`holds_protected_paths`], with a trailing slash
 /// tolerated on the file side.

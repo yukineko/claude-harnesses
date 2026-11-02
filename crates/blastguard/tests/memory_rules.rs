@@ -9,10 +9,13 @@
 //!    disappears from the stored text -> Ask. Single-quoted stays Allow.
 //! 2. `git checkout -- <file>` on a file with uncommitted changes destroys
 //!    them -> blocked; a clean file stays Allow; undeterminable -> blocked.
-//! 3. GitHub Actions is banned: `gh run ...` / `gh workflow ...` -> Deny;
-//!    `gh pr ...` / `gh issue ...` stay Allow.
+//! 3. GitHub Actions observation (`gh run list|view|watch`) is Allow; executing
+//!    or configuring it (`gh workflow run`, `gh run rerun`) is Ask, never Deny
+//!    (user ruling 2026-10-29). `gh pr ...` / `gh issue ...` reads stay Allow.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -43,10 +46,8 @@ impl Fx {
     }
 
     fn git(&self, args: &[&str]) {
-        let out = git_env::scrub(&mut Command::new("git"))
-            .arg("-C")
-            .arg(&self.repo)
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+        let mut cmd = git_env::pinned(&self.repo);
+        cmd.args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
             .args([
                 "-c",
                 "commit.gpgsign=false",
@@ -56,9 +57,9 @@ impl Fx {
             .args(args)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("HOME", &self.home)
-            .output()
-            .expect("git runs");
+            .env("HOME", &self.home);
+        let out =
+            bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
         assert!(
             out.status.success(),
             "git {args:?} failed: {}",
@@ -74,7 +75,8 @@ impl Fx {
             "tool_input": { "command": command },
         })
         .to_string();
-        let mut child = git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_blastguard")))
+        let mut hook = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+        git_env::scrub(&mut hook)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -85,13 +87,8 @@ impl Fx {
             .env_remove("BLASTGUARD_ASK")
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .env_remove("TMPDIR")
-            .current_dir(&self.base)
-            .spawn()
-            .expect("binary spawns");
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(payload.as_bytes());
-        }
-        let out = child.wait_with_output().expect("binary runs");
+            .current_dir(&self.base);
+        let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
         assert_eq!(
             out.status.code(),
             Some(0),
@@ -179,24 +176,25 @@ fn rule2_git_checkout_of_a_dirty_file_is_blocked_clean_file_allowed() {
 }
 
 #[test]
-fn rule3_github_actions_commands_are_denied_pr_and_issue_allowed() {
+fn rule3_gha_observation_allowed_execution_asks_never_denies() {
     let f = Fx::new("r3");
     for cmd in [
         "gh run list",
         "gh run watch 123",
         "gh run view 123 --log",
-        "gh workflow run ci.yml",
         "gh workflow list",
+        "gh pr list",
+        "gh issue list",
     ] {
         let out = f.run(cmd);
-        assert_eq!(decision(&out), "deny", "`{cmd}` must Deny; got {out:?}");
+        assert_eq!(decision(&out), "allow", "`{cmd}` must Allow; got {out:?}");
     }
-    for cmd in ["gh pr list", "gh pr create --fill", "gh issue list"] {
+    for cmd in ["gh workflow run ci.yml", "gh run rerun 123"] {
         let out = f.run(cmd);
         assert_eq!(
             decision(&out),
-            "allow",
-            "`{cmd}` must stay Allow; got {out:?}"
+            "ask",
+            "`{cmd}` must Ask (not deny); got {out:?}"
         );
     }
 }

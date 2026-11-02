@@ -18,11 +18,13 @@
 //! names a file under `/etc` that the test first proves absent.
 //!
 //! Repro: `cargo test -p blastguard --test backlog_2287ebae` (was `#[ignore]`d
-//! RED until the redirect axes judged the real landing, `detect::real_landing`).
+//! RED until the redirect axes judged the real landing, `detect::physical_landing`).
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use std::io::Write as _;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -35,18 +37,26 @@ struct Fx {
     base: PathBuf,
     home: PathBuf,
     proj: PathBuf,
+    /// Owns `base`: a unique directory per fixture instance, so concurrent
+    /// runs of this binary never share (and clobber) one fixture path
+    /// (backlog b6ce7f76). Removed on drop.
+    _dir: tempfile::TempDir,
 }
 
 impl Fx {
     fn new(name: &str) -> Fx {
-        let base = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("backlog_2287ebae")
-            .join(name);
-        let _ = std::fs::remove_dir_all(&base);
+        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("backlog_2287ebae");
+        std::fs::create_dir_all(&parent).unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("{name}-"))
+            .tempdir_in(&parent)
+            .unwrap();
+        let base = dir.path().to_path_buf();
         let f = Fx {
             home: base.join("home"),
             proj: base.join("src/proj"),
             base,
+            _dir: dir,
         };
         std::fs::create_dir_all(&f.home).unwrap();
         std::fs::create_dir_all(&f.proj).unwrap();
@@ -64,8 +74,8 @@ impl Fx {
             "tool_input": { "command": command },
         })
         .to_string();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_blastguard"))
-            .stdin(Stdio::piped())
+        let mut hook = Command::new(env!("CARGO_BIN_EXE_blastguard"));
+        hook.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("CLAUDE_PROJECT_DIR", &self.proj)
@@ -75,13 +85,8 @@ impl Fx {
             .env_remove("BLASTGUARD_ASK")
             .env_remove("TMPDIR")
             .env_remove("CLAUDE_CODE_SESSION_ID")
-            .current_dir(&self.base)
-            .spawn()
-            .expect("binary spawns");
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(payload.as_bytes());
-        }
-        let out = child.wait_with_output().expect("binary runs");
+            .current_dir(&self.base);
+        let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
         assert_eq!(
             out.status.code(),
             Some(0),

@@ -232,7 +232,9 @@ pub fn run_safe(repo: &Path) -> Result<ScriptRun, String> {
         return Err(format!("script not found: {}", script.display()));
     }
 
-    let output = Command::new(&script)
+    // The script runs git; scrub inherited GIT_* so its git calls act on
+    // `repo` (found from current_dir), not a repo named by an inherited GIT_DIR.
+    let output = harness_core::git_env::scrub(&mut Command::new(&script))
         .arg("--stage-repo")
         .current_dir(repo)
         .output()
@@ -282,7 +284,8 @@ pub fn rollout(repo: &Path) -> Result<ScriptRun, String> {
         return Err(format!("script not found: {}", script.display()));
     }
 
-    let output = Command::new(&script)
+    // See run_safe: scrub inherited GIT_* so git inside the script acts on `repo`.
+    let output = harness_core::git_env::scrub(&mut Command::new(&script))
         .current_dir(repo)
         .output()
         .map_err(|e| format!("failed to run {}: {e}", script.display()))?;

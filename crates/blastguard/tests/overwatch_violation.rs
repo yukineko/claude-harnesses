@@ -6,7 +6,9 @@
 //! identical with vs without the emit path being writable, and an
 //! unwritable store never panics or changes the exit code.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::process::{Command, Stdio};
 
 fn bin() -> &'static str {
@@ -23,11 +25,7 @@ fn run_with_home(payload: &str, home: &std::path::Path) -> (i32, String) {
         .stderr(Stdio::piped())
         // Repeat-ledger test isolation — see the note in integration.rs.
         .env_remove("CLAUDE_CODE_SESSION_ID");
-    let mut child = cmd.spawn().expect("binary spawns");
-    if let Some(mut child_stdin) = child.stdin.take() {
-        let _ = child_stdin.write_all(payload.as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+    let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -172,11 +170,7 @@ fn unwritable_store_does_not_panic_and_stays_exit_zero() {
         .stderr(Stdio::piped())
         // Repeat-ledger test isolation — see the note in integration.rs.
         .env_remove("CLAUDE_CODE_SESSION_ID");
-    let mut child = cmd.spawn().expect("binary spawns");
-    if let Some(mut child_stdin) = child.stdin.take() {
-        let _ = child_stdin.write_all(deny_payload().as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+    let out = bounded::run_bounded(&mut cmd, deny_payload().as_bytes(), bounded::HOOK_DEADLINE);
 
     let mut restore = perms;
     std::os::unix::fs::PermissionsExt::set_mode(&mut restore, 0o700);
@@ -196,34 +190,20 @@ fn unwritable_store_does_not_panic_and_stays_exit_zero() {
 }
 
 // ---------------------------------------------------------------------------
-// Minimal tempdir helper (avoid pulling in a dev-dependency just for this).
+// Per-call unique HOME.
+//
+// The previous helper named the dir `<pid>-<SystemTime nanos>`. On macOS the
+// wall clock has microsecond granularity, so two test threads of one process
+// could get the SAME name and share one HOME: a concurrent writable-HOME deny
+// (e.g. `deny_decision_is_byte_identical_regardless_of_store_writability`)
+// then appended a second identical line to `deny_appends_one_violation_line`'s
+// violations.jsonl. `tempfile` creates the directory atomically with a random
+// name (retrying on collision), so every call gets its own HOME. Removed on drop.
 // ---------------------------------------------------------------------------
 
-struct TempDir(std::path::PathBuf);
-
-impl TempDir {
-    fn path(&self) -> &std::path::Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn tempdir() -> TempDir {
-    let mut dir = std::env::temp_dir();
-    let unique = format!(
-        "blastguard-overwatch-test-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    );
-    dir.push(unique);
-    std::fs::create_dir_all(&dir).unwrap();
-    TempDir(dir)
+fn tempdir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("blastguard-overwatch-test-")
+        .tempdir()
+        .unwrap()
 }

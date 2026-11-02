@@ -8,7 +8,9 @@
 #[path = "support/neutral_base.rs"]
 mod neutral_base;
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -57,11 +59,7 @@ impl Fx {
             .env_remove("TMPDIR")
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .current_dir(&self.base);
-        let mut child = cmd.spawn().expect("binary spawns");
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(payload.as_bytes());
-        }
-        let out = child.wait_with_output().expect("binary runs");
+        let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
         assert_eq!(
             out.status.code(),
             Some(0),
@@ -89,7 +87,6 @@ fn control_rm_project_work_file_is_allow() {
 }
 
 #[test]
-#[ignore = "backlog repro: rm of <HOME>/.ssh/id_rsa (absolute) is Allow; irreplaceable $HOME asset must not be"]
 fn rm_ssh_private_key_absolute_is_not_allow() {
     let f = Fx::new("abs");
     let out = f.run(&format!("rm {}/.ssh/id_rsa", f.home.display()));
@@ -100,7 +97,6 @@ fn rm_ssh_private_key_absolute_is_not_allow() {
 }
 
 #[test]
-#[ignore = "backlog repro: rm of ~/.ssh/id_rsa is Allow; irreplaceable $HOME asset must not be"]
 fn rm_ssh_private_key_tilde_is_not_allow() {
     let f = Fx::new("tilde");
     let out = f.run("rm ~/.ssh/id_rsa");

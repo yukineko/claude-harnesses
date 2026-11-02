@@ -12,7 +12,9 @@ mod git_env;
 #[path = "support/neutral_base.rs"]
 mod neutral_base;
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,15 +29,14 @@ enum V {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = git_env::scrub(&mut Command::new("git"))
-        .args(args)
-        .current_dir(dir)
+    let mut cmd = git_env::pinned(dir);
+    cmd.args(args)
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@example.com")
         .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@example.com")
-        .output()
-        .expect("git runs");
+        .env("GIT_COMMITTER_EMAIL", "t@example.com");
+    let out =
+        bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
     assert!(
         out.status.success(),
         "git {args:?} failed: {}",
@@ -127,11 +128,7 @@ impl Fx {
             .env_remove("TMPDIR")
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .current_dir(&self.base);
-        let mut child = cmd.spawn().expect("binary spawns");
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(payload.as_bytes());
-        }
-        let out = child.wait_with_output().expect("binary runs");
+        let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
         assert_eq!(
             out.status.code(),
             Some(0),
@@ -451,11 +448,19 @@ const GIT_ENV: [&str; 6] = [
 ];
 
 /// Plain git call with every inherited `GIT_*` repo-locating variable removed;
-/// returns stdout. Independent of the `git` helper under test.
+/// returns stdout. Independent of the `git` helper under test, but pinned to
+/// `dir` the same way (`-C`, and `GIT_CEILING_DIRECTORIES` at its parent so a
+/// `dir` without `.git` fails instead of discovering an enclosing repo).
 fn clean_git(dir: &Path, args: &[&str]) -> String {
+    let real = dir
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("clean git dir {} is unusable: {e}", dir.display()));
     let mut c = Command::new("git");
-    c.args(args)
-        .current_dir(dir)
+    c.arg("-C")
+        .arg(&real)
+        .args(args)
+        .current_dir(&real)
+        .env("GIT_CEILING_DIRECTORIES", real.parent().unwrap())
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@example.com")
         .env("GIT_COMMITTER_NAME", "t")
@@ -463,7 +468,7 @@ fn clean_git(dir: &Path, args: &[&str]) -> String {
     for k in GIT_ENV {
         c.env_remove(k);
     }
-    let out = c.output().expect("git runs");
+    let out = bounded::run_bounded_stdin(&mut c, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
     assert!(
         out.status.success(),
         "clean git {args:?} failed: {}",
@@ -500,11 +505,15 @@ fn fixture_git_ignores_inherited_git_dir() {
     clean_git(&outer, &["commit", "-q", "-m", "outer"]);
     let before = repo_state(&outer);
 
-    let child = Command::new(std::env::current_exe().unwrap())
+    let mut child_cmd = Command::new(std::env::current_exe().unwrap());
+    child_cmd
         .args(["--exact", "c3_repo_absolute_form_allow", "--test-threads=1"])
-        .env("GIT_DIR", outer.join(".git"))
-        .output()
-        .expect("child test binary runs");
+        .env("GIT_DIR", outer.join(".git"));
+    let child = bounded::run_bounded_stdin(
+        &mut child_cmd,
+        bounded::ChildStdin::Null,
+        bounded::TOOL_DEADLINE,
+    );
 
     let after = repo_state(&outer);
     assert_eq!(

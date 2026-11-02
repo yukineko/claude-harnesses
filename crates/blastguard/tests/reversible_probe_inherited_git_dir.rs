@@ -12,19 +12,18 @@
 #[path = "support/git_env.rs"]
 mod git_env;
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn git(dir: &Path, args: &[&str]) {
-    let mut c = Command::new("git");
-    git_env::scrub(&mut c);
-    let out = c
-        .current_dir(dir)
-        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-        .args(args)
-        .output()
-        .unwrap();
+    let mut cmd = git_env::pinned(dir);
+    cmd.args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(args);
+    let out =
+        bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
     assert!(out.status.success(), "git {args:?}: {out:?}");
 }
 
@@ -57,14 +56,7 @@ fn run_with_env(base: &Path, proj: &Path, command: &str, envs: &[(&str, &Path)])
     for (k, v) in envs {
         cmd.env(k, v);
     }
-    let mut child = cmd.spawn().unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.as_bytes())
-        .unwrap();
-    let out = child.wait_with_output().unwrap();
+    let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     String::from_utf8_lossy(&out.stdout).into_owned()
 }

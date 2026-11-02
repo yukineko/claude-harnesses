@@ -1,5 +1,9 @@
-//! Pure destructive-operation detection. No I/O, no globals beyond the static
-//! allowlist in [`crate::exclude`] — just `(tool_name, tool_input) -> Decision`.
+//! Destructive-operation detection: `(tool_name, tool_input) -> Decision`, no
+//! globals beyond the static allowlist in [`crate::exclude`]. The rules are
+//! lexical, with filesystem reads only where the verdict depends on what a
+//! path really names: the recoverability probe ([`crate::reversible`]), the
+//! symlink-resolved landing ([`physical_landing`]) of a write to a system
+//! directory and of a write to a protected or workflow path.
 //!
 //! The bias is deliberately asymmetric: we only Deny on *clearly* destructive,
 //! hard-to-undo patterns (recursive/wildcard deletion, full-file truncation,
@@ -691,16 +695,197 @@ fn extract_path(ti: Option<&Value>) -> Option<String> {
 /// see [`protected_disarm_deny`] and [`protected_tree_deny`], where the outcome
 /// IS established by the command alone (a deleted file stops running; a
 /// recursive delete takes every protected path under it).
+///
+/// # Symlinks (user ruling 2026-11-01)
+///
+/// The path is judged TWICE: lexically as written (case-fold, `..`, trailing
+/// slash — [`exclude::is_workflow_path`] / [`exclude::is_protected_path`]), and
+/// again at the path the kernel really writes, with every symlink resolved
+/// ([`physical_landing`], base = the segment's raw cwd). Either match Asks, so
+/// `wf/ci.yml` with `wf -> .github/workflows`, a file symlink onto
+/// `.claude/settings.json`, and a chain of links are all the same write as the
+/// direct spelling. A redirect after a `cd` is resolved from the `cd`'s
+/// directory with its own `..` applied after the symlinks
+/// ([`protected_path_block_at`]), so `cd link3 && echo x > ../settings.json`
+/// is judged where it lands. When the resolution itself fails (a symlink loop, an
+/// unreadable component, any I/O error other than "does not exist yet") the
+/// write is Undetermined and Asks — "could not resolve" is never read as "not
+/// a protected path" (CLAUDE.md §3). A target with an unexpanded `$`/backtick,
+/// or a relative one with no known base, cannot be placed and keeps the
+/// lexical verdict alone.
 fn protected_path_block(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
-    if exclude::is_protected_path(path) && !ctx.in_worktree_checkout(path) {
+    protected_path_block_at(ctx, action, path, path)
+}
+
+/// [`protected_path_block`] with the two judgements fed different spellings:
+/// `path` is judged lexically, `physical` is resolved through its symlinks.
+/// They differ for a redirect after a `cd` ([`physical_redirect_spelling`]):
+/// the lexical form has `..` collapsed against the `cd` text, the physical one
+/// keeps it so it is applied to the directory the `cd` really entered.
+fn protected_path_block_at(
+    ctx: &Ctx<'_>,
+    action: &str,
+    path: &str,
+    physical: &str,
+) -> Option<Decision> {
+    if let Some(d) = protected_path_lexical_block(ctx, action, path) {
+        return Some(d);
+    }
+    match physical_landing(physical, ctx.raw_base.as_deref())? {
+        Determination::Known(real) => protected_verdict(
+            ctx,
+            action,
+            &format!("{path}, which resolves to {real}"),
+            &real,
+        ),
+        Determination::Undetermined(u) => Some(Decision::ask(format!(
+            "{action} target ({path}) could not be resolved through its symlinks ({u}) — \
+blastguard cannot tell whether it lands on a gate/config file it protects or on a GitHub \
+Actions workflow, so it refuses to guess"
+        ))),
+    }
+}
+
+/// [`protected_path_block`] without the symlink resolution: the path judged
+/// only as written. Used where the target's base is NOT known (an unplaceable
+/// redirect, which is asked about separately), so resolving it against the
+/// session cwd would judge a different file.
+fn protected_path_lexical_block(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
+    protected_verdict(ctx, action, path, path)
+}
+
+/// The shared verdict: `judged` is the path tested against the workflow and
+/// protected lists, `shown` is how it is named in the reason.
+fn protected_verdict(ctx: &Ctx<'_>, action: &str, shown: &str, judged: &str) -> Option<Decision> {
+    // GitHub Actions workflow files: configuring GHA needs an explicit user
+    // request. Unlike the protected-gate paths below, a worktree checkout does
+    // NOT exempt this (the file is pushed to the same remote Actions), and every
+    // write site that already routes through this function (Write, Edit,
+    // MultiEdit, redirects, tee, cp/mv, sed -i, sort -o, ...) inherits it.
+    if exclude::is_workflow_path(judged) {
+        return Some(Decision::ask(format!(
+            "{action} targets a GitHub Actions workflow file ({shown}) — GitHub Actions \
+configuration requires an explicit user request"
+        )));
+    }
+    if exclude::is_protected_path(judged) && !ctx.in_worktree_checkout(judged) {
         Some(Decision::ask(format!(
-            "{action} targets a protected gate/config path ({path}) — it controls which hooks, \
+            "{action} targets a protected gate/config path ({shown}) — it controls which hooks, \
 gates or policies run, and blastguard cannot tell from the tool call whether this strengthens \
 or disarms it, so it refuses to guess"
         )))
     } else {
         None
     }
+}
+
+/// Upper bound on symlinks followed while resolving one path (Linux
+/// `MAXSYMLINKS` is 40; macOS stops at 32, so nothing the kernel can open is
+/// cut short). Exceeding it is how a loop is detected.
+const MAX_SYMLINK_HOPS: usize = 40;
+
+/// The path the kernel really writes for `target`, every symlink resolved —
+/// INCLUDING a final file symlink whose target does not exist yet (followed
+/// through `read_link`, since a write through it creates the target) — with
+/// any not-yet-existing tail kept as written. `..` is applied PHYSICALLY to the
+/// resolved prefix, not lexically to the text.
+///
+/// `None` = not a path this can place (an unexpanded `$`/backtick, or relative
+/// with no absolute base). `Undetermined` = the filesystem could not answer: a
+/// symlink loop, a `read_link`/`lstat` error other than "does not exist".
+fn physical_landing(target: &str, base: Option<&str>) -> Option<Determination<String>> {
+    use std::path::{Component, Path, PathBuf};
+    if target.is_empty() || target.contains('$') || target.contains('`') {
+        return None;
+    }
+    let start = if target.starts_with('/') {
+        PathBuf::from(target)
+    } else {
+        let base = base.filter(|b| b.starts_with('/'))?;
+        Path::new(base).join(target)
+    };
+    /// One path component, owned (a `Component` borrows its path, and link
+    /// targets are spliced in as the walk proceeds).
+    enum Step {
+        Root,
+        Parent,
+        Name(std::ffi::OsString),
+    }
+    fn push_front(pending: &mut std::collections::VecDeque<Step>, p: &Path) {
+        for c in p.components().rev() {
+            match c {
+                Component::RootDir | Component::Prefix(_) => pending.push_front(Step::Root),
+                Component::CurDir => {}
+                Component::ParentDir => pending.push_front(Step::Parent),
+                Component::Normal(n) => pending.push_front(Step::Name(n.to_os_string())),
+            }
+        }
+    }
+    let mut pending = std::collections::VecDeque::new();
+    push_front(&mut pending, &start);
+    let mut resolved = PathBuf::from("/");
+    // How many trailing components of `resolved` do not exist. Nothing below a
+    // missing component can be a symlink, so those are appended unexamined; a
+    // `..` that climbs back out of them returns to examining (a writer that
+    // creates parents, as `mkdir -p` would, then meets the real components).
+    let mut missing_depth = 0usize;
+    let mut hops = 0usize;
+    while let Some(step) = pending.pop_front() {
+        match step {
+            Step::Root => {
+                resolved = PathBuf::from("/");
+                missing_depth = 0;
+            }
+            Step::Parent => {
+                resolved.pop();
+                missing_depth = missing_depth.saturating_sub(1);
+            }
+            Step::Name(name) => {
+                let candidate = resolved.join(&name);
+                if missing_depth > 0 {
+                    resolved = candidate;
+                    missing_depth += 1;
+                    continue;
+                }
+                match std::fs::symlink_metadata(&candidate) {
+                    Ok(m) if m.file_type().is_symlink() => {
+                        hops += 1;
+                        if hops > MAX_SYMLINK_HOPS {
+                            return Some(Determination::undetermined(format!(
+                                "more than {MAX_SYMLINK_HOPS} symlinks followed at `{}` — a \
+symlink loop",
+                                candidate.display()
+                            )));
+                        }
+                        match std::fs::read_link(&candidate) {
+                            // `resolved` stays the link's parent: a relative
+                            // link target is resolved from there, an absolute
+                            // one restarts at `/` via its RootDir component.
+                            Ok(link) => push_front(&mut pending, &link),
+                            Err(e) => {
+                                return Some(Determination::undetermined(format!(
+                                    "symlink `{}` could not be read ({e})",
+                                    candidate.display()
+                                )))
+                            }
+                        }
+                    }
+                    Ok(_) => resolved = candidate,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        missing_depth = 1;
+                        resolved = candidate;
+                    }
+                    Err(e) => {
+                        return Some(Determination::undetermined(format!(
+                            "`{}` could not be inspected ({e})",
+                            candidate.display()
+                        )))
+                    }
+                }
+            }
+        }
+    }
+    Some(Determination::Known(resolved.display().to_string()))
 }
 
 /// Deny reason for a write that lands in a SYSTEM directory, or `None` when the
@@ -734,8 +919,10 @@ $PATH), so whether the old bytes were recoverable does not make it safe"
     )))
 }
 
-/// Where `target` REALLY lands to the kernel: its deepest existing ancestor
-/// canonicalised (symlinks resolved), with the not-yet-existing tail appended.
+/// [`system_path_block`] applied to the path the kernel will really write
+/// ([`physical_landing`]) instead of the text. `Err(reason)` when the real
+/// landing could not be determined (a symlink loop, an unreadable link, an
+/// `lstat` error other than "does not exist").
 ///
 /// Backlog 2287ebae: [`system_path_block`] judges the LEXICAL path, so
 /// `: > <proj>/esc/etc/new.conf` with `esc -> /` was Allow — the file does not
@@ -743,57 +930,21 @@ $PATH), so whether the old bytes were recoverable does not make it safe"
 /// directory, yet the kernel creates `/etc/new.conf`. The literal spelling of
 /// the same file is Deny.
 ///
-/// `None` = not a path this can place (an unexpanded `$`/backtick target, or a
-/// relative one with no known base) — the caller's existing rules for those
-/// stand. `Undetermined` = the filesystem could not answer (EACCES on an
-/// ancestor, …); the caller must NOT read that as "not a system directory".
-fn real_landing(target: &str, base: Option<&str>) -> Option<Determination<String>> {
-    if target.contains('$') || target.contains('`') {
-        return None;
-    }
-    let path = crate::reversible::resolve(target, base)?;
-    let mut existing: &std::path::Path = path.as_path();
-    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
-    loop {
-        match std::fs::canonicalize(existing) {
-            Ok(mut real) => {
-                for comp in tail.iter().rev() {
-                    real.push(comp);
-                }
-                return Some(Determination::Known(real.display().to_string()));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                match (existing.parent(), existing.file_name()) {
-                    (Some(parent), Some(name)) => {
-                        tail.push(name);
-                        existing = parent;
-                    }
-                    _ => {
-                        return Some(Determination::undetermined(format!(
-                            "no ancestor of `{target}` could be resolved"
-                        )))
-                    }
-                }
-            }
-            Err(e) => {
-                return Some(Determination::undetermined(format!(
-                    "`{}` could not be resolved ({e}), so where `{target}` really lands is unknown",
-                    existing.display()
-                )))
-            }
-        }
-    }
-}
-
-/// [`system_path_block`] applied to the path the kernel will really write
-/// ([`real_landing`]) instead of the text. `Err(reason)` when the real landing
-/// could not be determined.
+/// The landing is the same resolver the protected-path axis uses, so a FINAL
+/// file symlink whose target does not exist yet is followed too (`sysln ->
+/// /etc/<absent>`, and chains of such links): a write through it creates that
+/// target. Resolving only the deepest existing ancestor (the previous
+/// `canonicalize` walk) stopped at the dangling link and never saw `/etc`.
+///
+/// `Ok(None)` also covers a target that cannot be placed (an unexpanded
+/// `$`/backtick, or relative with no known base) — the caller's existing rules
+/// for those stand.
 fn real_system_path_block(
     action: &str,
     target: &str,
     ctx: &Ctx,
 ) -> Result<Option<Decision>, String> {
-    match real_landing(target, ctx.raw_base.as_deref()) {
+    match physical_landing(target, ctx.raw_base.as_deref()) {
         None => Ok(None),
         // macOS: the writable data volume is mounted at `/` through firmlinks,
         // and some of its symlinks (`/home -> /System/Volumes/Data/home`)
@@ -1232,8 +1383,26 @@ fn analyze_unlink_rmdir(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         if let Some(deny) = protected_glob_deny(&format!("{cmd} operand"), op) {
             return deny;
         }
+        if let Some(deny) = home_asset_deny(ctx, cmd, op) {
+            return deny;
+        }
     }
     Decision::Allow
+}
+
+/// Deny for a single-entry delete (`rm` without `-r`, `unlink`, `rmdir`) whose
+/// operand is an irreplaceable `$HOME`-level asset — a credential store entry
+/// (`~/.ssh/id_rsa`) or a home-level dotfile (backlog 6067a527). Deletion
+/// policy: system configuration and irreplaceable assets are never deleted;
+/// work files stay deletable, so every other operand is `None`.
+fn home_asset_deny(ctx: &Ctx<'_>, action: &str, operand: &str) -> Option<Decision> {
+    let path = ctx
+        .scope
+        .irreplaceable_home_asset(operand, ctx.base_for(action))?;
+    Some(Decision::deny(format!(
+        "{action} {operand} deletes `{path}`, an irreplaceable home-level asset (credential \
+store or home-level config) that cannot be restored, so blastguard refuses"
+    )))
 }
 
 /// Deny for a single-file delete whose operand IS a `.git` entry (not a path
@@ -1348,6 +1517,11 @@ fn detect_write(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
     if let Some(deny) = protected_path_block(ctx, "Write", &path) {
         return deny;
     }
+    // Also before the config-file allowlist: `/etc/<x>.toml` is a config file
+    // by name and a system-directory drop-in by location.
+    if let Some(deny) = file_tool_system_block(ctx, "Write", &path) {
+        return deny;
+    }
     if exclude::is_config_file(&path) {
         return Decision::Allow;
     }
@@ -1370,9 +1544,10 @@ fn detect_write(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
 
 /// Edit / MultiEdit / NotebookEdit: a partial edit of an ordinary file is
 /// allowed, but a partial edit of a protected gate/hook/policy path is exactly
-/// how a guard gets switched off, so the target is classified rather than
-/// assumed harmless. `NotebookEdit` addresses its target via `notebook_path`,
-/// which `extract_path` already covers.
+/// how a guard gets switched off, and an edit inside a system directory is the
+/// same payload as a redirect there ([`file_tool_system_block`]), so the target
+/// is classified rather than assumed harmless. `NotebookEdit` addresses its
+/// target via `notebook_path`, which `extract_path` already covers.
 fn detect_edit(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
     let path = match extract_path(ti) {
         Some(p) => p,
@@ -1381,7 +1556,34 @@ fn detect_edit(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
     if let Some(deny) = protected_path_block(ctx, "Edit", &path) {
         return deny;
     }
+    if let Some(deny) = file_tool_system_block(ctx, "Edit", &path) {
+        return deny;
+    }
     Decision::Allow
+}
+
+/// The system-directory axis for the file tools (Write / Edit / MultiEdit /
+/// NotebookEdit), user ruling 2026-11-01: the same rule, reason and directory
+/// set as a Bash redirect — [`system_path_block`] on the path as written, then
+/// [`real_system_path_block`] on the path the kernel really writes, so a
+/// dangling file symlink, a chain of them, or a directory symlink into `/etc`
+/// is the same Deny as the direct spelling. The `confined_root` exemption in
+/// [`system_path_block`] applies unchanged (a project checked out under `/opt`).
+///
+/// When the landing cannot be resolved (a symlink loop, an `lstat`/`read_link`
+/// error other than "does not exist") the answer is Ask, never Allow: "could
+/// not resolve" is not "not a system directory" (CLAUDE.md §3).
+fn file_tool_system_block(ctx: &Ctx<'_>, action: &str, path: &str) -> Option<Decision> {
+    if let Some(deny) = system_path_block(action, path, ctx) {
+        return Some(deny);
+    }
+    match real_system_path_block(action, path, ctx) {
+        Ok(verdict) => verdict,
+        Err(why) => Some(Decision::ask(format!(
+            "{action} target ({path}) could not be resolved through its symlinks ({why}) — \
+blastguard cannot tell whether it lands in a system directory, so it refuses to guess"
+        ))),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1412,6 +1614,18 @@ const MAX_ANALYSIS_NODES: u32 = 2_000;
 thread_local! {
     /// Remaining node budget for the top-level command currently being analysed.
     static ANALYSIS_BUDGET: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only work probe: when installed, counts EVERY `detect_bash` entry
+    /// (admitted or budget-rejected) on this thread. It is an atomic shared via
+    /// `Arc` so a watcher thread can observe the count while the analysis is
+    /// still running, and fail on an unbounded tree instead of hanging. It is
+    /// deliberately independent of `ANALYSIS_BUDGET`: removing the budget must
+    /// make this count explode, not leave it untouched.
+    static VISIT_PROBE: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicU64>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Consume one unit of the analysis budget. Returns false when it is exhausted.
@@ -1673,6 +1887,12 @@ fn denoised_eval_rescan(region: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
 }
 
 fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    #[cfg(test)]
+    VISIT_PROBE.with(|p| {
+        if let Some(c) = p.borrow().as_ref() {
+            c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
     // D4: when the budget is exhausted we never Allow. A command too complex to
     // analyse within a bounded amount of work must not be waved through
     // unanalysed — an unanalysed destructive command is exactly the fail-open
@@ -1759,17 +1979,21 @@ primitive, not a filesystem path",
         let target = seg_idx
             .and_then(|seg_idx| resolve_redirect_target_at(rcmd, seg_idx, &raw_target))
             .unwrap_or(raw_target);
+        // `..` kept for the symlink resolver (see `physical_redirect_spelling`).
+        let physical = physical_redirect_spelling(seg_idx, &seg_cwds, &target);
         let target = match place_redirect_target(rcmd, seg_idx, &seg_cwds, target) {
             Ok(placed) => placed,
             Err(raw) => {
-                if let Some(deny) = protected_path_block(ctx, "redirect", &raw) {
+                // Unplaced: no base to resolve symlinks against, so lexical
+                // only; the unplaceable Ask below covers the rest.
+                if let Some(deny) = protected_path_lexical_block(ctx, "redirect", &raw) {
                     return deny;
                 }
                 line_level_asks.push(unplaceable_redirect_ask(">", &raw));
                 continue;
             }
         };
-        if let Some(deny) = protected_path_block(ctx, "redirect", &target) {
+        if let Some(deny) = protected_path_block_at(ctx, "redirect", &target, &physical) {
             return deny;
         }
         if !redirect_target_is_safe(&target, ctx) {
@@ -1784,7 +2008,7 @@ primitive, not a filesystem path",
             // The same axis on the path the kernel really writes (2287ebae):
             // a symlink in the text can land a NEW file in `/etc` that the
             // lexical check above never sees.
-            let landing_undetermined = match real_system_path_block("redirect", &target, ctx) {
+            let landing_undetermined = match real_system_path_block("redirect", &physical, ctx) {
                 Ok(Some(deny)) => return deny,
                 Ok(None) => None,
                 Err(why) => Some(why),
@@ -1977,17 +2201,19 @@ does not parse that body, but blastguard cannot show the program does not use it
         let target = seg_idx
             .and_then(|seg_idx| resolve_redirect_target_at(rcmd, seg_idx, &raw_target))
             .unwrap_or(raw_target);
+        let physical = physical_redirect_spelling(seg_idx, &seg_cwds, &target);
         let target = match place_redirect_target(rcmd, seg_idx, &seg_cwds, target) {
             Ok(placed) => placed,
             Err(raw) => {
-                if let Some(deny) = protected_path_block(ctx, "append redirect", &raw) {
+                // Unplaced: lexical only, as for `>` above.
+                if let Some(deny) = protected_path_lexical_block(ctx, "append redirect", &raw) {
                     return deny;
                 }
                 line_level_asks.push(unplaceable_redirect_ask(">>", &raw));
                 continue;
             }
         };
-        if let Some(deny) = protected_path_block(ctx, "append redirect", &target) {
+        if let Some(deny) = protected_path_block_at(ctx, "append redirect", &target, &physical) {
             return deny;
         }
         // The system-directory axis does not care about the truncate/append
@@ -1999,7 +2225,7 @@ does not parse that body, but blastguard cannot show the program does not use it
         }
         // ...and on the path the kernel really writes (2287ebae): a symlink in
         // the text hides the system directory from the lexical check.
-        match real_system_path_block("append redirect", &target, ctx) {
+        match real_system_path_block("append redirect", &physical, ctx) {
             Ok(Some(deny)) => return deny,
             Ok(None) => {}
             Err(why) => line_level_asks.push(Decision::ask(format!(
@@ -2536,6 +2762,36 @@ fn place_redirect_target(
     }
 }
 
+/// The spelling of a redirect target that [`physical_landing`] should resolve:
+/// `<dir>/<target>` with the target's `..` left UNcollapsed when a `cd` placed
+/// the segment in `dir`, otherwise the target unchanged.
+///
+/// [`place_redirect_target`] collapses `..` lexically, which is right for the
+/// `cd` chain itself (a shell's `cd` is logical by default: `cd link && cd ..`
+/// returns to where it started) but wrong for the redirect: the kernel opens
+/// `../x` from the directory the `cd` really entered, so `cd link3 && echo x >
+/// ../settings.json` with `link3 -> .claude/sub` writes `.claude/settings.json`,
+/// not `settings.json`. Keeping `dir` (logical) and the raw target lets the
+/// resolver follow `link3` before it applies `..`. Only meaningful when
+/// [`place_redirect_target`] returned `Ok` for the same target.
+fn physical_redirect_spelling(
+    seg_idx: Option<usize>,
+    seg_cwds: &[CwdState],
+    target: &str,
+) -> String {
+    if !is_relative_operand(target) || has_unresolvable_expansion(target) {
+        return target.to_string();
+    }
+    match seg_idx.and_then(|idx| seg_cwds.get(idx)) {
+        // `cd link && cd ..` tracks as `Known("")`: the line's own base, so
+        // the target is already relative to it (never `/<target>`).
+        Some(CwdState::Known(dir)) if !dir.is_empty() => {
+            format!("{}/{}", dir.trim_end_matches('/'), target)
+        }
+        _ => target.to_string(),
+    }
+}
+
 /// True ONLY when a truncating-redirect `target` (already placed by
 /// [`place_redirect_target`]) names an existing file whose truncation is
 /// disposable temp work (user ruling 2026-10-28): ALL of
@@ -2673,6 +2929,37 @@ fn ampersand_is_redirect_operator(chars: &[char], i: usize) -> bool {
     i > 0 && matches!(chars[i - 1], '>' | '<')
 }
 
+/// When `chars[i]` OPENS a command substitution — a backtick or `$(` that is
+/// not backslash-escaped — and that substitution is closed later in `chars`,
+/// the index of its closing `` ` ``/`)`. `None` otherwise.
+///
+/// Used by [`split_segments`] and [`split_segments_with_separators`] (outside
+/// single quotes only; the caller checks that) to keep a substitution's body
+/// in ONE segment. A `;`/`&&`/`||`/`|`/`&`/newline inside the body separates
+/// commands of the BODY, not of the outer line, and bash parses it that way.
+/// Cutting there left two fragments, neither of them a real command: the
+/// tail of `` B=`ls | sort` `` became the segment ``sort` ``, whose command
+/// word carries the closing backtick and was asked about as an "expansion",
+/// and the tail of `echo $(curl … | sh)` became `sh)`, which is not read as
+/// `sh`, so that fetch-and-execute reached Allow. Kept whole, the segment's
+/// body is judged as the complete command line it is by
+/// [`executed_substitution_payloads`].
+///
+/// An UNCLOSED substitution yields `None`, and the caller then splits exactly
+/// as before this existed, so every fragment of a line this cannot parse is
+/// still judged on its own; nothing becomes invisible.
+fn closed_substitution_end(chars: &[char], i: usize) -> Option<usize> {
+    let escaped = chars[..i].iter().rev().take_while(|&&c| c == '\\').count() % 2 == 1;
+    if escaped {
+        return None;
+    }
+    match chars[i] {
+        '`' => scan_balanced(chars, i + 1, Stop::Backtick, 0),
+        '$' if chars.get(i + 1) == Some(&'(') => scan_balanced(chars, i + 2, Stop::Paren, 0),
+        _ => None,
+    }
+}
+
 /// Quote-aware split of a command line into individual simple-command segments
 /// on `;`, newline, `&&`, `||`, `|`, `&`.
 ///
@@ -2702,6 +2989,13 @@ fn split_segments(cmd: &str) -> Vec<String> {
             cur.push(c);
             i += 1;
             continue;
+        }
+        if !in_s {
+            if let Some(end) = closed_substitution_end(&chars, i) {
+                cur.extend(&chars[i..=end]);
+                i = end + 1;
+                continue;
+            }
         }
         if !in_s && !in_d && !(c == '&' && ampersand_is_redirect_operator(&chars, i)) {
             // Two-char operators.
@@ -2769,6 +3063,15 @@ fn split_segments_paren_aware(cmd: &str) -> Vec<String> {
             cur.push(c);
             i += 1;
             continue;
+        }
+        // Backtick bodies too (paren depth does not see them); see
+        // `closed_substitution_end`.
+        if !in_s {
+            if let Some(end) = closed_substitution_end(&chars, i) {
+                cur.extend(&chars[i..=end]);
+                i = end + 1;
+                continue;
+            }
         }
         if !in_s && !in_d {
             if c == '(' {
@@ -2979,6 +3282,15 @@ fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment> {
             cur.push(c);
             i += 1;
             continue;
+        }
+        // Same substitution span as `split_segments`, so the two stay
+        // element-for-element equal.
+        if !in_s {
+            if let Some(end) = closed_substitution_end(&chars, i) {
+                cur.extend(&chars[i..=end]);
+                i = end + 1;
+                continue;
+            }
         }
         if !in_s && !in_d && !(c == '&' && ampersand_is_redirect_operator(&chars, i)) {
             let two_char_conditional = (c == '&' && chars.get(i + 1) == Some(&'&'))
@@ -3459,8 +3771,8 @@ fn interpreter_program_body_segments(cmd: &str) -> Vec<bool> {
 ///
 /// The body is removed only when ALL of these hold:
 ///   * every line BEFORE the opener is blank, a comment (`#` first), `set -e`,
-///     `set -eu`, `set -euo pipefail`, `cd <literal path>` or
-///     `mkdir -p <literal path>…`. A literal path is letters, digits and
+///     `set -eu`, `set -euo pipefail`, `cd <literal path>`,
+///     `mkdir -p <literal path>…` or `git add <literal path>…`. A literal path is letters, digits and
 ///     `/ . _ - + , @ % : =`, with `~` allowed only as its first character.
 ///     Anything else — an assignment, `eval`, `source`, `.`, a function, an
 ///     alias, `PATH`, any other command — keeps the body;
@@ -3469,9 +3781,10 @@ fn interpreter_program_body_segments(cmd: &str) -> Vec<bool> {
 ///     ([`plain_here_document_delimiter`]) and a data-only consumer
 ///     ([`here_document_consumer_is_data`]: `cat`, `tee` to data files,
 ///     `git commit -F -`, with output redirects only to data files). The opener
-///     line may begin with `cd <literal path> && ` ([`opener_consumer`]), the
-///     same-line spelling of a permitted `cd` line before it; the consumer
-///     check then reads the part after the `&&`;
+///     line may begin with `cd <literal path> && ` and/or
+///     `git add <literal path>… && ` heads ([`opener_consumer`]), the
+///     same-line spelling of a permitted `cd` / `git add` line before it; the
+///     consumer check then reads the part after the last such `&&`;
 ///   * the body is CLOSED by an exact delimiter line
 ///     ([`segment_closes_here_document`]);
 ///   * the delimiter is quoted, OR the body contains no `$`, backtick or
@@ -3620,23 +3933,35 @@ fn strip_here_document_body(cmd: &str, targets: OutputTargets) -> std::borrow::C
 /// `<rest>`. `cd X && cat <<'EOF'` is the same-line spelling of a permitted
 /// `cd X` line before the opener (and a stricter one: a failed `cd` skips the
 /// reader instead of running it in the old directory), so its body is data
-/// exactly when the body of `cat <<'EOF'` is. Only that one shape is split; any
-/// other prefix leaves the whole line, which the consumer check then refuses
+/// exactly when the body of `cat <<'EOF'` is. Only `cd` and `git add` heads
+/// (below) are split; any other prefix stays in the judged text, which the
+/// consumer check then refuses
 /// (`&` is shell syntax there). The opener line itself — `cd` included — stays
 /// in the command, so the cwd walk and every redirect rule still see it.
+///
+/// A `git add <literal path>… && ` head is split the same way (backlog
+/// c5b9c02b: `git add a.txt && git commit -F - <<'EOF'` had its quoted body
+/// read as a redirect, ``> `.` `` in the commit message, and was DENIED). It is
+/// the same-line spelling of a permitted `git add` line before the opener:
+/// `git add` runs BEFORE the reader and never sees the body, so it cannot make
+/// the body code. Heads chain (`cd X && git add a && git commit -F - <<'EOF'`);
+/// the first head that is neither a permitted `cd` nor a permitted `git add`
+/// stops the split, and the text from that head on is what gets judged (so the
+/// consumer check sees its `&&` and refuses). Only `&&` is split: `;`, `||`,
+/// `|` and `&` stay inside the judged text, where the consumer check refuses
+/// them.
 fn opener_consumer(line: &str) -> &str {
-    let Some((head, rest)) = line.split_once("&&") else {
-        return line;
-    };
-    let starts_with_cd = head
-        .split([' ', '\t'])
-        .find(|w| !w.is_empty())
-        .is_some_and(|w| w == "cd");
-    if starts_with_cd && permitted_prefix_line(head) {
-        rest
-    } else {
-        line
+    let mut rest = line;
+    while let Some((head, tail)) = rest.split_once("&&") {
+        let words: Vec<&str> = head.split([' ', '\t']).filter(|w| !w.is_empty()).collect();
+        let splittable_head = matches!(words.as_slice(), ["cd", ..] | ["git", "add", ..])
+            && permitted_prefix_line(head);
+        if !splittable_head {
+            break;
+        }
+        rest = tail;
     }
+    rest
 }
 
 /// True when `line` has no unterminated `'` or `"` quote.
@@ -3653,8 +3978,10 @@ fn quotes_balance(line: &str) -> bool {
 }
 
 /// The lines [`strip_data_here_document_bodies`] permits BEFORE the opener:
-/// `set -e`, `set -eu`, `set -euo pipefail`, `cd <literal path>`, and
-/// `mkdir -p <literal path>…`. Nothing else.
+/// `set -e`, `set -eu`, `set -euo pipefail`, `cd <literal path>`,
+/// `mkdir -p <literal path>…`, and `git add <literal path>…` (stages files; it
+/// runs before the reader and never reads the body). Nothing else: a `git`
+/// with global options (`git -c …`) is not `git add` here.
 fn permitted_prefix_line(line: &str) -> bool {
     let literal = |w: &str| {
         let rest = w.strip_prefix('~').unwrap_or(w);
@@ -3668,7 +3995,9 @@ fn permitted_prefix_line(line: &str) -> bool {
     match words.as_slice() {
         ["set", "-e"] | ["set", "-eu"] | ["set", "-euo", "pipefail"] => true,
         ["cd", path] => literal(path),
-        ["mkdir", "-p", paths @ ..] => !paths.is_empty() && paths.iter().all(|p| literal(p)),
+        ["mkdir", "-p", paths @ ..] | ["git", "add", paths @ ..] => {
+            !paths.is_empty() && paths.iter().all(|p| literal(p))
+        }
         _ => false,
     }
 }
@@ -5053,6 +5382,129 @@ fn command_candidates(tokens: &[&str]) -> Vec<usize> {
         return vec![i];
     }
     Vec::new()
+}
+
+/// Indices of the command words an exec-wrapper chain can actually run —
+/// `env [opts] [VAR=val] [--] CMD`, `command CMD`, `nice -n 5 CMD`,
+/// `timeout 5 CMD`, `sudo -u root CMD`, nested wrappers — WITHOUT the operands
+/// of the command finally reached. The last index is that command; earlier
+/// ones are the wrappers and any token that may be either an option's value or
+/// the command.
+///
+/// Unlike [`command_candidates`], which makes EVERY token behind a wrapper a
+/// candidate (sound for deny-if-ANY destructive checks, where a false
+/// candidate only adds a false positive), this is for asking "what program
+/// reads this stage's stdin", where grep's operand in `env grep bash` must
+/// not be read as a shell.
+///
+/// Ambiguity resolves to MORE candidates, never fewer: an option token not
+/// known to take no value (see [`wrapper_flag_is_boolean`]) makes the next
+/// token a candidate AND keeps scanning past it, so a value-taking option
+/// missing from any table widens the set instead of hiding the command.
+fn wrapped_command_heads(tokens: &[&str]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() && (tokens[i].is_empty() || is_assignment(tokens[i])) {
+        i += 1;
+    }
+    while i < tokens.len() {
+        out.push(i);
+        let wrapper = normalized_command(tokens[i]);
+        if !is_exec_wrapper(&wrapper) {
+            return out;
+        }
+        // Wrappers whose syntax puts one positional operand before the
+        // command: `timeout DURATION`, `chroot NEWROOT`, `flock FILE`.
+        let mut positional =
+            usize::from(matches!(wrapper.as_str(), "timeout" | "chroot" | "flock"));
+        let (mut value_pending, mut opts_done) = (false, false);
+        let mut j = i + 1;
+        let next_head = loop {
+            let Some(&t) = tokens.get(j) else {
+                break None;
+            };
+            j += 1;
+            if t.is_empty() {
+                continue;
+            }
+            if !opts_done && t == "--" {
+                opts_done = true;
+                value_pending = false;
+                continue;
+            }
+            if !opts_done && t.starts_with('-') && t.len() > 1 {
+                value_pending = !t.contains('=') && !wrapper_flag_is_boolean(&wrapper, t);
+                continue;
+            }
+            if value_pending {
+                // An option value, or the command itself: both.
+                out.push(j - 1);
+                value_pending = false;
+                continue;
+            }
+            if wrapper == "env" && is_assignment(t) {
+                continue;
+            }
+            if positional > 0 {
+                positional -= 1;
+                continue;
+            }
+            break Some(j - 1);
+        };
+        match next_head {
+            Some(h) => i = h,
+            None => return out,
+        }
+    }
+    out
+}
+
+/// True when `flag` is an option of `wrapper` KNOWN to take no separate value.
+/// A flag missing here is treated as possibly value-taking, which only adds a
+/// candidate in [`wrapped_command_heads`] — the restrictive direction.
+fn wrapper_flag_is_boolean(wrapper: &str, flag: &str) -> bool {
+    let known: &[&str] = match wrapper {
+        "env" => &[
+            "-i",
+            "-0",
+            "-v",
+            "--ignore-environment",
+            "--null",
+            "--debug",
+        ],
+        "command" => &["-p", "-v", "-V"],
+        "sudo" => &[
+            "-E",
+            "-H",
+            "-n",
+            "-S",
+            "-k",
+            "-b",
+            "-i",
+            "-s",
+            "--preserve-env",
+        ],
+        "timeout" => &["-v", "--verbose", "--foreground", "--preserve-status"],
+        "setsid" => &["-f", "-w", "-c", "--fork", "--wait", "--ctty"],
+        "time" => &["-p", "-v"],
+        "exec" => &["-c", "-l"],
+        _ => &[],
+    };
+    known.contains(&flag)
+}
+
+/// The shell or code interpreter `xargs` (given its arguments `rest`) runs,
+/// if its command word — resolved through any exec-wrapper — is one. The same
+/// reader set `analyze_interpreter_stdin_exec` uses: `xargs python3` hands the
+/// items to python as argv (a script path, `-c` code) exactly as `xargs sh`
+/// does to the shell.
+fn xargs_shell(rest: &[&str]) -> Option<String> {
+    let start = xargs_command_start(rest)?;
+    let inner = &rest[start..];
+    wrapped_command_heads(inner)
+        .into_iter()
+        .map(|idx| normalized_command(inner[idx]))
+        .find(|head| is_shell(head) || is_code_interpreter(head))
 }
 
 /// True when `tok` OPENS a quote it does not close within the same
@@ -6631,14 +7083,65 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
                 return deny;
             }
             let tokens: Vec<&str> = stage.split_whitespace().collect();
-            let Some(first) = tokens.first() else {
+            // The interpreter may sit behind an exec-wrapper (`env sh`,
+            // `env -i bash`, `/usr/bin/env python3`, `command sh`): reading
+            // token 0 alone took `env` for the program and let
+            // `echo "rm -rf /" | env sh` through unjudged, while the egress
+            // twin `stage_is_interpreter_terminal` and the here-string twin
+            // `shell_here_string_verdict` already resolve the wrapper.
+            //
+            // Resolved with `wrapped_command_heads`, NOT `command_candidates`:
+            // the latter makes every token behind a wrapper a candidate, so
+            // grep's OPERAND in `echo x | env grep bash` was taken for the
+            // reader and the line asked. Only a head the wrapper chain can
+            // actually exec counts here.
+            let heads = wrapped_command_heads(&tokens);
+            // `… | xargs sh`: xargs turns its stdin into ARGUMENTS of the
+            // shell it runs (`sh rm -rf /` runs a script file named `rm`, or
+            // `sh -c {}` runs the item as a command line). What executes is the
+            // piped text, re-parsed as argv, which no reading here models.
+            //
+            // Fed by a pipe or here-document, by a `<` redirect, or by an
+            // argument file (`-a FILE` / `--arg-file`, whose value
+            // `xargs_command_start` consumes): none of those items is on the
+            // command line. `xargs -a FILE sh` was Allow while this was gated
+            // on `i > 0 || heredoc_open` alone. A bare `xargs sh` at the head
+            // of a statement reads the hook's inherited stdin and is left to
+            // the other rules (the nesting-cap Ask in `sh -c xargs sh -c …`
+            // must stay the reported reason).
+            let stdin_redirect = tokens
+                .iter()
+                .any(|t| t.starts_with('<') || t.starts_with("0<"));
+            if let Some(inner) = heads
+                .iter()
+                .filter(|&&idx| normalized_command(tokens[idx]) == "xargs")
+                .find_map(|&idx| {
+                    let rest = &tokens[idx + 1..];
+                    let opts = &rest[..xargs_command_start(rest).unwrap_or(rest.len())];
+                    let fed = i > 0 || heredoc_open || stdin_redirect || xargs_reads_arg_file(opts);
+                    if fed {
+                        xargs_shell(rest)
+                    } else {
+                        None
+                    }
+                })
+            {
+                if let Some(deny) = acc.record(Decision::ask(format!(
+                    "`{}` hands its input items to `{inner}` as arguments — the command that runs \
+is built from text (stdin, a redirect or an `-a` file) that is not on the command line, so \
+blastguard cannot read it",
+                    stage.trim()
+                ))) {
+                    return deny;
+                }
+            }
+            let Some(idx) = heads.into_iter().find(|&idx| {
+                let head = normalized_command(tokens[idx]);
+                is_shell(&head) || is_code_interpreter(&head)
+            }) else {
                 continue;
             };
-            let head = normalized_command(first);
-            if !is_shell(&head) && !is_code_interpreter(&head) {
-                continue;
-            }
-            let rest = &tokens[1..];
+            let rest = &tokens[idx + 1..];
             let has_program_file = stage_has_program_operand(rest);
             let takes_stdin_program = interpreter_stdin_operand(rest).is_some()
                 || (!has_program_file && (i > 0 || heredoc_open));
@@ -6668,7 +7171,14 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
             if i > 0 {
                 // Piped in: the program is whatever the upstream stage of THIS
                 // statement emits, which is readable when it emits a literal.
-                program_texts.extend(quoted_string_literals(&statement[i - 1]));
+                // A backtick there is a command SUBSTITUTION, not a quote: the
+                // stage emits the body's OUTPUT, not its text. Read as a quote,
+                // `echo \`ls\` | sh` offered `ls` as the program and was
+                // allowed, while `echo $(ls) | sh` asked. Spelled as its
+                // `$( )` twin, it gets the twin's verdict.
+                program_texts.extend(quoted_string_literals(&backticks_as_dollar_paren(
+                    &statement[i - 1],
+                )));
             }
             let shape = format!("`{}` takes its program from stdin", stage.trim());
             if let Some(deny) = acc.record(interpreter_code_verdict(
@@ -6680,9 +7190,158 @@ fn analyze_interpreter_stdin_exec(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Dec
             )) {
                 return deny;
             }
+            // The quoted literals above are NOT everything the upstream stage
+            // emits: an UNQUOTED expansion beside them (`echo "a" $(ls) | sh`)
+            // is dropped by `quoted_string_literals`, so the program judged was
+            // `a` alone and the line was allowed — while `echo "a $(ls)" | sh`,
+            // whose substitution sits inside the literal, asked. The output of
+            // that expansion is part of the program and is not on the command
+            // line. Recorded after the literal verdict so a Deny found there
+            // still wins.
+            if i > 0 {
+                if let Some(word) =
+                    unquoted_expansion(&backticks_as_dollar_paren(&statement[i - 1]))
+                {
+                    if let Some(deny) = acc.record(Decision::ask(format!(
+                        "{shape}, and the stage piping into it emits the output of an unquoted \
+shell expansion (`{word}`) — that output is the program, it is not on the command line, so \
+blastguard cannot tell whether anything here is irreversible"
+                    ))) {
+                        return deny;
+                    }
+                }
+                // The quoted literals are the WHOLE program only when the
+                // upstream stage emits nothing but its own arguments (`echo`,
+                // `printf`). Any other upstream — `grep -E "a" f`, `jq -r . f`,
+                // `tr a b < f` — emits text from a file or from stdin, and its
+                // quoted words are a pattern or a filter, not the program:
+                // `grep -E "a" f | sh` judged `a` as the program and was
+                // allowed, while `cat f | sh` (no literal at all) asked.
+                // Recorded after the literal verdict so a Deny found in a
+                // literal still wins.
+                if !stage_emits_only_its_arguments(&statement[i - 1]) {
+                    if let Some(deny) = acc.record(Decision::ask(format!(
+                        "{shape}, and the stage piping into it (`{}`) is not a literal emitter \
+(`echo` / `printf`) — what it emits can include text from a file or from stdin, which is not on \
+the command line, so blastguard cannot read the program",
+                        statement[i - 1].trim()
+                    ))) {
+                        return deny;
+                    }
+                }
+            }
         }
     }
     acc.finish()
+}
+
+/// True when `stage` emits only text spelled in its own arguments: its
+/// command, behind any exec-wrapper chain, is `echo` or `printf`. Every head
+/// candidate [`wrapped_command_heads`] yields must be a wrapper or one of
+/// those two, so an ambiguous chain resolves to "not a literal emitter" (the
+/// restrictive side). A stage that is not a simple command (`(cat f)`,
+/// `{ cat f; }`) has no such head and is likewise not a literal emitter.
+fn stage_emits_only_its_arguments(stage: &str) -> bool {
+    let tokens: Vec<&str> = stage.split_whitespace().collect();
+    let heads = wrapped_command_heads(&tokens);
+    let Some(&last) = heads.last() else {
+        return false;
+    };
+    let is_emitter =
+        |idx: usize| matches!(normalized_command(tokens[idx]).as_str(), "echo" | "printf");
+    is_emitter(last)
+        && heads
+            .iter()
+            .all(|&idx| is_emitter(idx) || is_exec_wrapper(&normalized_command(tokens[idx])))
+}
+
+/// The first shell expansion in `stage` that sits OUTSIDE every quote — a
+/// `$(`, `${`, `$NAME` / special parameter, or a backtick — as a short sample
+/// of the text from that point. `None` when every expansion is inside quotes
+/// (those reach the program through [`quoted_string_literals`]) or there is
+/// none. An unquoted backslash-escaped `$` or backtick COUNTS: the escape only
+/// stops THIS stage from expanding it, so the stage emits a literal `$(ls)` /
+/// `` `ls` `` that the shell reading the pipe then runs (`echo "a" \$(ls) | sh`
+/// executes `ls`). `$'…'` / `$"…"` are quoting, not expansion. An unclosed
+/// backtick counts: what it emits cannot be read either.
+///
+/// PATHNAME and TILDE expansion count too: an unquoted `*`, `?` or `[` turns
+/// into whatever file names exist when the line runs, and a word-initial `~`
+/// into a home directory, so `echo "a" * | sh` hands the shell a program made
+/// of file names that are not on the command line.
+fn unquoted_expansion(stage: &str) -> Option<String> {
+    let chars: Vec<char> = stage.chars().collect();
+    let (mut in_s, mut in_d) = (false, false);
+    let mut k = 0;
+    while k < chars.len() {
+        let c = chars[k];
+        if c == '\\' && !in_s {
+            // An escaped glob or tilde is likewise emitted literally and
+            // expanded by the reading shell (`echo "a" \* | sh`).
+            if !in_d && matches!(chars.get(k + 1), Some('$' | '`' | '*' | '?' | '[' | '~')) {
+                return Some(chars[k..].iter().take(40).collect());
+            }
+            k += 2;
+            continue;
+        }
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if !in_s && !in_d {
+            let expands = match c {
+                '`' | '*' | '?' | '[' => true,
+                '~' => k == 0 || chars[k - 1].is_whitespace(),
+                '$' => chars.get(k + 1).is_some_and(|n| {
+                    matches!(n, '(' | '{' | '_' | '@' | '*' | '#' | '?' | '$' | '!' | '-')
+                        || n.is_ascii_alphanumeric()
+                }),
+                _ => false,
+            };
+            if expands {
+                return Some(chars[k..].iter().take(40).collect());
+            }
+        }
+        k += 1;
+    }
+    None
+}
+
+/// `stage` with every closed, unescaped backtick substitution outside single
+/// quotes rewritten as the `$( )` substitution it is equivalent to. Used where
+/// a reader treats a backtick as a quote character ([`quoted_string_literals`])
+/// but the text is a shell stage, in which a backtick runs its body. An
+/// unclosed backtick is left as written.
+fn backticks_as_dollar_paren(stage: &str) -> String {
+    let chars: Vec<char> = stage.chars().collect();
+    let mut out = String::with_capacity(stage.len() + 8);
+    let (mut in_s, mut in_d) = (false, false);
+    let mut k = 0;
+    while k < chars.len() {
+        let c = chars[k];
+        if c == '\\' && !in_s && k + 1 < chars.len() {
+            out.push(c);
+            out.push(chars[k + 1]);
+            k += 2;
+            continue;
+        }
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        } else if c == '`' && !in_s {
+            if let Some(end) = scan_balanced(&chars, k + 1, Stop::Backtick, 0) {
+                out.push_str("$(");
+                out.push_str(&backtick_body_as_run(&chars[k + 1..end]));
+                out.push(')');
+                k = end + 1;
+                continue;
+            }
+        }
+        out.push(c);
+        k += 1;
+    }
+    out
 }
 
 /// A here-string fed to a SHELL is shell code: `bash <<< 'rm -rf ~'` runs
@@ -6950,6 +7609,67 @@ fn inline_command_payloads(rest: &[&str], pos: usize, inline: &str) -> Vec<Strin
     payloads_after(&synthetic, 0)
 }
 
+/// Split a leading assignment whose value OPENS a command substitution that
+/// the token itself does not close — `B=$(ls`, `B="$(ls`, `` B=`ls `` — into
+/// the assignment-with-opener (`B=$(`) and the substitution's first word
+/// (`ls`).
+///
+/// Backlog a03fe3cd (#1471): the tokeniser splits on whitespace, so
+/// `B=$(ls -d GLOB | sort -V | tail -1)` reached [`analyze_segment`] (cut at
+/// the `|` by [`split_segments`]) as `B=$(ls`, `-d`, `GLOB`.
+/// [`command_candidates`] skips `B=$(ls` as an assignment and took `-d` as the
+/// command word, so the line asked "`-d` is a command blastguard has no rule
+/// for". The word that actually runs there is the substitution's first word,
+/// `ls`; `B=$( ls …` (a space after the opener) already parsed that way.
+///
+/// Only LEADING assignment tokens are rewritten (command position), and only
+/// when the opener is unclosed within the token, so `B=$(pwd)` stays a pure
+/// assignment. Exposing the body's first word as a command candidate only
+/// ever adds a word for the rule engine to judge; the body is still also
+/// re-analysed through [`executed_substitution_payloads`] when it is closed.
+fn split_substitution_opening_assignments(tokens: Vec<&str>) -> Vec<&str> {
+    let mut out = Vec::with_capacity(tokens.len() + 1);
+    let mut leading = true;
+    for tok in tokens {
+        if leading && is_assignment(tok) {
+            if let Some(cut) = unclosed_substitution_opener_end(tok) {
+                out.push(&tok[..cut]);
+                out.push(&tok[cut..]);
+                leading = false;
+                continue;
+            }
+            out.push(tok);
+            continue;
+        }
+        leading = false;
+        out.push(tok);
+    }
+    out
+}
+
+/// Byte index just past the `$(` / backtick that opens an assignment token's
+/// value (optionally inside a leading `"`), when the rest of the token is a
+/// non-empty word that does not close that substitution. `None` otherwise.
+fn unclosed_substitution_opener_end(tok: &str) -> Option<usize> {
+    let eq = tok.find('=')?;
+    let value = &tok[eq + 1..];
+    let quote = usize::from(value.starts_with('"'));
+    let after_quote = &value[quote..];
+    let (opener_len, closer) = if after_quote.starts_with("$(") {
+        (2, ')')
+    } else if after_quote.starts_with('`') {
+        (1, '`')
+    } else {
+        return None;
+    };
+    let cut = eq + 1 + quote + opener_len;
+    let body = &tok[cut..];
+    if body.is_empty() || body.contains(closer) {
+        return None;
+    }
+    Some(cut)
+}
+
 /// Judge ONE `;`/`&&`/`|`-separated segment of a command line.
 ///
 /// `line`/`seg_idx` locate this segment inside the command line it came from,
@@ -6958,7 +7678,7 @@ fn inline_command_payloads(rest: &[&str], pos: usize, inline: &str) -> Vec<Strin
 /// the line (see [`resolve_expanded_command_word`]). Nothing else here uses
 /// them, and `seg` remains the only thing judged.
 fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ctx<'_>) -> Decision {
-    let tokens: Vec<&str> = seg.split_whitespace().collect();
+    let tokens = split_substitution_opening_assignments(seg.split_whitespace().collect());
     let mut acc = VerdictAcc::default();
 
     // D2: a wrapper that takes a shell command string via `-c` (flock) runs that
@@ -8731,6 +9451,10 @@ fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         if let Some(deny) = operands.iter().find_map(|o| dotgit_link_deny("rm", o)) {
             return deny;
         }
+        // Backlog 6067a527: one file can be irreplaceable (`rm ~/.ssh/id_rsa`).
+        if let Some(deny) = operands.iter().find_map(|o| home_asset_deny(ctx, "rm", o)) {
+            return deny;
+        }
         // Single, non-recursive rm of named files — below the destructive bar.
         return Decision::Allow;
     }
@@ -9637,30 +10361,258 @@ them first.",
     ))
 }
 
-/// GitHub Actions is banned in this repository: every `gh run …` and
-/// `gh workflow …` is denied. Other `gh` subcommands (`pr`, `issue`, …) are not
-/// this rule's concern.
+/// Classify a `gh` invocation (user rulings 2026-10-29). Never Deny.
+///
+/// * Read-only commands are Allow: `<group> list|view|status|diff|checks|watch|
+///   download|...` for the known groups, `gh search`, `gh status`, `gh auth
+///   status`, `gh help`, `gh --version`, `gh config get|list`, `gh extension
+///   list`, `gh browse`, `gh repo clone`, and `gh api` that is a GET (no method
+///   and no field flag, or an explicit `GET`).
+/// * Remote-changing commands are Ask, and the reason names the command (`gh pr
+///   merge`, `gh repo delete`, ...): every other subcommand of a known group,
+///   `gh api` with POST/PUT/PATCH/DELETE or with a field flag and no explicit GET.
+/// * GitHub Actions: observation (`gh run list|view|watch|download`, `gh
+///   workflow list|view`, `gh cache list`, `gh api` GET on `/actions/`) is
+///   Allow like any read. Executing or configuring it (`gh workflow
+///   run|enable|disable`, `gh run rerun|cancel|delete`, `gh cache delete`, `gh
+///   secret|variable set|delete`, `gh api` mutating `/actions/`) is Ask with a
+///   reason saying GitHub Actions needs an explicit user request. Any
+///   non-read subcommand of the `run`/`workflow`/`cache`/`secret`/`variable`
+///   groups, including an unknown one, gets that same reason.
+/// * Anything blastguard cannot read is Ask (fail-closed): unknown group or
+///   subcommand, missing subcommand, an unresolved `$`/backtick token where the
+///   group, subcommand, or `gh api` method is, an unknown `gh api` flag, an
+///   unknown HTTP method, a bare `gh`. The `-R/--repo <owner/repo>` global flag
+///   is skipped.
+///
+/// Writes to `.github/workflows/` are a file-write concern, handled by
+/// [`protected_path_block`], not here.
 fn analyze_gh(rest: &[&str]) -> Decision {
-    // `-R/--repo <owner/repo>` is the one value-taking flag that may precede
-    // the subcommand; skip its value so it is not read as the subcommand.
+    fn unreadable(tok: &str) -> bool {
+        has_unresolvable_expansion(tok) || tok.contains(['(', ')', '*', '?', '[', '{'])
+    }
+    // Leading global flags: `-R/--repo <v>` and `--repo=<v>` are skipped;
+    // `--version` / `--help` are read-only; anything else is unreadable.
     let mut i = 0;
     while i < rest.len() {
         let t = rest[i];
         if t == "-R" || t == "--repo" {
+            if i + 1 >= rest.len() || unreadable(rest[i + 1]) {
+                return Decision::ask("gh: -R/--repo value is missing or unreadable");
+            }
             i += 2;
+        } else if t.starts_with("--repo=") {
+            i += 1;
+        } else if t == "--version" || t == "--help" || t == "-h" {
+            return Decision::Allow;
+        } else if t.starts_with('-') {
+            return Decision::ask(format!(
+                "gh {t}: unrecognised global flag — blastguard cannot tell what this does"
+            ));
+        } else {
+            break;
+        }
+    }
+    let Some(group_tok) = rest.get(i) else {
+        return Decision::ask("gh: no subcommand given — blastguard cannot tell what this does");
+    };
+    if unreadable(group_tok) {
+        return Decision::ask(format!(
+            "gh {group_tok}: the subcommand is not literal text — blastguard cannot tell what \
+this would do"
+        ));
+    }
+    let group = normalized_command(group_tok);
+    let tail = &rest[i + 1..];
+    if group == "api" {
+        return analyze_gh_api(tail);
+    }
+    // Second word (the subcommand), skipping `-R/--repo <v>` and other flags.
+    let mut sub_tok: Option<&str> = None;
+    let mut j = 0;
+    while j < tail.len() {
+        let t = tail[j];
+        if t == "-R" || t == "--repo" {
+            j += 2;
+        } else if t.starts_with('-') {
+            j += 1;
+        } else {
+            sub_tok = Some(t);
+            break;
+        }
+    }
+    if let Some(t) = sub_tok {
+        if unreadable(t) {
+            return Decision::ask(format!(
+                "gh {group} {t}: the subcommand is not literal text — blastguard cannot tell \
+what this would do"
+            ));
+        }
+    }
+    let sub = sub_tok.map(normalized_command);
+    let sub = sub.as_deref();
+    let actions_ask = |what: &str| {
+        Decision::ask(format!(
+            "gh {what} executes or configures GitHub Actions — GitHub Actions execution and \
+configuration need an explicit user request"
+        ))
+    };
+    let changes = |what: &str| {
+        Decision::ask(format!(
+            "gh {what} changes remote GitHub state (or a state blastguard cannot read) — \
+confirm before running"
+        ))
+    };
+    const READ: &[&str] = &[
+        "list",
+        "view",
+        "status",
+        "diff",
+        "checks",
+        "watch",
+        "download",
+        "item-list",
+        "field-list",
+    ];
+    match group.as_str() {
+        "search" | "status" | "browse" | "help" => Decision::Allow,
+        "auth" => match sub {
+            Some("status") => Decision::Allow,
+            Some(s) => changes(&format!("auth {s}")),
+            None => changes("auth"),
+        },
+        "config" => match sub {
+            Some("get" | "list") => Decision::Allow,
+            Some(s) => changes(&format!("config {s}")),
+            None => changes("config"),
+        },
+        "extension" => match sub {
+            Some("list") => Decision::Allow,
+            Some(s) => changes(&format!("extension {s}")),
+            None => changes("extension"),
+        },
+        "pr" | "issue" | "run" | "workflow" | "release" | "repo" | "label" | "gist" | "cache"
+        | "secret" | "variable" | "ruleset" | "project" | "codespace" | "org" => {
+            let Some(s) = sub else {
+                return changes(&group);
+            };
+            if READ.contains(&s) || (matches!(group.as_str(), "repo" | "gist") && s == "clone") {
+                return Decision::Allow;
+            }
+            let what = format!("{group} {s}");
+            match group.as_str() {
+                "workflow" | "run" | "cache" | "secret" | "variable" => actions_ask(&what),
+                _ => changes(&what),
+            }
+        }
+        _ => changes(&group),
+    }
+}
+
+/// `gh api`: GET (no method and no field flag, or an explicit `GET`) is Allow;
+/// POST/PUT/PATCH/DELETE, or a field flag (`-f/-F/--field/--raw-field/--input`)
+/// with no explicit GET (gh then defaults to POST), is Ask; a mutation of an
+/// `/actions/` endpoint carries the GitHub-Actions reason. A missing endpoint,
+/// an unreadable method, an unknown HTTP method or an unknown flag is Ask.
+fn analyze_gh_api(args: &[&str]) -> Decision {
+    let undeterminable = |why: &str| {
+        Decision::ask(format!(
+            "gh api: {why} — blastguard cannot tell whether this reads or changes GitHub"
+        ))
+    };
+    let mut method: Option<String> = None;
+    let mut fields = false;
+    let mut endpoint: Option<&str> = None;
+    let mut i = 0;
+    while i < args.len() {
+        let t = args[i];
+        if has_unresolvable_expansion(t) && (t.starts_with('-') || endpoint.is_some()) {
+            return undeterminable("an argument is not literal text");
+        }
+        // (long, short, effect): effect 0 = method, 1 = field, 2 = ignored value.
+        const VALUE_FLAGS: &[(&str, &str, u8)] = &[
+            ("--method", "-X", 0),
+            ("--field", "-F", 1),
+            ("--raw-field", "-f", 1),
+            ("--input", "", 1),
+            ("--header", "-H", 2),
+            ("--jq", "-q", 2),
+            ("--template", "-t", 2),
+            ("--hostname", "", 2),
+            ("--cache", "", 2),
+            ("--preview", "-p", 2),
+        ];
+        let mut matched = false;
+        for &(long, short, effect) in VALUE_FLAGS {
+            let (value, used): (Option<String>, usize) =
+                if t == long || (!short.is_empty() && t == short) {
+                    (args.get(i + 1).map(|v| (*v).to_string()), 2)
+                } else if let Some(v) = t.strip_prefix(&format!("{long}=")) {
+                    (Some(v.to_string()), 1)
+                } else if !short.is_empty() && t.starts_with(short) && t.len() > short.len() {
+                    (Some(t[short.len()..].to_string()), 1)
+                } else {
+                    continue;
+                };
+            let Some(value) = value else {
+                return undeterminable(&format!("{t} has no value"));
+            };
+            match effect {
+                0 => {
+                    if has_unresolvable_expansion(&value) {
+                        return undeterminable("the method is not literal text");
+                    }
+                    method = Some(value.trim_matches(['"', '\'']).to_uppercase());
+                }
+                1 => fields = true,
+                _ => {}
+            }
+            i += used;
+            matched = true;
+            break;
+        }
+        if matched {
             continue;
         }
-        if t.starts_with('-') {
+        if matches!(
+            t,
+            "--paginate" | "--slurp" | "-i" | "--include" | "--silent" | "--verbose"
+        ) {
             i += 1;
             continue;
         }
-        break;
+        if t.starts_with('-') {
+            return undeterminable(&format!("unrecognised flag {t}"));
+        }
+        if endpoint.is_none() {
+            endpoint = Some(t);
+        }
+        i += 1;
     }
-    match rest.get(i).map(|t| normalized_command(t)) {
-        Some(sub) if sub == "run" || sub == "workflow" => Decision::deny(format!(
-            "`gh {sub}` operates GitHub Actions, which is banned in this repository"
-        )),
-        _ => Decision::Allow,
+    let Some(endpoint) = endpoint else {
+        return undeterminable("no endpoint given");
+    };
+    let effective = match (&method, fields) {
+        (Some(m), _) => m.as_str(),
+        (None, true) => "POST",
+        (None, false) => "GET",
+    };
+    match effective {
+        "GET" => Decision::Allow,
+        "POST" | "PUT" | "PATCH" | "DELETE" => {
+            if endpoint.contains("/actions/") || endpoint.ends_with("/actions") {
+                Decision::ask(format!(
+                    "gh api {effective} {endpoint} executes or configures GitHub Actions — \
+GitHub Actions execution and configuration need an explicit user request"
+                ))
+            } else {
+                Decision::ask(format!(
+                    "gh api {effective} {endpoint} changes remote GitHub state (a field flag \
+without an explicit GET makes gh api POST)"
+                ))
+            }
+        }
+        other => undeterminable(&format!("unknown HTTP method {other}")),
     }
 }
 
@@ -10215,10 +11167,12 @@ fn xargs_command_start(rest: &[&str]) -> Option<usize> {
     // Value-taking xargs short flags whose value is the NEXT token when the flag
     // is given standalone (`-I {}`, `-n 1`, BSD `-J %`). Bundled forms (`-I{}`,
     // `-n1`, `-J%`) embed the value and consume only themselves. Covers both GNU
-    // (I i n L P s d E a) and BSD/macOS (J R S) — the default xargs on this host —
+    // (I n L P s d E a) and BSD/macOS (J R S) — the default xargs on this host —
     // because a MISSED value flag would misread its value as the command word and
-    // leak a destructive payload (`xargs -J % rm -rf %`) past re-analysis.
-    const VALUE_SHORT: &str = "IinLPsdEaJRS";
+    // leak a destructive payload (`xargs -J % rm -rf %`) past re-analysis. An
+    // EXTRA one is the same leak the other way: it swallows the command word
+    // (GNU `-i`/`-e`/`-l` take only an attached value; see XARGS_VALUE_SHORT).
+    const VALUE_SHORT: &str = XARGS_VALUE_SHORT;
     let mut i = 0;
     while i < rest.len() {
         let t = rest[i];
@@ -10231,16 +11185,17 @@ fn xargs_command_start(rest: &[&str]) -> Option<usize> {
         }
         if let Some(stripped) = t.strip_prefix("--") {
             // Long flag: value-taking ones consume the next token unless `=`-joined.
+            // NOT `--replace`, `--eof`, `--max-lines`: GNU gives those an
+            // OPTIONAL value that is only ever `=`-attached, so the next token
+            // is the command word (`xargs --replace sh -c {}` runs `sh`).
+            // Listed here, they swallowed it.
             let takes = matches!(
                 stripped.split('=').next().unwrap_or(""),
                 "max-args"
-                    | "max-lines"
                     | "max-procs"
                     | "max-chars"
                     | "delimiter"
-                    | "eof"
                     | "arg-file"
-                    | "replace"
                     | "process-slot-var"
             );
             i += if takes && !t.contains('=') { 2 } else { 1 };
@@ -10261,12 +11216,64 @@ fn xargs_command_start(rest: &[&str]) -> Option<usize> {
                 continue;
             };
             let standalone_value = t.len() == 2 && VALUE_SHORT.contains(last);
-            i += if standalone_value { 2 } else { 1 };
+            // A bundle of boolean flags ENDING in a value flag (`-0a FILE`,
+            // `-0n 1`) also takes the next token as that value. Read as
+            // self-contained, `xargs -0a FILE sh` took `FILE` for the command
+            // word and `sh` was never seen.
+            let bundled_value = xargs_short_value_flag(t).is_some_and(|(_, next)| next);
+            i += if standalone_value || bundled_value {
+                2
+            } else {
+                1
+            };
             continue;
         }
         return Some(i); // first non-flag token = the command word
     }
     None
+}
+
+/// Value-taking xargs short flags whose value may be the NEXT token (GNU
+/// `I n L P s d E a`, BSD `J R S`).
+///
+/// NOT GNU `-i`, `-e`, `-l`: their value (`-i[REPL]`, `-e[EOF]`, `-l[N]`) is
+/// OPTIONAL and only ever attached, so a separate next token is never theirs.
+/// `-i` used to be listed here, and `xargs -i sh -c {}` read `sh` as its
+/// value, never saw the shell, and was allowed. Those three live in
+/// [`XARGS_OPTIONAL_ATTACHED`].
+const XARGS_VALUE_SHORT: &str = "InLPsdEaJRS";
+
+/// GNU xargs short flags with an optional ATTACHED value: the rest of the
+/// bundle after one of these is its value, and it never takes the next token.
+const XARGS_OPTIONAL_ATTACHED: &str = "iel";
+
+/// For a short-option bundle `t` (`-0a`, `-aFILE`, `-n1`), the first
+/// value-taking flag in it and whether its value is the NEXT token (true when
+/// that flag is the bundle's last character). `None` for a bundle of boolean
+/// flags only, for one whose first value flag is optional-attached (`-0i`,
+/// `-ia`: everything after the `i` is its replace string), or for a token
+/// that is not a short-option bundle.
+fn xargs_short_value_flag(t: &str) -> Option<(char, bool)> {
+    let body = t.strip_prefix('-')?;
+    if body.is_empty() || body.starts_with('-') {
+        return None;
+    }
+    let (at, c) = body
+        .char_indices()
+        .find(|&(_, c)| XARGS_VALUE_SHORT.contains(c) || XARGS_OPTIONAL_ATTACHED.contains(c))?;
+    if XARGS_OPTIONAL_ATTACHED.contains(c) {
+        return None;
+    }
+    Some((c, at + c.len_utf8() == body.len()))
+}
+
+/// True when xargs's own options (`opts`, the tokens before its command word)
+/// name an argument FILE (`-a FILE`, `-aFILE`, `-0a FILE`, `--arg-file[=]FILE`):
+/// the items then come from that file, not from stdin.
+fn xargs_reads_arg_file(opts: &[&str]) -> bool {
+    opts.iter().any(|t| {
+        t.starts_with("--arg-file") || xargs_short_value_flag(t).is_some_and(|(c, _)| c == 'a')
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -10325,6 +11332,16 @@ fn split_statements_into_pipe_stages(cmd: &str) -> Vec<Vec<String>> {
             cur.push(c);
             i += 1;
             continue;
+        }
+        // A closed backtick/`$(` body stays inside its stage, as in
+        // `split_segments` (see `closed_substitution_end`); paren depth alone
+        // does not see a backtick.
+        if !in_s {
+            if let Some(end) = closed_substitution_end(&chars, i) {
+                cur.extend(&chars[i..=end]);
+                i = end + 1;
+                continue;
+            }
         }
         if !in_s && !in_d {
             if c == '(' {
@@ -10781,8 +11798,9 @@ fn backtick_payloads(stage: &str) -> Vec<String> {
 /// feeds the FULL rule engine, so literal single-quoted text must not be
 /// mistaken for code. Each body is found with [`scan_balanced`], so quoting
 /// and nesting inside the body cannot end it early. An unterminated
-/// substitution ends the scan: [`split_segments`] can cut a `$(a; b)` apart,
-/// and the pieces after the cut are analysed as segments of their own.
+/// substitution ends the scan: [`split_segments`] keeps a CLOSED `$(a; b)` in
+/// one segment (see [`closed_substitution_end`]) but cuts an unclosed one
+/// apart, and those pieces are analysed as segments of their own.
 fn executed_substitution_payloads(seg: &str) -> Vec<String> {
     let chars: Vec<char> = seg.chars().collect();
     let mut out = Vec::new();
@@ -10815,12 +11833,33 @@ fn executed_substitution_payloads(seg: &str) -> Vec<String> {
                 let Some(end) = scan_balanced(&chars, k + 1, Stop::Backtick, 0) else {
                     break;
                 };
-                out.push(chars[k + 1..end].iter().collect());
+                out.push(backtick_body_as_run(&chars[k + 1..end]));
                 k = end + 1;
                 continue;
             }
             _ => {}
         }
+        k += 1;
+    }
+    out
+}
+
+/// The command text bash actually runs for a backtick body: inside backticks
+/// a backslash followed by `` ` ``, `$` or `\` is removed before the body is
+/// parsed, so `` `echo \`rm -rf ~\`` `` runs `` echo `rm -rf ~` `` — a NESTED
+/// substitution. Passing the body through with its `` \` `` intact hid that
+/// inner command: the analyser read `` \` `` as an escaped, literal backtick
+/// and allowed it. Any other backslash is kept, as bash keeps it.
+fn backtick_body_as_run(body: &[char]) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut k = 0;
+    while k < body.len() {
+        if body[k] == '\\' && matches!(body.get(k + 1), Some('`' | '$' | '\\')) {
+            out.push(body[k + 1]);
+            k += 2;
+            continue;
+        }
+        out.push(body[k]);
         k += 1;
     }
     out
@@ -13597,13 +14636,45 @@ mod tests {
         for _ in 0..33 {
             cmd.push_str("+ ");
         }
-        let start = std::time::Instant::now();
-        let d = bash(&cmd);
-        let elapsed = start.elapsed();
-        // Availability: a PreToolUse hook must never hang the user's turn.
+        // Availability: a PreToolUse hook must never hang the user's turn. That
+        // is a property of the AMOUNT OF WORK, not of wall time: a wall-clock
+        // bound (formerly `< 2s`) measures the scheduler, and failed under CPU
+        // load at 25s-170s with the budget fully in force
+        // (`scripts/tests/blastguard-d4-timing-under-load.sh`, backlog
+        // 75b48877). So count `detect_bash` entries instead. The analysis runs
+        // on a worker thread while this thread watches the count, so an
+        // unbounded tree (budget removed: O(33^8) entries) FAILS here as soon
+        // as it crosses the bound rather than hanging the test.
+        //
+        // The bound: at most `MAX_ANALYSIS_NODES` entries are admitted; every
+        // further entry is a budget-rejected leaf called by an admitted parent.
+        // Measured for this input: 2199 total (2000 admitted + 199 rejected
+        // leaves). The bound allows 250 rejected leaves — tight against the
+        // ~10^12 entries an unbudgeted run would need. The analysis is
+        // deterministic, so this count does not vary with load.
+        const REJECTED_LEAF_SLACK: u64 = 250;
+        let visit_bound = u64::from(MAX_ANALYSIS_NODES) + REJECTED_LEAF_SLACK;
+        let visits = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let worker_visits = std::sync::Arc::clone(&visits);
+        let worker = std::thread::spawn(move || {
+            VISIT_PROBE.with(|p| *p.borrow_mut() = Some(worker_visits));
+            bash(&cmd)
+        });
+        let d = loop {
+            let seen = visits.load(std::sync::atomic::Ordering::Relaxed);
+            assert!(
+                seen <= visit_bound,
+                "analysis is unbounded: {seen} detect_bash entries so far, bound {visit_bound}"
+            );
+            if worker.is_finished() {
+                break worker.join().expect("analysis worker panicked");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        let total = visits.load(std::sync::atomic::Ordering::Relaxed);
         assert!(
-            elapsed < std::time::Duration::from_secs(2),
-            "analysis took {elapsed:?}, expected well under 2s"
+            total <= visit_bound,
+            "analysis did {total} detect_bash entries, bound {visit_bound}"
         );
         // Correctness: budget exhaustion BLOCKS. A command too complex to
         // analyse must never be waved through unanalysed.
@@ -16108,17 +17179,29 @@ and must not be Allowed: {failing:?}"
     /// `deletion_failing_git_probe_never_allows` (set once by that test).
     static FAKE_GIT_DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+    /// The fake gits that must ANSWER (clean / fail / garbage) run under a
+    /// generous bound, so CPU load cannot turn the clean control's answer into
+    /// a timeout (it did: the control's Allow flaked under concurrent runs).
+    /// Only `hang` keeps the production `TREE_GIT_TIMEOUT` (via
+    /// `probe_tree_with`), because exercising that timeout is its point.
     fn fake_git_probe(
         mode: &str,
         path: &str,
         cands: &[String],
     ) -> Determination<crate::reversible::TreeGitFacts> {
         let dir = FAKE_GIT_DIR.get().expect("fake git dir set");
-        crate::reversible::probe_tree_with(
-            std::ffi::OsStr::new(&format!("{dir}/git-{mode}")),
-            path,
-            cands,
-        )
+        let git = format!("{dir}/git-{mode}");
+        let git = std::ffi::OsStr::new(&git);
+        if mode == "hang" {
+            crate::reversible::probe_tree_with(git, path, cands)
+        } else {
+            crate::reversible::probe_tree_with_timeout(
+                git,
+                path,
+                cands,
+                std::time::Duration::from_secs(30),
+            )
+        }
     }
     fn fake_git_clean(p: &str, c: &[String]) -> Determination<crate::reversible::TreeGitFacts> {
         fake_git_probe("clean", p, c)
@@ -16193,6 +17276,51 @@ and must not be Allowed: {failing:?}"
                 "{name}: probe must be Undetermined"
             );
         }
+    }
+
+    static SLOW_GIT_DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+    /// The probe seam the flaky test uses, with a generous bound instead of
+    /// the production `TREE_GIT_TIMEOUT`.
+    fn slow_clean_git(p: &str, c: &[String]) -> Determination<crate::reversible::TreeGitFacts> {
+        crate::reversible::probe_tree_with_timeout(
+            std::ffi::OsStr::new(&format!("{}/git-slow", SLOW_GIT_DIR.get().expect("set"))),
+            p,
+            c,
+            std::time::Duration::from_secs(30),
+        )
+    }
+
+    /// Test-harness defect, not a claim about production: the Allow control of
+    /// `deletion_failing_git_probe_never_allows` must not depend on the fake git
+    /// answering within the production 1.5 s `TREE_GIT_TIMEOUT` (it flaked under
+    /// load: 3 of 12 concurrent suite runs). A clean fake git that is slow (2 s,
+    /// inside a 30 s bound, so any drift within that range passes) must still
+    /// yield Allow through the probe seam.
+    #[test]
+    fn fake_git_control_allow_does_not_depend_on_the_production_timeout() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = DelFx::new_in(std::path::Path::new("/var/tmp"), "slowgit");
+        std::fs::create_dir_all(format!("{}/src", f.proj)).unwrap();
+        let bin = format!("{}/bin", f.scratch);
+        std::fs::create_dir_all(&bin).unwrap();
+        let script = format!(
+            "#!/bin/sh\nsleep 2\ncase \"$*\" in\n  *rev-parse*) echo '{}' ;;\n  *\" status \"*) exit 0 ;;\n  *) exit 0 ;;\nesac\n",
+            f.proj
+        );
+        let p = format!("{bin}/git-slow");
+        std::fs::write(&p, script).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = SLOW_GIT_DIR.set(bin);
+        let roots = f
+            .roots_with_cwd(&f.proj.clone())
+            .with_git_tree_probe(slow_clean_git);
+        let d = detect_scoped(
+            "Bash",
+            Some(&json!({ "command": format!("rm -rf {}/src", f.proj) })),
+            &roots,
+        );
+        assert_eq!(d, Decision::Allow);
     }
 
     #[test]

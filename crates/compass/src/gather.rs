@@ -186,8 +186,15 @@ fn collect_md(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<()> {
 /// Run `git <args>` in `repo_root`, returning trimmed stdout on success.
 /// Returns `None` for any failure (non-git dir, missing git, non-zero exit, or
 /// timeout) so callers can treat git as an optional source.
+///
+/// The repository is selected only by `-C repo_root`: every inherited
+/// `GIT_*` location/config variable (`GIT_DIR`, `GIT_WORK_TREE`,
+/// `GIT_INDEX_FILE`, ... — see [`harness_core::git_env::INHERITED_GIT_ENV`]) is
+/// removed from the child, so a hook invoked under another git's environment
+/// cannot gather another repository's log/status/diff for `repo_root`.
 fn git_stdout(repo_root: &Path, args: &[&str]) -> Option<String> {
     let mut cmd = Command::new("git");
+    harness_core::git_env::scrub(&mut cmd);
     cmd.arg("-C").arg(repo_root).args(args);
     run_bounded(cmd, GIT_TIMEOUT)
 }
@@ -333,6 +340,101 @@ mod tests {
         assert!(
             result.is_ok(),
             "an absent .deepwiki/ must not error, got {result:?}"
+        );
+    }
+
+    /// Create a repo at `dir` with one commit whose subject is `subject`,
+    /// using a scrubbed git env so the setup itself is not redirected.
+    fn init_repo_with_commit(dir: &Path, subject: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        let git = |args: &[&str]| {
+            let mut c = Command::new("git");
+            harness_core::git_env::scrub(&mut c);
+            c.arg("-C")
+                .arg(dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args);
+            let out = c.output().expect("spawn git");
+            assert!(out.status.success(), "git {args:?} failed: {out:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", subject]);
+    }
+
+    /// Inner half of `gather_git_log_ignores_inherited_git_dir`; inert unless
+    /// the parent sets `COMPASS_GATHER_GITENV_TARGET`. The gathered `git:log`
+    /// fragments for the target repo must be exactly the target's own commit.
+    #[test]
+    fn gather_gitenv_inner_log_comes_from_target_repo() {
+        let Some(target) = std::env::var_os("COMPASS_GATHER_GITENV_TARGET") else {
+            return;
+        };
+        let target = std::path::PathBuf::from(target);
+        let bundle = gather(&target, &Charter::default(), &Config::default()).expect("gather");
+        let subjects: Vec<String> = bundle
+            .fragments
+            .iter()
+            .filter(|f| f.source_path == "git:log")
+            .map(|f| {
+                f.text
+                    .split_once(' ')
+                    .map(|(_, s)| s.to_string())
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(subjects, vec!["subject-from-target-A".to_string()]);
+    }
+
+    /// Mutation kill for the `scrub` in [`git_stdout`]: with an inherited
+    /// `GIT_DIR` (+ `GIT_WORK_TREE`) aimed at a different repo B, gathering
+    /// repo A must still report A's commit log, not B's.
+    #[test]
+    fn gather_git_log_ignores_inherited_git_dir() {
+        if std::env::var_os("COMPASS_GATHER_GITENV_TARGET").is_some() {
+            return;
+        }
+        let root = tempfile::tempdir().expect("tempdir");
+        let repo_a = root.path().join("a");
+        let repo_b = root.path().join("b");
+        init_repo_with_commit(&repo_a, "subject-from-target-A");
+        init_repo_with_commit(&repo_b, "subject-from-other-B");
+
+        let run = |polluted: bool| {
+            let mut c = Command::new(std::env::current_exe().unwrap());
+            c.args([
+                "--exact",
+                "gather::tests::gather_gitenv_inner_log_comes_from_target_repo",
+                "--test-threads=1",
+                "--nocapture",
+            ]);
+            harness_core::git_env::scrub(&mut c);
+            c.env("COMPASS_GATHER_GITENV_TARGET", &repo_a);
+            if polluted {
+                c.env("GIT_DIR", repo_b.join(".git"));
+                c.env("GIT_WORK_TREE", &repo_b);
+            }
+            c.output().expect("spawn child test binary")
+        };
+        let control = run(false);
+        assert!(
+            control.status.success(),
+            "control (no inherited GIT_DIR) must gather repo A's log: {}",
+            String::from_utf8_lossy(&control.stdout)
+        );
+        // The child must actually have run the inner test (a filter typo
+        // would run 0 tests and exit 0, proving nothing).
+        assert!(
+            String::from_utf8_lossy(&control.stdout).contains("1 passed"),
+            "child did not run the inner test: {}",
+            String::from_utf8_lossy(&control.stdout)
+        );
+        let polluted = run(true);
+        assert!(
+            polluted.status.success(),
+            "with inherited GIT_DIR=repo B, gather must still report repo A's log: {}{}",
+            String::from_utf8_lossy(&polluted.stdout),
+            String::from_utf8_lossy(&polluted.stderr)
         );
     }
 }

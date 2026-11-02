@@ -72,13 +72,16 @@ delimiter line (backlog 4a1cf1ad).
   path** (see below) → `ask` (hardened to deny where no human can answer):
   blastguard can see that the path controls which gates run, but not whether
   the new bytes strengthen or disarm it.
+- **Write / Edit / MultiEdit / NotebookEdit** into a **system directory**
+  (`/etc/paths.d/x`, `/Library/LaunchDaemons/x.plist`, `/usr/local/bin/x`; the
+  same `SYSTEM_DIRS` set and reason as a Bash redirect) → denied (user ruling
+  2026-11-01, 0.2.184). The path is judged as written and again where the
+  kernel really writes it, so a dangling file symlink, a chain of them, or a
+  directory symlink into `/etc` is the same deny. A target inside a safe root
+  (a project checked out under `/opt`) is exempt, as for a redirect. A target
+  whose symlinks cannot be resolved (a loop, an unreadable link) → `ask`.
+  `/var` (`$TMPDIR`, `/var/tmp`) is not in the set.
 - Other **Edit / MultiEdit / NotebookEdit** calls are partial edits → allowed.
-- A **Write** tool call into a system directory (e.g. `/etc/paths.d/x`) is
-  **not** denied by the Write arm: `detect_write` does not consult
-  `system_path_block` (only the Bash redirect / `tee` / `cp`-family arms do).
-  Observed on the 0.2.108 build: a Write payload for `/etc/paths.d/evil`
-  produced no output (allow). Note that `blastguard --protects` currently
-  claims otherwise.
 
 **This table lists shapes, not verdicts.** Since 0.2.51 the delete/truncate
 rows above (`rm`, `find -delete`, `truncate`, `shred`, `>`, `git clean -f`,

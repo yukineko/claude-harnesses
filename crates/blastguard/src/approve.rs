@@ -547,31 +547,39 @@ mod tests {
         );
     }
 
-    /// A scratch directory for the store tests.
+    /// A fresh, uniquely named scratch directory for one store test, removed
+    /// when the returned guard drops.
     ///
-    /// `std::env::temp_dir()` rather than `CARGO_TARGET_TMPDIR`, which Cargo
-    /// only defines for INTEGRATION tests — these are lib unit tests. The
-    /// inside/outside distinction that forced `tests/approval_memory.rs` off
-    /// `/tmp` does not arise here: these tests exercise [`Store`] alone and
-    /// never build a [`SafeRoots`].
-    fn store_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join("blastguard-approve-unit")
-            .join(name);
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
+    /// Unique per call (backlog 9451b280): a fixed
+    /// `temp_dir()/blastguard-approve-unit/<name>` path was shared by every
+    /// concurrent `cargo test -p blastguard --lib` process on one `$TMPDIR`,
+    /// and each run's `remove_dir_all` clobbered the others' store
+    /// (`scripts/tests/blastguard-approve-unit-tmpdir-race.sh`).
+    ///
+    /// Under `std::env::temp_dir()` rather than `CARGO_TARGET_TMPDIR`, which
+    /// Cargo only defines for INTEGRATION tests — these are lib unit tests.
+    /// The inside/outside distinction that forced `tests/approval_memory.rs`
+    /// off `/tmp` does not arise here: these tests exercise [`Store`] alone
+    /// and never build a [`SafeRoots`].
+    fn store_dir(name: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("blastguard-approve-unit-{name}-"))
+            .tempdir()
+            .unwrap()
     }
 
     #[test]
     fn empty_store_is_not_recorded_not_approved() {
-        let s = Store::open(store_dir("empty"));
+        let dir = store_dir("empty");
+        let s = Store::open(dir.path());
         assert_eq!(s.lookup("abc"), Lookup::NotRecorded);
         assert!(!s.lookup("abc").is_approved());
     }
 
     #[test]
     fn pending_is_not_an_approval_until_promoted() {
-        let s = Store::open(store_dir("promote"));
+        let dir = store_dir("promote");
+        let s = Store::open(dir.path());
         s.put_pending("k", "fp1", "chmod -R 755 sub").unwrap();
         assert_eq!(s.lookup("fp1"), Lookup::NotRecorded);
         assert_eq!(s.promote("k"), Determination::known("fp1".to_string()));
@@ -580,7 +588,8 @@ mod tests {
 
     #[test]
     fn promote_consumes_the_pending_entry() {
-        let s = Store::open(store_dir("consume"));
+        let dir = store_dir("consume");
+        let s = Store::open(dir.path());
         s.put_pending("k", "fp1", "cmd").unwrap();
         assert!(matches!(s.promote("k"), Determination::Known(_)));
         // A second promotion has nothing to promote: one ask, one approval.
@@ -589,14 +598,16 @@ mod tests {
 
     #[test]
     fn promote_without_a_pending_is_undetermined() {
-        let s = Store::open(store_dir("no-pending"));
+        let dir = store_dir("no-pending");
+        let s = Store::open(dir.path());
         assert!(matches!(s.promote("k"), Determination::Undetermined(_)));
     }
 
     #[test]
     fn an_unparseable_entry_is_undetermined_not_approved() {
-        let dir = store_dir("corrupt");
-        let s = Store::open(&dir);
+        let tmp = store_dir("corrupt");
+        let dir = tmp.path();
+        let s = Store::open(dir);
         std::fs::create_dir_all(dir.join("approved")).unwrap();
         std::fs::write(dir.join("approved").join("fp1"), "{not json").unwrap();
         assert!(matches!(s.lookup("fp1"), Lookup::Undetermined(_)));
@@ -605,8 +616,9 @@ mod tests {
 
     #[test]
     fn an_entry_naming_another_fingerprint_does_not_approve() {
-        let dir = store_dir("mismatch");
-        let s = Store::open(&dir);
+        let tmp = store_dir("mismatch");
+        let dir = tmp.path();
+        let s = Store::open(dir);
         std::fs::create_dir_all(dir.join("approved")).unwrap();
         std::fs::write(
             dir.join("approved").join("fp1"),
@@ -618,8 +630,9 @@ mod tests {
 
     #[test]
     fn an_unparseable_pending_does_not_become_an_approval() {
-        let dir = store_dir("corrupt-pending");
-        let s = Store::open(&dir);
+        let tmp = store_dir("corrupt-pending");
+        let dir = tmp.path();
+        let s = Store::open(dir);
         std::fs::create_dir_all(dir.join("pending")).unwrap();
         std::fs::write(dir.join("pending").join("k"), "{not json").unwrap();
         assert!(matches!(s.promote("k"), Determination::Undetermined(_)));

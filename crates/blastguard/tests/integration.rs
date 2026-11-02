@@ -4,14 +4,16 @@
 //! End-to-end tests: feed a PreToolUse payload to the real built binary over
 //! stdin and assert on stdout + exit code.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::process::{Command, Stdio};
 
 /// Run the binary with `payload` on stdin. Returns (exit_code, stdout).
 fn run(payload: &str) -> (i32, String) {
     let bin = env!("CARGO_BIN_EXE_blastguard");
-    let mut child = Command::new(bin)
-        .stdin(Stdio::piped())
+    let mut hook = Command::new(bin);
+    hook.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Test isolation for the repeat ledger (2026-09-18). A second identical
@@ -23,13 +25,8 @@ fn run(payload: &str) -> (i32, String) {
         // suite. An unattributable run resolves to `Undetermined` = no
         // downgrade, which is the condition these tests mean to measure.
         // `repeat_downgrade.rs` sets the variable explicitly instead.
-        .env_remove("CLAUDE_CODE_SESSION_ID")
-        .spawn()
-        .expect("binary spawns");
-    if let Some(mut child_stdin) = child.stdin.take() {
-        let _ = child_stdin.write_all(payload.as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+        .env_remove("CLAUDE_CODE_SESSION_ID");
+    let out = bounded::run_bounded(&mut hook, payload.as_bytes(), bounded::HOOK_DEADLINE);
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -48,11 +45,7 @@ fn run_with_env(payload: &str, envs: &[(&str, &str)]) -> (i32, String) {
     for (k, v) in envs {
         cmd.env(k, v);
     }
-    let mut child = cmd.spawn().expect("binary spawns");
-    if let Some(mut child_stdin) = child.stdin.take() {
-        let _ = child_stdin.write_all(payload.as_bytes());
-    }
-    let out = child.wait_with_output().expect("binary runs");
+    let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),

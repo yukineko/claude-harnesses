@@ -6,7 +6,9 @@
 //!
 //! Fixtures live under `CARGO_TARGET_TMPDIR` (not `/tmp`, a blastguard safe root).
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -16,20 +18,28 @@ struct Fx {
     home: PathBuf,
     parent: PathBuf,
     outside: PathBuf,
+    /// Owns `base`: a unique directory per fixture instance, so concurrent
+    /// runs of this binary never share (and clobber) one fixture path
+    /// (backlog b6ce7f76). Removed on drop.
+    _dir: tempfile::TempDir,
 }
 
 impl Fx {
     fn new(name: &str) -> Fx {
-        let base = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("worktree_root_payload_cwd_dotdot")
-            .join(name);
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
+        let parent =
+            Path::new(env!("CARGO_TARGET_TMPDIR")).join("worktree_root_payload_cwd_dotdot");
+        std::fs::create_dir_all(&parent).unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("{name}-"))
+            .tempdir_in(&parent)
+            .unwrap();
+        let base = dir.path().to_path_buf();
         let f = Fx {
             home: base.join("home"),
             parent: base.join("src"),
             outside: base.join("outside"),
             base,
+            _dir: dir,
         };
         std::fs::create_dir_all(&f.home).unwrap();
         std::fs::create_dir_all(f.parent.join("proj")).unwrap();
@@ -69,11 +79,7 @@ impl Fx {
             .env_remove("TMPDIR")
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .current_dir(&self.base);
-        let mut child = cmd.spawn().expect("binary spawns");
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(payload.as_bytes());
-        }
-        let out = child.wait_with_output().expect("binary runs");
+        let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
         assert_eq!(
             out.status.code(),
             Some(0),

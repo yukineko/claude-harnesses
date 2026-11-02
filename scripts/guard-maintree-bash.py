@@ -34,7 +34,15 @@ positive or false negative (4a64e6ff and ~30 sibling tickets).
                       starts with "merge " (written by `git merge`; covers a
                       fast-forward whose source branch is already deleted)
                                                             -> 0
-                      anything else                         -> 2, naming the paths
+                      HEAD moved by integration (same evidence as above)
+                      and the dirty tree is a LATER merge of this command
+                      caught in its pre-merge-commit window: ORIG_HEAD
+                      rewritten to the current HEAD, no SQUASH_MSG,
+                      index == AUTO_MERGE tree == working tree, and that tree
+                      is the clean `git merge-tree` of HEAD with a local
+                      branch not yet in HEAD (backlog 2dee8b0e; see
+                      in_flight_merge_window)               -> 0
+                      anything else                        -> 2, naming the paths
 
 Exit 2 at Post cannot undo the command — the write has happened. It stops the
 turn from proceeding as if main were untouched and names what changed, so the
@@ -52,7 +60,12 @@ AttributeError on a snapshot with wrong field types) exits 2 (blocked), never 1
 that crashed has not passed (CLAUDE.md 3), so it resolves to the restricted side.
 
 Known blind spots (not visible to `git status`): files under .git itself
-(.git/config, .git/hooks) and gitignored files. Changes by ANOTHER session
+(.git/config, .git/hooks) and gitignored files. After an integration HEAD
+move, a command that stages exactly the clean merge of a local branch without
+committing it by non-merge means and with ORIG_HEAD reset to HEAD (observed:
+`git reset -q HEAD` then `git cherry-pick -n` of a one-commit branch) is
+on-disk identical to a later merge's pre-merge-commit window and is allowed
+(in_flight_merge_window). Changes by ANOTHER session
 between this call's Pre and Post are still REFUSED (they cannot be told apart
 from this call's own writes) and the message says so. When the Post lands in
 another session's `git merge` window (merged tree already in main's index and
@@ -63,9 +76,12 @@ pre-merge-commit), the refusal reports that evidence as AMBIGUOUS: a concurrent
 merge in main is a possible cause, but this command's own reset/merge/rebase
 rewrites ORIG_HEAD too, so the change is not asserted to be this command's (and
 is still refused). Evidence = ORIG_HEAD differs between Pre and Post (including
-absent OR unreadable at Pre, both stored as None, and readable at Post), HEAD unchanged, no MERGE_HEAD. That evidence changes WORDING only:
+absent OR unreadable at Pre, both stored as None, and readable at Post), HEAD unchanged, no MERGE_HEAD. With HEAD unchanged that evidence changes WORDING only:
 it is recorded in the snapshot as `orig_head` but is excluded from the
-before==after comparison and from every verdict branch; a Pre snapshot without
+before==after comparison and from every verdict branch except one: when HEAD
+DID move by integration, an ORIG_HEAD rewritten to the current HEAD is one of
+several required (never sufficient alone) pieces of in_flight_merge_window
+evidence; a Pre snapshot without
 the field (key missing, not merely None), or an ORIG_HEAD that is absent or unreadable at
 Post, means no evidence (existing wording).
 """
@@ -303,6 +319,104 @@ def merge_reflog_entry(common: Path, branch: str, old: str, new: str) -> bool:
     return False
 
 
+def git_equal(cwd: Path, *args: str) -> bool:
+    """Run a `--quiet` comparison: exit 0 -> True, exit 1 -> False, else Undetermined."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(cwd), *args], capture_output=True, text=True
+        )
+    except OSError as exc:
+        raise Undetermined("git could not be executed: %s" % exc) from exc
+    if proc.returncode not in (0, 1):
+        raise Undetermined(
+            "`git %s` exited %d: %s"
+            % (" ".join(args), proc.returncode, proc.stderr.strip() or "(no stderr)")
+        )
+    return proc.returncode == 0
+
+
+def _hex_oid(text: str) -> str | None:
+    first = text.split()
+    if len(first) != 1 or len(first[0]) not in (40, 64) or not all(c in "0123456789abcdef" for c in first[0]):
+        return None
+    return first[0]
+
+
+def in_flight_merge_window(
+    main: Path, common: Path, before: dict, after: dict, has_orig: bool, before_orig, after_orig
+) -> bool:
+    """True if the Post state is a LATER `git merge` of this same command caught
+    inside its pre-merge-commit window (backlog 2dee8b0e): the merged tree is
+    already in main's index and working tree but neither MERGE_HEAD nor the merge
+    commit exists yet (observed: git writes AUTO_MERGE and ORIG_HEAD before
+    pre-merge-commit, MERGE_HEAD and the commit after it).
+
+    Every piece of evidence is required; any missing one is False (-> refuse):
+      - ORIG_HEAD rewritten between Pre and Post and naming the current HEAD
+        (`git merge` sets ORIG_HEAD = HEAD when it starts),
+      - no SQUASH_MSG (an uncommitted `git merge --squash` leaves the same
+        index/AUTO_MERGE state but never becomes a merge commit),
+      - AUTO_MERGE names a tree, the index equals it and the working tree equals
+        the index; no unmerged path; untracked paths only the pre-existing,
+        unchanged ones,
+      - that tree is exactly the clean `git merge-tree --write-tree HEAD <b>` of
+        some local branch <b> other than main's branch and not yet in HEAD.
+    The caller still requires the HEAD move itself to be integration.
+    Known residual: git's on-disk state in this window is the same as a command
+    that stages exactly a clean merge of a branch without committing it by other
+    means (e.g. `git reset -q HEAD` then `git cherry-pick -n` of a one-commit
+    branch); such content is what merging that branch would bring in.
+    """
+    if not has_orig or after_orig is None or before_orig == after_orig:
+        return False
+    if not isinstance(after_orig, list) or not after_orig or after_orig[0] != after["head"]:
+        return False
+    if (common / "SQUASH_MSG").exists():
+        return False
+    try:
+        auto = _hex_oid((common / "AUTO_MERGE").read_text())
+    except (OSError, UnicodeDecodeError):
+        return False
+    if auto is None:
+        return False
+    ra, rb = status_records(before["porcelain"]), status_records(after["porcelain"])
+    for p, rec in rb.items():
+        if rec.startswith("u "):
+            return False
+        if rec.startswith("? "):
+            if ra.get(p) != rec or before["hashes"].get(p) is None or before["hashes"].get(p) != after["hashes"].get(p):
+                return False
+    if not git_equal(main, "diff-index", "--cached", "--quiet", auto, "--"):
+        return False
+    if not git_equal(main, "diff", "--quiet", "--"):
+        return False
+    branch = checked_out_branch(main)
+    candidates = git(
+        main, "for-each-ref", "--no-merged", after["head"], "--format=%(refname)", "refs/heads/"
+    ).split()
+    for ref in candidates:
+        if ref == branch:
+            continue
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(main), "merge-tree", "--write-tree", after["head"], ref],
+                capture_output=True,
+                text=True,
+            )
+        except OSError as exc:
+            raise Undetermined("git could not be executed: %s" % exc) from exc
+        if proc.returncode == 1:
+            continue  # conflicted merge: not a clean merge result
+        if proc.returncode != 0:
+            raise Undetermined(
+                "`git merge-tree --write-tree %s %s` exited %d" % (after["head"][:12], ref, proc.returncode)
+            )
+        lines = proc.stdout.splitlines()
+        if lines and lines[0].strip() == auto:
+            return True
+    return False
+
+
 def changed_paths(before: dict, after: dict) -> list[str]:
     """Paths whose content hash or status record (index state) differs."""
     a, b = before["hashes"], after["hashes"]
@@ -416,7 +530,10 @@ def post(payload: dict, common: Path, main: Path) -> int:
         pass  # a merge / conflict resolution is in progress
     elif merge_abort_back_to_head(main, before, after):
         pass  # aborting one's own in-progress merge back to HEAD
-    elif after["head"] != before["head"] and only_unchanged_untracked(before, after):
+    elif after["head"] != before["head"] and (
+        only_unchanged_untracked(before, after)
+        or in_flight_merge_window(main, common, before, after, has_orig_field, before_orig, after_orig)
+    ):
         branch = checked_out_branch(main)
         if not integration_head(main, after["head"], branch) and not merge_reflog_entry(
             common, branch, before["head"], after["head"]

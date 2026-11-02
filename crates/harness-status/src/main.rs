@@ -47,6 +47,15 @@ enum Command {
     /// SessionStart hook: warn (via additionalContext) only when a registered
     /// hook binary is missing; silent otherwise. Never breaks the turn.
     SessionStart,
+    /// Classify what each background subagent of a session is doing right now
+    Agents {
+        /// Session id (default: every session under the projects dir)
+        #[arg(long)]
+        session: Option<String>,
+        /// Projects dir holding <proj>/<session>/subagents (default ~/.claude/projects)
+        #[arg(long)]
+        projects_dir: Option<std::path::PathBuf>,
+    },
 }
 
 fn today() -> String {
@@ -280,6 +289,16 @@ fn main() {
                 }
             }
         },
+        Some(Command::Agents {
+            session,
+            projects_dir,
+        }) => {
+            let dir = projects_dir.unwrap_or_else(|| {
+                std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                    .join(".claude/projects")
+            });
+            std::process::exit(harness_status::agents::run_cli(&dir, session.as_deref()));
+        }
         Some(Command::SessionStart) => {
             harness_core::hook::run_hook(|| {
                 // Read (and discard) stdin only if actually piped, mirroring the

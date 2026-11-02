@@ -13,7 +13,7 @@ use harness_core::verdict::Determination;
 
 /// Run `git <args>` in `repo`; `Ok(stdout)` only on a successful exit.
 fn git_stdout(repo: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = harness_core::git_env::scrub(&mut Command::new("git"))
         .args(args)
         .current_dir(repo)
         .output()

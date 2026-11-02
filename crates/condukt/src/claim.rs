@@ -1454,6 +1454,80 @@ pub(crate) fn session_transcript_mtime_secs(session_id: &str) -> Determination<i
     }
 }
 
+/// The owning session ids of the LIVE stateless claims of `run_id` — the shared
+/// front half of [`stateless_idle_secs`] and the compaction axis of
+/// `circuit check`, so both measure the SAME transcript(s). `Err` carries the
+/// [`StatelessIdle`] answer that applies when no session list can be produced
+/// (no stateless claim, unreadable registry, no live driver, claim without a
+/// session id).
+pub(crate) fn stateless_live_sessions(
+    cfg: &Config,
+    cwd: &Path,
+    run_id: &str,
+    now: i64,
+) -> Result<Vec<String>, StatelessIdle> {
+    let path = match registry_path(cfg, cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Err(StatelessIdle::RegistryUnreadable(format!(
+                "claim registry project root unresolvable: {}",
+                why.as_str()
+            )))
+        }
+    };
+    let reg = match read_registry(&path) {
+        Ok(Some(reg)) => reg,
+        Ok(None) => return Err(StatelessIdle::NoStatelessClaim),
+        Err(e) => {
+            return Err(StatelessIdle::RegistryUnreadable(format!(
+                "claim registry {} unreadable: {e}",
+                path.display()
+            )))
+        }
+    };
+    let mine: Vec<&Claim> = reg
+        .files
+        .values()
+        .chain(reg.task_claims.values())
+        .filter(|c| c.run_id == run_id && c.stateless)
+        .collect();
+    if mine.is_empty() {
+        return Err(StatelessIdle::NoStatelessClaim);
+    }
+    let ttl = ttl_secs(cfg);
+    let live: Vec<&Claim> = mine
+        .into_iter()
+        .filter(|c| !is_stale(c, now, ttl))
+        .collect();
+    if live.is_empty() {
+        return Err(StatelessIdle::Measured(Determination::undetermined(
+            format!(
+                "every stateless claim of run {run_id} has a heartbeat older than the stuck-TTL \
+             ({ttl}s) — no live driver to measure progress from"
+            ),
+        )));
+    }
+    let mut sessions: Vec<String> = Vec::new();
+    for c in &live {
+        match c.session_id.as_deref() {
+            Some(sid) if !sid.trim().is_empty() => {
+                if !sessions.iter().any(|s| s == sid) {
+                    sessions.push(sid.to_string());
+                }
+            }
+            _ => {
+                return Err(StatelessIdle::Measured(Determination::undetermined(
+                    format!(
+                        "stateless claim of run {run_id} has no owning session id — \
+                     transcript progress unreadable"
+                    ),
+                )))
+            }
+        }
+    }
+    Ok(sessions)
+}
+
 /// Idle seconds for a run that has no run state but may be a stateless
 /// (`/flow`) driver, measured from the owning session transcript — the same
 /// signal [`claim_progress`] uses for a [`Claim::stateless`] claim.
@@ -1479,63 +1553,12 @@ pub(crate) fn stateless_idle_secs(
     run_id: &str,
     now: i64,
 ) -> StatelessIdle {
-    let path = match registry_path(cfg, cwd) {
-        Determination::Known(p) => p,
-        Determination::Undetermined(why) => {
-            return StatelessIdle::RegistryUnreadable(format!(
-                "claim registry project root unresolvable: {}",
-                why.as_str()
-            ))
-        }
+    let sessions = match stateless_live_sessions(cfg, cwd, run_id, now) {
+        Ok(s) => s,
+        Err(answer) => return answer,
     };
-    let reg = match read_registry(&path) {
-        Ok(Some(reg)) => reg,
-        Ok(None) => return StatelessIdle::NoStatelessClaim,
-        Err(e) => {
-            return StatelessIdle::RegistryUnreadable(format!(
-                "claim registry {} unreadable: {e}",
-                path.display()
-            ))
-        }
-    };
-    let mine: Vec<&Claim> = reg
-        .files
-        .values()
-        .chain(reg.task_claims.values())
-        .filter(|c| c.run_id == run_id && c.stateless)
-        .collect();
-    if mine.is_empty() {
-        return StatelessIdle::NoStatelessClaim;
-    }
-    let ttl = ttl_secs(cfg);
-    let live: Vec<&Claim> = mine
-        .into_iter()
-        .filter(|c| !is_stale(c, now, ttl))
-        .collect();
-    if live.is_empty() {
-        return StatelessIdle::Measured(Determination::undetermined(format!(
-            "every stateless claim of run {run_id} has a heartbeat older than the stuck-TTL \
-             ({ttl}s) — no live driver to measure progress from"
-        )));
-    }
-    let mut sessions: Vec<&str> = Vec::new();
-    for c in &live {
-        match c.session_id.as_deref() {
-            Some(sid) if !sid.trim().is_empty() => {
-                if !sessions.contains(&sid) {
-                    sessions.push(sid);
-                }
-            }
-            _ => {
-                return StatelessIdle::Measured(Determination::undetermined(format!(
-                    "stateless claim of run {run_id} has no owning session id — \
-                     transcript progress unreadable"
-                )))
-            }
-        }
-    }
     let mut latest: Option<i64> = None;
-    for sid in sessions {
+    for sid in &sessions {
         match session_transcript_mtime_secs(sid) {
             Determination::Known(t) => latest = Some(latest.map_or(t, |l| l.max(t))),
             Determination::Undetermined(why) => {

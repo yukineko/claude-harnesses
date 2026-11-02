@@ -261,9 +261,11 @@ pub fn run_task(
     let wt_name = format!("{spec_id}-{req_id}");
     let wt_path = worktree_base.join(&wt_name);
 
-    // Create worktree on a detached branch.
+    // Create worktree on a detached branch. Inherited GIT_* are scrubbed: an
+    // inherited GIT_DIR overrides `-C`, and would create the branch and
+    // worktree in that unrelated repository instead of `repo_root`.
     let wt_branch = format!("specforge/{spec_id}/{req_id}");
-    let add = std::process::Command::new("git")
+    let add = harness_core::git_env::scrub(&mut std::process::Command::new("git"))
         .arg("-C")
         .arg(repo_root)
         .args(["worktree", "add", "-b", &wt_branch])
@@ -682,6 +684,101 @@ mod tests {
             "the write-enabled impl agent must NOT run directly against repo_root \
              when worktree creation failed (fail-open onto the caller's tree) — \
              the task should be skipped fail-closed instead"
+        );
+    }
+
+    fn gitenv_git(dir: &std::path::Path, args: &[&str]) -> String {
+        let mut cmd = std::process::Command::new("git");
+        harness_core::git_env::scrub(&mut cmd);
+        let o = cmd
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args)
+            .output()
+            .expect("git spawns");
+        assert!(
+            o.status.success(),
+            "fixture git {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    }
+
+    /// Inner half of the re-exec test: only acts when `GITENV_CHILD=1`. Runs the
+    /// production `run_task` against repo A with whatever GIT_DIR the parent set.
+    #[test]
+    fn gitenv_inner_run_task() {
+        if std::env::var("GITENV_CHILD").as_deref() != Ok("1") {
+            return;
+        }
+        let a = std::path::PathBuf::from(std::env::var("GITENV_REPO_A").unwrap());
+        let base = std::path::PathBuf::from(std::env::var("GITENV_WT_BASE").unwrap());
+        let agent = std::env::var("GITENV_AGENT").unwrap();
+        let cfg = AgentConfig {
+            command: agent,
+            args: vec![],
+        };
+        let _ = run_task(&a, "S1", "R1", "prompt", &base, &cfg, false);
+    }
+
+    #[test]
+    fn gitenv_run_task_must_not_mutate_inherited_git_dir_repo() {
+        // Production `run_task` runs `git worktree add` against `repo_root`. When
+        // the process inherits GIT_DIR pointing at an unrelated repo B, git
+        // honours GIT_DIR over `-C`, so the branch + worktree land in B instead
+        // of repo A. Correct behaviour: B is untouched, A gets the branch.
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let a = root.path().join("repo_a");
+        let b = root.path().join("repo_b");
+        for r in [&a, &b] {
+            std::fs::create_dir_all(r).unwrap();
+            gitenv_git(r, &["init", "-q"]);
+            gitenv_git(r, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        }
+        let base = root.path().join("wt_base");
+        std::fs::create_dir_all(&base).unwrap();
+        let agent = root.path().join("agent_stub.sh");
+        std::fs::write(&agent, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let b_branches = gitenv_git(&b, &["branch", "--list"]);
+        let b_worktrees = gitenv_git(&b, &["worktree", "list", "--porcelain"]);
+
+        let o = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "implement::tests::gitenv_inner_run_task",
+                "--test-threads=1",
+            ])
+            .env("GITENV_CHILD", "1")
+            .env("GITENV_REPO_A", &a)
+            .env("GITENV_WT_BASE", &base)
+            .env("GITENV_AGENT", &agent)
+            .env("GIT_DIR", b.join(".git"))
+            .output()
+            .expect("re-exec test binary");
+        assert!(
+            o.status.success(),
+            "child failed: {}",
+            String::from_utf8_lossy(&o.stdout)
+        );
+
+        assert_eq!(
+            gitenv_git(&b, &["branch", "--list"]),
+            b_branches,
+            "run_task mutated the GIT_DIR repo B (gained a branch)"
+        );
+        assert_eq!(
+            gitenv_git(&b, &["worktree", "list", "--porcelain"]),
+            b_worktrees,
+            "run_task mutated the GIT_DIR repo B (gained a worktree)"
+        );
+        assert!(
+            gitenv_git(&a, &["branch", "--list"]).contains("specforge/S1/R1"),
+            "run_task must create the worktree branch in its own repo_root (A)"
         );
     }
 

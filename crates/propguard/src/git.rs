@@ -1,5 +1,8 @@
 //! git helpers: which files changed, and the actual diff text for them. Pure
-//! subprocess calls to `git`. `changed_files` returns a [`ChangeScan`]:
+//! subprocess calls to `git`, each run in the given root with every inherited
+//! GIT_* variable scrubbed (`harness_core::git_env::scrub`), so the repo judged
+//! is always the one at `root`, never one an inherited `GIT_DIR` points at.
+//! `changed_files` returns a [`ChangeScan`]:
 //! `NotRepo` means "confirmed out of scope" — git said so, or git could not
 //! answer AND no `.git` exists anywhere above the path to contradict it. It
 //! does NOT mean "git unavailable": an unreachable git over a real repo is
@@ -17,7 +20,7 @@
 //! unobserved hole in it.
 
 use harness_core::boundary;
-use harness_core::git_probe::{probe_repo, RepoProbe};
+use harness_core::git_probe::{probe_repo_scrubbed, RepoProbe};
 use harness_core::verdict::Determination;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -90,6 +93,13 @@ const GIT: &str = "git";
 /// ([`changed_files`] and [`diff_text`]) pass [`GIT`].
 fn run_git_bin(git: &Path, root: &Path, args: &[&str]) -> Determination<String> {
     let mut cmd = Command::new(git);
+    // The repo is selected by `current_dir(root)` alone: every inherited
+    // GIT_* variable (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, …) is
+    // removed so a Stop hook launched from a git hook, or from a shell that
+    // exported `GIT_DIR`, cannot make `git` read ANOTHER repository's changes
+    // and have them judged as `root`'s. PATH is untouched, so a missing git
+    // binary still fails the spawn and stays `Undetermined`.
+    harness_core::git_env::scrub(&mut cmd);
     cmd.current_dir(root)
         .args(args)
         .stdin(Stdio::null())
@@ -144,7 +154,11 @@ pub fn changed_files(root: &Path) -> ChangeScan {
 /// [`changed_files`] with the invoked git binary injectable — the same seam,
 /// and for the same reason, as [`run_git_bin`].
 fn scan_changed(root: &Path, git: &Path) -> ChangeScan {
-    match probe_repo(root) {
+    // `probe_repo_scrubbed`, not `probe_repo`: the probe child has the
+    // inherited GIT_* variables removed and an env `GIT_DIR` is not counted as
+    // evidence of a repo, so "is `root` a repo" is answered about `root` on
+    // disk and never about whatever repository the hook process was pointed at.
+    match probe_repo_scrubbed(root) {
         RepoProbe::Repo => {}
         // Genuinely out of scope: git said so, or git could not answer and no
         // `.git` exists anywhere above to contradict it.

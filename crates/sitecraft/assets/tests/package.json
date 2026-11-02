@@ -1,0 +1,6 @@
+{
+  "name": "sitecraft-check-pages-tests",
+  "private": true,
+  "description": "Lets `node --test crates/sitecraft/assets/tests/` resolve the directory (Node >= 21 treats a directory argument as a module path, not a test-file search root).",
+  "main": "check-pages.test.mjs"
+}

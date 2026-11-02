@@ -1,0 +1,180 @@
+#!/bin/sh
+# sitecraft plugin launcher — selects the per-platform binary bundled in this dir.
+#
+# The Stop hook calls `${CLAUDE_PLUGIN_ROOT}/bin/sitecraft gate`
+# (crates/sitecraft/hooks/hooks.json); the /sitecraft skill calls the other
+# subcommands. This dispatcher execs the matching `sitecraft-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT "exit 0". A missing
+# binary means the gate DID NOT RUN — a cannot-determine — and for a Stop hook
+# exit 0 with no stdout is byte-for-byte what a PASSING gate looks like, so the
+# turn would end as if `sitecraft gate` had run and found nothing to block
+# (CLAUDE.md §1 and §3: "cannot determine" resolves to the restrictive side).
+#
+# Classification of this launcher's surface:
+#
+#   verdict-bearing (silence would be read as "the gate passed"):
+#     gate   Stop   -> {"decision":"block"} on this gate's FIRST failure in a
+#               session — including a `stop_hook_active` re-entry caused by
+#               ANOTHER gate's block — bounded exactly like harness_core::gate::
+#               run::run_guarded's panic barrier (crates/harness-core/src/gate/
+#               run.rs): only this gate's SECOND CONSECUTIVE failure in the
+#               session is allowed through (per-gate, per-session marker, see
+#               `streak_decide` below), so a missing binary can never trap the
+#               session in a block loop. The decision rides stdout JSON, never
+#               the exit code: hook branches exit 0 and carry the verdict in the
+#               body.
+#
+#   everything else (`decide …`, `serve …`, `check …`, `trust`, or any other
+#   subcommand / unknown argument) is consumed by the skill, humans and
+#   scripts, where an EMPTY stdout reads as a real answer (`check security`
+#   printing nothing with exit 0 reads as "clean"). Those exit non-zero with an
+#   empty stdout — an error must not return an empty set (CLAUDE.md §3).
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+ext=""
+[ "$os" = windows ] && ext=".exe"
+
+binary="$root/sitecraft-$os-$arch$ext"
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
+fi
+
+echo "sitecraft: no bundled binary for $os-$arch ($binary)." >&2
+
+fix="Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the sitecraft Stop hook."
+
+# ---- missing-binary failure streak, bounded exactly like run_guarded --------
+# `stop_hook_active` is set whenever ANY Stop hook blocked the previous stop, so
+# on its own it says nothing about THIS gate. Only a SECOND CONSECUTIVE failure
+# of THIS gate in THIS session may allow (CLAUDE.md §1). The streak is the same
+# per-gate, per-session marker run_guarded keeps for panics
+# (crates/harness-core/src/gate/run.rs `PanicMarker`):
+#   $HOME/.harness/state/panic-markers/<gate>/<session>.panic
+# read-and-cleared on every stop and re-written when this stop fails. Sharing the
+# path means a run of the real binary (run_guarded clears it up front) resets the
+# streak, and a missing binary followed by a panic counts as consecutive. The
+# decision table mirrors run_guarded's `decide`:
+#   first stop of a chain              -> record, block (whatever the record did)
+#   re-entry, previous stop failed     -> record, allow (stderr only)
+#   re-entry, previous stop did not    -> record; block, or loud allow if the
+#                                         record failed (a block that cannot be
+#                                         recorded could never be bounded)
+#   re-entry, streak undetermined (no usable session id, HOME unset, marker not
+#   clearable)                         -> loud allow: systemMessage on stdout
+# Sets $streak (block|allow|loud) and $streak_why.
+streak_record() {
+  [ -n "$streak_marker" ] || return 1
+  mkdir -p "$streak_dir" 2>/dev/null || return 1
+  printf 'missing-binary\n' > "$streak_marker" 2>/dev/null
+}
+streak_decide() {
+  # $1 = Stop payload, $2 = yes when stop_hook_active is true, $3 = gate name
+  streak_why=""
+  streak_marker=""
+  streak_dir=""
+  if printf '%s' "$1" | grep -q '"session_id"'; then
+    streak_sid="$(printf '%s' "$1" | tr -d '\n' | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p')"
+  else
+    streak_sid="${CLAUDE_CODE_SESSION_ID:-}"
+  fi
+  case "$streak_sid" in
+    ''|.|..|_local|*/*|*\\*) streak_sid="" ;;
+  esac
+  if [ -z "$streak_sid" ]; then
+    streak_why="no usable session id, so this gate's previous-stop failure cannot be looked up"
+  elif [ -z "${HOME:-}" ]; then
+    streak_why="HOME is unset, so the failure-streak marker cannot be located"
+  else
+    streak_dir="$HOME/.harness/state/panic-markers/$3"
+    streak_marker="$streak_dir/$streak_sid.panic"
+  fi
+  streak_prev=no
+  if [ -z "$streak_marker" ]; then
+    streak_prev=undetermined
+  elif [ -e "$streak_marker" ] || [ -L "$streak_marker" ]; then
+    if rm -f "$streak_marker" 2>/dev/null && ! [ -e "$streak_marker" ] && ! [ -L "$streak_marker" ]; then
+      streak_prev=yes
+    else
+      streak_prev=undetermined
+      streak_why="the failure-streak marker exists but could not be cleared"
+      streak_marker=""
+    fi
+  fi
+  if [ "$2" != yes ]; then
+    streak_record || echo "$3: failure-streak marker not recorded; the next re-entry cannot see it." >&2
+    streak=block
+    return 0
+  fi
+  case "$streak_prev" in
+    yes)
+      streak_record || echo "$3: failure-streak marker not recorded." >&2
+      streak=allow
+      ;;
+    no)
+      if streak_record; then
+        streak=block
+      else
+        streak=loud
+        streak_why="this first failure on a re-entry could not be recorded, so a block here could never be bounded"
+      fi
+      ;;
+    *)
+      streak=loud
+      ;;
+  esac
+}
+
+case "${1:-}" in
+  gate)
+    # Read the Stop event ourselves — no binary will. A TTY on stdin, or an
+    # empty stdin, means this is a manual invocation with no live turn, so
+    # there is no verdict to give: report an error rather than fabricating a
+    # decision (this mirrors PanicAction::InteractiveError). The `-t 0` test
+    # comes first so an interactive run can never block on `cat`.
+    if [ -t 0 ]; then
+      echo "sitecraft: no Stop event (stdin is a terminal) — a decision will NOT be fabricated for a manual invocation. $fix" >&2
+      exit 1
+    fi
+    payload="$(cat)"
+    if [ -z "$(printf '%s' "$payload" | tr -d '[:space:]')" ]; then
+      echo "sitecraft: no Stop event on stdin — a decision will NOT be fabricated for a manual invocation. $fix" >&2
+      exit 1
+    fi
+    reentry=no
+    if printf '%s' "$payload" | grep -q '"stop_hook_active"[[:space:]]*:[[:space:]]*true'; then
+      reentry=yes
+    fi
+    streak_decide "$payload" "$reentry" sitecraft
+    case "$streak" in
+      allow)
+        echo "sitecraft: no binary again on this gate's consecutive stop — allowing this stop (the fail-closed block was already surfaced for this gate's previous stop in this session; the sitecraft checks (decide check, check security, check pages) still have NOT run)." >&2
+        exit 0
+        ;;
+      loud)
+        echo "sitecraft: stop re-entry with no binary and an undetermined failure streak ($streak_why) — allowing loudly." >&2
+        printf '{"systemMessage":"%s"}\n' \
+          "sitecraft gate did not run on a stop re-entry (no bundled binary for $os-$arch) and did NOT check this stop. Whether its previous stop also failed could not be determined ($streak_why), and blocking without that record could loop forever, so this stop is allowed. Treat this stop as unchecked by sitecraft. $fix"
+        exit 0
+        ;;
+    esac
+    printf '{"decision":"block","reason":"%s"}\n' \
+      "sitecraft gate did not run: no bundled binary for $os-$arch, so the sitecraft checks (decide check, check security, check pages) were NOT evaluated. This stop is therefore UNCHECKED, not approved (blocked fail-closed — only if sitecraft also finds no binary on its very next stop in this session is that stop allowed through, so the session can never be trapped). $fix"
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac

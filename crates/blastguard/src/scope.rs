@@ -360,6 +360,11 @@ const NOT_A_LITERAL_PATH: &[char] = &[
     '>', '!', '\n', '\t', ' ',
 ];
 
+/// Directories directly under `$HOME` whose contents are irreplaceable
+/// credentials: deleting ANY entry inside them is refused
+/// ([`SafeRoots::irreplaceable_home_asset`], backlog 6067a527).
+const IRREPLACEABLE_HOME_DIRS: &[&str] = &[".ssh", ".gnupg"];
+
 /// Absolute paths that are never a safe root even when the session's cwd or
 /// `CLAUDE_PROJECT_DIR` names one.
 ///
@@ -930,6 +935,57 @@ is not decided by where it is spelled"
             return Determination::undetermined("operand still contains an unresolved `..`");
         }
         Determination::known(absolute)
+    }
+
+    /// Does deleting `operand` (one directory entry, not a tree) destroy an
+    /// irreplaceable `$HOME`-level asset (backlog 6067a527)? `Some(path)` names
+    /// the landing path when it is:
+    ///
+    ///  * inside a credential store at the top of `$HOME`
+    ///    ([`IRREPLACEABLE_HOME_DIRS`]: `~/.ssh/id_rsa`, `~/.gnupg/…`), or
+    ///  * a home-level dotfile directly at `$HOME/.<name>` (`~/.zshrc`,
+    ///    `~/.gitconfig`) — the "home-level config" deletion class.
+    ///
+    /// `~`, `~/…`, `$HOME/…` and `${HOME}/…` are expanded against the
+    /// canonical home; a relative operand is placed against `cwd`. The landing
+    /// path is compared to the home both as spelled and with its PARENT
+    /// resolved (`rm` removes the final entry itself, so a final symlink is not
+    /// followed), so `/var/…` spelling a `/private/var/…` home still matches.
+    ///
+    /// `None` means "not recognised as a home asset", which keeps the caller's
+    /// existing verdict; it is not a determination that the path is safe.
+    pub(crate) fn irreplaceable_home_asset(
+        &self,
+        operand: &str,
+        cwd: Option<&str>,
+    ) -> Option<String> {
+        let home = self.home_real()?.trim_end_matches('/');
+        let expanded = ["${HOME}", "$HOME", "~"]
+            .iter()
+            .find_map(|p| {
+                operand.strip_prefix(p).and_then(|rest| {
+                    (rest.is_empty() || rest.starts_with('/')).then(|| format!("{home}{rest}"))
+                })
+            })
+            .unwrap_or_else(|| operand.to_string());
+        let Determination::Known(lexical) = self.lexical_absolute(&expanded, cwd) else {
+            return None;
+        };
+        let mut candidates = vec![lexical.clone()];
+        if let Some((parent, name)) = lexical.rsplit_once('/') {
+            let parent = if parent.is_empty() { "/" } else { parent };
+            if let Some(real_parent) = self.resolve(parent) {
+                candidates.push(format!("{}/{name}", real_parent.trim_end_matches('/')));
+            }
+        }
+        candidates.into_iter().find(|path| {
+            let Some(rel) = path.strip_prefix(&format!("{home}/")) else {
+                return false;
+            };
+            let first = rel.split('/').next().unwrap_or("");
+            IRREPLACEABLE_HOME_DIRS.contains(&first)
+                || (!rel.contains('/') && first.starts_with('.'))
+        })
     }
 
     /// "Between `root` and `lexical`, is there no symlink at all?"

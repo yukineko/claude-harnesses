@@ -18,7 +18,9 @@
 //! so a Deny is attributable to the rule under test and not to the harness
 //! checkout's own `target/`.
 
-use std::io::Write;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -73,10 +75,8 @@ impl Fx {
     }
 
     fn git(&self, args: &[&str]) {
-        let out = git_env::scrub(&mut Command::new("git"))
-            .arg("-C")
-            .arg(&self.repo)
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+        let mut cmd = git_env::pinned(&self.repo);
+        cmd.args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
             .args([
                 "-c",
                 "commit.gpgsign=false",
@@ -86,9 +86,9 @@ impl Fx {
             .args(args)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("HOME", &self.home)
-            .output()
-            .expect("git runs");
+            .env("HOME", &self.home);
+        let out =
+            bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE);
         assert!(
             out.status.success(),
             "git {args:?} failed: {}",
@@ -150,11 +150,7 @@ impl Fx {
             Some(t) => cmd.env("TMPDIR", t),
             None => cmd.env_remove("TMPDIR"),
         };
-        let mut child = cmd.spawn().expect("binary spawns");
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(payload.as_bytes());
-        }
-        let out = child.wait_with_output().expect("binary runs");
+        let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
         assert_eq!(
             out.status.code(),
             Some(0),

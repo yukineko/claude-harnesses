@@ -889,7 +889,9 @@ fn decoy_inside_a_here_document_body_must_not_excuse_the_real_suffixed_redirect(
 // Allow would cement the bug. What IS asserted is the filesystem fact that
 // makes the hazard real, so the rows below cannot pass by accident.
 
-use std::io::Write as _;
+#[path = "support/bounded.rs"]
+mod bounded;
+
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -901,18 +903,26 @@ struct SymlinkFx {
     base: PathBuf,
     home: PathBuf,
     proj: PathBuf,
+    /// Owns `base`: a unique directory per fixture instance, so concurrent
+    /// runs of this binary never share (and clobber) one fixture path
+    /// (backlog b6ce7f76). Removed on drop.
+    _dir: tempfile::TempDir,
 }
 
 impl SymlinkFx {
     fn new(name: &str) -> SymlinkFx {
-        let base = Path::new(env!("CARGO_TARGET_TMPDIR"))
-            .join("redirect_target_suffix_symlink")
-            .join(name);
-        let _ = std::fs::remove_dir_all(&base);
+        let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("redirect_target_suffix_symlink");
+        std::fs::create_dir_all(&parent).unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("{name}-"))
+            .tempdir_in(&parent)
+            .unwrap();
+        let base = dir.path().to_path_buf();
         let f = SymlinkFx {
             home: base.join("home"),
             proj: base.join("src/proj"),
             base,
+            _dir: dir,
         };
         std::fs::create_dir_all(&f.home).unwrap();
         std::fs::create_dir_all(f.proj.join("sub")).unwrap();
@@ -982,11 +992,7 @@ impl SymlinkFx {
             // this reason.
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .current_dir(&self.base);
-        let mut child = cmd.spawn().expect("binary spawns");
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(payload.as_bytes());
-        }
-        let out = child.wait_with_output().expect("binary runs");
+        let out = bounded::run_bounded(&mut cmd, payload.as_bytes(), bounded::HOOK_DEADLINE);
         assert_eq!(
             out.status.code(),
             Some(0),

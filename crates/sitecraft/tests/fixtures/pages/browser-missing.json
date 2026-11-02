@@ -1,0 +1,1 @@
+{"schema": "sitecraft-check-pages/1", "status": "browser-missing", "pages_checked": 0, "findings": [], "error": "browserType.launch: Executable doesn't exist at /x/Chromium. Run npx playwright install"}

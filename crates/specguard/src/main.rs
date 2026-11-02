@@ -17,6 +17,8 @@ mod config;
 mod coverage;
 mod decision;
 mod gatecheck;
+#[cfg(test)]
+mod gitenv_testutil;
 mod init;
 mod observed;
 mod parse;

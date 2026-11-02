@@ -38,6 +38,14 @@
 //!   * `CLAUDE_CODE_CHILD_SESSION`, `AI_AGENT` — likewise present and equal in
 //!     both measurements.
 //!
+//! # Subagents
+//!
+//! The env above is INHERITED by subagents unchanged, so a subagent of an
+//! interactive session also reads as `cli`. Nobody can answer its `ask`.
+//! [`payload_is_subagent`] detects it from the payload instead, and the caller
+//! turns every `Ask` there into a `Deny`, including the repeat-deny downgrade.
+//! `BLASTGUARD_ASK=always` does not override this.
+//!
 //! # Residual gaps (see the crate README / task report)
 //!
 //! `cli` is treated as the ONLY affirmatively-interactive value because it is
@@ -111,6 +119,33 @@ pub fn ask_available() -> bool {
     )
 }
 
+/// Is this PreToolUse call being made from inside a subagent?
+///
+/// A subagent cannot answer a permission prompt: nobody is watching it, and a
+/// background subagent that hit an `ask` on 2026-10-30 waited 10.6 h. The env
+/// cannot tell the two apart — measured byte-identical between a main-thread
+/// and a subagent Bash call, `CLAUDE_CODE_ENTRYPOINT=cli` included — so
+/// [`ask_available`] alone says "a human can answer" inside a subagent. The
+/// only measured discriminator is the payload: Claude Code adds `agent_id`
+/// (and `agent_type`) to a subagent's PreToolUse payload, and the main
+/// thread's carries neither.
+///
+/// Fail-closed (CLAUDE.md §3): the main thread is only recognised by the
+/// ABSENCE of both keys. Any presence counts as a subagent, whatever the value
+/// — a non-string, `null` or empty `agent_id` is "cannot tell", and "cannot
+/// tell" must not read as "a human is here". A payload that is not JSON at all
+/// cannot be inspected structurally, so a raw `"agent_id"` / `"agent_type"`
+/// key anywhere in its bytes also counts as a subagent.
+pub fn payload_is_subagent(raw: &str) -> bool {
+    const KEYS: [&str; 2] = ["agent_id", "agent_type"];
+    match serde_json::from_str::<serde_json::Value>(raw.trim()) {
+        Ok(serde_json::Value::Object(map)) => KEYS.iter().any(|k| map.contains_key(*k)),
+        // Valid JSON that is not an object carries no keys at all.
+        Ok(_) => false,
+        Err(_) => KEYS.iter().any(|k| raw.contains(&format!("\"{k}\""))),
+    }
+}
+
 /// The whole decision as a pure function of the three env values.
 ///
 /// Split out from [`ask_available`] so the tests can drive the REAL logic:
@@ -181,6 +216,33 @@ mod tests {
         assert!(!resolve(Some("yes"), Some("1"), Some("cli")));
         assert!(!resolve(Some(""), Some("1"), Some("cli")));
         assert!(!resolve(Some("AUTO"), Some("1"), Some("cli"))); // case-sensitive
+    }
+
+    #[test]
+    fn main_thread_payload_is_not_a_subagent() {
+        assert!(!payload_is_subagent(
+            r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#
+        ));
+        assert!(!payload_is_subagent("[1, 2, 3]"));
+        assert!(!payload_is_subagent("this is not json"));
+    }
+
+    #[test]
+    fn any_agent_marker_is_a_subagent_whatever_its_value() {
+        for v in [r#""ab06""#, r#""""#, "null", "7", "{}", "[]"] {
+            let raw = format!(r#"{{"tool_name":"Bash","agent_id":{v}}}"#);
+            assert!(payload_is_subagent(&raw), "agent_id={v}");
+        }
+        assert!(payload_is_subagent(
+            r#"{"tool_name":"Bash","agent_type":"general-purpose"}"#
+        ));
+    }
+
+    #[test]
+    fn unparseable_payload_mentioning_agent_id_is_a_subagent() {
+        assert!(payload_is_subagent(
+            r#"{"agent_id":"ab06","tool_input":{"command":"rm -rf "#
+        ));
     }
 
     #[test]

@@ -73,7 +73,7 @@ fn main() {
 /// there, and any git call that fails reports `Undetermined` (`[?]`), never
 /// clean.
 fn resolve_repo_root(start: &Path) -> PathBuf {
-    let output = Command::new("git")
+    let output = harness_core::git_env::scrub(&mut Command::new("git"))
         .arg("rev-parse")
         .arg("--show-toplevel")
         .current_dir(start)

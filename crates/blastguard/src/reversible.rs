@@ -363,7 +363,9 @@ pub struct TreeGitFacts {
 /// `check-ignore` about.
 pub type GitTreeProbe = fn(&str, &[String]) -> Determination<TreeGitFacts>;
 
-/// Timeout for each git invocation of [`probe_tree`].
+/// Timeout for each git invocation of [`probe_tree`] (and of
+/// [`probe_tree_with`]). Only tests reach a different bound, through
+/// [`probe_tree_with_timeout`].
 const TREE_GIT_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// A `git` command for `dir` with the inherited `GIT_*` variables that would
@@ -394,10 +396,15 @@ fn tree_git(git: &std::ffi::OsStr, dir: &Path, literal: bool) -> std::process::C
     cmd
 }
 
-/// Run `cmd` bounded by [`TREE_GIT_TIMEOUT`]; stdout only for an exit code in
-/// `ok_codes`, together with the code. Anything else is `Undetermined`.
-fn run_tree_git(cmd: &mut std::process::Command, ok_codes: &[i32]) -> Determination<(i32, String)> {
-    match harness_core::boundary::run_with_timeout(cmd, TREE_GIT_TIMEOUT) {
+/// Run `cmd` bounded by `timeout` (production: [`TREE_GIT_TIMEOUT`]); stdout
+/// only for an exit code in `ok_codes`, together with the code. Anything else
+/// — including not finishing within `timeout` — is `Undetermined`.
+fn run_tree_git(
+    cmd: &mut std::process::Command,
+    ok_codes: &[i32],
+    timeout: Duration,
+) -> Determination<(i32, String)> {
+    match harness_core::boundary::run_with_timeout(cmd, timeout) {
         Determination::Known(out) => {
             let code = out.code();
             match out.stdout_allowing(ok_codes) {
@@ -469,11 +476,27 @@ pub fn probe_tree(path: &str, build_candidates: &[String]) -> Determination<Tree
 
 /// [`probe_tree`] with the `git` program named explicitly — the seam the
 /// failure-mode tests use to substitute a git that fails, hangs or prints
-/// garbage. Production always passes `git`.
+/// garbage. Production always passes `git`. Each invocation is bounded by
+/// [`TREE_GIT_TIMEOUT`] (it is [`probe_tree_with_timeout`] with that bound).
 pub(crate) fn probe_tree_with(
     git: &std::ffi::OsStr,
     path: &str,
     build_candidates: &[String],
+) -> Determination<TreeGitFacts> {
+    probe_tree_with_timeout(git, path, build_candidates, TREE_GIT_TIMEOUT)
+}
+
+/// [`probe_tree_with`] with the per-invocation bound named explicitly — the
+/// seam tests use when a git that must ANSWER (a clean fake, a real
+/// repository) would otherwise depend on finishing inside the production
+/// 1.5 s [`TREE_GIT_TIMEOUT`] on a loaded machine. No production call site
+/// reaches it with any bound other than [`TREE_GIT_TIMEOUT`]. A git that does
+/// not finish within `timeout` is `Undetermined`, as in production.
+pub(crate) fn probe_tree_with_timeout(
+    git: &std::ffi::OsStr,
+    path: &str,
+    build_candidates: &[String],
+    timeout: Duration,
 ) -> Determination<TreeGitFacts> {
     let p = Path::new(path);
     let meta = match std::fs::symlink_metadata(p) {
@@ -495,6 +518,7 @@ pub(crate) fn probe_tree_with(
     let toplevel = match run_tree_git(
         tree_git(git, dir, true).args(["rev-parse", "--show-toplevel"]),
         &[0],
+        timeout,
     ) {
         Determination::Known((_, out)) => out.trim().to_string(),
         Determination::Undetermined(u) => return Determination::Undetermined(u),
@@ -514,6 +538,7 @@ pub(crate) fn probe_tree_with(
             ])
             .arg(path),
         &[0],
+        timeout,
     ) {
         Determination::Known((_, out)) => out,
         Determination::Undetermined(u) => return Determination::Undetermined(u),
@@ -526,6 +551,7 @@ pub(crate) fn probe_tree_with(
             .args(["ls-files", "-z", "-s", "-v", "--"])
             .arg(path),
         &[0],
+        timeout,
     ) {
         Determination::Known((_, out)) => out,
         Determination::Undetermined(u) => return Determination::Undetermined(u),
@@ -548,6 +574,7 @@ pub(crate) fn probe_tree_with(
                 .args(["check-ignore", "-q", "--"])
                 .arg(cand),
             &[0, 1],
+            timeout,
         ) {
             Determination::Known((code, _)) => build_dirs.push((cand.clone(), code == 0)),
             Determination::Undetermined(u) => return Determination::Undetermined(u),
@@ -567,6 +594,21 @@ pub(crate) fn probe_tree_with(
 mod tests {
     use super::*;
 
+    /// Bound for test gits that must answer (not hang): wide enough that CPU
+    /// load cannot push a correct answer past it, finite so a real hang still
+    /// fails the test.
+    const ANSWERING_GIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+    /// [`probe_tree`] against the real `git`, under [`ANSWERING_GIT_TIMEOUT`].
+    fn probe_real(path: &str, build_candidates: &[String]) -> Determination<TreeGitFacts> {
+        probe_tree_with_timeout(
+            std::ffi::OsStr::new("git"),
+            path,
+            build_candidates,
+            ANSWERING_GIT_TIMEOUT,
+        )
+    }
+
     #[test]
     fn run_tree_git_only_knows_listed_exit_codes_within_the_timeout() {
         let sh = |script: &str| {
@@ -574,20 +616,27 @@ mod tests {
             c.args(["-c", script]);
             c
         };
+        // Commands that must ANSWER get a generous bound so a loaded machine
+        // cannot turn them into a timeout; only the hang uses the production
+        // bound, because exercising it is that case's point.
         assert_eq!(
-            run_tree_git(&mut sh("printf ok"), &[0]),
+            run_tree_git(&mut sh("printf ok"), &[0], ANSWERING_GIT_TIMEOUT),
             Determination::known((0, "ok".to_string()))
         );
         assert_eq!(
-            run_tree_git(&mut sh("exit 1"), &[0, 1]),
+            run_tree_git(&mut sh("exit 1"), &[0, 1], ANSWERING_GIT_TIMEOUT),
             Determination::known((1, String::new()))
         );
         assert!(matches!(
-            run_tree_git(&mut sh("printf partial; exit 128"), &[0]),
+            run_tree_git(
+                &mut sh("printf partial; exit 128"),
+                &[0],
+                ANSWERING_GIT_TIMEOUT
+            ),
             Determination::Undetermined(_)
         ));
         assert!(matches!(
-            run_tree_git(&mut sh("exec sleep 5"), &[0]),
+            run_tree_git(&mut sh("exec sleep 5"), &[0], TREE_GIT_TIMEOUT),
             Determination::Undetermined(_)
         ));
     }
@@ -896,7 +945,8 @@ mod tests {
     }
 
     /// Against a REAL repository: what each class of content looks like to
-    /// the probe.
+    /// the probe (the real git must answer, so under [`ANSWERING_GIT_TIMEOUT`]
+    /// rather than the production bound).
     #[test]
     fn probe_tree_observes_a_real_repository() {
         let base = std::env::temp_dir().join(format!("bg-tree-{}", std::process::id()));
@@ -917,7 +967,7 @@ mod tests {
         let repo = repo.canonicalize().unwrap();
         let r = |p: &str| format!("{}/{p}", repo.display());
 
-        let clean = known_facts(probe_tree(&r("src"), &[]));
+        let clean = known_facts(probe_real(&r("src"), &[]));
         assert!(clean.status.is_empty(), "{clean:?}");
         assert_eq!(clean.tracked, 2);
         assert!(!clean.submodule && !clean.hidden_index_state);
@@ -928,33 +978,33 @@ mod tests {
             repo
         );
 
-        let t = known_facts(probe_tree(&r("target/debug"), &[r("target")]));
+        let t = known_facts(probe_real(&r("target/debug"), &[r("target")]));
         assert_eq!(t.tracked, 0);
         assert!(t.status.iter().all(|(xy, _)| xy == "!!"), "{t:?}");
         assert_eq!(t.build_dirs, vec![(r("target"), true)]);
-        let tracked_build = known_facts(probe_tree(&r("src"), &[r("src")]));
+        let tracked_build = known_facts(probe_real(&r("src"), &[r("src")]));
         assert_eq!(tracked_build.build_dirs, vec![(r("src"), false)]);
 
-        let s = known_facts(probe_tree(&r("secrets"), &[]));
+        let s = known_facts(probe_real(&r("secrets"), &[]));
         assert_eq!(s.status, vec![("!!".to_string(), "secrets/".to_string())]);
 
         std::fs::write(repo.join("src/a.rs"), "changed").unwrap();
         std::fs::write(repo.join("src/sub/new.rs"), "n").unwrap();
-        let dirty = known_facts(probe_tree(&r("src"), &[]));
+        let dirty = known_facts(probe_real(&r("src"), &[]));
         let codes: Vec<&str> = dirty.status.iter().map(|(xy, _)| xy.as_str()).collect();
         assert!(codes.contains(&" M") && codes.contains(&"??"), "{dirty:?}");
 
         git_in(&repo, &["update-index", "--skip-worktree", "src/sub/b.rs"]);
-        assert!(known_facts(probe_tree(&r("src/sub"), &[])).hidden_index_state);
+        assert!(known_facts(probe_real(&r("src/sub"), &[])).hidden_index_state);
 
         // Not a repository, and a path that does not exist: no facts.
         let plain = base.join("plain").canonicalize().unwrap();
         assert!(matches!(
-            probe_tree(plain.to_str().unwrap(), &[]),
+            probe_real(plain.to_str().unwrap(), &[]),
             Determination::Undetermined(_)
         ));
         assert!(matches!(
-            probe_tree(&r("nope"), &[]),
+            probe_real(&r("nope"), &[]),
             Determination::Undetermined(_)
         ));
         let _ = std::fs::remove_dir_all(&base);

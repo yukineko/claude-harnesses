@@ -283,6 +283,11 @@ fn run() {
         return;
     }
 
+    // Read from the RAW bytes, not from `HookInput`: the shared struct has no
+    // `agent_id` field, and a payload `HookInput::parse` rejects must still be
+    // classified (see `payload_is_subagent` for the fail-closed rules).
+    let subagent = interactive::payload_is_subagent(&raw);
+
     let input = match HookInput::parse(&raw) {
         Some(i) => i,
         None => {
@@ -293,7 +298,7 @@ fn run() {
             // via `.ok()`, so the two cases are indistinguishable downstream —
             // which is why they are separated HERE, at the only point that
             // still has the raw bytes.
-            emit(Decision::ask(UNREADABLE_PAYLOAD), None);
+            emit(Decision::ask(UNREADABLE_PAYLOAD), None, subagent);
             return;
         }
     };
@@ -301,7 +306,25 @@ fn run() {
     let decision = analyse(&input);
     let decision = consult_memory(&input, decision);
 
-    emit(decision, Some(&input));
+    emit(decision, Some(&input), subagent);
+}
+
+/// Turn an `Ask` into a `Deny` for a call made inside a subagent.
+///
+/// Nobody can answer a permission prompt there (a background subagent waited
+/// 10.6 h on one), so the agent gets a refusal it can act on: report and stop.
+/// The original reason is kept verbatim so the parent sees what was refused.
+/// `Deny` and `Allow` pass through untouched.
+fn harden_for_subagent(decision: Decision) -> Decision {
+    match decision {
+        Decision::Ask(reason) => Decision::Deny(format!(
+            "blastguard: this call was made inside a subagent, where nobody can \
+             answer a permission prompt, so it is denied instead of asked. Do not \
+             retry it another way. Stop and report the reason below verbatim to \
+             your parent agent so a human can decide.\n\n{reason}"
+        )),
+        other => other,
+    }
 }
 
 /// The reason attached to a payload blastguard could not parse at all.
@@ -338,7 +361,18 @@ drifted from what Claude Code sends and needs updating.";
 /// should not be able to re-open the hole silently. Printing first makes the
 /// ordering enforce that, and the inner `catch_and_log` means telemetry can
 /// only ever lose ITSELF.
-fn emit(decision: Decision, input: Option<&HookInput>) {
+fn emit(decision: Decision, input: Option<&HookInput>, subagent: bool) {
+    // A subagent can never answer an `ask` — user ruling 2026-11-01, after a
+    // background subagent waited 10.6 h on one. Its env is inherited from the
+    // main thread and looks interactive, so this check comes FIRST and is not
+    // overridable by `BLASTGUARD_ASK=always`.
+    if subagent {
+        // The repeat-deny downgrade is skipped on purpose: inside a subagent
+        // its `Ask` would stall exactly like any other. A repeat stays a deny.
+        emit_line(harden_for_subagent(decision), input);
+        return;
+    }
+
     // An `Ask` is only a real question when someone can answer it. In a headless
     // or agent-driven session it is not a pause, it is a block the agent cannot
     // clear — so it is hardened to a deny instead. Never to an allow: "ask に
@@ -354,8 +388,15 @@ fn emit(decision: Decision, input: Option<&HookInput>) {
     // operator was asked whether headless/agent runs should be exempt and ruled
     // 「全 gate で 2度目は無条件に通す」, so the downgrade has to survive the
     // hardening that would otherwise fold it straight back into a deny.
+    // Subagents are the one exception (user ruling 2026-11-01, handled above).
     let decision = downgrade_on_repeat(input, decision);
 
+    emit_line(decision, input);
+}
+
+/// Print the decision, then record telemetry (see [`emit`] for why the order
+/// is the invariant).
+fn emit_line(decision: Decision, input: Option<&HookInput>) {
     let Some(line) = hookio::decision_line(&decision) else {
         return; // Allow → print nothing.
     };

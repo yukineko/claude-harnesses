@@ -1,7 +1,13 @@
 //! Determine which files have changed so checks can be scoped (don't run
 //! `cargo test` when only markdown changed). Pure subprocess calls to `git`.
+//!
+//! Every `git` child is spawned with the inherited repository-selecting
+//! environment (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, ...) removed via
+//! `harness_core::git_env::scrub`, and is run in `root`: the scan answers for
+//! the directory donegate was asked about, never for whatever repository an
+//! inherited `GIT_DIR` happens to name.
 
-use harness_core::git_probe::{probe_repo, RepoProbe};
+use harness_core::git_probe::{probe_repo_scrubbed, RepoProbe};
 use std::path::Path;
 use std::process::Command;
 
@@ -29,9 +35,10 @@ pub enum ChangeScan {
 /// changes, and untracked-but-not-ignored files. Returns `NotRepo` when there is
 /// no git repo, `Failed` when the repo state is undetermined or any sub-command
 /// errored (non-zero exit / spawn failure), and `Files` on a successful scan.
-/// Repository detection goes through `harness_core::git_probe`.
+/// Repository detection goes through `harness_core::git_probe::probe_repo_scrubbed`,
+/// which ignores an inherited `GIT_DIR` both as evidence and in the child.
 pub fn changed_files(root: &Path) -> ChangeScan {
-    match probe_repo(root) {
+    match probe_repo_scrubbed(root) {
         RepoProbe::Repo => {}
         // Genuinely out of scope. donegate maps this to the restrictive branch in
         // its consumer, but the scan result itself must stay honest (`NotRepo`, not
@@ -64,9 +71,13 @@ pub fn changed_files(root: &Path) -> ChangeScan {
 /// Run one `git` sub-command, appending its trimmed non-empty stdout lines to
 /// `out`. Returns `true` on success (exit 0), `false` on a spawn error or a
 /// non-zero exit — the caller maps `false` to `ChangeScan::Failed`. A successful
-/// command with EMPTY stdout still returns `true` (clean ≠ failed).
+/// command with EMPTY stdout still returns `true` (clean ≠ failed). The child
+/// has the inherited `GIT_*` repository-selecting variables scrubbed and runs
+/// in `root`, so it discovers `root`'s repository rather than an inherited one.
 fn collect(root: &Path, args: &[&str], out: &mut Vec<String>) -> bool {
-    match Command::new("git").current_dir(root).args(args).output() {
+    let mut cmd = Command::new("git");
+    harness_core::git_env::scrub(&mut cmd);
+    match cmd.current_dir(root).args(args).output() {
         Ok(o) if o.status.success() => {
             for line in String::from_utf8_lossy(&o.stdout).lines() {
                 let line = line.trim();

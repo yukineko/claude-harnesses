@@ -351,27 +351,202 @@ pub struct MissingHookBinary {
 /// missing). Any *other* unexpanded `${VAR}` is returned as-is (rare/unknown
 /// shape; existence-checking it will correctly report it missing, since a
 /// literal `${...}` path segment never exists on disk).
+///
+/// Interpreter-wrapped commands (`bash /abs/guard.sh`, `python3 -u /abs/x.py`)
+/// check the *script*, not the interpreter: the first argument after the
+/// interpreter that is not a flag. An inline-code form (`bash -c '…'`,
+/// `python3 -c …` / `-m mod`) and a relative script path (resolved against
+/// the hook's runtime cwd, which a health check cannot know) both yield
+/// `None` — nothing concrete to check, same as the unresolved-root case.
+///
+/// A bare command name (no `/`) is resolved through `$PATH` — never as a path
+/// relative to the checker's own cwd, which made the verdict depend on where
+/// the health check happened to run. Found → the resolved absolute path;
+/// not found → the bare name, which [`binary_present`] reports missing.
+///
+/// Further shell shapes, each handled so it neither false-flags nor hides the
+/// real target: leading `NAME=value` assignments and `env`/`exec`/`nohup`/
+/// `command` wrappers are skipped; a shell builtin / keyword head (`cd …`,
+/// `if …`) yields `None`; one pair of surrounding quotes is stripped; `~` and
+/// `$HOME` are expanded as the shell would, any other `$VAR` yields `None`;
+/// a relative path containing `/` yields `None` (cwd-relative at hook time).
 pub fn extract_binary_path(command: &str, plugin_root: Option<&str>) -> Option<String> {
-    let token = command.split_whitespace().next()?;
-    if token.is_empty() {
+    let mut tokens = command.split_whitespace().map(unquote).peekable();
+    // Skip assignments and transparent wrappers in front of the real command.
+    let first = loop {
+        let tok = tokens.next()?;
+        if is_assignment(tok) {
+            continue;
+        }
+        if WRAPPERS.contains(&basename(tok)) {
+            while tokens.peek().is_some_and(|t| t.starts_with('-')) {
+                tokens.next();
+            }
+            continue;
+        }
+        break tok;
+    };
+    if SHELL_BUILTINS.contains(&first) {
         return None;
     }
-    if let Some(rest) = token.strip_prefix("${CLAUDE_PLUGIN_ROOT}") {
-        let root = plugin_root?;
-        return Some(format!("{root}{rest}"));
+    let first = expand_token(first, plugin_root)?;
+    if let Some(kind) = interpreter_kind(&first) {
+        let mut prev_was_flag = false;
+        for tok in tokens {
+            if tok.starts_with('-') {
+                if is_inline_code_flag(kind, tok) {
+                    return None;
+                }
+                prev_was_flag = tok != "--";
+                continue;
+            }
+            let arg = expand_token(tok, plugin_root)?;
+            if Path::new(&arg).is_absolute() {
+                return Some(arg);
+            }
+            if prev_was_flag {
+                // Likely the value of an option (`-o pipefail`, `-W ignore`).
+                prev_was_flag = false;
+                continue;
+            }
+            // A relative script: resolved against the hook's runtime cwd.
+            return None;
+        }
+        // Bare interpreter with no script argument: check the interpreter.
     }
-    Some(token.to_string())
+    if Path::new(&first).is_absolute() {
+        return Some(first);
+    }
+    if first.contains('/') {
+        return None;
+    }
+    Some(resolve_on_path(&first).unwrap_or(first))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Interp {
+    Shell,
+    Python,
+    Perl,
+    Node,
+}
+
+/// Interpreter family by basename (`python3.12` counts as Python).
+fn interpreter_kind(cmd: &str) -> Option<Interp> {
+    let base = basename(cmd);
+    match base {
+        "bash" | "sh" | "dash" | "zsh" | "ksh" => Some(Interp::Shell),
+        "perl" | "ruby" => Some(Interp::Perl),
+        "node" => Some(Interp::Node),
+        _ => base
+            .strip_prefix("python")
+            .filter(|v| v.chars().all(|c| c.is_ascii_digit() || c == '.'))
+            .map(|_| Interp::Python),
+    }
+}
+
+/// True if `flag` makes the interpreter run inline code / a module rather
+/// than a script file. Short clusters (`-lc`, `-mjson.tool`) are scanned up
+/// to the first option that takes a glued value.
+fn is_inline_code_flag(kind: Interp, flag: &str) -> bool {
+    if let Some(long) = flag.strip_prefix("--") {
+        let name = long.split('=').next().unwrap_or(long);
+        return kind == Interp::Node && matches!(name, "eval" | "print");
+    }
+    let (inline, takes_value): (&[char], &[char]) = match kind {
+        Interp::Shell => (&['c'], &['o', 'O']),
+        Interp::Python => (&['c', 'm'], &['W', 'X']),
+        Interp::Perl => (&['e', 'E'], &['I', 'M', 'm', 'r']),
+        Interp::Node => (&['e', 'p'], &['r']),
+    };
+    for c in flag.chars().skip(1) {
+        if inline.contains(&c) {
+            return true;
+        }
+        if takes_value.contains(&c) {
+            return false;
+        }
+    }
+    false
+}
+
+/// Commands that run their argument as the real command.
+const WRAPPERS: &[&str] = &["env", "exec", "nohup", "command"];
+
+/// Builtins / keywords that are not files on `$PATH`.
+const SHELL_BUILTINS: &[&str] = &[
+    "cd", "export", "source", ".", "set", "unset", "if", "for", "while", "case", "[", "[[", "test",
+    "true", "false", ":", "eval", "ulimit", "umask", "trap", "{", "(",
+];
+
+fn basename(cmd: &str) -> &str {
+    cmd.rsplit('/').next().unwrap_or(cmd)
+}
+
+fn is_assignment(tok: &str) -> bool {
+    tok.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty()
+            && !name.starts_with(|c: char| c.is_ascii_digit())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// Strip one pair of surrounding matching quotes.
+fn unquote(tok: &str) -> &str {
+    for q in ['"', '\''] {
+        if let Some(inner) = tok.strip_prefix(q).and_then(|t| t.strip_suffix(q)) {
+            return inner;
+        }
+    }
+    tok
+}
+
+/// Expand `${CLAUDE_PLUGIN_ROOT}` / `$CLAUDE_PLUGIN_ROOT` (only when a root is
+/// supplied), `~` and `$HOME`. `None` when the token still holds a `$` the
+/// checker cannot resolve — never guessed at, never existence-checked as a
+/// literal.
+fn expand_token(token: &str, plugin_root: Option<&str>) -> Option<String> {
+    let home = || std::env::var("HOME").ok().filter(|h| !h.is_empty());
+    let expanded = if let Some(rest) = token
+        .strip_prefix("${CLAUDE_PLUGIN_ROOT}")
+        .or_else(|| token.strip_prefix("$CLAUDE_PLUGIN_ROOT"))
+    {
+        format!("{}{rest}", plugin_root?)
+    } else if let Some(rest) = token
+        .strip_prefix("${HOME}")
+        .or_else(|| token.strip_prefix("$HOME"))
+    {
+        format!("{}{rest}", home()?)
+    } else if token == "~" || token.starts_with("~/") {
+        format!("{}{}", home()?, &token[1..])
+    } else {
+        token.to_string()
+    };
+    (!expanded.contains('$')).then_some(expanded)
+}
+
+/// First `$PATH` entry holding a file named `name`. Pure lookup — spawns
+/// nothing. Empty `$PATH` entries are skipped rather than read as the cwd.
+fn resolve_on_path(name: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| dir.join(name))
+        .find(|cand| cand.is_file())
+        .map(|cand| cand.to_string_lossy().into_owned())
 }
 
 /// True if `command`'s extracted binary path exists on disk. A command with no
-/// extractable/resolvable path (empty, malformed, or an unresolved
-/// `${CLAUDE_PLUGIN_ROOT}`) is treated as "exists" — i.e. not reported missing
-/// — since there's nothing concrete to check; this function only flags a
-/// *concrete, absent* path, never an unresolvable one (fail-soft: never turns
-/// an unrelated shell snippet or unresolved var into a false warning).
+/// extractable/resolvable path (empty, malformed, an unresolved
+/// `${CLAUDE_PLUGIN_ROOT}`, inline interpreter code, or a relative script) is
+/// treated as "exists" — i.e. not reported missing — since there's nothing
+/// concrete to check; this function only flags a *concrete, absent* path. A
+/// bare name (no `/`) reaching here was not found on `$PATH`, so it is
+/// missing — it is never existence-checked against the checker's cwd.
 fn binary_present(command: &str, plugin_root: Option<&str>) -> bool {
     match extract_binary_path(command, plugin_root) {
-        Some(path) => Path::new(&path).exists(),
+        Some(path) if path.contains('/') => Path::new(&path).exists(),
+        Some(_) => false,
         None => true,
     }
 }

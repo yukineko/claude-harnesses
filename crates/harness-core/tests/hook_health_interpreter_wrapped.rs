@@ -26,7 +26,6 @@ fn settings_with(command: &str) -> serde_json::Value {
 
 /// An existing script run through a bare interpreter name is NOT missing.
 #[test]
-#[ignore = "repro: RED until extract_binary_path handles interpreter-wrapped commands (run with --ignored)"]
 fn bash_wrapped_existing_script_is_not_reported_missing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let script = dir.path().join("guard.sh");
@@ -43,7 +42,6 @@ fn bash_wrapped_existing_script_is_not_reported_missing() {
 /// An absent script run through a bare interpreter name IS missing, and the
 /// reported path is the script, not the interpreter.
 #[test]
-#[ignore = "repro: RED until extract_binary_path handles interpreter-wrapped commands (run with --ignored)"]
 fn bash_wrapped_absent_script_is_reported_with_script_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     let script = dir.path().join("gone.sh");

@@ -26,37 +26,3 @@ scripts/test_guard_maintree_bash_foreign_merge_window.py:100: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_guard_maintree_bash_foreign_merge_window.py::ForeignMergeWindow::test_foreign_merge_window_does_not_refuse_unrelated_command
 ========================= 1 failed, 1 passed in 2.09s =========================="""
-
-[[task]]
-id = "59c6d0e4"
-title = "harness-status hooks-health false-flags interpreter-wrapped hook commands (bash <script>) and never checks the script"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "harness-status",
-    "harness-core",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "DEFECT: harness_core::hook::extract_binary_path (crates/harness-core/src/hook.rs:354) returns the first whitespace token. For 'bash /home/.../.claude/hooks/foregone-ask-guard.sh' that is the bare name 'bash', which binary_present existence-checks as a path relative to the CWD. Observed 2026-11-02: 'harness-status hooks-health' flagged it from a repo cwd but NOT from /usr/bin (where ./bash exists); the script was present and 0755 in both runs. Two consequences: (1) false warning at SessionStart, cwd-dependent; (2) fail-open: a genuinely missing script behind an interpreter is never checked (and from a cwd containing ./bash is reported clean). Repro: crates/harness-core/tests/hook_health_interpreter_wrapped.rs (#[ignore]d, RED with --ignored), committed 345d07d5. Fix direction (not decided): resolve bare names via PATH, and for known interpreters (bash/sh/python3/node...) also check the first non-flag argument."
-created_at = 1793593769
-updated_at = 1793593769
-weight = 0.0
-issue_number = 1482
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1482"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p harness-core --test hook_health_interpreter_wrapped -- --ignored"
-rev = "345d07d5dfeaf838898bd321094828e8e9ba6301"
-observed_at = 1793593769
-detail = """
-exit 101: orted_missing
-
-test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
-     Running tests/hook_health_interpreter_wrapped.rs (target/debug/deps/hook_health_interpreter_wrapped-25bfd2a90a76cc4b)
-error: test failed, to rerun pass `-p harness-core --test hook_health_interpreter_wrapped`"""

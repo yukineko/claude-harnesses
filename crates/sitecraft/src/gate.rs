@@ -4,7 +4,9 @@
 //! `sitecraft`; a panic blocks). In a repo with `sitecraft.toml` it combines,
 //! with [`Verdict::worst_of`]: trust of the config, `decide check`,
 //! `check security`, and — only when the session wrote a file matching
-//! `web_globs`, or when that cannot be determined — `serve start` +
+//! `web_globs` (a Write/Edit to one, or a Bash command naming one), or when
+//! that cannot be determined (including any Bash command not provably
+//! read-only) — `serve start` +
 //! `check pages` + `serve stop`. A repo without `sitecraft.toml` is allowed
 //! and a `not-configured` line is appended to the state dir. Give-up is
 //! bounded (`max_attempts`) and says NOTHING WAS VERIFIED when it allows.
@@ -51,6 +53,8 @@ const WRITE_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 /// Tools that run a sub-agent: its Write/Edit calls are recorded in another
 /// transcript, so web changes cannot be ruled out from this one.
 const SUBAGENT_TOOLS: [&str; 2] = ["Task", "Agent"];
+/// The shell tool: its writes are only visible as a command string.
+const BASH_TOOL: &str = "Bash";
 
 /// Evaluate the gate for one Stop payload (the testable core; no stdout, no
 /// exit, no give-up counter).
@@ -291,11 +295,13 @@ fn web_globset(cfg: &Config) -> Result<GlobSet, String> {
 /// Did this session write a file matching `web_globs`?
 ///
 /// Contract: `Known(true)` when a Write/Edit/MultiEdit/NotebookEdit tool call
-/// targets such a file; `Known(false)` only when the whole transcript was read
-/// and parsed and no such call exists; `Undetermined` when there is no
-/// transcript path, it cannot be read, it is empty, any line does not parse,
-/// a write call has no usable path, or a sub-agent ran (its edits are not in
-/// this transcript).
+/// targets such a file, or a Bash command mentions one (see [`bash_change`]);
+/// `Known(false)` only when the whole transcript was read and parsed, no such
+/// call exists, and every Bash command was proven unable to write a file;
+/// `Undetermined` when there is no transcript path, it cannot be read, it is
+/// empty, any line does not parse, a write call has no usable path, a Bash
+/// call has no command string or a command that is not provably read-only,
+/// or a sub-agent ran (its edits are not in this transcript).
 fn web_changes(transcript_path: &str, root: &Path, cfg: &Config) -> Determination<bool> {
     if transcript_path.is_empty() {
         return Determination::undetermined("the Stop payload has no transcript_path");
@@ -315,6 +321,7 @@ fn web_changes(transcript_path: &str, root: &Path, cfg: &Config) -> Determinatio
     let canon_root = std::fs::canonicalize(root).ok();
     let mut lines = 0usize;
     let mut subagent = false;
+    let mut bash_unknown: Option<String> = None;
     for (i, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
@@ -346,6 +353,32 @@ fn web_changes(transcript_path: &str, root: &Path, cfg: &Config) -> Determinatio
                 subagent = true;
                 continue;
             }
+            if name == BASH_TOOL {
+                let command = item
+                    .get("input")
+                    .and_then(|i| i.get("command"))
+                    .and_then(|c| c.as_str());
+                let Some(command) = command else {
+                    return Determination::undetermined(format!(
+                        "transcript {transcript_path} line {}: a Bash call has no command string",
+                        i + 1
+                    ));
+                };
+                match bash_change(command, root, canon_root.as_deref(), &globs) {
+                    Determination::Known(true) => return Determination::known(true),
+                    Determination::Known(false) => {}
+                    Determination::Undetermined(why) => {
+                        if bash_unknown.is_none() {
+                            bash_unknown = Some(format!(
+                                "transcript {transcript_path} line {}: {}",
+                                i + 1,
+                                why.as_str()
+                            ));
+                        }
+                    }
+                }
+                continue;
+            }
             if !WRITE_TOOLS.contains(&name) {
                 continue;
             }
@@ -372,7 +405,345 @@ fn web_changes(transcript_path: &str, root: &Path, cfg: &Config) -> Determinatio
             "a sub-agent ran in this session and its edits are not in this transcript",
         );
     }
+    if let Some(why) = bash_unknown {
+        return Determination::undetermined(why);
+    }
     Determination::known(false)
+}
+
+/// Commands that cannot write a file whatever their arguments (subject to the
+/// per-command exclusions in [`simple_command_is_read_only`]). Anything not
+/// listed — `sed`, `tee`, `cp`, `mv`, `find`, `sort`, `npm`, scripts, … — is
+/// treated as possibly writing.
+const READ_ONLY_COMMANDS: [&str; 23] = [
+    "ls", "cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "rg", "pwd", "echo", "printf",
+    "which", "stat", "true", "false", "test", "cd", "basename", "dirname", "realpath", "diff",
+    "cmp",
+];
+/// `git` subcommands that do not write the work tree.
+const READ_ONLY_GIT: [&str; 4] = ["status", "log", "rev-parse", "ls-files"];
+
+/// Can this Bash `command` have written a file matching `web_globs`?
+///
+/// Contract (restrictive by construction — a command is only cleared when it
+/// is proven unable to write):
+/// - `Known(true)` when any word (or the value after a word's first `=`)
+///   names a path matching `web_globs` — any mention counts as a change;
+/// - `Known(false)` only when the command lexes completely and every simple
+///   command in it is in [`READ_ONLY_COMMANDS`] (or `git` with a
+///   [`READ_ONLY_GIT`] subcommand), with no output redirect other than to
+///   `/dev/null` or an fd duplicate;
+/// - `Undetermined` otherwise: command / process substitution, backticks,
+///   heredocs, unterminated quotes, subshells, variable assignments, a
+///   dynamic or unlisted command name, or a file-writing redirect.
+fn bash_change(
+    command: &str,
+    root: &Path,
+    canon_root: Option<&Path>,
+    globs: &GlobSet,
+) -> Determination<bool> {
+    let tokens = match lex_shell(command) {
+        Ok(t) => t,
+        Err(why) => {
+            return Determination::undetermined(format!(
+                "a Bash command cannot be analysed ({why}), so it may have written a web file: {command:?}"
+            ))
+        }
+    };
+    let mentions_web = |s: &str| {
+        is_web_file(s, root, canon_root, globs)
+            || s.split_once('=')
+                .is_some_and(|(_, v)| !v.is_empty() && is_web_file(v, root, canon_root, globs))
+    };
+    if tokens.iter().any(|t| match t {
+        Tok::Word { text, .. } => mentions_web(text),
+        _ => false,
+    }) {
+        return Determination::known(true);
+    }
+    for cmd in tokens.split(|t| matches!(t, Tok::Sep)) {
+        if let Err(why) = simple_command_is_read_only(cmd) {
+            return Determination::undetermined(format!(
+                "a Bash command may have written a web file ({why}): {command:?}"
+            ));
+        }
+    }
+    Determination::known(false)
+}
+
+/// One simple command (no separators) is provably unable to write a file.
+fn simple_command_is_read_only(cmd: &[Tok]) -> Result<(), String> {
+    let mut words: Vec<(&str, bool)> = Vec::new();
+    let mut iter = cmd.iter();
+    while let Some(t) = iter.next() {
+        match t {
+            Tok::Sep => {}
+            Tok::Group => return Err("it uses a subshell or group".into()),
+            Tok::Word { text, dynamic } => words.push((text.as_str(), *dynamic)),
+            Tok::Redir(kind) => {
+                let target = match iter.next() {
+                    Some(Tok::Word { text, dynamic }) => (text.as_str(), *dynamic),
+                    _ => return Err("a redirect has no target".into()),
+                };
+                match kind {
+                    RedirKind::Read => {}
+                    RedirKind::Write => {
+                        if target.1 || target.0 != "/dev/null" {
+                            return Err(format!("it redirects output into {:?}", target.0));
+                        }
+                    }
+                    RedirKind::Dup => {
+                        let fd_like = target.0 == "-"
+                            || (!target.0.is_empty()
+                                && target.0.bytes().all(|b| b.is_ascii_digit()));
+                        if target.1 || !fd_like {
+                            return Err(format!("it redirects output into {:?}", target.0));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let Some(&(name, dynamic)) = words.first() else {
+        return Ok(());
+    };
+    if dynamic {
+        return Err(format!("the command name {name:?} is not a literal"));
+    }
+    if name.contains('=') {
+        return Err(format!("it sets a variable ({name:?})"));
+    }
+    let args = &words[1..];
+    if name == "git" {
+        let sub = args.first().map(|a| a.0);
+        if !sub.is_some_and(|s| READ_ONLY_GIT.contains(&s)) {
+            return Err(format!(
+                "`git {}` is not a known read-only git command",
+                sub.unwrap_or("")
+            ));
+        }
+        if args
+            .iter()
+            .any(|a| a.0.starts_with("--output") || a.0 == "--ext-diff")
+        {
+            return Err("git is asked to write output to a file or run an external diff".into());
+        }
+        return Ok(());
+    }
+    if !READ_ONLY_COMMANDS.contains(&name) {
+        return Err(format!("`{name}` is not a known read-only command"));
+    }
+    if name == "rg" && args.iter().any(|a| a.0.starts_with("--pre")) {
+        return Err("rg --pre runs another command".into());
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RedirKind {
+    /// `<` (reads its target).
+    Read,
+    /// `>`, `>>`, `>|`, `&>`, `<>` (writes its target).
+    Write,
+    /// `>&`, `<&` (duplicates an fd; a non-numeric target is a file write).
+    Dup,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Tok {
+    /// A word after quote removal; `dynamic` when it contains a `$` expansion.
+    Word {
+        text: String,
+        dynamic: bool,
+    },
+    /// `;`, `&`, `&&`, `|`, `||`, `|&`, newline.
+    Sep,
+    /// `(` or `)`.
+    Group,
+    Redir(RedirKind),
+}
+
+/// A minimal POSIX-shell lexer, sufficient to prove a command read-only.
+/// Constructs whose effect it cannot see — command substitution, backticks,
+/// process substitution, heredocs — and unterminated quotes are errors.
+fn lex_shell(s: &str) -> Result<Vec<Tok>, String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut toks = Vec::new();
+    let mut word = String::new();
+    let mut in_word = false;
+    let mut dynamic = false;
+    let mut i = 0usize;
+
+    fn flush(toks: &mut Vec<Tok>, word: &mut String, in_word: &mut bool, dynamic: &mut bool) {
+        if *in_word {
+            toks.push(Tok::Word {
+                text: std::mem::take(word),
+                dynamic: *dynamic,
+            });
+        }
+        *in_word = false;
+        *dynamic = false;
+    }
+
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        match c {
+            ' ' | '\t' => {
+                flush(&mut toks, &mut word, &mut in_word, &mut dynamic);
+                i += 1;
+            }
+            '\n' => {
+                flush(&mut toks, &mut word, &mut in_word, &mut dynamic);
+                toks.push(Tok::Sep);
+                i += 1;
+            }
+            '#' if !in_word => {
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+            }
+            '\\' => {
+                match next {
+                    Some('\n') => {}
+                    Some(n) => {
+                        word.push(n);
+                        in_word = true;
+                    }
+                    None => return Err("trailing backslash".into()),
+                }
+                i += 2;
+            }
+            '\'' => {
+                let end = chars[i + 1..]
+                    .iter()
+                    .position(|&ch| ch == '\'')
+                    .ok_or("unterminated single quote")?;
+                word.extend(&chars[i + 1..i + 1 + end]);
+                in_word = true;
+                i += end + 2;
+            }
+            '"' => {
+                i += 1;
+                loop {
+                    let Some(&ch) = chars.get(i) else {
+                        return Err("unterminated double quote".into());
+                    };
+                    match ch {
+                        '"' => {
+                            i += 1;
+                            break;
+                        }
+                        '\\' => {
+                            match chars.get(i + 1) {
+                                Some(&n @ ('$' | '`' | '"' | '\\')) => word.push(n),
+                                Some('\n') => {}
+                                Some(&n) => {
+                                    word.push('\\');
+                                    word.push(n);
+                                }
+                                None => return Err("unterminated double quote".into()),
+                            }
+                            i += 2;
+                        }
+                        '`' => return Err("command substitution".into()),
+                        '$' => {
+                            if chars.get(i + 1) == Some(&'(') {
+                                return Err("command substitution".into());
+                            }
+                            dynamic = true;
+                            word.push('$');
+                            i += 1;
+                        }
+                        _ => {
+                            word.push(ch);
+                            i += 1;
+                        }
+                    }
+                }
+                in_word = true;
+            }
+            '`' => return Err("command substitution".into()),
+            '$' => {
+                if next == Some('(') {
+                    return Err("command substitution".into());
+                }
+                dynamic = true;
+                word.push('$');
+                in_word = true;
+                i += 1;
+            }
+            ';' => {
+                flush(&mut toks, &mut word, &mut in_word, &mut dynamic);
+                toks.push(Tok::Sep);
+                i += if next == Some(';') { 2 } else { 1 };
+            }
+            '|' => {
+                flush(&mut toks, &mut word, &mut in_word, &mut dynamic);
+                toks.push(Tok::Sep);
+                i += if matches!(next, Some('|' | '&')) {
+                    2
+                } else {
+                    1
+                };
+            }
+            '&' => {
+                flush(&mut toks, &mut word, &mut in_word, &mut dynamic);
+                match next {
+                    Some('>') => {
+                        toks.push(Tok::Redir(RedirKind::Write));
+                        i += if chars.get(i + 2) == Some(&'>') { 3 } else { 2 };
+                    }
+                    Some('&') => {
+                        toks.push(Tok::Sep);
+                        i += 2;
+                    }
+                    _ => {
+                        toks.push(Tok::Sep);
+                        i += 1;
+                    }
+                }
+            }
+            '(' | ')' => {
+                flush(&mut toks, &mut word, &mut in_word, &mut dynamic);
+                toks.push(Tok::Group);
+                i += 1;
+            }
+            '<' | '>' => {
+                // A word of digits right before the operator is its fd number.
+                if in_word
+                    && !dynamic
+                    && !word.is_empty()
+                    && word.chars().all(|d| d.is_ascii_digit())
+                {
+                    word.clear();
+                    in_word = false;
+                } else {
+                    flush(&mut toks, &mut word, &mut in_word, &mut dynamic);
+                }
+                if next == Some('(') {
+                    return Err("process substitution".into());
+                }
+                let (kind, len) = match (c, next) {
+                    ('<', Some('<')) => return Err("heredoc / herestring".into()),
+                    ('<', Some('>')) => (RedirKind::Write, 2),
+                    ('<', Some('&')) | ('>', Some('&')) => (RedirKind::Dup, 2),
+                    ('<', _) => (RedirKind::Read, 1),
+                    ('>', Some('>' | '|')) => (RedirKind::Write, 2),
+                    _ => (RedirKind::Write, 1),
+                };
+                toks.push(Tok::Redir(kind));
+                i += len;
+            }
+            _ => {
+                word.push(c);
+                in_word = true;
+                i += 1;
+            }
+        }
+    }
+    flush(&mut toks, &mut word, &mut in_word, &mut dynamic);
+    Ok(toks)
 }
 
 /// `path` (absolute, or relative to the root) is inside the root and its

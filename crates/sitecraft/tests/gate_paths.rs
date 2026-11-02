@@ -13,8 +13,9 @@
 //! perturbs exactly one dimension, so a block can only come from that one.
 //!
 //! Pages run only when this session's transcript shows a Write/Edit to a file
-//! matching `web_globs` (user ruling), or when that cannot be determined
-//! (transcript missing, unreadable, unparseable, or no `transcript_path`).
+//! matching `web_globs` (user ruling) or a Bash command that may have written
+//! one, or when that cannot be determined (transcript missing, unreadable,
+//! unparseable, or no `transcript_path`).
 //! Whether pages ran is observed through the `node` stub's marker file.
 //!
 //! Stubs: `SITECRAFT_NODE` / `SITECRAFT_NPM` point at shell scripts written
@@ -114,12 +115,12 @@ fn audit_json(high: u32, critical: u32) -> String {
     )
 }
 
-/// Whatever exact schema `check pages` settles on, this payload reports a
-/// console error on one checked page; a correct implementation must block on
-/// it (as a violation, or as undetermined if the shape differs) — never allow.
+/// A valid `sitecraft-check-pages/1` payload (schema, status `ok`,
+/// `pages_checked` equal to the one configured page) reporting a console
+/// error on that page, so the gate blocks on the finding itself.
 fn pages_findings_json(port: u16) -> String {
     format!(
-        "{{\"checked\":1,\"pages\":[\"http://127.0.0.1:{port}/\"],\"findings\":[{{\"page\":\"http://127.0.0.1:{port}/\",\"kind\":\"console-error\",\"detail\":\"Uncaught TypeError: boom\"}}]}}"
+        "{{\"schema\":\"sitecraft-check-pages/1\",\"status\":\"ok\",\"pages_checked\":1,\"findings\":[{{\"page\":\"http://127.0.0.1:{port}/\",\"kind\":\"console-error\",\"detail\":\"Uncaught TypeError: boom\"}}]}}"
     )
 }
 
@@ -906,10 +907,10 @@ fn bash_redirect_into_web_file_runs_pages() {
 // ---------------------------------------------------------------- node stub schema
 
 /// The fixture's `node` stub reports a console error. The block it provokes
-/// must be that page finding. The stub's payload carries no `schema` /
-/// `status` / `pages_checked`, so pages are judged Undetermined ("output does
-/// not match sitecraft-check-pages/1") and the test above that reads as
-/// "findings block" is really blocking on a schema mismatch.
+/// must be that page finding. A stub payload without `schema` / `status` /
+/// `pages_checked` would be judged Undetermined ("output does not match
+/// sitecraft-check-pages/1"), and the tests above that read as "findings
+/// block" would really be blocking on a schema mismatch.
 #[test]
 fn web_edit_block_reason_is_the_page_finding_not_a_schema_mismatch() {
     let f = fixture();

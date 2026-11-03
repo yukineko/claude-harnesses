@@ -622,3 +622,307 @@ fn malformed_payload_is_denied() {
         assert_denied(&out, what);
     }
 }
+
+// ------------------------ (11) fde status / report / begin while unratified
+//
+// User ruling (2026-11-03): with a registered but UNRATIFIED target, the model
+// may run exactly one `fde status`, `fde report` or `fde begin` invocation via
+// Bash, even with cwd inside the target or naming the target. `fde ratify`
+// stays human-only and denied. Everything else that runs in or names an
+// unratified target stays denied. The allowance covers ONLY an exact single
+// `fde status|report|begin` invocation: no chaining (`;`, `&&`, `||`, `|`,
+// newline), no redirects, no command substitution, no `ratify` hidden in the
+// arguments. Anything ambiguous stays denied (fail-closed).
+//
+// The ALLOW tests below fail on a gate that denies every Bash touching an
+// unratified target (the pre-ruling gate); the DENY controls fail on a gate
+// that allows every command starting with `fde status|report|begin`.
+
+/// For Bash: never allowed, and not exit 0 (deny or ask, per the shared
+/// decision contract).
+fn assert_not_allowed(out: &Output, what: &str) {
+    let d = decision(out);
+    assert_ne!(
+        d.as_deref(),
+        Some("allow"),
+        "{what}: must NOT be allowed (got {d:?}): {}",
+        show(out)
+    );
+    assert_ne!(
+        code(out),
+        Some(0),
+        "{what}: a non-allow must not exit 0: {}",
+        show(out)
+    );
+}
+
+/// Every Bash `cmd`, run with payload cwd `cwd`, is not allowed.
+fn assert_all_not_allowed(e: &Engagement, cwd: &Path, cmds: &[String]) {
+    for cmd in cmds {
+        assert_not_allowed(
+            &gate(e, &bash(cwd, cmd)),
+            &format!(
+                "Bash {cmd:?} (cwd {}) on an unratified target",
+                cwd.display()
+            ),
+        );
+    }
+}
+
+/// Root and a nested subdir of the target, as payload cwds.
+fn target_cwds(e: &Engagement) -> Vec<PathBuf> {
+    vec![e.root().to_path_buf(), e.repo.subdir("src/nested")]
+}
+
+/// ALLOW: bare `fde status` with cwd inside an unratified target (root and a
+/// nested subdir).
+#[test]
+fn fde_status_in_unratified_target_is_allowed() {
+    let e = unratified();
+    for cwd in target_cwds(&e) {
+        assert_allowed(
+            &gate(&e, &bash(&cwd, "fde status")),
+            &format!(
+                "`fde status` (cwd {}) on an unratified target",
+                cwd.display()
+            ),
+        );
+    }
+}
+
+/// ALLOW: bare `fde report` with cwd inside an unratified target.
+#[test]
+fn fde_report_in_unratified_target_is_allowed() {
+    let e = unratified();
+    for cwd in target_cwds(&e) {
+        assert_allowed(
+            &gate(&e, &bash(&cwd, "fde report")),
+            &format!(
+                "`fde report` (cwd {}) on an unratified target",
+                cwd.display()
+            ),
+        );
+    }
+}
+
+/// ALLOW: `fde begin --spec <abs spec outside the target>` with cwd inside an
+/// unratified target (re-registering a draft spec is allowed by the ruling).
+#[test]
+fn fde_begin_in_unratified_target_is_allowed() {
+    let e = unratified();
+    let spec = write_spec_outside(&e, "spec-v2.toml");
+    let cmd = format!("fde begin --spec {}", s(&spec));
+    for cwd in target_cwds(&e) {
+        assert_allowed(
+            &gate(&e, &bash(&cwd, &cmd)),
+            &format!("{cmd:?} (cwd {}) on an unratified target", cwd.display()),
+        );
+    }
+}
+
+/// ALLOW: `fde status <target abs path>` and `fde report <target abs path>`
+/// from a cwd outside every target (the command names the target).
+#[test]
+fn fde_status_and_report_naming_unratified_target_from_outside_are_allowed() {
+    let e = unratified();
+    let elsewhere = TempPlace::new("fde-elsewhere-");
+    for sub in ["status", "report"] {
+        let cmd = format!("fde {sub} {}", s(e.root()));
+        assert_allowed(
+            &gate(&e, &bash(&elsewhere.path, &cmd)),
+            &format!("{cmd:?} from outside the unratified target"),
+        );
+    }
+}
+
+/// DENY: `fde ratify` stays human-only while the target is unratified — bare,
+/// with `--spec`, and naming the target from outside.
+#[test]
+fn fde_ratify_on_unratified_target_is_denied() {
+    let e = unratified();
+    let spec = s(&e.spec);
+    for cwd in target_cwds(&e) {
+        assert_all_not_allowed(
+            &e,
+            &cwd,
+            &[
+                "fde ratify".to_string(),
+                format!("fde ratify --spec {spec}"),
+            ],
+        );
+    }
+    let elsewhere = TempPlace::new("fde-elsewhere-");
+    assert_all_not_allowed(
+        &e,
+        &elsewhere.path,
+        &[
+            format!("fde ratify {}", s(e.root())),
+            format!("fde ratify {} --spec {spec}", s(e.root())),
+        ],
+    );
+}
+
+/// DENY: chaining an allowed invocation with anything (`;`, `&&`, `||`, `|`,
+/// newline, background `&`) is denied — whatever the second command is.
+#[test]
+fn chained_fde_status_on_unratified_target_is_denied() {
+    let e = unratified();
+    let cmds: Vec<String> = [
+        "fde status; rm x",
+        "fde status && fde ratify",
+        "fde status || fde ratify",
+        "fde status | sh",
+        "fde status\nfde ratify",
+        "fde status\nrm x",
+        "fde status & fde ratify",
+        "fde begin && make",
+        "fde report; cargo test",
+    ]
+    .iter()
+    .map(|c| c.to_string())
+    .collect();
+    for cwd in target_cwds(&e) {
+        assert_all_not_allowed(&e, &cwd, &cmds);
+    }
+    // the same chains naming the target from outside
+    let elsewhere = TempPlace::new("fde-elsewhere-");
+    let t = s(e.root());
+    assert_all_not_allowed(
+        &e,
+        &elsewhere.path,
+        &[
+            format!("fde status {t}; rm -rf {t}/src"),
+            format!("fde status {t} && fde ratify {t}"),
+            format!("fde report {t} | sh"),
+        ],
+    );
+}
+
+/// DENY: a redirect turns a read-only report into a write — into the target
+/// by absolute path (cwd outside) and by a relative path (cwd inside).
+#[test]
+fn redirected_fde_report_on_unratified_target_is_denied() {
+    let e = unratified();
+    let t = s(e.root());
+    let elsewhere = TempPlace::new("fde-elsewhere-");
+    assert_all_not_allowed(
+        &e,
+        &elsewhere.path,
+        &[
+            format!("fde report > {t}/file"),
+            format!("fde report {t} > {t}/file"),
+            format!("fde status {t} >> {t}/file"),
+        ],
+    );
+    for cwd in target_cwds(&e) {
+        assert_all_not_allowed(
+            &e,
+            &cwd,
+            &[
+                "fde report > file".to_string(),
+                "fde report >file".to_string(),
+                "fde status 2> file".to_string(),
+                "fde report >> README.md".to_string(),
+                "fde status < README.md".to_string(),
+            ],
+        );
+    }
+}
+
+/// DENY: command substitution can run anything, including `fde ratify`.
+#[test]
+fn command_substitution_in_fde_status_is_denied() {
+    let e = unratified();
+    let cmds: Vec<String> = [
+        "fde status $(fde ratify)",
+        "fde status `fde ratify`",
+        "fde report \"$(fde ratify)\"",
+        "fde status <(fde ratify)",
+    ]
+    .iter()
+    .map(|c| c.to_string())
+    .collect();
+    for cwd in target_cwds(&e) {
+        assert_all_not_allowed(&e, &cwd, &cmds);
+    }
+}
+
+/// DENY: `ratify` smuggled into the arguments of an allowed subcommand.
+/// `fde status ratify` would only treat `ratify` as a relative target path,
+/// but the ruling says no `fde ratify` hidden in arguments, and the gate
+/// cannot be expected to prove that a token is harmless: denied.
+#[test]
+fn ratify_smuggled_into_fde_status_arguments_is_denied() {
+    let e = unratified();
+    let spec = s(&e.spec);
+    let cmds: Vec<String> = vec![
+        "fde status ratify".to_string(),
+        "fde report ratify".to_string(),
+        format!("fde status --spec {spec} ratify"),
+        format!("fde begin --spec {spec} ratify"),
+        format!("fde begin ratify --spec {spec}"),
+    ];
+    for cwd in target_cwds(&e) {
+        assert_all_not_allowed(&e, &cwd, &cmds);
+    }
+}
+
+/// DENY: anything that is not exactly an `fde status|report|begin`
+/// invocation, with cwd in the target. Choices (documented per form):
+/// * `cargo test`, `git log`, `make`: ordinary work in the target — the
+///   ruling keeps these denied.
+/// * `fde evidence ...`, `fde gate`, `fde resolve`: other fde subcommands are
+///   not in the allowance (only status/report/begin are).
+/// * `fdex status`: another program whose name merely starts with `fde`.
+/// * `FOO=1 fde status`: an env prefix changes how fde runs (e.g.
+///   `FDE_STATE_DIR` pointing at a forged state); ambiguous => denied.
+/// * `/abs/path/fde status`, `./fde status`: the gate cannot know that an
+///   arbitrary path is the real fde binary (a file inside the target could be
+///   named `fde`); ambiguous => denied.
+/// * `command fde status`, `exec fde status`, `sh -c 'fde status'`,
+///   `'fde' status`: wrappers and quoting hide the command word; ambiguous =>
+///   denied.
+#[test]
+fn non_allowlisted_bash_in_unratified_target_is_denied() {
+    let e = unratified();
+    let fake_fde = e.root().join("fde");
+    fs::write(&fake_fde, "#!/bin/sh\necho forged\n").expect("write fake fde");
+    let cmds: Vec<String> = vec![
+        "cargo test".to_string(),
+        "git log".to_string(),
+        "make".to_string(),
+        "fde evidence verify".to_string(),
+        "fde resolve".to_string(),
+        "fdex status".to_string(),
+        "FOO=1 fde status".to_string(),
+        "FDE_STATE_DIR=/tmp fde status".to_string(),
+        "env fde status".to_string(),
+        format!("{} status", s(&fake_fde)),
+        "./fde status".to_string(),
+        "command fde status".to_string(),
+        "exec fde status".to_string(),
+        "sh -c 'fde status'".to_string(),
+        "'fde' status".to_string(),
+    ];
+    for cwd in target_cwds(&e) {
+        assert_all_not_allowed(&e, &cwd, &cmds);
+    }
+}
+
+/// Control (already passes): after ratification `fde status` is allowed, as is
+/// every Bash in the target.
+#[test]
+fn fde_status_in_ratified_target_is_allowed() {
+    let e = Engagement::ratified(REQS);
+    for cwd in target_cwds(&e) {
+        assert_allowed(
+            &gate(&e, &bash(&cwd, "fde status")),
+            &format!("`fde status` (cwd {}) on a ratified target", cwd.display()),
+        );
+    }
+}
+
+/// A second draft spec in the spec dir (outside the target).
+fn write_spec_outside(e: &Engagement, name: &str) -> PathBuf {
+    common::write_spec(&e.spec_dir.path, name, "fixture-v2", REQS)
+}

@@ -982,7 +982,7 @@
     {
       "name": "fde",
       "description": "Forward Deployed Engineer harness: resolves a target repo, keeps a ratified spec per target outside it, denies edits to unratified registered targets, and records a red/green evidence ledger. Implemented: resolve, begin, ratify, status, gate, evidence red/green/pass/verify and report.",
-      "version": "0.1.11",
+      "version": "0.1.12",
       "category": "quality",
       "keywords": [
         "hooks",

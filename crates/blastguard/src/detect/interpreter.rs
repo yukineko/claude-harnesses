@@ -1,9 +1,9 @@
 use super::{
     analyze_shell_payload, confined_ask, glob_literal_prefix, has_glob_meta,
     here_document_delimiter_is_quoted, here_string_operands, inline_command_payloads,
-    interpreter_stdin_operand, is_redirect_token, is_short_flag, opens_here_document,
-    payloads_after, positional_operands, process_substitution_payloads, recommend_against, Ctx,
-    Decision,
+    interpreter_payloads_after, interpreter_stdin_operand, is_redirect_token, is_short_flag,
+    opens_here_document, positional_operands, process_substitution_payloads, recommend_against,
+    Ctx, Decision,
 };
 use crate::exclude;
 
@@ -1394,7 +1394,7 @@ pub(super) fn analyze_code_interpreter(
     ctx: &Ctx<'_>,
 ) -> Decision {
     if let Some(pos) = interpreter_inline_eval_pos(cmd, rest) {
-        let mut payloads = payloads_after(rest, pos);
+        let mut payloads = interpreter_payloads_after(rest, pos);
         // Glued forms, where the program is in the SAME token as the flag:
         // short `-c<payload>` and long `--eval=<payload>`.
         let flag = rest[pos];

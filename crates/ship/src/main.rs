@@ -152,9 +152,20 @@ fn rollout() {
 }
 
 fn session_end() {
-    let raw = harness_core::hook::read_stdin_if_piped();
-    let Some(input) = HookInput::parse(&raw) else {
-        return;
+    // A stdin READ ERROR is not "nothing to ship" (backlog 8004d80f): name it
+    // on stderr and still check the repo at the process cwd (where Claude Code
+    // runs the hook), so the reminder is not silently lost.
+    let input = match harness_core::hook::try_read_stdin_if_piped() {
+        Ok(raw) => match HookInput::parse(&raw) {
+            Some(input) => input,
+            None => return,
+        },
+        Err(e) => {
+            eprintln!(
+                "ship session-end: stdin read failed: {e}; checking the current directory instead"
+            );
+            HookInput::default()
+        }
     };
     let cwd = input.cwd_or_current();
     let repo = resolve_repo_root(&cwd);

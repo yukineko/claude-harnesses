@@ -21,7 +21,7 @@ mod audit_b1_0_tests;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use harness_core::boundary;
-use harness_core::hook::{read_stdin, run_hook, HookInput};
+use harness_core::hook::{run_hook, try_read_stdin, HookInput};
 use harness_core::verdict::{Determination, Required};
 use serde_json::json;
 use std::collections::HashSet;
@@ -1640,7 +1640,14 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Command::SessionStart => {
-            let raw = read_stdin();
+            // A stdin READ ERROR takes the same visible-failure path as a
+            // malformed payload (backlog 8004d80f).
+            let raw = match try_read_stdin() {
+                Ok(raw) => raw,
+                Err(e) => anyhow::bail!(
+                    "backlog session-start: stdin read failed: {e}; backlog context was NOT injected"
+                ),
+            };
             // Don't silently coerce malformed stdin to an empty default —
             // that would run session-start against a blank input and could
             // mis-key the project. Nor exit 0 with empty stdout: that is

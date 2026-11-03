@@ -12,6 +12,9 @@ Modes:
   serve    answer every GET with HTTP 200 on 127.0.0.1:<port>
   noready  never listen (the ready probe must hit its deadline)
   exit1    exit with status 1 immediately (early exit before ready)
+  serve6   answer every GET with HTTP 200 on [::1]:<port> ONLY (IPV6_V6ONLY=1,
+           127.0.0.1 untouched) — what Vite does when `localhost` resolves to
+           ::1 only (crates/sitecraft/tests/serve_ready_ipv6.rs)
 
 Safety net against orphans if a test or the implementation under test fails
 to clean up: the process exits on its own after LIFETIME seconds and the
@@ -20,6 +23,7 @@ grandchild `sleep` is bounded by the same value.
 
 import http.server
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -49,6 +53,14 @@ class Ok(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class V6OnlyServer(http.server.ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        super().server_bind()
+
+
 def main():
     mode, port, outdir = sys.argv[1], int(sys.argv[2]), sys.argv[3]
     threading.Timer(LIFETIME, lambda: os._exit(3)).start()
@@ -63,6 +75,11 @@ def main():
     if mode == "noready":
         time.sleep(LIFETIME)
         os._exit(3)
+    if mode == "serve6":
+        server = V6OnlyServer(("::1", port), Ok)
+        server.daemon_threads = True
+        server.serve_forever()
+        return
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Ok)
     server.daemon_threads = True
     server.serve_forever()

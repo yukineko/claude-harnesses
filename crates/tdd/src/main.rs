@@ -39,7 +39,7 @@ mod trust_worktree_tests;
 mod warned;
 
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use serde_json::json;
@@ -307,6 +307,14 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // (a session in a linked worktree while the hook runs in the primary tree
     // would otherwise be judged on the clean primary tree). The first root whose
     // verdict blocks is the one reported; an undetermined root blocks.
+    //
+    // The gate judges PER SESSION (user ruling 2026-11-03, backlog 49e95d32):
+    // every enabled root is evaluated first, then the test evidence the session
+    // wrote in ANY of them (attributed via the transcript; uncommitted, or
+    // committed since the session start) is credited to the implementation
+    // change in every root (`gate::session_test_evidence`). An undetermined
+    // root or attribution makes that fold undetermined: no credit, each root
+    // is judged on its own scan alone, and the block reason says why.
     let sr = match harness_core::session_roots::resolve(&root, &input.transcript_path) {
         Determination::Known(sr) => sr,
         Determination::Undetermined(why) => stop_block_now(
@@ -324,6 +332,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     let mut first: Option<gate::Report> = None;
     let mut evaluated_something = false;
     let mut all_opted_out = true;
+    let mut evaluated: Vec<(usize, PathBuf, Config, gate::Report)> = Vec::new();
     for (i, r) in sr.roots.iter().enumerate() {
         let rcfg = if i == 0 { cfg.clone() } else { Config::load(r) };
         if !rcfg.enabled {
@@ -331,10 +340,21 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         }
         all_opted_out = false;
         let rep = gate::evaluate(&rcfg, r, &input.transcript_path);
+        evaluated.push((i, r.clone(), rcfg, rep));
+    }
+    let credit = {
+        let reps: Vec<&gate::Report> = evaluated.iter().map(|(_, _, _, rep)| rep).collect();
+        gate::session_test_evidence(&reps)
+    };
+    for (i, r, rcfg, mut rep) in evaluated {
+        rep.credit = credit.clone();
+        if let Some(note) = gate::credit_note(&rep) {
+            eprintln!("{note}");
+        }
         if rep.blocks(&rcfg) {
             if chosen.is_none() {
                 cfg = rcfg;
-                root = r.clone();
+                root = r;
                 chosen = Some(rep);
             }
             continue;

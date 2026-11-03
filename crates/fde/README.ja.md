@@ -62,7 +62,7 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
 1. **把握**: target を読み、`file:line` の逐語引用付きで要件素材を state dir 側に書く。`specforge draft` で
    Spec IR TOML の下書きを作り、`fde begin` で登録する。
 2. **批准**: 推定 spec を根拠とともに `AskUserQuestion` で人間に示す。自答しない(自律モードでも escalate)。
-   明示的な承認があったときだけ `fde ratify`。`fde status` が 0 になるまで先へ進まない。spec を変えると批准は外れる。
+   明示的な承認があったときだけ、人間自身が `fde ratify` を実行する(モデルは実行しない)。`fde status` が 0 になるまで先へ進まない。spec を変えると批准は外れる。
 3. **RED**: テスト agent が要件ごとにテストを書き、`fde evidence red` と `tdd red` で失敗を記録する。
    最初から通る要件は `fde evidence pass` で適合済みとして記録する。
 4. **fix**: `condukt` / `condukt-loop` に実装を委譲する(テスト agent とは別)。target root に統合後、RED と同じ CMD で
@@ -78,7 +78,13 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
 
 - Edit 系: 対象パスを正規化し、保護範囲の中なら deny。
 - Bash: 正規化した cwd が保護範囲の中、またはコマンド文字列が root / worktree のパスを文字列として含むなら deny。
-  未批准の間は `fde ratify` / `fde status` / `fde report` の Bash 実行も同じ理由で deny される(観測済み)。
+  例外(2026-11-03 のユーザー裁定): 状態が「未批准」の target に対しては、`fde status` / `fde report` /
+  `fde begin` の**ちょうど 1 回の単独呼び出し**だけ allow する。判定は保守的な許可リストで、コマンド全体が
+  英数字と `-_./=:,@+%` だけの語を空白/タブで区切ったもので、第 1 語がちょうど `fde`、第 2 語が
+  `status` / `report` / `begin` のいずれか、以降の語が `ratify` を含まないときだけ通る(連結・リダイレクト・
+  置換・引用符・環境変数の前置・パス指定の `fde`・ラッパーはすべて deny)。`fde ratify` は人間専用で、
+  未批准の間は deny のまま。人間が承認したら、人間自身が Claude Code のプロンプトで `! fde ratify [TARGET]`
+  または自分の端末で実行する。状態が判定不能な target、Edit 系ツールにはこの例外は適用されない。
 - 空・壊れた payload、読めない state、matcher 外のツール(登録 target がある場合)、panic はすべて deny。
 - 登録 target が 1 つも無ければ、すべて allow。
 

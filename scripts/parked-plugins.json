@@ -17,7 +17,7 @@
     "the user ruled it stays `false` in settings.json. It is still rolled out on",
     "every run, so its bytes stay current; what is parked is arming it.",
     "And fde, parked 2026-11-03 for BOTH rollout and enablement by user ruling:",
-    "a scaffold not rolled out or armed until the user decides.",
+    "implemented, but not rolled out or armed until the user decides.",
     "The previous entry was taintguard, parked 2026-08-04 while its",
     "false positive eb39308e was open, then unparked the same day when it rolled",
     "out at 0.1.10. That crate was REMOVED from the repo entirely on 2026-08-24",
@@ -38,7 +38,7 @@
       "revisit": "The user's own decision is the only trigger. Ask before unparking; there is no metric here that unparks itself."
     },
     "fde": {
-      "reason": "ROLLOUT and ENABLEMENT parked by user ruling 2026-11-03: fde is deliberately not rolled out and not enabled until the user decides. It is a scaffold whose every command answers undetermined (exit 2); its PreToolUse gate would block every Bash/Edit/Write if armed. Do not run rollout-plugins.sh or enable it to clear the report.",
+      "reason": "ROLLOUT and ENABLEMENT parked by user ruling 2026-11-03: fde is deliberately not rolled out and not enabled until the user decides. It is implemented (resolve / begin / ratify / status / gate / evidence / report); it stays parked only pending the user's decision to enable and roll it out. If armed, its PreToolUse gate denies edits and Bash in or naming any target registered with fde begin but not ratified. Do not run rollout-plugins.sh or enable it to clear the report.",
       "parked_at": "2026-11-03",
       "revisit": "user decision to roll out"
     }

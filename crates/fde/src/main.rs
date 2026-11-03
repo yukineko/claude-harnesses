@@ -47,6 +47,10 @@
 //! read error) is undetermined, i.e. deny. It denies edits (and Bash run in,
 //! or naming, a guarded area) touching a target registered by `fde begin`
 //! whose status is not ratified; see `gate.rs` for the full decision order.
+//! One exception (user ruling 2026-11-03): while a target is unratified, an
+//! exact single Bash `fde status|report|begin` invocation is allowed even in
+//! or naming it; `fde ratify` stays human-only and denied, and a target whose
+//! status is undetermined gets no exception.
 //!
 //! # State directory
 //!

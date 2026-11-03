@@ -53,8 +53,13 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
      実 LLM agent の挙動は証明していない。
 4. 登録: `fde begin [TARGET] --spec <dir>/specs/<spec-id>.toml`(spec は target の**外**であること。中なら exit 1)。
    これで target は「登録済み・未批准」になり、gate が target への変更を拒否し始める。
-   **観測済みの挙動**: gate が有効なとき、未批准の間は cwd が target 内の Bash も、target の root パスを文字列で含む Bash も
-   拒否される(`fde ratify` / `fde status` / `fde report` 自身も含む)。target を読むのは Read / Grep / Glob で行う。
+   gate が有効なとき、未批准の間は cwd が target 内の Bash も、target の root パスを文字列で含む Bash も拒否される
+   (target 内のテスト・ビルド・git コマンドも含む)。target を読むのは Read / Grep / Glob で行う。
+   **例外**: 未批准の間でも `fde status` / `fde report` / `fde begin` は Bash で実行してよい。ただし
+   **ちょうど 1 回の単独呼び出し**に限る(`fde status [TARGET]` のように書く。`;` `&&` `||` `|` `&` 改行による連結、
+   リダイレクト、`$(...)` 等の置換、引用符、環境変数の前置、`./fde` や絶対パス、`command` / `env` / `sh -c` 等の
+   ラッパー、引数に `ratify` を含むものは拒否される)。**`fde ratify` は人間専用**で、未批准の間はモデルの実行を拒否する。
+   target の状態が判定不能(status が 2)のときは、この例外も適用されず拒否される。
 
 ## (b) 批准 — 人間に確認する
 
@@ -62,9 +67,10 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
    `AskUserQuestion` で「この仕様で批准するか / どこを直すか」を聞く。**自分で答えない。**
 2. 人間が修正を求めたら spec を直し、もう一度聞く。spec ファイルを 1 バイトでも変えると批准は外れる
    (fingerprint = 内容の SHA-256)。批准後に直した場合も同じく再確認が要る。
-3. **人間の明示的な承認があったときだけ** `fde ratify [TARGET]` を実行する。
-   gate に拒否されたら(上の観測どおり、gate 有効時は拒否される)迂回せず、人間に「自分の端末で
-   `fde ratify [TARGET]` を実行してください」と同じコマンドを示して依頼する。
+3. **`fde ratify` は自分で実行しない(人間専用)。** `AskUserQuestion` で人間が明示的に承認したら、
+   人間自身に実行してもらう: 「Claude Code のプロンプトで `! fde ratify [TARGET]` と入力するか、
+   自分の端末で `fde ratify [TARGET]` を実行してください」と同じコマンドを示して依頼する。
+   モデルが実行しようとすると gate が拒否する。拒否を別経路で回避しない。
 4. 先へ進む条件は `fde status [TARGET]` が **exit 0**。1(未批准・spec 変更あり)なら (b) に戻る。
    2 は止めて人間に聞く。
 

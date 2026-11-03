@@ -14,6 +14,13 @@ Commands: `fde resolve`, `begin`, `ratify`, `status`, `gate` (PreToolUse hook),
 (0 complete / 1 incomplete / 2 undetermined); `fde report` is a listing whose
 exit code is not a verdict (it exits 0 for an unratified target too).
 
+Before ratification the gate denies Bash run in, or naming, the target, with
+one exception: an exact single `fde status`, `fde report` or `fde begin`
+invocation (no chaining, redirects, substitution, quoting, env prefixes or
+wrappers) is allowed. `fde ratify` is human-only: after the human approves,
+they run it themselves (e.g. `! fde ratify [TARGET]` in their Claude Code
+prompt, or in their own terminal); the model must not run it.
+
 State lives in `$FDE_STATE_DIR` (default `~/.fde`), keyed by the resolved git
 top-level of the target.
 

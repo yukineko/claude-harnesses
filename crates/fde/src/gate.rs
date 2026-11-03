@@ -47,6 +47,14 @@
 //!      canonicalize the path, or to determine the area (git probe failure;
 //!      only needed when the path / cwd / command is not already under the
 //!      root), is `Undetermined` — even for a path that might lie elsewhere.
+//!    * Exception (user ruling 2026-11-03), Bash only: a Bash call that
+//!      touches a target whose status is `Unratified` is not a violation when
+//!      its command is an exact single `fde status|report|begin` invocation
+//!      ([`is_allowed_fde_invocation`]). `fde ratify` stays human-only and
+//!      denied. The exception does not apply to a target whose status is
+//!      `Undetermined` (still `Undetermined`, i.e. deny — the gate does not
+//!      know the target is merely unratified), nor to an area that cannot be
+//!      determined, nor to Edit / Write / MultiEdit / NotebookEdit.
 //! 6. Nothing guarded touched: `Clean`.
 
 use std::path::{Component, Path, PathBuf};
@@ -258,6 +266,56 @@ fn touches(req: &Checked, area: &Area) -> Option<String> {
     }
 }
 
+/// `fde` subcommands the model may run via Bash while a target is unratified.
+const ALLOWED_FDE_SUBCOMMANDS: &[&str] = &["status", "report", "begin"];
+
+/// Characters a word of an allowed invocation may contain: ASCII
+/// alphanumerics and `-_./=:,@+%`. None of them is a shell metacharacter,
+/// quote, expansion, glob or redirect character, so a command made of such
+/// words separated by spaces / tabs is a single simple command whose words
+/// reach the program verbatim.
+fn is_safe_word_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "-_./=:,@+%".contains(c)
+}
+
+/// Whether `command` is exactly one `fde status|report|begin` invocation
+/// (user ruling 2026-11-03). A conservative allowlist, not a shell parser:
+///
+/// * Leading / trailing spaces and tabs are ignored; any other character
+///   (newline included) is judged below.
+/// * Every remaining character is a space, a tab or [`is_safe_word_char`]:
+///   no quotes, `$`, backtick, `;&|<>()`, newline, backslash, glob, brace,
+///   `~`, `!`, `#` — so no chaining, redirect, substitution, expansion or
+///   comment can occur.
+/// * The words are the runs between spaces / tabs. The first is exactly
+///   `fde` (not a path, not an env assignment, not a wrapper such as
+///   `command` / `exec` / `env` / `sh -c`); the second is exactly one of
+///   `status`, `report`, `begin`.
+/// * No later word contains `ratify` anywhere (so `fde status ratify` and a
+///   path spelled with `ratify` in it are both denied).
+///
+/// Anything else answers `false` (stay denied). Not covered: the gate cannot
+/// see which binary the shell resolves `fde` to through `PATH`, aliases or
+/// functions; that resolution is outside the command text.
+pub fn is_allowed_fde_invocation(command: &str) -> bool {
+    let trimmed = command.trim_matches(|c| c == ' ' || c == '\t');
+    if !trimmed
+        .chars()
+        .all(|c| c == ' ' || c == '\t' || is_safe_word_char(c))
+    {
+        return false;
+    }
+    let mut words = trimmed.split([' ', '\t']).filter(|w| !w.is_empty());
+    if words.next() != Some("fde") {
+        return false;
+    }
+    match words.next() {
+        Some(sub) if ALLOWED_FDE_SUBCOMMANDS.contains(&sub) => {}
+        _ => return false,
+    }
+    words.all(|w| !w.contains("ratify"))
+}
+
 /// A request with its path / cwd canonicalized.
 enum Checked {
     Path { tool: String, path: PathBuf },
@@ -269,7 +327,8 @@ enum Checked {
 ///
 /// * `Clean` — allow (exit 0).
 /// * `Violation` — deny (exit 2): the call touches an unratified registered
-///   target.
+///   target (except an exact single Bash `fde status|report|begin`; see the
+///   module doc, step 5).
 /// * `Undetermined` — deny (exit 2): see the module doc for every case.
 #[track_caller]
 pub fn evaluate(payload: &str) -> Verdict {
@@ -309,6 +368,13 @@ fn evaluate_with(req: Request, state: &Path) -> Verdict {
         },
     };
 
+    // Step 5 exception: only a Bash command, only an exact single
+    // `fde status|report|begin`, only against an `Unratified` status.
+    let fde_allowance = match &checked {
+        Checked::Bash { command, .. } => is_allowed_fde_invocation(command),
+        Checked::Path { .. } => false,
+    };
+
     let mut verdicts = Vec::new();
     for t in &targets {
         let unratified_reason = match ratify::status(t, state) {
@@ -332,10 +398,14 @@ fn evaluate_with(req: Request, state: &Path) -> Verdict {
             },
         };
         let Some(hit) = hit else { continue };
+        if fde_allowance && unratified_reason.is_ok() {
+            continue;
+        }
         verdicts.push(match unratified_reason {
             Ok(reason) => Verdict::violation(format!(
                 "{hit}: registered target {} is not ratified ({reason}); \
-                 ratify its spec with `fde ratify` first",
+                 its spec must be ratified first — `fde ratify` is human-only: \
+                 ask the human to approve and run it themselves",
                 t.root.display()
             )),
             Err(why) => Verdict::undetermined(format!(

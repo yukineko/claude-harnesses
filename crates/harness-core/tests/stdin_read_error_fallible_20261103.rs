@@ -193,14 +193,17 @@ fn child_read_error_interactive() {
     println!("{RETURNED}{p:?}");
 }
 
-/// Re-exec target: the same gate panicking under run_guarded on a chain-first
-/// stop (shares the per-gate, per-session marker).
+/// Re-exec target: the same gate panicking under run_guarded (shares the
+/// per-gate, per-session marker). `panic` is a chain-first stop
+/// (`stop_hook_active = false`); `panic-active` is a re-entry (`true`).
 #[test]
 fn child_run_guarded_panic() {
-    if std::env::var(CHILD_ENV).as_deref() != Ok("panic") {
-        return;
-    }
-    harness_core::gate::run::run_guarded(GATE, false, false, || -> () {
+    let active = match std::env::var(CHILD_ENV).as_deref() {
+        Ok("panic") => false,
+        Ok("panic-active") => true,
+        _ => return,
+    };
+    harness_core::gate::run::run_guarded(GATE, false, active, || -> () {
         panic!("deterministic gate panic (stdin_read_error_fallible probe)")
     });
 }
@@ -440,4 +443,118 @@ fn interactive_read_error_exits_1_naming_the_failure() {
         dbg(&o)
     );
     assert!(block_reason(&o).is_none(), "{}", dbg(&o));
+}
+
+// ---------------------------------------------------------------------------
+// Mixed run_guarded panic / stdin read error streaks (shared marker)
+// ---------------------------------------------------------------------------
+
+fn panic_stop(root: &Path, active: bool) -> Output {
+    let kind = if active { "panic-active" } else { "panic" };
+    run_child(root, kind, "child_run_guarded_panic", true)
+}
+
+/// `<HOME>/.harness/state/panic-markers/<gate>/<session>.panic`
+/// (`PanicMarker::locate` in src/gate/run.rs).
+fn marker_path(root: &Path) -> PathBuf {
+    root.join("home")
+        .join(".harness")
+        .join("state")
+        .join("panic-markers")
+        .join(GATE)
+        .join(format!("{SESSION}.panic"))
+}
+
+fn assert_block(o: &Output, what: &str) {
+    assert_eq!(o.status.code(), Some(0), "{what}\n{}", dbg(o));
+    assert!(block_reason(o).is_some(), "{what}: must block\n{}", dbg(o));
+}
+
+fn assert_allow(o: &Output, what: &str) {
+    assert_eq!(o.status.code(), Some(0), "{what}\n{}", dbg(o));
+    assert!(
+        !returned(o) && block_reason(o).is_none(),
+        "{what}: must be the bounded allow\n{}",
+        dbg(o)
+    );
+}
+
+/// run_guarded policy is unchanged by the stdin-error work: a chain-first
+/// panic blocks, the panic on its re-entry is the bounded allow.
+#[test]
+fn run_guarded_panic_then_reentry_panic_is_still_the_bounded_allow() {
+    let root = scratch("rg-unchanged");
+    assert_block(&panic_stop(&root, false), "panic #1 (chain-first)");
+    assert_allow(&panic_stop(&root, true), "panic #2 (re-entry)");
+}
+
+/// (a) A run_guarded bounded allow followed by a stdin read error of the same
+/// gate/session must block: two allows in a row would be an unbounded
+/// fail-open across the two failure kinds.
+#[test]
+fn stdin_read_error_after_a_run_guarded_bounded_allow_blocks() {
+    let root = scratch("rg-allow-then-err");
+    assert_block(&panic_stop(&root, false), "panic #1 (chain-first)");
+    assert_allow(&panic_stop(&root, true), "panic #2 (re-entry)");
+    assert_block(
+        &err_stop(&root, true),
+        "stdin read error right after run_guarded's bounded allow",
+    );
+}
+
+/// (a') The same, entered from a stdin-error block: stdin error blocks, a
+/// re-entry panic takes run_guarded's bounded allow, the next stdin error
+/// must block.
+#[test]
+fn stdin_read_error_after_a_panic_allow_that_followed_a_stdin_block_blocks() {
+    let root = scratch("err-rg-allow-err");
+    assert_block(&err_stop(&root, true), "stdin error #1");
+    assert_allow(&panic_stop(&root, true), "re-entry panic after stdin block");
+    assert_block(&err_stop(&root, true), "stdin error after that allow");
+}
+
+/// (b) Unrecognised marker content is undetermined, which blocks: it must not
+/// be read as "previous failure was blocked" (which would grant the allow).
+#[test]
+fn unrecognised_marker_content_then_stdin_read_error_blocks() {
+    let root = scratch("garbage-marker");
+    let p = marker_path(&root);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, b"\x00garbage-not-a-marker-state\n").unwrap();
+    assert_block(
+        &err_stop(&root, true),
+        "stdin read error with unrecognised marker content",
+    );
+}
+
+/// Control for (b): the path above IS the marker the stdin path reads — the
+/// marker the first failure records there, written back, grants the allow.
+/// Without this, (b) could pass merely because the path is wrong.
+#[test]
+fn marker_path_control_a_recorded_block_is_read_from_that_path() {
+    let root = scratch("marker-path-control");
+    assert_block(&err_stop(&root, true), "stdin error #1");
+    let p = marker_path(&root);
+    assert!(
+        p.is_file(),
+        "the first failure must record its marker at {}",
+        p.display()
+    );
+    let recorded = std::fs::read(&p).unwrap();
+    std::fs::remove_file(&p).unwrap();
+    std::fs::write(&p, &recorded).unwrap();
+    assert_allow(&err_stop(&root, true), "stdin error #2 via the same path");
+}
+
+/// (c) After a stdin-error bounded allow, a panic of the same gate on a
+/// re-entry (another gate blocked) is a FIRST panic again: it must block.
+#[test]
+fn reentry_panic_after_a_stdin_error_bounded_allow_blocks() {
+    let root = scratch("err-allow-then-panic");
+    assert_block(&err_stop(&root, true), "stdin error #1");
+    assert_allow(&err_stop(&root, true), "stdin error #2");
+    assert_block(
+        &panic_stop(&root, true),
+        "re-entry panic right after the stdin-error bounded allow",
+    );
 }

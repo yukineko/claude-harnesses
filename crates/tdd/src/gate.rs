@@ -53,6 +53,7 @@ use regex::RegexSet;
 
 use crate::config::Config;
 use crate::git::{self, AddedLine, AddedScan, ChangeScan};
+use crate::moved;
 
 /// What a successful scan found. Only populated on `Scan::Known(Some(_))` —
 /// i.e. a real git repo whose diff could be read.
@@ -60,6 +61,8 @@ pub struct Fields {
     /// Number of *added* implementation lines (impl-glob file, not a test file,
     /// not itself a test marker).
     pub added_impl_lines: usize,
+    /// Added impl lines read as moved code, not counted ([`crate::moved`]).
+    pub moved_impl_lines: usize,
     /// An added line matched a test marker (e.g. an inline `#[test]`).
     pub test_marker_added: bool,
     /// A changed/added file is a test by location/name.
@@ -353,12 +356,22 @@ fn build_markers(patterns: &[String]) -> RegexSet {
     })
 }
 
-/// Classify a set of changed files + added lines into a report. Pure (no git):
-/// unit-testable. Maps the tri-state scans: any `Failed` → `Undetermined`
-/// (fail closed); otherwise any `NotRepo` → `Known(None)` (allow, as before);
-/// otherwise the successful `Files`/`Lines` sets drive the existing
-/// test-evidence logic, carried as `Known(Some(fields))`.
+/// [`classify_with_removed`] with no removals: nothing reads as moved.
 pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report {
+    classify_with_removed(cfg, changed, added, &AddedScan::Lines(Vec::new()))
+}
+
+/// Classify changed files + added/removed lines into a report. Pure (no git).
+/// Any `Failed` scan (changed, added OR removed) → `Undetermined` (fail
+/// closed); else a `NotRepo` changed/added side → `Known(None)` (allow); else
+/// `Known(Some(fields))`. A `NotRepo` removed side reads as "no removals"
+/// (can only count more). What is not counted is decided by [`crate::moved`].
+pub fn classify_with_removed(
+    cfg: &Config,
+    changed: &ChangeScan,
+    added: &AddedScan,
+    removed: &AddedScan,
+) -> Report {
     let impl_set = build_globset(&cfg.impl_globs);
     let test_set = build_globset(&cfg.test_path_globs);
     let markers = build_markers(&cfg.test_markers);
@@ -366,7 +379,10 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
     // A git command errored in a real repo → the changeset is undetermined.
     // Fail closed rather than let a collapsed-empty scan read as "no changes".
     // Checked first so a Failed scan is never masked by a NotRepo companion.
-    if matches!(changed, ChangeScan::Failed) || matches!(added, AddedScan::Failed) {
+    if matches!(changed, ChangeScan::Failed)
+        || matches!(added, AddedScan::Failed)
+        || matches!(removed, AddedScan::Failed)
+    {
         return Report {
             scan: Determination::undetermined(
                 "a `git` command failed while scanning the changeset",
@@ -394,51 +410,16 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
     let is_impl_file = |f: &str| impl_set.is_match(f) && !is_test_file(f);
 
     let test_file_changed = changed.iter().any(|f| is_test_file(f));
-
-    let mut added_impl_lines = 0usize;
-    let mut test_marker_added = false;
-    let mut impl_files: Vec<String> = Vec::new();
-    for AddedLine { file, text } in added {
-        let marker_hit = markers.is_match(text);
-        // One arm, one rule: the added line must MATCH A MARKER, and it must
-        // land somewhere a test can live (an impl file — an inline `mod tests`
-        // — or a test file).
-        //
-        // Both halves were learned by measurement. The marker requirement came
-        // first (backlog 1ff0fcc9): the comment on the impl arm always said
-        // "inline test written in an impl file", but the guard that would make
-        // it true was missing, so a marker hit in ANY changed path counted —
-        // the default set matches the bare substring `test(`, which reaches
-        // CHANGELOG.md, a Cargo.toml comment, a JSON fixture or a shell script.
-        // The test-file arm was the same hole with the halves swapped: it took
-        // ANY added line, marker or not, so a comment, an import or a single
-        // blank line under `tests/` was accepted as proof a test was written
-        // (backlog 1454ba50 — probed against a real checkout, not reasoned).
-        // "A regex matched somewhere" and "a path under tests/ was touched" are
-        // both "cannot tell whether a test was added", and resolving that to
-        // clean is the fail-open this repo exists to catch. Narrowing can only
-        // BLOCK more, never less.
-        if marker_hit && (is_impl_file(file) || is_test_file(file)) {
-            test_marker_added = true;
-            continue;
-        }
-        if is_test_file(file) {
-            continue; // a test path, but this line is not a test
-        }
-        if is_impl_file(file) && !text.trim().is_empty() {
-            added_impl_lines += 1;
-            if !impl_files.contains(file) {
-                impl_files.push(file.clone());
-            }
-        }
-    }
+    let removed = moved::removed_lines(removed);
+    let c = moved::count(added, removed, &is_impl_file, &is_test_file, &markers);
 
     Report {
         scan: Determination::known(Some(Fields {
-            added_impl_lines,
-            test_marker_added,
+            added_impl_lines: c.added_impl_lines,
+            moved_impl_lines: c.moved_impl_lines,
+            test_marker_added: c.test_marker_added,
             test_file_changed,
-            impl_files,
+            impl_files: c.impl_files,
         })),
         authorship: Authorship::not_attempted(),
         committed: Committed::not_attempted(),
@@ -453,13 +434,15 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
 ///
 /// `transcript_path` is the Stop payload's transcript (empty for a manual
 /// run). The scan is narrowed to what this session wrote — see
-/// [`scope_to_session`] — before it is classified.
+/// [`scope_to_session`] — before it is classified, removed lines included.
 pub fn evaluate(cfg: &Config, root: &Path, transcript_path: &str) -> Report {
     let changed = git::changed_files(root);
-    let added = git::added_lines(root);
-    let (changed, added, committed) = include_committed(cfg, root, transcript_path, changed, added);
-    let (changed, added, authorship) = scope_to_session(root, transcript_path, changed, added);
-    let mut report = classify(cfg, &changed, &added);
+    let git::DiffScan { added, removed } = git::diff_lines(root);
+    let (changed, added, removed, committed) =
+        include_committed(cfg, root, transcript_path, changed, added, removed);
+    let (changed, added, removed, authorship) =
+        scope_to_session(root, transcript_path, changed, added, removed);
+    let mut report = classify_with_removed(cfg, &changed, &added, &removed);
     report.authorship = authorship;
     report.committed = committed;
     report.root = Some(root.to_path_buf());
@@ -509,18 +492,19 @@ pub fn session_start(transcript_path: &str) -> Determination<i64> {
 /// The committed lines are also judged on their own
 /// ([`committed_test_evidence`], recorded in `Committed::Included {
 /// test_evidence }`): a test the session wrote AND committed is the only
-/// evidence credited across roots.
+/// evidence credited across roots. The commits' removed lines are folded in.
 pub fn include_committed(
     cfg: &Config,
     root: &Path,
     transcript_path: &str,
     changed: ChangeScan,
     added: AddedScan,
-) -> (ChangeScan, AddedScan, Committed) {
+    removed: AddedScan,
+) -> (ChangeScan, AddedScan, AddedScan, Committed) {
     let (ChangeScan::Files(mut files), AddedScan::Lines(mut lines)) =
         (changed.clone(), added.clone())
     else {
-        return (changed, added, Committed::not_attempted());
+        return (changed, added, removed, Committed::not_attempted());
     };
     let since = match session_start(transcript_path) {
         Determination::Known(t) => t,
@@ -528,13 +512,16 @@ pub fn include_committed(
             return (
                 changed,
                 added,
+                removed,
                 Committed::NotCredited {
                     why: why.to_string(),
                 },
             );
         }
     };
-    match git::committed_added_lines(root, since) {
+    let scan = git::committed_diff_lines(root, since);
+    let removed = moved::merge_removed(removed, scan.removed);
+    match scan.added {
         AddedScan::Lines(committed) => {
             for l in &committed {
                 if !files.contains(&l.file) {
@@ -548,6 +535,7 @@ pub fn include_committed(
             (
                 ChangeScan::Files(files),
                 AddedScan::Lines(lines),
+                removed,
                 Committed::Included {
                     since,
                     lines: n,
@@ -555,8 +543,9 @@ pub fn include_committed(
                 },
             )
         }
-        AddedScan::Failed => (changed, AddedScan::Failed, Committed::not_attempted()),
-        AddedScan::NotRepo => (changed, added, Committed::not_attempted()),
+        // A failed `git log` fails both sides (`merge_removed` made `removed` Failed).
+        f @ AddedScan::Failed => (changed, f, removed, Committed::not_attempted()),
+        AddedScan::NotRepo => (changed, added, removed, Committed::not_attempted()),
     }
 }
 
@@ -582,11 +571,12 @@ pub fn committed_test_evidence(
         }
     }
     files.sort();
-    let (changed, added, authorship) = scope_to_session(
+    let (changed, added, _removed, authorship) = scope_to_session(
         root,
         transcript_path,
         ChangeScan::Files(files),
         AddedScan::Lines(committed),
+        AddedScan::Lines(Vec::new()),
     );
     if let Authorship::Unverified { why } = authorship {
         return Determination::undetermined(format!(
@@ -606,11 +596,10 @@ pub fn committed_test_evidence(
 /// ruling 2026-10-17, 「検証テストの範囲は書いた文だけでいい」), via the rule
 /// shared with reviewgate: `harness_core::attribution::attribute_own_writes`.
 ///
-/// The universe attributed is `changed ∪ files of added lines`: `git status`
-/// collapses an untracked directory to `dir/`, while `added_lines` lists the
-/// files inside it, so attributing only `changed` would drop every line of a
-/// new directory. Both sides are filtered by the same kept set, so test
-/// evidence from another session's file no longer counts either.
+/// The universe attributed is `changed ∪ files of added/removed lines`: `git
+/// status` collapses an untracked directory to `dir/`, while `diff_lines`
+/// lists the files inside it; a session commit that only deleted lines from a
+/// file is in neither. All three sides are filtered by the same kept set.
 ///
 /// A `Failed` / `NotRepo` scan passes through untouched (there is nothing to
 /// attribute, and `classify` already decides those). Undetermined attribution
@@ -620,12 +609,13 @@ pub fn scope_to_session(
     transcript_path: &str,
     changed: ChangeScan,
     added: AddedScan,
-) -> (ChangeScan, AddedScan, Authorship) {
+    removed: AddedScan,
+) -> (ChangeScan, AddedScan, AddedScan, Authorship) {
     let (ChangeScan::Files(files), AddedScan::Lines(lines)) = (&changed, &added) else {
-        return (changed, added, Authorship::not_attempted());
+        return (changed, added, removed, Authorship::not_attempted());
     };
     let mut universe: Vec<String> = files.clone();
-    for l in lines {
+    for l in lines.iter().chain(moved::removed_lines(&removed)) {
         if !universe.contains(&l.file) {
             universe.push(l.file.clone());
         }
@@ -644,14 +634,16 @@ pub fn scope_to_session(
                 .filter(|l| keep.contains(&l.file))
                 .cloned()
                 .collect();
+            let removed = moved::keep_removed(&removed, &keep);
             (
                 ChangeScan::Files(files),
                 AddedScan::Lines(lines),
+                removed,
                 Authorship::Attributed { excluded },
             )
         }
         harness_core::attribution::Attribution::Undetermined { why } => {
-            (changed, added, Authorship::Unverified { why })
+            (changed, added, removed, Authorship::Unverified { why })
         }
     }
 }
@@ -872,11 +864,12 @@ fn generic_block_reason(
          `it(...)`, or a file under tests/), then finish. Prefer test-first: run \
          `tdd red --task <id>` to capture the failing test before you implement, and \
          `tdd green --task <id>` once it passes.\n\n\
-         Genuinely no test needed (pure refactor/rename/docs)? Run \
+         {hint} Genuinely no test needed (e.g. a rename that edits lines, or docs)? Run \
          `tdd skip --reason \"...\"` — one stop, THIS session only, and recorded. Disable \
          entirely: TDD_DISABLE=1 in the environment Claude Code itself was started with \
          (exporting it from a tool call does not reach this hook).",
         scope = committed.scope(),
+        hint = moved::BLOCK_HINT,
     )
 }
 
@@ -917,6 +910,7 @@ pub fn human_report(v: &Report, cfg: &Config) -> String {
         Determination::Known(Some(f)) => {
             let mut s = String::new();
             s.push_str(&format!("added impl lines: {}\n", f.added_impl_lines));
+            s.push_str(&moved::report_line(f.moved_impl_lines));
             s.push_str(&format!(
                 "test evidence:    {}\n",
                 // Report the observation, not the inference it invites
@@ -990,6 +984,7 @@ mod tests {
         AddedLine {
             file: file.to_string(),
             text: text.to_string(),
+            block: 0,
         }
     }
 
@@ -1360,6 +1355,7 @@ mod tests {
         Report {
             scan: Determination::Known(Some(Fields {
                 added_impl_lines: 12,
+                moved_impl_lines: 0,
                 test_marker_added: false,
                 test_file_changed: false,
                 impl_files: vec!["src/foo.rs".to_string(), "src/bar.rs".to_string()],
@@ -1377,6 +1373,7 @@ mod tests {
         Report {
             scan: Determination::Known(Some(Fields {
                 added_impl_lines: 12,
+                moved_impl_lines: 0,
                 test_marker_added: true,
                 test_file_changed: false,
                 impl_files: vec!["src/foo.rs".to_string()],
@@ -1676,6 +1673,7 @@ mod tests {
         Report {
             scan: Determination::Known(Some(Fields {
                 added_impl_lines: 12,
+                moved_impl_lines: 0,
                 test_marker_added: false,
                 test_file_changed: false,
                 impl_files: vec!["src/foo.rs".to_string(), ".githooks/pre-push".to_string()],
@@ -1889,6 +1887,7 @@ mod tests {
         let report = Report {
             scan: Determination::Known(Some(Fields {
                 added_impl_lines: 3,
+                moved_impl_lines: 0,
                 test_marker_added: true,
                 test_file_changed: true,
                 impl_files: vec!["src/foo.rs".to_string()],
@@ -2326,6 +2325,7 @@ mod backlog_e0269780_regression {
                 .map(|(f, t)| AddedLine {
                     file: f.to_string(),
                     text: t.to_string(),
+                    block: 0,
                 })
                 .collect(),
         );

@@ -11,21 +11,21 @@ touched_files = []
 status = "pending"
 notes = "Observed 2026-11-03 at blastguard 0.2.245 (re-measured at branch base 6e6ed586 + test, 0.2.247). A python3 -c program that only opens a file, json-parses lines and prints, with the string literal 'recursive rm' as data, is denied: rm with a wildcard can delete many files at once. Test: crates/blastguard/tests/python_c_recursive_rm_literal_fp_20261103.rs. Expected: not deny; actual: deny."
 created_at = 1793715217
-updated_at = 1793715217
+updated_at = 1793730413
 weight = 0.0
 issue_number = 1517
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1517"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
-cmd = "cargo test -p blastguard --test python_c_recursive_rm_literal_fp_20261103"
-rev = "d550d8aac0c23246f38abe03b2ee55b4bfeb7c47"
-observed_at = 1793715217
+cmd = "cargo test -p blastguard --test python_c_recursive_rm_literal_fp_20261103 -- --ignored"
+rev = "03bc65978e28d44ac6f89347fcef561fd70b1c72"
+observed_at = 1793730406
 detail = """
-exit 101: .247 (/Users/yuki/src/.harness-worktrees/file-bg-findings-20261103/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.37s
-     Running tests/python_c_recursive_rm_literal_fp_20261103.rs (target/debug/deps/python_c_recursive_rm_literal_fp_20261103-0ddb952d97f0858b)
+exit 101: uard v0.2.252 (/Users/yuki/src/.harness-worktrees/session-064f2060/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.99s
+     Running tests/python_c_recursive_rm_literal_fp_20261103.rs (target/debug/deps/python_c_recursive_rm_literal_fp_20261103-92f39f4cb8faf911)
 error: test failed, to rerun pass `-p blastguard --test python_c_recursive_rm_literal_fp_20261103`"""
 
 [[task]]

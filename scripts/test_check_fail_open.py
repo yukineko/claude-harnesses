@@ -21,7 +21,9 @@ The module under test has hyphens in its name, so it is loaded via importlib.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -575,6 +577,71 @@ class NewClassIsAdvisoryOnly(unittest.TestCase):
         hits = [(1, "Err(_) => Ok(Vec::new()),", "err-arm-empty-fallback")]
         self.assertEqual(len(hits), 1)
         self.assertEqual(fo.blocking_hits(hits), [])
+
+
+class UnknownFlagsAreRejected(unittest.TestCase):
+    """`main` recognises only `--all` and explicit paths. Any other dash-prefixed
+    argument used to be silently ignored, so a caller still passing the retired
+    whole-workspace mode flag (or a typo) silently got a DIFFERENT check (the
+    gate-surface scan) and exit 0 when that surface was clean — a retired mode
+    reinterpreted without notice (CLAUDE.md §3/§4). An unrecognised argument is
+    a cannot-determine about what the caller asked for: refuse with exit 2 and
+    name the argument on stderr."""
+
+    # Built from pieces on purpose: a repo grep for the retired flag literal
+    # must stay empty.
+    RETIRED_FLAG = "--" + "rat" + "chet"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.clean = Path(self._tmp.name) / "clean.rs"
+        self.clean.write_text("fn main() {}\n", encoding="utf-8")
+        self._saved = fo.iter_target_files
+        # Discovery stubbed to one clean file so that, if a flag were silently
+        # ignored, the fallback scan would report clean (exit 0) — exactly the
+        # silent reinterpretation this class must catch.
+        fo.iter_target_files = lambda all_crates: [self.clean]
+
+    def tearDown(self):
+        fo.iter_target_files = self._saved
+        self._tmp.cleanup()
+
+    def _run(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = fo.main(["check-fail-open.py", *args])
+        return rc, out.getvalue(), err.getvalue()
+
+    def _assert_rejected(self, flag, *extra):
+        rc, _out, err = self._run(*extra, flag)
+        self.assertEqual(rc, 2, f"unrecognised argument {flag!r} must exit 2, got {rc}")
+        self.assertIn(flag, err, f"stderr must name the unrecognised argument {flag!r}: {err!r}")
+
+    def test_made_up_flag_is_rejected(self):
+        self._assert_rejected("--no-such-flag")
+
+    def test_retired_mode_flag_is_rejected(self):
+        self._assert_rejected(self.RETIRED_FLAG)
+
+    def test_unknown_flag_alongside_all_is_rejected(self):
+        self._assert_rejected("--no-such-flag", "--all")
+
+    def test_unknown_flag_alongside_explicit_path_is_rejected(self):
+        self._assert_rejected("--no-such-flag", str(self.clean))
+
+    def test_all_still_works(self):
+        rc, _out, _err = self._run("--all")
+        self.assertNotEqual(rc, 2)
+        self.assertEqual(rc, 0)
+
+    def test_explicit_path_still_works(self):
+        rc, _out, _err = self._run(str(self.clean))
+        self.assertNotEqual(rc, 2)
+        self.assertEqual(rc, 0)
+
+    def test_no_args_still_works(self):
+        rc, _out, _err = self._run()
+        self.assertEqual(rc, 0)
 
 
 if __name__ == "__main__":

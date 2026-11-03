@@ -164,3 +164,36 @@ exit 101:  in 1.68s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.76s
      Running tests/cross_worktree_test_credit_20261103.rs (target/debug/deps/cross_worktree_test_credit_20261103-51ec6359cbedde29)
 error: test failed, to rerun pass `-p tdd --test cross_worktree_test_credit_20261103`"""
+
+[[task]]
+id = "80b18990"
+title = "blastguard: python3 stdin program using re.compile( is asked as code-building"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard,false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-03 at blastguard 0.2.245 (measured at 0.2.246 branch base 6e6ed586). A python3 - heredoc program that only calls re.compile( (regex, not code exec) returns ask: python3 - takes its program from stdin, and that program builds or decodes the code it runs (compile() ). Test: crates/blastguard/tests/python_stdin_re_compile_fp_20261103.rs. Expected allow, actual ask."
+created_at = 1793715031
+updated_at = 1793715031
+weight = 0.0
+issue_number = 1511
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1511"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_stdin_re_compile_fp_20261103"
+rev = "6ae75e70d7167765023d22bdfaaace8de942ce2a"
+observed_at = 1793715031
+detail = """
+exit 101: wed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/python_stdin_re_compile_fp_20261103.rs (target/debug/deps/python_stdin_re_compile_fp_20261103-bd5a6e9183aab4c1)
+error: test failed, to rerun pass `-p blastguard --test python_stdin_re_compile_fp_20261103`"""

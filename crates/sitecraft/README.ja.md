@@ -43,8 +43,10 @@
   - `decide check`（未回答は block、`sitecraft decide next` の案内付き）
   - `check security`
   - `serve start` → `check pages` → `serve stop` — セッションの transcript に `web_globs` に一致するファイルへの
-    Write/Edit/MultiEdit/NotebookEdit があるときだけ。transcript が無い・読めない・空・パースできない行がある・
-    書き込み先の無い書き込み呼び出しがある・sub-agent が走った（その編集は別の transcript にある）ときは
+    Write/Edit/MultiEdit/NotebookEdit があるとき、または `web_globs` に一致するパスを含む Bash コマンドがあるときだけ。
+    transcript が無い・読めない・空・パースできない行がある・書き込み先の無い書き込み呼び出しがある・
+    読み取り専用と証明できない Bash コマンド（既知の読み取り専用コマンド以外、`/dev/null` 以外へのリダイレクト、
+    コマンド置換・heredoc・subshell 等）がある・sub-agent が走った（その編集は別の transcript にある）ときは
     変更有無を判定不能として**実行する**（省略側に倒さない）。gate が起動した dev server は drop guard で必ず止める。
 - stdin が空でない非 JSON — block。空の stdin は手動実行（判定を stderr、終了コードは上の規約）。
 - give-up は bounded: 同一セッションで `max_attempts`（trust 済み設定の値を 1..=10 に clamp。未 trust なら既定 3）

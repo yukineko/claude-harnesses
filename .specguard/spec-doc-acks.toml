@@ -262,3 +262,7 @@ reason = "Pure move: the git analysers (git_subcommand_index through checkout_pa
 [[ack]]
 path = "crates/blastguard/src/detect/gh.rs"
 reason = "Pure move: the gh invocation classifier (analyze_gh and analyze_gh_api) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/sinks.rs"
+reason = "Pure move: the egress and fetched-payload-exec sinks (split_statements_into_pipe_stages through analyze_nc, incl. analyze_pipe_egress, analyze_process_substitution_egress, analyze_here_string_egress, HereStringSpan, contains_dev_tcp_or_udp, analyze_fetch) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."

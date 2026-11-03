@@ -552,6 +552,84 @@ pub(super) fn payloads_after(rest: &[&str], pos: usize) -> Vec<String> {
     out
 }
 
+/// Number of whitespace-split tokens, starting at `rest[from]`, that one shell
+/// WORD spans — `"x='a b'` + `c"` is one word over two tokens. `None` when a
+/// quote is still open at the end of `rest`: where the word ends is then
+/// undetermined.
+fn shell_word_token_span(rest: &[&str], from: usize) -> Option<usize> {
+    // `None` outside quotes, otherwise the open quote char.
+    let mut open: Option<char> = None;
+    for (n, tok) in rest[from..].iter().enumerate() {
+        let mut chars = tok.chars();
+        // An escape on the token's LAST char escapes the whitespace that split
+        // it, so the word continues into the next token.
+        let mut escaped_separator = false;
+        while let Some(c) = chars.next() {
+            match (open, c) {
+                (None, '\\') | (Some('"'), '\\') => {
+                    escaped_separator = chars.next().is_none();
+                }
+                (None, '\'' | '"') => open = Some(c),
+                (Some(q), c) if c == q => open = None,
+                _ => {}
+            }
+        }
+        if open.is_none() && !escaped_separator {
+            return Some(n + 1);
+        }
+    }
+    None
+}
+
+/// The [`payloads_after`] candidate set for an INTERPRETER's inline-eval flag
+/// (`python3 -c`, `perl -e`, `node -e`, …), minus the candidates that start
+/// INSIDE an already-delimited shell word.
+///
+/// Backlog 1943843c: `payloads_after` re-reads EVERY whitespace position after
+/// the flag as a fresh command string. Inside a quoted program that means a
+/// candidate starting mid-string: `python3 -c "if 'recursive rm' in t:
+/// print(t[:5])"` yielded the candidate `rm' in t: print(t[:5])"`, whose open
+/// `'` swallowed the rest, and `rm in t: print(t[:5])"` was denied as "rm with
+/// a wildcard" — a command line that exists nowhere: no process ever receives
+/// that text as an argument.
+///
+/// NOT covered (still denied): a program whose assignment value holds a
+/// space and is followed by a NEWLINE, `python3 -c "x='recursive rm'
+/// y=a[:1]"`. `rest` was split on all whitespace, so the newline is gone and
+/// the shell pass over the whole program reads one statement whose command
+/// word is `rm'`. That loss happens before this function. Positions strictly INSIDE a word whose quotes all close are
+/// therefore not candidates; the word's whole text still is (and is read by the
+/// full program analysis: shell pass, literal descent, destructive calls).
+///
+/// Every word BOUNDARY after the flag stays a candidate — a later
+/// `-e 'system "rm -rf /"'` (perl/ruby/node accept several) is still judged.
+/// Undetermined stays on the widening side: from the first word whose quote
+/// never closes, every remaining position is a candidate exactly as before.
+pub(super) fn interpreter_payloads_after(rest: &[&str], pos: usize) -> Vec<String> {
+    let mut keep: Vec<String> = Vec::new();
+    let mut boundary = pos + 1;
+    while boundary < rest.len() {
+        let Some(span) = shell_word_token_span(rest, boundary) else {
+            // Undetermined word end: every position, as before.
+            return payloads_after(rest, pos);
+        };
+        if let Some(word) = first_shell_word(&rest[boundary..].join(" ")) {
+            if !word.is_empty() && !keep.contains(&word) {
+                keep.push(word);
+            }
+        }
+        boundary += span;
+    }
+    // The legacy join-then-peel candidate is kept unchanged: it is not a
+    // mid-word fragment.
+    let joined = rest[pos + 1..].join(" ");
+    let legacy = strip_wrapping_quotes(&joined);
+    if !legacy.is_empty() && !keep.iter().any(|p| p == legacy) {
+        keep.push(legacy.to_string());
+    }
+    keep
+}
+
 /// Payloads for a command-string flag whose value is GLUED INSIDE the flag
 /// token — the long attached form `--command=<payload>` (value after `=`) and
 /// the short glued form `-c<payload>` (value after the `c`). `inline` is the

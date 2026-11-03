@@ -123,8 +123,8 @@ use interpreter::{
 
 use payload::{
     analyze_interpreter_stdin_exec, dash_c_payloads, inline_command_payloads,
-    interpreter_stdin_operand, payloads_after, split_substitution_opening_assignments,
-    strip_wrapping_quotes,
+    interpreter_payloads_after, interpreter_stdin_operand, payloads_after,
+    split_substitution_opening_assignments, strip_wrapping_quotes,
 };
 
 use compound::{

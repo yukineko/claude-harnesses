@@ -443,3 +443,111 @@ fn a_repeat_is_recognised_in_the_normal_flow_with_a_rising_attempt() {
         r2.stderr
     );
 }
+
+// ===========================================================================
+// tsc / gcc / clang diagnostics (single-line `file(line,col)` / `file:line:col`)
+// ===========================================================================
+
+fn tsc_output(n: usize) -> String {
+    let mut s = String::new();
+    for i in 0..n {
+        s.push_str(&format!(
+            "src/mod{i}.ts({},5): error TS2322: Type 'string' is not assignable to type 'number'.\n",
+            i + 3
+        ));
+    }
+    s.push_str(&format!("\nFound {n} errors in {n} files.\n"));
+    s
+}
+
+fn gcc_output(n: usize) -> String {
+    let mut s = String::new();
+    for i in 0..n {
+        s.push_str(&format!(
+            "src/mod{i}.c:{}:5: error: use of undeclared identifier 'v{i}'\n    v{i} = 1;\n    ^\n",
+            i + 3
+        ));
+    }
+    s.push_str(&format!("{n} errors generated.\nmake: *** [all] Error 1\n"));
+    s
+}
+
+/// Few tsc diagnostics: each one's code, message and `file(line,col)` survives,
+/// as does the summary line.
+#[test]
+fn digest_of_tsc_output_keeps_every_diagnostic_and_the_summary() {
+    // 5 diagnostics + the summary: the first is outside the last 5 lines.
+    let f = fixture("tsc", &tsc_output(5), "");
+    let reason = reason_of(&stop(&f, "s-tsc"));
+    for i in 0..5 {
+        let loc = format!("src/mod{i}.ts({},5): error TS2322", i + 3);
+        assert!(
+            reason.contains(&loc),
+            "tsc diagnostic {loc} was dropped\n--- reason ---\n{reason}"
+        );
+    }
+    assert!(
+        reason.contains("Found 5 errors in 5 files."),
+        "tsc summary dropped\n--- reason ---\n{reason}"
+    );
+}
+
+/// Many tsc diagnostics: not tail-only. The FIRST diagnostic and the summary
+/// are shown, and the rest are counted.
+#[test]
+fn digest_of_many_tsc_diagnostics_is_not_tail_only() {
+    let f = fixture("tsc-many", &tsc_output(40), "");
+    let reason = reason_of(&stop(&f, "s-tsc-many"));
+    assert!(
+        reason.contains("src/mod0.ts(3,5): error TS2322"),
+        "the first tsc diagnostic was dropped (tail-only display)\n--- reason ---\n{reason}"
+    );
+    assert!(
+        reason.contains("Found 40 errors in 40 files."),
+        "tsc summary dropped\n--- reason ---\n{reason}"
+    );
+    assert!(
+        reason.contains("more"),
+        "dropped diagnostics must be counted\n--- reason ---\n{reason}"
+    );
+}
+
+/// Few gcc/clang diagnostics over several files plus a trailing summary.
+#[test]
+fn digest_of_gcc_output_keeps_every_diagnostic_and_the_summary() {
+    let f = fixture("gcc", &gcc_output(4), "");
+    let reason = reason_of(&stop(&f, "s-gcc"));
+    for i in 0..4 {
+        let loc = format!(
+            "src/mod{i}.c:{}:5: error: use of undeclared identifier 'v{i}'",
+            i + 3
+        );
+        assert!(
+            reason.contains(&loc),
+            "gcc diagnostic {loc} was dropped\n--- reason ---\n{reason}"
+        );
+    }
+    assert!(
+        reason.contains("4 errors generated."),
+        "gcc summary dropped\n--- reason ---\n{reason}"
+    );
+}
+
+/// Many gcc diagnostics: the first diagnostic and the summary are shown.
+#[test]
+fn digest_of_many_gcc_diagnostics_is_not_tail_only() {
+    let f = fixture("gcc-many", &gcc_output(40), "");
+    let reason = reason_of(&stop(&f, "s-gcc-many"));
+    assert!(
+        reason.contains("src/mod0.c:3:5: error: use of undeclared identifier 'v0'"),
+        "the first gcc diagnostic was dropped (tail-only display)\n--- reason ---\n{reason}"
+    );
+    assert!(
+        reason.contains("40 errors generated."),
+        "gcc summary dropped\n--- reason ---\n{reason}"
+    );
+    assert!(
+        reason.contains("more"),
+        "dropped diagnostics must be counted\n--- reason ---\n{reason}"
+    );
+}

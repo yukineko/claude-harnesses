@@ -24,6 +24,10 @@ path = "crates/blastguard/src/detect/heredoc.rs"
 reason = "Pure move: the here-document recognisers and body strippers (here_document_delimiter_is_quoted through here_document_consumer_is_data) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
 
 [[ack]]
+path = "crates/blastguard/src/detect/substitution.rs"
+reason = "Pure move: the process-/command-substitution payload scanners (process_substitution_payloads through command_substitution_payloads, Stop, scan_balanced) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
 path = "crates/blastguard/src/detect/executors.rs"
 reason = "blastguard.md's detect section covers shells and eval wrappers but not the awk system()/git -c pager/env -S executor rules this file adds (daf7611b). Spec debt."
 

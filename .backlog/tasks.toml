@@ -1,34 +1,4 @@
 [[task]]
-id = "1943843c"
-title = "blastguard: read-only python3 -c with 'recursive rm' string data denied as rm with a wildcard"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard,false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-03 at blastguard 0.2.245 (re-measured at branch base 6e6ed586 + test, 0.2.247). A python3 -c program that only opens a file, json-parses lines and prints, with the string literal 'recursive rm' as data, is denied: rm with a wildcard can delete many files at once. Test: crates/blastguard/tests/python_c_recursive_rm_literal_fp_20261103.rs. Expected: not deny; actual: deny."
-created_at = 1793715217
-updated_at = 1793730413
-weight = 0.0
-issue_number = 1517
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1517"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test python_c_recursive_rm_literal_fp_20261103 -- --ignored"
-rev = "03bc65978e28d44ac6f89347fcef561fd70b1c72"
-observed_at = 1793730406
-detail = """
-exit 101: uard v0.2.252 (/Users/yuki/src/.harness-worktrees/session-064f2060/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.99s
-     Running tests/python_c_recursive_rm_literal_fp_20261103.rs (target/debug/deps/python_c_recursive_rm_literal_fp_20261103-92f39f4cb8faf911)
-error: test failed, to rerun pass `-p blastguard --test python_c_recursive_rm_literal_fp_20261103`"""
-
-[[task]]
 id = "a09d8297"
 title = "condukt circuit breaker: releasing a claimed item excluded for overlap is logged 'unspecified' and counted as a failure"
 project = "/Users/yuki/src/harness"
@@ -185,3 +155,65 @@ E   STDERR:check-test-weakening: undetermined — crates/demo/tests/macro_tests.
 =========================== short test summary info ============================
 FAILED scripts/test_ctw_macro_rules_test_fn.py::MacroRulesTestFn::test_new_file_with_macro_rules_tests_is_clean
 ========================= 1 failed, 1 passed in 1.45s =========================="""
+
+[[task]]
+id = "d0d5cc67"
+title = "blastguard: --all inside a git stash -m message is read as the -a flag"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-04 on deployed blastguard 0.2.251 (and at 0.2.254): git stash push -m "stray cargo fmt --all reformat" -- a/b.rs is DENIED with 'git stash -u/-a removes untracked (and with -a, ignored) files from the working tree, like git clean'. The same command with -m "plain msg" is allowed. Controls git stash push --all / -u must stay non-allow. Reading (a) defect: quoted message text is scanned as flags. (b) intentional: none found. Distinguish: the RED test."""
+created_at = 1793743978
+updated_at = 1793743978
+weight = 0.0
+issue_number = 1526
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1526"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test git_stash_message_text_flag_fp_20261104"
+rev = "610675b3ff82f30bb03f04020c2812eb57df6f4e"
+observed_at = 1793743978
+detail = """
+exit 101: astguard v0.2.256 (/Users/yuki/src/.harness-worktrees/session-6d697f68-c/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/git_stash_message_text_flag_fp_20261104.rs (target/debug/deps/git_stash_message_text_flag_fp_20261104-bfa0d4964d3d6ade)
+error: test failed, to rerun pass `-p blastguard --test git_stash_message_text_flag_fp_20261104`"""
+
+[[task]]
+id = "ce04adeb"
+title = "blastguard: python -c spaced string literal followed by a newline is denied as rm with a wildcard"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-04 at blastguard 0.2.252 (after the 1943843c fix): python3 -c "x='recursive rm'<newline>y=a[:1]" (no shell sink) is DENIED 'rm with a wildcard can delete many files at once'. Cause per the 1943843c implementer: tokens are split on all whitespace before word-boundary analysis, so the newline is lost and assignment skipping takes rm' as the command word. Fix needs newline-preserving tokens or quote-aware assignment skipping. Control: a real os.system('rm -rf /x') sink stays non-allow."""
+created_at = 1793743981
+updated_at = 1793743981
+weight = 0.0
+issue_number = 1527
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1527"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_c_newline_after_spaced_literal_fp_20261104"
+rev = "610675b3ff82f30bb03f04020c2812eb57df6f4e"
+observed_at = 1793743981
+detail = """
+exit 101: /src/.harness-worktrees/session-6d697f68-c/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/python_c_newline_after_spaced_literal_fp_20261104.rs (target/debug/deps/python_c_newline_after_spaced_literal_fp_20261104-29f50aa0723aadfc)
+error: test failed, to rerun pass `-p blastguard --test python_c_newline_after_spaced_literal_fp_20261104`"""

@@ -65615,3 +65615,61 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "8041551fe0e010b56f6529d4b495f4c76d5ccf19"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "1943843c"
+title = "blastguard: read-only python3 -c with 'recursive rm' string data denied as rm with a wildcard"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard,false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-03 at blastguard 0.2.245 (re-measured at branch base 6e6ed586 + test, 0.2.247). A python3 -c program that only opens a file, json-parses lines and prints, with the string literal 'recursive rm' as data, is denied: rm with a wildcard can delete many files at once. Test: crates/blastguard/tests/python_c_recursive_rm_literal_fp_20261103.rs. Expected: not deny; actual: deny."
+created_at = 1793715217
+updated_at = 1793743967
+weight = 0.0
+issue_number = 1517
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1517"
+issue_closed_at = 1793743969
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_c_recursive_rm_literal_fp_20261103 -- --ignored"
+rev = "03bc65978e28d44ac6f89347fcef561fd70b1c72"
+observed_at = 1793730406
+detail = """
+exit 101: uard v0.2.252 (/Users/yuki/src/.harness-worktrees/session-064f2060/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.99s
+     Running tests/python_c_recursive_rm_literal_fp_20261103.rs (target/debug/deps/python_c_recursive_rm_literal_fp_20261103-92f39f4cb8faf911)
+error: test failed, to rerun pass `-p blastguard --test python_c_recursive_rm_literal_fp_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test python_c_recursive_rm_literal_fp_20261103"
+exit = 0
+passed = 1
+rev = "610675b3ff82f30bb03f04020c2812eb57df6f4e"
+observed_at = 1793743952
+output_digest = "sha256:4486a311fc5e1b7ea67a53b475836bc3c4098510659cc61a4e4ca25b1c16a0f6"
+excerpt = """
+
+running 1 test
+test fa_python_c_reading_file_with_recursive_rm_literal_is_not_denied ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/python_c_recursive_rm_literal_fp_20261103.rs (target/debug/deps/python_c_recursive_rm_literal_fp_20261103-680beac9b97673cb)
+"""
+
+[task.closure.red]
+rev = "a015dbef833f0297e672353c025540324355e488"
+exit = 101
+kind = "behavioural"

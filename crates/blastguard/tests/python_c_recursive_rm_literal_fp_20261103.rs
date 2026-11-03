@@ -70,7 +70,6 @@ fn verdict(cwd: &Path, command: &str) -> (String, String) {
 /// many files at once"). It only reads a file and prints; 'recursive rm' is
 /// string data inside the Python program.
 #[test]
-#[ignore = "backlog 1943843c: open defect, remove ignore when fixed"]
 fn fa_python_c_reading_file_with_recursive_rm_literal_is_not_denied() {
     let dir = fresh_dir("fa");
     let cmd = r#"python3 -c "

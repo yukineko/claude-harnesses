@@ -98,7 +98,7 @@ _tm_now; _tm_total_t0="$_tm_v"
 _tm_start_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
 _tm_name=""; _tm_sha=""; _tm_t0=""
 _tm_sum=""; _tm_json=""
-_tm_extra_sum=""; _tm_extra_json=""
+_tm_extra_sum=""; _tm_extra_json=""; _tm_extra_field=""
 timing_shas=""
 # _tm_secs <t0>: elapsed seconds since t0 into _tm_s ("" when unknown).
 _tm_secs() {
@@ -115,7 +115,7 @@ _tm_labelonly() {
 }
 phase_begin() {
     _tm_name="$1"; _tm_sha="${2:-}"
-    _tm_extra_sum=""; _tm_extra_json=""
+    _tm_extra_sum=""; _tm_extra_json=""; _tm_extra_field=""
     _tm_now; _tm_t0="$_tm_v"
 }
 phase_end() {
@@ -130,12 +130,12 @@ phase_end() {
     fi
     _tm_entry="$_tm_entry,\"secs\":${_tm_s:-null}"
     [ -n "$_tm_extra_json" ] && _tm_entry="$_tm_entry,\"targets\":{$_tm_extra_json}"
-    _tm_entry="$_tm_entry}"
+    _tm_entry="$_tm_entry$_tm_extra_field}"
     _tm_label="$_tm_label ${_tm_s:-?}s"
     [ -n "$_tm_extra_sum" ] && _tm_label="$_tm_label [$_tm_extra_sum]"
     _tm_sum="${_tm_sum:+$_tm_sum, }$_tm_label"
     _tm_json="${_tm_json:+$_tm_json,}$_tm_entry"
-    _tm_name=""; _tm_sha=""; _tm_extra_sum=""; _tm_extra_json=""
+    _tm_name=""; _tm_sha=""; _tm_extra_sum=""; _tm_extra_json=""; _tm_extra_field=""
 }
 # Pass-through filter for check-compile-fail.py's stderr: every line is
 # re-emitted unchanged to stdout, and each "running <target> ..." line opens a
@@ -554,6 +554,143 @@ if [ -z "${pushed_shas:-}" ]; then
         exit 1
     fi
 fi
+
+# --- bounded cleanup of the shared target dir (maintenance, no verdict) ------
+# $TYPECHECK_TARGET persists across pushes and nothing pruned it: every source
+# change leaves a new hashed artifact set behind. Measured 2026-11-03 on this
+# repo's main clone: debug/deps held 488,578 entries (oldest from 2026-08-06),
+# so every cargo run fingerprint-scanned half a million files. When debug/deps
+# holds more than PREPUSH_TARGET_MAX_DEPS entries (default 20000; a value that
+# is not a non-negative integer falls back to the default) the whole dir is
+# removed, so the next build is one cold build.
+#
+# Deleting is the destructive side, so every "cannot determine" here means DO
+# NOT delete: no python3 (it does the count and the lock test), an entry count
+# that cannot be read, a sibling pre-push whose prepush-typecheck.<pid>
+# worktree exists and whose pid is alive (kill -0), or a cargo lock under the
+# dir that is held or whose state cannot be read (non-blocking flock on each
+# known .cargo-lock: debug/, release/, <triple>/debug/, tests/trybuild/debug/,
+# tests/trybuild/<triple>/debug/; cargo takes them with std File::try_lock /
+# lock, i.e. flock(2), on macOS and Linux). Each skip prints one line saying
+# why. A sibling dir whose pid cannot be signalled is treated as stale.
+# Residual race: a cargo that starts between the lock test and the rm can lose
+# its artifacts mid-build; that build then fails, which blocks that push (the
+# restrictive side); it cannot make one pass.
+#
+# Nothing here changes a block/allow outcome: every branch falls through to the
+# type check below. The outcome is recorded in the timing as the
+# target-cleanup phase (deps_entries_seen, threshold, action).
+phase_begin target-cleanup
+tc_max="${PREPUSH_TARGET_MAX_DEPS:-20000}"
+case "$tc_max" in
+    ''|*[!0-9]*)
+        echo "pre-push: PREPUSH_TARGET_MAX_DEPS='$tc_max' is not a non-negative integer — using 20000." >&2
+        tc_max=20000 ;;
+esac
+tc_deps="$TYPECHECK_TARGET/debug/deps"
+tc_count=""
+tc_action=""
+if [ ! -e "$tc_deps" ]; then
+    tc_count=0
+    tc_action="kept"
+elif ! command -v python3 >/dev/null 2>&1; then
+    tc_action="skipped-undetermined"
+    echo "pre-push: no python3 to count the entries in $tc_deps — not cleaning the shared target dir (continuing)." >&2
+else
+    # Counted with os.scandir (no per-entry stat) and stopped at threshold+1:
+    # "more than the threshold" is all that is decided, and the full count is
+    # slow on a bloated dir (measured 2026-11-03 on the 488,578-entry dir:
+    # `ls -f | awk` 60s, a full scandir 3.55s, scandir stopped at 20001 0.19s).
+    # So tc_count is exact up to the threshold and a lower bound (threshold+1)
+    # above it. A failed count prints nothing and is undetermined, never 0.
+    tc_count="$(python3 -c '
+import os, sys
+limit = int(sys.argv[2])
+n = 0
+with os.scandir(sys.argv[1]) as it:
+    for _ in it:
+        n += 1
+        if n > limit:
+            break
+print(n)
+' "$tc_deps" "$tc_max" 2>/dev/null)" || tc_count=""
+    case "$tc_count" in ''|*[!0-9]*) tc_count="" ;; esac
+    if [ -z "$tc_count" ]; then
+        tc_action="skipped-undetermined"
+        echo "pre-push: could not count the entries in $tc_deps — not cleaning the shared target dir (continuing)." >&2
+    elif [ "$tc_count" -le "$tc_max" ]; then
+        tc_action="kept"
+    else
+        tc_busy=""
+        for tc_d in "$GIT_COMMON"/prepush-typecheck.*; do
+            [ -e "$tc_d" ] || continue
+            tc_pid="${tc_d##*.}"
+            case "$tc_pid" in ''|*[!0-9]*) continue ;; esac
+            [ "$tc_pid" = "$$" ] && continue
+            if kill -0 "$tc_pid" 2>/dev/null; then
+                tc_busy="another pre-push (pid $tc_pid) is type-checking with it"
+                break
+            fi
+        done
+        if [ -z "$tc_busy" ]; then
+            python3 -c '
+import fcntl, glob, os, sys
+t = sys.argv[1]
+c = {os.path.join(t, "debug", ".cargo-lock"),
+     os.path.join(t, "release", ".cargo-lock"),
+     os.path.join(t, "tests", "trybuild", "debug", ".cargo-lock")}
+c.update(glob.glob(os.path.join(t, "*", "debug", ".cargo-lock")))
+c.update(glob.glob(os.path.join(t, "tests", "trybuild", "*", "debug", ".cargo-lock")))
+for p in sorted(c):
+    try:
+        fd = os.open(p, os.O_RDONLY)
+    except FileNotFoundError:
+        continue
+    except OSError:
+        sys.exit(2)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(3)
+    except OSError:
+        sys.exit(2)
+    finally:
+        os.close(fd)
+sys.exit(0)
+' "$TYPECHECK_TARGET" 2>/dev/null
+            tc_lock_rc=$?
+            case "$tc_lock_rc" in
+                0) ;;
+                3) tc_busy="a cargo process holds a lock under it" ;;
+                *) tc_busy="its cargo locks could not be tested (rc $tc_lock_rc)"
+                   tc_action="skipped-undetermined" ;;
+            esac
+        fi
+        if [ -n "$tc_busy" ]; then
+            [ -n "$tc_action" ] || tc_action="skipped-busy"
+            echo "pre-push: $tc_deps holds more than $tc_max entries but $tc_busy — not cleaning it (continuing)." >&2
+        else
+            case "$GIT_COMMON" in
+                /?*)
+                    echo "pre-push: $tc_deps holds more than $tc_max entries — removing the shared target dir; this push builds cold." >&2
+                    if rm -rf "$GIT_COMMON/prepush-typecheck-target"; then
+                        tc_action="removed"
+                    else
+                        tc_action="rm-failed"
+                        echo "pre-push: could not fully remove $GIT_COMMON/prepush-typecheck-target (continuing)." >&2
+                    fi ;;
+                *)
+                    tc_action="skipped-undetermined"
+                    echo "pre-push: git common dir is not an absolute path — not cleaning the shared target dir (continuing)." >&2 ;;
+            esac
+        fi
+    fi
+fi
+# deps_entries_seen is exact when <= threshold, else threshold+1 (counting
+# stops there), so seen > threshold reads as "at least that many".
+_tm_extra_sum="deps seen ${tc_count:-?} (threshold $tc_max), $tc_action"
+_tm_extra_field=",\"deps_entries_seen\":${tc_count:-null},\"threshold\":$tc_max,\"action\":\"$tc_action\""
+phase_end
 
 for sha in $pushed_shas; do
     phase_begin typecheck "$sha"

@@ -617,6 +617,20 @@ def scan_file(path: Path) -> list[tuple[int, str, str]]:
 def main(argv: list[str]) -> int:
     args = argv[1:]
 
+    # Only `--all` and explicit paths are recognised. Any other dash-prefixed
+    # argument (a typo, or a retired mode flag) must not be silently ignored:
+    # that would run a different check than the caller asked for and report
+    # clean. Refuse instead (cannot-determine -> exit 2).
+    unknown = [a for a in args if a.startswith("-") and a != "--all"]
+    if unknown:
+        print(
+            f"fail-open-guard: unrecognised argument(s): {' '.join(unknown)}. "
+            f"Only `--all` and explicit file paths are accepted. The per-file "
+            f"gate is scripts/check-fail-open-diff.py.",
+            file=sys.stderr,
+        )
+        return 2
+
     all_crates = "--all" in args
     explicit = [Path(a) for a in args if not a.startswith("-")]
     if explicit:

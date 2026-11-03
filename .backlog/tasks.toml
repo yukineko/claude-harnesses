@@ -26,3 +26,60 @@ scripts/test_guard_maintree_bash_foreign_merge_window.py:100: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_guard_maintree_bash_foreign_merge_window.py::ForeignMergeWindow::test_foreign_merge_window_does_not_refuse_unrelated_command
 ========================= 1 failed, 1 passed in 2.09s =========================="""
+
+[[task]]
+id = "e0085090"
+title = "blastguard FP: quoted git commit -F heredoc body trailer read as relative redirect EOF"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = 'Observed 2026-11-03 in a subagent session (Ask hardened to deny, stalled work). Verbatim reason: [> EOF is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve - it cannot tell whether this lands in a system directory or on a protected gate/config path, and refuses to guess]. Shapes reproduced on 0.2.215 (both ask; the -m equivalents allow): (1) cd ABS && git add QUOTED-PATH && git commit -q -F - <<EOF-quoted with message ending in the Co-Authored-By ... <noreply@anthropic.com> trailer; (2) same with unquoted git add path but a command (git log -1) after the closing EOF. The cd target is an absolute literal path, so could-not-statically-resolve is itself a wrong reason. Suspected location (read, not tested): crates/blastguard/src/detect.rs strip_here_document_body / opener_consumer / permitted_prefix_line (~3865-3990): literal() rejects quoted git add paths and any non-inert line after the close keeps the body, so the trailer > plus the EOF line tokenise as > EOF. Fix must keep controls in the same test file green (real relative > out after cd "$(...)" still asks).'
+created_at = 1793668854
+updated_at = 1793668854
+weight = 0.0
+issue_number = 1489
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1489"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_opener_misparse_fp_20261103 fp1_quoted_heredoc_after_absolute_cd_is_not_a_relative_redirect"
+rev = "10edd4d8eb70a8d1a5d32ffb842b9ac5a6585125"
+observed_at = 1793668854
+detail = """
+exit 101: piling blastguard v0.2.216 (/Users/yuki/src/.harness-worktrees/blastguard-heredoc-fp/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.11s
+     Running tests/heredoc_opener_misparse_fp_20261103.rs (target/debug/deps/heredoc_opener_misparse_fp_20261103-bb221da0ad197b11)
+error: test failed, to rerun pass `-p blastguard --test heredoc_opener_misparse_fp_20261103`"""
+
+[[task]]
+id = "ef015a66"
+title = "blastguard FP: backticks in quoted python3 heredoc body read as run-time command word"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-03 in subagent sessions (Ask hardened to deny). First report: cat > /abs/file.md <<EOF-quoted with Markdown backtick body denied with [the command word decide is an expansion whose value only exists at run time - blastguard cannot tell what program this runs]; that cat shape did NOT reproduce on 0.2.215 in tests (pinned as a passing regression test in the same file; the exact original command was not captured). Live reproduced shape: the reporting subagent own python3 - <<PY-quoted call (program doing s.replace(a, Run BACKTICK sitecraft decide purpose --text BACKTICK x)) was denied with [the command word BACKTICK-BACKTICK-sitecraft is an expansion whose value only exists at run time - blastguard cannot tell what program this runs]; the same program without backticks is allowed. In a quoted heredoc the body is never expanded, so backticks are literal. Reason site: crates/blastguard/src/detect.rs ~8629 (CommandWordOrigin NoReachingAssignment/AssignedButUnknowable arm); the body reaches the per-segment command-word loop because strip_here_document_body only removes bodies for cat/tee/git commit readers (python3 is not a data reader), so the inline-eval/segment scan tokenises backtick text inside the python string as a substitution. Control in same file: unquoted heredoc body with $(rm -rf /) must stay not-allowed."
+created_at = 1793668869
+updated_at = 1793668869
+weight = 0.0
+issue_number = 1490
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1490"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_opener_misparse_fp_20261103 fp2_backticks_in_quoted_python_heredoc_body_are_not_command_words"
+rev = "10edd4d8eb70a8d1a5d32ffb842b9ac5a6585125"
+observed_at = 1793668869
+detail = """
+exit 101: rds
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.33s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/heredoc_opener_misparse_fp_20261103.rs (target/debug/deps/heredoc_opener_misparse_fp_20261103-bb221da0ad197b11)
+error: test failed, to rerun pass `-p blastguard --test heredoc_opener_misparse_fp_20261103`"""

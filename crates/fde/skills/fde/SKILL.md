@@ -64,8 +64,13 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
      実 LLM agent の挙動は証明していない。
 4. 登録: `fde begin [TARGET] --spec <dir>/specs/<spec-id>.toml`(spec は target の**外**であること。中なら exit 1)。
    これで target は「登録済み・未批准」になり、gate が target への変更を拒否し始める。
-   gate が有効なとき、未批准の間は cwd が target 内の Bash も、target の root パスを文字列で含む Bash も拒否される
-   (target 内のテスト・ビルド・git コマンドも含む)。target を読むのは Read / Grep / Glob で行う。
+   gate が有効なとき、未批准の間は cwd が target 内の Bash も、target の root パスを文字列で含む Bash も、
+   語を解決すると target(またはその worktree)に入る Bash(`../proj/x`、`rm -rf proj`、symlink 経由、
+   `--out=proj/x`、`~/` で HOME が target など)も拒否される(target 内のテスト・ビルド・git コマンドも含む)。
+   さらに未批准の target がある間は、gate が解決できない語 — `$`・バッククォート・引用符の外のグロブ
+   (`*` `?` `[`)・`{`・`~user`・閉じていない引用符 — を含む Bash は、target と無関係でも拒否される
+   (判定不能は deny)。変数や置換を使わず、パスを字義どおりに書くこと。拒否を別構文で回避しない。
+   target を読むのは Read / Grep / Glob で行う。
    **例外**: 未批准の間でも `fde status` / `fde report` / `fde begin` は Bash で実行してよい。ただし
    **ちょうど 1 回の単独呼び出し**に限る(`fde status [TARGET]` のように書く。`;` `&&` `||` `|` `&` 改行による連結、
    リダイレクト、`$(...)` 等の置換、引用符、環境変数の前置、`./fde` や絶対パス、`command` / `env` / `sh -c` 等の

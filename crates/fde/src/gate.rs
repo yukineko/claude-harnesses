@@ -45,9 +45,16 @@
 //!      Only its own former path stays denied, as a `Violation` whose reason
 //!      says it is gone and names `fde forget <root>`: an Edit-tool path
 //!      lying (as given, or canonicalized) under the recorded root, or a Bash
-//!      call whose cwd (as given, or canonicalized) lies under it or whose
-//!      command text contains it. The step-6 `fde status|report|begin`
-//!      exception applies here too.
+//!      call whose cwd (as given, or canonicalized) lies under it, whose
+//!      command text contains it, or one of whose resolvable words (step 6,
+//!      Bash) lies under it — joined onto the cwd lexically or through
+//!      [`canonical_lenient`]. A word whose canonicalization fails with an
+//!      error other than `NotFound` (e.g. `notes.txt/x`, `notes.txt` a file)
+//!      makes the call `Undetermined` (deny) for the gone target, with a
+//!      reason naming the word: the gate cannot show it avoids the former
+//!      path. Unresolvable words (`$`, globs, …) do not deny for a gone target
+//!      (it is not guarded). The step-6 `fde status|report|begin` exception
+//!      applies to the `Violation` only.
 //!    * any other stat error — `Undetermined` (deny), whatever the call
 //!      touches: the root may still be there.
 //! 6. Of the present targets, every one whose [`crate::ratify::status`] is
@@ -62,15 +69,36 @@
 //!      lexically). It is inside a target when it lies under the root or
 //!      under any of its work trees.
 //!    * Bash: inside when the canonicalized payload `cwd` lies in the area,
-//!      or when the command string contains the text of the root or of any
-//!      work tree path (canonical or as git printed it). Command parsing is
-//!      not attempted: a target named through a relative path from outside,
-//!      or through a non-canonical symlink spelling, is not detected.
+//!      when the command string contains the text of the root or of any
+//!      work tree path (canonical or as git printed it), or when one of the
+//!      command's words resolves into the area. Words come from a small
+//!      conservative lexer ([`crate::bashwords`]): split on unquoted
+//!      whitespace (newline included) and `;&|()<>` (so `>file` / `2>file`
+//!      yield `file`), single quotes literal, double quotes keep their content,
+//!      backslash escapes; a leading `~` / `~/` is `$HOME`; for a word with an
+//!      `=` (`--opt=value`, `NAME=value`) the value is a further word. Each
+//!      word is joined onto the canonical cwd (unless absolute) and passed
+//!      through [`canonical_lenient`], so `../proj/x`, `proj`, `link/x`
+//!      (symlink into the target) and a relative path into a linked worktree
+//!      are all inside. A word is *unresolvable* when it holds an unquoted or
+//!      double-quoted `$` or backtick, an unquoted `*` `?` `[` `{`, a dangling
+//!      backslash, a `~user` prefix, or `~` with `HOME` unset / empty; an
+//!      unterminated quote makes the whole command unresolvable.
 //!    * Decision: inside an `Unratified` target is a `Violation`; inside a
 //!      target whose status is `Undetermined` is `Undetermined`. Failing to
 //!      canonicalize the path, or to determine the area (git probe failure;
 //!      only needed when the path / cwd / command is not already under the
 //!      root), is `Undetermined` — even for a path that might lie elsewhere.
+//!      For Bash, when nothing touches the area but a word is unresolvable or
+//!      its path cannot be canonicalized (an error other than `NotFound`, e.g.
+//!      `notes.txt/x` with `notes.txt` a file), the call is `Undetermined` for
+//!      every guarded target, with a reason naming the word. With no guarded
+//!      target (none registered, or all ratified) words are never judged.
+//!    * Not seen (limits, not fixed): aliases, shell functions and `PATH`
+//!      resolution of a different binary; directory changes inside the
+//!      command (`cd x && ...` — every relative word resolves against the
+//!      payload cwd); paths a program constructs at run time; here-doc bodies
+//!      are lexed as words like the rest of the command.
 //!    * Exception (user ruling 2026-11-03), Bash only: a Bash call that
 //!      touches a target whose status is `Unratified` is not a violation when
 //!      its command is an exact single `fde status|report|begin` invocation
@@ -263,28 +291,84 @@ fn area(t: &ResolvedTarget) -> Determination<Area> {
     Determination::known(Area { canonical, spelled })
 }
 
-/// Whether the request touches `area` (`Some(description)`) or not (`None`).
-fn touches(req: &Checked, area: &Area) -> Option<String> {
+/// Whether a request touches an area.
+enum Touch {
+    /// It does (description).
+    Hit(String),
+    /// It cannot be told (reason): a Bash word is unresolvable or its path
+    /// cannot be canonicalized.
+    Unknown(String),
+    /// It does not.
+    Miss,
+}
+
+/// Whether the request touches `area` (step 6).
+fn touches(req: &Checked, area: &Area) -> Touch {
     match req {
         Checked::Path { tool, path, .. } => area
             .canonical
             .iter()
             .find(|a| path.starts_with(a))
-            .map(|a| format!("{tool} of {} lies in {}", path.display(), a.display())),
-        Checked::Bash { cwd, command, .. } => {
+            .map_or(Touch::Miss, |a| {
+                Touch::Hit(format!(
+                    "{tool} of {} lies in {}",
+                    path.display(),
+                    a.display()
+                ))
+            }),
+        Checked::Bash {
+            cwd,
+            command,
+            words,
+            ..
+        } => {
             if let Some(a) = area.canonical.iter().find(|a| cwd.starts_with(a)) {
-                return Some(format!(
+                return Touch::Hit(format!(
                     "Bash runs in {} inside {}",
                     cwd.display(),
                     a.display()
                 ));
             }
-            area.canonical
+            if let Some(a) = area
+                .canonical
                 .iter()
                 .chain(area.spelled.iter())
                 .filter_map(|a| a.to_str())
                 .find(|a| command.contains(a))
-                .map(|a| format!("the Bash command names {a}"))
+            {
+                return Touch::Hit(format!("the Bash command names {a}"));
+            }
+            let mut unknown = None;
+            for w in words {
+                match w {
+                    BashWord::Path {
+                        spelled,
+                        canonical: Determination::Known(p),
+                        ..
+                    } => {
+                        if let Some(a) = area.canonical.iter().find(|a| p.starts_with(a)) {
+                            return Touch::Hit(format!(
+                                "the Bash word `{spelled}` resolves to {} inside {}",
+                                p.display(),
+                                a.display()
+                            ));
+                        }
+                    }
+                    BashWord::Path {
+                        spelled,
+                        canonical: Determination::Undetermined(why),
+                        ..
+                    } => {
+                        unknown.get_or_insert_with(|| {
+                            format!("the Bash word `{spelled}` cannot be resolved: {why}")
+                        });
+                    }
+                    BashWord::Unresolvable(why) => {
+                        unknown.get_or_insert_with(|| why.clone());
+                    }
+                }
+            }
+            unknown.map_or(Touch::Miss, Touch::Unknown)
         }
     }
 }
@@ -376,13 +460,63 @@ enum Checked {
         cwd: PathBuf,
         raw_cwd: PathBuf,
         command: String,
+        words: Vec<BashWord>,
     },
+}
+
+/// One path candidate of a Bash command ([`crate::bashwords::word_paths`]).
+enum BashWord {
+    /// A resolvable word: `canonical` is `cwd.join(word)` (cwd canonical)
+    /// through [`canonical_lenient`]; `raw` is `raw_cwd.join(word)` with `.` /
+    /// `..` applied lexically (for the gone-root match).
+    Path {
+        spelled: String,
+        canonical: Determination<PathBuf>,
+        raw: PathBuf,
+    },
+    /// A word the gate cannot resolve (reason names the word).
+    Unresolvable(String),
+}
+
+/// `base.join(rel)` with `.` skipped and `..` popping, purely lexically.
+fn lexical_join(base: &Path, rel: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in base.join(rel).components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Resolve the path words of `command` against `cwd` (canonical) and
+/// `raw_cwd` (as given); `HOME` from the environment expands `~`.
+fn bash_words(command: &str, cwd: &Path, raw_cwd: &Path) -> Vec<BashWord> {
+    let home = std::env::var("HOME").ok();
+    crate::bashwords::word_paths(command, home.as_deref())
+        .into_iter()
+        .map(|w| match w {
+            crate::bashwords::WordPath::Literal { spelled, path } => {
+                let rel = Path::new(&path);
+                BashWord::Path {
+                    spelled,
+                    canonical: canonical_lenient(&cwd.join(rel)),
+                    raw: lexical_join(raw_cwd, rel),
+                }
+            }
+            crate::bashwords::WordPath::Unresolvable { why } => BashWord::Unresolvable(why),
+        })
+        .collect()
 }
 
 /// Whether the request touches the gone root `root` (`Some(description)`):
 /// the raw or canonicalized path / cwd lies under it, or the Bash command
 /// text contains it. No git probe: the repository is gone with it.
-fn touches_gone(req: &Checked, root: &Path) -> Option<String> {
+fn touches_gone(req: &Checked, root: &Path) -> Touch {
     match req {
         Checked::Path {
             tool,
@@ -391,22 +525,67 @@ fn touches_gone(req: &Checked, root: &Path) -> Option<String> {
         } => [raw_path, path]
             .into_iter()
             .find(|p| p.starts_with(root))
-            .map(|p| format!("{tool} of {} lies in {}", p.display(), root.display())),
+            .map_or(Touch::Miss, |p| {
+                Touch::Hit(format!(
+                    "{tool} of {} lies in {}",
+                    p.display(),
+                    root.display()
+                ))
+            }),
         Checked::Bash {
             cwd,
             raw_cwd,
             command,
+            words,
         } => {
             if let Some(c) = [raw_cwd, cwd].into_iter().find(|c| c.starts_with(root)) {
-                return Some(format!(
+                return Touch::Hit(format!(
                     "Bash runs in {} inside {}",
                     c.display(),
                     root.display()
                 ));
             }
-            root.to_str()
-                .filter(|r| command.contains(r))
-                .map(|r| format!("the Bash command names {r}"))
+            if let Some(r) = root.to_str().filter(|r| command.contains(r)) {
+                return Touch::Hit(format!("the Bash command names {r}"));
+            }
+            let mut unknown = None;
+            for w in words {
+                // Unresolvable words do not deny for a gone target (it is not
+                // guarded; coordinator ruling pending, see the module doc).
+                let BashWord::Path {
+                    spelled,
+                    canonical,
+                    raw,
+                } = w
+                else {
+                    continue;
+                };
+                if raw.starts_with(root) {
+                    return Touch::Hit(format!(
+                        "the Bash word `{spelled}` resolves to {} inside {}",
+                        raw.display(),
+                        root.display()
+                    ));
+                }
+                match canonical {
+                    Determination::Known(p) if p.starts_with(root) => {
+                        return Touch::Hit(format!(
+                            "the Bash word `{spelled}` resolves to {} inside {}",
+                            p.display(),
+                            root.display()
+                        ));
+                    }
+                    Determination::Known(_) => {}
+                    // Fail-closed: the gate cannot show this word avoids the
+                    // gone root.
+                    Determination::Undetermined(why) => {
+                        unknown.get_or_insert_with(|| {
+                            format!("the Bash word `{spelled}` cannot be resolved: {why}")
+                        });
+                    }
+                }
+            }
+            unknown.map_or(Touch::Miss, Touch::Unknown)
         }
     }
 }
@@ -468,6 +647,7 @@ fn evaluate_with(req: Request, state: &Path) -> Verdict {
         },
         Request::Bash { cwd, command } => match canonical_lenient(&cwd) {
             Determination::Known(c) => Checked::Bash {
+                words: bash_words(&command, &c, &cwd),
                 cwd: c,
                 raw_cwd: cwd,
                 command,
@@ -491,16 +671,25 @@ fn evaluate_with(req: Request, state: &Path) -> Verdict {
         match target::presence(&t.root) {
             Determination::Known(target::Presence::Present) => {}
             Determination::Known(target::Presence::Gone) => {
-                if let Some(hit) = touches_gone(&checked, &t.root) {
-                    if !fde_allowance {
-                        verdicts.push(Verdict::violation(format!(
-                            "{hit}: registered target {root} is gone (its directory no longer \
-                             exists) but its fde state remains; nothing may be created there \
-                             until the human runs `fde forget {root}` (human-only: ask them to \
-                             run `! fde forget {root}`)",
-                            root = t.root.display()
-                        )));
+                match touches_gone(&checked, &t.root) {
+                    Touch::Hit(hit) => {
+                        if !fde_allowance {
+                            verdicts.push(Verdict::violation(format!(
+                                "{hit}: registered target {root} is gone (its directory no \
+                                 longer exists) but its fde state remains; nothing may be \
+                                 created there until the human runs `fde forget {root}` \
+                                 (human-only: ask them to run `! fde forget {root}`)",
+                                root = t.root.display()
+                            )));
+                        }
                     }
+                    Touch::Unknown(why) => verdicts.push(Verdict::undetermined(format!(
+                        "{why}; registered target {root} is gone (its directory no longer \
+                         exists) and the gate cannot tell whether the call reaches its former \
+                         path (the human can drop its state with `fde forget {root}`)",
+                        root = t.root.display()
+                    ))),
+                    Touch::Miss => {}
                 }
                 continue;
             }
@@ -519,9 +708,12 @@ fn evaluate_with(req: Request, state: &Path) -> Verdict {
             canonical: vec![t.root.clone()],
             spelled: vec![t.root.clone()],
         };
-        let hit = match touches(&checked, &root_only) {
-            Some(h) => Some(h),
-            None => match area(t) {
+        let touch = match touches(&checked, &root_only) {
+            Touch::Hit(h) => Touch::Hit(h),
+            // Not inside the root itself (or not decidable there): the whole
+            // area decides, so a word landing in a linked worktree is a hit
+            // rather than merely unknown.
+            Touch::Unknown(_) | Touch::Miss => match area(t) {
                 Determination::Known(a) => touches(&checked, &a),
                 Determination::Undetermined(why) => {
                     verdicts.push(why.into_verdict());
@@ -529,7 +721,19 @@ fn evaluate_with(req: Request, state: &Path) -> Verdict {
                 }
             },
         };
-        let Some(hit) = hit else { continue };
+        let hit = match touch {
+            Touch::Hit(h) => h,
+            Touch::Miss => continue,
+            Touch::Unknown(why) => {
+                verdicts.push(Verdict::undetermined(format!(
+                    "{why}; registered target {} is guarded (not ratified, or its \
+                     ratification cannot be determined), so the gate cannot tell whether the \
+                     call touches it",
+                    t.root.display()
+                )));
+                continue;
+            }
+        };
         if fde_allowance && unratified_reason.is_ok() {
             continue;
         }

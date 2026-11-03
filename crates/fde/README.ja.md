@@ -114,7 +114,19 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
 全 worktree)への編集を拒否する。
 
 - Edit 系: 対象パスを正規化し、保護範囲の中なら deny。
-- Bash: 正規化した cwd が保護範囲の中、またはコマンド文字列が root / worktree のパスを文字列として含むなら deny。
+- Bash: 正規化した cwd が保護範囲の中、コマンド文字列が root / worktree のパスを文字列として含む、または
+  コマンドの語を解決したパスが保護範囲の中なら deny。語は小さな保守的 lexer で切り出す: 引用符の外の空白(改行を
+  含む)と `;&|()<>` で区切り(`>file` / `2>file` の `file` も 1 語)、シングルクォートは字義どおり、ダブルクォートは
+  中身を保つ、バックスラッシュは次の 1 文字をエスケープする。先頭の `~` / `~/` は `$HOME` に展開し、`=` を含む語
+  (`--opt=value`・`NAME=value`)は値の部分も 1 語として調べる。各語は payload の cwd(正規化後)に join して
+  `canonical_lenient`(存在する最も近い祖先を正規化 = symlink を辿り、残りは字句的に適用)を通すので、
+  `../proj/x`・`rm -rf proj`・target を指す symlink 経由の `link/x`・linked worktree への相対パスも検出する。
+  保護対象がある間、**解決できない語**があり、かつ保護範囲に触れると判明していなければ、その target について
+  判定不能(deny)とし、理由に語そのものを含める。解決できない語: 引用符の外またはダブルクォート内の `$`・バッククォート、
+  引用符の外の `*` `?` `[` `{`、末尾の孤立したバックスラッシュ、`~user` 形式、`HOME` が未設定・空のときの `~`。
+  閉じていない引用符はコマンド全体を解決不能にする。語のパスの正規化が `NotFound` 以外のエラー(例: 通常ファイル
+  `notes.txt` に対する `notes.txt/x`)で失敗した場合も判定不能(deny)。保護対象が無い(未登録、または全部批准済み)
+  ときは語を判定に使わない。
   例外(2026-11-03 のユーザー裁定): 状態が「未批准」の target に対しては、`fde status` / `fde report` /
   `fde begin` の**ちょうど 1 回の単独呼び出し**だけ allow する。判定は保守的な許可リストで、コマンド全体が
   英数字と `-_./=:,@+%` だけの語を空白/タブで区切ったもので、第 1 語がちょうど `fde`、第 2 語が
@@ -130,7 +142,9 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
 - **消えた(gone)target**: 登録済み target の root が存在しない(`symlink_metadata` が `NotFound`)ことを
   観測したら、それは判定済みの事実として扱い、保護対象から外す(git の照会もしない)。無関係なパスの編集・Bash は
   止めない。ただし元の場所は deny のまま: root の下を指す Edit 系パス(そのまま、または正規化後)、cwd が root の下
-  にある Bash、root の文字列を含む Bash は、`gone` と `fde forget <root>` を理由に含む deny になる(上の
+  にある Bash、root の文字列を含む Bash、解決した語(上記。cwd に字句的に join したもの、または `canonical_lenient`
+  を通したもの)が root の下にある Bash は(語の正規化が `NotFound` 以外のエラーで失敗した Bash は判定不能として
+  deny。下記「制限」)、`gone` と `fde forget <root>` を理由に含む deny になる(上の
   `fde status|report|begin` の例外はここでも効く)。人間が `fde forget <root>` を実行すると解除される。
   root の stat が `NotFound` 以外のエラー(権限など)で失敗したら判定不能として、何に触れる呼び出しでも deny する。
 - 空・壊れた payload、読めない state、壊れた登録(`fde forget` で消すまで)、matcher 外のツール(登録 target が
@@ -168,12 +182,19 @@ state dir は環境変数 `FDE_STATE_DIR`(設定済みかつ空でない場合)�
 ## 制限
 
 - 対象プラットフォームは Unix 系(WSL 含む)。Windows は対象外(上記「対象プラットフォーム」。制限ではなく対象範囲)。
-- **gate の Bash 判定は文字列照合**。コマンドの構文解析はしない。外から相対パスで target を指す、正規形でない
-  symlink 経由で指す、といった書き方は検出しない。
+- **gate の Bash 判定は語の解決まで**(上記 gate 節)。シェルの完全な構文解析はしない。次は**検出しない(未対応)**:
+  alias・シェル関数・`PATH` 解決による別バイナリの実行。コマンド内のディレクトリ移動(`cd x && ...`。相対語は
+  すべて payload の cwd に対して解決する)。プログラムが実行時に組み立てるパス(パスを計算するスクリプトなど)。
+  here-doc の本文はコマンドの他の部分と同じく語として切り出される(本文中の `$` などで deny になりうる)。
+  また保護対象がある間は `$`・バッククォート・グロブ・`{`・`~user` を含む Bash は無関係な作業でも deny される
+  (判定不能は制限側)。
 - **登録済み target を削除すると**、その target は「消えた(gone)」扱いになり、無関係な作業は止めなくなるが、
-  元の root の下(Edit 系のパス・Bash の cwd・root を文字列で含む Bash)は deny され続け、`fde status <root>` は
-  1(`gone`)を返す。state dir を消すのは人間の `fde forget <root>` で、モデルには許されない。gate の元の場所の判定は
-  root の文字列照合と cwd の比較だけで、相対パスや別の symlink の綴りで元の場所を指す Bash は検出しない。
+  元の root の下(Edit 系のパス・Bash の cwd・root を文字列で含む Bash・解決した語が root の下にある Bash)は
+  deny され続け、`fde status <root>` は 1(`gone`)を返す。state dir を消すのは人間の `fde forget <root>` で、
+  モデルには許されない。消えた root に対しては解決できない語(`$`・グロブなど)では deny しない(保護対象ではない
+  ため)。ただし語のパスの正規化が `NotFound` 以外のエラー(例: 通常ファイル `notes.txt` に対する `notes.txt/x`)で
+  失敗したときは、元の場所を避けていると示せないので判定不能(deny、理由に語を含める)。元の root を指す dangling な symlink 経由の語(`link/x`、`link -> <消えた root>`)は、symlink の先が
+  存在しないので辿れず検出しない。
 - **壊れた登録**(読めない・パースできない `registration.json` など)がある間は、gate はすべてを deny する。
   人間が `fde forget [TARGET]` で消すまで解除されない。
 - **HEAD は前進のみ許す**。批准後に HEAD を reset・別ブランチへ切り替え・履歴の書き換えをすると verify / report は 2。

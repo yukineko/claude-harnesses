@@ -70,6 +70,7 @@
 //! non-empty, otherwise `.fde` under the home directory. A state directory
 //! that cannot be resolved is undetermined (exit 2).
 
+mod bashwords;
 mod evidence;
 mod gate;
 mod git;

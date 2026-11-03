@@ -44,7 +44,16 @@ Re-ratifying at the same HEAD keeps the records counting. A record from an
 earlier fde that matches the fingerprint but has no `ratified_head` is not
 placed in any epoch: recording, `verify` and `report` exit 2 while it exists.
 
-Before ratification the gate denies Bash run in, or naming, the target, with
+Before ratification the gate denies Bash run in, or naming, the target. A
+command is split into words by a small conservative lexer (quotes, backslash
+escapes, `;&|()<>` operators, redirect targets, `~` as `$HOME`, the value of
+`--opt=value` / `NAME=value`); each word is resolved against the payload cwd
+and canonicalized (symlinks followed), so `../proj/x`, `rm -rf proj` from the
+parent or `link/x` through a symlink are caught. While a target is guarded, a
+word the gate cannot resolve (`$`, backtick, unquoted glob or `{`, `~user`, an
+unterminated quote) or cannot canonicalize denies the call as undetermined.
+Not seen: aliases / functions / `PATH` resolution, `cd` inside the command,
+paths computed at run time; here-doc bodies are lexed as words. There is
 one exception: an exact single `fde status`, `fde report` or `fde begin`
 invocation (no chaining, redirects, substitution, quoting, env prefixes or
 wrappers) is allowed. `fde ratify` is human-only: after the human approves,

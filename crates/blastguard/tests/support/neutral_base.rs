@@ -16,14 +16,29 @@
 //!     temp safe root, so a recursive `rm` there is a confined Ask instead of
 //!     the Deny the negative controls pin.
 //!
+//!   * a BUILD-OUTPUT component in the real path, when the fixture sits in a git
+//!     checkout (observed 2026-11-03 in `~/.condukt/worktrees/<wt>`): the cargo
+//!     target dir is `<checkout>/target`, which git ignores, so the deletion
+//!     principle's class 4 (`src/deletion.rs`, `BUILD_OUTPUT_NAMES`: "ignored
+//!     build output in a git work tree") makes a recursive `rm` of the victim
+//!     an Allow whenever the operand's SPELLING reaches the work tree without a
+//!     symlink. Measured with the real hook binary: a fixture under
+//!     `<git checkout>/target/tmp` Allow even with `HOME=/nonexistent`; the same
+//!     directory spelled through a symlink in `temp_dir()` Deny; a git repo
+//!     whose ignored dir is named `ign` instead of `target` Deny ("ignored (not
+//!     build output)"). The `.harness-worktrees` layout only passed because the
+//!     alias it forced happened to put a symlink in the spelling.
+//!
 //! So the base has a PHYSICAL directory (where the files live) and a LEXICAL
 //! spelling (what the tests hand to the hook: payload `cwd`,
 //! `CLAUDE_PROJECT_DIR`, `HOME`, operands). The lexical spelling is the physical
 //! directory itself when its canonical path has no `.harness-worktrees`
-//! component, else a symlink to it in `std::env::temp_dir()` (whose own path
-//! must not contain one). blastguard canonicalises the anchor and every operand,
-//! so the alias changes only the spelling the root derivation reads, not where
-//! anything resolves.
+//! component and no build-output component
+//! (`blastguard::deletion::BUILD_OUTPUT_NAMES`), else a symlink to it in
+//! `std::env::temp_dir()` (whose own path must not contain a
+//! `.harness-worktrees` component). blastguard canonicalises the anchor and
+//! every operand, so the alias changes only the spelling the root derivation
+//! and the class-4 symlink check read, not where anything resolves.
 //!
 //! Every test-binary RUN gets its own base: `<parent>/run-<pid>-<nanos>[-n]`
 //! under the candidate's `blastguard-worktree-root-fixtures` directory, created
@@ -169,13 +184,14 @@ fn prune_stale_runs(parent: &Path) {
 
 /// The lexical spelling of the physical parent: itself, or its alias.
 fn alias_parent(physical: &Path) -> Result<PathBuf, String> {
-    if !has_worktree_component(physical) {
+    if !has_worktree_component(physical) && !has_build_output_component(physical) {
         return Ok(physical.to_path_buf());
     }
     let tmp = std::env::temp_dir();
     if has_worktree_component(&tmp) {
         return Err(format!(
-            "real path has a `{WORKTREE_DIR_NAME}` component and temp_dir() {} has one too, \
+            "real path needs an alias spelling (a `{WORKTREE_DIR_NAME}` or build-output \
+             component) and temp_dir() {} has a `{WORKTREE_DIR_NAME}` component too, \
              so no alias spelling is available",
             tmp.display()
         ));
@@ -207,6 +223,14 @@ fn alias_parent(physical: &Path) -> Result<PathBuf, String> {
 fn has_worktree_component(p: &Path) -> bool {
     p.components()
         .any(|c| c.as_os_str() == std::ffi::OsStr::new(WORKTREE_DIR_NAME))
+}
+
+fn has_build_output_component(p: &Path) -> bool {
+    p.components().any(|c| {
+        blastguard::deletion::BUILD_OUTPUT_NAMES
+            .iter()
+            .any(|n| c.as_os_str() == std::ffi::OsStr::new(n))
+    })
 }
 
 fn fnv1a(bytes: &[u8]) -> u64 {

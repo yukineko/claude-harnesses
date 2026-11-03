@@ -44,6 +44,10 @@ path = "crates/blastguard/src/detect/cwd.rs"
 reason = "Pure move: the shell working-directory tracker (CwdState through segment_cwd_states, verb_operands_are_rewritten, SubshellCwdScopes, cwd_rewrite_was_lost, line_changes_cwd_before) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
 
 [[ack]]
+path = "crates/blastguard/src/detect/compound.rs"
+reason = "Pure move: the compound-command views (COMPOUND_PREFIX_WORDS through strip_unmatched_close_parens, analyze_expanded_data through loop_variants) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
 path = "crates/blastguard/src/detect/executors.rs"
 reason = "blastguard.md's detect section covers shells and eval wrappers but not the awk system()/git -c pager/env -S executor rules this file adds (daf7611b). Spec debt."
 

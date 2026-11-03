@@ -153,3 +153,35 @@ test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
      Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-1a53e298d311f026)
 error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""
+
+[[task]]
+id = "fa35fde1"
+title = "check-test-weakening: #[test] inside a macro_rules! template is UNDETERMINED (blocks a pure test addition)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "check-test-weakening",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Repro scripts/test_ctw_macro_rules_test_fn.py (RED 3/3, committed 74ebc047). test_fn_assertions cannot attribute '#[test] fn $name()' in a macro template (FN_DECL_RE misses $name) and raises Undetermined, blocking a commit that only adds a new test file. Observed on crates/fde/tests/gone_target_unresolvable.rs 2026-11-04; worked around by writing explicit fns (no justification line). Control: explicit fns are clean."
+created_at = 1793729585
+updated_at = 1793729585
+weight = 0.0
+issue_number = 1525
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1525"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_ctw_macro_rules_test_fn.py"
+rev = "74ebc04756d34fa67fa8f19cd8d07b29b44f3a8b"
+observed_at = 1793729585
+detail = """
+exit 1: 
+E   STDERR:check-test-weakening: undetermined — crates/demo/tests/macro_tests.rs: a #[test] attribute with no `fn` after it
+=========================== short test summary info ============================
+FAILED scripts/test_ctw_macro_rules_test_fn.py::MacroRulesTestFn::test_new_file_with_macro_rules_tests_is_clean
+========================= 1 failed, 1 passed in 1.45s =========================="""

@@ -94,3 +94,35 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
      Running tests/python_stdin_git_string_fp_20261103.rs (target/debug/deps/python_stdin_git_string_fp_20261103-752bb3b1e3271a9d)
 error: test failed, to rerun pass `-p blastguard --test python_stdin_git_string_fp_20261103`"""
+
+[[task]]
+id = "658b7839"
+title = "blastguard FP4: python3 -c read-only open() misattributed as the write target"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Cause: in a python3 -c program, blastguard pairs the mode 'w' of the scratch open('<scratch>/task-%s.json'%t['id'],'w') with the earlier read-only open('<decomposition.json>') (default mode), so the read-only file is reported as the write target. Observed 2026-11-03, blastguard 0.2.218. Repro: crates/blastguard/tests/python_c_read_open_misattributed_fp_20261103.rs (fp4_ RED; control must stay non-allow). Expected: same verdict as the command without the read open (allow in a temp-dir scratch). Verbatim denial reason: "`python3` is invoked with an inline-eval flag, and it writes `/Users/yuki/.condukt/state/harness-e77d23c7/run-20261103-102800-88064.decomposition.json` (`,'w')`) — it exists, and it is not inside a git work tree — nothing holds a second copy of these bytes". Denied command: python3 -c "import json;d=json.load(open('/Users/yuki/.condukt/state/harness-e77d23c7/run-20261103-102800-88064.decomposition.json')) / for t in d['tasks']: open('<scratchpad>/task-%s.json'%t['id'],'w').write(json.dumps(t,ensure_ascii=False,indent=1)) / print('ok')""""
+created_at = 1793675446
+updated_at = 1793675446
+weight = 0.0
+issue_number = 1506
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1506"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_c_read_open_misattributed_fp_20261103 fp4_"
+rev = "3b0d2e89dc53dedb26b69dbe7c6de874ff2abfd1"
+observed_at = 1793675446
+detail = """
+exit 101:  passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.06s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/python_c_read_open_misattributed_fp_20261103.rs (target/debug/deps/python_c_read_open_misattributed_fp_20261103-3db3e44148957530)
+error: test failed, to rerun pass `-p blastguard --test python_c_read_open_misattributed_fp_20261103`"""

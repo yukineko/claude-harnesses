@@ -353,6 +353,66 @@ fn a_repeat_is_recognised_when_only_the_record_path_differs() {
     );
 }
 
+/// The retention failure text is per-run state too (it lists whichever old
+/// directories could not be removed). Same failure twice, but the second run's
+/// retention error lists one more directory: it must still be a repeat.
+/// Pins the `<why>` placeholder in the repeat identity against removal.
+#[test]
+fn a_repeat_is_recognised_when_only_the_retention_failure_text_differs() {
+    let f = fixture(
+        "rep-why",
+        "boom: always the same\n",
+        "reset_after_secs = 1\n",
+    );
+    let make_victim = |name: &str| -> PathBuf {
+        let sub = f.sd.join("records").join(name).join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("f.log"), "x").unwrap();
+        std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o555)).unwrap();
+        sub
+    };
+    let age = |name: &str| {
+        let d = std::fs::File::open(f.sd.join("records").join(name)).unwrap();
+        d.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1000))
+            .unwrap();
+    };
+    let sub_a = make_victim("aaa-victim-a");
+    age("aaa-victim-a");
+    for i in 0..25 {
+        std::fs::create_dir_all(f.sd.join(format!("records/old{i:02}"))).unwrap();
+    }
+    let r1 = stop(&f, "s-rep-why");
+    let reason1 = reason_of(&r1);
+    let sub_b = make_victim("aaa-victim-b");
+    age("aaa-victim-b");
+    std::thread::sleep(std::time::Duration::from_millis(2300));
+    let r2 = stop(&f, "s-rep-why");
+    for s in [&sub_a, &sub_b] {
+        std::fs::set_permissions(s, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    assert!(
+        reason1.contains("record retention failed: ") && reason1.contains("aaa-victim-a"),
+        "setup: the 1st run must display a retention failure naming victim a\n{reason1}"
+    );
+    assert!(
+        r2.stdout.contains("aaa-victim-b") || waived(&r2) || block_reason(&r2).is_some(),
+        "setup: the 2nd run produced no verdict\n{}",
+        r2.stdout
+    );
+    if let Some(reason2) = block_reason(&r2) {
+        assert!(
+            reason2.contains("aaa-victim-b"),
+            "setup: the 2nd retention error must differ from the 1st (name victim b)\n{reason2}"
+        );
+    }
+    assert!(
+        waived(&r2),
+        "the 2nd identical failure must be waived as a repeat although the retention text differs\n--- 1st reason ---\n{reason1}\n--- 2nd stdout ---\n{}\n--- stderr ---\n{}",
+        r2.stdout,
+        r2.stderr
+    );
+}
+
 /// Same session, but the failing test differs: NOT a repeat, still a block.
 #[test]
 fn a_different_failure_is_not_a_repeat() {
@@ -691,6 +751,38 @@ fn digest_keeps_a_clang_summary_that_is_followed_by_more_lines() {
     assert!(
         reason.contains("2 errors generated."),
         "the clang summary line was dropped\n--- reason ---\n{reason}"
+    );
+}
+
+/// A `-->` line belongs to a header only within three lines of it: the third
+/// line after the header still counts, the fourth does not. The far one is
+/// something else (a note quoting a path) and must not be attributed to the
+/// error. Pins the location window against removal.
+#[test]
+fn digest_attributes_a_location_line_only_within_three_lines_of_the_header() {
+    let mut raw = String::from("   Compiling app v0.1.0 (/p/app)\n");
+    raw.push_str("error[E0001]: near error\n  |\n  |\n --> src/near.rs:11:5\n\n");
+    raw.push_str("error[E0002]: far error\n  |\n  |\n  |\n --> src/far.rs:77:5\n\n");
+    for i in 0..8 {
+        raw.push_str(&format!(
+            "warning: filler {i}\n --> src/filler{i}.rs:{}:1\n\n",
+            i + 1
+        ));
+    }
+    raw.push_str("error: could not compile `app` (bin \"app\") due to 2 previous errors\n");
+    let f = fixture("diag-window", &raw, "");
+    let reason = reason_of(&stop(&f, "s-diag-window"));
+    assert!(
+        reason.contains("error[E0002]: far error"),
+        "the far error's header must be shown\n--- reason ---\n{reason}"
+    );
+    assert!(
+        reason.contains("src/near.rs:11:5"),
+        "a location 3 lines after the header is attributed\n--- reason ---\n{reason}"
+    );
+    assert!(
+        !reason.contains("src/far.rs:77:5"),
+        "a location 4 lines after the header must not be attributed\n--- reason ---\n{reason}"
     );
 }
 

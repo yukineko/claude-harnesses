@@ -60,7 +60,7 @@ Both must exit 0.
   `--allow-removed FILE`; anything else missing or new is exit 1.
 
 `ordered` tolerates rustfmt re-wrapping (line breaks, a trailing comma before the
-closing bracket) and an inline `mod name { ... }` moved to `name.rs`. The `tdd`
+closing bracket where it cannot be semantic — a wrapped 1-tuple keeps it) and an inline `mod name { ... }` moved to `name.rs`. The `tdd`
 gate recognises pure moves: moved lines are not new implementation.
 
 ## 4. Prove the whole range

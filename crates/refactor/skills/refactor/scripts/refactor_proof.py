@@ -255,17 +255,157 @@ def tokens(lines):
 
     rustfmt re-wrapping (typically a signature that grew past the width after a
     visibility change) moves line breaks and adds a trailing comma before the
-    closing bracket of the wrapped list. So: a comma that ENDS a line whose next
-    line STARTS with a closing bracket is dropped (a one-line `(x,)` 1-tuple is
-    untouched), brackets/commas/semicolons are split into their own tokens, and
-    whitespace is then insignificant.
+    closing bracket of the wrapped list. Brackets/commas/semicolons are split into
+    their own tokens and whitespace is insignificant. A comma that ENDS a line
+    (as code, not inside a literal or comment) whose next line STARTS with the
+    matching closing bracket is a re-wrap candidate (a one-line `(x,)` never is),
+    and is dropped only where it cannot be semantic — see Brackets.droppable().
+    Otherwise it is kept, which fails toward exit 1.
     """
     out = []
+    br = Brackets()
     for i, s in enumerate(lines):
-        if s.endswith(",") and i + 1 < len(lines) and lines[i + 1][:1] in (")", "]", "}"):
-            s = s[:-1]
+        br.feed(s)
         out.extend(BRACKET.sub(r" \1 ", s).split())
+        if (s.endswith(",") and i + 1 < len(lines) and lines[i + 1][:1] in (")", "]", "}")
+                and br.droppable(lines[i + 1][0])):
+            out.pop()
     return out
+
+
+RUST_KEYWORDS = frozenset(
+    "as async await break const continue crate dyn else enum extern false fn for if impl "
+    "in let loop match mod move mut pub ref return self Self static struct super trait true "
+    "type unsafe use where while yield box".split()
+)
+OPENERS = {"(": ")", "[": "]", "{": "}"}
+IDENT = re.compile(r"[A-Za-z0-9_]")
+RAW_START = re.compile(r"r(#*)\"")
+
+
+class Brackets:
+    """Line-fed lexer tracking the open-bracket stack, skipping string / char
+    literals and comments, so a trailing comma's group can be judged.
+
+    Each frame records its kind, how many top-level commas it holds so far, and
+    whether its `(` follows a non-keyword identifier or macro name (a call, a fn
+    signature, a tuple-struct argument list). Anything it cannot read for sure
+    (mismatched bracket, unterminated literal at the comma) makes droppable()
+    answer False.
+    """
+
+    def __init__(self):
+        self.stack = []  # [kind, commas, callable]
+        self.broken = False
+        self.in_str = False
+        self.raw_hashes = None  # inside r#"..."# when not None
+        self.block = 0  # nested /* */ depth
+        self.last = ""  # last significant token (identifier, `name!`, or punct)
+        self.code_comma_at_end = False
+
+    def feed(self, s):
+        self.code_comma_at_end = False
+        k, n = 0, len(s)
+        while k < n:
+            c = s[k]
+            if self.block:
+                if s.startswith("*/", k):
+                    self.block -= 1
+                    k += 2
+                elif s.startswith("/*", k):
+                    self.block += 1
+                    k += 2
+                else:
+                    k += 1
+                continue
+            if self.in_str:
+                if c == "\\":
+                    k += 2
+                    continue
+                if c == '"':
+                    self.in_str = False
+                    self.last = "lit"
+                k += 1
+                continue
+            if self.raw_hashes is not None:
+                end = '"' + "#" * self.raw_hashes
+                if s.startswith(end, k):
+                    k += len(end)
+                    self.raw_hashes = None
+                    self.last = "lit"
+                else:
+                    k += 1
+                continue
+            if s.startswith("//", k):
+                break
+            if s.startswith("/*", k):
+                self.block = 1
+                k += 2
+                continue
+            m = RAW_START.match(s, k)
+            if m and (k == 0 or not IDENT.match(s[k - 1])
+                      or (s[k - 1] == "b" and (k < 2 or not IDENT.match(s[k - 2])))):
+                self.raw_hashes = len(m.group(1))
+                k = m.end()
+                continue
+            if c == '"':
+                self.in_str = True
+                k += 1
+                continue
+            if c == "'":
+                if k + 1 < n and s[k + 1] == "\\":
+                    j = s.find("'", k + 2)
+                    if j < 0:
+                        self.broken = True
+                        return
+                    k = j + 1
+                    self.last = "lit"
+                    continue
+                if k + 2 < n and s[k + 2] == "'":
+                    k += 3
+                    self.last = "lit"
+                    continue
+                k += 1  # lifetime: the identifier that follows is read normally
+                continue
+            if IDENT.match(c):
+                j = k
+                while j < n and IDENT.match(s[j]):
+                    j += 1
+                word = s[k:j]
+                if j < n and s[j] == "!":
+                    word += "!"
+                    j += 1
+                self.last = word
+                k = j
+                continue
+            if c in OPENERS:
+                callable_ = (c == "(" and re.match(r"^[A-Za-z_]\w*!?$", self.last) is not None
+                             and self.last.rstrip("!") not in RUST_KEYWORDS)
+                self.stack.append([c, 0, callable_])
+            elif c in (")", "]", "}"):
+                if not self.stack or OPENERS[self.stack[-1][0]] != c:
+                    self.broken = True
+                else:
+                    self.stack.pop()
+            elif c == ",":
+                if self.stack:
+                    self.stack[-1][1] += 1
+                if k == n - 1:
+                    self.code_comma_at_end = True
+            if not c.isspace():
+                self.last = c
+            k += 1
+
+    def droppable(self, close):
+        if (self.broken or not self.code_comma_at_end or self.in_str
+                or self.raw_hashes is not None or self.block or not self.stack):
+            return False
+        kind, commas, callable_ = self.stack[-1]
+        if OPENERS[kind] != close:
+            return False
+        # `]` / `}`: a trailing comma never changes meaning. `(`: `(x,)` is a
+        # 1-tuple and `(x)` is not, so only with 2+ elements or after a callee.
+        return kind != "(" or commas >= 2 or callable_
 
 
 def cmd_ordered(a):

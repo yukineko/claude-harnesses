@@ -38,8 +38,13 @@ as a difference.
 The N-lines removed from `<from>` by commit C, in order, equal the N-lines of `<to>`, a
 file C creates; and `<from>` gained nothing but use/mod lines (a line replaced in place
 by itself modulo N — a visibility change — is not a gain). Compared as token sequences
-in which whitespace is insignificant, brackets/commas are separate tokens, and a comma
-ending a line before a line that starts with a closing bracket is dropped, so rustfmt
+in which whitespace is insignificant and brackets/commas are separate tokens. A comma
+that ends a line (as code, not inside a literal or comment) before a line starting with
+the matching closing bracket is dropped only where it cannot be semantic: always before
+`]` / `}`, and before `)` only when the group has 2+ elements or the `(` follows a
+non-keyword identifier or macro name (a call or fn signature). A wrapped 1-tuple
+`(\n x,\n)` keeps its comma, so turning it into `(x)` is exit 1. Anything the bracket
+tracker cannot read for sure keeps the comma (fails toward exit 1). So rustfmt
 re-wrapping compares equal. `mod NAME { BODY }` removed and `NAME.rs` (or
 `NAME/mod.rs`) created with BODY is also equal. `<to>` absent at C, present before C,
 `<from>` absent before C, or C without a parent is exit 2.

@@ -1125,7 +1125,7 @@
     {
       "name": "refactor",
       "description": "Pay-down skill for oversized source files: split one module per commit as pure moves and prove each step behaviour-preserving with a stdlib proof tool (ordered move, line multiset, test-set comparison).",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "quality",
       "keywords": [
         "refactor",

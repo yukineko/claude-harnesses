@@ -90,7 +90,24 @@ fn green_cmd_that_resets_head_back_is_refused() {
     assert_code(&ev(&e, "red", &cmd), 0, "RED (non-moving run)");
     fs::write(e.root().join("done.txt"), "").unwrap();
     assert_refused_records_nothing(&e, "GREEN moving HEAD back", || ev(&e, "green", &cmd));
-    assert_code(&e.fde(&["evidence", "verify"]), 1, "R1 has RED only");
+    // The GREEN was not recorded: the ledger still holds exactly the RED.
+    let (_root, key) = common::parse_resolved(&e.fde(&["resolve"]));
+    let ledger = e.state.path.join("targets").join(key).join("evidence.json");
+    let v: serde_json::Value = serde_json::from_slice(&fs::read(&ledger).unwrap()).unwrap();
+    let kinds: Vec<&str> = v["records"]
+        .as_array()
+        .unwrap_or_else(|| panic!("evidence.json lacks array \"records\": {v}"))
+        .iter()
+        .map(|r| r["kind"].as_str().unwrap_or("?"))
+        .collect();
+    assert_eq!(kinds, vec!["red"], "only the RED may be in the ledger: {v}");
+    // The CMD moved HEAD (to A) below the counted RED record (head B), so
+    // R <= H <= C fails and verify is undetermined (2), not "RED only" (1).
+    assert_code(
+        &e.fde(&["evidence", "verify"]),
+        2,
+        "HEAD (A) is now below the RED record's head (B): R <= H <= C fails, verify is undetermined",
+    );
 }
 
 #[test]

@@ -266,3 +266,7 @@ reason = "Pure move: the gh invocation classifier (analyze_gh and analyze_gh_api
 [[ack]]
 path = "crates/blastguard/src/detect/sinks.rs"
 reason = "Pure move: the egress and fetched-payload-exec sinks (split_statements_into_pipe_stages through analyze_nc, incl. analyze_pipe_egress, analyze_process_substitution_egress, analyze_here_string_egress, HereStringSpan, contains_dev_tcp_or_udp, analyze_fetch) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/high_blast.rs"
+reason = "Pure move: the high-blast Ask tier (analyze_high_blast_tier through high_blast_outside_tree_rm, incl. high_blast_git_force_push, refspec_source_is_force, high_blast_schemeless_upload) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."

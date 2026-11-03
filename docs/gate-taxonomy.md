@@ -59,8 +59,10 @@
   ブロックするのは (1) bypass ledger に未ゲート commit が残っていないか（`scripts/gate-bypass.py`）、
   (2) push される各 tip の `cargo check --workspace --all-targets`（使い捨て worktree に checkout して
   判定する。作業ツリーではない）、(3) 同じ tip に対する `scripts/check-compile-fail.py`（trybuild の
-  compile-fail 型契約。target ごとに、入力〈その crate と推移的 path 依存の git tree・`Cargo.lock`・
-  root `Cargo.toml`・`rust-toolchain.toml`・`.cargo`・`rustc -vV`/`cargo -V`・スクリプト自身・build 系 env〉の
+  compile-fail 型契約。target ごとに、入力〈その crate と推移的 path 依存の git tree・その crate の依存閉包
+  （全 dep kind・registry/git 依存を含む全 package）の resolved package id 一覧〈`cargo metadata` の
+  `resolve` 由来。`Cargo.lock` ファイル自体は入力にも dirty 判定にも含めないので、閉包外の package
+  だけを動かす lock 変更では cache が当たる〉・root `Cargo.toml`・`rust-toolchain.toml`・`.cargo`・`rustc -vV`/`cargo -V`・スクリプト自身・build 系 env〉の
   hash が以前 pass した時と一致し、かつ入力が clean な時だけ cargo を飛ばして pass とみなす。入力を
   判定できない・cache が読めない時は従来どおり実行する。`CHECK_COMPILE_FAIL_NO_CACHE=1` で常に全実行）、(4) 同じ tip に対する `specguard map gate-check`（gate crate の変更が spec-doc
   binding か理由付き ack で覆われているか。backlog 0c277117、2026-10-02 配線）。いずれも判定不能は

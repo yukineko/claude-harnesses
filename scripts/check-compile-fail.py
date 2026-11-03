@@ -38,12 +38,18 @@ would be skipped.
   Key: sha256 (length-prefixed fields) over the label `pkg::test`, the full
   `rustc -vV` and `cargo -V` output, this script's bytes, the values of the
   build-affecting env vars in KEY_ENV / KEY_ENV_PREFIXES (an addition to the
-  spec: RUSTFLAGS etc. change diagnostics), and `git rev-parse HEAD:<path>` for
-  every input path. Input paths: the dir of every path-dependency crate
-  (`source` null) in the package's transitive closure, the package included,
-  computed by a BFS over `cargo metadata --format-version 1 --all-features`
-  `resolve.nodes[].deps` (normal, dev and build edges, all platforms, all
-  optional deps, so it over-approximates); plus `Cargo.lock`, `Cargo.toml`,
+  spec: RUSTFLAGS etc. change diagnostics), the sorted resolved package ids of
+  the package's dependency closure, and `git rev-parse HEAD:<path>` for every
+  input path. The closure is a walk over `cargo metadata --format-version 1
+  --all-features` `resolve.nodes[].deps` from the package, the package
+  included: normal, dev and build edges, all platforms, all optional deps (so it
+  over-approximates), and every package, registry and git deps included. Each
+  id (`resolve.nodes[].id` = `packages[].id`) carries name, version and source
+  (a git dep's commit), so a Cargo.lock change that re-resolves any closure
+  member changes the key, and one that only touches packages outside the
+  closure does not (spec L1-L4, user ruling 2026-11-03). Cargo.lock itself is
+  NOT an input path and NOT part of the dirty check. Input paths: the dir of
+  every path package (`source` null) in the closure; plus `Cargo.toml`,
   `rust-toolchain.toml`, and `.cargo` when `git ls-tree HEAD -- .cargo` lists it.
   The key is valid only when `git status --porcelain --untracked-files=all --`
   over the input paths (and `.cargo`, present at HEAD or not) prints nothing.
@@ -58,7 +64,9 @@ would be skipped.
   UNDETERMINED target never writes and removes the label's entry if it had one.
 
   Not used (target runs): `cargo metadata` failing / unparseable / lacking the
-  package or a path dep outside the repo, any git call failing, the script root
+  package, a closure member's package or resolve node missing, listed twice or
+  without a readable id (only the targets whose closure needs it are affected),
+  a path dep outside the repo, any git call failing, the script root
   not being the git toplevel, dirty inputs, `rustc -vV` / `cargo -V` failing, a
   cache file that is unreadable / not JSON / of the wrong shape. Each prints one
   `check-compile-fail: cache not used for <label>: <reason>` line. A missing
@@ -107,7 +115,9 @@ RESULT_RE = re.compile(r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed"
 
 # Workspace-level inputs hashed for every target (C1). `.cargo` is added only
 # when it exists at HEAD, but it is always part of the dirtiness check.
-FIXED_INPUTS = ("Cargo.lock", "Cargo.toml", "rust-toolchain.toml")
+# Cargo.lock is deliberately absent (spec L1): the resolved ids of each target's
+# dependency closure are keyed instead, so a lock edit outside the closure hits.
+FIXED_INPUTS = ("Cargo.toml", "rust-toolchain.toml")
 CARGO_CONFIG_DIR = ".cargo"
 
 # Env vars that change what rustc emits; their values go into the key.
@@ -163,6 +173,25 @@ def _run(cmd: list[str], root: Path, env: dict[str, str]) -> str:
     return proc.stdout
 
 
+_AMBIGUOUS = object()
+
+
+def _index_by_id(items: list) -> dict[str, object]:
+    """Map `id` -> entry. An entry whose `id` is missing or not a non-empty
+    string is left out, so only a target whose closure needs it finds it
+    missing (and runs); an id listed twice maps to _AMBIGUOUS, which no lookup
+    accepts. A non-list raises TypeError (whole output unparseable)."""
+    if not isinstance(items, list):
+        raise TypeError(f"expected a list, got {type(items).__name__}")
+    out: dict[str, object] = {}
+    for item in items:
+        pid = item.get("id") if isinstance(item, dict) else None
+        if not isinstance(pid, str) or not pid:
+            continue
+        out[pid] = _AMBIGUOUS if pid in out else item
+    return out
+
+
 class KeyContext:
     """Inputs shared by every target's key. Each part is either a value or the
     reason it could not be determined (never a default)."""
@@ -196,18 +225,29 @@ class KeyContext:
         )
         try:
             self.metadata = json.loads(raw)
-            self.packages = {p["id"]: p for p in self.metadata["packages"]}
-            self.nodes = {n["id"]: n for n in self.metadata["resolve"]["nodes"]}
-        except (ValueError, KeyError, TypeError) as e:
+            self.packages = _index_by_id(self.metadata["packages"])
+            self.nodes = _index_by_id(self.metadata["resolve"]["nodes"])
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise CacheUnavailable(f"cargo metadata output not parseable: {e!r}") from e
 
-    def crate_dirs(self, pkg: str) -> list[str]:
-        """Repo-relative dirs of every path dep in `pkg`'s transitive closure."""
+    def _lookup(self, table: dict[str, object], what: str, pid: str) -> dict:
+        entry = table.get(pid)
+        if entry is _AMBIGUOUS:
+            raise CacheUnavailable(f"cargo metadata {what} lists {pid} more than once")
+        if not isinstance(entry, dict):
+            raise CacheUnavailable(f"cargo metadata {what} lacks {pid}")
+        return entry
+
+    def closure(self, pkg: str) -> tuple[list[str], list[str]]:
+        """(repo-relative dirs of the path packages, sorted resolved package ids)
+        of `pkg`'s full transitive closure, `pkg` included: every dep kind, every
+        package (registry and git deps too). Any package or resolve node that
+        cannot be found or read raises CacheUnavailable."""
         try:
             roots = [
                 pid
                 for pid, p in self.packages.items()
-                if p["name"] == pkg and p["source"] is None
+                if isinstance(p, dict) and p["name"] == pkg and p["source"] is None
             ]
             if len(roots) != 1:
                 raise CacheUnavailable(
@@ -219,34 +259,35 @@ class KeyContext:
                 pid = todo.pop()
                 if pid in seen:
                     continue
+                self._lookup(self.packages, "packages", pid)
+                node = self._lookup(self.nodes, "resolve", pid)
                 seen.add(pid)
-                if self.packages[pid]["source"] is not None:
-                    continue  # registry/git dep: pinned by Cargo.lock
-                node = self.nodes.get(pid)
-                if node is None:
-                    raise CacheUnavailable(f"cargo metadata resolve lacks {pid}")
-                todo.extend(d["pkg"] for d in node["deps"])
+                for d in node["deps"]:
+                    dep = d["pkg"]
+                    if not isinstance(dep, str) or not dep:
+                        raise CacheUnavailable(f"cargo metadata resolve dep of {pid} has no id")
+                    todo.append(dep)
             dirs = set()
             base = self.root.resolve()
             for pid in seen:
-                p = self.packages[pid]
+                p = self._lookup(self.packages, "packages", pid)
                 if p["source"] is not None:
-                    continue
+                    continue  # registry/git dep: its id carries version + source
                 d = Path(p["manifest_path"]).resolve().parent
                 try:
                     rel = d.relative_to(base)
                 except ValueError as e:
                     raise CacheUnavailable(f"path dep {p['name']} at {d} is outside the repo") from e
                 dirs.add(rel.as_posix() or ".")
-            return sorted(dirs)
-        except (KeyError, TypeError) as e:
+            return sorted(dirs), sorted(seen)
+        except (KeyError, TypeError, AttributeError) as e:
             raise CacheUnavailable(f"cargo metadata output not parseable: {e!r}") from e
 
-    def git_part(self, pkg: str) -> list[tuple[str, str]]:
+    def git_part(self, dirs: list[str]) -> list[tuple[str, str]]:
         """(path, HEAD object id) per input; raises when dirty or a git call fails."""
         if self.error is not None:
             raise CacheUnavailable(self.error)
-        paths = self.crate_dirs(pkg) + list(FIXED_INPUTS)
+        paths = list(dirs) + list(FIXED_INPUTS)
         listed = _run(["git", "ls-tree", "HEAD", "--", CARGO_CONFIG_DIR], self.root, self.env)
         if listed.strip():
             paths.append(CARGO_CONFIG_DIR)
@@ -270,7 +311,7 @@ class KeyContext:
             )
         return list(zip(paths, out))
 
-    def key(self, label: str, git_part: list[tuple[str, str]]) -> str:
+    def key(self, label: str, git_part: list[tuple[str, str]], ids: list[str]) -> str:
         h = hashlib.sha256()
 
         def field(name: str, data: bytes) -> None:
@@ -284,6 +325,9 @@ class KeyContext:
             field("env:" + k, v.encode())
         for path, oid in git_part:
             field("path:" + path, oid.encode())
+        field("closure", str(len(ids)).encode())
+        for pid in ids:
+            field("id", pid.encode())
         return h.hexdigest()
 
 
@@ -410,14 +454,18 @@ def main() -> int:
         label = f"{pkg}::{test}"
         key: str | None = None
         git_before: list[tuple[str, str]] | None = None
+        dirs: list[str] = []
         if ctx is not None:
             # An unreadable cache file only rules out the skip: the key is still
             # computed so a pass rewrites the file (or warns that it cannot).
             if cache_error is not None:
                 print(f"check-compile-fail: cache not used for {label}: {cache_error}", file=sys.stderr)
             try:
-                git_before = ctx.git_part(pkg)
-                key = ctx.key(label, git_before)
+                if ctx.error is not None:
+                    raise CacheUnavailable(ctx.error)
+                dirs, ids = ctx.closure(pkg)
+                git_before = ctx.git_part(dirs)
+                key = ctx.key(label, git_before, ids)
             except CacheUnavailable as e:
                 if cache_error is None:
                     print(f"check-compile-fail: cache not used for {label}: {e}", file=sys.stderr)
@@ -457,7 +505,7 @@ def main() -> int:
             print(f"check-compile-fail: ok {label} ({passed} passed)", file=sys.stderr)
             if ctx is not None and key is not None and cpath is not None and may_record:
                 try:
-                    unchanged = ctx.git_part(pkg) == git_before
+                    unchanged = ctx.git_part(dirs) == git_before
                 except CacheUnavailable as e:
                     unchanged = False
                     print(f"check-compile-fail: pass not recorded for {label}: {e}", file=sys.stderr)

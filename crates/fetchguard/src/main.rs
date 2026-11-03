@@ -24,13 +24,15 @@
 //! The body runs inside `harness_core::hook::run_hook`, whose outer catch
 //! turns any panic that escapes the above into a stderr log and a silent
 //! exit 0. Silence is not a clean verdict, which is why every judging path
-//! above emits its own warning instead of relying on that backstop. What is
-//! still outside those barriers is `read_stdin`, `HookInput::parse` and the
-//! final `println!`.
+//! above emits its own warning instead of relying on that backstop. A stdin
+//! READ ERROR is handled the same way (`try_read_stdin`, then
+//! [`fetchguard::gate::stdin_read_failed_warning`]); it is not left to the
+//! backstop. What is still outside those barriers is `HookInput::parse` and
+//! the final `println!`.
 
 use clap::{Parser, Subcommand};
 
-use harness_core::hook::{read_stdin, run_hook, HookInput};
+use harness_core::hook::{run_hook, try_read_stdin, HookInput};
 
 #[derive(Parser)]
 #[command(
@@ -54,7 +56,13 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::Scan => run_hook(|| {
-            let raw = read_stdin();
+            let raw = match try_read_stdin() {
+                Ok(raw) => raw,
+                Err(e) => {
+                    println!("{}", fetchguard::gate::stdin_read_failed_warning(&e));
+                    return;
+                }
+            };
             if raw.trim().is_empty() {
                 return;
             }

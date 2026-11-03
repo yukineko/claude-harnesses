@@ -57,7 +57,7 @@
     {
       "name": "blastguard",
       "description": "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary.",
-      "version": "0.2.236",
+      "version": "0.2.241",
       "category": "security",
       "keywords": [
         "hooks",
@@ -331,7 +331,7 @@
     {
       "name": "donegate",
       "description": "Completion-verification gate for Claude Code: on Stop it runs your acceptance commands and blocks until every applicable check is green, feeding failures back for an auto-fix loop.",
-      "version": "0.1.63",
+      "version": "0.1.65",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -679,7 +679,7 @@
     {
       "name": "stuckguard",
       "description": "Stuck-loop detector for Claude Code: a PostToolUse hook that spots repeated identical actions and edit thrash, then nudges the agent to change approach or ask the user for help.",
-      "version": "0.1.44",
+      "version": "0.1.46",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -703,7 +703,7 @@
     {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: on Stop it blocks when implementation lines were added with no test visible in the uncommitted changes, and red/green/verify subcommands record RED before GREEN.",
-      "version": "0.1.62",
+      "version": "0.1.65",
       "category": "quality",
       "keywords": [
         "tdd",
@@ -1006,7 +1006,7 @@
     {
       "name": "fetchguard",
       "description": "PostToolUse hook that scans WebFetch and WebSearch results for planted prompt-injection phrasing and warns the model that the flagged span is untrusted data.",
-      "version": "0.1.8",
+      "version": "0.1.10",
       "category": "security",
       "keywords": [
         "security",

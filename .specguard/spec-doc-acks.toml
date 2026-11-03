@@ -234,3 +234,23 @@ reason = "Unit-test submodule (classified impl by the path heuristic) blinding b
 [[ack]]
 path = "crates/specguard/src/gitenv_testutil.rs"
 reason = "test-only fixture (#[cfg(test)]) for GIT_DIR scrub tests; no production behaviour to specify"
+
+[[ack]]
+path = "crates/blastguard/src/detect/protected.rs"
+reason = "Pure move: the protected-path and system-path verdicts (protected_path_block through protected_glob_deny, incl. MAX_SYMLINK_HOPS, physical_landing, system_path_block, glob_literal_prefix) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/readonly.rs"
+reason = "Pure move: the read-only command table and recognised-verb helpers (READ_ONLY_COMMANDS through backlog_writes_operand_paths, plus is_recognized_command) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/fileops.rs"
+reason = "Pure move: the per-verb file-operation analysers and operand helpers (analyze_unlink_rmdir through analyze_uniq, has_glob_meta through mode_removes_read, positional_operands through analyze_sed) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/rm.rs"
+reason = "Pure move: the rm analyser and its eligibility helpers (analyze_rm through placeable_targets, incl. checkout_exempt_eligible, literal_cd_and_rest, worktree_rm_eligible, deletion_rm_eligible, worktree_confined) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/find_xargs.rs"
+reason = "Pure move: the find and xargs analysers (find_search_roots through find_confined_root, analyze_find through xargs_reads_arg_file, incl. NARROWING_PREDICATES, xargs_command_start, XARGS_* flag tables) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."

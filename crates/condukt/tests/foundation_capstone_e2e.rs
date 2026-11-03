@@ -47,6 +47,30 @@ struct Fixture {
     broken_wt: PathBuf,
 }
 
+/// #1485: remove the base dir on drop (including panic unwinding). Set
+/// `CONDUKT_E2E_KEEP_FIXTURE` (non-empty) to keep it for debugging; the kept
+/// path is printed to stderr. A failed removal is reported on stderr, never
+/// panicked on (a panic in Drop while unwinding aborts the process).
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        if std::env::var_os("CONDUKT_E2E_KEEP_FIXTURE").is_some_and(|v| !v.is_empty()) {
+            eprintln!(
+                "CONDUKT_E2E_KEEP_FIXTURE set: keeping fixture dir {}",
+                self.base.display()
+            );
+            return;
+        }
+        if let Err(e) = std::fs::remove_dir_all(&self.base) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "WARNING: failed to remove fixture dir {}: {e}",
+                    self.base.display()
+                );
+            }
+        }
+    }
+}
+
 impl Fixture {
     fn new(tag: &str) -> Self {
         let pid = std::process::id();

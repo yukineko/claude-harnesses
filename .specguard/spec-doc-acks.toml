@@ -270,3 +270,7 @@ reason = "Pure move: the egress and fetched-payload-exec sinks (split_statements
 [[ack]]
 path = "crates/blastguard/src/detect/high_blast.rs"
 reason = "Pure move: the high-blast Ask tier (analyze_high_blast_tier through high_blast_outside_tree_rm, incl. high_blast_git_force_push, refspec_source_is_force, high_blast_schemeless_upload) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/tests/python_stdin_git_string_fp_20261103.rs"
+reason = "Test-only file, not gate implementation: RED repro (fp3) for backlog 61558e27, cancelled as an accepted limit by user ruling 2026-11-03, plus two controls that .git writes from a python stdin program stay non-allow. Its #[ignore] (df77dc73) documents that limit; no docs/specs doc describes individual regression tests."

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
-use sitecraft::{check, decide, gate, init, serve, Determination, EXIT_UNDETERMINED};
+use sitecraft::{capability, check, decide, gate, init, serve, Determination, EXIT_UNDETERMINED};
 
 #[derive(Parser)]
 #[command(name = "sitecraft", version)]
@@ -25,7 +25,7 @@ enum Cmd {
     /// Design-decision record (`sitecraft/decisions.toml`).
     Decide {
         #[command(subcommand)]
-        cmd: DecideCmd,
+        cmd: Box<DecideCmd>,
     },
     /// Dev-server manager (runs the trusted `sitecraft.toml` command).
     Serve {
@@ -47,8 +47,27 @@ enum Cmd {
         /// The directory to create (or an existing empty one).
         dir: PathBuf,
     },
-    /// Record the current `sitecraft.toml` of the root as trusted.
+    /// Record the current `sitecraft.toml` of the root as trusted, and the
+    /// `verify.argv` of every `command` capability in
+    /// `sitecraft/decisions.toml` (key `<root>#capabilities`; removed when
+    /// there is none). Run by a human only.
     Trust,
+    /// Capabilities beyond the web app (`[capabilities.<name>]`).
+    Capability {
+        #[command(subcommand)]
+        cmd: CapabilityCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum CapabilityCmd {
+    /// Whether the capability can run on this machine: prints one JSON line
+    /// `{"capability","result","reason"}`; exit 0 feasible, 1 infeasible,
+    /// 2 undetermined (120 s limit). Writes nothing. Not completion evidence.
+    Probe {
+        /// The capability name.
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -110,6 +129,41 @@ enum DecideCmd {
         #[arg(long = "confirm-fit")]
         confirm_fit: Option<String>,
     },
+    /// Record (or replace) `[capabilities.<name>]`. A relevant capability
+    /// needs `--how`, `--done-when` and `--verify-kind`
+    /// (`builtin:blender-headless` with `--script --glb --render`,
+    /// `builtin:threejs-render` with `--page [--selector]`, `command` with
+    /// repeated `--argv` and `--input`). Invalid input is exit 2 and changes
+    /// nothing. A changed value is appended to `[[history]]`.
+    Capability {
+        #[arg(long)]
+        name: String,
+        /// `relevant` or `irrelevant`.
+        #[arg(long)]
+        relevance: String,
+        #[arg(long)]
+        how: Option<String>,
+        #[arg(long = "done-when")]
+        done_when: Option<String>,
+        #[arg(long = "verify-kind")]
+        verify_kind: Option<String>,
+        #[arg(long)]
+        script: Option<String>,
+        #[arg(long)]
+        glb: Option<String>,
+        #[arg(long)]
+        render: Option<String>,
+        #[arg(long)]
+        page: Option<String>,
+        #[arg(long)]
+        selector: Option<String>,
+        /// One argv element of a `command` capability (repeat, in order).
+        #[arg(long = "argv", allow_hyphen_values = true)]
+        argv: Vec<String>,
+        /// One input glob of a `command` (or builtin) capability (repeatable).
+        #[arg(long = "input")]
+        inputs: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -132,6 +186,12 @@ enum CheckCmd {
     },
     /// Scan build output for secrets, sources for HTML sinks, and run npm audit.
     Security,
+    /// Run a relevant capability's verify (300 s limit) and write its result
+    /// record: exit 0 clean, 1 violation, 2 undetermined.
+    Capability {
+        /// The capability name.
+        name: String,
+    },
 }
 
 fn main() {
@@ -159,7 +219,7 @@ fn resolve_root(root: Option<PathBuf>) -> Result<PathBuf, String> {
 
 fn dispatch(cmd: Cmd, root: &Path) -> i32 {
     match cmd {
-        Cmd::Decide { cmd } => match cmd {
+        Cmd::Decide { cmd } => match *cmd {
             DecideCmd::Next => decide::cmd_next(root),
             DecideCmd::Record {
                 area,
@@ -181,6 +241,39 @@ fn dispatch(cmd: Cmd, root: &Path) -> i32 {
                 harness,
                 confirm_fit,
             } => decide::cmd_classify(root, &feature, &kind, harness, confirm_fit.as_deref()),
+            DecideCmd::Capability {
+                name,
+                relevance,
+                how,
+                done_when,
+                verify_kind,
+                script,
+                glb,
+                render,
+                page,
+                selector,
+                argv,
+                inputs,
+            } => decide::cmd_capability(
+                root,
+                &name,
+                &decide::capability::CapabilityArgs {
+                    relevance,
+                    how,
+                    done_when,
+                    verify_kind,
+                    script,
+                    glb,
+                    render,
+                    page,
+                    selector,
+                    argv,
+                    inputs,
+                },
+            ),
+        },
+        Cmd::Capability { cmd } => match cmd {
+            CapabilityCmd::Probe { name } => capability::cmd_probe(root, &name),
         },
         Cmd::Serve { cmd } => with_state_dir(|state| match cmd {
             ServeCmd::Start => print_known("serve start", serve::start(state, root)),
@@ -195,6 +288,7 @@ fn dispatch(cmd: Cmd, root: &Path) -> i32 {
             CheckCmd::Security => {
                 sitecraft::report("sitecraft check security", &check::security::run(root))
             }
+            CheckCmd::Capability { name } => capability::cmd_check(root, &name),
         },
         Cmd::Trust => with_state_dir(|state| trust(state, root)),
         // Handled before root resolution.
@@ -235,11 +329,35 @@ fn print_known<T: serde::Serialize>(label: &str, d: Determination<T>) -> i32 {
     }
 }
 
+/// `sitecraft trust`: the `sitecraft.toml` hash and, in the same write, the
+/// D2-trust digest of the `command` capabilities (none → the
+/// `#capabilities` key is removed). An unusable decision record is exit 2
+/// and nothing is written (the digest would otherwise be guessed).
 fn trust(state: &Path, root: &Path) -> i32 {
     let cfg = sitecraft::config::path_for(root);
-    match sitecraft::trust::record(state, root, &cfg) {
+    let digest = match decide::record::load(root) {
+        Determination::Known(None) => None,
+        Determination::Known(Some(d)) => match d.parsed_capabilities() {
+            Ok(caps) => decide::capability::command_digest(&caps),
+            Err(e) => {
+                eprintln!(
+                    "sitecraft trust: UNDETERMINED - the capabilities in {} are unusable ({e}); nothing was trusted",
+                    decide::record::path_for(root).display()
+                );
+                return EXIT_UNDETERMINED;
+            }
+        },
+        Determination::Undetermined(why) => {
+            eprintln!("sitecraft trust: UNDETERMINED - {why}; nothing was trusted");
+            return EXIT_UNDETERMINED;
+        }
+    };
+    match sitecraft::trust::record_with_capabilities(state, root, &cfg, digest.as_deref()) {
         Ok(h) => {
             println!("sitecraft: trusted {} (sha256 {h})", cfg.display());
+            if let Some(d) = &digest {
+                println!("sitecraft: trusted the command capabilities' argv (sha256 {d})");
+            }
             0
         }
         Err(e) => {

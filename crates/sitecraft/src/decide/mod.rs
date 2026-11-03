@@ -6,6 +6,7 @@
 //! (0 clean/success, 1 violation, 2 undetermined / invalid input / unreadable
 //! record).
 
+pub mod capability;
 pub mod catalog;
 pub mod record;
 pub mod rules;
@@ -290,6 +291,52 @@ pub fn cmd_check(root: &Path) -> i32 {
         }
     }
     crate::exit_code(v)
+}
+
+/// `decide capability --name N --relevance R [--how T] [--done-when T]
+/// [--verify-kind K] [per-kind args]` (rulings D2): build the
+/// `[capabilities.N]` table ([`capability::table_from_args`]), record it,
+/// append history for a changed table, save. Exit 0 on success (with a
+/// `changed:` line when the table changed), 2 otherwise (invalid name,
+/// relevance, kind or kind arguments, missing `--how` / `--done-when` /
+/// `--verify-kind` for a relevant capability, unreadable record, save
+/// failure; the record is unchanged).
+pub fn cmd_capability(root: &Path, name: &str, args: &capability::CapabilityArgs) -> i32 {
+    let what = "decide capability";
+    let table = match capability::table_from_args(name, args) {
+        Ok(t) => t,
+        Err(e) => {
+            return undetermined(
+                what,
+                &e,
+                "fix: rerun `sitecraft decide capability --name <a-z0-9-> --relevance relevant|irrelevant --how <text> --done-when <text> --verify-kind <kind>` with the kind's arguments: builtin:blender-headless --script <rel> --glb <rel> --render <rel> [--input <glob>]...; builtin:threejs-render --page </path> [--selector <css>] [--input <glob>]...; command --argv <program> [--argv <arg>]... --input <glob> [--input <glob>]... (the record was not changed)",
+            )
+        }
+    };
+    let before = match load_for_update(root) {
+        Ok(d) => d,
+        Err(e) => return undetermined(what, &e, BROKEN_RECORD_HINT),
+    };
+    let mut d = before.clone();
+    if let Err(e) = record::record_capability(&mut d, name, table) {
+        return undetermined(
+            what,
+            &e,
+            "fix: correct the arguments (the record was not changed)",
+        );
+    }
+    match save_with_history(root, what, &before, d) {
+        Ok(()) => {
+            eprintln!("sitecraft {what}: recorded capability `{name}`");
+            if args.verify_kind.as_deref() == Some(capability::KIND_COMMAND) {
+                eprintln!(
+                    "sitecraft {what}: a `command` capability runs only after a human reviews its argv and runs `sitecraft trust` (the LLM does not run it)"
+                );
+            }
+            EXIT_CLEAN
+        }
+        Err(code) => code,
+    }
 }
 
 /// `decide add-question --id I --text T [--choice C]... [--multi]`: load

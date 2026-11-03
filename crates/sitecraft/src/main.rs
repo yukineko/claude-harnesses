@@ -6,14 +6,14 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
-use sitecraft::{check, decide, gate, serve, Determination, EXIT_UNDETERMINED};
+use sitecraft::{check, decide, gate, init, serve, Determination, EXIT_UNDETERMINED};
 
 #[derive(Parser)]
 #[command(name = "sitecraft", version)]
 struct Cli {
     /// Project root (where `sitecraft.toml` and `sitecraft/decisions.toml`
     /// live). Defaults to the current directory. Ignored by `gate`, which
-    /// uses the Stop payload's `cwd`.
+    /// uses the Stop payload's `cwd`, and by `init`, which takes `<dir>`.
     #[arg(long, global = true)]
     root: Option<PathBuf>,
     #[command(subcommand)]
@@ -39,6 +39,14 @@ enum Cmd {
     },
     /// Stop hook gate (reads the Stop payload JSON on stdin).
     Gate,
+    /// Create a new site repository: `git init <dir>` plus `<dir>/sitecraft/`.
+    /// Only a missing or empty directory outside any other git repository
+    /// is used (else exit 1, nothing changed); git missing, failing or
+    /// exceeding 30 s, or an IO failure is exit 2. Ignores `--root`.
+    Init {
+        /// The directory to create (or an existing empty one).
+        dir: PathBuf,
+    },
     /// Record the current `sitecraft.toml` of the root as trusted.
     Trust,
 }
@@ -130,6 +138,7 @@ fn main() {
     let cli = Cli::parse();
     let code = match cli.cmd {
         Cmd::Gate => gate::command(),
+        Cmd::Init { dir } => init::command(&dir),
         cmd => match resolve_root(cli.root) {
             Ok(root) => dispatch(cmd, &root),
             Err(e) => {
@@ -190,6 +199,7 @@ fn dispatch(cmd: Cmd, root: &Path) -> i32 {
         Cmd::Trust => with_state_dir(|state| trust(state, root)),
         // Handled before root resolution.
         Cmd::Gate => gate::command(),
+        Cmd::Init { dir } => init::command(&dir),
     }
 }
 

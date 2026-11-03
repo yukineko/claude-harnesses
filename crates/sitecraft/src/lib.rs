@@ -45,6 +45,7 @@ pub mod check;
 pub mod config;
 pub mod decide;
 pub mod gate;
+pub mod init;
 pub mod serve;
 pub mod trust;
 

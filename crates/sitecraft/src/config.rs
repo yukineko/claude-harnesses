@@ -14,6 +14,7 @@
 //! web_globs = ["src/**", "index.html", "public/**"]
 //! max_attempts = 3            # default 3 (Stop-gate give-up budget)
 //! reset_after_secs = 1800     # default 1800
+//! api_paths = ["/api/health"] # default []; `check pages` GETs each one
 //! ```
 //!
 //! Three answers, not two ([`Loaded`]): `Absent` (no file: the project never
@@ -31,6 +32,12 @@ pub const FILE_NAME: &str = "sitecraft.toml";
 /// Ceiling for `ready_timeout_secs` (keeps the dev-server wait well inside the
 /// 600 s Stop-hook timeout).
 pub const MAX_READY_TIMEOUT_SECS: u64 = 300;
+
+/// Optional top-level key: API paths `check pages` requests with a plain
+/// `GET` (redirects are not followed); each must answer 2xx. Kept out of
+/// [`Config`] (read it with [`api_paths`]) but still part of the trusted
+/// file: trust hashes the whole file.
+pub const API_PATHS_KEY: &str = "api_paths";
 
 /// The parsed `sitecraft.toml`. Unknown keys are a parse error.
 #[derive(Debug, Clone, Deserialize)]
@@ -104,8 +111,13 @@ pub fn path_for(root: &Path) -> PathBuf {
 /// TOML syntax error, unknown key, or a failed validation (empty `command` or
 /// blank program, `port` 0, empty `pages`, empty `build_dir`, empty or
 /// uncompilable `web_globs`, `ready_timeout_secs` outside
-/// 1..=[`MAX_READY_TIMEOUT_SECS`], `max_attempts` 0) → [`Loaded::Undetermined`];
+/// 1..=[`MAX_READY_TIMEOUT_SECS`], `max_attempts` 0, an `api_paths` element
+/// not starting with `/` or containing whitespace / a control character) →
+/// [`Loaded::Undetermined`];
 /// otherwise [`Loaded::Config`]. No error maps to `Absent` or `Config`.
+///
+/// `api_paths` is validated here but is not a [`Config`] field; read it from
+/// the returned bytes with [`api_paths`].
 #[must_use]
 pub fn load(root: &Path) -> Loaded {
     let p = path_for(root);
@@ -118,7 +130,14 @@ pub fn load(root: &Path) -> Loaded {
         Ok(t) => t,
         Err(e) => return Loaded::Undetermined(format!("{} is not valid UTF-8: {e}", p.display())),
     };
-    let cfg: Config = match toml::from_str(text) {
+    let mut table: toml::Table = match toml::from_str(text) {
+        Ok(t) => t,
+        Err(e) => return Loaded::Undetermined(format!("cannot parse {}: {e}", p.display())),
+    };
+    if let Err(why) = take_api_paths(&mut table) {
+        return Loaded::Undetermined(format!("{} is unusable: {why}", p.display()));
+    }
+    let cfg: Config = match toml::Value::Table(table).try_into() {
         Ok(c) => c,
         Err(e) => return Loaded::Undetermined(format!("cannot parse {}: {e}", p.display())),
     };
@@ -126,6 +145,55 @@ pub fn load(root: &Path) -> Loaded {
         Ok(()) => Loaded::Config(Box::new(cfg), bytes),
         Err(why) => Loaded::Undetermined(format!("{} is unusable: {why}", p.display())),
     }
+}
+
+/// The `api_paths` key of a `sitecraft.toml` (the bytes [`load`] returned).
+///
+/// Contract: key absent → `Ok([])`; not UTF-8, not TOML, `api_paths` not an
+/// array of strings, or an element not starting with `/` or containing
+/// whitespace / a control character → `Err(why)`; else `Ok(paths)` in file
+/// order. [`load`] applies the same rule, so bytes it accepted never fail here.
+pub fn api_paths(bytes: &[u8]) -> Result<Vec<String>, String> {
+    let text = std::str::from_utf8(bytes).map_err(|e| format!("not valid UTF-8: {e}"))?;
+    let mut table: toml::Table = toml::from_str(text).map_err(|e| format!("cannot parse: {e}"))?;
+    take_api_paths(&mut table)
+}
+
+/// Remove `api_paths` from `table` and validate it (see [`api_paths`]).
+fn take_api_paths(table: &mut toml::Table) -> Result<Vec<String>, String> {
+    let raw = match table.remove(API_PATHS_KEY) {
+        None => return Ok(Vec::new()),
+        Some(toml::Value::Array(a)) => a,
+        Some(other) => {
+            return Err(format!(
+                "`{API_PATHS_KEY}` must be an array of strings, got a {}",
+                other.type_str()
+            ))
+        }
+    };
+    let mut out = Vec::with_capacity(raw.len());
+    for v in raw {
+        let toml::Value::String(p) = v else {
+            return Err(format!(
+                "`{API_PATHS_KEY}` must be an array of strings, got an element of type {}",
+                v.type_str()
+            ));
+        };
+        if !p.starts_with('/') {
+            return Err(format!(
+                "`{API_PATHS_KEY}` element {p:?} does not start with `/`; write it as an \
+                 absolute path, e.g. \"/api/health\""
+            ));
+        }
+        if p.chars().any(|ch| ch.is_whitespace() || ch.is_control()) {
+            return Err(format!(
+                "`{API_PATHS_KEY}` element {p:?} contains whitespace or a control character; \
+                 percent-encode it"
+            ));
+        }
+        out.push(p);
+    }
+    Ok(out)
 }
 
 /// A read hit NotFound. That is `Absent` only when the root is an existing

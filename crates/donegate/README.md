@@ -46,8 +46,11 @@ and reads exit codes — so it can never hit a rate limit.
    keeps working. The reason is **quiet**: per failing check it shows the name,
    exit code and command, then only the decision-relevant digest of the output
    (for cargo-style output: each `panicked at` line with its message, the
-   `failures:` name list, `test result: FAILED`, `error:` lines and a final
-   FAILED line; otherwise the `error` header lines plus the last 5 lines; capped
+   `failures:` name list, `test result: FAILED`, the diagnostics and a final
+   FAILED line; otherwise the diagnostics, the lines containing `FAILED` (up to
+   10) and the last 5 lines. Diagnostics are `error[…]`/`error:`/`warning:`
+   headers with their first `--> file:line:col` location (up to 5, errors
+   first) plus unlocated `error:` summaries such as `could not compile`. Capped
    at 24 lines, never empty), and the **absolute path of the full raw output**.
    Raw `--- stdout ---` / `--- stderr ---` sections and progress lines are never
    shown.

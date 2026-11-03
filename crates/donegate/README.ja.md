@@ -90,8 +90,10 @@ donegate gate          # チェックを手動実行（人間向けレポート�
   `record retention failed: …` 行として表示する（握りつぶさない）。
 - block 理由に表示するのは判断を促すものだけ: チェック名・exit code・コマンド、
   cargo 形式なら各 `panicked at` 行とそのメッセージ、`failures:` の名前一覧、
-  `test result: FAILED`、`error:` 行、最終行の FAILED。それ以外の出力は `error` 見出し行と
-  末尾 5 行。1 チェック 24 行が上限で、空にはならない。そして**記録ファイルの絶対パス**。
+  `test result: FAILED`、診断行、最終行の FAILED。それ以外の出力は診断行、`FAILED` を含む行
+  （最大 10）、末尾 5 行。診断行とは `error[…]`/`error:`/`warning:` 見出しとその最初の
+  `--> file:line:col` 位置行（最大 5 件、error 優先）、および位置を持たない `error:` 要約行
+  （`could not compile` 等）。1 チェック 24 行が上限で、空にはならない。そして**記録ファイルの絶対パス**。
   生の `--- stdout ---` / `--- stderr ---` 節や進捗行は表示しない。
 - 記録を保存できないときもチェックは実行し、停止もブロックする。理由に「保存できなかった」旨と
   原因を明記し、表示は**減らさず増やす**（digest に加えて末尾

@@ -45,6 +45,8 @@ const PLAIN_TAIL_LINES: usize = 5;
 const PANIC_MSG_MAX: usize = 4;
 const FAILURE_NAMES_MAX: usize = 10;
 const ERROR_HEADERS_MAX: usize = 5;
+/// Lines after a diagnostic header searched for its `-->` location.
+const DIAG_LOCATION_WINDOW: usize = 3;
 
 /// Where a check's full output ended up.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,20 +255,94 @@ fn is_error_header(l: &str) -> bool {
     l.starts_with("error[") || l.starts_with("error:")
 }
 
+fn is_warning_header(l: &str) -> bool {
+    l.starts_with("warning[") || l.starts_with("warning:")
+}
+
+/// The `--> file:line:col` location line of the diagnostic whose header is
+/// `lines[i]`: the first such line before a blank line or the next header,
+/// within a few lines of the header.
+fn diagnostic_location<'a>(lines: &[&'a str], i: usize) -> Option<&'a str> {
+    lines[i + 1..]
+        .iter()
+        .take(DIAG_LOCATION_WINDOW)
+        .take_while(|l| !l.trim().is_empty() && !is_error_header(l) && !is_warning_header(l))
+        .find(|l| l.trim_start().starts_with("--> "))
+        .copied()
+}
+
+/// The compiler/lint diagnostics of `lines`, skipping header lines in `skip`
+/// (already shown elsewhere). Located diagnostics (a header with a `-->`
+/// location) are shown as the header plus its first location line: up to
+/// [`ERROR_HEADERS_MAX`] of them, `error` ones before `warning` ones, with a
+/// `… and N more diagnostics` line for the rest. Every unlocated `error`
+/// header (summaries such as `error: could not compile …`) follows; only the
+/// digest's overall [`DIGEST_MAX_LINES`] cap bounds them. Unlocated `warning`
+/// headers (`warning: … generated N warnings`) are not shown.
+fn diagnostics(lines: &[&str], skip: &[&str]) -> Vec<String> {
+    let mut located_err: Vec<(&str, &str)> = Vec::new();
+    let mut located_warn: Vec<(&str, &str)> = Vec::new();
+    let mut unlocated_err: Vec<&str> = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        let err = is_error_header(l);
+        if !(err || is_warning_header(l)) || skip.contains(l) {
+            continue;
+        }
+        match (diagnostic_location(lines, i), err) {
+            (Some(loc), true) => located_err.push((l, loc)),
+            (Some(loc), false) => located_warn.push((l, loc)),
+            (None, true) => unlocated_err.push(l),
+            (None, false) => {}
+        }
+    }
+    let located: Vec<(&str, &str)> = located_err.into_iter().chain(located_warn).collect();
+    let mut out: Vec<String> = Vec::new();
+    for (h, loc) in located.iter().take(ERROR_HEADERS_MAX) {
+        out.push(h.trim_end().to_string());
+        out.push(loc.trim_end().to_string());
+    }
+    if located.len() > ERROR_HEADERS_MAX {
+        out.push(format!(
+            "… and {} more diagnostics",
+            located.len() - ERROR_HEADERS_MAX
+        ));
+    }
+    for h in &unlocated_err {
+        out.push(h.trim_end().to_string());
+    }
+    out
+}
+
+/// Non-cargo lines that report a failure (`FAILED …`, pytest's `FAILED
+/// tests/…::name`, `… build FAILED`).
+fn is_plain_failed_line(l: &str) -> bool {
+    l.contains("FAILED")
+}
+
 /// The decision-relevant lines of a failing check's output. Never empty.
 ///
 /// * cargo-style output (a `test … FAILED`, `panicked at` or `test result:
 ///   FAILED` line is present): each `panicked at` line (it names the test
 ///   thread and the location) with its message lines up to the next section
 ///   marker; the last `failures:` name list (or, if there is none, the `test …
-///   FAILED` lines); every `test result: FAILED` line; `error:` lines; and the
-///   final line if it says FAILED.
-/// * anything else: the `error[…]`/`error:` header lines, then the last
-///   [`PLAIN_TAIL_LINES`] non-empty lines.
+///   FAILED` lines); every `test result: FAILED` line; the diagnostics (see
+///   below); and the final line if it says FAILED.
+/// * anything else: the diagnostics, then the lines containing `FAILED` (up to
+///   [`FAILURE_NAMES_MAX`], then `… and N more FAILED lines`), then the last
+///   [`PLAIN_TAIL_LINES`] non-empty lines (lines already in that tail are not
+///   repeated above it).
+///
+/// Diagnostics: each `error[…]`/`error:`/`warning[…]`/`warning:` header that
+/// has a `--> file:line:col` location is shown with that location (up to
+/// [`ERROR_HEADERS_MAX`], errors first, then `… and N more diagnostics`); the
+/// location is what the next action needs. `error` headers with no location
+/// (`error: could not compile …`, `error: test failed …`) are all shown too.
 ///
 /// Raw `--- stdout ---`/`--- stderr ---` sections, `---- name stdout ----`
 /// banners, backtrace notes and passing-test progress lines are never selected.
-/// The result is capped at [`DIGEST_MAX_LINES`].
+/// The result is capped at [`DIGEST_MAX_LINES`]; what the cap drops is counted
+/// in a final `… (N more summary lines; see the full output)` line, and the
+/// full output is in the record file.
 pub fn digest(text: &str) -> Vec<String> {
     let lines: Vec<&str> = text.lines().collect();
     let cargo = lines.iter().any(|l| {
@@ -327,9 +403,12 @@ pub fn digest(text: &str) -> Vec<String> {
         }
         for l in lines
             .iter()
-            .filter(|l| l.starts_with("test result: FAILED") || l.starts_with("error:"))
+            .filter(|l| l.starts_with("test result: FAILED"))
         {
             push(&mut out, l);
+        }
+        for l in diagnostics(&lines, &[]) {
+            push(&mut out, &l);
         }
         if let Some(last) = lines.iter().rev().find(|l| !l.trim().is_empty()) {
             if last.contains("FAILED") {
@@ -345,16 +424,28 @@ pub fn digest(text: &str) -> Vec<String> {
                 .collect();
             ne[ne.len().saturating_sub(PLAIN_TAIL_LINES)..].to_vec()
         };
-        let headers: Vec<&str> = lines
+        let diags = diagnostics(&lines, &tail);
+        for d in &diags {
+            push(&mut out, d);
+        }
+        let failed: Vec<&str> = lines
             .iter()
             .copied()
-            .filter(|l| is_error_header(l) && !tail.contains(l))
-            .take(ERROR_HEADERS_MAX)
+            .filter(|l| is_plain_failed_line(l) && !tail.contains(l))
             .collect();
-        for h in &headers {
-            push(&mut out, h);
+        for l in failed.iter().take(FAILURE_NAMES_MAX) {
+            push(&mut out, l);
         }
-        if !headers.is_empty() {
+        if failed.len() > FAILURE_NAMES_MAX {
+            push(
+                &mut out,
+                &format!(
+                    "… and {} more FAILED lines",
+                    failed.len() - FAILURE_NAMES_MAX
+                ),
+            );
+        }
+        if !diags.is_empty() || !failed.is_empty() {
             push(&mut out, "…");
         }
         for l in tail {

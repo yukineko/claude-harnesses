@@ -3,9 +3,10 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! fde — Forward Deployed Engineer harness.
 //!
-//! **PARTIAL SCAFFOLD.** Every subcommand below exists and parses. `resolve` is
-//! implemented (`target.rs`, `git.rs`); every other subcommand still answers
-//! `Undetermined`, so it exits 2. The contract below is what the
+//! **PARTIAL SCAFFOLD.** Every subcommand below exists and parses. `resolve`
+//! (`target.rs`, `git.rs`) and `begin` / `ratify` / `status` (`ratify.rs`,
+//! `state.rs`) are implemented; `gate`, `evidence` and `report` still answer
+//! `Undetermined`, so they exit 2. The contract below is what the
 //! implementation must meet; tests may rely on it.
 //!
 //! # CLI contract
@@ -26,8 +27,9 @@
 //! | command | stdout | exit |
 //! |---|---|---|
 //! | `fde resolve [TARGET]` | JSON `{"root": "<abs path>", "state_key": "<key>"}` | 0 resolved / 2 undetermined |
-//! | `fde ratify [TARGET] --spec FILE` | — | 0 recorded / 1 refused / 2 undetermined |
-//! | `fde status [TARGET]` | — | **0 ratified / 1 unratified / 2 undetermined** |
+//! | `fde begin [TARGET] --spec FILE` | — | 0 registered / 1 refused (spec missing, not a file, or inside the target) / 2 undetermined |
+//! | `fde ratify [TARGET] [--spec FILE]` | — | 0 recorded / 1 refused (not registered, or FILE is not the registered spec) / 2 undetermined |
+//! | `fde status [TARGET]` | — | **0 ratified / 1 unratified (incl. not registered, spec changed since ratification) / 2 undetermined (state unreadable or corrupt; or, once a ratification is recorded, the spec unreadable or missing)** |
 //! | `fde gate` | — (reason on stderr) | 0 allow / 2 deny (PreToolUse block) |
 //! | `fde evidence red\|green\|pass --req ID --cmd CMD [TARGET]` | — | 0 recorded / 1 observation contradicts the kind / 2 undetermined |
 //! | `fde evidence verify [TARGET]` | — | 0 complete / 1 incomplete / 2 undetermined |
@@ -54,6 +56,7 @@ mod evidence;
 mod gate;
 mod git;
 mod ratify;
+mod state;
 mod target;
 
 use std::io::Write;
@@ -73,7 +76,7 @@ const EXIT_NEGATIVE: i32 = 1;
 #[command(
     name = "fde",
     version,
-    about = "Forward Deployed Engineer harness (partial scaffold: resolve is implemented; every other command answers undetermined, exit 2)"
+    about = "Forward Deployed Engineer harness (partial scaffold: resolve, begin, ratify and status are implemented; gate, evidence and report answer undetermined, exit 2)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -87,13 +90,21 @@ enum Cmd {
         /// Target path (default: the git top-level of the cwd; relative paths resolve against the cwd).
         target: Option<PathBuf>,
     },
-    /// Ratify FILE as the spec of the target.
+    /// Register the target with the draft spec FILE (outside the target); the target becomes unratified.
+    Begin {
+        /// Target path (default: the git top-level of the cwd; relative paths resolve against the cwd).
+        target: Option<PathBuf>,
+        /// The draft spec file; must exist and live outside the target.
+        #[arg(long)]
+        spec: PathBuf,
+    },
+    /// Ratify the registered spec of the target (content fingerprint = SHA-256 of its bytes).
     Ratify {
         /// Target path (default: the git top-level of the cwd; relative paths resolve against the cwd).
         target: Option<PathBuf>,
-        /// The spec file to ratify.
+        /// Optional: when given, must be the registered spec, else refused (exit 1).
         #[arg(long)]
-        spec: PathBuf,
+        spec: Option<PathBuf>,
     },
     /// Exit 0 ratified / 1 unratified / 2 undetermined.
     Status {
@@ -233,13 +244,19 @@ fn run(cmd: Cmd) -> i32 {
                 Determination::Undetermined(why) => undetermined(why),
             }
         }
+        Cmd::Begin { target, spec } => with_target(target.as_deref(), |t, state| {
+            verdict_exit(ratify::begin(t, &spec, state))
+        }),
         Cmd::Ratify { target, spec } => with_target(target.as_deref(), |t, state| {
-            verdict_exit(ratify::ratify(t, &spec, state))
+            verdict_exit(ratify::ratify(t, spec.as_deref(), state))
         }),
         Cmd::Status { target } => with_target(target.as_deref(), |t, state| {
             match ratify::status(t, state) {
                 Determination::Known(ratify::Status::Ratified { .. }) => 0,
-                Determination::Known(ratify::Status::Unratified) => EXIT_NEGATIVE,
+                Determination::Known(ratify::Status::Unratified { reason }) => {
+                    let _ = writeln!(std::io::stderr(), "fde: unratified: {reason}");
+                    EXIT_NEGATIVE
+                }
                 Determination::Undetermined(why) => undetermined(why),
             }
         }),

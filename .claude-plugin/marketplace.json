@@ -82,7 +82,7 @@
     {
       "name": "backlog",
       "description": "Cross-project task queue for Claude Code with cycle-type tags, a SessionStart hook that injects pending work, and subcommands to add, list, claim and finish tasks.",
-      "version": "0.3.76",
+      "version": "0.3.77",
       "category": "workflow",
       "keywords": [
         "backlog",
@@ -107,7 +107,7 @@
     {
       "name": "budgetguard",
       "description": "Real-time cost budget gate for Claude Code: on Stop it computes the session's USD cost from the transcript and blocks the turn when the session or daily limit is exceeded.",
-      "version": "0.1.47",
+      "version": "0.1.48",
       "category": "cost",
       "keywords": [
         "hooks",
@@ -132,7 +132,7 @@
     {
       "name": "compass",
       "description": "Goal re-grounding and next-move derivation for Claude Code, sitting upstream of condukt to decide what to work on.",
-      "version": "0.1.39",
+      "version": "0.1.40",
       "category": "planning",
       "keywords": [
         "compass",
@@ -184,7 +184,7 @@
     {
       "name": "context-governor",
       "description": "Thin control layer around Claude Code's built-in compaction: pinning, lossless recall, retrieval and tool-result hygiene, wired as a single hook-dispatch binary.",
-      "version": "0.1.24",
+      "version": "0.1.25",
       "category": "context",
       "keywords": [
         "context",
@@ -208,7 +208,7 @@
     {
       "name": "ctxrot",
       "description": "Context-rot guard for Claude Code that detects, rescues, restores and distills conversation context to fight attention decay in long sessions.",
-      "version": "0.5.38",
+      "version": "0.5.39",
       "category": "context",
       "keywords": [
         "context",
@@ -306,7 +306,7 @@
     {
       "name": "ship",
       "description": "Nudges the commit, merge, push and plugin-update shipping ritual and detects unshipped state using read-only git checks, never auto-running a mutating command.",
-      "version": "0.1.28",
+      "version": "0.1.29",
       "category": "workflow",
       "keywords": [
         "hooks",
@@ -484,7 +484,7 @@
     {
       "name": "harness-status",
       "description": "Unified human-on-the-loop status dashboard for Claude Code: a /status command that aggregates budgetguard spend and gauge session records into one read-only view.",
-      "version": "0.1.31",
+      "version": "0.1.32",
       "category": "observability",
       "keywords": [
         "status",
@@ -557,7 +557,7 @@
     {
       "name": "reviewgate",
       "description": "Code-review gate for Claude Code whose Stop hook defaults to off; opt in to inject a review rubric for self-review or to spawn an independent reviewer command.",
-      "version": "0.1.63",
+      "version": "0.1.64",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -703,7 +703,7 @@
     {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: on Stop it blocks when implementation lines were added with no test visible in the uncommitted changes, and red/green/verify subcommands record RED before GREEN.",
-      "version": "0.1.61",
+      "version": "0.1.62",
       "category": "quality",
       "keywords": [
         "tdd",
@@ -752,7 +752,7 @@
     {
       "name": "autoflow",
       "description": "Session-end auto-flow gate for Claude Code: a Stop hook that prompts /record once, then keeps looping /condukt while the in-flight run still has pending tasks.",
-      "version": "0.1.41",
+      "version": "0.1.42",
       "category": "orchestration",
       "keywords": [
         "hooks",
@@ -957,7 +957,7 @@
     {
       "name": "propguard",
       "description": "Property gate for Claude Code that derives invariants from a task's done_criteria and checks the code against them; its Stop hook is not wired by default and must be installed explicitly.",
-      "version": "0.1.75",
+      "version": "0.1.76",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -1077,7 +1077,7 @@
     {
       "name": "webqa",
       "description": "Web QA gate for Claude Code: blocks a Stop until Playwright specs for changed web code pass, and detects test-weakening edits to Playwright specs.",
-      "version": "0.1.6",
+      "version": "0.1.7",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -1101,7 +1101,7 @@
     {
       "name": "sitecraft",
       "description": "Site-building harness for Claude Code: records design decisions asked from the user, manages the dev server, and blocks a Stop on broken pages or security findings.",
-      "version": "0.1.17",
+      "version": "0.1.18",
       "category": "quality",
       "keywords": [
         "hooks",

@@ -26,3 +26,61 @@ scripts/test_guard_maintree_bash_foreign_merge_window.py:100: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_guard_maintree_bash_foreign_merge_window.py::ForeignMergeWindow::test_foreign_merge_window_does_not_refuse_unrelated_command
 ========================= 1 failed, 1 passed in 2.09s =========================="""
+
+[[task]]
+id = "55cea09a"
+title = "sitecraft serve start: ready probe misses an IPv6-only (::1) dev server (F13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1793668543
+updated_at = 1793668543
+weight = 0.0
+issue_number = 1487
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1487"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test serve_ready_ipv6 serve_start_detects_server_listening_only_on_ipv6_loopback"
+rev = "c76993884cb84ad252dfc6efca1d725431f95c0e"
+observed_at = 1793668543
+detail = """
+exit 101: ; 0 ignored; 0 measured; 1 filtered out; finished in 5.60s
+
+   Compiling sitecraft v0.1.4 (/Users/yuki/src/.harness-worktrees/sitecraft-f12-f13/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running tests/serve_ready_ipv6.rs (target/debug/deps/serve_ready_ipv6-6711ec267f416d9a)
+error: test failed, to rerun pass `-p sitecraft --test serve_ready_ipv6`"""
+
+[[task]]
+id = "56303611"
+title = "sitecraft check pages: cannot resolve playwright from the npm --prefix app package dir (F12)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1793668551
+updated_at = 1793668551
+weight = 0.0
+issue_number = 1488
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1488"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test check_pages_app_subdir playwright_in_app_subdir_named_by_npm_prefix_is_resolved"
+rev = "c76993884cb84ad252dfc6efca1d725431f95c0e"
+observed_at = 1793668551
+detail = """
+exit 101: sured; 2 filtered out; finished in 0.45s
+
+   Compiling sitecraft v0.1.4 (/Users/yuki/src/.harness-worktrees/sitecraft-f12-f13/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running tests/check_pages_app_subdir.rs (target/debug/deps/check_pages_app_subdir-05f09da1ec31ea57)
+error: test failed, to rerun pass `-p sitecraft --test check_pages_app_subdir`"""

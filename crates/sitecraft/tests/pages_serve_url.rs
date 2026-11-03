@@ -140,8 +140,7 @@ impl Env {
     fn run(&self, extra: &[&str]) -> Out {
         let mut args = vec!["check", "pages"];
         args.extend_from_slice(extra);
-        self.p
-            .run_env(&args, &[("SITECRAFT_NODE", os(&self.node))])
+        self.p.run_env(&args, &[("SITECRAFT_NODE", os(&self.node))])
     }
 
     fn state_file(&self) -> PathBuf {
@@ -199,7 +198,11 @@ fn p1_running_ipv6_server_is_the_base_for_pages_and_api_paths() {
     e.record_running(leader.pgid(), &format!("http://[::1]:{}", e.port));
     // Precondition: serve status reports running (so P1 applies).
     let st = e.p.run(&["serve", "status"]);
-    expect_code(&st, 0, "precondition: serve status with a live recorded group");
+    expect_code(
+        &st,
+        0,
+        "precondition: serve status with a live recorded group",
+    );
     assert!(st.stdout.contains("running"), "{}", st.describe());
 
     let o = e.run(&[]);

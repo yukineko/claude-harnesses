@@ -30,7 +30,11 @@ The `/sitecraft` skill asks the user every design decision the purpose needs, re
   console errors, page errors, asset HTTP errors and broken links. node runs in `<root>/<dir>` when
   `command` is `npm --prefix <dir> …` (Playwright resolves from there and its ancestors), else in the
   root. Then each `api_paths` entry gets one `GET` (redirects not followed): non-2xx or no connection
-  is exit 1, more than 10 s for one path is exit 2.
+  is exit 1, more than 10 s for one path is exit 2. The pages and the `GET`s target `--base-url` when
+  given (it always wins). Without it they target the `url` that `sitecraft serve status` reports for a
+  running server (`http://127.0.0.1:<port>` or `http://[::1]:<port>`), or `http://127.0.0.1:<port>`
+  when no server is recorded (stopped). A serve state that cannot be determined (an unreadable or
+  invalid state file, a dead recorded group) is exit 2 without running node; no address is guessed.
 - `sitecraft check security` — secrets (printed redacted) and `.env` values in build output, dangerous
   HTML sinks in sources, `npm audit --json` high/critical (judged from the JSON shape, not the exit code).
   The audit runs in the same package directory as `check pages`: `<root>/<dir>` when `command` is

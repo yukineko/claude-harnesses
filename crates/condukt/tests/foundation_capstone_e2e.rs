@@ -38,6 +38,9 @@ fn bin() -> &'static str {
 /// touched) + a standalone compile-broken fixture cargo crate that a task's
 /// worktree can be pointed at for the editgate leg.
 struct Fixture {
+    /// The per-fixture root dir (`<temp>/condukt-capstone-e2e-<pid>-<tag>`)
+    /// that holds `repo`, `home` and `broken_wt`.
+    base: PathBuf,
     repo: PathBuf,
     home: PathBuf,
     state_dir: PathBuf,
@@ -70,6 +73,7 @@ impl Fixture {
         );
 
         Self {
+            base,
             repo,
             home,
             state_dir,
@@ -368,4 +372,58 @@ fn foundation_capstone_composes_autonomy_checkpoint_editgate_and_auto_rollback_i
     let block_v2: serde_json::Value = serde_json::from_str(&block_line_2)
         .expect("post-rollback block verdict must be one JSON line");
     assert_eq!(block_v2["decision"], "block");
+}
+
+/// #1485: a `Fixture` must remove its temp base dir when it goes out of scope.
+/// Without a `Drop`, every run leaks `condukt-capstone-e2e-<pid>-<tag>` dirs
+/// under the temp dir (190 leftovers were observed).
+#[test]
+fn fixture_cleanup_on_drop() {
+    let fx = Fixture::new("cleanup-on-drop");
+    let base = fx.base.clone();
+    assert!(
+        base.is_dir(),
+        "precondition: fixture base dir must exist before drop: {}",
+        base.display()
+    );
+    drop(fx);
+    assert!(
+        !base.exists(),
+        "fixture base dir still exists after drop: {}",
+        base.display()
+    );
+}
+
+/// #1485: the cleanup must also happen when the test body panics (a failing
+/// assert is the common case), i.e. it must live in `Drop`, which runs during
+/// unwinding, not in an end-of-test call that a panic skips.
+#[test]
+fn fixture_cleanup_on_panic() {
+    let mut recorded: Option<PathBuf> = None;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let fx = Fixture::new("cleanup-on-panic");
+        recorded = Some(fx.base.clone());
+        assert!(
+            fx.base.is_dir(),
+            "precondition: fixture base dir must exist before the panic: {}",
+            fx.base.display()
+        );
+        panic!("intentional panic while the fixture is alive (#1485)");
+    }));
+    let base = recorded.expect("the closure must record the base path before panicking");
+    let payload = result.expect_err("the closure must have panicked");
+    let msg = payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+    assert!(
+        msg.contains("intentional panic while the fixture is alive"),
+        "the closure panicked for an unexpected reason (precondition failed?): {msg}"
+    );
+    assert!(
+        !base.exists(),
+        "fixture base dir still exists after panic unwind: {}",
+        base.display()
+    );
 }

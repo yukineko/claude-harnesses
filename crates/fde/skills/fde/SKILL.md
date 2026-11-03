@@ -1,6 +1,6 @@
 ---
 name: fde
-description: Forward Deployed Engineer ワークフロー。外部の target リポジトリを読んで仕様を推定し(証拠は逐語引用)、人間の批准を AskUserQuestion で得てから、要件ごとに RED→fix→GREEN を証跡付きで回し、未解決・未計測を逐語で報告する。批准前の target 変更は fde gate(PreToolUse)が拒否する。判定は `fde evidence verify` の終了コードだけ。
+description: Forward Deployed Engineer ワークフロー。外部の target リポジトリを読んで仕様を推定し(証拠は逐語引用)、人間の批准を AskUserQuestion で得てから、要件ごとに RED→fix→GREEN を証跡付きで回し、未解決・未計測を逐語で報告する。批准前の target 変更は fde gate(PreToolUse)が拒否する。判定は `fde evidence verify`(PASS も完了)と `fde report`(批准済みかつ全要件 RED→GREEN のときだけ 0)の終了コード。
 argument-hint: '[target-dir]'
 allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
 ---

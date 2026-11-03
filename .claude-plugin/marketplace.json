@@ -156,7 +156,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.321",
+      "version": "0.7.322",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -982,7 +982,7 @@
     {
       "name": "fde",
       "description": "Forward Deployed Engineer harness: resolves a target repo, keeps a ratified spec per target outside it, denies edits to unratified registered targets, and records a red/green evidence ledger. Implemented: resolve, begin, ratify, status, gate, evidence red/green/pass/verify and report.",
-      "version": "0.1.27",
+      "version": "0.1.28",
       "category": "quality",
       "keywords": [
         "hooks",

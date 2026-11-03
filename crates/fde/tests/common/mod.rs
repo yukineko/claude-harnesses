@@ -140,6 +140,46 @@ pub fn run_fde(cwd: &Path, state: &Path, args: &[&str]) -> Output {
     c.output().expect("spawn fde")
 }
 
+/// Run `fde gate` with process cwd `cwd`, `FDE_STATE_DIR=state`, and `stdin`
+/// (the raw PreToolUse payload bytes) on stdin; git leak vars removed.
+pub fn run_gate(cwd: &Path, state: &Path, stdin: &[u8]) -> Output {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut c = Command::new(fde_bin());
+    c.current_dir(cwd)
+        .arg("gate")
+        .env("FDE_STATE_DIR", state)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for v in GIT_LEAK_VARS {
+        c.env_remove(v);
+    }
+    let mut child = c.spawn().expect("spawn fde gate");
+    {
+        let mut si = child.stdin.take().expect("gate stdin");
+        // A gate that exits before reading stdin closes the pipe; that is the
+        // gate's answer, not a fixture error, so a broken pipe is tolerated.
+        let _ = si.write_all(stdin);
+    }
+    child.wait_with_output().expect("wait fde gate")
+}
+
+/// A real-shaped PreToolUse payload (`session_id`, `transcript_path`, `cwd`,
+/// `hook_event_name`, `tool_name`, `tool_input`).
+pub fn pretooluse_payload(cwd: &Path, tool_name: &str, tool_input: serde_json::Value) -> String {
+    serde_json::json!({
+        "session_id": "fde-hook-gate-test",
+        "transcript_path": "/dev/null",
+        "cwd": cwd.to_str().expect("utf-8 cwd"),
+        "permission_mode": "default",
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool_name,
+        "tool_input": tool_input,
+    })
+    .to_string()
+}
+
 /// Exit code of `out` (`None` = killed by a signal).
 pub fn code(out: &Output) -> Option<i32> {
     out.status.code()

@@ -8,7 +8,7 @@
     {
       "name": "fde",
       "source": ".",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "description": "Forward Deployed Engineer harness: resolves a target repo, keeps a ratified spec per target outside it, denies edits to unratified registered targets, and records a red/green evidence ledger. Scaffold only: every command currently answers undetermined (exit 2)."
     }
   ]

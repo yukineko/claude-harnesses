@@ -1,7 +1,9 @@
 // sitecraft check pages — bundled Playwright runner.
 //
 // Usage: node check-pages.mjs '{"base_url":"http://127.0.0.1:5173","pages":["/","/about"]}'
-// cwd:   the project root (Playwright is resolved from its node_modules).
+// cwd:   the web-app package dir — `<root>/<dir>` for an `npm --prefix <dir>`
+//        command, else the project root (Playwright is resolved from its
+//        node_modules and those of its ancestors).
 //
 // Contract: the doc comment at the top of crates/sitecraft/tests/check_pages.rs.
 // stdout carries exactly one JSON object (schema sitecraft-check-pages/1);

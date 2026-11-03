@@ -100,12 +100,20 @@ fn write_record(root: &Path, body: &str) {
     std::fs::write(record_path(root), body).unwrap();
 }
 
-/// TOML for: every area in `irrelevant` judged irrelevant, nothing else.
+/// A recorded purpose. Ratified spec R1 (rulings D1): `decide check` exits 0
+/// only when `[purpose] text` is recorded, so every record these tests expect
+/// to be clean carries one. It comes first so a key appended after the last
+/// table header still lands in an area table.
+const PURPOSE_TOML: &str = "[purpose]\ntext = \"decide_cli test purpose\"\n\n";
+
+/// TOML for: a recorded purpose ([`PURPOSE_TOML`]) and every area in
+/// `irrelevant` judged irrelevant, nothing else.
 fn irrelevant_toml(irrelevant: &[&str]) -> String {
-    irrelevant
+    let areas: String = irrelevant
         .iter()
         .map(|a| format!("[areas.{a}]\nrelevance = \"irrelevant\"\n\n"))
-        .collect()
+        .collect();
+    format!("{PURPOSE_TOML}{areas}")
 }
 
 fn all_irrelevant_toml() -> String {
@@ -316,6 +324,12 @@ fn next_json_has_the_documented_shape() {
 fn every_area_is_asked_its_relevance_and_all_irrelevant_reaches_done() {
     let t = TempDir::new().unwrap();
     let root = t.path();
+    // R1 (rulings D1): the purpose is recorded, never asked by `next`.
+    expect_code(
+        &run(root, &["purpose", "--text", "decide_cli test purpose"]),
+        0,
+        "record purpose",
+    );
     let asked = walk_to_done(root, |_| "irrelevant");
     let areas: BTreeSet<&str> = asked.iter().map(|(a, _)| a.as_str()).collect();
     let want: BTreeSet<&str> = AREA_IDS.into_iter().collect();

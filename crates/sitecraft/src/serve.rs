@@ -2,7 +2,10 @@
 //!
 //! `start` spawns the trusted `sitecraft.toml` `command` in its own process
 //! group, after checking the port is free, and waits (with a deadline) for an
-//! HTTP response on `http://127.0.0.1:<port><ready_path>`. Its state is a JSON
+//! HTTP 2xx/3xx response on `http://127.0.0.1:<port><ready_path>` or, when
+//! the server listens on the IPv6 loopback only (a `localhost` bind that
+//! resolved to `::1`), `http://[::1]:<port><ready_path>`; the address that
+//! answered is the recorded `url`. Its state is a JSON
 //! file under `<state>/serve/`, keyed by the canonical project root. `stop`
 //! terminates the whole process group (SIGTERM, grace, SIGKILL, wait).
 //!
@@ -50,7 +53,8 @@ pub struct ServerState {
     pub pgid: i32,
     /// Listening port.
     pub port: u16,
-    /// Base URL, `http://127.0.0.1:<port>`.
+    /// Base URL of the loopback address that answered the ready probe:
+    /// `http://127.0.0.1:<port>` or `http://[::1]:<port>`.
     pub url: String,
     /// Canonical project root the server belongs to.
     pub root: PathBuf,
@@ -160,7 +164,7 @@ fn read_state(path: &Path, canonical: &Path) -> Result<OnDisk, String> {
             canonical.display()
         ));
     }
-    if st.url != base_url(st.port) {
+    if st.url != base_url(st.port) && st.url != base_url_v6(st.port) {
         return Err(format!(
             "state file {} has url {:?} inconsistent with port {}; {fix}",
             path.display(),
@@ -173,6 +177,16 @@ fn read_state(path: &Path, canonical: &Path) -> Result<OnDisk, String> {
 
 fn base_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
+}
+
+fn base_url_v6(port: u16) -> String {
+    format!("http://[::1]:{port}")
+}
+
+/// `http://<addr>` — `http://127.0.0.1:<port>` or `http://[::1]:<port>` for
+/// the loopback addresses the ready probe uses.
+fn url_for(addr: SocketAddr) -> String {
+    format!("http://{addr}")
 }
 
 /// Liveness of a process group.
@@ -215,12 +229,25 @@ fn signal_group(pgid: i32, sig: libc::c_int) -> Result<(), String> {
 
 /// Wait (bounded) until the group is gone, reaping `child` (our own leader,
 /// if we spawned it) so its zombie does not keep the group alive.
+///
+/// Without a `child` handle the leader may still be our own child: a
+/// process that ran [`start`] and then [`stop`] (the Stop gate, `check
+/// capability`) dropped the handle in `start`. Its unreaped zombie keeps the
+/// group id in use, and macOS answers `killpg(pgid, 0)` on a zombie-only
+/// group with EPERM, so it is reaped here with `waitpid(pgid, WNOHANG)`.
+/// That reaps only a child of this process; for any other pid it fails with
+/// ECHILD, which is ignored (nothing of ours to reap).
 fn wait_gone(pgid: i32, child: &mut Option<&mut Child>, within: Duration) -> Result<bool, String> {
     let deadline = Instant::now() + within;
     loop {
         if let Some(c) = child.as_mut() {
             c.try_wait()
                 .map_err(|e| format!("cannot reap dev-server leader {pgid}: {e}"))?;
+        } else {
+            let mut status: libc::c_int = 0;
+            // SAFETY: waitpid on one specific pid with WNOHANG; it only ever
+            // reaps a terminated child of this process.
+            unsafe { libc::waitpid(pgid, &mut status, libc::WNOHANG) };
         }
         if group_liveness(pgid)? == Group::Gone {
             return Ok(true);
@@ -376,13 +403,12 @@ fn confirm_port_released(port: u16) -> Result<(), String> {
 /// when nothing answered with HTTP yet (refused / reset / timeout / garbage).
 /// `None` only ever means "not ready": the caller keeps waiting until its
 /// deadline, so an IO error here never becomes a ready answer.
-fn probe_http(port: u16, path: &str, budget: Duration) -> Option<u16> {
+fn probe_http(addr: SocketAddr, path: &str, budget: Duration) -> Option<u16> {
     let timeout = budget.min(PROBE_TIMEOUT).max(Duration::from_millis(10));
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let mut s = TcpStream::connect_timeout(&addr, timeout).ok()?;
     s.set_read_timeout(Some(timeout)).ok()?;
     s.set_write_timeout(Some(timeout)).ok()?;
-    let req = format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    let req = format!("GET {path} HTTP/1.0\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
     s.write_all(req.as_bytes()).ok()?;
     let mut buf = [0u8; 64];
     let mut got = 0;
@@ -540,7 +566,7 @@ fn start_inner(state: &Path, root: &Path) -> Result<ServerState, String> {
 
     let deadline = Instant::now() + Duration::from_secs(cfg.ready_timeout_secs);
     let mut last_code: Option<u16> = None;
-    loop {
+    let ready_addr = loop {
         match child.try_wait() {
             Ok(Some(status)) => {
                 return Err(fail(
@@ -568,22 +594,38 @@ fn start_inner(state: &Path, root: &Path) -> Result<ServerState, String> {
             return Err(fail(
                 &mut child,
                 format!(
-                    "dev server not ready on {}{} within {}s ({seen}); raise `ready_timeout_secs` or fix `command`/`ready_path` in {} (then `sitecraft trust`)",
+                    "dev server not ready on {}{} or {}{} within {}s ({seen}); raise `ready_timeout_secs` or fix `command`/`ready_path` in {} (then `sitecraft trust`)",
                     base_url(cfg.port),
+                    cfg.ready_path,
+                    base_url_v6(cfg.port),
                     cfg.ready_path,
                     cfg.ready_timeout_secs,
                     cfg_path.display()
                 ),
             ));
         }
-        if let Some(code) = probe_http(cfg.port, &cfg.ready_path, deadline - now) {
-            if (200..400).contains(&code) {
+        // Every loopback family, IPv4 first: a server bound to `localhost`
+        // may listen on [::1] only (F13). The first family answering 2xx/3xx
+        // is the one recorded.
+        let mut ready_on = None;
+        for (addr, _) in loopbacks(cfg.port) {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
                 break;
             }
-            last_code = Some(code);
+            if let Some(code) = probe_http(addr, &cfg.ready_path, left) {
+                if (200..400).contains(&code) {
+                    ready_on = Some(addr);
+                    break;
+                }
+                last_code = Some(code);
+            }
+        }
+        if let Some(addr) = ready_on {
+            break addr;
         }
         std::thread::sleep(PROBE_INTERVAL);
-    }
+    };
 
     // Ready — but a different process may have answered; the leader must
     // still be ours and alive.
@@ -609,7 +651,7 @@ fn start_inner(state: &Path, root: &Path) -> Result<ServerState, String> {
     let st = ServerState {
         pgid,
         port: cfg.port,
-        url: base_url(cfg.port),
+        url: url_for(ready_addr),
         root: canonical,
     };
     if let Err(why) = write_state(&sf, &st) {

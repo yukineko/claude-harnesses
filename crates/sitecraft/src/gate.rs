@@ -3,7 +3,12 @@
 //! Runs through `harness_core::gate::run::run_guarded` (gate name
 //! `sitecraft`; a panic blocks). In a repo with `sitecraft.toml` it combines,
 //! with [`Verdict::worst_of`]: trust of the config, `decide check`,
-//! `check security`, and — only when the session wrote a file matching
+//! `check security` (the same [`crate::check::security::check_security`] as
+//! the CLI, so `npm audit` runs in the same `--prefix` package directory),
+//! the result records of every relevant capability
+//! (rulings D5: missing / failed / other-version / stale-input / unreadable →
+//! block naming `sitecraft check capability <name>`; the gate never runs a
+//! capability itself), and — only when the session wrote a file matching
 //! `web_globs` (a Write/Edit to one, or a Bash command naming one), or when
 //! that cannot be determined (including any Bash command not provably
 //! read-only from its command line: an allowlisted command with literal,
@@ -11,6 +16,9 @@
 //! `check pages` + `serve stop`. A repo without `sitecraft.toml` is allowed
 //! and a `not-configured` line is appended to the state dir. Give-up is
 //! bounded (`max_attempts`) and says NOTHING WAS VERIFIED when it allows.
+//! `decide check`, `check security` and (when run) the pages step each
+//! append a check-history line ([`crate::history`]); a line that cannot be
+//! appended makes that check `Undetermined` (a block).
 //!
 //! Stdin handling: empty stdin is a manual run (verdict on stderr, exit code
 //! per [`crate::exit_code`], no give-up counter); non-empty stdin that is not
@@ -130,7 +138,7 @@ fn evaluate(input: &HookInput, state: &Path) -> (Verdict, (u32, i64)) {
         Ok(r) => r,
         Err(why) => return (Verdict::undetermined(why), DEFAULT_BUDGET),
     };
-    let cfg = match config::load(&root) {
+    let (cfg, cfg_bytes) = match config::load(&root) {
         Loaded::Absent => return (not_configured(state, &root, input), DEFAULT_BUDGET),
         Loaded::Undetermined(why) => {
             return (
@@ -143,7 +151,7 @@ fn evaluate(input: &HookInput, state: &Path) -> (Verdict, (u32, i64)) {
         }
         Loaded::Config(cfg, bytes) => {
             match trust::check_bytes(state, &root, &config::path_for(&root), &bytes) {
-                Trust::Trusted => cfg,
+                Trust::Trusted => (cfg, bytes),
                 // Nothing from an unapproved file is honoured, including its
                 // give-up budget: the built-in default bounds this block.
                 Trust::Untrusted(why) => {
@@ -170,27 +178,92 @@ fn evaluate(input: &HookInput, state: &Path) -> (Verdict, (u32, i64)) {
     );
     let decide = annotate(
         "decide check",
-        record::check_root(&root),
+        recorded(state, &root, "decide", "sitecraft decide check", |o| {
+            crate::decide::gate_check(&root, o)
+        }),
         "ask the user and record each answer: `sitecraft decide next` prints the next question, `sitecraft decide record --area <area> --question <id> --answer <value>` records it",
     );
     let security = annotate(
         "check security",
-        check::security::check_security(&cfg, &root),
+        recorded(state, &root, "security", "sitecraft check security", |o| {
+            let v = check::security::check_security(&cfg, &root);
+            o.report("sitecraft check security", &v);
+            v
+        }),
         "fix each finding listed above, then stop again",
     );
+    let run_pages = || {
+        recorded(state, &root, "pages", "sitecraft check pages", |o| {
+            let v = pages_with_server(state, &root);
+            o.report("sitecraft check pages", &v);
+            v
+        })
+    };
     let pages = match web_changes(&input.transcript_path, &root, &cfg) {
         Determination::Known(false) => None,
-        Determination::Known(true) => Some(pages_with_server(state, &root)),
+        Determination::Known(true) => Some(run_pages()),
         Determination::Undetermined(why) => {
             eprintln!(
                 "sitecraft gate: web changes cannot be ruled out ({}); checking pages",
                 why.as_str()
             );
-            Some(pages_with_server(state, &root))
+            Some(run_pages())
         }
     };
-    let v = Verdict::worst_of([decide, security].into_iter().chain(pages));
+    let caps = capabilities(state, &root, &cfg, &cfg_bytes);
+    let v = Verdict::worst_of([decide, security, caps].into_iter().chain(pages));
     (v, budget)
+}
+
+/// The D5 capability check: the result records of every relevant
+/// capability, compared with the current inputs. Spawns nothing (no
+/// Blender, no Chromium, no capability command). An absent decision record
+/// or one without relevant capabilities is `Clean` (nothing is added; `decide
+/// check` already judges the record itself); an unreadable record or
+/// unusable `[capabilities]` is `Undetermined`.
+fn capabilities(state: &Path, root: &Path, cfg: &Config, cfg_bytes: &[u8]) -> Verdict {
+    let d = match record::load(root) {
+        Determination::Known(None) => return Verdict::from_findings(Vec::new()),
+        Determination::Known(Some(d)) => d,
+        Determination::Undetermined(why) => {
+            return Verdict::undetermined(format!(
+                "capabilities: undetermined: the decision record cannot be read ({}), so the capability results cannot be judged; fix it, then run `sitecraft check capability <name>` for each relevant capability",
+                why.as_str()
+            ))
+        }
+    };
+    let caps = match d.parsed_capabilities() {
+        Ok(c) => c,
+        Err(e) => {
+            return Verdict::undetermined(format!(
+                "capabilities: undetermined: [capabilities] is unusable ({e}); fix it with `sitecraft decide capability`, then run `sitecraft check capability <name>`"
+            ))
+        }
+    };
+    crate::capability::results::freshness(
+        state,
+        root,
+        &d.capabilities,
+        &caps,
+        Some(crate::capability::results::WebInputs {
+            toml_bytes: cfg_bytes,
+            web_globs: &cfg.web_globs,
+        }),
+    )
+}
+
+/// One gate check through [`crate::history::recorded`]: its report lines
+/// are captured (not printed) for the fingerprint, and a history line that
+/// cannot be appended makes the check `Undetermined` (a block).
+fn recorded(
+    state: &Path,
+    root: &Path,
+    name: &str,
+    label: &str,
+    run: impl FnOnce(&mut crate::history::Output) -> Verdict,
+) -> Verdict {
+    let mut out = crate::history::Output::capturing();
+    crate::history::recorded(Ok(state), root, name, label, &mut out, run)
 }
 
 /// Prefix a check's non-clean reason with its name and a fix hint. `Clean`

@@ -63391,3 +63391,1247 @@ FAILED scripts/test_guard_maintree_bash_foreign_merge_window.py::ForeignMergeWin
 [task.closure]
 reason = "discard"
 discard_reason = "user ruling 2026-11-01, confirmed 2026-11-03: accepted as a limit. No sound signal proves an in-flight merge in main belongs to another process; the guard stays fail-closed and the false refusal is accepted."
+
+[[task]]
+id = "1ea85cbd"
+title = "[sitecraft-capabilities:R1] 目的を decisions.toml の [purpose] text に記録でき、未記録なら sitecraft decide check が exit 1 で記録方法を案内する。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R1",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R1 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: 目的を decisions.toml の [purpose] text に記録でき、未記録なら sitecraft decide check が exit 1 で記録方法を案内する。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - sitecraft decide purpose --text "<要約>" の後、sitecraft/decisions.toml の [purpose] text に前後空白を除いた空でない文字列が保存されている
+  - 空白だけの --text を渡すと decisions.toml は変わらず exit 1
+  - [purpose] が無い（または text が空白のみ）状態で他の記録が揃っていても sitecraft decide check が exit 1 になり、出力に `sitecraft decide purpose --text` の案内を含む
+  - sitecraft decide next は purpose を問いとして返さない
+  - 値の違う purpose を再記録すると [[history]] に area = "purpose", question = "text" の行が 1 つ追記される
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D1
+  - docs/specs/sitecraft-capabilities-rulings.md#D8
+"""
+created_at = 1793674776
+updated_at = 1793677545
+weight = 0.0
+issue_number = 1494
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1494"
+issue_closed_at = 1793677547
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r1_purpose"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674776
+detail = """
+exit 101: arness-worktrees/session-6d697f68/crates/sitecraft)
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling flate2 v1.1.9
+   Compiling png v0.18.1
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s
+     Running tests/spec_r1_purpose.rs (target/debug/deps/spec_r1_purpose-74e46e048b59888c)
+error: test failed, to rerun pass `-p sitecraft --test spec_r1_purpose`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r1_purpose"
+exit = 0
+passed = 10
+rev = "eb23ef8a03d19042a9ea8b78eeb17a8a91e70f74"
+observed_at = 1793677527
+output_digest = "sha256:5bc236cff0cb0295d629ac56c4dbd682107e4c72ae0d6c0492990a71423aaec2"
+excerpt = """
+
+running 10 tests
+test check_with_purpose_and_all_areas_is_clean ... ok
+test next_never_asks_purpose_when_everything_else_is_settled ... ok
+test blank_purpose_on_absent_record_is_exit_1_and_creates_nothing ... ok
+test next_never_asks_purpose_on_an_empty_record ... ok
+test check_with_blank_purpose_text_is_exit_1_with_the_purpose_hint ... ok
+test blank_purpose_text_is_exit_1_and_changes_nothing ... ok
+test purpose_on_absent_record_creates_it ... ok
+test purpose_text_is_recorded_trimmed ... ok
+test check_without_purpose_is_exit_1_with_the_purpose_hint ... ok
+test rerecording_a_different_purpose_appends_one_history_row ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+   Compiling sitecraft v0.1.7 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.12s
+     Running tests/spec_r1_purpose.rs (target/debug/deps/spec_r1_purpose-e71b3c79f0d3dfd1)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "0191013a"
+title = "[sitecraft-capabilities:R7] sitecraft decide check は、D7 の閉じた 6 行の規則表（W1, V1〜V5）でカタログ回答の組を検査する。violation は exit 1、W1 は終了コードを変えない warning とする。domain 問いは判定しない。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R7",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R7 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: sitecraft decide check は、D7 の閉じた 6 行の規則表（W1, V1〜V5）でカタログ回答の組を検査する。violation は exit 1、W1 は終了コードを変えない warning とする。domain 問いは判定しない。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - 規則表は crates/sitecraft/src/decide/ 内にあり、W1, V1, V2, V3, V4, V5 のちょうど 6 行で、条件は D7 の表のとおり
+  - 6 規則のそれぞれについて、発火する例と発火しない例のテストがあり、どちらも pass する
+  - V1〜V5 が発火すると exit 1 になり、出力に `<id>: <表示文>` と関与した (area, question, answer) が並ぶ
+  - W1（auth.relevance=relevant かつ exposure.relevance=irrelevant）だけが成立する記録では、stderr に `warning: W1: …` が出て、終了コードは W1 が無い場合と同じ（ほかが揃っていれば 0）
+  - 記録の無い回答（領域 irrelevant・follow-up 非活性・未回答）を参照する条件項は偽として評価する。multi の回答は、いずれかの要素が集合に含まれれば真
+  - domain 問いの回答をどう変えても、規則表の判定は変わらない
+  - SKILL.md の Phase 4 は、done の後に LLM が回答一覧（domain 問いを含む）を読み直し、食い違いがあれば AskUserQuestion で確認する手順を持つ
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D7
+  - docs/specs/sitecraft-capabilities-rulings.md#C1
+  - docs/specs/sitecraft-capabilities-rulings.md#C3
+  - docs/specs/sitecraft-capabilities-rulings.md#U4
+"""
+created_at = 1793674799
+updated_at = 1793677563
+weight = 0.0
+issue_number = 1500
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1500"
+issue_closed_at = 1793677566
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r7_rules"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674799
+detail = """
+exit 101:  16 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/spec_r7_rules.rs (target/debug/deps/spec_r7_rules-03fc873c1fc6c105)
+error: test failed, to rerun pass `-p sitecraft --test spec_r7_rules`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r7_rules"
+exit = 0
+passed = 16
+rev = "eb23ef8a03d19042a9ea8b78eeb17a8a91e70f74"
+observed_at = 1793677548
+output_digest = "sha256:2205a365e772928a6c28e9152807c26dc1f9234a202dd9cc2106de05faad3fcd"
+excerpt = """
+
+running 16 tests
+test skill_phase_4_rereads_the_answers_and_asks_about_contradictions ... ok
+test the_rule_table_lives_in_src_decide_with_exactly_six_ids ... ok
+test v2_fires_on_static_hosting_with_local_disk_files ... ok
+test v4_does_not_fire_without_an_admin_ui_or_with_login ... ok
+test v3_does_not_fire_for_a_single_user_or_with_login ... ok
+test v1_fires_on_static_hosting_with_server_side_processing ... ok
+test v2_does_not_fire_for_object_storage_or_an_inactive_follow_up ... ok
+test v1_does_not_fire_for_browser_processing_or_server_hosting ... ok
+test v4_fires_on_an_admin_ui_without_login ... ok
+test v5_fires_on_failure_notification_without_notifications ... ok
+test w1_does_not_change_the_exit_code_of_a_pending_record ... ok
+test w1_fires_on_auth_relevant_with_exposure_irrelevant ... ok
+test v3_fires_on_several_users_without_login ... ok
+test w1_does_not_fire_when_exposure_is_relevant_or_auth_irrelevant ... ok
+test v5_does_not_fire_for_retry_or_with_notifications ... ok
+test domain_answers_never_change_the_rule_verdict ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+   Compiling sitecraft v0.1.7 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.53s
+     Running tests/spec_r7_rules.rs (target/debug/deps/spec_r7_rules-fc93c4901a1c36b7)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "5b588d44"
+title = "[sitecraft-capabilities:R8] 回答の複数選択（multi）と補足（--note）を記録でき、follow-up は any-of で活性化し、値が変わる再記録は [[history]] に追記されて changed 行を出す。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R8",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R8 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: 回答の複数選択（multi）と補足（--note）を記録でき、follow-up は any-of で活性化し、値が変わる再記録は [[history]] に追記されて changed 行を出す。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - カタログで multi = true なのは notification.channel だけ。decide add-question --multi で domain 問いを multi にできる
+  - multi の問いは --answer の繰り返しを配列で保存する（1 個でも配列）。空要素・重複・choices 外の要素は記録を変えずに失敗終了する。multi でない問いへの --answer 2 個以上も同じく失敗終了する
+  - multi の問いに旧形式の文字列があれば 1 要素の配列として読む。multi でない問いに配列があれば exit 2
+  - channel=[web-push, email] と記録すると、decide next が email-sender を問う
+  - --note はカタログ回答なら [areas.<a>.notes] <q>、domain 問いなら [[questions]] の note に保存する。--note を付けない再記録は既存の note を残す
+  - 値（回答・relevance・note・purpose・capability）が変わる記録ごとに [[history]] に {area, question, old, new, at}（at は UTC RFC 3339、note の変更は question = "<q>#note"）が追記され、stdout に `changed: <old> -> <new>` が 1 行出る
+  - 同じ値の再記録では history が増えず、changed も出ない
+  - follow-up の剪定で消える回答は {…, new = "", pruned = true} として history に残る
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D8
+"""
+created_at = 1793674802
+updated_at = 1793677583
+weight = 0.0
+issue_number = 1501
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1501"
+issue_closed_at = 1793677586
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r8_multi_history"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674802
+detail = """
+exit 101:  measured; 0 filtered out; finished in 1.07s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.53s
+     Running tests/spec_r8_multi_history.rs (target/debug/deps/spec_r8_multi_history-6a6507a76d14fae0)
+error: test failed, to rerun pass `-p sitecraft --test spec_r8_multi_history`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r8_multi_history"
+exit = 0
+passed = 13
+rev = "eb23ef8a03d19042a9ea8b78eeb17a8a91e70f74"
+observed_at = 1793677566
+output_digest = "sha256:fcb018ab2f993f5511c5adaceab39528492d4124e886784cca44c4c5ecc2f8ce"
+excerpt = """
+
+running 13 tests
+test legacy_string_under_channel_reads_as_one_element ... ok
+test array_under_a_non_multi_question_is_exit_2 ... ok
+test non_multi_domain_question_rejects_two_answers ... ok
+test domain_question_can_be_multi ... ok
+test channel_is_multi_and_stores_an_array ... ok
+test any_of_channel_activates_email_sender ... ok
+test changed_answer_appends_history_and_prints_one_changed_line ... ok
+test invalid_multi_answers_change_nothing ... ok
+test notes_are_stored_and_kept ... ok
+test pruned_follow_up_is_kept_in_history ... ok
+test same_value_rerecord_adds_no_history_and_no_changed_line ... ok
+test relevance_and_note_changes_are_history_rows ... ok
+test only_channel_is_multi_in_the_catalog ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.31s
+
+   Compiling sitecraft v0.1.7 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/spec_r8_multi_history.rs (target/debug/deps/spec_r8_multi_history-b8a3e1c58d693b40)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "91c69f00"
+title = "[sitecraft-capabilities:R9] classify の dedicated-harness 出力に description と reuse を加え、ユーザーが --confirm-fit yes を記録するまで既存 plugin の再利用を許可しない。simple / dedicated-harness の境界を SKILL に明記する。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R9",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R9 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: classify の dedicated-harness 出力に description と reuse を加え、ユーザーが --confirm-fit yes を記録するまで既存 plugin の再利用を許可しない。simple / dedicated-harness の境界を SKILL に明記する。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - dedicated-harness の出力 JSON に description（existing=true なら marketplace.json の当該 description、false なら null）と reuse が含まれる
+  - reuse は existing=true で fit の記録が無ければ unconfirmed、fit=yes なら confirmed、fit=no なら rejected、existing=false か kind=simple なら not-applicable
+  - --confirm-fit yes|no は existing=true のときだけ受け付けて [features.<F>] fit に記録し、それ以外では失敗終了する
+  - SKILL.md は、description を AskUserQuestion で示してユーザーの回答だけを --confirm-fit に記録すること、confirmed のときだけ既存 plugin を使うこと、unconfirmed を再利用許可と読まないこと、rejected は新規 plugin（別名）の経路に進むことを明記し、旧文言「existing: true ならその plugin を使う」を含まない
+  - SKILL.md に D9 の境界が明記されている: アプリのプロセス内で動き、アプリ利用者のための機能（ジョブ実行・予算制御・通知送信・認証など）は simple。Claude Code のセッション・ツール呼び出し・ファイル編集を判定するもの（hook・gate・検査ハーネス）だけが dedicated-harness
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D9
+  - crates/sitecraft/skills/sitecraft/SKILL.md#Phase 5
+"""
+created_at = 1793674806
+updated_at = 1793677601
+weight = 0.0
+issue_number = 1502
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1502"
+issue_closed_at = 1793677603
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r9_classify_fit"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674806
+detail = """
+exit 101: ; 0 measured; 0 filtered out; finished in 0.53s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/spec_r9_classify_fit.rs (target/debug/deps/spec_r9_classify_fit-6f4c26b1cf0f4aed)
+error: test failed, to rerun pass `-p sitecraft --test spec_r9_classify_fit`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r9_classify_fit"
+exit = 0
+passed = 8
+rev = "eb23ef8a03d19042a9ea8b78eeb17a8a91e70f74"
+observed_at = 1793677586
+output_digest = "sha256:f3e0e55a53021a86a16bcf7bae4986f98b40f05b2cba75e062ee8cc4fb93fb1a"
+excerpt = """
+
+running 8 tests
+test skill_states_the_simple_dedicated_harness_boundary ... ok
+test skill_asks_the_user_about_fit_and_reuses_only_confirmed ... ok
+test simple_feature_is_not_applicable ... ok
+test missing_plugin_is_not_applicable_with_null_description ... ok
+test existing_plugin_without_fit_is_unconfirmed_with_its_description ... ok
+test confirm_fit_no_is_rejected_and_recorded ... ok
+test confirm_fit_yes_is_confirmed_and_recorded ... ok
+test confirm_fit_is_refused_when_nothing_exists_to_reuse ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+   Compiling sitecraft v0.1.7 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/spec_r9_classify_fit.rs (target/debug/deps/spec_r9_classify_fit-85cc3d8f4d625ed4)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "4336e9c2"
+title = "[sitecraft-capabilities:R6] sitecraft init <dir> は D6 の規則で git repo と sitecraft/ を作る。scaffold 先は <root>/app/ とし、決定記録と分ける。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R6",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R6 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: sitecraft init <dir> は D6 の規則で git repo と sitecraft/ を作る。scaffold 先は <root>/app/ とし、決定記録と分ける。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - <dir> が存在しない、または空なら、ディレクトリを作り（必要なら）、git init と <dir>/sitecraft/ を作って exit 0
+  - <dir> が空でない、またはファイルなら、何も変えずに exit 1
+  - <dir> の親が別の git work tree の中にあるなら、何も変えずに exit 1
+  - git が無い・git init が非 0・30 秒の時間制限超過・IO 失敗は exit 2
+  - SKILL.md の不変条件「空でないディレクトリには scaffold しない」は文言を変えずに残し、scaffold 先を <root>/app/ と明記する（app/ が存在して空でなければ拒否する）
+  - SKILL.md の sitecraft.toml の例が `npm --prefix app …`・build_dir = "app/dist"・web_globs = ["app/src/**", …] の形になっている
+  - <root>/sitecraft/decisions.toml がある root でも、空の app/ への scaffold 手順は拒否されない
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D6
+  - docs/specs/sitecraft-capabilities-rulings.md#C5
+  - crates/sitecraft/skills/sitecraft/SKILL.md#Phase 6
+"""
+created_at = 1793674796
+updated_at = 1793678365
+weight = 0.0
+issue_number = 1499
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1499"
+issue_closed_at = 1793678368
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r6_init"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674796
+detail = """
+exit 101: ed; 11 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/spec_r6_init.rs (target/debug/deps/spec_r6_init-d0083c9dc99ee536)
+error: test failed, to rerun pass `-p sitecraft --test spec_r6_init`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r6_init"
+exit = 0
+passed = 11
+rev = "672a1ed212d558544c67a8247bc06f8c76be4571"
+observed_at = 1793678318
+output_digest = "sha256:62d0691354becc62ac697dd22e2003121a2ba9bfb7dcc33c71e69075e0fcdd07"
+excerpt = """
+
+running 11 tests
+test init_creates_a_missing_directory ... ok
+test init_accepts_an_empty_directory ... ok
+test skill_phase_6_scaffolds_into_app_even_with_a_decision_record ... ok
+test skill_keeps_the_invariant_and_names_app_as_the_target ... ok
+test skill_sitecraft_toml_example_uses_app ... ok
+test init_refuses_a_directory_inside_another_work_tree ... ok
+test init_without_git_is_exit_2 ... ok
+test init_refuses_a_non_empty_directory_or_a_file ... ok
+test io_failure_creating_the_directory_is_exit_2 ... ok
+test git_init_failure_is_exit_2 ... ok
+test git_exceeding_30_seconds_is_exit_2 ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.68s
+
+   Compiling sitecraft v0.1.8 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.09s
+     Running tests/spec_r6_init.rs (target/debug/deps/spec_r6_init-53070e4d7150acf7)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "07d216cc"
+title = "[sitecraft-capabilities:R10] sitecraft.toml の任意キー api_paths を check pages が GET で検査し、SKILL に Vite + Hono（@hono/vite-dev-server）を 1 つの dev command で起動する手順を持つ。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R10",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R10 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: sitecraft.toml の任意キー api_paths を check pages が GET で検査し、SKILL に Vite + Hono（@hono/vite-dev-server）を 1 つの dev command で起動する手順を持つ。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - api_paths（/ で始まる文字列の配列、既定は空）を sitecraft.toml が受け付け、/ で始まらない要素はエラーになる。trust 対象は従来どおりファイル全体
+  - check pages は各 api_paths に http://127.0.0.1:<port> から GET し（リダイレクトは追わない）、2xx 以外と接続失敗は exit 1、1 パスあたり 10 秒超過は exit 2
+  - SKILL.md に、Vite + Hono（@hono/vite-dev-server）でフロントと API を 1 つの dev command で起動する手順（vite.config.ts と server/app.ts の構成）がある
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D10
+"""
+created_at = 1793674809
+updated_at = 1793678395
+weight = 0.0
+issue_number = 1503
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1503"
+issue_closed_at = 1793678398
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r10_api_paths"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674809
+detail = """
+exit 101: gnored; 0 measured; 0 filtered out; finished in 0.47s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/spec_r10_api_paths.rs (target/debug/deps/spec_r10_api_paths-0132eaf6a5f8ceb1)
+error: test failed, to rerun pass `-p sitecraft --test spec_r10_api_paths`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r10_api_paths"
+exit = 0
+passed = 7
+rev = "672a1ed212d558544c67a8247bc06f8c76be4571"
+observed_at = 1793678368
+output_digest = "sha256:a60ba8f67aa63d3785ebc0705fb357eb9c0b13ddf6f7c103c0b63bc6b34337f3"
+excerpt = """
+
+running 7 tests
+test skill_has_the_vite_hono_one_command_step ... ok
+test unreachable_api_server_is_a_violation ... ok
+test api_paths_all_2xx_is_clean ... ok
+test api_paths_stay_under_whole_file_trust ... ok
+test api_path_without_leading_slash_is_unusable ... ok
+test non_2xx_api_paths_are_violations ... ok
+test api_path_slower_than_10_seconds_is_exit_2 ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.46s
+
+   Compiling sitecraft v0.1.8 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/spec_r10_api_paths.rs (target/debug/deps/spec_r10_api_paths-9b8f8bffa575bdfa)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "56303611"
+title = "sitecraft check pages: cannot resolve playwright from the npm --prefix app package dir (F12)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1793668551
+updated_at = 1793678413
+weight = 0.0
+issue_number = 1488
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1488"
+issue_closed_at = 1793678415
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test check_pages_app_subdir playwright_in_app_subdir_named_by_npm_prefix_is_resolved"
+rev = "c76993884cb84ad252dfc6efca1d725431f95c0e"
+observed_at = 1793668551
+detail = """
+exit 101: sured; 2 filtered out; finished in 0.45s
+
+   Compiling sitecraft v0.1.4 (/Users/yuki/src/.harness-worktrees/sitecraft-f12-f13/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running tests/check_pages_app_subdir.rs (target/debug/deps/check_pages_app_subdir-05f09da1ec31ea57)
+error: test failed, to rerun pass `-p sitecraft --test check_pages_app_subdir`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test check_pages_app_subdir"
+exit = 0
+passed = 3
+rev = "672a1ed212d558544c67a8247bc06f8c76be4571"
+observed_at = 1793678398
+output_digest = "sha256:04e8d5654bb051216ba9cd65acfe7d761f152bf53d15c9d2110c3d0e3548a0f4"
+excerpt = """
+
+running 3 tests
+test control_playwright_nowhere_still_not_installed ... ok
+test playwright_in_app_subdir_named_by_npm_prefix_is_resolved ... ok
+test control_playwright_in_root_is_clean ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+   Compiling sitecraft v0.1.8 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running tests/check_pages_app_subdir.rs (target/debug/deps/check_pages_app_subdir-2c399f2ba9b056c1)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "55cea09a"
+title = "sitecraft serve start: ready probe misses an IPv6-only (::1) dev server (F13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1793668543
+updated_at = 1793678438
+weight = 0.0
+issue_number = 1487
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1487"
+issue_closed_at = 1793678441
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test serve_ready_ipv6 serve_start_detects_server_listening_only_on_ipv6_loopback"
+rev = "c76993884cb84ad252dfc6efca1d725431f95c0e"
+observed_at = 1793668543
+detail = """
+exit 101: ; 0 ignored; 0 measured; 1 filtered out; finished in 5.60s
+
+   Compiling sitecraft v0.1.4 (/Users/yuki/src/.harness-worktrees/sitecraft-f12-f13/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running tests/serve_ready_ipv6.rs (target/debug/deps/serve_ready_ipv6-6711ec267f416d9a)
+error: test failed, to rerun pass `-p sitecraft --test serve_ready_ipv6`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test serve_ready_ipv6"
+exit = 0
+passed = 2
+rev = "672a1ed212d558544c67a8247bc06f8c76be4571"
+observed_at = 1793678416
+output_digest = "sha256:5011e7b1c2d1abaee4aaec6b78ffe29b9b4bf206c768d667172510cc73fb6fe2"
+excerpt = """
+
+running 2 tests
+test serve_start_detects_server_listening_only_on_ipv6_loopback ... ok
+test serve_start_still_undetermined_when_nothing_ever_answers ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.52s
+
+   Compiling sitecraft v0.1.8 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running tests/serve_ready_ipv6.rs (target/debug/deps/serve_ready_ipv6-98765ad89ac20a94)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "e3d38715"
+title = "[sitecraft-capabilities:R2] Web アプリ以外の能力を sitecraft decide capability で [capabilities.<name>] に登録できる。verify.kind は閉じた 3 種で、command 種の argv は D2-trust の digest で人間の trust を要する。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R2",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R2 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: Web アプリ以外の能力を sitecraft decide capability で [capabilities.<name>] に登録できる。verify.kind は閉じた 3 種で、command 種の argv は D2-trust の digest で人間の trust を要する。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - sitecraft decide capability --name N --relevance R --how T --done-when T --verify-kind K と種別ごとの引数で、[capabilities.N] に relevance・how・done_when・verify が保存される
+  - name が ^[a-z0-9][a-z0-9-]*$ に一致しない場合は記録されず、失敗終了する
+  - verify.kind が builtin:blender-headless / builtin:threejs-render / command 以外、必須キー（blender-headless: script・glb・render、threejs-render: page、command: argv（空でない文字列配列、先頭は空白でない）・inputs（空でない glob 配列））の欠落、または型不一致のとき、sitecraft decide check が exit 2
+  - relevance=relevant の能力で how / done_when / verify のどれかが無いとき、sitecraft decide check が exit 1
+  - [capabilities] テーブルが無い project では、能力に関する指摘を何も出さない（能力なしとして扱う）
+  - sitecraft trust は、command 種の能力が 1 つ以上あれば、[name, argv] を name 昇順に並べた JSON 配列の sha256 を trust store のキー `<canonical root>#capabilities` に記録する。command 種が 0 個ならこのキーを要求しない
+  - command 種の argv を変えた後、trust し直す前に sitecraft check capability <name> を実行すると、コマンドを実行せず exit 2 になり、sitecraft trust の案内を出す。trust store が読めない場合も exit 2
+  - how / done_when / builtin 種の verify の変更では D2-trust の記録は無効にならない
+  - 値の違う能力を再記録すると [[history]] に area = "capability", question = N で追記される
+  - SKILL.md は、能力の how / done_when を AskUserQuestion でユーザーに決めてもらう手順を持ち、LLM が sitecraft trust を代わりに実行しないことを明記している
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#U1
+  - docs/specs/sitecraft-capabilities-rulings.md#D2
+  - docs/specs/sitecraft-capabilities-rulings.md#C4
+  - crates/sitecraft/skills/sitecraft/SKILL.md#不変条件
+  - crates/sitecraft/README.ja.md#trust の手順
+"""
+created_at = 1793674780
+updated_at = 1793691804
+weight = 0.0
+issue_number = 1495
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1495"
+issue_closed_at = 1793691807
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r2_capability_decide"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674780
+detail = """
+exit 101:  filtered out; finished in 0.55s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/spec_r2_capability_decide.rs (target/debug/deps/spec_r2_capability_decide-31c1ffd003005f5f)
+error: test failed, to rerun pass `-p sitecraft --test spec_r2_capability_decide`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r2_capability_decide"
+exit = 0
+passed = 16
+rev = "2cf34c307ff5262ab45d01b7f59403d0440dc8c1"
+observed_at = 1793691783
+output_digest = "sha256:d9e377436d593ab715f3b9af8382ae0b3d1736f9f0b9a5888aab73cf13ee3656"
+excerpt = """
+
+running 16 tests
+test project_without_capabilities_table_gets_no_capability_findings ... ok
+test decide_capability_records_a_command_capability ... ok
+test skill_has_the_ask_step_for_how_and_done_when ... ok
+test decide_capability_records_a_threejs_render_capability ... ok
+test skill_says_llm_does_not_run_trust ... ok
+test decide_capability_records_a_blender_headless_capability ... ok
+test trust_records_the_command_argv_digest_under_the_capabilities_key ... ok
+test rerecording_a_changed_capability_appends_a_history_row ... ok
+test trust_without_command_capabilities_does_not_write_the_capabilities_key ... ok
+test relevant_capability_missing_how_done_when_or_verify_is_exit_1 ... ok
+test invalid_capability_names_are_not_recorded ... ok
+test valid_capabilities_of_each_kind_check_clean ... ok
+test changed_argv_is_not_run_until_trusted_again ... ok
+test unusable_verify_tables_make_decide_check_exit_2 ... ok
+test how_done_when_and_builtin_verify_changes_keep_the_trust ... ok
+test unreadable_trust_store_is_exit_2_without_running_the_command ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.48s
+
+   Compiling sitecraft v0.1.10 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.87s
+     Running tests/spec_r2_capability_decide.rs (target/debug/deps/spec_r2_capability_decide-2f4f42949ac5bcc0)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "d6feb3ed"
+title = "[sitecraft-capabilities:R3] sitecraft capability probe <name> は実環境で試して feasible / infeasible / undetermined の三値を JSON と終了コードで返す。プローブ結果は記録せず、完成判定にも使わない。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R3",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R3 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: sitecraft capability probe <name> は実環境で試して feasible / infeasible / undetermined の三値を JSON と終了コードで返す。プローブ結果は記録せず、完成判定にも使わない。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - stdout に JSON がちょうど 1 個 {"capability":N,"result":…,"reason":…} 出る。終了コードは feasible 0 / infeasible 1 / undetermined 2
+  - 未登録の name は exit 2
+  - 120 秒を超えると result=undetermined、reason=timeout、exit 2
+  - blender の探索: SITECRAFT_BLENDER が空でなければそれだけを使い、指すファイルが無い・実行できない場合は undetermined。未設定なら PATH の blender、次に /Applications/Blender.app/Contents/MacOS/Blender の順に探し、どれも無ければ infeasible
+  - blender が見つかったら --background --factory-startup --python <最小スクリプト> を実行し、終了 0 かつ <state>/probe-tmp/ 配下の出力が D4 の GLB 条件を満たせば feasible。非 0 終了・条件不成立は infeasible、spawn 失敗は undetermined
+  - three.js プローブ: check pages と同じ方法で解決した Playwright の Chromium を headless で起動し、about:blank で webgl2 か webgl の context が取れれば feasible、どちらも取れなければ infeasible、Playwright か Chromium が起動できなければ undetermined
+  - command 種: argv[0] が実行可能（`/` を含むならそのパスのファイル、含まなければ PATH で解決）なら feasible、そうでなければ infeasible。コマンド自体は実行せず、trust も要求しない
+  - probe の実行で capability-results・decisions.toml のどちらにも書き込みが起きない
+  - SKILL.md は、プローブ結果を AskUserQuestion でユーザーに示す手順を持ち、probe の feasible を完成の根拠にしないことを明記している
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D3
+  - docs/specs/sitecraft-capabilities-rulings.md#U2
+"""
+created_at = 1793674784
+updated_at = 1793691825
+weight = 0.0
+issue_number = 1496
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1496"
+issue_closed_at = 1793691827
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r3_probe"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674784
+detail = """
+exit 101:  18 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/spec_r3_probe.rs (target/debug/deps/spec_r3_probe-ff702f264c7060ee)
+error: test failed, to rerun pass `-p sitecraft --test spec_r3_probe`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r3_probe"
+exit = 0
+passed = 18
+rev = "2cf34c307ff5262ab45d01b7f59403d0440dc8c1"
+observed_at = 1793691807
+output_digest = "sha256:92d9c41ca6682face482f250569bf186cf885a18bb259719c33388c9a8ed4f7c"
+excerpt = """
+
+running 20 tests
+test no_blender_anywhere_is_infeasible ... ignored, only meaningful where /Applications/Blender.app is absent; this Mac has it
+test probe_times_out_after_120_seconds ... ignored, takes > 120 s: the probe time limit is 120 s (rulings D3)
+test blender_spawn_failure_is_undetermined ... ok
+test sitecraft_blender_not_executable_is_undetermined ... ok
+test sitecraft_blender_pointing_at_nothing_is_undetermined_and_path_is_not_used ... ok
+test skill_says_feasible_is_not_completion ... ok
+test skill_shows_probe_results_to_the_user ... ok
+test threejs_probe_when_chromium_cannot_start_is_undetermined ... ok
+test command_probe_resolves_argv0_without_running_it ... ok
+test threejs_probe_with_only_webgl_is_feasible ... ok
+test threejs_probe_with_webgl2_is_feasible ... ok
+test threejs_probe_without_playwright_is_undetermined ... ok
+test threejs_probe_without_webgl_is_infeasible ... ok
+test blender_nonzero_exit_is_infeasible ... ok
+test blender_on_path_is_used_when_sitecraft_blender_is_unset ... ok
+test blender_probe_with_a_valid_glb_is_feasible ... ok
+test probing_writes_neither_results_nor_decisions ... ok
+test empty_sitecraft_blender_falls_back_to_path ... ok
+test unregistered_name_is_exit_2 ... ok
+test blender_output_failing_the_glb_condition_is_infeasible ... ok
+
+test result: ok. 18 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.20s
+
+   Compiling sitecraft v0.1.10 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/spec_r3_probe.rs (target/debug/deps/spec_r3_probe-651bd601123e9d6d)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "5cdeb78a"
+title = "[sitecraft-capabilities:R4] sitecraft check capability <name> は、能力が実機で動いた証拠を D4 の画素規則と GLB 条件で判定し、0 clean / 1 violation / 2 undetermined を返す。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R4",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R4 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: sitecraft check capability <name> は、能力が実機で動いた証拠を D4 の画素規則と GLB 条件で判定し、0 clean / 1 violation / 2 undetermined を返す。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - 未登録または relevance=irrelevant の name は exit 2。300 秒を超えると exit 2（reason timeout）
+  - 画素規則: 背景色は 4 隅の RGB の最頻値。最頻値が一意でなければ、描画率が最小になる候補を背景色にする。描画画素は R/G/B のいずれかで背景との差の絶対値が 16 を超える画素。描画率 1% 以上で clean、1% 未満と幅か高さが 0 の画像は violation。単色画像が violation、1% 以上描かれた画像が clean になることをテストで観測する
+  - GLB 条件: 先頭 4 バイトが glTF、version(uint32 LE)=2、length(uint32 LE) がファイルサイズと一致。0 バイトのファイルと条件不成立のファイルは violation
+  - builtin:blender-headless: 実行前に既存の glb と render を削除し、cwd=root で `<blender> --background --factory-startup --python <script> -- --glb <絶対パス> --render <絶対パス>` を実行する。非 0 終了・出力が無い・PNG として読めない・GLB 条件不成立・画素規則 violation は exit 1。blender が見つからない・script が無い・読み取りの IO 失敗は exit 2
+  - builtin:threejs-render: trust 済み sitecraft.toml が無いか未 trust なら exit 2。dev server が止まっていれば自分で起動し、終了時に自分が起動したものだけを止める。http://127.0.0.1:<port><page> を headless Chromium で開き、selector（既定 canvas）が 30 秒以内に可視にならなければ exit 1。可視になったら 2000 ms 後に要素のスクリーンショットを撮り、画素規則で判定する。Playwright か Chromium が起動できなければ exit 2
+  - command: D2-trust が無ければ実行せず exit 2。trust 済みなら cwd=root で argv を実行し、終了 0 は exit 0、終了 2 は exit 2、それ以外の非 0 と signal 終了は exit 1、spawn 失敗は exit 2
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D4
+  - docs/specs/sitecraft-capabilities-rulings.md#U2
+  - crates/sitecraft/skills/sitecraft/SKILL.md#終了コード規約
+"""
+created_at = 1793674787
+updated_at = 1793691856
+weight = 0.0
+issue_number = 1497
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1497"
+issue_closed_at = 1793691858
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r4_check_capability"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674787
+detail = """
+exit 101: ; 0 filtered out; finished in 1.02s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s
+     Running tests/spec_r4_check_capability.rs (target/debug/deps/spec_r4_check_capability-40bd56346b984fa3)
+error: test failed, to rerun pass `-p sitecraft --test spec_r4_check_capability`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r4_check_capability"
+exit = 0
+passed = 28
+rev = "2cf34c307ff5262ab45d01b7f59403d0440dc8c1"
+observed_at = 1793691827
+output_digest = "sha256:f97133a5e10ffe28d4e50a1c9ac1620f6c0b68d65b9506c7344a5a1f4b6c70f7"
+excerpt = """
+
+running 29 tests
+test check_times_out_after_300_seconds ... ignored, takes > 300 s: the check capability time limit is 300 s (rulings D4)
+test blender_is_run_with_the_documented_argv_and_cwd ... ok
+test blender_not_found_is_exit_2 ... ok
+test blender_nonzero_exit_is_a_violation ... ok
+test command_spawn_failure_is_exit_2 ... ok
+test command_without_capability_trust_is_not_run ... ok
+test alpha_is_ignored ... ok
+test four_distinct_corner_colours_pick_the_candidate_with_the_smallest_drawn_ratio ... ok
+test missing_script_is_exit_2 ... ok
+test render_drawn_below_one_percent_is_a_violation ... ok
+test channel_difference_must_exceed_16 ... ok
+test missing_render_is_a_violation ... ok
+test stale_outputs_are_deleted_before_the_run ... ok
+test render_drawn_at_one_percent_or_more_is_clean ... ok
+test single_colour_render_is_a_violation ... ok
+test threejs_selector_never_visible_is_a_violation ... ok
+test threejs_custom_selector_is_used ... ok
+test threejs_drawn_canvas_is_clean_and_the_server_it_started_is_stopped ... ok
+test command_exit_codes_map_to_the_verdict ... ok
+test threejs_leaves_an_already_running_server_running ... ok
+test threejs_single_colour_canvas_is_a_violation ... ok
+test glb_condition_failures_are_violations ... ok
+test threejs_chromium_or_playwright_unavailable_is_exit_2 ... ok
+test tied_corner_colours_pick_the_candidate_with_the_smallest_drawn_ratio ... ok
+test unregistered_and_irrelevant_capabilities_are_exit_2 ... ok
+test unreadable_outputs_are_exit_2 ... ok
+test zero_sized_or_unreadable_png_is_a_violation ... ok
+test threejs_with_untrusted_sitecraft_toml_is_exit_2 ... ok
+test threejs_without_sitecraft_toml_is_exit_2 ... ok
+
+test result: ok. 28 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 12.99s
+
+   Compiling sitecraft v0.1.10 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/spec_r4_check_capability.rs (target/debug/deps/spec_r4_check_capability-f80a5c840c926c1c)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "255b6411"
+title = "[sitecraft-capabilities:R5] check capability は結果を入力ハッシュ付きで記録し、Stop gate は能力を実行せずに、relevant な全能力の記録の鮮度を確かめ、そろっていなければ block する。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R5",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R5 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: check capability は結果を入力ハッシュ付きで記録し、Stop gate は能力を実行せずに、relevant な全能力の記録の鮮度を確かめ、そろっていなければ block する。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - check capability は終了のたびに <state>/capability-results/<root-key>/<name>.json に {name, exit, input_hash, sitecraft_version, at} を一時ファイルからの rename で書く。<root-key> は canonical root パスの sha256 hex。書けなければ check capability 自体が exit 2
+  - input_hash は、[capabilities.<name>] のキー昇順の正規化 JSON に続けて、種別ごとの入力ファイル集合（blender-headless: script と verify.inputs、threejs-render: sitecraft.toml・web_globs・verify.inputs、command: verify.inputs）を root 相対パス昇順に (パス, 内容の sha256) として連結したものの sha256。command 種で一致が 0 件、または読めないファイルがあれば exit 2
+  - trust 済み sitecraft.toml がある project で、relevant な能力の記録が無い・exit≠0・sitecraft_version 不一致・input_hash 不一致・読めない・再計算できないときは gate が block し、reason に能力名と `sitecraft check capability <name>` を含める
+  - 入力ファイルを 1 バイト変えると、check capability を再実行するまで gate が block する
+  - gate の実行中に blender も Chromium も能力の command も spawn されない
+  - 能力の判定は既存の検査と Verdict::worst_of で合成され、既存の bounded give-up（max_attempts 後の NOTHING WAS VERIFIED 付き通過）と panic barrier は変わらない
+  - relevant な能力が無い decisions.toml では、gate の判定が変更前と同じになる
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D5
+  - crates/sitecraft/README.ja.md#Stop gate
+"""
+created_at = 1793674791
+updated_at = 1793691907
+weight = 0.0
+issue_number = 1498
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1498"
+issue_closed_at = 1793691911
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r5_results_gate"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674791
+detail = """
+exit 101: ; 0 measured; 0 filtered out; finished in 2.44s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/spec_r5_results_gate.rs (target/debug/deps/spec_r5_results_gate-6f89fa03571585eb)
+error: test failed, to rerun pass `-p sitecraft --test spec_r5_results_gate`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r5_results_gate"
+exit = 0
+passed = 17
+rev = "2cf34c307ff5262ab45d01b7f59403d0440dc8c1"
+observed_at = 1793691859
+output_digest = "sha256:592f6654dfaf28a7bfdc5a5d4e7ac51d6adaa5e4251882f7f5dfbfc52eb1eefc"
+excerpt = """
+
+running 17 tests
+test blender_input_hash_covers_the_script_and_verify_inputs ... ok
+test a_violating_run_is_recorded_too ... ok
+test check_capability_writes_the_result_record ... ok
+test command_inputs_matching_nothing_or_unreadable_are_exit_2 ... ok
+test gate_still_runs_under_the_panic_barrier ... ok
+test changing_one_input_byte_blocks_until_the_check_is_rerun ... ok
+test gate_blocks_on_a_failed_record ... ok
+test fresh_capability_does_not_mask_another_failing_check ... ok
+test gate_spawns_no_capability ... ok
+test gate_blocks_on_a_stale_or_broken_record ... ok
+test input_hash_tracks_exactly_the_inputs_and_the_table ... ok
+test gate_blocks_without_a_record_and_allows_after_the_check ... ok
+test gate_does_not_rerun_a_freshly_checked_command ... ok
+test stale_capability_keeps_the_bounded_give_up ... ok
+test unwritable_results_dir_makes_the_check_exit_2 ... ok
+test no_relevant_capability_leaves_the_gate_as_before ... ok
+test threejs_input_hash_covers_sitecraft_toml_web_globs_and_verify_inputs ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.82s
+
+   Compiling sitecraft v0.1.10 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.43s
+     Running tests/spec_r5_results_gate.rs (target/debug/deps/spec_r5_results_gate-240351a4dcf1153f)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "d8791c47"
+title = "[sitecraft-capabilities:R11] D11 の閉じた一覧のすべての subprocess に時間制限があり、各検査の結果を履歴に残す。sitecraft status は state を D11 の判定式と優先順で JSON に出し、SKILL は stuck と waiting-human を D12 の手順で扱う（対象は /sitecraft のビルドループに限る）。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R11",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R11 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: D11 の閉じた一覧のすべての subprocess に時間制限があり、各検査の結果を履歴に残す。sitecraft status は state を D11 の判定式と優先順で JSON に出し、SKILL は stuck と waiting-human を D12 の手順で扱う（対象は /sitecraft のビルドループに限る）。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - probe は 120 秒、check capability は 300 秒、init の git は 30 秒、api_paths は 1 パス 10 秒で時間切れになり、exit 2（reason timeout）。既存の deadline_for・npm audit 300 秒・ready_timeout_secs は変わらない
+  - decide check・check pages・check security・check capability <name> は、CLI でも gate 経由でも、終了ごとに <state>/check-history/<root-key>.jsonl に {name, exit, fingerprint, elapsed_ms, timed_out, at} を 1 行追記する（name は decide / pages / security / capability:<name>）。追記できなければその検査が exit 2
+  - fingerprint は、exit≠0 なら stdout+stderr の時刻を <time>、絶対パスを <path>、数字列を 0 にこの順で置換した文字列の sha256 hex。時間切れなら sha256("timeout")、exit 0 なら null。時刻・パス・数字だけが違う 2 つの失敗が同じ指紋になることをテストで観測する
+  - sitecraft status は stdout に {"checks":[{name, last_exit, consecutive_same_failure, elapsed_ms, state}]} を出す。state は waiting-human > stuck（同一指紋の連続失敗 3 以上）> failing > slow（exit 0 かつ elapsed_ms が制限の 50% 以上。decide は slow にならない）> ok の優先順で決まる
+  - status の終了コード: 全検査が ok か slow なら 0、failing / stuck / waiting-human のどれかがあれば 1。履歴が無い・読めない・パースできない行がある・state dir が決まらない場合は 2
+  - pages と、capability: のうち threejs-render 種と command 種は、sitecraft.toml または D2-trust の digest が未 trust なら、失敗の連続数にかかわらず waiting-human になる
+  - SKILL.md は、stuck を見たら再実行ループを止め、D12 の (a)〜(d) でハーネス側か対象アプリ側かを切り分けて記録すること、ハーネス側なら harness repo の worktree で RED を観測した再現テストを添えて backlog add し、修正と rollout の後に再開すること、対象アプリ側で同じ指紋の stuck がさらに 3 回続けば Ask することを明記している
+  - SKILL.md は、waiting-human を停滞として扱わず、trust が要るファイルを示してユーザーに Ask し、待ち続けないことを明記している。この手順の対象を /sitecraft のビルドループに限ることも明記している（U6）
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D11
+  - docs/specs/sitecraft-capabilities-rulings.md#D12
+  - docs/specs/sitecraft-capabilities-rulings.md#C2
+  - docs/specs/sitecraft-capabilities-rulings.md#U5
+  - docs/specs/sitecraft-capabilities-rulings.md#U6
+"""
+created_at = 1793674812
+updated_at = 1793691948
+weight = 0.0
+issue_number = 1504
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1504"
+issue_closed_at = 1793691950
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r11_status_history"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674812
+detail = """
+exit 101: red; 0 filtered out; finished in 0.91s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s
+     Running tests/spec_r11_status_history.rs (target/debug/deps/spec_r11_status_history-09dbcb318d8103c4)
+error: test failed, to rerun pass `-p sitecraft --test spec_r11_status_history`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r11_status_history"
+exit = 0
+passed = 16
+rev = "2cf34c307ff5262ab45d01b7f59403d0440dc8c1"
+observed_at = 1793691911
+output_digest = "sha256:78a27a9fd0eeabdc4f73c2ae18dea6c9cde1f5ab14a89cbb33d459a589c9c843"
+excerpt = """
+
+running 17 tests
+test existing_time_limits_are_unchanged ... ok
+test passing_checks_are_ok_and_decide_is_never_slow ... ok
+test skill_handles_stuck_with_the_d12_procedure ... ok
+test skill_treats_waiting_human_as_an_ask_and_scopes_to_the_build_loop ... ok
+test failures_differing_only_in_paths_share_a_fingerprint ... ok
+test capability_at_half_its_limit_is_slow ... ok
+test command_capability_without_digest_trust_is_waiting_human_but_blender_is_not ... ok
+test timed_out_check_has_the_timeout_fingerprint ... ignored, takes ~105 s: check pages' own deadline (30 + 45 x 1 page + 30 s) must expire
+test three_same_failures_are_stuck ... ok
+test fewer_or_interrupted_failures_are_failing ... ok
+test failures_differing_only_in_times_and_digits_share_a_fingerprint ... ok
+test unappendable_history_makes_the_check_exit_2 ... ok
+test status_without_a_usable_history_is_exit_2 ... ok
+test untrusted_pages_are_waiting_human_even_when_stuck ... ok
+test the_gate_appends_history_lines_too ... ok
+test every_check_appends_a_history_line ... ok
+test api_path_time_limit_reports_timeout ... ok
+
+test result: ok. 16 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 16.08s
+
+   Compiling sitecraft v0.1.10 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s
+     Running tests/spec_r11_status_history.rs (target/debug/deps/spec_r11_status_history-1bb8b7cedd49d0a4)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "a258c41b"
+title = "[sitecraft-capabilities:R12] ~/src/3d-pipeline-web で D13 の 4 項目がすべて観測されたとき spec を完成とし、GLB→VRM 変換は完了条件に含めない。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R12",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R12 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: ~/src/3d-pipeline-web で D13 の 4 項目がすべて観測されたとき spec を完成とし、GLB→VRM 変換は完了条件に含めない。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - ~/src/3d-pipeline-web で [purpose] が記録され、sitecraft decide check が exit 0、stderr に `warning: W1:` が表示される
+  - blender-headless（builtin:blender-headless）と threejs-render（builtin:threejs-render）が relevance=relevant で登録され、両方の sitecraft capability probe が exit 0（feasible）
+  - 両方の sitecraft check capability が、/Applications/Blender.app の実 Blender と Playwright Chromium で exit 0
+  - その状態で sitecraft gate が block を返さない
+  - SKILL.md の完成報告の条件に、relevant な全能力の sitecraft check capability が exit 0 であることが加わっている（probe の feasible だけでは完成と報告しない）
+  - command 種はテスト内の fixture で検証し、テストベッドの完了条件には含めない
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D13
+  - docs/specs/sitecraft-capabilities-rulings.md#U2
+  - docs/specs/sitecraft-capabilities-rulings.md#U3
+  - crates/sitecraft/skills/sitecraft/SKILL.md#不変条件
+"""
+created_at = 1793674815
+updated_at = 1793691968
+weight = 0.0
+issue_number = 1505
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1505"
+issue_closed_at = 1793691971
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r12_skill_completion"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674815
+detail = """
+exit 101:  filtered out; finished in 0.00s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/spec_r12_skill_completion.rs (target/debug/deps/spec_r12_skill_completion-f07f6ea7031ccc97)
+error: test failed, to rerun pass `-p sitecraft --test spec_r12_skill_completion`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r12_skill_completion"
+exit = 0
+passed = 3
+rev = "2cf34c307ff5262ab45d01b7f59403d0440dc8c1"
+observed_at = 1793691950
+output_digest = "sha256:448527235f8931b75b750afdb42c67bf4f282a1fdb8293bf6aa59ea3cd69f0d5"
+excerpt = """
+
+running 4 tests
+test d13_testbed_is_complete ... ignored, D13 testbed: needs ~/src/3d-pipeline-web, /Applications/Blender.app and Playwright Chromium (run by hand)
+test invariant_5_lists_check_capability ... ok
+test phase_11_requires_check_capability_exit_0_for_relevant_capabilities ... ok
+test phase_11_says_probe_feasible_is_not_completion ... ok
+
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling sitecraft v0.1.10 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/spec_r12_skill_completion.rs (target/debug/deps/spec_r12_skill_completion-1d046c012637dfa6)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"

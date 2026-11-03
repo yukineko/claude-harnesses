@@ -788,11 +788,23 @@ def test_body_root(side: Side, f: str, _seen=None):
 # First words that open an ITEM or a `let` statement. Such a head may contain
 # depth-0 commas (`fn f<A, B>()`, `-> Map<K, V>`, `where T: A, U: B`,
 # `impl<A, B> X<A, B>`), so it ends only at its block `{` or at `;`.
+# Only STRICT keywords are listed: none of them can be a field, variant or
+# binding name, so a head starting with one is an item.
 _ITEM_HEAD_WORDS = frozenset({
-    "fn", "impl", "trait", "mod", "struct", "enum", "union", "type", "use",
-    "static", "const", "let", "extern", "unsafe", "async", "default", "auto",
-    "macro_rules",
+    "fn", "impl", "trait", "mod", "struct", "enum", "type", "use",
+    "static", "const", "let", "extern", "unsafe", "async",
 })
+# WEAK keywords (`union`, `default`, `auto`, `macro_rules`) are also legal
+# identifiers -- `struct S { #[cfg(test)] default: u8 }` is a field. They open
+# an item only when followed by that item's syntax: `union NAME`,
+# `default fn|impl|unsafe|const|type|async|extern`, `auto trait`,
+# `macro_rules!`. Otherwise the head is classified like any other non-item.
+_WEAK_ITEM_HEAD_RE = re.compile(
+    r"(?:union\s+[A-Za-z_][A-Za-z0-9_]*"
+    r"|default\s+(?:fn|impl|unsafe|const|type|async|extern)\b"
+    r"|auto\s+trait\b"
+    r"|macro_rules\s*!)"
+)
 _HEAD_WORD_RE = re.compile(r"\s*(?:pub\s*(?:\([^()]*\))?\s*)?([A-Za-z_][A-Za-z0-9_]*)")
 _OUTER_ATTR_RE = re.compile(r"\s*#\s*\[")
 
@@ -814,12 +826,15 @@ def _annotated_block(code: str, path: str, attr_end: int):
     `code` is MASKED (no comments/literals), so every bracket is real. Further
     outer attributes are skipped first. Then:
 
-    * an ITEM or `let` head (`_ITEM_HEAD_WORDS`, after an optional `pub(..)`)
-      ends at its first `{` (its block: the span is that `{ .. }`) or `;` at
-      `(`/`[` depth 0. Commas do not end it: they occur in generics, return
-      types and where clauses (`fn f<A, B>() where T: A, U: B { .. }`).
-      `#[cfg(test)] use x;` therefore captures nothing, never the next item's
-      block.
+    * an ITEM or `let` head (a strict keyword in `_ITEM_HEAD_WORDS`, or a
+      weak keyword followed by its item syntax per `_WEAK_ITEM_HEAD_RE`, after
+      an optional `pub(..)`) ends at its first `{` (its block: the span is
+      that `{ .. }`) or `;` at `(`/`[` depth 0. Commas do not end it: they
+      occur in generics, return types and where clauses (`fn f<A, B>() where
+      T: A, U: B { .. }`). `#[cfg(test)] use x;` therefore captures nothing,
+      never the next item's block. A `}` reached first closes an ENCLOSING
+      block, so the head was misread (it is not an item): Undetermined, never
+      the next item's block.
     * any other head (a struct field, enum variant, match arm, expression
       statement or list element) ends at the first depth-0 `{` (its block),
       or at `;`, `}` or a closing `)`/`]`, or at a `,` -- unless an unclosed
@@ -853,7 +868,10 @@ def _annotated_block(code: str, path: str, attr_end: int):
             raise Undetermined(f"{path}: unterminated attribute after #[cfg(test)]")
         i = k + 1
     hm = _HEAD_WORD_RE.match(code, i)
-    item_head = hm is not None and hm.group(1) in _ITEM_HEAD_WORDS
+    item_head = hm is not None and (
+        hm.group(1) in _ITEM_HEAD_WORDS
+        or _WEAK_ITEM_HEAD_RE.match(code, hm.start(1)) is not None
+    )
     start = i
     depth = 0
     nested_brace = False
@@ -880,6 +898,11 @@ def _annotated_block(code: str, path: str, attr_end: int):
                 return (i, end + 1)
             if c == ";":
                 return done(i + 1)
+            if item_head and c == "}":
+                raise Undetermined(
+                    f"{path}: #[cfg(test)] item {code[start:i].strip()[:60]!r} reaches "
+                    "the end of its enclosing block without a `{` or `;`"
+                )
             if not item_head:
                 if c == "}":
                     return done(i)

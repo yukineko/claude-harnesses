@@ -36,7 +36,9 @@
 //! after a reset to another commit, but also at a descendant of the old head
 //! — therefore starts a new evidence epoch: the earlier evidence leaves every
 //! answer and the requirements must be measured again. Re-ratifying at the
-//! same HEAD keeps the epoch (and the records counting). A record that
+//! same HEAD keeps the epoch (and the records counting). That a new epoch
+//! discards earlier evidence even at a descendant HEAD is kept as is by user
+//! ruling (2026-11-04). A record that
 //! matches the current fingerprint but has no `ratified_head` (written by an
 //! earlier fde) cannot be placed in an epoch; no epoch is guessed for it, and
 //! recording, `verify` and `report` answer `Undetermined` while one exists.
@@ -83,10 +85,20 @@
 //!    spawn failure, a signal (no exit code), a timeout, unreadable output, or
 //!    exit 126/127 (the shell could not execute / find the command, so nothing
 //!    was tested) is `Undetermined` and records nothing.
-//! 7. Ratification is observed again: if it is no longer ratified with the
+//! 7. Right after `CMD` exits — before its exit status is judged — the target
+//!    HEAD is observed again (user ruling 2026-11-04). If it cannot be
+//!    observed, or differs in any way from the step-6 HEAD (moved back, moved
+//!    forward to a new descendant commit, or anything else), the answer is
+//!    `Undetermined`, naming both commits and saying HEAD changed while `CMD`
+//!    ran, and nothing is recorded — whatever the exit status was. Forward
+//!    movement is refused too (coordinator decision under that ruling): the
+//!    record's `head` would no longer describe the tree `CMD`'s result belongs
+//!    to, and the history rule (`R <= H <= C`) could otherwise be satisfied by
+//!    a `CMD` that commits its own fix.
+//! 8. Ratification is observed again: if it is no longer ratified with the
 //!    same fingerprint and the same recorded HEAD / dirty flag, nothing is
 //!    recorded (`Violation`).
-//! 8. The ledger is re-read, the step-4 / step-5 checks repeated against it,
+//! 9. The ledger is re-read, the step-4 / step-5 checks repeated against it,
 //!    the record (with `ratified_head` = the ratification head) appended, and
 //!    the file written atomically. Only a successful write is `Clean`.
 //!
@@ -94,16 +106,20 @@
 //!
 //! Per requirement, over the counted (current-epoch) records in order: a requirement
 //! is **unresolved** while some RED `CMD` has no later GREEN with the same
-//! `CMD`; otherwise it is **complete** when it has a GREEN (after its RED) or a
-//! PASS; otherwise it is **unmeasured**. `verify` is `Clean` only when every
-//! requirement of the ratified spec is complete.
+//! `CMD`; otherwise it is **complete** when it has a GREEN (after its RED);
+//! otherwise it is **PASS-only** when it has a PASS; otherwise it is
+//! **unmeasured**. A PASS-only requirement is **not** complete (user ruling
+//! 2026-11-04): `fde evidence pass` still records the PASS, but only a later
+//! RED then GREEN completes the requirement (PASS → RED → GREEN is complete).
+//! `verify` is `Clean` only when every requirement of the ratified spec is
+//! complete; otherwise it is a `Violation` naming each incomplete requirement
+//! (`(PASS only, never RED then GREEN)` for a PASS-only one).
 //!
-//! `report` applies a **stricter** bar (user ruling 2026-11-03: "Exit 0 only
-//! when it is ratified and every requirement is verified RED→GREEN"): its
-//! verdict is `Clean` only when every requirement is GREEN after RED. A
-//! PASS-only requirement counts as complete for `verify` but not for
-//! `report`, and an unratified target is a determined `Violation` for
-//! `report` (while `verify` answers it `Undetermined`).
+//! `report` applies the same bar (user ruling 2026-11-03: "Exit 0 only when
+//! it is ratified and every requirement is verified RED→GREEN"), and its
+//! `complete: N of M` line counts only GREEN after RED. The two differ only
+//! for an unratified target: a determined `Violation` for `report`, while
+//! `verify` answers it `Undetermined`.
 //!
 //! # History (`verify`, `report`)
 //!
@@ -352,8 +368,21 @@ enum ReqState {
 }
 
 impl ReqState {
+    /// Only GREEN after RED is complete (user ruling 2026-11-04: a PASS-only
+    /// requirement is not complete).
     fn complete(&self) -> bool {
-        matches!(self, ReqState::GreenAfterRed { .. } | ReqState::Pass { .. })
+        matches!(self, ReqState::GreenAfterRed { .. })
+    }
+}
+
+/// Why requirement `id` in state `st` is not complete, or `None` when it is
+/// (shared by `verify` and `report`, so both name the same reasons).
+fn incomplete_reason(id: &str, st: &ReqState) -> Option<String> {
+    match st {
+        ReqState::GreenAfterRed { .. } => None,
+        ReqState::Unresolved { open } => Some(format!("{id} (RED without GREEN: {open:?})")),
+        ReqState::Pass { .. } => Some(format!("{id} (PASS only, never RED then GREEN)")),
+        ReqState::Unmeasured => Some(format!("{id} (no evidence)")),
     }
 }
 
@@ -753,8 +782,9 @@ fn run_cmd(cmd: &str, root: &Path) -> Determination<boundary::CommandOutput> {
 ///   current-fingerprint record without `ratified_head`, a legacy
 ///   ratification without a recorded HEAD, a target HEAD that cannot be
 ///   observed or is not a descendant of (or equal to) the ratification head,
-///   a dirty flag that cannot be observed, or `cmd` could not be run to an
-///   exit code. Nothing is recorded.
+///   a dirty flag that cannot be observed, `cmd` could not be run to an exit
+///   code, or the target HEAD changed while `cmd` ran (or cannot be observed
+///   after it; checked before the exit status). Nothing is recorded.
 #[track_caller]
 pub fn record(
     kind: Kind,
@@ -843,6 +873,30 @@ pub fn record(
         Determination::Known(o) => o,
         Determination::Undetermined(why) => return why.into_verdict(),
     };
+    // The record's `head` must describe the tree the CMD's result belongs
+    // to: any HEAD movement while CMD ran (back, forward, or unobservable) is
+    // refused before the exit status is looked at (user ruling 2026-11-04;
+    // forward movement too, see the module docs, step 7).
+    match crate::git::head(&target.root) {
+        Determination::Known(after) if after == head => {}
+        Determination::Known(after) => {
+            return Verdict::undetermined(format!(
+                "{} not recorded for {req}: the target HEAD changed while the command ran \
+                 (before {head}, after {after}); the result cannot be placed on one commit, so \
+                 nothing is recorded. Run a CMD that does not move HEAD",
+                kind.label()
+            ))
+        }
+        Determination::Undetermined(why) => {
+            return Verdict::undetermined(format!(
+                "{} not recorded for {req}: the target HEAD cannot be observed after the command \
+                 ran (before it was {head}), so it cannot be shown that HEAD did not change while \
+                 the command ran: {}",
+                kind.label(),
+                why.as_str()
+            ))
+        }
+    }
     let code = out.code();
     let matches_kind = match kind {
         Kind::Red => code != 0,
@@ -953,8 +1007,10 @@ fn evaluated(
 
 /// Check `target`'s ledger against its ratified spec.
 ///
-/// * `Clean` — every requirement is complete (GREEN after RED, or PASS).
-/// * `Violation` — some requirement is unresolved or unmeasured (named).
+/// * `Clean` — every requirement is complete (GREEN after RED; user ruling
+///   2026-11-04: PASS-only is not complete).
+/// * `Violation` — some requirement is unresolved, unmeasured or PASS-only
+///   (named).
 /// * `Undetermined` — not ratified (incl. spec changed), a spec with zero
 ///   requirements, an unreadable/corrupt/inconsistent ledger or store, or the
 ///   history rule (module docs, "History") violated or undecidable.
@@ -970,11 +1026,7 @@ pub fn verify(target: &ResolvedTarget, state_dir: &Path) -> Verdict {
     let missing: Vec<String> = ev
         .states
         .iter()
-        .filter(|(_, st)| !st.complete())
-        .map(|(id, st)| match st {
-            ReqState::Unresolved { open } => format!("{id} (RED without GREEN: {open:?})"),
-            _ => format!("{id} (no evidence)"),
-        })
+        .filter_map(|(id, st)| incomplete_reason(id, st))
         .collect();
     if missing.is_empty() {
         return Verdict::from_findings(Vec::new());
@@ -1120,12 +1172,7 @@ pub fn report(target: &ResolvedTarget, state_dir: &Path) -> Determination<Report
     let not_red_green: Vec<String> = ev
         .states
         .iter()
-        .filter_map(|(id, st)| match st {
-            ReqState::GreenAfterRed { .. } => None,
-            ReqState::Unresolved { open } => Some(format!("{id} (RED without GREEN: {open:?})")),
-            ReqState::Pass { .. } => Some(format!("{id} (PASS only, never RED then GREEN)")),
-            ReqState::Unmeasured => Some(format!("{id} (no evidence)")),
-        })
+        .filter_map(|(id, st)| incomplete_reason(id, st))
         .collect();
     let verdict = if not_red_green.is_empty() {
         Verdict::from_findings(Vec::new())

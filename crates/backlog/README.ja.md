@@ -58,6 +58,14 @@ backlog uninstall                                            # 再び除去す�
 
 規則と根拠テストは [backlog スキルの「起票の基準」](skills/backlog/SKILL.md) を参照すること。
 
+- 意図的な RED repro は `#[ignore = "backlog <id>: ..."]` を付けてコミットし、
+  `--repro-test "cargo test -p <crate> --test <file> -- --ignored"` で起票する。
+- テストを1件も実行しなかった exit 0 の実行は `not-reproduced` ではなく `undetermined`
+  （拒否、`repro outcome undetermined`）。libtest の `test result:` 行（テストバイナリごとに1行）全体で
+  `passed + failed` の合計が 0 の場合（`-- --ignored` 無しの `#[ignore]` テスト = `0 passed; 1 ignored`、
+  何にも一致しないフィルタ = `filtered out`）と、`test result:` 行の無い `cargo test` の exit 0 がこれに当たる。
+  libtest 形式でない pytest / スクリプトの出力は従来どおり exit code で判定する。
+
 `add` はタイトルと project から求めた **content hashkey** (`title` を trim → Unicode NFKC → 小文字化 →
 連続空白の1個への圧縮 → 前後の記号除去 したものと project を FNV-1a 64bit で畳み込んだ 16 桁 hex)
 で内容の重複を検出する。次のいずれかに該当する場合、`add` はエラーで拒否される。`done` の重複はブロックしない:

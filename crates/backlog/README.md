@@ -65,6 +65,13 @@ writing.
   `pending` with the reproduced repro recorded.
 - Any other outcome is refused with a non-zero exit and nothing written to the store: no `--repro-test`,
   not reproduced, undetermined.
+- Intentional RED repros are committed with `#[ignore = "backlog <id>: ..."]` and filed with
+  `--repro-test "cargo test -p <crate> --test <file> -- --ignored"`.
+- An exit-0 run that executed ZERO tests is `undetermined`, not `not-reproduced` (refused with
+  `repro outcome undetermined`): libtest output whose `passed + failed` summed over every
+  `test result:` line (one per test binary) is 0 (an `#[ignore]`d test run without `-- --ignored`
+  = `0 passed; 1 ignored`; a filter matching nothing = `filtered out`), or a `cargo test` exit 0
+  with no `test result:` line. Non-libtest pytest / script output keeps its exit-code polarity.
 - `next` / `next --claim` never hand out a row without a reproduced repro.
 - A store holding a row with status `unconfirmed` or `needs-ruling` is refused by `list` and `next`,
   naming the row.

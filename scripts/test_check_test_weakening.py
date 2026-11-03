@@ -1518,5 +1518,162 @@ class OutOfLineTestModule(GateTestCase):
         self.assertBlocks(*self.run_gate(repo.root), kind="assertion-removed")
 
 
+# ---------------------------------------------------------------------------
+# 8. Out-of-line modules: paths beyond the verbatim move (verifier additions)
+#    Base is ALREADY out-of-line (foo.rs declares `mod tests;`, body in
+#    foo/tests.rs), so the change touches the body and/or declarer separately.
+# ---------------------------------------------------------------------------
+
+BAR_PATH = "crates/demo/src/bar.rs"
+FOO_TESTS_MODRS_PATH = "crates/demo/src/foo/tests/mod.rs"
+
+BAR_RS_BASE = """\
+pub fn triple(n: i32) -> i32 {
+    assert!(n < 1000);
+    n * 3
+}
+"""
+
+
+class OutOfLineTestModuleBeyondMove(GateTestCase):
+    def _base(self, extra=None):
+        files = {FOO_PATH: FOO_RS_DECL, FOO_TESTS_PATH: FOO_TESTS_MOVED}
+        files.update(extra or {})
+        return self.make_repo(files)
+
+    def assertUndetermined(self, rc, out, err):
+        self.assertEqual(rc, 2, f"expected undetermined (exit 2)\nSTDOUT:{out}\nSTDERR:{err}")
+
+    def _finding_paths(self, repo):
+        rc, payload, err = self.json_of(repo.root)
+        return rc, [(f["path"], f["kind"]) for f in payload["findings"]]
+
+    def test_body_only_change_dropped_assertion_attributed_to_declarer(self):
+        repo = self._base()
+        repo.write(FOO_TESTS_PATH, FOO_TESTS_ASSERT_DROPPED)
+        repo.commit("test: tweak foo/tests.rs only")
+        self.assertBlocks(*self.run_gate(repo.root), kind="assertion-removed")
+        rc, found = self._finding_paths(repo)
+        self.assertEqual(rc, 1)
+        self.assertEqual(found, [(FOO_PATH, "assertion-removed")])
+
+    def test_body_only_change_dropped_test_blocks(self):
+        repo = self._base()
+        repo.write(FOO_TESTS_PATH, FOO_TESTS_TEST_DROPPED)
+        repo.commit("test: tweak foo/tests.rs only")
+        self.assertBlocks(*self.run_gate(repo.root), kind="test-removed")
+        rc, found = self._finding_paths(repo)
+        self.assertIn((FOO_PATH, "test-removed"), found)
+
+    def test_body_file_deleted_declarer_unchanged_is_undetermined(self):
+        repo = self._base()
+        repo.remove(FOO_TESTS_PATH)
+        repo.commit("test: delete foo/tests.rs, leave `mod tests;`")
+        self.assertUndetermined(*self.run_gate(repo.root))
+
+    def test_both_tests_rs_and_tests_mod_rs_is_undetermined(self):
+        repo = self._base()
+        repo.write(FOO_TESTS_MODRS_PATH, FOO_TESTS_MOVED)
+        repo.commit("test: add ambiguous foo/tests/mod.rs")
+        self.assertUndetermined(*self.run_gate(repo.root))
+
+    def test_production_file_losing_assert_stays_clean(self):
+        """No `#[cfg(test)]` in bar.rs: the new body-resolution logic must not
+        turn an ordinary production-code change into a finding."""
+        repo = self._base({BAR_PATH: BAR_RS_BASE})
+        repo.write(BAR_PATH, BAR_RS_BASE.replace("    assert!(n < 1000);\n", ""))
+        repo.commit("refactor: bar loses a production assert!")
+        self.assertClean(*self.run_gate(repo.root))
+
+    def test_body_renamed_to_mod_rs_layout_is_clean(self):
+        """foo/tests.rs -> foo/tests/mod.rs with the declarer untouched is the
+        same module: not a weakening, not undetermined."""
+        repo = self._base()
+        repo.remove(FOO_TESTS_PATH)
+        repo.write(FOO_TESTS_MODRS_PATH, FOO_TESTS_MOVED)
+        repo.commit("refactor: foo/tests.rs -> foo/tests/mod.rs")
+        self.assertClean(*self.run_gate(repo.root))
+
+    def test_declaration_and_body_both_deleted_blocks(self):
+        """Deleting the whole out-of-line module (declaration and file) removes
+        every test: test-removed, not clean."""
+        repo = self._base()
+        repo.write(FOO_PATH, _FOO_PROD)
+        repo.remove(FOO_TESTS_PATH)
+        repo.commit("test: delete the out-of-line test module")
+        self.assertBlocks(*self.run_gate(repo.root), kind="test-removed")
+
+    def test_declaration_removed_body_orphaned_blocks(self):
+        """foo.rs stops declaring `mod tests;`; foo/tests.rs is left unchanged
+        on disk but is no longer compiled: the tests are gone."""
+        repo = self._base()
+        repo.write(FOO_PATH, _FOO_PROD)
+        repo.commit("test: stop declaring mod tests;")
+        self.assertBlocks(*self.run_gate(repo.root), kind="test-removed")
+
+    def test_cfg_test_gate_removed_from_declaration_blocks(self):
+        """`#[cfg(test)] mod tests;` -> `mod tests;`: the body is now production
+        code, not test surface. Tests lost from the surface must not read clean."""
+        repo = self._base()
+        repo.write(FOO_PATH, _FOO_PROD + "mod tests;\n")
+        repo.commit("refactor: drop the cfg(test) gate on mod tests;")
+        rc, out, err = self.run_gate(repo.root)
+        self.assertIn(rc, (1, 2), f"must not be clean\nSTDOUT:{out}\nSTDERR:{err}")
+
+    def test_path_attribute_literal_body_dropped_assertion_blocks(self):
+        decl = _FOO_PROD + '#[cfg(test)]\n#[path = "foo_checks.rs"]\nmod tests;\n'
+        repo = self.make_repo({FOO_PATH: decl, "crates/demo/src/foo_checks.rs": FOO_TESTS_MOVED})
+        repo.write("crates/demo/src/foo_checks.rs", FOO_TESTS_ASSERT_DROPPED)
+        repo.commit("test: tweak #[path] body")
+        self.assertBlocks(*self.run_gate(repo.root), kind="assertion-removed")
+
+    def test_non_literal_path_attribute_is_undetermined(self):
+        decl = _FOO_PROD + '#[cfg(test)]\n#[cfg_attr(unix, path = "foo_checks.rs")]\nmod tests;\n'
+        repo = self.make_repo({FOO_PATH: _FOO_PROD})
+        repo.write(FOO_PATH, decl)
+        repo.write("crates/demo/src/foo_checks.rs", FOO_TESTS_MOVED)
+        repo.commit("test: cfg_attr path")
+        self.assertUndetermined(*self.run_gate(repo.root))
+
+    def test_repo_escaping_path_attribute_is_undetermined(self):
+        decl = _FOO_PROD + '#[cfg(test)]\n#[path = "../../../../outside.rs"]\nmod tests;\n'
+        repo = self.make_repo({FOO_PATH: _FOO_PROD})
+        repo.write(FOO_PATH, decl)
+        repo.commit("test: escaping path")
+        self.assertUndetermined(*self.run_gate(repo.root))
+
+    def test_nested_out_of_line_module_dropped_assertion_blocks(self):
+        """tests.rs itself declares `mod helpers;`: its body is test surface too."""
+        helpers = "pub fn h() {\n    assert!(true);\n    assert_eq!(1, 1);\n}\n"
+        tests_rs = FOO_TESTS_MOVED + "\nmod helpers;\n"
+        helpers_path = "crates/demo/src/foo/tests/helpers.rs"
+        repo = self._base({helpers_path: helpers, FOO_TESTS_PATH: tests_rs})
+        repo.write(helpers_path, helpers.replace("    assert_eq!(1, 1);\n", ""))
+        repo.commit("test: nested helper loses an assertion")
+        self.assertBlocks(*self.run_gate(repo.root), kind="assertion-removed")
+
+    def test_declaration_in_comment_does_not_hide_missing_body(self):
+        """`// #[cfg(test)] mod tests;` in a comment is not a declaration; a real
+        `#[cfg(test)] mod tests {` after it must still be scanned."""
+        base = _FOO_PROD + "// #[cfg(test)] mod tests;\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn a() {\n        assert!(true);\n        assert!(true);\n    }\n}\n"
+        repo = self.make_repo({FOO_PATH: base})
+        repo.write(FOO_PATH, base.replace("        assert!(true);\n        assert!(true);\n", "        assert!(true);\n"))
+        repo.commit("test: inline assertion dropped")
+        self.assertBlocks(*self.run_gate(repo.root), kind="assertion-removed")
+
+    def test_body_renamed_to_mod_rs_layout_dropping_assertion_blocks(self):
+        repo = self._base()
+        repo.remove(FOO_TESTS_PATH)
+        repo.write(FOO_TESTS_MODRS_PATH, FOO_TESTS_ASSERT_DROPPED)
+        repo.commit("refactor: foo/tests.rs -> foo/tests/mod.rs, losing an assert")
+        self.assertBlocks(*self.run_gate(repo.root), kind="assertion-removed")
+
+    def test_mod_rs_body_only_change_dropped_assertion_blocks(self):
+        repo = self.make_repo({FOO_PATH: FOO_RS_DECL, FOO_TESTS_MODRS_PATH: FOO_TESTS_MOVED})
+        repo.write(FOO_TESTS_MODRS_PATH, FOO_TESTS_ASSERT_DROPPED)
+        repo.commit("test: tweak foo/tests/mod.rs only")
+        self.assertBlocks(*self.run_gate(repo.root), kind="assertion-removed")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

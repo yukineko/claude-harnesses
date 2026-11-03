@@ -36,6 +36,10 @@ path = "crates/blastguard/src/detect/vars.rs"
 reason = "Pure move: the expansion/variable resolvers (CommandWordOrigin, opens_unmodelled_construct through resolve_expanded_command_word, has_unresolvable_expansion, unresolvable_command_word) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
 
 [[ack]]
+path = "crates/blastguard/src/detect/redirect.rs"
+reason = "Pure move: the redirect-target placers and scanners (place_redirect_target through redirect_target_is_safe, resolve_redirect_target_at through is_angle_placeholder_close) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
 path = "crates/blastguard/src/detect/executors.rs"
 reason = "blastguard.md's detect section covers shells and eval wrappers but not the awk system()/git -c pager/env -S executor rules this file adds (daf7611b). Spec debt."
 

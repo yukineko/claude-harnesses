@@ -68,7 +68,6 @@ fn verdict(cwd: &Path, command: &str) -> (String, String) {
 
 /// F-B: `python3 - <<EOF` using `re.compile(` is a regex, not code execution.
 #[test]
-#[ignore = "backlog 80b18990: open defect, remove ignore when fixed"]
 fn fb_python_stdin_program_with_re_compile_is_allowed() {
     let dir = fresh_dir("fb");
     let cmd = "python3 - <<'EOF'\nimport re\np = re.compile(r'a+b')\nprint(p.findall('aab'))\nEOF";

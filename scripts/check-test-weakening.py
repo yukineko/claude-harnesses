@@ -499,15 +499,20 @@ def _mask_noncode(src: str, path: str) -> str:
 # that side, both `name.rs` and `name/mod.rs` present (rustc E0761), a
 # `#[path]` that is not a plain escape-free string literal (`cfg_attr(.., path
 # = ..)` included), an absolute or repo-escaping `#[path]`, an out-of-line
-# declaration nested inside an inline block, or one inside a `#[path]`-loaded
-# body file (whose own child-path rules this does not model).
+# declaration nested inside a block that is not a plain inline `mod NAME {`
+# (a fn body, or an inline module carrying a path-shaped attribute), a
+# `#[path]` on a declaration nested inside an inline module, or one inside a
+# `#[path]`-loaded body file (whose own child-path rules this does not model).
+# A declaration inside plain inline modules (`mod a { #[cfg(test)] mod b; }`
+# in `src/lib.rs` -> `src/a/b.rs`) is resolved, and one inside an inline
+# `#[cfg(test)] mod x { mod y; }` counts as test-only too.
 #
-# What this does NOT see: a body file whose declarer is not one of the standard
-# parent-module files (`<dir>.rs`, `<dir>/mod.rs`, `<dir>/lib.rs`,
-# `<dir>/main.rs`) and not a `#[path]` declarer findable by `git grep` -- e.g.
-# a declaration inside an inline `mod a { mod b; }` block. When such a body file
-# changes WITHOUT its declarer it is classified like any other non-test `.rs`
-# file (its own `#[cfg(test)]` modules only).
+# What this does NOT see: a body file whose declarer is neither a standard
+# parent-module file (`<dir>.rs`, `<dir>/mod.rs`, `<dir>/lib.rs`,
+# `<dir>/main.rs`) of ANY ancestor directory of the body file nor a `#[path]`
+# declarer findable by `git grep`. When such a body file changes WITHOUT its
+# declarer it is classified like any other non-test `.rs` file (its own
+# `#[cfg(test)]` modules only).
 
 CFG_TEST_RE = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
 MOD_DECL_RE = re.compile(r"\bmod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
@@ -587,8 +592,49 @@ def _module_decls(code: str, path: str) -> list:
             "attrs": attrs,
             "gated": any(CFG_TEST_RE.fullmatch(code[a:b]) for a, b in attrs),
             "depth": code.count("{", 0, m.start()) - code.count("}", 0, m.start()),
+            "enclosing": _enclosing_blocks(code, m.start()),
         })
     return out
+
+
+INLINE_MOD_TAIL_RE = re.compile(r"(?<![A-Za-z0-9_])mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*\Z")
+
+
+def _enclosing_blocks(code: str, idx: int) -> list:
+    """The `{` blocks of the MASKED source `code` that enclose `idx`, outermost
+    first, as dicts: `name` (the inline module name when the block is the body
+    of `mod NAME {`, else None), `gated` (that module carries `#[cfg(test)]`)
+    and `path_attr` (that module carries a `path`-shaped attribute).
+
+    This never raises: whether an enclosing block can be resolved is decided
+    by the caller that needs it (`_decl_candidates`), so an unrelated
+    unresolvable block does not turn every scan of the file undetermined."""
+    stack = []
+    for k in range(idx):
+        c = code[k]
+        if c == "{":
+            stack.append(k)
+        elif c == "}" and stack:
+            stack.pop()
+    out = []
+    for o in stack:
+        mm = INLINE_MOD_TAIL_RE.search(code, max(0, o - 200), o)
+        if mm is None:
+            out.append({"name": None, "gated": False, "path_attr": False})
+            continue
+        attrs = _attr_spans_before(code, mm.start())
+        out.append({
+            "name": mm.group(1),
+            "gated": any(CFG_TEST_RE.fullmatch(code[a:b]) for a, b in attrs),
+            "path_attr": any(PATH_WORD_RE.search(code[a:b]) for a, b in attrs),
+        })
+    return out
+
+
+def _decl_test_gated(decl: dict) -> bool:
+    """`decl` is test-only code: its own attributes or an enclosing inline
+    module carry `#[cfg(test)]`."""
+    return decl["gated"] or any(e["gated"] for e in decl["enclosing"])
 
 
 def _decl_path_attr(src: str, code: str, path: str, decl: dict):
@@ -610,13 +656,21 @@ def _decl_path_attr(src: str, code: str, path: str, decl: dict):
 
 def _decl_candidates(src: str, code: str, path: str, decl: dict, via_path_attr: bool) -> list:
     """Repo-relative candidate body files for an out-of-line `decl` in `path`."""
-    if decl["depth"] != 0:
-        raise Undetermined(
-            f"{path}: out-of-line `mod {decl['name']};` inside an inline block -- "
-            "its body path is not resolved"
-        )
+    inline = []
+    for e in decl["enclosing"]:
+        if e["name"] is None or e["path_attr"]:
+            raise Undetermined(
+                f"{path}: out-of-line `mod {decl['name']};` inside a block that is not "
+                "a plain inline `mod NAME {` -- its body path is not resolved"
+            )
+        inline.append(e["name"])
     d = posixpath.dirname(path)
     attr = _decl_path_attr(src, code, path, decl)
+    if attr is not None and inline:
+        raise Undetermined(
+            f"{path}: #[path] on `mod {decl['name']};` inside an inline module -- "
+            "its body path is not resolved"
+        )
     if attr is not None:
         joined = posixpath.normpath(posixpath.join(d, attr))
         if posixpath.isabs(attr) or joined == ".." or joined.startswith("../"):
@@ -631,6 +685,9 @@ def _decl_candidates(src: str, code: str, path: str, decl: dict, via_path_attr: 
         home = d
     else:
         home = path[: -len(".rs")]
+    # `mod a { mod b; }` in `x/lib.rs` loads `x/a/b.rs` (or `x/a/b/mod.rs`).
+    for name in inline:
+        home = posixpath.join(home, name)
     return [
         posixpath.join(home, decl["name"] + ".rs"),
         posixpath.join(home, decl["name"], "mod.rs"),
@@ -671,9 +728,13 @@ def test_body_root(side: Side, f: str, _seen=None):
     """The declaring (non-test) file whose `#[cfg(test)] mod x;` makes `f` an
     out-of-line test body on `side`, or None when `f` is not one.
 
-    Candidates are the standard parent-module files and every `#[path]` declarer
-    on that side; a `mod x;` that is not itself `#[cfg(test)]` still counts when
-    its declarer is in turn a test body (nested `tests/helpers.rs`).
+    Candidates are the standard parent-module files of every ancestor directory
+    (a declaration inside inline `mod a { .. }` blocks lives higher up) and
+    every `#[path]` declarer on that side; a same-named declaration that cannot
+    be resolved raises Undetermined. A `mod x;` that is not itself
+    `#[cfg(test)]` still counts when an enclosing inline module is
+    `#[cfg(test)]`, or when its declarer is in turn a test body (nested
+    `tests/helpers.rs`).
 
     Only integration-test files are excluded up front: a `tests` dir inside the
     source tree (`src/foo/tests/mod.rs`, `src/foo/tests/helpers.rs`) is a module
@@ -688,11 +749,18 @@ def test_body_root(side: Side, f: str, _seen=None):
         return None
     seen.add(f)
     loc = posixpath.dirname(f) if posixpath.basename(f) == "mod.rs" else f[: -len(".rs")]
-    d = posixpath.dirname(loc)
+    # The declarer may sit at any ancestor level: `mod a { mod tests; }` in
+    # `src/lib.rs` declares `src/a/tests.rs`. Walk every ancestor directory and
+    # let `_decl_candidates` (which models the inline nesting) decide.
     cands = []
-    if d:
-        cands.append(d + ".rs")
-    cands += [posixpath.join(d, n) for n in _MOD_RS_NAMES]
+    d = posixpath.dirname(loc)
+    while True:
+        if d:
+            cands.append(d + ".rs")
+        cands += [posixpath.join(d, n) for n in _MOD_RS_NAMES]
+        if not d:
+            break
+        d = posixpath.dirname(d)
     cands += side.path_attr_files()
     for c in dict.fromkeys(cands):
         if c == f or is_integration_tests_file(c):
@@ -702,14 +770,14 @@ def test_body_root(side: Side, f: str, _seen=None):
             continue
         code = _mask_noncode(src, c)
         for decl in _module_decls(code, c):
-            if decl["depth"] != 0:
-                continue
             attr = _decl_path_attr(src, code, c, decl)
             if attr is None and decl["name"] != posixpath.basename(loc):
                 continue
+            # A same-named declaration we cannot resolve might be `f`'s
+            # declarer: Undetermined (raised here), never "not a test body".
             if f not in _decl_candidates(src, code, c, decl, False):
                 continue
-            if decl["gated"]:
+            if _decl_test_gated(decl):
                 return c
             root = test_body_root(side, c, seen)
             if root is not None:
@@ -717,46 +785,84 @@ def test_body_root(side: Side, f: str, _seen=None):
     return None
 
 
+def _annotated_block(code: str, path: str, attr_end: int):
+    """Index of the `{` opening the block of the item that the outer attribute
+    ending at `attr_end` annotates, or None when that item has no block.
+
+    `code` is MASKED (no comments/literals), so every bracket is real. Further
+    attributes and the item head are skipped; the item ends at the first `{`,
+    `;` or `,` at bracket depth 0 (or the `}` closing the enclosing block). Only
+    a `{` is a block: `#[cfg(test)] use x;` or a `#[cfg(test)]` struct field
+    annotates nothing with a body and must not borrow the NEXT item's block.
+    Running out of input is Undetermined."""
+    n = len(code)
+    depth = 0
+    i = attr_end
+    while i < n:
+        c = code[i]
+        if c in "([":
+            depth += 1
+        elif c in ")]":
+            depth -= 1
+            if depth < 0:
+                return None  # attribute on the last element of a list/call
+        elif depth == 0:
+            if c == "{":
+                return i
+            if c in ";,}":
+                return None
+        i += 1
+    raise Undetermined(f"{path}: #[cfg(test)] annotates no item before end of file")
+
+
 def cfg_test_modules(
     src: str, path: str, side: Side | None = None, out_of_line_only: bool = False
 ) -> str:
-    """Concatenate every `#[cfg(test)]` module body found in `src`.
+    """Concatenate every `#[cfg(test)]` item body found in `src`.
+
+    Attributes are matched in CODE only: `src` is masked first (see
+    `_mask_noncode`), so `#[cfg(test)]` text inside a comment or a string/char/
+    raw-string literal is not an attribute. An unterminated comment/literal is
+    Undetermined.
 
     Brace matching skips string/char literals and comments (see
     `_matching_brace`); if a module's braces still do not balance we cannot claim
     to have inspected it, so the whole run goes undetermined rather than
     reporting on a partial read.
 
-    A `#[cfg(test)]` that is the attribute of an out-of-line `mod NAME;` (in
-    code, not in a comment or literal) contributes its resolved body FILE's
-    whole content instead, read from `side` (see the out-of-line section
-    above); unresolvable is Undetermined. Any other `#[cfg(test)]` takes the
-    next `{...}` block, and one with no `{` after it is Undetermined.
+    Every out-of-line `mod NAME;` that is test-only -- its own attributes carry
+    `#[cfg(test)]`, or it sits inside an inline `#[cfg(test)] mod x { .. }` --
+    contributes its resolved body FILE's whole content, read from `side` (see
+    the out-of-line section above; inline `mod a { mod b; }` nesting is
+    followed); unresolvable is Undetermined. Any other `#[cfg(test)]`
+    contributes the block of the item it annotates (`_annotated_block`); an item
+    without a block (`#[cfg(test)] use x;`) contributes nothing, and an
+    attribute with no item after it is Undetermined.
     With `out_of_line_only` only the out-of-line bodies are returned (used when
     the file's own content is already counted whole; see `test_surface`).
     """
+    code = _mask_noncode(src, path)
     chunks = []
-    gated_decls: dict = {}
-    if MOD_DECL_RE.search(src):
-        code = _mask_noncode(src, path)
+    decl_attrs: set = set()
+    if MOD_DECL_RE.search(code):
         for decl in _module_decls(code, path):
-            if decl["gated"]:
-                for a, b in decl["attrs"]:
-                    if CFG_TEST_RE.fullmatch(code[a:b]):
-                        gated_decls[a] = decl
-    for m in CFG_TEST_RE.finditer(src):
-        decl = gated_decls.get(m.start())
-        if decl is not None:
+            if not _decl_test_gated(decl):
+                continue
+            for a, b in decl["attrs"]:
+                if CFG_TEST_RE.fullmatch(code[a:b]):
+                    decl_attrs.add(a)
             if side is None:
                 raise Undetermined(f"{path}: `mod {decl['name']};` with no side to read")
             bp, bs, via = _resolve_body(side, src, code, path, decl, False)
             chunks.extend(_body_surface(side, bp, bs, via, set()))
+    if out_of_line_only:
+        return "\n".join(chunks)
+    for m in CFG_TEST_RE.finditer(code):
+        if m.start() in decl_attrs:
             continue
-        if out_of_line_only:
+        brace = _annotated_block(code, path, m.end())
+        if brace is None:
             continue
-        brace = src.find("{", m.end())
-        if brace == -1:
-            raise Undetermined(f"{path}: #[cfg(test)] with no module body")
         end = _matching_brace(src, brace)
         if end is None:
             raise Undetermined(f"{path}: unbalanced braces in #[cfg(test)] module")

@@ -64860,3 +64860,75 @@ excerpt = """
 rev = "7057a4d75031347557f878cead08146110461f56"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "03885f11"
+title = "blastguard: writes to .git/config are not protected (.git/config missing from PROTECTED_GLOBS)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Already present before 0.2.218 (found 2026-11-03 by the FP3 test author). python3 - <<'EOF' open('.git/config','a').write('[core] hooksPath = /tmp'), echo x >> .git/config and python3 -c "open('.git/config','a')..." are all ALLOWED, while git config core.hooksPath /tmp is denied, so a plain file write can set hooksPath and disable the gates. exclude.rs PROTECTED_GLOBS has .git/hooks/** but not .git/config."""
+created_at = 1793672951
+updated_at = 1793716172
+weight = 0.0
+issue_number = 1493
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1493"
+issue_closed_at = 1793716175
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_stdin_git_string_fp_20261103 control_python_stdin_program_appending_git_config"
+rev = "6a3ef5da9909fcf5e796b092f9f49b2be2164e5a"
+observed_at = 1793672951
+detail = """
+exit 101: wed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.33s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/python_stdin_git_string_fp_20261103.rs (target/debug/deps/python_stdin_git_string_fp_20261103-752bb3b1e3271a9d)
+error: test failed, to rerun pass `-p blastguard --test python_stdin_git_string_fp_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test git_config_write_protected_20261103"
+exit = 0
+passed = 10
+rev = "507f65a38499777d55bced4792dce71d06f7a34a"
+observed_at = 1793716154
+output_digest = "sha256:d4bd7ca8ac9d39590aae9b057aba338fb9d07c3afe2dd031f44e3c78ff3db730"
+excerpt = """
+
+running 10 tests
+test control_git_config_get_hookspath_stays_allowed ... ok
+test control_cat_git_config_stays_allowed ... ok
+test bash_printf_truncate_write_to_git_config_is_not_allowed ... ok
+test bash_append_redirect_to_git_config_is_not_allowed ... ok
+test bash_python_c_append_hookspath_to_git_config_is_not_allowed ... ok
+test control_append_to_unrelated_git_config_named_file_stays_allowed ... ok
+test edit_tool_on_git_config_is_not_allowed ... ok
+test bash_append_redirect_to_nested_repo_git_config_is_not_allowed ... ok
+test write_tool_on_git_config_is_not_allowed ... ok
+test sanity_bash_write_to_git_hooks_is_refused_in_this_fixture ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+   Compiling blastguard v0.2.248 (/Users/yuki/src/.harness-worktrees/session-6d697f68-b/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.03s
+     Running tests/git_config_write_protected_20261103.rs (target/debug/deps/git_config_write_protected_20261103-48dd8ed3b7e776e4)
+"""
+
+[task.closure.red]
+rev = "fcdf557969d40b02708edca31a6eb3ce5781d240"
+exit = 101
+kind = "behavioural"

@@ -672,6 +672,15 @@ fn detect_write(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
         Some(p) => p,
         None => return unreadable_operand("Write", "file_path"),
     };
+    // Git internals first: a whole-file Write over `.git/<x>` has always been a
+    // flat Deny. `.git/config` (and `.git/hooks/**`) are ALSO protected paths,
+    // whose verdict is the weaker Ask — checking the protected list first would
+    // downgrade that Deny (backlog 03885f11). The stricter verdict wins.
+    if exclude::is_git_internal(&path) {
+        return Decision::deny(format!(
+            "Write would overwrite git internals ({path}) — refusing"
+        ));
+    }
     // BEFORE the config-file allowlist, not after: `.claude/**`, `*.toml` and
     // `settings.local.json` are all matched by `is_config_file`, so the
     // exemption used to swallow exactly the paths that decide whether the gates
@@ -687,11 +696,6 @@ fn detect_write(ti: Option<&Value>, ctx: &Ctx<'_>) -> Decision {
     }
     if exclude::is_config_file(&path) {
         return Decision::Allow;
-    }
-    if exclude::is_git_internal(&path) {
-        return Decision::deny(format!(
-            "Write would overwrite git internals ({path}) — refusing"
-        ));
     }
     let content = ti
         .and_then(|v| v.get("content"))

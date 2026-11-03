@@ -20,7 +20,7 @@ use context_governor::handlers::{
 };
 use context_governor::io::HookOutput;
 use context_governor::LedgerSummary;
-use harness_core::hook::{read_stdin, run_hook, HookInput};
+use harness_core::hook::{run_hook, try_read_stdin, HookInput};
 
 /// What the dispatch decided to do, kept separate from doing it so `main` owns
 /// the process-exit policy (the handlers never call `exit`).
@@ -54,7 +54,16 @@ fn main() -> ! {
         std::process::exit(0);
     }
     run_hook(|| {
-        let raw = read_stdin();
+        // A stdin READ ERROR is named on stderr, not left to the generic
+        // panic path (backlog 8004d80f). The event is unknown, so nothing is
+        // emitted and nothing is blocked (exit 0).
+        let raw = match try_read_stdin() {
+            Ok(raw) => raw,
+            Err(e) => {
+                eprintln!("context-governor: stdin read failed: {e}; hook event not handled");
+                return;
+            }
+        };
         let Some(input) = HookInput::parse(&raw) else {
             return; // empty/invalid payload → silent no-op (exit 0)
         };

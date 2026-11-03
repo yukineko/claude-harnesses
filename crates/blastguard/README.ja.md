@@ -27,7 +27,7 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
   読むインタプリタ（`… | python3 -`、`python3 /dev/stdin`）は判定を拒否する（下の
   「既知の high-frequency deny」節を参照）。
 - **ファイル操作**: 既存ファイルを**空内容で置き換える** Write（＝ファイルの抹消）、
-  および **git 内部**（`.git/**`）を上書きする Write は deny。**保護パス**（下記）への
+  および **git 内部**（`.git/**`）を上書きする Write は deny（保護パスの ask より先に判定するので、保護パスでもある `.git/config`・`.git/hooks/**` への Write も deny のまま）。**保護パス**（下記）への
   Write / Edit / MultiEdit / NotebookEdit は `ask`（人間が答えられない場では deny）。
   **システムディレクトリ**への Write / Edit / MultiEdit / NotebookEdit
   （`/etc/paths.d/x`、`/Library/LaunchDaemons/x.plist`、`/usr/local/bin/x` 等。Bash
@@ -80,7 +80,7 @@ session id 未設定や台帳の IO 失敗では deny のまま。
 `.claude/**`、`**/package.json`、`**/*.toml` / `*.yaml` / `*.yml` / `*.lock`、
 `.config/**` などは除外（allow）する。**ただし `.claude/settings.json` /
 `.claude/settings.local.json` / `.claude/hooks.json` / `.claude/hooks/**` /
-`.githooks/**`、デプロイ済みプラグインの実行ファイルと hook 配線（`.claude/plugins/cache/**/bin/**`・
+`.githooks/**` / `.git/hooks/**` / `.git/config`（`core.hooksPath` を決める。backlog 03885f11）、デプロイ済みプラグインの実行ファイルと hook 配線（`.claude/plugins/cache/**/bin/**`・
 `.claude/plugins/cache/**/hooks/**`。exec bit を外された launcher は `Permission denied` で起動せず、
 finding も出ないので gate が赤ではなく暗転する — backlog 1b82a049。ここでは読み/実行権の剥奪・`rm`・`mv` は deny、
 書き込みは ask〈人間が答えられない場では deny に硬化〉、読み取りと `chmod +x` は allow）
@@ -372,7 +372,7 @@ git の probe の失敗・タイムアウト（各呼び出し 1.5 秒）・解�
 `rm -rf x 2>/dev/null`）／シェル展開・引用符・glob 文字／単独の `-`、`--`、最初の
 オペランドより後ろのオプション風の語。
 
-優先順位は変わらない: 保護パス（`.git`、`.git/hooks`、`.claude`、`.githooks`、ゲート
+優先順位は変わらない: 保護パス（`.git`、`.git/hooks`、`.git/config`、`.claude`、`.githooks`、ゲート
 設定。linked worktree チェックアウト内側は除く）の `deny` が最初、次に worktree 置き場の `allow`、次に設定ファイル除外、その後に
 この節の判定。ライブラリ利用（`detect::detect`、`SafeRoots::none()`）には一時・
 キャッシュのルートも git probe も無いので、従来の判定のまま。

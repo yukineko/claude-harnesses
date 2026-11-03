@@ -360,3 +360,66 @@ exit 101:
     Finished `test` profile [unoptimized + debuginfo] target(s) in 9.76s
      Running tests/check_criteria_unterminated_quote.rs (target/debug/deps/check_criteria_unterminated_quote-0c8c16d8b5d6828f)
 error: test failed, to rerun pass `-p condukt --test check_criteria_unterminated_quote`"""
+
+[[task]]
+id = "80b18990"
+title = "blastguard: python3 stdin program using re.compile( is asked as code-building"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard,false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-03 at blastguard 0.2.245 (measured at 0.2.246 branch base 6e6ed586). A python3 - heredoc program that only calls re.compile( (regex, not code exec) returns ask: python3 - takes its program from stdin, and that program builds or decodes the code it runs (compile() ). Test: crates/blastguard/tests/python_stdin_re_compile_fp_20261103.rs. Expected allow, actual ask."
+created_at = 1793715031
+updated_at = 1793715031
+weight = 0.0
+issue_number = 1511
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1511"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_stdin_re_compile_fp_20261103"
+rev = "6ae75e70d7167765023d22bdfaaace8de942ce2a"
+observed_at = 1793715031
+detail = """
+exit 101: wed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/python_stdin_re_compile_fp_20261103.rs (target/debug/deps/python_stdin_re_compile_fp_20261103-bd5a6e9183aab4c1)
+error: test failed, to rerun pass `-p blastguard --test python_stdin_re_compile_fp_20261103`"""
+
+[[task]]
+id = "1943843c"
+title = "blastguard: read-only python3 -c with 'recursive rm' string data denied as rm with a wildcard"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard,false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-03 at blastguard 0.2.245 (re-measured at branch base 6e6ed586 + test, 0.2.247). A python3 -c program that only opens a file, json-parses lines and prints, with the string literal 'recursive rm' as data, is denied: rm with a wildcard can delete many files at once. Test: crates/blastguard/tests/python_c_recursive_rm_literal_fp_20261103.rs. Expected: not deny; actual: deny."
+created_at = 1793715217
+updated_at = 1793715217
+weight = 0.0
+issue_number = 1517
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1517"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_c_recursive_rm_literal_fp_20261103"
+rev = "d550d8aac0c23246f38abe03b2ee55b4bfeb7c47"
+observed_at = 1793715217
+detail = """
+exit 101: .247 (/Users/yuki/src/.harness-worktrees/file-bg-findings-20261103/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.37s
+     Running tests/python_c_recursive_rm_literal_fp_20261103.rs (target/debug/deps/python_c_recursive_rm_literal_fp_20261103-0ddb952d97f0858b)
+error: test failed, to rerun pass `-p blastguard --test python_c_recursive_rm_literal_fp_20261103`"""

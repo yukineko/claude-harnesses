@@ -1375,9 +1375,10 @@ fn ref_opt(r: &str) -> Option<String> {
     }
 }
 
-/// Run `git log --name-status <baseline>..HEAD` from `repo_root` and return its
-/// raw stdout. The `baseline` is validated with the same safe-ref guard the
-/// scope resolver uses, so a hostile ref can never reach git.
+/// Raw stdout of `git log --name-status --diff-merges=separate <baseline>..HEAD` (`baseline` must
+/// pass the safe-ref guard). `separate` (= `-m`, immune to `log.diffMerges`) diffs each merge
+/// against EVERY parent, so merge-only changes are seen and paths cover gate-check's tree diff when
+/// baseline is an ancestor of HEAD; `first-parent` misses a merge that drops the base side's edit.
 fn git_log_name_status(repo_root: &Path, baseline: &str) -> Result<String> {
     if !crate::scope::is_safe_ref(baseline) {
         anyhow::bail!(
@@ -1390,14 +1391,13 @@ fn git_log_name_status(repo_root: &Path, baseline: &str) -> Result<String> {
         .arg("-C")
         .arg(repo_root)
         .arg("log")
-        .arg("--name-status")
-        .arg("--no-color")
+        .args(["--name-status", "--diff-merges=separate", "--no-color"])
         .arg(format!("{baseline}..HEAD"))
         .output()
         .context("spawning git log")?;
     if !out.status.success() {
         anyhow::bail!(
-            "git log --name-status {baseline}..HEAD failed: {}",
+            "git log --name-status --diff-merges=separate {baseline}..HEAD failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }

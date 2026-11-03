@@ -62,7 +62,9 @@ would be skipped.
   not being the git toplevel, dirty inputs, `rustc -vV` / `cargo -V` failing, a
   cache file that is unreadable / not JSON / of the wrong shape. Each prints one
   `check-compile-fail: cache not used for <label>: <reason>` line. A missing
-  cache file, a missing entry and a key mismatch are silent.
+  cache file, a missing entry and a key mismatch are silent. An unreadable or
+  malformed cache file only rules out skipping: a pass still writes its key,
+  rewriting the file from scratch (or warning that it cannot, below).
 
   File: `$CHECK_COMPILE_FAIL_CACHE` when set and non-empty, else
   `<git rev-parse --git-common-dir>/compile-fail-cache.json` made absolute. JSON
@@ -409,14 +411,17 @@ def main() -> int:
         key: str | None = None
         git_before: list[tuple[str, str]] | None = None
         if ctx is not None:
+            # An unreadable cache file only rules out the skip: the key is still
+            # computed so a pass rewrites the file (or warns that it cannot).
+            if cache_error is not None:
+                print(f"check-compile-fail: cache not used for {label}: {cache_error}", file=sys.stderr)
             try:
-                if cache_error is not None:
-                    raise CacheUnavailable(cache_error)
                 git_before = ctx.git_part(pkg)
                 key = ctx.key(label, git_before)
             except CacheUnavailable as e:
-                print(f"check-compile-fail: cache not used for {label}: {e}", file=sys.stderr)
-            if key is not None and entries.get(label) == key:
+                if cache_error is None:
+                    print(f"check-compile-fail: cache not used for {label}: {e}", file=sys.stderr)
+            if cache_error is None and key is not None and entries.get(label) == key:
                 print(
                     f"check-compile-fail: skipped {label} "
                     f"(inputs unchanged since a pass, key {key[:12]})",

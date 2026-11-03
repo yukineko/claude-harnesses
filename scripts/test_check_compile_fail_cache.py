@@ -69,6 +69,19 @@ if args[:1] == ["metadata"]:
         names.remove("donegate")
     def pid(n):
         return "path+file://%s/crates/%s#0.1.0" % (fixture, n)
+    REG_SRC = "registry+https://github.com/rust-lang/crates.io-index"
+    def rid(n, v):
+        return "%s#%s@%s" % (REG_SRC, n, v)
+    reg = json.loads(os.environ.get("CFC_REG", "null")) or {
+        "deps": {"harness-core": [["serde", "1.0.1"]], "donegate": [["itoa", "1.0.0"]]},
+        "unrelated": [["fde", "0.1.0"]],
+    }
+    reg_pkgs = {}
+    for owner in names:
+        for rn, rv in reg["deps"].get(owner, []):
+            reg_pkgs[rid(rn, rv)] = (rn, rv)
+    for rn, rv in reg.get("unrelated", []):
+        reg_pkgs[rid(rn, rv)] = (rn, rv)
     packages = []
     nodes = []
     for n in names:
@@ -91,6 +104,30 @@ if args[:1] == ["metadata"]:
             ],
             "features": [],
         })
+    for n in names:
+        for rn, rv in reg["deps"].get(n, []):
+            for pk in packages:
+                if pk["name"] == n:
+                    pk["dependencies"].append(
+                        {"name": rn, "source": REG_SRC, "req": "*", "kind": None})
+            for nd in nodes:
+                if nd["id"] == pid(n):
+                    nd["dependencies"].append(rid(rn, rv))
+                    nd["deps"].append(
+                        {"name": rn, "pkg": rid(rn, rv),
+                         "dep_kinds": [{"kind": None, "target": None}]})
+    for i, (k, (rn, rv)) in enumerate(sorted(reg_pkgs.items())):
+        packages.append({
+            "name": rn, "version": rv, "id": k, "source": REG_SRC,
+            "manifest_path": "/home/u/.cargo/registry/src/x/%s-%s/Cargo.toml" % (rn, rv),
+            "dependencies": [],
+        })
+        node = {"id": k, "dependencies": [], "deps": [], "features": []}
+        if rn == "itoa" and mode == "regnode_missing":
+            continue
+        if rn == "itoa" and mode == "regid_bad":
+            del node["id"]
+        nodes.append(node)
     print(json.dumps({
         "packages": packages,
         "workspace_members": [pid(n) for n in names],
@@ -313,11 +350,61 @@ class TestSkipAndKeyScope(CacheBase):
             err,
         )
 
-    def test_c1_cargo_lock_change_reruns_all(self):
+    # c1_cargo_lock_change_reruns_all was replaced ON PURPOSE by the spec change
+    # cfc-lock-spec.md L1-L6 (user ruling 2026-11-03): Cargo.lock is no longer a
+    # whole-file key input; the key carries the resolved ids of the dependency
+    # closure instead. The three tests below are its replacement, not a weakening.
+    def test_l3_cargo_lock_edit_outside_closure_skips_all(self):
         self.prime()
-        self.commit("Cargo.lock", "# lock v2\n")
-        _, err, ran = self.run_script()
+        self.commit("Cargo.lock", "# lock v1\n[[package]]\nname = \"fde\"\n", "a")
+        rc, err, ran = self.run_script()
+        self.assertEqual(rc, 0, err)
+        self.assertRanOnly(ran, [], err)
+        self.assertIn("(4 from cache)", err)
+
+    def test_l4a_registry_dep_change_in_donegate_closure_reruns_donegate_only(self):
+        self.prime()
+        self.commit("Cargo.lock", "# lock v2 itoa 1.0.1\n")
+        reg = {
+            "deps": {"harness-core": [["serde", "1.0.1"]], "donegate": [["itoa", "1.0.1"]]},
+            "unrelated": [["fde", "0.1.0"]],
+        }
+        rc, err, ran = self.run_script(env={"CFC_REG": json.dumps(reg)})
+        self.assertEqual(rc, 0, err)
+        self.assertRanOnly(ran, ["donegate::verdict_compile_fail"], err)
+
+    def test_l4b_registry_dep_change_in_harness_core_closure_reruns_all(self):
+        self.prime()
+        self.commit("Cargo.lock", "# lock v2 serde 1.0.2\n")
+        reg = {
+            "deps": {"harness-core": [["serde", "1.0.2"]], "donegate": [["itoa", "1.0.0"]]},
+            "unrelated": [["fde", "0.1.0"]],
+        }
+        rc, err, ran = self.run_script(env={"CFC_REG": json.dumps(reg)})
+        self.assertEqual(rc, 0, err)
         self.assertRanOnly(ran, LABELS, err)
+
+    def test_l2_closure_id_change_alone_changes_key_without_lock_edit(self):
+        # The key comes from the resolved ids in cargo metadata, not from the
+        # Cargo.lock file: no Cargo.lock commit here, yet donegate must rerun.
+        self.prime()
+        reg = {
+            "deps": {"harness-core": [["serde", "1.0.1"]], "donegate": [["itoa", "1.0.1"]]},
+            "unrelated": [["fde", "0.1.0"]],
+        }
+        rc, err, ran = self.run_script(env={"CFC_REG": json.dumps(reg)})
+        self.assertEqual(rc, 0, err)
+        self.assertRanOnly(ran, ["donegate::verdict_compile_fail"], err)
+
+    def test_l2_unrelated_registry_package_change_skips_all(self):
+        self.prime()
+        reg = {
+            "deps": {"harness-core": [["serde", "1.0.1"]], "donegate": [["itoa", "1.0.0"]]},
+            "unrelated": [["fde", "0.2.0"], ["other", "9.9.9"]],
+        }
+        rc, err, ran = self.run_script(env={"CFC_REG": json.dumps(reg)})
+        self.assertEqual(rc, 0, err)
+        self.assertRanOnly(ran, [], err)
 
     def test_c1_toolchain_file_change_reruns_all(self):
         self.prime()
@@ -553,6 +640,34 @@ class TestUndetermined(CacheBase):
     def test_c4_metadata_lacks_package(self):
         self.prime()
         rc, err, ran = self.run_script(env={"CFC_META": "missing"})
+        self.assertEqual(rc, 0, err)
+        self.assertIn("donegate::verdict_compile_fail", ran, err)
+        self.assertNotIn("donegate::verdict_compile_fail", self.skipped(err))
+        self.assertTrue(
+            any(
+                ln.startswith("check-compile-fail: cache not used for donegate::")
+                for ln in err.splitlines()
+            ),
+            err,
+        )
+
+    def test_l5_registry_node_missing_for_closure_dep_runs_target(self):
+        self.prime()
+        rc, err, ran = self.run_script(env={"CFC_META": "regnode_missing"})
+        self.assertEqual(rc, 0, err)
+        self.assertIn("donegate::verdict_compile_fail", ran, err)
+        self.assertNotIn("donegate::verdict_compile_fail", self.skipped(err))
+        self.assertTrue(
+            any(
+                ln.startswith("check-compile-fail: cache not used for donegate::")
+                for ln in err.splitlines()
+            ),
+            err,
+        )
+
+    def test_l5_registry_node_id_unreadable_runs_target(self):
+        self.prime()
+        rc, err, ran = self.run_script(env={"CFC_META": "regid_bad"})
         self.assertEqual(rc, 0, err)
         self.assertIn("donegate::verdict_compile_fail", ran, err)
         self.assertNotIn("donegate::verdict_compile_fail", self.skipped(err))

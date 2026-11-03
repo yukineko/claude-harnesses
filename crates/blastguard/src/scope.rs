@@ -1784,6 +1784,89 @@ pub(crate) mod test_fixture_roots {
             }
         )
     }
+
+    /// Independent pins on the panic path of [`neutral_fixture_parent`]
+    /// (#1486 ruling: no qualifying parent means an explicit panic naming the
+    /// reasons, never a `$HOME` fallback). `$HOME` is deliberately not
+    /// mutated here (process-global env would race other tests); that no
+    /// fallback happens is shown by every all-rejected case panicking.
+    #[cfg(test)]
+    mod panic_path_tests {
+        use super::neutral_fixture_parent;
+        use std::path::PathBuf;
+
+        /// Runs the helper and returns the panic message, or panics if the
+        /// helper returned (which would be a fallback).
+        fn panic_message(candidates: &[(&str, Result<PathBuf, String>)]) -> String {
+            let result = std::panic::catch_unwind(|| neutral_fixture_parent(candidates));
+            match result {
+                Ok(p) => panic!("expected a panic but got a fallback path {}", p.display()),
+                Err(payload) => {
+                    if let Some(s) = payload.downcast_ref::<String>() {
+                        s.clone()
+                    } else if let Some(s) = payload.downcast_ref::<&str>() {
+                        (*s).to_string()
+                    } else {
+                        panic!("panic payload was not a string")
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn fixed_temp_root_candidate_panics_with_label_and_reason() {
+            let msg = panic_message(&[("tmp", Ok(PathBuf::from("/tmp")))]);
+            assert!(msg.contains("tmp"), "{msg}");
+            assert!(msg.contains("fixed temp root"), "{msg}");
+            assert!(msg.contains("cannot be observed"), "{msg}");
+        }
+
+        #[test]
+        fn candidate_inside_git_work_tree_panics_naming_it() {
+            // CARGO_MANIFEST_DIR is inside this repo's work tree (a `.git`
+            // entry exists above it) and is not under a fixed temp root.
+            let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let msg = panic_message(&[("manifest", Ok(dir))]);
+            assert!(msg.contains("manifest"), "{msg}");
+            assert!(msg.contains(".git"), "{msg}");
+            assert!(msg.contains("cannot be observed"), "{msg}");
+        }
+
+        #[test]
+        fn err_candidate_panics_with_its_reason() {
+            let msg = panic_message(&[("x", Err("reason text".to_string()))]);
+            assert!(msg.contains("x"), "{msg}");
+            assert!(msg.contains("reason text"), "{msg}");
+        }
+
+        #[test]
+        fn empty_candidate_list_panics() {
+            let msg = panic_message(&[]);
+            assert!(msg.contains("no candidates"), "{msg}");
+        }
+
+        #[test]
+        fn every_rejected_candidate_is_named() {
+            let msg = panic_message(&[
+                ("first", Ok(PathBuf::from("/tmp"))),
+                ("second", Err("boom".to_string())),
+            ]);
+            assert!(msg.contains("first"), "{msg}");
+            assert!(msg.contains("second"), "{msg}");
+            assert!(msg.contains("boom"), "{msg}");
+        }
+
+        /// Positive control: `/` is outside every fixed temp root and has no
+        /// `.git`, so it qualifies; a rejected candidate before it is skipped.
+        #[test]
+        fn qualifying_candidate_is_returned_canonicalised() {
+            let got = neutral_fixture_parent(&[
+                ("tmp", Ok(PathBuf::from("/tmp"))),
+                ("root", Ok(PathBuf::from("/"))),
+            ]);
+            assert_eq!(got, PathBuf::from("/"));
+        }
+    }
 }
 
 #[cfg(test)]

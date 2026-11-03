@@ -196,34 +196,330 @@ enum Group {
     Gone,
 }
 
-/// `killpg(pgid, 0)`: success → alive; ESRCH → gone; anything else (EPERM:
-/// the id belongs to someone else) → `Err`.
-fn group_liveness(pgid: i32) -> Result<Group, String> {
-    // SAFETY: signal 0 performs only the existence/permission check.
-    let r = unsafe { libc::killpg(pgid, 0) };
+/// `killpg(pgid, sig)`: `None` on success, else the errno (`Err` when the
+/// OS reported a failure without one — nothing to classify).
+fn killpg_errno(pgid: i32, sig: libc::c_int) -> Result<Option<i32>, String> {
+    // SAFETY: signal delivery (or, for 0, only the existence/permission
+    // check) to a validated (> 1, not our own) group.
+    let r = unsafe { libc::killpg(pgid, sig) };
     if r == 0 {
-        return Ok(Group::Alive);
+        return Ok(None);
     }
     let e = std::io::Error::last_os_error();
     match e.raw_os_error() {
-        Some(libc::ESRCH) => Ok(Group::Gone),
-        _ => Err(format!(
-            "cannot probe process group {pgid}: {e} (the id may now belong to another user's group)"
+        Some(code) => Ok(Some(code)),
+        None => Err(format!(
+            "killpg({pgid}, {sig}) failed without an errno: {e}"
         )),
     }
 }
 
-/// Send `sig` to the group. ESRCH (already gone) is fine; other errors are `Err`.
-fn signal_group(pgid: i32, sig: libc::c_int) -> Result<(), String> {
-    // SAFETY: plain signal delivery to a validated (> 1, not our own) group.
-    let r = unsafe { libc::killpg(pgid, sig) };
-    if r == 0 {
-        return Ok(());
+/// `strerror` text of `code`, for messages.
+fn errno_text(code: i32) -> std::io::Error {
+    std::io::Error::from_raw_os_error(code)
+}
+
+/// How to reap our own terminated leader before re-probing an EPERM group.
+type Reap<'a> = Option<&'a mut dyn FnMut() -> Result<(), String>>;
+
+/// `killpg(pgid, 0)`: success → alive; ESRCH → gone; EPERM → settled by
+/// [`settle_eperm`] (`reap` first, then the group's members); anything else → `Err`.
+///
+/// Why EPERM needs settling: macOS answers EPERM both for a live group owned
+/// by another user (we may not signal it: undetermined) **and** for a group
+/// whose only members are unreaped zombies (every process has exited: gone)
+/// or are still inside `exit` (not gone yet: alive). EPERM alone is never
+/// read as gone. Off macOS there is no member listing and EPERM stays `Err`.
+fn group_liveness(pgid: i32, reap: Reap<'_>) -> Result<Group, String> {
+    match killpg_errno(pgid, 0)? {
+        None => Ok(Group::Alive),
+        Some(libc::ESRCH) => Ok(Group::Gone),
+        Some(libc::EPERM) => settle_eperm(
+            pgid,
+            reap,
+            format!(
+                "cannot probe process group {pgid}: {} (the id may now belong to another user's group)",
+                errno_text(libc::EPERM)
+            ),
+        ),
+        Some(code) => Err(format!(
+            "cannot probe process group {pgid}: {} (the id may now belong to another user's group)",
+            errno_text(code)
+        )),
     }
-    let e = std::io::Error::last_os_error();
-    match e.raw_os_error() {
-        Some(libc::ESRCH) => Ok(()),
-        _ => Err(format!("cannot signal process group {pgid}: {e}")),
+}
+
+/// Settle an EPERM from `killpg(pgid, 0)` without guessing.
+///
+/// 1. If `reap` is given (the leader may be our own child), reap it and
+///    probe again: ESRCH → gone, success → alive, EPERM → step 2, other → `Err`.
+/// 2. Classify the group's members ([`classify_members`]): every member a
+///    zombie → gone; some member still in `exit` → alive (not gone *yet*:
+///    the caller keeps waiting); any other member → `Err(eperm)`, and the
+///    listing failing or being unparseable → `Err`.
+fn settle_eperm(pgid: i32, reap: Reap<'_>, eperm: String) -> Result<Group, String> {
+    if let Some(reap) = reap {
+        reap()?;
+        match killpg_errno(pgid, 0)? {
+            None => return Ok(Group::Alive),
+            Some(libc::ESRCH) => return Ok(Group::Gone),
+            Some(libc::EPERM) => {}
+            Some(code) => {
+                return Err(format!(
+                    "cannot probe process group {pgid} after reaping: {}",
+                    errno_text(code)
+                ))
+            }
+        }
+    }
+    classify_members(pgid, eperm).map(group_of)
+}
+
+/// Liveness of a settled EPERM group: all zombies → gone; a member still
+/// exiting → alive (not gone *yet*; never gone before every member is `SZOMB`).
+fn group_of(s: Settled) -> Group {
+    match s {
+        Settled::AllZombies => Group::Gone,
+        Settled::Exiting => Group::Alive,
+    }
+}
+
+/// What the member listing of an EPERM group shows, when it settles anything.
+#[derive(Debug, PartialEq, Eq)]
+enum Settled {
+    /// No member, or every member a zombie (`SZOMB`): every process of the
+    /// group has exited.
+    AllZombies,
+    /// Every member is a zombie or still inside `exit` (`P_WEXIT` set, not
+    /// yet `SZOMB`), and at least one is the latter. Measured on Darwin 25.6:
+    /// right after SIGTERM, `killpg` already answers EPERM while the dying
+    /// process is still listed `p_stat == SRUN` with `p_flag` 0x6004
+    /// (`P_WEXIT` among it), for microseconds, before it turns `SZOMB`.
+    Exiting,
+}
+
+/// Classify the members of an EPERM group: [`pgrp_members`] (its failure →
+/// `Err`), then [`classify_member_list`].
+fn classify_members(pgid: i32, eperm: String) -> Result<Settled, String> {
+    let members = pgrp_members(pgid).map_err(|why| format!("{eperm}; {why}"))?;
+    classify_member_list(&members, eperm)
+}
+
+/// The pure decision over an EPERM group's member list.
+///
+/// Any member that is neither a zombie nor exiting → `Err(eperm)`: EPERM on
+/// a live group means we may not touch it (another user's group), which is
+/// undetermined. Otherwise all zombies (or no member) → `AllZombies`, else
+/// `Exiting`. EPERM is never read as gone by itself.
+fn classify_member_list(members: &[Member], eperm: String) -> Result<Settled, String> {
+    let live: Vec<String> = members
+        .iter()
+        .filter(|m| !m.zombie && !m.exiting)
+        .map(|m| format!("pid {} p_stat {} p_flag {:#x}", m.pid, m.stat, m.flag))
+        .collect();
+    if !live.is_empty() {
+        return Err(format!(
+            "{eperm}; members that have not exited: {}",
+            live.join(", ")
+        ));
+    }
+    if members.iter().all(|m| m.zombie) {
+        Ok(Settled::AllZombies)
+    } else {
+        Ok(Settled::Exiting)
+    }
+}
+
+/// One process of a process group, as the kernel lists it.
+#[derive(Debug)]
+#[cfg_attr(
+    not(all(target_os = "macos", target_pointer_width = "64")),
+    allow(dead_code, reason = "only the macOS member listing constructs it")
+)]
+struct Member {
+    pid: i32,
+    /// `p_stat`.
+    stat: u32,
+    /// `p_flag`.
+    flag: i32,
+    /// `p_stat == SZOMB`.
+    zombie: bool,
+    /// `p_flag & P_WEXIT` and not yet a zombie.
+    exiting: bool,
+}
+
+/// Members of process group `pgid`, zombies included, from
+/// `sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PGRP, pgid)`.
+///
+/// `libc` (0.2.186) does not define `struct kinfo_proc` for macOS, so the
+/// four fields read here are taken at their byte offsets. Layout measured
+/// with clang `offsetof`/`sizeof` on Darwin 25.6 arm64 (`<sys/sysctl.h>`,
+/// LP64): `sizeof(struct kinfo_proc)` = 648, `kp_proc` at 0, `kp_eproc` at
+/// 296, `extern_proc.p_flag` (int) at 32, `p_stat` (char) at 36, `p_pid` at
+/// 40, `eproc.e_pgid` at 268; `P_WEXIT` = 0x2000 (`<sys/proc.h>`).
+/// Every record is cross-checked (its `e_pgid` must be `pgid`, `p_pid` > 0,
+/// `p_stat` one of SIDL..=SZOMB) so a layout mismatch is an `Err`, never a
+/// misread "zombie". A zombie whose parent has not reaped it is listed with
+/// `p_stat == SZOMB` (measured on the same system; `proc_pidinfo` instead
+/// fails with ESRCH for such a zombie, which is why `sysctl` is used).
+#[cfg(all(target_os = "macos", target_pointer_width = "64"))]
+fn pgrp_members(pgid: i32) -> Result<Vec<Member>, String> {
+    const KINFO_PROC_SIZE: usize = 648;
+    const P_FLAG_OFFSET: usize = 32;
+    const P_STAT_OFFSET: usize = 36;
+    const P_PID_OFFSET: usize = 40;
+    const E_PGID_OFFSET: usize = 296 + 268;
+    const P_WEXIT: i32 = 0x2000;
+    // `SIDL`..=`SZOMB` are 1..=5; `libc` exposes them as u32.
+    const SIDL: u32 = libc::SIDL;
+    const SZOMB: u32 = libc::SZOMB;
+
+    let read_i32 = |rec: &[u8], at: usize| -> Result<i32, String> {
+        rec.get(at..at + 4)
+            .and_then(|b| <[u8; 4]>::try_from(b).ok())
+            .map(i32::from_ne_bytes)
+            .ok_or_else(|| format!("kinfo_proc record too short for offset {at}"))
+    };
+
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PGRP, pgid];
+    // The group can grow between the size query and the fetch (ENOMEM): retry
+    // with headroom a bounded number of times, then give up as `Err`.
+    let mut last_err = String::new();
+    for _ in 0..4 {
+        let mut len: libc::size_t = 0;
+        // SAFETY: size query — null old buffer, `len` receives the size.
+        let r = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                4,
+                std::ptr::null_mut(),
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if r != 0 {
+            return Err(format!(
+                "cannot list the members of process group {pgid} (sysctl size query): {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let mut buf = vec![0u8; len + 4 * KINFO_PROC_SIZE];
+        let mut got: libc::size_t = buf.len();
+        // SAFETY: `buf` is writable for `got` bytes; sysctl writes at most that.
+        let r = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                4,
+                buf.as_mut_ptr().cast(),
+                &mut got,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if r != 0 {
+            let e = std::io::Error::last_os_error();
+            if e.raw_os_error() == Some(libc::ENOMEM) {
+                last_err = e.to_string();
+                continue;
+            }
+            return Err(format!(
+                "cannot list the members of process group {pgid} (sysctl): {e}"
+            ));
+        }
+        let data = buf.get(..got).ok_or_else(|| {
+            format!(
+                "sysctl reported {got} bytes for a {}-byte buffer",
+                buf.len()
+            )
+        })?;
+        if data.len() % KINFO_PROC_SIZE != 0 {
+            return Err(format!(
+                "cannot parse the members of process group {pgid}: {} bytes is not a multiple of sizeof(kinfo_proc) = {KINFO_PROC_SIZE}",
+                data.len()
+            ));
+        }
+        let mut members = Vec::new();
+        for rec in data.chunks_exact(KINFO_PROC_SIZE) {
+            let pid = read_i32(rec, P_PID_OFFSET)?;
+            let rec_pgid = read_i32(rec, E_PGID_OFFSET)?;
+            let stat = rec
+                .get(P_STAT_OFFSET)
+                .map(|&b| u32::from(b))
+                .ok_or_else(|| "kinfo_proc record too short for p_stat".to_string())?;
+            if pid <= 0 || rec_pgid != pgid || !(SIDL..=SZOMB).contains(&stat) {
+                return Err(format!(
+                    "cannot parse the members of process group {pgid}: implausible kinfo_proc record (pid {pid}, pgid {rec_pgid}, p_stat {stat})"
+                ));
+            }
+            let flag = read_i32(rec, P_FLAG_OFFSET)?;
+            let zombie = stat == SZOMB;
+            members.push(Member {
+                pid,
+                stat,
+                flag,
+                zombie,
+                exiting: !zombie && flag & P_WEXIT != 0,
+            });
+        }
+        return Ok(members);
+    }
+    Err(format!(
+        "cannot list the members of process group {pgid}: the group kept growing ({last_err})"
+    ))
+}
+
+/// Not macOS (or not LP64): no member listing, so an EPERM stays `Err`.
+#[cfg(not(all(target_os = "macos", target_pointer_width = "64")))]
+fn pgrp_members(pgid: i32) -> Result<Vec<Member>, String> {
+    Err(format!(
+        "listing the members of process group {pgid} is not implemented on this platform"
+    ))
+}
+
+/// Reap our own terminated child `pid` if there is one: `waitpid(pid,
+/// WNOHANG)`. ECHILD (not our child, or already reaped) is the expected
+/// "nothing of ours to reap"; EINTR is retried; any other failure is `Err`.
+fn reap_own_child(pid: i32) -> Result<(), String> {
+    loop {
+        let mut status: libc::c_int = 0;
+        // SAFETY: waitpid on one specific pid with WNOHANG; it only ever
+        // reaps a terminated child of this process.
+        let r = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if r >= 0 {
+            return Ok(());
+        }
+        let e = std::io::Error::last_os_error();
+        match e.raw_os_error() {
+            Some(libc::ECHILD) => return Ok(()),
+            Some(libc::EINTR) => continue,
+            _ => return Err(format!("cannot reap dev-server leader {pid}: {e}")),
+        }
+    }
+}
+
+/// Send `sig` to the group. ESRCH (already gone) is fine; EPERM is settled by
+/// [`classify_members`]: macOS answers TERM/KILL to a group whose members
+/// have all exited or are exiting with EPERM, and there is nothing left to
+/// signal, so that is `Ok` (whether the group is *gone* is still decided by
+/// the [`wait_gone`] that follows). EPERM with any other member stays `Err`,
+/// as do all other errors.
+fn signal_group(pgid: i32, sig: libc::c_int) -> Result<(), String> {
+    match killpg_errno(pgid, sig)? {
+        None | Some(libc::ESRCH) => Ok(()),
+        Some(libc::EPERM) => {
+            let eperm = format!(
+                "cannot signal process group {pgid}: {}",
+                errno_text(libc::EPERM)
+            );
+            match classify_members(pgid, eperm)? {
+                Settled::AllZombies | Settled::Exiting => Ok(()),
+            }
+        }
+        Some(code) => Err(format!(
+            "cannot signal process group {pgid}: {}",
+            errno_text(code)
+        )),
     }
 }
 
@@ -232,24 +528,31 @@ fn signal_group(pgid: i32, sig: libc::c_int) -> Result<(), String> {
 ///
 /// Without a `child` handle the leader may still be our own child: a
 /// process that ran [`start`] and then [`stop`] (the Stop gate, `check
-/// capability`) dropped the handle in `start`. Its unreaped zombie keeps the
-/// group id in use, and macOS answers `killpg(pgid, 0)` on a zombie-only
-/// group with EPERM, so it is reaped here with `waitpid(pgid, WNOHANG)`.
-/// That reaps only a child of this process; for any other pid it fails with
-/// ECHILD, which is ignored (nothing of ours to reap).
+/// capability`) dropped the handle in `start`. It is reaped here with
+/// `waitpid(pgid, WNOHANG)`; that reaps only a child of this process (for
+/// any other pid it fails with ECHILD: nothing of ours to reap).
+///
+/// That reap runs *before* the probe, so it only helps when the leader was
+/// already dead at that moment. When the leader dies between the reap and
+/// the probe (typically just after the SIGTERM), or its parent is another
+/// process, the probe sees a zombie-only group, which macOS answers with
+/// EPERM. [`group_liveness`] settles that EPERM: it reaps again, re-probes,
+/// and then reads the group's members — all zombies is gone, a member still
+/// exiting is alive (so this loop polls again), any other member stays `Err`.
 fn wait_gone(pgid: i32, child: &mut Option<&mut Child>, within: Duration) -> Result<bool, String> {
     let deadline = Instant::now() + within;
     loop {
-        if let Some(c) = child.as_mut() {
-            c.try_wait()
-                .map_err(|e| format!("cannot reap dev-server leader {pgid}: {e}"))?;
-        } else {
-            let mut status: libc::c_int = 0;
-            // SAFETY: waitpid on one specific pid with WNOHANG; it only ever
-            // reaps a terminated child of this process.
-            unsafe { libc::waitpid(pgid, &mut status, libc::WNOHANG) };
-        }
-        if group_liveness(pgid)? == Group::Gone {
+        let mut reap = || -> Result<(), String> {
+            match child.as_mut() {
+                Some(c) => c
+                    .try_wait()
+                    .map(|_| ())
+                    .map_err(|e| format!("cannot reap dev-server leader {pgid}: {e}")),
+                None => reap_own_child(pgid),
+            }
+        };
+        reap()?;
+        if group_liveness(pgid, Some(&mut reap))? == Group::Gone {
             return Ok(true);
         }
         if Instant::now() >= deadline {
@@ -483,7 +786,7 @@ fn start_inner(state: &Path, root: &Path) -> Result<ServerState, String> {
     match read_state(&sf, &canonical)? {
         OnDisk::Absent => {}
         OnDisk::Present(st) => {
-            return match group_liveness(st.pgid)? {
+            return match group_liveness(st.pgid, None)? {
                 Group::Alive => Err(format!(
                     "a dev server is already running for {} (pgid {}, {}); run `sitecraft serve stop` first",
                     canonical.display(),
@@ -709,7 +1012,7 @@ fn status_inner(state: &Path, root: &Path) -> Result<Status, String> {
         OnDisk::Absent => return Ok(Status::Stopped),
         OnDisk::Present(st) => st,
     };
-    match group_liveness(st.pgid) {
+    match group_liveness(st.pgid, None) {
         Ok(Group::Alive) => Ok(Status::Running(st)),
         Ok(Group::Gone) => Err(format!(
             "process group {} recorded in {} is gone (the dev server died without `stop`); run `sitecraft serve stop` to clear the state, then `sitecraft serve start`",
@@ -734,5 +1037,77 @@ mod tests {
         assert_eq!(parse_status_line(b"SSH-2.0-OpenSSH\r\n"), None);
         assert_eq!(parse_status_line(b"HTTP/1.1 abc\r\n"), None);
         assert_eq!(parse_status_line(b""), None);
+    }
+
+    fn member(pid: i32, zombie: bool, exiting: bool) -> Member {
+        Member {
+            pid,
+            stat: if zombie { 5 } else { 2 },
+            flag: if exiting { 0x2000 } else { 0 },
+            zombie,
+            exiting,
+        }
+    }
+
+    const EPERM_TEXT: &str = "killpg(4242): EPERM";
+
+    fn classify(members: &[Member]) -> Result<Settled, String> {
+        classify_member_list(members, EPERM_TEXT.to_string())
+    }
+
+    #[test]
+    fn eperm_empty_member_list_is_all_zombies() {
+        assert_eq!(classify(&[]), Ok(Settled::AllZombies));
+    }
+
+    #[test]
+    fn eperm_all_zombies_is_all_zombies() {
+        let ms = [member(10, true, false), member(11, true, false)];
+        assert_eq!(classify(&ms), Ok(Settled::AllZombies));
+    }
+
+    #[test]
+    fn eperm_zombie_plus_exiting_is_exiting() {
+        let ms = [member(10, true, false), member(11, false, true)];
+        assert_eq!(classify(&ms), Ok(Settled::Exiting));
+    }
+
+    #[test]
+    fn eperm_exiting_only_is_exiting() {
+        let ms = [member(11, false, true)];
+        assert_eq!(classify(&ms), Ok(Settled::Exiting));
+    }
+
+    #[test]
+    fn eperm_live_member_is_err_with_text_and_pid() {
+        let ms = [member(31337, false, false)];
+        let err = classify(&ms).unwrap_err();
+        assert!(err.contains(EPERM_TEXT), "missing eperm text: {err}");
+        assert!(err.contains("31337"), "missing live pid: {err}");
+    }
+
+    #[test]
+    fn eperm_live_plus_zombie_err_wins() {
+        let ms = [member(10, true, false), member(777, false, false)];
+        let err = classify(&ms).unwrap_err();
+        assert!(err.contains(EPERM_TEXT), "missing eperm text: {err}");
+        assert!(err.contains("777"), "missing live pid: {err}");
+    }
+
+    #[test]
+    fn eperm_live_plus_exiting_err_wins() {
+        let ms = [member(11, false, true), member(888, false, false)];
+        let err = classify(&ms).unwrap_err();
+        assert!(err.contains("888"), "missing live pid: {err}");
+    }
+
+    #[test]
+    fn group_of_all_zombies_is_gone() {
+        assert_eq!(group_of(Settled::AllZombies), Group::Gone);
+    }
+
+    #[test]
+    fn group_of_exiting_is_alive_never_gone() {
+        assert_eq!(group_of(Settled::Exiting), Group::Alive);
     }
 }

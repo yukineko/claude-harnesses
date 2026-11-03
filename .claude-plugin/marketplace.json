@@ -57,7 +57,7 @@
     {
       "name": "blastguard",
       "description": "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary.",
-      "version": "0.2.234",
+      "version": "0.2.236",
       "category": "security",
       "keywords": [
         "hooks",
@@ -1101,7 +1101,7 @@
     {
       "name": "sitecraft",
       "description": "Site-building harness for Claude Code: records design decisions asked from the user, manages the dev server, and blocks a Stop on broken pages or security findings.",
-      "version": "0.1.15",
+      "version": "0.1.17",
       "category": "quality",
       "keywords": [
         "hooks",

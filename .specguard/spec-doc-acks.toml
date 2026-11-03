@@ -32,6 +32,14 @@ path = "crates/blastguard/src/detect/words.rs"
 reason = "Pure move: the command-word and flag helpers (basename through foreign_shell_runs_code, incl. is_short_flag, has_short, is_redirect_token, is_bare_redirect_op, takes_shell_command_flag) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
 
 [[ack]]
+path = "crates/blastguard/src/detect/interpreter.rs"
+reason = "Pure move: the code-interpreter audit (is_code_interpreter through analyze_code_interpreter, incl. INTERPRETER_* call tables, strip_hash_comments, protected_operand_ask, quoted_string_literals) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/payload.rs"
+reason = "Pure move: the stdin-exec and payload-extraction helpers (stage_has_program_operand through unclosed_substitution_opener_end, incl. analyze_interpreter_stdin_exec, shell_here_string_verdict, dash_c_payloads, payloads_after, inline_command_payloads) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
 path = "crates/blastguard/src/detect/vars.rs"
 reason = "Pure move: the expansion/variable resolvers (CommandWordOrigin, opens_unmodelled_construct through resolve_expanded_command_word, has_unresolvable_expansion, unresolvable_command_word) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
 

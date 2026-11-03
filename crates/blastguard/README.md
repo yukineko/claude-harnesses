@@ -52,7 +52,7 @@ It matches `Bash`, `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`.
 Inline-eval interpreters (`python3`/`perl`/`ruby`/`node`/`php`/`lua` with
 `-c`/`-e`/…) are no longer denied for their **shape**: the program text is
 audited (`analyze_code_interpreter` / `interpreter_code_verdict` in
-`src/detect.rs`). A program that demonstrably deletes something, or whose
+`src/detect/interpreter.rs`). A program that demonstrably deletes something, or whose
 embedded shell line is destructive, is a deny; one that names a protected
 gate/config path is an ask; a benign program such as `python3 -c "print(1)"`
 is allowed (0.2.59). Running a script **file** (`python3 app.py`,

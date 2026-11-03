@@ -550,7 +550,7 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   here-document の後のコマンドがあれば従来通り本文も走査する
 >   （`src/detect/heredoc.rs` の `redirect_view_without_quoted_here_document_body`）。
 > - **code-interpreter-inline-eval**: 「形」での一律 deny は廃止され、プログラム本文を
->   監査する（`analyze_code_interpreter` / `interpreter_code_verdict`）。破壊的な呼び出し
+>   監査する（`analyze_code_interpreter` / `interpreter_code_verdict`、`src/detect/interpreter.rs`）。破壊的な呼び出し
 >   や破壊的なシェル行を含めば `deny`、保護パスを名指しすれば `ask`、
 >   `python3 -c "print(1)"` のような無害なものは allow（0.2.59）。stdin からプログラムを
 >   読む形（`… | python3 -`、`python3 /dev/stdin`、here-doc）は判定を拒否する。

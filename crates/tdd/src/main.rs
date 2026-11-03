@@ -30,6 +30,7 @@ mod gate;
 mod git;
 mod install;
 mod model;
+mod moved;
 mod proof;
 mod runner;
 mod state;
@@ -360,6 +361,9 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         if let Some(note) = gate::credit_note(&rep) {
             eprintln!("{note}");
         }
+        if let Some(note) = moved::moved_note(&rep) {
+            eprintln!("{} ({})", note, r.display());
+        }
         if rep.blocks(&rcfg) {
             if chosen.is_none() {
                 cfg = rcfg;
@@ -627,6 +631,9 @@ fn status() {
     // whole checkout is scanned (and the note says so).
     let verdict = gate::evaluate(&cfg, &root, "");
     if let Some(note) = gate::attribution_note(&verdict) {
+        println!("{note}");
+    }
+    if let Some(note) = moved::moved_note(&verdict) {
         println!("{note}");
     }
     if let Some(note) = gate::committed_note(&verdict) {

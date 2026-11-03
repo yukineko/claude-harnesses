@@ -34,7 +34,7 @@
 //! | `fde gate` | JSON `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"\|"deny","permissionDecisionReason":"..."}}` (deny reason also on stderr) | 0 allow / 2 deny (PreToolUse block) |
 //! | `fde evidence red\|green\|pass --req ID --cmd CMD [TARGET]` | — | 0 recorded / 1 refused (not ratified incl. spec changed, ID not in the ratified spec, GREEN without a RED of the same ID and CMD, PASS after a RED, or the exit status of CMD run at the target root contradicts the kind) / 2 undetermined (store, spec or ledger unreadable/corrupt; CMD killed by a signal, timed out, could not spawn, or exited 126/127) |
 //! | `fde evidence verify [TARGET]` | — | 0 complete / 1 incomplete (missing requirements named on stderr) / 2 undetermined (not ratified, zero requirements, ledger unreadable/corrupt/inconsistent) |
-//! | `fde report [TARGET]` | the report text (per-requirement state, unresolved and unmeasured sections) | 0 / 2 undetermined |
+//! | `fde report [TARGET]` | the report text (per-requirement state, unresolved and unmeasured sections; for an unratified target, `ratification: UNRATIFIED`) | **0 done: ratified and every requirement RED then GREEN / 1 not done (unratified incl. not registered and spec changed since ratification, or a requirement unresolved, unmeasured or PASS-only; named on stderr) / 2 undetermined (store, spec or ledger unreadable/corrupt/inconsistent, zero requirements, stdout write failed)** |
 //!
 //! Exit 2 is always "undetermined" (or, for `gate`, deny) and is never a pass.
 //! A reason is written to stderr on every non-zero exit. Argument errors
@@ -319,7 +319,12 @@ fn run(cmd: Cmd) -> i32 {
         Cmd::Report { target } => {
             with_target(target.as_deref(), |t, state| {
                 match evidence::report(t, state) {
-                    Determination::Known(text) => emit(&text),
+                    // The text is printed first in every determined case; a
+                    // failed write is undetermined whatever the verdict.
+                    Determination::Known(r) => match emit(&r.text) {
+                        0 => verdict_exit(r.verdict),
+                        failed => failed,
+                    },
                     Determination::Undetermined(why) => undetermined(why),
                 }
             })

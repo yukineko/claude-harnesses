@@ -62,6 +62,13 @@
 //! `CMD`; otherwise it is **complete** when it has a GREEN (after its RED) or a
 //! PASS; otherwise it is **unmeasured**. `verify` is `Clean` only when every
 //! requirement of the ratified spec is complete.
+//!
+//! `report` applies a **stricter** bar (user ruling 2026-11-03: "Exit 0 only
+//! when it is ratified and every requirement is verified RED→GREEN"): its
+//! verdict is `Clean` only when every requirement is GREEN after RED. A
+//! PASS-only requirement counts as complete for `verify` but not for
+//! `report`, and an unratified target is a determined `Violation` for
+//! `report` (while `verify` answers it `Undetermined`).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -603,23 +610,49 @@ pub fn verify(target: &ResolvedTarget, state_dir: &Path) -> Verdict {
     ))
 }
 
-/// Render a human-readable report of `target`'s ratification and evidence.
+/// The rendered report and its completion verdict.
 ///
-/// `Known` for a ratified target with a readable ledger (and also for a
-/// target that is determined not ratified: the report then says so and
-/// evaluates no evidence). `Undetermined` — never an empty or partial report —
-/// for an unreadable store/spec/ledger, an inconsistent ledger, or a spec with
-/// zero requirements.
+/// `text` is printed in every determined case, including an unratified
+/// target. `verdict` is never `Undetermined` (an undetermined report is a
+/// [`Determination::Undetermined`] with no text at all):
+///
+/// * `Clean` — ratified, and **every** requirement of the ratified spec is
+///   RED then GREEN (no open RED).
+/// * `Violation` — determined not done, with a reason naming why: the target
+///   is unratified (not registered, registered but not ratified, spec changed
+///   since ratification), or some requirement is unresolved (RED without
+///   GREEN), unmeasured (no evidence) or PASS-only (named).
+#[derive(Debug)]
+pub struct Report {
+    /// The human-readable report.
+    pub text: String,
+    /// Whether the report shows the target done (see the type docs).
+    pub verdict: Verdict,
+}
+
+/// Render a human-readable report of `target`'s ratification and evidence,
+/// with its completion verdict (see [`Report`]).
+///
+/// `Known` for a ratified target with a readable ledger, and also for a
+/// target that is determined not ratified (the text then says so, evaluates
+/// no evidence, and the verdict is `Violation`). `Undetermined` — never an
+/// empty or partial report — for an unreadable store/spec/ledger, an
+/// inconsistent ledger, or a spec with zero requirements.
 #[track_caller]
-pub fn report(target: &ResolvedTarget, state_dir: &Path) -> Determination<String> {
+pub fn report(target: &ResolvedTarget, state_dir: &Path) -> Determination<Report> {
     if let Determination::Known(Observed::Unratified { reason }) =
         ratify::observe(target, state_dir)
     {
-        return Determination::known(format!(
+        let text = format!(
             "fde report: target {}\nratification: UNRATIFIED ({reason})\n\
              evidence: not evaluated (no ratified spec to judge it against)",
             target.root.display()
+        );
+        let verdict = Verdict::violation(format!(
+            "report: not done: target {} is unratified ({reason})",
+            target.root.display()
         ));
+        return Determination::known(Report { text, verdict });
     }
     let (spec, ev) = match evaluated(target, state_dir) {
         Determination::Known(x) => x,
@@ -679,5 +712,26 @@ pub fn report(target: &ResolvedTarget, state_dir: &Path) -> Determination<String
             ev.stale
         ));
     }
-    Determination::known(out)
+    let not_red_green: Vec<String> = ev
+        .states
+        .iter()
+        .filter_map(|(id, st)| match st {
+            ReqState::GreenAfterRed { .. } => None,
+            ReqState::Unresolved { open } => Some(format!("{id} (RED without GREEN: {open:?})")),
+            ReqState::Pass { .. } => Some(format!("{id} (PASS only, never RED then GREEN)")),
+            ReqState::Unmeasured => Some(format!("{id} (no evidence)")),
+        })
+        .collect();
+    let verdict = if not_red_green.is_empty() {
+        Verdict::from_findings(Vec::new())
+    } else {
+        Verdict::violation(format!(
+            "report: not done for {}: {} of {} requirement(s) are not verified RED then GREEN: {}",
+            target.root.display(),
+            not_red_green.len(),
+            ev.states.len(),
+            not_red_green.join("; ")
+        ))
+    };
+    Determination::known(Report { text: out, verdict })
 }

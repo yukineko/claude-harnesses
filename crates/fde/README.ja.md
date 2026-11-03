@@ -44,12 +44,18 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
 | `fde gate` | PreToolUse hook の入口(stdin で payload を読む) | 0 allow / 2 deny |
 | `fde evidence red\|green\|pass --req ID --cmd CMD [TARGET]` | target root で CMD を実行し、終了ステータスで記録可否を決める | 0 記録 / 1 拒否 / 2 判定不能 |
 | `fde evidence verify [TARGET]` | 全要件の証跡が揃っているか | 0 完了 / 1 欠け(欠けた要件を stderr に列挙)/ 2 判定不能(未批准・要件ゼロ・ledger 不整合を含む) |
-| `fde report [TARGET]` | 人間向けの一覧 | 0 / 2 判定不能 |
+| `fde report [TARGET]` | 人間向けの一覧(未批准でも `ratification: UNRATIFIED` を出力) | 0 完了(批准済みかつ全要件が RED→GREEN)/ 1 未完了(未批准〈未登録・批准後の spec 変更を含む〉、または unresolved・unmeasured・PASS のみの要件がある。理由を stderr に出す)/ 2 判定不能(store・spec・ledger が読めない・壊れている・不整合、要件ゼロ、stdout へ書けない) |
 
 - exit 2 は常に「判定不能」(gate では deny)で、pass ではない。受け取ったら止めて人間に聞く。
 - 非 0 終了では必ず stderr に理由が出る。引数エラー(clap)も exit 2。
-- **`fde report` の終了コードは判定ではない。** 未批准の target でも exit 0 で
-  `ratification: UNRATIFIED` / `evidence: not evaluated` を出力する。完了の判定に使えるのは `fde evidence verify` だけ。
+- **`fde report` の終了コードは「批准済みかつ全要件が RED→GREEN で検証済みか」の判定である**(2026-11-03 のユーザー裁定:
+  「Exit 0 only when it is ratified and every requirement is verified RED→GREEN」)。一覧は従来どおり全ケースで stdout に
+  出る(未批准なら `ratification: UNRATIFIED` / `evidence: not evaluated`)。exit 0 は批准済みかつ全要件が RED→GREEN の
+  ときだけ。未批准(未登録・未批准・批准後の spec 変更)や、unresolved・unmeasured・PASS のみの要件があれば exit 1 で、
+  理由(未批准の理由、または該当要件)を stderr に出す。
+- **`fde evidence verify` との違い**: verify は PASS(最初から通る要件)も完了と数え、未批准を 2(判定不能)と答える。
+  report は PASS のみの要件を未完了(1)とし、未批准を 1(`fde status` と同じく「否と判定済み」)と答える。
+  したがって verify が 0 でも report が 1 のことがある(PASS のみの要件がある場合)。
 - `evidence` の拒否(1)の条件: 未批准(批准後の spec 変更を含む)、ID が批准 spec に無い、同じ ID・同じ CMD の
   RED が無い GREEN、RED 後の PASS、CMD の終了ステータスが種類と矛盾(RED は非 0、GREEN / PASS は 0 が必要)。
   判定不能(2)の条件: store・spec・ledger が読めない・壊れている、CMD がシグナルで終了・タイムアウト(1 時間)・
@@ -67,8 +73,8 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
    最初から通る要件は `fde evidence pass` で適合済みとして記録する。
 4. **fix**: `condukt` / `condukt-loop` に実装を委譲する(テスト agent とは別)。target root に統合後、RED と同じ CMD で
    `fde evidence green`、`tdd green`、`tdd oracle`。
-5. **報告**: `fde evidence verify` が判定。`fde report` の unresolved(RED のみで GREEN 無し)と unmeasured(証跡なし)、
-   やっていないことを逐語で報告する。
+5. **報告**: `fde evidence verify`(PASS も完了と数える)と `fde report`(批准済みかつ全要件 RED→GREEN のときだけ 0)の
+   終了コード、`fde report` の unresolved(RED のみで GREEN 無し)と unmeasured(証跡なし)、やっていないことを逐語で報告する。
 
 ## gate(PreToolUse)
 

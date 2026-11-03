@@ -32,7 +32,9 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
    (相対パスで target を名指す・別ディレクトリから回り込む等は禁止)。拒否理由を逐語で人間に返す。
 2. **批准は人間だけが与える。** 自分で答えない(自律モード・`condukt policy answer` でも escalate 扱い)。
 3. **exit 2 は常に「判定不能」**(gate では deny)。pass 扱いにしない。止めて人間に聞く。
-4. **完了の判定は `fde evidence verify` の終了コードだけ。** `fde report` の終了コードは判定ではない。
+4. **完了の判定は終了コードで行う。** `fde evidence verify`(0 = 全要件の証跡が揃った。PASS も完了と数える)と、
+   より厳しい `fde report`(0 = 批准済みかつ全要件が RED→GREEN。未批准・unresolved・unmeasured・PASS のみは 1)。
+   「全要件を RED→GREEN で検証した」と言えるのは `fde report` が exit 0 のときだけ。
 5. テストを書く agent と実装する agent は別にする。
 
 ## (a) 把握 — 仕様を推定する
@@ -103,16 +105,18 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
 1. **判定**: `fde evidence verify [TARGET]` — 0 = 全要件完了 / 1 = 欠けあり(欠けた要件は stderr)/ 2 = 判定不能。
    完了と言えるのは exit 0 のときだけ。
 2. **一覧**: `fde report [TARGET]`(要件ごとの状態、unresolved / unmeasured の節)。
-   **`fde report` は未批准の target でも exit 0** で `ratification: UNRATIFIED` / `evidence: not evaluated` を出す。
-   したがって report の終了コードは判定ではなく、判定として使ってはならない。
+   一覧は未批准の target でも出る(`ratification: UNRATIFIED` / `evidence: not evaluated`)が、そのときの終了コードは 1。
+   exit 0 は批准済みかつ全要件が RED→GREEN のときだけ。未批准(未登録・未批准・批准後の spec 変更)や、unresolved・
+   unmeasured・PASS のみの要件があれば exit 1 で理由を stderr に出す(verify と違い PASS は完了に数えない)。2 = 判定不能。
 3. 最終報告には次を**逐語で**載せる:
    - unresolved(RED はあるが GREEN が無い)要件
    - unmeasured(証跡なし)要件
-   - `fde evidence verify` の終了コードと stderr
+   - `fde evidence verify` と `fde report` の終了コードと stderr
    - やっていないこと・確かめていないこと(例: 実行しなかった検査、gate に止められて進めなかった手順)
 
 ## 終了コードの読み方(要約)
 
-- `resolve` / `report`: 0 / 2。`begin` / `ratify` / `evidence red|green|pass`: 0 記録 / 1 拒否 / 2 判定不能。
+- `resolve`: 0 / 2。`begin` / `ratify` / `evidence red|green|pass`: 0 記録 / 1 拒否 / 2 判定不能。
+- `report`: 0 完了(批准済みかつ全要件 RED→GREEN)/ 1 未完了(未批准、または unresolved・unmeasured・PASS のみの要件あり)/ 2 判定不能。
 - `status`: 0 批准済み / 1 未批准 / 2 判定不能。`evidence verify`: 0 完了 / 1 欠け / 2 判定不能。
 - `gate`: 0 allow / 2 deny。引数エラー(clap)も 2。どれも 2 は pass ではない。

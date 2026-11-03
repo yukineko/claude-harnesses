@@ -11,8 +11,12 @@ not enabled).
 Commands: `fde resolve`, `begin`, `ratify`, `status`, `gate` (PreToolUse hook),
 `evidence red|green|pass|verify`, `report`. Exit 2 always means undetermined
 (deny for `gate`) and is never a pass. The verdict is `fde evidence verify`
-(0 complete / 1 incomplete / 2 undetermined); `fde report` is a listing whose
-exit code is not a verdict (it exits 0 for an unratified target too).
+(0 complete / 1 incomplete / 2 undetermined), which counts PASS as complete.
+`fde report` prints the listing in every determined case and exits 0 only when
+the target is ratified and every requirement is verified RED then GREEN; it
+exits 1 (reason on stderr) for an unratified target (not registered, not
+ratified, spec changed since ratification) or any unresolved, unmeasured or
+PASS-only requirement, and 2 when undetermined.
 
 Before ratification the gate denies Bash run in, or naming, the target, with
 one exception: an exact single `fde status`, `fde report` or `fde begin`

@@ -204,7 +204,7 @@ api_paths = ["/api/health"]
 ```
 
 - `check pages` は `command` の `npm --prefix app` から `app/` を web-app package とみなし、そこ（と祖先）の `node_modules` から Playwright を解決する。Playwright は `app/` に入れる（`npm --prefix app i -D playwright && (cd app && npx playwright install chromium)`）。
-- `api_paths` の各パスは `http://127.0.0.1:<port>`（Stop gate では `serve start` が応答を確認した loopback アドレス。`[::1]` のこともある）に GET され、2xx 以外（3xx を含む）・接続失敗は exit 1、1 パス 10 秒を超えたら exit 2。`/` で始まらない要素は設定エラー（exit 2）。
+- `api_paths` の各パスは pages と同じ宛先（`--base-url`、無ければ `serve start` が記録した `url` ＝ 応答を確認した loopback アドレスで `[::1]` のこともある、サーバの記録が無ければ `http://127.0.0.1:<port>`。Stop gate も `serve start` の `url` を使う）に GET され、2xx 以外（3xx を含む）・接続失敗は exit 1、1 パス 10 秒を超えたら exit 2。`/` で始まらない要素は設定エラー（exit 2）。
 
 書いたら **`sitecraft trust` は人間に実行してもらう。** `command` は Stop gate と `sitecraft serve start` が実行するコマンドなので、内容を人間が確認して承認する必要がある。LLM が代わりに `sitecraft trust` を実行しない。未 trust の設定では `serve start` も gate も止まる（exit 2 / block）。`sitecraft trust` は同時に `sitecraft/decisions.toml` の `command` 能力の argv も承認として記録する（`command` 能力が無ければその記録を消す）。`decisions.toml` が読めない・`[capabilities]` が壊れているときは何も trust せず exit 2。
 
@@ -231,7 +231,7 @@ sitecraft decide check
 sitecraft check capability <name>   # relevant な能力ごとに
 ```
 
-- `check pages` — 設定した pages を Playwright で開き、console error・page error・asset の HTTP エラー・壊れたリンクを検出する。
+- `check pages` — 設定した pages を Playwright で開き、console error・page error・asset の HTTP エラー・壊れたリンクを検出する。`--base-url` を付けなければ、`sitecraft serve start` が記録した `url`（`sitecraft serve status` が running と報告するもの。macOS の Vite のように `[::1]` しか listen しない dev server なら `http://[::1]:<port>`）を pages と `api_paths` の宛先にする。サーバの記録が無い（stopped）なら `http://127.0.0.1:<port>`。serve state が判定できない（state file が読めない・壊れている・記録した group が死んでいる）ときは node を起動せず exit 2 になるので、`sitecraft serve status` で原因を見て `sitecraft serve stop` → `sitecraft serve start` してから再実行する。`--base-url` を明示したときは常にそれが優先する。
 - `check security` — build 出力の秘密情報（伏字で表示）・`.env` の値の混入・危険な HTML sink・`npm audit` の high/critical を検出する。`npm audit` は `check pages` と同じ package ディレクトリ（`command` が `npm --prefix app …` なら `app/`、`--prefix` が無ければ root）で走るので、lockfile はそこに置く（`npm --prefix app i --package-lock-only`）。そこに lockfile が無い・`--prefix` が root 内のディレクトリに解決できないときは exit 2。
 - `check capability <name>` — 能力の verify を実行して判定する（300 秒で打ち切り exit 2）。`builtin:blender-headless` は古い GLB / render を消してから Blender を走らせ、GLB ヘッダ（`glTF`・version 2・長さ一致）と render の描画（四隅の最頻色を背景とし、どれかのチャネルが 16 を超えて違う画素が 1% 以上）を確かめる。`builtin:threejs-render` は trust 済みの `sitecraft.toml` の dev server（止まっていれば起動し、自分で起動したものだけ止める）でページを開き、selector の要素のスクリーンショットに同じ描画規則を当てる。`command` は trust 済みの argv を root で実行する。結果は state dir の result record に残り、Stop gate はそれを読む（gate 自身は能力を実行しない）。入力（script・`verify.inputs`・threejs では `sitecraft.toml` と `web_globs`）や `[capabilities.<name>]` を変えたら再実行する。
 - exit 1 は指摘を直して再実行。exit 2 は検査が走れなかった原因（未ビルド・Playwright 未導入・lockfile 無し・Blender 不在・未 trust 等）を直して再実行。

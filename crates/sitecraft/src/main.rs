@@ -191,7 +191,9 @@ enum ServeCmd {
 enum CheckCmd {
     /// Open the configured pages in Playwright and block on errors.
     Pages {
-        /// Server origin; defaults to `http://127.0.0.1:<port>` from the config.
+        /// Server origin (always wins). Defaults to the `url` that `serve status`
+        /// reports for a running server, else `http://127.0.0.1:<port>` from the
+        /// config when none is recorded; an undeterminable serve state is exit 2.
         #[arg(long)]
         base_url: Option<String>,
     },

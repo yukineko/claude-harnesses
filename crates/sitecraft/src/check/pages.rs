@@ -26,13 +26,26 @@
 //! any `--`), else the project root. A prefix that does not resolve to an
 //! existing directory inside the root → `Undetermined`.
 //!
+//! # Base URL
+//!
+//! An explicit `--base-url` always wins (the gate passes the address
+//! `serve start` found ready). Without it, the base comes from what
+//! [`crate::serve::status`] reports for the root (the same answer as
+//! `sitecraft serve status`): a running server → its recorded `url`
+//! (`http://127.0.0.1:<port>` or `http://[::1]:<port>`, so an IPv6-only dev
+//! server is reached); stopped (no state file) → `http://127.0.0.1:<port>` from
+//! the config; the state dir or the serve state cannot be determined (an
+//! unreadable / invalid state file, a dead recorded group, …) → `Undetermined`
+//! naming the serve state, without spawning node and without guessing an
+//! address.
+//!
 //! # `api_paths`
 //!
 //! After the pages, each `api_paths` entry of `sitecraft.toml` gets one plain
 //! `GET <path>` (HTTP/1.1, `Connection: close`, redirects not followed) on the
-//! server's loopback address: `127.0.0.1:<port>`, or the `[::1]`/`127.0.0.1`
-//! address of `--base-url` when that names a loopback `http://` origin (the
-//! gate passes the address `serve start` found ready). A 2xx status line is
+//! loopback address of the base (see "Base URL"): its `[::1]`/`127.0.0.1`
+//! address when it is a loopback `http://<ip>:<port>` origin, else
+//! `127.0.0.1:<port>`. A 2xx status line is
 //! clean; any other status (a 3xx included), a refused / reset connection, or
 //! an answer without an HTTP status line is a `Violation`; no status line
 //! within [`API_PATH_TIMEOUT`] per path is `Undetermined` (reason `timeout`).
@@ -49,7 +62,8 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::config::{Config, Loaded};
-use crate::Verdict;
+use crate::serve::Status;
+use crate::{Determination, Verdict};
 
 /// The bundled script's file name.
 pub const SCRIPT_NAME: &str = "check-pages.mjs";
@@ -76,10 +90,14 @@ const FIX_BROWSER: &str = "install the browser from the web-app package (the `np
 
 /// Check pages (and `api_paths`) of `root` against a running server.
 ///
-/// `base_url` is the server origin; `None` means `http://127.0.0.1:<port>`
-/// from the config. Contract: config not loadable (`Absent` or
-/// `Undetermined`), or a `--prefix` package directory that does not resolve
-/// inside the root → `Undetermined` without spawning; otherwise
+/// `base_url` is the server origin (it always wins). `None` means the base
+/// of the module docs' "Base URL" section: the `url` recorded by the running
+/// server (`serve status` → running), `http://127.0.0.1:<port>` from the config
+/// when none is recorded (stopped), and `Undetermined` without spawning when the
+/// serve state cannot be determined. Contract: config not loadable (`Absent` or
+/// `Undetermined`), a `--prefix` package directory that does not resolve
+/// inside the root, or (without `base_url`) an undeterminable serve state →
+/// `Undetermined` without spawning; otherwise
 /// [`check_pages`] with node running in the package directory (module docs),
 /// combined with the `api_paths` GETs (module docs): any violation →
 /// `Violation`, else any undetermined → `Undetermined`, else `Clean`.
@@ -107,15 +125,46 @@ pub fn run(root: &Path, base_url: Option<&str>) -> Verdict {
             };
             let base = match base_url {
                 Some(b) => b.to_string(),
-                None => format!("http://127.0.0.1:{}", cfg.port),
+                None => match default_base(root, cfg.port) {
+                    Ok(b) => b,
+                    Err(why) => return Verdict::undetermined(why),
+                },
             };
             let pages = check_pages_in(&cfg, &base, Some(&node_dir));
             if api_paths.is_empty() {
                 return pages;
             }
-            let api = check_api_paths(api_target(base_url, cfg.port), &api_paths);
+            let api = check_api_paths(api_target(Some(&base), cfg.port), &api_paths);
             combine(vec![pages, api])
         }
+    }
+}
+
+/// The base used when no `--base-url` is given, from what
+/// [`crate::serve::status`] reports for `root` (the same answer as
+/// `sitecraft serve status`): a running server → its recorded `url`
+/// (`http://127.0.0.1:<port>` or `http://[::1]:<port>`); stopped (no state
+/// file) → `http://127.0.0.1:<port>`; the state dir or the serve state cannot
+/// be determined → `Err` naming the serve state (never a guessed address).
+fn default_base(root: &Path, port: u16) -> Result<String, String> {
+    let fix = "fix the serve state (`sitecraft serve status` gives the same answer; \
+               `sitecraft serve stop` clears it) or pass --base-url <server origin>";
+    let state = match crate::state_dir() {
+        Determination::Known(s) => s,
+        Determination::Undetermined(why) => {
+            return Err(format!(
+                "cannot determine the serve state without --base-url: {}; {fix}",
+                why.as_str()
+            ))
+        }
+    };
+    match crate::serve::status(&state, root) {
+        Determination::Known(Status::Running(st)) => Ok(st.url),
+        Determination::Known(Status::Stopped) => Ok(format!("http://127.0.0.1:{port}")),
+        Determination::Undetermined(why) => Err(format!(
+            "cannot determine the serve state without --base-url: {}; {fix}",
+            why.as_str()
+        )),
     }
 }
 

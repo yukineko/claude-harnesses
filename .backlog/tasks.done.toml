@@ -63314,3 +63314,80 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; fini
 rev = "2cc2d63b66c0dfbf795d282cc05608cc0dcf2fbe"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "61558e27"
+title = "blastguard FP3: python3 - <<'EOF' program naming .git only as string data is asked as a protected gate/config path"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-03 run-20261103-102800-88064. Cause: interpreter_program_verdict runs exclude::touches_protected on every whitespace-free string literal at EVERY quote layer; in the live shape .git is a string nested inside a Python string literal (Rust source being inserted). NO SOUND DISCRIMINATOR FOUND (2026-11-03, blastguard 0.2.218): ignoring protected names at nested layers loses protection measured on HEAD 2cc2d63b, where each of these is caught ONLY at the nested layer: (1) subprocess.run(["python3","-c","open('.git/hooks/pre-commit','w').write('x')"]) - the argv re-join does not catch it; (2) '# it''s here' comment then open(".git/hooks/pre-commit","w") - quoted_string_literals mis-nests on the apostrophe; (3) open('".git/hooks/pre-commit"'.strip('"'),'w'). Separating these from FP3 needs to know whether a literal is executed or turned into a path (data flow), which the lexer cannot answer. Needs a human ruling or a real per-language parser.
+user ruling 2026-11-03: accepted as a limit. No sound discriminator: ignoring .git at nested quote layers loses 3 measured real .git/hooks writes (HEAD 2cc2d63b). The FP fails toward Ask (restrictive side); workaround is the standing Write-tool route."""
+created_at = 1793672949
+updated_at = 1793690053
+weight = 0.0
+issue_number = 1492
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1492"
+issue_closed_at = 1793690055
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_stdin_git_string_fp_20261103 fp3_"
+rev = "6a3ef5da9909fcf5e796b092f9f49b2be2164e5a"
+observed_at = 1793672949
+detail = """
+exit 101: ite
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.38s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/python_stdin_git_string_fp_20261103.rs (target/debug/deps/python_stdin_git_string_fp_20261103-752bb3b1e3271a9d)
+error: test failed, to rerun pass `-p blastguard --test python_stdin_git_string_fp_20261103`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "user ruling 2026-11-03: accepted as a limit. No sound discriminator: ignoring .git at nested quote layers loses 3 measured real .git/hooks writes (HEAD 2cc2d63b). The FP fails toward Ask (restrictive side); workaround is the standing Write-tool route."
+
+[[task]]
+id = "61666b2f"
+title = "guard-maintree-bash refuses a command that never touches main when another process's git merge is in its pre-merge-commit window"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-01 ~01:18: cargo test --manifest-path <own worktree>/Cargo.toml -p blastguard refused by scripts/guard-maintree-bash.py (concurrent_merge wording: ORIG_HEAD rewritten, HEAD unmoved, no MERGE_HEAD) while another agent's git merge --no-ff into main was in flight. 2dee8b0e/in_flight_merge_window covers only a later merge of the SAME command after an integration HEAD move. Limit: on-disk state alone is identical for foreign vs own-command window; fix needs another signal (e.g. cwd/command not in main, or merge-process liveness). Control test (own write in main stays refused) passes today. NOT FIXED BY USER RULING 2026-11-01 (session c5b9c02b): no sound signal proves the in-flight merge belongs to another process. Each candidate was tested and found unsound: (a) process ancestry, since a backgrounded child is reparented to pid 1, a merge can be delegated to a pre-existing daemon, and all agent shells share one claude parent; (b) Pre-recorded markers, since a terminal merge leaves none and an orphan persists up to 24h; (c) cwd and argv. The disk-only extension is unsafe: `git reset -q HEAD; git cherry-pick -n <branch>` in main reproduces every in_flight_merge_window disk signal with HEAD unmoved, and that state never resolves. The user declined the relaxed rule (disk evidence plus a live `git merge` process in main). The guard stays fail-closed; the false refusal is accepted.
+user ruling 2026-11-01, confirmed 2026-11-03: accepted as a limit. No sound signal proves an in-flight merge in main belongs to another process; the guard stays fail-closed and the false refusal is accepted."""
+created_at = 1793464948
+updated_at = 1793690056
+weight = 0.0
+issue_number = 1481
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1481"
+issue_closed_at = 1793690058
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_foreign_merge_window.py"
+rev = "d50ec5554b0a01b0df54bcb945f5cfa7df142899"
+observed_at = 1793464948
+detail = """
+exit 1: nto a worktree.
+
+scripts/test_guard_maintree_bash_foreign_merge_window.py:100: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_foreign_merge_window.py::ForeignMergeWindow::test_foreign_merge_window_does_not_refuse_unrelated_command
+========================= 1 failed, 1 passed in 2.09s =========================="""
+
+[task.closure]
+reason = "discard"
+discard_reason = "user ruling 2026-11-01, confirmed 2026-11-03: accepted as a limit. No sound signal proves an in-flight merge in main belongs to another process; the guard stays fail-closed and the false refusal is accepted."

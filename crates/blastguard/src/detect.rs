@@ -3715,6 +3715,23 @@ fn here_document_layout(segs: &[SeparatedSegment]) -> (Vec<bool>, Option<usize>)
 /// here-document, an unquoted delimiter, or a command word that is not plainly
 /// a code interpreter (a shell, `env`, `sudo`, an assignment, …) marks nothing.
 fn interpreter_program_body_segments(cmd: &str) -> Vec<bool> {
+    program_body_segments_fed_to(cmd, |w| is_code_interpreter(w) && !is_shell(w))
+}
+
+/// [`interpreter_program_body_segments`] narrowed to PYTHON readers (`python`,
+/// `python2`, `python3`, versioned spellings). Python has no syntax that runs
+/// a shell command from a backtick (Python 2's backticks are `repr`), unlike
+/// Perl, Ruby and PHP, where `` `cmd` `` IS a shell command substitution. So in
+/// a Python program body a backtick-headed "command word" is never a command
+/// word the shell runs (FP2, backlog ef015a66).
+fn python_program_body_segments(cmd: &str) -> Vec<bool> {
+    program_body_segments_fed_to(cmd, |w| strip_version_suffix(w) == "python")
+}
+
+/// The shared scan of [`interpreter_program_body_segments`] and
+/// [`python_program_body_segments`]; `reader` judges the basename of the
+/// opener segment's first word.
+fn program_body_segments_fed_to(cmd: &str, reader: impl Fn(&str) -> bool) -> Vec<bool> {
     let segs = split_segments_with_separators(cmd);
     let mut out = vec![false; segs.len()];
     let mut idx = 0;
@@ -3733,7 +3750,7 @@ fn interpreter_program_body_segments(cmd: &str) -> Vec<bool> {
                 .text
                 .split_whitespace()
                 .next()
-                .is_some_and(|w| is_code_interpreter(basename(w)) && !is_shell(basename(w)));
+                .is_some_and(|w| reader(basename(w)));
         let opener = &openers[0];
         let mut body = idx + 1;
         while body < segs.len() && !segment_closes_here_document(&segs[body].text, opener) {
@@ -3773,7 +3790,9 @@ fn interpreter_program_body_segments(cmd: &str) -> Vec<bool> {
 ///   * every line BEFORE the opener is blank, a comment (`#` first), `set -e`,
 ///     `set -eu`, `set -euo pipefail`, `cd <literal path>`,
 ///     `mkdir -p <literal path>…` or `git add <literal path>…`. A literal path is letters, digits and
-///     `/ . _ - + , @ % : =`, with `~` allowed only as its first character.
+///     `/ . _ - + , @ % : =`, with `~` allowed only as its first character;
+///     a `git add` path may also be one wholly quoted word the shell expands
+///     nothing in (see [`permitted_prefix_line`]).
 ///     Anything else — an assignment, `eval`, `source`, `.`, a function, an
 ///     alias, `PATH`, any other command — keeps the body;
 ///   * the opener line is one physical line with balanced quotes, no `$`, no
@@ -3845,13 +3864,17 @@ enum OutputTargets {
 /// The shape rule is exactly [`strip_data_here_document_bodies`]'s (permitted
 /// lines before the opener, one opener line with no `$`/backtick, a reader on
 /// the closed `cat`/`tee`/`git commit -F -` list, no `|`, `;` or `&`, a CLOSED
-/// body, only blank or comment lines after it), with two differences:
+/// body, only blank or comment lines after it), with three differences:
 ///   * the delimiter MUST be quoted (`'EOF'`, `"EOF"`, `\EOF`). An unquoted
 ///     one lets the shell expand `$(…)` and backticks in the body, so the body
 ///     stays in the view;
 ///   * the opener's output redirect may name ANY literal target, not only a
 ///     data file. Its target is still judged: the opener line stays in the
-///     view, so `> src/x.rs` goes through every redirect axis as before.
+///     view, so `> src/x.rs` goes through every redirect axis as before;
+///   * when the reader stores the body in no file
+///     ([`here_document_reader_stores_nothing`]: bare `cat`, `git commit -F -`,
+///     no output redirect), ANY lines may follow the closing delimiter. They
+///     stay in the view and are judged like every other line.
 ///
 /// Every other rule (the per-segment loop, the interpreter and egress scans)
 /// still reads the full text, body included.
@@ -3915,10 +3938,15 @@ fn strip_here_document_body(cmd: &str, targets: OutputTargets) -> std::borrow::C
     if !here_document_delimiter_is_quoted(&opener_line) && body.contains(['$', '`', '\\']) {
         return unchanged;
     }
-    // Lines after the close.
+    // Lines after the close. The redirect view may keep LATER commands when the
+    // reader stores the body nowhere a later command could run it from
+    // ([`here_document_reader_stores_nothing`]): those lines stay in the view
+    // and every redirect rule still judges them; only the body leaves.
+    let later_commands_ok = targets == OutputTargets::AnyTarget
+        && here_document_reader_stores_nothing(opener_consumer(&opener_line));
     if lines[close + 1..]
         .iter()
-        .any(|l| odd_whitespace(&text(l)) || !inert(&text(l)))
+        .any(|l| odd_whitespace(&text(l)) || !(later_commands_ok || inert(&text(l))))
     {
         return unchanged;
     }
@@ -3964,6 +3992,30 @@ fn opener_consumer(line: &str) -> &str {
     rest
 }
 
+/// True when `consumer` (the opener-line text [`opener_consumer`] returns, which
+/// [`here_document_consumer_is_data`] has already accepted) hands the body to a
+/// reader that leaves it in NO file: a bare `cat` with no output redirect (the
+/// body goes to the tool's stdout) or `git commit -F -` with no output redirect
+/// (the body becomes a commit message).
+///
+/// Only for the redirect view ([`OutputTargets::AnyTarget`]), where it lets
+/// commands follow the closing delimiter line (FP1, backlog e0085090:
+/// `git commit -F - <<'EOF'` … `EOF` then `git log -1` had a message line ending
+/// in `>` read as the redirect `> EOF`). The reason the shape rule otherwise
+/// forbids later commands is that one of them could execute a FILE the body was
+/// written to; with no file there is nothing for it to execute. `tee` writes
+/// files, and any output redirect names one, so both answer false.
+fn here_document_reader_stores_nothing(consumer: &str) -> bool {
+    let words = quote_aware_words(consumer);
+    if words
+        .iter()
+        .any(|w| strip_output_redirect_operator(w).is_some() || w.contains('>'))
+    {
+        return false;
+    }
+    matches!(words.first().map(String::as_str), Some("cat" | "git"))
+}
+
 /// True when `line` has no unterminated `'` or `"` quote.
 fn quotes_balance(line: &str) -> bool {
     let (mut in_s, mut in_d) = (false, false);
@@ -3982,7 +4034,27 @@ fn quotes_balance(line: &str) -> bool {
 /// `mkdir -p <literal path>…`, and `git add <literal path>…` (stages files; it
 /// runs before the reader and never reads the body). Nothing else: a `git`
 /// with global options (`git -c …`) is not `git add` here.
+///
+/// A `git add` path word may also be ONE wholly quoted word (FP1, backlog
+/// e0085090: `git add 'a b.rs' && git commit -F - <<'EOF'`): `'…'` holding no
+/// `'` or newline, or `"…"` holding none of `"`, `$`, backtick, `\`, `!` or
+/// newline. The shell expands nothing in either, and `git add` only stages
+/// files, so the word is as harmless as an unquoted one. Words are split
+/// quote-aware ([`quote_aware_words`]); any other quoting (a quote glued to
+/// unquoted text, an unbalanced quote) is not literal. `cd` and `mkdir -p`
+/// keep the unquoted-only rule: a `cd` operand also moves the cwd every later
+/// rule resolves against, and `mutkill_opener_consumer_splits_only_a_permitted_cd_head`
+/// pins `cd "/x/y"` as not permitted.
 fn permitted_prefix_line(line: &str) -> bool {
+    let quoted_literal = |w: &str| {
+        let quoted = |q: char, forbidden: &[char]| {
+            w.len() >= 2
+                && w.starts_with(q)
+                && w.ends_with(q)
+                && !w[1..w.len() - 1].contains(forbidden)
+        };
+        quoted('\'', &['\'', '\n']) || quoted('"', &['"', '$', '`', '\\', '!', '\n'])
+    };
     let literal = |w: &str| {
         let rest = w.strip_prefix('~').unwrap_or(w);
         !w.is_empty()
@@ -3991,12 +4063,14 @@ fn permitted_prefix_line(line: &str) -> bool {
                     || matches!(c, '/' | '.' | '_' | '-' | '+' | ',' | '@' | '%' | ':' | '=')
             })
     };
-    let words: Vec<&str> = line.split([' ', '\t']).filter(|w| !w.is_empty()).collect();
+    let owned = quote_aware_words(line);
+    let words: Vec<&str> = owned.iter().map(String::as_str).collect();
     match words.as_slice() {
         ["set", "-e"] | ["set", "-eu"] | ["set", "-euo", "pipefail"] => true,
         ["cd", path] => literal(path),
-        ["mkdir", "-p", paths @ ..] | ["git", "add", paths @ ..] => {
-            !paths.is_empty() && paths.iter().all(|p| literal(p))
+        ["mkdir", "-p", paths @ ..] => !paths.is_empty() && paths.iter().all(|p| literal(p)),
+        ["git", "add", paths @ ..] => {
+            !paths.is_empty() && paths.iter().all(|p| literal(p) || quoted_literal(p))
         }
         _ => false,
     }
@@ -8538,7 +8612,19 @@ fn unknown_wrapper_ask(
     // earlier (`BIN=/path/to/tool` … `"$BIN" status`), and then the program
     // this runs IS in the text. `resolve_expanded_command_word` answers that
     // in three values, and only its `Literal` is permissive enough to act on.
-    if has_unresolvable_expansion(tokens[idx]) {
+    //
+    // NOT a command word at all (FP2, backlog ef015a66): a backtick-headed word
+    // on a BODY line of a quoted-delimiter here-document read by Python
+    // (`python3 - <<'PY'` … `s.replace('a','Run \`x y\`')` … `PY`). The shell
+    // does not parse that body, and Python never runs a backtick as a shell
+    // command, so nothing ever executes this "command word". The word is then
+    // judged like any other unrecognised head below, and the program itself
+    // is still audited by `interpreter_code_verdict`. Perl/Ruby/PHP bodies,
+    // where a backtick IS a shell substitution, are not covered and keep the
+    // Ask.
+    let literal_backtick_in_python_body = tokens[idx].starts_with('`')
+        && python_program_body_segments(line).get(seg_idx) == Some(&true);
+    if has_unresolvable_expansion(tokens[idx]) && !literal_backtick_in_python_body {
         match resolve_expanded_command_word(line, seg_idx, tokens[idx]) {
             // SUBSTITUTIVE, never a skip. The resolved program replaces the
             // expansion token and the rewritten segment goes back through the

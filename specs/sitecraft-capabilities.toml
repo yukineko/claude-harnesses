@@ -31,6 +31,7 @@ canon = [
     "docs/specs/sitecraft-capabilities-rulings.md#D8",
 ]
 falsifiable = true
+repro_test = "cargo test -p sitecraft --test spec_r1_purpose"
 
 [[requirement]]
 id = "R2"
@@ -55,6 +56,7 @@ canon = [
     "crates/sitecraft/README.ja.md#trust の手順",
 ]
 falsifiable = true
+repro_test = "cargo test -p sitecraft --test spec_r2_capability_decide"
 
 [[requirement]]
 id = "R3"
@@ -75,6 +77,7 @@ canon = [
     "docs/specs/sitecraft-capabilities-rulings.md#U2",
 ]
 falsifiable = true
+repro_test = "cargo test -p sitecraft --test spec_r3_probe"
 
 [[requirement]]
 id = "R4"
@@ -93,6 +96,7 @@ canon = [
     "crates/sitecraft/skills/sitecraft/SKILL.md#終了コード規約",
 ]
 falsifiable = true
+repro_test = "cargo test -p sitecraft --test spec_r4_check_capability"
 
 [[requirement]]
 id = "R5"
@@ -111,6 +115,7 @@ canon = [
     "crates/sitecraft/README.ja.md#Stop gate",
 ]
 falsifiable = true
+repro_test = "cargo test -p sitecraft --test spec_r5_results_gate"
 
 [[requirement]]
 id = "R6"
@@ -130,6 +135,7 @@ canon = [
     "crates/sitecraft/skills/sitecraft/SKILL.md#Phase 6",
 ]
 falsifiable = true
+repro_test = "cargo test -p sitecraft --test spec_r6_init"
 
 [[requirement]]
 id = "R7"
@@ -150,6 +156,7 @@ canon = [
     "docs/specs/sitecraft-capabilities-rulings.md#U4",
 ]
 falsifiable = true
+repro_test = "cargo test -p sitecraft --test spec_r7_rules"
 
 [[requirement]]
 id = "R8"
@@ -166,6 +173,7 @@ acceptance = [
 ]
 canon = ["docs/specs/sitecraft-capabilities-rulings.md#D8"]
 falsifiable = true
+repro_test = "cargo test -p sitecraft --test spec_r8_multi_history"
 
 [[requirement]]
 id = "R9"
@@ -182,6 +190,7 @@ canon = [
     "crates/sitecraft/skills/sitecraft/SKILL.md#Phase 5",
 ]
 falsifiable = true
+repro_test = "cargo test -p sitecraft --test spec_r9_classify_fit"
 
 [[requirement]]
 id = "R10"
@@ -193,6 +202,7 @@ acceptance = [
 ]
 canon = ["docs/specs/sitecraft-capabilities-rulings.md#D10"]
 falsifiable = true
+repro_test = "cargo test -p sitecraft --test spec_r10_api_paths"
 
 [[requirement]]
 id = "R11"
@@ -215,6 +225,7 @@ canon = [
     "docs/specs/sitecraft-capabilities-rulings.md#U6",
 ]
 falsifiable = true
+repro_test = "cargo test -p sitecraft --test spec_r11_status_history"
 
 [[requirement]]
 id = "R12"
@@ -234,3 +245,4 @@ canon = [
     "crates/sitecraft/skills/sitecraft/SKILL.md#不変条件",
 ]
 falsifiable = true
+repro_test = "cargo test -p sitecraft --test spec_r12_skill_completion"

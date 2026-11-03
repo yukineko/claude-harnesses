@@ -62,7 +62,10 @@
   compile-fail 型契約）、(4) 同じ tip に対する `specguard map gate-check`（gate crate の変更が spec-doc
   binding か理由付き ack で覆われているか。backlog 0c277117、2026-10-02 配線）。いずれも判定不能は
   block に倒す。advisory は GATE_CRATES 変更検知・rollout drift・autonomy chain の 3 本で、これらは
-  push を止めない。
+  push を止めない。各フェーズの所要秒数は判定に関与しない observability として stderr の 1 行と
+  `prepush-timing.jsonl`（git common dir）に記録される。typecheck の前に、肥大した共有 target dir を
+  上限付きで掃除する判定に関与しない保守フェーズ（`target-cleanup`。判定不能なら削除しない）がある
+  （詳細はどちらも `docs/repo-operations.md`）。
   この行はかつて「push 自体は止めない設計（fail-soft）」と書いていたが、bypass ledger 以降の実装と
   食い違っていた（CLAUDE.md 第4節: 散文が実装と食い違ったら散文を直す）。chronically-red CI の
   チェックは GitHub Actions 禁止（CLAUDE.md 第7節）に伴い撤去済みで、もう存在しない。

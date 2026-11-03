@@ -785,19 +785,82 @@ def test_body_root(side: Side, f: str, _seen=None):
     return None
 
 
+# First words that open an ITEM or a `let` statement. Such a head may contain
+# depth-0 commas (`fn f<A, B>()`, `-> Map<K, V>`, `where T: A, U: B`,
+# `impl<A, B> X<A, B>`), so it ends only at its block `{` or at `;`.
+_ITEM_HEAD_WORDS = frozenset({
+    "fn", "impl", "trait", "mod", "struct", "enum", "union", "type", "use",
+    "static", "const", "let", "extern", "unsafe", "async", "default", "auto",
+    "macro_rules",
+})
+_HEAD_WORD_RE = re.compile(r"\s*(?:pub\s*(?:\([^()]*\))?\s*)?([A-Za-z_][A-Za-z0-9_]*)")
+_OUTER_ATTR_RE = re.compile(r"\s*#\s*\[")
+
+
+def _angle_depth(seg: str) -> int:
+    """`<` minus `>` in masked `seg`, not counting the arrows `->`/`=>` nor the
+    two-character operators `<=` `>=` `<<` `>>`. Positive means an unclosed `<`
+    (an open generic list -- or a `<` comparison: the caller cannot tell)."""
+    for op in ("->", "=>", "<=", ">=", "<<", ">>"):
+        seg = seg.replace(op, "  ")
+    return seg.count("<") - seg.count(">")
+
+
 def _annotated_block(code: str, path: str, attr_end: int):
-    """Index of the `{` opening the block of the item that the outer attribute
-    ending at `attr_end` annotates, or None when that item has no block.
+    """Half-open `(lo, hi)` span of the test surface contributed by the item
+    that the outer attribute ending at `attr_end` annotates, or None when that
+    item contains no block at all.
 
     `code` is MASKED (no comments/literals), so every bracket is real. Further
-    attributes and the item head are skipped; the item ends at the first `{`,
-    `;` or `,` at bracket depth 0 (or the `}` closing the enclosing block). Only
-    a `{` is a block: `#[cfg(test)] use x;` or a `#[cfg(test)]` struct field
-    annotates nothing with a body and must not borrow the NEXT item's block.
-    Running out of input is Undetermined."""
+    outer attributes are skipped first. Then:
+
+    * an ITEM or `let` head (`_ITEM_HEAD_WORDS`, after an optional `pub(..)`)
+      ends at its first `{` (its block: the span is that `{ .. }`) or `;` at
+      `(`/`[` depth 0. Commas do not end it: they occur in generics, return
+      types and where clauses (`fn f<A, B>() where T: A, U: B { .. }`).
+      `#[cfg(test)] use x;` therefore captures nothing, never the next item's
+      block.
+    * any other head (a struct field, enum variant, match arm, expression
+      statement or list element) ends at the first depth-0 `{` (its block),
+      or at `;`, `}` or a closing `)`/`]`, or at a `,` -- unless an unclosed
+      `<` precedes that comma, in which case the comma may belong to a generic
+      list or to a comparison and the item's extent cannot be decided:
+      Undetermined, never an empty surface.
+
+    An item that ends without a depth-0 block but has braces nested inside
+    `(..)`/`[..]` (`#[cfg(test)] LOCK.with(|p| { .. });`, `const X: T =
+    f(|| { .. });`) contributes its whole text up to the terminator, so a block
+    inside a call is never dropped. Unbalanced braces or running out of input
+    is Undetermined."""
     n = len(code)
-    depth = 0
     i = attr_end
+    while True:
+        am = _OUTER_ATTR_RE.match(code, i)
+        if am is None:
+            break
+        o = am.end() - 1
+        depth = 0
+        k = o
+        while k < n:
+            if code[k] == "[":
+                depth += 1
+            elif code[k] == "]":
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        if k >= n:
+            raise Undetermined(f"{path}: unterminated attribute after #[cfg(test)]")
+        i = k + 1
+    hm = _HEAD_WORD_RE.match(code, i)
+    item_head = hm is not None and hm.group(1) in _ITEM_HEAD_WORDS
+    start = i
+    depth = 0
+    nested_brace = False
+
+    def done(end: int):
+        return (start, end) if nested_brace else None
+
     while i < n:
         c = code[i]
         if c in "([":
@@ -805,12 +868,29 @@ def _annotated_block(code: str, path: str, attr_end: int):
         elif c in ")]":
             depth -= 1
             if depth < 0:
-                return None  # attribute on the last element of a list/call
-        elif depth == 0:
+                return done(i)  # attribute on the last element of a list/call
+        elif depth > 0:
             if c == "{":
-                return i
-            if c in ";,}":
-                return None
+                nested_brace = True
+        else:
+            if c == "{":
+                end = _matching_brace(code, i)
+                if end is None:
+                    raise Undetermined(f"{path}: unbalanced braces in #[cfg(test)] item")
+                return (i, end + 1)
+            if c == ";":
+                return done(i + 1)
+            if not item_head:
+                if c == "}":
+                    return done(i)
+                if c == ",":
+                    if _angle_depth(code[start:i]) > 0:
+                        raise Undetermined(
+                            f"{path}: cannot tell where the #[cfg(test)] item "
+                            f"{code[start:i].strip()[:60]!r} ends (comma after an "
+                            "unclosed `<`)"
+                        )
+                    return done(i)
         i += 1
     raise Undetermined(f"{path}: #[cfg(test)] annotates no item before end of file")
 
@@ -835,9 +915,12 @@ def cfg_test_modules(
     contributes its resolved body FILE's whole content, read from `side` (see
     the out-of-line section above; inline `mod a { mod b; }` nesting is
     followed); unresolvable is Undetermined. Any other `#[cfg(test)]`
-    contributes the block of the item it annotates (`_annotated_block`); an item
-    without a block (`#[cfg(test)] use x;`) contributes nothing, and an
-    attribute with no item after it is Undetermined.
+    contributes the block of the item it annotates (`_annotated_block`; item
+    heads with generic or where-clause commas keep their block, and an item
+    whose braces sit inside a call contributes its whole text); an item with
+    no block anywhere (`#[cfg(test)] use x;`, a plain field, a match arm
+    ending in `,`) contributes nothing, and an attribute with no item after
+    it, or one whose item extent cannot be decided, is Undetermined.
     With `out_of_line_only` only the out-of-line bodies are returned (used when
     the file's own content is already counted whole; see `test_surface`).
     """
@@ -860,13 +943,10 @@ def cfg_test_modules(
     for m in CFG_TEST_RE.finditer(code):
         if m.start() in decl_attrs:
             continue
-        brace = _annotated_block(code, path, m.end())
-        if brace is None:
+        span = _annotated_block(code, path, m.end())
+        if span is None:
             continue
-        end = _matching_brace(src, brace)
-        if end is None:
-            raise Undetermined(f"{path}: unbalanced braces in #[cfg(test)] module")
-        chunks.append(src[brace : end + 1])
+        chunks.append(src[span[0] : span[1]])
     return "\n".join(chunks)
 
 

@@ -13,7 +13,7 @@ To drain the whole queue automatically, use `/flow` instead.
 - `cancel <id> --reason R` — Close as "decided not to do it": terminal, never requeued, recorded as a `discard` closure, no test needed
 - `audit-closures` — Read-only classification of every terminal row's closure evidence (`--json`); never writes the store
 - `overlap` — Group queued tasks by declared `touched_files` scope (advisory; undeclared scopes listed separately)
-- `edit <id>` — Update a task's title / tags / notes / status
+- `edit <id>` — Update a task's title / tags / notes / status; `--repro-test CMD` replaces a pending task's repro (see **File only with a reproducing test**)
 - `sync` — Reconcile the store against its GitHub issues (one-way, local wins). It is report-only unless `--apply`. `--only both|create|close|body` selects which arms run. `--limit` truncates the plan to that many tasks
 - `session-start` — SessionStart hook: inject pending tasks as context
 - `install` / `uninstall` — Wire/remove the SessionStart hook in `~/.claude/settings.json` (standalone use)
@@ -67,6 +67,14 @@ writing.
   not reproduced, undetermined.
 - Intentional RED repros are committed with `#[ignore = "backlog <id>: ..."]` and filed with
   `--repro-test "cargo test -p <crate> --test <file> -- --ignored"`.
+- An already-filed task whose RED test is moved under `#[ignore]` gets its stored repro updated
+  with `backlog edit <id> --repro-test "cargo test -p <crate> --test <file> -- --ignored"`.
+  The command is run exactly as `add --repro-test` runs it (at HEAD in a temp worktree) and the
+  same repro record is stored, but only on `reproduced`. `not-reproduced` / `undetermined`
+  (including a run without `-- --ignored`, which executes zero tests) exit non-zero naming the
+  outcome, and the store is left byte-identical. A task that is not `pending` is refused. Other
+  flags in the same `edit` (`--title`, `--tag`, ...) are written only together with an accepted
+  repro.
 - An exit-0 run that executed ZERO tests is `undetermined`, not `not-reproduced` (refused with
   `repro outcome undetermined`): libtest output whose `passed + failed` summed over every
   `test result:` line (one per test binary) is 0 (an `#[ignore]`d test run without `-- --ignored`

@@ -52,7 +52,7 @@ pub const STATUS_CANCELLED: Status = Status::Cancelled;
 /// The core STORED lifecycle statuses, in lifecycle order. `stored_status_error`
 /// rejects any `edit --status` value outside this list (so the derived
 /// `claimed` is never persisted), and on top of that the close-evidence rule
-/// in `store::edit` admits only `pending` / `failed`: `done` / `cancelled`
+/// in `backlog edit` (`crate::edit_repro`) admits only `pending` / `failed`: `done` / `cancelled`
 /// need a recorded closure (`backlog done` with evidence, or `backlog cancel`).
 pub const STATUSES: [Status; 4] = [STATUS_PENDING, STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED];
 
@@ -275,7 +275,7 @@ pub struct Task {
     /// last confirmed pushed to GitHub, or `None` if it never has been.
     ///
     /// **This was `updated_at`-based first, and that was wrong.** The reasoning
-    /// was that `store::edit` always re-stamps `updated_at`, so comparing it
+    /// was that `backlog edit` always re-stamps `updated_at`, so comparing it
     /// against a recorded value could only OVER-report staleness (a title-only
     /// edit re-pushes an unchanged body — one redundant, idempotent write) and
     /// never UNDER-report a notes change. The flaw is resolution: `updated_at`

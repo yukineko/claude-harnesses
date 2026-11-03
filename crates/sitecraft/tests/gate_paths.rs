@@ -904,6 +904,116 @@ fn bash_redirect_into_web_file_runs_pages() {
     );
 }
 
+/// bash ANSI-C quoting: inside `$'...'` a backslash-escaped `'` does NOT end
+/// the string (bash manual, "ANSI-C Quoting"). So bash parses
+/// `ls $'a\'b'; sed -i s/a/b/ src/main.js # '` as: `ls` with one argument
+/// `a'b`, then `sed -i` on src/main.js, then a comment. `lex_shell` has no `$'`
+/// case: it treats `$` as a dynamic char and then ends the single quote at the
+/// escaped `'`, swallowing the rest as one word, so it sees only `ls`.
+#[test]
+fn bash_ansi_c_quote_hides_sed_in_place_on_web_file() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("ls $'a\\'b'; sed -i s/a/b/ src/main.js # '");
+    let out = f.gate("s-bash-ansic", false);
+    assert!(
+        f.pages_ran(),
+        "bash really runs `sed -i` on src/main.js here; the lexer must not clear it: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// Dynamic argument to an allowlisted command: `$F` may expand to `--pre=<cmd>`
+/// (rg runs `<cmd>` on every file), so the command is not provably read-only.
+#[test]
+fn bash_rg_with_dynamic_argument_runs_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("rg $F pat README.md");
+    let out = f.gate("s-bash-rg-dyn", false);
+    assert!(
+        f.pages_ran(),
+        "`rg $F`: $F may be `--pre=...`, which runs an arbitrary program: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// Same for `git log $X`, where `$X` may be `--output=src/main.js`.
+#[test]
+fn bash_git_log_with_dynamic_argument_runs_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("git log $X");
+    let out = f.gate("s-bash-git-dyn", false);
+    assert!(
+        f.pages_ran(),
+        "`git log $X`: $X may be `--output=<web file>`: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// `rg --hostname-bin=<prog>` (present in the installed rg's `--help`) makes rg
+/// execute `<prog>` when it formats hyperlinks. Observed: with
+/// `--hyperlink-format=default` rg ran the program (marker file created).
+#[test]
+fn bash_rg_hostname_bin_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let prog = f.base.join("stubs/hostname.sh");
+    f.transcript_with_bash(&format!(
+        "rg --hostname-bin={} --hyperlink-format=default answer README.md",
+        prog.display()
+    ));
+    let out = f.gate("s-bash-rg-hostbin", false);
+    assert!(
+        f.pages_ran(),
+        "`rg --hostname-bin=PROG` executes PROG: not provably read-only, pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// Control: a plainly read-only command with no web path is `Known(false)`, so
+/// pages are skipped.
+#[test]
+fn bash_read_only_ls_skips_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("ls -la");
+    let out = f.gate("s-bash-ls", false);
+    assert!(
+        !f.pages_ran(),
+        "`ls -la` is read-only and mentions no web file: pages must be skipped\n{}",
+        describe(&out)
+    );
+}
+
+#[test]
+fn bash_read_only_git_status_skips_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("git status");
+    let out = f.gate("s-bash-gitstatus", false);
+    assert!(
+        !f.pages_ran(),
+        "`git status` is read-only and mentions no web file: pages must be skipped\n{}",
+        describe(&out)
+    );
+}
+
+/// `npm run build` can write anything (including web_globs files): pages run.
+#[test]
+fn bash_npm_run_build_runs_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("npm run build");
+    let out = f.gate("s-bash-npmbuild", false);
+    assert!(
+        f.pages_ran(),
+        "`npm run build` is not on the read-only allowlist: pages must run\n{}",
+        describe(&out)
+    );
+}
+
 // ---------------------------------------------------------------- node stub schema
 
 /// The fixture's `node` stub reports a console error. The block it provokes

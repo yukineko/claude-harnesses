@@ -18,6 +18,7 @@
 //!     failure, not "parsing decomposition JSON".
 //!  4. session-heartbeat: exit non-zero, stderr names the stdin read failure,
 //!     not "hook payload is not JSON".
+//!
 //! Controls (stdin = /dev/null, i.e. genuinely empty) pin today's behavior so
 //! the fix cannot regress the empty-stdin contract.
 
@@ -59,13 +60,16 @@ fn editgate_blocks_on_stdin_read_error() {
     let tmp = tempfile::tempdir().unwrap();
     let out = condukt(tmp.path(), tmp.path(), &["editgate"], In::Dir);
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let line = stdout.lines().find(|l| !l.trim().is_empty()).unwrap_or_else(|| {
-        panic!(
-            "editgate was SILENT (= allow) on a stdin read error; expected a block line. \
+    let line = stdout
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or_else(|| {
+            panic!(
+                "editgate was SILENT (= allow) on a stdin read error; expected a block line. \
              stderr: {}",
-            String::from_utf8_lossy(&out.stderr)
-        )
-    });
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
     let v: serde_json::Value = serde_json::from_str(line).expect("block line is JSON");
     assert_eq!(v["decision"], "block", "stdout: {stdout}");
     let reason = v["reason"].as_str().unwrap_or("").to_lowercase();
@@ -91,7 +95,10 @@ fn subagent_stop_names_stdin_read_failure() {
     let tmp = tempfile::tempdir().unwrap();
     let out = condukt(tmp.path(), tmp.path(), &["subagent-stop"], In::Dir);
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(out.status.success(), "hook exit-0 contract; stderr: {stderr}");
+    assert!(
+        out.status.success(),
+        "hook exit-0 contract; stderr: {stderr}"
+    );
     assert!(
         String::from_utf8_lossy(&out.stdout).trim().is_empty(),
         "no verdict channel"
@@ -143,7 +150,10 @@ fn session_heartbeat_names_stdin_read_failure() {
     let tmp = tempfile::tempdir().unwrap();
     let out = condukt(tmp.path(), tmp.path(), &["session-heartbeat"], In::Dir);
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    assert!(!out.status.success(), "must exit non-zero; stderr: {stderr}");
+    assert!(
+        !out.status.success(),
+        "must exit non-zero; stderr: {stderr}"
+    );
     assert!(
         names_read_failure(&stderr) && !stderr.contains("not JSON"),
         "stderr must name the stdin read failure, not 'not JSON'; got: {stderr}"

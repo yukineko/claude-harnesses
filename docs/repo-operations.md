@@ -13,6 +13,20 @@
     に隠蔽・検証バイパス・egress 文言が植わっていないか走査（防御 framing は除外）。ローカルは
     `git config core.hooksPath .githooks` で pre-commit を有効化（速い advisory 層。CI の `injectguard` job が
     非バイパスの本ゲート）。
+- **file-growth ratchet（pre-commit、`file-growth`）** — `python3 scripts/check-file-growth.py`。
+  **staged（index）** の追加/変更 `.rs` / `.py` を `git show :<path>` の行数（末尾改行なしの最終行も
+  1 行と数える）で検査し、2000 行を超えたら block する。既に 2000 行を超えていたファイルは
+  `scripts/check-file-growth.baseline`（`<max_lines> <path>`、`#` 行・空行は無視）に導入時点の行数を
+  上限として記録してあり、その上限を超えたら block する。**上限は下げる方向にしか動かない**:
+  staged の baseline が HEAD の baseline より上限を上げると block。HEAD の baseline に無い 2000 超の
+  新規エントリ（HEAD に baseline 自体が無い場合を含む）は、**HEAD の tree で既にその行数以上ある
+  ファイルの追認**としてだけ許す（上限 ≤ `git show HEAD:<path>` の行数）。HEAD にそのパスが無い・
+  上限が HEAD の行数を超える・HEAD が unborn のときは block（成長の追認は不可）。2000 以下の新規
+  エントリは締める方向なので可。HEAD:<path> を読む git が失敗したら判定不能（exit 2）。
+  下げる・消すのは可。直し方はファイルを分割して 2000 行未満にし、同じ commit でエントリを下げるか
+  消すこと。working tree だけの変更・stage していないファイルは見ない。exit 0 = pass / 1 = 違反
+  （path・行数・上限を表示）/ 2 = 判定不能（git 失敗・baseline の解釈不能行・重複エントリ）で、
+  2 も block する。テスト: `python3 -m unittest scripts/test_check_file_growth.py`。
 - **Continuous-Audit 自動起動導線** — `git config core.hooksPath .githooks` を有効化していれば
   `.githooks/pre-push` が GATE_CRATES（blastguard/propguard/specguard/stuckguard/mutategate/overwatch）配下の
   変更を検知し、`scripts/continuous-audit.sh --dry-run` を勧める advisory メッセージを出す

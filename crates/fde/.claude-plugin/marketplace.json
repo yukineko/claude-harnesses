@@ -8,8 +8,8 @@
     {
       "name": "fde",
       "source": ".",
-      "version": "0.1.9",
-      "description": "Forward Deployed Engineer harness: resolves a target repo, keeps a ratified spec per target outside it, denies edits to unratified registered targets, and records a red/green evidence ledger. Partial scaffold: resolve, begin, ratify, status and gate are implemented; evidence and report currently answer undetermined (exit 2)."
+      "version": "0.1.10",
+      "description": "Forward Deployed Engineer harness: resolves a target repo, keeps a ratified spec per target outside it, denies edits to unratified registered targets, and records a red/green evidence ledger. Implemented: resolve, begin, ratify, status, gate, evidence red/green/pass/verify and report."
     }
   ]
 }

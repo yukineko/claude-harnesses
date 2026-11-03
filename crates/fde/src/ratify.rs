@@ -110,7 +110,7 @@ fn canonical_spec(spec: &Path) -> Determination<Option<PathBuf>> {
 
 /// Refuse to write state when the state directory is inside the target
 /// (`Violation`); `Undetermined` when that cannot be decided.
-fn state_outside_target(target: &ResolvedTarget, state_dir: &Path) -> Verdict {
+pub(crate) fn state_outside_target(target: &ResolvedTarget, state_dir: &Path) -> Verdict {
     let effective = match std::fs::canonicalize(state_dir) {
         Ok(p) => p,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => state_dir.to_path_buf(),
@@ -410,10 +410,50 @@ pub fn ratify(target: &ResolvedTarget, spec: Option<&Path>, state_dir: &Path) ->
 ///   exists) an unreadable or missing spec.
 #[track_caller]
 pub fn status(target: &ResolvedTarget, state_dir: &Path) -> Determination<Status> {
+    match observe(target, state_dir) {
+        Determination::Known(Observed::Ratified(spec)) => Determination::known(Status::Ratified {
+            fingerprint: spec.fingerprint,
+        }),
+        Determination::Known(Observed::Unratified { reason }) => {
+            Determination::known(Status::Unratified { reason })
+        }
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
+}
+
+/// The ratified spec of a target, as read in one observation: the bytes
+/// whose SHA-256 is `fingerprint` are exactly `bytes` (no second read).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RatifiedSpec {
+    /// Canonical path of the registered (and ratified) spec.
+    pub path: PathBuf,
+    /// Lowercase hex SHA-256 of `bytes`, equal to the recorded ratification.
+    pub fingerprint: String,
+    /// The spec bytes that were read and fingerprinted.
+    pub bytes: Vec<u8>,
+}
+
+/// [`status`] with the ratified spec bytes attached, for callers (the
+/// evidence ledger) that must interpret the very bytes that were checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Observed {
+    /// See [`Status::Ratified`].
+    Ratified(RatifiedSpec),
+    /// See [`Status::Unratified`].
+    Unratified {
+        /// Why the target is not ratified (for stderr).
+        reason: String,
+    },
+}
+
+/// Same answers as [`status`], carrying the ratified spec bytes on
+/// `Ratified`.
+#[track_caller]
+pub fn observe(target: &ResolvedTarget, state_dir: &Path) -> Determination<Observed> {
     let reg = match read_registration(target, state_dir) {
         Determination::Known(Some(r)) => r,
         Determination::Known(None) => {
-            return Determination::known(Status::Unratified {
+            return Determination::known(Observed::Unratified {
                 reason: format!("target {} is not registered", target.root.display()),
             })
         }
@@ -422,7 +462,7 @@ pub fn status(target: &ResolvedTarget, state_dir: &Path) -> Determination<Status
     let rat = match read_ratification(target, state_dir) {
         Determination::Known(Some(r)) => r,
         Determination::Known(None) => {
-            return Determination::known(Status::Unratified {
+            return Determination::known(Observed::Unratified {
                 reason: format!(
                     "target {} is registered with spec {} but not ratified",
                     target.root.display(),
@@ -433,7 +473,7 @@ pub fn status(target: &ResolvedTarget, state_dir: &Path) -> Determination<Status
         Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
     if rat.spec != reg.spec {
-        return Determination::known(Status::Unratified {
+        return Determination::known(Observed::Unratified {
             reason: format!(
                 "the ratification is for spec {}, but the registered spec is {}",
                 rat.spec.display(),
@@ -452,7 +492,7 @@ pub fn status(target: &ResolvedTarget, state_dir: &Path) -> Determination<Status
     };
     let current = fingerprint(&bytes);
     if current != rat.fingerprint {
-        return Determination::known(Status::Unratified {
+        return Determination::known(Observed::Unratified {
             reason: format!(
                 "spec {} changed since ratification (fingerprint {} now {current})",
                 reg.spec.display(),
@@ -460,7 +500,9 @@ pub fn status(target: &ResolvedTarget, state_dir: &Path) -> Determination<Status
             ),
         });
     }
-    Determination::known(Status::Ratified {
+    Determination::known(Observed::Ratified(RatifiedSpec {
+        path: reg.spec,
         fingerprint: current,
-    })
+        bytes,
+    }))
 }

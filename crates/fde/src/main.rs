@@ -3,11 +3,12 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! fde — Forward Deployed Engineer harness.
 //!
-//! **PARTIAL SCAFFOLD.** Every subcommand below exists and parses. `resolve`
-//! (`target.rs`, `git.rs`), `begin` / `ratify` / `status` (`ratify.rs`,
-//! `state.rs`) and `gate` (`gate.rs`) are implemented; `evidence` and `report`
-//! still answer `Undetermined`, so they exit 2. The contract below is what the
-//! implementation must meet; tests may rely on it.
+//! Every subcommand below is implemented: `resolve` (`target.rs`, `git.rs`),
+//! `begin` / `ratify` / `status` (`ratify.rs`, `state.rs`), `gate`
+//! (`gate.rs`), and `evidence` / `report` (`evidence.rs`, which documents the
+//! ledger layout, the order of recording checks and the completeness rule).
+//! The contract below is what the implementation must meet; tests may rely
+//! on it.
 //!
 //! # CLI contract
 //!
@@ -31,9 +32,9 @@
 //! | `fde ratify [TARGET] [--spec FILE]` | — | 0 recorded / 1 refused (not registered, or FILE is not the registered spec) / 2 undetermined |
 //! | `fde status [TARGET]` | — | **0 ratified / 1 unratified (incl. not registered, spec changed since ratification) / 2 undetermined (state unreadable or corrupt; or, once a ratification is recorded, the spec unreadable or missing)** |
 //! | `fde gate` | JSON `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"\|"deny","permissionDecisionReason":"..."}}` (deny reason also on stderr) | 0 allow / 2 deny (PreToolUse block) |
-//! | `fde evidence red\|green\|pass --req ID --cmd CMD [TARGET]` | — | 0 recorded / 1 observation contradicts the kind / 2 undetermined |
-//! | `fde evidence verify [TARGET]` | — | 0 complete / 1 incomplete / 2 undetermined |
-//! | `fde report [TARGET]` | the report text | 0 / 2 undetermined |
+//! | `fde evidence red\|green\|pass --req ID --cmd CMD [TARGET]` | — | 0 recorded / 1 refused (not ratified incl. spec changed, ID not in the ratified spec, GREEN without a RED of the same ID and CMD, PASS after a RED, or the exit status of CMD run at the target root contradicts the kind) / 2 undetermined (store, spec or ledger unreadable/corrupt; CMD killed by a signal, timed out, could not spawn, or exited 126/127) |
+//! | `fde evidence verify [TARGET]` | — | 0 complete / 1 incomplete (missing requirements named on stderr) / 2 undetermined (not ratified, zero requirements, ledger unreadable/corrupt/inconsistent) |
+//! | `fde report [TARGET]` | the report text (per-requirement state, unresolved and unmeasured sections) | 0 / 2 undetermined |
 //!
 //! Exit 2 is always "undetermined" (or, for `gate`, deny) and is never a pass.
 //! A reason is written to stderr on every non-zero exit. Argument errors
@@ -78,7 +79,7 @@ const EXIT_NEGATIVE: i32 = 1;
 #[command(
     name = "fde",
     version,
-    about = "Forward Deployed Engineer harness (partial scaffold: resolve, begin, ratify, status and gate are implemented; evidence and report answer undetermined, exit 2)"
+    about = "Forward Deployed Engineer harness: target resolution, spec ratification, a PreToolUse gate, and a red/green evidence ledger"
 )]
 struct Cli {
     #[command(subcommand)]

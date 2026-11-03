@@ -250,3 +250,7 @@ reason = "Pure move: the per-verb file-operation analysers and operand helpers (
 [[ack]]
 path = "crates/blastguard/src/detect/rm.rs"
 reason = "Pure move: the rm analyser and its eligibility helpers (analyze_rm through placeable_targets, incl. checkout_exempt_eligible, literal_cd_and_rest, worktree_rm_eligible, deletion_rm_eligible, worktree_confined) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/find_xargs.rs"
+reason = "Pure move: the find and xargs analysers (find_search_roots through find_confined_root, analyze_find through xargs_reads_arg_file, incl. NARROWING_PREDICATES, xargs_command_start, XARGS_* flag tables) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."

@@ -1,0 +1,44 @@
+#!/bin/sh
+# fde plugin launcher — selects the per-platform binary bundled in this dir.
+#
+# The PreToolUse hook calls `${CLAUDE_PLUGIN_ROOT}/bin/fde gate`
+# (crates/fde/hooks/hooks.json); this dispatcher execs the matching
+# `fde-<os>-<arch>` build.
+#
+# WHEN NO BUILD EXISTS FOR THE HOST, the answer is NOT "exit 0". A missing
+# binary means nothing was judged — a cannot-determine — and CLAUDE.md §3 says
+# that resolves to the restrictive side. Every subcommand therefore exits 2
+# with a message on stderr:
+#
+#   gate    PreToolUse -> exit 2 is Claude Code's "block this tool call"
+#           (stderr is shown to the model). exit 0 would be an allow of an
+#           edit whose target's ratification was never checked.
+#   status  exit 2 is the documented "undetermined" code (0 = ratified,
+#           1 = unratified), never mistakable for either answer.
+#   others  (resolve / ratify / evidence / report) are consumed by humans,
+#           skills and scripts, where an empty stdout with exit 0 would read
+#           as a real (empty) answer. exit 2 = undetermined, as in the binary.
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+ext=""
+[ "$os" = windows ] && ext=".exe"
+
+binary="$root/fde-$os-$arch$ext"
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
+fi
+
+echo "fde: no bundled binary for $os-$arch ($binary). fde ${1:-<no subcommand>} did NOT run, so its answer is UNDETERMINED (exit 2), not a pass. Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the fde hooks." >&2
+exit 2

@@ -1,0 +1,21 @@
+[package]
+rust-version.workspace = true
+name = "fde"
+version = "0.1.0"
+edition = "2021"
+description = "Forward Deployed Engineer harness: target resolution, spec ratification store, a PreToolUse gate on unratified registered targets, and an evidence ledger. Scaffold: every command answers undetermined (exit 2)."
+license = "MIT"
+
+[[bin]]
+name = "fde"
+path = "src/main.rs"
+
+[dependencies]
+harness-core = { path = "../harness-core" }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# ワークスペースの [workspace.lints.clippy] を継承する（unwrap_used / expect_used = deny）。
+[lints]
+workspace = true

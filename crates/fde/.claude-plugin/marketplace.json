@@ -1,0 +1,15 @@
+{
+  "name": "yukineko",
+  "owner": { "name": "yukineko" },
+  "metadata": {
+    "description": "yukineko's Claude Code tools. Hosts fde, a Forward Deployed Engineer harness (spec ratification gate + evidence ledger)."
+  },
+  "plugins": [
+    {
+      "name": "fde",
+      "source": ".",
+      "version": "0.1.0",
+      "description": "Forward Deployed Engineer harness: resolves a target repo, keeps a ratified spec per target outside it, denies edits to unratified registered targets, and records a red/green evidence ledger. Scaffold only: every command currently answers undetermined (exit 2)."
+    }
+  ]
+}

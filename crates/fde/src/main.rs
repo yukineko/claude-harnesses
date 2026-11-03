@@ -1,0 +1,263 @@
+// テスト内の unwrap/expect は意図的な assert であって fail-open ではないので許可する。
+// production 側は workspace の [workspace.lints.clippy] で deny のまま。
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+//! fde — Forward Deployed Engineer harness.
+//!
+//! **SCAFFOLD.** Every subcommand below exists and parses, but every answer is
+//! currently `Undetermined`, so every subcommand exits 2. The contract below is
+//! what the implementation must meet; tests may rely on it.
+//!
+//! # CLI contract
+//!
+//! `TARGET` is always an optional positional path. Omitted, it is the
+//! invocation cwd. A relative `TARGET` resolves against the cwd. Either way the
+//! target is the canonical (symlink-resolved) **git top-level** containing
+//! that path, and all fde state for it is keyed by that canonical top-level
+//! (so two spellings of the same repo share one state).
+//!
+//! | command | stdout | exit |
+//! |---|---|---|
+//! | `fde resolve [TARGET]` | JSON `{"root": "<abs path>", "state_key": "<key>"}` | 0 resolved / 2 undetermined |
+//! | `fde ratify [TARGET] --spec FILE` | — | 0 recorded / 1 refused / 2 undetermined |
+//! | `fde status [TARGET]` | — | **0 ratified / 1 unratified / 2 undetermined** |
+//! | `fde gate` | — (reason on stderr) | 0 allow / 2 deny (PreToolUse block) |
+//! | `fde evidence red\|green\|pass --req ID --cmd CMD [TARGET]` | — | 0 recorded / 1 observation contradicts the kind / 2 undetermined |
+//! | `fde evidence verify [TARGET]` | — | 0 complete / 1 incomplete / 2 undetermined |
+//! | `fde report [TARGET]` | the report text | 0 / 2 undetermined |
+//!
+//! Exit 2 is always "undetermined" (or, for `gate`, deny) and is never a pass.
+//! A reason is written to stderr on every non-zero exit. Argument errors
+//! (clap) also exit 2.
+//!
+//! `fde gate` is the PreToolUse hook (`hooks/hooks.json`, matcher
+//! `Bash|Edit|Write|MultiEdit|NotebookEdit`). It reads the hook payload from
+//! stdin and runs under `harness_core::hook::run_pretooluse_guarded`, so a
+//! panic is also exit 2 (block). An empty or unparsable payload must be
+//! undetermined, i.e. deny.
+//!
+//! # State directory
+//!
+//! Ratifications and the evidence ledger live **outside** the target, in the
+//! state directory: the `FDE_STATE_DIR` environment variable when set and
+//! non-empty, otherwise `.fde` under the home directory. A state directory
+//! that cannot be resolved is undetermined (exit 2).
+
+mod evidence;
+mod gate;
+mod ratify;
+mod target;
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use clap::{Parser, Subcommand};
+use harness_core::verdict::{Determination, Verdict};
+
+use target::ResolvedTarget;
+
+/// Exit code for "undetermined" (and for a PreToolUse deny).
+const EXIT_UNDETERMINED: i32 = 2;
+/// Exit code for a determined negative answer (violation / unratified).
+const EXIT_NEGATIVE: i32 = 1;
+
+#[derive(Parser)]
+#[command(
+    name = "fde",
+    version,
+    about = "Forward Deployed Engineer harness (scaffold: every command answers undetermined, exit 2)"
+)]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Print the resolved target as JSON {"root", "state_key"}.
+    Resolve {
+        /// Target path (default: cwd; relative paths resolve against cwd).
+        target: Option<PathBuf>,
+    },
+    /// Ratify FILE as the spec of the target.
+    Ratify {
+        /// Target path (default: cwd; relative paths resolve against cwd).
+        target: Option<PathBuf>,
+        /// The spec file to ratify.
+        #[arg(long)]
+        spec: PathBuf,
+    },
+    /// Exit 0 ratified / 1 unratified / 2 undetermined.
+    Status {
+        /// Target path (default: cwd; relative paths resolve against cwd).
+        target: Option<PathBuf>,
+    },
+    /// PreToolUse hook entry: reads the hook payload on stdin.
+    Gate,
+    /// Evidence ledger operations.
+    Evidence {
+        #[command(subcommand)]
+        op: EvidenceCmd,
+    },
+    /// Print the ratification and evidence report for the target.
+    Report {
+        /// Target path (default: cwd; relative paths resolve against cwd).
+        target: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum EvidenceCmd {
+    /// Record that CMD was observed failing for requirement ID.
+    Red(RecordArgs),
+    /// Record that CMD was observed passing after a recorded RED.
+    Green(RecordArgs),
+    /// Record that CMD was observed passing.
+    Pass(RecordArgs),
+    /// Check that every requirement has complete evidence.
+    Verify {
+        /// Target path (default: cwd; relative paths resolve against cwd).
+        target: Option<PathBuf>,
+    },
+}
+
+#[derive(clap::Args)]
+struct RecordArgs {
+    /// Requirement id.
+    #[arg(long)]
+    req: String,
+    /// Command to run.
+    #[arg(long)]
+    cmd: String,
+    /// Target path (default: cwd; relative paths resolve against cwd).
+    target: Option<PathBuf>,
+}
+
+fn main() {
+    let cli = Cli::parse();
+    if let Cmd::Gate = cli.cmd {
+        harness_core::hook::run_pretooluse_guarded("fde", run_gate);
+    }
+    std::process::exit(run(cli.cmd));
+}
+
+/// PreToolUse body. Allow = return normally (exit 0 from the guard); every
+/// non-clean answer exits 2 (block) itself.
+fn run_gate() {
+    let payload = harness_core::hook::read_stdin();
+    match gate::evaluate(&payload) {
+        Verdict::Clean(_) => {}
+        Verdict::Violation(why) => {
+            let _ = writeln!(std::io::stderr(), "fde gate: denied: {why}");
+            std::process::exit(EXIT_UNDETERMINED);
+        }
+        Verdict::Undetermined(why) => {
+            let _ = writeln!(
+                std::io::stderr(),
+                "fde gate: undetermined, so denied: {why}"
+            );
+            std::process::exit(EXIT_UNDETERMINED);
+        }
+    }
+}
+
+/// Print `msg` on stderr and return [`EXIT_UNDETERMINED`]. A failed stderr
+/// write does not change the exit code: the code carries the answer.
+fn undetermined(msg: impl std::fmt::Display) -> i32 {
+    let _ = writeln!(std::io::stderr(), "fde: undetermined: {msg}");
+    EXIT_UNDETERMINED
+}
+
+/// Map a verdict to the CLI exit code: 0 clean / 1 violation / 2 undetermined.
+fn verdict_exit(v: Verdict) -> i32 {
+    match v {
+        Verdict::Clean(_) => 0,
+        Verdict::Violation(why) => {
+            let _ = writeln!(std::io::stderr(), "fde: {why}");
+            EXIT_NEGATIVE
+        }
+        Verdict::Undetermined(why) => undetermined(why),
+    }
+}
+
+/// Write `text` to stdout; a failed write is undetermined (exit 2), never a
+/// silent success with missing output.
+fn emit(text: &str) -> i32 {
+    match writeln!(std::io::stdout(), "{text}") {
+        Ok(()) => 0,
+        Err(e) => undetermined(format!("could not write output: {e}")),
+    }
+}
+
+/// Resolve the target and the state directory, then run `f`; any
+/// undetermined step short-circuits to exit 2.
+fn with_target<F>(target: Option<&Path>, f: F) -> i32
+where
+    F: FnOnce(&ResolvedTarget, &Path) -> i32,
+{
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c,
+        Err(e) => return undetermined(format!("cannot read the current directory: {e}")),
+    };
+    let resolved = match target::resolve(target, &cwd) {
+        Determination::Known(r) => r,
+        Determination::Undetermined(why) => return undetermined(why),
+    };
+    let state = match target::state_dir() {
+        Determination::Known(s) => s,
+        Determination::Undetermined(why) => return undetermined(why),
+    };
+    f(&resolved, &state)
+}
+
+fn run(cmd: Cmd) -> i32 {
+    match cmd {
+        Cmd::Resolve { target } => {
+            let cwd = match std::env::current_dir() {
+                Ok(c) => c,
+                Err(e) => return undetermined(format!("cannot read the current directory: {e}")),
+            };
+            match target::resolve(target.as_deref(), &cwd) {
+                Determination::Known(r) => match serde_json::to_string(&r) {
+                    Ok(json) => emit(&json),
+                    Err(e) => undetermined(format!("cannot serialize the resolved target: {e}")),
+                },
+                Determination::Undetermined(why) => undetermined(why),
+            }
+        }
+        Cmd::Ratify { target, spec } => with_target(target.as_deref(), |t, state| {
+            verdict_exit(ratify::ratify(t, &spec, state))
+        }),
+        Cmd::Status { target } => with_target(target.as_deref(), |t, state| {
+            match ratify::status(t, state) {
+                Determination::Known(ratify::Status::Ratified { .. }) => 0,
+                Determination::Known(ratify::Status::Unratified) => EXIT_NEGATIVE,
+                Determination::Undetermined(why) => undetermined(why),
+            }
+        }),
+        // `main` routes Gate to the guarded PreToolUse entry before calling
+        // `run`; reaching here is a wiring error, answered restrictively.
+        Cmd::Gate => undetermined("gate must run through the PreToolUse guard"),
+        Cmd::Evidence { op } => match op {
+            EvidenceCmd::Red(a) => record(evidence::Kind::Red, a),
+            EvidenceCmd::Green(a) => record(evidence::Kind::Green, a),
+            EvidenceCmd::Pass(a) => record(evidence::Kind::Pass, a),
+            EvidenceCmd::Verify { target } => with_target(target.as_deref(), |t, state| {
+                verdict_exit(evidence::verify(t, state))
+            }),
+        },
+        Cmd::Report { target } => {
+            with_target(target.as_deref(), |t, state| {
+                match evidence::report(t, state) {
+                    Determination::Known(text) => emit(&text),
+                    Determination::Undetermined(why) => undetermined(why),
+                }
+            })
+        }
+    }
+}
+
+fn record(kind: evidence::Kind, a: RecordArgs) -> i32 {
+    with_target(a.target.as_deref(), |t, state| {
+        verdict_exit(evidence::record(kind, &a.req, &a.cmd, t, state))
+    })
+}

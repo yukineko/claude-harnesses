@@ -195,25 +195,45 @@ pub fn absent_root_candidates(start: &Path) -> Determination<Vec<PathBuf>> {
     Determination::known(out)
 }
 
-/// The `(root, state_key)` candidates `fde forget [TARGET]` acts on (see
-/// `main.rs`); the caller removes the state of the first candidate whose
-/// state directory exists.
+/// What `fde forget [TARGET]` acts on: the `(root, state_key)` candidates, in
+/// order, and — when the key came from the canonical-path fallback below — the
+/// git failure that forced it, so a refusal can say why git's answer was not
+/// used.
+#[derive(Debug, Clone)]
+pub struct ForgetPlan {
+    /// `(root, state_key)` pairs; never empty.
+    pub candidates: Vec<(PathBuf, String)>,
+    /// Why git resolution of an existing TARGET failed, when it did.
+    pub git_failure: Option<String>,
+}
+
+/// The [`ForgetPlan`] for `fde forget [TARGET]` (see `main.rs`); the caller
+/// removes the state of the first candidate whose state directory exists.
 ///
 /// * no `target`: [`resolve`] of the cwd (its git top-level);
 /// * an existing `target` (absolute, or relative to `cwd`): [`resolve`] of it
-///   (its git top-level), so a subdirectory names its repository;
+///   (its git top-level), so a subdirectory names its repository; when that
+///   git resolution fails (e.g. a registered root whose `.git` was removed is
+///   no longer a work tree), the canonical path of `target` itself — a
+///   registered root that stopped being a repository is still forgettable,
+///   while an unregistered directory has no state there and is refused. A
+///   failure to canonicalize `target` is `Undetermined` (naming the git
+///   failure too);
 /// * a `target` that does not exist (`NotFound`): every
 ///   [`absent_root_candidates`] entry, in order, so a gone target is reachable
 ///   through a relative or symlinked spelling of its former path;
-/// * any other stat error, or a resolution failure: `Undetermined`.
+/// * any other stat error, or a resolution failure of the cwd: `Undetermined`.
 #[track_caller]
-pub fn forget_candidates(
-    target: Option<&Path>,
-    cwd: &Path,
-) -> Determination<Vec<(PathBuf, String)>> {
+pub fn forget_candidates(target: Option<&Path>, cwd: &Path) -> Determination<ForgetPlan> {
+    let plan = |candidates, git_failure| ForgetPlan {
+        candidates,
+        git_failure,
+    };
     let Some(t) = target else {
         return match resolve(None, cwd) {
-            Determination::Known(r) => Determination::known(vec![(r.root, r.state_key)]),
+            Determination::Known(r) => {
+                Determination::known(plan(vec![(r.root, r.state_key)], None))
+            }
             Determination::Undetermined(why) => Determination::Undetermined(why),
         };
     };
@@ -224,19 +244,31 @@ pub fn forget_candidates(
     };
     match std::fs::symlink_metadata(&start) {
         Ok(_) => match resolve(Some(&start), cwd) {
-            Determination::Known(r) => Determination::known(vec![(r.root, r.state_key)]),
-            Determination::Undetermined(why) => Determination::Undetermined(why),
+            Determination::Known(r) => {
+                Determination::known(plan(vec![(r.root, r.state_key)], None))
+            }
+            Determination::Undetermined(git_why) => match std::fs::canonicalize(&start) {
+                Ok(canon) => {
+                    let k = state_key(&canon);
+                    Determination::known(plan(vec![(canon, k)], Some(git_why.to_string())))
+                }
+                Err(e) => Determination::undetermined(format!(
+                    "{git_why}; and {} cannot be canonicalized: {e}",
+                    start.display()
+                )),
+            },
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             match absent_root_candidates(&start) {
-                Determination::Known(c) => Determination::known(
+                Determination::Known(c) => Determination::known(plan(
                     c.into_iter()
                         .map(|p| {
                             let k = state_key(&p);
                             (p, k)
                         })
                         .collect(),
-                ),
+                    None,
+                )),
                 Determination::Undetermined(why) => Determination::Undetermined(why),
             }
         }

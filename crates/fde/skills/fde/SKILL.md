@@ -154,3 +154,5 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
   消すのも禁止)。人間に「Claude Code のプロンプトで `! fde forget <TARGET>` と入力するか、自分の端末で
   `fde forget <TARGET>` を実行してください」と、`fde status` が示した root を添えて依頼する。
 - 壊れた登録で gate がすべてを拒否している場合も同じく、人間に `fde forget [TARGET]` を依頼する。
+- 登録 root が git repo でなくなった(`.git` が消えた)場合も、人間に `fde forget <root>` を依頼すれば消せる
+  (git が解決できないときは root の正規化パスで key を引く)。

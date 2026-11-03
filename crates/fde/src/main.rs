@@ -31,7 +31,7 @@
 //! | `fde begin [TARGET] --spec FILE` | — | 0 registered / 1 refused (spec missing, not a file, or inside the target) / 2 undetermined |
 //! | `fde ratify [TARGET] [--spec FILE]` | — | 0 recorded (with the target HEAD commit and dirty flag) / 1 refused (not registered, or FILE is not the registered spec) / 2 undetermined (incl. a target HEAD or dirty flag that cannot be determined, e.g. a repository without commits; nothing is recorded) |
 //! | `fde status [TARGET]` | — | **0 ratified / 1 unratified (incl. not registered, spec changed since ratification, and a TARGET that no longer exists but is — after canonicalizing its nearest existing ancestor, or spelled exactly — the root of a registered target: stderr says `gone` and names `fde forget`) / 2 undetermined (state unreadable or corrupt; a nonexistent TARGET that is not a registered root; or, once a ratification is recorded, the spec unreadable or missing)** |
-//! | `fde forget [TARGET]` (**human-only**; the gate denies it to the model) | — | 0 removed the whole state directory `<state_dir>/targets/<key>/` (registration, ratification, evidence; nothing in it is parsed, so a corrupt registration is removable) / 1 refused (no state directory for that key: not registered) / 2 undetermined (cannot resolve; cannot remove — then nothing is removed, or, if the directory was already moved out of `targets/`, the reason says it is unregistered but left on disk). Key: an existing TARGET (or the cwd when omitted) names its git top-level as above; a TARGET that does not exist names its canonical-lenient absolute path (nearest existing ancestor canonicalized), else its lexical absolute path. Never touches the target |
+//! | `fde forget [TARGET]` (**human-only**; the gate denies it to the model) | — | 0 removed the whole state directory `<state_dir>/targets/<key>/` (registration, ratification, evidence; nothing in it is parsed, so a corrupt registration is removable) / 1 refused (no state directory for that key: not registered) / 2 undetermined (cannot resolve; cannot remove — then nothing is removed, or, if the directory was already moved out of `targets/`, the reason says it is unregistered but left on disk). Key: an existing TARGET (or the cwd when omitted) names its git top-level as above; when git cannot resolve an existing TARGET (e.g. a registered root whose `.git` was removed), its canonical path instead — so such a root is still forgettable (0) and an unregistered non-git directory is refused (1, the reason naming the git failure); a TARGET that cannot be canonicalized is 2; the omitted-TARGET (cwd) case has no fallback (2); a TARGET that does not exist names its canonical-lenient absolute path (nearest existing ancestor canonicalized), else its lexical absolute path. Never touches the target |
 //! | `fde gate` | JSON `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"\|"deny","permissionDecisionReason":"..."}}` (deny reason also on stderr) | 0 allow / 2 deny (PreToolUse block) |
 //! | `fde evidence red\|green\|pass --req ID --cmd CMD [TARGET]` | — | 0 recorded (with the target HEAD and dirty flag observed just before CMD ran, and the ratification HEAD as `ratified_head`) / 1 refused (not ratified incl. spec changed, ID not in the ratified spec, GREEN without a RED of the same ID and CMD, PASS after a RED, or the exit status of CMD run at the target root contradicts the kind) / 2 undetermined (store, spec or ledger unreadable/corrupt; a current-fingerprint record without `ratified_head`; a legacy ratification without a recorded HEAD (re-ratify); the current target HEAD not a descendant of or equal to the ratification HEAD, or not comparable (both commits named); HEAD or dirty flag unobservable; CMD killed by a signal, timed out, could not spawn, or exited 126/127) |
 //! | `fde evidence verify [TARGET]` | — | 0 complete / 1 incomplete (missing requirements named on stderr) / 2 undetermined (not ratified, zero requirements, ledger unreadable/corrupt/inconsistent, or the history rule fails: legacy ratification without HEAD, a current-fingerprint record without `ratified_head`, a counted record without HEAD, current HEAD C unobservable, or not ratification HEAD R <= C and R <= H <= C for every counted record head H, or any comparison failed) |
@@ -408,7 +408,8 @@ fn status_of_gone(target: Option<&Path>) -> Option<i32> {
 
 /// `fde forget [TARGET]`: remove the state directory of the first candidate
 /// ([`target::forget_candidates`]) that has one. Exit 0 removed / 1 not
-/// registered / 2 undetermined.
+/// registered / 2 undetermined. A refusal for a key taken from the
+/// canonical-path fallback also names the git failure behind it.
 fn run_forget(target: Option<&Path>) -> i32 {
     let cwd = match std::env::current_dir() {
         Ok(c) => c,
@@ -418,12 +419,12 @@ fn run_forget(target: Option<&Path>) -> i32 {
         Determination::Known(s) => s,
         Determination::Undetermined(why) => return undetermined(why),
     };
-    let candidates = match target::forget_candidates(target, &cwd) {
-        Determination::Known(c) => c,
+    let plan = match target::forget_candidates(target, &cwd) {
+        Determination::Known(p) => p,
         Determination::Undetermined(why) => return undetermined(why),
     };
     let mut refusal = None;
-    for (root, key) in &candidates {
+    for (root, key) in &plan.candidates {
         let v = ratify::forget(&state, root, key);
         if matches!(v, Verdict::Violation(_)) {
             // Not registered under this candidate; try the next one.
@@ -434,11 +435,16 @@ fn run_forget(target: Option<&Path>) -> i32 {
         }
         return verdict_exit(v);
     }
-    match refusal {
-        Some(v) => verdict_exit(v),
+    match (refusal, plan.git_failure) {
+        (Some(Verdict::Violation(why)), Some(git_why)) => {
+            verdict_exit(Verdict::violation(format!(
+                "{why} (keyed by its canonical path because git could not resolve it: {git_why})"
+            )))
+        }
+        (Some(v), _) => verdict_exit(v),
         // `forget_candidates` never answers an empty list; reaching here is a
         // wiring error, answered restrictively.
-        None => undetermined("no candidate state key to forget"),
+        (None, _) => undetermined("no candidate state key to forget"),
     }
 }
 

@@ -44,7 +44,7 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
 | `fde begin [TARGET] --spec FILE` | 下書き spec を登録。target は未批准になる | 0 登録 / 1 拒否(spec が無い・ファイルでない・target の中にある)/ 2 判定不能 |
 | `fde ratify [TARGET] [--spec FILE]` | 登録 spec の批准を記録(内容の SHA-256 を fingerprint とし、target の HEAD コミットと dirty かどうかも記録する) | 0 記録 / 1 拒否(未登録、または FILE が登録 spec でない)/ 2 判定不能(HEAD・dirty が判定できない場合を含む。例: コミットが 1 つも無い repo。このとき何も記録しない) |
 | `fde status [TARGET]` | 批准状態の照会 | 0 批准済み / 1 未批准(未登録・批准後の spec 変更を含む。TARGET が存在せず、登録済み target の root〈最も近い既存の祖先を正規化して比較するので symlink 経由の綴りも一致。記録された root そのままの綴りも可〉だった場合も 1 で、stderr に `gone` と `fde forget` を出す)/ 2 判定不能(state が読めない・壊れている、存在しない TARGET が登録済み root でもない、批准記録後に spec が読めない・無い) |
-| `fde forget [TARGET]` | **人間専用**。target の state dir `<state_dir>/targets/<state_key>/` を丸ごと消す(登録・批准・証跡)。中身はパースしないので壊れた登録も消せる。target 自体には一切触れない | 0 削除 / 1 拒否(その key の state dir が無い = 未登録)/ 2 判定不能(解決できない・消せない。消せないときは何も消していない。`targets/` の外へ移した後に削除だけ失敗した場合は、未登録になったが残骸が残っている旨を理由に出す) |
+| `fde forget [TARGET]` | **人間専用**。target の state dir `<state_dir>/targets/<state_key>/` を丸ごと消す(登録・批准・証跡)。中身はパースしないので壊れた登録も消せる。target 自体には一切触れない。key は、存在する TARGET(省略時は cwd)なら git top-level。存在する TARGET を git が解決できない(例: `.git` を消して repo でなくなった登録 root)ときは TARGET の正規化パスで引くので、そうなった登録 root も消せ(0)、未登録の非 git ディレクトリは拒否(1、理由に git の失敗を含む)。TARGET 自体を正規化できなければ 2。TARGET 省略(cwd)にはこの代替は無い(2)。存在しない TARGET は最も近い既存の祖先を正規化したパス、次に字句的な絶対パスで引く | 0 削除 / 1 拒否(その key の state dir が無い = 未登録)/ 2 判定不能(解決できない・消せない。消せないときは何も消していない。`targets/` の外へ移した後に削除だけ失敗した場合は、未登録になったが残骸が残っている旨を理由に出す) |
 | `fde gate` | PreToolUse hook の入口(stdin で payload を読む) | 0 allow / 2 deny |
 | `fde evidence red\|green\|pass --req ID --cmd CMD [TARGET]` | target root で CMD を実行し、終了ステータスで記録可否を決める | 0 記録 / 1 拒否 / 2 判定不能 |
 | `fde evidence verify [TARGET]` | 全要件の証跡が揃っているか | 0 完了 / 1 欠け(欠けた要件を stderr に列挙)/ 2 判定不能(未批准・要件ゼロ・ledger 不整合、および下の「HEAD の来歴」規則を満たさない・判定できない場合を含む) |
@@ -197,6 +197,8 @@ state dir は環境変数 `FDE_STATE_DIR`(設定済みかつ空でない場合)�
   存在しないので辿れず検出しない。
 - **壊れた登録**(読めない・パースできない `registration.json` など)がある間は、gate はすべてを deny する。
   人間が `fde forget [TARGET]` で消すまで解除されない。
+- **登録 root から `.git` を消して git repo でなくなった場合**も、人間が `fde forget <root>` で state を消せる
+  (git が解決できないときは root の正規化パスで key を引く)。
 - **HEAD は前進のみ許す**。批准後に HEAD を reset・別ブランチへ切り替え・履歴の書き換えをすると verify / report は 2。
   人間が現在の HEAD で再批准すると新しい epoch になり、以前の証跡はすべて無視される(記録し直しが要る)。前進した
   コミットでの再批准でも同じく以前の証跡は判定から外れる。`ratified_head` を持たない旧版の記録は epoch を推測しない

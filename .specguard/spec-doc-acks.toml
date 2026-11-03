@@ -16,6 +16,10 @@ path = "crates/blastguard/src/detect/tests.rs"
 reason = "Pure test move: the inline unit tests of detect.rs relocated verbatim (de-indented) into src/detect/tests.rs; no behavior or spec-visible change, so no spec text is owed."
 
 [[ack]]
+path = "crates/blastguard/src/detect/segment.rs"
+reason = "Pure move: the command-line segment splitters (split_segments, split_segments_paren_aware, split_segments_with_separators, SegmentSep, SeparatedSegment and the assignment-reach helpers) relocated verbatim out of detect.rs; the spec's split_segments description is unchanged, so no spec text is owed."
+
+[[ack]]
 path = "crates/blastguard/src/detect/executors.rs"
 reason = "blastguard.md's detect section covers shells and eval wrappers but not the awk system()/git -c pager/env -S executor rules this file adds (daf7611b). Spec debt."
 

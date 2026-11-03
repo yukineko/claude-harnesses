@@ -339,6 +339,107 @@ fn interpreter_write_call(payload: &str) -> Option<&'static str> {
         .copied()
 }
 
+/// Whether EVERY occurrence of `literal` in `payload` is positively a
+/// read-only `open(...)` whose result is consumed by a read — the only case in
+/// which the recoverability probe may skip that literal (backlog 658b7839).
+///
+/// Why: [`interpreter_write_call`] answers "does this program write anywhere",
+/// not "which literal is written". Without this, `json.load(open('A'))` next to
+/// an unrelated `open(other,'w')` had `A` probed and reported as the `,'w')`
+/// target.
+///
+/// Accepted, per occurrence of the raw text `literal` (not only quoted ones —
+/// any occurrence outside the shape rejects):
+/// - it is quoted exactly as `'literal'` or `"literal"`, the opening quote
+///   immediately preceded by bare `open(` (the char before `open` is not an
+///   identifier char or `.`, so `io.open(`, `os.open(`, `fopen(`, f-strings and
+///   byte/raw prefixes are all rejected);
+/// - the closing quote is followed by `)` or by an explicit read mode
+///   `,'r')` / `, 'r')` / `,'rb')` / `, 'rb')` (or the double-quoted twins);
+/// - that open call is then consumed by a read: immediately followed by
+///   `.read(`, `.readline(` or `.readlines(`, or it is the sole argument of a
+///   `load(` call (`json.load(open('A'))`), `load` itself not being the tail
+///   of a longer identifier.
+///
+/// Rejected (keeps probing): zero occurrences, `with open('A') as f:` (the
+/// handle escapes and `f.name` could feed a write), `open('A').name`, any
+/// write/append mode, keyword args, assignment `x='A'`, or anything else.
+///
+/// What this does NOT prove: that the program never writes `A` through some
+/// spelling that does not contain the literal text (e.g. a path rebuilt by
+/// concatenation). Such a program already evades the probe whether or not this
+/// helper exists, since the probe only sees whole literals; this helper only
+/// removes the misattribution and never turns a reject into an allow on its
+/// own.
+fn literal_is_read_only_open(literal: &str, payload: &str) -> bool {
+    if literal.is_empty() {
+        return false;
+    }
+    let bytes = payload.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut seen = 0usize;
+    let mut from = 0usize;
+    while let Some(rel) = payload[from..].find(literal) {
+        let start = from + rel;
+        let end = start + literal.len();
+        seen += 1;
+        // Advance one char (not one match) so overlapping occurrences are
+        // inspected too.
+        from = start + payload[start..].chars().next().map_or(1, char::len_utf8);
+
+        // Quoted exactly by a matching quote pair.
+        let Some(&q) = start.checked_sub(1).and_then(|i| bytes.get(i)) else {
+            return false;
+        };
+        if (q != b'\'' && q != b'"') || bytes.get(end) != Some(&q) {
+            return false;
+        }
+        // Bare `open(` directly before the opening quote.
+        let quote_at = start - 1;
+        let Some(open_at) = quote_at.checked_sub("open(".len()) else {
+            return false;
+        };
+        if &payload.as_bytes()[open_at..quote_at] != b"open(" {
+            return false;
+        }
+        if open_at > 0 {
+            let prev = bytes[open_at - 1];
+            if is_ident(prev) || prev == b'.' {
+                return false;
+            }
+        }
+        // `)` or an explicit read mode closes the call.
+        let after_quote = &payload[end + 1..];
+        let qc = q as char;
+        let close_len = [
+            ")".to_string(),
+            format!(",{qc}r{qc})"),
+            format!(", {qc}r{qc})"),
+            format!(",{qc}rb{qc})"),
+            format!(", {qc}rb{qc})"),
+        ]
+        .iter()
+        .find(|c| after_quote.starts_with(c.as_str()))
+        .map(String::len);
+        let Some(close_len) = close_len else {
+            return false;
+        };
+        let after_call = &after_quote[close_len..];
+        // Consumed by a read.
+        let read_after = [".read(", ".readline(", ".readlines("]
+            .iter()
+            .any(|r| after_call.starts_with(r));
+        let load_around = after_call.starts_with(')') && payload[..open_at].ends_with("load(") && {
+            let load_at = open_at - "load(".len();
+            load_at == 0 || !is_ident(bytes[load_at - 1])
+        };
+        if !(read_after || load_around) {
+            return false;
+        }
+    }
+    seen > 0
+}
+
 /// The destructive interpreter-level call in `payload`, if any. Case-folded
 /// because `FileUtils.rm_rf` and `fileutils.rm_rf` are the same hazard.
 fn interpreter_destructive_call(payload: &str) -> Option<&'static str> {
@@ -992,9 +1093,16 @@ path — changing it changes which hooks and gates run, and blastguard will not 
                 // is exactly the waste the ruling names. Gated on the literal
                 // looking like a path, and capped, because each probe spawns
                 // git and this runs inside a PreToolUse hook.
+                //
+                // `write_call` says the program writes SOMEWHERE, not which
+                // literal it writes. A literal whose every occurrence is a
+                // read-only `open(...)` consumed by a read is not the target
+                // (backlog 658b7839); anything not positively attributed that
+                // way is still probed.
                 if write_call.is_some()
                     && probed < MAX_RECOVERY_PROBES
                     && candidate.contains('/')
+                    && !literal_is_read_only_open(candidate, payload)
                     && !names_unwritable_directory(candidate, payload, ctx.raw_base.as_deref())
                 {
                     probed += 1;
@@ -1111,7 +1219,22 @@ read, so it cannot tell whether anything here is irreversible"
     ];
     for payload in payloads {
         let lowered = payload.to_ascii_lowercase();
-        if let Some(marker) = CODE_BUILDING.iter().find(|m| lowered.contains(**m)) {
+        // `compile(` is the one marker with a common unrelated spelling:
+        // `re.compile(` builds a regex, not code (backlog 80b18990). It is
+        // exempted only occurrence by occurrence, and only when
+        // `compile_call_is_regex_method` positively establishes the regex
+        // module; any other occurrence still fires.
+        let fires = |m: &&&str| {
+            let m: &str = m;
+            if m == "compile(" {
+                lowered
+                    .match_indices("compile(")
+                    .any(|(at, _)| !compile_call_is_regex_method(payload, at))
+            } else {
+                lowered.contains(m)
+            }
+        };
+        if let Some(marker) = CODE_BUILDING.iter().find(fires) {
             return Decision::ask(format!(
                 "{shape}, and that program builds or decodes the code it runs (`{marker}`) — the \
 text on the command line is not the program that will execute, so blastguard cannot tell whether \
@@ -1383,4 +1506,343 @@ pub(super) fn analyze_code_interpreter(
         }
     }
     verdict
+}
+
+fn is_python_ident_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Whether the `compile(` occurrence at byte offset `at` of `payload` is a
+/// regex-module method call, `re.compile(` or `regex.compile(`, and so not the
+/// builtin `compile` that turns a string into code (backlog 80b18990).
+///
+/// `at` is an offset into the ASCII-lowercased payload; lowercasing preserves
+/// byte offsets, and every check here is made case-sensitively on the original
+/// text (Python is case-sensitive: `RE.compile(` or `re.COMPILE(` is not
+/// exempt).
+///
+/// Accepted only when ALL of these hold:
+/// - the text at `at` is exactly `compile(`, immediately preceded by `re.` or
+///   `regex.`, and the character before the module name is neither an
+///   identifier character nor `.` (so `myre.compile(` and `x.re.compile(` are
+///   not exempt);
+/// - `module_bound_only_by_import` establishes that the name is bound by a
+///   plain module-level `import` and is used nowhere else except as
+///   `name.attr` reads.
+///
+/// What this does NOT prove: that the program cannot reach code execution by
+/// some other route (e.g. `c = builtins.compile; c(src, 'f', 'exec')`, which
+/// contains no `compile(` at all, or replacing `re.compile` through a module
+/// handle obtained without writing the name). Such programs already evade the
+/// `CODE_BUILDING` scan with or without this helper; this helper only removes
+/// the misattribution of the regex call and never exempts an occurrence it
+/// cannot positively identify — anything it does not recognise returns
+/// `false`, so the marker still fires.
+fn compile_call_is_regex_method(payload: &str, at: usize) -> bool {
+    let Some(tail) = payload.get(at..) else {
+        return false;
+    };
+    if !tail.starts_with("compile(") {
+        return false;
+    }
+    let Some(head) = payload.get(..at) else {
+        return false;
+    };
+    for module in ["re", "regex"] {
+        let Some(before_module) = head.strip_suffix('.').and_then(|h| h.strip_suffix(module))
+        else {
+            continue;
+        };
+        if before_module
+            .chars()
+            .next_back()
+            .is_some_and(|c| is_python_ident_char(c) || c == '.')
+        {
+            continue;
+        }
+        return module_bound_only_by_import(payload, module);
+    }
+    false
+}
+
+/// Whether `name` is bound in `payload` only by a plain module-level import
+/// and otherwise used only to read attributes of it.
+///
+/// Accepted only when ALL of these hold (checked case-sensitively):
+/// - there is an UNINDENTED line that is `import <items>` where one
+///   comma-separated item, trimmed, is exactly `name` (`import re`,
+///   `import os, re`), and no triple quote (`'''` / `"""`) appears anywhere
+///   before that line (so the line is not inside a multi-line string);
+/// - every other whole-word occurrence of `name` comes after that line, is not
+///   preceded by `.`, and is followed by `.` and an attribute name that does
+///   not start with `_`, after which the next non-blank character is none of
+///   `.`, `[`, `:`, or an assignment `=` (a lone `=`, or `=` following an
+///   operator character other than in `==`);
+/// - the payload contains no star import anywhere (`payload_has_star_import`):
+///   `from m import *` can rebind `name` without spelling it.
+///
+/// This rejects the rebinding spellings that write the name
+/// (`import builtins as re`, `from x import y as re`, `re = …`,
+/// `from … import re`, `global re`, `for re in`, `def re(`, `class re`,
+/// `lambda re`, `del re`, `re` passed as an argument, `'re'` in a string,
+/// `re.compile = …`, `re.__dict__`) because none of them is an attribute read,
+/// and the star import, which rebinds without writing the name. Rejection is
+/// the conservative direction.
+///
+/// What this does NOT prove:
+/// - that the module object has not been altered through a handle that never
+///   spells `name` as a word (for example via `sys.modules.get('r' + 'e')`);
+/// - that an imported module (e.g. a local `.py` file next to the program)
+///   does not monkeypatch `re` / `re.compile` when it is imported. That code is
+///   not in the program text. The gap predates this exemption: importing such
+///   a module already runs arbitrary code that no scan of this text sees.
+///
+/// See `compile_call_is_regex_method`.
+fn module_bound_only_by_import(payload: &str, name: &str) -> bool {
+    if payload_has_star_import(payload) {
+        return false;
+    }
+    // Locate the binding import line: [start, end) byte range.
+    let mut binding: Option<(usize, usize)> = None;
+    let mut offset = 0;
+    for raw in payload.split_inclusive('\n') {
+        let start = offset;
+        offset += raw.len();
+        let line = raw.trim_end_matches(['\n', '\r']).trim_end();
+        let Some(items) = line.strip_prefix("import ") else {
+            continue;
+        };
+        if !items.split(',').any(|item| item.trim() == name) {
+            continue;
+        }
+        let Some(before) = payload.get(..start) else {
+            return false;
+        };
+        if before.contains("'''") || before.contains("\"\"\"") {
+            return false;
+        }
+        binding = Some((start, offset));
+        break;
+    }
+    let Some((bind_start, bind_end)) = binding else {
+        return false;
+    };
+
+    for (at, _) in payload.match_indices(name) {
+        let (Some(head), Some(tail)) = (payload.get(..at), payload.get(at + name.len()..)) else {
+            return false;
+        };
+        let prev = head.chars().next_back();
+        if prev.is_some_and(is_python_ident_char) {
+            continue; // part of a longer identifier (`myre`)
+        }
+        if tail.chars().next().is_some_and(is_python_ident_char) {
+            continue; // part of a longer identifier (`regex`, `rest`)
+        }
+        if at >= bind_start && at < bind_end {
+            continue; // the binding import itself
+        }
+        if at < bind_start || prev == Some('.') {
+            return false;
+        }
+        let Some(attr) = tail.strip_prefix('.') else {
+            return false;
+        };
+        if !attr.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+            return false;
+        }
+        let after_attr = attr.trim_start_matches(is_python_ident_char);
+        let after_attr = after_attr.trim_start_matches([' ', '\t']);
+        let mut chars = after_attr.chars();
+        let next = chars.next();
+        let second = chars.next();
+        match next {
+            Some('.' | '[' | ':') => return false,
+            Some('=') if second != Some('=') => return false,
+            Some('+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>' | '@' | '!')
+                if second == Some('=') || matches!(second, Some('<' | '>' | '*' | '/')) =>
+            {
+                // Augmented assignment (`+=`, `<<=`, `**=`, `//=`, …) or a
+                // comparison; either way not a plain attribute read we vouch for.
+                return false;
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+/// Whether `payload` may contain a star import (`from m import *`).
+///
+/// Deliberately over-approximate (fail-closed): it returns true when ANY
+/// occurrence of the text `import`, anywhere in the payload (indented or not,
+/// after `;`, inside a string or comment), is followed — after any run of
+/// whitespace, newlines, `\` line continuations and `(` — by `*`. That covers
+/// `import *`, `import*`, `import (*`, `import(*` and
+/// `import \` + newline + `*`. A false positive only means the `re.compile(`
+/// exemption is withheld and the marker asks.
+fn payload_has_star_import(payload: &str) -> bool {
+    payload.match_indices("import").any(|(at, kw)| {
+        payload
+            .get(at + kw.len()..)
+            .unwrap_or("*")
+            .trim_start_matches(|c: char| c.is_whitespace() || c == '\\' || c == '(')
+            .starts_with('*')
+    })
+}
+
+#[cfg(test)]
+mod regex_compile_tests {
+    use super::compile_call_is_regex_method;
+
+    /// Mirrors the `CODE_BUILDING` loop: true when the `compile(` marker fires.
+    fn fires(payload: &str) -> bool {
+        payload
+            .to_ascii_lowercase()
+            .match_indices("compile(")
+            .any(|(at, _)| !compile_call_is_regex_method(payload, at))
+    }
+
+    #[test]
+    fn imported_re_compile_is_exempt() {
+        assert!(!fires("import re\np=re.compile(r'a')"));
+        assert!(!fires("import os, re\nre.compile('x')"));
+        assert!(!fires(
+            "import re\np = re.compile(r'a+b', re.I)\nprint(p.findall('aab'))"
+        ));
+        assert!(!fires("import regex\nregex.compile('x')"));
+    }
+
+    #[test]
+    fn bare_and_other_module_compile_fire() {
+        assert!(fires("compile('x','f','exec')"));
+        assert!(fires("import builtins\nbuiltins.compile('x','f','exec')"));
+        assert!(fires("import re\nmyre.compile('x')"));
+        assert!(fires("import re\nx.re.compile('x')"));
+        assert!(fires("import re\n__builtins__.compile('x','f','exec')"));
+    }
+
+    #[test]
+    fn rebinding_or_missing_import_fires() {
+        assert!(fires("import builtins as re\nre.compile('x','f','exec')"));
+        assert!(fires(
+            "import re\nre = builtins\nre.compile('x','f','exec')"
+        ));
+        assert!(fires("import re\nre=builtins\nre.compile('x','f','exec')"));
+        assert!(fires("re.compile('x')"));
+        assert!(fires("from builtins import compile as re\nre.compile('x')"));
+        assert!(fires("import re\nfrom x import y as re\nre.compile('x')"));
+        assert!(fires("import re\nfor re in [b]:\n  re.compile('x')"));
+        assert!(fires("import re\ndef re(): pass\nre.compile('x')"));
+        assert!(fires("import re\nglobal re\nre.compile('x')"));
+        assert!(fires("import re\nf = lambda re: re.compile('x')"));
+        assert!(fires(
+            "import re\nre.compile = builtins.compile\nre.compile('x','f','exec')"
+        ));
+        assert!(fires("import re\nre.__dict__\nre.compile('x')"));
+        assert!(fires("re.compile('x')\nimport re"));
+        assert!(fires("def f():\n    import re\nre.compile('x')"));
+        assert!(fires("s = '''\nimport re\n'''\nre.compile('x')"));
+        assert!(fires("import RE\nRE.compile('x')"));
+        assert!(fires("import re\nre.COMPILE('x')"));
+    }
+
+    #[test]
+    fn star_import_fires() {
+        assert!(fires(
+            "import re\nfrom evil import *\nre.compile('import os','f','exec')"
+        ));
+        assert!(fires(
+            "import re\nif True:\n    from evil import *\nre.compile('x')"
+        ));
+        assert!(fires("import re\nfrom evil import*\nre.compile('x')"));
+        assert!(fires("import re\nfrom evil import (*)\nre.compile('x')"));
+        assert!(fires("import re\nx=1; from evil import *\nre.compile('x')"));
+        assert!(fires(
+            "import re\nfrom evil import \\\n    *\nre.compile('x')"
+        ));
+        assert!(fires("from evil import *\nimport re\nre.compile('x')"));
+    }
+
+    #[test]
+    fn any_non_exempt_occurrence_fires() {
+        assert!(fires("import re\nre.compile('a')\ncompile('x','f','exec')"));
+    }
+}
+
+#[cfg(test)]
+mod read_only_open_tests {
+    use super::literal_is_read_only_open;
+
+    const A: &str = "/tmp/x/a.json";
+
+    #[test]
+    fn fp4_shape_json_load_open_is_read_only() {
+        let p = "import json;d=json.load(open('/tmp/x/a.json'))\nfor t in d['tasks']:\n  open('/tmp/s/task-%s.json'%t['id'],'w').write('')";
+        assert!(literal_is_read_only_open(A, p));
+    }
+
+    #[test]
+    fn read_call_and_read_mode_are_read_only() {
+        assert!(literal_is_read_only_open(
+            A,
+            "s=open('/tmp/x/a.json').read()"
+        ));
+        assert!(literal_is_read_only_open(
+            A,
+            "s=open(\"/tmp/x/a.json\", \"rb\").readlines()"
+        ));
+    }
+
+    #[test]
+    fn write_mode_is_not_read_only() {
+        assert!(!literal_is_read_only_open(
+            A,
+            "open('/tmp/x/a.json','w').write('')"
+        ));
+        assert!(!literal_is_read_only_open(A, "open('/tmp/x/a.json','w')"));
+    }
+
+    #[test]
+    fn second_occurrence_as_assignment_rejects() {
+        let p = "d=json.load(open('/tmp/x/a.json'))\nx='/tmp/x/a.json'\nopen(x,'w')";
+        assert!(!literal_is_read_only_open(A, p));
+    }
+
+    #[test]
+    fn with_open_as_is_not_read_only() {
+        let p = "with open('/tmp/x/a.json') as f:\n  d=f.read()";
+        assert!(!literal_is_read_only_open(A, p));
+    }
+
+    #[test]
+    fn f_string_is_not_read_only() {
+        assert!(!literal_is_read_only_open(
+            A,
+            "s=open(f'/tmp/x/a.json').read()"
+        ));
+    }
+
+    #[test]
+    fn open_name_is_not_read_only() {
+        let p = "n=open('/tmp/x/a.json').name\nopen(n,'w')";
+        assert!(!literal_is_read_only_open(A, p));
+    }
+
+    #[test]
+    fn non_bare_open_and_absent_literal_are_not_read_only() {
+        assert!(!literal_is_read_only_open(
+            A,
+            "s=os.open('/tmp/x/a.json').read()"
+        ));
+        assert!(!literal_is_read_only_open(
+            A,
+            "s=myopen('/tmp/x/a.json').read()"
+        ));
+        assert!(!literal_is_read_only_open(
+            A,
+            "d=myload(open('/tmp/x/a.json'))"
+        ));
+        assert!(!literal_is_read_only_open(A, "print(1)"));
+    }
 }

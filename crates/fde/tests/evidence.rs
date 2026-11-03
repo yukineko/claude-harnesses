@@ -256,8 +256,15 @@ fn pass_records_already_passing_requirement_separately_from_red_green() {
     );
 
     // The report shows it as conforming/pass, not as GREEN.
+    // PASS-only is not "verified RED then GREEN": the report is printed but
+    // exits 1 (determined not done) with a reason.
     let r = e.fde(&["report"]);
-    assert_code(&r, 0, "report");
+    assert_code(&r, 1, "report on a PASS-only requirement");
+    assert!(
+        !stderr(&r).trim().is_empty(),
+        "report exit 1 must state a reason: {}",
+        show(&r)
+    );
     let text = stdout(&r);
     let lines = lines_mentioning(&text, "R1");
     assert!(!lines.is_empty(), "report must list R1:\n{text}");
@@ -610,7 +617,12 @@ fn report_lists_status_unresolved_and_unmeasured() {
     // R3: no evidence at all.
 
     let r = e.fde(&["report"]);
-    assert_code(&r, 0, "report");
+    assert_code(&r, 1, "report with unresolved and unmeasured requirements");
+    assert!(
+        !stderr(&r).trim().is_empty(),
+        "report exit 1 must state a reason: {}",
+        show(&r)
+    );
     let text = stdout(&r);
 
     let r1 = lines_mentioning(&text, "R1");
@@ -648,8 +660,13 @@ fn report_lists_status_unresolved_and_unmeasured() {
 fn report_on_undetermined_ledger_never_prints_all_clear() {
     let e = Engagement::ratified(&[("R1", "first")]);
     let ledger = ledger_files_after_red(&e);
-    // Control: over the intact ledger the report is determined (exit 0).
-    assert_code(&e.fde(&["report"]), 0, "report over an intact ledger");
+    // Control: over the intact ledger (RED only) the report is determined:
+    // not done (exit 1), so the later 2 comes from the damage.
+    assert_code(
+        &e.fde(&["report"]),
+        1,
+        "report over an intact ledger with RED only",
+    );
     for f in &ledger {
         fs::write(f, b"\x00\xffnot a ledger {{{[[[").unwrap();
     }
@@ -680,7 +697,8 @@ fn ledger_is_written_outside_the_target_repo() {
     assert_code(&ev_root(&e, "green", "R1", &cmd), 0, "GREEN R1");
     assert_code(&ev_root(&e, "pass", "R2", "true"), 0, "PASS R2");
     assert_code(&verify(&e), 0, "verify");
-    assert_code(&e.fde(&["report"]), 0, "report");
+    // R2 is PASS-only, so the report is determined not done (exit 1).
+    assert_code(&e.fde(&["report"]), 1, "report with a PASS-only R2");
 
     assert_eq!(
         e.repo.porcelain_ignored(),

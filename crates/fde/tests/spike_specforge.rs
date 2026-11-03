@@ -27,8 +27,21 @@
 //!   (2) `<state>/specs/<id>.toml` exists and parses as TOML with `[spec] id`
 //!       equal to the requested id and at least one `[[requirement]]`.
 //!
-//! The specforge binary is `$FDE_SPECFORGE_BIN`, else `specforge` on `PATH`.
-//! If it cannot be located or spawned the test FAILS (never skips).
+//! The specforge binary is resolved in this order:
+//!   1. `$FDE_SPECFORGE_BIN` if set (it must name a file, else the test FAILS
+//!      without trying anything else);
+//!   2. the workspace's own `specforge` (`[[bin]]` of `crates/specguard`),
+//!      built by `$CARGO build -p specguard --bin specforge
+//!      --message-format=json` against this workspace's `Cargo.toml`, with a
+//!      dedicated `--target-dir` (`<workspace>/target/fde-spike-specforge`) so it
+//!      never waits on the build-directory lock held by the outer
+//!      `cargo test`; the path is the `executable` of the `compiler-artifact`
+//!      message for target `specforge`, and the build must exit 0;
+//!   3. `specforge` on `PATH` (only if step 2 failed, e.g. `$CARGO` unset).
+//!
+//! If none works the test FAILS (never skips), listing why each step failed.
+//! If the chosen binary cannot be spawned the test FAILS too. The chosen path
+//! is printed to stderr (`specforge=<path>`).
 //!
 //! What this test does NOT prove: anything about a real LLM agent (which runs
 //! with cwd = repo_root = the state dir and could still be told to read or
@@ -94,19 +107,96 @@ fn locate_specforge() -> PathBuf {
         );
         return p;
     }
-    let path = std::env::var_os("PATH").unwrap_or_default();
+    let build_err = match build_workspace_specforge() {
+        Ok(p) => return p,
+        Err(e) => e,
+    };
+    let path_err = match specforge_on_path() {
+        Ok(p) => return p,
+        Err(e) => e,
+    };
+    panic!(
+        "specforge binary not found (the spike cannot be decided without it; this is a FAIL, \
+         not a skip):\n  1. FDE_SPECFORGE_BIN: unset\n  2. workspace build: {build_err}\n  \
+         3. PATH lookup: {path_err}"
+    );
+}
+
+/// Step 2 of [`locate_specforge`]: build the workspace's `specforge` and
+/// return the produced executable, or why that was impossible.
+fn build_workspace_specforge() -> Result<PathBuf, String> {
+    let cargo = std::env::var_os("CARGO").ok_or("CARGO is not set")?;
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let manifest = workspace.join("Cargo.toml");
+    if !manifest.is_file() {
+        return Err(format!("{} is not a file", manifest.display()));
+    }
+    // A target dir separate from the outer `cargo test`'s, so this build never
+    // waits on its build-directory lock.
+    let target_dir = workspace.join("target").join("fde-spike-specforge");
+    let out = Command::new(&cargo)
+        .arg("build")
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .arg("--target-dir")
+        .arg(&target_dir)
+        .args([
+            "-p",
+            "specguard",
+            "--bin",
+            "specforge",
+            "--message-format=json",
+        ])
+        .output()
+        .map_err(|e| format!("spawning {} failed: {e}", Path::new(&cargo).display()))?;
+    if !out.status.success() {
+        return Err(format!(
+            "cargo build exited {:?}: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let stdout = String::from_utf8(out.stdout).map_err(|e| format!("non-utf8 stdout: {e}"))?;
+    let mut found = None;
+    for line in stdout.lines() {
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if msg.get("reason").and_then(|r| r.as_str()) != Some("compiler-artifact") {
+            continue;
+        }
+        if msg.pointer("/target/name").and_then(|n| n.as_str()) != Some("specforge") {
+            continue;
+        }
+        if let Some(exe) = msg.get("executable").and_then(|e| e.as_str()) {
+            found = Some(PathBuf::from(exe));
+        }
+    }
+    let exe = found.ok_or("cargo build succeeded but reported no specforge executable")?;
+    if !exe.is_file() {
+        return Err(format!(
+            "reported executable {} is not a file",
+            exe.display()
+        ));
+    }
+    Ok(exe)
+}
+
+/// Step 3 of [`locate_specforge`]: an executable `specforge` on `PATH`.
+fn specforge_on_path() -> Result<PathBuf, String> {
+    let path = std::env::var_os("PATH").ok_or("PATH is not set")?;
     for dir in std::env::split_paths(&path) {
         let cand = dir.join("specforge");
         if let Ok(md) = fs::metadata(&cand) {
             if md.is_file() && md.permissions().mode() & 0o111 != 0 {
-                return cand;
+                return Ok(cand);
             }
         }
     }
-    panic!(
-        "specforge binary not found: set FDE_SPECFORGE_BIN or put `specforge` on PATH \
-         (the spike cannot be decided without it; this is a FAIL, not a skip)"
-    );
+    Err(format!(
+        "no executable `specforge` in PATH={}",
+        path.to_string_lossy()
+    ))
 }
 
 #[derive(Debug, PartialEq, Eq)]

@@ -68,6 +68,7 @@ EXPECTED_SCANNERS = [
     "check-clippy-lints.py",
     "check-backlog-store.py",
     "check-projkey-store-classification.py",
+    "check-file-growth.py",
 ]
 
 # Label the hook prints for each scanner, used to check the message names the
@@ -90,6 +91,7 @@ LABELS = {
     "check-clippy-lints.py": "clippy-lints",
     "check-backlog-store.py": "backlog-store",
     "check-projkey-store-classification.py": "projkey-classification",
+    "check-file-growth.py": "file-growth",
 }
 
 _STUB = """#!/usr/bin/env python3

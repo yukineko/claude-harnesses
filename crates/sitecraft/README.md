@@ -16,7 +16,8 @@ The `/sitecraft` skill asks the user every design decision the purpose needs, re
 - `sitecraft gate` — Stop hook under `harness_core::gate::run::run_guarded` (gate name `sitecraft`).
   No `sitecraft.toml`: allowed, one `not-configured` line appended to the state dir. Otherwise it
   combines trust, `decide check`, `check security` and — only when the transcript shows a
-  Write/Edit to a `web_globs` file, or when that cannot be determined — `serve start` + `check pages` +
+  Write/Edit to a `web_globs` file or a Bash command naming one, or when that cannot be determined
+  (including any Bash command not provably read-only) — `serve start` + `check pages` +
   `serve stop` with `Verdict::worst_of`. Bounded give-up after `max_attempts` with a
   `NOTHING WAS VERIFIED` systemMessage.
 

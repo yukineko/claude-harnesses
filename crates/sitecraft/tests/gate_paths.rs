@@ -13,8 +13,9 @@
 //! perturbs exactly one dimension, so a block can only come from that one.
 //!
 //! Pages run only when this session's transcript shows a Write/Edit to a file
-//! matching `web_globs` (user ruling), or when that cannot be determined
-//! (transcript missing, unreadable, unparseable, or no `transcript_path`).
+//! matching `web_globs` (user ruling) or a Bash command that may have written
+//! one, or when that cannot be determined (transcript missing, unreadable,
+//! unparseable, or no `transcript_path`).
 //! Whether pages ran is observed through the `node` stub's marker file.
 //!
 //! Stubs: `SITECRAFT_NODE` / `SITECRAFT_NPM` point at shell scripts written
@@ -114,12 +115,12 @@ fn audit_json(high: u32, critical: u32) -> String {
     )
 }
 
-/// Whatever exact schema `check pages` settles on, this payload reports a
-/// console error on one checked page; a correct implementation must block on
-/// it (as a violation, or as undetermined if the shape differs) — never allow.
+/// A valid `sitecraft-check-pages/1` payload (schema, status `ok`,
+/// `pages_checked` equal to the one configured page) reporting a console
+/// error on that page, so the gate blocks on the finding itself.
 fn pages_findings_json(port: u16) -> String {
     format!(
-        "{{\"checked\":1,\"pages\":[\"http://127.0.0.1:{port}/\"],\"findings\":[{{\"page\":\"http://127.0.0.1:{port}/\",\"kind\":\"console-error\",\"detail\":\"Uncaught TypeError: boom\"}}]}}"
+        "{{\"schema\":\"sitecraft-check-pages/1\",\"status\":\"ok\",\"pages_checked\":1,\"findings\":[{{\"page\":\"http://127.0.0.1:{port}/\",\"kind\":\"console-error\",\"detail\":\"Uncaught TypeError: boom\"}}]}}"
     )
 }
 
@@ -857,4 +858,393 @@ fn bounded_give_up_is_loud_and_per_session() {
 
     let other = f.gate("s-giveup-other", true);
     assert_block(&other);
+}
+
+// ---------------------------------------------------------------- Bash edits of web files
+
+impl Fixture {
+    /// Transcript whose only tool call is a Bash command (no Write/Edit).
+    fn transcript_with_bash(&self, command: &str) {
+        let lines = [
+            user_line("change the page"),
+            tool_use_line("t1", "Bash", serde_json::json!({"command": command})),
+        ];
+        write(&self.transcript, &(lines.join("\n") + "\n"));
+    }
+}
+
+/// A web file edited through Bash (`sed -i`) is a web change the transcript
+/// shows only as an opaque command. Judging it `Known(false)` skips the pages
+/// check, which reads as "no web changes" -- permissive on a case that cannot
+/// be ruled out. It must run pages (the control is the Write case above).
+#[test]
+fn bash_sed_in_place_on_web_file_runs_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("sed -i '' 's/42/43/' src/main.js");
+    let out = f.gate("s-bash-sed", false);
+    assert!(
+        f.pages_ran(),
+        "a Bash `sed -i` on a web_globs file cannot be ruled out as a web change: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// Same gap through a shell redirect.
+#[test]
+fn bash_redirect_into_web_file_runs_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("echo 'export const answer = 43;' > src/main.js");
+    let out = f.gate("s-bash-redir", false);
+    assert!(
+        f.pages_ran(),
+        "a Bash redirect into a web_globs file cannot be ruled out as a web change: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// bash ANSI-C quoting: inside `$'...'` a backslash-escaped `'` does NOT end
+/// the string (bash manual, "ANSI-C Quoting"). So bash parses
+/// `ls $'a\'b'; sed -i s/a/b/ src/main.js # '` as: `ls` with one argument
+/// `a'b`, then `sed -i` on src/main.js, then a comment. `lex_shell` has no `$'`
+/// case: it treats `$` as a dynamic char and then ends the single quote at the
+/// escaped `'`, swallowing the rest as one word, so it sees only `ls`.
+#[test]
+fn bash_ansi_c_quote_hides_sed_in_place_on_web_file() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("ls $'a\\'b'; sed -i s/a/b/ src/main.js # '");
+    let out = f.gate("s-bash-ansic", false);
+    assert!(
+        f.pages_ran(),
+        "bash really runs `sed -i` on src/main.js here; the lexer must not clear it: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// Dynamic argument to an allowlisted command: `$F` may expand to `--pre=<cmd>`
+/// (rg runs `<cmd>` on every file), so the command is not provably read-only.
+#[test]
+fn bash_rg_with_dynamic_argument_runs_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("rg $F pat README.md");
+    let out = f.gate("s-bash-rg-dyn", false);
+    assert!(
+        f.pages_ran(),
+        "`rg $F`: $F may be `--pre=...`, which runs an arbitrary program: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// Same for `git log $X`, where `$X` may be `--output=src/main.js`.
+#[test]
+fn bash_git_log_with_dynamic_argument_runs_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("git log $X");
+    let out = f.gate("s-bash-git-dyn", false);
+    assert!(
+        f.pages_ran(),
+        "`git log $X`: $X may be `--output=<web file>`: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// `rg --hostname-bin=<prog>` (present in the installed rg's `--help`) makes rg
+/// execute `<prog>` when it formats hyperlinks. Observed: with
+/// `--hyperlink-format=default` rg ran the program (marker file created).
+#[test]
+fn bash_rg_hostname_bin_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let prog = f.base.join("stubs/hostname.sh");
+    f.transcript_with_bash(&format!(
+        "rg --hostname-bin={} --hyperlink-format=default answer README.md",
+        prog.display()
+    ));
+    let out = f.gate("s-bash-rg-hostbin", false);
+    assert!(
+        f.pages_ran(),
+        "`rg --hostname-bin=PROG` executes PROG: not provably read-only, pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// Control: a plainly read-only command with no web path is `Known(false)`, so
+/// pages are skipped.
+#[test]
+fn bash_read_only_ls_skips_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("ls -la");
+    let out = f.gate("s-bash-ls", false);
+    assert!(
+        !f.pages_ran(),
+        "`ls -la` is read-only and mentions no web file: pages must be skipped\n{}",
+        describe(&out)
+    );
+}
+
+#[test]
+fn bash_read_only_git_status_skips_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("git status");
+    let out = f.gate("s-bash-gitstatus", false);
+    assert!(
+        !f.pages_ran(),
+        "`git status` is read-only and mentions no web file: pages must be skipped\n{}",
+        describe(&out)
+    );
+}
+
+/// `npm run build` can write anything (including web_globs files): pages run.
+#[test]
+fn bash_npm_run_build_runs_pages() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with_bash("npm run build");
+    let out = f.gate("s-bash-npmbuild", false);
+    assert!(
+        f.pages_ran(),
+        "`npm run build` is not on the read-only allowlist: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+impl Fixture {
+    /// Gate run over a transcript whose only call is `command`; true when the
+    /// pages check ran (i.e. the command was NOT cleared as read-only).
+    fn bash_runs_pages(&self, session: &str, command: &str) -> (bool, Output) {
+        self.transcript_with_bash(command);
+        let out = self.gate(session, false);
+        (self.pages_ran(), out)
+    }
+}
+
+/// Unquoted pathname expansion: `*` may expand to a file named `--pre=prog`,
+/// so the words the program receives are not the words written.
+#[test]
+fn bash_unquoted_glob_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-glob", "ls *.txt");
+    assert!(
+        ran,
+        "`ls *.txt`: an unquoted glob is expanded by the shell, argv unknown: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// Brace expansion: `{--pre=prog,x}` becomes `--pre=prog x`.
+#[test]
+fn bash_unquoted_brace_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-brace", "ls {a,b}");
+    assert!(
+        ran,
+        "`ls {{a,b}}`: brace expansion changes the words: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// `%G?` in a git log format verifies signatures, i.e. runs gpg.
+#[test]
+fn bash_git_log_signature_format_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-gitlog-g", "git log --format=%G? -1");
+    assert!(
+        ran,
+        "`git log --format=%G?` runs gpg: not provably read-only, pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// `rg -z` / `--search-zip` runs decompression programs found on PATH.
+#[test]
+fn bash_rg_search_zip_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-rg-z", "rg -z answer README.md");
+    assert!(
+        ran,
+        "`rg -z` runs external decompressors: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// git global options other than `--no-pager` (`-c`, `-C`, `--git-dir`, ...)
+/// change what git runs or where.
+#[test]
+fn bash_git_global_config_option_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-git-c", "git -c core.fsmonitor=hook status");
+    assert!(
+        ran,
+        "`git -c k=v status`: a global option is not allowed: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+#[test]
+fn bash_git_global_dir_option_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-git-C", "git -C . status");
+    assert!(
+        ran,
+        "`git -C . status`: a global option is not allowed: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// git accepts unambiguous abbreviations of long options: `--out=x` is
+/// `--output=x` (a file write). An allowlist rejects it; a denylist of the
+/// full name would not.
+#[test]
+fn bash_git_log_abbreviated_output_option_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-git-abbrev", "git log --out=notes.log");
+    assert!(
+        ran,
+        "`git log --out=...` abbreviates --output (a file write): pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// rg takes `--` as the VALUE of `-e` (observed: `rg -e -- --pre=./pre.sh f`
+/// ran pre.sh, ripgrep 14.1.1), so what follows is still an option. The option
+/// check must not treat that `--` as the end of options.
+#[test]
+fn bash_rg_pattern_option_value_dashdash_then_pre_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let prog = f.base.join("stubs/hostname.sh");
+    let (ran, out) = f.bash_runs_pages(
+        "s-bash-rg-e-dashdash",
+        &format!("rg -e -- --pre={} README.md", prog.display()),
+    );
+    assert!(
+        ran,
+        "`rg -e -- --pre=PROG`: `--` is -e's value and --pre runs PROG: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// Long form of the same rg hole: `--regexp -- --pre=PROG`.
+#[test]
+fn bash_rg_long_pattern_option_dashdash_then_pre_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let prog = f.base.join("stubs/hostname.sh");
+    let (ran, out) = f.bash_runs_pages(
+        "s-bash-rg-regexp-dashdash",
+        &format!("rg --regexp -- --pre={} README.md", prog.display()),
+    );
+    assert!(
+        ran,
+        "`rg --regexp -- --pre=PROG`: `--` is the value, --pre runs PROG: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// git refuses `--grep --` ("requires a value"), but the gate must still not
+/// read that `--` as the end of options: the next word is checked.
+#[test]
+fn bash_git_log_required_value_dashdash_then_output_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages(
+        "s-bash-gitlog-grep-dashdash",
+        "git log --grep -- --output=notes.log",
+    );
+    assert!(
+        ran,
+        "`git log --grep -- --output=...`: the word after the value is an option: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// `git ls-files --format -- --output=x`: git reads `--` as the format and then
+/// fails on `--output` (observed); either way the gate must check the next word.
+#[test]
+fn bash_git_ls_files_format_dashdash_then_output_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages(
+        "s-bash-lsfiles-format-dashdash",
+        "git ls-files --format -- --output=notes.log",
+    );
+    assert!(
+        ran,
+        "`git ls-files --format -- --output=...`: `--` is the value: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// Optional-value git options are attached-only: `git status --porcelain --`
+/// ends the options at `--` (observed in scratch: `--output=x` after it is a
+/// pathspec, no file is written), so the command is cleared and pages are
+/// skipped. This pins that the gate does not consume `--` after them.
+#[test]
+fn bash_git_status_optional_value_option_then_dashdash_skips_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages(
+        "s-bash-gitstatus-porc-dashdash",
+        "git status --porcelain -- --output=notes.log",
+    );
+    assert!(
+        !ran,
+        "`git status --porcelain -- X`: `--` ends the options; read-only, pages skipped\n{}",
+        describe(&out)
+    );
+}
+
+/// An output option next to an optional-value option is still rejected.
+#[test]
+fn bash_git_status_porcelain_with_output_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages(
+        "s-bash-gitstatus-porc-output",
+        "git status --porcelain --output=notes.log",
+    );
+    assert!(
+        ran,
+        "`git status --porcelain --output=...`: --output is not allowlisted: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+// ---------------------------------------------------------------- node stub schema
+
+/// The fixture's `node` stub reports a console error. The block it provokes
+/// must be that page finding. A stub payload without `schema` / `status` /
+/// `pages_checked` would be judged Undetermined ("output does not match
+/// sitecraft-check-pages/1"), and the tests above that read as "findings
+/// block" would really be blocking on a schema mismatch.
+#[test]
+fn web_edit_block_reason_is_the_page_finding_not_a_schema_mismatch() {
+    let f = fixture();
+    f.trust();
+    f.transcript_with("Write", "src/main.js");
+    let out = f.gate("s-stub-schema", false);
+    let reason = assert_block(&out);
+    assert!(
+        !reason.contains("does not match"),
+        "the stub's pages payload must be valid for the check-pages schema; the block is a schema mismatch\n{}",
+        describe(&out)
+    );
+    assert!(
+        reason.contains("uncaught typeerror: boom"),
+        "the block must carry the stub's console-error finding\n{}",
+        describe(&out)
+    );
 }

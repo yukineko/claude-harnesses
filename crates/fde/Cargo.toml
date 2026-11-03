@@ -1,9 +1,9 @@
 [package]
 rust-version.workspace = true
 name = "fde"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
-description = "Forward Deployed Engineer harness: target resolution, spec ratification store, a PreToolUse gate on unratified registered targets, and an evidence ledger. Scaffold: every command answers undetermined (exit 2)."
+description = "Forward Deployed Engineer harness: target resolution, spec ratification store, a PreToolUse gate on unratified registered targets, and an evidence ledger. Partial scaffold: resolve is implemented; every other command answers undetermined (exit 2)."
 license = "MIT"
 
 [[bin]]
@@ -15,6 +15,7 @@ harness-core = { path = "../harness-core" }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

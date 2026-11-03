@@ -29,6 +29,10 @@ spec の各要求の acceptance は、この文書の値を根拠にする。こ
     実装する。評価器は規則表を引数に取り、本番は閉じた 6 行（D7）を渡す。D7 の表に行は足さない。
   - カタログの select / multi の問いの選択肢は、どれも `sitecraft decide` で記録でき、それを参照する follow-up の活性化が
     働く。コードが拒否・無視する選択肢を置かない。
+- **U8** [U] `sitecraft check security` の `npm audit` は、`check pages` が dev コマンドの `--prefix` から解決するのと
+  同じパッケージディレクトリで実行する。`--prefix` が無ければ root。そのディレクトリに lockfile が無ければ従来どおり
+  UNDETERMINED（exit 2）。解決できない・root 外の `--prefix` も exit 2（2026-11-03、選択肢「Same dir as --prefix
+  (Recommended)」を選択。app/ レイアウトで root に lockfile が無く常に exit 2 になり、app/ が監査されない問題への裁定）。
 
 ## C. 矛盾の裁定
 

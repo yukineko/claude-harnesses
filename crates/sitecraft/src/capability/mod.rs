@@ -271,10 +271,13 @@ fn run_three(cwd: &Path, input: &Value, limit: Duration) -> ThreeOut {
         "launch-failed" => undet(format!(
             "Chromium cannot be launched: {err}; install it from the web-app package: `npx playwright install chromium`{stderr}"
         )),
-        "error" if err == "timeout" => ThreeOut::Undetermined {
-            why: format!("timeout: the three.js runner hit its time limit{stderr}"),
-            timeout: true,
-        },
+        "error" if err == "timeout" => {
+            crate::history::note_timeout();
+            ThreeOut::Undetermined {
+                why: format!("timeout: the three.js runner hit its time limit{stderr}"),
+                timeout: true,
+            }
+        }
         other => undet(format!(
             "the three.js runner ended with status {other:?} ({status}): {err}{stderr}"
         )),
@@ -541,22 +544,53 @@ fn millis(d: Duration) -> u64 {
 // ---------------------------------------------------------------------------
 
 /// `sitecraft check capability <name>`: run, write the result record, print
-/// the verdict, return the exit code (module docs).
+/// the verdict, append the `capability:<name>` check-history line
+/// ([`crate::history::recorded`]), return the exit code (module docs).
 pub fn cmd_check(root: &Path, name: &str) -> i32 {
     let label = format!("sitecraft check capability {name}");
+    let mut out = crate::history::Output::printing();
     let state = match crate::state_dir() {
         Determination::Known(s) => s,
         Determination::Undetermined(why) => {
-            return crate::report(&label, &why.into_verdict());
+            // No state dir: neither the result record nor the history line
+            // can be written.
+            let v = why.into_verdict();
+            out.report(&label, &v);
+            return crate::exit_code(&v);
         }
     };
+    let v = crate::history::recorded(
+        Ok(&state),
+        root,
+        &format!("capability:{name}"),
+        &label,
+        &mut out,
+        |o| check_and_record(&state, root, name, &label, o),
+    );
+    crate::exit_code(&v)
+}
+
+/// The body of [`cmd_check`]: look up, run, write the result record and
+/// print the verdict into `out`. Returns the reported verdict (an unwritable
+/// result record is `Undetermined`).
+fn check_and_record(
+    state: &Path,
+    root: &Path,
+    name: &str,
+    label: &str,
+    out: &mut crate::history::Output,
+) -> Verdict {
     let (d, raw, cap) = match lookup(root, name) {
         Ok(x) => x,
-        Err(e) => return crate::report(&label, &Verdict::undetermined(e)),
+        Err(e) => {
+            let v = Verdict::undetermined(e);
+            out.report(label, &v);
+            return v;
+        }
     };
     // A refused run has no input hash: its record stores `input_hash: null`,
     // which the Stop gate reads as a Violation (never as fresh).
-    let (verdict, hash) = match check(&state, root, name, &d, &raw, &cap) {
+    let (verdict, hash) = match check(state, root, name, &d, &raw, &cap) {
         Run::Refused(v) => (v, None),
         Run::Ran {
             verdict,
@@ -564,16 +598,15 @@ pub fn cmd_check(root: &Path, name: &str) -> i32 {
         } => (verdict, Some(input_hash)),
     };
     let code = crate::exit_code(&verdict);
-    match results::write_record(&state, root, name, code, hash.as_deref()) {
-        Ok(_) => crate::report(&label, &verdict),
+    out.report(label, &verdict);
+    match results::write_record(state, root, name, code, hash.as_deref()) {
+        Ok(_) => verdict,
         Err(e) => {
-            let _ = crate::report(&label, &verdict);
-            crate::report(
-                &label,
-                &Verdict::undetermined(format!(
-                    "the result record cannot be written ({e}), so the Stop gate could never see this run; make the state dir writable and rerun"
-                )),
-            )
+            let u = Verdict::undetermined(format!(
+                "the result record cannot be written ({e}), so the Stop gate could never see this run; make the state dir writable and rerun"
+            ));
+            out.report(label, &u);
+            u
         }
     }
 }
@@ -996,6 +1029,7 @@ fn check_threejs(
         };
         let limit = deadline.remaining();
         let v = if limit.is_zero() {
+            crate::history::note_timeout();
             Verdict::undetermined(format!(
                 "timeout: the {}s limit passed while starting the dev server",
                 CHECK_LIMIT.as_secs()

@@ -1121,6 +1121,31 @@
         "path": "crates/sitecraft",
         "ref": "main"
       }
+    },
+    {
+      "name": "refactor",
+      "description": "Pay-down skill for oversized source files: split one module per commit as pure moves and prove each step behaviour-preserving with a stdlib proof tool (ordered move, line multiset, test-set comparison).",
+      "version": "0.1.1",
+      "category": "quality",
+      "keywords": [
+        "refactor",
+        "split",
+        "pure-move",
+        "proof",
+        "file-growth",
+        "skills"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/refactor",
+      "author": {
+        "name": "yukineko"
+      },
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/yukineko/claude-harnesses.git",
+        "path": "crates/refactor",
+        "ref": "main"
+      }
     }
   ]
 }

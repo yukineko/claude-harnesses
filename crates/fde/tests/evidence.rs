@@ -92,6 +92,10 @@ fn ledger_files_after_red(e: &Engagement) -> Vec<PathBuf> {
         "recording RED must write the ledger into FDE_STATE_DIR ({})",
         e.state.path.display()
     );
+    // Control before the caller damages the ledger: the intact ledger gives a
+    // determined answer, so a later 2 comes from the damage, not from a
+    // verify that always answers 2.
+    assert_code(&verify(e), 1, "intact ledger with RED only is incomplete");
     changed
 }
 
@@ -140,6 +144,13 @@ fn red_is_rejected_when_command_passes() {
         "GREEN without a recorded RED must be refused",
     );
     assert_code(&verify(&e), 1, "rejected RED leaves R1 incomplete");
+    // Positive control: the rejection is specific to the passing command, so
+    // a binary that answers 1 to everything does not satisfy this test.
+    assert_code(
+        &ev_root(&e, "red", "R1", "false"),
+        0,
+        "RED with a failing command must still be recorded",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +212,10 @@ fn green_without_any_red_is_rejected() {
         "refusal must state a reason"
     );
     assert_code(&verify(&e), 1, "refused GREEN leaves R1 incomplete");
+    // Positive control: R1 can be completed, so the 1s above are not a
+    // constant answer.
+    assert_code(&ev_root(&e, "pass", "R1", "true"), 0, "PASS R1");
+    assert_code(&verify(&e), 0, "R1 PASS is complete");
 }
 
 #[test]
@@ -269,6 +284,10 @@ fn pass_is_rejected_when_command_fails() {
         "rejection must state a reason"
     );
     assert_code(&verify(&e), 1, "rejected PASS leaves R1 incomplete");
+    // Positive control: a passing command is accepted and completes R1, so
+    // the 1s above are not a constant answer.
+    assert_code(&ev_root(&e, "pass", "R1", "true"), 0, "PASS R1");
+    assert_code(&verify(&e), 0, "R1 PASS is complete");
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +303,10 @@ fn verify_with_no_evidence_is_incomplete() {
         !stderr(&v).trim().is_empty(),
         "incomplete verify must state a reason"
     );
+    // Positive control: with evidence for both, the same verify answers 0.
+    assert_code(&ev_root(&e, "pass", "R1", "true"), 0, "PASS R1");
+    assert_code(&ev_root(&e, "pass", "R2", "true"), 0, "PASS R2");
+    assert_code(&verify(&e), 0, "every requirement has evidence");
 }
 
 #[test]
@@ -355,6 +378,16 @@ fn verify_spec_with_zero_requirements_is_undetermined() {
         2,
         "zero ratified requirements is undetermined, never complete",
     );
+    assert!(
+        !stderr(&v).trim().is_empty(),
+        "undetermined verify must state a reason"
+    );
+    // Control: the same fixture with one requirement and a PASS gives 0, so
+    // the 2 above can only come from the zero-requirement spec, not from a
+    // verify that always answers 2.
+    let one = Engagement::ratified(&[("R1", "first")]);
+    assert_code(&ev_root(&one, "pass", "R1", "true"), 0, "PASS R1");
+    assert_code(&verify(&one), 0, "one requirement with a PASS is complete");
 }
 
 // ---------------------------------------------------------------------------
@@ -400,6 +433,13 @@ fn evidence_is_refused_for_registered_but_unratified_target() {
         1,
         "the refused PASS must not have been recorded",
     );
+    // Positive control: once ratified, the same RED is accepted, so the
+    // refusals above are about ratification, not a constant answer.
+    assert_code(
+        &ev_root(&e, "red", "R1", "false"),
+        0,
+        "RED on the ratified target must be recorded",
+    );
 }
 
 #[test]
@@ -423,6 +463,12 @@ fn evidence_is_refused_for_unregistered_target() {
         1,
         "the refused RED must not have been recorded",
     );
+    // Positive control: once registered and ratified, the same RED is accepted.
+    assert_code(
+        &ev_root(&e, "red", "R1", "false"),
+        0,
+        "RED on the ratified target must be recorded",
+    );
 }
 
 #[test]
@@ -435,11 +481,35 @@ fn evidence_is_refused_after_spec_changed_since_ratification() {
         &[("R1", "first"), ("R2", "added after ratification")],
     );
     assert_code(&e.fde(&["status"]), 1, "a changed spec is unratified");
-    let red = ev_root(&e, "red", "R1", "false");
+    // `test -f fixed` fails now, so a RED would be recorded if it were accepted.
+    let red = ev_root(&e, "red", "R1", "test -f fixed");
     assert_ne!(code(&red), Some(0), "RED after spec change: {}", show(&red));
     assert!(
         !stderr(&red).trim().is_empty(),
         "refusal must state a reason"
+    );
+
+    // Restore the ratified bytes: the fingerprint matches again, so the
+    // target is ratified without a new ratification.
+    common::write_spec(&e.spec_dir.path, "spec.toml", "fixture", &[("R1", "first")]);
+    assert_code(
+        &e.fde(&["status"]),
+        0,
+        "restored spec matches the ratification",
+    );
+    // Side effect: nothing was recorded by the refused RED, so the GREEN that
+    // would need it is refused (determined, exit 1).
+    fs::write(e.root().join("fixed"), "").unwrap();
+    assert_code(
+        &ev_root(&e, "green", "R1", "test -f fixed"),
+        1,
+        "the RED refused after the spec change must not have been recorded",
+    );
+    // Positive control: on the ratified target a RED is accepted.
+    assert_code(
+        &ev_root(&e, "red", "R1", "false"),
+        0,
+        "RED on the ratified target must be recorded",
     );
 }
 
@@ -466,6 +536,13 @@ fn records_from_nested_subdirs_aggregate_under_the_project_root() {
         0,
         "GREEN from c/d must find the RED recorded from a/b",
     );
+    // Negative control: R2 still lacks evidence, so verify is incomplete
+    // (a verify that always answers 0 does not satisfy this test).
+    assert_code(
+        &e.fde_in(&abc, &["evidence", "verify"]),
+        1,
+        "verify from a/b/c before R2 has evidence",
+    );
     assert_code(&ev(&e, &a, "pass", "R2", "true"), 0, "PASS from a");
 
     assert_code(
@@ -488,6 +565,21 @@ fn evidence_cmd_runs_with_cwd_at_the_project_root() {
     let e = Engagement::ratified(&[("R1", "first"), ("R2", "second")]);
     fs::write(e.root().join("root-marker"), "").unwrap();
     let nested = e.repo.subdir("deep/er");
+
+    // Negative controls (a recorder that always answers 0 fails these): at
+    // the root `test -f root-marker` passes, which contradicts RED; in the
+    // nested cwd it would fail and RED would be recorded.
+    assert_code(
+        &ev(&e, &nested, "red", "R1", "test -f root-marker"),
+        1,
+        "CMD must run at the project root, so RED is contradicted",
+    );
+    // At the root `test ! -f root-marker` fails, which contradicts PASS.
+    assert_code(
+        &ev(&e, &nested, "pass", "R2", "test ! -f root-marker"),
+        1,
+        "CMD must run at the project root, so PASS is contradicted",
+    );
 
     // At the root `test ! -f root-marker` FAILS (marker exists), so RED is
     // recorded. Run in the nested cwd it would pass and RED would be rejected.
@@ -556,6 +648,8 @@ fn report_lists_status_unresolved_and_unmeasured() {
 fn report_on_undetermined_ledger_never_prints_all_clear() {
     let e = Engagement::ratified(&[("R1", "first")]);
     let ledger = ledger_files_after_red(&e);
+    // Control: over the intact ledger the report is determined (exit 0).
+    assert_code(&e.fde(&["report"]), 0, "report over an intact ledger");
     for f in &ledger {
         fs::write(f, b"\x00\xffnot a ledger {{{[[[").unwrap();
     }

@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use harness_core::hook::{read_stdin, HookInput};
+use harness_core::hook::{try_read_stdin, HookInput};
 use harness_core::interrogate::{self, Answer, CarveState};
 
 use carve::CarveView;
@@ -436,8 +436,17 @@ fn nudge_command(args: NudgeArgs) -> Result<()> {
 /// extracts an explicit ```` ```compass-next ```` block; if found, sets
 /// `charter.next_action`. No LLM, never guesses. ALWAYS exits 0 — a breadcrumb
 /// must never block a turn.
+///
+/// A stdin READ ERROR records nothing and says so on stderr (backlog
+/// 8004d80f); it is never an empty payload and never a crash.
 fn breadcrumb_command() -> Result<()> {
-    let raw = read_stdin();
+    let raw = match try_read_stdin() {
+        Ok(raw) => raw,
+        Err(e) => {
+            eprintln!("compass breadcrumb: stdin read failed: {e}; no breadcrumb was recorded");
+            return Ok(());
+        }
+    };
     let Some(input) = HookInput::parse(&raw) else {
         return Ok(()); // empty / invalid payload: stay silent.
     };

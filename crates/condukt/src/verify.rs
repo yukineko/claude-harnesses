@@ -1677,10 +1677,17 @@ fn parse_argv(s: &str) -> Option<Vec<String>> {
 ///
 /// `mechanical_check_hint` is the interpreter-declared, structured
 /// [`crate::model::Task::mechanical_check`] fact. When `Some`, its `cmd` is
-/// authoritative and returned as-is (split into argv). Otherwise: the first
-/// backticked span whose head is an [`is_criteria_runner`], then recognised
-/// runner prose (`cargo test`, `npm test`, pytest via [`prose_pytest_argv`],
-/// `go test`).
+/// authoritative and tokenized via [`parse_argv`]; an unparseable `cmd` (e.g.
+/// an unterminated quote) yields `None`, never a guessed argv. Otherwise: the
+/// first backticked span whose head is an [`is_criteria_runner`], then
+/// recognised runner prose (`cargo test`, `npm test`, pytest via
+/// [`prose_pytest_argv`], `go test`).
+///
+/// `None` is also returned when ANY backticked span is unparseable by shlex
+/// (unterminated quote), whatever its head token: the criteria names a command
+/// that cannot be determined, and falling through to the prose recognizer would
+/// run a different command than the one written. The LLM verifier is then
+/// required (User ruling 2026-11-03).
 pub fn mechanical_cmd(
     done_criteria: &str,
     mechanical_check_hint: Option<&crate::model::MechanicalCheck>,
@@ -1700,19 +1707,13 @@ pub fn mechanical_cmd(
                         }
                     }
                     None => {
-                        // Unparseable span (unterminated quote). If it looks
-                        // like a runner command, the criteria names a command
-                        // we cannot determine: stop here with None rather than
-                        // falling through to prose recognition, which would
-                        // run a different command than the one written.
-                        let head_is_runner = inner
-                            .as_str()
-                            .split_whitespace()
-                            .next()
-                            .is_some_and(is_criteria_runner);
-                        if head_is_runner {
-                            return None;
-                        }
+                        // Unparseable span (unterminated quote), whatever its
+                        // head. The criteria wrote a command we cannot
+                        // determine; falling through to prose recognition
+                        // would run a DIFFERENT command than the one written
+                        // (e.g. `FOO=1 cargo test -- "x` -> `cargo test`).
+                        // Fail closed: no mechanical command.
+                        return None;
                     }
                 }
             }

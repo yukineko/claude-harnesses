@@ -258,3 +258,7 @@ reason = "Pure move: the find and xargs analysers (find_search_roots through fin
 [[ack]]
 path = "crates/blastguard/src/detect/git.rs"
 reason = "Pure move: the git analysers (git_subcommand_index through checkout_pathspec_verdict, incl. HOOKSPATH_REASON, git_global_config_assignments, sets_hookspath_inline; and analyze_git) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/gh.rs"
+reason = "Pure move: the gh invocation classifier (analyze_gh and analyze_gh_api) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."

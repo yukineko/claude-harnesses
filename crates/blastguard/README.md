@@ -291,7 +291,7 @@ longer denied as ``> `Err` ``. The opener's own target is still judged by the
 steps above, and every other rule still reads the body. An unquoted delimiter,
 an unterminated body, an interpreter or shell reader, or any command after the
 here-document keeps the body in the scan, as before
-(`redirect_view_without_quoted_here_document_body` in `src/detect.rs`).
+(`redirect_view_without_quoted_here_document_body` in `src/detect/heredoc.rs`).
 
 Measured on the 0.2.108 debug build (2026-10-14): `echo hi > existing.txt` on
 an untracked file in the session's git repo → allow; the same to an existing

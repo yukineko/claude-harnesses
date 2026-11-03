@@ -216,3 +216,35 @@ exit 101: d out; finished in 0.44s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
      Running tests/unterminated_quote_is_draft.rs (target/debug/deps/unterminated_quote_is_draft-9cdcccafa995c3b3)
 error: test failed, to rerun pass `-p curate --test unterminated_quote_is_draft`"""
+
+[[task]]
+id = "732148d2"
+title = "condukt verify + curate derive: unterminated quote in no-backtick prose criteria still yields a command (GH 1518 extension)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "curate",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """User ruling 2026-11-04 extends GH 1518 (unterminated quote yields NO command) to the prose fallback. Observed RED at 8041551f: condukt mechanical_cmd prose arms yield [cargo,test,-p,demo] for 'cargo test -p demo -- "x exits 0' and a stray-quote pytest argv; curate test_runner_command yields a runnable golden. Repro: crates/condukt/tests/check_criteria_prose_unterminated_quote.rs, crates/curate/tests/unterminated_quote_prose_is_draft.rs."""
+created_at = 1793719666
+updated_at = 1793719666
+weight = 0.0
+issue_number = 1523
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1523"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test check_criteria_prose_unterminated_quote"
+rev = "8041551fe0e010b56f6529d4b495f4c76d5ccf19"
+observed_at = 1793719666
+detail = """
+exit 101: t v0.7.327 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-failclosed-ext/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.78s
+     Running tests/check_criteria_prose_unterminated_quote.rs (target/debug/deps/check_criteria_prose_unterminated_quote-2ce2c866e37e01f5)
+error: test failed, to rerun pass `-p condukt --test check_criteria_prose_unterminated_quote`"""

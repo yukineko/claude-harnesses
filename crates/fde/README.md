@@ -5,8 +5,11 @@ repository it infers a spec, has a human ratify it, denies edits to the target
 until then, and records a per-requirement RED / GREEN evidence ledger outside
 the target. A deterministic Rust binary plus the `/fde [target-dir]` skill.
 
-**Status: parked** (declared in `scripts/parked-plugins.json`; not rolled out,
-not enabled).
+**Status: rolled out and enabled** (parked and unparked on 2026-11-03 by user
+ruling; see the note in `scripts/parked-plugins.json`).
+
+**Platform:** Unix-like systems, including WSL. Windows is out of scope (user
+ruling 2026-11-03; a scope definition, not a limitation).
 
 Commands: `fde resolve`, `begin`, `ratify`, `status`, `gate` (PreToolUse hook),
 `evidence red|green|pass|verify`, `report`. Exit 2 always means undetermined

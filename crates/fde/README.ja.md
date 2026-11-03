@@ -6,11 +6,14 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
 
 ## 状態(導入状況)
 
-**parked。未 rollout・未 enable。** `scripts/parked-plugins.json` に、rollout と enable の両方をユーザー裁定
-(2026-11-03)で保留していることが宣言されている。`scripts/rollout-plugins.sh` を実行していないので、
-稼働中の Claude Code にはこの plugin(hook・skill・バイナリ)は入っていない。
-(同ファイルの parked 理由は「全コマンドが exit 2 を返す scaffold」と書かれた時点のままで、現在の実装状況とは
-食い違っている。理由文の更新はこの README の範囲外。)
+**rollout・enable 済み。** 2026-11-03 に一度 parked(rollout と enable の保留)とされたが、同日のユーザー裁定で
+解除され、`scripts/rollout-plugins.sh` で配布・有効化された(`scripts/parked-plugins.json` の経緯メモを参照)。
+稼働ハーネスに反映されるのは `scripts/rollout-plugins.sh` を実行した版だけである。
+
+## 対象プラットフォーム
+
+**Unix 系(WSL を含む)が対象。Windows は対象外。**(2026-11-03 のユーザー裁定。制限ではなく対象範囲の定義)
+`src/target.rs` は `std::os::unix` を使い、CMD は `/bin/sh -c` で実行する。
 
 ## 役割分担
 
@@ -135,7 +138,7 @@ state dir は環境変数 `FDE_STATE_DIR`(設定済みかつ空でない場合)�
 
 ## 制限
 
-- **unix 専用**(`src/target.rs` が `std::os::unix` を使うため非 unix ではビルドできない。CMD は `/bin/sh -c` で実行する)。
+- 対象プラットフォームは Unix 系(WSL 含む)。Windows は対象外(上記「対象プラットフォーム」。制限ではなく対象範囲)。
 - **gate の Bash 判定は文字列照合**。コマンドの構文解析はしない。外から相対パスで target を指す、正規形でない
   symlink 経由で指す、といった書き方は検出しない。
 - **登録済み target を削除すると**、その state dir(`<state_dir>/targets/<state_key>/`)を消すまで gate は編集を deny し続ける。

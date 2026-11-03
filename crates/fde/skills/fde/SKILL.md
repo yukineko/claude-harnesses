@@ -14,6 +14,7 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
 外部の target リポジトリに入り、**仕様を推定 → 人間が批准 → 要件ごとに RED → fix → GREEN → 報告**を回す。
 判断(読解・仕様推定・テスト記述・実装)はこの skill と委譲先 agent、決定論(target 解決・批准の記録・
 批准前変更の拒否・証跡の判定)は `fde` バイナリが担う。終了コードの全表は `crates/fde/README.ja.md` を参照。
+対象プラットフォームは Unix 系(WSL 含む)。Windows は対象外。
 
 ## target の決め方
 

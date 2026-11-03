@@ -195,5 +195,67 @@ class FileGrowth(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
+class GrandfatherAtHead(unittest.TestCase):
+    """Bootstrap refinement: a NEW staged baseline entry is allowed iff its cap
+    is <= that path's line count in HEAD's tree (grandfather already-oversized
+    files, never growth)."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self.repo = _Repo(self._td.name)
+
+    def _head_with_big(self, n):
+        self.repo.write("big.rs", _lines(n))
+        self.repo.stage("big.rs")
+        self.repo.commit("base")  # HEAD has big.rs, no baseline
+
+    # ---- RED: grandfathering at/below HEAD size must be allowed ----
+
+    def test_new_entry_equal_to_head_size_is_allowed(self):
+        self._head_with_big(2500)
+        self.repo.write(BASELINE, "2500 big.rs\n")
+        self.repo.stage(BASELINE)
+        r = self.repo.run()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_new_entry_below_head_size_is_allowed(self):
+        self._head_with_big(2500)
+        self.repo.write(BASELINE, "2400 big.rs\n")
+        self.repo.stage(BASELINE)
+        r = self.repo.run()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    # ---- CONTROLS: must stay violations ----
+
+    def test_new_entry_above_head_size_is_violation(self):
+        self._head_with_big(2500)
+        self.repo.write(BASELINE, "2600 big.rs\n")
+        self.repo.stage(BASELINE)
+        r = self.repo.run()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("big.rs", r.stdout + r.stderr)
+
+    def test_new_entry_for_path_absent_at_head_is_violation(self):
+        self.repo.write("seed.txt", "s\n")
+        self.repo.stage("seed.txt")
+        self.repo.commit("seed")
+        self.repo.write("big.rs", _lines(2500))
+        self.repo.write(BASELINE, "2500 big.rs\n")
+        self.repo.stage("big.rs", BASELINE)
+        r = self.repo.run()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("big.rs", r.stdout + r.stderr)
+
+    def test_growth_and_grandfathering_in_same_commit_is_violation(self):
+        self._head_with_big(2500)
+        self.repo.write("big.rs", _lines(2600))
+        self.repo.write(BASELINE, "2600 big.rs\n")
+        self.repo.stage("big.rs", BASELINE)
+        r = self.repo.run()
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("big.rs", r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

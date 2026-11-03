@@ -64635,3 +64635,228 @@ test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; fini
 rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "49e95d32"
+title = "tdd Stop gate: credit tests the same session wrote in sibling worktrees; name the judged root in the block reason"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-03T10:44:15Z in session c4aa3733 (tdd 0.1.60, hook cwd /Users/yuki/src/harness): verbatim '🔴 tdd: write a test first — 399 new implementation line(s) added, and no test is visible in the uncommitted changes and this session's own commits ... implementation changed: crates/fde/src/evidence.rs, crates/fde/src/gate.rs, crates/fde/src/main.rs, crates/fde/src/ratify.rs, crates/fde/src/target.rs'. CAUSE (traced, not assumed): all fde writes were by condukt-worker subagents in 14 condukt worktrees (run-20261103-171621-35629-*), all still live at the stop (removed ~11:00Z). harness_core::session_roots makes every checkout the session wrote into a separate root; tdd main.rs evaluates each root alone and reports the first blocking one; attribution (attribute_own_writes) keys Edit/Write on that root's absolute path. The impl list equals exactly the scaffold worker's Write set in run-...-scaffold, whose HEAD held only 9520b448 (437 added src lines, no test); the session's RED tests were Written at sibling worktree paths, so that root saw no test. Neither hypothesis 'merge/ff hides commits' (committed_added_lines walks --no-merges HEAD, merged-in commits ARE scanned) nor 'subagent impl attributed but not tests' (both are subagent Writes) is the cause; it is per-root isolation. Replay: tdd gate on HEAD with the transcript truncated to the stop, worktrees gone, ALLOWS (all fde lines attributed in one root) — consistent. MEASURED at rev a387f7fe (2026-11-03): cargo test -p tdd --test cross_worktree_test_credit_20261103 -> '1 passed; 3 failed'. Control control_no_test_written_anywhere_blocks passes. RED: test_written_by_this_session_in_a_sibling_worktree_is_credited (observed shape), session_test_commit_in_the_impl_worktree_history_is_credited (impl worktree cut after RED ff-merge: the test commit is in wt-impl's own HEAD history yet is excluded because it was Written at the wt-red path), missing_test_block_names_the_checkout_it_judged (reason: 'the block judged .../wt-impl but its reason does not name it'). READING (a) real defect: the unit tdd should judge is the session's work; a test this session wrote and committed is not 'not visible' because it was written in a sibling checkout; and a multi-root block that does not name its root sends the reader to the wrong tree (the parent had to guess). READING (b) intentional: session_roots/main.rs say 'Every checkout the session wrote into is evaluated' — per-checkout judgment is by design, and the scaffold checkout genuinely held 437 impl lines with no test (scaffold written before any test = a real test-first violation for that task). HOW TO TELL APART: a human ruling on the unit of judgment (per checkout vs per session). Under (b), tests 1-2 are wrong spec and only test 3 (name the root) stands — split rather than cancel. Note tdd 0.1.61 bump (tests only) needs rollout-plugins.sh after merge."
+created_at = 1793709196
+updated_at = 1793715545
+weight = 0.0
+issue_number = 1509
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1509"
+issue_closed_at = 1793715547
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test cross_worktree_test_credit_20261103"
+rev = "a387f7fe2f7d57a1dfe27c161362d17ba9bc8f37"
+observed_at = 1793709196
+detail = """
+exit 101:  in 1.68s
+
+   Compiling tdd v0.1.61 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-followups/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.76s
+     Running tests/cross_worktree_test_credit_20261103.rs (target/debug/deps/cross_worktree_test_credit_20261103-51ec6359cbedde29)
+error: test failed, to rerun pass `-p tdd --test cross_worktree_test_credit_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test cross_worktree_test_credit_20261103"
+exit = 0
+passed = 4
+rev = "5ba389aa4c9a7e312c90e9a65bbdb96c99e10eb0"
+observed_at = 1793715499
+output_digest = "sha256:64f5ef8d19a3edec9d0c17db67534903e1540db468fc20d6517bbb60b1389116"
+excerpt = """
+
+running 4 tests
+test control_no_test_written_anywhere_blocks ... ok
+test missing_test_block_names_the_checkout_it_judged ... ok
+test session_test_commit_in_the_impl_worktree_history_is_credited ... ok
+test test_written_by_this_session_in_a_sibling_worktree_is_credited ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.46s
+
+   Compiling aho-corasick v1.1.4
+   Compiling bstr v1.12.2
+   Compiling log v0.4.33
+   Compiling regex-automata v0.4.14
+   Compiling regex v1.12.4
+   Compiling globset v0.4.18
+   Compiling harness-core v0.2.87 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-fixes/crates/harness-core)
+   Compiling overwatch v0.2.110 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-fixes/crates/overwatch)
+   Compiling tdd v0.1.66 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-fixes/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.48s
+     Running tests/cross_worktree_test_credit_20261103.rs (target/debug/deps/cross_worktree_test_credit_20261103-56fea9b71bde0efd)
+"""
+
+[task.closure.red]
+rev = "7057a4d75031347557f878cead08146110461f56"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "8004d80f"
+title = "harness-core read_stdin/read_capped: surface stdin read errors instead of returning empty/partial payload"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "harness-core",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = '''Measured 2026-11-03 at rev 69c03215 (worktree session-c4aa3733-followups): cargo test -p harness-core --test read_stdin_error_erased_20261103 -> 'test result: FAILED. 0 passed; 2 failed'. Verbatim: 'assertion left != right failed: a stdin read ERROR came back as Ok("") — identical to nothing was piped; the failure is invisible to the caller' and 'a stdin read that FAILED after "{\"a\":1}" came back identical to a complete, error-free read of the same bytes'. Cause: crates/harness-core/src/hook.rs read_capped does 'let _ = r.take(MAX_STDIN_BYTES).read_to_end(&mut buf);'. Verdict-bearing consumers of the erased value: fetchguard scan ('if raw.trim().is_empty() { return; }' = no warning; its main.rs doc admits read_stdin is outside the barriers), stuckguard watch (early return). parallelguard maps empty to Deny (not affected). donegate has its own read_stdin twin with the same 'let _ = read_to_string' (gate-audit mirror). READING (a) real defect: CLAUDE.md §3 says an IO failure is cannot-determine and must not be representable as empty/clean; the erasure is a fail-open for fetchguard/stuckguard. READING (b) intentional: read_stdin's doc says 'Errors are swallowed (returns what was read, possibly empty) so a hook never aborts on a read hiccup', and in-crate test read_capped_returns_partial_content_when_the_reader_errors_midway (commit 97a2498d, 2026-09-11) pins returning the partial prefix. Note the doc's 'never aborts' rationale is the §1 'don't break the turn' wording that CLAUDE.md flags as a red signal on verdict paths. HOW TO TELL APART: (b) holds only if no verdict-bearing caller consumes read_stdin's output; list callers (grep read_stdin crates/*/src) — fetchguard scan is a PostToolUse warning emitter whose silence is read as 'nothing found', so (a) unless a human rules fetchguard/stuckguard non-verdict. The fix decision (panic vs Determination return type vs keep) and the fate of the conflicting pinned in-crate test need a human ruling; if the return type changes, re-target the RED file at the new API rather than counting a compile error as GREEN.'''
+created_at = 1793708588
+updated_at = 1793715574
+weight = 0.0
+issue_number = 1507
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1507"
+issue_closed_at = 1793715577
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test read_stdin_error_erased_20261103"
+rev = "69c03215bcccef57ff052fbb6d110e8db0b0d89e"
+observed_at = 1793708588
+detail = """
+exit 101: te_payload
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/read_stdin_error_erased_20261103.rs (target/debug/deps/read_stdin_error_erased_20261103-716cb226bca33b49)
+error: test failed, to rerun pass `-p harness-core --test read_stdin_error_erased_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test read_stdin_error_erased_20261103"
+exit = 0
+passed = 2
+rev = "5ba389aa4c9a7e312c90e9a65bbdb96c99e10eb0"
+observed_at = 1793715552
+output_digest = "sha256:98dc58b2fd1900628cdb11bf96662bf2872f21a5273e80a0078af97ef513486b"
+excerpt = """
+
+running 2 tests
+test read_error_before_any_byte_is_not_the_empty_payload ... ok
+test read_error_midway_is_not_a_complete_payload ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling serde_core v1.0.228
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling getrandom v0.3.4
+   Compiling num-traits v0.2.19
+   Compiling zerocopy v0.8.52
+   Compiling winnow v1.0.4
+   Compiling target-triple v1.0.1
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling glob v0.3.3
+   Compiling unarray v0.1.4
+   Compiling chrono v0.4.45
+   Compiling termcolor v1.4.1
+   Compiling syn v2.0.118
+   Compiling rand_core v0.9.5
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.4
+   Compiling serde_derive v1.0.228
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_json v1.0.150
+   Compiling serde_spanned v1.1.1
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling serde v1.0.228
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.9.0
+   Compiling proptest v1.11.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling trybuild v1.0.118
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.87 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-fixes/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.24s
+     Running tests/read_stdin_error_erased_20261103.rs (target/debug/deps/read_stdin_error_erased_20261103-da4507d9e6034d86)
+"""
+
+[task.closure.red]
+rev = "7057a4d75031347557f878cead08146110461f56"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "4591e6e1"
+title = "docs/GLOSSARY.md: mark parked plugins (parallelguard) as parked, and tie GLOSSARY to parked-plugins.json"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "glossary",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Measured 2026-11-03 at rev 22051d62: python3 -m pytest -q scripts/test_glossary_parked_marking_20261103.py -> '1 failed, 1 passed'; verbatim 'AssertionError: Lists differ ... GLOSSARY rows for parked plugins carry no parked marking: [parallelguard]'. Control (every parked plugin has a GLOSSARY row) passes; the fde row ('...批准前編集ブロック（parked）', added 6f1efba8 2026-11-03) satisfies the property, so the test can go GREEN. scripts/parked-plugins.json parks parallelguard for ENABLEMENT since 2026-08-28 (stays false in settings.json); its GLOSSARY row reads 'always-on' and says it denies calls over the cap. No checker reads both files (grep: parked-plugins.json is read only by check-plugin-rollout.py / session-rollout-drift.py / their tests; no script compares GLOSSARY with it). READING (a) real defect: GLOSSARY is the first doc every session reads (CLAUDE.md context strategy step 1); a row describing an inert gate as always-on denying is a doc-vs-actual-state contradiction (§4 docstring rule, §6 LLM duty 1), and fde's ad-hoc mark shows the intended convention. READING (b) intentional: the GLOSSARY 起動スコープ column describes design scope, not deployment state; parallelguard is parked for enablement only and still rolled out, so 'always-on' describes how it would run when armed, and fde's '（parked）' is a one-off not a rule. HOW TO TELL APART: a human ruling on whether GLOSSARY rows must reflect parked state; if yes, mark the parallelguard row and keep this test (or fold it into a checker); if no, remove the fde mark or cancel this item with the ruling."
+created_at = 1793708695
+updated_at = 1793715584
+weight = 0.0
+issue_number = 1508
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1508"
+issue_closed_at = 1793715588
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q scripts/test_glossary_parked_marking_20261103.py"
+rev = "22051d62dd505b4ab0000ef9fe1d431da5e64073"
+observed_at = 1793708695
+detail = """
+exit 1: ard']
+E       + [] : GLOSSARY rows for parked plugins carry no parked marking: ['parallelguard']
+
+scripts/test_glossary_parked_marking_20261103.py:51: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_glossary_parked_marking_20261103.py::GlossaryParkedMarking::test_every_parked_plugin_row_is_marked_parked
+1 failed, 1 passed in 0.04s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q scripts/test_glossary_parked_marking_20261103.py"
+exit = 0
+passed = 2
+rev = "5ba389aa4c9a7e312c90e9a65bbdb96c99e10eb0"
+observed_at = 1793715577
+output_digest = "sha256:0a97b591ab7ce9644866a9aea8e19c37ff6647585418c546d0481e0cb92bfbc7"
+excerpt = """
+..                                                                       [100%]
+2 passed in 0.14s
+"""
+
+[task.closure.red]
+rev = "7057a4d75031347557f878cead08146110461f56"
+exit = 1
+kind = "behavioural"

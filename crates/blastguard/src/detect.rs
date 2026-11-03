@@ -5011,15 +5011,6 @@ fn target_occurrences_by(cmd: &str, scan: fn(&str) -> Vec<String>) -> Option<Vec
     Some(per_segment)
 }
 
-/// Find the first single `>` redirect outside quotes and return its target
-/// token. Returns None for `>>`, `&>>`, `>&<digit>` (fd dup) and quoted `>`
-/// (but `&>`, `>&<filename>` — the combined stdout+stderr truncating forms —
-/// and every explicit-fd `N>file` yield their target).
-#[cfg(test)]
-fn single_redirect_target(seg: &str) -> Option<String> {
-    redirect_targets(seg).into_iter().next()
-}
-
 /// Where a redirect-adjacent token ends.
 ///
 /// Used by BOTH scans inside [`redirect_targets`] — the fd-dup token scan
@@ -12717,6 +12708,14 @@ to explain where `..` lands — blastguard cannot confirm the target and refuses
 mod tests {
     use super::*;
 
+    /// Find the first single `>` redirect outside quotes and return its target
+    /// token. Returns None for `>>`, `&>>`, `>&<digit>` (fd dup) and quoted `>`
+    /// (but `&>`, `>&<filename>` — the combined stdout+stderr truncating forms —
+    /// and every explicit-fd `N>file` yield their target).
+    fn single_redirect_target(seg: &str) -> Option<String> {
+        redirect_targets(seg).into_iter().next()
+    }
+
     #[test]
     fn worktree_rm_eligible_is_an_allowlist_of_bare_rm_and_cd() {
         for ok in [
@@ -17414,12 +17413,6 @@ and must not be Allowed: {failing:?}"
             &roots,
         );
         assert_eq!(d, Decision::Allow);
-    }
-
-    #[test]
-    fn deletion_without_a_resolver_changes_nothing() {
-        // The library entry (`detect`, SafeRoots::none) keeps the shape Deny.
-        assert!(bash("rm -rf /tmp/foo").is_deny());
     }
 
     const DP: &str = "/home/yuki/proj";

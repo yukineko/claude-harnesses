@@ -16,11 +16,25 @@ use harness_core::git_probe::{probe_repo_scrubbed, RepoProbe};
 use std::path::Path;
 use std::process::Command;
 
-/// One added line in the working tree's diff, tagged with the file it belongs to.
+/// One added (or, in a removed scan, removed) line, tagged with the file it
+/// belongs to and the diff hunk it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddedLine {
     pub file: String,
     pub text: String,
+    /// Hunk id. Lines with the same `(file, block)` are CONSECUTIVE lines of
+    /// that file, in order (one `-U0` hunk side, or a whole untracked file);
+    /// a different id means "not known to be adjacent". Ids come from a
+    /// process-wide counter ([`next_block`]), so hunks from different diffs
+    /// (unstaged / staged / commits) never share one.
+    pub block: u64,
+}
+
+static NEXT_BLOCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// A fresh hunk id, never handed out before in this process.
+pub fn next_block() -> u64 {
+    NEXT_BLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Tri-state result of scanning the changed-files set. Distinguishes "no git
@@ -190,10 +204,12 @@ pub fn diff_lines(root: &Path) -> DiffScan {
         // Individual file-read errors stay best-effort: git already listed the
         // file, so this is not a git-command failure — skip the unreadable file.
         if let Ok(content) = std::fs::read_to_string(root.join(f)) {
+            let block = next_block();
             for line in content.lines() {
                 out.push(AddedLine {
                     file: f.to_string(),
                     text: line.to_string(),
+                    block,
                 });
             }
         }
@@ -302,6 +318,7 @@ pub fn parse_unified_diff_both(
     let mut old: Option<String> = None;
     let mut new: Option<String> = None;
     let mut in_hunk = false;
+    let mut block = 0;
     for line in diff.lines() {
         if line.starts_with("diff ") {
             in_hunk = false;
@@ -310,7 +327,10 @@ pub fn parse_unified_diff_both(
             continue;
         }
         if line.starts_with("@@") {
+            // With `-U0` a hunk's `-` lines are consecutive in the old file
+            // and its `+` lines consecutive in the new file.
             in_hunk = true;
+            block = next_block();
             continue;
         }
         if !in_hunk {
@@ -333,6 +353,7 @@ pub fn parse_unified_diff_both(
                 sink.push(AddedLine {
                     file: file.clone(),
                     text: text.to_string(),
+                    block,
                 });
             }
         }

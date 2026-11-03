@@ -63,16 +63,29 @@ On each stop `tdd gate`:
 4. counts *added implementation lines* (impl-glob files, minus test files and
    inline test markers) and looks for **test evidence** (an added `#[test]` /
    `def test_` / `func Test…` / `it(...)`, or a changed file under `tests/`).
-   **Pure moves are recognised automatically**: an added impl line whose text
-   (trimmed, with one leading `pub` / `pub(..)` qualifier dropped) equals a
-   line *removed from an impl file* in the same change set (working tree +
-   index + this session's commits) is not counted — a multiset, so each
-   removed line cancels at most one added line, and a copy (nothing removed)
-   still counts. Lines that are only a `use …;` statement (multi-line too) or a
-   `mod name;` declaration are not impl lines. Removals from docs or test files
-   never cancel. Limit, stated: matching is per line, so reordering existing
-   lines is also read as a move. The number of lines read as moved is printed
-   to stderr on every run;
+   **Pure moves are recognised automatically**: an added impl line is not
+   counted when it is part of a *run* — at least 3 consecutive added lines of
+   one file (one diff hunk, or a whole new untracked file) that equal, in the
+   same order, consecutive lines *removed from one impl file* (one hunk) in
+   the same change set (working tree + index + this session's commits). A
+   multiset: each removed line cancels at most one added line, so a copy
+   (nothing removed) still counts. Matching normalisation: in brace languages
+   (`rs go c h cc cpp hpp java js jsx ts tsx mjs cjs cs swift kt kts scala php
+   dart`) the line is trimmed and one leading `pub` / `pub(..)` is dropped; in
+   every other file (Python, YAML, no extension, …) only trailing whitespace
+   is dropped, because there a dedent changes control flow. Lines that are
+   only a `use …;` statement (multi-line too) or a `mod name;` declaration
+   are not impl lines; they and blank lines are skipped inside a run (neither
+   counted toward it nor breaking it). Removals from docs or test files never
+   cancel. The number of lines read as moved is printed to stderr on every
+   run. **Known limits:** (a) a block of 3+ lines moved to another place in
+   its own file (or to another file) reads as a move even where the new
+   position changes behaviour (e.g. statements reordered as whole blocks);
+   (b) matching is on text only, so 3+ consecutive lines of boilerplate
+   deleted in one place can vouch for the same 3+ lines added elsewhere;
+   (c) a run is 3 lines, so a moved 1–2 line function still counts as new;
+   (d) a lone path-shaped statement right after a dangling added
+   `use x::{` is swallowed as part of the `use`;
 5. **impl added + no test** → `{"decision":"block","reason":…}` so Claude writes
    a test and continues; otherwise the stop proceeds.
 

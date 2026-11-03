@@ -53,6 +53,7 @@ use regex::RegexSet;
 
 use crate::config::Config;
 use crate::git::{self, AddedLine, AddedScan, ChangeScan};
+use crate::moved;
 
 /// What a successful scan found. Only populated on `Scan::Known(Some(_))` —
 /// i.e. a real git repo whose diff could be read.
@@ -60,10 +61,7 @@ pub struct Fields {
     /// Number of *added* implementation lines (impl-glob file, not a test file,
     /// not itself a test marker).
     pub added_impl_lines: usize,
-    /// Added implementation lines NOT counted above because each matched a
-    /// line removed from an impl file in the same change set (moved code —
-    /// see [`classify_with_removed`]). Reported so an allow earned by a move
-    /// is never silent.
+    /// Added impl lines read as moved code, not counted ([`crate::moved`]).
     pub moved_impl_lines: usize,
     /// An added line matched a test marker (e.g. an inline `#[test]`).
     pub test_marker_added: bool,
@@ -358,97 +356,16 @@ fn build_markers(patterns: &[String]) -> RegexSet {
     })
 }
 
-/// [`classify_with_removed`] with NO removed lines: nothing can be recognised
-/// as moved, so every added implementation line counts (the restricted side).
+/// [`classify_with_removed`] with no removals: nothing reads as moved.
 pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report {
     classify_with_removed(cfg, changed, added, &AddedScan::Lines(Vec::new()))
 }
 
-/// Normalise a line for move matching: trim surrounding whitespace, then drop
-/// one leading visibility qualifier (`pub `, `pub(crate) `, `pub(super) `,
-/// `pub(self) `, `pub(in path) `), so `fn helper` moved and re-exposed as
-/// `pub(super) fn helper` still matches.
-pub fn normalise_moved_line(text: &str) -> &str {
-    let t = text.trim();
-    if let Some(rest) = t.strip_prefix("pub(") {
-        if let Some(close) = rest.find(')') {
-            let after = &rest[close + 1..];
-            if after.starts_with(char::is_whitespace) {
-                return after.trim_start();
-            }
-        }
-        return t;
-    }
-    match t.strip_prefix("pub") {
-        Some(rest) if rest.starts_with(char::is_whitespace) => rest.trim_start(),
-        _ => t,
-    }
-}
-
-/// `mod name;` (after [`normalise_moved_line`]): a module declaration, not
-/// implementation.
-fn is_mod_decl(norm: &str) -> bool {
-    let Some(rest) = norm.strip_prefix("mod ") else {
-        return false;
-    };
-    let Some(name) = rest.trim().strip_suffix(';') else {
-        return false;
-    };
-    let name = name.trim();
-    !name.is_empty()
-        && name.chars().all(|c| c.is_alphanumeric() || c == '_')
-        && !name.starts_with(|c: char| c.is_ascii_digit())
-}
-
-/// (Part of) a `use` tree: comma-separated items, each (braces and the closing
-/// `;` aside) empty, a path (`a::b`, `self`, `*`) or `path as name`. Anything
-/// else — an `=`, a call, a string, two words without `as` — is not part of a
-/// `use`, so a dangling added `use x::{` cannot swallow real code that
-/// follows. Residual, stated: a lone path-shaped statement (`break;`, a tail
-/// expression `x`) directly after a dangling `use x::{` is still swallowed.
-fn is_use_tree_fragment(norm: &str) -> bool {
-    let is_path = |w: &str| {
-        !w.is_empty()
-            && w.chars()
-                .all(|c| c.is_alphanumeric() || matches!(c, '_' | ':' | '*'))
-    };
-    let body = norm.trim_end_matches(';');
-    if body.contains(';') {
-        return false;
-    }
-    body.split(',').all(|item| {
-        let item: String = item.chars().filter(|c| !matches!(c, '{' | '}')).collect();
-        let words: Vec<&str> = item.split_whitespace().collect();
-        match words.as_slice() {
-            [] => true,
-            [p] => is_path(p),
-            [p, "as", name] => is_path(p) && is_path(name),
-            _ => false,
-        }
-    })
-}
-
-/// Classify a set of changed files + added lines into a report, recognising
-/// moved code. Pure (no git): unit-testable. Maps the tri-state scans: any
-/// `Failed` (changed, added OR removed) → `Undetermined` (fail closed);
-/// otherwise a `NotRepo` changed/added side → `Known(None)` (allow, as
-/// before); otherwise the successful `Files`/`Lines` sets drive the
-/// test-evidence logic, carried as `Known(Some(fields))`. A `NotRepo` removed
-/// side next to successful added lines is read as "no removals" — the side
-/// that can only count more lines, never fewer.
-///
-/// Not counted as added implementation lines (everything else is unchanged):
-///
-/// * **Moved lines.** An added impl line whose [`normalise_moved_line`] form
-///   equals the normalised form of a line REMOVED from an impl file in the
-///   same change set. Multiset: each removed line cancels at most one added
-///   line. Removals from non-impl files (docs, test files) never cancel —
-///   text deleted from a note is not code that moved. Limit, stated: the
-///   match is per line, so reordering existing lines inside a file is also
-///   read as a move.
-/// * **`use` / `mod` declarations.** A line that is only a `use ...;`
-///   statement (including every line of a multi-line `use` tree) or a
-///   `mod name;` declaration.
+/// Classify changed files + added/removed lines into a report. Pure (no git).
+/// Any `Failed` scan (changed, added OR removed) → `Undetermined` (fail
+/// closed); else a `NotRepo` changed/added side → `Known(None)` (allow); else
+/// `Known(Some(fields))`. A `NotRepo` removed side reads as "no removals"
+/// (can only count more). What is not counted is decided by [`crate::moved`].
 pub fn classify_with_removed(
     cfg: &Config,
     changed: &ChangeScan,
@@ -493,101 +410,16 @@ pub fn classify_with_removed(
     let is_impl_file = |f: &str| impl_set.is_match(f) && !is_test_file(f);
 
     let test_file_changed = changed.iter().any(|f| is_test_file(f));
-
-    // Multiset of normalised lines removed from IMPL files.
-    let mut removed_pool: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    if let AddedScan::Lines(removed) = removed {
-        for AddedLine { file, text } in removed {
-            let norm = normalise_moved_line(text);
-            if is_impl_file(file) && !norm.is_empty() {
-                *removed_pool.entry(norm).or_insert(0) += 1;
-            }
-        }
-    }
-
-    let mut added_impl_lines = 0usize;
-    let mut moved_impl_lines = 0usize;
-    let mut test_marker_added = false;
-    let mut impl_files: Vec<String> = Vec::new();
-    // Inside a multi-line `use` tree of this file (reset on a file change).
-    let mut in_use: Option<&str> = None;
-    for AddedLine { file, text } in added {
-        if in_use.is_some_and(|f| f != file.as_str()) {
-            in_use = None;
-        }
-        let marker_hit = markers.is_match(text);
-        // One arm, one rule: the added line must MATCH A MARKER, and it must
-        // land somewhere a test can live (an impl file — an inline `mod tests`
-        // — or a test file).
-        //
-        // Both halves were learned by measurement. The marker requirement came
-        // first (backlog 1ff0fcc9): the comment on the impl arm always said
-        // "inline test written in an impl file", but the guard that would make
-        // it true was missing, so a marker hit in ANY changed path counted —
-        // the default set matches the bare substring `test(`, which reaches
-        // CHANGELOG.md, a Cargo.toml comment, a JSON fixture or a shell script.
-        // The test-file arm was the same hole with the halves swapped: it took
-        // ANY added line, marker or not, so a comment, an import or a single
-        // blank line under `tests/` was accepted as proof a test was written
-        // (backlog 1454ba50 — probed against a real checkout, not reasoned).
-        // "A regex matched somewhere" and "a path under tests/ was touched" are
-        // both "cannot tell whether a test was added", and resolving that to
-        // clean is the fail-open this repo exists to catch. Narrowing can only
-        // BLOCK more, never less.
-        if marker_hit && (is_impl_file(file) || is_test_file(file)) {
-            test_marker_added = true;
-            continue;
-        }
-        if is_test_file(file) {
-            continue; // a test path, but this line is not a test
-        }
-        if is_impl_file(file) && !text.trim().is_empty() {
-            let norm = normalise_moved_line(text);
-            // `use` statements (single- or multi-line) and `mod name;`
-            // declarations are not implementation.
-            if in_use.is_some() {
-                if is_use_tree_fragment(norm) {
-                    if norm.ends_with(';') {
-                        in_use = None;
-                    }
-                    continue;
-                }
-                in_use = None;
-            }
-            if let Some(rest) = norm.strip_prefix("use ") {
-                if !rest.trim_end().ends_with(';') && is_use_tree_fragment(rest) {
-                    in_use = Some(file.as_str());
-                    continue;
-                }
-                if is_use_tree_fragment(rest) {
-                    continue;
-                }
-            }
-            if is_mod_decl(norm) {
-                continue;
-            }
-            // A line removed from an impl file in the same change set: moved.
-            if let Some(n) = removed_pool.get_mut(norm) {
-                if *n > 0 {
-                    *n -= 1;
-                    moved_impl_lines += 1;
-                    continue;
-                }
-            }
-            added_impl_lines += 1;
-            if !impl_files.contains(file) {
-                impl_files.push(file.clone());
-            }
-        }
-    }
+    let removed = moved::removed_lines(removed);
+    let c = moved::count(added, removed, &is_impl_file, &is_test_file, &markers);
 
     Report {
         scan: Determination::known(Some(Fields {
-            added_impl_lines,
-            moved_impl_lines,
-            test_marker_added,
+            added_impl_lines: c.added_impl_lines,
+            moved_impl_lines: c.moved_impl_lines,
+            test_marker_added: c.test_marker_added,
             test_file_changed,
-            impl_files,
+            impl_files: c.impl_files,
         })),
         authorship: Authorship::not_attempted(),
         committed: Committed::not_attempted(),
@@ -602,10 +434,7 @@ pub fn classify_with_removed(
 ///
 /// `transcript_path` is the Stop payload's transcript (empty for a manual
 /// run). The scan is narrowed to what this session wrote — see
-/// [`scope_to_session`] — before it is classified. The removed lines of the
-/// same change set (working tree + index + session commits) travel alongside
-/// the added ones so [`classify_with_removed`] can recognise moved code; a
-/// failed git command on that side fails closed exactly like the added side.
+/// [`scope_to_session`] — before it is classified, removed lines included.
 pub fn evaluate(cfg: &Config, root: &Path, transcript_path: &str) -> Report {
     let changed = git::changed_files(root);
     let git::DiffScan { added, removed } = git::diff_lines(root);
@@ -663,11 +492,7 @@ pub fn session_start(transcript_path: &str) -> Determination<i64> {
 /// The committed lines are also judged on their own
 /// ([`committed_test_evidence`], recorded in `Committed::Included {
 /// test_evidence }`): a test the session wrote AND committed is the only
-/// evidence credited across roots.
-///
-/// The commits' REMOVED lines are folded into `removed` the same way (a move
-/// committed during the session is recognised like an uncommitted one); a
-/// failed `git log` makes `removed` `Failed` too.
+/// evidence credited across roots. The commits' removed lines are folded in.
 pub fn include_committed(
     cfg: &Config,
     root: &Path,
@@ -694,19 +519,9 @@ pub fn include_committed(
             );
         }
     };
-    let git::DiffScan {
-        added: committed_added,
-        removed: committed_removed,
-    } = git::committed_diff_lines(root, since);
-    let removed = match (removed, committed_removed) {
-        (AddedScan::Lines(mut r), AddedScan::Lines(c)) => {
-            r.extend(c);
-            AddedScan::Lines(r)
-        }
-        (AddedScan::Failed, _) | (_, AddedScan::Failed) => AddedScan::Failed,
-        (r, _) => r,
-    };
-    match committed_added {
+    let scan = git::committed_diff_lines(root, since);
+    let removed = moved::merge_removed(removed, scan.removed);
+    match scan.added {
         AddedScan::Lines(committed) => {
             for l in &committed {
                 if !files.contains(&l.file) {
@@ -728,12 +543,8 @@ pub fn include_committed(
                 },
             )
         }
-        AddedScan::Failed => (
-            changed,
-            AddedScan::Failed,
-            AddedScan::Failed,
-            Committed::not_attempted(),
-        ),
+        // A failed `git log` fails both sides (`merge_removed` made `removed` Failed).
+        f @ AddedScan::Failed => (changed, f, removed, Committed::not_attempted()),
         AddedScan::NotRepo => (changed, added, removed, Committed::not_attempted()),
     }
 }
@@ -785,14 +596,10 @@ pub fn committed_test_evidence(
 /// ruling 2026-10-17, 「検証テストの範囲は書いた文だけでいい」), via the rule
 /// shared with reviewgate: `harness_core::attribution::attribute_own_writes`.
 ///
-/// The universe attributed is `changed ∪ files of added lines ∪ files of
-/// removed lines`: `git status` collapses an untracked directory to `dir/`,
-/// while `diff_lines` lists the files inside it, so attributing only
-/// `changed` would drop every line of a new directory; and a session commit
-/// that only deleted lines from a file is in neither of the first two. All
-/// three sides are filtered by the same kept set, so test evidence from
-/// another session's file no longer counts either, and another session's
-/// deletion cannot vouch for this session's added lines as "moved".
+/// The universe attributed is `changed ∪ files of added/removed lines`: `git
+/// status` collapses an untracked directory to `dir/`, while `diff_lines`
+/// lists the files inside it; a session commit that only deleted lines from a
+/// file is in neither. All three sides are filtered by the same kept set.
 ///
 /// A `Failed` / `NotRepo` scan passes through untouched (there is nothing to
 /// attribute, and `classify` already decides those). Undetermined attribution
@@ -808,11 +615,7 @@ pub fn scope_to_session(
         return (changed, added, removed, Authorship::not_attempted());
     };
     let mut universe: Vec<String> = files.clone();
-    let removed_lines: &[AddedLine] = match &removed {
-        AddedScan::Lines(r) => r,
-        _ => &[],
-    };
-    for l in lines.iter().chain(removed_lines) {
+    for l in lines.iter().chain(moved::removed_lines(&removed)) {
         if !universe.contains(&l.file) {
             universe.push(l.file.clone());
         }
@@ -831,16 +634,7 @@ pub fn scope_to_session(
                 .filter(|l| keep.contains(&l.file))
                 .cloned()
                 .collect();
-            // A `Failed` removed side stays `Failed` (classify fails closed).
-            let removed = match &removed {
-                AddedScan::Lines(r) => AddedScan::Lines(
-                    r.iter()
-                        .filter(|l| keep.contains(&l.file))
-                        .cloned()
-                        .collect(),
-                ),
-                other => other.clone(),
-            };
+            let removed = moved::keep_removed(&removed, &keep);
             (
                 ChangeScan::Files(files),
                 AddedScan::Lines(lines),
@@ -889,23 +683,6 @@ pub fn credit_note(v: &Report) -> Option<String> {
         f.added_impl_lines,
         from.display()
     ))
-}
-
-/// The stderr line saying added implementation lines were read as MOVED code
-/// and not counted — printed on every run like [`attribution_note`], so an
-/// allow earned by a move is never silent. `None` when nothing matched.
-pub fn moved_note(v: &Report) -> Option<String> {
-    let Determination::Known(Some(f)) = &v.scan else {
-        return None;
-    };
-    (f.moved_impl_lines > 0).then(|| {
-        format!(
-            "tdd: {} added implementation line(s) matched lines removed from implementation \
-             files in the same change set and were read as moved code, not counted \
-             ({} counted as new)",
-            f.moved_impl_lines, f.added_impl_lines
-        )
-    })
 }
 
 /// The stderr line that makes the exclusion visible on EVERY run, including
@@ -1087,15 +864,12 @@ fn generic_block_reason(
          `it(...)`, or a file under tests/), then finish. Prefer test-first: run \
          `tdd red --task <id>` to capture the failing test before you implement, and \
          `tdd green --task <id>` once it passes.\n\n\
-         Pure moves are already recognised automatically: an added line matching a line \
-         removed from an implementation file in the same change set (ignoring indentation and \
-         a leading `pub`/`pub(..)`), and `use`/`mod name;` lines, are not counted above — so \
-         what is counted is code that did not move. Genuinely no test needed (e.g. a \
-         rename that edits lines, or docs)? Run \
+         {hint} Genuinely no test needed (e.g. a rename that edits lines, or docs)? Run \
          `tdd skip --reason \"...\"` — one stop, THIS session only, and recorded. Disable \
          entirely: TDD_DISABLE=1 in the environment Claude Code itself was started with \
          (exporting it from a tool call does not reach this hook).",
         scope = committed.scope(),
+        hint = moved::BLOCK_HINT,
     )
 }
 
@@ -1136,12 +910,7 @@ pub fn human_report(v: &Report, cfg: &Config) -> String {
         Determination::Known(Some(f)) => {
             let mut s = String::new();
             s.push_str(&format!("added impl lines: {}\n", f.added_impl_lines));
-            if f.moved_impl_lines > 0 {
-                s.push_str(&format!(
-                    "moved impl lines: {} (matched lines removed from impl files; not counted)\n",
-                    f.moved_impl_lines
-                ));
-            }
+            s.push_str(&moved::report_line(f.moved_impl_lines));
             s.push_str(&format!(
                 "test evidence:    {}\n",
                 // Report the observation, not the inference it invites
@@ -1215,6 +984,7 @@ mod tests {
         AddedLine {
             file: file.to_string(),
             text: text.to_string(),
+            block: 0,
         }
     }
 
@@ -2555,6 +2325,7 @@ mod backlog_e0269780_regression {
                 .map(|(f, t)| AddedLine {
                     file: f.to_string(),
                     text: t.to_string(),
+                    block: 0,
                 })
                 .collect(),
         );
@@ -2638,145 +2409,5 @@ mod backlog_e0269780_regression {
                 );
             }
         }
-    }
-}
-
-/// Edge cases of moved-code recognition in `classify_with_removed` that the
-/// integration tests (`tests/pure_move_not_new_impl.rs`) do not reach.
-#[cfg(test)]
-mod moved_code {
-    use super::*;
-
-    fn l(file: &str, text: &str) -> AddedLine {
-        AddedLine {
-            file: file.to_string(),
-            text: text.to_string(),
-        }
-    }
-
-    fn run(added: &[(&str, &str)], removed: AddedScan) -> Report {
-        let v: Vec<AddedLine> = added.iter().map(|(f, t)| l(f, t)).collect();
-        let mut files: Vec<String> = v.iter().map(|x| x.file.clone()).collect();
-        files.dedup();
-        classify_with_removed(
-            &Config::default(),
-            &ChangeScan::Files(files),
-            &AddedScan::Lines(v),
-            &removed,
-        )
-    }
-
-    fn counted(r: &Report) -> (usize, usize) {
-        match &r.scan {
-            Determination::Known(Some(f)) => (f.added_impl_lines, f.moved_impl_lines),
-            _ => panic!("expected a determined scan"),
-        }
-    }
-
-    #[test]
-    fn normalisation_strips_whitespace_and_one_visibility_qualifier() {
-        assert_eq!(normalise_moved_line("  fn a() {"), "fn a() {");
-        assert_eq!(normalise_moved_line("pub fn a() {"), "fn a() {");
-        assert_eq!(normalise_moved_line("pub(crate) fn a() {"), "fn a() {");
-        assert_eq!(
-            normalise_moved_line("pub(in crate::x) fn a() {"),
-            "fn a() {"
-        );
-        // Not a visibility qualifier: an identifier that starts with `pub`.
-        assert_eq!(normalise_moved_line("publish();"), "publish();");
-        assert_eq!(normalise_moved_line("pub_x = 1;"), "pub_x = 1;");
-    }
-
-    /// A failed removal scan is undetermined, never "no removals" read as clean.
-    #[test]
-    fn failed_removed_scan_is_undetermined() {
-        let r = run(&[("src/a.rs", "fn a() {}")], AddedScan::Failed);
-        assert!(matches!(r.scan, Determination::Undetermined(_)));
-        assert!(r.blocks(&Config::default()));
-    }
-
-    /// Multiset: one removal cancels one addition, not every duplicate.
-    #[test]
-    fn each_removed_line_cancels_at_most_one_added_line() {
-        let r = run(
-            &[("src/b.rs", "let x = f();"), ("src/c.rs", "let x = f();")],
-            AddedScan::Lines(vec![l("src/a.rs", "    let x = f();")]),
-        );
-        assert_eq!(counted(&r), (1, 1));
-    }
-
-    /// Removals from a test file are not implementation that moved.
-    #[test]
-    fn removal_from_a_test_file_does_not_cancel() {
-        let r = run(
-            &[("src/b.rs", "let x = f();")],
-            AddedScan::Lines(vec![l("tests/t.rs", "let x = f();")]),
-        );
-        assert_eq!(counted(&r), (1, 0));
-    }
-
-    #[test]
-    fn use_and_mod_declarations_are_not_impl_lines() {
-        let r = run(
-            &[
-                ("src/b.rs", "use std::fmt;"),
-                ("src/b.rs", "pub use crate::a::{b, c as d};"),
-                ("src/b.rs", "use std::{"),
-                ("src/b.rs", "    collections::HashMap,"),
-                ("src/b.rs", "    io::Write as _,"),
-                ("src/b.rs", "};"),
-                ("src/lib.rs", "mod b;"),
-                ("src/lib.rs", "pub(crate) mod c;"),
-            ],
-            AddedScan::Lines(Vec::new()),
-        );
-        assert_eq!(counted(&r), (0, 0));
-    }
-
-    /// A dangling multi-line `use` does not swallow real code after it, and an
-    /// inline `mod x { ... }` is implementation.
-    #[test]
-    fn dangling_use_does_not_swallow_code_and_inline_mod_counts() {
-        let r = run(
-            &[
-                ("src/b.rs", "use std::{"),
-                ("src/b.rs", "let y = compute(1);"),
-                ("src/b.rs", "mod inner { fn f() {} }"),
-                ("src/b.rs", "use_it(x);"),
-            ],
-            AddedScan::Lines(Vec::new()),
-        );
-        assert_eq!(counted(&r), (3, 0));
-    }
-
-    /// The parser tags removed lines with the old path and keeps `-- x` / `++ x`
-    /// content lines inside a hunk as lines, not headers.
-    #[test]
-    fn parser_tags_removed_lines_and_reads_hunk_content_as_content() {
-        let diff = "\
-diff --git a/src/a.rs b/src/a.rs
---- a/src/a.rs
-+++ b/src/a.rs
-@@ -1,2 +1,2 @@
---- sql comment
--fn gone() {}
-+++ kept
-diff --git a/src/old.rs b/src/old.rs
---- a/src/old.rs
-+++ /dev/null
-@@ -1 +0,0 @@
--fn old() {}
-";
-        let (mut a, mut r) = (Vec::new(), Vec::new());
-        crate::git::parse_unified_diff_both(diff, &mut a, &mut r);
-        assert_eq!(a, vec![l("src/a.rs", "++ kept")]);
-        assert_eq!(
-            r,
-            vec![
-                l("src/a.rs", "-- sql comment"),
-                l("src/a.rs", "fn gone() {}"),
-                l("src/old.rs", "fn old() {}"),
-            ]
-        );
     }
 }

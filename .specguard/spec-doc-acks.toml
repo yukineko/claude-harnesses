@@ -254,3 +254,19 @@ reason = "Pure move: the rm analyser and its eligibility helpers (analyze_rm thr
 [[ack]]
 path = "crates/blastguard/src/detect/find_xargs.rs"
 reason = "Pure move: the find and xargs analysers (find_search_roots through find_confined_root, analyze_find through xargs_reads_arg_file, incl. NARROWING_PREDICATES, xargs_command_start, XARGS_* flag tables) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/git.rs"
+reason = "Pure move: the git analysers (git_subcommand_index through checkout_pathspec_verdict, incl. HOOKSPATH_REASON, git_global_config_assignments, sets_hookspath_inline; and analyze_git) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/gh.rs"
+reason = "Pure move: the gh invocation classifier (analyze_gh and analyze_gh_api) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/sinks.rs"
+reason = "Pure move: the egress and fetched-payload-exec sinks (split_statements_into_pipe_stages through analyze_nc, incl. analyze_pipe_egress, analyze_process_substitution_egress, analyze_here_string_egress, HereStringSpan, contains_dev_tcp_or_udp, analyze_fetch) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/high_blast.rs"
+reason = "Pure move: the high-blast Ask tier (analyze_high_blast_tier through high_blast_outside_tree_rm, incl. high_blast_git_force_push, refspec_source_is_force, high_blast_schemeless_upload) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."

@@ -1,6 +1,6 @@
 [package]
 name = "fetchguard"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 rust-version.workspace = true
 description = "PostToolUse hook that scans WebFetch and WebSearch results for planted prompt-injection phrasing and warns the model that the flagged span is untrusted data."

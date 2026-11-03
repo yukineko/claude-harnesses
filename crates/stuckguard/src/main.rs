@@ -32,7 +32,7 @@ use std::path::Path;
 use clap::{Parser, Subcommand};
 use serde_json::json;
 
-use harness_core::hook::{read_stdin, run_hook};
+use harness_core::hook::{run_hook, try_read_stdin};
 use harness_core::verdict::Determination;
 
 use config::Config;
@@ -106,7 +106,22 @@ fn watch() {
     if Config::disabled_env() {
         return;
     }
-    let raw = read_stdin();
+    let raw = match try_read_stdin() {
+        Ok(raw) => raw,
+        Err(e) => {
+            // Cannot determine: this call was neither recorded nor examined, so
+            // silence would read as "no stuck loop". Nudge instead.
+            eprintln!("stuckguard: stdin read failed ({e}); nudging out of caution");
+            let out = json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": stdin_read_failed_message(),
+                }
+            });
+            println!("{out}");
+            return;
+        }
+    };
     let Some(input) = HookInput::parse(&raw) else {
         return;
     };
@@ -247,6 +262,14 @@ fn watch() {
         });
         println!("{out}");
     }
+}
+
+/// Shown when the hook payload could not be read from stdin.
+fn stdin_read_failed_message() -> String {
+    "🔁 stuckguard: stdin からフックのペイロードを読み取れませんでした（stdin read failed）。\
+     このツール呼び出しは記録も検査もされていないため、ループ検知は行えていません。\
+     念のため通知します。同じ操作を無自覚に繰り返していないか確認してください。"
+        .to_string()
 }
 
 /// Shown when the session history could not be read, so the repeat detector

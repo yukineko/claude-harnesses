@@ -290,38 +290,6 @@ exit 101: .247 (/Users/yuki/src/.harness-worktrees/file-bg-findings-20261103/cra
 error: test failed, to rerun pass `-p blastguard --test python_c_recursive_rm_literal_fp_20261103`"""
 
 [[task]]
-id = "7ac39b44"
-title = "backlog tests: a fresh per-fixture condukt shim's first exec (~2.3s on this host) trips the 2.5s claim-check timeout"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "backlog",
-    "flaky-test",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Measured 2026-11-03 at main fcbcfc3f. cargo test -p backlog --test closure_evidence failed 3 of 3 parallel runs (14, 17 and 15 of 31 failed) and also failed with --test-threads=1 (14 of 31). Each failure was 'add refused: the cross-session claim check could not be made (timed out after 2.5s)'. Probe: a newly written 3-line #!/bin/sh script took real 2.35s and 2.32s on its first exec and 0.00s on later execs, so this is not load (load average was 6 at the time). Cause: tests/common/mod.rs Fixture::new writes a NEW condukt shim (NOT_CLAIMED_CONDUKT) into a unique dir per fixture. Its first exec pays the host's new-executable cost, which uses up nearly all of IS_CLAIMED_TIMEOUT (2.5s). The shared condukt_shim_dir() (backlog-test-condukt-shim-v2) avoids that cost. Not caused by the stdin work (run-20261103-214242-9422): the shim's stdin is null. Do NOT fix by raising the timeout (coordinator ruling)."
-created_at = 1793714987
-updated_at = 1793714987
-weight = 0.0
-issue_number = 1510
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1510"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test closure_evidence"
-rev = "6e6ed5868bb00709ffecb183c567418f86bf6f5d"
-observed_at = 1793714987
-detail = """
-exit 101: rness-worktrees/session-c4aa3733-fixes/crates/harness-core)
-   Compiling backlog v0.3.76 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-fixes/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.77s
-     Running tests/closure_evidence.rs (target/debug/deps/closure_evidence-221df5dead63d61c)
-error: test failed, to rerun pass `-p backlog --test closure_evidence`"""
-
-[[task]]
 id = "a09d8297"
 title = "condukt circuit breaker: releasing a claimed item excluded for overlap is logged 'unspecified' and counted as a failure"
 project = "/Users/yuki/src/harness"

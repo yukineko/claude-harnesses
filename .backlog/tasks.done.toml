@@ -64932,3 +64932,65 @@ test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 rev = "fcdf557969d40b02708edca31a6eb3ce5781d240"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "7ac39b44"
+title = "backlog tests: a fresh per-fixture condukt shim's first exec (~2.3s on this host) trips the 2.5s claim-check timeout"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "flaky-test",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Measured 2026-11-03 at main fcbcfc3f. cargo test -p backlog --test closure_evidence failed 3 of 3 parallel runs (14, 17 and 15 of 31 failed) and also failed with --test-threads=1 (14 of 31). Each failure was 'add refused: the cross-session claim check could not be made (timed out after 2.5s)'. Probe: a newly written 3-line #!/bin/sh script took real 2.35s and 2.32s on its first exec and 0.00s on later execs, so this is not load (load average was 6 at the time). Cause: tests/common/mod.rs Fixture::new writes a NEW condukt shim (NOT_CLAIMED_CONDUKT) into a unique dir per fixture. Its first exec pays the host's new-executable cost, which uses up nearly all of IS_CLAIMED_TIMEOUT (2.5s). The shared condukt_shim_dir() (backlog-test-condukt-shim-v2) avoids that cost. Not caused by the stdin work (run-20261103-214242-9422): the shim's stdin is null. Do NOT fix by raising the timeout (coordinator ruling)."
+created_at = 1793714987
+updated_at = 1793717637
+weight = 0.0
+issue_number = 1510
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1510"
+issue_closed_at = 1793717641
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test closure_evidence"
+rev = "6e6ed5868bb00709ffecb183c567418f86bf6f5d"
+observed_at = 1793714987
+detail = """
+exit 101: rness-worktrees/session-c4aa3733-fixes/crates/harness-core)
+   Compiling backlog v0.3.76 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-fixes/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.77s
+     Running tests/closure_evidence.rs (target/debug/deps/closure_evidence-221df5dead63d61c)
+error: test failed, to rerun pass `-p backlog --test closure_evidence`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test fixture_shared_condukt_shim"
+exit = 0
+passed = 2
+rev = "4eb398a691b6232cdfbb71e3fcc1f784b147633a"
+observed_at = 1793717623
+output_digest = "sha256:3b9dbf09e3bb2802c07c449d079e0a13c0994c541ecf70a359ca216951ab37d6"
+excerpt = """
+
+running 2 tests
+test default_fixture_does_not_write_a_fresh_condukt_executable ... ok
+test default_fixture_add_of_a_reproduced_ticket_still_lands ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/fixture_shared_condukt_shim.rs (target/debug/deps/fixture_shared_condukt_shim-562da4c457ff7438)
+"""
+
+[task.closure.red]
+rev = "2fb979df373e585c682dfce63a94d9eca995c5e1"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/backlog/tests/fixture_shared_condukt_shim.rs"]

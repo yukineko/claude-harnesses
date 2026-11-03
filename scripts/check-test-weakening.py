@@ -25,12 +25,15 @@ restricted side, never to "fine")
 Exit 2 covers: git missing or erroring, the path is not a repo, the base ref
 does not resolve, a diff subprocess exits non-zero, a tracked file cannot be
 read or decoded, a `#[cfg(test)]` module whose braces do not balance (an
-unparsed module is an uninspected one), or a Python test file that `ast` cannot
-parse. None of these may collapse into 0: an unreadable test surface is not a
-clean test surface.
+unparsed module is an uninspected one), an out-of-line `#[cfg(test)] mod x;`
+whose body file cannot be resolved on that side, or a Python test file that
+`ast` cannot parse. None of these may collapse into 0: an unreadable test
+surface is not a clean test surface.
 
-Scope: every changed `.rs` file (its `#[cfg(test)]` modules, or the whole file
-under a `tests/` dir), and every changed Python test file -- `test_*.py`,
+Scope: every changed `.rs` file (its `#[cfg(test)]` modules -- inline bodies
+and the whole file behind an out-of-line `#[cfg(test)] mod x;`, attributed to
+the declaring file -- or the whole file under a `tests/` dir), and every
+changed Python test file -- `test_*.py`,
 `*_test.py`, or any `.py` under a `tests/` dir (backlog 911a93b8; see the
 "Python test surface" section below for the Python-specific rules).
 
@@ -117,6 +120,7 @@ import argparse
 import ast
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -453,16 +457,270 @@ def _mask_noncode(src: str, path: str) -> str:
     return "".join(out)
 
 
-def cfg_test_modules(src: str, path: str) -> str:
+# --- out-of-line modules (`#[cfg(test)] mod tests;`) ----------------------
+#
+# Moving an inline `#[cfg(test)] mod tests { ... }` into its own file is an
+# ordinary, correct refactor. Until 2026-11-03 the declaration form
+# `#[cfg(test)] mod tests;` had no body for `cfg_test_modules` to find, so every
+# such file went Undetermined (exit 2) and the refactor could not be committed.
+#
+# Now the body FILE is resolved with Rust's module path rules and its whole
+# contents are test surface, read from the same side as the declaring file (the
+# merge-base blob for the base, the worktree for the change). The body is
+# appended to the DECLARING file's surface, so findings stay keyed by the
+# declaring path on both sides: a verbatim inline -> out-of-line move compares
+# equal, while an assertion or `#[test]` lost in the move is still reported (it
+# is attributed to the declaring file, e.g. `src/foo.rs`, not `src/foo/tests.rs`).
+# The body file is NOT also scanned under its own path (see `test_body_root`),
+# so it is neither double-counted nor read as production code with an empty
+# surface. Further `mod x;` declarations inside a body file are followed the
+# same way (everything under a `#[cfg(test)]` module is test-only).
+#
+# Every case this cannot resolve is Undetermined, never clean: no body file on
+# that side, both `name.rs` and `name/mod.rs` present (rustc E0761), a
+# `#[path]` that is not a plain escape-free string literal (`cfg_attr(.., path
+# = ..)` included), an absolute or repo-escaping `#[path]`, an out-of-line
+# declaration nested inside an inline block, or one inside a `#[path]`-loaded
+# body file (whose own child-path rules this does not model).
+#
+# What this does NOT see: a body file whose declarer is not one of the standard
+# parent-module files (`<dir>.rs`, `<dir>/mod.rs`, `<dir>/lib.rs`,
+# `<dir>/main.rs`) and not a `#[path]` declarer findable by `git grep` -- e.g.
+# a declaration inside an inline `mod a { mod b; }` block. When such a body file
+# changes WITHOUT its declarer it is classified like any other non-test `.rs`
+# file (its own `#[cfg(test)]` modules only).
+
+CFG_TEST_RE = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
+MOD_DECL_RE = re.compile(r"\bmod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
+VIS_TAIL_RE = re.compile(r"(?<![A-Za-z0-9_])pub(?:\s*\([^()]*\))?\s*\Z")
+PATH_ATTR_MASKED_RE = re.compile(r"#\s*\[\s*path\s*=\s*\]")
+PATH_ATTR_RAW_RE = re.compile(r'#\s*\[\s*path\s*=\s*"([^"\\]*)"\s*\]')
+PATH_WORD_RE = re.compile(r"\bpath\b")
+# crate-root and `mod.rs` files resolve `mod x;` next to themselves.
+_MOD_RS_NAMES = ("mod.rs", "lib.rs", "main.rs")
+
+
+class Side:
+    """One side of the diff: `read(path)` is the file's content, or None when the
+    file genuinely does not exist on that side (a read failure raises)."""
+
+    def __init__(self, label: str, reader, grep_path_attr_files):
+        self.label = label
+        self._reader = reader
+        self._grep = grep_path_attr_files
+        self._cache: dict = {}
+        self._path_files = None
+
+    def read(self, path: str):
+        if path not in self._cache:
+            self._cache[path] = self._reader(path)
+        return self._cache[path]
+
+    def path_attr_files(self) -> list:
+        """Non-`tests/` `.rs` files on this side containing a `#[path` attribute."""
+        if self._path_files is None:
+            self._path_files = [p for p in self._grep() if not is_tests_dir_file(p)]
+        return self._path_files
+
+
+def _is_mod_rs_like(path: str) -> bool:
+    return posixpath.basename(path) in _MOD_RS_NAMES
+
+
+def _attr_spans_before(code: str, idx: int) -> list:
+    """`(start, end)` of the outer attributes directly preceding the item whose
+    keyword starts at `idx` (an optional `pub`/`pub(..)` is skipped first)."""
+    j = idx
+    vm = VIS_TAIL_RE.search(code, max(0, j - 80), j)
+    if vm:
+        j = vm.start()
+    spans = []
+    while True:
+        k = j
+        while k > 0 and code[k - 1].isspace():
+            k -= 1
+        if k == 0 or code[k - 1] != "]":
+            break
+        o = code.rfind("[", 0, k - 1)
+        if o == -1 or "]" in code[o + 1 : k - 1]:
+            break
+        h = o - 1
+        while h >= 0 and code[h].isspace():
+            h -= 1
+        if h < 0 or code[h] != "#":
+            break
+        spans.append((h, k))
+        j = h
+    return spans
+
+
+def _module_decls(code: str, path: str) -> list:
+    """Every out-of-line `mod NAME;` in the MASKED source `code`, as dicts with
+    `name`, `gated` (a `#[cfg(test)]` among its attributes), `attrs` (spans),
+    `depth` (brace depth: 0 = file top level) and `path_attr` (str or None)."""
+    out = []
+    for m in MOD_DECL_RE.finditer(code):
+        attrs = _attr_spans_before(code, m.start())
+        out.append({
+            "name": m.group(1),
+            "start": m.start(),
+            "attrs": attrs,
+            "gated": any(CFG_TEST_RE.fullmatch(code[a:b]) for a, b in attrs),
+            "depth": code.count("{", 0, m.start()) - code.count("}", 0, m.start()),
+        })
+    return out
+
+
+def _decl_path_attr(src: str, code: str, path: str, decl: dict):
+    """The `#[path = "..."]` value of `decl`, None when it has none. Anything
+    path-shaped that is not a plain escape-free literal is Undetermined."""
+    found = None
+    for a, b in decl["attrs"]:
+        if not PATH_WORD_RE.search(code[a:b]):
+            continue
+        rm = PATH_ATTR_RAW_RE.fullmatch(src[a:b])
+        if not PATH_ATTR_MASKED_RE.fullmatch(code[a:b]) or rm is None or found is not None:
+            raise Undetermined(
+                f"{path}: cannot resolve `mod {decl['name']};` -- non-trivial path "
+                f"attribute {src[a:b]!r}"
+            )
+        found = rm.group(1)
+    return found
+
+
+def _decl_candidates(src: str, code: str, path: str, decl: dict, via_path_attr: bool) -> list:
+    """Repo-relative candidate body files for an out-of-line `decl` in `path`."""
+    if decl["depth"] != 0:
+        raise Undetermined(
+            f"{path}: out-of-line `mod {decl['name']};` inside an inline block -- "
+            "its body path is not resolved"
+        )
+    d = posixpath.dirname(path)
+    attr = _decl_path_attr(src, code, path, decl)
+    if attr is not None:
+        joined = posixpath.normpath(posixpath.join(d, attr))
+        if posixpath.isabs(attr) or joined == ".." or joined.startswith("../"):
+            raise Undetermined(f"{path}: #[path = {attr!r}] leaves the repository")
+        return [joined]
+    if via_path_attr:
+        raise Undetermined(
+            f"{path}: `mod {decl['name']};` inside a #[path]-loaded body file -- "
+            "its body path is not resolved"
+        )
+    if _is_mod_rs_like(path):
+        home = d
+    else:
+        home = path[: -len(".rs")]
+    return [
+        posixpath.join(home, decl["name"] + ".rs"),
+        posixpath.join(home, decl["name"], "mod.rs"),
+    ]
+
+
+def _resolve_body(side: Side, src: str, code: str, path: str, decl: dict, via: bool):
+    """`(body_path, content, loaded_via_path_attr)` -- exactly one candidate must
+    exist on `side`, else Undetermined."""
+    cands = _decl_candidates(src, code, path, decl, via)
+    hits = [(c, side.read(c)) for c in cands]
+    hits = [(c, s) for c, s in hits if s is not None]
+    if len(hits) != 1:
+        why = "no body file" if not hits else "more than one body file"
+        raise Undetermined(
+            "{}: #[cfg(test)] `mod {};` declared but {} found at {} (tried {})".format(
+                path, decl["name"], why, side.label, ", ".join(cands)
+            )
+        )
+    return hits[0][0], hits[0][1], _decl_path_attr(src, code, path, decl) is not None
+
+
+def _body_surface(side: Side, body_path: str, content: str, via: bool, seen: set) -> list:
+    """Chunks for one out-of-line test body file: its whole content plus, recursively,
+    every out-of-line module it declares."""
+    if body_path in seen:
+        raise Undetermined(f"{body_path}: module declaration cycle")
+    seen.add(body_path)
+    chunks = [content]
+    code = _mask_noncode(content, body_path)
+    for decl in _module_decls(code, body_path):
+        bp, bs, bvia = _resolve_body(side, content, code, body_path, decl, via)
+        chunks.extend(_body_surface(side, bp, bs, bvia, seen))
+    return chunks
+
+
+def test_body_root(side: Side, f: str, _seen=None):
+    """The declaring (non-test) file whose `#[cfg(test)] mod x;` makes `f` an
+    out-of-line test body on `side`, or None when `f` is not one.
+
+    Candidates are the standard parent-module files and every `#[path]` declarer
+    on that side; a `mod x;` that is not itself `#[cfg(test)]` still counts when
+    its declarer is in turn a test body (nested `tests/helpers.rs`)."""
+    if not _is_rs(f) or is_tests_dir_file(f):
+        return None
+    seen = _seen if _seen is not None else set()
+    if f in seen:
+        return None
+    seen.add(f)
+    loc = posixpath.dirname(f) if posixpath.basename(f) == "mod.rs" else f[: -len(".rs")]
+    d = posixpath.dirname(loc)
+    cands = []
+    if d:
+        cands.append(d + ".rs")
+    cands += [posixpath.join(d, n) for n in _MOD_RS_NAMES]
+    cands += side.path_attr_files()
+    for c in dict.fromkeys(cands):
+        if c == f or is_tests_dir_file(c):
+            continue
+        src = side.read(c)
+        if src is None:
+            continue
+        code = _mask_noncode(src, c)
+        for decl in _module_decls(code, c):
+            if decl["depth"] != 0:
+                continue
+            attr = _decl_path_attr(src, code, c, decl)
+            if attr is None and decl["name"] != posixpath.basename(loc):
+                continue
+            if f not in _decl_candidates(src, code, c, decl, False):
+                continue
+            if decl["gated"]:
+                return c
+            root = test_body_root(side, c, seen)
+            if root is not None:
+                return root
+    return None
+
+
+def cfg_test_modules(src: str, path: str, side: Side | None = None) -> str:
     """Concatenate every `#[cfg(test)]` module body found in `src`.
 
     Brace matching skips string/char literals and comments (see
     `_matching_brace`); if a module's braces still do not balance we cannot claim
     to have inspected it, so the whole run goes undetermined rather than
     reporting on a partial read.
+
+    A `#[cfg(test)]` that is the attribute of an out-of-line `mod NAME;` (in
+    code, not in a comment or literal) contributes its resolved body FILE's
+    whole content instead, read from `side` (see the out-of-line section
+    above); unresolvable is Undetermined. Any other `#[cfg(test)]` takes the
+    next `{...}` block, and one with no `{` after it is Undetermined.
     """
     chunks = []
-    for m in re.finditer(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]", src):
+    gated_decls: dict = {}
+    if MOD_DECL_RE.search(src):
+        code = _mask_noncode(src, path)
+        for decl in _module_decls(code, path):
+            if decl["gated"]:
+                for a, b in decl["attrs"]:
+                    if CFG_TEST_RE.fullmatch(code[a:b]):
+                        gated_decls[a] = decl
+    for m in CFG_TEST_RE.finditer(src):
+        decl = gated_decls.get(m.start())
+        if decl is not None:
+            if side is None:
+                raise Undetermined(f"{path}: `mod {decl['name']};` with no side to read")
+            bp, bs, via = _resolve_body(side, src, code, path, decl, False)
+            chunks.extend(_body_surface(side, bp, bs, via, set()))
+            continue
         brace = src.find("{", m.end())
         if brace == -1:
             raise Undetermined(f"{path}: #[cfg(test)] with no module body")
@@ -473,10 +731,10 @@ def cfg_test_modules(src: str, path: str) -> str:
     return "\n".join(chunks)
 
 
-def test_surface(src: str, path: str) -> str:
+def test_surface(src: str, path: str, side: Side | None = None) -> str:
     if is_tests_dir_file(path):
         return src
-    return cfg_test_modules(src, path)
+    return cfg_test_modules(src, path, side)
 
 
 def test_fn_assertions(surface: str, path: str) -> dict:
@@ -951,6 +1209,56 @@ def worktree_content(repo: str, path: str) -> str:
         raise Undetermined(f"{path}: unreadable in the worktree: {exc}") from exc
 
 
+def blob_or_none(repo: str, rev: str, path: str):
+    """Like `blob_at`, but None (not "") for a path absent at `rev`, so an empty
+    out-of-line body file is distinguishable from a missing one."""
+    listed = git(repo, "ls-tree", "-z", "--name-only", rev, "--", path)
+    if path not in listed.split("\0"):
+        return None
+    return blob_at(repo, rev, path)
+
+
+def worktree_or_none(repo: str, path: str):
+    """Worktree content of `path`, None when it is not a regular file there."""
+    full = os.path.join(repo, path)
+    if not os.path.lexists(full):
+        return None
+    if not os.path.isfile(full):
+        raise Undetermined(f"{path}: present in the worktree but not a regular file")
+    return worktree_content(repo, path)
+
+
+_PATH_ATTR_GREP = r"#[[:space:]]*\[[[:space:]]*path[[:space:]]*="
+
+
+def grep_path_attr_files(repo: str, rev: str | None) -> list:
+    """`.rs` files containing a `#[path` attribute, at `rev` or (None) in the
+    worktree. `git grep` exits 1 for "no match", which is an answer; any other
+    non-zero exit is Undetermined."""
+    args = ["git", "-C", repo, "-c", "core.quotePath=false", "grep", "-l", "-z", "-E",
+            _PATH_ATTR_GREP]
+    if rev is not None:
+        args.append(rev)
+    args += ["--", "*.rs"]
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True)
+    except OSError as exc:
+        raise Undetermined(f"could not run git grep: {exc}") from exc
+    if proc.returncode == 1 and not proc.stdout:
+        return []
+    if proc.returncode != 0:
+        raise Undetermined(f"git grep exited {proc.returncode}: {proc.stderr.strip()}")
+    prefix = f"{rev}:" if rev is not None else ""
+    out = []
+    for tok in proc.stdout.split("\0"):
+        if not tok:
+            continue
+        if prefix and not tok.startswith(prefix):
+            raise Undetermined(f"unexpected git grep output: {tok!r}")
+        out.append(tok[len(prefix):])
+    return out
+
+
 # --- findings --------------------------------------------------------------
 
 
@@ -1146,8 +1454,47 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
 
     acked = acknowledgements(repo, merge_base, pending_msg)
 
+    base_side = Side(
+        f"base {merge_base[:12]}",
+        lambda p: blob_or_none(repo, merge_base, p),
+        lambda: grep_path_attr_files(repo, merge_base),
+    )
+    after_side = Side(
+        "worktree",
+        lambda p: worktree_or_none(repo, p),
+        lambda: grep_path_attr_files(repo, None),
+    )
+
+    # Out-of-line `#[cfg(test)] mod x;` body files are scanned as part of their
+    # DECLARING file, on each side, never under their own path: that keeps a
+    # verbatim inline -> file move equal, and keeps the body file from being
+    # counted twice or read as production code. A changed body file whose
+    # declarer did not change pulls the declarer into the scan.
+    body_base = {}
+    body_after = {}
+    for old, new in pairs:
+        if old:
+            r = test_body_root(base_side, old)
+            if r is not None:
+                body_base[old] = r
+        if new:
+            r = test_body_root(after_side, new)
+            if r is not None:
+                body_after[new] = r
+    touched = {p for pr in pairs for p in pr if p}
+    for r in list(body_base.values()) + list(body_after.values()):
+        if r not in touched:
+            pairs.append((r, r))
+            touched.add(r)
+
     results = []
     for old, new in sorted(set(pairs), key=lambda pr: (pr[1] or "", pr[0] or "")):
+        if old in body_base:
+            old = None
+        if new in body_after:
+            new = None
+        if old is None and new is None:
+            continue
         rep = new or old  # attribute the finding to the surviving/current path
         before_src = blob_at(repo, merge_base, old) if old else ""
         after_src = worktree_content(repo, new) if new else ""
@@ -1160,9 +1507,13 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
             found = py_findings_for(rep, before, after)
         else:
             before = (
-                counts(test_surface(before_src, old), old) if before_src else counts("")
+                counts(test_surface(before_src, old, base_side), old)
+                if before_src else counts("")
             )
-            after = counts(test_surface(after_src, new), new) if after_src else counts("")
+            after = (
+                counts(test_surface(after_src, new, after_side), new)
+                if after_src else counts("")
+            )
             found = findings_for(rep, before, after)
         for p, kind, detail in found:
             results.append(

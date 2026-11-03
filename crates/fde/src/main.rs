@@ -3,17 +3,25 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! fde — Forward Deployed Engineer harness.
 //!
-//! **SCAFFOLD.** Every subcommand below exists and parses, but every answer is
-//! currently `Undetermined`, so every subcommand exits 2. The contract below is
-//! what the implementation must meet; tests may rely on it.
+//! **PARTIAL SCAFFOLD.** Every subcommand below exists and parses. `resolve` is
+//! implemented (`target.rs`, `git.rs`); every other subcommand still answers
+//! `Undetermined`, so it exits 2. The contract below is what the
+//! implementation must meet; tests may rely on it.
 //!
 //! # CLI contract
 //!
-//! `TARGET` is always an optional positional path. Omitted, it is the
-//! invocation cwd. A relative `TARGET` resolves against the cwd. Either way the
-//! target is the canonical (symlink-resolved) **git top-level** containing
-//! that path, and all fde state for it is keyed by that canonical top-level
-//! (so two spellings of the same repo share one state).
+//! `TARGET` is always an optional positional path. Omitted, the target is the
+//! **git top-level containing the invocation cwd** (found by
+//! `git rev-parse --show-toplevel` run in the cwd); there is no fallback to the
+//! bare cwd — a cwd outside any git work tree is undetermined (exit 2). A
+//! relative `TARGET` resolves against the invocation cwd. Either way the path
+//! must exist, is canonicalized (symlink-resolved), and the target is the
+//! canonical **git top-level** containing it (the whole top-level; sub-project
+//! markers are not consulted). All fde state for it is keyed by that canonical
+//! top-level only — the key is the hex SHA-256 of the canonical path — so two
+//! spellings of the same repo share one state. Inherited `GIT_DIR` /
+//! `GIT_WORK_TREE` / `GIT_INDEX_FILE` (and the other repo-relocating `GIT_*`)
+//! are removed from the git probe and do not change the answer.
 //!
 //! | command | stdout | exit |
 //! |---|---|---|
@@ -44,6 +52,7 @@
 
 mod evidence;
 mod gate;
+mod git;
 mod ratify;
 mod target;
 
@@ -64,7 +73,7 @@ const EXIT_NEGATIVE: i32 = 1;
 #[command(
     name = "fde",
     version,
-    about = "Forward Deployed Engineer harness (scaffold: every command answers undetermined, exit 2)"
+    about = "Forward Deployed Engineer harness (partial scaffold: resolve is implemented; every other command answers undetermined, exit 2)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -75,12 +84,12 @@ struct Cli {
 enum Cmd {
     /// Print the resolved target as JSON {"root", "state_key"}.
     Resolve {
-        /// Target path (default: cwd; relative paths resolve against cwd).
+        /// Target path (default: the git top-level of the cwd; relative paths resolve against the cwd).
         target: Option<PathBuf>,
     },
     /// Ratify FILE as the spec of the target.
     Ratify {
-        /// Target path (default: cwd; relative paths resolve against cwd).
+        /// Target path (default: the git top-level of the cwd; relative paths resolve against the cwd).
         target: Option<PathBuf>,
         /// The spec file to ratify.
         #[arg(long)]
@@ -88,7 +97,7 @@ enum Cmd {
     },
     /// Exit 0 ratified / 1 unratified / 2 undetermined.
     Status {
-        /// Target path (default: cwd; relative paths resolve against cwd).
+        /// Target path (default: the git top-level of the cwd; relative paths resolve against the cwd).
         target: Option<PathBuf>,
     },
     /// PreToolUse hook entry: reads the hook payload on stdin.
@@ -100,7 +109,7 @@ enum Cmd {
     },
     /// Print the ratification and evidence report for the target.
     Report {
-        /// Target path (default: cwd; relative paths resolve against cwd).
+        /// Target path (default: the git top-level of the cwd; relative paths resolve against the cwd).
         target: Option<PathBuf>,
     },
 }
@@ -115,7 +124,7 @@ enum EvidenceCmd {
     Pass(RecordArgs),
     /// Check that every requirement has complete evidence.
     Verify {
-        /// Target path (default: cwd; relative paths resolve against cwd).
+        /// Target path (default: the git top-level of the cwd; relative paths resolve against the cwd).
         target: Option<PathBuf>,
     },
 }
@@ -128,7 +137,7 @@ struct RecordArgs {
     /// Command to run.
     #[arg(long)]
     cmd: String,
-    /// Target path (default: cwd; relative paths resolve against cwd).
+    /// Target path (default: the git top-level of the cwd; relative paths resolve against the cwd).
     target: Option<PathBuf>,
 }
 

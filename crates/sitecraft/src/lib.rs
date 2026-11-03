@@ -26,7 +26,7 @@
 //! | [`ENV_NODE`] `SITECRAFT_NODE` | the `node` executable `check pages` and the `builtin:threejs-render` capability spawn | `node` on `PATH` |
 //! | [`ENV_BLENDER`] `SITECRAFT_BLENDER` | the Blender executable for `builtin:blender-headless` (set = only that path) | `blender` on `PATH`, then `/Applications/Blender.app/Contents/MacOS/Blender` |
 //! | [`ENV_NPM`] `SITECRAFT_NPM` | the `npm` executable `check security` spawns for `npm audit` | `npm` on `PATH` |
-//! | [`ENV_STATE_DIR`] `SITECRAFT_STATE_DIR` | where the trust store and dev-server state files live | `$HOME/.sitecraft` |
+//! | [`ENV_STATE_DIR`] `SITECRAFT_STATE_DIR` | where the trust store, dev-server state files, capability result records and check history live | `$HOME/.sitecraft` |
 //! | [`ENV_MARKETPLACE`] `SITECRAFT_MARKETPLACE` | path to the `marketplace.json` that `decide classify` scans for existing dedicated plugins | none (unset = undetermined) |
 //!
 //! # Three answers, not two
@@ -47,6 +47,7 @@ pub mod check;
 pub mod config;
 pub mod decide;
 pub mod gate;
+pub mod history;
 pub mod init;
 pub mod serve;
 pub mod trust;

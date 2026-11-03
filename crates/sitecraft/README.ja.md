@@ -24,9 +24,25 @@
 | `sitecraft capability probe N` | 能力がこのマシンで動くかを確かめ、stdout に `{"capability","result","reason"}` を 1 行出す（`feasible` 0 / `infeasible` 1 / `undetermined` 2、120 秒で `timeout` の 2）。何も書かない。完成の根拠にはならない |
 | `sitecraft check capability N` | relevant な能力の verify を実行して判定する（300 秒で `timeout` の 2）。結果を result record に書く（書けなければ 2） |
 | `sitecraft trust` | 現在の `sitecraft.toml` の sha256 と、`sitecraft/decisions.toml` の `command` 能力の argv の digest を trust store に記録する（人間が実行する） |
+| `sitecraft status` | check 履歴から検査ごとの状態を stdout に `{"checks":[{name, last_exit, consecutive_same_failure, elapsed_ms, state}]}` で出す（下の「check 履歴と status」）。全検査が ok / slow なら 0、failing / stuck / waiting-human があれば 1、履歴が無い・読めない・パースできない行がある・state dir や trust が判定できないなら 2（stdout は空） |
 | `sitecraft gate` | Stop hook（stdin の Stop payload を読む） |
 
 全サブコマンド共通で `--root <dir>` を取る（既定は cwd。`gate` は payload の `cwd` を使う。`init` は引数の `<dir>` を使う）。
+
+### check 履歴と status
+
+`decide check`・`check pages`・`check security`・`check capability <name>` は、CLI でも Stop gate 経由でも、1 回ごとに
+`<state>/check-history/<sha256(正規化した root)>.jsonl` に `{"name","exit","fingerprint","elapsed_ms","timed_out","at"}` を
+1 行追記する（`name` は `decide` / `pages` / `security` / `capability:<name>`）。追記できなければ（state dir が決まらない場合を含む）
+その検査は exit 2。`fingerprint` は exit 0 なら null、時間切れなら `sha256("timeout")`、それ以外は stdout と stderr を連結し、
+時刻（RFC 3339 / ISO 8601）→ `<time>`、絶対パス → `<path>`、数字列 → `0` の順に置換した文字列の sha256 hex。gate は各検査の
+CLI と同じ報告行を（表示せずに）指紋に使う。gate の `pages` 行の `elapsed_ms` は dev server の起動・停止を含む。
+
+`sitecraft status` の `consecutive_same_failure` は履歴の末尾から exit ≠ 0 かつ最新と同じ指紋の行が続く数。`state` は
+`waiting-human`（`pages` と `builtin:threejs-render` 種の能力は `sitecraft.toml` が、`command` 種の能力は argv の digest が
+いま未 trust）> `stuck`（3 以上）> `failing`（最新の exit ≠ 0）> `slow`（最新が exit 0 で `elapsed_ms` が時間制限の 50% 以上。
+制限は pages が `check pages` の deadline、security が npm audit の 300 秒、能力が 300 秒。`decide` は slow にならない）> `ok`
+の優先順で 1 つ。decisions.toml に無い能力の行は trust 不要として扱う（`check capability` は何も実行せずに拒否するため）。
 
 ### 整合性規則（`decide check`）
 
@@ -81,6 +97,8 @@
     Write/Edit/MultiEdit/NotebookEdit があるときだけ。transcript が無い・読めない・空・パースできない行がある・
     書き込み先の無い書き込み呼び出しがある・sub-agent が走った（その編集は別の transcript にある）ときは
     変更有無を判定不能として**実行する**（省略側に倒さない）。gate が起動した dev server は drop guard で必ず止める。
+- `decide check`・`check security`・（実行したときの）pages の段は、それぞれ check 履歴に 1 行追記する。追記できなければ
+  その検査は undetermined（block）。
 - stdin が空でない非 JSON — block。空の stdin は手動実行（判定を stderr、終了コードは上の規約）。
 - give-up は bounded: 同一セッションで `max_attempts`（trust 済み設定の値を 1..=10 に clamp。未 trust なら既定 3）
   回 block した次の stop は、`NOTHING WAS VERIFIED` を含む `systemMessage` 付きで通す。

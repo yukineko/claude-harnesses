@@ -31,7 +31,7 @@ use crate::Verdict;
 use harness_core::verdict::Reason;
 
 /// Upper bound for one `npm audit` run; a hung audit is undetermined.
-const AUDIT_TIMEOUT: Duration = Duration::from_secs(300);
+pub(crate) const AUDIT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Run the security check for `root`.
 ///
@@ -876,6 +876,7 @@ fn audit(root: &Path) -> Verdict {
             Ok(true) => break,
             Ok(false) => {
                 if start.elapsed() > AUDIT_TIMEOUT {
+                    crate::history::note_timeout();
                     kill_group(&child);
                     let _ = child.wait();
                     return audit_undet(format!("timed out after {}s", AUDIT_TIMEOUT.as_secs()));

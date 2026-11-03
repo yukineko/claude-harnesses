@@ -236,6 +236,24 @@ sitecraft check capability <name>   # relevant な能力ごとに
 - `check capability <name>` — 能力の verify を実行して判定する（300 秒で打ち切り exit 2）。`builtin:blender-headless` は古い GLB / render を消してから Blender を走らせ、GLB ヘッダ（`glTF`・version 2・長さ一致）と render の描画（四隅の最頻色を背景とし、どれかのチャネルが 16 を超えて違う画素が 1% 以上）を確かめる。`builtin:threejs-render` は trust 済みの `sitecraft.toml` の dev server（止まっていれば起動し、自分で起動したものだけ止める）でページを開き、selector の要素のスクリーンショットに同じ描画規則を当てる。`command` は trust 済みの argv を root で実行する。結果は state dir の result record に残り、Stop gate はそれを読む（gate 自身は能力を実行しない）。入力（script・`verify.inputs`・threejs では `sitecraft.toml` と `web_globs`）や `[capabilities.<name>]` を変えたら再実行する。
 - exit 1 は指摘を直して再実行。exit 2 は検査が走れなかった原因（未ビルド・Playwright 未導入・lockfile 無し・Blender 不在・未 trust 等）を直して再実行。
 
+### 停滞の検知と対処（sitecraft status）
+
+この手順の対象は `/sitecraft` で対象アプリを作っている最中のビルドループ（Phase 8〜10 の実装・検査の繰り返し）に限る。harness repo 自体の開発中に止まることはこの手順の対象外。
+
+`sitecraft decide check`・`sitecraft check pages`・`sitecraft check security`・`sitecraft check capability <name>` は、CLI でも Stop gate 経由でも、1 回ごとに state dir の check 履歴へ 1 行（名前・exit・失敗の指紋・所要時間・時間切れか・時刻）を追記する（追記できなければその検査は exit 2）。失敗の指紋は出力の時刻・絶対パス・数字を均した sha256 なので、同じ原因の失敗は同じ指紋になる。検査を再実行する前に `sitecraft status` を実行し、stdout の `{"checks":[{name, last_exit, consecutive_same_failure, elapsed_ms, state}]}` の `state` を読む（exit 0 = 全検査が ok / slow、1 = failing / stuck / waiting-human がある、2 = 履歴が無い・読めない・壊れている、または判定できない。2 は「問題なし」ではない）。
+
+- `ok` / `slow` — 先へ進む（`slow` は時間制限の半分以上かかった成功。止まってはいないが、遅さの原因はユーザーに示す）。
+- `failing` — 通常どおり出力を読んで直し、再実行する。
+- `stuck`（同じ指紋の失敗が 3 回以上連続）— 同じ検査の再実行ループをそこで止める。直す前に、原因を次の閉じた基準で切り分けて、どれに当たったかを記録する。
+
+**ハーネス側**の基準: (a) sitecraft が panic・内部エラーで終わる。(b) 検査の判定が直接の観測と食い違う（例: 手で開いた GLB・画面は正常なのに violation）。(c) この SKILL の手順どおりのコマンドが存在しない・引数が拒否される。(d) 検査が対象アプリの状態に関係なく同じ指紋を出す（アプリを変えても指紋が変わらない）。(a)〜(d) のどれにも当たらなければ**対象アプリ側**。
+
+ハーネス側なら、harness repo（`SITECRAFT_MARKETPLACE` の marketplace.json がある repo）の worktree で、その停滞を再現する失敗テストを書いて RED を観測し、そのテストを添えて `backlog add` で起票する。修正して rollout してから対象アプリの作業を再開する。テストの無い起票や、RED を観測していないテストで済ませない。
+
+対象アプリ側なら、アプリを直して再実行する。直しても同じ指紋の stuck がさらに 3 回続いたら、それ以上ループせず、切り分けの記録と出力を示してユーザーに AskUserQuestion で Ask する。
+
+`waiting-human` は停滞ではない。`pages` と、`builtin:threejs-render` 種の能力は `sitecraft.toml` の trust、`command` 種の能力は argv（D2-trust）の trust が無いと走れない。どのファイル（`sitecraft.toml` か `sitecraft/decisions.toml` の `verify.argv`）に `sitecraft trust` が要るかを示して、人間に `sitecraft trust` を実行してもらうよう AskUserQuestion で Ask する。trust を待ち続けない・同じ検査を繰り返さない・LLM が代わりに `sitecraft trust` を実行しない。
+
 ### Phase 11 — 完成報告
 
 `sitecraft check pages`・`sitecraft check security`・`sitecraft decide check`、および **relevant な能力すべての `sitecraft check capability <name>`** が**すべて exit 0** になったことを確認してから、プロトタイプ完成を報告する。報告には各コマンドの実行結果（exit code）を含める。1 つでも exit 1 / exit 2 が残っていれば完成と報告しない — 残っている検査とその出力をそのまま報告する。

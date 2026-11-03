@@ -1,38 +1,4 @@
 [[task]]
-id = "03885f11"
-title = "blastguard: writes to .git/config are not protected (.git/config missing from PROTECTED_GLOBS)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """Already present before 0.2.218 (found 2026-11-03 by the FP3 test author). python3 - <<'EOF' open('.git/config','a').write('[core] hooksPath = /tmp'), echo x >> .git/config and python3 -c "open('.git/config','a')..." are all ALLOWED, while git config core.hooksPath /tmp is denied, so a plain file write can set hooksPath and disable the gates. exclude.rs PROTECTED_GLOBS has .git/hooks/** but not .git/config."""
-created_at = 1793672951
-updated_at = 1793672951
-weight = 0.0
-issue_number = 1493
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1493"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test python_stdin_git_string_fp_20261103 control_python_stdin_program_appending_git_config"
-rev = "6a3ef5da9909fcf5e796b092f9f49b2be2164e5a"
-observed_at = 1793672951
-detail = """
-exit 101: wed
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.33s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
-     Running tests/python_stdin_git_string_fp_20261103.rs (target/debug/deps/python_stdin_git_string_fp_20261103-752bb3b1e3271a9d)
-error: test failed, to rerun pass `-p blastguard --test python_stdin_git_string_fp_20261103`"""
-
-[[task]]
 id = "658b7839"
 title = "blastguard FP4: python3 -c read-only open() misattributed as the write target"
 project = "/Users/yuki/src/harness"

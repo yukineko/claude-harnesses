@@ -440,7 +440,9 @@ const READ_ONLY_GIT: [&str; 4] = ["status", "log", "rev-parse", "ls-files"];
 ///   `--no-pager`, with a [`READ_ONLY_GIT`] subcommand), no word of it is
 ///   expanded by the shell (`$`, `*`, `?`, `[`, `{` outside single quotes),
 ///   every option given to `rg` / `git` is on its allowlist ([`RG_FLAGS`],
-///   [`git_flags`]; a `git log` argument containing `%G` is rejected), and
+///   [`git_flags`]; a `git log` argument containing `%G` is rejected) —
+///   options are parsed value-aware ([`check_flags`]), so a `--` that is an
+///   option's value (`rg -e -- --pre=PROG`) does not end the check — and
 ///   there is no output redirect other than to `/dev/null` or an fd
 ///   duplicate;
 /// - `Undetermined` otherwise: command / process substitution, backticks,
@@ -572,66 +574,114 @@ fn simple_command_is_read_only(cmd: &[Tok]) -> Result<(), String> {
 struct FlagSpec {
     /// Long options without a value (`--name`, exact match).
     long_bool: &'static [&'static str],
-    /// Long options with a value (`--name=VALUE` or `--name VALUE`).
+    /// Long options with a required value (`--name=VALUE` or `--name VALUE`:
+    /// without `=`, the next word is the value whatever it is, `--`
+    /// included).
     long_val: &'static [&'static str],
+    /// Long options with an optional value, which is only ever attached
+    /// (`--name` or `--name=VALUE`; the next word is never the value).
+    long_opt: &'static [&'static str],
     /// Short options without a value; they may be clustered (`-abc`).
     short_bool: &'static str,
-    /// Short options with a value; the rest of the cluster, or the next word,
-    /// is that value.
+    /// Short options with a required value; the rest of the cluster (`-eX`,
+    /// `-ieX`) is that value, or, when the option ends the cluster (`-e`,
+    /// `-ie`), the next word is, whatever it is (`--` included).
     short_val: &'static str,
+    /// Short options with an optional value, which is only ever the rest of
+    /// the cluster (`-u`, `-uno`; the next word is never the value).
+    short_opt: &'static str,
     /// `-<digits>` (git log's `-5`) is accepted.
     digits: bool,
 }
 
 /// Check every option-looking word of `args` against `spec`.
 ///
-/// A word is option-looking when it starts with `-` and is not `-` itself,
-/// up to a `--` word (after which every word is an operand). A word that is
-/// the value of a preceding option is checked too when it starts with `-`
-/// (a pattern such as `-e -x` is then rejected: conservative, never
-/// permissive). Operands are not options and are not restricted here; a
-/// web-file operand is caught by [`bash_change`]'s mention check.
+/// Parsing is value-aware: an option of [`FlagSpec::long_val`] written
+/// without `=`, or a cluster ending in a [`FlagSpec::short_val`] option,
+/// consumes the next word as its value, so a `--` in that position is a value
+/// (rg reads `rg -e -- --pre=PROG` as pattern `--` plus option `--pre`) and
+/// does not end option parsing. Any other `--` word ends it (every later word
+/// is an operand). Each allowlisted option is classified as taking no value,
+/// a required value or an optional attached value; an option on no list is
+/// rejected (whether it takes a value is then not known either).
+///
+/// A word is option-looking when it starts with `-` and is not `-` itself.
+/// A consumed value that starts with `-` (other than `--` / `-`) is checked
+/// too, as if it were an option (a pattern such as `-e -x` is then rejected:
+/// conservative, never permissive); it does not itself consume a value.
+/// Operands are not options and are not restricted here; a web-file operand
+/// is caught by [`bash_change`]'s mention check.
 fn check_flags(cmd: &str, args: &[&str], spec: &FlagSpec) -> Result<(), String> {
-    let reject = |a: &str| -> Result<(), String> {
-        Err(format!(
-            "`{cmd}` option {a:?} is not on its read-only allowlist"
-        ))
-    };
-    for &a in args {
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i];
+        i += 1;
         if a == "--" {
             break;
         }
-        if let Some(long) = a.strip_prefix("--") {
-            let (name, has_value) = match long.split_once('=') {
-                Some((n, _)) => (n, true),
-                None => (long, false),
-            };
-            let ok =
-                spec.long_val.contains(&name) || (!has_value && spec.long_bool.contains(&name));
-            if !ok {
-                return reject(a);
-            }
-            continue;
-        }
-        let Some(short) = a.strip_prefix('-') else {
-            continue;
-        };
-        if short.is_empty() {
-            continue;
-        }
-        if spec.digits && short.bytes().all(|b| b.is_ascii_digit()) {
-            continue;
-        }
-        for c in short.chars() {
-            if spec.short_val.contains(c) {
-                break;
-            }
-            if !spec.short_bool.contains(c) {
-                return reject(a);
+        if check_option(cmd, a, spec)? {
+            if let Some(&value) = args.get(i) {
+                i += 1;
+                if value != "--" {
+                    check_option(cmd, value, spec)?;
+                }
             }
         }
     }
     Ok(())
+}
+
+/// Check one word against `spec`: `Err` when it is an option not on the
+/// allowlist, else whether the NEXT word is this option's value.
+fn check_option(cmd: &str, a: &str, spec: &FlagSpec) -> Result<bool, String> {
+    let reject = || -> Result<bool, String> {
+        Err(format!(
+            "`{cmd}` option {a:?} is not on its read-only allowlist"
+        ))
+    };
+    if let Some(long) = a.strip_prefix("--") {
+        return match long.split_once('=') {
+            Some((name, _)) => {
+                if spec.long_val.contains(&name) || spec.long_opt.contains(&name) {
+                    Ok(false)
+                } else {
+                    reject()
+                }
+            }
+            None => {
+                if spec.long_val.contains(&long) {
+                    Ok(true)
+                } else if spec.long_bool.contains(&long) || spec.long_opt.contains(&long) {
+                    Ok(false)
+                } else {
+                    reject()
+                }
+            }
+        };
+    }
+    let Some(short) = a.strip_prefix('-') else {
+        return Ok(false);
+    };
+    if short.is_empty() {
+        return Ok(false);
+    }
+    if spec.digits && short.bytes().all(|b| b.is_ascii_digit()) {
+        return Ok(false);
+    }
+    for (at, c) in short.char_indices() {
+        if spec.short_val.contains(c) {
+            // The value is the rest of the cluster, or the next word.
+            return Ok(at + c.len_utf8() == short.len());
+        }
+        if spec.short_opt.contains(c) {
+            // The value, if any, is the rest of the cluster.
+            return Ok(false);
+        }
+        if !spec.short_bool.contains(c) {
+            return reject();
+        }
+    }
+    Ok(false)
 }
 
 /// ripgrep options that neither run a program nor write a file, taken from
@@ -749,8 +799,13 @@ const RG_FLAGS: FlagSpec = FlagSpec {
         "sortr",
         "generate",
     ],
+    // rg has no option with an optional value: every value above is
+    // required (`-e PATTERN, --regexp=PATTERN` in `rg --help`), and rg takes
+    // the next word as it whatever it is.
+    long_opt: &[],
     short_bool: "sivxUFPSawL.ubnN0opqHIclhV",
     short_val: "efEmjgdtTABCMr",
+    short_opt: "",
     digits: false,
 };
 
@@ -780,9 +835,14 @@ fn git_flags(sub: &str) -> Option<FlagSpec> {
                 "no-renames",
                 "renames",
             ],
-            long_val: &["porcelain", "untracked-files", "ignored"],
+            // `git status -h`: `--porcelain[=<version>]`,
+            // `-u, --untracked-files[=<mode>]`, `--ignored[=<mode>]` — all
+            // optional, attached only.
+            long_val: &[],
+            long_opt: &["porcelain", "untracked-files", "ignored"],
             short_bool: "sbz",
-            short_val: "u",
+            short_val: "",
+            short_opt: "u",
             digits: false,
         },
         "log" => FlagSpec {
@@ -807,6 +867,11 @@ fn git_flags(sub: &str) -> Option<FlagSpec> {
                 "date-order",
                 "no-color",
             ],
+            // Revision options (git's revision.c): `--max-count`, `--author`,
+            // `--grep`, … and `-n` take the next word when not attached;
+            // `--format=` / `--pretty[=]` / `--abbrev[=]` are attached only.
+            // (git log also ends options at the first `--` word anywhere, so
+            // consuming a `--` as a value only ever checks more words.)
             long_val: &[
                 "max-count",
                 "skip",
@@ -817,13 +882,12 @@ fn git_flags(sub: &str) -> Option<FlagSpec> {
                 "author",
                 "committer",
                 "grep",
-                "format",
-                "pretty",
                 "date",
-                "abbrev",
             ],
+            long_opt: &["format", "pretty", "abbrev"],
             short_bool: "",
             short_val: "n",
+            short_opt: "",
             digits: true,
         },
         "rev-parse" => FlagSpec {
@@ -842,9 +906,12 @@ fn git_flags(sub: &str) -> Option<FlagSpec> {
                 "verify",
                 "quiet",
             ],
-            long_val: &["abbrev-ref", "short"],
+            // `--abbrev-ref[=<mode>]`, `--short[=<n>]`: attached only.
+            long_val: &[],
+            long_opt: &["abbrev-ref", "short"],
             short_bool: "q",
             short_val: "",
+            short_opt: "",
             digits: false,
         },
         "ls-files" => FlagSpec {
@@ -864,9 +931,13 @@ fn git_flags(sub: &str) -> Option<FlagSpec> {
                 "error-unmatch",
                 "deduplicate",
             ],
-            long_val: &["exclude", "abbrev", "format"],
+            // `git ls-files -h`: `-x, --exclude <pattern>`,
+            // `--format <format>` (required), `--abbrev[=<n>]` (optional).
+            long_val: &["exclude", "format"],
+            long_opt: &["abbrev"],
             short_bool: "zcdmoisktuvf",
             short_val: "x",
+            short_opt: "",
             digits: false,
         },
         _ => return None,

@@ -229,12 +229,25 @@ fn signal_group(pgid: i32, sig: libc::c_int) -> Result<(), String> {
 
 /// Wait (bounded) until the group is gone, reaping `child` (our own leader,
 /// if we spawned it) so its zombie does not keep the group alive.
+///
+/// Without a `child` handle the leader may still be our own child: a
+/// process that ran [`start`] and then [`stop`] (the Stop gate, `check
+/// capability`) dropped the handle in `start`. Its unreaped zombie keeps the
+/// group id in use, and macOS answers `killpg(pgid, 0)` on a zombie-only
+/// group with EPERM, so it is reaped here with `waitpid(pgid, WNOHANG)`.
+/// That reaps only a child of this process; for any other pid it fails with
+/// ECHILD, which is ignored (nothing of ours to reap).
 fn wait_gone(pgid: i32, child: &mut Option<&mut Child>, within: Duration) -> Result<bool, String> {
     let deadline = Instant::now() + within;
     loop {
         if let Some(c) = child.as_mut() {
             c.try_wait()
                 .map_err(|e| format!("cannot reap dev-server leader {pgid}: {e}"))?;
+        } else {
+            let mut status: libc::c_int = 0;
+            // SAFETY: waitpid on one specific pid with WNOHANG; it only ever
+            // reaps a terminated child of this process.
+            unsafe { libc::waitpid(pgid, &mut status, libc::WNOHANG) };
         }
         if group_liveness(pgid)? == Group::Gone {
             return Ok(true);

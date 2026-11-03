@@ -33,11 +33,37 @@ The `/sitecraft` skill asks the user every design decision the purpose needs, re
   is exit 1, more than 10 s for one path is exit 2.
 - `sitecraft check security` — secrets (printed redacted) and `.env` values in build output, dangerous
   HTML sinks in sources, `npm audit --json` high/critical (judged from the JSON shape, not the exit code).
+- `sitecraft decide capability --name N --relevance relevant|irrelevant [--how H --done-when D
+  --verify-kind K …]` — records `[capabilities.N]`, a capability beyond the web app. The verify kinds
+  are exactly `builtin:blender-headless` (`--script --glb --render`), `builtin:threejs-render`
+  (`--page /… [--selector S]`, default `canvas`) and `command` (repeated `--argv`, at least one
+  `--input` glob). Invalid input is exit 2 with nothing changed. `decide check` is exit 1 for a
+  capability without a relevance, or a relevant one missing how / done_when / verify, and exit 2 for an
+  unknown key, a wrong type or an unknown kind.
+- `sitecraft capability probe N` — prints one `{"capability","result","reason"}` line: `feasible` 0 /
+  `infeasible` 1 / `undetermined` 2 (`timeout` after 120 s). Writes nothing; not completion evidence.
+  Blender is `$SITECRAFT_BLENDER` when set (only that), else `blender` on `PATH`, else
+  `/Applications/Blender.app/Contents/MacOS/Blender`.
+- `sitecraft check capability N` — runs a relevant capability's verify (exit 2 `timeout` after 300 s):
+  the blender kind deletes the old outputs, runs Blender headless and checks the GLB header (`glTF`,
+  version 2, length = file size) and the render; the threejs kind needs a trusted `sitecraft.toml`,
+  starts the dev server if it is stopped (and stops only a server it started) and screenshots the
+  selector's element; the command kind runs the trusted argv in the root (exit 0 → 0, 2 → 2, else 1).
+  Pixel rule: background = most frequent corner colour, a pixel is drawn when a channel differs by more
+  than 16, at least 1 % must be drawn. Every run writes
+  `<state>/capability-results/<sha256(root)>/<name>.json` (`{name, exit, input_hash,
+  sitecraft_version, at}`) by temp file + rename; an unwritable record makes the check exit 2.
 - `sitecraft trust` — a human records the sha256 of `sitecraft.toml`; an untrusted or changed file is never run.
+  In the same write it records, under `<root>#capabilities`, the sha256 of the name-sorted
+  `[[name, argv], …]` JSON of the `command` capabilities (removed when there is none). A changed argv,
+  or an unreadable trust store, makes `check capability` exit 2 without running anything.
 - `sitecraft gate` — Stop hook under `harness_core::gate::run::run_guarded` (gate name `sitecraft`).
   No `sitecraft.toml`: allowed, one `not-configured` line appended to the state dir. Otherwise it
   combines trust, `decide check` (pending answers and V1-V5; the gate does **not** require
-  `[purpose]`, only the CLI `decide check` does), `check security` and — only when the transcript shows a
+  `[purpose]`, only the CLI `decide check` does), `check security`, the result records of every relevant
+  capability (missing, failed, other sitecraft version, changed inputs or unreadable → block naming
+  `sitecraft check capability <name>`; the gate never runs Blender, Chromium or a capability command)
+  and — only when the transcript shows a
   Write/Edit to a `web_globs` file, or when that cannot be determined — `serve start` + `check pages` +
   `serve stop` with `Verdict::worst_of`. Bounded give-up after `max_attempts` with a
   `NOTHING WAS VERIFIED` systemMessage.

@@ -3,7 +3,10 @@
 //! Runs through `harness_core::gate::run::run_guarded` (gate name
 //! `sitecraft`; a panic blocks). In a repo with `sitecraft.toml` it combines,
 //! with [`Verdict::worst_of`]: trust of the config, `decide check`,
-//! `check security`, and — only when the session wrote a file matching
+//! `check security`, the result records of every relevant capability
+//! (rulings D5: missing / failed / other-version / stale-input / unreadable →
+//! block naming `sitecraft check capability <name>`; the gate never runs a
+//! capability itself), and — only when the session wrote a file matching
 //! `web_globs`, or when that cannot be determined — `serve start` +
 //! `check pages` + `serve stop`. A repo without `sitecraft.toml` is allowed
 //! and a `not-configured` line is appended to the state dir. Give-up is
@@ -125,7 +128,7 @@ fn evaluate(input: &HookInput, state: &Path) -> (Verdict, (u32, i64)) {
         Ok(r) => r,
         Err(why) => return (Verdict::undetermined(why), DEFAULT_BUDGET),
     };
-    let cfg = match config::load(&root) {
+    let (cfg, cfg_bytes) = match config::load(&root) {
         Loaded::Absent => return (not_configured(state, &root, input), DEFAULT_BUDGET),
         Loaded::Undetermined(why) => {
             return (
@@ -138,7 +141,7 @@ fn evaluate(input: &HookInput, state: &Path) -> (Verdict, (u32, i64)) {
         }
         Loaded::Config(cfg, bytes) => {
             match trust::check_bytes(state, &root, &config::path_for(&root), &bytes) {
-                Trust::Trusted => cfg,
+                Trust::Trusted => (cfg, bytes),
                 // Nothing from an unapproved file is honoured, including its
                 // give-up budget: the built-in default bounds this block.
                 Trust::Untrusted(why) => {
@@ -184,8 +187,46 @@ fn evaluate(input: &HookInput, state: &Path) -> (Verdict, (u32, i64)) {
             Some(pages_with_server(state, &root))
         }
     };
-    let v = Verdict::worst_of([decide, security].into_iter().chain(pages));
+    let caps = capabilities(state, &root, &cfg, &cfg_bytes);
+    let v = Verdict::worst_of([decide, security, caps].into_iter().chain(pages));
     (v, budget)
+}
+
+/// The D5 capability check: the result records of every relevant
+/// capability, compared with the current inputs. Spawns nothing (no
+/// Blender, no Chromium, no capability command). An absent decision record
+/// or one without relevant capabilities is `Clean` (nothing is added; `decide
+/// check` already judges the record itself); an unreadable record or
+/// unusable `[capabilities]` is `Undetermined`.
+fn capabilities(state: &Path, root: &Path, cfg: &Config, cfg_bytes: &[u8]) -> Verdict {
+    let d = match record::load(root) {
+        Determination::Known(None) => return Verdict::from_findings(Vec::new()),
+        Determination::Known(Some(d)) => d,
+        Determination::Undetermined(why) => {
+            return Verdict::undetermined(format!(
+                "capabilities: undetermined: the decision record cannot be read ({}), so the capability results cannot be judged; fix it, then run `sitecraft check capability <name>` for each relevant capability",
+                why.as_str()
+            ))
+        }
+    };
+    let caps = match d.parsed_capabilities() {
+        Ok(c) => c,
+        Err(e) => {
+            return Verdict::undetermined(format!(
+                "capabilities: undetermined: [capabilities] is unusable ({e}); fix it with `sitecraft decide capability`, then run `sitecraft check capability <name>`"
+            ))
+        }
+    };
+    crate::capability::results::freshness(
+        state,
+        root,
+        &d.capabilities,
+        &caps,
+        Some(crate::capability::results::WebInputs {
+            toml_bytes: cfg_bytes,
+            web_globs: &cfg.web_globs,
+        }),
+    )
 }
 
 /// Prefix a check's non-clean reason with its name and a fix hint. `Clean`

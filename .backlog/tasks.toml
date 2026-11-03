@@ -320,3 +320,32 @@ exit 101: rness-worktrees/session-c4aa3733-fixes/crates/harness-core)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 8.77s
      Running tests/closure_evidence.rs (target/debug/deps/closure_evidence-221df5dead63d61c)
 error: test failed, to rerun pass `-p backlog --test closure_evidence`"""
+
+[[task]]
+id = "a09d8297"
+title = "condukt circuit breaker: releasing a claimed item excluded for overlap is logged 'unspecified' and counted as a failure"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-03 at condukt 0.7.322 (rev 3227fcd7). A flow driver claimed 9 items, re-checked overlap after claiming and excluded 3 (#1511/#1517 scope_overlap with a live blastguard lease, #1518 escalated design question). state release-task accepts only --outcome done|failed; omitted is logged 'unspecified', which circuit check counts as a failure, so run flow-c4aa3733-70d7-4ffe-b0e7-4c370c052e65 tripped verbatim: reason failure_streak, streak 3, streak_cap 3, streak_source release_log, before any work started. Repro: crates/condukt/tests/release_excluded_not_failure.rs at 4ad4c187 (RED: clap rejects --outcome excluded). Two readings: (a) defect: an exclusion is neither success nor failure and needs its own outcome that the streak skips; (b) intended: claiming then excluding is wasted work and should count. Distinguish: the flow skill tells drivers to re-check overlap after claiming, so (a) is what the skill's own procedure needs; alternative fix is to move the overlap re-check before claim-task. Spelling 'excluded' is the test author's. Do not fix in the GH-issues run (user ruling 2026-11-03)."
+created_at = 1793716434
+updated_at = 1793716434
+weight = 0.0
+issue_number = 1519
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1519"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test release_excluded_not_failure"
+rev = "4ad4c1879023d2fc446c2c6c9cbb5e9338f68b24"
+observed_at = 1793716434
+detail = """
+exit 101: finished in 0.89s
+
+   Compiling condukt v0.7.323 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.00s
+     Running tests/release_excluded_not_failure.rs (target/debug/deps/release_excluded_not_failure-24a993f271d84aa0)
+error: test failed, to rerun pass `-p condukt --test release_excluded_not_failure`"""

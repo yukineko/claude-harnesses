@@ -1,7 +1,7 @@
 [package]
 rust-version.workspace = true
 name = "fde"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Forward Deployed Engineer harness: target resolution, spec ratification store, a PreToolUse gate on unratified registered targets, and an evidence ledger. Scaffold: every command answers undetermined (exit 2)."
 license = "MIT"
@@ -18,6 +18,8 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+sha2 = { workspace = true }
+toml = { workspace = true }
 
 # ワークスペースの [workspace.lints.clippy] を継承する（unwrap_used / expect_used = deny）。
 [lints]

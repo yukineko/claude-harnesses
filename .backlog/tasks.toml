@@ -312,3 +312,38 @@ exit 1: ============== short test summary info ============================
 FAILED scripts/test_guard_maintree_bash_status_records_rename_source.py::RenameSourceField::test_source_starting_with_1
 FAILED scripts/test_guard_maintree_bash_status_records_rename_source.py::RenameSourceField::test_source_starting_with_question_mark
 ========================= 2 failed, 1 passed in 0.06s =========================="""
+
+[[task]]
+id = "81c41b1b"
+title = "condukt autonomy_invariant RED: fde/skills/fde/SKILL.md has 4 unaudited AskUserQuestion sites (not in ASK_ALLOWLIST)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fde",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-04 at main c4fef301 (merged into session worktree). cargo test -p condukt --test autonomy_invariant: askuserquestion_sites_match_frozen_allowlist panics at crates/condukt/tests/autonomy_invariant.rs:709 verbatim: unaudited AskUserQuestion site(s) in fde/skills/fde/SKILL.md (4 occurrence(s)). The fde skill was added in a67ac4f4 / touched in cfbf12ca. Fix: audit each of the 4 sites (route via condukt policy answer or justify as human-only) and add the entry to ASK_ALLOWLIST; do not just bump the count without auditing. Found off-task by the gh1518 worker in run run-20261103-233558-54331."
+created_at = 1793718116
+updated_at = 1793718116
+weight = 0.0
+issue_number = 1521
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1521"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test autonomy_invariant"
+rev = "c4fef30170613d297baf26d3c4c4f3efad71bd87"
+observed_at = 1793718116
+detail = """
+exit 101: ilures:
+    askuserquestion_sites_match_frozen_allowlist
+
+test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-681c0cdedb76ebef)
+error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""

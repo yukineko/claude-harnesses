@@ -1219,7 +1219,22 @@ read, so it cannot tell whether anything here is irreversible"
     ];
     for payload in payloads {
         let lowered = payload.to_ascii_lowercase();
-        if let Some(marker) = CODE_BUILDING.iter().find(|m| lowered.contains(**m)) {
+        // `compile(` is the one marker with a common unrelated spelling:
+        // `re.compile(` builds a regex, not code (backlog 80b18990). It is
+        // exempted only occurrence by occurrence, and only when
+        // `compile_call_is_regex_method` positively establishes the regex
+        // module; any other occurrence still fires.
+        let fires = |m: &&&str| {
+            let m: &str = m;
+            if m == "compile(" {
+                lowered
+                    .match_indices("compile(")
+                    .any(|(at, _)| !compile_call_is_regex_method(payload, at))
+            } else {
+                lowered.contains(m)
+            }
+        };
+        if let Some(marker) = CODE_BUILDING.iter().find(fires) {
             return Decision::ask(format!(
                 "{shape}, and that program builds or decodes the code it runs (`{marker}`) — the \
 text on the command line is not the program that will execute, so blastguard cannot tell whether \
@@ -1491,6 +1506,219 @@ pub(super) fn analyze_code_interpreter(
         }
     }
     verdict
+}
+
+fn is_python_ident_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Whether the `compile(` occurrence at byte offset `at` of `payload` is a
+/// regex-module method call, `re.compile(` or `regex.compile(`, and so not the
+/// builtin `compile` that turns a string into code (backlog 80b18990).
+///
+/// `at` is an offset into the ASCII-lowercased payload; lowercasing preserves
+/// byte offsets, and every check here is made case-sensitively on the original
+/// text (Python is case-sensitive: `RE.compile(` or `re.COMPILE(` is not
+/// exempt).
+///
+/// Accepted only when ALL of these hold:
+/// - the text at `at` is exactly `compile(`, immediately preceded by `re.` or
+///   `regex.`, and the character before the module name is neither an
+///   identifier character nor `.` (so `myre.compile(` and `x.re.compile(` are
+///   not exempt);
+/// - `module_bound_only_by_import` establishes that the name is bound by a
+///   plain module-level `import` and is used nowhere else except as
+///   `name.attr` reads.
+///
+/// What this does NOT prove: that the program cannot reach code execution by
+/// some other route (e.g. `c = builtins.compile; c(src, 'f', 'exec')`, which
+/// contains no `compile(` at all, or replacing `re.compile` through a module
+/// handle obtained without writing the name). Such programs already evade the
+/// `CODE_BUILDING` scan with or without this helper; this helper only removes
+/// the misattribution of the regex call and never exempts an occurrence it
+/// cannot positively identify — anything it does not recognise returns
+/// `false`, so the marker still fires.
+fn compile_call_is_regex_method(payload: &str, at: usize) -> bool {
+    let Some(tail) = payload.get(at..) else {
+        return false;
+    };
+    if !tail.starts_with("compile(") {
+        return false;
+    }
+    let Some(head) = payload.get(..at) else {
+        return false;
+    };
+    for module in ["re", "regex"] {
+        let Some(before_module) = head.strip_suffix('.').and_then(|h| h.strip_suffix(module))
+        else {
+            continue;
+        };
+        if before_module
+            .chars()
+            .next_back()
+            .is_some_and(|c| is_python_ident_char(c) || c == '.')
+        {
+            continue;
+        }
+        return module_bound_only_by_import(payload, module);
+    }
+    false
+}
+
+/// Whether `name` is bound in `payload` only by a plain module-level import
+/// and otherwise used only to read attributes of it.
+///
+/// Accepted only when ALL of these hold (checked case-sensitively):
+/// - there is an UNINDENTED line that is `import <items>` where one
+///   comma-separated item, trimmed, is exactly `name` (`import re`,
+///   `import os, re`), and no triple quote (`'''` / `"""`) appears anywhere
+///   before that line (so the line is not inside a multi-line string);
+/// - every other whole-word occurrence of `name` comes after that line, is not
+///   preceded by `.`, and is followed by `.` and an attribute name that does
+///   not start with `_`, after which the next non-blank character is none of
+///   `.`, `[`, `:`, or an assignment `=` (a lone `=`, or `=` following an
+///   operator character other than in `==`).
+///
+/// This rejects every rebinding spelling (`import builtins as re`,
+/// `from x import y as re`, `re = …`, `from … import re`, `global re`,
+/// `for re in`, `def re(`, `class re`, `lambda re`, `del re`, `re` passed as an
+/// argument, `'re'` in a string, `re.compile = …`, `re.__dict__`) because none
+/// of them is an attribute read. Rejection is the conservative direction.
+///
+/// What this does NOT prove: that the module object has not been altered
+/// through a handle that never spells `name` as a word (for example via
+/// `sys.modules.get('r' + 'e')`). See `compile_call_is_regex_method`.
+fn module_bound_only_by_import(payload: &str, name: &str) -> bool {
+    // Locate the binding import line: [start, end) byte range.
+    let mut binding: Option<(usize, usize)> = None;
+    let mut offset = 0;
+    for raw in payload.split_inclusive('\n') {
+        let start = offset;
+        offset += raw.len();
+        let line = raw.trim_end_matches(['\n', '\r']).trim_end();
+        let Some(items) = line.strip_prefix("import ") else {
+            continue;
+        };
+        if !items.split(',').any(|item| item.trim() == name) {
+            continue;
+        }
+        let Some(before) = payload.get(..start) else {
+            return false;
+        };
+        if before.contains("'''") || before.contains("\"\"\"") {
+            return false;
+        }
+        binding = Some((start, offset));
+        break;
+    }
+    let Some((bind_start, bind_end)) = binding else {
+        return false;
+    };
+
+    for (at, _) in payload.match_indices(name) {
+        let (Some(head), Some(tail)) = (payload.get(..at), payload.get(at + name.len()..)) else {
+            return false;
+        };
+        let prev = head.chars().next_back();
+        if prev.is_some_and(is_python_ident_char) {
+            continue; // part of a longer identifier (`myre`)
+        }
+        if tail.chars().next().is_some_and(is_python_ident_char) {
+            continue; // part of a longer identifier (`regex`, `rest`)
+        }
+        if at >= bind_start && at < bind_end {
+            continue; // the binding import itself
+        }
+        if at < bind_start || prev == Some('.') {
+            return false;
+        }
+        let Some(attr) = tail.strip_prefix('.') else {
+            return false;
+        };
+        if !attr.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+            return false;
+        }
+        let after_attr = attr.trim_start_matches(is_python_ident_char);
+        let after_attr = after_attr.trim_start_matches([' ', '\t']);
+        let mut chars = after_attr.chars();
+        let next = chars.next();
+        let second = chars.next();
+        match next {
+            Some('.' | '[' | ':') => return false,
+            Some('=') if second != Some('=') => return false,
+            Some('+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>' | '@' | '!')
+                if second == Some('=') || matches!(second, Some('<' | '>' | '*' | '/')) =>
+            {
+                // Augmented assignment (`+=`, `<<=`, `**=`, `//=`, …) or a
+                // comparison; either way not a plain attribute read we vouch for.
+                return false;
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod regex_compile_tests {
+    use super::compile_call_is_regex_method;
+
+    /// Mirrors the `CODE_BUILDING` loop: true when the `compile(` marker fires.
+    fn fires(payload: &str) -> bool {
+        payload
+            .to_ascii_lowercase()
+            .match_indices("compile(")
+            .any(|(at, _)| !compile_call_is_regex_method(payload, at))
+    }
+
+    #[test]
+    fn imported_re_compile_is_exempt() {
+        assert!(!fires("import re\np=re.compile(r'a')"));
+        assert!(!fires("import os, re\nre.compile('x')"));
+        assert!(!fires(
+            "import re\np = re.compile(r'a+b', re.I)\nprint(p.findall('aab'))"
+        ));
+        assert!(!fires("import regex\nregex.compile('x')"));
+    }
+
+    #[test]
+    fn bare_and_other_module_compile_fire() {
+        assert!(fires("compile('x','f','exec')"));
+        assert!(fires("import builtins\nbuiltins.compile('x','f','exec')"));
+        assert!(fires("import re\nmyre.compile('x')"));
+        assert!(fires("import re\nx.re.compile('x')"));
+        assert!(fires("import re\n__builtins__.compile('x','f','exec')"));
+    }
+
+    #[test]
+    fn rebinding_or_missing_import_fires() {
+        assert!(fires("import builtins as re\nre.compile('x','f','exec')"));
+        assert!(fires(
+            "import re\nre = builtins\nre.compile('x','f','exec')"
+        ));
+        assert!(fires("import re\nre=builtins\nre.compile('x','f','exec')"));
+        assert!(fires("re.compile('x')"));
+        assert!(fires("from builtins import compile as re\nre.compile('x')"));
+        assert!(fires("import re\nfrom x import y as re\nre.compile('x')"));
+        assert!(fires("import re\nfor re in [b]:\n  re.compile('x')"));
+        assert!(fires("import re\ndef re(): pass\nre.compile('x')"));
+        assert!(fires("import re\nglobal re\nre.compile('x')"));
+        assert!(fires("import re\nf = lambda re: re.compile('x')"));
+        assert!(fires(
+            "import re\nre.compile = builtins.compile\nre.compile('x','f','exec')"
+        ));
+        assert!(fires("import re\nre.__dict__\nre.compile('x')"));
+        assert!(fires("re.compile('x')\nimport re"));
+        assert!(fires("def f():\n    import re\nre.compile('x')"));
+        assert!(fires("s = '''\nimport re\n'''\nre.compile('x')"));
+        assert!(fires("import RE\nRE.compile('x')"));
+        assert!(fires("import re\nre.COMPILE('x')"));
+    }
+
+    #[test]
+    fn any_non_exempt_occurrence_fires() {
+        assert!(fires("import re\nre.compile('a')\ncompile('x','f','exec')"));
+    }
 }
 
 #[cfg(test)]

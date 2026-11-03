@@ -10,24 +10,43 @@
 //! * `registration.json` — `{schema, root, spec}`: written by [`begin`]. `spec`
 //!   is the canonical absolute path of the draft spec, which lives outside the
 //!   target.
-//! * `ratification.json` — `{schema, spec, fingerprint}`: written by
-//!   [`ratify`]. `fingerprint` is the lowercase hex SHA-256 of the spec file
-//!   bytes at ratification time; `spec` repeats the registered spec path so a
-//!   ratification left over from a different registration never counts.
+//! * `ratification.json` — `{schema: 2, spec, fingerprint, head, dirty}`:
+//!   written by [`ratify`]. `fingerprint` is the lowercase hex SHA-256 of the
+//!   spec file bytes at ratification time; `spec` repeats the registered spec
+//!   path so a ratification left over from a different registration never
+//!   counts. `head` is the target HEAD commit at ratification time (40
+//!   lowercase hex, [`crate::git::head`]) and `dirty` whether the target work
+//!   tree differed from it then ([`crate::git::is_dirty`]: untracked files
+//!   count, ignored files do not). When either cannot be determined (e.g. a
+//!   repository without commits), nothing is written and `ratify` is
+//!   `Undetermined`.
+//!
+//! [`forget`] (`fde forget`, human-only — the gate denies it to the model)
+//! removes the whole per-target directory, evidence included, without parsing
+//! anything in it; it is the only way out for a corrupt registration and for
+//! a registered target whose root was deleted ("gone"). [`registered_at`]
+//! reads the one registration recorded for an exact root (used by
+//! `fde status` to recognise a gone root).
 //!
 //! Both files are written atomically (temp file + rename). [`begin`] removes
 //! any previous `ratification.json` *before* writing the registration, so a
 //! (re-)registered target is unratified even if the registration write fails
 //! afterwards.
 //!
-//! The target HEAD commit is **not** recorded at ratification time (not part
-//! of this record yet).
+//! A ratification written by an earlier fde (`schema: 1`, `{schema, spec,
+//! fingerprint}`, no `head` / `dirty`) is still read: [`status`] answers it
+//! exactly as before, and [`observe`] returns it with
+//! [`Provenance::Legacy`]. Every evidence operation (recording, `verify`,
+//! `report`) refuses a legacy ratification as `Undetermined` and asks the
+//! human to re-ratify, because its HEAD is unknown.
 //!
 //! # Answers
 //!
 //! Every IO error and every parse error (including an unknown `schema`, a
-//! registration whose `root` is not the target, or a malformed fingerprint) is
-//! `Undetermined` — never `Ratified`, never `Unratified`.
+//! schema-2 ratification without a well-formed `head` / `dirty`, a schema-1
+//! one that carries them, a registration whose `root` is not the target, or a
+//! malformed fingerprint) is `Undetermined` — never `Ratified`, never
+//! `Unratified`.
 
 use std::path::{Path, PathBuf};
 
@@ -37,8 +56,14 @@ use sha2::{Digest, Sha256};
 use crate::state;
 use crate::target::ResolvedTarget;
 
-/// Schema version of both state records.
+/// Schema version of `registration.json`.
 const SCHEMA: u32 = 1;
+/// Schema version of `ratification.json` as written now (with `head` /
+/// `dirty`).
+const RATIFICATION_SCHEMA: u32 = 2;
+/// The earlier `ratification.json` schema (no `head` / `dirty`), read as
+/// [`Provenance::Legacy`].
+const LEGACY_RATIFICATION_SCHEMA: u32 = 1;
 const REGISTRATION_FILE: &str = "registration.json";
 const RATIFICATION_FILE: &str = "ratification.json";
 
@@ -67,12 +92,33 @@ struct Registration {
     spec: PathBuf,
 }
 
+/// `ratification.json` of either schema: `head` / `dirty` are present in
+/// schema 2 and absent in schema 1 (checked by [`read_ratification`]).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Ratification {
     schema: u32,
     spec: PathBuf,
     fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    head: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dirty: Option<bool>,
+}
+
+/// The target commit a ratification was taken at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Provenance {
+    /// Recorded at ratification time (schema 2).
+    Recorded {
+        /// Target HEAD commit (40 lowercase hex).
+        head: String,
+        /// Whether the target work tree differed from `head` then.
+        dirty: bool,
+    },
+    /// A schema-1 ratification written before HEAD was recorded: its commit is
+    /// unknown, so no evidence can be placed on the ratified history.
+    Legacy,
 }
 
 /// Lowercase hex SHA-256 of `bytes`.
@@ -164,7 +210,12 @@ fn read_registration_file(path: &Path) -> Determination<Option<Registration>> {
 ///   schema, a non-absolute root, or sits under a directory whose name is not
 ///   the state key of its root. One bad registration makes the whole answer
 ///   undetermined: its root is unknown, so no path can be shown to lie
-///   outside it.
+///   outside it. Such a registration is removed only by [`forget`]
+///   (`fde forget`), which does not parse it.
+///
+/// A registered target whose root no longer exists ("gone") is listed like
+/// any other; whether its root exists is not checked here (the gate does it
+/// with [`crate::target::presence`]).
 #[track_caller]
 pub fn registered_targets(state_dir: &Path) -> Determination<Vec<ResolvedTarget>> {
     let dir = state_dir.join("targets");
@@ -230,6 +281,118 @@ pub fn registered_targets(state_dir: &Path) -> Determination<Vec<ResolvedTarget>
     Determination::known(targets)
 }
 
+/// The target registered with exactly the root `candidate`, read from
+/// `<state_dir>/targets/<state_key(candidate)>/registration.json` alone (no
+/// listing, no other registration consulted).
+///
+/// * `Known(None)` — no registration under that key.
+/// * `Known(Some(t))` — registered, and its recorded root is `candidate`.
+/// * `Undetermined` — unreadable / corrupt / unknown schema, or a recorded
+///   root that is not `candidate`.
+#[track_caller]
+pub fn registered_at(state_dir: &Path, candidate: &Path) -> Determination<Option<ResolvedTarget>> {
+    let key = crate::target::state_key(candidate);
+    let path = state::target_dir(state_dir, &key).join(REGISTRATION_FILE);
+    match read_registration_file(&path) {
+        Determination::Known(None) => Determination::known(None),
+        Determination::Known(Some(reg)) if reg.root == candidate => {
+            Determination::known(Some(ResolvedTarget {
+                root: reg.root,
+                state_key: key,
+            }))
+        }
+        Determination::Known(Some(reg)) => Determination::undetermined(format!(
+            "registration {} names root {}, not {}",
+            path.display(),
+            reg.root.display(),
+            candidate.display()
+        )),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
+}
+
+/// Directory (under the state directory, outside `targets/`) a forgotten
+/// target's state is moved into before it is deleted.
+const FORGOTTEN_DIR: &str = ".forgotten";
+
+/// Remove the whole state directory `<state_dir>/targets/<state_key>/` of
+/// `root` (registration, ratification, evidence) — `fde forget`. The files
+/// in it are not parsed, so a corrupt registration is removable too. Nothing
+/// outside the state directory is touched (never the target).
+///
+/// The directory is first renamed (atomically) to
+/// `<state_dir>/.forgotten/<state_key>.<pid>.<nanos>` and then deleted, so a
+/// failure either leaves the registration fully in place or leaves it
+/// unregistered; a half-deleted registration is never left under `targets/`.
+///
+/// * `Clean` — removed.
+/// * `Violation` — refused: no state directory for that key (not registered).
+/// * `Undetermined` — the state directory cannot be stat'ed, is not a
+///   directory, cannot be moved (nothing was removed), or was moved out of
+///   `targets/` (so it is no longer registered) but could not be deleted;
+///   the reason says which.
+#[track_caller]
+pub fn forget(state_dir: &Path, root: &Path, state_key: &str) -> Verdict {
+    let dir = state::target_dir(state_dir, state_key);
+    match std::fs::symlink_metadata(&dir) {
+        Ok(m) if m.is_dir() => {}
+        Ok(_) => {
+            return Verdict::undetermined(format!(
+                "state entry {} for {} is not a directory; nothing was removed",
+                dir.display(),
+                root.display()
+            ))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Verdict::violation(format!(
+                "refused: target {} is not registered (no state directory {})",
+                root.display(),
+                dir.display()
+            ))
+        }
+        Err(e) => {
+            return Verdict::undetermined(format!(
+                "cannot stat state directory {}: {e}; nothing was removed",
+                dir.display()
+            ))
+        }
+    }
+    let trash_parent = state_dir.join(FORGOTTEN_DIR);
+    if let Err(e) = std::fs::create_dir_all(&trash_parent) {
+        return Verdict::undetermined(format!(
+            "cannot create {}: {e}; nothing was removed",
+            trash_parent.display()
+        ));
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let trash = trash_parent.join(format!("{state_key}.{}.{nanos}", std::process::id()));
+    if let Err(e) = std::fs::rename(&dir, &trash) {
+        // Best-effort cleanup of the (possibly just created) empty parent; it
+        // holds nothing, so its fate does not change the answer.
+        let _ = std::fs::remove_dir(&trash_parent);
+        return Verdict::undetermined(format!(
+            "cannot remove the state directory {} of {}: {e}; nothing was removed, \
+             the target is still registered",
+            dir.display(),
+            root.display()
+        ));
+    }
+    if let Err(e) = std::fs::remove_dir_all(&trash) {
+        return Verdict::undetermined(format!(
+            "the state of {} was moved out of the registered targets to {} (it is no \
+             longer registered), but deleting it failed: {e}; delete that directory by hand",
+            root.display(),
+            trash.display()
+        ));
+    }
+    // Same best-effort cleanup: only succeeds when the parent is empty.
+    let _ = std::fs::remove_dir(&trash_parent);
+    recorded()
+}
+
 fn read_registration(
     target: &ResolvedTarget,
     state_dir: &Path,
@@ -254,20 +417,44 @@ fn read_registration(
 fn read_ratification(
     target: &ResolvedTarget,
     state_dir: &Path,
-) -> Determination<Option<Ratification>> {
+) -> Determination<Option<(Ratification, Provenance)>> {
     let path = state::target_dir(state_dir, &target.state_key).join(RATIFICATION_FILE);
     let rat: Ratification = match state::read_json(&path) {
         Determination::Known(Some(r)) => r,
         Determination::Known(None) => return Determination::known(None),
         Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
-    if rat.schema != SCHEMA {
-        return Determination::undetermined(format!(
-            "ratification {} has unknown schema {}",
-            path.display(),
-            rat.schema
-        ));
-    }
+    let provenance = match (rat.schema, &rat.head, rat.dirty) {
+        (RATIFICATION_SCHEMA, Some(head), Some(dirty)) if crate::git::is_commit_id(head) => {
+            Provenance::Recorded {
+                head: head.clone(),
+                dirty,
+            }
+        }
+        (RATIFICATION_SCHEMA, _, _) => {
+            return Determination::undetermined(format!(
+                "ratification {} (schema {RATIFICATION_SCHEMA}) lacks a well-formed head \
+                 (40 lowercase hex) and dirty flag: head {:?}, dirty {:?}",
+                path.display(),
+                rat.head,
+                rat.dirty
+            ))
+        }
+        (LEGACY_RATIFICATION_SCHEMA, None, None) => Provenance::Legacy,
+        (LEGACY_RATIFICATION_SCHEMA, _, _) => {
+            return Determination::undetermined(format!(
+                "ratification {} has schema {LEGACY_RATIFICATION_SCHEMA} but carries head/dirty \
+                 fields that schema never had",
+                path.display()
+            ))
+        }
+        (other, _, _) => {
+            return Determination::undetermined(format!(
+                "ratification {} has unknown schema {other}",
+                path.display()
+            ))
+        }
+    };
     if !is_fingerprint(&rat.fingerprint) {
         return Determination::undetermined(format!(
             "ratification {} holds a malformed fingerprint {:?}",
@@ -275,7 +462,7 @@ fn read_ratification(
             rat.fingerprint
         ));
     }
-    Determination::known(Some(rat))
+    Determination::known(Some((rat, provenance)))
 }
 
 /// Register `target` with the draft `spec` under `state_dir`; the target is
@@ -336,13 +523,15 @@ pub fn begin(target: &ResolvedTarget, spec: &Path, state_dir: &Path) -> Verdict 
 }
 
 /// Record the registered spec of `target` as ratified under `state_dir`, with
-/// the fingerprint of its current bytes. When `spec` is given it must name the
-/// registered spec.
+/// the fingerprint of its current bytes and the target HEAD commit and dirty
+/// flag observed now. When `spec` is given it must name the registered spec.
 ///
 /// * `Clean` — recorded.
 /// * `Violation` — refused: the target is not registered, or `spec` is not the
 ///   registered spec (or does not exist).
-/// * `Undetermined` — anything that could not be read, decided or written.
+/// * `Undetermined` — anything that could not be read, decided or written,
+///   including a target HEAD or dirty flag that cannot be determined (e.g. a
+///   repository without commits). Nothing is written then.
 #[track_caller]
 pub fn ratify(target: &ResolvedTarget, spec: Option<&Path>, state_dir: &Path) -> Verdict {
     let reg = match read_registration(target, state_dir) {
@@ -378,6 +567,27 @@ pub fn ratify(target: &ResolvedTarget, spec: Option<&Path>, state_dir: &Path) ->
         Verdict::Clean(_) => {}
         other => return other,
     }
+    let head = match crate::git::head(&target.root) {
+        Determination::Known(h) => h,
+        Determination::Undetermined(why) => {
+            return Verdict::undetermined(format!(
+                "cannot ratify {}: the target HEAD commit cannot be determined (a ratification \
+                 needs a commit to record): {}",
+                target.root.display(),
+                why.as_str()
+            ))
+        }
+    };
+    let dirty = match crate::git::is_dirty(&target.root) {
+        Determination::Known(d) => d,
+        Determination::Undetermined(why) => {
+            return Verdict::undetermined(format!(
+                "cannot ratify {}: whether the target work tree is dirty cannot be determined: {}",
+                target.root.display(),
+                why.as_str()
+            ))
+        }
+    };
     let bytes = match std::fs::read(&reg.spec) {
         Ok(b) => b,
         Err(e) => {
@@ -388,9 +598,11 @@ pub fn ratify(target: &ResolvedTarget, spec: Option<&Path>, state_dir: &Path) ->
         }
     };
     let rat = Ratification {
-        schema: SCHEMA,
+        schema: RATIFICATION_SCHEMA,
         spec: reg.spec,
         fingerprint: fingerprint(&bytes),
+        head: Some(head),
+        dirty: Some(dirty),
     };
     let path = state::target_dir(state_dir, &target.state_key).join(RATIFICATION_FILE);
     match state::write_json_atomic(&path, &rat) {
@@ -431,6 +643,8 @@ pub struct RatifiedSpec {
     pub fingerprint: String,
     /// The spec bytes that were read and fingerprinted.
     pub bytes: Vec<u8>,
+    /// The target commit the ratification was taken at.
+    pub provenance: Provenance,
 }
 
 /// [`status`] with the ratified spec bytes attached, for callers (the
@@ -446,8 +660,10 @@ pub enum Observed {
     },
 }
 
-/// Same answers as [`status`], carrying the ratified spec bytes on
-/// `Ratified`.
+/// Same answers as [`status`], carrying the ratified spec bytes and the
+/// ratification's [`Provenance`] on `Ratified`. A legacy (schema-1)
+/// ratification is `Ratified` with [`Provenance::Legacy`]; deciding what that
+/// means for evidence is the caller's job.
 #[track_caller]
 pub fn observe(target: &ResolvedTarget, state_dir: &Path) -> Determination<Observed> {
     let reg = match read_registration(target, state_dir) {
@@ -459,7 +675,7 @@ pub fn observe(target: &ResolvedTarget, state_dir: &Path) -> Determination<Obser
         }
         Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
-    let rat = match read_ratification(target, state_dir) {
+    let (rat, provenance) = match read_ratification(target, state_dir) {
         Determination::Known(Some(r)) => r,
         Determination::Known(None) => {
             return Determination::known(Observed::Unratified {
@@ -504,5 +720,6 @@ pub fn observe(target: &ResolvedTarget, state_dir: &Path) -> Determination<Obser
         path: reg.spec,
         fingerprint: current,
         bytes,
+        provenance,
     }))
 }

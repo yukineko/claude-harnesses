@@ -161,13 +161,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "Measured 2026-11-04 at main c4fef301 (merged into session worktree). cargo test -p condukt --test autonomy_invariant: askuserquestion_sites_match_frozen_allowlist panics at crates/condukt/tests/autonomy_invariant.rs:709 verbatim: unaudited AskUserQuestion site(s) in fde/skills/fde/SKILL.md (4 occurrence(s)). The fde skill was added in a67ac4f4 / touched in cfbf12ca. Fix: audit each of the 4 sites (route via condukt policy answer or justify as human-only) and add the entry to ASK_ALLOWLIST; do not just bump the count without auditing. Found off-task by the gh1518 worker in run run-20261103-233558-54331."
+notes = "Measured 2026-11-04 at main c4fef301 (merged into session worktree). cargo test -p condukt --test autonomy_invariant: askuserquestion_sites_match_frozen_allowlist panics at crates/condukt/tests/autonomy_invariant.rs:709 verbatim: unaudited AskUserQuestion site(s) in fde/skills/fde/SKILL.md (4 occurrence(s)). The fde skill was added in a67ac4f4 / touched in cfbf12ca. Fix: audit each of the 4 sites (route via condukt policy answer or justify as human-only) and add the entry to ASK_ALLOWLIST; do not just bump the count without auditing. Found off-task by the gh1518 worker in run run-20261103-233558-54331. UPDATE 2026-11-04 (fde-report session): fde row audited and added in 02c2bcfa (ratification = human-only judgment request, escalate, never auto; not routed via condukt policy answer). The fde-row panic is gone, but the same test function still fails on the sitecraft row (allowlist 4, found 12; filed as fd2d2362), so done --test cannot pass at HEAD yet. Close this with done --test cargo test -p condukt --test autonomy_invariant --red-rev de7ba2e0 once fd2d2362 is fixed."
 created_at = 1793718116
-updated_at = 1793718116
+updated_at = 1793719721
 weight = 0.0
 issue_number = 1521
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1521"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
@@ -248,3 +248,38 @@ exit 101: t v0.7.327 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-failcl
     Finished `test` profile [unoptimized + debuginfo] target(s) in 4.78s
      Running tests/check_criteria_prose_unterminated_quote.rs (target/debug/deps/check_criteria_prose_unterminated_quote-2ce2c866e37e01f5)
 error: test failed, to rerun pass `-p condukt --test check_criteria_prose_unterminated_quote`"""
+
+[[task]]
+id = "fd2d2362"
+title = "condukt autonomy_invariant RED: sitecraft/skills/sitecraft/SKILL.md has 12 AskUserQuestion sites vs ASK_ALLOWLIST 4 (8 unaudited)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "sitecraft",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-04 at branch session-c4aa3733-fde-report 65f10055 (main merged in). cargo test -p condukt --test autonomy_invariant: askuserquestion_sites_match_frozen_allowlist panics at crates/condukt/tests/autonomy_invariant.rs:732 verbatim: AskUserQuestion count changed in sitecraft/skills/sitecraft/SKILL.md (allowlist 4, found 12). Also red on main. Found by the fde-report session while fixing 81c41b1b (fde row, now audited); not caused by that session. Audit each new sitecraft site (judgment request vs approval vs route via condukt policy answer) before raising the count."
+created_at = 1793719707
+updated_at = 1793719707
+weight = 0.0
+issue_number = 1524
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1524"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test autonomy_invariant"
+rev = "65f100559f7f74e38b8833e80ba271c19bed0d11"
+observed_at = 1793719707
+detail = """
+exit 101: ilures:
+    askuserquestion_sites_match_frozen_allowlist
+
+test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-1a53e298d311f026)
+error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""

@@ -1,6 +1,6 @@
 {
   "name": "stuckguard",
-  "version": "0.1.44",
+  "version": "0.1.46",
   "description": "Stuck-loop detector for Claude Code: a PostToolUse hook that spots repeated identical actions and edit thrash, then nudges the agent to change approach or ask the user for help.",
   "author": {
     "name": "yukineko"

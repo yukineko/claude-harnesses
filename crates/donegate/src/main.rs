@@ -41,7 +41,6 @@ mod record;
 mod runner;
 mod state;
 
-use std::io::Read;
 use std::path::Path;
 
 use clap::{Parser, Subcommand};
@@ -97,12 +96,6 @@ enum Command {
         #[arg(long)]
         reason: String,
     },
-}
-
-fn read_stdin() -> String {
-    let mut buf = String::new();
-    let _ = std::io::stdin().read_to_string(&mut buf);
-    buf
 }
 
 fn main() {
@@ -170,7 +163,16 @@ fn exit_on_err(r: anyhow::Result<()>) {
 /// is surfaced (exit 1) in manual CLI mode. Real `process::exit` calls inside
 /// `gate_run` terminate directly, so only genuine panics ever reach the guard.
 fn gate_command() -> ! {
-    let raw = read_stdin();
+    // A read ERROR is "cannot determine", never an empty payload: it blocks
+    // (hook mode) and exits inside `read_stop_payload_guarded`. The payload is
+    // unknown on Err, so hook-vs-manual-CLI cannot come from parsing it; use
+    // whether stdin is a terminal (a hook's stdin is a pipe).
+    use std::io::IsTerminal;
+    let raw = harness_core::gate::run::read_stop_payload_guarded(
+        "donegate",
+        std::io::stdin().is_terminal(),
+        harness_core::hook::try_read_stdin(),
+    );
     let hook = HookInput::parse(&raw);
     let interactive = hook.is_none();
     // On a post-block re-entry Claude Code sets stop_hook_active; the panic guard

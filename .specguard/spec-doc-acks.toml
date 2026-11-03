@@ -246,3 +246,7 @@ reason = "Pure move: the read-only command table and recognised-verb helpers (RE
 [[ack]]
 path = "crates/blastguard/src/detect/fileops.rs"
 reason = "Pure move: the per-verb file-operation analysers and operand helpers (analyze_unlink_rmdir through analyze_uniq, has_glob_meta through mode_removes_read, positional_operands through analyze_sed) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/rm.rs"
+reason = "Pure move: the rm analyser and its eligibility helpers (analyze_rm through placeable_targets, incl. checkout_exempt_eligible, literal_cd_and_rest, worktree_rm_eligible, deletion_rm_eligible, worktree_confined) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."

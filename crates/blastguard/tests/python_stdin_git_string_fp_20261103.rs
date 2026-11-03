@@ -105,6 +105,7 @@ fn py_stdin(program: &str) -> String {
 /// literal (Rust source being spliced into a non-`.git` file) must be judged
 /// like the same program with `.git` replaced by `.gix`.
 #[test]
+#[ignore = "backlog 61558e27: accepted limit (cancelled by user ruling 2026-11-03; the FP fails toward Ask)"]
 fn fp3_python_stdin_program_naming_git_as_data_is_not_a_git_write() {
     let base = fresh_dir("fp3");
     let programs = [

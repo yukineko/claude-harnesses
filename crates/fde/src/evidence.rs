@@ -9,7 +9,7 @@
 //! ```text
 //! {"schema": 2, "records": [
 //!   {"fingerprint": "<spec sha256>", "req": "R1", "kind": "red", "cmd": "...", "exit_code": 1,
-//!    "head": "<40 lowercase hex>", "dirty": false},
+//!    "head": "<40 lowercase hex>", "dirty": false, "ratified_head": "<40 lowercase hex>"},
 //!   ...
 //! ]}
 //! ```
@@ -17,17 +17,30 @@
 //! `head` is the target HEAD commit ([`crate::git::head`]) and `dirty` whether
 //! the target work tree differed from it ([`crate::git::is_dirty`]: untracked
 //! files count, ignored files do not), both observed immediately **before**
-//! `CMD` ran. A ledger written by an earlier fde (`schema: 1`, records without
-//! `head` / `dirty`) is still read; its records keep no `head` (and are
-//! carried over without one when the ledger is next rewritten as schema 2). In
-//! schema 2 a record has both `head` and `dirty` or neither (carried over);
-//! anything else, or an unknown schema, makes the ledger `Undetermined`.
+//! `CMD` ran. `ratified_head` is the ratification head `R` in force when the
+//! record was written (its **evidence epoch**). A ledger written by an earlier
+//! fde (`schema: 1`, records without `head` / `dirty` / `ratified_head`) is
+//! still read; its records keep no `head` (and are carried over without one
+//! when the ledger is next rewritten as schema 2). In schema 2 a record has
+//! `head` and `dirty` together with `ratified_head`, `head` and `dirty`
+//! without it (written by an fde before epochs), or none of the three
+//! (carried over); anything else, or an unknown schema, makes the ledger
+//! `Undetermined`.
 //!
-//! Records are append-only and kept in recording order. Every record carries
-//! the fingerprint of the ratified spec it was recorded against; only records
-//! whose fingerprint equals the *current* ratified fingerprint count. A spec
-//! change (and re-ratification) therefore leaves earlier evidence on disk but
-//! out of every answer. The file is rewritten atomically (temp file + rename,
+//! Records are append-only and kept in recording order. A record **counts**
+//! only when its `fingerprint` equals the *current* ratified fingerprint
+//! **and** its `ratified_head` equals the *current* ratification head. Every
+//! other record is **stale**: kept on disk, but ignored by recording
+//! preconditions, `verify` and `report` (which counts them on its `ignored:`
+//! line). A spec change, and every re-ratification at a different HEAD —
+//! after a reset to another commit, but also at a descendant of the old head
+//! — therefore starts a new evidence epoch: the earlier evidence leaves every
+//! answer and the requirements must be measured again. Re-ratifying at the
+//! same HEAD keeps the epoch (and the records counting). A record that
+//! matches the current fingerprint but has no `ratified_head` (written by an
+//! earlier fde) cannot be placed in an epoch; no epoch is guessed for it, and
+//! recording, `verify` and `report` answer `Undetermined` while one exists.
+//! The file is rewritten atomically (temp file + rename,
 //! [`crate::state::write_json_atomic`]); two concurrent recorders can lose one
 //! of the two appends (last rename wins), which can only make the ledger
 //! *less* complete, never more.
@@ -50,13 +63,15 @@
 //!    duplicate requirement id is `Undetermined`. A `--req` that is not a
 //!    requirement of the spec, or an empty `--cmd`, is `Violation`.
 //! 3. The state dir must lie outside the target (`Violation` otherwise).
-//! 4. The ledger is read; unreadable, corrupt, unknown schema, or internally
-//!    inconsistent (see `evaluate`) is `Undetermined`.
-//! 5. Preconditions (`Violation` when unmet, without running `CMD`):
-//!    GREEN needs an earlier RED for the same requirement **and the same
-//!    `CMD` text**; PASS needs that the requirement has no RED at all (a
-//!    requirement with a RED is closed by its GREEN, not by a PASS). RED has
-//!    no precondition.
+//! 4. The ledger is read; unreadable, corrupt, unknown schema, internally
+//!    inconsistent (see `evaluate`), or holding a current-fingerprint record
+//!    without `ratified_head` is `Undetermined`.
+//! 5. Preconditions over the counted (current-epoch) records only
+//!    (`Violation` when unmet, without running `CMD`): GREEN needs an earlier
+//!    RED for the same requirement **and the same `CMD` text**; PASS needs
+//!    that the requirement has no RED at all (a requirement with a RED is
+//!    closed by its GREEN, not by a PASS). RED has no precondition. A stale
+//!    RED neither enables a GREEN nor blocks a PASS.
 //! 6. Immediately before `CMD` runs, the target HEAD and dirty flag are
 //!    observed (they become the record's `head` / `dirty`) and the step-1
 //!    ancestry check is repeated against that HEAD; any failure is
@@ -71,13 +86,13 @@
 //! 7. Ratification is observed again: if it is no longer ratified with the
 //!    same fingerprint and the same recorded HEAD / dirty flag, nothing is
 //!    recorded (`Violation`).
-//! 8. The ledger is re-read, the step-5 precondition re-checked against it,
-//!    the record appended, and the file written atomically. Only a successful
-//!    write is `Clean`.
+//! 8. The ledger is re-read, the step-4 / step-5 checks repeated against it,
+//!    the record (with `ratified_head` = the ratification head) appended, and
+//!    the file written atomically. Only a successful write is `Clean`.
 //!
 //! # Completeness (`verify`, `report`)
 //!
-//! Per requirement, over current-fingerprint records in order: a requirement
+//! Per requirement, over the counted (current-epoch) records in order: a requirement
 //! is **unresolved** while some RED `CMD` has no later GREEN with the same
 //! `CMD`; otherwise it is **complete** when it has a GREEN (after its RED) or a
 //! PASS; otherwise it is **unmeasured**. `verify` is `Clean` only when every
@@ -94,12 +109,16 @@
 //!
 //! Before either answers, the evidence must lie on the ratified history
 //! (forward history only): with `R` the ratification head, `C` the current
-//! target HEAD and `H` the `head` of each counted (current-fingerprint)
-//! record, `R` must be an ancestor of or equal to `C`, and `R <= H <= C` for
-//! every counted record. A legacy ratification (no `R`), a counted record
-//! without `head`, a `C` that cannot be observed, any "not an ancestor"
-//! answer, or any failed comparison (e.g. a commit unknown to the repository)
-//! is `Undetermined`: `verify` exits 2 and `report` exits 2 without text.
+//! target HEAD and `H` the `head` of each counted (current-epoch) record, `R`
+//! must be an ancestor of or equal to `C`, and `R <= H <= C` for every counted
+//! record. Stale records are not checked (they do not count). A legacy
+//! ratification (no `R`), a current-fingerprint record without
+//! `ratified_head`, a counted record without `head`, a `C` that cannot be
+//! observed, any "not an ancestor" answer, or any failed comparison (e.g. a
+//! commit unknown to the repository) is `Undetermined`: `verify` exits 2 and
+//! `report` exits 2 without text. After a reset off the ratified line, a
+//! human re-ratifying at the new HEAD starts a new epoch, so the answer
+//! becomes "unmeasured" (1) until evidence is recorded again.
 //! `dirty` is recorded and shown by `report` but is not by itself
 //! disqualifying.
 
@@ -164,6 +183,11 @@ struct Record {
     /// `head` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dirty: Option<bool>,
+    /// The ratification head `R` in force when the record was written (its
+    /// evidence epoch). `None` only for a record written by an earlier fde;
+    /// present only together with `head` / `dirty`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ratified_head: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -248,10 +272,11 @@ fn ledger_path(target: &ResolvedTarget, state_dir: &Path) -> PathBuf {
 
 /// Read the ledger: absent is the empty ledger; unreadable, corrupt or an
 /// unknown schema is `Undetermined`. A schema-1 ledger (no record carries
-/// `head` / `dirty`) is returned as schema 2 with head-less records, so the
-/// next write upgrades it without inventing a head. In schema 2 a record with
-/// only one of `head` / `dirty`, or a `head` that is not 40 lowercase hex, is
-/// `Undetermined`.
+/// `head` / `dirty` / `ratified_head`) is returned as schema 2 with head-less
+/// records, so the next write upgrades it without inventing a head. In schema
+/// 2 a record with only one of `head` / `dirty`, a `ratified_head` without
+/// both of them, or a `head` / `ratified_head` that is not 40 lowercase hex,
+/// is `Undetermined`.
 #[track_caller]
 fn read_ledger(path: &Path) -> Determination<Ledger> {
     let mut ledger: Ledger = match state::read_json(path) {
@@ -267,18 +292,24 @@ fn read_ledger(path: &Path) -> Determination<Ledger> {
     match ledger.schema {
         SCHEMA => {
             for (i, rec) in ledger.records.iter().enumerate() {
-                let well_formed = match (&rec.head, rec.dirty) {
-                    (Some(h), Some(_)) => crate::git::is_commit_id(h),
-                    (None, None) => true,
+                let well_formed = match (&rec.head, rec.dirty, &rec.ratified_head) {
+                    (Some(h), Some(_), Some(r)) => {
+                        crate::git::is_commit_id(h) && crate::git::is_commit_id(r)
+                    }
+                    (Some(h), Some(_), None) => crate::git::is_commit_id(h),
+                    (None, None, None) => true,
                     _ => false,
                 };
                 if !well_formed {
                     return Determination::undetermined(format!(
-                        "evidence ledger {} is corrupt: record #{i} has head {:?} and dirty {:?} \
-                         (both, with a 40-digit lowercase hex head, or neither are expected)",
+                        "evidence ledger {} is corrupt: record #{i} has head {:?}, dirty {:?} and \
+                         ratified_head {:?} (expected: head and dirty both present with a \
+                         40-digit lowercase hex head, optionally with a 40-digit lowercase hex \
+                         ratified_head; or none of the three)",
                         path.display(),
                         rec.head,
-                        rec.dirty
+                        rec.dirty,
+                        rec.ratified_head
                     ));
                 }
             }
@@ -287,11 +318,11 @@ fn read_ledger(path: &Path) -> Determination<Ledger> {
             if let Some(i) = ledger
                 .records
                 .iter()
-                .position(|r| r.head.is_some() || r.dirty.is_some())
+                .position(|r| r.head.is_some() || r.dirty.is_some() || r.ratified_head.is_some())
             {
                 return Determination::undetermined(format!(
                     "evidence ledger {} has schema {LEGACY_SCHEMA}, but record #{i} carries \
-                     head/dirty fields that schema never had",
+                     head/dirty/ratified_head fields that schema never had",
                     path.display()
                 ));
             }
@@ -316,7 +347,7 @@ enum ReqState {
     GreenAfterRed { cmds: Vec<String> },
     /// No RED; at least one PASS.
     Pass { cmds: Vec<String> },
-    /// No current-fingerprint record at all.
+    /// No counted (current-epoch) record at all.
     Unmeasured,
 }
 
@@ -355,24 +386,49 @@ struct RecordAt {
 /// The evaluated ledger against the requirements of one ratified spec.
 struct Evaluation {
     states: Vec<(String, ReqState)>,
-    /// Counted (current-fingerprint) records per requirement, in ledger
+    /// Counted (current-epoch) records per requirement, in ledger
     /// order; parallel to `states`.
     records: Vec<Vec<RecordAt>>,
-    /// Records from other fingerprints (earlier ratifications), ignored.
+    /// Records from an earlier ratification (another fingerprint, or another
+    /// ratification head), ignored.
     stale: usize,
+    /// Ledger positions of current-fingerprint records without a
+    /// `ratified_head` (written by an earlier fde): their epoch is unknown, so
+    /// they are neither counted nor ignored. Callers answer `Undetermined`
+    /// while this is non-empty.
+    unplaced: Vec<usize>,
 }
 
-/// Evaluate `ledger` for `reqs` under `fingerprint`. A current-fingerprint
-/// record that recording would never have written — a requirement outside
-/// the spec, a GREEN without an earlier RED of the same `CMD`, a PASS after a
-/// RED of its requirement — makes the ledger inconsistent: `Undetermined`.
+/// Whether `rec` belongs to the current evidence epoch: recorded against
+/// `fingerprint` under the ratification head `ratified_head`.
+fn in_epoch(rec: &Record, fingerprint: &str, ratified_head: &str) -> bool {
+    rec.fingerprint == fingerprint && rec.ratified_head.as_deref() == Some(ratified_head)
+}
+
+/// Evaluate `ledger` for `reqs` in the evidence epoch (`fingerprint`,
+/// `ratified_head`). Records of another fingerprint or another ratification
+/// head are stale (counted in `stale`); current-fingerprint records without a
+/// `ratified_head` are listed in `unplaced`. A counted record that recording
+/// would never have written — a requirement outside the spec, a GREEN without
+/// an earlier RED of the same `CMD`, a PASS after a RED of its requirement —
+/// makes the ledger inconsistent: `Undetermined`.
 #[track_caller]
-fn evaluate(reqs: &[String], ledger: &Ledger, fingerprint: &str) -> Determination<Evaluation> {
+fn evaluate(
+    reqs: &[String],
+    ledger: &Ledger,
+    fingerprint: &str,
+    ratified_head: &str,
+) -> Determination<Evaluation> {
     let mut accs: Vec<Acc> = reqs.iter().map(|_| Acc::default()).collect();
     let mut records: Vec<Vec<RecordAt>> = reqs.iter().map(|_| Vec::new()).collect();
     let mut stale = 0usize;
+    let mut unplaced = Vec::new();
     for (i, rec) in ledger.records.iter().enumerate() {
-        if rec.fingerprint != fingerprint {
+        if rec.fingerprint == fingerprint && rec.ratified_head.is_none() {
+            unplaced.push(i);
+            continue;
+        }
+        if !in_epoch(rec, fingerprint, ratified_head) {
             stale += 1;
             continue;
         }
@@ -443,7 +499,25 @@ fn evaluate(reqs: &[String], ledger: &Ledger, fingerprint: &str) -> Determinatio
         states,
         records,
         stale,
+        unplaced,
     })
+}
+
+/// `Undetermined` when `ev` holds current-fingerprint records without a
+/// `ratified_head`: no epoch is guessed for them.
+#[track_caller]
+fn require_placed(ev: &Evaluation) -> Determination<()> {
+    if ev.unplaced.is_empty() {
+        return Determination::known(());
+    }
+    let list: Vec<String> = ev.unplaced.iter().map(|i| format!("#{i}")).collect();
+    Determination::undetermined(format!(
+        "evidence record(s) {} match the ratified spec fingerprint but were written by an \
+         earlier fde without the ratification HEAD (ratified_head), so it cannot be decided \
+         whether they belong to the current ratification; no epoch is guessed. A human must \
+         decide what to do with the ledger (e.g. drop the target state and re-begin)",
+        list.join(", ")
+    ))
 }
 
 /// Step-5 precondition for recording `kind` of `cmd` for `req`. `None` = met.
@@ -453,11 +527,12 @@ fn precondition_unmet(
     cmd: &str,
     ledger: &Ledger,
     fingerprint: &str,
+    ratified_head: &str,
 ) -> Option<String> {
     let mut current = ledger
         .records
         .iter()
-        .filter(|r| r.fingerprint == fingerprint && r.req == req);
+        .filter(|r| in_epoch(r, fingerprint, ratified_head) && r.req == req);
     match kind {
         Kind::Red => None,
         Kind::Green => {
@@ -465,8 +540,9 @@ fn precondition_unmet(
                 None
             } else {
                 Some(format!(
-                    "refused: no RED is recorded for requirement {req} with the command {cmd:?}; \
-                     a GREEN must follow a recorded RED of the same requirement and command"
+                    "refused: no RED is recorded for requirement {req} with the command {cmd:?} \
+                     under the current ratification; a GREEN must follow a recorded RED of the \
+                     same requirement and command"
                 ))
             }
         }
@@ -581,8 +657,9 @@ struct History {
 }
 
 /// Apply the history rule (module docs, "History") to an evaluated ledger:
-/// `R <= C` and `R <= H <= C` for every counted record. Any violation or
-/// failure to compare is `Undetermined`.
+/// no current-fingerprint record without `ratified_head`, `R <= C` and
+/// `R <= H <= C` for every counted record. Any violation or failure to
+/// compare is `Undetermined`.
 #[track_caller]
 fn check_history(
     target: &ResolvedTarget,
@@ -593,6 +670,9 @@ fn check_history(
         Determination::Known(x) => x,
         Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
+    if let Determination::Undetermined(why) = require_placed(ev) {
+        return Determination::Undetermined(why);
+    }
     let c = match head_on_ratified_line(&r, &target.root) {
         Determination::Known(c) => c,
         Determination::Undetermined(why) => return Determination::Undetermined(why),
@@ -602,9 +682,8 @@ fn check_history(
         for rec in recs {
             let Some(h) = &rec.head else {
                 return Determination::undetermined(format!(
-                    "evidence record #{} ({} for {id}) was written by an earlier fde without the \
-                     target HEAD, so it cannot be placed on the ratified history; it stays \
-                     counted while the ratified spec fingerprint is unchanged",
+                    "evidence record #{} ({} for {id}) carries no target HEAD, so it cannot be \
+                     placed on the ratified history",
                     rec.index,
                     rec.kind.label()
                 ));
@@ -670,7 +749,8 @@ fn run_cmd(cmd: &str, root: &Path) -> Determination<boundary::CommandOutput> {
 ///   `req` not in the ratified spec, empty `cmd`, state dir inside the target,
 ///   unmet precondition, or the exit status contradicts `kind`. Nothing is
 ///   recorded.
-/// * `Undetermined` — store/spec/ledger unreadable or corrupt, a legacy
+/// * `Undetermined` — store/spec/ledger unreadable or corrupt, a
+///   current-fingerprint record without `ratified_head`, a legacy
 ///   ratification without a recorded HEAD, a target HEAD that cannot be
 ///   observed or is not a descendant of (or equal to) the ratification head,
 ///   a dirty flag that cannot be observed, or `cmd` could not be run to an
@@ -721,10 +801,17 @@ pub fn record(
         Determination::Known(l) => l,
         Determination::Undetermined(why) => return why.into_verdict(),
     };
-    if let Determination::Undetermined(why) = evaluate(&reqs, &ledger, &spec.fingerprint) {
-        return why.into_verdict();
+    match evaluate(&reqs, &ledger, &spec.fingerprint, &ratified_head) {
+        Determination::Known(ev) => {
+            if let Determination::Undetermined(why) = require_placed(&ev) {
+                return why.into_verdict();
+            }
+        }
+        Determination::Undetermined(why) => return why.into_verdict(),
     }
-    if let Some(why) = precondition_unmet(kind, req, cmd, &ledger, &spec.fingerprint) {
+    if let Some(why) =
+        precondition_unmet(kind, req, cmd, &ledger, &spec.fingerprint, &ratified_head)
+    {
         return Verdict::violation(why);
     }
 
@@ -792,10 +879,17 @@ pub fn record(
         Determination::Known(l) => l,
         Determination::Undetermined(why) => return why.into_verdict(),
     };
-    if let Determination::Undetermined(why) = evaluate(&reqs, &ledger, &spec.fingerprint) {
-        return why.into_verdict();
+    match evaluate(&reqs, &ledger, &spec.fingerprint, &ratified_head) {
+        Determination::Known(ev) => {
+            if let Determination::Undetermined(why) = require_placed(&ev) {
+                return why.into_verdict();
+            }
+        }
+        Determination::Undetermined(why) => return why.into_verdict(),
     }
-    if let Some(why) = precondition_unmet(kind, req, cmd, &ledger, &spec.fingerprint) {
+    if let Some(why) =
+        precondition_unmet(kind, req, cmd, &ledger, &spec.fingerprint, &ratified_head)
+    {
         return Verdict::violation(why);
     }
     ledger.records.push(Record {
@@ -806,6 +900,7 @@ pub fn record(
         exit_code: code,
         head: Some(head),
         dirty: Some(dirty),
+        ratified_head: Some(ratified_head),
     });
     match state::write_json_atomic(&path, &ledger) {
         Determination::Known(()) => Verdict::from_findings(Vec::new()),
@@ -842,11 +937,15 @@ fn evaluated(
             spec.path.display()
         ));
     }
+    let (ratified_head, _) = match ratification_head(&spec) {
+        Determination::Known(x) => x,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
     let ledger = match read_ledger(&ledger_path(target, state_dir)) {
         Determination::Known(l) => l,
         Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
-    match evaluate(&reqs, &ledger, &spec.fingerprint) {
+    match evaluate(&reqs, &ledger, &spec.fingerprint, &ratified_head) {
         Determination::Known(ev) => Determination::known((spec, ev)),
         Determination::Undetermined(why) => Determination::Undetermined(why),
     }
@@ -1013,7 +1112,8 @@ pub fn report(target: &ResolvedTarget, state_dir: &Path) -> Determination<Report
     ));
     if ev.stale > 0 {
         out.push_str(&format!(
-            "\nignored: {} record(s) from an earlier ratification (different spec fingerprint)",
+            "\nignored: {} record(s) from an earlier ratification (different spec fingerprint \
+             or ratification HEAD)",
             ev.stale
         ));
     }

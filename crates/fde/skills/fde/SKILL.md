@@ -40,7 +40,10 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
 6. **target の HEAD は批准時のコミットから前進させるだけ。** 批准は target の HEAD コミット(と dirty かどうか)を記録し、
    各証跡も CMD 実行直前の HEAD / dirty を記録する。批准後に target root で `git reset`・ブランチ切り替え・履歴の
    書き換えをすると、記録は「批准した履歴の上」に無くなり、`fde evidence red|green|pass|verify` と `fde report` は
-   exit 2 になる(再批准しても既存の記録が数えられ続けるため 2 のままになりうる。そうなったら止めて人間に聞く)。
+   exit 2 になる。そうなったら止めて人間に聞く。人間が現在の HEAD で再批准(`fde ratify`)すると新しい証跡 epoch に
+   なり、以前の記録は残るが無視される(`fde report` の `ignored:` 行に件数が出る)ので、全要件の RED / GREEN / PASS を
+   記録し直す。前進したコミットで再批准した場合も以前の証跡は判定から外れる。同じ HEAD での再批准なら記録は数えられ
+   続ける。旧版の fde が書いた `ratified_head` の無い記録が残っている場合は再批准しても 2 のままなので、人間に聞く。
    修正はコミットとして積む(merge / fast-forward / 新規コミット)。
 
 ## (a) 把握 — 仕様を推定する

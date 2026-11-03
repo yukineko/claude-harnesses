@@ -61,7 +61,8 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
   したがって verify が 0 でも report が 1 のことがある(PASS のみの要件がある場合)。
 - `evidence` の拒否(1)の条件: 未批准(批准後の spec 変更を含む)、ID が批准 spec に無い、同じ ID・同じ CMD の
   RED が無い GREEN、RED 後の PASS、CMD の終了ステータスが種類と矛盾(RED は非 0、GREEN / PASS は 0 が必要)。
-  判定不能(2)の条件: store・spec・ledger が読めない・壊れている、HEAD を記録していない旧形式の批准(再批准が必要)、
+  判定不能(2)の条件: store・spec・ledger が読めない・壊れている、現在の fingerprint で `ratified_head` を持たない
+  記録がある、HEAD を記録していない旧形式の批准(再批准が必要)、
   現在の HEAD が批准時 HEAD の子孫(または同一)でない・比較できない(両コミットを stderr に出す)、HEAD・dirty が
   判定できない、CMD がシグナルで終了・タイムアウト(1 時間)・起動失敗・126/127 で終了。いずれも何も記録しない。
 
@@ -69,16 +70,26 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
 
 - `fde ratify` は target の HEAD(`git rev-parse --verify HEAD`、40 桁小文字 hex)と dirty(`git status --porcelain`
   が何か出力したか。未追跡ファイルは含み、ignore されたファイルは含まない)を `ratification.json` に記録する。
-- `fde evidence red|green|pass` の各記録も、CMD を実行する**直前**に観測した HEAD と dirty を持つ。
-- R = 批准時 HEAD、C = 現在の HEAD、H = 数えられる(現在の fingerprint の)各記録の HEAD とする。
+- `fde evidence red|green|pass` の各記録も、CMD を実行する**直前**に観測した HEAD と dirty を持つ。さらに記録時点の
+  批准時 HEAD を `ratified_head` として持つ(証跡の **epoch**)。
+- **数えられる記録**は、fingerprint が現在の批准 fingerprint と一致し、**かつ** `ratified_head` が現在の批准時 HEAD と
+  一致するものだけ。それ以外は **stale**(ディスクには残るが、記録時の前提条件・verify・report のすべてで無視され、
+  report の `ignored:` 行で件数が出る)。
+- したがって**再批准は新しい証跡 epoch を始める**: 別の HEAD で再批准すると以前の記録は残るが無視され、要件は
+  unmeasured(1)に戻るので、RED / GREEN / PASS を記録し直す。reset 等で批准した履歴から外れたとき(2)の回復は、
+  人間が現在の HEAD で再批准すること。**前進したコミットで再批准した場合も以前の証跡は判定から外れる**ことに注意。
+  同じ HEAD での再批准では epoch は変わらず、記録は数えられ続ける。
+- R = 批准時 HEAD、C = 現在の HEAD、H = 数えられる(現在の epoch の)各記録の HEAD とする。
   - `evidence red|green|pass`: CMD 実行前に R が現在の HEAD の祖先または同一であること
     (`git merge-base --is-ancestor`)。祖先でない(reset・ブランチ切り替え・履歴の書き換え)か比較できなければ 2。
   - `evidence verify` / `report`: C が判定でき、R ≤ C、かつ数えられる全記録で R ≤ H ≤ C であること。
     1 つでも満たさない・比較できない(例: リポジトリに無いコミット)なら 2(pass / 完了とは言わない)。
 - **dirty は記録・表示するが、それだけでは失格にしない**。ただし dirty な記録はコミットからは再現できない。
 - HEAD を持たない旧形式の `ratification.json`(schema 1)は `fde status` では従来どおり読める(批准済みのまま)が、
-  `evidence red|green|pass|verify` と `report` は再批准を求めて 2 になる。HEAD を持たない記録(旧形式 ledger
-  由来)が数えられる場合も verify / report は 2。
+  `evidence red|green|pass|verify` と `report` は再批准を求めて 2 になる。現在の fingerprint と一致するが
+  `ratified_head` を持たない記録(旧版 fde が書いたもの。旧形式 ledger 由来を含む)は epoch を推測せず、それが
+  ledger にある限り `evidence red|green|pass|verify` と `report` は 2(人間が ledger の扱いを決める。例: target の
+  state を消して `fde begin` からやり直す)。
 
 ## `/fde` のフロー
 
@@ -121,17 +132,20 @@ state dir は環境変数 `FDE_STATE_DIR`(設定済みかつ空でない場合)�
 <state_dir>/targets/<state_key>/
   registration.json   {schema: 1, root, spec}                             fde begin が書く
   ratification.json   {schema: 2, spec, fingerprint, head, dirty}         fde ratify が書く
-  evidence.json       {schema: 2, records: [{fingerprint, req, kind, cmd, exit_code, head, dirty}, ...]}
+  evidence.json       {schema: 2, records: [{fingerprint, req, kind, cmd, exit_code, head, dirty, ratified_head}, ...]}
                                                                           fde evidence red/green/pass が追記
 ```
 
-- `head` は 40 桁小文字 hex のコミット ID、`dirty` は bool。
+- `head` / `ratified_head` は 40 桁小文字 hex のコミット ID、`dirty` は bool。
 - 旧形式: `ratification.json` の schema 1(`{schema, spec, fingerprint}`)は読めるが evidence 系では判定不能
   (上記)。`evidence.json` の schema 1(記録に `head` / `dirty` なし)も読め、次の追記で schema 2 として書き直される
-  (旧記録は `head` なしのまま)。未知の schema、schema 2 で `head` / `dirty` の片方だけを持つ記録は判定不能。
+  (旧記録は `head` なしのまま)。schema 2 で `ratified_head` を持たない記録(この変更以前の fde が書いたもの)も読める
+  (扱いは上記)。未知の schema、schema 2 で `head` / `dirty` の片方だけを持つ記録、`head` / `dirty` なしで
+  `ratified_head` を持つ記録は判定不能。
 
 - いずれも一時ファイル + rename で原子的に書く。`fde begin` は既存の `ratification.json` を先に消す。
-- ledger の各記録は記録時の批准 fingerprint を持ち、現在の fingerprint と一致するものだけが判定に数えられる。
+- ledger の各記録は記録時の批准 fingerprint と批准時 HEAD(`ratified_head`)を持ち、両方が現在の批准と一致する
+  ものだけが判定に数えられる(上記「HEAD の来歴」)。
 - 要件の状態: RED の CMD に同じ CMD の後続 GREEN が無ければ unresolved、GREEN(RED の後)か PASS があれば complete、
   どれも無ければ unmeasured。
 - specforge の config・要件素材・下書き spec も state dir 側(例: `<state_dir>/specforge/<state_key>/`)に置く。
@@ -142,10 +156,10 @@ state dir は環境変数 `FDE_STATE_DIR`(設定済みかつ空でない場合)�
 - **gate の Bash 判定は文字列照合**。コマンドの構文解析はしない。外から相対パスで target を指す、正規形でない
   symlink 経由で指す、といった書き方は検出しない。
 - **登録済み target を削除すると**、その state dir(`<state_dir>/targets/<state_key>/`)を消すまで gate は編集を deny し続ける。
-- **HEAD は前進のみ許す**。批准後に HEAD を reset・別ブランチへ切り替え・履歴の書き換えをすると、批准をやり直しても
-  批准時 HEAD と各記録の HEAD・現在の HEAD の関係が崩れたままなら verify / report は 2 のまま。同じ spec のまま
-  (fingerprint が同じまま)再批准しても既存の記録は数えられ続けるため、ledger(state dir 側の `evidence.json`)を
-  どう扱うかは人間が判断する必要がある。HEAD を持たない旧形式の記録も同様に数えられ続ける。
+- **HEAD は前進のみ許す**。批准後に HEAD を reset・別ブランチへ切り替え・履歴の書き換えをすると verify / report は 2。
+  人間が現在の HEAD で再批准すると新しい epoch になり、以前の証跡はすべて無視される(記録し直しが要る)。前進した
+  コミットでの再批准でも同じく以前の証跡は判定から外れる。`ratified_head` を持たない旧版の記録は epoch を推測しない
+  ため、再批准しても 2 のまま(ledger の扱いは人間が判断する)。
 - **dirty は失格条件ではない**。dirty な tree で取った証跡も数える(report に `dirty` と出る)が、その状態は
   コミットからは再現できない。
 - SHA-256 object format の repo(64 桁のコミット ID)は HEAD を判定できないため、ratify・evidence は 2 になる。

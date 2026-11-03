@@ -13,7 +13,7 @@
 4095 crates/condukt/src/claim.rs
 7271 crates/condukt/src/main.rs
 6460 crates/condukt/src/state.rs
-4977 crates/condukt/src/verify.rs
+4892 crates/condukt/src/verify.rs
 5254 crates/condukt/src/worktree.rs
 2699 crates/condukt/src/wt_reconcile.rs
 2345 crates/fugu-router/src/main.rs

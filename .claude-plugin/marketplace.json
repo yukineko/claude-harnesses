@@ -156,7 +156,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.327",
+      "version": "0.7.330",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -232,7 +232,7 @@
     {
       "name": "curate",
       "description": "Promotes fugu-router playbooks into versioned golden eval datasets for evalkit, turning mechanical acceptance criteria into runnable cases and the rest into drafts for a human.",
-      "version": "0.1.13",
+      "version": "0.1.15",
       "category": "quality",
       "keywords": [
         "eval",

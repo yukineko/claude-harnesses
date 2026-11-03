@@ -349,3 +349,30 @@ exit 101: finished in 0.89s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 5.00s
      Running tests/release_excluded_not_failure.rs (target/debug/deps/release_excluded_not_failure-24a993f271d84aa0)
 error: test failed, to rerun pass `-p condukt --test release_excluded_not_failure`"""
+
+[[task]]
+id = "7b9c258d"
+title = "guard-maintree-bash status_records parses a rename source field starting with 1/2/u/?/! as a status record"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-03 at main 81dbf64a (also present at gh1512 fix 674d5a1f). scripts/guard-maintree-bash.py status_records(): for rec in porcelain.split NUL: if rec[:1] in (1,2,u,?,!) -> status_paths(rec+NUL). In porcelain v2 -z a '2' rename record is followed by a separate source-path field; status_paths consumes it, status_records re-parses it. Source '1src.txt' -> IndexError (crash handler -> exit 2, refusing a possibly legitimate command); source '? weird.txt' -> phantom path 'weird.txt'. Repro: scripts/test_guard_maintree_bash_status_records_rename_source.py at a6d1d75f (2 of 3 FAIL). Readings: (a) defect, skip the source field like status_paths; (b) intended over-refusal - unlikely since the inline comment says the source field is a separate entry. Off-task note from condukt run-20261103-233558-54331 gh1512 worker."
+created_at = 1793717491
+updated_at = 1793717491
+weight = 0.0
+issue_number = 1520
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1520"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_status_records_rename_source.py"
+rev = "a6d1d75fbf47bdcfbf8ddda6fbc12599774d5543"
+observed_at = 1793717491
+detail = """
+exit 1: ============== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_status_records_rename_source.py::RenameSourceField::test_source_starting_with_1
+FAILED scripts/test_guard_maintree_bash_status_records_rename_source.py::RenameSourceField::test_source_starting_with_question_mark
+========================= 2 failed, 1 passed in 0.06s =========================="""

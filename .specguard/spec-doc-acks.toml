@@ -238,3 +238,7 @@ reason = "test-only fixture (#[cfg(test)]) for GIT_DIR scrub tests; no productio
 [[ack]]
 path = "crates/blastguard/src/detect/protected.rs"
 reason = "Pure move: the protected-path and system-path verdicts (protected_path_block through protected_glob_deny, incl. MAX_SYMLINK_HOPS, physical_landing, system_path_block, glob_literal_prefix) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/readonly.rs"
+reason = "Pure move: the read-only command table and recognised-verb helpers (READ_ONLY_COMMANDS through backlog_writes_operand_paths, plus is_recognized_command) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."

@@ -2804,7 +2804,10 @@ fn claim_n_condukt_resolution_order() {
 
     // (3) neither: refused, reason names condukt, nothing stored.
     let f = Fixture::new("resorder-none");
-    std::fs::remove_file(f.shim.join("condukt")).unwrap();
+    assert!(
+        !f.shim.join("condukt").exists(),
+        "case (3) precondition: the default fixture must not mint its own condukt (GH #1510)"
+    );
     let o = run_add(&f, &[("PATH", "/usr/bin:/bin")]);
     assert_ne!(o.code, 0, "no condukt anywhere must refuse: {}", o.both());
     assert!(o.stderr.contains("condukt not found"), "{}", o.stderr);

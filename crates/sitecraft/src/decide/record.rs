@@ -31,8 +31,18 @@
 //! harness = "authkit"              # plugin name looked up in marketplace.json
 //! fit = "yes"                      # `--confirm-fit` (D9), only for an existing plugin
 //!
+//! [capabilities.blender-headless]  # `decide capability` (D2; schema in `super::capability`)
+//! relevance = "relevant"
+//! how = "..."
+//! done_when = "..."
+//! [capabilities.blender-headless.verify]
+//! kind = "builtin:blender-headless"
+//! script = "scripts/make.py"
+//! glb = "out/model.glb"
+//! render = "out/render.png"
+//!
 //! [[history]]                      # appended when a recorded value changes (D8)
-//! area = "auth"
+//! area = "auth"                    # "capability" for a capability (question = its name)
 //! question = "needs-login"         # "<q>#note" for a note, "relevance", "text" for purpose
 //! old = "yes"
 //! new = "no"
@@ -50,6 +60,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::capability::{self, Capability};
 use super::catalog::{
     self, AnswerChoice, Area, Question, IRRELEVANT, RELEVANCE_QUESTION, RELEVANT,
 };
@@ -225,8 +236,8 @@ pub struct HistoryEntry {
     pub pruned: bool,
 }
 
-/// The whole record.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The whole record. (`PartialEq` only: `toml::Value` has no `Eq`.)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Decisions {
     /// The purpose (D1); `None` = not recorded.
@@ -241,6 +252,12 @@ pub struct Decisions {
     /// Feature classifications, keyed by feature name.
     #[serde(default)]
     pub features: BTreeMap<String, FeatureClass>,
+    /// Capabilities beyond the web app (D2), keyed by name, kept raw so a
+    /// broken table (exit 2) can be told apart from a missing key (exit 1);
+    /// parse with [`super::capability::parse_all`]. [`load`] has already
+    /// checked that every table parses.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub capabilities: BTreeMap<String, toml::Value>,
     /// Change history (append-only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<HistoryEntry>,
@@ -256,8 +273,15 @@ impl Decisions {
             areas: BTreeMap::new(),
             questions: Vec::new(),
             features: BTreeMap::new(),
+            capabilities: BTreeMap::new(),
             history: Vec::new(),
         }
+    }
+
+    /// The parsed capabilities. `Err` only for a record that did not come
+    /// from [`load`] (which rejects unparseable tables).
+    pub fn parsed_capabilities(&self) -> Result<BTreeMap<String, Capability>, String> {
+        capability::parse_all(&self.capabilities)
     }
 
     /// The recorded purpose text (trimmed), if non-blank.
@@ -475,6 +499,7 @@ fn validate(d: &Decisions, catalog: &[Area]) -> Result<(), String> {
             ));
         }
     }
+    capability::parse_all(&d.capabilities)?;
     Ok(())
 }
 
@@ -498,8 +523,11 @@ fn validated(mut d: Decisions, label: &str) -> Determination<Decisions> {
 /// Contract: file absent (`NotFound`) → `Known(None)`; read error, non-UTF-8,
 /// TOML error, unknown key, unknown area id, an answer not among its
 /// question's choices, an array answer to a non-multi question, an answer to
-/// an inactive question or a non-relevant area, a note without an answer, or
-/// an entry that exists but cannot be read (e.g. a dangling symlink) →
+/// an inactive question or a non-relevant area, a note without an answer, a
+/// `[capabilities.<name>]` table that does not parse (bad name, unknown key or
+/// `verify.kind`, missing / mistyped required `verify` key; see
+/// [`super::capability`]), or an entry that exists but cannot be read (e.g. a
+/// dangling symlink) →
 /// `Undetermined`; else `Known(Some(_))` (legacy strings under multi
 /// questions normalised to arrays).
 pub fn load(root: &Path) -> Determination<Option<Decisions>> {
@@ -811,7 +839,9 @@ pub fn set_purpose(decisions: &mut Decisions, text: &str) -> Result<(), String> 
 ///
 /// Contract: a row is produced for every value that existed in `before` and
 /// is different in `after` — purpose text, an area's relevance, a catalog
-/// answer, a note (`<q>#note`), a domain answer or note. A value present in
+/// answer, a note (`<q>#note`), a domain answer or note, a capability table
+/// (`area = "capability"`, `question = <name>`, old/new as canonical JSON).
+/// A value present in
 /// `before` and absent in `after` is a row with `new = ""` and `pruned =
 /// true` (follow-up pruning, or answers cleared by a relevance change). A
 /// value recorded for the first time (absent in `before`) is not a change
@@ -891,7 +921,37 @@ pub fn diff_history(before: &Decisions, after: &Decisions, at: &str) -> Vec<Hist
             }
         }
     }
+    for (name, ov) in &before.capabilities {
+        match after.capabilities.get(name) {
+            Some(nv) if nv == ov => {}
+            Some(nv) => row(
+                capability::HISTORY_AREA,
+                name,
+                capability::canonical_json(ov),
+                Some(capability::canonical_json(nv)),
+            ),
+            None => row(
+                capability::HISTORY_AREA,
+                name,
+                capability::canonical_json(ov),
+                None,
+            ),
+        }
+    }
     out
+}
+
+/// Record (or replace) the raw `[capabilities.<name>]` table (in memory;
+/// call [`save`]). The table must parse ([`capability::parse`]), else `Err`
+/// with the record unchanged.
+pub fn record_capability(
+    decisions: &mut Decisions,
+    name: &str,
+    table: toml::Value,
+) -> Result<(), String> {
+    capability::parse(name, &table)?;
+    decisions.capabilities.insert(name.to_string(), table);
+    Ok(())
 }
 
 /// Append [`diff_history`] of `before` → `after` to `after.history` and
@@ -1033,30 +1093,61 @@ fn fix_hint(item: &Next) -> String {
 pub const PURPOSE_HINT: &str =
     "purpose: not recorded, run `sitecraft decide purpose --text \"<要約>\"` (the purpose summary agreed with the user in SKILL Phase 1)";
 
-/// Pending catalog / domain items plus fired violation rules, as findings.
-fn findings(decisions: &Decisions) -> Determination<Vec<harness_core::verdict::Reason>> {
-    pending(decisions).map(|items| {
-        let mut out: Vec<_> = items
-            .iter()
-            .map(|i| harness_core::verdict::Reason::new(fix_hint(i)))
-            .collect();
-        for f in rules::evaluate(decisions) {
-            if f.severity == Severity::Violation {
-                out.push(harness_core::verdict::Reason::new(f.line()));
-            }
+/// The pending items of the capabilities (D2): an undecided relevance, and
+/// for a relevant capability a missing `how` / `done_when` / `verify`.
+fn capability_findings(decisions: &Decisions) -> Result<Vec<String>, String> {
+    let caps = decisions.parsed_capabilities()?;
+    let mut out = Vec::new();
+    for (name, c) in &caps {
+        let missing = c.pending();
+        if missing.is_empty() {
+            continue;
         }
-        out
-    })
+        out.push(format!(
+            "capabilities.{name}: {} not recorded, ask the user and run `sitecraft decide capability --name {name} --relevance relevant|irrelevant --how <text> --done-when <text> --verify-kind {}` (with the kind's arguments)",
+            missing.join(" / "),
+            capability::KINDS.join("|")
+        ));
+    }
+    Ok(out)
+}
+
+/// Pending catalog / domain items, pending capability keys, plus fired
+/// violation rules, as findings.
+fn findings(decisions: &Decisions) -> Determination<Vec<harness_core::verdict::Reason>> {
+    let items = match pending(decisions) {
+        Determination::Known(i) => i,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let caps = match capability_findings(decisions) {
+        Ok(c) => c,
+        Err(e) => return Determination::undetermined(format!("inconsistent decision record: {e}")),
+    };
+    let mut out: Vec<_> = items
+        .iter()
+        .map(|i| harness_core::verdict::Reason::new(fix_hint(i)))
+        .collect();
+    out.extend(caps.into_iter().map(harness_core::verdict::Reason::new));
+    for f in rules::evaluate(decisions) {
+        if f.severity == Severity::Violation {
+            out.push(harness_core::verdict::Reason::new(f.line()));
+        }
+    }
+    Determination::known(out)
 }
 
 /// Are all required catalog / domain decisions present and consistent?
 ///
 /// Contract: `Clean` iff every catalog area has a relevance, every relevant
 /// area's active questions are answered, every domain question is answered,
-/// and no violation rule of [`super::rules::RULES`] fires; otherwise
-/// `Violation` naming the pending area / question ids and the fired rules
+/// every capability has a relevance and every relevant capability has `how`,
+/// `done_when` and `verify` (D2), and no violation rule of
+/// [`super::rules::RULES`] fires; otherwise `Violation` naming the pending
+/// area / question ids, the pending capability keys and the fired rules
 /// (`<id>: <text> (<area>/<question> = <answer>, …)`); catalog unavailable or
-/// record inconsistent → `Undetermined`. Warning rules never affect the
+/// record inconsistent (a capability table that does not parse included) →
+/// `Undetermined`. Whether a capability has been *verified* is not part of
+/// this verdict (that is the Stop gate's capability-record check). Warning rules never affect the
 /// verdict. The purpose is **not** part of this verdict (it is what the Stop
 /// gate composes); `decide check` adds it via [`check_report`].
 pub fn check(decisions: &Decisions) -> Verdict {

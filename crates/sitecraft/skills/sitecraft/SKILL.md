@@ -23,7 +23,7 @@ argument-hint: '[作りたいもの]'
 2. **仮の既定値で埋めない。** ユーザーが答えていない問いに LLM が「とりあえず」「一般的には」で答えを入れて `decide record` してはならない。わからない問いは AskUserQuestion で聞く。「関係なし（irrelevant）」も**ユーザーの判断を経た記録**であって、問いを省略する手段ではない。
 3. **テスト作者と実装者を別 subagent に分ける。** 自分の実装を検証するテストを自分で書かない（CLAUDE.md §2(a)）。
 4. **E2E は既存の `webqa-gen` スキルに委ねる。** Playwright のテスト生成をこのスキル内で再実装しない。
-5. **完成報告は全検査 exit 0 の後だけ。** `sitecraft check pages`・`sitecraft check security`・`sitecraft decide check` がすべて exit 0 になってからプロトタイプ完成を報告する。exit 2 は合格扱いしない。
+5. **完成報告は全検査 exit 0 の後だけ。** `sitecraft check pages`・`sitecraft check security`・`sitecraft decide check`、および relevant な能力ごとの `sitecraft check capability <name>` がすべて exit 0 になってからプロトタイプ完成を報告する。exit 2 は合格扱いしない。
 
 ## 手順
 
@@ -61,6 +61,30 @@ sitecraft decide add-question --id <id> --text "<問い>" [--choice <選択肢> 
 ```
 
 `--choice` を付けない問いは自由記述。複数選んでよい問いには `--multi` を付ける（回答は配列で記録される）。
+
+**Web アプリの外の能力（capability）を記録する。** 目的が Web アプリ以外の成果物を要するとき（Blender で 3D モデルを書き出す・three.js で描画する・変換 CLI を動かす等）、能力ごとに `[capabilities.<name>]` を記録する（`<name>` は `^[a-z0-9][a-z0-9-]*$`）。関連（relevant / irrelevant）の判定はカタログ領域と同じく根拠を添えてユーザーに確認する。relevant な能力の **how（どう実現するか）と done_when（何をもって完成とするか）は LLM が決めない。** 案を示したうえで **AskUserQuestion** でユーザーに聞き、答えだけを記録する。verify（完成を機械判定する方法）は次の 3 種類だけ:
+
+```sh
+# Blender を headless で動かし GLB と render PNG を書かせる（script は root 相対）
+sitecraft decide capability --name <name> --relevance relevant --how "<how>" --done-when "<done_when>" \
+  --verify-kind builtin:blender-headless --script <script.py> --glb <out.glb> --render <out.png> [--input <glob> ...]
+# dev server のページを headless Chromium で開き、selector（既定 canvas）の描画を確かめる
+sitecraft decide capability --name <name> --relevance relevant --how "<how>" --done-when "<done_when>" \
+  --verify-kind builtin:threejs-render --page /<page>.html [--selector <css>] [--input <glob> ...]
+# 任意のコマンド（exit 0 = clean / 2 = undetermined / それ以外 = violation）
+sitecraft decide capability --name <name> --relevance relevant --how "<how>" --done-when "<done_when>" \
+  --verify-kind command --argv <prog> [--argv <arg> ...] --input <glob> [--input <glob> ...]
+# 関係なし
+sitecraft decide capability --name <name> --relevance irrelevant
+```
+
+relevant なのに how / done_when / verify が欠けた能力は `decide check` が exit 1 で列挙する。キーの誤り・型違い・未知の verify kind・root の外を指すパスは exit 2（記録は変わらない）。変更は `[[history]]`（`area = "capability"`）に残る。
+
+`command` の verify は任意のプログラムを実行するので、その `argv` は `sitecraft trust` が人間の承認として記録する（`sitecraft.toml` と同じ手順。argv を変えたら trust し直すまで `check capability` は exit 2 で何も実行しない）。LLM が人間の代わりに `sitecraft trust` を実行しない。
+
+**記録したら、その場で動くかを確かめる（probe）。** relevant な能力ごとに `sitecraft capability probe <name>` を実行する。stdout に `{"capability","result","reason"}` の JSON が 1 行出る（exit 0 `feasible` / 1 `infeasible` / 2 `undetermined`、120 秒で打ち切り `timeout`）。probe は何も書かない。結果（`result` と `reason`）を **AskUserQuestion** でユーザーに示し、infeasible / undetermined なら「環境を整える（Blender の導入・`SITECRAFT_BLENDER` の設定・Playwright の導入）か、how / verify を変えるか」を聞いて決めてもらう。
+
+probe の `feasible` は「この環境で動かせる」という事前確認であって完成ではない。feasible を根拠に完成と報告しない（完成の根拠は Phase 10 の `sitecraft check capability` の exit 0 だけ）。
 
 ### Phase 4 — 全問に答えてもらう（Ask ループ）
 
@@ -182,7 +206,7 @@ api_paths = ["/api/health"]
 - `check pages` は `command` の `npm --prefix app` から `app/` を web-app package とみなし、そこ（と祖先）の `node_modules` から Playwright を解決する。Playwright は `app/` に入れる（`npm --prefix app i -D playwright && (cd app && npx playwright install chromium)`）。
 - `api_paths` の各パスは `http://127.0.0.1:<port>`（Stop gate では `serve start` が応答を確認した loopback アドレス。`[::1]` のこともある）に GET され、2xx 以外（3xx を含む）・接続失敗は exit 1、1 パス 10 秒を超えたら exit 2。`/` で始まらない要素は設定エラー（exit 2）。
 
-書いたら **`sitecraft trust` は人間に実行してもらう。** `command` は Stop gate と `sitecraft serve start` が実行するコマンドなので、内容を人間が確認して承認する必要がある。LLM が代わりに `sitecraft trust` を実行しない。未 trust の設定では `serve start` も gate も止まる（exit 2 / block）。
+書いたら **`sitecraft trust` は人間に実行してもらう。** `command` は Stop gate と `sitecraft serve start` が実行するコマンドなので、内容を人間が確認して承認する必要がある。LLM が代わりに `sitecraft trust` を実行しない。未 trust の設定では `serve start` も gate も止まる（exit 2 / block）。`sitecraft trust` は同時に `sitecraft/decisions.toml` の `command` 能力の argv も承認として記録する（`command` 能力が無ければその記録を消す）。`decisions.toml` が読めない・`[capabilities]` が壊れているときは何も trust せず exit 2。
 
 ### Phase 8 — 実装
 
@@ -204,12 +228,16 @@ sitecraft check pages
 sitecraft serve stop
 sitecraft check security
 sitecraft decide check
+sitecraft check capability <name>   # relevant な能力ごとに
 ```
 
 - `check pages` — 設定した pages を Playwright で開き、console error・page error・asset の HTTP エラー・壊れたリンクを検出する。
 - `check security` — build 出力の秘密情報（伏字で表示）・`.env` の値の混入・危険な HTML sink・`npm audit` の high/critical を検出する。
-- exit 1 は指摘を直して再実行。exit 2 は検査が走れなかった原因（未ビルド・Playwright 未導入・lockfile 無し等）を直して再実行。
+- `check capability <name>` — 能力の verify を実行して判定する（300 秒で打ち切り exit 2）。`builtin:blender-headless` は古い GLB / render を消してから Blender を走らせ、GLB ヘッダ（`glTF`・version 2・長さ一致）と render の描画（四隅の最頻色を背景とし、どれかのチャネルが 16 を超えて違う画素が 1% 以上）を確かめる。`builtin:threejs-render` は trust 済みの `sitecraft.toml` の dev server（止まっていれば起動し、自分で起動したものだけ止める）でページを開き、selector の要素のスクリーンショットに同じ描画規則を当てる。`command` は trust 済みの argv を root で実行する。結果は state dir の result record に残り、Stop gate はそれを読む（gate 自身は能力を実行しない）。入力（script・`verify.inputs`・threejs では `sitecraft.toml` と `web_globs`）や `[capabilities.<name>]` を変えたら再実行する。
+- exit 1 は指摘を直して再実行。exit 2 は検査が走れなかった原因（未ビルド・Playwright 未導入・lockfile 無し・Blender 不在・未 trust 等）を直して再実行。
 
 ### Phase 11 — 完成報告
 
-`sitecraft check pages`・`sitecraft check security`・`sitecraft decide check` が**すべて exit 0** になったことを確認してから、プロトタイプ完成を報告する。報告には各コマンドの実行結果（exit code）を含める。1 つでも exit 1 / exit 2 が残っていれば完成と報告しない — 残っている検査とその出力をそのまま報告する。
+`sitecraft check pages`・`sitecraft check security`・`sitecraft decide check`、および **relevant な能力すべての `sitecraft check capability <name>`** が**すべて exit 0** になったことを確認してから、プロトタイプ完成を報告する。報告には各コマンドの実行結果（exit code）を含める。1 つでも exit 1 / exit 2 が残っていれば完成と報告しない — 残っている検査とその出力をそのまま報告する。
+
+`sitecraft capability probe` の `feasible` だけでは完成ではない。probe は動かせるかの事前確認であり、能力の完成は `check capability` の exit 0 でだけ示す。

@@ -164,7 +164,7 @@ fn npm_prefix(command: &[String]) -> Option<&str> {
 /// The directory node runs in: the `npm --prefix` package dir (canonical,
 /// inside the canonical root) or `root` itself. A prefix that is empty,
 /// cannot be resolved, is not a directory, or lies outside the root → `Err`.
-fn package_dir(command: &[String], root: &Path) -> Result<PathBuf, String> {
+pub(crate) fn package_dir(command: &[String], root: &Path) -> Result<PathBuf, String> {
     let Some(prefix) = npm_prefix(command) else {
         return Ok(root.to_path_buf());
     };
@@ -403,21 +403,21 @@ fn deadline_for(pages: usize) -> Duration {
     Duration::from_secs(secs.min(480) + 30)
 }
 
-/// Candidate script paths, in priority order.
-fn script_candidates() -> Vec<PathBuf> {
+/// Candidate paths of the bundled asset `name`, in priority order.
+fn script_candidates(name: &str) -> Vec<PathBuf> {
     let mut c = Vec::new();
     if let Some(root) = std::env::var_os("CLAUDE_PLUGIN_ROOT").filter(|r| !r.is_empty()) {
-        c.push(PathBuf::from(root).join("assets").join(SCRIPT_NAME));
+        c.push(PathBuf::from(root).join("assets").join(name));
     }
     if let Ok(exe) = std::env::current_exe() {
         let exe = exe.canonicalize().unwrap_or(exe);
         for dir in exe.ancestors().skip(1).take(EXE_ANCESTOR_DEPTH) {
-            c.push(dir.join("assets").join(SCRIPT_NAME));
+            c.push(dir.join("assets").join(name));
             c.push(
                 dir.join("crates")
                     .join("sitecraft")
                     .join("assets")
-                    .join(SCRIPT_NAME),
+                    .join(name),
             );
         }
     }
@@ -425,7 +425,13 @@ fn script_candidates() -> Vec<PathBuf> {
 }
 
 fn locate_script() -> Result<PathBuf, String> {
-    let candidates = script_candidates();
+    locate_asset(SCRIPT_NAME)
+}
+
+/// Locate the bundled asset `name` the same way as the check-pages script
+/// (module docs). Not found → `Err` naming every path tried.
+pub(crate) fn locate_asset(name: &str) -> Result<PathBuf, String> {
+    let candidates = script_candidates(name);
     for p in &candidates {
         if p.is_file() {
             return p
@@ -439,20 +445,24 @@ fn locate_script() -> Result<PathBuf, String> {
         .collect::<Vec<_>>()
         .join(", ");
     Err(format!(
-        "cannot locate the bundled {SCRIPT_NAME} (tried: {}); set CLAUDE_PLUGIN_ROOT to the \
+        "cannot locate the bundled {name} (tried: {}); set CLAUDE_PLUGIN_ROOT to the \
          sitecraft plugin directory or reinstall the plugin",
         if tried.is_empty() { "nothing" } else { &tried }
     ))
 }
 
-struct Output {
+/// Result of [`run_with_deadline`].
+pub(crate) struct Output {
     /// `None` when the deadline passed and the process group was killed.
-    status: Option<ExitStatus>,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
+    pub(crate) status: Option<ExitStatus>,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
 }
 
-fn run_with_deadline(mut cmd: Command, limit: Duration) -> std::io::Result<Output> {
+/// Spawn `cmd` (stdout / stderr piped by the caller, own process group) and
+/// wait at most `limit`; past it the whole group is SIGKILLed and the
+/// status is `None`. A spawn or capture failure is `Err`.
+pub(crate) fn run_with_deadline(mut cmd: Command, limit: Duration) -> std::io::Result<Output> {
     let mut child = cmd.spawn()?;
     let mut so = child.stdout.take();
     let mut se = child.stderr.take();

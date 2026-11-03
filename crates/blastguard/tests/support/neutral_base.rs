@@ -2,8 +2,8 @@
 //!
 //! The `worktree_root_*` tests put a synthetic `<base>/src/proj`,
 //! `<base>/src/.harness-worktrees` and `<base>/home` somewhere and ask the hook
-//! binary about `rm -r` there. Two properties of that "somewhere" leak into the
-//! verdict (backlog bdd85e20, measured 2026-10-01):
+//! binary about `rm -r` there. Three properties of that "somewhere" leak into the
+//! verdict (the first two: backlog bdd85e20, measured 2026-10-01):
 //!
 //!   * the payload `cwd` / `CLAUDE_PROJECT_DIR` SPELLING: blastguard derives a
 //!     worktree storage root from the LAST `.harness-worktrees` component of
@@ -58,7 +58,8 @@
 //! Every candidate is CALIBRATED against the real hook binary before use: an
 //! `rm -rf <base>/calibration-<test>/outside/victim` from cwd
 //! `<base>/calibration-<test>/src/proj` must come back exactly Deny. A location that turns it into Allow (an
-//! enclosing worktree root) or Ask (a temp safe root), or anything else, is
+//! enclosing worktree root, or class 4: ignored build output in a git work
+//! tree) or Ask (a temp safe root), or anything else, is
 //! rejected with the hook's output. When no candidate calibrates, this PANICS
 //! with every rejection — the tests fail loudly rather than run somewhere their
 //! assertions stop observing the property.
@@ -110,7 +111,9 @@ fn pick() -> PathBuf {
     panic!(
         "no location-neutral fixture base: every candidate lets its location decide the \
          verdict. Set {OVERRIDE_ENV} to a directory whose real path is outside the \
-         blastguard temp roots.\n  {}",
+         blastguard temp roots, outside every worktree storage root, and not inside a git \
+         work tree under a build-output directory (ignored build output); the calibration \
+         must come back exactly Deny.\n  {}",
         rejected.join("\n  ")
     );
 }
@@ -288,7 +291,7 @@ fn calibrate(lexical: &Path) -> Result<(), String> {
     if stdout.contains(r#""permissionDecision":"deny""#) {
         Ok(())
     } else if stdout.trim().is_empty() {
-        Err("calibration `rm -rf <outside>/victim` was Allow (an enclosing worktree root?)".into())
+        Err("calibration `rm -rf <outside>/victim` was Allow (an enclosing worktree root, or ignored build output in a git work tree?)".into())
     } else {
         Err(format!(
             "calibration `rm -rf <outside>/victim` was not Deny: {}",

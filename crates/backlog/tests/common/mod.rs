@@ -80,10 +80,6 @@ case "$m" in
 esac
 "#;
 
-/// A `condukt` that answers "not claimed" the way the real one does:
-/// `{"claimed":false}` on stdout and exit 1.
-const NOT_CLAIMED_CONDUKT: &str = "#!/bin/sh\necho '{\"claimed\":false}'\nexit 1\n";
-
 impl Fixture {
     pub fn new(tag: &str) -> Self {
         let home = unique_dir(&format!("{tag}-home"));
@@ -116,10 +112,10 @@ impl Fixture {
         );
         f.write("README.txt", "x\n");
         f.write_exec_shim("cargo", FAKE_CARGO);
-        // `add` runs the cross-session claim check (`condukt state is-claimed`),
-        // and an unusable condukt is UNDETERMINED, so `add` is refused (backlog
-        // 420f1eec). Pin a deterministic "not claimed" answer for this fixture.
-        f.write_exec_shim("condukt", NOT_CLAIMED_CONDUKT);
+        // The default claim check resolves the shared, already-published
+        // `condukt_shim_dir()` (see `run_stdin`); a fresh per-fixture exec
+        // costs ~2.3s on this host (GH 1510). Tests may still override by
+        // calling `write_exec_shim("condukt", ..)`.
         // Repro scripts: a FAILING repro (exit 1) means the bug is REPRODUCED
         // (same polarity as a RED test); exit 0 means NOT reproduced.
         f.write_script("tests/repro_yes.sh", "echo 'bug present'; exit 1");
@@ -253,8 +249,9 @@ impl Fixture {
     pub fn run_stdin(&self, args: &[&str], env: &[(&str, &str)], input: &[u8]) -> Out {
         let bin = env!("CARGO_BIN_EXE_backlog");
         let path = format!(
-            "{}:{}",
+            "{}:{}:{}",
             self.shim.display(),
+            condukt_shim_dir().display(),
             std::env::var("PATH").unwrap_or_default()
         );
         let mut cmd = Command::new(bin);

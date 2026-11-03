@@ -68,7 +68,11 @@ fn unterminated_quote_in_criteria_command_is_not_extracted_as_a_command() {
         r#"{"goal":"g","tasks":[{"id":"t1","title":"t","touched_files":["x.txt"],"deps":[],"class":"serial","done_criteria":"`cargo test -p demo -- \"never_closed` passes"}]}"#,
     )
     .unwrap();
-    let init = condukt(&repo, &home, &["state", "init", "--file", decomp.to_str().unwrap()]);
+    let init = condukt(
+        &repo,
+        &home,
+        &["state", "init", "--file", decomp.to_str().unwrap()],
+    );
     let init_out = format!(
         "{}{}",
         String::from_utf8_lossy(&init.stdout),
@@ -81,7 +85,11 @@ fn unterminated_quote_in_criteria_command_is_not_extracted_as_a_command() {
         .unwrap_or_else(|| panic!("state init produced no run id: {init_out}"))
         .to_string();
 
-    let cc = condukt(&repo, &home, &["state", "check-criteria", "--run", &rid, "--task", "t1"]);
+    let cc = condukt(
+        &repo,
+        &home,
+        &["state", "check-criteria", "--run", &rid, "--task", "t1"],
+    );
     let stdout = String::from_utf8_lossy(&cc.stdout).into_owned();
     let _ = std::fs::remove_dir_all(&tmp);
     let v: serde_json::Value = serde_json::from_str(stdout.trim())

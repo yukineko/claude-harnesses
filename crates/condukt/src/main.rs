@@ -1876,14 +1876,36 @@ fn main() {
             if Config::disabled() {
                 return;
             }
-            let input = model::HookInput::parse(&read_stdin());
+            // Silence here means "nothing to resume", so an unreadable payload
+            // (its `cwd` names the project to check) is said out loud rather
+            // than guessing the project from the process cwd.
+            let raw = match try_read_stdin() {
+                Ok(raw) => raw,
+                Err(e) => {
+                    println!(
+                        "[condukt] Could not read the SessionStart hook payload from stdin \
+                         ({e}), so open runs and orphan worktrees cannot be listed"
+                    );
+                    return;
+                }
+            };
+            let input = model::HookInput::parse(&raw);
             hooks::restore::run(input.cwd.as_deref().unwrap_or(""));
         }),
         Command::Statusline => run_hook(|| {
             if Config::disabled() {
                 return;
             }
-            let input = model::HookInput::parse(&read_stdin());
+            // An empty status line reads as "no active run", so an unreadable
+            // payload renders an explicit `unknown`, never silence.
+            let raw = match try_read_stdin() {
+                Ok(raw) => raw,
+                Err(e) => {
+                    println!("condukt run state unknown (stdin read failed: {e})");
+                    return;
+                }
+            };
+            let input = model::HookInput::parse(&raw);
             hooks::statusline::run(input.cwd.as_deref().unwrap_or(""));
         }),
         Command::Editgate => run_hook(|| {
@@ -1893,7 +1915,13 @@ fn main() {
             run_editgate();
         }),
         Command::SessionHeartbeat => {
-            let code = match wt_reap::run_session_heartbeat_hook(&read_stdin()) {
+            let heartbeat = try_read_stdin()
+                .context(
+                    "session heartbeat: reading the hook payload from stdin failed, so the \
+                     session is unidentifiable",
+                )
+                .and_then(|raw| wt_reap::run_session_heartbeat_hook(&raw));
+            let code = match heartbeat {
                 Ok(_) => 0,
                 Err(e) => {
                     eprintln!("condukt session-heartbeat: {e:#}");
@@ -1959,16 +1987,38 @@ fn editgate_block_reason(verdict: &serde_json::Value) -> String {
 /// blocks, with a stated reason, when the current directory cannot be
 /// determined (e.g. deleted), or when the project's run state cannot be
 /// located, including when condukt's configuration cannot be loaded
-/// (config.toml unreadable or unparseable). Out-of-scope paths (non-edit tool, no file, non-Rust file,
-/// out-of-worktree edit), a clean build, and empty/invalid stdin print nothing.
+/// (config.toml unreadable or unparseable), and when stdin cannot be read (an
+/// I/O error, which is not the same as an empty payload). Out-of-scope paths
+/// (non-edit tool, no file, non-Rust file, out-of-worktree edit), a clean
+/// build, and empty/invalid stdin that was read successfully print nothing.
 /// Called under [`run_hook`], so the process exits 0 — exit status is not this
 /// hook's verdict channel; the printed block line is. Note that `run_hook`
 /// swallows a panic, and a panic before the block line is printed therefore
 /// leaves stdout empty, which the harness reads as "no block": that path is
 /// NOT fail-closed today.
 fn run_editgate() {
+    // A stdin READ ERROR is not "no payload": which file was edited (and so
+    // whether it is in scope) is unknown, so block, stated (user ruling
+    // 2026-11-03, backlog 8004d80f). Empty/invalid stdin that was read fine
+    // stays silent.
+    let raw = match try_read_stdin() {
+        Ok(raw) => raw,
+        Err(e) => {
+            let out = serde_json::json!({
+                "decision": "block",
+                "reason": format!(
+                    "condukt editgate could not read the PostToolUse payload from stdin, so \
+                     which file this edit touched and whether it still compiles is unknown: {e}"
+                ),
+            });
+            if let Ok(line) = serde_json::to_string(&out) {
+                println!("{line}");
+            }
+            return;
+        }
+    };
     // Parse the PostToolUse payload; empty/invalid stdin → stay silent.
-    let input = match harness_core::hook::HookInput::parse(&read_stdin()) {
+    let input = match harness_core::hook::HookInput::parse(&raw) {
         Some(i) => i,
         None => return,
     };
@@ -2093,7 +2143,19 @@ fn run_subagent_stop() {
             return;
         }
     };
-    let outcome = subagent_stop::run(&cfg, &cwd, &read_stdin(), state::now_secs());
+    // A stdin read error is not an empty payload: say so, rather than letting
+    // `subagent_stop::run` report the empty string as "stdin was empty".
+    let raw = match try_read_stdin() {
+        Ok(raw) => raw,
+        Err(e) => {
+            eprintln!(
+                "condukt subagent-stop: no progress timestamp written: reading the hook \
+                 payload from stdin failed ({e}), so the run and task are unidentifiable"
+            );
+            return;
+        }
+    };
+    let outcome = subagent_stop::run(&cfg, &cwd, &raw, state::now_secs());
     eprintln!("condukt subagent-stop: {}", outcome.describe());
 }
 
@@ -2213,7 +2275,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 let raw = match file {
                     Some(p) => std::fs::read_to_string(&p)
                         .with_context(|| format!("reading {}", p.display()))?,
-                    None => read_stdin(),
+                    None => read_stdin_input()?,
                 };
                 let digest = verify::distill_failure(&raw);
                 println!("{}", serde_json::to_string_pretty(&digest)?);
@@ -2226,7 +2288,8 @@ fn run_user(cmd: Command) -> Result<()> {
             } => {
                 // stdout: read the file when given, else empty. stderr: read the
                 // file when given, else read stdin (the primary input, so empty
-                // stdin fails soft to an empty digest and exit 0).
+                // stdin fails soft to an empty digest and exit 0; a stdin READ
+                // error is not empty stdin and fails the command, exit 1).
                 let stdout_raw = match stdout {
                     Some(p) => std::fs::read_to_string(&p)
                         .with_context(|| format!("reading {}", p.display()))?,
@@ -2235,7 +2298,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 let stderr_raw = match stderr {
                     Some(p) => std::fs::read_to_string(&p)
                         .with_context(|| format!("reading {}", p.display()))?,
-                    None => read_stdin(),
+                    None => read_stdin_input()?,
                 };
                 if reflux {
                     let verdict =
@@ -2375,7 +2438,7 @@ fn run_user(cmd: Command) -> Result<()> {
                 let raw = match file {
                     Some(p) => std::fs::read_to_string(&p)
                         .with_context(|| format!("reading {}", p.display()))?,
-                    None => read_stdin(),
+                    None => read_stdin_input()?,
                 };
                 let input: ReplanHandoffInput = if raw.trim().is_empty() {
                     ReplanHandoffInput::default()
@@ -4054,7 +4117,7 @@ fn run_consensus(cfg: &Config, action: ConsensusAction) -> Result<()> {
             let raw = match &file {
                 Some(p) => std::fs::read_to_string(p)
                     .with_context(|| format!("reading {}", p.display()))?,
-                None => read_stdin(),
+                None => read_stdin_input()?,
             };
             // Schema-precheck the fresh LLM output before deserializing. The
             // input is either a bare array of verdicts or an object wrapper
@@ -4164,7 +4227,7 @@ fn run_adversarial(cfg: &Config, action: AdversarialAction) -> Result<()> {
             let raw = match &file {
                 Some(p) => std::fs::read_to_string(p)
                     .with_context(|| format!("reading {}", p.display()))?,
-                None => read_stdin(),
+                None => read_stdin_input()?,
             };
             let input: AdversarialInput =
                 serde_json::from_str(&raw).context("parsing adversarial ballots JSON")?;
@@ -4340,7 +4403,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             let raw = match &file {
                 Some(p) => std::fs::read_to_string(p)
                     .with_context(|| format!("reading {}", p.display()))?,
-                None => read_stdin(),
+                None => read_stdin_input()?,
             };
             schema_precheck(&raw, "decomposition")?;
             let dec: model::Decomposition =
@@ -4380,7 +4443,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             let raw = match &file {
                 Some(p) => std::fs::read_to_string(p)
                     .with_context(|| format!("reading {}", p.display()))?,
-                None => read_stdin(),
+                None => read_stdin_input()?,
             };
             let dec: model::Decomposition =
                 serde_json::from_str(&raw).context("parsing decomposition JSON")?;
@@ -6680,16 +6743,36 @@ fn read_decomposition(file: Option<PathBuf>) -> Result<model::Decomposition> {
         Some(p) => {
             std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?
         }
-        None => read_stdin(),
+        None => read_stdin_input()?,
     };
     serde_json::from_str(&raw).context("parsing decomposition JSON")
 }
 
-fn read_stdin() -> String {
+/// Read all of stdin for a hook or user command. A read error (including one
+/// after a partial read) is `Err`, never an empty or partial `Ok` payload: an
+/// empty string would be indistinguishable from "nothing was piped" and a
+/// partial one from a complete payload (CLAUDE.md §3: IO failure is
+/// cannot-determine; user ruling 2026-11-03, backlog 8004d80f). Every caller
+/// handles the `Err` explicitly — verdict hooks give their restrictive
+/// outcome, user commands fail via [`read_stdin_input`].
+///
+/// Unlike `harness_core::hook::try_read_stdin` this does not cap the read:
+/// user commands consume arbitrarily large inputs (`verify digest` of a long
+/// test log), and a silently truncated payload is exactly the partial `Ok`
+/// this function exists to refuse. Non-UTF-8 bytes are decoded lossily (not
+/// a read failure; the payload is complete).
+fn try_read_stdin() -> std::io::Result<String> {
     use std::io::Read;
-    let mut s = String::new();
-    let _ = std::io::stdin().read_to_string(&mut s);
-    s
+    let mut buf = Vec::new();
+    std::io::stdin().read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// [`try_read_stdin`] for user commands: a read failure becomes an error that
+/// names it (the command exits 1), so it is never misreported as an empty or
+/// unparseable input.
+fn read_stdin_input() -> Result<String> {
+    try_read_stdin().context("reading stdin failed (cannot determine the input)")
 }
 
 #[cfg(test)]

@@ -140,6 +140,74 @@ pub fn run_fde(cwd: &Path, state: &Path, args: &[&str]) -> Output {
     c.output().expect("spawn fde")
 }
 
+/// Like [`run_fde`], but after the git leak vars are removed, `extra_env` is
+/// applied to this child only (used to inject an inherited `GIT_DIR` etc.).
+pub fn run_fde_with_env(
+    cwd: &Path,
+    state: &Path,
+    args: &[&str],
+    extra_env: &[(&str, &Path)],
+) -> Output {
+    let mut c = Command::new(fde_bin());
+    c.current_dir(cwd).args(args).env("FDE_STATE_DIR", state);
+    for v in GIT_LEAK_VARS {
+        c.env_remove(v);
+    }
+    for (k, v) in extra_env {
+        c.env(k, v);
+    }
+    c.output().expect("spawn fde")
+}
+
+/// `git init` + one committed `README.md` at `dir` (created if missing).
+/// Returns the canonical path of `dir`.
+pub fn init_repo_at(dir: &Path) -> PathBuf {
+    fs::create_dir_all(dir).expect("create repo dir");
+    let root = dir.canonicalize().expect("canonicalize repo dir");
+    git(&root, &["init", "-q"]);
+    git(&root, &["config", "user.name", "fde-test"]);
+    git(&root, &["config", "user.email", "fde-test@example.invalid"]);
+    git(&root, &["config", "commit.gpgsign", "false"]);
+    fs::write(root.join("README.md"), "fixture\n").expect("write README");
+    git(&root, &["add", "README.md"]);
+    git(&root, &["commit", "-q", "-m", "initial"]);
+    root
+}
+
+/// Parse the stdout of a successful `fde resolve` as `(root, state_key)`.
+/// Panics (with the full run) unless exit is 0 and stdout is the contract JSON
+/// `{"root": "<abs path>", "state_key": "<non-empty key>"}`.
+pub fn parse_resolved(out: &Output) -> (PathBuf, String) {
+    assert_eq!(
+        code(out),
+        Some(0),
+        "fde resolve must resolve: {}",
+        show(out)
+    );
+    let v: serde_json::Value = serde_json::from_str(stdout(out).trim())
+        .unwrap_or_else(|e| panic!("fde resolve stdout is not JSON ({e}): {}", show(out)));
+    let root = v
+        .get("root")
+        .and_then(|r| r.as_str())
+        .unwrap_or_else(|| panic!("fde resolve JSON lacks string \"root\": {}", show(out)));
+    let key = v
+        .get("state_key")
+        .and_then(|k| k.as_str())
+        .unwrap_or_else(|| panic!("fde resolve JSON lacks string \"state_key\": {}", show(out)));
+    assert!(
+        !key.is_empty(),
+        "fde resolve state_key must be non-empty: {}",
+        show(out)
+    );
+    let root = PathBuf::from(root);
+    assert!(
+        root.is_absolute(),
+        "fde resolve root must be absolute: {}",
+        show(out)
+    );
+    (root, key.to_owned())
+}
+
 /// Run `fde gate` with process cwd `cwd`, `FDE_STATE_DIR=state`, and `stdin`
 /// (the raw PreToolUse payload bytes) on stdin; git leak vars removed.
 pub fn run_gate(cwd: &Path, state: &Path, stdin: &[u8]) -> Output {

@@ -330,8 +330,8 @@ fn waived(r: &Run) -> bool {
     block_reason(r).is_none() && r.stdout.contains("systemMessage")
 }
 
-/// Two stops, same failure. The attempt counter is reset between them (idle gap
-/// > `reset_after_secs`), so the reason differs ONLY by the per-run record path
+/// Two stops, same failure. The attempt counter is reset between them (the idle
+/// gap exceeds `reset_after_secs`), so the reason differs ONLY by the per-run record path
 /// (its timestamp and `-a<attempt>` stay distinct). The second must be recognised
 /// as a repeat.
 #[test]
@@ -373,5 +373,73 @@ fn a_different_failure_is_not_a_repeat() {
     assert!(
         reason2.contains("suite::beta"),
         "a different failing test must block again\n{reason2}"
+    );
+}
+
+// ===========================================================================
+// holes found in review of cc63509a, and the repeat key in the real flow
+// ===========================================================================
+
+/// The same error text in several files: each diagnostic has the same header
+/// line and a different location. When the header of the LAST one is among the
+/// final lines of the output, the earlier ones must not be skipped because
+/// their header text is "already shown".
+#[test]
+fn digest_keeps_the_locations_of_same_header_diagnostics_in_different_files() {
+    let mut raw = String::from("   Compiling app v0.1.0 (/p/app)\n");
+    for (n, file) in ["a", "b", "c"].iter().enumerate() {
+        raw.push_str(&format!(
+            "error[E0425]: cannot find value `x` in this scope\n --> src/{file}.rs:{}:5\n {} | x\n\n",
+            n + 1,
+            n + 1
+        ));
+    }
+    raw.push_str("error: could not compile `app` (bin \"app\") due to 3 previous errors\n");
+    let f = fixture("same-header", &raw, "");
+    let reason = reason_of(&stop(&f, "s-same-header"));
+    for loc in ["src/a.rs:1:5", "src/b.rs:2:5", "src/c.rs:3:5"] {
+        assert!(
+            reason.contains(loc),
+            "the location {loc} of a compile error was dropped\n--- reason ---\n{reason}"
+        );
+    }
+}
+
+/// `go test` names its failures `--- FAIL: TestName`; there is no `FAILED`.
+#[test]
+fn digest_of_go_test_output_keeps_every_failing_test_name() {
+    let mut raw = String::new();
+    for i in 0..8 {
+        raw.push_str(&format!(
+            "--- FAIL: TestCase{i} (0.00s)\n    case_test.go:{}: expected 1, got 2\n",
+            i + 10
+        ));
+    }
+    raw.push_str("FAIL\nFAIL\tapp/pkg\t0.012s\n");
+    let f = fixture("gotest", &raw, "");
+    let reason = reason_of(&stop(&f, "s-gotest"));
+    for i in 0..8 {
+        let name = format!("TestCase{i}");
+        assert!(
+            reason.contains(&name),
+            "failing test {name} was dropped\n--- reason ---\n{reason}"
+        );
+    }
+}
+
+/// In the normal flow nothing resets the attempt counter: the second stop is
+/// attempt 2/N, the first was 1/N. The same failure must still be recognised as
+/// a repeat, but `block_fingerprint` contains `attempt N/max`, so it never is.
+#[test]
+fn a_repeat_is_recognised_in_the_normal_flow_with_a_rising_attempt() {
+    let f = fixture("rep-normal", "boom: always the same\n", "");
+    let r1 = stop(&f, "s-rep-normal");
+    let reason1 = reason_of(&r1);
+    let r2 = stop(&f, "s-rep-normal");
+    assert!(
+        waived(&r2),
+        "the 2nd identical failure (attempt 2 vs 1) must be waived as a repeat\n--- 1st reason ---\n{reason1}\n--- 2nd stdout ---\n{}\n--- stderr ---\n{}",
+        r2.stdout,
+        r2.stderr
     );
 }

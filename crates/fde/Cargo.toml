@@ -1,9 +1,9 @@
 [package]
 rust-version.workspace = true
 name = "fde"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
-description = "Forward Deployed Engineer harness: target resolution, spec ratification store, a PreToolUse gate on unratified registered targets, and an evidence ledger. Partial scaffold: resolve, begin, ratify and status are implemented; gate, evidence and report answer undetermined (exit 2)."
+description = "Forward Deployed Engineer harness: target resolution, spec ratification store, a PreToolUse gate on unratified registered targets, and an evidence ledger. Partial scaffold: resolve, begin, ratify, status and gate are implemented; evidence and report answer undetermined (exit 2)."
 license = "MIT"
 
 [[bin]]

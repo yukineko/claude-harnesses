@@ -4,9 +4,9 @@
 //! fde — Forward Deployed Engineer harness.
 //!
 //! **PARTIAL SCAFFOLD.** Every subcommand below exists and parses. `resolve`
-//! (`target.rs`, `git.rs`) and `begin` / `ratify` / `status` (`ratify.rs`,
-//! `state.rs`) are implemented; `gate`, `evidence` and `report` still answer
-//! `Undetermined`, so they exit 2. The contract below is what the
+//! (`target.rs`, `git.rs`), `begin` / `ratify` / `status` (`ratify.rs`,
+//! `state.rs`) and `gate` (`gate.rs`) are implemented; `evidence` and `report`
+//! still answer `Undetermined`, so they exit 2. The contract below is what the
 //! implementation must meet; tests may rely on it.
 //!
 //! # CLI contract
@@ -30,7 +30,7 @@
 //! | `fde begin [TARGET] --spec FILE` | — | 0 registered / 1 refused (spec missing, not a file, or inside the target) / 2 undetermined |
 //! | `fde ratify [TARGET] [--spec FILE]` | — | 0 recorded / 1 refused (not registered, or FILE is not the registered spec) / 2 undetermined |
 //! | `fde status [TARGET]` | — | **0 ratified / 1 unratified (incl. not registered, spec changed since ratification) / 2 undetermined (state unreadable or corrupt; or, once a ratification is recorded, the spec unreadable or missing)** |
-//! | `fde gate` | — (reason on stderr) | 0 allow / 2 deny (PreToolUse block) |
+//! | `fde gate` | JSON `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"\|"deny","permissionDecisionReason":"..."}}` (deny reason also on stderr) | 0 allow / 2 deny (PreToolUse block) |
 //! | `fde evidence red\|green\|pass --req ID --cmd CMD [TARGET]` | — | 0 recorded / 1 observation contradicts the kind / 2 undetermined |
 //! | `fde evidence verify [TARGET]` | — | 0 complete / 1 incomplete / 2 undetermined |
 //! | `fde report [TARGET]` | the report text | 0 / 2 undetermined |
@@ -42,8 +42,10 @@
 //! `fde gate` is the PreToolUse hook (`hooks/hooks.json`, matcher
 //! `Bash|Edit|Write|MultiEdit|NotebookEdit`). It reads the hook payload from
 //! stdin and runs under `harness_core::hook::run_pretooluse_guarded`, so a
-//! panic is also exit 2 (block). An empty or unparsable payload must be
-//! undetermined, i.e. deny.
+//! panic is also exit 2 (block). An empty or unparsable payload (or a stdin
+//! read error) is undetermined, i.e. deny. It denies edits (and Bash run in,
+//! or naming, a guarded area) touching a target registered by `fde begin`
+//! whose status is not ratified; see `gate.rs` for the full decision order.
 //!
 //! # State directory
 //!
@@ -76,7 +78,7 @@ const EXIT_NEGATIVE: i32 = 1;
 #[command(
     name = "fde",
     version,
-    about = "Forward Deployed Engineer harness (partial scaffold: resolve, begin, ratify and status are implemented; gate, evidence and report answer undetermined, exit 2)"
+    about = "Forward Deployed Engineer harness (partial scaffold: resolve, begin, ratify, status and gate are implemented; evidence and report answer undetermined, exit 2)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -160,13 +162,51 @@ fn main() {
     std::process::exit(run(cli.cmd));
 }
 
-/// PreToolUse body. Allow = return normally (exit 0 from the guard); every
-/// non-clean answer exits 2 (block) itself.
+/// Read the whole PreToolUse payload from stdin. Unlike
+/// `harness_core::hook::read_stdin` (which swallows read errors), a read
+/// error, a payload over `harness_core::hook::MAX_STDIN_BYTES` (it would be
+/// truncated) or non-UTF-8 bytes are `Undetermined`.
+#[track_caller]
+fn read_payload() -> Determination<String> {
+    use std::io::Read;
+    let cap = harness_core::hook::MAX_STDIN_BYTES;
+    let mut buf = Vec::new();
+    if let Err(e) = std::io::stdin().take(cap + 1).read_to_end(&mut buf) {
+        return Determination::undetermined(format!("cannot read the payload on stdin: {e}"));
+    }
+    if buf.len() as u64 > cap {
+        return Determination::undetermined(format!("the payload on stdin exceeds {cap} bytes"));
+    }
+    match String::from_utf8(buf) {
+        Ok(s) => Determination::known(s),
+        Err(e) => Determination::undetermined(format!("the payload on stdin is not UTF-8: {e}")),
+    }
+}
+
+/// PreToolUse body: print the decision JSON on stdout. Allow = return
+/// normally (exit 0 from the guard). Deny exits 2 itself, with the reason on
+/// stderr as well. An allow whose JSON cannot be written also exits 2: exit 0
+/// must never come without the allow it stands for.
 fn run_gate() {
-    let payload = harness_core::hook::read_stdin();
-    match gate::evaluate(&payload) {
-        Verdict::Clean(_) => {}
+    let verdict = match read_payload() {
+        Determination::Known(payload) => gate::evaluate(&payload),
+        Determination::Undetermined(why) => why.into_verdict(),
+    };
+    let json = gate::decision_json(&verdict);
+    let written = writeln!(std::io::stdout(), "{json}").and_then(|()| std::io::stdout().flush());
+    match verdict {
+        Verdict::Clean(_) => {
+            if let Err(e) = written {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "fde gate: could not write the allow decision ({e}), so denied"
+                );
+                std::process::exit(EXIT_UNDETERMINED);
+            }
+        }
         Verdict::Violation(why) => {
+            // The exit code carries the block; a failed stdout write does not
+            // change it.
             let _ = writeln!(std::io::stderr(), "fde gate: denied: {why}");
             std::process::exit(EXIT_UNDETERMINED);
         }

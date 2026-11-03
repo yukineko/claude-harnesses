@@ -131,12 +131,10 @@ fn state_outside_target(target: &ResolvedTarget, state_dir: &Path) -> Verdict {
     recorded()
 }
 
-fn read_registration(
-    target: &ResolvedTarget,
-    state_dir: &Path,
-) -> Determination<Option<Registration>> {
-    let path = state::target_dir(state_dir, &target.state_key).join(REGISTRATION_FILE);
-    let reg: Registration = match state::read_json(&path) {
+/// Read the registration file `path`: `Known(None)` when absent, `Known(Some)`
+/// when it parses with the current schema, `Undetermined` otherwise.
+fn read_registration_file(path: &Path) -> Determination<Option<Registration>> {
+    let reg: Registration = match state::read_json(path) {
         Determination::Known(Some(r)) => r,
         Determination::Known(None) => return Determination::known(None),
         Determination::Undetermined(why) => return Determination::Undetermined(why),
@@ -148,6 +146,100 @@ fn read_registration(
             reg.schema
         ));
     }
+    Determination::known(Some(reg))
+}
+
+/// Every target registered (by [`begin`]) under `state_dir`, sorted by root.
+///
+/// Enumerates `<state_dir>/targets/*/registration.json`.
+///
+/// * `Known(vec![])` — the `targets` directory does not exist (`NotFound`),
+///   i.e. nothing was ever registered; or it holds no registration.
+/// * `Known(targets)` — every per-target directory was read; a directory
+///   without `registration.json` is not registered and is skipped, and a
+///   non-directory entry of `targets/` is skipped (registrations only live
+///   in per-target directories).
+/// * `Undetermined` — the directory listing (or any entry's metadata) cannot
+///   be read, or ANY registration is unreadable, corrupt, has an unknown
+///   schema, a non-absolute root, or sits under a directory whose name is not
+///   the state key of its root. One bad registration makes the whole answer
+///   undetermined: its root is unknown, so no path can be shown to lie
+///   outside it.
+#[track_caller]
+pub fn registered_targets(state_dir: &Path) -> Determination<Vec<ResolvedTarget>> {
+    let dir = state_dir.join("targets");
+    let listing = match std::fs::read_dir(&dir) {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Determination::known(vec![]),
+        Err(e) => {
+            return Determination::undetermined(format!(
+                "cannot list registered targets in {}: {e}",
+                dir.display()
+            ))
+        }
+    };
+    let mut targets = Vec::new();
+    for entry in listing {
+        let entry = match entry {
+            Ok(en) => en,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "cannot list registered targets in {}: {e}",
+                    dir.display()
+                ))
+            }
+        };
+        let path = entry.path();
+        match std::fs::metadata(&path) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => continue,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "cannot stat state entry {}: {e}",
+                    path.display()
+                ))
+            }
+        }
+        let reg_path = path.join(REGISTRATION_FILE);
+        let reg = match read_registration_file(&reg_path) {
+            Determination::Known(Some(r)) => r,
+            Determination::Known(None) => continue,
+            Determination::Undetermined(why) => return Determination::Undetermined(why),
+        };
+        if !reg.root.is_absolute() {
+            return Determination::undetermined(format!(
+                "registration {} names a non-absolute root {}",
+                reg_path.display(),
+                reg.root.display()
+            ));
+        }
+        let key = crate::target::state_key(&reg.root);
+        if entry.file_name().to_str() != Some(key.as_str()) {
+            return Determination::undetermined(format!(
+                "registration {} names root {}, whose state key is not its directory name",
+                reg_path.display(),
+                reg.root.display()
+            ));
+        }
+        targets.push(ResolvedTarget {
+            root: reg.root,
+            state_key: key,
+        });
+    }
+    targets.sort_by(|a, b| a.root.cmp(&b.root));
+    Determination::known(targets)
+}
+
+fn read_registration(
+    target: &ResolvedTarget,
+    state_dir: &Path,
+) -> Determination<Option<Registration>> {
+    let path = state::target_dir(state_dir, &target.state_key).join(REGISTRATION_FILE);
+    let reg = match read_registration_file(&path) {
+        Determination::Known(Some(r)) => r,
+        Determination::Known(None) => return Determination::known(None),
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
     if reg.root != target.root {
         return Determination::undetermined(format!(
             "registration {} names root {}, not the target {}",

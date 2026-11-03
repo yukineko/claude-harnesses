@@ -87,7 +87,11 @@ fn assert_not_filed(f: &Fixture, o: &Out, what: &str) {
         "{what}: must not be filed: {}",
         o.stdout
     );
-    assert!(f.list_all().is_empty(), "{what}: no row: {:?}", f.list_all());
+    assert!(
+        f.list_all().is_empty(),
+        "{what}: no row: {:?}",
+        f.list_all()
+    );
 }
 
 // ---- add: --repro-test ------------------------------------------------------
@@ -105,7 +109,12 @@ fn ignored_failing_test_with_dash_dash_ignored_is_reproduced() {
             .map(|s| s.trim().to_string());
         (o, id)
     };
-    assert_eq!(o.code, 0, "ignored failing test is reproduced: {}", o.both());
+    assert_eq!(
+        o.code,
+        0,
+        "ignored failing test is reproduced: {}",
+        o.both()
+    );
     let id = id.expect("added: line");
     assert_eq!(f.status(&id), "pending");
     assert!(

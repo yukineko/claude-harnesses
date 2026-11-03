@@ -6,7 +6,8 @@
 //! `check security`, and — only when the session wrote a file matching
 //! `web_globs` (a Write/Edit to one, or a Bash command naming one), or when
 //! that cannot be determined (including any Bash command not provably
-//! read-only) — `serve start` +
+//! read-only from its command line: an allowlisted command with literal,
+//! allowlisted arguments; see `bash_change`) — `serve start` +
 //! `check pages` + `serve stop`. A repo without `sitecraft.toml` is allowed
 //! and a `not-configured` line is appended to the state dir. Give-up is
 //! bounded (`max_attempts`) and says NOTHING WAS VERIFIED when it allows.
@@ -411,16 +412,21 @@ fn web_changes(transcript_path: &str, root: &Path, cfg: &Config) -> Determinatio
     Determination::known(false)
 }
 
-/// Commands that cannot write a file whatever their arguments (subject to the
-/// per-command exclusions in [`simple_command_is_read_only`]). Anything not
-/// listed — `sed`, `tee`, `cp`, `mv`, `find`, `sort`, `npm`, scripts, … — is
-/// treated as possibly writing.
+/// Commands that neither write a file nor run another program when given
+/// literal arguments. Two conditions apply on top of the name (see
+/// [`simple_command_is_read_only`]): no word of the command may be expanded
+/// by the shell, and `rg` may only be given the options in [`RG_FLAGS`].
+/// `git` is not listed here: only the subcommands in [`READ_ONLY_GIT`] with
+/// the options of [`git_flags`] are cleared. Anything not listed — `sed`,
+/// `tee`, `cp`, `mv`, `find`, `sort`, `npm`, scripts, … — is treated as
+/// possibly writing.
 const READ_ONLY_COMMANDS: [&str; 23] = [
     "ls", "cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "rg", "pwd", "echo", "printf",
     "which", "stat", "true", "false", "test", "cd", "basename", "dirname", "realpath", "diff",
     "cmp",
 ];
-/// `git` subcommands that do not write the work tree.
+/// `git` subcommands that do not write the work tree; each has an option
+/// allowlist in [`git_flags`].
 const READ_ONLY_GIT: [&str; 4] = ["status", "log", "rev-parse", "ls-files"];
 
 /// Can this Bash `command` have written a file matching `web_globs`?
@@ -430,12 +436,24 @@ const READ_ONLY_GIT: [&str; 4] = ["status", "log", "rev-parse", "ls-files"];
 /// - `Known(true)` when any word (or the value after a word's first `=`)
 ///   names a path matching `web_globs` — any mention counts as a change;
 /// - `Known(false)` only when the command lexes completely and every simple
-///   command in it is in [`READ_ONLY_COMMANDS`] (or `git` with a
-///   [`READ_ONLY_GIT`] subcommand), with no output redirect other than to
-///   `/dev/null` or an fd duplicate;
+///   command in it is in [`READ_ONLY_COMMANDS`] (or `git`, optionally after
+///   `--no-pager`, with a [`READ_ONLY_GIT`] subcommand), no word of it is
+///   expanded by the shell (`$`, `*`, `?`, `[`, `{` outside single quotes),
+///   every option given to `rg` / `git` is on its allowlist ([`RG_FLAGS`],
+///   [`git_flags`]; a `git log` argument containing `%G` is rejected), and
+///   there is no output redirect other than to `/dev/null` or an fd
+///   duplicate;
 /// - `Undetermined` otherwise: command / process substitution, backticks,
-///   heredocs, unterminated quotes, subshells, variable assignments, a
-///   dynamic or unlisted command name, or a file-writing redirect.
+///   ANSI-C quoting (`$'...'`), heredocs, unterminated quotes, subshells,
+///   variable assignments, an expanded word anywhere in argv (the command
+///   name included), an unlisted command / git subcommand / option, a git
+///   global option other than `--no-pager`, or a file-writing redirect.
+///
+/// Only the command line is judged. Configuration the commands read at run
+/// time — `RIPGREP_CONFIG_PATH` (which can hold `--pre`), git config such as
+/// `core.fsmonitor`, filters or `core.pager` — is not inspected: a read-only
+/// command line is cleared even if such configuration would make it run a
+/// program.
 fn bash_change(
     command: &str,
     root: &Path,
@@ -504,39 +522,356 @@ fn simple_command_is_read_only(cmd: &[Tok]) -> Result<(), String> {
             }
         }
     }
-    let Some(&(name, dynamic)) = words.first() else {
+    let Some(&(name, _)) = words.first() else {
         return Ok(());
     };
-    if dynamic {
-        return Err(format!("the command name {name:?} is not a literal"));
+    // Any expansion in argv (the command name included): the words the
+    // program receives are not the words written (`rg $F` may be
+    // `rg --pre=prog`, `git log $X` may be `git log --output=<web file>`).
+    if let Some(&(w, _)) = words.iter().find(|w| w.1) {
+        return Err(format!(
+            "the word {w:?} is expanded by the shell, so the argv is not known"
+        ));
     }
     if name.contains('=') {
         return Err(format!("it sets a variable ({name:?})"));
     }
-    let args = &words[1..];
+    let mut args: Vec<&str> = words[1..].iter().map(|w| w.0).collect();
     if name == "git" {
-        let sub = args.first().map(|a| a.0);
-        if !sub.is_some_and(|s| READ_ONLY_GIT.contains(&s)) {
-            return Err(format!(
-                "`git {}` is not a known read-only git command",
-                sub.unwrap_or("")
-            ));
+        // Global options are not allowed (`-c`, `--exec-path`, `--git-dir`,
+        // `--work-tree`, `--config-env`, … change what git runs or where),
+        // except the output-only `--no-pager`.
+        while args.first() == Some(&"--no-pager") {
+            args.remove(0);
         }
-        if args
-            .iter()
-            .any(|a| a.0.starts_with("--output") || a.0 == "--ext-diff")
-        {
-            return Err("git is asked to write output to a file or run an external diff".into());
+        let sub = args.first().copied().unwrap_or("");
+        let Some(spec) = git_flags(sub) else {
+            return Err(format!("`git {sub}` is not a known read-only git command"));
+        };
+        let opts = &args[1..];
+        if sub == "log" {
+            if let Some(a) = opts.iter().find(|a| a.contains("%G")) {
+                return Err(format!(
+                    "git log format {a:?} verifies signatures (runs gpg)"
+                ));
+            }
         }
-        return Ok(());
+        return check_flags(&format!("git {sub}"), opts, &spec);
     }
     if !READ_ONLY_COMMANDS.contains(&name) {
         return Err(format!("`{name}` is not a known read-only command"));
     }
-    if name == "rg" && args.iter().any(|a| a.0.starts_with("--pre")) {
-        return Err("rg --pre runs another command".into());
+    if name == "rg" {
+        return check_flags("rg", &args, &RG_FLAGS);
     }
     Ok(())
+}
+
+/// The options an allowlisted command may be given. Anything else that looks
+/// like an option makes the command not provably read-only.
+struct FlagSpec {
+    /// Long options without a value (`--name`, exact match).
+    long_bool: &'static [&'static str],
+    /// Long options with a value (`--name=VALUE` or `--name VALUE`).
+    long_val: &'static [&'static str],
+    /// Short options without a value; they may be clustered (`-abc`).
+    short_bool: &'static str,
+    /// Short options with a value; the rest of the cluster, or the next word,
+    /// is that value.
+    short_val: &'static str,
+    /// `-<digits>` (git log's `-5`) is accepted.
+    digits: bool,
+}
+
+/// Check every option-looking word of `args` against `spec`.
+///
+/// A word is option-looking when it starts with `-` and is not `-` itself,
+/// up to a `--` word (after which every word is an operand). A word that is
+/// the value of a preceding option is checked too when it starts with `-`
+/// (a pattern such as `-e -x` is then rejected: conservative, never
+/// permissive). Operands are not options and are not restricted here; a
+/// web-file operand is caught by [`bash_change`]'s mention check.
+fn check_flags(cmd: &str, args: &[&str], spec: &FlagSpec) -> Result<(), String> {
+    let reject = |a: &str| -> Result<(), String> {
+        Err(format!(
+            "`{cmd}` option {a:?} is not on its read-only allowlist"
+        ))
+    };
+    for &a in args {
+        if a == "--" {
+            break;
+        }
+        if let Some(long) = a.strip_prefix("--") {
+            let (name, has_value) = match long.split_once('=') {
+                Some((n, _)) => (n, true),
+                None => (long, false),
+            };
+            let ok =
+                spec.long_val.contains(&name) || (!has_value && spec.long_bool.contains(&name));
+            if !ok {
+                return reject(a);
+            }
+            continue;
+        }
+        let Some(short) = a.strip_prefix('-') else {
+            continue;
+        };
+        if short.is_empty() {
+            continue;
+        }
+        if spec.digits && short.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        for c in short.chars() {
+            if spec.short_val.contains(c) {
+                break;
+            }
+            if !spec.short_bool.contains(c) {
+                return reject(a);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// ripgrep options that neither run a program nor write a file, taken from
+/// the installed rg's `--help` (ripgrep 14). Left out on purpose:
+/// `--pre` / `--pre-glob` (run a preprocessor on every file),
+/// `--hostname-bin` (runs a program to get the hostname for hyperlinks) and
+/// `-z` / `--search-zip` (runs decompression programs found on `PATH`).
+/// rg never writes files; it is an allowlist so that an option this list
+/// does not know (a newer rg, an abbreviation) is not cleared.
+const RG_FLAGS: FlagSpec = FlagSpec {
+    long_bool: &[
+        "case-sensitive",
+        "crlf",
+        "fixed-strings",
+        "ignore-case",
+        "invert-match",
+        "line-regexp",
+        "mmap",
+        "multiline",
+        "multiline-dotall",
+        "no-unicode",
+        "null-data",
+        "pcre2",
+        "smart-case",
+        "stop-on-nonmatch",
+        "text",
+        "word-regexp",
+        "auto-hybrid-regex",
+        "no-pcre2-unicode",
+        "binary",
+        "follow",
+        "glob-case-insensitive",
+        "hidden",
+        "ignore-file-case-insensitive",
+        "no-ignore",
+        "no-ignore-dot",
+        "no-ignore-exclude",
+        "no-ignore-files",
+        "no-ignore-global",
+        "no-ignore-parent",
+        "no-ignore-vcs",
+        "no-require-git",
+        "one-file-system",
+        "unrestricted",
+        "block-buffered",
+        "byte-offset",
+        "column",
+        "heading",
+        "no-heading",
+        "help",
+        "include-zero",
+        "line-buffered",
+        "line-number",
+        "no-line-number",
+        "max-columns-preview",
+        "null",
+        "only-matching",
+        "passthru",
+        "pretty",
+        "quiet",
+        "trim",
+        "vimgrep",
+        "with-filename",
+        "no-filename",
+        "sort-files",
+        "count",
+        "count-matches",
+        "files-with-matches",
+        "files-without-match",
+        "json",
+        "debug",
+        "no-ignore-messages",
+        "no-messages",
+        "stats",
+        "trace",
+        "files",
+        "no-config",
+        "no-pre",
+        "no-search-zip",
+        "pcre2-version",
+        "type-list",
+        "version",
+    ],
+    long_val: &[
+        "regexp",
+        "file",
+        "dfa-size-limit",
+        "encoding",
+        "engine",
+        "max-count",
+        "regex-size-limit",
+        "threads",
+        "glob",
+        "iglob",
+        "ignore-file",
+        "max-depth",
+        "max-filesize",
+        "type",
+        "type-not",
+        "type-add",
+        "type-clear",
+        "after-context",
+        "before-context",
+        "color",
+        "colors",
+        "context",
+        "context-separator",
+        "field-context-separator",
+        "field-match-separator",
+        "hyperlink-format",
+        "max-columns",
+        "path-separator",
+        "replace",
+        "sort",
+        "sortr",
+        "generate",
+    ],
+    short_bool: "sivxUFPSawL.ubnN0opqHIclhV",
+    short_val: "efEmjgdtTABCMr",
+    digits: false,
+};
+
+/// The option allowlist for a read-only `git` subcommand ([`READ_ONLY_GIT`]),
+/// or `None` for any other subcommand. Allowlists, not denylists: git
+/// accepts unambiguous abbreviations of long options (`--out` for
+/// `--output`), so a denylist cannot be complete. Left out on purpose:
+/// `--output`, `--ext-diff`, `--textconv` and anything that prints a diff
+/// (`-p`, `--stat`, `-v`: diff drivers / textconv run programs),
+/// `--show-signature` (runs gpg), and every option that takes a file.
+fn git_flags(sub: &str) -> Option<FlagSpec> {
+    if !READ_ONLY_GIT.contains(&sub) {
+        return None;
+    }
+    let spec = match sub {
+        "status" => FlagSpec {
+            long_bool: &[
+                "short",
+                "no-short",
+                "branch",
+                "no-branch",
+                "show-stash",
+                "ahead-behind",
+                "no-ahead-behind",
+                "long",
+                "null",
+                "no-renames",
+                "renames",
+            ],
+            long_val: &["porcelain", "untracked-files", "ignored"],
+            short_bool: "sbz",
+            short_val: "u",
+            digits: false,
+        },
+        "log" => FlagSpec {
+            long_bool: &[
+                "oneline",
+                "graph",
+                "decorate",
+                "no-decorate",
+                "all",
+                "branches",
+                "tags",
+                "remotes",
+                "reverse",
+                "abbrev-commit",
+                "no-abbrev-commit",
+                "no-merges",
+                "merges",
+                "first-parent",
+                "name-only",
+                "name-status",
+                "topo-order",
+                "date-order",
+                "no-color",
+            ],
+            long_val: &[
+                "max-count",
+                "skip",
+                "since",
+                "until",
+                "after",
+                "before",
+                "author",
+                "committer",
+                "grep",
+                "format",
+                "pretty",
+                "date",
+                "abbrev",
+            ],
+            short_bool: "",
+            short_val: "n",
+            digits: true,
+        },
+        "rev-parse" => FlagSpec {
+            long_bool: &[
+                "show-toplevel",
+                "show-prefix",
+                "show-cdup",
+                "git-dir",
+                "git-common-dir",
+                "absolute-git-dir",
+                "is-inside-work-tree",
+                "is-inside-git-dir",
+                "is-bare-repository",
+                "is-shallow-repository",
+                "symbolic-full-name",
+                "verify",
+                "quiet",
+            ],
+            long_val: &["abbrev-ref", "short"],
+            short_bool: "q",
+            short_val: "",
+            digits: false,
+        },
+        "ls-files" => FlagSpec {
+            long_bool: &[
+                "cached",
+                "deleted",
+                "modified",
+                "others",
+                "ignored",
+                "stage",
+                "killed",
+                "directory",
+                "eol",
+                "unmerged",
+                "exclude-standard",
+                "full-name",
+                "error-unmatch",
+                "deduplicate",
+            ],
+            long_val: &["exclude", "abbrev", "format"],
+            short_bool: "zcdmoisktuvf",
+            short_val: "x",
+            digits: false,
+        },
+        _ => return None,
+    };
+    Some(spec)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -551,7 +886,8 @@ enum RedirKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Tok {
-    /// A word after quote removal; `dynamic` when it contains a `$` expansion.
+    /// A word after quote removal; `dynamic` when bash may expand it into
+    /// something other than `text` (see [`lex_shell`]).
     Word {
         text: String,
         dynamic: bool,
@@ -565,7 +901,10 @@ enum Tok {
 
 /// A minimal POSIX-shell lexer, sufficient to prove a command read-only.
 /// Constructs whose effect it cannot see — command substitution, backticks,
-/// process substitution, heredocs — and unterminated quotes are errors.
+/// process substitution, heredocs, bash ANSI-C quoting (`$'...'`) — and
+/// unterminated quotes are errors. A word is marked `dynamic` when it
+/// contains an unquoted or double-quoted `$`, or an unquoted `*`, `?`, `[`
+/// or `{` (pathname / brace expansion).
 fn lex_shell(s: &str) -> Result<Vec<Tok>, String> {
     let chars: Vec<char> = s.chars().collect();
     let mut toks = Vec::new();
@@ -668,8 +1007,23 @@ fn lex_shell(s: &str) -> Result<Vec<Tok>, String> {
                 if next == Some('(') {
                     return Err("command substitution".into());
                 }
+                // bash ANSI-C quoting: inside `$'...'` a `\'` does not end
+                // the string, so treating it as `$` + a plain single quote
+                // mis-splits the command. It is not lexed; it is rejected.
+                if next == Some('\'') {
+                    return Err("ANSI-C quoting ($'...') is not analysed".into());
+                }
                 dynamic = true;
                 word.push('$');
+                in_word = true;
+                i += 1;
+            }
+            // Unquoted pathname / brace expansion: the words bash passes are
+            // not the text written (`*` may expand to a file named
+            // `--pre=prog`, `{--pre=prog,x}` to `--pre=prog x`).
+            '*' | '?' | '[' | '{' => {
+                dynamic = true;
+                word.push(c);
                 in_word = true;
                 i += 1;
             }

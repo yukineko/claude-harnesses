@@ -265,7 +265,7 @@ tdd/condukt の2コピーが実際にドリフトした前例がある以上、�
 
 **当時対象外にした理由**: 発見したタスクの `touched_files` は `scripts/check-gate-crates-sync.py` の
 編集のみを許可しており、`scripts/check-fail-open.py` はスコープ外だった。また「実測ゼロ件」の観点でも、
-`check-fail-open.py` は CI の `fail-open.yml`（`--ratchet` 付き、非バイパス本ゲート）で常時
+`check-fail-open.py` は pre-commit（`check-fail-open-diff.py`）で常時
 稼働しており実測ゼロ件とは言えないため、当時の是正基準（重複**かつ**実測ゼロ件の両方を満たす）を
 満たさず、統合せず次の是正対象の候補として記録するに留めた（別タスクでの追跡を推奨）。
 

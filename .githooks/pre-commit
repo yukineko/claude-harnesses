@@ -34,7 +34,7 @@
 #                                                 the commit's own files so a
 #                                                 parallel session's change
 #                                                 cannot block this one (the
-#                                                 whole-workspace --ratchet
+#                                                 whole-workspace count
 #                                                 would); backlog 2133b6fe
 #   doc-duplication    check-doc-duplication.py   a change that ADDS a copy of a
 #                                                 block (Jaccard >= 0.6 over

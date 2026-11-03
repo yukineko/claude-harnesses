@@ -166,6 +166,202 @@ exit 101:  in 1.68s
 error: test failed, to rerun pass `-p tdd --test cross_worktree_test_credit_20261103`"""
 
 [[task]]
+id = "fbc2d42e"
+title = "guard-maintree-bash refuses a real merge when main has an unchanged pre-existing tracked modification (misleading 'not a merge / fast-forward')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "guard-maintree-bash,false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Measured at rev 3d58ecce, 2026-11-03. Observed in the field: condukt worktree merge c23cc705 (parents 800b3318, 6f7136e8) and fcbcfc3f (parents b13a47cf, 3dc82ddd) refused with 'HEAD 800b33189836 -> c23cc705e421 (not a merge / fast-forward)'. Cause NOT proven for those two events; this test reproduces the identical message for a two-parent merge when main had an unrelated tracked modification at Pre that is byte-identical at Post: only_unchanged_untracked() (scripts/guard-maintree-bash.py:428) returns False for any non-'? ' record, so integration_head() is never asked and the REFUSE text blames not-a-merge. Test: scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py. Expected rc 0; actual rc 2: 'AssertionError: 2 != 0 : genuine two-parent merge refused (rc=2): ... HEAD 231020add0ed -> 470036e66b84 (not a merge / fast-forward)'. Note the refuse message is emitted for any HEAD-moved refusal regardless of reason, so it cannot distinguish causes."
+created_at = 1793715182
+updated_at = 1793715182
+weight = 0.0
+issue_number = 1512
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1512"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py -q"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715182
+detail = """
+exit 1: ` before reverting anything.
+
+scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py:47: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py::MergeWithPreexistingTrackedMod::test_red_merge_allowed_with_unchanged_preexisting_tracked_modification
+1 failed in 1.34s"""
+
+[[task]]
+id = "c74364bf"
+title = "check-test-weakening: #[cfg(test)] text inside a comment is treated as an attribute"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "check-test-weakening,false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Measured at rev 3d58ecce, 2026-11-03. Test: scripts/test_check_test_weakening_f_findings.py. Production fn losing one assert! (2 -> 1) is reported 'assertion-removed' because cfg_test_modules() (scripts/check-test-weakening.py:720) runs CFG_TEST_RE.finditer on RAW src and takes src.find('{') after the match. Expected exit 0; actual: 'AssertionError: 1 != 0 ... STDOUT:[BLOCK] crates/demo/src/lib.rs: assertion-removed (assertion macros 2 -> 1)'. Sub-case: comment."
+created_at = 1793715205
+updated_at = 1793715205
+weight = 0.0
+issue_number = 1513
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1513"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_f_findings.py -q -k in_comment"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715205
+detail = """
+exit 1: ay so in the commit message:
+E         test-weakening-justified: <path>:<kind> - <reason>
+
+scripts/test_check_test_weakening_f_findings.py:45: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_f_findings.py::CfgTestTextIsNotAnAttribute::test_cfg_test_in_comment_is_not_an_attribute
+1 failed, 3 deselected in 0.55s"""
+
+[[task]]
+id = "1cdb1503"
+title = "check-test-weakening: #[cfg(test)] text inside a string literal is treated as an attribute"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "check-test-weakening,false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Measured at rev 3d58ecce, 2026-11-03. Test: scripts/test_check_test_weakening_f_findings.py. Production fn losing one assert! (2 -> 1) is reported 'assertion-removed' because cfg_test_modules() (scripts/check-test-weakening.py:720) runs CFG_TEST_RE.finditer on RAW src and takes src.find('{') after the match. Expected exit 0; actual: 'AssertionError: 1 != 0 ... STDOUT:[BLOCK] crates/demo/src/lib.rs: assertion-removed (assertion macros 2 -> 1)'. Sub-case: string literal."
+created_at = 1793715208
+updated_at = 1793715208
+weight = 0.0
+issue_number = 1514
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1514"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_f_findings.py -q -k in_string_literal"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715208
+detail = """
+exit 1: n the commit message:
+E         test-weakening-justified: <path>:<kind> - <reason>
+
+scripts/test_check_test_weakening_f_findings.py:49: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_f_findings.py::CfgTestTextIsNotAnAttribute::test_cfg_test_in_string_literal_is_not_an_attribute
+1 failed, 3 deselected in 0.50s"""
+
+[[task]]
+id = "9371508a"
+title = "check-test-weakening: #[cfg(test)] use x; captures the next unrelated block"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "check-test-weakening,false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Measured at rev 3d58ecce, 2026-11-03. Test: scripts/test_check_test_weakening_f_findings.py. Production fn losing one assert! (2 -> 1) is reported 'assertion-removed' because cfg_test_modules() (scripts/check-test-weakening.py:720) runs CFG_TEST_RE.finditer on RAW src and takes src.find('{') after the match. Expected exit 0; actual: 'AssertionError: 1 != 0 ... STDOUT:[BLOCK] crates/demo/src/lib.rs: assertion-removed (assertion macros 2 -> 1)'. Sub-case: cfg(test) use statement followed by a production fn."
+created_at = 1793715210
+updated_at = 1793715210
+weight = 0.0
+issue_number = 1515
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1515"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_f_findings.py -q -k cfg_test_use"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715210
+detail = """
+exit 1:  in the commit message:
+E         test-weakening-justified: <path>:<kind> - <reason>
+
+scripts/test_check_test_weakening_f_findings.py:53: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_f_findings.py::CfgTestTextIsNotAnAttribute::test_cfg_test_use_does_not_capture_the_next_block
+1 failed, 3 deselected in 0.61s"""
+
+[[task]]
+id = "b1787e4c"
+title = "check-test-weakening: weakened test body behind an unsearched declarer (inline mod a { mod tests; }) is clean"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "check-test-weakening,fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Measured at rev 3d58ecce, 2026-11-03. Test: scripts/test_check_test_weakening_f_findings.py::UnreachedDeclarer. lib.rs declares 'mod a { #[cfg(test)] mod tests; }'; only crates/demo/src/a/tests.rs changes and loses one assert_eq!. test_body_root does not find the inline-block declarer so the body is scanned as production code. Expected exit 1 or 2; actual: 'AssertionError: 0 not found in (1, 2) : weakened test body scanned as production: clean STDOUT:check-test-weakening: no unacknowledged test weakening.'"
+created_at = 1793715213
+updated_at = 1793715213
+weight = 0.0
+issue_number = 1516
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1516"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_f_findings.py -q -k inline_mod_declarer"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715213
+detail = """
+exit 1:   STDOUT:check-test-weakening: no unacknowledged test weakening.
+E       
+E       STDERR:
+
+scripts/test_check_test_weakening_f_findings.py:68: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_f_findings.py::UnreachedDeclarer::test_body_file_behind_inline_mod_declarer_is_not_clean
+1 failed, 3 deselected in 0.56s"""
+
+[[task]]
+id = "772b2f3a"
+title = "condukt: parse_argv turns an unterminated-quote command into a whitespace-split argv instead of undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt,fail-open",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Measured at rev 3d58ecce (condukt 0.7.322), 2026-11-03. crates/condukt/src/verify.rs:1663 parse_argv = shlex::split(s).unwrap_or_else(whitespace split). Caller: mechanical_cmd -> state check-criteria, which RUNS the argv and sets skip_verifier from its exit code, so it is not display-only. Test: crates/condukt/tests/check_criteria_unterminated_quote.rs. done_criteria with backtick span cargo test -p demo -- "never_closed. Expected: no cmd extracted (undetermined); actual: 'extracted as argv Some(Array [cargo,test,-p,demo,--,"never_closed])' and it was executed. Note: unit test parse_argv_falls_back_on_unterminated_quote in verify.rs pins the current fallback (frozen assert) and will need re-anchoring when fixed."""
+created_at = 1793715216
+updated_at = 1793715216
+weight = 0.0
+issue_number = 1518
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1518"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test check_criteria_unterminated_quote"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715216
+detail = """
+exit 101: 
+   Compiling condukt v0.7.322 (/Users/yuki/src/.harness-worktrees/file-script-findings-20261103/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.76s
+     Running tests/check_criteria_unterminated_quote.rs (target/debug/deps/check_criteria_unterminated_quote-0c8c16d8b5d6828f)
+error: test failed, to rerun pass `-p condukt --test check_criteria_unterminated_quote`"""
+
+[[task]]
 id = "80b18990"
 title = "blastguard: python3 stdin program using re.compile( is asked as code-building"
 project = "/Users/yuki/src/harness"

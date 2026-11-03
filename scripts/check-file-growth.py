@@ -11,11 +11,14 @@ ratchet only turns one way:
 
   * a staged file listed in the baseline passes iff its line count <= its cap;
   * a staged file NOT listed passes iff its line count <= LIMIT;
-  * the STAGED baseline may not raise any cap relative to the baseline at HEAD,
-    nor add a new entry whose cap > LIMIT (with no baseline at HEAD, or an
-    unborn HEAD, every entry > LIMIT counts as "added"). Lowering or deleting
-    entries is fine. To get a file under the limit, split it, then lower (or
-    delete) its entry.
+  * the STAGED baseline may not raise any cap relative to the baseline at HEAD.
+    A NEW entry (absent from HEAD's baseline, or no baseline at HEAD) whose
+    cap > LIMIT is allowed only to grandfather a file that is already that big
+    in HEAD's tree: its cap must be <= the line count of `git show HEAD:<path>`.
+    It is a violation if the path is absent at HEAD, the cap exceeds the HEAD
+    count, or HEAD is unborn. A new entry with cap <= LIMIT only tightens and
+    is allowed. Lowering or deleting entries is fine. To get a file under the
+    limit, split it, then lower (or delete) its entry.
 
 Scope: only the INDEX matters. The files checked are the staged added /
 modified / renamed / copied / type-changed paths ending in `.rs` or `.py`
@@ -31,7 +34,8 @@ UNDETERMINED — the cap it was supposed to express is unknown.
 Exit codes (fail-closed, CLAUDE.md §3):
   0  every staged source file is within its cap and the baseline did not loosen
   1  violation — each one is printed with its path, line count and cap
-  2  undetermined — a git command failed or a baseline line is unparsable.
+  2  undetermined — a git command failed (including reading HEAD:<path> for a
+     grandfathered entry) or a baseline line is unparsable.
      Never 0: an uninspected commit is not a clean commit.
 
 Run from anywhere inside the repository; it operates on the git toplevel of
@@ -135,6 +139,29 @@ def _staged_baseline(root: str) -> dict[str, int]:
     return _parse_baseline(blob.decode("utf-8", "surrogateescape"), f"(index) {BASELINE_PATH}")
 
 
+def _head_line_count(root: str, path: str) -> int | None:
+    """Line count of `path` in HEAD's tree, or None if HEAD has no blob there.
+
+    Absence is established positively via `ls-tree` (an exact path match with
+    object type `blob`); any git failure raises Undetermined (exit 2), so an
+    unreadable HEAD can never pass for "file is this big at HEAD".
+    """
+    listed = _git(root, "ls-tree", "-z", "HEAD", "--", path)
+    for rec in listed.split(b"\0"):
+        if not rec:
+            continue
+        meta, _, name = rec.partition(b"\t")
+        if name.decode("utf-8", "surrogateescape") != path:
+            continue
+        fields = meta.split()
+        if len(fields) != 3:
+            raise Undetermined(f"unparsable `git ls-tree HEAD` record for {path!r}: {rec!r}")
+        if fields[1] != b"blob":
+            return None
+        return _line_count(_git(root, "show", f"HEAD:{path}"))
+    return None
+
+
 def _head_baseline(root: str) -> dict[str, int]:
     if not _head_exists(root):
         return {}
@@ -161,6 +188,7 @@ def check(root: str) -> list[str]:
     """
     violations: list[str] = []
     staged_caps = _staged_baseline(root)
+    head_exists = _head_exists(root)
     head_caps = _head_baseline(root)
 
     for path, cap in sorted(staged_caps.items()):
@@ -170,10 +198,23 @@ def check(root: str) -> list[str]:
                     f"{BASELINE_PATH}: cap for {path} raised from "
                     f"{head_caps[path]} to {cap} (caps may only go down)"
                 )
-        elif cap > LIMIT:
+            continue
+        if cap <= LIMIT:
+            continue  # a new entry at or under the limit only tightens
+        # A new entry over the limit grandfathers an ALREADY-oversized file:
+        # allowed only up to that file's size in HEAD's tree, never growth.
+        head_lines = _head_line_count(root, path) if head_exists else None
+        if head_lines is None:
+            where = "HEAD is unborn" if not head_exists else f"{path} does not exist at HEAD"
             violations.append(
-                f"{BASELINE_PATH}: new entry {path} with cap {cap} exceeds "
-                f"the {LIMIT}-line limit (new oversized files are not grandfathered)"
+                f"{BASELINE_PATH}: new entry {path} with cap {cap} exceeds the "
+                f"{LIMIT}-line limit and {where} (only files already oversized "
+                f"at HEAD can be grandfathered)"
+            )
+        elif cap > head_lines:
+            violations.append(
+                f"{BASELINE_PATH}: new entry {path} with cap {cap} exceeds its "
+                f"{head_lines} lines at HEAD (grandfathering may not allow growth)"
             )
 
     for path in _staged_sources(root):

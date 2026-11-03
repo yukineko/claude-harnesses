@@ -144,8 +144,9 @@
 #                                                 in scripts/check-file-growth.
 #                                                 baseline, or a staged baseline
 #                                                 that raises a cap vs HEAD / adds
-#                                                 an entry over 2000. Caps only go
-#                                                 down
+#                                                 an entry over 2000 above that
+#                                                 file's size at HEAD. Caps only
+#                                                 go down
 #
 # Plus one Rust gate (not python3):
 #   main-tree-guard    condukt guard main-tree    a commit from the SHARED primary
@@ -445,8 +446,9 @@ Remediation hints:
                     tree's mode entirely.
   file-growth       a staged .rs/.py file is over 2000 lines (or over its cap in
                     scripts/check-file-growth.baseline). Split it into smaller
-                    modules; never raise a cap or add a new baseline entry over
-                    2000. After a split, lower or delete the entry in the same
+                    modules; never raise a cap, and a new baseline entry over
+                    2000 may only record a file's existing size at HEAD (not
+                    growth). After a split, lower or delete the entry in the same
                     commit.
   main-tree-guard  commit from a worktree instead of the shared primary tree
                     (`condukt worktree create`, or `git stash` + `git worktree

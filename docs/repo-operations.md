@@ -18,8 +18,11 @@
   1 行と数える）で検査し、2000 行を超えたら block する。既に 2000 行を超えていたファイルは
   `scripts/check-file-growth.baseline`（`<max_lines> <path>`、`#` 行・空行は無視）に導入時点の行数を
   上限として記録してあり、その上限を超えたら block する。**上限は下げる方向にしか動かない**:
-  staged の baseline が HEAD の baseline より上限を上げる、または 2000 超の新規エントリを足すと
-  block（HEAD に baseline が無い／unborn HEAD のときは 2000 超のエントリ全部が「新規」扱い）。
+  staged の baseline が HEAD の baseline より上限を上げると block。HEAD の baseline に無い 2000 超の
+  新規エントリ（HEAD に baseline 自体が無い場合を含む）は、**HEAD の tree で既にその行数以上ある
+  ファイルの追認**としてだけ許す（上限 ≤ `git show HEAD:<path>` の行数）。HEAD にそのパスが無い・
+  上限が HEAD の行数を超える・HEAD が unborn のときは block（成長の追認は不可）。2000 以下の新規
+  エントリは締める方向なので可。HEAD:<path> を読む git が失敗したら判定不能（exit 2）。
   下げる・消すのは可。直し方はファイルを分割して 2000 行未満にし、同じ commit でエントリを下げるか
   消すこと。working tree だけの変更・stage していないファイルは見ない。exit 0 = pass / 1 = 違反
   （path・行数・上限を表示）/ 2 = 判定不能（git 失敗・baseline の解釈不能行・重複エントリ）で、

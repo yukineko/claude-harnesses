@@ -49,16 +49,28 @@ enum DecideCmd {
     Next,
     /// Record an answer. `--question relevance` with `relevant|irrelevant`
     /// judges the area; `--area domain` answers an added domain question.
+    /// Repeat `--answer` for a multi-select question; `--note` stores a
+    /// remark (omitting it keeps an existing note). A changed value prints
+    /// `changed: <old> -> <new>` and is appended to `[[history]]`.
     Record {
         #[arg(long)]
         area: String,
         #[arg(long)]
         question: String,
+        #[arg(long = "answer", required = true)]
+        answers: Vec<String>,
         #[arg(long)]
-        answer: String,
+        note: Option<String>,
     },
-    /// Exit 0 when every required decision is recorded, 1 when some are
-    /// pending, 2 when the record is absent or unreadable/invalid.
+    /// Record the purpose summary (`[purpose] text`). A blank text is exit 1.
+    Purpose {
+        #[arg(long)]
+        text: String,
+    },
+    /// Exit 0 when the purpose and every required decision are recorded and
+    /// no consistency rule is violated, 1 when something is pending or
+    /// violated, 2 when the record is absent or unreadable/invalid. Warnings
+    /// go to stderr and do not change the exit code.
     Check,
     /// Add a domain-specific question derived from the purpose.
     AddQuestion {
@@ -69,9 +81,13 @@ enum DecideCmd {
         /// Allowed answer (repeatable). None = free text.
         #[arg(long = "choice")]
         choices: Vec<String>,
+        /// Allow several answers (stored as an array).
+        #[arg(long)]
+        multi: bool,
     },
     /// Classify a feature as `simple` or `dedicated-harness` and report
-    /// whether a dedicated plugin already exists in the marketplace.
+    /// whether a dedicated plugin already exists in the marketplace, its
+    /// description, and whether its reuse is confirmed by the user.
     Classify {
         #[arg(long)]
         feature: String,
@@ -81,6 +97,10 @@ enum DecideCmd {
         /// Plugin name of the dedicated harness (defaults to the feature).
         #[arg(long)]
         harness: Option<String>,
+        /// The user's answer (`yes`/`no`) to whether the existing plugin fits
+        /// the purpose. Only accepted when the plugin exists.
+        #[arg(long = "confirm-fit")]
+        confirm_fit: Option<String>,
     },
 }
 
@@ -135,17 +155,23 @@ fn dispatch(cmd: Cmd, root: &Path) -> i32 {
             DecideCmd::Record {
                 area,
                 question,
-                answer,
-            } => decide::cmd_record(root, &area, &question, &answer),
+                answers,
+                note,
+            } => decide::cmd_record(root, &area, &question, &answers, note.as_deref()),
+            DecideCmd::Purpose { text } => decide::cmd_purpose(root, &text),
             DecideCmd::Check => decide::cmd_check(root),
-            DecideCmd::AddQuestion { id, text, choices } => {
-                decide::cmd_add_question(root, &id, &text, choices)
-            }
+            DecideCmd::AddQuestion {
+                id,
+                text,
+                choices,
+                multi,
+            } => decide::cmd_add_question(root, &id, &text, choices, multi),
             DecideCmd::Classify {
                 feature,
                 kind,
                 harness,
-            } => decide::cmd_classify(root, &feature, &kind, harness),
+                confirm_fit,
+            } => decide::cmd_classify(root, &feature, &kind, harness, confirm_fit.as_deref()),
         },
         Cmd::Serve { cmd } => with_state_dir(|state| match cmd {
             ServeCmd::Start => print_known("serve start", serve::start(state, root)),

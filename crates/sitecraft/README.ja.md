@@ -11,10 +11,11 @@
 | コマンド | 役割 |
 |---|---|
 | `sitecraft decide next` | 次の未回答の問いを JSON で出す（`{"status":"ask",…}` / `{"status":"done"}`） |
-| `sitecraft decide record --area A --question Q --answer V` | 回答を記録する。`--question relevance` に `relevant` / `irrelevant` で領域の関連を判定。`--area domain` で追加したドメイン問いに答える |
-| `sitecraft decide check` | 必要な判断がすべて記録済みなら 0、未回答があれば 1、記録が無い・壊れていれば 2 |
-| `sitecraft decide add-question --id I --text T [--choice C]…` | 目的から起こしたドメイン固有の問いを追加する（`--choice` 無しは自由記述） |
-| `sitecraft decide classify --feature F --kind simple\|dedicated-harness [--harness P]` | 機能を分類し、`dedicated-harness` なら `$SITECRAFT_MARKETPLACE` の marketplace.json に既存 plugin があるかを報告する |
+| `sitecraft decide purpose --text T` | 目的の要約を `[purpose] text` に記録する（前後の空白は除く）。空白だけの `--text` は記録を変えずに exit 1。`decide next` は目的を問わない |
+| `sitecraft decide record --area A --question Q --answer V [--answer V2]… [--note T]` | 回答を記録する。`--question relevance` に `relevant` / `irrelevant` で領域の関連を判定。`--area domain` で追加したドメイン問いに答える。`--answer` を繰り返せるのは multi の問い（カタログでは `notification.channel` だけ）で、1 個でも配列で保存する（multi でない問いに 2 個以上は失敗終了）。`--note` は補足（カタログ回答は `[areas.<a>.notes]`、ドメイン問いは `note`。付けない再記録は既存の補足を残す） |
+| `sitecraft decide check` | 目的と必要な判断がすべて記録済みで、整合性規則に違反しなければ 0。未回答・目的未記録（`sitecraft decide purpose --text` の案内付き）・規則違反があれば 1。記録が無い・壊れている（multi でない問いに配列がある等）なら 2 |
+| `sitecraft decide add-question --id I --text T [--choice C]… [--multi]` | 目的から起こしたドメイン固有の問いを追加する（`--choice` 無しは自由記述、`--multi` で複数選択） |
+| `sitecraft decide classify --feature F --kind simple\|dedicated-harness [--harness P] [--confirm-fit yes\|no]` | 機能を分類し、`dedicated-harness` なら `$SITECRAFT_MARKETPLACE` の marketplace.json に既存 plugin があるか（`existing`）・その `description`・`reuse`（`unconfirmed` / `confirmed` / `rejected` / `not-applicable`）を報告する。`--confirm-fit` はユーザーの適合判断を `[features.F] fit` に記録し、`existing: true` のときだけ受け付ける |
 | `sitecraft serve start` / `stop` / `status` | trust 済み `sitecraft.toml` の `command` を自前のプロセスグループで起動・停止・状態表示する（ポート空き確認、ready 待ち、停止はポート解放まで確認） |
 | `sitecraft check pages [--base-url URL]` | 同梱の `assets/check-pages.mjs` を Playwright で回し、console error・page error・asset の HTTP エラー・壊れたリンクを検出する |
 | `sitecraft check security` | build 出力の秘密情報（伏字表示）と `.env` 値の混入、ソースの危険な HTML sink、`npm audit --json` の high/critical を検出する |
@@ -22,6 +23,31 @@
 | `sitecraft gate` | Stop hook（stdin の Stop payload を読む） |
 
 全サブコマンド共通で `--root <dir>` を取る（既定は cwd。`gate` は payload の `cwd` を使う）。
+
+### 整合性規則（`decide check`）
+
+規則は `src/decide/rules.rs` の閉じた表で、次の 6 行がすべて（追加・削除は
+`docs/specs/sitecraft-capabilities-rulings.md` の D7 の改訂を要する）。対象はカタログ回答だけで、ドメイン問いは判定しない。
+
+| id | 条件 | 判定 |
+|---|---|---|
+| W1 | auth.relevance=relevant かつ exposure.relevance=irrelevant | warning（stderr に `warning: W1: …`。終了コードは変えない） |
+| V1 | exposure.hosting=static かつ processing.execution ∈ {in-request, background} | violation |
+| V2 | exposure.hosting=static かつ storage.file-storage=local-disk | violation |
+| V3 | users-roles.user-model ∈ {same-rights, multi-role} かつ（auth.relevance=irrelevant または auth.needs-login=no） | violation |
+| V4 | admin.admin-ui=yes かつ（auth.relevance=irrelevant または auth.needs-login=no） | violation |
+| V5 | workflow.on-failure ∈ {notify, both} かつ notification.relevance=irrelevant | violation |
+
+記録の無い回答（領域が irrelevant・follow-up が非活性・未回答）を参照する項は偽。multi の回答はいずれかの要素が
+集合に含まれれば真。violation は `<id>: <表示文> (<area>/<question> = <answer>, …)` を出して exit 1。
+
+### 変更履歴（`[[history]]`）
+
+既に記録された値（回答・relevance・補足・目的）が変わる記録ごとに、`[[history]]` に
+`{area, question, old, new, at}`（`at` は UTC RFC 3339、補足の変更は `question = "<q>#note"`、目的は
+`area = "purpose"`, `question = "text"`）を追記し、stdout に `changed: <old> -> <new>` を 1 行出す。
+同じ値の再記録・初めての記録は history を増やさない。follow-up の剪定や relevance の変更で消える回答は
+`new = ""`, `pruned = true` の行として残る。
 
 ## 終了コード規約
 
@@ -40,7 +66,8 @@
   `not-configured` を 1 行追記する。
 - 設定が読めない・未 trust・trust 後に変更 — block（`sitecraft trust` の案内付き）。`command` は起動しない。
 - 以下を `Verdict::worst_of` で合成する:
-  - `decide check`（未回答は block、`sitecraft decide next` の案内付き）
+  - `decide check` の判断部分（未回答・整合性規則 V1〜V5 の違反は block、`sitecraft decide next` の案内付き）。
+    **gate は `[purpose]` を要求しない**: 目的の未記録で exit 1 にするのは CLI の `sitecraft decide check` だけ
   - `check security`
   - `serve start` → `check pages` → `serve stop` — セッションの transcript に `web_globs` に一致するファイルへの
     Write/Edit/MultiEdit/NotebookEdit があるときだけ。transcript が無い・読めない・空・パースできない行がある・
@@ -84,7 +111,9 @@ LLM（`/sitecraft` スキル）は `sitecraft trust` を代わりに実行しな
 
 1. `sitecraft decide classify --feature <name> --kind dedicated-harness [--harness <plugin>]` を
    `SITECRAFT_MARKETPLACE=<harness repo>/.claude-plugin/marketplace.json` 付きで実行する。
-2. 出力 JSON の `existing` が `true` なら既存 plugin を使う。`false` なら harness repo に新規 plugin
+2. 出力 JSON の `existing` が `true` なら、`description` をユーザーに示して目的に合うかを聞き、その回答だけを
+   `--confirm-fit yes|no` で記録する。`reuse: confirmed` のときだけ既存 plugin を使う（`unconfirmed` は
+   再利用の許可ではない）。`reuse: rejected` または `existing: false` なら harness repo に新規 plugin（rejected のときは別名）
    （`crates/<plugin>/` に `Cargo.toml`・`.claude-plugin/plugin.json`・`hooks/hooks.json`・`bin/<plugin>`
    launcher・`skills/`・`README.ja.md`）を作り、`.claude-plugin/marketplace.json` に登録して 3 ファイルの version を
    lockstep させる。判定は `harness_core::verdict::Verdict`（三値）で返し、判定不能は block に倒す。

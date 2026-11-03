@@ -30,7 +30,7 @@
 - **pre-push のフェーズ計時（observability のみ）** — `.githooks/pre-push` は各フェーズの wall-clock 秒
   （`date +%s`）を測る: `bypass-ledger` / `nudges` / `rollout`（スクリプトがある時のみ）/
   push される sha ごとの `typecheck(<sha8>)`（worktree 作成＋`cargo check`）・`compile-fail(<sha8>)`
-  （trybuild target ごとの内訳つき）・`specguard(<sha8>)`（gate crate を触る range か、その diff が取れなかった時のみ）/
+  （trybuild target ごとの内訳つき。pass cache で飛ばした target は秒数の代わりに `skipped`）・`specguard(<sha8>)`（gate crate を触る range か、その diff が取れなかった時のみ）/
   `cleanup`（検査用 worktree の削除）/ `ref-recheck`。EXIT trap で、block や失敗で抜けた場合も含めて
   その時点までの計測を `pre-push timing: ...; total <N>s (exit <rc>)` の 1 行で stderr に出し、
   `$(git rev-parse --git-common-dir)/prepush-timing.jsonl` に 1 push 1 行の JSON（`start` / `shas` /

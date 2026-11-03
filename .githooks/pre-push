@@ -140,7 +140,8 @@ phase_end() {
 # Pass-through filter for check-compile-fail.py's stderr: every line is
 # re-emitted unchanged to stdout, and each "running <target> ..." line opens a
 # per-target timer closed by the next ok/FAILED/UNDETERMINED line (or EOF).
-# Per-target results go to fd 3 as "T <target> <secs>".
+# Per-target results go to fd 3 as "T <target> <secs>"; a target the script
+# skipped from its pass cache ("skipped <target> (...)") goes as "S <target>".
 _cf_emit() {
     _tm_secs "$_cf_t0"
     printf 'T %s %s\n' "$(_tm_labelonly "$_cf_label")" "${_tm_s:-?}" >&3
@@ -156,6 +157,10 @@ prepush_cf_filter() {
                 _cf_label="${_cf_l#check-compile-fail: running }"
                 _cf_label="${_cf_label% ...}"
                 _tm_now; _cf_t0="$_tm_v" ;;
+            "check-compile-fail: skipped "*)
+                [ -n "$_cf_label" ] && _cf_emit
+                _cf_sk="${_cf_l#check-compile-fail: skipped }"
+                printf 'S %s\n' "$(_tm_labelonly "${_cf_sk%% (*}")" >&3 ;;
             "check-compile-fail: ok "*|"check-compile-fail: FAILED "*|"check-compile-fail: UNDETERMINED"*)
                 [ -n "$_cf_label" ] && _cf_emit ;;
         esac
@@ -750,6 +755,10 @@ for sha in $pushed_shas; do
                 case "$_cf_ts" in ''|*[!0-9]*) _cf_ts="" ;; esac
                 _tm_extra_sum="${_tm_extra_sum:+$_tm_extra_sum, }$_cf_tl ${_cf_ts:-?}s"
                 _tm_extra_json="${_tm_extra_json:+$_tm_extra_json,}\"$_cf_tl\":${_cf_ts:-null}" ;;
+            "S "*)
+                _cf_tl="${_cf_r#S }"
+                _tm_extra_sum="${_tm_extra_sum:+$_tm_extra_sum, }$_cf_tl skipped"
+                _tm_extra_json="${_tm_extra_json:+$_tm_extra_json,}\"$_cf_tl\":\"skipped\"" ;;
         esac
     done <<EOF
 $_cf_out

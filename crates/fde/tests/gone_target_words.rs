@@ -16,8 +16,10 @@
 //!   `notes.txt/x` where `notes.txt` is a regular file) means the gate cannot
 //!   show the call avoids the gone root: deny (exit 2, undetermined) with a
 //!   reason naming the word.
-//! * Unresolvable words (`$`, globs, ...) are outside this decision; `echo
-//!   $HOME` is pinned to the current behaviour (allow).
+//! * Unresolvable words (`$`, globs, ...): superseded by user ruling
+//!   2026-11-04. While a target is gone, a Bash word the gate cannot resolve
+//!   is denied (the full matrix lives in `gone_target_unresolvable.rs`); the
+//!   `echo $HOME` pin below was flipped from allow to deny accordingly.
 
 mod common;
 
@@ -232,8 +234,15 @@ fn gone_root_ls_sibling_from_parent_is_allowed() {
 }
 
 #[test]
-fn gone_root_echo_home_from_parent_is_allowed() {
+fn gone_root_echo_home_from_parent_is_denied() {
+    // user ruling 2026-11-04: an unresolvable word with a gone target is denied
+    // (formerly pinned to allow).
     let l = Layout::new(true);
     let out = l.gate(l.p(), "echo $HOME");
-    assert_allowed(&out, "Bash `echo $HOME` from P with only a gone target");
+    assert_denied(&out, "Bash `echo $HOME` from P with a gone target");
+    assert!(
+        reason(&out).contains("! fde forget"),
+        "the reason must point at `! fde forget`: {}",
+        show(&out)
+    );
 }

@@ -299,7 +299,8 @@ fn evidence_sequencing_pass_after_red_and_red_after_pass() {
     // RED after PASS: allowed, then needs a GREEN.
     let e = Engagement::ratified(REQS);
     assert_code(&ev(&e, "pass", "R1", "true"), 0, "PASS R1");
-    assert_code(&verify(&e), 0, "PASS-only is complete for verify");
+    // user ruling 2026-11-04: PASS-only is not complete
+    assert_code(&verify(&e), 1, "PASS-only is not complete for verify");
     assert_code(&ev(&e, "red", "R1", "test -f fixed"), 0, "RED after PASS");
     let v = verify(&e);
     assert_code(&v, 1, "after RED the requirement needs a GREEN");

@@ -270,10 +270,14 @@ fn stale_epoch_red_does_not_block_a_pass_after_reratify() {
     e.ratify();
     let out = ev(&e, "pass", "R1", "true");
     assert_code(&out, 0, "PASS for R1 after re-ratify (old RED is stale)");
-    assert_code(
-        &verify(&e),
-        0,
-        "verify: R1 complete by PASS in the new epoch",
+    // user ruling 2026-11-04: PASS-only is not complete. The new-epoch PASS
+    // still counts as evidence (verify names it PASS-only, not "no evidence").
+    let v = verify(&e);
+    assert_code(&v, 1, "verify: R1 is PASS-only in the new epoch");
+    assert!(
+        stderr(&v).contains("PASS"),
+        "verify must say R1 is PASS-only: {}",
+        show(&v)
     );
 }
 

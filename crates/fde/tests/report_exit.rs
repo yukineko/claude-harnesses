@@ -183,8 +183,8 @@ fn report_red_only_exits_1() {
 fn report_pass_only_exits_1() {
     let e = Engagement::ratified(&[("R1", "first")]);
     assert_code(&ev(&e, "pass", "R1", "true"), 0, "PASS R1");
-    // verify accepts PASS; report's stricter bar does not.
-    assert_code(&e.fde(&["evidence", "verify"]), 0, "control: verify");
+    // user ruling 2026-11-04: PASS-only is not complete (verify agrees with report).
+    assert_code(&e.fde(&["evidence", "verify"]), 1, "control: verify");
     let r = report(&e);
     assert_not_done(&r, "PASS-only is not verified RED then GREEN");
     assert!(stdout(&r).contains("R1"), "{}", show(&r));

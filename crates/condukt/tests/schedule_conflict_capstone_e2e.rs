@@ -44,6 +44,30 @@ struct Fixture {
     dir: PathBuf,
 }
 
+/// #1485: remove the dir on drop (including panic unwinding). Set
+/// `CONDUKT_E2E_KEEP_FIXTURE` (non-empty) to keep it for debugging; the kept
+/// path is printed to stderr. A failed removal is reported on stderr, never
+/// panicked on (a panic in Drop while unwinding aborts the process).
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        if std::env::var_os("CONDUKT_E2E_KEEP_FIXTURE").is_some_and(|v| !v.is_empty()) {
+            eprintln!(
+                "CONDUKT_E2E_KEEP_FIXTURE set: keeping fixture dir {}",
+                self.dir.display()
+            );
+            return;
+        }
+        if let Err(e) = std::fs::remove_dir_all(&self.dir) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                eprintln!(
+                    "WARNING: failed to remove fixture dir {}: {e}",
+                    self.dir.display()
+                );
+            }
+        }
+    }
+}
+
 impl Fixture {
     fn new(tag: &str) -> Self {
         let pid = std::process::id();
@@ -343,4 +367,59 @@ fn schedule_driven_write_simulation_has_no_data_loss_for_conflict_pairs() {
     assert_eq!(dup_after_all, content_for("dup-b"));
     let norm_after_all = std::fs::read_to_string(work.join("shared/norm.rs")).unwrap();
     assert_eq!(norm_after_all, content_for("norm-b"));
+}
+
+/// #1485: a `Fixture` must remove its temp base dir when it goes out of scope.
+/// Without a `Drop`, every run leaks `condukt-schedule-capstone-e2e-<pid>-<tag>`
+/// dirs under the temp dir (190 leftovers were observed). The fixture's `dir`
+/// field is its base dir.
+#[test]
+fn fixture_cleanup_on_drop() {
+    let fx = Fixture::new("cleanup-on-drop");
+    let base = fx.dir.clone();
+    assert!(
+        base.is_dir(),
+        "precondition: fixture base dir must exist before drop: {}",
+        base.display()
+    );
+    drop(fx);
+    assert!(
+        !base.exists(),
+        "fixture base dir still exists after drop: {}",
+        base.display()
+    );
+}
+
+/// #1485: the cleanup must also happen when the test body panics (a failing
+/// assert is the common case), i.e. it must live in `Drop`, which runs during
+/// unwinding, not in an end-of-test call that a panic skips.
+#[test]
+fn fixture_cleanup_on_panic() {
+    let mut recorded: Option<PathBuf> = None;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let fx = Fixture::new("cleanup-on-panic");
+        recorded = Some(fx.dir.clone());
+        assert!(
+            fx.dir.is_dir(),
+            "precondition: fixture base dir must exist before the panic: {}",
+            fx.dir.display()
+        );
+        panic!("intentional panic while the fixture is alive (#1485)");
+    }));
+    let base = recorded.expect("the closure must record the base path before panicking");
+    let payload = result.expect_err("the closure must have panicked");
+    let msg = payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+    assert!(
+        msg.contains("intentional panic while the fixture is alive"),
+        "the closure panicked for an unexpected reason (precondition failed?): {msg}"
+    );
+    assert!(
+        !base.exists(),
+        "fixture base dir still exists after panic unwind: {}",
+        base.display()
+    );
 }

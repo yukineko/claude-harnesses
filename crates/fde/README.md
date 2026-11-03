@@ -44,7 +44,9 @@ moved forward to a new commit, or anything else — the answer is exit 2 naming
 both commits, and nothing is recorded. Forward movement is refused too (a
 coordinator decision under that ruling): the record's HEAD would no longer
 describe the tree the result belongs to, and a CMD that commits its own fix
-could otherwise satisfy the history rule.
+could otherwise satisfy the history rule. Only the two observations (before
+and after the CMD) are compared: a CMD that moves HEAD and then restores it
+(commit then `reset --hard` back, checkout away and back) is not detected.
 
 Every evidence record also carries the ratification HEAD in force when it was
 recorded (`ratified_head`), and only records of the current spec fingerprint

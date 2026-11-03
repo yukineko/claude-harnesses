@@ -50,6 +50,7 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
    `fde evidence red|green|pass` は CMD の前後で HEAD を観測し、CMD の実行中に HEAD が変わる(後退・前進〈コミット〉・
    観測不能)と終了ステータスに関わらず exit 2 で何も記録しない(2026-11-04 のユーザー裁定。前進も拒否するのは、
    記録の HEAD が結果の属する tree を表さなくなり、CMD が自分で修正をコミットして来歴規則を満たせてしまうため)。
+   比較は CMD の前後 2 点だけなので、途中で HEAD を動かして元に戻す CMD は検出されない。そういう CMD を使わない。
 
 ## (a) 把握 — 仕様を推定する
 

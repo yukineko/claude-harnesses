@@ -220,6 +220,8 @@ state dir は環境変数 `FDE_STATE_DIR`(設定済みかつ空でない場合)�
   を持たない旧版の記録は epoch を推測しないため、再批准しても 2 のまま(ledger の扱いは人間が判断する)。
 - **HEAD を動かす CMD の証跡は取れない**。CMD の実行中に HEAD が変わると(コミット・reset・checkout など、前進も
   含む)evidence は 2 で何も記録しない(2026-11-04 のユーザー裁定)。修正のコミットは CMD の外で行う。
+  判定は CMD の**前と後の 2 点**の HEAD の比較だけである。CMD の途中で HEAD を動かして元に戻した場合
+  (コミットしてから `reset --hard` で戻す、別ブランチへ checkout して戻る、など)は検出しない(未対応)。
 - **dirty は失格条件ではない**。dirty な tree で取った証跡も数える(report に `dirty` と出る)が、その状態は
   コミットからは再現できない。
 - SHA-256 object format の repo(64 桁のコミット ID)は HEAD を判定できないため、ratify・evidence は 2 になる。

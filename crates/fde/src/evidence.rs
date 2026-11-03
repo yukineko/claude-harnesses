@@ -94,7 +94,9 @@
 //!    movement is refused too (coordinator decision under that ruling): the
 //!    record's `head` would no longer describe the tree `CMD`'s result belongs
 //!    to, and the history rule (`R <= H <= C`) could otherwise be satisfied by
-//!    a `CMD` that commits its own fix.
+//!    a `CMD` that commits its own fix. Only these two observations are
+//!    compared: a `CMD` that moves HEAD and then restores it (commit then
+//!    `reset --hard` back, checkout away and back) is not detected.
 //! 8. Ratification is observed again: if it is no longer ratified with the
 //!    same fingerprint and the same recorded HEAD / dirty flag, nothing is
 //!    recorded (`Violation`).

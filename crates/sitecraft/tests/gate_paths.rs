@@ -1137,6 +1137,92 @@ fn bash_rg_pattern_option_value_dashdash_then_pre_runs_pages() {
     );
 }
 
+/// Long form of the same rg hole: `--regexp -- --pre=PROG`.
+#[test]
+fn bash_rg_long_pattern_option_dashdash_then_pre_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let prog = f.base.join("stubs/hostname.sh");
+    let (ran, out) = f.bash_runs_pages(
+        "s-bash-rg-regexp-dashdash",
+        &format!("rg --regexp -- --pre={} README.md", prog.display()),
+    );
+    assert!(
+        ran,
+        "`rg --regexp -- --pre=PROG`: `--` is the value, --pre runs PROG: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// git refuses `--grep --` ("requires a value"), but the gate must still not
+/// read that `--` as the end of options: the next word is checked.
+#[test]
+fn bash_git_log_required_value_dashdash_then_output_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages(
+        "s-bash-gitlog-grep-dashdash",
+        "git log --grep -- --output=notes.log",
+    );
+    assert!(
+        ran,
+        "`git log --grep -- --output=...`: the word after the value is an option: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// `git ls-files --format -- --output=x`: git reads `--` as the format and then
+/// fails on `--output` (observed); either way the gate must check the next word.
+#[test]
+fn bash_git_ls_files_format_dashdash_then_output_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages(
+        "s-bash-lsfiles-format-dashdash",
+        "git ls-files --format -- --output=notes.log",
+    );
+    assert!(
+        ran,
+        "`git ls-files --format -- --output=...`: `--` is the value: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// Optional-value git options are attached-only: `git status --porcelain --`
+/// ends the options at `--` (observed in scratch: `--output=x` after it is a
+/// pathspec, no file is written), so the command is cleared and pages are
+/// skipped. This pins that the gate does not consume `--` after them.
+#[test]
+fn bash_git_status_optional_value_option_then_dashdash_skips_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages(
+        "s-bash-gitstatus-porc-dashdash",
+        "git status --porcelain -- --output=notes.log",
+    );
+    assert!(
+        !ran,
+        "`git status --porcelain -- X`: `--` ends the options; read-only, pages skipped\n{}",
+        describe(&out)
+    );
+}
+
+/// An output option next to an optional-value option is still rejected.
+#[test]
+fn bash_git_status_porcelain_with_output_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages(
+        "s-bash-gitstatus-porc-output",
+        "git status --porcelain --output=notes.log",
+    );
+    assert!(
+        ran,
+        "`git status --porcelain --output=...`: --output is not allowlisted: pages must run\n{}",
+        describe(&out)
+    );
+}
+
 // ---------------------------------------------------------------- node stub schema
 
 /// The fixture's `node` stub reports a console error. The block it provokes

@@ -238,8 +238,27 @@ def is_git_repo(repo: str) -> bool:
 
 
 def is_tests_dir_file(path: str) -> bool:
+    """Any `.rs` file with a `tests` directory component: its WHOLE content is
+    test surface (see `test_surface`). Broad on purpose -- it also covers a
+    `src/**/tests/` file that no out-of-line declaration claims."""
     parts = path.replace("\\", "/").split("/")
     return path.endswith(".rs") and "tests" in parts[:-1]
+
+
+def is_integration_tests_file(path: str) -> bool:
+    """A `.rs` file under a Cargo integration-test dir: a `tests` directory
+    component that is NOT below a `src` component (`crates/c/tests/x.rs`). A
+    `tests` dir inside the source tree (`src/foo/tests/mod.rs`) is a module
+    path -- possibly an out-of-line `#[cfg(test)]` body -- and must be resolved
+    back to its declarer, not short-circuited as an integration test."""
+    if not path.endswith(".rs"):
+        return False
+    for part in path.replace("\\", "/").split("/")[:-1]:
+        if part == "src":
+            return False
+        if part == "tests":
+            return True
+    return False
 
 
 def _matching_brace(src: str, open_idx: int) -> int | None:
@@ -517,9 +536,10 @@ class Side:
         return self._cache[path]
 
     def path_attr_files(self) -> list:
-        """Non-`tests/` `.rs` files on this side containing a `#[path` attribute."""
+        """`.rs` files outside integration-test dirs on this side containing a
+        `#[path` attribute."""
         if self._path_files is None:
-            self._path_files = [p for p in self._grep() if not is_tests_dir_file(p)]
+            self._path_files = [p for p in self._grep() if not is_integration_tests_file(p)]
         return self._path_files
 
 
@@ -653,8 +673,15 @@ def test_body_root(side: Side, f: str, _seen=None):
 
     Candidates are the standard parent-module files and every `#[path]` declarer
     on that side; a `mod x;` that is not itself `#[cfg(test)]` still counts when
-    its declarer is in turn a test body (nested `tests/helpers.rs`)."""
-    if not _is_rs(f) or is_tests_dir_file(f):
+    its declarer is in turn a test body (nested `tests/helpers.rs`).
+
+    Only integration-test files are excluded up front: a `tests` dir inside the
+    source tree (`src/foo/tests/mod.rs`, `src/foo/tests/helpers.rs`) is a module
+    path and is resolved like any other. Excluding it with the broad
+    `is_tests_dir_file` used to leave a newly added `src/foo/tests/mod.rs` next
+    to an existing `src/foo/tests.rs` scanned on its own, so the declarer was
+    never re-read and the E0761 ambiguity reported clean."""
+    if not _is_rs(f) or is_integration_tests_file(f):
         return None
     seen = _seen if _seen is not None else set()
     if f in seen:
@@ -668,7 +695,7 @@ def test_body_root(side: Side, f: str, _seen=None):
     cands += [posixpath.join(d, n) for n in _MOD_RS_NAMES]
     cands += side.path_attr_files()
     for c in dict.fromkeys(cands):
-        if c == f or is_tests_dir_file(c):
+        if c == f or is_integration_tests_file(c):
             continue
         src = side.read(c)
         if src is None:
@@ -690,7 +717,9 @@ def test_body_root(side: Side, f: str, _seen=None):
     return None
 
 
-def cfg_test_modules(src: str, path: str, side: Side | None = None) -> str:
+def cfg_test_modules(
+    src: str, path: str, side: Side | None = None, out_of_line_only: bool = False
+) -> str:
     """Concatenate every `#[cfg(test)]` module body found in `src`.
 
     Brace matching skips string/char literals and comments (see
@@ -703,6 +732,8 @@ def cfg_test_modules(src: str, path: str, side: Side | None = None) -> str:
     whole content instead, read from `side` (see the out-of-line section
     above); unresolvable is Undetermined. Any other `#[cfg(test)]` takes the
     next `{...}` block, and one with no `{` after it is Undetermined.
+    With `out_of_line_only` only the out-of-line bodies are returned (used when
+    the file's own content is already counted whole; see `test_surface`).
     """
     chunks = []
     gated_decls: dict = {}
@@ -721,6 +752,8 @@ def cfg_test_modules(src: str, path: str, side: Side | None = None) -> str:
             bp, bs, via = _resolve_body(side, src, code, path, decl, False)
             chunks.extend(_body_surface(side, bp, bs, via, set()))
             continue
+        if out_of_line_only:
+            continue
         brace = src.find("{", m.end())
         if brace == -1:
             raise Undetermined(f"{path}: #[cfg(test)] with no module body")
@@ -732,8 +765,16 @@ def cfg_test_modules(src: str, path: str, side: Side | None = None) -> str:
 
 
 def test_surface(src: str, path: str, side: Side | None = None) -> str:
-    if is_tests_dir_file(path):
+    if is_integration_tests_file(path):
         return src
+    if is_tests_dir_file(path):
+        # A `src/**/tests/` file that `scan` did not claim as an out-of-line
+        # body of some declarer: keep the whole-file classification (never
+        # downgrade it to production code), and ALSO follow its own
+        # `#[cfg(test)] mod x;` bodies -- its inline modules are already inside
+        # `src`, so only the out-of-line ones are added.
+        extra = cfg_test_modules(src, path, side, out_of_line_only=True)
+        return src + ("\n" + extra if extra else "")
     return cfg_test_modules(src, path, side)
 
 

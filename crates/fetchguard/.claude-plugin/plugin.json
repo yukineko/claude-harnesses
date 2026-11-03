@@ -1,6 +1,6 @@
 {
   "name": "fetchguard",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "PostToolUse hook that scans WebFetch and WebSearch results for planted prompt-injection phrasing and warns the model that the flagged span is untrusted data.",
   "author": {
     "name": "yukineko"

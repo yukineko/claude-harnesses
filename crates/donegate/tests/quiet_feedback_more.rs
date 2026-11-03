@@ -427,23 +427,6 @@ fn digest_of_go_test_output_keeps_every_failing_test_name() {
     }
 }
 
-/// In the normal flow nothing resets the attempt counter: the second stop is
-/// attempt 2/N, the first was 1/N. The same failure must still be recognised as
-/// a repeat, but `block_fingerprint` contains `attempt N/max`, so it never is.
-#[test]
-fn a_repeat_is_recognised_in_the_normal_flow_with_a_rising_attempt() {
-    let f = fixture("rep-normal", "boom: always the same\n", "");
-    let r1 = stop(&f, "s-rep-normal");
-    let reason1 = reason_of(&r1);
-    let r2 = stop(&f, "s-rep-normal");
-    assert!(
-        waived(&r2),
-        "the 2nd identical failure (attempt 2 vs 1) must be waived as a repeat\n--- 1st reason ---\n{reason1}\n--- 2nd stdout ---\n{}\n--- stderr ---\n{}",
-        r2.stdout,
-        r2.stderr
-    );
-}
-
 // ===========================================================================
 // tsc / gcc / clang diagnostics (single-line `file(line,col)` / `file:line:col`)
 // ===========================================================================

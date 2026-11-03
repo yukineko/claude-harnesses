@@ -63162,3 +63162,41 @@ rev = "3488bc34b28d894a866b022db0ab9e37af1f0561"
 exit = 101
 kind = "behavioural"
 overlay = ["crates/condukt/tests/check_criteria_python_m_prefix.rs"]
+
+[[task]]
+id = "e46c1fa6"
+title = "donegate block_fingerprint includes attempt N/max and duration so a repeat is never recognised"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = "spec ruling 2026-11-03: a repeat below max_attempts is deliberately blocked; the bounded exit is the attempt cap plus the give-up sentinel (giveup_sentinel / refusal_giveup_sentinel tests)"
+created_at = 1793670400
+updated_at = 1793672543
+weight = 0.0
+issue_number = 1491
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1491"
+issue_closed_at = 1793672545
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test quiet_feedback_more -- a_repeat_is_recognised_in_the_normal_flow_with_a_rising_attempt"
+rev = "c1f396421e08a577855d13b7bed11b9a3b60098e"
+observed_at = 1793670400
+detail = """
+exit 101: _recognised_in_the_normal_flow_with_a_rising_attempt
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.48s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/quiet_feedback_more.rs (target/debug/deps/quiet_feedback_more-e74e027558bd0ada)
+error: test failed, to rerun pass `-p donegate --test quiet_feedback_more`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "spec ruling 2026-11-03: a repeat below max_attempts is deliberately blocked; the bounded exit is the attempt cap plus the give-up sentinel (giveup_sentinel / refusal_giveup_sentinel tests)"

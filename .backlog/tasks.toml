@@ -1,38 +1,4 @@
 [[task]]
-id = "03885f11"
-title = "blastguard: writes to .git/config are not protected (.git/config missing from PROTECTED_GLOBS)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "fail-open",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """Already present before 0.2.218 (found 2026-11-03 by the FP3 test author). python3 - <<'EOF' open('.git/config','a').write('[core] hooksPath = /tmp'), echo x >> .git/config and python3 -c "open('.git/config','a')..." are all ALLOWED, while git config core.hooksPath /tmp is denied, so a plain file write can set hooksPath and disable the gates. exclude.rs PROTECTED_GLOBS has .git/hooks/** but not .git/config."""
-created_at = 1793672951
-updated_at = 1793672951
-weight = 0.0
-issue_number = 1493
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1493"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test python_stdin_git_string_fp_20261103 control_python_stdin_program_appending_git_config"
-rev = "6a3ef5da9909fcf5e796b092f9f49b2be2164e5a"
-observed_at = 1793672951
-detail = """
-exit 101: wed
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.33s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
-     Running tests/python_stdin_git_string_fp_20261103.rs (target/debug/deps/python_stdin_git_string_fp_20261103-752bb3b1e3271a9d)
-error: test failed, to rerun pass `-p blastguard --test python_stdin_git_string_fp_20261103`"""
-
-[[task]]
 id = "658b7839"
 title = "blastguard FP4: python3 -c read-only open() misattributed as the write target"
 project = "/Users/yuki/src/harness"
@@ -65,102 +31,188 @@ exit 101:  passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 
 error: test failed, to rerun pass `-p blastguard --test python_c_read_open_misattributed_fp_20261103`"""
 
 [[task]]
-id = "8004d80f"
-title = "harness-core read_stdin/read_capped: surface stdin read errors instead of returning empty/partial payload"
+id = "80b18990"
+title = "blastguard: python3 stdin program using re.compile( is asked as code-building"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = [
-    "harness-core",
+    "blastguard,false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-03 at blastguard 0.2.245 (measured at 0.2.246 branch base 6e6ed586). A python3 - heredoc program that only calls re.compile( (regex, not code exec) returns ask: python3 - takes its program from stdin, and that program builds or decodes the code it runs (compile() ). Test: crates/blastguard/tests/python_stdin_re_compile_fp_20261103.rs. Expected allow, actual ask."
+created_at = 1793715031
+updated_at = 1793715031
+weight = 0.0
+issue_number = 1511
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1511"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_stdin_re_compile_fp_20261103"
+rev = "6ae75e70d7167765023d22bdfaaace8de942ce2a"
+observed_at = 1793715031
+detail = """
+exit 101: wed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/python_stdin_re_compile_fp_20261103.rs (target/debug/deps/python_stdin_re_compile_fp_20261103-bd5a6e9183aab4c1)
+error: test failed, to rerun pass `-p blastguard --test python_stdin_re_compile_fp_20261103`"""
+
+[[task]]
+id = "1943843c"
+title = "blastguard: read-only python3 -c with 'recursive rm' string data denied as rm with a wildcard"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard,false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-03 at blastguard 0.2.245 (re-measured at branch base 6e6ed586 + test, 0.2.247). A python3 -c program that only opens a file, json-parses lines and prints, with the string literal 'recursive rm' as data, is denied: rm with a wildcard can delete many files at once. Test: crates/blastguard/tests/python_c_recursive_rm_literal_fp_20261103.rs. Expected: not deny; actual: deny."
+created_at = 1793715217
+updated_at = 1793715217
+weight = 0.0
+issue_number = 1517
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1517"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_c_recursive_rm_literal_fp_20261103"
+rev = "d550d8aac0c23246f38abe03b2ee55b4bfeb7c47"
+observed_at = 1793715217
+detail = """
+exit 101: .247 (/Users/yuki/src/.harness-worktrees/file-bg-findings-20261103/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.37s
+     Running tests/python_c_recursive_rm_literal_fp_20261103.rs (target/debug/deps/python_c_recursive_rm_literal_fp_20261103-0ddb952d97f0858b)
+error: test failed, to rerun pass `-p blastguard --test python_c_recursive_rm_literal_fp_20261103`"""
+
+[[task]]
+id = "a09d8297"
+title = "condukt circuit breaker: releasing a claimed item excluded for overlap is logged 'unspecified' and counted as a failure"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-03 at condukt 0.7.322 (rev 3227fcd7). A flow driver claimed 9 items, re-checked overlap after claiming and excluded 3 (#1511/#1517 scope_overlap with a live blastguard lease, #1518 escalated design question). state release-task accepts only --outcome done|failed; omitted is logged 'unspecified', which circuit check counts as a failure, so run flow-c4aa3733-70d7-4ffe-b0e7-4c370c052e65 tripped verbatim: reason failure_streak, streak 3, streak_cap 3, streak_source release_log, before any work started. Repro: crates/condukt/tests/release_excluded_not_failure.rs at 4ad4c187 (RED: clap rejects --outcome excluded). Two readings: (a) defect: an exclusion is neither success nor failure and needs its own outcome that the streak skips; (b) intended: claiming then excluding is wasted work and should count. Distinguish: the flow skill tells drivers to re-check overlap after claiming, so (a) is what the skill's own procedure needs; alternative fix is to move the overlap re-check before claim-task. Spelling 'excluded' is the test author's. Do not fix in the GH-issues run (user ruling 2026-11-03)."
+created_at = 1793716434
+updated_at = 1793716434
+weight = 0.0
+issue_number = 1519
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1519"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test release_excluded_not_failure"
+rev = "4ad4c1879023d2fc446c2c6c9cbb5e9338f68b24"
+observed_at = 1793716434
+detail = """
+exit 101: finished in 0.89s
+
+   Compiling condukt v0.7.323 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.00s
+     Running tests/release_excluded_not_failure.rs (target/debug/deps/release_excluded_not_failure-24a993f271d84aa0)
+error: test failed, to rerun pass `-p condukt --test release_excluded_not_failure`"""
+
+[[task]]
+id = "7b9c258d"
+title = "guard-maintree-bash status_records parses a rename source field starting with 1/2/u/?/! as a status record"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-03 at main 81dbf64a (also present at gh1512 fix 674d5a1f). scripts/guard-maintree-bash.py status_records(): for rec in porcelain.split NUL: if rec[:1] in (1,2,u,?,!) -> status_paths(rec+NUL). In porcelain v2 -z a '2' rename record is followed by a separate source-path field; status_paths consumes it, status_records re-parses it. Source '1src.txt' -> IndexError (crash handler -> exit 2, refusing a possibly legitimate command); source '? weird.txt' -> phantom path 'weird.txt'. Repro: scripts/test_guard_maintree_bash_status_records_rename_source.py at a6d1d75f (2 of 3 FAIL). Readings: (a) defect, skip the source field like status_paths; (b) intended over-refusal - unlikely since the inline comment says the source field is a separate entry. Off-task note from condukt run-20261103-233558-54331 gh1512 worker."
+created_at = 1793717491
+updated_at = 1793717491
+weight = 0.0
+issue_number = 1520
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1520"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_status_records_rename_source.py"
+rev = "a6d1d75fbf47bdcfbf8ddda6fbc12599774d5543"
+observed_at = 1793717491
+detail = """
+exit 1: ============== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_status_records_rename_source.py::RenameSourceField::test_source_starting_with_1
+FAILED scripts/test_guard_maintree_bash_status_records_rename_source.py::RenameSourceField::test_source_starting_with_question_mark
+========================= 2 failed, 1 passed in 0.06s =========================="""
+
+[[task]]
+id = "81c41b1b"
+title = "condukt autonomy_invariant RED: fde/skills/fde/SKILL.md has 4 unaudited AskUserQuestion sites (not in ASK_ALLOWLIST)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fde",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-04 at main c4fef301 (merged into session worktree). cargo test -p condukt --test autonomy_invariant: askuserquestion_sites_match_frozen_allowlist panics at crates/condukt/tests/autonomy_invariant.rs:709 verbatim: unaudited AskUserQuestion site(s) in fde/skills/fde/SKILL.md (4 occurrence(s)). The fde skill was added in a67ac4f4 / touched in cfbf12ca. Fix: audit each of the 4 sites (route via condukt policy answer or justify as human-only) and add the entry to ASK_ALLOWLIST; do not just bump the count without auditing. Found off-task by the gh1518 worker in run run-20261103-233558-54331."
+created_at = 1793718116
+updated_at = 1793718116
+weight = 0.0
+issue_number = 1521
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1521"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test autonomy_invariant"
+rev = "c4fef30170613d297baf26d3c4c4f3efad71bd87"
+observed_at = 1793718116
+detail = """
+exit 101: ilures:
+    askuserquestion_sites_match_frozen_allowlist
+
+test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-681c0cdedb76ebef)
+error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""
+
+[[task]]
+id = "72f471d3"
+title = "curate derive: unterminated-quote backtick span becomes a runnable golden (split_whitespace twin of GH 1518)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "curate",
     "fail-open",
     "p2",
 ]
 touched_files = []
 status = "pending"
-notes = '''Measured 2026-11-03 at rev 69c03215 (worktree session-c4aa3733-followups): cargo test -p harness-core --test read_stdin_error_erased_20261103 -> 'test result: FAILED. 0 passed; 2 failed'. Verbatim: 'assertion left != right failed: a stdin read ERROR came back as Ok("") — identical to nothing was piped; the failure is invisible to the caller' and 'a stdin read that FAILED after "{\"a\":1}" came back identical to a complete, error-free read of the same bytes'. Cause: crates/harness-core/src/hook.rs read_capped does 'let _ = r.take(MAX_STDIN_BYTES).read_to_end(&mut buf);'. Verdict-bearing consumers of the erased value: fetchguard scan ('if raw.trim().is_empty() { return; }' = no warning; its main.rs doc admits read_stdin is outside the barriers), stuckguard watch (early return). parallelguard maps empty to Deny (not affected). donegate has its own read_stdin twin with the same 'let _ = read_to_string' (gate-audit mirror). READING (a) real defect: CLAUDE.md §3 says an IO failure is cannot-determine and must not be representable as empty/clean; the erasure is a fail-open for fetchguard/stuckguard. READING (b) intentional: read_stdin's doc says 'Errors are swallowed (returns what was read, possibly empty) so a hook never aborts on a read hiccup', and in-crate test read_capped_returns_partial_content_when_the_reader_errors_midway (commit 97a2498d, 2026-09-11) pins returning the partial prefix. Note the doc's 'never aborts' rationale is the §1 'don't break the turn' wording that CLAUDE.md flags as a red signal on verdict paths. HOW TO TELL APART: (b) holds only if no verdict-bearing caller consumes read_stdin's output; list callers (grep read_stdin crates/*/src) — fetchguard scan is a PostToolUse warning emitter whose silence is read as 'nothing found', so (a) unless a human rules fetchguard/stuckguard non-verdict. The fix decision (panic vs Determination return type vs keep) and the fate of the conflicting pinned in-crate test need a human ruling; if the return type changes, re-target the RED file at the new API rather than counting a compile error as GREEN.'''
-created_at = 1793708588
-updated_at = 1793708588
+notes = """Measured 2026-11-04 at session worktree rev 7dbeeb09. crates/curate/src/derive.rs backticked_command uses inner.split_whitespace() with no shlex; condukt verify::mechanical_cmd was made fail-closed for the same input in GH 1518 (user ruling 2026-11-03: an unterminated quote yields no mechanical command). Observed: criteria with an unterminated quote yields golden cmd [cargo,test,-p,demo,--,"never_closed] (stray quote glued), and a FOO=1 head falls through to test_runner_command yielding [cargo,test,-p,demo], a different command. evalkit runs the golden and asserts exit 0. Expected: draft (no cmd), per curate's auto+draft-fallback policy. Repro: crates/curate/tests/unterminated_quote_is_draft.rs (7dbeeb09). Whether the condukt ruling extends to curate is a judgment: if a human says curate goldens are review-before-trust anyway, close as won't-do."""
+created_at = 1793718555
+updated_at = 1793718555
 weight = 0.0
-issue_number = 1507
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1507"
+issue_number = 1522
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1522"
 rev = 0
 
 [task.repro]
 outcome = "reproduced"
-cmd = "cargo test -p harness-core --test read_stdin_error_erased_20261103"
-rev = "69c03215bcccef57ff052fbb6d110e8db0b0d89e"
-observed_at = 1793708588
+cmd = "cargo test -p curate --test unterminated_quote_is_draft"
+rev = "7dbeeb09129482fb37ead84d6c9c2a3539c45a22"
+observed_at = 1793718555
 detail = """
-exit 101: te_payload
+exit 101: d out; finished in 0.44s
 
-test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
-     Running tests/read_stdin_error_erased_20261103.rs (target/debug/deps/read_stdin_error_erased_20261103-716cb226bca33b49)
-error: test failed, to rerun pass `-p harness-core --test read_stdin_error_erased_20261103`"""
-
-[[task]]
-id = "4591e6e1"
-title = "docs/GLOSSARY.md: mark parked plugins (parallelguard) as parked, and tie GLOSSARY to parked-plugins.json"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "docs",
-    "glossary",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Measured 2026-11-03 at rev 22051d62: python3 -m pytest -q scripts/test_glossary_parked_marking_20261103.py -> '1 failed, 1 passed'; verbatim 'AssertionError: Lists differ ... GLOSSARY rows for parked plugins carry no parked marking: [parallelguard]'. Control (every parked plugin has a GLOSSARY row) passes; the fde row ('...批准前編集ブロック（parked）', added 6f1efba8 2026-11-03) satisfies the property, so the test can go GREEN. scripts/parked-plugins.json parks parallelguard for ENABLEMENT since 2026-08-28 (stays false in settings.json); its GLOSSARY row reads 'always-on' and says it denies calls over the cap. No checker reads both files (grep: parked-plugins.json is read only by check-plugin-rollout.py / session-rollout-drift.py / their tests; no script compares GLOSSARY with it). READING (a) real defect: GLOSSARY is the first doc every session reads (CLAUDE.md context strategy step 1); a row describing an inert gate as always-on denying is a doc-vs-actual-state contradiction (§4 docstring rule, §6 LLM duty 1), and fde's ad-hoc mark shows the intended convention. READING (b) intentional: the GLOSSARY 起動スコープ column describes design scope, not deployment state; parallelguard is parked for enablement only and still rolled out, so 'always-on' describes how it would run when armed, and fde's '（parked）' is a one-off not a rule. HOW TO TELL APART: a human ruling on whether GLOSSARY rows must reflect parked state; if yes, mark the parallelguard row and keep this test (or fold it into a checker); if no, remove the fde mark or cancel this item with the ruling."
-created_at = 1793708695
-updated_at = 1793708695
-weight = 0.0
-issue_number = 1508
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1508"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest -q scripts/test_glossary_parked_marking_20261103.py"
-rev = "22051d62dd505b4ab0000ef9fe1d431da5e64073"
-observed_at = 1793708695
-detail = """
-exit 1: ard']
-E       + [] : GLOSSARY rows for parked plugins carry no parked marking: ['parallelguard']
-
-scripts/test_glossary_parked_marking_20261103.py:51: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_glossary_parked_marking_20261103.py::GlossaryParkedMarking::test_every_parked_plugin_row_is_marked_parked
-1 failed, 1 passed in 0.04s"""
-
-[[task]]
-id = "49e95d32"
-title = "tdd Stop gate: credit tests the same session wrote in sibling worktrees; name the judged root in the block reason"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "tdd",
-    "false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-03T10:44:15Z in session c4aa3733 (tdd 0.1.60, hook cwd /Users/yuki/src/harness): verbatim '🔴 tdd: write a test first — 399 new implementation line(s) added, and no test is visible in the uncommitted changes and this session's own commits ... implementation changed: crates/fde/src/evidence.rs, crates/fde/src/gate.rs, crates/fde/src/main.rs, crates/fde/src/ratify.rs, crates/fde/src/target.rs'. CAUSE (traced, not assumed): all fde writes were by condukt-worker subagents in 14 condukt worktrees (run-20261103-171621-35629-*), all still live at the stop (removed ~11:00Z). harness_core::session_roots makes every checkout the session wrote into a separate root; tdd main.rs evaluates each root alone and reports the first blocking one; attribution (attribute_own_writes) keys Edit/Write on that root's absolute path. The impl list equals exactly the scaffold worker's Write set in run-...-scaffold, whose HEAD held only 9520b448 (437 added src lines, no test); the session's RED tests were Written at sibling worktree paths, so that root saw no test. Neither hypothesis 'merge/ff hides commits' (committed_added_lines walks --no-merges HEAD, merged-in commits ARE scanned) nor 'subagent impl attributed but not tests' (both are subagent Writes) is the cause; it is per-root isolation. Replay: tdd gate on HEAD with the transcript truncated to the stop, worktrees gone, ALLOWS (all fde lines attributed in one root) — consistent. MEASURED at rev a387f7fe (2026-11-03): cargo test -p tdd --test cross_worktree_test_credit_20261103 -> '1 passed; 3 failed'. Control control_no_test_written_anywhere_blocks passes. RED: test_written_by_this_session_in_a_sibling_worktree_is_credited (observed shape), session_test_commit_in_the_impl_worktree_history_is_credited (impl worktree cut after RED ff-merge: the test commit is in wt-impl's own HEAD history yet is excluded because it was Written at the wt-red path), missing_test_block_names_the_checkout_it_judged (reason: 'the block judged .../wt-impl but its reason does not name it'). READING (a) real defect: the unit tdd should judge is the session's work; a test this session wrote and committed is not 'not visible' because it was written in a sibling checkout; and a multi-root block that does not name its root sends the reader to the wrong tree (the parent had to guess). READING (b) intentional: session_roots/main.rs say 'Every checkout the session wrote into is evaluated' — per-checkout judgment is by design, and the scaffold checkout genuinely held 437 impl lines with no test (scaffold written before any test = a real test-first violation for that task). HOW TO TELL APART: a human ruling on the unit of judgment (per checkout vs per session). Under (b), tests 1-2 are wrong spec and only test 3 (name the root) stands — split rather than cancel. Note tdd 0.1.61 bump (tests only) needs rollout-plugins.sh after merge."
-created_at = 1793709196
-updated_at = 1793709196
-weight = 0.0
-issue_number = 1509
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1509"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p tdd --test cross_worktree_test_credit_20261103"
-rev = "a387f7fe2f7d57a1dfe27c161362d17ba9bc8f37"
-observed_at = 1793709196
-detail = """
-exit 101:  in 1.68s
-
-   Compiling tdd v0.1.61 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-followups/crates/tdd)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.76s
-     Running tests/cross_worktree_test_credit_20261103.rs (target/debug/deps/cross_worktree_test_credit_20261103-51ec6359cbedde29)
-error: test failed, to rerun pass `-p tdd --test cross_worktree_test_credit_20261103`"""
+   Compiling curate v0.1.13 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues/crates/curate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running tests/unterminated_quote_is_draft.rs (target/debug/deps/unterminated_quote_is_draft-9cdcccafa995c3b3)
+error: test failed, to rerun pass `-p curate --test unterminated_quote_is_draft`"""

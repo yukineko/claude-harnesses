@@ -1655,12 +1655,16 @@ pub fn mechanical_skip_verdict(
 
 /// Tokenize a command string into argv respecting shell quoting/escaping
 /// (e.g. `"cargo test -- --path \"a b/c\""` keeps `a b/c` as one token),
-/// unlike `split_whitespace` which would split it into `a`, `b/c"`. Falls
-/// back to `split_whitespace` on unterminated-quote input that `shlex`
-/// cannot parse, so a malformed hint still yields a best-effort argv rather
-/// than silently dropping the mechanical check.
-fn parse_argv(s: &str) -> Vec<String> {
-    shlex::split(s).unwrap_or_else(|| s.split_whitespace().map(String::from).collect())
+/// unlike `split_whitespace` which would split it into `a`, `b/c"`.
+///
+/// Returns `None` when `shlex` cannot parse the input (e.g. an unterminated
+/// quote). There is deliberately NO `split_whitespace` fallback: a best-effort
+/// argv would be a different command from the one written, and
+/// `state check-criteria` would run it and could set `skip_verifier`. An
+/// unparseable command is undetermined and resolves restricted (no mechanical
+/// command, so the LLM verifier is required). User ruling 2026-11-03.
+fn parse_argv(s: &str) -> Option<Vec<String>> {
+    shlex::split(s)
 }
 
 /// Extract a runnable command from a done_criteria string for mechanical gate
@@ -1673,24 +1677,44 @@ fn parse_argv(s: &str) -> Vec<String> {
 ///
 /// `mechanical_check_hint` is the interpreter-declared, structured
 /// [`crate::model::Task::mechanical_check`] fact. When `Some`, its `cmd` is
-/// authoritative and returned as-is (split into argv). Otherwise: the first
-/// backticked span whose head is an [`is_criteria_runner`], then recognised
-/// runner prose (`cargo test`, `npm test`, pytest via [`prose_pytest_argv`],
-/// `go test`).
+/// authoritative and tokenized via [`parse_argv`]; an unparseable `cmd` (e.g.
+/// an unterminated quote) yields `None`, never a guessed argv. Otherwise: the
+/// first backticked span whose head is an [`is_criteria_runner`], then
+/// recognised runner prose (`cargo test`, `npm test`, pytest via
+/// [`prose_pytest_argv`], `go test`).
+///
+/// `None` is also returned when ANY backticked span is unparseable by shlex
+/// (unterminated quote), whatever its head token: the criteria names a command
+/// that cannot be determined, and falling through to the prose recognizer would
+/// run a different command than the one written. The LLM verifier is then
+/// required (User ruling 2026-11-03).
 pub fn mechanical_cmd(
     done_criteria: &str,
     mechanical_check_hint: Option<&crate::model::MechanicalCheck>,
 ) -> Option<Vec<String>> {
     if let Some(check) = mechanical_check_hint {
-        return Some(parse_argv(&check.cmd));
+        // `?`-style: an unparseable hint cmd yields None (never a guessed argv).
+        return parse_argv(&check.cmd);
     }
     // Prefer an explicit backtick command: `cargo test -p condukt`
     if let Ok(re) = regex::Regex::new(r"`([^`]+)`") {
         for caps in re.captures_iter(done_criteria) {
             if let Some(inner) = caps.get(1) {
-                let argv = parse_argv(inner.as_str());
-                if argv.first().is_some_and(|p| is_criteria_runner(p)) {
-                    return Some(argv);
+                match parse_argv(inner.as_str()) {
+                    Some(argv) => {
+                        if argv.first().is_some_and(|p| is_criteria_runner(p)) {
+                            return Some(argv);
+                        }
+                    }
+                    None => {
+                        // Unparseable span (unterminated quote), whatever its
+                        // head. The criteria wrote a command we cannot
+                        // determine; falling through to prose recognition
+                        // would run a DIFFERENT command than the one written
+                        // (e.g. `FOO=1 cargo test -- "x` -> `cargo test`).
+                        // Fail closed: no mechanical command.
+                        return None;
+                    }
                 }
             }
         }
@@ -2211,7 +2235,7 @@ mod tests {
     /// `split_whitespace` which would split it in two.
     #[test]
     fn parse_argv_respects_quoted_spaces() {
-        let argv = parse_argv(r#"cargo test -- --path "a b/c""#);
+        let argv = parse_argv(r#"cargo test -- --path "a b/c""#).unwrap();
         assert_eq!(
             argv,
             vec!["cargo", "test", "--", "--path", "a b/c"]
@@ -2234,17 +2258,27 @@ mod tests {
         assert_eq!(argv, vec!["pytest".to_string(), "tests/a b.py".to_string()]);
     }
 
-    /// Unterminated-quote input (unparseable by shlex) falls back to
-    /// split_whitespace rather than dropping the mechanical check entirely.
+    /// User ruling 2026-11-03: an unterminated quote (unparseable by shlex)
+    /// yields NO argv. There is no `split_whitespace` fallback; the criteria is
+    /// undetermined and the LLM verifier is required (fail-closed).
     #[test]
-    fn parse_argv_falls_back_on_unterminated_quote() {
-        let argv = parse_argv(r#"cargo test "unterminated"#);
+    fn parse_argv_unterminated_quote_yields_none() {
+        assert_eq!(parse_argv(r#"cargo test "unterminated"#), None);
+    }
+
+    /// Same property through `mechanical_cmd`: neither the hint path nor the
+    /// backtick path (nor the prose fallback behind it) returns a command.
+    #[test]
+    fn mechanical_cmd_unterminated_quote_yields_none() {
+        let hint = crate::model::MechanicalCheck {
+            cmd: r#"cargo test "unterminated"#.to_string(),
+            expect_exit: None,
+            expect_substring: None,
+        };
+        assert_eq!(mechanical_cmd("irrelevant prose", Some(&hint)), None);
         assert_eq!(
-            argv,
-            vec!["cargo", "test", "\"unterminated"]
-                .into_iter()
-                .map(String::from)
-                .collect::<Vec<_>>()
+            mechanical_cmd(r#"`cargo test -p demo -- "never_closed` passes"#, None),
+            None
         );
     }
 

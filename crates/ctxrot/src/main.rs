@@ -40,7 +40,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use config::Config;
-use harness_core::hook::{read_stdin, run_hook, HookInput};
+use harness_core::hook::{read_stdin, run_hook, try_read_stdin, HookInput};
 use harness_core::store::Store;
 
 #[derive(Parser)]
@@ -324,7 +324,24 @@ fn main() {
             if Config::disabled() {
                 return;
             }
-            let raw = read_stdin();
+            // A stdin READ ERROR is not "nothing to inject" (backlog 8004d80f):
+            // the prompt and session are unknown, so the context-rot check did
+            // not run. Say so in the injected context instead of going silent.
+            let raw = match try_read_stdin() {
+                Ok(raw) => raw,
+                Err(e) => {
+                    eprintln!("ctxrot guard: stdin read failed: {e}");
+                    print_context_line(
+                        "UserPromptSubmit",
+                        &format!(
+                            "[ctxrot] stdin read failed ({e}): the UserPromptSubmit payload \
+                             could not be read, so the context-rot check did NOT run for this \
+                             prompt (result unknown, not clean)."
+                        ),
+                    );
+                    return;
+                }
+            };
             if let Some(input) = HookInput::parse(&raw) {
                 let cfg = Config::load();
                 if let Some(text) = hooks::guard::run(&input, &cfg) {
@@ -342,7 +359,12 @@ fn main() {
             if Config::disabled() {
                 return;
             }
-            let raw = read_stdin();
+            // PreCompact cannot inject context: a read error is reported on
+            // stderr (no rescue note is written, no distill is spawned).
+            let Some(raw) = read_stdin_or_report("ctxrot rescue", "no rescue note was saved")
+            else {
+                return;
+            };
             if let Some(input) = HookInput::parse(&raw) {
                 let cfg = Config::load();
                 if let Some(path) = hooks::rescue::run(&input, &cfg) {
@@ -359,7 +381,10 @@ fn main() {
             if Config::disabled() {
                 return;
             }
-            let raw = read_stdin();
+            let Some(raw) = read_stdin_or_report("ctxrot restore", "no rescue note was restored")
+            else {
+                return;
+            };
             if let Some(input) = HookInput::parse(&raw) {
                 let cfg = Config::load();
                 if let Some(text) = hooks::restore::run(&input, &cfg) {
@@ -375,6 +400,9 @@ fn main() {
             if Config::disabled() {
                 return;
             }
+            // A stdin read error panics in `read_stdin` (harness-core refuses an
+            // empty/partial payload) and this barrier turns that panic into a
+            // block (exit 2): fail-closed for this verdict-bearing hook.
             let raw = read_stdin();
             if let Some(input) = HookInput::parse(&raw) {
                 let cfg = Config::load();
@@ -399,7 +427,24 @@ fn main() {
             if Config::disabled() {
                 return;
             }
-            let raw = read_stdin();
+            // A stdin READ ERROR: the tool output (and its size) is unknown and
+            // passes through unexamined. Announce that, never stay silent
+            // (backlog 8004d80f).
+            let raw = match try_read_stdin() {
+                Ok(raw) => raw,
+                Err(e) => {
+                    eprintln!("ctxrot toolguard: stdin read failed: {e}");
+                    print_context_line(
+                        "PostToolUse",
+                        &format!(
+                            "[ctxrot] stdin read failed ({e}): the PostToolUse payload could \
+                             not be read, so this tool output was NOT examined for size (it \
+                             may be large; its size is unknown)."
+                        ),
+                    );
+                    return;
+                }
+            };
             if let Some(input) = HookInput::parse(&raw) {
                 let cfg = Config::load();
                 // `analyse` (not `run`) wraps the detector in a panic barrier so a
@@ -435,7 +480,11 @@ fn main() {
             if Config::disabled() {
                 return;
             }
-            let raw = read_stdin();
+            let Some(raw) =
+                read_stdin_or_report("ctxrot handoff-record", "no handoff cache was recorded")
+            else {
+                return;
+            };
             if let Some(input) = HookInput::parse(&raw) {
                 let cfg = Config::load();
                 // Side-effect only (writes the cache); no hook output either way
@@ -447,7 +496,12 @@ fn main() {
             if Config::disabled() {
                 return;
             }
-            let raw = read_stdin();
+            let Some(raw) = read_stdin_or_report(
+                "ctxrot handoff",
+                "the Task runs with its original prompt (no handoff injected)",
+            ) else {
+                return;
+            };
             if let Some(input) = HookInput::parse(&raw) {
                 let cfg = Config::load();
                 // No inner panic barrier needed here: on panic, `run_hook`'s
@@ -530,7 +584,13 @@ fn main() {
                     let cwd = cwd.unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
                     });
-                    let body = read_stdin();
+                    let body = match try_read_stdin() {
+                        Ok(body) => body,
+                        Err(e) => {
+                            eprintln!("stdin read failed: {e}; nothing was written.");
+                            std::process::exit(1);
+                        }
+                    };
                     if require_sections {
                         let missing = hooks::restore::missing_sections(&body);
                         if !missing.is_empty() {
@@ -790,8 +850,17 @@ fn main() {
             // is SURFACED as an explicit non-green "unknown" band, mirroring
             // `ctxrot usage`'s "不明" readout. Blank is reserved for "genuinely
             // nothing to report yet" (empty stdin / no session).
+            // A stdin READ ERROR is the same cannot-determine as an unparseable
+            // payload: render the explicit unknown band (backlog 8004d80f).
             let cfg = Config::load();
-            let raw = read_stdin();
+            let raw = match try_read_stdin() {
+                Ok(raw) => raw,
+                Err(e) => {
+                    eprintln!("ctxrot statusline: stdin read failed: {e}");
+                    println!("{}", usage::unknown_line(&cfg));
+                    return;
+                }
+            };
             match harness_core::hook::HookInput::parse(&raw) {
                 Some(input) => {
                     if let Some(line) = statusline_from(&cfg, &input) {
@@ -948,8 +1017,17 @@ fn main() {
 /// before any decision was emitted) now fails CLOSED (`decision:block`)
 /// instead of the old behavior of silently exiting 0 with no decision
 /// (indistinguishable from a clean stop).
+///
+/// A stdin READ ERROR is "cannot determine", never an empty payload (backlog
+/// 8004d80f): `read_stop_payload_guarded` blocks (hook mode) and exits. The
+/// payload is unknown on Err, so hook-vs-manual mode comes from whether stdin
+/// is a terminal (a hook's stdin is a pipe).
 fn stop_command() -> ! {
-    let raw = read_stdin();
+    let raw = harness_core::gate::run::read_stop_payload_guarded(
+        "ctxrot",
+        std::io::IsTerminal::is_terminal(&std::io::stdin()),
+        try_read_stdin(),
+    );
     let hook = HookInput::parse(&raw);
     let interactive = hook.is_none();
     let stop_hook_active = hook.as_ref().is_some_and(|h| h.stop_hook_active);
@@ -957,6 +1035,30 @@ fn stop_command() -> ! {
         stop_run(hook)
     });
     std::process::exit(0);
+}
+
+/// Read a non-verdict hook's stdin. A READ ERROR is reported on stderr (with
+/// what was therefore not done) and yields `None`; it is never an empty
+/// payload (backlog 8004d80f).
+fn read_stdin_or_report(hook: &str, consequence: &str) -> Option<String> {
+    match try_read_stdin() {
+        Ok(raw) => Some(raw),
+        Err(e) => {
+            eprintln!("{hook}: stdin read failed: {e}; {consequence}");
+            None
+        }
+    }
+}
+
+/// Print one `hookSpecificOutput` JSON line carrying `additionalContext`.
+fn print_context_line(event: &str, context: &str) {
+    let out = serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": event,
+            "additionalContext": context,
+        }
+    });
+    println!("{out}");
 }
 
 fn stop_run(hook: Option<HookInput>) {

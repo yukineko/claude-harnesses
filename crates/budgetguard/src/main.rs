@@ -51,7 +51,6 @@ mod streak;
 
 use clap::{Args, Parser, Subcommand};
 
-use harness_core::hook::read_stdin;
 use harness_core::verdict::Determination;
 
 use config::Config;
@@ -135,7 +134,15 @@ fn gate_command() -> ! {
     if Config::disabled_env() {
         std::process::exit(0);
     }
-    let raw = read_stdin();
+    // A stdin READ ERROR is "cannot determine", never an empty payload
+    // (backlog 8004d80f): `read_stop_payload_guarded` blocks (hook mode) and
+    // exits. The payload is unknown on Err, so hook-vs-manual mode comes from
+    // whether stdin is a terminal (a hook's stdin is a pipe).
+    let raw = harness_core::gate::run::read_stop_payload_guarded(
+        "budgetguard",
+        std::io::IsTerminal::is_terminal(&std::io::stdin()),
+        harness_core::hook::try_read_stdin(),
+    );
     let hook = harness_core::hook::HookInput::parse(&raw);
     let interactive = hook.is_none();
     let stop_hook_active = hook.as_ref().is_some_and(|h| h.stop_hook_active);

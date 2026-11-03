@@ -67,7 +67,9 @@ delimiter line (backlog 4a1cf1ad).
 ### File operations
 
 - **Write** that replaces a file with **empty content** (wipes it), or that
-  overwrites **git internals** (`.git/**`) → denied.
+  overwrites **git internals** (`.git/**`) → denied. This deny is checked
+  before the protected-path `ask`, so a Write over `.git/config` or
+  `.git/hooks/**` (both also protected) stays a deny.
 - **Write / Edit / MultiEdit / NotebookEdit** of a **protected gate/config
   path** (see below) → `ask` (hardened to deny where no human can answer):
   blastguard can see that the path controls which gates run, but not whether
@@ -115,6 +117,7 @@ exempt, its `src/main.rs` is not).
 Protected gate paths outrank this exemption and are never exempt: Claude Code settings
 and hook wiring (`.claude/settings.json`, `settings.local.json`,
 `.claude/hooks.json`, `.claude/hooks/**`), `.githooks/**`, `.git/hooks/**`,
+`.git/config` (it decides `core.hooksPath`),
 shell rc files (`.zshrc`, `.bashrc`, `.profile`, …), the gate config tomls
 (`deny.toml`, `donegate.toml`, `blastguard.toml`, …, `.precommit-audit.toml`),
 and the deployed plugin cache's executables and hook wiring

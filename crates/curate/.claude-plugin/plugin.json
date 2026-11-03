@@ -1,6 +1,6 @@
 {
   "name": "curate",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Promotes fugu-router playbooks into versioned golden eval datasets for evalkit, turning mechanical acceptance criteria into runnable cases and the rest into drafts for a human.",
   "author": {
     "name": "yukineko"

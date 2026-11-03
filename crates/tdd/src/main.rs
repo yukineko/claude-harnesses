@@ -38,7 +38,6 @@ mod transition;
 mod trust_worktree_tests;
 mod warned;
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
@@ -148,12 +147,6 @@ enum Command {
     },
 }
 
-fn read_stdin() -> String {
-    let mut buf = String::new();
-    let _ = std::io::stdin().read_to_string(&mut buf);
-    buf
-}
-
 fn main() {
     let cli = Cli::parse();
     match cli.command {
@@ -229,8 +222,23 @@ fn skip_cmd(reason: &str) -> anyhow::Result<()> {
 /// violation emits `decision:block`. It is bounded by the gate's existing
 /// per-session attempt counter (`max_attempts`, default 3) and its give-up,
 /// exactly like a parsed payload — no separate retry mechanism.
+///
+/// # A stdin READ ERROR is not "no stdin" either
+///
+/// An empty stdin is manual CLI mode, but a stdin that could not be READ is
+/// "cannot determine" (backlog 8004d80f): it used to be discarded with
+/// `let _ =`, the empty buffer was taken for "a human ran `tdd gate`", and the
+/// stop was ALLOWED. `read_stop_payload_guarded` resolves it to a fail-closed
+/// `decision:block` (reason "stdin read failed: ...") and exits; the payload is
+/// unknown on `Err`, so hook-vs-manual mode comes from whether stdin is a
+/// terminal (a hook's stdin is a pipe).
 fn gate_command() -> ! {
-    let raw = read_stdin();
+    use std::io::IsTerminal;
+    let raw = harness_core::gate::run::read_stop_payload_guarded(
+        "tdd",
+        std::io::stdin().is_terminal(),
+        harness_core::hook::try_read_stdin(),
+    );
     let hook = HookInput::parse(&raw).or_else(|| {
         if raw.trim().is_empty() {
             None

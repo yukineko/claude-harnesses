@@ -44,7 +44,6 @@ mod trust_worktree_tests;
 use std::path::Path;
 
 use clap::{Parser, Subcommand};
-use harness_core::hook::read_stdin;
 use serde_json::json;
 
 use config::{Config, Mode};
@@ -153,7 +152,15 @@ fn exit_on_err(r: anyhow::Result<()>) {
 /// manual CLI mode. Real `process::exit` calls inside `review_run` terminate
 /// directly, so only genuine panics ever reach the guard.
 fn review_command() -> ! {
-    let raw = read_stdin();
+    // A stdin READ ERROR is "cannot determine", never an empty payload
+    // (backlog 8004d80f): `read_stop_payload_guarded` blocks (hook mode) and
+    // exits. The payload is unknown on Err, so hook-vs-manual mode comes from
+    // whether stdin is a terminal (a hook's stdin is a pipe).
+    let raw = harness_core::gate::run::read_stop_payload_guarded(
+        "reviewgate",
+        std::io::IsTerminal::is_terminal(&std::io::stdin()),
+        harness_core::hook::try_read_stdin(),
+    );
     let hook = HookInput::parse(&raw);
     // Manual CLI mode only when NOTHING arrived on stdin. A non-empty payload
     // that fails to parse is still Claude Code calling the hook: treating it

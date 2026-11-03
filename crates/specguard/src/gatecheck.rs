@@ -30,8 +30,11 @@
 //!   Otherwise it is a **violation** (exit 1) naming the impl path;
 //! * a changed, non-deleted gate path that NO entry references (in impl, test or
 //!   client lists) is **undetermined** (exit 2): `map sync` attributes every
-//!   non-excluded path to an entry, so an unreferenced one means the map has not
-//!   observed this file and its spec status is unknown — never "no spec needed".
+//!   non-excluded path its `git log --diff-merges=separate` history read lists
+//!   (for a `<base>` that is an ancestor of HEAD, a superset of this tree
+//!   diff, merge-only changes included), so an unreferenced one means the map
+//!   has not observed this file and its spec status is unknown — never "no spec
+//!   needed".
 //!   The remedy is `specguard map sync`, after which the file is an entry and
 //!   the rules above apply;
 //! * a deleted gate path is judged only through the entry that still lists it.

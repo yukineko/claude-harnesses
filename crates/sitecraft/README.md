@@ -33,6 +33,10 @@ The `/sitecraft` skill asks the user every design decision the purpose needs, re
   is exit 1, more than 10 s for one path is exit 2.
 - `sitecraft check security` — secrets (printed redacted) and `.env` values in build output, dangerous
   HTML sinks in sources, `npm audit --json` high/critical (judged from the JSON shape, not the exit code).
+  The audit runs in the same package directory as `check pages`: `<root>/<dir>` when `command` is
+  `npm --prefix <dir> …`, else the root. No lockfile there is exit 2 (the root's lockfile is not used
+  instead); a `--prefix` that does not resolve to a directory inside the root (symlinks resolved) is
+  exit 2 and npm is not run. The Stop gate audits the same directory.
 - `sitecraft decide capability --name N --relevance relevant|irrelevant [--how H --done-when D
   --verify-kind K …]` — records `[capabilities.N]`, a capability beyond the web app. The verify kinds
   are exactly `builtin:blender-headless` (`--script --glb --render`), `builtin:threejs-render`

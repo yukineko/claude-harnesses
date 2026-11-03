@@ -3,7 +3,9 @@
 //! Runs through `harness_core::gate::run::run_guarded` (gate name
 //! `sitecraft`; a panic blocks). In a repo with `sitecraft.toml` it combines,
 //! with [`Verdict::worst_of`]: trust of the config, `decide check`,
-//! `check security`, the result records of every relevant capability
+//! `check security` (the same [`crate::check::security::check_security`] as
+//! the CLI, so `npm audit` runs in the same `--prefix` package directory),
+//! the result records of every relevant capability
 //! (rulings D5: missing / failed / other-version / stale-input / unreadable →
 //! block naming `sitecraft check capability <name>`; the gate never runs a
 //! capability itself), and — only when the session wrote a file matching

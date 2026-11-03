@@ -12,6 +12,9 @@
   使った コマンドを併記する。数値は継承せず、使う側で測り直すこと。
 - 各コマンドは `crates/` 直下（`/Users/yuki/.condukt/worktrees/run-20261103-162350-31430-t9/crates`）
   で実行した。`wc -l` は `crates/blastguard` 基準。
+- ファイル数: `ls crates/blastguard/src/detect/*.rs | wc -l` = 21（`tests.rs` を含む）。
+- harness-core の行数: `wc -l crates/harness-core/src/session_roots.rs crates/harness-core/src/worktree_origin.rs crates/harness-core/src/git_probe.rs` =
+  1005 / 327 / 185（合計 1517）。
 - 行数（`cd crates/blastguard && wc -l src/detect.rs src/detect/*.rs`）:
   `detect.rs` 2402 / `segment.rs` 441 / `heredoc.rs` 852 / `substitution.rs` 332 /
   `words.rs` 491 / `vars.rs` 615 / `protected.rs` 486 / `tests.rs` 5021 / 合計 18892。
@@ -36,7 +39,11 @@ blastguard の PreToolUse hook が、検索コマンドのパターン中に書�
 
 | 元の意図 | 実際に実行したコマンド |
 |---|---|
-| blastguard 外で `command` 文字列をリテラル照合している箇所（`git commit`/`git push`/`git add`/rm の再帰削除/`cargo test`）を探す | `grep -rnE "contains\(\"(git commit\|git push\|git add\|cargo test)" '--include=*.rs' . \| grep -v "^./blastguard/\|/tests/"` — **rm の再帰削除の選択肢を落とした**。したがってこの検索は「rm 側の部分一致」を調べていない（未確認）。 |
+| blastguard 外で `command` 文字列をリテラル照合している箇所（`git commit`/`git push`/`git add`/rm の再帰削除/`cargo test`）を探す | `grep -rnE "contains\(\"(git commit\|git push\|git add\|cargo test)" '--include=*.rs' . \| grep -v "^blastguard/" \| grep -v "/tests/"` — **rm の再帰削除の選択肢を落とした**。したがってこの検索は「rm 側の部分一致」を調べていない（未確認）。出力は 4 件: `specguard/src/forge/implement.rs:546`、`curate/src/derive.rs:70`、`hypothesis/src/goal_link.rs:166`、`condukt/src/verify.rs:1700`（いずれも `cargo test` のみ。`git commit`/`git push`/`git add` のヒットは 0）。 |
+
+**`grep` のパスに関する注意**: この環境の `grep` は ugrep 7.8.4 で、パスの先頭に `./` を付けずに出力する。初版は
+`grep -v "^./blastguard/"` で除外していたが、これは何も除外しなかった。本書の除外は `crates/` で実行する `grep -v "^blastguard/"` に
+直し、すべて再実行した。出力は修正後のコマンドのものである。
 
 別件: 最初の試行では `--include=*.rs` を引用符なしで書いたため、zsh が
 `no matches found` で失敗した（誤検知とは無関係）。以降は `'--include=*.rs'` と引用して実行した。
@@ -60,7 +67,7 @@ CLAUDE.md が挙げる三値 `Absent / Undetermined / Known(T)` のうち、`Abs
    - `detect/words.rs:20` `first_shell_word`
    - `detect/vars.rs:141` `quote_aware_words`（`words.rs` ではない。0.1 を参照）
 2. **類似コード**（blastguard 外）:
-   - `grep -rnE "fn (split_(segments|commands|command_line|shell|on_operators|compound)[a-z_]*|shell_words|shell_split|tokenize[a-z_]*|split_pipeline[a-z_]*|split_chain[a-z_]*)\b" '--include=*.rs' . | grep -v "^./blastguard/"`
+   - `grep -rnE "fn (split_(segments|commands|command_line|shell|on_operators|compound)[a-z_]*|shell_words|shell_split|tokenize[a-z_]*|split_pipeline[a-z_]*|split_chain[a-z_]*)\b" '--include=*.rs' . | grep -v "^blastguard/"`（`crates/` で再実行済み。15 行がヒットし、全部 `tokenize*`）
      → シェル分割の同等品は **ヒットなし**。`tokenize` のヒット（`playbook/src/retrieve.rs:44`、`stuckguard/src/sig.rs:71`、
      `specguard/src/forge/gather.rs:383`、`fugu-router/src/rag.rs:16`、`context-governor/src/defaults/injector.rs:30`、
      `compass/src/freshness.rs:251`、`harness-core/src/lessons.rs:238`、`harness-core/src/code_index.rs:398`、
@@ -68,8 +75,11 @@ CLAUDE.md が挙げる三値 `Absent / Undetermined / Known(T)` のうち、`Abs
    - `grep -rnE "shlex" '--include=*.rs' .` → `condukt/src/verify.rs:1663`
      （`shlex::split(s).unwrap_or_else(|| s.split_whitespace().map(String::from).collect())`）。
      `condukt/Cargo.toml:29` に `shlex = "1"`。ヒアドキュメントを含む語は
-     `grep -rliE "heredoc|here_doc|here-doc" '--include=*.rs' .` で `sitecraft/src/gate.rs` などに現れるが、
-     `sitecraft/src/gate.rs` が heredoc を解析しているのか言及だけなのかは**未確認**（本文を読んでいない）。
+     `grep -rliE "heredoc|here_doc|here-doc" '--include=*.rs' . | grep -v "^blastguard/"`（`crates/` で再実行）は 7 ファイル:
+     `specguard/tests/forge_agent_diagnosability.rs`、`specguard/tests/integration.rs`、`overwatch/tests/continuous_audit_contract.rs`、
+     `reviewgate/tests/session_attribution.rs`、`sitecraft/src/gate.rs`、`harness-core/src/transcript.rs`、`harness-core/src/attribution.rs`。
+     非テストの 3 つ（`sitecraft/src/gate.rs`、`harness-core/src/transcript.rs`、`harness-core/src/attribution.rs`）が heredoc を解析しているのか
+     言及だけなのかは**未確認**（本文を読んでいない。初版は `harness-core` の 2 件を見落としていた）。
 3. **想定する利用者**: 現時点で呼び出す側として根拠を示せる crate は**ない**。
    - Bash の `command` 文字列を実際に調べているのは `fde/src/gate.rs:147`（`tool_input.command` の取り出しのみ。
      字句解析は呼んでいない）、`stuckguard/src/sig.rs:105`（`"Bash" => norm(field(&inp, "command").unwrap_or(""))`、
@@ -79,7 +89,9 @@ CLAUDE.md が挙げる三値 `Absent / Undetermined / Known(T)` のうち、`Abs
      化であり、`;`/`&&`/ヒアドキュメント/コマンド置換を扱わない。字句解析グループを使う動機は薄い。
 4. **blastguard 型との結合**: 型としては小さい。`grep -c` で数えた `Ctx`/`Decision`/`SafeRoots` の出現数は
    segment/heredoc/substitution/words/vars のどれも `Ctx=0 SafeRoots=0`、`Decision` は vars.rs に 1 件のみ
-   （`for f in segment heredoc substitution words vars protected; do grep -c ... detect/$f.rs; done` の結果）。
+   （コマンド: `cd crates && for f in segment heredoc substitution words vars protected; do echo "$f Ctx=$(grep -c 'Ctx' blastguard/src/detect/$f.rs) Decision=$(grep -c 'Decision' blastguard/src/detect/$f.rs) SafeRoots=$(grep -c 'SafeRoots' blastguard/src/detect/$f.rs)"; done`。
+   出力: segment/heredoc/substitution/words は `Ctx=0 Decision=0 SafeRoots=0`、vars は `Ctx=0 Decision=1 SafeRoots=0`、protected は `Ctx=11 Decision=23 SafeRoots=0`。
+   `Determination` の出現は `grep -n "Determination" blastguard/src/detect/{segment,heredoc,substitution,words,vars}.rs | wc -l` で 0。）
    ただし **関数の相互依存が結合の本体**:
    - `segment.rs:1` `use super::{here_document_layout, opens_unmodelled_construct, scan_balanced, Stop};`
    - `heredoc.rs:1-4` `use super::{basename, git_subcommand_index, is_code_interpreter, is_shell, quote_aware_words, split_segments_with_separators, strip_version_suffix, SeparatedSegment};`
@@ -116,10 +128,18 @@ CLAUDE.md が挙げる三値 `Absent / Undetermined / Known(T)` のうち、`Abs
    `fn physical_landing(target: &str, base: Option<&str>) -> Option<Determination<String>>`。上限は `protected.rs:129`
    `const MAX_SYMLINK_HOPS: usize = 40;`。呼び出し側は `protected.rs:78`、`protected.rs:295`。
 2. **類似コード**:
-   - `grep -rnE "read_link|symlink_metadata" '--include=*.rs' . | grep -v "^./blastguard/"` →
-     `read_link` は **blastguard 外でヒットなし**。`symlink_metadata` は存在確認の用途で
-     `specguard/src/report.rs:162`、`specguard/src/gatecheck.rs:403`、`backlog/src/store.rs:2857`、`backlog/src/claim_ledger.rs:516`、
-     `donegate/src/git.rs:142`、`donegate/src/gate.rs:476`、`sitecraft/src/config.rs:218`、`sitecraft/src/decide/record.rs:540` など。
+   - `grep -rnE "read_link" '--include=*.rs' . | grep -v "^blastguard/"`（`crates/` で実行）→ blastguard 外の `read_link` は **3 件、すべて `tests/`**:
+     `sitecraft/tests/decide_cli.rs:967`、`condukt/tests/backlog_f7a0cadc_red.rs:116`、`fde/tests/spike_specforge.rs:134`。
+     件数は同コマンドに `| wc -l` を付けた値（3）、さらに `| grep -v "/tests/" | wc -l` を付けた値は 0。
+     つまり「blastguard 外の非テスト（`src/`）に `read_link` は無い」が事実で、「blastguard 外に `read_link` が無い」は誤り。
+     （初版は `grep -v "^./blastguard/"` を使っていたが、ugrep 7.8.4 は先頭の `./` を出力しないため何も除外しておらず、
+     件数の報告も食い違っていた。本節は修正後のコマンドを再実行した出力である。）
+   - `grep -rnE "symlink_metadata" '--include=*.rs' . | grep -v "^blastguard/" | grep -v "/tests/"` → 存在確認等の用途で
+     `specguard/src/report.rs:162`、`specguard/src/gatecheck.rs:403`、`specguard/src/main.rs:1744`、`backlog/src/store.rs:2857`/`:2974`/`:3013`、
+     `backlog/src/claim_ledger.rs:516`、`backlog/src/main.rs:2232`、`donegate/src/git.rs:142`、`donegate/src/gate.rs:476`、
+     `sitecraft/src/config.rs:218`、`sitecraft/src/decide/record.rs:540`、`harness-core/src/session_roots.rs:188`、
+     `harness-core/src/git_probe.rs:120`、`harness-core/src/trust.rs:256`/`:298`、`harness-core/src/gate/run.rs:96`、`condukt/src/state.rs:513` など
+     （コメント行・`#[cfg(test)]` 内の行も含まれる。全件の用途分類はしていない）。
    - 近い意図の実装: `crates/fde/src/gate.rs:171` `pub fn canonical_lenient(p: &Path) -> Determination<PathBuf>`
      （最長の既存 prefix を `std::fs::canonicalize` し、残りを `Component::ParentDir => base.pop()` で字句的に処理する）。
      `harness-core/src/discovery.rs:111` `lexical_normalize` と `harness-core/src/projkey.rs:287` は字句的なだけで symlink を解決しない。
@@ -145,7 +165,7 @@ CLAUDE.md が挙げる三値 `Absent / Undetermined / Known(T)` のうち、`Abs
    `?`/`unwrap_or` で潰す呼び出しが生まれうる（blastguard 内の呼び出し `protected.rs:78` は `physical_landing(...)?` で伝播している）。
 6. **判定: recommend（条件付き）**。
    - 理由: 結合がなく、三値で、`fde` に同種の関数が既にあるため需要が実在する。symlink を物理解決する関数は
-     blastguard 外に存在しない（`read_link` が 0 件）。
+     blastguard 外の非テストコードに存在しない（`read_link` は `tests/` に 3 件のみ。上記 2. の再実行結果）。
    - 条件: (1) 戻り値を `Determination<String>` に正規化する（`None` を理由付き `Undetermined` へ）。
      (2) 移す前に、`canonical_lenient` との差が出る入力（symlink を含む尾部、`..` で既存部へ戻る経路、循環）を
      利害関係のない Agent がテストにする。差が出なければ統合、出れば fde の挙動を blastguard 側へ寄せるかを判断する。
@@ -219,12 +239,17 @@ CLAUDE.md が挙げる三値 `Absent / Undetermined / Known(T)` のうち、`Abs
 2. **類似コード**: `crates/harness-core/src/git_probe.rs`（185 行）。`RepoProbe`（`Repo`/`NotRepo`/`Undetermined`、`:25`）、
    `decide_repo_probe`（`:59`）、`dot_git_present`（`:117`）、`probe_repo`（`:141`）、`probe_repo_scrubbed`（`:162`）。
    **blastguard は既に使っている**: `reversible.rs:45` `use harness_core::git_probe::{probe_repo_scrubbed, RepoProbe};`
-   （`grep -rn "harness_core::git_probe\|git_probe::" '--include=*.rs' . | grep -v "/tests/"` の結果。他に `donegate/src/git.rs:10`、`reviewgate/src/git.rs:36`）。
+   （`grep -rn "harness_core::git_probe\|git_probe::" '--include=*.rs' . | grep -v "/tests/"` を `crates/` で再実行した結果。
+   `use harness_core::git_probe::{probe_repo_scrubbed, RepoProbe};` は他に `donegate/src/git.rs:10`、`reviewgate/src/git.rs:36`、
+   `propguard/src/git.rs:23`、`tdd/src/git.rs:13` の 4 件。`donegate/src/git.rs:110` は `{probe_repo, RepoProbe}`。
+   残りのヒット（`harness-core/src/primary_tree.rs:126`、`verdict.rs:17`/`:428`、`git_env.rs:20`、各 crate の doc コメント）は
+   使用ではなく参照または説明。）
    `git_env::scrub` も共有されている（`reversible.rs` の `probe_tree` 周辺の doc に `harness_core::git_env::scrub`）。
 3. **想定する利用者**: `GitTreeProbe` は「ある絶対パス以下のバイトがすべて HEAD に載っているか」（`status`/`ls-files`/`check-ignore` の
    結果）を答える。`git_probe` が答える「リポジトリか」とは**問いが違う**。同種の「作業ツリーの変更が git で復元可能か」を
-   必要とする crate は `donegate`/`reviewgate`/`tdd`（変更集合を見る gate）が候補だが、現状は `donegate/src/git.rs`、`reviewgate/src/git.rs`
-   とも `RepoProbe` を使い、`TreeGitFacts` 相当のものは**確認していない**（それらの diff 取得部は読んでいない。未確認）。
+   必要とする crate は `donegate`/`reviewgate`/`tdd`/`propguard`（変更集合を見る gate）が候補だが、これら 4 crate の `git.rs` は
+   上記のとおり `RepoProbe` を使っている（`tdd/src/git.rs:13` を含む。以前の版は tdd を未確認と書いたが、grep に出ており誤りだった）。
+   一方、`TreeGitFacts` 相当（復元可能性の判定）を必要としているかは**未確認**（各 `git.rs` の diff 取得部の本文を読んでいない）。
 4. **結合**: `GitTreeProbe` は `Determination<TreeGitFacts>` と `fn` 型エイリアスだけで、型としては軽い。ただし
    `probe_tree_with_timeout` 内に blastguard 固有の知識（build 出力ディレクトリ候補 `build_dirs`、`TREE_GIT_TIMEOUT = 1500ms`、
    exit code の一覧）が入る。`scope.rs:722` の `SafeRoots` への注入口は blastguard 固有で、切り出し対象外。
@@ -244,7 +269,12 @@ CLAUDE.md が挙げる三値 `Absent / Undetermined / Known(T)` のうち、`Abs
    `crates/blastguard/src/approve.rs:169` `pub fn normalize_command(command: &str) -> String`
    （`command.split_whitespace().collect::<Vec<_>>().join(" ")`）。
 2. **類似コード**:
-   - `approve::normalize_command` と**同じ式**: `stuckguard/src/sig.rs:58` `fn norm(s: &str) -> String { s.split_whitespace().collect::<Vec<_>>().join(" ") }`
+   - `approve::normalize_command` と**同じ式**: `stuckguard/src/sig.rs:58` `fn norm(s: &str) -> String { s.split_whitespace().collect::<Vec<_>>().join(" ") }`。
+     固定文字列検索 `grep -rnF 'split_whitespace().collect::<Vec<_>>().join(" ")' '--include=*.rs' .`（`crates/` で実行）は 7 件:
+     `stuckguard/src/sig.rs:59`、`backlog/src/task.rs:443`（`lower.split_whitespace()...` のインライン）、`ctxrot/src/hooks/guard.rs:644`（インライン）、
+     `blastguard/src/approve.rs:170`、`blastguard/src/retro.rs:647`（`s.split_whitespace()...`、blastguard 内の別コピー）、
+     `condukt/tests/backlog_0805b07a.rs:108`（テスト）、`beacon/src/transcript.rs:52`（`s.split_whitespace()...`）。
+     初版は stuckguard だけを挙げていたが、同じ式は workspace に他にもある。
      （`sed -n 58,60p crates/stuckguard/src/sig.rs`）。
    - `exclude::normalize` の近縁: `overwatch/src/changeset.rs:46 normalize_path`（先頭の `./` 除去・連続 `/` の圧縮・小文字化。`..` は解決しない）。
      doc に「Rules (identical to `schedule::normalize_entry`)」とあり、`schedule::normalize_entry` は `condukt/src/schedule.rs:73` にある（`grep -n "normalize_entry" crates/condukt/src/schedule.rs`。本体と overwatch 版の一致は未確認）
@@ -275,8 +305,12 @@ CLAUDE.md が挙げる三値 `Absent / Undetermined / Known(T)` のうち、`Abs
 #### 2.7.2 `protected` / `exclude` の保護パス表
 
 `exclude.rs` の `ALLOW_GLOBS`/保護集合は gate の設定ファイル一覧を持つ。他 gate が同じ一覧を必要とする可能性はあるが、
-どの crate が呼ぶかを示す根拠コードを見つけていない（`grep -rn "exclude::" '--include=*.rs' . | grep -v "^./blastguard/"` は
-`blastguard/tests/` 配下のみヒット）。**判定: defer**（需要未観測）。
+どの crate が呼ぶかを示す根拠コードを見つけていない。`grep -rn "exclude::" '--include=*.rs' . | grep -v "^blastguard/"`（`crates/` で実行）の
+ヒットは `propguard/src/gate.rs:147` の 1 件のみで、これは doc コメント
+（`/// \`blastguard::exclude::build_set\` (9ed33ba6) and \`blastguard::diffrisk\``）であって呼び出しではない。
+フィルタ無しの全件数は 68（`| wc -l`）で、内訳は `blastguard/src` 51 件（`| grep -c "^blastguard/src"`）、
+`blastguard/tests` 16 件（`| grep -c "^blastguard/tests"`）、残り 1 件が上の propguard。
+（初版の「`blastguard/tests/` 配下のみヒット」は誤りだった。）**判定: defer**（需要未観測）。
 
 #### 2.7.3 `fde` の `canonical_lenient` との関係（再掲）
 
@@ -297,7 +331,7 @@ CLAUDE.md が挙げる三値 `Absent / Undetermined / Known(T)` のうち、`Abs
 
 ## 4. 未確認の項目と理由
 
-- `sitecraft/src/gate.rs` が heredoc を解析しているか: 本文を読んでいない。
+- `sitecraft/src/gate.rs`、`harness-core/src/transcript.rs`、`harness-core/src/attribution.rs` が heredoc を解析しているか: 本文を読んでいない。
 - `fde::canonical_lenient` と `physical_landing` の挙動差: 同一入力で走らせるテストを書いていない（本書は分析のみ）。
 - 他 crate の予算機構・時間制限つき git 実行・時間制限つき git 実行: 該当 `grep` を実行していない。
 - 0.2 の「rm 側の部分一致」: 2. の検索パターンから外したため調べていない（0.2）。

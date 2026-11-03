@@ -242,3 +242,7 @@ reason = "Pure move: the protected-path and system-path verdicts (protected_path
 [[ack]]
 path = "crates/blastguard/src/detect/readonly.rs"
 reason = "Pure move: the read-only command table and recognised-verb helpers (READ_ONLY_COMMANDS through backlog_writes_operand_paths, plus is_recognized_command) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/fileops.rs"
+reason = "Pure move: the per-verb file-operation analysers and operand helpers (analyze_unlink_rmdir through analyze_uniq, has_glob_meta through mode_removes_read, positional_operands through analyze_sed) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."

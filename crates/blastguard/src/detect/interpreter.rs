@@ -1577,18 +1577,31 @@ fn compile_call_is_regex_method(payload: &str, at: usize) -> bool {
 ///   preceded by `.`, and is followed by `.` and an attribute name that does
 ///   not start with `_`, after which the next non-blank character is none of
 ///   `.`, `[`, `:`, or an assignment `=` (a lone `=`, or `=` following an
-///   operator character other than in `==`).
+///   operator character other than in `==`);
+/// - the payload contains no star import anywhere (`payload_has_star_import`):
+///   `from m import *` can rebind `name` without spelling it.
 ///
-/// This rejects every rebinding spelling (`import builtins as re`,
-/// `from x import y as re`, `re = …`, `from … import re`, `global re`,
-/// `for re in`, `def re(`, `class re`, `lambda re`, `del re`, `re` passed as an
-/// argument, `'re'` in a string, `re.compile = …`, `re.__dict__`) because none
-/// of them is an attribute read. Rejection is the conservative direction.
+/// This rejects the rebinding spellings that write the name
+/// (`import builtins as re`, `from x import y as re`, `re = …`,
+/// `from … import re`, `global re`, `for re in`, `def re(`, `class re`,
+/// `lambda re`, `del re`, `re` passed as an argument, `'re'` in a string,
+/// `re.compile = …`, `re.__dict__`) because none of them is an attribute read,
+/// and the star import, which rebinds without writing the name. Rejection is
+/// the conservative direction.
 ///
-/// What this does NOT prove: that the module object has not been altered
-/// through a handle that never spells `name` as a word (for example via
-/// `sys.modules.get('r' + 'e')`). See `compile_call_is_regex_method`.
+/// What this does NOT prove:
+/// - that the module object has not been altered through a handle that never
+///   spells `name` as a word (for example via `sys.modules.get('r' + 'e')`);
+/// - that an imported module (e.g. a local `.py` file next to the program)
+///   does not monkeypatch `re` / `re.compile` when it is imported. That code is
+///   not in the program text. The gap predates this exemption: importing such
+///   a module already runs arbitrary code that no scan of this text sees.
+///
+/// See `compile_call_is_regex_method`.
 fn module_bound_only_by_import(payload: &str, name: &str) -> bool {
+    if payload_has_star_import(payload) {
+        return false;
+    }
     // Locate the binding import line: [start, end) byte range.
     let mut binding: Option<(usize, usize)> = None;
     let mut offset = 0;
@@ -1659,6 +1672,25 @@ fn module_bound_only_by_import(payload: &str, name: &str) -> bool {
     true
 }
 
+/// Whether `payload` may contain a star import (`from m import *`).
+///
+/// Deliberately over-approximate (fail-closed): it returns true when ANY
+/// occurrence of the text `import`, anywhere in the payload (indented or not,
+/// after `;`, inside a string or comment), is followed — after any run of
+/// whitespace, newlines, `\` line continuations and `(` — by `*`. That covers
+/// `import *`, `import*`, `import (*`, `import(*` and
+/// `import \` + newline + `*`. A false positive only means the `re.compile(`
+/// exemption is withheld and the marker asks.
+fn payload_has_star_import(payload: &str) -> bool {
+    payload.match_indices("import").any(|(at, kw)| {
+        payload
+            .get(at + kw.len()..)
+            .unwrap_or("*")
+            .trim_start_matches(|c: char| c.is_whitespace() || c == '\\' || c == '(')
+            .starts_with('*')
+    })
+}
+
 #[cfg(test)]
 mod regex_compile_tests {
     use super::compile_call_is_regex_method;
@@ -1713,6 +1745,23 @@ mod regex_compile_tests {
         assert!(fires("s = '''\nimport re\n'''\nre.compile('x')"));
         assert!(fires("import RE\nRE.compile('x')"));
         assert!(fires("import re\nre.COMPILE('x')"));
+    }
+
+    #[test]
+    fn star_import_fires() {
+        assert!(fires(
+            "import re\nfrom evil import *\nre.compile('import os','f','exec')"
+        ));
+        assert!(fires(
+            "import re\nif True:\n    from evil import *\nre.compile('x')"
+        ));
+        assert!(fires("import re\nfrom evil import*\nre.compile('x')"));
+        assert!(fires("import re\nfrom evil import (*)\nre.compile('x')"));
+        assert!(fires("import re\nx=1; from evil import *\nre.compile('x')"));
+        assert!(fires(
+            "import re\nfrom evil import \\\n    *\nre.compile('x')"
+        ));
+        assert!(fires("from evil import *\nimport re\nre.compile('x')"));
     }
 
     #[test]

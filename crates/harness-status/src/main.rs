@@ -301,11 +301,18 @@ fn main() {
         }
         Some(Command::SessionStart) => {
             harness_core::hook::run_hook(|| {
-                // Read (and discard) stdin only if actually piped, mirroring the
-                // fail-soft, non-blocking pattern other plugins' SessionStart hooks
-                // use; this hook doesn't need the payload, just needs to be a good
-                // citizen w.r.t. stdin handling.
-                let _ = harness_core::hook::read_stdin_if_piped();
+                // Read (and discard) stdin only if actually piped; this hook
+                // doesn't need the payload, just needs to be a good citizen
+                // w.r.t. stdin handling. A READ ERROR is named on stderr and
+                // the health report below still runs (backlog 8004d80f): the
+                // payload is not an input to it, and dropping the report would
+                // make an empty stdout read as "all healthy".
+                if let Err(e) = harness_core::hook::try_read_stdin_if_piped() {
+                    eprintln!(
+                        "harness-status session-start: stdin read failed: {e} (payload not \
+                         needed; health is still reported)"
+                    );
+                }
                 let r = hooks_health::read();
                 let shadowed = path_shadow::detect();
                 let mut sections = Vec::new();

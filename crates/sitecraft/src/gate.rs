@@ -84,8 +84,17 @@ pub fn run(input: &HookInput) -> Verdict {
 /// The whole `sitecraft gate` subcommand: read the Stop payload from stdin,
 /// evaluate under the panic barrier, print the Stop-hook decision, and
 /// return the process exit code.
+///
+/// A stdin READ ERROR is "cannot determine", never an empty payload (backlog
+/// 8004d80f): `read_stop_payload_guarded` blocks (hook mode) and exits, so it
+/// is never taken for the empty-stdin manual run below. The payload is unknown
+/// on Err, so hook-vs-manual mode comes from whether stdin is a terminal.
 pub fn command() -> i32 {
-    let raw = harness_core::hook::read_stdin();
+    let raw = harness_core::gate::run::read_stop_payload_guarded(
+        GATE_NAME,
+        std::io::IsTerminal::is_terminal(&std::io::stdin()),
+        harness_core::hook::try_read_stdin(),
+    );
     if raw.trim().is_empty() {
         // Manual run: no payload, no session; report like any other check.
         return harness_core::gate::run::run_guarded(GATE_NAME, true, false, || {

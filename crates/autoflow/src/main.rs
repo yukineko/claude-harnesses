@@ -60,7 +60,7 @@ mod state;
 mod stop_intent;
 
 use clap::{Parser, Subcommand};
-use harness_core::hook::{read_stdin, run_hook, HookInput};
+use harness_core::hook::{run_hook, try_read_stdin, HookInput};
 use harness_core::verdict::{Determination, Verdict};
 
 use config::Config;
@@ -132,8 +132,17 @@ fn resolve_session_id(input: &HookInput) -> String {
 /// before any decision was emitted) now fails CLOSED (`decision:block`)
 /// instead of the old behavior of silently exiting 0 with no decision
 /// (indistinguishable from a clean, nothing-to-do stop).
+///
+/// A stdin READ ERROR is "cannot determine", never an empty payload (backlog
+/// 8004d80f): `read_stop_payload_guarded` blocks (hook mode) and exits. The
+/// payload is unknown on Err, so hook-vs-manual mode comes from whether stdin
+/// is a terminal (a hook's stdin is a pipe).
 fn stop_command() -> ! {
-    let raw = read_stdin();
+    let raw = harness_core::gate::run::read_stop_payload_guarded(
+        "autoflow",
+        std::io::IsTerminal::is_terminal(&std::io::stdin()),
+        try_read_stdin(),
+    );
     let hook = HookInput::parse(&raw);
     let interactive = hook.is_none();
     let stop_hook_active = hook.as_ref().is_some_and(|h| h.stop_hook_active);
@@ -628,14 +637,32 @@ fn prompt_submit_run(session_id: &str, cfg: &Config) -> Option<String> {
 
 fn pre_compact_command() -> ! {
     run_hook(|| {
-        let raw = read_stdin();
-        let input = HookInput::parse(&raw).unwrap_or_default();
-        let session_id = resolve_session_id(&input);
-        let cwd = input.cwd_or_current();
+        let raw = try_read_stdin();
         let cfg = Config::load();
         if !cfg.enabled || Config::disabled_env() {
             return;
         }
+        // A stdin READ ERROR: the session (and so whether it drives /flow) is
+        // unknown. Say so the same way as any other undetermined answer — a
+        // user-visible `systemMessage`, no marker written — never silence.
+        let raw = match raw {
+            Ok(raw) => raw,
+            Err(e) => {
+                eprintln!("autoflow pre-compact: stdin read failed: {e}");
+                if cfg.resume_flow_on_compact {
+                    let msg = format!(
+                        "autoflow: /compact 後の /flow 自動再開を判定できませんでした（判定不能）: \
+                         stdin read failed: {e}\n\
+                         再開マーカーは書いていません。/flow を回していた場合は手動で再開してください。"
+                    );
+                    println!("{}", serde_json::json!({ "systemMessage": msg }));
+                }
+                return;
+            }
+        };
+        let input = HookInput::parse(&raw).unwrap_or_default();
+        let session_id = resolve_session_id(&input);
+        let cwd = input.cwd_or_current();
         // `systemMessage` is user-visible and is not a `decision`, so it
         // surfaces the undetermined answer without blocking compaction.
         if let Some(msg) = pre_compact_run(&session_id, &cwd, &cfg) {
@@ -646,7 +673,18 @@ fn pre_compact_command() -> ! {
 
 fn prompt_submit_command() -> ! {
     run_hook(|| {
-        let raw = read_stdin();
+        // A stdin READ ERROR: the session is unknown, so no resume marker can
+        // be consumed. The marker (if any) stays in place for the next prompt;
+        // the failure is reported on stderr, not injected as context.
+        let raw = match try_read_stdin() {
+            Ok(raw) => raw,
+            Err(e) => {
+                eprintln!(
+                    "autoflow prompt-submit: stdin read failed: {e}; no resume marker consumed"
+                );
+                return;
+            }
+        };
         let input = HookInput::parse(&raw).unwrap_or_default();
         let session_id = resolve_session_id(&input);
         let cfg = Config::load();

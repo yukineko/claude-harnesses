@@ -101,6 +101,13 @@ const PROTECTED_GLOBS: &[&str] = &[
     "**/.githooks/**",
     ".git/hooks/**",
     "**/.git/hooks/**",
+    // `.git/config` decides `core.hooksPath` (and other hook-adjacent keys
+    // such as `core.fsmonitor`): one appended `[core] hooksPath = /dev/null`
+    // disables every git hook, `.githooks/` included, without touching either
+    // hook tree (backlog 03885f11). Only the config file itself is named —
+    // the rest of `.git/` keeps its ordinary rules.
+    ".git/config",
+    "**/.git/config",
     // ---- deployed plugin executables & hook wiring (backlog 1b82a049) ----
     // The plugin cache is where every hook actually runs FROM: `bin/` holds
     // the launcher and the per-platform binaries, `hooks/` the `hooks.json`

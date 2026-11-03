@@ -7,7 +7,6 @@ mod trust;
 mod weaken;
 
 use clap::{Parser, Subcommand};
-use std::io::Read;
 use std::path::PathBuf;
 
 use harness_core::hook::HookInput;
@@ -90,9 +89,18 @@ fn trust_command() -> i32 {
     }
 }
 
+/// The Stop hook. A stdin READ ERROR is "cannot determine", never an empty
+/// payload (backlog 8004d80f): it used to be discarded with `let _ =` and the
+/// empty buffer ran manual-CLI mode, which allowed the stop.
+/// `read_stop_payload_guarded` blocks (hook mode) and exits instead; the
+/// payload is unknown on Err, so hook-vs-manual mode comes from whether stdin
+/// is a terminal (a hook's stdin is a pipe).
 fn gate_command() -> ! {
-    let mut raw = String::new();
-    let _ = std::io::stdin().read_to_string(&mut raw);
+    let raw = harness_core::gate::run::read_stop_payload_guarded(
+        "webqa",
+        std::io::IsTerminal::is_terminal(&std::io::stdin()),
+        harness_core::hook::try_read_stdin(),
+    );
     let hook = HookInput::parse(&raw);
     let interactive = hook.is_none();
     let active = hook.as_ref().is_some_and(|h| h.stop_hook_active);

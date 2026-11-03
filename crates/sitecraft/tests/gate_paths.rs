@@ -1014,6 +1014,129 @@ fn bash_npm_run_build_runs_pages() {
     );
 }
 
+impl Fixture {
+    /// Gate run over a transcript whose only call is `command`; true when the
+    /// pages check ran (i.e. the command was NOT cleared as read-only).
+    fn bash_runs_pages(&self, session: &str, command: &str) -> (bool, Output) {
+        self.transcript_with_bash(command);
+        let out = self.gate(session, false);
+        (self.pages_ran(), out)
+    }
+}
+
+/// Unquoted pathname expansion: `*` may expand to a file named `--pre=prog`,
+/// so the words the program receives are not the words written.
+#[test]
+fn bash_unquoted_glob_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-glob", "ls *.txt");
+    assert!(
+        ran,
+        "`ls *.txt`: an unquoted glob is expanded by the shell, argv unknown: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// Brace expansion: `{--pre=prog,x}` becomes `--pre=prog x`.
+#[test]
+fn bash_unquoted_brace_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-brace", "ls {a,b}");
+    assert!(
+        ran,
+        "`ls {{a,b}}`: brace expansion changes the words: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// `%G?` in a git log format verifies signatures, i.e. runs gpg.
+#[test]
+fn bash_git_log_signature_format_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-gitlog-g", "git log --format=%G? -1");
+    assert!(
+        ran,
+        "`git log --format=%G?` runs gpg: not provably read-only, pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// `rg -z` / `--search-zip` runs decompression programs found on PATH.
+#[test]
+fn bash_rg_search_zip_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-rg-z", "rg -z answer README.md");
+    assert!(
+        ran,
+        "`rg -z` runs external decompressors: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// git global options other than `--no-pager` (`-c`, `-C`, `--git-dir`, ...)
+/// change what git runs or where.
+#[test]
+fn bash_git_global_config_option_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-git-c", "git -c core.fsmonitor=hook status");
+    assert!(
+        ran,
+        "`git -c k=v status`: a global option is not allowed: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+#[test]
+fn bash_git_global_dir_option_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-git-C", "git -C . status");
+    assert!(
+        ran,
+        "`git -C . status`: a global option is not allowed: pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// git accepts unambiguous abbreviations of long options: `--out=x` is
+/// `--output=x` (a file write). An allowlist rejects it; a denylist of the
+/// full name would not.
+#[test]
+fn bash_git_log_abbreviated_output_option_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let (ran, out) = f.bash_runs_pages("s-bash-git-abbrev", "git log --out=notes.log");
+    assert!(
+        ran,
+        "`git log --out=...` abbreviates --output (a file write): pages must run\n{}",
+        describe(&out)
+    );
+}
+
+/// rg takes `--` as the VALUE of `-e` (observed: `rg -e -- --pre=./pre.sh f`
+/// ran pre.sh, ripgrep 14.1.1), so what follows is still an option. The option
+/// check must not treat that `--` as the end of options.
+#[test]
+fn bash_rg_pattern_option_value_dashdash_then_pre_runs_pages() {
+    let f = fixture();
+    f.trust();
+    let prog = f.base.join("stubs/hostname.sh");
+    let (ran, out) = f.bash_runs_pages(
+        "s-bash-rg-e-dashdash",
+        &format!("rg -e -- --pre={} README.md", prog.display()),
+    );
+    assert!(
+        ran,
+        "`rg -e -- --pre=PROG`: `--` is -e's value and --pre runs PROG: pages must run\n{}",
+        describe(&out)
+    );
+}
+
 // ---------------------------------------------------------------- node stub schema
 
 /// The fixture's `node` stub reports a console error. The block it provokes

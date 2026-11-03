@@ -534,3 +534,177 @@ fn digest_of_many_gcc_diagnostics_is_not_tail_only() {
         "dropped diagnostics must be counted\n--- reason ---\n{reason}"
     );
 }
+
+// ===========================================================================
+// pins added by the verifier for the digest's remaining branches
+// ===========================================================================
+
+/// python unittest: `FAIL: test_x (mod.Class)` blocks, no `FAILED` before the
+/// last line.
+#[test]
+fn digest_of_unittest_output_keeps_every_fail_line() {
+    let mut raw = String::new();
+    for i in 0..8 {
+        raw.push_str(&format!(
+            "======================\nFAIL: test_x{i} (mod.Class)\n----------------------\nAssertionError: 1 != 2\n"
+        ));
+    }
+    raw.push_str("\nRan 8 tests in 0.01s\n\nFAILED (failures=8)\n");
+    let f = fixture("unittest", &raw, "");
+    let reason = reason_of(&stop(&f, "s-unittest"));
+    for i in 0..8 {
+        let name = format!("FAIL: test_x{i} (mod.Class)");
+        assert!(
+            reason.contains(&name),
+            "{name} was dropped\n--- reason ---\n{reason}"
+        );
+    }
+}
+
+/// jest / go package style: `FAIL <path>` lines among other output.
+#[test]
+fn digest_of_fail_path_lines_keeps_every_path() {
+    let mut raw = String::new();
+    for i in 0..8 {
+        raw.push_str(&format!(
+            "FAIL src/a{i}.test.js\n  ● suite {i} › case\n    expect(received).toBe(expected)\n"
+        ));
+    }
+    raw.push_str("Tests: 8 failed, 8 total\nTime: 1.2 s\nRan all test suites.\n");
+    let f = fixture("jest", &raw, "");
+    let reason = reason_of(&stop(&f, "s-jest"));
+    for i in 0..8 {
+        let name = format!("FAIL src/a{i}.test.js");
+        assert!(
+            reason.contains(&name),
+            "{name} was dropped\n--- reason ---\n{reason}"
+        );
+    }
+}
+
+/// 14 FAILED lines: the first 10 are shown and the other 4 are counted.
+#[test]
+fn digest_caps_failed_lines_at_ten_and_counts_the_rest() {
+    let mut raw = String::new();
+    for i in 0..14 {
+        raw.push_str(&format!(
+            "FAILED tests/test_b.py::test_case_{i:02} - assert 0\n"
+        ));
+    }
+    raw.push_str("noise 1\nnoise 2\nnoise 3\nnoise 4\nnoise 5\n");
+    let f = fixture("failed-cap", &raw, "");
+    let reason = reason_of(&stop(&f, "s-failed-cap"));
+    assert!(
+        reason.contains("test_case_00") && reason.contains("test_case_09"),
+        "the first ten FAILED lines must be shown\n--- reason ---\n{reason}"
+    );
+    assert!(
+        !reason.contains("test_case_10"),
+        "only the first ten FAILED lines are shown; the rest are counted\n--- reason ---\n{reason}"
+    );
+    assert!(
+        reason.contains("… and 4 more FAILED lines"),
+        "the rest must be counted\n--- reason ---\n{reason}"
+    );
+}
+
+/// An early gcc `fatal error` and `warning` (outside the last 5 lines) are
+/// shown.
+#[test]
+fn digest_keeps_gcc_fatal_error_and_warning_lines() {
+    let mut raw = String::from("src/f.h:1:10: fatal error: nofile.h: No such file or directory\n");
+    raw.push_str("src/w.c:2:1: warning: unused variable 'q' [-Wunused-variable]\n");
+    for i in 0..10 {
+        raw.push_str(&format!("cc -c unit{i}.c\n"));
+    }
+    raw.push_str("make: *** [all] Error 1\n");
+    let f = fixture("gcc-kinds", &raw, "");
+    let reason = reason_of(&stop(&f, "s-gcc-kinds"));
+    for needle in [
+        "src/f.h:1:10: fatal error: nofile.h",
+        "src/w.c:2:1: warning: unused variable 'q'",
+    ] {
+        assert!(
+            reason.contains(needle),
+            "{needle} was dropped\n--- reason ---\n{reason}"
+        );
+    }
+}
+
+/// Seven warnings come before the only error: the error must not be pushed out
+/// by the cap of five.
+#[test]
+fn digest_shows_an_error_that_follows_many_warnings() {
+    let mut raw = String::new();
+    for i in 0..7 {
+        raw.push_str(&format!(
+            "src/w{i}.c:{}:1: warning: unused variable 'q{i}'\n",
+            i + 1
+        ));
+    }
+    raw.push_str("src/e.c:9:9: error: expected ';' before '}' token\n");
+    for i in 0..8 {
+        raw.push_str(&format!("cc -c unit{i}.c\n"));
+    }
+    raw.push_str("make: *** [all] Error 1\n");
+    let f = fixture("err-after-warn", &raw, "");
+    let reason = reason_of(&stop(&f, "s-err-after-warn"));
+    assert!(
+        reason.contains("src/e.c:9:9: error: expected ';'"),
+        "the error behind many warnings was dropped\n--- reason ---\n{reason}"
+    );
+}
+
+/// tsc prints a per-file table AFTER its `Found N errors` summary, so the
+/// summary is not among the last five lines.
+#[test]
+fn digest_keeps_a_tsc_summary_that_is_followed_by_the_per_file_table() {
+    let mut raw = String::new();
+    for i in 0..5 {
+        raw.push_str(&format!(
+            "src/m{i}.ts({},5): error TS2322: Type 'string' is not assignable to type 'number'.\n",
+            i + 1
+        ));
+    }
+    raw.push_str("\nFound 5 errors in 5 files.\n\nErrors  Files\n");
+    for i in 0..5 {
+        raw.push_str(&format!("     1  src/m{i}.ts:{}\n", i + 1));
+    }
+    let f = fixture("tsc-table", &raw, "");
+    let reason = reason_of(&stop(&f, "s-tsc-table"));
+    assert!(
+        reason.contains("Found 5 errors in 5 files."),
+        "the tsc summary line was dropped\n--- reason ---\n{reason}"
+    );
+}
+
+/// The same for clang's `N errors generated.` followed by more lines.
+#[test]
+fn digest_keeps_a_clang_summary_that_is_followed_by_more_lines() {
+    let mut raw = String::from("src/a.c:3:5: error: use of undeclared identifier 'q'\n");
+    raw.push_str("    q = 1;\n    ^\n2 errors generated.\n");
+    for i in 0..7 {
+        raw.push_str(&format!("make[{i}]: leaving directory\n"));
+    }
+    let f = fixture("clang-sum", &raw, "");
+    let reason = reason_of(&stop(&f, "s-clang-sum"));
+    assert!(
+        reason.contains("2 errors generated."),
+        "the clang summary line was dropped\n--- reason ---\n{reason}"
+    );
+}
+
+/// Eight located rustc errors: five are shown, three counted.
+#[test]
+fn digest_caps_located_diagnostics_at_five_and_counts_the_rest() {
+    let f = fixture("diag-cap", &compile_errors(8), "");
+    let reason = reason_of(&stop(&f, "s-diag-cap"));
+    assert!(
+        reason.contains("src/main.rs:5:5") && !reason.contains("src/main.rs:6:5"),
+        "exactly the first five located diagnostics are shown\n--- reason ---\n{reason}"
+    );
+    assert!(
+        reason.contains("… and 3 more diagnostics"),
+        "the rest must be counted\n--- reason ---\n{reason}"
+    );
+}

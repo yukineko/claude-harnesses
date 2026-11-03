@@ -1,7 +1,9 @@
 //! Target resolution and the fde state directory.
 //!
 //! [`resolve`] and [`state_dir`] are implemented; both answer `Undetermined`
-//! (never a guessed value) when they cannot reach a conclusion.
+//! (never a guessed value) when they cannot reach a conclusion. [`presence`]
+//! tells whether a registered root still exists ("gone" only on `NotFound`),
+//! and [`forget_candidates`] computes what `fde forget` removes.
 
 use std::path::{Path, PathBuf};
 
@@ -135,4 +137,112 @@ pub fn resolve(target: Option<&Path>, cwd: &Path) -> Determination<ResolvedTarge
     }
     let state_key = state_key(&root);
     Determination::known(ResolvedTarget { root, state_key })
+}
+
+/// Whether a registered root is still there, as observed by
+/// `std::fs::symlink_metadata` (the root itself is not followed, so a root
+/// that is now a dangling symlink is present, not gone).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presence {
+    /// Something exists at the root path.
+    Present,
+    /// The root path does not exist (`NotFound`): a determined fact.
+    Gone,
+}
+
+/// Observe whether `root` exists. `Known(Gone)` only for `NotFound`; every
+/// other stat error (permission denied, IO, …) is `Undetermined` — the root
+/// may still be there.
+#[track_caller]
+pub fn presence(root: &Path) -> Determination<Presence> {
+    match std::fs::symlink_metadata(root) {
+        Ok(_) => Determination::known(Presence::Present),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Determination::known(Presence::Gone),
+        Err(e) => Determination::undetermined(format!(
+            "cannot tell whether registered target {} still exists: {e}",
+            root.display()
+        )),
+    }
+}
+
+/// The roots a path that does not exist may have been registered under: its
+/// [`crate::gate::canonical_lenient`] form (nearest existing ancestor
+/// canonicalized, so a symlinked-parent spelling matches the canonical root
+/// fde recorded), then the path itself with `.` / `..` applied lexically when
+/// that differs (the exact recorded root, should the ancestors have changed).
+/// `start` must be absolute; `Undetermined` when it is not or when
+/// canonicalization fails with anything but `NotFound`.
+#[track_caller]
+pub fn absent_root_candidates(start: &Path) -> Determination<Vec<PathBuf>> {
+    let canon = match crate::gate::canonical_lenient(start) {
+        Determination::Known(c) => c,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let mut lexical = PathBuf::new();
+    for c in start.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                lexical.pop();
+            }
+            other => lexical.push(other),
+        }
+    }
+    let mut out = vec![canon];
+    if !out.contains(&lexical) {
+        out.push(lexical);
+    }
+    Determination::known(out)
+}
+
+/// The `(root, state_key)` candidates `fde forget [TARGET]` acts on (see
+/// `main.rs`); the caller removes the state of the first candidate whose
+/// state directory exists.
+///
+/// * no `target`: [`resolve`] of the cwd (its git top-level);
+/// * an existing `target` (absolute, or relative to `cwd`): [`resolve`] of it
+///   (its git top-level), so a subdirectory names its repository;
+/// * a `target` that does not exist (`NotFound`): every
+///   [`absent_root_candidates`] entry, in order, so a gone target is reachable
+///   through a relative or symlinked spelling of its former path;
+/// * any other stat error, or a resolution failure: `Undetermined`.
+#[track_caller]
+pub fn forget_candidates(
+    target: Option<&Path>,
+    cwd: &Path,
+) -> Determination<Vec<(PathBuf, String)>> {
+    let Some(t) = target else {
+        return match resolve(None, cwd) {
+            Determination::Known(r) => Determination::known(vec![(r.root, r.state_key)]),
+            Determination::Undetermined(why) => Determination::Undetermined(why),
+        };
+    };
+    let start = if t.is_absolute() {
+        t.to_path_buf()
+    } else {
+        cwd.join(t)
+    };
+    match std::fs::symlink_metadata(&start) {
+        Ok(_) => match resolve(Some(&start), cwd) {
+            Determination::Known(r) => Determination::known(vec![(r.root, r.state_key)]),
+            Determination::Undetermined(why) => Determination::Undetermined(why),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            match absent_root_candidates(&start) {
+                Determination::Known(c) => Determination::known(
+                    c.into_iter()
+                        .map(|p| {
+                            let k = state_key(&p);
+                            (p, k)
+                        })
+                        .collect(),
+                ),
+                Determination::Undetermined(why) => Determination::Undetermined(why),
+            }
+        }
+        Err(e) => Determination::undetermined(format!(
+            "cannot tell whether {} exists: {e}",
+            start.display()
+        )),
+    }
 }

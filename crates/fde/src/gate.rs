@@ -1,4 +1,6 @@
-//! PreToolUse gate: deny edits to registered targets that are not ratified.
+//! PreToolUse gate: deny edits to registered targets that are not ratified,
+//! edits at the former path of a registered target that is gone, and the
+//! human-only `fde forget`.
 //!
 //! # Decision
 //!
@@ -23,13 +25,35 @@
 //!    targets ([`crate::ratify::registered_targets`]) are read; an unresolved
 //!    state dir, an unreadable listing or any corrupt registration is
 //!    `Undetermined`. No registered target at all is `Clean` for every tool.
-//! 3. Any other `tool_name` (outside the hook matcher
+//!    A corrupt registration therefore denies everything until the human
+//!    removes it with `fde forget`.
+//! 3. `fde forget` is human-only (like `fde ratify`): while any target is
+//!    registered (gone ones included), a Bash call whose command invokes it
+//!    ([`invokes_fde_forget`]: among the [`lenient_words`] — split on
+//!    whitespace and `;&|()<>`, quotes and backslashes deleted — a word `fde`
+//!    or ending in `/fde` followed later by the word `forget`) is a
+//!    `Violation`, wherever it runs and whatever it names. Textual and
+//!    conservative: a quoted string that merely contains those words is
+//!    denied too.
+//! 4. Any other `tool_name` (outside the hook matcher
 //!    `Bash|Edit|Write|MultiEdit|NotebookEdit`) is `Undetermined` while a
 //!    target is registered: the gate does not know whether it edits files.
-//! 4. Every registered target whose [`crate::ratify::status`] is `Ratified`
-//!    is out of the question. Every other one (`Unratified`, or an
-//!    `Undetermined` status) is *guarded*.
-//! 5. A guarded target's area is its canonical root plus every work tree of
+//! 5. Each registered target's root is stat'ed ([`crate::target::presence`],
+//!    `symlink_metadata`, before its ratification is looked at):
+//!    * `NotFound` — the target is *gone*, a determined fact. It is not
+//!      guarded: it denies nothing elsewhere and no git probe is made for it.
+//!      Only its own former path stays denied, as a `Violation` whose reason
+//!      says it is gone and names `fde forget <root>`: an Edit-tool path
+//!      lying (as given, or canonicalized) under the recorded root, or a Bash
+//!      call whose cwd (as given, or canonicalized) lies under it or whose
+//!      command text contains it. The step-6 `fde status|report|begin`
+//!      exception applies here too.
+//!    * any other stat error — `Undetermined` (deny), whatever the call
+//!      touches: the root may still be there.
+//! 6. Of the present targets, every one whose [`crate::ratify::status`] is
+//!    `Ratified` is out of the question. Every other one (`Unratified`, or an
+//!    `Undetermined` status) is *guarded*. A guarded target's area is its
+//!    canonical root plus every work tree of
 //!    its repository (`git worktree list`, each canonicalized), so a linked
 //!    worktree created outside the target dir is inside.
 //!    * Edit tools: the path is canonicalized ([`canonical_lenient`]: the
@@ -55,7 +79,7 @@
 //!      `Undetermined` (still `Undetermined`, i.e. deny — the gate does not
 //!      know the target is merely unratified), nor to an area that cannot be
 //!      determined, nor to Edit / Write / MultiEdit / NotebookEdit.
-//! 6. Nothing guarded touched: `Clean`.
+//! 7. Nothing guarded or gone touched: `Clean`.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -216,14 +240,13 @@ struct Area {
     spelled: Vec<PathBuf>,
 }
 
-/// Root + work trees of `t`; see the module doc, step 5.
+/// Root + work trees of `t`; see the module doc, step 6.
 fn area(t: &ResolvedTarget) -> Determination<Area> {
     let wts = match git::worktree_paths(&t.root) {
         Determination::Known(w) => w,
         Determination::Undetermined(why) => {
             return Determination::undetermined(format!(
-                "cannot list the work trees of registered target {} \
-                 (if it was deleted, remove its fde state): {why}",
+                "cannot list the work trees of registered target {}: {why}",
                 t.root.display()
             ))
         }
@@ -243,12 +266,12 @@ fn area(t: &ResolvedTarget) -> Determination<Area> {
 /// Whether the request touches `area` (`Some(description)`) or not (`None`).
 fn touches(req: &Checked, area: &Area) -> Option<String> {
     match req {
-        Checked::Path { tool, path } => area
+        Checked::Path { tool, path, .. } => area
             .canonical
             .iter()
             .find(|a| path.starts_with(a))
             .map(|a| format!("{tool} of {} lies in {}", path.display(), a.display())),
-        Checked::Bash { cwd, command } => {
+        Checked::Bash { cwd, command, .. } => {
             if let Some(a) = area.canonical.iter().find(|a| cwd.starts_with(a)) {
                 return Some(format!(
                     "Bash runs in {} inside {}",
@@ -316,19 +339,86 @@ pub fn is_allowed_fde_invocation(command: &str) -> bool {
     words.all(|w| !w.contains("ratify"))
 }
 
-/// A request with its path / cwd canonicalized.
+/// Split `command` into words for conservative textual checks — not a shell
+/// parser. Separators are whitespace (newline and tab included) and the shell
+/// operator characters `;&|()<>`; quote characters (`'`, `"`) and backslashes
+/// are deleted from each word (so `'fde'`, `"forget"`, `f\orget` read as the
+/// bare words), and empty words are dropped. Over-matching (a quoted string
+/// that merely contains the words) is accepted: callers use it to deny.
+pub(crate) fn lenient_words(command: &str) -> Vec<String> {
+    command
+        .split(|c: char| c.is_whitespace() || ";&|()<>".contains(c))
+        .map(|w| w.replace(['\'', '"', '\\'], ""))
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// Whether `command` invokes `fde forget` (step 3, human-only): among its
+/// [`lenient_words`], a word that is `fde` or ends with `/fde` is followed,
+/// anywhere later, by the word `forget`.
+pub fn invokes_fde_forget(command: &str) -> bool {
+    let words = lenient_words(command);
+    words
+        .iter()
+        .position(|w| w == "fde" || w.ends_with("/fde"))
+        .is_some_and(|i| words[i + 1..].iter().any(|w| w == "forget"))
+}
+
+/// A request with its path / cwd canonicalized (`path` / `cwd`) and as given
+/// (`raw_*`, absolute; used for the lexical match against a gone root).
 enum Checked {
-    Path { tool: String, path: PathBuf },
-    Bash { cwd: PathBuf, command: String },
+    Path {
+        tool: String,
+        path: PathBuf,
+        raw_path: PathBuf,
+    },
+    Bash {
+        cwd: PathBuf,
+        raw_cwd: PathBuf,
+        command: String,
+    },
+}
+
+/// Whether the request touches the gone root `root` (`Some(description)`):
+/// the raw or canonicalized path / cwd lies under it, or the Bash command
+/// text contains it. No git probe: the repository is gone with it.
+fn touches_gone(req: &Checked, root: &Path) -> Option<String> {
+    match req {
+        Checked::Path {
+            tool,
+            path,
+            raw_path,
+        } => [raw_path, path]
+            .into_iter()
+            .find(|p| p.starts_with(root))
+            .map(|p| format!("{tool} of {} lies in {}", p.display(), root.display())),
+        Checked::Bash {
+            cwd,
+            raw_cwd,
+            command,
+        } => {
+            if let Some(c) = [raw_cwd, cwd].into_iter().find(|c| c.starts_with(root)) {
+                return Some(format!(
+                    "Bash runs in {} inside {}",
+                    c.display(),
+                    root.display()
+                ));
+            }
+            root.to_str()
+                .filter(|r| command.contains(r))
+                .map(|r| format!("the Bash command names {r}"))
+        }
+    }
 }
 
 /// Judge one PreToolUse `payload` (the raw stdin JSON) against the targets
 /// registered in the state directory ([`crate::target::state_dir`]).
 ///
 /// * `Clean` — allow (exit 0).
-/// * `Violation` — deny (exit 2): the call touches an unratified registered
-///   target (except an exact single Bash `fde status|report|begin`; see the
-///   module doc, step 5).
+/// * `Violation` — deny (exit 2): a Bash `fde forget` while a target is
+///   registered (step 3); or the call touches an unratified registered
+///   target, or the former path of a gone one (except an exact single Bash
+///   `fde status|report|begin`; see the module doc, steps 5 and 6).
 /// * `Undetermined` — deny (exit 2): see the module doc for every case.
 #[track_caller]
 pub fn evaluate(payload: &str) -> Verdict {
@@ -351,6 +441,16 @@ fn evaluate_with(req: Request, state: &Path) -> Verdict {
     if targets.is_empty() {
         return Verdict::from_findings(Vec::new());
     }
+    if let Request::Bash { command, .. } = &req {
+        if invokes_fde_forget(command) {
+            return Verdict::violation(
+                "the Bash command invokes `fde forget`, which is human-only (like \
+                 `fde ratify`): it drops a target's registration, ratification and \
+                 evidence. Ask the human to run `! fde forget <TARGET>` in this session \
+                 or `fde forget <TARGET>` in their own terminal",
+            );
+        }
+    }
     let checked = match req {
         Request::Other { tool } => {
             return Verdict::undetermined(format!(
@@ -359,17 +459,26 @@ fn evaluate_with(req: Request, state: &Path) -> Verdict {
             ))
         }
         Request::Edit { tool, path } => match canonical_lenient(&path) {
-            Determination::Known(p) => Checked::Path { tool, path: p },
+            Determination::Known(p) => Checked::Path {
+                tool,
+                path: p,
+                raw_path: path,
+            },
             Determination::Undetermined(why) => return why.into_verdict(),
         },
         Request::Bash { cwd, command } => match canonical_lenient(&cwd) {
-            Determination::Known(c) => Checked::Bash { cwd: c, command },
+            Determination::Known(c) => Checked::Bash {
+                cwd: c,
+                raw_cwd: cwd,
+                command,
+            },
             Determination::Undetermined(why) => return why.into_verdict(),
         },
     };
 
-    // Step 5 exception: only a Bash command, only an exact single
-    // `fde status|report|begin`, only against an `Unratified` status.
+    // Step 6 exception: only a Bash command, only an exact single
+    // `fde status|report|begin`, only against an `Unratified` status or a
+    // gone root (step 5).
     let fde_allowance = match &checked {
         Checked::Bash { command, .. } => is_allowed_fde_invocation(command),
         Checked::Path { .. } => false,
@@ -377,6 +486,29 @@ fn evaluate_with(req: Request, state: &Path) -> Verdict {
 
     let mut verdicts = Vec::new();
     for t in &targets {
+        // Step 5: a gone root is a determined fact; only its former path is
+        // still denied. A root that cannot be stat'ed is undetermined.
+        match target::presence(&t.root) {
+            Determination::Known(target::Presence::Present) => {}
+            Determination::Known(target::Presence::Gone) => {
+                if let Some(hit) = touches_gone(&checked, &t.root) {
+                    if !fde_allowance {
+                        verdicts.push(Verdict::violation(format!(
+                            "{hit}: registered target {root} is gone (its directory no longer \
+                             exists) but its fde state remains; nothing may be created there \
+                             until the human runs `fde forget {root}` (human-only: ask them to \
+                             run `! fde forget {root}`)",
+                            root = t.root.display()
+                        )));
+                    }
+                }
+                continue;
+            }
+            Determination::Undetermined(why) => {
+                verdicts.push(why.into_verdict());
+                continue;
+            }
+        }
         let unratified_reason = match ratify::status(t, state) {
             Determination::Known(ratify::Status::Ratified { .. }) => continue,
             Determination::Known(ratify::Status::Unratified { reason }) => Ok(reason),

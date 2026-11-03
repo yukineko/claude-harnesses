@@ -11,7 +11,7 @@ ruling; see the note in `scripts/parked-plugins.json`).
 **Platform:** Unix-like systems, including WSL. Windows is out of scope (user
 ruling 2026-11-03; a scope definition, not a limitation).
 
-Commands: `fde resolve`, `begin`, `ratify`, `status`, `gate` (PreToolUse hook),
+Commands: `fde resolve`, `begin`, `ratify`, `status`, `forget`, `gate` (PreToolUse hook),
 `evidence red|green|pass|verify`, `report`. Exit 2 always means undetermined
 (deny for `gate`) and is never a pass. The verdict is `fde evidence verify`
 (0 complete / 1 incomplete / 2 undetermined), which counts PASS as complete.
@@ -50,6 +50,17 @@ invocation (no chaining, redirects, substitution, quoting, env prefixes or
 wrappers) is allowed. `fde ratify` is human-only: after the human approves,
 they run it themselves (e.g. `! fde ratify [TARGET]` in their Claude Code
 prompt, or in their own terminal); the model must not run it.
+
+`fde forget [TARGET]` is human-only too: it removes the target's whole state
+directory (registration, ratification, evidence; a corrupt registration
+included) and never touches the target (0 removed / 1 not registered / 2
+undetermined). While any target is registered, the gate denies every Bash
+command that invokes `fde forget` (detected textually and conservatively). A
+registered target whose root directory was deleted is "gone": it no longer
+blocks unrelated work, but its former path stays denied with a reason naming
+`fde forget`, and `fde status <root>` exits 1 saying `gone`. A root that cannot
+be stat'ed (other than not-found), or a corrupt registration, still denies
+everything.
 
 State lives in `$FDE_STATE_DIR` (default `~/.fde`), keyed by the resolved git
 top-level of the target.

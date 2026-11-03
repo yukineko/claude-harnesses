@@ -43,7 +43,8 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
 | `fde resolve [TARGET]` | `{"root", "state_key"}` を JSON で出力 | 0 解決 / 2 判定不能 |
 | `fde begin [TARGET] --spec FILE` | 下書き spec を登録。target は未批准になる | 0 登録 / 1 拒否(spec が無い・ファイルでない・target の中にある)/ 2 判定不能 |
 | `fde ratify [TARGET] [--spec FILE]` | 登録 spec の批准を記録(内容の SHA-256 を fingerprint とし、target の HEAD コミットと dirty かどうかも記録する) | 0 記録 / 1 拒否(未登録、または FILE が登録 spec でない)/ 2 判定不能(HEAD・dirty が判定できない場合を含む。例: コミットが 1 つも無い repo。このとき何も記録しない) |
-| `fde status [TARGET]` | 批准状態の照会 | 0 批准済み / 1 未批准(未登録・批准後の spec 変更を含む)/ 2 判定不能(state が読めない・壊れている、批准記録後に spec が読めない・無い) |
+| `fde status [TARGET]` | 批准状態の照会 | 0 批准済み / 1 未批准(未登録・批准後の spec 変更を含む。TARGET が存在せず、登録済み target の root〈最も近い既存の祖先を正規化して比較するので symlink 経由の綴りも一致。記録された root そのままの綴りも可〉だった場合も 1 で、stderr に `gone` と `fde forget` を出す)/ 2 判定不能(state が読めない・壊れている、存在しない TARGET が登録済み root でもない、批准記録後に spec が読めない・無い) |
+| `fde forget [TARGET]` | **人間専用**。target の state dir `<state_dir>/targets/<state_key>/` を丸ごと消す(登録・批准・証跡)。中身はパースしないので壊れた登録も消せる。target 自体には一切触れない | 0 削除 / 1 拒否(その key の state dir が無い = 未登録)/ 2 判定不能(解決できない・消せない。消せないときは何も消していない。`targets/` の外へ移した後に削除だけ失敗した場合は、未登録になったが残骸が残っている旨を理由に出す) |
 | `fde gate` | PreToolUse hook の入口(stdin で payload を読む) | 0 allow / 2 deny |
 | `fde evidence red\|green\|pass --req ID --cmd CMD [TARGET]` | target root で CMD を実行し、終了ステータスで記録可否を決める | 0 記録 / 1 拒否 / 2 判定不能 |
 | `fde evidence verify [TARGET]` | 全要件の証跡が揃っているか | 0 完了 / 1 欠け(欠けた要件を stderr に列挙)/ 2 判定不能(未批准・要件ゼロ・ledger 不整合、および下の「HEAD の来歴」規則を満たさない・判定できない場合を含む) |
@@ -121,8 +122,20 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
   置換・引用符・環境変数の前置・パス指定の `fde`・ラッパーはすべて deny)。`fde ratify` は人間専用で、
   未批准の間は deny のまま。人間が承認したら、人間自身が Claude Code のプロンプトで `! fde ratify [TARGET]`
   または自分の端末で実行する。状態が判定不能な target、Edit 系ツールにはこの例外は適用されない。
-- 空・壊れた payload、読めない state、matcher 外のツール(登録 target がある場合)、panic はすべて deny。
-- 登録 target が 1 つも無ければ、すべて allow。
+- **`fde forget` は人間専用**(`fde ratify` と同じ)。登録 target が 1 つでもある間(消えた target を含む)、
+  コマンドが `fde forget` を呼ぶ Bash は、どこで実行しても何を指しても deny する。判定は文字列ベースで保守的:
+  空白(改行・タブを含む)と `;&|()<>` で語に分け、引用符とバックスラッシュを取り除いたうえで、`fde` または
+  `/fde` で終わる語の後に語 `forget` があれば deny(引用符内の文字列にたまたま含まれるだけでも deny)。
+  人間が自分で Claude Code のプロンプトで `! fde forget <TARGET>` または自分の端末で実行する。
+- **消えた(gone)target**: 登録済み target の root が存在しない(`symlink_metadata` が `NotFound`)ことを
+  観測したら、それは判定済みの事実として扱い、保護対象から外す(git の照会もしない)。無関係なパスの編集・Bash は
+  止めない。ただし元の場所は deny のまま: root の下を指す Edit 系パス(そのまま、または正規化後)、cwd が root の下
+  にある Bash、root の文字列を含む Bash は、`gone` と `fde forget <root>` を理由に含む deny になる(上の
+  `fde status|report|begin` の例外はここでも効く)。人間が `fde forget <root>` を実行すると解除される。
+  root の stat が `NotFound` 以外のエラー(権限など)で失敗したら判定不能として、何に触れる呼び出しでも deny する。
+- 空・壊れた payload、読めない state、壊れた登録(`fde forget` で消すまで)、matcher 外のツール(登録 target が
+  ある場合)、panic はすべて deny。
+- 登録 target が 1 つも無ければ、すべて allow(`fde forget` も含む)。
 
 ## state の配置
 
@@ -144,6 +157,8 @@ state dir は環境変数 `FDE_STATE_DIR`(設定済みかつ空でない場合)�
   `ratified_head` を持つ記録は判定不能。
 
 - いずれも一時ファイル + rename で原子的に書く。`fde begin` は既存の `ratification.json` を先に消す。
+- `fde forget` は `targets/<state_key>/` をまず `<state_dir>/.forgotten/<state_key>.<pid>.<nanos>` へ rename し
+  (ここで失敗すれば何も変わっていない)、その後に削除する。`targets/` の下に中途半端に消えた登録は残らない。
 - ledger の各記録は記録時の批准 fingerprint と批准時 HEAD(`ratified_head`)を持ち、両方が現在の批准と一致する
   ものだけが判定に数えられる(上記「HEAD の来歴」)。
 - 要件の状態: RED の CMD に同じ CMD の後続 GREEN が無ければ unresolved、GREEN(RED の後)か PASS があれば complete、
@@ -155,7 +170,12 @@ state dir は環境変数 `FDE_STATE_DIR`(設定済みかつ空でない場合)�
 - 対象プラットフォームは Unix 系(WSL 含む)。Windows は対象外(上記「対象プラットフォーム」。制限ではなく対象範囲)。
 - **gate の Bash 判定は文字列照合**。コマンドの構文解析はしない。外から相対パスで target を指す、正規形でない
   symlink 経由で指す、といった書き方は検出しない。
-- **登録済み target を削除すると**、その state dir(`<state_dir>/targets/<state_key>/`)を消すまで gate は編集を deny し続ける。
+- **登録済み target を削除すると**、その target は「消えた(gone)」扱いになり、無関係な作業は止めなくなるが、
+  元の root の下(Edit 系のパス・Bash の cwd・root を文字列で含む Bash)は deny され続け、`fde status <root>` は
+  1(`gone`)を返す。state dir を消すのは人間の `fde forget <root>` で、モデルには許されない。gate の元の場所の判定は
+  root の文字列照合と cwd の比較だけで、相対パスや別の symlink の綴りで元の場所を指す Bash は検出しない。
+- **壊れた登録**(読めない・パースできない `registration.json` など)がある間は、gate はすべてを deny する。
+  人間が `fde forget [TARGET]` で消すまで解除されない。
 - **HEAD は前進のみ許す**。批准後に HEAD を reset・別ブランチへ切り替え・履歴の書き換えをすると verify / report は 2。
   人間が現在の HEAD で再批准すると新しい epoch になり、以前の証跡はすべて無視される(記録し直しが要る)。前進した
   コミットでの再批准でも同じく以前の証跡は判定から外れる。`ratified_head` を持たない旧版の記録は epoch を推測しない

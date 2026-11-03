@@ -70,6 +70,7 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
    **ちょうど 1 回の単独呼び出し**に限る(`fde status [TARGET]` のように書く。`;` `&&` `||` `|` `&` 改行による連結、
    リダイレクト、`$(...)` 等の置換、引用符、環境変数の前置、`./fde` や絶対パス、`command` / `env` / `sh -c` 等の
    ラッパー、引数に `ratify` を含むものは拒否される)。**`fde ratify` は人間専用**で、未批准の間はモデルの実行を拒否する。
+   **`fde forget` も人間専用**で、登録 target がある間は場所を問わずモデルの実行を拒否する(下の「復旧」)。
    target の状態が判定不能(status が 2)のときは、この例外も適用されず拒否される。
 
 ## (b) 批准 — 人間に確認する
@@ -136,5 +137,15 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
   (`ratify` は HEAD・dirty が判定できないとき、`evidence` は旧形式の批准、または現在の HEAD が批准時 HEAD の子孫でないときも 2)。
 - `evidence verify` / `report` は、批准時 HEAD ≤ 各記録の HEAD ≤ 現在の HEAD(祖先または同一)が成り立たない・比較できないとき 2。
 - `report`: 0 完了(批准済みかつ全要件 RED→GREEN)/ 1 未完了(未批准、または unresolved・unmeasured・PASS のみの要件あり)/ 2 判定不能。
-- `status`: 0 批准済み / 1 未批准 / 2 判定不能。`evidence verify`: 0 完了 / 1 欠け / 2 判定不能。
+- `status`: 0 批准済み / 1 未批准(target が消えた〈gone〉場合も 1)/ 2 判定不能。`evidence verify`: 0 完了 / 1 欠け / 2 判定不能。
+- `forget`(**人間専用。モデルは実行しない**): 0 削除 / 1 未登録 / 2 判定不能。
 - `gate`: 0 allow / 2 deny。引数エラー(clap)も 2。どれも 2 は pass ではない。
+
+## 復旧: 登録済み target が消えた(gone)とき
+
+- 登録済み target のディレクトリが削除されると、`fde status <root>` は exit 1 で stderr に `gone` と出し、
+  gate はその元の場所(パス・cwd・root を含む Bash)を `gone` / `fde forget` を理由に拒否する。無関係な作業は止めない。
+- そのときは **`fde forget` を自分で実行しない**(人間専用。モデルが実行すると gate が拒否する。別経路で state dir を
+  消すのも禁止)。人間に「Claude Code のプロンプトで `! fde forget <TARGET>` と入力するか、自分の端末で
+  `fde forget <TARGET>` を実行してください」と、`fde status` が示した root を添えて依頼する。
+- 壊れた登録で gate がすべてを拒否している場合も同じく、人間に `fde forget [TARGET]` を依頼する。

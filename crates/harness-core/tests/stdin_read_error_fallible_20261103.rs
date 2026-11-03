@@ -326,8 +326,44 @@ fn second_consecutive_read_error_of_the_same_gate_is_the_bounded_allow() {
         "the second consecutive failure (marker present) is the bounded allow\n{}",
         dbg(&second)
     );
-    // The streak was consumed by the allow and re-recorded; a third failure
-    // keeps being allowed (decide records on BoundedAllow) — not asserted here.
+    // What follows a bounded allow is pinned by
+    // `read_error_streak_never_allows_twice_in_a_row`.
+}
+
+/// CLAUDE.md §1: the fail-open is BOUNDED — only a single consecutive
+/// re-entry may allow. A stop that follows an allow is a new chain (the allow
+/// ended the previous one), so it must block again. `run_guarded` gets this
+/// from `stop_hook_active`; on the stdin-error path that bit is unreadable, so
+/// the marker alone must not let every later failure through.
+#[test]
+fn read_error_streak_never_allows_twice_in_a_row() {
+    let root = scratch("streak");
+    let mut outcomes = Vec::new();
+    for i in 1..=5 {
+        let o = err_stop(&root, true);
+        assert!(
+            !returned(&o),
+            "#{i}: must not return a payload on Err\n{}",
+            dbg(&o)
+        );
+        assert_eq!(o.status.code(), Some(0), "#{i}\n{}", dbg(&o));
+        outcomes.push(if block_reason(&o).is_some() {
+            "block"
+        } else {
+            "allow"
+        });
+    }
+    assert_eq!(
+        &outcomes[..3],
+        &["block", "allow", "block"],
+        "with one session id: #1 blocks, #2 is the bounded allow, #3 blocks again \
+         (full sequence: {outcomes:?})"
+    );
+    assert!(
+        !outcomes.windows(2).any(|w| w == ["allow", "allow"]),
+        "a stdin read error must never be allowed twice in a row (unbounded \
+         fail-open): {outcomes:?}"
+    );
 }
 
 #[test]

@@ -33,12 +33,14 @@ On each stop `tdd gate`:
    evaluated, not only the cwd. An unresolvable written root, or a session that wrote
    files while no root had an implementation change to evaluate, blocks naming the
    roots. The gate judges **per session**: a test this session wrote (per its
-   transcript) and committed since the session started — or left uncommitted — in
-   any of those roots is credited to the session's implementation change in every
-   root, so an implementation worktree whose test lives in a sibling worktree is not
-   blocked (the credit is printed on stderr). An undetermined root (a failed `git`
-   command) or an undetermined attribution (no / unreadable transcript) credits
-   nothing — each root is then judged on its own changes. A missing-test block names
+   transcript) and committed since the session started in any of those roots is
+   credited to the session's implementation change in every root, so an
+   implementation worktree whose test lives in a sibling worktree is not blocked
+   (the credit is printed on stderr). A test left uncommitted counts only for the
+   root it is in, never across roots. An undetermined root (a failed `git`
+   command), an undetermined attribution (no / unreadable transcript) or an
+   undetermined session start credits nothing — each root is then judged on its
+   own changes. A missing-test block names
    the checkout path it judged;
 2. loads `./tdd.toml` (or `~/.tdd/config.toml`, or language-aware defaults);
 3. asks `git` what changed and which lines were **added**, then keeps only the

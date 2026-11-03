@@ -310,11 +310,12 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     //
     // The gate judges PER SESSION (user ruling 2026-11-03, backlog 49e95d32):
     // every enabled root is evaluated first, then the test evidence the session
-    // wrote in ANY of them (attributed via the transcript; uncommitted, or
-    // committed since the session start) is credited to the implementation
-    // change in every root (`gate::session_test_evidence`). An undetermined
-    // root or attribution makes that fold undetermined: no credit, each root
-    // is judged on its own scan alone, and the block reason says why.
+    // wrote AND committed since the session start in ANY of them (attributed
+    // via the transcript) is credited to the implementation change in every
+    // root (`gate::session_test_evidence`). An uncommitted test counts for its
+    // own root only. An undetermined root, attribution or session start makes
+    // that fold undetermined: no credit, each root is judged on its own scan
+    // alone, and the block reason says why.
     let sr = match harness_core::session_roots::resolve(&root, &input.transcript_path) {
         Determination::Known(sr) => sr,
         Determination::Undetermined(why) => stop_block_now(

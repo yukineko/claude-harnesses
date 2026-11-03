@@ -19,7 +19,7 @@ argument-hint: '[作りたいもの]'
 
 ## 不変条件（外さない）
 
-1. **未回答のまま scaffold へ進まない。** `sitecraft decide next` が `{"status":"done"}` を返し、かつ `sitecraft decide check` が exit 0 になるまで、scaffold・実装に入らない。
+1. **未回答のまま scaffold へ進まない。** 目的が `sitecraft decide purpose` で記録され、`sitecraft decide next` が `{"status":"done"}` を返し、かつ `sitecraft decide check` が exit 0 になるまで、scaffold・実装に入らない。
 2. **仮の既定値で埋めない。** ユーザーが答えていない問いに LLM が「とりあえず」「一般的には」で答えを入れて `decide record` してはならない。わからない問いは AskUserQuestion で聞く。「関係なし（irrelevant）」も**ユーザーの判断を経た記録**であって、問いを省略する手段ではない。
 3. **テスト作者と実装者を別 subagent に分ける。** 自分の実装を検証するテストを自分で書かない（CLAUDE.md §2(a)）。
 4. **E2E は既存の `webqa-gen` スキルに委ねる。** Playwright のテスト生成をこのスキル内で再実装しない。
@@ -31,6 +31,11 @@ argument-hint: '[作りたいもの]'
 
 1. 作りたいもの（目的）を **AskUserQuestion** で聞く。引数で渡されていても、誰が何のために使うか・最低限動いてほしいことを確認する。
 2. 目的を 1〜3 文に要約してユーザーに確認する。以降の判定はこの要約を根拠にする。
+3. 確認した要約を記録する（`decide next` は目的を問わないので、ここで必ず記録する。未記録のままだと `decide check` は exit 1）:
+   ```sh
+   sitecraft decide purpose --text "<要約>"
+   ```
+   空白だけの `--text` は exit 1 で記録されない。目的が変わったら同じコマンドで再記録する（旧値は `[[history]]` に残る）。
 
 ### Phase 2 — カタログ 12 領域の関連判定
 
@@ -52,28 +57,32 @@ sitecraft decide record --area <area> --question relevance --answer irrelevant
 - 「データやログの解析は要るか」「既存データの取り込み元はどこか」
 
 ```sh
-sitecraft decide add-question --id <id> --text "<問い>" [--choice <選択肢> ...]
+sitecraft decide add-question --id <id> --text "<問い>" [--choice <選択肢> ...] [--multi]
 ```
 
-`--choice` を付けない問いは自由記述。
+`--choice` を付けない問いは自由記述。複数選んでよい問いには `--multi` を付ける（回答は配列で記録される）。
 
 ### Phase 4 — 全問に答えてもらう（Ask ループ）
 
 次のループを `decide next` が done を返すまで回す。
 
 1. `sitecraft decide next` を実行する。出力は JSON:
-   - `{"status":"ask","area":…,"question_id":…,"text":…,"choices":[…]}` — 次の未回答の問い
+   - `{"status":"ask","area":…,"question_id":…,"text":…,"choices":[…],"multi":bool}` — 次の未回答の問い
    - `{"status":"done"}` — すべて回答済み
    - exit 2 — 記録が壊れている・読めない。メッセージの fix に従って直す（握りつぶして先へ進まない）
-2. `ask` なら、その `text` と `choices` を **AskUserQuestion** でユーザーに聞く（`choices` が空なら自由記述）。
+2. `ask` なら、その `text` と `choices` を **AskUserQuestion** でユーザーに聞く（`choices` が空なら自由記述。`multi: true` なら複数選択で聞く）。
 3. 回答を記録する:
    ```sh
-   sitecraft decide record --area <area> --question <question_id> --answer <回答>
+   sitecraft decide record --area <area> --question <question_id> --answer <回答> [--answer <回答2> ...] [--note "<補足>"]
    ```
-   ドメイン問い（Phase 3）は `--area domain --question <id>` で記録する。
+   ドメイン問い（Phase 3）は `--area domain --question <id>` で記録する。`--answer` を複数渡せるのは `multi: true` の問いだけ（それ以外は失敗終了）。
+   ユーザーが回答に添えた条件・理由は `--note` で残す（`--note` を付けない再記録は既存の補足を残す）。
+   値が変わった再記録では stdout に `changed: <旧> -> <新>` が出て `[[history]]` に残る。その変更で問われなくなった follow-up の回答も `pruned = true` として history に残る。
 4. 1. に戻る。
 
-done が返ったら `sitecraft decide check` を実行し、**exit 0 を確認する**。exit 1 なら列挙された未回答を Ask ループで埋める。exit 2 なら記録の不整合を直す。exit 0 になるまで Phase 5 以降へ進まない。
+done が返ったら `sitecraft decide check` を実行し、**exit 0 を確認する**。exit 1 なら列挙された未回答・未記録の目的（`sitecraft decide purpose --text` の案内）・整合性規則の違反（`V1`〜`V5` の `<id>: <表示文>` と関与した回答）を、ユーザーに AskUserQuestion で確認して記録し直す。exit 2 なら記録の不整合を直す。exit 0 になるまで Phase 5 以降へ進まない。stderr の `warning: W1: …` は終了コードを変えない警告だが、黙って流さずユーザーに示して意図どおりか確認する。
+
+`decide check` の規則表はカタログの回答だけを見る。ドメイン問いの回答とカタログ回答の食い違い（例: processing の execution=background なのに、ドメイン問いでは起動経路を利用者の操作と答えている）はバイナリは判定しないので、done と exit 0 の後に LLM が回答一覧（ドメイン問い・`--note` の補足を含む `sitecraft/decisions.toml` 全体）を読み直し、食い違いを見つけたら AskUserQuestion でユーザーに確認して、どちらかを記録し直す。食い違いを LLM の判断で解消したことにしない。
 
 ### Phase 5 — 計画と切り出し（simple / dedicated-harness）
 
@@ -87,10 +96,25 @@ SITECRAFT_MARKETPLACE=<harness repo>/.claude-plugin/marketplace.json \
   sitecraft decide classify --feature <name> --kind dedicated-harness [--harness <plugin>]
 ```
 
-`dedicated-harness` の出力 JSON の `existing` を見る:
+simple と dedicated-harness の境界: 対象アプリのプロセス内で動き、アプリの利用者のための機能（ジョブ実行・予算制御・通知送信・認証など）は **simple**（アプリの中で実装する）。
 
-- `existing: true` — 既存の専用 plugin がある。その plugin を使う（README を読んで導入し、再実装しない）。
-- `existing: false` — 無い。harness repo に新規 plugin を作る。雛形（`crates/<plugin>/`）:
+Claude Code のセッション・ツール呼び出し・ファイル編集を判定するもの（hook・gate・検査ハーネス）だけが **dedicated-harness**。アプリの機能が「独立した検査が要りそう」に見えても、判定する対象が Claude Code の作業でなければ simple に分類する。
+
+`dedicated-harness` の出力 JSON の `existing`・`description`・`reuse` を見る:
+
+- `existing: true` — 同名の plugin が marketplace にある。ただし名前が同じでも目的に合うとは限らない。出力の `description`（marketplace.json の当該エントリの説明）を AskUserQuestion でユーザーに示し、「この plugin はこの目的に合うか」を聞いて、ユーザーの回答だけを `--confirm-fit yes|no` で記録する（LLM が自答して `--confirm-fit` を渡さない）:
+  ```sh
+  SITECRAFT_MARKETPLACE=<harness repo>/.claude-plugin/marketplace.json \
+    sitecraft decide classify --feature <name> --kind dedicated-harness [--harness <plugin>] --confirm-fit yes
+  ```
+
+`reuse: confirmed`（ユーザーが yes と答えた）のときだけ既存 plugin を使う（README を読んで導入し、再実装しない）。
+
+`reuse: unconfirmed`（適合の記録がまだ無い）は再利用の許可ではない。再利用してよいと読まず、上の AskUserQuestion で確認するまで先へ進まない。
+
+`reuse: rejected`（ユーザーが no と答えた）は `existing: false` と同じく新規 plugin を作る経路に進む。既存と名前が衝突するので、新規 plugin は別名（`--harness <別名>` で classify し直す）で作る。
+
+- `existing: false`（`reuse: not-applicable`）— 無い。harness repo に新規 plugin を作る（`--confirm-fit` は受け付けられない）。雛形（`crates/<plugin>/`）:
   ```
   crates/<plugin>/
     Cargo.toml                    # [package] version = "0.1.0"

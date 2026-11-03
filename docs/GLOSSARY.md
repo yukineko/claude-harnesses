@@ -48,7 +48,7 @@
 | difflog | always-on | SessionStart で HEAD をスナップショット、SessionEnd で git diff サマリを記録する |
 | donegate | always-on | Stop で受け入れコマンドを実行し全 green まで完了を阻止する |
 | evalkit | manual | golden `*.jsonl` を実行し契約劣化で非ゼロ終了するオフライン回帰評価ハーネス |
-| fde | always-on | 未知リポから逐語証拠付き spec を推定・批准後 RED→GREEN。PreToolUse fail-closed で批准前編集ブロック（parked） |
+| fde | always-on | 未知リポから逐語証拠付き spec を推定・批准後 RED→GREEN。PreToolUse fail-closed で批准前編集ブロック |
 | flow | manual | source（compass/backlog）→executor（condukt）を 1 ループで束ねる統合 driver（`/flow` skill のみ。SessionStart の自動提案は 2026-08-20 に廃止） |
 | fugu-router | always-on | 検証実績から cheap-first でモデル選択する per-model ルーター |
 | gauge | always-on | Stop でトークン/コスト/ツール呼び出し/レイテンシをローカル計測する LLMOps テレメトリ |

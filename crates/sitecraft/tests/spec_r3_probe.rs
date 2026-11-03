@@ -51,7 +51,16 @@ use spec_common::*;
 /// Run the probe, assert the one-JSON-object stdout and the result/exit
 /// agreement, return (output, json).
 fn probe(p: &Project, name: &str, envs: &[(&str, OsString)]) -> (Out, Value) {
-    let o = p.run_env(&["capability", "probe", name], envs);
+    probe_with_deadline(p, name, envs, RUN_DEADLINE)
+}
+
+fn probe_with_deadline(
+    p: &Project,
+    name: &str,
+    envs: &[(&str, OsString)],
+    deadline: std::time::Duration,
+) -> (Out, Value) {
+    let o = p.run_env_with_deadline(&["capability", "probe", name], envs, deadline);
     let lines: Vec<&str> = o.stdout.lines().filter(|l| !l.trim().is_empty()).collect();
     assert_eq!(
         lines.len(),
@@ -164,10 +173,13 @@ fn unregistered_name_is_exit_2() {
 #[ignore = "takes > 120 s: the probe time limit is 120 s (rulings D3)"]
 fn probe_times_out_after_120_seconds() {
     let p = blender_project();
-    let (o, v) = probe(
+    // Harness deadline 200 s: above the 120 s limit under test and above the
+    // `< 190` bound asserted below (the default 120 s would kill sitecraft first).
+    let (o, v) = probe_with_deadline(
         &p,
         "blender",
         &blender_env(&p, &[("FAKE_BLENDER_SLEEP", "200")]),
+        std::time::Duration::from_secs(200),
     );
     assert_eq!(v["result"], "undetermined", "{v}");
     assert_eq!(v["reason"], "timeout", "{v}");

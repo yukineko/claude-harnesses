@@ -96,6 +96,16 @@ impl Blender {
         png: Option<&[u8]>,
         extra: &[(&'static str, OsString)],
     ) -> Out {
+        self.check_with_deadline(glb, png, extra, RUN_DEADLINE)
+    }
+
+    fn check_with_deadline(
+        &self,
+        glb: Option<&[u8]>,
+        png: Option<&[u8]>,
+        extra: &[(&'static str, OsString)],
+        deadline: std::time::Duration,
+    ) -> Out {
         let mut env: Vec<(&str, OsString)> = vec![
             ("SITECRAFT_BLENDER", os(self.p.fake_blender())),
             (
@@ -110,7 +120,8 @@ impl Blender {
             env.push(("SPEC_SRC_PNG", os(self.src("in.png", i))));
         }
         env.extend(extra.iter().cloned());
-        self.p.run_env(&["check", "capability", "blender"], &env)
+        self.p
+            .run_env_with_deadline(&["check", "capability", "blender"], &env, deadline)
     }
 }
 
@@ -152,10 +163,13 @@ fn unregistered_and_irrelevant_capabilities_are_exit_2() {
 #[ignore = "takes > 300 s: the check capability time limit is 300 s (rulings D4)"]
 fn check_times_out_after_300_seconds() {
     let b = Blender::new();
-    let o = b.check(
+    // Harness deadline 400 s: above the 300 s limit under test and above the
+    // `< 390` bound asserted below (the default 120 s would kill sitecraft first).
+    let o = b.check_with_deadline(
         Some(&glb_valid()),
         Some(&drawn_png()),
         &[("FAKE_BLENDER_SLEEP", os("400"))],
+        std::time::Duration::from_secs(400),
     );
     expect_code(&o, 2, "check capability past 300 s");
     assert!(o.all().contains("timeout"), "{}", o.describe());

@@ -42,31 +42,86 @@ pub fn is_mechanical(done_criteria: &str) -> bool {
 /// `None` if it isn't mechanical. Two signals, strongest first:
 ///   1. an explicit backticked command — `` `cargo test --workspace` ``
 ///   2. a recognised test-runner mention — "cargo test", "npm test", …
+///
+/// An unterminated quote yields NO command (User ruling 2026-11-03, GH 1518,
+/// extended to curate 2026-11-04): if ANY backticked span cannot be tokenized
+/// by shlex, the criterion is undetermined and becomes a draft — it does not
+/// fall through to the prose recognizer, which would emit a different command
+/// than the one written (`FOO=1 cargo test -- "x` -> `cargo test`). The prose
+/// path likewise returns `None` when the text from the runner mention onward
+/// does not tokenize (see [`test_runner_command`]).
 fn mechanical_cmd(done_criteria: &str) -> Option<Vec<String>> {
-    if let Some(cmd) = backticked_command(done_criteria) {
-        return Some(cmd);
+    match backticked_command(done_criteria) {
+        Backticked::Command(cmd) => Some(cmd),
+        Backticked::Unparseable => None,
+        Backticked::Absent => test_runner_command(done_criteria),
     }
-    test_runner_command(done_criteria)
 }
 
-/// First backticked span whose first token is a known runner/script — taken
-/// verbatim as argv. The most explicit, least-guessy signal.
-fn backticked_command(s: &str) -> Option<Vec<String>> {
-    let re = Regex::new(r"`([^`]+)`").ok()?;
+/// Outcome of scanning backticked spans: a runnable command, a span that
+/// cannot be tokenized (undetermined — never guessed), or no command span.
+enum Backticked {
+    Command(Vec<String>),
+    Unparseable,
+    Absent,
+}
+
+/// First backticked span whose first token is a known runner/script, tokenized
+/// with shell quoting rules (shlex). Any span shlex cannot parse (unterminated
+/// quote), whatever its head, yields [`Backticked::Unparseable`]: there is no
+/// `split_whitespace` fallback, since a best-effort argv is a different
+/// command from the one written.
+fn backticked_command(s: &str) -> Backticked {
+    let Ok(re) = Regex::new(r"`([^`]+)`") else {
+        return Backticked::Unparseable;
+    };
     for caps in re.captures_iter(s) {
-        let inner = caps.get(1)?.as_str().trim();
-        let argv: Vec<String> = inner.split_whitespace().map(String::from).collect();
-        if argv.first().is_some_and(|p| is_command_word(p)) {
-            return Some(argv);
+        let Some(inner) = caps.get(1) else {
+            continue;
+        };
+        match shlex::split(inner.as_str().trim()) {
+            Some(argv) => {
+                if argv.first().is_some_and(|p| is_command_word(p)) {
+                    return Backticked::Command(argv);
+                }
+            }
+            None => return Backticked::Unparseable,
         }
     }
-    None
+    Backticked::Absent
+}
+
+/// True when the criterion text from the FIRST case-insensitive occurrence of
+/// `needle` to the end tokenizes with shlex. `false` on an unterminated quote,
+/// and also when `needle` cannot be located or the regex is unavailable
+/// (undetermined resolves to draft).
+fn prose_tail_parses(s: &str, needle: &str) -> bool {
+    let Ok(re) = Regex::new(&format!("(?i){}", regex::escape(needle))) else {
+        return false;
+    };
+    match re.find(s) {
+        Some(m) => shlex::split(&s[m.start()..]).is_some(),
+        None => false,
+    }
 }
 
 /// Canonical command for a recognised test runner mentioned in prose, capturing
 /// a `-p <crate>` scope for cargo when present.
+///
+/// `None` when the text from the runner mention onward does not tokenize
+/// (unterminated `"`/`'`, e.g. `cargo test -p demo -- "x exits 0`): the
+/// canonical argv would drop the written arguments and run a broader command.
+/// Consequence, stated rather than hidden: an English apostrophe after the
+/// runner mention ("cargo test passes, doesn't regress") also yields `None`
+/// (draft). Known gap: a quote opened BEFORE the mention is not seen.
 fn test_runner_command(s: &str) -> Option<Vec<String>> {
     let lower = s.to_lowercase();
+    let needle = ["cargo test", "npm test", "pytest", "go test"]
+        .into_iter()
+        .find(|n| lower.contains(n))?;
+    if !prose_tail_parses(s, needle) {
+        return None;
+    }
     if lower.contains("cargo test") {
         let mut cmd = vec!["cargo".to_string(), "test".to_string()];
         if let Ok(re) = Regex::new(r"-p\s+([A-Za-z0-9_-]+)") {

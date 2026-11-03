@@ -1688,6 +1688,17 @@ fn parse_argv(s: &str) -> Option<Vec<String>> {
 /// that cannot be determined, and falling through to the prose recognizer would
 /// run a different command than the one written. The LLM verifier is then
 /// required (User ruling 2026-11-03).
+///
+/// The prose fallback obeys the same rule (User ruling 2026-11-04): before a
+/// prose arm returns, the criteria text from the recognised runner mention to
+/// the end must tokenize with shlex. If it does not (an unterminated `"` or
+/// `'` after the runner, e.g. `cargo test -p demo -- "x exits 0`), the argv
+/// the arm would build is a different command from the one written, so `None`
+/// is returned instead. Consequence, stated rather than hidden: an English
+/// apostrophe after the runner mention ("cargo test passes, doesn't regress")
+/// also makes the tail unparseable and yields `None` (LLM verifier required).
+/// Known gap: a quote opened BEFORE the runner mention (`FOO="1 cargo test`)
+/// is not seen, because only the tail is tokenized.
 pub fn mechanical_cmd(
     done_criteria: &str,
     mechanical_check_hint: Option<&crate::model::MechanicalCheck>,
@@ -1719,9 +1730,15 @@ pub fn mechanical_cmd(
             }
         }
     }
-    // Fall back to recognised test-runner prose.
+    // Fall back to recognised test-runner prose. Each arm first requires the
+    // text from the runner mention onward to tokenize (no unterminated quote);
+    // otherwise the command is undetermined and no argv is guessed.
     let lower = done_criteria.to_lowercase();
+    let tail_parses = |needle: &str| prose_tail_parses(done_criteria, needle);
     if lower.contains("cargo test") {
+        if !tail_parses("cargo test") {
+            return None;
+        }
         let mut cmd = vec!["cargo".to_string(), "test".to_string()];
         if let Ok(re2) = regex::Regex::new(r"-p\s+([A-Za-z0-9_-]+)") {
             if let Some(c) = re2.captures(done_criteria).and_then(|c| c.get(1)) {
@@ -1732,15 +1749,38 @@ pub fn mechanical_cmd(
         return Some(cmd);
     }
     if lower.contains("npm test") {
+        if !tail_parses("npm test") {
+            return None;
+        }
         return Some(vec!["npm".to_string(), "test".to_string()]);
     }
     if lower.contains("pytest") {
+        if !tail_parses("pytest") {
+            return None;
+        }
         return Some(prose_pytest_argv(done_criteria));
     }
     if lower.contains("go test") {
+        if !tail_parses("go test") {
+            return None;
+        }
         return Some(vec!["go".to_string(), "test".to_string()]);
     }
     None
+}
+
+/// True when the criteria text from the FIRST case-insensitive occurrence of
+/// `needle` to the end tokenizes with [`parse_argv`]. `false` when it does not
+/// (unterminated quote) and also when `needle` cannot be located or the regex
+/// is unavailable: undetermined resolves restricted (no prose command).
+fn prose_tail_parses(done_criteria: &str, needle: &str) -> bool {
+    let Ok(re) = regex::Regex::new(&format!("(?i){}", regex::escape(needle))) else {
+        return false;
+    };
+    match re.find(done_criteria) {
+        Some(m) => parse_argv(&done_criteria[m.start()..]).is_some(),
+        None => false,
+    }
 }
 
 /// Extract the pytest command as written in prose: keeps an optional

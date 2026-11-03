@@ -335,7 +335,26 @@ pub fn waive_stop_decision(
 /// the session's `waivers.log` (written by [`must_yield`] via
 /// [`record_waiver`]), readable through [`waivers`].
 pub fn emit_stop_block(gate: &str, reason: &str) {
-    match stop_block_or_waive(gate, reason) {
+    emit_stop_block_keyed(gate, reason, reason);
+}
+
+/// [`emit_stop_block`] with the repeat identity given separately from the
+/// displayed reason.
+///
+/// For a gate whose reason carries per-run detail that is not part of the
+/// finding — e.g. donegate's per-attempt record path
+/// (`records/<session>/<ms>-a<n>-<check>.log`) — keying on the raw reason would
+/// make every occurrence look new and the second-occurrence waiver unreachable.
+/// The caller passes `fingerprint` = the reason with that detail normalised;
+/// the full `reason` is what is printed on a block. An empty `fingerprint` is
+/// `Undetermined` in [`observe`], which keeps the block.
+pub fn emit_stop_block_keyed(gate: &str, reason: &str, fingerprint: &str) {
+    let decision = if must_yield(gate, fingerprint) {
+        None
+    } else {
+        Some(serde_json::json!({ "decision": "block", "reason": reason }))
+    };
+    match decision {
         Some(decision) => println!("{decision}"),
         None => println!(
             "{}",

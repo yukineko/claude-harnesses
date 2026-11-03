@@ -66,7 +66,10 @@ pub struct Config {
     /// stop (so a genuinely stuck agent isn't trapped forever).
     pub max_attempts: u32,
     pub default_timeout_secs: u64,
-    /// How many trailing lines of a failing command's output to feed back.
+    /// How many trailing raw lines of a failing command's output to show when
+    /// its full output could NOT be saved to the session record (floored at
+    /// `record::FALLBACK_MIN_LINES`). With a saved record, only the digest and
+    /// the record path are shown (see `crate::record`).
     pub output_tail_lines: usize,
     /// A session's attempt counter resets if this many seconds pass between
     /// stops (a fresh turn after the user did other work).

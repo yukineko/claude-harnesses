@@ -272,6 +272,7 @@ fn is_timeout(e: &std::io::Error) -> bool {
 /// One `GET <path>` at `addr` within `limit` (see module docs).
 fn get_status(addr: SocketAddr, path: &str, limit: Duration) -> ApiOutcome {
     let timeout = || {
+        crate::history::note_timeout();
         ApiOutcome::Undetermined(format!(
             "timeout: no HTTP status line within {}s",
             limit.as_secs()
@@ -397,8 +398,9 @@ fn check_pages_in(config: &Config, base_url: &str, cwd: Option<&Path>) -> Verdic
     judge(&out, config.pages.len())
 }
 
-/// Rust-side ceiling: the script's own global timeout plus a margin.
-fn deadline_for(pages: usize) -> Duration {
+/// Rust-side ceiling: the script's own global timeout plus a margin. Also
+/// the time limit `sitecraft status` judges a slow `pages` run against.
+pub(crate) fn deadline_for(pages: usize) -> Duration {
     let secs = 30u64.saturating_add(45u64.saturating_mul(pages as u64));
     Duration::from_secs(secs.min(480) + 30)
 }
@@ -460,8 +462,9 @@ pub(crate) struct Output {
 }
 
 /// Spawn `cmd` (stdout / stderr piped by the caller, own process group) and
-/// wait at most `limit`; past it the whole group is SIGKILLed and the
-/// status is `None`. A spawn or capture failure is `Err`.
+/// wait at most `limit`; past it the whole group is SIGKILLed, the status is
+/// `None` and the expiry is noted for the check history
+/// ([`crate::history::note_timeout`]). A spawn or capture failure is `Err`.
 pub(crate) fn run_with_deadline(mut cmd: Command, limit: Duration) -> std::io::Result<Output> {
     let mut child = cmd.spawn()?;
     let mut so = child.stdout.take();
@@ -481,6 +484,7 @@ pub(crate) fn run_with_deadline(mut cmd: Command, limit: Duration) -> std::io::R
         match child.try_wait()? {
             Some(s) => break Some(s),
             None if start.elapsed() >= limit => {
+                crate::history::note_timeout();
                 kill_group(&mut child);
                 let _ = child.wait();
                 break None;
@@ -536,7 +540,7 @@ fn judge(out: &Output, expected_pages: usize) -> Verdict {
     let stderr_tail = tail(&stderr);
     let Some(status) = out.status else {
         return Verdict::undetermined(format!(
-            "check-pages.mjs did not finish within the deadline and was killed; is the dev \
+            "timeout: check-pages.mjs did not finish within the deadline and was killed; is the dev \
              server running and responsive? (start it with `sitecraft serve start`){stderr_tail}"
         ));
     };

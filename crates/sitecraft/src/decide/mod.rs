@@ -256,28 +256,60 @@ pub fn cmd_purpose(root: &Path, text: &str) -> i32 {
 /// `decide check`: [`record::check_root_report`] mapped through
 /// [`crate::exit_code`]; exit 1 / 2 diagnostics name the `decide` command
 /// that fixes them. Warning rules (W1) are printed as `warning: <id>: …` on
-/// stderr and never change the exit code (U4).
+/// stderr and never change the exit code (U4). Each run appends a `decide`
+/// line to the check history ([`crate::history::recorded`]); a line that
+/// cannot be appended (no state dir included) makes it exit 2.
 pub fn cmd_check(root: &Path) -> i32 {
-    let report = record::check_root_report(root);
-    for w in &report.warnings {
-        eprintln!("warning: {w}");
+    let state = crate::state_dir();
+    let state = match &state {
+        Determination::Known(s) => Ok(s.as_path()),
+        Determination::Undetermined(why) => Err(why.as_str()),
+    };
+    let mut out = crate::history::Output::printing();
+    let v = crate::history::recorded(
+        state,
+        root,
+        "decide",
+        "sitecraft decide check",
+        &mut out,
+        |o| {
+            let report = record::check_root_report(root);
+            print_check(root, &report.verdict, &report.warnings, o);
+            report.verdict
+        },
+    );
+    crate::exit_code(&v)
+}
+
+/// The Stop gate's `decide check`: [`record::check_root`], with the same
+/// report lines as [`cmd_check`] written into `out` (for the history
+/// fingerprint).
+pub fn gate_check(root: &Path, out: &mut crate::history::Output) -> Verdict {
+    let v = record::check_root(root);
+    print_check(root, &v, &[], out);
+    v
+}
+
+/// The `decide check` report lines of `v` (warnings first) into `out`.
+fn print_check(root: &Path, v: &Verdict, warnings: &[String], out: &mut crate::history::Output) {
+    for w in warnings {
+        out.err(format!("warning: {w}"));
     }
-    let v = &report.verdict;
     match v {
         Verdict::Clean(_) => {
-            eprintln!(
-                "sitecraft decide check: clean - the purpose and every decision are recorded and no consistency rule is violated"
-            )
+            out.err(
+                "sitecraft decide check: clean - the purpose and every decision are recorded and no consistency rule is violated",
+            );
         }
         Verdict::Violation(r) => {
-            eprintln!(
-                "sitecraft decide check: VIOLATION - pending decisions / violated consistency rules:"
+            out.err(
+                "sitecraft decide check: VIOLATION - pending decisions / violated consistency rules:",
             );
             for item in r.as_str().split("; ") {
-                eprintln!("  - {item}");
+                out.err(format!("  - {item}"));
             }
-            eprintln!(
-                "fix: ask the user and record each answer (`sitecraft decide next` prints the next question; `irrelevant` is a valid, recorded relevance answer); for a violated rule, ask the user which of the involved answers to change and re-record it"
+            out.err(
+                "fix: ask the user and record each answer (`sitecraft decide next` prints the next question; `irrelevant` is a valid, recorded relevance answer); for a violated rule, ask the user which of the involved answers to change and re-record it",
             );
         }
         Verdict::Undetermined(u) => {
@@ -286,11 +318,13 @@ pub fn cmd_check(root: &Path) -> i32 {
             } else {
                 "fix: start the decision record with `sitecraft decide purpose --text \"<要約>\"` and `sitecraft decide next`, then answer each question with `sitecraft decide record --area <area> --question <id> --answer <value>`"
             };
-            eprintln!("sitecraft decide check: UNDETERMINED - {}", u.as_str());
-            eprintln!("{hint}");
+            out.err(format!(
+                "sitecraft decide check: UNDETERMINED - {}",
+                u.as_str()
+            ));
+            out.err(hint);
         }
     }
-    crate::exit_code(v)
 }
 
 /// `decide capability --name N --relevance R [--how T] [--done-when T]

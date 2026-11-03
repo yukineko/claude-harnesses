@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
-use sitecraft::{capability, check, decide, gate, init, serve, Determination, EXIT_UNDETERMINED};
+use sitecraft::{
+    capability, check, decide, gate, history, init, serve, Determination, Verdict,
+    EXIT_UNDETERMINED,
+};
 
 #[derive(Parser)]
 #[command(name = "sitecraft", version)]
@@ -32,7 +35,8 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ServeCmd,
     },
-    /// Broken-page and security checks.
+    /// Broken-page, security and capability checks. Each run (like `decide
+    /// check`) appends one check-history line; an unappendable line is exit 2.
     Check {
         #[command(subcommand)]
         cmd: CheckCmd,
@@ -57,6 +61,13 @@ enum Cmd {
         #[command(subcommand)]
         cmd: CapabilityCmd,
     },
+    /// Print the state of every check in the check history as JSON
+    /// `{"checks":[{name, last_exit, consecutive_same_failure, elapsed_ms,
+    /// state}]}` (state: waiting-human, stuck, failing, slow or ok). Exit 0
+    /// when all are ok or slow, 1 when any is failing, stuck or
+    /// waiting-human, 2 when the history is missing, unreadable or has an
+    /// unparseable line, or the state cannot be determined.
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -281,20 +292,42 @@ fn dispatch(cmd: Cmd, root: &Path) -> i32 {
             ServeCmd::Status => print_known("serve status", serve::status(state, root)),
         }),
         Cmd::Check { cmd } => match cmd {
-            CheckCmd::Pages { base_url } => sitecraft::report(
-                "sitecraft check pages",
-                &check::pages::run(root, base_url.as_deref()),
-            ),
+            CheckCmd::Pages { base_url } => {
+                recorded_check(root, "pages", "sitecraft check pages", || {
+                    check::pages::run(root, base_url.as_deref())
+                })
+            }
             CheckCmd::Security => {
-                sitecraft::report("sitecraft check security", &check::security::run(root))
+                recorded_check(root, "security", "sitecraft check security", || {
+                    check::security::run(root)
+                })
             }
             CheckCmd::Capability { name } => capability::cmd_check(root, &name),
         },
         Cmd::Trust => with_state_dir(|state| trust(state, root)),
+        Cmd::Status => with_state_dir(|state| history::cmd_status(state, root)),
         // Handled before root resolution.
         Cmd::Gate => gate::command(),
         Cmd::Init { dir } => init::command(&dir),
     }
+}
+
+/// Run a check, print its verdict line, append its check-history line
+/// (`history::recorded`; an unlocatable state dir or a failed append is
+/// exit 2) and return the exit code.
+fn recorded_check(root: &Path, name: &str, label: &str, run: impl FnOnce() -> Verdict) -> i32 {
+    let state = sitecraft::state_dir();
+    let state = match &state {
+        Determination::Known(s) => Ok(s.as_path()),
+        Determination::Undetermined(why) => Err(why.as_str()),
+    };
+    let mut out = history::Output::printing();
+    let v = history::recorded(state, root, name, label, &mut out, |o| {
+        let v = run();
+        o.report(label, &v);
+        v
+    });
+    sitecraft::exit_code(&v)
 }
 
 /// Run `f` with the state dir; an unlocatable state dir is exit 2.

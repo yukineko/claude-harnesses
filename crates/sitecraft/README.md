@@ -57,6 +57,18 @@ The `/sitecraft` skill asks the user every design decision the purpose needs, re
   In the same write it records, under `<root>#capabilities`, the sha256 of the name-sorted
   `[[name, argv], …]` JSON of the `command` capabilities (removed when there is none). A changed argv,
   or an unreadable trust store, makes `check capability` exit 2 without running anything.
+- Check history: `decide check`, `check pages`, `check security` and `check capability N` (from the
+  CLI and from the gate) append one line per run to `<state>/check-history/<sha256(root)>.jsonl`:
+  `{name, exit, fingerprint, elapsed_ms, timed_out, at}` (`name` = `decide` / `pages` / `security` /
+  `capability:N`). An unappendable line (no state dir included) makes that check exit 2. The
+  fingerprint is null on exit 0, `sha256("timeout")` on a time-out, else the sha256 of stdout+stderr
+  with times → `<time>`, absolute paths → `<path>`, digit runs → `0`.
+- `sitecraft status` — prints `{"checks":[{name, last_exit, consecutive_same_failure, elapsed_ms,
+  state}]}`; state, first match: `waiting-human` (pages / threejs-render capability with an untrusted
+  `sitecraft.toml`, command capability with an untrusted argv digest), `stuck` (3+ consecutive failures
+  with the newest fingerprint), `failing`, `slow` (exit 0 in at least half the check's limit; never for
+  `decide`), `ok`. Exit 0 all ok/slow, 1 any failing/stuck/waiting-human, 2 (empty stdout) for a
+  missing, unreadable or unparseable history or an undeterminable state dir or trust.
 - `sitecraft gate` — Stop hook under `harness_core::gate::run::run_guarded` (gate name `sitecraft`).
   No `sitecraft.toml`: allowed, one `not-configured` line appended to the state dir. Otherwise it
   combines trust, `decide check` (pending answers and V1-V5; the gate does **not** require

@@ -36,6 +36,11 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
    より厳しい `fde report`(0 = 批准済みかつ全要件が RED→GREEN。未批准・unresolved・unmeasured・PASS のみは 1)。
    「全要件を RED→GREEN で検証した」と言えるのは `fde report` が exit 0 のときだけ。
 5. テストを書く agent と実装する agent は別にする。
+6. **target の HEAD は批准時のコミットから前進させるだけ。** 批准は target の HEAD コミット(と dirty かどうか)を記録し、
+   各証跡も CMD 実行直前の HEAD / dirty を記録する。批准後に target root で `git reset`・ブランチ切り替え・履歴の
+   書き換えをすると、記録は「批准した履歴の上」に無くなり、`fde evidence red|green|pass|verify` と `fde report` は
+   exit 2 になる(再批准しても既存の記録が数えられ続けるため 2 のままになりうる。そうなったら止めて人間に聞く)。
+   修正はコミットとして積む(merge / fast-forward / 新規コミット)。
 
 ## (a) 把握 — 仕様を推定する
 
@@ -75,6 +80,9 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
    モデルが実行しようとすると gate が拒否する。拒否を別経路で回避しない。
 4. 先へ進む条件は `fde status [TARGET]` が **exit 0**。1(未批准・spec 変更あり)なら (b) に戻る。
    2 は止めて人間に聞く。
+5. `fde ratify` は target に**コミットが 1 つ以上ある**ことを要する(HEAD を記録するため。コミットの無い repo では
+   exit 2 で何も記録しない)。旧版の fde で批准した target(HEAD 記録なし)は `fde status` では批准済みのままだが、
+   evidence / verify / report が exit 2 で再批准を求める。そのときは人間に再批准(`fde ratify`)を依頼する。
 
 ## (c) RED — 要件ごとに失敗するテストを作る
 
@@ -96,6 +104,8 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
 
 1. 実装は `condukt` / `condukt-loop` に委譲し、target の worktree で行う。**テスト agent とは別の agent** にする。
 2. fde は `CMD` を **target root** で実行するので、修正を target root の作業ツリーに統合してから記録する。
+   統合は**コミットしてから** GREEN を記録することを推奨する: 未コミットの変更がある(dirty な)tree で取った記録も
+   数えられ、`fde report` に `dirty` と出るが、その状態はコミットからは再現できない。
 3. `fde evidence green --req <REQ-ID> --cmd '<CMD>' [TARGET]` — RED と**同じ `CMD`**。同じ要件・同じ `CMD` の RED が無ければ exit 1。
 4. tdd 側: `tdd green --task <spec-id>-<REQ-ID> --cmd '<CMD>' --author <impl-agent-id> --strict-separation`、
    続けて `tdd oracle --task <spec-id>-<REQ-ID>`(exit 0 = 有効な Fail→Pass。1 は不成立、2 は読めない=止めて聞く)。
@@ -104,7 +114,8 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
 
 1. **判定**: `fde evidence verify [TARGET]` — 0 = 全要件完了 / 1 = 欠けあり(欠けた要件は stderr)/ 2 = 判定不能。
    完了と言えるのは exit 0 のときだけ。
-2. **一覧**: `fde report [TARGET]`(要件ごとの状態、unresolved / unmeasured の節)。
+2. **一覧**: `fde report [TARGET]`(批准時 HEAD と clean/dirty、現在の HEAD、要件ごとの状態と各記録の HEAD・clean/dirty、
+   unresolved / unmeasured の節)。
    一覧は未批准の target でも出る(`ratification: UNRATIFIED` / `evidence: not evaluated`)が、そのときの終了コードは 1。
    exit 0 は批准済みかつ全要件が RED→GREEN のときだけ。未批准(未登録・未批准・批准後の spec 変更)や、unresolved・
    unmeasured・PASS のみの要件があれば exit 1 で理由を stderr に出す(verify と違い PASS は完了に数えない)。2 = 判定不能。
@@ -112,11 +123,14 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
    - unresolved(RED はあるが GREEN が無い)要件
    - unmeasured(証跡なし)要件
    - `fde evidence verify` と `fde report` の終了コードと stderr
+   - `dirty` と表示された記録があれば、その要件と HEAD(コミットから再現できない証跡であること)
    - やっていないこと・確かめていないこと(例: 実行しなかった検査、gate に止められて進めなかった手順)
 
 ## 終了コードの読み方(要約)
 
-- `resolve`: 0 / 2。`begin` / `ratify` / `evidence red|green|pass`: 0 記録 / 1 拒否 / 2 判定不能。
+- `resolve`: 0 / 2。`begin` / `ratify` / `evidence red|green|pass`: 0 記録 / 1 拒否 / 2 判定不能
+  (`ratify` は HEAD・dirty が判定できないとき、`evidence` は旧形式の批准、または現在の HEAD が批准時 HEAD の子孫でないときも 2)。
+- `evidence verify` / `report` は、批准時 HEAD ≤ 各記録の HEAD ≤ 現在の HEAD(祖先または同一)が成り立たない・比較できないとき 2。
 - `report`: 0 完了(批准済みかつ全要件 RED→GREEN)/ 1 未完了(未批准、または unresolved・unmeasured・PASS のみの要件あり)/ 2 判定不能。
 - `status`: 0 批准済み / 1 未批准 / 2 判定不能。`evidence verify`: 0 完了 / 1 欠け / 2 判定不能。
 - `gate`: 0 allow / 2 deny。引数エラー(clap)も 2。どれも 2 は pass ではない。

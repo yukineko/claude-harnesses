@@ -18,6 +18,17 @@ exits 1 (reason on stderr) for an unratified target (not registered, not
 ratified, spec changed since ratification) or any unresolved, unmeasured or
 PASS-only requirement, and 2 when undetermined.
 
+`fde ratify` records the target HEAD commit and whether the work tree was dirty
+(it needs at least one commit; otherwise exit 2), and every evidence record
+carries the HEAD and dirty flag observed just before its command ran. Only
+forward history counts: recording needs the ratification HEAD to be an
+ancestor of (or equal to) the current HEAD, and `verify` / `report` need
+ratification HEAD <= every counted record's HEAD <= current HEAD; a reset,
+branch switch, rewritten history or a failed comparison is exit 2. A dirty tree
+is recorded and shown by `report`, but is not disqualifying by itself. A
+ratification from an earlier fde (no HEAD) still satisfies `status`, but the
+evidence commands and `report` exit 2 until it is re-ratified.
+
 Before ratification the gate denies Bash run in, or naming, the target, with
 one exception: an exact single `fde status`, `fde report` or `fde begin`
 invocation (no chaining, redirects, substitution, quoting, env prefixes or

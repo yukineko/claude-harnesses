@@ -1,6 +1,8 @@
 //! Talk to `git` to learn what changed: the set of changed paths (for test-file
-//! evidence) and the *added* lines with their file (for inline-test detection
-//! and counting newly added implementation lines). Pure subprocess calls.
+//! evidence), the *added* lines with their file (for inline-test detection
+//! and counting newly added implementation lines) and the *removed* lines
+//! with their file (so moved code is not counted as new). Pure subprocess
+//! calls.
 //!
 //! Every `git` child spawned here has the inherited repo-relocating `GIT_*`
 //! variables removed (`harness_core::git_env::scrub`) and is pointed at the
@@ -127,32 +129,62 @@ pub fn changed_files(root: &Path) -> ChangeScan {
     ChangeScan::Files(out)
 }
 
-/// All *added* lines across unstaged + staged diffs, plus the full content of
-/// untracked files (which have no diff). Returns an [`AddedScan`]: `NotRepo`,
-/// `Failed` (a git command errored → undetermined → gate fails closed), or
-/// `Lines(v)` (the possibly-empty added-line set). A failed git *command* is
-/// `Failed`; an individual untracked-file *read* error is best-effort (skipped).
+/// The added and the REMOVED lines of one change set, from the same git
+/// commands. Both scans share one tri-state: when a git command fails, BOTH
+/// are `Failed` — a removal set is never silently reported empty (or full)
+/// next to a failed added set, nor vice versa. Removed lines are tagged with
+/// the file they were removed from (the `--- a/<path>` side of the diff).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffScan {
+    pub added: AddedScan,
+    pub removed: AddedScan,
+}
+
+impl DiffScan {
+    fn same(state: AddedScan) -> Self {
+        DiffScan {
+            added: state.clone(),
+            removed: state,
+        }
+    }
+}
+
+/// The `added` side of [`diff_lines`] alone (test-only convenience; the gate
+/// calls [`diff_lines`]).
+#[cfg(test)]
 pub fn added_lines(root: &Path) -> AddedScan {
+    diff_lines(root).added
+}
+
+/// All *added* lines across unstaged + staged diffs, plus the full content of
+/// untracked files (which have no diff), and the lines REMOVED by those same
+/// diffs (untracked files have no removals). Each side is an [`AddedScan`]:
+/// `NotRepo`, `Failed` (a git command errored → undetermined → gate fails
+/// closed), or `Lines(v)` (the possibly-empty line set). A failed git
+/// *command* makes BOTH sides `Failed`; an individual untracked-file *read*
+/// error is best-effort (skipped).
+pub fn diff_lines(root: &Path) -> DiffScan {
     match probe_repo_scrubbed(root) {
         RepoProbe::Repo => {}
         // Genuinely out of scope: git said so, or git could not answer and no
         // `.git` exists anywhere above to contradict it.
-        RepoProbe::NotRepo => return AddedScan::NotRepo,
+        RepoProbe::NotRepo => return DiffScan::same(AddedScan::NotRepo),
         // git could not be run / refused to answer while a `.git` exists.
         // Undetermined is not "no scope" — resolve to the restricted side.
-        RepoProbe::Undetermined => return AddedScan::Failed,
+        RepoProbe::Undetermined => return DiffScan::same(AddedScan::Failed),
     }
     let mut out = Vec::new();
+    let mut removed = Vec::new();
     for args in [&["diff", "-U0"][..], &["diff", "--cached", "-U0"][..]] {
         // A failed diff command is undetermined, not "no added lines".
         let Some(text) = run(root, args) else {
-            return AddedScan::Failed;
+            return DiffScan::same(AddedScan::Failed);
         };
-        parse_unified_diff(&text, &mut out);
+        parse_unified_diff_both(&text, &mut out, &mut removed);
     }
     // Untracked files: every line is "added". A failed `ls-files` is undetermined.
     let Some(text) = run(root, &["ls-files", "--others", "--exclude-standard"]) else {
-        return AddedScan::Failed;
+        return DiffScan::same(AddedScan::Failed);
     };
     for f in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
         // Individual file-read errors stay best-effort: git already listed the
@@ -166,23 +198,27 @@ pub fn added_lines(root: &Path) -> AddedScan {
             }
         }
     }
-    AddedScan::Lines(out)
+    DiffScan {
+        added: AddedScan::Lines(out),
+        removed: AddedScan::Lines(removed),
+    }
 }
 
-/// Added lines from the non-merge commits reachable from HEAD whose committer
-/// date is at or after `since` (unix seconds) — the work committed during the
-/// session (backlog ba649100: a session that committed impl+test before
-/// stopping left an empty uncommitted scan and was blocked). Same tri-state as
-/// [`added_lines`]: a failed `git log` is `Failed` (undetermined → fail closed).
-/// A repo with no commits yet has no committed work: `Lines(vec![])`.
+/// Added and removed lines from the non-merge commits reachable from HEAD
+/// whose committer date is at or after `since` (unix seconds) — the work
+/// committed during the session (backlog ba649100: a session that committed
+/// impl+test before stopping left an empty uncommitted scan and was blocked).
+/// Same tri-state as [`diff_lines`]: a failed `git log` makes both sides
+/// `Failed` (undetermined → fail closed). A repo with no commits yet has no
+/// committed work: both sides `Lines(vec![])`.
 ///
 /// `--since` only bounds the walk; each commit's `%ct` is re-checked here, so
 /// git's date-ordering slop never credits an older commit.
-pub fn committed_added_lines(root: &Path, since: i64) -> AddedScan {
+pub fn committed_diff_lines(root: &Path, since: i64) -> DiffScan {
     match probe_repo_scrubbed(root) {
         RepoProbe::Repo => {}
-        RepoProbe::NotRepo => return AddedScan::NotRepo,
-        RepoProbe::Undetermined => return AddedScan::Failed,
+        RepoProbe::NotRepo => return DiffScan::same(AddedScan::NotRepo),
+        RepoProbe::Undetermined => return DiffScan::same(AddedScan::Failed),
     }
     // `rev-parse --verify -q HEAD` exits 1 with no output on an unborn branch;
     // `git log HEAD` would error there, and "no commits" is not a failure.
@@ -193,9 +229,9 @@ pub fn committed_added_lines(root: &Path, since: i64) -> AddedScan {
     match unborn {
         Ok(o) if o.status.success() => {}
         Ok(o) if o.status.code() == Some(1) && o.stdout.is_empty() => {
-            return AddedScan::Lines(Vec::new())
+            return DiffScan::same(AddedScan::Lines(Vec::new()))
         }
-        _ => return AddedScan::Failed,
+        _ => return DiffScan::same(AddedScan::Failed),
     }
     let since_arg = format!("--since=@{since}");
     let Some(log) = run(
@@ -212,20 +248,21 @@ pub fn committed_added_lines(root: &Path, since: i64) -> AddedScan {
             "HEAD",
         ],
     ) else {
-        return AddedScan::Failed;
+        return DiffScan::same(AddedScan::Failed);
     };
     let mut out = Vec::new();
+    let mut removed = Vec::new();
     let mut chunk = String::new();
     let mut keep = false;
     for line in log.lines() {
         if let Some(ct) = line.strip_prefix("tdd-commit ") {
             if keep {
-                parse_unified_diff(&chunk, &mut out);
+                parse_unified_diff_both(&chunk, &mut out, &mut removed);
             }
             chunk.clear();
             // An unparseable date cannot be shown to fall inside the session.
             let Ok(ct) = ct.trim().parse::<i64>() else {
-                return AddedScan::Failed;
+                return DiffScan::same(AddedScan::Failed);
             };
             keep = ct >= since;
             continue;
@@ -234,31 +271,69 @@ pub fn committed_added_lines(root: &Path, since: i64) -> AddedScan {
         chunk.push('\n');
     }
     if keep {
-        parse_unified_diff(&chunk, &mut out);
+        parse_unified_diff_both(&chunk, &mut out, &mut removed);
     }
-    AddedScan::Lines(out)
+    DiffScan {
+        added: AddedScan::Lines(out),
+        removed: AddedScan::Lines(removed),
+    }
 }
 
 /// Parse `git diff` unified output, collecting `+` lines tagged with the file
-/// from the most recent `+++ b/<path>` header. `+++`/`---` markers are skipped.
+/// from the most recent `+++ b/<path>` header. See [`parse_unified_diff_both`]
+/// (test-only convenience).
+#[cfg(test)]
 pub fn parse_unified_diff(diff: &str, out: &mut Vec<AddedLine>) {
-    let mut current: Option<String> = None;
+    let mut removed = Vec::new();
+    parse_unified_diff_both(diff, out, &mut removed);
+}
+
+/// Parse `git diff` unified output into added (`+`, tagged with the `+++
+/// b/<path>` file) and removed (`-`, tagged with the `--- a/<path>` file)
+/// lines. Stateful: `---`/`+++` are file headers only in the header block
+/// (after a `diff ` line, before the first `@@`); inside a hunk every `+`/`-`
+/// line is content, so an added `++ x` or a removed `-- x` line is still a
+/// line, not a header. Lines on a `/dev/null` side are never emitted.
+pub fn parse_unified_diff_both(
+    diff: &str,
+    added: &mut Vec<AddedLine>,
+    removed: &mut Vec<AddedLine>,
+) {
+    let mut old: Option<String> = None;
+    let mut new: Option<String> = None;
+    let mut in_hunk = false;
     for line in diff.lines() {
-        if let Some(rest) = line.strip_prefix("+++ ") {
-            current = Some(strip_diff_prefix(rest));
+        if line.starts_with("diff ") {
+            in_hunk = false;
+            old = None;
+            new = None;
             continue;
         }
-        if line.starts_with("--- ") || line.starts_with("+++") {
+        if line.starts_with("@@") {
+            in_hunk = true;
             continue;
         }
-        if let Some(added) = line.strip_prefix('+') {
-            if let Some(file) = &current {
-                if file != "/dev/null" {
-                    out.push(AddedLine {
-                        file: file.clone(),
-                        text: added.to_string(),
-                    });
-                }
+        if !in_hunk {
+            if let Some(rest) = line.strip_prefix("--- ") {
+                old = Some(strip_diff_prefix(rest));
+            } else if let Some(rest) = line.strip_prefix("+++ ") {
+                new = Some(strip_diff_prefix(rest));
+            }
+            continue;
+        }
+        let (side, text, sink) = if let Some(t) = line.strip_prefix('+') {
+            (&new, t, &mut *added)
+        } else if let Some(t) = line.strip_prefix('-') {
+            (&old, t, &mut *removed)
+        } else {
+            continue;
+        };
+        if let Some(file) = side {
+            if file != "/dev/null" {
+                sink.push(AddedLine {
+                    file: file.clone(),
+                    text: text.to_string(),
+                });
             }
         }
     }

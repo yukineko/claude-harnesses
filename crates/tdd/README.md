@@ -62,12 +62,23 @@ On each stop `tdd gate`:
    shell glob, a script) is excluded too;
 4. counts *added implementation lines* (impl-glob files, minus test files and
    inline test markers) and looks for **test evidence** (an added `#[test]` /
-   `def test_` / `func Test…` / `it(...)`, or a changed file under `tests/`);
+   `def test_` / `func Test…` / `it(...)`, or a changed file under `tests/`).
+   **Pure moves are recognised automatically**: an added impl line whose text
+   (trimmed, with one leading `pub` / `pub(..)` qualifier dropped) equals a
+   line *removed from an impl file* in the same change set (working tree +
+   index + this session's commits) is not counted — a multiset, so each
+   removed line cancels at most one added line, and a copy (nothing removed)
+   still counts. Lines that are only a `use …;` statement (multi-line too) or a
+   `mod name;` declaration are not impl lines. Removals from docs or test files
+   never cancel. Limit, stated: matching is per line, so reordering existing
+   lines is also read as a move. The number of lines read as moved is printed
+   to stderr on every run;
 5. **impl added + no test** → `{"decision":"block","reason":…}` so Claude writes
    a test and continues; otherwise the stop proceeds.
 
 A per-session attempt counter gives up after `max_attempts` so a stuck agent is
-never trapped. Escape hatch, for genuine refactors/renames/docs: `tdd skip
+never trapped. Escape hatch, for genuine refactors that edit lines (a pure
+move no longer needs it — see step 4) and docs: `tdd skip
 --reason "<why>"` — reason required, scoped to the issuing session, consumed
 once, and recorded in the gate log at both issue and consumption. (The old shared
 `.tdd-skip` file in the project root was removed: a one-shot marker in a shared

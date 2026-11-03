@@ -42,10 +42,8 @@ impl Fx {
     /// A real git repo at `<base>/proj` (so `.git/config` exists) plus a real
     /// nested repo at `<base>/proj/sub`.
     fn new(name: &str) -> Fx {
-        let root = Path::new("/var/tmp").join(format!(
-            "bg-git-config-write-{}-{name}",
-            std::process::id()
-        ));
+        let root = Path::new("/var/tmp")
+            .join(format!("bg-git-config-write-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let base = std::fs::canonicalize(&root).unwrap();
@@ -62,7 +60,10 @@ impl Fx {
         f.git(&sub, &["init", "-q", "-b", "main"]);
         std::fs::create_dir_all(f.repo.join("notes")).unwrap();
         assert!(f.repo.join(".git/config").is_file(), "fixture: .git/config");
-        assert!(sub.join(".git/config").is_file(), "fixture: sub/.git/config");
+        assert!(
+            sub.join(".git/config").is_file(),
+            "fixture: sub/.git/config"
+        );
         f
     }
 

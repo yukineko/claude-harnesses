@@ -195,7 +195,8 @@ enum CheckCmd {
         #[arg(long)]
         base_url: Option<String>,
     },
-    /// Scan build output for secrets, sources for HTML sinks, and run npm audit.
+    /// Scan build output for secrets, sources for HTML sinks, and run npm audit
+    /// in the `check pages` package directory (`npm --prefix <dir>`, else root).
     Security,
     /// Run a relevant capability's verify (300 s limit) and write its result
     /// record: exit 0 clean, 1 violation, 2 undetermined.

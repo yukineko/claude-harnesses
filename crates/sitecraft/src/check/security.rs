@@ -13,9 +13,23 @@
 //! * `npm audit --json` (`$SITECRAFT_NPM` / `npm`) reporting high or critical
 //!   vulnerabilities, judged from the JSON shape, not the exit code.
 //!
+//! # Where `npm audit` runs (U8)
+//!
+//! In the same web-app package directory `check pages` runs node in
+//! ([`super::pages::package_dir`]): `<root>/<dir>` when the configured
+//! `command` is `npm … --prefix <dir> …` / `--prefix=<dir>` (before any `--`),
+//! else the project root. npm is started with that directory as its cwd and
+//! as its `--prefix`, so it cannot walk up to an ancestor's `package.json` /
+//! lockfile. A prefix that is empty, cannot be resolved, is not a directory,
+//! or resolves outside the root (symlinks are resolved first) →
+//! `Undetermined` and npm is never started. A package directory without a
+//! lockfile is reported by npm as ENOLOCK → `Undetermined`; the root's
+//! lockfile is never used in its place.
+//!
 //! Undetermined: audit JSON without all six `metadata.vulnerabilities` keys,
 //! an `error` object (including ENOLOCK), empty or invalid stdout, missing
-//! npm, zero files to scan, or a file walk exceeding its entry limit.
+//! npm, an unusable `--prefix` (above), zero files to scan, or a file walk
+//! exceeding its entry limit.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -55,12 +69,18 @@ pub fn run(root: &Path) -> Verdict {
 /// Run the three scans for `root` with `config` and combine them with
 /// [`Verdict::worst_of`]. `Clean` only when every scan ran on a non-empty
 /// target set and found nothing; violation output names file, line and fix.
+/// The audit runs in the package directory resolved from `config.command`
+/// (module docs, "Where `npm audit` runs"); an unusable `--prefix` makes the
+/// audit `Undetermined` without starting npm. Both `sitecraft check security`
+/// and the Stop gate call this, so they audit the same directory.
 pub fn check_security(config: &Config, root: &Path) -> Verdict {
-    Verdict::worst_of([
-        scan_secrets(config, root),
-        scan_sinks(config, root),
-        audit(root),
-    ])
+    let audit = match super::pages::package_dir(&config.command, root) {
+        Ok(dir) => audit(&dir),
+        Err(why) => Verdict::undetermined(format!(
+            "sitecraft check security: npm audit was not run: {why}"
+        )),
+    };
+    Verdict::worst_of([scan_secrets(config, root), scan_sinks(config, root), audit])
 }
 
 // ---------------------------------------------------------------------------
@@ -842,13 +862,15 @@ fn kill_group(child: &std::process::Child) {
     }
 }
 
-fn audit(root: &Path) -> Verdict {
+/// `npm audit --json` in the package directory `dir` (cwd and `--prefix`).
+fn audit(dir: &Path) -> Verdict {
     use std::os::unix::process::CommandExt;
 
     let npm = crate::program_from_env(crate::ENV_NPM, "npm");
     let mut child = match Command::new(&npm)
-        .args(["audit", "--json"])
-        .current_dir(root)
+        .args(["audit", "--json", "--prefix"])
+        .arg(dir)
+        .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

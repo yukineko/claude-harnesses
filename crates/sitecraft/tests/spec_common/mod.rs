@@ -375,11 +375,24 @@ impl Project {
     }
 
     pub fn run_env(&self, args: &[&str], envs: &[(&str, OsString)]) -> Out {
+        self.run_env_with_deadline(args, envs, RUN_DEADLINE)
+    }
+
+    /// Like [`Project::run_env`] with an explicit harness deadline, for the
+    /// `#[ignore]`d tests that must outlive [`RUN_DEADLINE`] to observe a
+    /// sitecraft time limit (120 s probe, 300 s check). Choose a deadline
+    /// above the limit under test and above that test's own `elapsed` bound.
+    pub fn run_env_with_deadline(
+        &self,
+        args: &[&str],
+        envs: &[(&str, OsString)],
+        deadline: Duration,
+    ) -> Out {
         let mut c = self.cmd(args);
         for (k, v) in envs {
             c.env(k, v);
         }
-        run_deadline(c, None, RUN_DEADLINE)
+        run_deadline(c, None, deadline)
     }
 
     pub fn path(&self, rel: &str) -> PathBuf {

@@ -232,7 +232,7 @@ sitecraft check capability <name>   # relevant な能力ごとに
 ```
 
 - `check pages` — 設定した pages を Playwright で開き、console error・page error・asset の HTTP エラー・壊れたリンクを検出する。
-- `check security` — build 出力の秘密情報（伏字で表示）・`.env` の値の混入・危険な HTML sink・`npm audit` の high/critical を検出する。
+- `check security` — build 出力の秘密情報（伏字で表示）・`.env` の値の混入・危険な HTML sink・`npm audit` の high/critical を検出する。`npm audit` は `check pages` と同じ package ディレクトリ（`command` が `npm --prefix app …` なら `app/`、`--prefix` が無ければ root）で走るので、lockfile はそこに置く（`npm --prefix app i --package-lock-only`）。そこに lockfile が無い・`--prefix` が root 内のディレクトリに解決できないときは exit 2。
 - `check capability <name>` — 能力の verify を実行して判定する（300 秒で打ち切り exit 2）。`builtin:blender-headless` は古い GLB / render を消してから Blender を走らせ、GLB ヘッダ（`glTF`・version 2・長さ一致）と render の描画（四隅の最頻色を背景とし、どれかのチャネルが 16 を超えて違う画素が 1% 以上）を確かめる。`builtin:threejs-render` は trust 済みの `sitecraft.toml` の dev server（止まっていれば起動し、自分で起動したものだけ止める）でページを開き、selector の要素のスクリーンショットに同じ描画規則を当てる。`command` は trust 済みの argv を root で実行する。結果は state dir の result record に残り、Stop gate はそれを読む（gate 自身は能力を実行しない）。入力（script・`verify.inputs`・threejs では `sitecraft.toml` と `web_globs`）や `[capabilities.<name>]` を変えたら再実行する。
 - exit 1 は指摘を直して再実行。exit 2 は検査が走れなかった原因（未ビルド・Playwright 未導入・lockfile 無し・Blender 不在・未 trust 等）を直して再実行。
 

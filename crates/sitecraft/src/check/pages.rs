@@ -161,7 +161,8 @@ fn npm_prefix(command: &[String]) -> Option<&str> {
     None
 }
 
-/// The directory node runs in: the `npm --prefix` package dir (canonical,
+/// The directory node runs in (and `check security` runs `npm audit` in, U8):
+/// the `npm --prefix` package dir (canonical,
 /// inside the canonical root) or `root` itself. A prefix that is empty,
 /// cannot be resolved, is not a directory, or lies outside the root → `Err`.
 pub(crate) fn package_dir(command: &[String], root: &Path) -> Result<PathBuf, String> {

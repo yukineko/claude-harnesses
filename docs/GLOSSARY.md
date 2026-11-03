@@ -60,6 +60,7 @@
 | playbook | always-on | UserPromptSubmit で関連アトミックノートを予算内でコンテキスト注入する |
 | precommit-audit | always-on | Stop で汎用＋プロジェクトルールを diff に照合し clean まで完了を阻止する |
 | propguard | always-on | done_criteria から 3–5 個の意味的不変条件を導出し fail-closed で Stop を検証する |
+| refactor | manual | 肥大ファイルを 1 コミット 1 モジュールの純粋移動で分割し、各ステップを stdlib 証明ツール（ordered / multiset / tests compare、exit 0/1/2）で挙動保存と示す返済 skill（`/refactor` のみ。ゲートではない） |
 | replaykit | manual | tracekit の run trace を evalkit golden へ再生する回帰ハーネス |
 | reviewgate | always-on | Stop で diff をレビューするコードレビューゲート（既定 mode=off で何もしない。inject/subprocess は opt-in） |
 | runbook | always-on | UserPromptSubmit で `!name` マクロを repo 手順（`.runbook/<name>.md`）に展開する（plugin 名 runbook） |

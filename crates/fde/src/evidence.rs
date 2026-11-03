@@ -7,17 +7,40 @@
 //! to `registration.json` / `ratification.json`; never inside the target):
 //!
 //! ```text
-//! {"schema": 1, "records": [
-//!   {"fingerprint": "<spec sha256>", "req": "R1", "kind": "red", "cmd": "...", "exit_code": 1},
+//! {"schema": 2, "records": [
+//!   {"fingerprint": "<spec sha256>", "req": "R1", "kind": "red", "cmd": "...", "exit_code": 1,
+//!    "head": "<40 lowercase hex>", "dirty": false, "ratified_head": "<40 lowercase hex>"},
 //!   ...
 //! ]}
 //! ```
 //!
-//! Records are append-only and kept in recording order. Every record carries
-//! the fingerprint of the ratified spec it was recorded against; only records
-//! whose fingerprint equals the *current* ratified fingerprint count. A spec
-//! change (and re-ratification) therefore leaves earlier evidence on disk but
-//! out of every answer. The file is rewritten atomically (temp file + rename,
+//! `head` is the target HEAD commit ([`crate::git::head`]) and `dirty` whether
+//! the target work tree differed from it ([`crate::git::is_dirty`]: untracked
+//! files count, ignored files do not), both observed immediately **before**
+//! `CMD` ran. `ratified_head` is the ratification head `R` in force when the
+//! record was written (its **evidence epoch**). A ledger written by an earlier
+//! fde (`schema: 1`, records without `head` / `dirty` / `ratified_head`) is
+//! still read; its records keep no `head` (and are carried over without one
+//! when the ledger is next rewritten as schema 2). In schema 2 a record has
+//! `head` and `dirty` together with `ratified_head`, `head` and `dirty`
+//! without it (written by an fde before epochs), or none of the three
+//! (carried over); anything else, or an unknown schema, makes the ledger
+//! `Undetermined`.
+//!
+//! Records are append-only and kept in recording order. A record **counts**
+//! only when its `fingerprint` equals the *current* ratified fingerprint
+//! **and** its `ratified_head` equals the *current* ratification head. Every
+//! other record is **stale**: kept on disk, but ignored by recording
+//! preconditions, `verify` and `report` (which counts them on its `ignored:`
+//! line). A spec change, and every re-ratification at a different HEAD —
+//! after a reset to another commit, but also at a descendant of the old head
+//! — therefore starts a new evidence epoch: the earlier evidence leaves every
+//! answer and the requirements must be measured again. Re-ratifying at the
+//! same HEAD keeps the epoch (and the records counting). A record that
+//! matches the current fingerprint but has no `ratified_head` (written by an
+//! earlier fde) cannot be placed in an epoch; no epoch is guessed for it, and
+//! recording, `verify` and `report` answer `Undetermined` while one exists.
+//! The file is rewritten atomically (temp file + rename,
 //! [`crate::state::write_json_atomic`]); two concurrent recorders can lose one
 //! of the two appends (last rename wins), which can only make the ledger
 //! *less* complete, never more.
@@ -29,20 +52,31 @@
 //! 1. Ratification is observed ([`crate::ratify::observe`]). Not registered,
 //!    registered but unratified, or spec changed since ratification is a
 //!    determined refusal (`Violation`); an unreadable store/spec is
-//!    `Undetermined`.
+//!    `Undetermined`. A legacy ratification without a recorded HEAD
+//!    ([`crate::ratify::Provenance::Legacy`]) is `Undetermined` (re-ratify).
+//!    The current target HEAD is then observed and the ratification head `R`
+//!    must be an ancestor of, or equal to, it (`git merge-base --is-ancestor`);
+//!    "not an ancestor" (reset, branch switch, rewritten history) or any
+//!    failure to observe or compare is `Undetermined`, naming both commits.
 //! 2. The ratified spec bytes are parsed as specforge Spec IR TOML
 //!    (`[spec] id`, `[[requirement]] id`). Unparsable, a missing/empty id or a
 //!    duplicate requirement id is `Undetermined`. A `--req` that is not a
 //!    requirement of the spec, or an empty `--cmd`, is `Violation`.
 //! 3. The state dir must lie outside the target (`Violation` otherwise).
-//! 4. The ledger is read; unreadable, corrupt, unknown schema, or internally
-//!    inconsistent (see `evaluate`) is `Undetermined`.
-//! 5. Preconditions (`Violation` when unmet, without running `CMD`):
-//!    GREEN needs an earlier RED for the same requirement **and the same
-//!    `CMD` text**; PASS needs that the requirement has no RED at all (a
-//!    requirement with a RED is closed by its GREEN, not by a PASS). RED has
-//!    no precondition.
-//! 6. `CMD` runs as `/bin/sh -c CMD` with cwd = the target root, stdin null,
+//! 4. The ledger is read; unreadable, corrupt, unknown schema, internally
+//!    inconsistent (see `evaluate`), or holding a current-fingerprint record
+//!    without `ratified_head` is `Undetermined`.
+//! 5. Preconditions over the counted (current-epoch) records only
+//!    (`Violation` when unmet, without running `CMD`): GREEN needs an earlier
+//!    RED for the same requirement **and the same `CMD` text**; PASS needs
+//!    that the requirement has no RED at all (a requirement with a RED is
+//!    closed by its GREEN, not by a PASS). RED has no precondition. A stale
+//!    RED neither enables a GREEN nor blocks a PASS.
+//! 6. Immediately before `CMD` runs, the target HEAD and dirty flag are
+//!    observed (they become the record's `head` / `dirty`) and the step-1
+//!    ancestry check is repeated against that HEAD; any failure is
+//!    `Undetermined` and `CMD` does not run.
+//!    `CMD` runs as `/bin/sh -c CMD` with cwd = the target root, stdin null,
 //!    the repo-relocating `GIT_*` variables removed, bounded by
 //!    [`CMD_TIMEOUT`]. The **exit status** decides: RED needs a non-zero
 //!    exit, GREEN and PASS need exit 0; the other outcome is `Violation`. A
@@ -50,18 +84,43 @@
 //!    exit 126/127 (the shell could not execute / find the command, so nothing
 //!    was tested) is `Undetermined` and records nothing.
 //! 7. Ratification is observed again: if it is no longer ratified with the
-//!    same fingerprint, nothing is recorded (`Violation`).
-//! 8. The ledger is re-read, the step-5 precondition re-checked against it,
-//!    the record appended, and the file written atomically. Only a successful
-//!    write is `Clean`.
+//!    same fingerprint and the same recorded HEAD / dirty flag, nothing is
+//!    recorded (`Violation`).
+//! 8. The ledger is re-read, the step-4 / step-5 checks repeated against it,
+//!    the record (with `ratified_head` = the ratification head) appended, and
+//!    the file written atomically. Only a successful write is `Clean`.
 //!
 //! # Completeness (`verify`, `report`)
 //!
-//! Per requirement, over current-fingerprint records in order: a requirement
+//! Per requirement, over the counted (current-epoch) records in order: a requirement
 //! is **unresolved** while some RED `CMD` has no later GREEN with the same
 //! `CMD`; otherwise it is **complete** when it has a GREEN (after its RED) or a
 //! PASS; otherwise it is **unmeasured**. `verify` is `Clean` only when every
 //! requirement of the ratified spec is complete.
+//!
+//! `report` applies a **stricter** bar (user ruling 2026-11-03: "Exit 0 only
+//! when it is ratified and every requirement is verified RED→GREEN"): its
+//! verdict is `Clean` only when every requirement is GREEN after RED. A
+//! PASS-only requirement counts as complete for `verify` but not for
+//! `report`, and an unratified target is a determined `Violation` for
+//! `report` (while `verify` answers it `Undetermined`).
+//!
+//! # History (`verify`, `report`)
+//!
+//! Before either answers, the evidence must lie on the ratified history
+//! (forward history only): with `R` the ratification head, `C` the current
+//! target HEAD and `H` the `head` of each counted (current-epoch) record, `R`
+//! must be an ancestor of or equal to `C`, and `R <= H <= C` for every counted
+//! record. Stale records are not checked (they do not count). A legacy
+//! ratification (no `R`), a current-fingerprint record without
+//! `ratified_head`, a counted record without `head`, a `C` that cannot be
+//! observed, any "not an ancestor" answer, or any failed comparison (e.g. a
+//! commit unknown to the repository) is `Undetermined`: `verify` exits 2 and
+//! `report` exits 2 without text. After a reset off the ratified line, a
+//! human re-ratifying at the new HEAD starts a new epoch, so the answer
+//! becomes "unmeasured" (1) until evidence is recorded again.
+//! `dirty` is recorded and shown by `report` but is not by itself
+//! disqualifying.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -71,12 +130,15 @@ use std::time::Duration;
 use harness_core::boundary;
 use harness_core::verdict::{Determination, Verdict};
 
-use crate::ratify::{self, Observed, RatifiedSpec};
+use crate::ratify::{self, Observed, Provenance, RatifiedSpec};
 use crate::state;
 use crate::target::ResolvedTarget;
 
-/// Schema version of the ledger file.
-const SCHEMA: u32 = 1;
+/// Schema version of the ledger file as written now (records carry `head` /
+/// `dirty`).
+const SCHEMA: u32 = 2;
+/// The earlier ledger schema (records without `head` / `dirty`), still read.
+const LEGACY_SCHEMA: u32 = 1;
 const LEDGER_FILE: &str = "evidence.json";
 
 /// Upper bound on one evidence command. A command that has not exited by
@@ -113,6 +175,19 @@ struct Record {
     kind: Kind,
     cmd: String,
     exit_code: i32,
+    /// Target HEAD observed before `CMD` ran; `None` only for a record
+    /// written by an earlier fde (schema 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    head: Option<String>,
+    /// Whether the target work tree was dirty then; present exactly when
+    /// `head` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dirty: Option<bool>,
+    /// The ratification head `R` in force when the record was written (its
+    /// evidence epoch). `None` only for a record written by an earlier fde;
+    /// present only together with `head` / `dirty`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ratified_head: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -196,10 +271,15 @@ fn ledger_path(target: &ResolvedTarget, state_dir: &Path) -> PathBuf {
 }
 
 /// Read the ledger: absent is the empty ledger; unreadable, corrupt or an
-/// unknown schema is `Undetermined`.
+/// unknown schema is `Undetermined`. A schema-1 ledger (no record carries
+/// `head` / `dirty` / `ratified_head`) is returned as schema 2 with head-less
+/// records, so the next write upgrades it without inventing a head. In schema
+/// 2 a record with only one of `head` / `dirty`, a `ratified_head` without
+/// both of them, or a `head` / `ratified_head` that is not 40 lowercase hex,
+/// is `Undetermined`.
 #[track_caller]
 fn read_ledger(path: &Path) -> Determination<Ledger> {
-    let ledger: Ledger = match state::read_json(path) {
+    let mut ledger: Ledger = match state::read_json(path) {
         Determination::Known(Some(l)) => l,
         Determination::Known(None) => {
             return Determination::known(Ledger {
@@ -209,12 +289,51 @@ fn read_ledger(path: &Path) -> Determination<Ledger> {
         }
         Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
-    if ledger.schema != SCHEMA {
-        return Determination::undetermined(format!(
-            "evidence ledger {} has unknown schema {}",
-            path.display(),
-            ledger.schema
-        ));
+    match ledger.schema {
+        SCHEMA => {
+            for (i, rec) in ledger.records.iter().enumerate() {
+                let well_formed = match (&rec.head, rec.dirty, &rec.ratified_head) {
+                    (Some(h), Some(_), Some(r)) => {
+                        crate::git::is_commit_id(h) && crate::git::is_commit_id(r)
+                    }
+                    (Some(h), Some(_), None) => crate::git::is_commit_id(h),
+                    (None, None, None) => true,
+                    _ => false,
+                };
+                if !well_formed {
+                    return Determination::undetermined(format!(
+                        "evidence ledger {} is corrupt: record #{i} has head {:?}, dirty {:?} and \
+                         ratified_head {:?} (expected: head and dirty both present with a \
+                         40-digit lowercase hex head, optionally with a 40-digit lowercase hex \
+                         ratified_head; or none of the three)",
+                        path.display(),
+                        rec.head,
+                        rec.dirty,
+                        rec.ratified_head
+                    ));
+                }
+            }
+        }
+        LEGACY_SCHEMA => {
+            if let Some(i) = ledger
+                .records
+                .iter()
+                .position(|r| r.head.is_some() || r.dirty.is_some() || r.ratified_head.is_some())
+            {
+                return Determination::undetermined(format!(
+                    "evidence ledger {} has schema {LEGACY_SCHEMA}, but record #{i} carries \
+                     head/dirty/ratified_head fields that schema never had",
+                    path.display()
+                ));
+            }
+            ledger.schema = SCHEMA;
+        }
+        other => {
+            return Determination::undetermined(format!(
+                "evidence ledger {} has unknown schema {other}",
+                path.display()
+            ))
+        }
     }
     Determination::known(ledger)
 }
@@ -228,7 +347,7 @@ enum ReqState {
     GreenAfterRed { cmds: Vec<String> },
     /// No RED; at least one PASS.
     Pass { cmds: Vec<String> },
-    /// No current-fingerprint record at all.
+    /// No counted (current-epoch) record at all.
     Unmeasured,
 }
 
@@ -253,23 +372,63 @@ fn push_unique(v: &mut Vec<String>, s: &str) {
     }
 }
 
+/// Where one counted record was taken.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecordAt {
+    /// Position in the ledger (for messages).
+    index: usize,
+    kind: Kind,
+    /// `None` only for a record written by an earlier fde.
+    head: Option<String>,
+    dirty: Option<bool>,
+}
+
 /// The evaluated ledger against the requirements of one ratified spec.
 struct Evaluation {
     states: Vec<(String, ReqState)>,
-    /// Records from other fingerprints (earlier ratifications), ignored.
+    /// Counted (current-epoch) records per requirement, in ledger
+    /// order; parallel to `states`.
+    records: Vec<Vec<RecordAt>>,
+    /// Records from an earlier ratification (another fingerprint, or another
+    /// ratification head), ignored.
     stale: usize,
+    /// Ledger positions of current-fingerprint records without a
+    /// `ratified_head` (written by an earlier fde): their epoch is unknown, so
+    /// they are neither counted nor ignored. Callers answer `Undetermined`
+    /// while this is non-empty.
+    unplaced: Vec<usize>,
 }
 
-/// Evaluate `ledger` for `reqs` under `fingerprint`. A current-fingerprint
-/// record that recording would never have written — a requirement outside
-/// the spec, a GREEN without an earlier RED of the same `CMD`, a PASS after a
-/// RED of its requirement — makes the ledger inconsistent: `Undetermined`.
+/// Whether `rec` belongs to the current evidence epoch: recorded against
+/// `fingerprint` under the ratification head `ratified_head`.
+fn in_epoch(rec: &Record, fingerprint: &str, ratified_head: &str) -> bool {
+    rec.fingerprint == fingerprint && rec.ratified_head.as_deref() == Some(ratified_head)
+}
+
+/// Evaluate `ledger` for `reqs` in the evidence epoch (`fingerprint`,
+/// `ratified_head`). Records of another fingerprint or another ratification
+/// head are stale (counted in `stale`); current-fingerprint records without a
+/// `ratified_head` are listed in `unplaced`. A counted record that recording
+/// would never have written — a requirement outside the spec, a GREEN without
+/// an earlier RED of the same `CMD`, a PASS after a RED of its requirement —
+/// makes the ledger inconsistent: `Undetermined`.
 #[track_caller]
-fn evaluate(reqs: &[String], ledger: &Ledger, fingerprint: &str) -> Determination<Evaluation> {
+fn evaluate(
+    reqs: &[String],
+    ledger: &Ledger,
+    fingerprint: &str,
+    ratified_head: &str,
+) -> Determination<Evaluation> {
     let mut accs: Vec<Acc> = reqs.iter().map(|_| Acc::default()).collect();
+    let mut records: Vec<Vec<RecordAt>> = reqs.iter().map(|_| Vec::new()).collect();
     let mut stale = 0usize;
+    let mut unplaced = Vec::new();
     for (i, rec) in ledger.records.iter().enumerate() {
-        if rec.fingerprint != fingerprint {
+        if rec.fingerprint == fingerprint && rec.ratified_head.is_none() {
+            unplaced.push(i);
+            continue;
+        }
+        if !in_epoch(rec, fingerprint, ratified_head) {
             stale += 1;
             continue;
         }
@@ -280,12 +439,18 @@ fn evaluate(reqs: &[String], ledger: &Ledger, fingerprint: &str) -> Determinatio
                 rec.req
             ));
         };
-        let Some(acc) = accs.get_mut(idx) else {
+        let (Some(acc), Some(at)) = (accs.get_mut(idx), records.get_mut(idx)) else {
             return Determination::undetermined(format!(
                 "evidence ledger evaluation lost requirement {:?}",
                 rec.req
             ));
         };
+        at.push(RecordAt {
+            index: i,
+            kind: rec.kind,
+            head: rec.head.clone(),
+            dirty: rec.dirty,
+        });
         match rec.kind {
             Kind::Red => {
                 acc.red_cmds.insert(rec.cmd.clone());
@@ -330,7 +495,29 @@ fn evaluate(reqs: &[String], ledger: &Ledger, fingerprint: &str) -> Determinatio
             (id.clone(), st)
         })
         .collect();
-    Determination::known(Evaluation { states, stale })
+    Determination::known(Evaluation {
+        states,
+        records,
+        stale,
+        unplaced,
+    })
+}
+
+/// `Undetermined` when `ev` holds current-fingerprint records without a
+/// `ratified_head`: no epoch is guessed for them.
+#[track_caller]
+fn require_placed(ev: &Evaluation) -> Determination<()> {
+    if ev.unplaced.is_empty() {
+        return Determination::known(());
+    }
+    let list: Vec<String> = ev.unplaced.iter().map(|i| format!("#{i}")).collect();
+    Determination::undetermined(format!(
+        "evidence record(s) {} match the ratified spec fingerprint but were written by an \
+         earlier fde without the ratification HEAD (ratified_head), so it cannot be decided \
+         whether they belong to the current ratification; no epoch is guessed. A human must \
+         decide what to do with the ledger (e.g. drop the target state and re-begin)",
+        list.join(", ")
+    ))
 }
 
 /// Step-5 precondition for recording `kind` of `cmd` for `req`. `None` = met.
@@ -340,11 +527,12 @@ fn precondition_unmet(
     cmd: &str,
     ledger: &Ledger,
     fingerprint: &str,
+    ratified_head: &str,
 ) -> Option<String> {
     let mut current = ledger
         .records
         .iter()
-        .filter(|r| r.fingerprint == fingerprint && r.req == req);
+        .filter(|r| in_epoch(r, fingerprint, ratified_head) && r.req == req);
     match kind {
         Kind::Red => None,
         Kind::Green => {
@@ -352,8 +540,9 @@ fn precondition_unmet(
                 None
             } else {
                 Some(format!(
-                    "refused: no RED is recorded for requirement {req} with the command {cmd:?}; \
-                     a GREEN must follow a recorded RED of the same requirement and command"
+                    "refused: no RED is recorded for requirement {req} with the command {cmd:?} \
+                     under the current ratification; a GREEN must follow a recorded RED of the \
+                     same requirement and command"
                 ))
             }
         }
@@ -393,6 +582,137 @@ fn ratified(
     }
 }
 
+/// The recorded ratification head and dirty flag of `spec`. A legacy
+/// ratification has none: `Undetermined`, asking the human to re-ratify.
+#[track_caller]
+fn ratification_head(spec: &RatifiedSpec) -> Determination<(String, bool)> {
+    match &spec.provenance {
+        Provenance::Recorded { head, dirty } => Determination::known((head.clone(), *dirty)),
+        Provenance::Legacy => Determination::undetermined(format!(
+            "the ratification of {} was written by an earlier fde without the target HEAD \
+             commit, so evidence cannot be placed on the ratified history; a human must \
+             re-ratify it (`fde ratify`) to record the HEAD",
+            spec.path.display()
+        )),
+    }
+}
+
+/// `Known(())` when `ancestor` is an ancestor of, or equal to, `descendant`;
+/// `Undetermined` (with `what` and both commits named) when it is not or the
+/// comparison failed.
+#[track_caller]
+fn require_ancestor(
+    ancestor: &str,
+    descendant: &str,
+    root: &Path,
+    what: &str,
+) -> Determination<()> {
+    match crate::git::is_ancestor(ancestor, descendant, root) {
+        Determination::Known(true) => Determination::known(()),
+        Determination::Known(false) => Determination::undetermined(format!(
+            "{what}: commit {ancestor} is not an ancestor of (or equal to) commit {descendant} \
+             in {} (HEAD reset, switched to another branch, or history rewritten); only forward \
+             history from the ratified commit counts",
+            root.display()
+        )),
+        Determination::Undetermined(why) => Determination::undetermined(format!(
+            "{what}: cannot decide whether commit {ancestor} is an ancestor of commit \
+             {descendant} in {}: {}",
+            root.display(),
+            why.as_str()
+        )),
+    }
+}
+
+/// Observe the current target HEAD and require the ratification head `r` to
+/// be an ancestor of, or equal to, it. `Known(head)` only then.
+#[track_caller]
+fn head_on_ratified_line(r: &str, root: &Path) -> Determination<String> {
+    let c = match crate::git::head(root) {
+        Determination::Known(c) => c,
+        Determination::Undetermined(why) => {
+            return Determination::undetermined(format!(
+                "the current target HEAD cannot be determined: {}",
+                why.as_str()
+            ))
+        }
+    };
+    match require_ancestor(
+        r,
+        &c,
+        root,
+        &format!("the current target HEAD {c} is off the ratified history (ratified at {r})"),
+    ) {
+        Determination::Known(()) => Determination::known(c),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    }
+}
+
+/// The commits a judged ledger sits on: the ratification head (and whether
+/// the tree was dirty then) and the current target HEAD.
+struct History {
+    ratified: String,
+    ratified_dirty: bool,
+    current: String,
+}
+
+/// Apply the history rule (module docs, "History") to an evaluated ledger:
+/// no current-fingerprint record without `ratified_head`, `R <= C` and
+/// `R <= H <= C` for every counted record. Any violation or failure to
+/// compare is `Undetermined`.
+#[track_caller]
+fn check_history(
+    target: &ResolvedTarget,
+    spec: &RatifiedSpec,
+    ev: &Evaluation,
+) -> Determination<History> {
+    let (r, r_dirty) = match ratification_head(spec) {
+        Determination::Known(x) => x,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    if let Determination::Undetermined(why) = require_placed(ev) {
+        return Determination::Undetermined(why);
+    }
+    let c = match head_on_ratified_line(&r, &target.root) {
+        Determination::Known(c) => c,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let mut checked: BTreeSet<String> = BTreeSet::new();
+    for ((id, _), recs) in ev.states.iter().zip(&ev.records) {
+        for rec in recs {
+            let Some(h) = &rec.head else {
+                return Determination::undetermined(format!(
+                    "evidence record #{} ({} for {id}) carries no target HEAD, so it cannot be \
+                     placed on the ratified history",
+                    rec.index,
+                    rec.kind.label()
+                ));
+            };
+            if !checked.insert(h.clone()) {
+                continue;
+            }
+            let what = format!(
+                "evidence record #{} ({} for {id}) at {h} is off the ratified history \
+                 (ratified at {r}, current HEAD {c})",
+                rec.index,
+                rec.kind.label()
+            );
+            for (a, b) in [(r.as_str(), h.as_str()), (h.as_str(), c.as_str())] {
+                if let Determination::Undetermined(why) =
+                    require_ancestor(a, b, &target.root, &what)
+                {
+                    return Determination::Undetermined(why);
+                }
+            }
+        }
+    }
+    Determination::known(History {
+        ratified: r,
+        ratified_dirty: r_dirty,
+        current: c,
+    })
+}
+
 /// Run `cmd` at the target root. `Known(output)` only for a process that
 /// ran to completion with an exit code other than 126/127.
 #[track_caller]
@@ -429,8 +749,12 @@ fn run_cmd(cmd: &str, root: &Path) -> Determination<boundary::CommandOutput> {
 ///   `req` not in the ratified spec, empty `cmd`, state dir inside the target,
 ///   unmet precondition, or the exit status contradicts `kind`. Nothing is
 ///   recorded.
-/// * `Undetermined` — store/spec/ledger unreadable or corrupt, or `cmd` could
-///   not be run to an exit code. Nothing is recorded.
+/// * `Undetermined` — store/spec/ledger unreadable or corrupt, a
+///   current-fingerprint record without `ratified_head`, a legacy
+///   ratification without a recorded HEAD, a target HEAD that cannot be
+///   observed or is not a descendant of (or equal to) the ratification head,
+///   a dirty flag that cannot be observed, or `cmd` could not be run to an
+///   exit code. Nothing is recorded.
 #[track_caller]
 pub fn record(
     kind: Kind,
@@ -443,6 +767,17 @@ pub fn record(
         Ok(x) => x,
         Err(v) => return v,
     };
+    let (ratified_head, _) = match ratification_head(&spec) {
+        Determination::Known(x) => x,
+        Determination::Undetermined(why) => return why.into_verdict(),
+    };
+    if let Determination::Undetermined(why) = head_on_ratified_line(&ratified_head, &target.root) {
+        return Verdict::undetermined(format!(
+            "{} not recorded for {req}: {}",
+            kind.label(),
+            why.as_str()
+        ));
+    }
     if !reqs.iter().any(|r| r == req) {
         return Verdict::violation(format!(
             "refused: {req:?} is not a requirement of the ratified spec {} (requirements: {})",
@@ -466,12 +801,43 @@ pub fn record(
         Determination::Known(l) => l,
         Determination::Undetermined(why) => return why.into_verdict(),
     };
-    if let Determination::Undetermined(why) = evaluate(&reqs, &ledger, &spec.fingerprint) {
-        return why.into_verdict();
+    match evaluate(&reqs, &ledger, &spec.fingerprint, &ratified_head) {
+        Determination::Known(ev) => {
+            if let Determination::Undetermined(why) = require_placed(&ev) {
+                return why.into_verdict();
+            }
+        }
+        Determination::Undetermined(why) => return why.into_verdict(),
     }
-    if let Some(why) = precondition_unmet(kind, req, cmd, &ledger, &spec.fingerprint) {
+    if let Some(why) =
+        precondition_unmet(kind, req, cmd, &ledger, &spec.fingerprint, &ratified_head)
+    {
         return Verdict::violation(why);
     }
+
+    // Provenance of this record: observed immediately before CMD runs, so it
+    // describes the tree CMD ran on (not what CMD left behind).
+    let head = match head_on_ratified_line(&ratified_head, &target.root) {
+        Determination::Known(h) => h,
+        Determination::Undetermined(why) => {
+            return Verdict::undetermined(format!(
+                "{} not recorded for {req}: {}",
+                kind.label(),
+                why.as_str()
+            ))
+        }
+    };
+    let dirty = match crate::git::is_dirty(&target.root) {
+        Determination::Known(d) => d,
+        Determination::Undetermined(why) => {
+            return Verdict::undetermined(format!(
+                "{} not recorded for {req}: whether the target work tree is dirty cannot be \
+                 determined: {}",
+                kind.label(),
+                why.as_str()
+            ))
+        }
+    };
 
     let out = match run_cmd(cmd, &target.root) {
         Determination::Known(o) => o,
@@ -498,7 +864,8 @@ pub fn record(
 
     // The spec may have changed while the command ran.
     match ratify::observe(target, state_dir) {
-        Determination::Known(Observed::Ratified(now)) if now.fingerprint == spec.fingerprint => {}
+        Determination::Known(Observed::Ratified(now))
+            if now.fingerprint == spec.fingerprint && now.provenance == spec.provenance => {}
         Determination::Known(_) => {
             return Verdict::violation(format!(
                 "{} not recorded for {req}: the ratification of {} changed while the command ran",
@@ -512,10 +879,17 @@ pub fn record(
         Determination::Known(l) => l,
         Determination::Undetermined(why) => return why.into_verdict(),
     };
-    if let Determination::Undetermined(why) = evaluate(&reqs, &ledger, &spec.fingerprint) {
-        return why.into_verdict();
+    match evaluate(&reqs, &ledger, &spec.fingerprint, &ratified_head) {
+        Determination::Known(ev) => {
+            if let Determination::Undetermined(why) = require_placed(&ev) {
+                return why.into_verdict();
+            }
+        }
+        Determination::Undetermined(why) => return why.into_verdict(),
     }
-    if let Some(why) = precondition_unmet(kind, req, cmd, &ledger, &spec.fingerprint) {
+    if let Some(why) =
+        precondition_unmet(kind, req, cmd, &ledger, &spec.fingerprint, &ratified_head)
+    {
         return Verdict::violation(why);
     }
     ledger.records.push(Record {
@@ -524,6 +898,9 @@ pub fn record(
         kind,
         cmd: cmd.to_owned(),
         exit_code: code,
+        head: Some(head),
+        dirty: Some(dirty),
+        ratified_head: Some(ratified_head),
     });
     match state::write_json_atomic(&path, &ledger) {
         Determination::Known(()) => Verdict::from_findings(Vec::new()),
@@ -560,11 +937,15 @@ fn evaluated(
             spec.path.display()
         ));
     }
+    let (ratified_head, _) = match ratification_head(&spec) {
+        Determination::Known(x) => x,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
     let ledger = match read_ledger(&ledger_path(target, state_dir)) {
         Determination::Known(l) => l,
         Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
-    match evaluate(&reqs, &ledger, &spec.fingerprint) {
+    match evaluate(&reqs, &ledger, &spec.fingerprint, &ratified_head) {
         Determination::Known(ev) => Determination::known((spec, ev)),
         Determination::Undetermined(why) => Determination::Undetermined(why),
     }
@@ -575,13 +956,17 @@ fn evaluated(
 /// * `Clean` — every requirement is complete (GREEN after RED, or PASS).
 /// * `Violation` — some requirement is unresolved or unmeasured (named).
 /// * `Undetermined` — not ratified (incl. spec changed), a spec with zero
-///   requirements, an unreadable/corrupt/inconsistent ledger or store.
+///   requirements, an unreadable/corrupt/inconsistent ledger or store, or the
+///   history rule (module docs, "History") violated or undecidable.
 #[track_caller]
 pub fn verify(target: &ResolvedTarget, state_dir: &Path) -> Verdict {
-    let (_, ev) = match evaluated(target, state_dir) {
+    let (spec, ev) = match evaluated(target, state_dir) {
         Determination::Known(x) => x,
         Determination::Undetermined(why) => return why.into_verdict(),
     };
+    if let Determination::Undetermined(why) = check_history(target, &spec, &ev) {
+        return why.into_verdict();
+    }
     let missing: Vec<String> = ev
         .states
         .iter()
@@ -603,38 +988,78 @@ pub fn verify(target: &ResolvedTarget, state_dir: &Path) -> Verdict {
     ))
 }
 
-/// Render a human-readable report of `target`'s ratification and evidence.
+/// The rendered report and its completion verdict.
 ///
-/// `Known` for a ratified target with a readable ledger (and also for a
-/// target that is determined not ratified: the report then says so and
-/// evaluates no evidence). `Undetermined` — never an empty or partial report —
-/// for an unreadable store/spec/ledger, an inconsistent ledger, or a spec with
-/// zero requirements.
+/// `text` is printed in every determined case, including an unratified
+/// target. `verdict` is never `Undetermined` (an undetermined report is a
+/// [`Determination::Undetermined`] with no text at all):
+///
+/// * `Clean` — ratified, and **every** requirement of the ratified spec is
+///   RED then GREEN (no open RED).
+/// * `Violation` — determined not done, with a reason naming why: the target
+///   is unratified (not registered, registered but not ratified, spec changed
+///   since ratification), or some requirement is unresolved (RED without
+///   GREEN), unmeasured (no evidence) or PASS-only (named).
+#[derive(Debug)]
+pub struct Report {
+    /// The human-readable report.
+    pub text: String,
+    /// Whether the report shows the target done (see the type docs).
+    pub verdict: Verdict,
+}
+
+/// Render a human-readable report of `target`'s ratification and evidence,
+/// with its completion verdict (see [`Report`]).
+///
+/// `Known` for a ratified target with a readable ledger on the ratified
+/// history, and also for a target that is determined not ratified (the text
+/// then says so, evaluates no evidence, and the verdict is `Violation`).
+/// `Undetermined` — never an empty or partial report — for an unreadable
+/// store/spec/ledger, an inconsistent ledger, a spec with zero requirements,
+/// or the history rule (module docs, "History") violated or undecidable
+/// (incl. a legacy ratification without a recorded HEAD).
+///
+/// The text shows the ratification head with `clean` / `dirty`, the current
+/// target HEAD, and per requirement the kind, head and `clean` / `dirty` of
+/// each counted record.
 #[track_caller]
-pub fn report(target: &ResolvedTarget, state_dir: &Path) -> Determination<String> {
+pub fn report(target: &ResolvedTarget, state_dir: &Path) -> Determination<Report> {
     if let Determination::Known(Observed::Unratified { reason }) =
         ratify::observe(target, state_dir)
     {
-        return Determination::known(format!(
+        let text = format!(
             "fde report: target {}\nratification: UNRATIFIED ({reason})\n\
              evidence: not evaluated (no ratified spec to judge it against)",
             target.root.display()
+        );
+        let verdict = Verdict::violation(format!(
+            "report: not done: target {} is unratified ({reason})",
+            target.root.display()
         ));
+        return Determination::known(Report { text, verdict });
     }
     let (spec, ev) = match evaluated(target, state_dir) {
         Determination::Known(x) => x,
         Determination::Undetermined(why) => return Determination::Undetermined(why),
     };
+    let history = match check_history(target, &spec, &ev) {
+        Determination::Known(h) => h,
+        Determination::Undetermined(why) => return Determination::Undetermined(why),
+    };
+    let tree = |dirty: bool| if dirty { "dirty" } else { "clean" };
     let mut out = format!(
         "fde report: target {}\nratification: ratified spec {} (fingerprint {})\n\
-         requirements: {}\n",
+         ratified at HEAD {} ({})\ncurrent HEAD: {}\nrequirements: {}\n",
         target.root.display(),
         spec.path.display(),
         spec.fingerprint,
+        history.ratified,
+        tree(history.ratified_dirty),
+        history.current,
         ev.states.len()
     );
-    for (id, st) in &ev.states {
-        let line = match st {
+    for ((id, st), recs) in ev.states.iter().zip(&ev.records) {
+        let mut line = match st {
             ReqState::GreenAfterRed { cmds } => format!("  {id}: RED then GREEN (cmd {cmds:?})"),
             ReqState::Pass { cmds } => {
                 format!("  {id}: PASS, already conforming (cmd {cmds:?})")
@@ -644,6 +1069,18 @@ pub fn report(target: &ResolvedTarget, state_dir: &Path) -> Determination<String
             }
             ReqState::Unmeasured => format!("  {id}: no evidence recorded"),
         };
+        if !recs.is_empty() {
+            // `check_history` has refused every counted record without a
+            // head or dirty flag, so both are present here.
+            let at: Vec<String> = recs
+                .iter()
+                .map(|r| match (&r.head, r.dirty) {
+                    (Some(h), Some(d)) => format!("{} at {h} ({})", r.kind.label(), tree(d)),
+                    _ => format!("{} at unknown HEAD", r.kind.label()),
+                })
+                .collect();
+            line.push_str(&format!("; records: {}", at.join(", ")));
+        }
         out.push_str(&line);
         out.push('\n');
     }
@@ -675,9 +1112,31 @@ pub fn report(target: &ResolvedTarget, state_dir: &Path) -> Determination<String
     ));
     if ev.stale > 0 {
         out.push_str(&format!(
-            "\nignored: {} record(s) from an earlier ratification (different spec fingerprint)",
+            "\nignored: {} record(s) from an earlier ratification (different spec fingerprint \
+             or ratification HEAD)",
             ev.stale
         ));
     }
-    Determination::known(out)
+    let not_red_green: Vec<String> = ev
+        .states
+        .iter()
+        .filter_map(|(id, st)| match st {
+            ReqState::GreenAfterRed { .. } => None,
+            ReqState::Unresolved { open } => Some(format!("{id} (RED without GREEN: {open:?})")),
+            ReqState::Pass { .. } => Some(format!("{id} (PASS only, never RED then GREEN)")),
+            ReqState::Unmeasured => Some(format!("{id} (no evidence)")),
+        })
+        .collect();
+    let verdict = if not_red_green.is_empty() {
+        Verdict::from_findings(Vec::new())
+    } else {
+        Verdict::violation(format!(
+            "report: not done for {}: {} of {} requirement(s) are not verified RED then GREEN: {}",
+            target.root.display(),
+            not_red_green.len(),
+            ev.states.len(),
+            not_red_green.join("; ")
+        ))
+    };
+    Determination::known(Report { text: out, verdict })
 }

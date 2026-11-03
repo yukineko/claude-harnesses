@@ -622,9 +622,24 @@ fn policy_answer_conflict_beats_approval() {
 ///   L109 framework choice). All are judgment requests about WHAT site to build,
 ///   never permission approvals; sitecraft is a human-driven build surface, not
 ///   part of the scout/condukt/flow autonomy loop.
+/// fde SKILL (4): arrived with a67ac4f4 / cfbf12ca unregistered (main was red,
+///   backlog 81c41b1b); audited 2026-11-04. HDR x2 (L3 the `description`
+///   naming the ratification prompt, L5 `allowed-tools`) + HOTL x1 (section
+///   (b) step 1: "この仕様で批准するか / どこを直すか" — the spec ratification) +
+///   PROSE x1 (step 3: `fde ratify` is run by the human only after an explicit
+///   approval obtained through that prompt). The ratification is human-only by
+///   user ruling 2026-11-03: category (c), a genuine judgment request ("is this
+///   inferred spec right?") that must ESCALATE and never be auto-answered —
+///   the SKILL itself says 自律モード・`condukt policy answer` でも escalate 扱い,
+///   and the fde PreToolUse gate denies a model-run `fde ratify` mechanically.
+///   It is deliberately NOT routed through `condukt policy answer` (whose auto
+///   verdict could answer it) and carries no `--approval`. A new residual stop,
+///   deliberately; fde is a human-driven engagement surface.
 const ASK_ALLOWLIST: &[(&str, usize)] = &[
     ("compass/skills/compass/SKILL.md", 3),
     ("condukt/skills/condukt/SKILL.md", 25),
+    // 81c41b1b: spec ratification is human-only (user ruling 2026-11-03); escalate, never auto.
+    ("fde/skills/fde/SKILL.md", 4),
     ("flow/skills/flow/SKILL.md", 15),
     ("hypothesis/skills/add/SKILL.md", 1),
     // ce76ce72: five per-command HOTL gates consolidated into one prohibition

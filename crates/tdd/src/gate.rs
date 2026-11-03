@@ -30,6 +30,20 @@
 //! transcript, a manual run) the whole checkout is scanned and the message
 //! says authorship was NOT verified — undetermined is never read as "this
 //! session wrote nothing" (CLAUDE.md §3).
+//!
+//! **The gate judges per session, not per checkout** (user ruling 2026-11-03,
+//! backlog 49e95d32). [`evaluate`] reads one root; the Stop hook evaluates
+//! every root the session wrote into (`harness_core::session_roots`) and then
+//! folds their test evidence with [`session_test_evidence`]: a test the session
+//! wrote (attributed via the transcript) AND committed since its start in ANY
+//! root is credited ([`Credit`]) to the implementation change in every root,
+//! so an implementation worktree whose test lives in a sibling worktree is not
+//! blocked. A test left uncommitted counts only for its own root, never across
+//! roots ([`committed_test_evidence`]). An undetermined root (failed git scan),
+//! an unverified attribution (no / unreadable transcript) or an undetermined
+//! session start makes the fold `Undetermined`: nothing is credited, each root
+//! is judged on its own scan alone. Every missing-test block reason names the checkout it
+//! judged ([`Report::root`]).
 
 use std::path::Path;
 
@@ -91,19 +105,137 @@ pub struct Report {
     pub authorship: Authorship,
     /// Whether the session's committed work is in `scan` — see [`Committed`].
     pub committed: Committed,
+    /// The absolute checkout path this report judged. Set by [`evaluate`];
+    /// `None` only for a report built without a root (unit fixtures). Every
+    /// missing-test block reason names it, so a reader with several roots can
+    /// tell which checkout was judged.
+    pub root: Option<std::path::PathBuf>,
+    /// Session-wide test credit from another root — see [`Credit`].
+    pub credit: Credit,
+}
+
+/// Whether this root's implementation change is credited with test evidence
+/// the same session produced in ANOTHER root (user ruling 2026-11-03: the gate
+/// judges per session — a test the session wrote and committed in any checkout
+/// it wrote into counts for its implementation change in every root; backlog
+/// 49e95d32).
+///
+/// * `NotApplied` — no session-wide fold was run (a single report, a manual
+///   `tdd status`, a unit fixture). The root is judged on its own scan alone.
+/// * `Credited { from }` — the session-wide fold found attributed test evidence
+///   (see [`session_test_evidence`]) in the root `from` — a test the session
+///   wrote and committed since it started.
+/// * `Absent` — the fold ran and determined no root holds a committed session
+///   test.
+/// * `Undetermined { why }` — some root's evidence could not be determined (a
+///   failed git scan, an unverified attribution — e.g. an unreadable
+///   transcript). Never credited: the root is judged on its own scan alone,
+///   and the block reason says why the cross-root credit was not applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Credit {
+    NotApplied,
+    Credited { from: std::path::PathBuf },
+    Absent,
+    Undetermined { why: String },
+}
+
+/// What one root's report contributes to the session-wide test evidence:
+///
+/// * a failed scan → `Undetermined` (we cannot tell whether a test is there);
+/// * an unverified attribution (no / unreadable transcript) → `Undetermined`:
+///   the scan covers the whole checkout, so a test in it is not known to be
+///   THIS session's, and the absence of one is not known either;
+/// * no repo → `Known(false)`;
+/// * an attributed scan → the root's COMMITTED test evidence
+///   (`Committed::Included { test_evidence, .. }`, see
+///   [`committed_test_evidence`]): a test the session wrote AND committed since
+///   it started. A test left uncommitted is NOT contributed — it counts for its
+///   own root's verdict only (user ruling 2026-11-03: "wrote and committed");
+/// * an attributed scan whose committed work was not scanned (session start
+///   undetermined) → `Undetermined`.
+pub fn root_test_evidence(rep: &Report) -> Determination<bool> {
+    let at = rep
+        .root
+        .as_ref()
+        .map(|r| r.display().to_string())
+        .unwrap_or_else(|| "(unrecorded root)".to_string());
+    match &rep.scan {
+        Determination::Undetermined(why) => {
+            Determination::undetermined(format!("{at}: {}", why.as_str()))
+        }
+        Determination::Known(None) => Determination::known(false),
+        Determination::Known(Some(_)) => match (&rep.authorship, &rep.committed) {
+            (Authorship::Unverified { why }, _) => Determination::undetermined(format!(
+                "{at}: session attribution undetermined ({why})"
+            )),
+            (Authorship::Attributed { .. }, Committed::Included { test_evidence, .. }) => {
+                match test_evidence {
+                    Determination::Known(b) => Determination::known(*b),
+                    Determination::Undetermined(why) => {
+                        Determination::undetermined(format!("{at}: {}", why.as_str()))
+                    }
+                }
+            }
+            (Authorship::Attributed { .. }, Committed::NotCredited { why }) => {
+                Determination::undetermined(format!(
+                    "{at}: the session's commits were not scanned ({why})"
+                ))
+            }
+        },
+    }
+}
+
+/// Fold every evaluated root's evidence into the session's. Any undetermined
+/// root makes the whole fold `Undetermined` — even if another root has
+/// evidence — so an unreadable root is never papered over by a credit
+/// (CLAUDE.md §3). Otherwise the first root with evidence is the credit source.
+pub fn session_test_evidence(reports: &[&Report]) -> Credit {
+    let mut found: Option<std::path::PathBuf> = None;
+    let mut undetermined: Vec<String> = Vec::new();
+    for rep in reports {
+        match root_test_evidence(rep) {
+            Determination::Undetermined(why) => undetermined.push(why.as_str().to_string()),
+            Determination::Known(true) => {
+                if found.is_none() {
+                    found = rep.root.clone();
+                    if found.is_none() {
+                        undetermined.push("a root with test evidence has no recorded path".into());
+                    }
+                }
+            }
+            Determination::Known(false) => {}
+        }
+    }
+    if !undetermined.is_empty() {
+        return Credit::Undetermined {
+            why: undetermined.join("; "),
+        };
+    }
+    match found {
+        Some(from) => Credit::Credited { from },
+        None => Credit::Absent,
+    }
 }
 
 /// Whether `scan` includes the work this session committed.
 ///
-/// * `Included { since, lines }` — added lines of non-merge commits on HEAD
-///   dated at or after `since` (the session start) were scanned, before
-///   attribution narrowed them.
+/// * `Included { since, lines, test_evidence }` — added lines of non-merge
+///   commits on HEAD dated at or after `since` (the session start) were
+///   scanned, before attribution narrowed them. `test_evidence` is whether
+///   those committed lines, narrowed to this session's files, add a test
+///   ([`committed_test_evidence`], computed by [`include_committed`]).
 /// * `NotCredited { why }` — the session start was undetermined, so no
 ///   committed work was scanned; `why` is said in the message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Committed {
-    Included { since: i64, lines: usize },
-    NotCredited { why: String },
+    Included {
+        since: i64,
+        lines: usize,
+        test_evidence: Determination<bool>,
+    },
+    NotCredited {
+        why: String,
+    },
 }
 
 impl Committed {
@@ -164,8 +296,13 @@ impl Report {
             Determination::Undetermined(why) => Verdict::Undetermined(why.clone()),
             Determination::Known(None) => Verdict::from_findings(Vec::new()),
             Determination::Known(Some(f)) => {
-                let blocks =
-                    f.added_impl_lines >= cfg.min_added_impl_lines.max(1) && !f.has_test_evidence();
+                // Session-wide credit (see [`Credit`]) is the only thing besides
+                // this root's own evidence that can lift the block; only a
+                // determined `Credited` does.
+                let credited = matches!(self.credit, Credit::Credited { .. });
+                let blocks = f.added_impl_lines >= cfg.min_added_impl_lines.max(1)
+                    && !f.has_test_evidence()
+                    && !credited;
                 if blocks {
                     // State the observation, not an absence that was never
                     // checked. The scan reads `git status` + the unstaged and
@@ -236,6 +373,8 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
             ),
             authorship: Authorship::not_attempted(),
             committed: Committed::not_attempted(),
+            root: None,
+            credit: Credit::NotApplied,
         };
     }
 
@@ -246,6 +385,8 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
             scan: Determination::known(None),
             authorship: Authorship::not_attempted(),
             committed: Committed::not_attempted(),
+            root: None,
+            credit: Credit::NotApplied,
         };
     };
 
@@ -301,6 +442,8 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
         })),
         authorship: Authorship::not_attempted(),
         committed: Committed::not_attempted(),
+        root: None,
+        credit: Credit::NotApplied,
     }
 }
 
@@ -314,11 +457,12 @@ pub fn classify(cfg: &Config, changed: &ChangeScan, added: &AddedScan) -> Report
 pub fn evaluate(cfg: &Config, root: &Path, transcript_path: &str) -> Report {
     let changed = git::changed_files(root);
     let added = git::added_lines(root);
-    let (changed, added, committed) = include_committed(root, transcript_path, changed, added);
+    let (changed, added, committed) = include_committed(cfg, root, transcript_path, changed, added);
     let (changed, added, authorship) = scope_to_session(root, transcript_path, changed, added);
     let mut report = classify(cfg, &changed, &added);
     report.authorship = authorship;
     report.committed = committed;
+    report.root = Some(root.to_path_buf());
     report
 }
 
@@ -361,7 +505,13 @@ pub fn session_start(transcript_path: &str) -> Determination<i64> {
 /// undetermined session start credits NO committed work and says so: that can
 /// only remove lines — evidence included — so it never turns a block into an
 /// allow by itself.
+///
+/// The committed lines are also judged on their own
+/// ([`committed_test_evidence`], recorded in `Committed::Included {
+/// test_evidence }`): a test the session wrote AND committed is the only
+/// evidence credited across roots.
 pub fn include_committed(
+    cfg: &Config,
     root: &Path,
     transcript_path: &str,
     changed: ChangeScan,
@@ -393,15 +543,62 @@ pub fn include_committed(
             }
             files.sort();
             let n = committed.len();
-            lines.extend(committed);
+            lines.extend(committed.iter().cloned());
+            let test_evidence = committed_test_evidence(cfg, root, transcript_path, committed);
             (
                 ChangeScan::Files(files),
                 AddedScan::Lines(lines),
-                Committed::Included { since, lines: n },
+                Committed::Included {
+                    since,
+                    lines: n,
+                    test_evidence,
+                },
             )
         }
         AddedScan::Failed => (changed, AddedScan::Failed, Committed::not_attempted()),
         AddedScan::NotRepo => (changed, added, Committed::not_attempted()),
+    }
+}
+
+/// Whether the lines this root's HEAD gained in non-merge commits since the
+/// session start, narrowed to the files the transcript shows this session
+/// writing, add a test (the same marker rule as [`Fields::has_test_evidence`]).
+/// This — a test the session wrote AND committed — is the only evidence the
+/// session-wide fold credits to other roots (user ruling 2026-11-03); a
+/// root's uncommitted tests count for that root alone.
+///
+/// Undetermined attribution (no / unreadable transcript) is `Undetermined`,
+/// never `false`-and-carry-on and never `true`.
+pub fn committed_test_evidence(
+    cfg: &Config,
+    root: &Path,
+    transcript_path: &str,
+    committed: Vec<AddedLine>,
+) -> Determination<bool> {
+    let mut files: Vec<String> = Vec::new();
+    for l in &committed {
+        if !files.contains(&l.file) {
+            files.push(l.file.clone());
+        }
+    }
+    files.sort();
+    let (changed, added, authorship) = scope_to_session(
+        root,
+        transcript_path,
+        ChangeScan::Files(files),
+        AddedScan::Lines(committed),
+    );
+    if let Authorship::Unverified { why } = authorship {
+        return Determination::undetermined(format!(
+            "session attribution of the committed lines undetermined ({why})"
+        ));
+    }
+    match classify(cfg, &changed, &added).scan {
+        Determination::Known(Some(f)) => Determination::known(f.has_test_evidence()),
+        Determination::Known(None) => {
+            Determination::undetermined("the committed-line scan classified as no repo")
+        }
+        Determination::Undetermined(why) => Determination::Undetermined(why),
     }
 }
 
@@ -472,6 +669,30 @@ pub fn committed_note(v: &Report) -> Option<String> {
     }
 }
 
+/// The stderr line saying a root's implementation change was let through on a
+/// test the session wrote and committed in a root — printed so a cross-root credit is
+/// never silent. `None` unless the root has implementation lines, no evidence
+/// of its own, and a `Credited` session-wide fold.
+pub fn credit_note(v: &Report) -> Option<String> {
+    let (Credit::Credited { from }, Determination::Known(Some(f))) = (&v.credit, &v.scan) else {
+        return None;
+    };
+    if f.added_impl_lines == 0 || f.has_test_evidence() {
+        return None;
+    }
+    let at = v
+        .root
+        .as_ref()
+        .map(|r| r.display().to_string())
+        .unwrap_or_else(|| "(unrecorded root)".to_string());
+    Some(format!(
+        "tdd: {at} has {} new implementation line(s) and no test of its own in scope; credited \
+         with the test this session wrote and committed in {} (the gate judges per session)",
+        f.added_impl_lines,
+        from.display()
+    ))
+}
+
 /// The stderr line that makes the exclusion visible on EVERY run, including
 /// the allowing one — an exclusion that only surfaces when the gate blocks is
 /// invisible exactly when it silenced the gate. `None` when nothing was
@@ -507,6 +728,31 @@ pub fn check_kind(v: &Report) -> &'static str {
 
 /// The reason injected back into the model when the stop is blocked.
 pub fn block_reason(v: &Report, attempt: u32, max: u32) -> String {
+    let base = block_reason_body(v, attempt, max);
+    let judged = match &v.root {
+        Some(r) => r.display().to_string(),
+        None => "(not recorded)".to_string(),
+    };
+    let credit = match &v.credit {
+        Credit::NotApplied => String::new(),
+        Credit::Absent => " No test this session wrote and committed since it started was found \
+                           in any checkout it wrote into either (uncommitted tests in another \
+                           checkout are not credited here)."
+            .to_string(),
+        Credit::Credited { from } => format!(
+            " (A test this session wrote and committed was found in {}, but it did not lift \
+             this block.)",
+            from.display()
+        ),
+        Credit::Undetermined { why } => format!(
+            " Tests this session committed in its other checkouts were NOT credited, because \
+             the session-wide test evidence could not be determined ({why})."
+        ),
+    };
+    format!("{base}\n\nCheckout judged: {judged}.{credit}")
+}
+
+fn block_reason_body(v: &Report, attempt: u32, max: u32) -> String {
     match &v.scan {
         // Undetermined changeset (a git command errored): a DISTINCT, loud
         // reason. We are not allowing the stop blindly on an empty/collapsed
@@ -710,6 +956,19 @@ pub fn human_report(v: &Report, cfg: &Config) -> String {
                     "not changed"
                 }
             ));
+            match &v.credit {
+                Credit::NotApplied => {}
+                Credit::Credited { from } => s.push_str(&format!(
+                    "session credit:   a test this session wrote is in {}\n",
+                    from.display()
+                )),
+                Credit::Absent => {
+                    s.push_str("session credit:   none (no other root holds a session test)\n")
+                }
+                Credit::Undetermined { why } => s.push_str(&format!(
+                    "session credit:   NOT applied — undetermined ({why})\n"
+                )),
+            }
             if v.blocks(cfg) {
                 s.push_str(&format!(
                     "\n🔴 would BLOCK: implementation lines added and no test visible in {}",
@@ -1107,6 +1366,8 @@ mod tests {
             })),
             authorship: Authorship::not_attempted(),
             committed: Committed::not_attempted(),
+            root: None,
+            credit: Credit::NotApplied,
         }
     }
 
@@ -1122,6 +1383,8 @@ mod tests {
             })),
             authorship: Authorship::not_attempted(),
             committed: Committed::not_attempted(),
+            root: None,
+            credit: Credit::NotApplied,
         }
     }
 
@@ -1419,6 +1682,8 @@ mod tests {
             })),
             authorship: Authorship::not_attempted(),
             committed: Committed::not_attempted(),
+            root: None,
+            credit: Credit::NotApplied,
         }
     }
 
@@ -1630,6 +1895,8 @@ mod tests {
             })),
             authorship: Authorship::not_attempted(),
             committed: Committed::not_attempted(),
+            root: None,
+            credit: Credit::NotApplied,
         };
         let out = human_report(&report, &cfg);
         assert!(

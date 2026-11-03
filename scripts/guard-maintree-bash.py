@@ -25,9 +25,10 @@ positive or false negative (4a64e6ff and ~30 sibling tickets).
                       `git merge --abort` of an in-progress merge
                                                             -> 0
                       (an unreadable MERGE_HEAD oid at Pre -> not covered)
-                      HEAD moved, tree clean apart from untracked paths
-                      that were already untracked with the same content
-                      hash at Pre, and the new HEAD is a merge
+                      HEAD moved, tree clean apart from paths (untracked or
+                      tracked) that were already dirty at Pre with the same
+                      status record and content hash, and exactly the same
+                      set of dirty paths as at Pre, and the new HEAD is a merge
                       commit, or is contained in a ref other than the branch
                       main has checked out, or that branch's reflog has an
                       entry for exactly this old -> new move whose message
@@ -425,26 +426,38 @@ def changed_paths(before: dict, after: dict) -> list[str]:
     return sorted(p for p in paths if a.get(p) != b.get(p) or ra.get(p) != rb.get(p))
 
 
-def only_unchanged_untracked(before: dict, after: dict) -> bool:
-    """True if every path `git status` names at Post is an untracked path that
-    was already untracked at Pre with the same content hash (backlog 58bc638d).
+def only_unchanged_preexisting(before: dict, after: dict) -> bool:
+    """True if `git status` names exactly the same paths at Pre and Post, each
+    with a byte-identical status record and the same content hash (backlog
+    58bc638d for untracked paths, fbc2d42e / GH 1512 for tracked ones).
 
-    Such a path (e.g. a stray `bare.git/` at the root) is not a change by this
-    call, so it must not hide an integration HEAD move. Anything else at Post
-    -- a tracked modification, a conflict, an untracked path that is new or
-    whose hash differs from Pre -- means the tree is not "clean apart from
-    pre-existing untracked paths" and the caller refuses. An empty Post
-    porcelain is trivially True (the clean-tree case).
+    Such a path -- a stray untracked `bare.git/` at the root, or a tracked file
+    another session had already modified before this call -- was not changed
+    by this call, so it must not hide an integration HEAD move. A tracked
+    path's status record carries its HEAD/index/worktree modes and its HEAD
+    and index object ids, so an identical record means the call changed
+    neither that path's HEAD blob nor its index entry; the content hash covers
+    the working-tree bytes.
+
+    Anything else means the tree is not "unchanged apart from pre-existing
+    dirty paths" and the caller refuses: a path dirty at Post but not at Pre,
+    a path dirty at Pre but not at Post (a pre-existing modification that was
+    reverted or committed is a change too), a record or hash that differs, a
+    hash missing on either side, or a conflict record. An empty porcelain on
+    both sides is trivially True (the clean-tree case).
     """
     ra, rb = status_records(before["porcelain"]), status_records(after["porcelain"])
+    if set(ra) != set(rb):
+        return False
+    a, b = before["hashes"], after["hashes"]
     for p, rec in rb.items():
-        if not rec.startswith("? "):
+        if rec.startswith("u "):
             return False
-        if ra.get(p) != rec:
+        if ra[p] != rec:
             return False
-        if p not in before["hashes"] or p not in after["hashes"]:
+        if p not in a or p not in b:
             return False
-        if before["hashes"][p] != after["hashes"][p]:
+        if a[p] != b[p]:
             return False
     return True
 
@@ -524,6 +537,10 @@ def post(payload: dict, common: Path, main: Path) -> int:
     )
 
     verdict = ALLOW
+    # Whether the HEAD move itself was checked for integration evidence and
+    # found to have none. Only then may the refusal say "not a merge"; when the
+    # tree check failed first, the HEAD move was never classified (GH 1512).
+    head_not_integration = False
     if before == after:
         pass
     elif after["merge_head"]:
@@ -531,7 +548,7 @@ def post(payload: dict, common: Path, main: Path) -> int:
     elif merge_abort_back_to_head(main, before, after):
         pass  # aborting one's own in-progress merge back to HEAD
     elif after["head"] != before["head"] and (
-        only_unchanged_untracked(before, after)
+        only_unchanged_preexisting(before, after)
         or in_flight_merge_window(main, common, before, after, has_orig_field, before_orig, after_orig)
     ):
         branch = checked_out_branch(main)
@@ -539,13 +556,22 @@ def post(payload: dict, common: Path, main: Path) -> int:
             common, branch, before["head"], after["head"]
         ):
             verdict = REFUSE
+            head_not_integration = True
     else:
         verdict = REFUSE
 
     if verdict == REFUSE:
         changed = changed_paths(before, after)
         if after["head"] != before["head"]:
-            changed.insert(0, "HEAD %s -> %s (not a merge / fast-forward)" % (before["head"][:12], after["head"][:12]))
+            if head_not_integration:
+                why = "not a merge / fast-forward"
+            else:
+                why = (
+                    "not classified as merge or fast-forward: the working tree / "
+                    "index also changed during this call (paths below), so the HEAD "
+                    "move was refused without checking it"
+                )
+            changed.insert(0, "HEAD %s -> %s (%s)" % (before["head"][:12], after["head"][:12], why))
         if concurrent_merge:
             msg = (
                 "Refused: ORIG_HEAD was rewritten during this call while HEAD did "

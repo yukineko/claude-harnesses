@@ -1,0 +1,117 @@
+# fde
+
+Forward Deployed Engineer 用の harness。外部の target リポジトリに対して、推定した仕様を人間に批准させ、
+批准前の変更を拒否し、要件ごとの RED / GREEN 証跡を target の外に記録する。Rust 製の決定論バイナリと
+`/fde` skill から成る。
+
+## 状態(導入状況)
+
+**parked。未 rollout・未 enable。** `scripts/parked-plugins.json` に、rollout と enable の両方をユーザー裁定
+(2026-11-03)で保留していることが宣言されている。`scripts/rollout-plugins.sh` を実行していないので、
+稼働中の Claude Code にはこの plugin(hook・skill・バイナリ)は入っていない。
+(同ファイルの parked 理由は「全コマンドが exit 2 を返す scaffold」と書かれた時点のままで、現在の実装状況とは
+食い違っている。理由文の更新はこの README の範囲外。)
+
+## 役割分担
+
+- **LLM(`/fde` skill と委譲先 agent)**: target の読解、要件素材と逐語引用の作成、テスト記述、実装。
+- **`fde` バイナリ**: target の解決、spec の登録と批准の記録、批准前変更の拒否(PreToolUse gate)、
+  証跡の記録と完全性の判定。
+- **specforge**: `specforge draft` だけを再利用して下書き spec(Spec IR TOML)を作る。config と出力は
+  fde の state dir 側に置き、target には置かない。`specforge ratify` / `specforge queue` は使わない。
+- **tdd / condukt**: RED / F→P オラクルの証跡(`tdd red` / `tdd green` / `tdd oracle`)と、実装の委譲
+  (`condukt` / `condukt-loop`)。テスト agent と実装 agent は分ける。
+
+## target の解決
+
+`TARGET` はどのサブコマンドでも省略可能な位置引数。
+
+- 省略時は、呼び出し cwd を含む git top-level(`git rev-parse --show-toplevel` を cwd で実行)。
+  cwd が git work tree の外なら判定不能(exit 2)。素の cwd へのフォールバックは無い。
+- 相対パスは呼び出し cwd 基準。パスは実在し、symlink 解決後の正規パスにし、それを含む git top-level 全体が target。
+- 継承された `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE` などは probe から除かれる。
+- state key は正規化した top-level パスの SHA-256(16 進)。同じ repo を別の書き方・別の下位ディレクトリから
+  指しても同じ state を共有する。
+
+## コマンドと終了コード
+
+| コマンド | 内容 | 終了コード |
+|---|---|---|
+| `fde resolve [TARGET]` | `{"root", "state_key"}` を JSON で出力 | 0 解決 / 2 判定不能 |
+| `fde begin [TARGET] --spec FILE` | 下書き spec を登録。target は未批准になる | 0 登録 / 1 拒否(spec が無い・ファイルでない・target の中にある)/ 2 判定不能 |
+| `fde ratify [TARGET] [--spec FILE]` | 登録 spec の批准を記録(内容の SHA-256 を fingerprint とする) | 0 記録 / 1 拒否(未登録、または FILE が登録 spec でない)/ 2 判定不能 |
+| `fde status [TARGET]` | 批准状態の照会 | 0 批准済み / 1 未批准(未登録・批准後の spec 変更を含む)/ 2 判定不能(state が読めない・壊れている、批准記録後に spec が読めない・無い) |
+| `fde gate` | PreToolUse hook の入口(stdin で payload を読む) | 0 allow / 2 deny |
+| `fde evidence red\|green\|pass --req ID --cmd CMD [TARGET]` | target root で CMD を実行し、終了ステータスで記録可否を決める | 0 記録 / 1 拒否 / 2 判定不能 |
+| `fde evidence verify [TARGET]` | 全要件の証跡が揃っているか | 0 完了 / 1 欠け(欠けた要件を stderr に列挙)/ 2 判定不能(未批准・要件ゼロ・ledger 不整合を含む) |
+| `fde report [TARGET]` | 人間向けの一覧 | 0 / 2 判定不能 |
+
+- exit 2 は常に「判定不能」(gate では deny)で、pass ではない。受け取ったら止めて人間に聞く。
+- 非 0 終了では必ず stderr に理由が出る。引数エラー(clap)も exit 2。
+- **`fde report` の終了コードは判定ではない。** 未批准の target でも exit 0 で
+  `ratification: UNRATIFIED` / `evidence: not evaluated` を出力する。完了の判定に使えるのは `fde evidence verify` だけ。
+- `evidence` の拒否(1)の条件: 未批准(批准後の spec 変更を含む)、ID が批准 spec に無い、同じ ID・同じ CMD の
+  RED が無い GREEN、RED 後の PASS、CMD の終了ステータスが種類と矛盾(RED は非 0、GREEN / PASS は 0 が必要)。
+  判定不能(2)の条件: store・spec・ledger が読めない・壊れている、CMD がシグナルで終了・タイムアウト(1 時間)・
+  起動失敗・126/127 で終了。
+
+## `/fde` のフロー
+
+`/fde [target-dir]`。詳細手順は `skills/fde/SKILL.md`。
+
+1. **把握**: target を読み、`file:line` の逐語引用付きで要件素材を state dir 側に書く。`specforge draft` で
+   Spec IR TOML の下書きを作り、`fde begin` で登録する。
+2. **批准**: 推定 spec を根拠とともに `AskUserQuestion` で人間に示す。自答しない(自律モードでも escalate)。
+   明示的な承認があったときだけ、人間自身が `fde ratify` を実行する(モデルは実行しない)。`fde status` が 0 になるまで先へ進まない。spec を変えると批准は外れる。
+3. **RED**: テスト agent が要件ごとにテストを書き、`fde evidence red` と `tdd red` で失敗を記録する。
+   最初から通る要件は `fde evidence pass` で適合済みとして記録する。
+4. **fix**: `condukt` / `condukt-loop` に実装を委譲する(テスト agent とは別)。target root に統合後、RED と同じ CMD で
+   `fde evidence green`、`tdd green`、`tdd oracle`。
+5. **報告**: `fde evidence verify` が判定。`fde report` の unresolved(RED のみで GREEN 無し)と unmeasured(証跡なし)、
+   やっていないことを逐語で報告する。
+
+## gate(PreToolUse)
+
+`hooks/hooks.json` で matcher `Bash|Edit|Write|MultiEdit|NotebookEdit` に `fde gate` を登録する。
+`fde begin` 済みで未批准(または状態が判定不能)の target を「保護対象」とし、その範囲(root と、その repo の
+全 worktree)への編集を拒否する。
+
+- Edit 系: 対象パスを正規化し、保護範囲の中なら deny。
+- Bash: 正規化した cwd が保護範囲の中、またはコマンド文字列が root / worktree のパスを文字列として含むなら deny。
+  例外(2026-11-03 のユーザー裁定): 状態が「未批准」の target に対しては、`fde status` / `fde report` /
+  `fde begin` の**ちょうど 1 回の単独呼び出し**だけ allow する。判定は保守的な許可リストで、コマンド全体が
+  英数字と `-_./=:,@+%` だけの語を空白/タブで区切ったもので、第 1 語がちょうど `fde`、第 2 語が
+  `status` / `report` / `begin` のいずれか、以降の語が `ratify` を含まないときだけ通る(連結・リダイレクト・
+  置換・引用符・環境変数の前置・パス指定の `fde`・ラッパーはすべて deny)。`fde ratify` は人間専用で、
+  未批准の間は deny のまま。人間が承認したら、人間自身が Claude Code のプロンプトで `! fde ratify [TARGET]`
+  または自分の端末で実行する。状態が判定不能な target、Edit 系ツールにはこの例外は適用されない。
+- 空・壊れた payload、読めない state、matcher 外のツール(登録 target がある場合)、panic はすべて deny。
+- 登録 target が 1 つも無ければ、すべて allow。
+
+## state の配置
+
+state dir は環境変数 `FDE_STATE_DIR`(設定済みかつ空でない場合)、それ以外は `~/.fde`。解決できなければ判定不能。
+
+```
+<state_dir>/targets/<state_key>/
+  registration.json   {schema, root, spec}            fde begin が書く
+  ratification.json   {schema, spec, fingerprint}     fde ratify が書く
+  evidence.json       {schema, records: [...]}        fde evidence red/green/pass が追記
+```
+
+- いずれも一時ファイル + rename で原子的に書く。`fde begin` は既存の `ratification.json` を先に消す。
+- ledger の各記録は記録時の批准 fingerprint を持ち、現在の fingerprint と一致するものだけが判定に数えられる。
+- 要件の状態: RED の CMD に同じ CMD の後続 GREEN が無ければ unresolved、GREEN(RED の後)か PASS があれば complete、
+  どれも無ければ unmeasured。
+- specforge の config・要件素材・下書き spec も state dir 側(例: `<state_dir>/specforge/<state_key>/`)に置く。
+
+## 制限
+
+- **unix 専用**(`src/target.rs` が `std::os::unix` を使うため非 unix ではビルドできない。CMD は `/bin/sh -c` で実行する)。
+- **gate の Bash 判定は文字列照合**。コマンドの構文解析はしない。外から相対パスで target を指す、正規形でない
+  symlink 経由で指す、といった書き方は検出しない。
+- **登録済み target を削除すると**、その state dir(`<state_dir>/targets/<state_key>/`)を消すまで gate は編集を deny し続ける。
+- **証跡は target の HEAD を記録しない**。どのコミットで RED / GREEN を観測したかは ledger からは分からない。
+- 同時に 2 つの記録が走ると片方の追記が失われうる(最後の rename が勝つ)。ledger が「より不完全」になる方向にしか
+  起きない。
+- `specforge draft` の再利用で target が変わらないことは stub agent で確認しただけで、実 LLM agent については未確認。

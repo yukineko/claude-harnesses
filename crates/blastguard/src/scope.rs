@@ -1643,6 +1643,149 @@ fn normalize_abs(path: &str) -> Option<String> {
     Some(format!("/{}", out.join("/")))
 }
 
+/// Test-only fixture-root helpers (#1486). They live outside `tests` so the
+/// `detect` test module can reach the private [`TEMP_ROOTS`] /
+/// [`DELETION_TEMP_ROOTS`] through them; nothing here is compiled into the
+/// shipped binary.
+#[cfg(test)]
+#[allow(clippy::panic)]
+pub(crate) mod test_fixture_roots {
+    use super::{DELETION_TEMP_ROOTS, TEMP_ROOTS};
+    use std::path::{Path, PathBuf};
+
+    /// The canonical form of the fixed temp root `/tmp`: `/private/tmp` on
+    /// macOS (where `/tmp` is a symlink), `/tmp` on Linux. Both are entries of
+    /// [`TEMP_ROOTS`] and [`DELETION_TEMP_ROOTS`], so a fixture created here
+    /// sits under a real (non-symlink) fixed temp root on either OS. Panics
+    /// with the reason when `/tmp` cannot be canonicalised: a fixture that
+    /// silently landed elsewhere would stop testing what it tests.
+    pub(crate) fn canonical_fixed_temp_root() -> PathBuf {
+        std::fs::canonicalize("/tmp").unwrap_or_else(|e| {
+            panic!(
+                "cannot canonicalise the fixed temp root /tmp ({e}); the \
+                 fixed-temp-root fixtures cannot be placed in this environment"
+            )
+        })
+    }
+
+    /// The candidates [`neutral_fixture_parent`] is given in practice:
+    /// `std::env::temp_dir()` and, on macOS only, `getconf
+    /// DARWIN_USER_TEMP_DIR`. A candidate that cannot be produced carries the
+    /// reason as its `Err` (never a silent omission). `$HOME` is never a
+    /// candidate.
+    pub(crate) fn neutral_fixture_candidates() -> Vec<(&'static str, Result<PathBuf, String>)> {
+        #[allow(unused_mut)]
+        let mut out = vec![("std::env::temp_dir()", Ok(std::env::temp_dir()))];
+        #[cfg(target_os = "macos")]
+        out.push(("getconf DARWIN_USER_TEMP_DIR", darwin_user_temp_dir()));
+        out
+    }
+
+    #[cfg(target_os = "macos")]
+    fn darwin_user_temp_dir() -> Result<PathBuf, String> {
+        let output = std::process::Command::new("getconf")
+            .arg("DARWIN_USER_TEMP_DIR")
+            .output()
+            .map_err(|e| format!("could not run getconf: {e}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "getconf exited with {} (stderr: {:?})",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let text = String::from_utf8(output.stdout)
+            .map_err(|e| format!("getconf output is not UTF-8: {e}"))?;
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Err("getconf printed an empty path".to_string());
+        }
+        Ok(PathBuf::from(trimmed))
+    }
+
+    /// Why `canon` (a canonical path) is not a neutral parent, or `None` when
+    /// it is one.
+    fn rejection(canon: &Path) -> Option<String> {
+        for root in TEMP_ROOTS.iter().chain(DELETION_TEMP_ROOTS) {
+            let raw = Path::new(root);
+            let mut forms = vec![raw.to_path_buf()];
+            if let Ok(c) = std::fs::canonicalize(raw) {
+                forms.push(c);
+            }
+            for form in forms {
+                if canon.starts_with(&form) {
+                    return Some(format!(
+                        "{} is equal to or under the fixed temp root {root} (as {})",
+                        canon.display(),
+                        form.display()
+                    ));
+                }
+            }
+        }
+        for dir in canon.ancestors() {
+            let git = dir.join(".git");
+            match std::fs::symlink_metadata(&git) {
+                Ok(_) => return Some(format!("{} exists", git.display())),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Some(format!(
+                        "cannot determine whether {} exists: {e}",
+                        git.display()
+                    ))
+                }
+            }
+        }
+        None
+    }
+
+    /// The parent directory for a fixture whose property requires it to be
+    /// OUTSIDE every fixed temp root and outside any git work tree (so only
+    /// the roots the test passes explicitly can admit it). Returns the
+    /// canonical path of the first candidate that is neither equal to nor
+    /// under any [`TEMP_ROOTS`] / [`DELETION_TEMP_ROOTS`] entry (raw and
+    /// canonicalised forms) and has no `.git` entry from it up to `/`.
+    ///
+    /// Never falls back to `$HOME` or anywhere else: when no candidate
+    /// qualifies it panics, naming every rejected candidate and why.
+    pub(crate) fn neutral_fixture_parent(
+        candidates: &[(&str, Result<PathBuf, String>)],
+    ) -> PathBuf {
+        let mut rejected = Vec::new();
+        for (label, candidate) in candidates {
+            let path = match candidate {
+                Ok(p) => p,
+                Err(why) => {
+                    rejected.push(format!("{label}: unavailable: {why}"));
+                    continue;
+                }
+            };
+            let canon = match std::fs::canonicalize(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    rejected.push(format!(
+                        "{label} ({}): cannot canonicalise: {e}",
+                        path.display()
+                    ));
+                    continue;
+                }
+            };
+            match rejection(&canon) {
+                None => return canon,
+                Some(why) => rejected.push(format!("{label} ({}): {why}", path.display())),
+            }
+        }
+        panic!(
+            "no neutral fixture parent: every candidate was rejected, so the \
+             property under test cannot be observed in this environment:\n  {}",
+            if rejected.is_empty() {
+                "(no candidates were given)".to_string()
+            } else {
+                rejected.join("\n  ")
+            }
+        )
+    }
+}
+
 #[cfg(test)]
 // Same carve-out as `exclude`'s and `rule_id`'s test modules: a test helper that
 // reaches a state it is asserting cannot happen has nothing to return, and
@@ -2166,9 +2309,10 @@ mod tests {
 
     // ---- mutation kill tests (c5b9c02b-bg-kill): `no_git_entry_up_to` --------
     //
-    // A real directory under `/private/tmp` (the fixed temp root this check is
-    // used for) with no `.git` entry anywhere from it up to `/`; each test
-    // removes only the directory it created.
+    // A real directory under the canonicalised fixed temp root `/tmp`
+    // (`/private/tmp` on macOS, `/tmp` on Linux — the root this check is used
+    // for) with no `.git` entry anywhere from it up to `/`; each test removes
+    // only the directory it created.
 
     struct GitWalkFx {
         root: String,
@@ -2180,10 +2324,14 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let root = format!(
-                "/private/tmp/bg-mutkill-gitwalk-{tag}-{}-{nanos}",
-                std::process::id()
-            );
+            let root = super::test_fixture_roots::canonical_fixed_temp_root()
+                .join(format!(
+                    "bg-mutkill-gitwalk-{tag}-{}-{nanos}",
+                    std::process::id()
+                ))
+                .to_str()
+                .unwrap()
+                .to_string();
             std::fs::create_dir_all(format!("{root}/a")).unwrap();
             std::fs::write(format!("{root}/a/f"), "x\n").unwrap();
             std::fs::write(format!("{root}/plain"), "x\n").unwrap();

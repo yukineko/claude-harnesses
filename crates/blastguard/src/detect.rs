@@ -16773,14 +16773,17 @@ and must not be Allowed: {failing:?}"
     /// `SafeRoots::new` explicitly rather than assumed to be a root, so the
     /// verdict does not depend on the runner exporting `TMPDIR` or on which OS
     /// `temp_dir()` resolves for. The pid in the name keeps concurrent
-    /// `cargo test` runs off each other's fixture. One precondition is stated
-    /// rather than hidden: `temp_dir()` must sit outside any git work tree, or
-    /// the earlier recoverability axis answers `Allow` for both sides and the
-    /// comparison stops meaning anything.
+    /// `cargo test` runs off each other's fixture. Two preconditions are
+    /// enforced by `neutral_fixture_parent` (which panics rather than guess):
+    /// the scratch parent must sit outside any git work tree, or the earlier
+    /// recoverability axis answers `Allow` for both sides and the comparison
+    /// stops meaning anything; and outside every fixed temp root, or the
+    /// truncation relaxation answers `Allow` for the twin (#1486).
     #[test]
     #[allow(clippy::expect_used)]
     fn a_truncating_redirect_into_worktree_source_asks_exactly_as_its_twin_does() {
-        let scratch = std::env::temp_dir().join(format!(
+        use crate::scope::test_fixture_roots as fr;
+        let scratch = fr::neutral_fixture_parent(&fr::neutral_fixture_candidates()).join(format!(
             "blastguard-worktree-redirect-{}",
             std::process::id()
         ));
@@ -17012,7 +17015,11 @@ and must not be Allowed: {failing:?}"
 
     impl DelFx {
         fn new(tag: &str) -> DelFx {
-            DelFx::new_in(&std::env::temp_dir(), tag)
+            use crate::scope::test_fixture_roots as fr;
+            DelFx::new_in(
+                &fr::neutral_fixture_parent(&fr::neutral_fixture_candidates()),
+                tag,
+            )
         }
 
         fn new_in(parent: &std::path::Path, tag: &str) -> DelFx {
@@ -17566,8 +17573,9 @@ and must not be Allowed: {failing:?}"
     // `literal_cd_and_rest`, `opener_consumer` and `temp_disposable_redirect_target`
     // judged directly, for the guards whose Decision-level effect another layer
     // masks (or which only matter for an input the hook never produces). Real
-    // fixtures live under `/private/tmp`, the fixed temp root the truncation
-    // relaxation is about; each test removes only the directory it created.
+    // fixtures live under the canonicalised `/tmp` (`/private/tmp` on macOS,
+    // `/tmp` on Linux), the fixed temp root the truncation relaxation is
+    // about; each test removes only the directory it created.
 
     struct MutKillTmp {
         dir: String,
@@ -17579,10 +17587,14 @@ and must not be Allowed: {failing:?}"
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let dir = format!(
-                "/private/tmp/bg-mutkill-unit-{tag}-{}-{nanos}",
-                std::process::id()
-            );
+            let dir = crate::scope::test_fixture_roots::canonical_fixed_temp_root()
+                .join(format!(
+                    "bg-mutkill-unit-{tag}-{}-{nanos}",
+                    std::process::id()
+                ))
+                .to_str()
+                .unwrap()
+                .to_string();
             std::fs::create_dir_all(&dir).unwrap();
             MutKillTmp {
                 dir: del_real(&dir).unwrap(),

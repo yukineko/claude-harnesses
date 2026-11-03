@@ -30,6 +30,12 @@ Load-bearing properties pinned here:
      "I could not look" into "clean" is worse than no gate at all.
   6. `--json` reports {"verdict", "findings":[{path,kind,detail,acknowledged}]}
      for both a weakened and a clean run, and does NOT change the exit code.
+  7. OUT-OF-LINE TEST MODULES. `#[cfg(test)] mod tests;` (body in the sibling
+     `foo/tests.rs`) is test surface too: a verbatim move of an inline module is
+     clean (exit 0); an assertion or `#[test]` lost in the move is still
+     assertion-removed / test-removed (exit 1); a declared module whose body file
+     cannot be found is undetermined (exit 2), never clean; the mod.rs layout is
+     covered the same way.
 
 Every test builds a THROWAWAY git repo under tempfile.TemporaryDirectory() and
 invokes the script as a subprocess with `--repo <tmp> --base <ref>`; the real
@@ -1421,6 +1427,95 @@ class PerFunctionAssertionLoss(GateTestCase):
         repo.commit("style: reformat victim_test, assertion count unchanged")
         self.assertClean(*self.run_gate(repo.root))
 
+
+# ---------------------------------------------------------------------------
+# 7. Out-of-line test modules (`#[cfg(test)] mod tests;`)
+# ---------------------------------------------------------------------------
+
+FOO_PATH = "crates/demo/src/foo.rs"
+FOO_TESTS_PATH = "crates/demo/src/foo/tests.rs"
+FOO_MODRS_PATH = "crates/demo/src/foo/mod.rs"
+
+_FOO_PROD = """\
+pub fn double(n: i32) -> i32 {
+    n * 2
+}
+
+"""
+
+_FOO_TESTS_BODY = """\
+use super::*;
+
+#[test]
+fn doubles() {
+    assert_eq!(double(2), 4);
+    assert!(double(0) == 0);
+}
+
+#[test]
+fn doubles_negative() {
+    assert_eq!(double(-1), -2);
+    assert_ne!(double(1), 3);
+}
+"""
+
+# Base: the test module is INLINE in foo.rs.
+FOO_RS_INLINE = (
+    _FOO_PROD
+    + "#[cfg(test)]\nmod tests {\n"
+    + "".join(("    " + ln if ln.strip() else ln) for ln in _FOO_TESTS_BODY.splitlines(True))
+    + "}\n"
+)
+
+# After the move: foo.rs only DECLARES the module.
+FOO_RS_DECL = _FOO_PROD + "#[cfg(test)]\nmod tests;\n"
+
+FOO_TESTS_MOVED = _FOO_TESTS_BODY
+FOO_TESTS_ASSERT_DROPPED = _FOO_TESTS_BODY.replace("    assert_ne!(double(1), 3);\n", "")
+FOO_TESTS_TEST_DROPPED = _FOO_TESTS_BODY.split("#[test]\nfn doubles_negative")[0].rstrip("\n") + "\n"
+
+
+class OutOfLineTestModule(GateTestCase):
+    def _moved(self, tests_body):
+        repo = self.make_repo({FOO_PATH: FOO_RS_INLINE})
+        repo.write(FOO_PATH, FOO_RS_DECL)
+        repo.write(FOO_TESTS_PATH, tests_body)
+        repo.commit("refactor: move inline tests to foo/tests.rs")
+        return repo
+
+    def test_verbatim_move_to_sibling_file_is_clean(self):
+        """Moving an inline test module to its own file is a correct refactor,
+        not a weakening and not undetermined."""
+        repo = self._moved(FOO_TESTS_MOVED)
+        self.assertClean(*self.run_gate(repo.root))
+
+    def test_move_dropping_an_assertion_blocks(self):
+        """The moved file is still test surface: an assertion lost in the move
+        is assertion-removed, not ignored as production code."""
+        repo = self._moved(FOO_TESTS_ASSERT_DROPPED)
+        self.assertBlocks(*self.run_gate(repo.root), kind="assertion-removed")
+
+    def test_move_dropping_a_test_blocks(self):
+        repo = self._moved(FOO_TESTS_TEST_DROPPED)
+        self.assertBlocks(*self.run_gate(repo.root), kind="test-removed")
+
+    def test_declared_module_with_missing_sibling_is_undetermined(self):
+        """`mod tests;` whose body file cannot be found (neither foo/tests.rs
+        nor foo/tests/mod.rs) cannot be inspected: exit 2, never clean."""
+        repo = self.make_repo({FOO_PATH: FOO_RS_INLINE})
+        repo.write(FOO_PATH, FOO_RS_DECL)
+        repo.commit("refactor: declare mod tests; but forget the file")
+        rc, out, err = self.run_gate(repo.root)
+        self.assertEqual(rc, 2, f"expected undetermined (exit 2)\nSTDOUT:{out}\nSTDERR:{err}")
+
+    def test_mod_rs_layout_dropped_assertion_blocks(self):
+        """`src/foo/mod.rs` declaring `mod tests;` with body in the sibling
+        `src/foo/tests.rs`: the dropped assertion there is still caught."""
+        repo = self.make_repo({FOO_MODRS_PATH: FOO_RS_INLINE})
+        repo.write(FOO_MODRS_PATH, FOO_RS_DECL)
+        repo.write(FOO_TESTS_PATH, FOO_TESTS_ASSERT_DROPPED)
+        repo.commit("refactor: move inline tests out of foo/mod.rs")
+        self.assertBlocks(*self.run_gate(repo.root), kind="assertion-removed")
 
 
 if __name__ == "__main__":

@@ -64994,3 +64994,65 @@ rev = "2fb979df373e585c682dfce63a94d9eca995c5e1"
 exit = 101
 kind = "behavioural"
 overlay = ["crates/backlog/tests/fixture_shared_condukt_shim.rs"]
+
+[[task]]
+id = "fbc2d42e"
+title = "guard-maintree-bash refuses a real merge when main has an unchanged pre-existing tracked modification (misleading 'not a merge / fast-forward')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "guard-maintree-bash,false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Measured at rev 3d58ecce, 2026-11-03. Observed in the field: condukt worktree merge c23cc705 (parents 800b3318, 6f7136e8) and fcbcfc3f (parents b13a47cf, 3dc82ddd) refused with 'HEAD 800b33189836 -> c23cc705e421 (not a merge / fast-forward)'. Cause NOT proven for those two events; this test reproduces the identical message for a two-parent merge when main had an unrelated tracked modification at Pre that is byte-identical at Post: only_unchanged_untracked() (scripts/guard-maintree-bash.py:428) returns False for any non-'? ' record, so integration_head() is never asked and the REFUSE text blames not-a-merge. Test: scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py. Expected rc 0; actual rc 2: 'AssertionError: 2 != 0 : genuine two-parent merge refused (rc=2): ... HEAD 231020add0ed -> 470036e66b84 (not a merge / fast-forward)'. Note the refuse message is emitted for any HEAD-moved refusal regardless of reason, so it cannot distinguish causes."
+created_at = 1793715182
+updated_at = 1793717856
+weight = 0.0
+issue_number = 1512
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1512"
+issue_closed_at = 1793717859
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py -q"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715182
+detail = """
+exit 1: ` before reverting anything.
+
+scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py:47: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py::MergeWithPreexistingTrackedMod::test_red_merge_allowed_with_unchanged_preexisting_tracked_modification
+1 failed in 1.34s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py"
+exit = 0
+passed = 1
+rev = "85502452f35aeef15f6b57de8bd7246543562234"
+observed_at = 1793717853
+output_digest = "sha256:b7290914241cf54da04b66d4a5d9bc4f91e811df46cb1f6c167d4a5ff9e1f026"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py . [100%]
+
+============================== 1 passed in 0.52s ===============================
+"""
+
+[task.closure.red]
+rev = "e0efebd1d11cdeceff507599b3a36231c8f53d6e"
+exit = 1
+kind = "behavioural"
+overlay = ["scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py"]

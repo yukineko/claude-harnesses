@@ -65309,3 +65309,64 @@ rev = "ec6754d683e7b21c0d6818e448af683cb083caa6"
 exit = 1
 kind = "behavioural"
 overlay = ["scripts/test_check_test_weakening_f_findings.py"]
+
+[[task]]
+id = "772b2f3a"
+title = "condukt: parse_argv turns an unterminated-quote command into a whitespace-split argv instead of undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt,fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """Measured at rev 3d58ecce (condukt 0.7.322), 2026-11-03. crates/condukt/src/verify.rs:1663 parse_argv = shlex::split(s).unwrap_or_else(whitespace split). Caller: mechanical_cmd -> state check-criteria, which RUNS the argv and sets skip_verifier from its exit code, so it is not display-only. Test: crates/condukt/tests/check_criteria_unterminated_quote.rs. done_criteria with backtick span cargo test -p demo -- "never_closed. Expected: no cmd extracted (undetermined); actual: 'extracted as argv Some(Array [cargo,test,-p,demo,--,"never_closed])' and it was executed. Note: unit test parse_argv_falls_back_on_unterminated_quote in verify.rs pins the current fallback (frozen assert) and will need re-anchoring when fixed."""
+created_at = 1793715216
+updated_at = 1793718648
+weight = 0.0
+issue_number = 1518
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1518"
+issue_closed_at = 1793718650
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test check_criteria_unterminated_quote"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715216
+detail = """
+exit 101: 
+   Compiling condukt v0.7.322 (/Users/yuki/src/.harness-worktrees/file-script-findings-20261103/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.76s
+     Running tests/check_criteria_unterminated_quote.rs (target/debug/deps/check_criteria_unterminated_quote-0c8c16d8b5d6828f)
+error: test failed, to rerun pass `-p condukt --test check_criteria_unterminated_quote`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test check_criteria_unterminated_quote"
+exit = 0
+passed = 1
+rev = "e03b12f9b8f41192919bc0c96d264452bf5a4dec"
+observed_at = 1793718624
+output_digest = "sha256:8efc62b98ca3a57107a9387696bd720b8b24dafc10c59ca1ec5a9a9d33513f7b"
+excerpt = """
+
+running 1 test
+test unterminated_quote_in_criteria_command_is_not_extracted_as_a_command ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
+
+   Compiling condukt v0.7.326 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.54s
+     Running tests/check_criteria_unterminated_quote.rs (target/debug/deps/check_criteria_unterminated_quote-6e5b1a4635b05bc3)
+"""
+
+[task.closure.red]
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/condukt/tests/check_criteria_unterminated_quote.rs"]

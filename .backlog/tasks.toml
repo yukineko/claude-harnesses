@@ -31,37 +31,6 @@ exit 101:  passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 
 error: test failed, to rerun pass `-p blastguard --test python_c_read_open_misattributed_fp_20261103`"""
 
 [[task]]
-id = "772b2f3a"
-title = "condukt: parse_argv turns an unterminated-quote command into a whitespace-split argv instead of undetermined"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt,fail-open",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """Measured at rev 3d58ecce (condukt 0.7.322), 2026-11-03. crates/condukt/src/verify.rs:1663 parse_argv = shlex::split(s).unwrap_or_else(whitespace split). Caller: mechanical_cmd -> state check-criteria, which RUNS the argv and sets skip_verifier from its exit code, so it is not display-only. Test: crates/condukt/tests/check_criteria_unterminated_quote.rs. done_criteria with backtick span cargo test -p demo -- "never_closed. Expected: no cmd extracted (undetermined); actual: 'extracted as argv Some(Array [cargo,test,-p,demo,--,"never_closed])' and it was executed. Note: unit test parse_argv_falls_back_on_unterminated_quote in verify.rs pins the current fallback (frozen assert) and will need re-anchoring when fixed."""
-created_at = 1793715216
-updated_at = 1793715216
-weight = 0.0
-issue_number = 1518
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1518"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test check_criteria_unterminated_quote"
-rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
-observed_at = 1793715216
-detail = """
-exit 101: 
-   Compiling condukt v0.7.322 (/Users/yuki/src/.harness-worktrees/file-script-findings-20261103/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.76s
-     Running tests/check_criteria_unterminated_quote.rs (target/debug/deps/check_criteria_unterminated_quote-0c8c16d8b5d6828f)
-error: test failed, to rerun pass `-p condukt --test check_criteria_unterminated_quote`"""
-
-[[task]]
 id = "80b18990"
 title = "blastguard: python3 stdin program using re.compile( is asked as code-building"
 project = "/Users/yuki/src/harness"

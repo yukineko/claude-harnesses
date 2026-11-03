@@ -164,9 +164,14 @@ pub const MAX_STDIN_BYTES: u64 = 10 * 1024 * 1024;
 /// A stdin READ ERROR is NOT swallowed: an empty or partial payload would be
 /// indistinguishable from "nothing was piped" / a complete payload (CLAUDE.md
 /// §3: IO failure is cannot-determine). This function therefore refuses by
-/// panicking (user ruling 2026-11-03, backlog 8004d80f); a Stop gate's panic
-/// barrier resolves that to a block. Callers that can handle the failure
-/// themselves use [`try_read_stdin`]; Stop gates reading before
+/// panicking (user ruling 2026-11-03, backlog 8004d80f). What that panic
+/// becomes depends on where it is raised: inside `gate::run::run_guarded`'s
+/// body it is that barrier's fail-closed block (bounded allow on a consecutive
+/// re-entry); inside [`run_pretooluse_guarded`] it is exit 2 (tool call
+/// blocked); inside [`run_hook`] it is swallowed (exit 0, nothing emitted);
+/// anywhere else (e.g. a gate's `main` before `run_guarded`) it is an uncaught
+/// panic (exit 101), which is NOT a block decision. So callers that can handle
+/// the failure themselves use [`try_read_stdin`]; Stop gates reading before
 /// `gate::run::run_guarded` use `gate::run::read_stop_payload_guarded`.
 pub fn read_stdin() -> String {
     read_capped(std::io::stdin())
@@ -200,9 +205,11 @@ pub fn try_read_capped<R: Read>(r: R) -> std::io::Result<String> {
 /// Infallible wrapper over [`try_read_capped`]: same cap and lossy decode, but
 /// a read error (including after a partial read) panics instead of returning
 /// the empty or partial payload (user ruling 2026-11-03, backlog 8004d80f).
+/// The panic is a block only inside `gate::run::run_guarded`; see
+/// [`read_stdin`] for what it becomes elsewhere.
 #[allow(
     clippy::panic,
-    reason = "user ruling 2026-11-03 (backlog 8004d80f): a stdin read error must refuse, never become an empty/partial Ok payload; the fail-closed panic barriers resolve it to block"
+    reason = "user ruling 2026-11-03 (backlog 8004d80f): a stdin read error must refuse, never become an empty/partial Ok payload; the panic is a block only inside run_guarded (swallowed under run_hook, exit 101 elsewhere)"
 )]
 pub fn read_capped<R: Read>(r: R) -> String {
     match try_read_capped(r) {

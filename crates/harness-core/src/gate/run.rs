@@ -47,8 +47,12 @@ enum PanicAction {
 /// The record "this gate's previous stop in this session was a panic":
 /// `<base_dir("harness")>/state/panic-markers/<gate>/<session>.panic`.
 ///
-/// Presence is the whole signal. It is cleared at the start of every hook-mode
-/// run ([`PanicMarker::take`]) and re-written only when that run panics, so a
+/// For [`run_guarded`] presence is the whole signal ([`PanicMarker::take`]).
+/// The content additionally says how the failure was resolved
+/// ([`MARKER_BLOCKED`] / [`MARKER_ALLOWED`]); only the stdin-read-error path
+/// ([`PanicMarker::take_state`]) reads it, because it has no `stop_hook_active`
+/// to bound its allow. The marker is cleared at the start of every hook-mode
+/// run and re-written only when that run panics (or cannot read stdin), so a
 /// run that ends any other way — a clean allow, a block, an operator escape,
 /// all of which `process::exit` and never return to the guard — leaves no
 /// marker behind and the next panic counts as a FIRST panic again.
@@ -105,15 +109,118 @@ impl PanicMarker {
         }
     }
 
-    /// Record that this run panicked.
+    /// Read-and-clear for the stdin-read-error path
+    /// ([`read_stop_payload_guarded`]), which cannot read `stop_hook_active`
+    /// and so must also know HOW the previous failure was resolved: only a
+    /// previous failure that was BLOCKED may be followed by the bounded allow.
+    /// Absent → [`PrevStop::Clean`]; [`MARKER_BLOCKED`] → [`PrevStop::Blocked`];
+    /// [`MARKER_ALLOWED`] → [`PrevStop::Allowed`]; unreadable, unclearable or
+    /// unrecognised content → undetermined.
+    fn take_state(&self) -> Determination<PrevStop> {
+        let content = match std::fs::read(&self.path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Determination::known(PrevStop::Clean)
+            }
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "panic-streak marker {} could not be read: {e}",
+                    self.path.display()
+                ))
+            }
+        };
+        if let Err(e) = std::fs::remove_file(&self.path) {
+            return Determination::undetermined(format!(
+                "panic-streak marker {} exists but could not be cleared: {e}",
+                self.path.display()
+            ));
+        }
+        if content == MARKER_BLOCKED {
+            Determination::known(PrevStop::Blocked)
+        } else if content == MARKER_ALLOWED {
+            Determination::known(PrevStop::Allowed)
+        } else {
+            Determination::undetermined(format!(
+                "panic-streak marker {} has unrecognised content",
+                self.path.display()
+            ))
+        }
+    }
+
+    /// Record that this run failed (a panic, or an unreadable stdin) and was
+    /// resolved by a fail-closed BLOCK.
     fn record(&self) -> Result<(), String> {
+        self.write(MARKER_BLOCKED)
+    }
+
+    /// Overwrite the marker to say this run's failure was resolved by the
+    /// bounded allow. Presence still means "this gate's previous stop failed"
+    /// to [`PanicMarker::take`] (so [`run_guarded`]'s policy is unchanged), but
+    /// [`PanicMarker::take_state`] will not grant a second allow after it.
+    fn record_allowed(&self) -> Result<(), String> {
+        self.write(MARKER_ALLOWED)
+    }
+
+    fn write(&self, content: &[u8]) -> Result<(), String> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
         }
-        std::fs::write(&self.path, b"panicked\n")
+        std::fs::write(&self.path, content)
             .map_err(|e| format!("could not write {}: {e}", self.path.display()))
     }
+}
+
+/// Marker content: the failure was resolved by a fail-closed block.
+const MARKER_BLOCKED: &[u8] = b"panicked\n";
+/// Marker content: the failure was resolved by the bounded allow.
+const MARKER_ALLOWED: &[u8] = b"allowed\n";
+
+/// This gate's previous stop in this session, as recorded by its marker.
+#[derive(Debug, PartialEq, Eq)]
+enum PrevStop {
+    /// No marker: the previous stop did not fail.
+    Clean,
+    /// The previous stop failed and was blocked.
+    Blocked,
+    /// The previous stop failed and was let through by the bounded allow.
+    Allowed,
+}
+
+/// The stdin-read-error policy ([`read_stop_payload_guarded`]). Unlike
+/// [`decide`] there is no `stop_hook_active` (it is inside the unreadable
+/// payload), so the marker is the only evidence of a re-entry, and it must not
+/// be able to allow twice in a row:
+///
+/// * interactive → [`PanicAction::InteractiveError`].
+/// * previous stop of this gate failed AND was blocked →
+///   [`PanicAction::BoundedAllow`], recording nothing (`take_state` already
+///   cleared the marker), so the stop after this allow is chain-first again.
+/// * anything else — clean, previous failure already allowed, or undetermined
+///   → record a block marker (best effort) and [`PanicAction::FailClosedBlock`].
+///   If the marker cannot be recorded the next failure blocks too: not
+///   bounded, but on the restrictive side (CLAUDE.md §3).
+///
+/// Bound on the fail-open: an allow is only emitted after a BLOCK marker was
+/// read back and cleared, and the allow writes no marker, so a streak of read
+/// errors alternates block / allow and never allows twice in a row.
+fn decide_read_error(
+    interactive: bool,
+    prev: Determination<PrevStop>,
+    record: impl FnOnce() -> Result<(), String>,
+) -> PanicAction {
+    if interactive {
+        return PanicAction::InteractiveError;
+    }
+    if let Determination::Known(PrevStop::Blocked) = prev {
+        return PanicAction::BoundedAllow;
+    }
+    if let Err(e) = record() {
+        eprintln!(
+            "panic-streak marker not recorded ({e}); the next stdin read error will block again"
+        );
+    }
+    PanicAction::FailClosedBlock
 }
 
 /// The panic policy, given the run mode, this gate's previous-stop panic
@@ -239,7 +346,19 @@ pub fn run_guarded<R, F: FnOnce() -> R>(
     let record = || record_marker(&marker);
     match guard(interactive, stop_hook_active, prev, record, body) {
         Ok(value) => value,
-        Err(action) => panic_exit(name, action, None),
+        Err(action) => {
+            if action == PanicAction::BoundedAllow {
+                // Mark the streak as already allowed: `take` still reads it as
+                // "previous stop panicked" (run_guarded policy unchanged), but
+                // the stdin-read-error path will not grant a second allow.
+                if let Some(Determination::Known(m)) = &marker {
+                    if let Err(e) = m.record_allowed() {
+                        eprintln!("panic-streak marker not updated to allowed ({e})");
+                    }
+                }
+            }
+            panic_exit(name, action, None)
+        }
     }
 }
 
@@ -280,15 +399,16 @@ fn record_marker(marker: &Option<Determination<PanicMarker>>) -> Result<(), Stri
 ///   on a chain-first stop; interactive -> stderr + exit 1), with a block
 ///   `reason` that names the stdin read failure and `e`.
 ///
-/// `stop_hook_active` is itself part of the unreadable payload, so it is
-/// derived from the gate's own per-gate, per-session panic marker instead: if
-/// this gate's previous stop in this session also ended in a crash or an
-/// unreadable stdin (marker present) it is treated as a re-entry and the
-/// bounded allow applies (second consecutive failure); otherwise (marker
-/// absent, unreadable, or no usable session id because `CLAUDE_CODE_SESSION_ID`
-/// is unset) it is the chain-first policy: block. Without a session id the
-/// block is therefore not bounded; that is the existing [`run_guarded`]
-/// handling of a missing session id.
+/// `stop_hook_active` is itself part of the unreadable payload, so the policy
+/// is [`decide_read_error`], driven by the gate's own per-gate, per-session
+/// marker alone: if this gate's previous stop in this session also failed (a
+/// crash or an unreadable stdin) AND that failure was blocked, this stop is
+/// the bounded allow, and the allow records nothing — so the next failure
+/// blocks again (a streak goes block, allow, block, allow, ...; never two
+/// allows in a row). Otherwise (marker absent, the previous failure was itself
+/// the bounded allow, the marker is unreadable, or no usable session id
+/// because `CLAUDE_CODE_SESSION_ID` is unset) it is the chain-first policy:
+/// block. Without a session id every such stop blocks (not bounded).
 pub fn read_stop_payload_guarded(
     name: &str,
     interactive: bool,
@@ -299,9 +419,13 @@ pub fn read_stop_payload_guarded(
         Err(e) => e,
     };
     let marker = (!interactive).then(|| PanicMarker::locate(name));
-    let prev = take_prev(&marker);
-    let reentry = matches!(&prev, Determination::Known(true));
-    let action = decide(interactive, reentry, prev, || record_marker(&marker));
+    let prev = match &marker {
+        Some(Determination::Known(m)) => m.take_state(),
+        // Forward without re-recording (already recorded when `locate` minted it).
+        Some(Determination::Undetermined(why)) => Determination::Undetermined(why.clone()),
+        None => Determination::known(PrevStop::Clean),
+    };
+    let action = decide_read_error(interactive, prev, || record_marker(&marker));
     panic_exit(name, action, Some(&format!("stdin read failed: {e}")))
 }
 
@@ -413,9 +537,10 @@ fn panic_exit(name: &str, action: PanicAction, cause: Option<&str>) -> ! {
             // fail-closed block; blocking again would trap the session, so
             // allow the stop (bounded fail-open). Still surface it on stderr.
             eprintln!(
-                "{name}: internal error again on its consecutive stop — allowing \
+                "{name}: internal error{} again on its consecutive stop — allowing \
                  this stop to avoid trapping the session (a fail-closed block was \
-                 already surfaced for the previous crash)."
+                 already surfaced for the previous failure).",
+                cause.map(|c| format!(" ({c})")).unwrap_or_default()
             );
             std::process::exit(0);
         }

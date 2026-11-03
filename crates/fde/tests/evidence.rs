@@ -45,6 +45,16 @@ fn verify(e: &Engagement) -> Output {
     e.fde(&["evidence", "verify"])
 }
 
+/// Complete `req` with RED then GREEN (`test -f <flag>` at the target root).
+/// Used where a test needs a complete requirement: user ruling 2026-11-04:
+/// PASS-only is not complete.
+fn complete(e: &Engagement, req: &str, flag: &str) {
+    let cmd = format!("test -f {flag}");
+    assert_code(&ev_root(e, "red", req, &cmd), 0, &format!("RED {req}"));
+    fs::write(e.root().join(flag), "").unwrap();
+    assert_code(&ev_root(e, "green", req, &cmd), 0, &format!("GREEN {req}"));
+}
+
 /// Phrases that would read as "everything is fine" to a human or a script.
 const ALL_CLEAR: &[&str] = &[
     "all clear",
@@ -194,12 +204,8 @@ fn green_requires_prior_red_for_same_req_and_same_cmd() {
         show(&v)
     );
     // Positive control: completing R2 makes verify pass.
-    assert_code(
-        &ev_root(&e, "pass", "R2", "true"),
-        0,
-        "PASS for R2 must be recorded",
-    );
-    assert_code(&verify(&e), 0, "R1 RED+GREEN and R2 PASS is complete");
+    complete(&e, "R2", "fixed2");
+    assert_code(&verify(&e), 0, "R1 and R2 both RED+GREEN is complete");
 }
 
 #[test]
@@ -214,8 +220,11 @@ fn green_without_any_red_is_rejected() {
     assert_code(&verify(&e), 1, "refused GREEN leaves R1 incomplete");
     // Positive control: R1 can be completed, so the 1s above are not a
     // constant answer.
+    // user ruling 2026-11-04: PASS-only is not complete
     assert_code(&ev_root(&e, "pass", "R1", "true"), 0, "PASS R1");
-    assert_code(&verify(&e), 0, "R1 PASS is complete");
+    assert_code(&verify(&e), 1, "R1 PASS-only is not complete");
+    complete(&e, "R1", "fixed-r1");
+    assert_code(&verify(&e), 0, "PASS then RED then GREEN is complete");
 }
 
 #[test]
@@ -246,7 +255,8 @@ fn pass_records_already_passing_requirement_separately_from_red_green() {
         0,
         "PASS with a passing command must be recorded",
     );
-    assert_code(&verify(&e), 0, "a conforming record completes R1");
+    // user ruling 2026-11-04: PASS-only is not complete
+    assert_code(&verify(&e), 1, "a PASS-only record does not complete R1");
 
     // PASS is not a RED: it does not license a GREEN.
     assert_code(
@@ -293,8 +303,11 @@ fn pass_is_rejected_when_command_fails() {
     assert_code(&verify(&e), 1, "rejected PASS leaves R1 incomplete");
     // Positive control: a passing command is accepted and completes R1, so
     // the 1s above are not a constant answer.
+    // user ruling 2026-11-04: PASS-only is not complete
     assert_code(&ev_root(&e, "pass", "R1", "true"), 0, "PASS R1");
-    assert_code(&verify(&e), 0, "R1 PASS is complete");
+    assert_code(&verify(&e), 1, "R1 PASS-only is not complete");
+    complete(&e, "R1", "fixed-r1");
+    assert_code(&verify(&e), 0, "PASS then RED then GREEN is complete");
 }
 
 // ---------------------------------------------------------------------------
@@ -311,15 +324,17 @@ fn verify_with_no_evidence_is_incomplete() {
         "incomplete verify must state a reason"
     );
     // Positive control: with evidence for both, the same verify answers 0.
-    assert_code(&ev_root(&e, "pass", "R1", "true"), 0, "PASS R1");
-    assert_code(&ev_root(&e, "pass", "R2", "true"), 0, "PASS R2");
-    assert_code(&verify(&e), 0, "every requirement has evidence");
+    // user ruling 2026-11-04: PASS-only is not complete
+    complete(&e, "R1", "fixed1");
+    complete(&e, "R2", "fixed2");
+    assert_code(&verify(&e), 0, "every requirement has RED+GREEN");
 }
 
 #[test]
 fn verify_red_only_is_incomplete_and_completion_flips_it() {
     let e = Engagement::ratified(&[("R1", "first"), ("R2", "second")]);
-    assert_code(&ev_root(&e, "pass", "R2", "true"), 0, "PASS R2");
+    // user ruling 2026-11-04: PASS-only is not complete
+    complete(&e, "R2", "fixed2");
     assert_code(&ev_root(&e, "red", "R1", "test -f fixed"), 0, "RED R1");
     let v = verify(&e);
     assert_code(&v, 1, "R1 has RED but no GREEN");
@@ -393,8 +408,13 @@ fn verify_spec_with_zero_requirements_is_undetermined() {
     // the 2 above can only come from the zero-requirement spec, not from a
     // verify that always answers 2.
     let one = Engagement::ratified(&[("R1", "first")]);
-    assert_code(&ev_root(&one, "pass", "R1", "true"), 0, "PASS R1");
-    assert_code(&verify(&one), 0, "one requirement with a PASS is complete");
+    // user ruling 2026-11-04: PASS-only is not complete
+    complete(&one, "R1", "fixed1");
+    assert_code(
+        &verify(&one),
+        0,
+        "one requirement with RED+GREEN is complete",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -550,7 +570,18 @@ fn records_from_nested_subdirs_aggregate_under_the_project_root() {
         1,
         "verify from a/b/c before R2 has evidence",
     );
-    assert_code(&ev(&e, &a, "pass", "R2", "true"), 0, "PASS from a");
+    // user ruling 2026-11-04: PASS-only is not complete
+    assert_code(
+        &ev(&e, &a, "red", "R2", "test -f fixed2"),
+        0,
+        "RED R2 from a",
+    );
+    fs::write(e.root().join("fixed2"), "").unwrap();
+    assert_code(
+        &ev(&e, &a, "green", "R2", "test -f fixed2"),
+        0,
+        "GREEN R2 from a",
+    );
 
     assert_code(
         &e.fde_in(&abc, &["evidence", "verify"]),
@@ -696,7 +727,8 @@ fn ledger_is_written_outside_the_target_repo() {
     fs::write(&flag, "").unwrap();
     assert_code(&ev_root(&e, "green", "R1", &cmd), 0, "GREEN R1");
     assert_code(&ev_root(&e, "pass", "R2", "true"), 0, "PASS R2");
-    assert_code(&verify(&e), 0, "verify");
+    // user ruling 2026-11-04: PASS-only is not complete
+    assert_code(&verify(&e), 1, "verify: R2 is PASS-only");
     // R2 is PASS-only, so the report is determined not done (exit 1).
     assert_code(&e.fde(&["report"]), 1, "report with a PASS-only R2");
 

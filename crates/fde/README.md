@@ -14,12 +14,17 @@ ruling 2026-11-03; a scope definition, not a limitation).
 Commands: `fde resolve`, `begin`, `ratify`, `status`, `forget`, `gate` (PreToolUse hook),
 `evidence red|green|pass|verify`, `report`. Exit 2 always means undetermined
 (deny for `gate`) and is never a pass. The verdict is `fde evidence verify`
-(0 complete / 1 incomplete / 2 undetermined), which counts PASS as complete.
+(0 complete / 1 incomplete / 2 undetermined). A requirement is complete only
+when it is GREEN after RED: a PASS-only requirement is not complete (user
+ruling 2026-11-04; `fde evidence pass` still records the PASS, and PASS then
+RED then GREEN is complete), so `verify` exits 1 naming it as
+`(PASS only, never RED then GREEN)`.
 `fde report` prints the listing in every determined case and exits 0 only when
 the target is ratified and every requirement is verified RED then GREEN; it
 exits 1 (reason on stderr) for an unratified target (not registered, not
 ratified, spec changed since ratification) or any unresolved, unmeasured or
-PASS-only requirement, and 2 when undetermined.
+PASS-only requirement, and 2 when undetermined. `verify` and `report` thus
+differ only for an unratified target (`verify` 2, `report` 1).
 
 `fde ratify` records the target HEAD commit and whether the work tree was dirty
 (it needs at least one commit; otherwise exit 2), and every evidence record
@@ -32,6 +37,17 @@ is recorded and shown by `report`, but is not disqualifying by itself. A
 ratification from an earlier fde (no HEAD) still satisfies `status`, but the
 evidence commands and `report` exit 2 until it is re-ratified.
 
+An evidence CMD must not move HEAD (user ruling 2026-11-04): right after the
+CMD exits, before its exit status is judged, HEAD is observed again; if it
+cannot be observed or differs from the pre-CMD HEAD in any way — moved back,
+moved forward to a new commit, or anything else — the answer is exit 2 naming
+both commits, and nothing is recorded. Forward movement is refused too (a
+coordinator decision under that ruling): the record's HEAD would no longer
+describe the tree the result belongs to, and a CMD that commits its own fix
+could otherwise satisfy the history rule. Only the two observations (before
+and after the CMD) are compared: a CMD that moves HEAD and then restores it
+(commit then `reset --hard` back, checkout away and back) is not detected.
+
 Every evidence record also carries the ratification HEAD in force when it was
 recorded (`ratified_head`), and only records of the current spec fingerprint
 **and** the current ratification HEAD count. Re-ratifying at a different HEAD
@@ -39,8 +55,9 @@ therefore starts a new evidence epoch: earlier records are kept on disk but
 ignored (counted on `report`'s `ignored:` line), and the requirements read as
 unmeasured (exit 1) until RED / GREEN / PASS are recorded again. This is how a
 human recovers after a reset off the ratified line; note that re-ratifying at
-a forward commit also discards the earlier evidence from the answer.
-Re-ratifying at the same HEAD keeps the records counting. A record from an
+a forward commit also discards the earlier evidence from the answer (kept as
+is by user ruling 2026-11-04). Re-ratifying at the same HEAD keeps the records
+counting. A record from an
 earlier fde that matches the fingerprint but has no `ratified_head` is not
 placed in any epoch: recording, `verify` and `report` exit 2 while it exists.
 
@@ -68,8 +85,12 @@ root whose `.git` was removed), it is keyed by its canonical path, so such a
 root can still be forgotten; an unregistered non-git directory is refused (1). While any target is registered, the gate denies every Bash
 command that invokes `fde forget` (detected textually and conservatively). A
 registered target whose root directory was deleted is "gone": it no longer
-blocks unrelated work, but its former path stays denied with a reason naming
-`fde forget`, and `fde status <root>` exits 1 saying `gone`. A root that cannot
+blocks unrelated, fully resolvable work, but its former path stays denied with
+a reason naming `fde forget`, and `fde status <root>` exits 1 saying `gone`.
+While a target is gone, a Bash call with a word the gate cannot resolve (`$`,
+backtick, unquoted glob or `{`, `~user`, an unterminated quote) or cannot
+canonicalize is denied as undetermined, with a reason asking the human to run
+`! fde forget <root>` (user ruling 2026-11-04). A root that cannot
 be stat'ed (other than not-found), or a corrupt registration, still denies
 everything.
 

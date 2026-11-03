@@ -41,20 +41,22 @@
 //! 5. Each registered target's root is stat'ed ([`crate::target::presence`],
 //!    `symlink_metadata`, before its ratification is looked at):
 //!    * `NotFound` — the target is *gone*, a determined fact. It is not
-//!      guarded: it denies nothing elsewhere and no git probe is made for it.
-//!      Only its own former path stays denied, as a `Violation` whose reason
+//!      guarded and no git probe is made for it. Its own former path stays
+//!      denied, as a `Violation` whose reason
 //!      says it is gone and names `fde forget <root>`: an Edit-tool path
 //!      lying (as given, or canonicalized) under the recorded root, or a Bash
 //!      call whose cwd (as given, or canonicalized) lies under it, whose
 //!      command text contains it, or one of whose resolvable words (step 6,
 //!      Bash) lies under it — joined onto the cwd lexically or through
-//!      [`canonical_lenient`]. A word whose canonicalization fails with an
-//!      error other than `NotFound` (e.g. `notes.txt/x`, `notes.txt` a file)
-//!      makes the call `Undetermined` (deny) for the gone target, with a
-//!      reason naming the word: the gate cannot show it avoids the former
-//!      path. Unresolvable words (`$`, globs, …) do not deny for a gone target
-//!      (it is not guarded). The step-6 `fde status|report|begin` exception
-//!      applies to the `Violation` only.
+//!      [`canonical_lenient`]. Otherwise, a word whose canonicalization fails
+//!      with an error other than `NotFound` (e.g. `notes.txt/x`, `notes.txt` a
+//!      file), or an unresolvable word (step 6: `$`, backtick, unquoted glob or
+//!      brace, `~user`, `~` with `HOME` unset, a dangling backslash, an
+//!      unterminated quote; user ruling 2026-11-04), makes the call
+//!      `Undetermined` (deny) for the gone target, with a reason naming the
+//!      word and asking the human to run `! fde forget <root>`: the gate cannot
+//!      show the call avoids the former path. The step-6
+//!      `fde status|report|begin` exception applies to the `Violation` only.
 //!    * any other stat error — `Undetermined` (deny), whatever the call
 //!      touches: the root may still be there.
 //! 6. Of the present targets, every one whose [`crate::ratify::status`] is
@@ -93,7 +95,8 @@
 //!      its path cannot be canonicalized (an error other than `NotFound`, e.g.
 //!      `notes.txt/x` with `notes.txt` a file), the call is `Undetermined` for
 //!      every guarded target, with a reason naming the word. With no guarded
-//!      target (none registered, or all ratified) words are never judged.
+//!      and no gone target (none registered, or all present and ratified)
+//!      words are never judged.
 //!    * Not seen (limits, not fixed): aliases, shell functions and `PATH`
 //!      resolution of a different binary; directory changes inside the
 //!      command (`cd x && ...` — every relative word resolves against the
@@ -513,9 +516,12 @@ fn bash_words(command: &str, cwd: &Path, raw_cwd: &Path) -> Vec<BashWord> {
         .collect()
 }
 
-/// Whether the request touches the gone root `root` (`Some(description)`):
-/// the raw or canonicalized path / cwd lies under it, or the Bash command
-/// text contains it. No git probe: the repository is gone with it.
+/// Whether the request touches the gone root `root`: `Hit` when the raw or
+/// canonicalized path / cwd lies under it, the Bash command text contains
+/// it, or a resolvable Bash word lies under it; otherwise `Unknown` when a
+/// Bash word is unresolvable or cannot be canonicalized (fail-closed, user
+/// ruling 2026-11-04); otherwise `Miss`. No git probe: the repository is
+/// gone with it.
 fn touches_gone(req: &Checked, root: &Path) -> Touch {
     match req {
         Checked::Path {
@@ -550,15 +556,18 @@ fn touches_gone(req: &Checked, root: &Path) -> Touch {
             }
             let mut unknown = None;
             for w in words {
-                // Unresolvable words do not deny for a gone target (it is not
-                // guarded; coordinator ruling pending, see the module doc).
-                let BashWord::Path {
-                    spelled,
-                    canonical,
-                    raw,
-                } = w
-                else {
-                    continue;
+                let (spelled, canonical, raw) = match w {
+                    BashWord::Path {
+                        spelled,
+                        canonical,
+                        raw,
+                    } => (spelled, canonical, raw),
+                    // Fail-closed (user ruling 2026-11-04): the gate cannot
+                    // show an unresolvable word avoids the gone root.
+                    BashWord::Unresolvable(why) => {
+                        unknown.get_or_insert_with(|| why.clone());
+                        continue;
+                    }
                 };
                 if raw.starts_with(root) {
                     return Touch::Hit(format!(
@@ -686,7 +695,8 @@ fn evaluate_with(req: Request, state: &Path) -> Verdict {
                     Touch::Unknown(why) => verdicts.push(Verdict::undetermined(format!(
                         "{why}; registered target {root} is gone (its directory no longer \
                          exists) and the gate cannot tell whether the call reaches its former \
-                         path (the human can drop its state with `fde forget {root}`)",
+                         path; until its state is dropped (human-only), ask the human to run \
+                         `! fde forget {root}`",
                         root = t.root.display()
                     ))),
                     Touch::Miss => {}

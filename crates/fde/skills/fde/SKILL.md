@@ -1,6 +1,6 @@
 ---
 name: fde
-description: Forward Deployed Engineer ワークフロー。外部の target リポジトリを読んで仕様を推定し(証拠は逐語引用)、人間の批准を AskUserQuestion で得てから、要件ごとに RED→fix→GREEN を証跡付きで回し、未解決・未計測を逐語で報告する。批准前の target 変更は fde gate(PreToolUse)が拒否する。判定は `fde evidence verify`(PASS も完了)と `fde report`(批准済みかつ全要件 RED→GREEN のときだけ 0)の終了コード。
+description: Forward Deployed Engineer ワークフロー。外部の target リポジトリを読んで仕様を推定し(証拠は逐語引用)、人間の批准を AskUserQuestion で得てから、要件ごとに RED→fix→GREEN を証跡付きで回し、未解決・未計測を逐語で報告する。批准前の target 変更は fde gate(PreToolUse)が拒否する。判定は `fde evidence verify`(全要件 RED→GREEN で 0。PASS のみは未完了)と `fde report`(批准済みかつ全要件 RED→GREEN のときだけ 0)の終了コード。
 argument-hint: '[target-dir]'
 allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
 ---
@@ -33,18 +33,24 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
    (相対パスで target を名指す・別ディレクトリから回り込む等は禁止)。拒否理由を逐語で人間に返す。
 2. **批准は人間だけが与える。** 自分で答えない(自律モード・`condukt policy answer` でも escalate 扱い)。
 3. **exit 2 は常に「判定不能」**(gate では deny)。pass 扱いにしない。止めて人間に聞く。
-4. **完了の判定は終了コードで行う。** `fde evidence verify`(0 = 全要件の証跡が揃った。PASS も完了と数える)と、
-   より厳しい `fde report`(0 = 批准済みかつ全要件が RED→GREEN。未批准・unresolved・unmeasured・PASS のみは 1)。
-   「全要件を RED→GREEN で検証した」と言えるのは `fde report` が exit 0 のときだけ。
+4. **完了の判定は終了コードで行う。** `fde evidence verify`(0 = 全要件が RED→GREEN。unresolved・unmeasured・
+   PASS のみは 1。2026-11-04 のユーザー裁定: PASS のみの要件は完了ではない)と `fde report`(0 = 批准済みかつ全要件が
+   RED→GREEN。未批准・unresolved・unmeasured・PASS のみは 1)。両者の違いは未批准の扱いだけ(verify は 2、report は 1)。
+   「全要件を RED→GREEN で検証した」と言えるのはこれらが exit 0 のときだけ。
 5. テストを書く agent と実装する agent は別にする。
 6. **target の HEAD は批准時のコミットから前進させるだけ。** 批准は target の HEAD コミット(と dirty かどうか)を記録し、
    各証跡も CMD 実行直前の HEAD / dirty を記録する。批准後に target root で `git reset`・ブランチ切り替え・履歴の
    書き換えをすると、記録は「批准した履歴の上」に無くなり、`fde evidence red|green|pass|verify` と `fde report` は
    exit 2 になる。そうなったら止めて人間に聞く。人間が現在の HEAD で再批准(`fde ratify`)すると新しい証跡 epoch に
    なり、以前の記録は残るが無視される(`fde report` の `ignored:` 行に件数が出る)ので、全要件の RED / GREEN / PASS を
-   記録し直す。前進したコミットで再批准した場合も以前の証跡は判定から外れる。同じ HEAD での再批准なら記録は数えられ
-   続ける。旧版の fde が書いた `ratified_head` の無い記録が残っている場合は再批准しても 2 のままなので、人間に聞く。
-   修正はコミットとして積む(merge / fast-forward / 新規コミット)。
+   記録し直す。前進したコミットで再批准した場合も以前の証跡は判定から外れる(2026-11-04 のユーザー裁定で現状維持)。
+   同じ HEAD での再批准なら記録は数えられ続ける。旧版の fde が書いた `ratified_head` の無い記録が残っている場合は
+   再批准しても 2 のままなので、人間に聞く。
+   修正はコミットとして積む(merge / fast-forward / 新規コミット)。ただしコミットは **CMD の外**で行う:
+   `fde evidence red|green|pass` は CMD の前後で HEAD を観測し、CMD の実行中に HEAD が変わる(後退・前進〈コミット〉・
+   観測不能)と終了ステータスに関わらず exit 2 で何も記録しない(2026-11-04 のユーザー裁定。前進も拒否するのは、
+   記録の HEAD が結果の属する tree を表さなくなり、CMD が自分で修正をコミットして来歴規則を満たせてしまうため)。
+   比較は CMD の前後 2 点だけなので、途中で HEAD を動かして元に戻す CMD は検出されない。そういう CMD を使わない。
 
 ## (a) 把握 — 仕様を推定する
 
@@ -67,7 +73,7 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
    gate が有効なとき、未批准の間は cwd が target 内の Bash も、target の root パスを文字列で含む Bash も、
    語を解決すると target(またはその worktree)に入る Bash(`../proj/x`、`rm -rf proj`、symlink 経由、
    `--out=proj/x`、`~/` で HOME が target など)も拒否される(target 内のテスト・ビルド・git コマンドも含む)。
-   さらに未批准の target がある間は、gate が解決できない語 — `$`・バッククォート・引用符の外のグロブ
+   さらに未批准の target(または消えた target)がある間は、gate が解決できない語 — `$`・バッククォート・引用符の外のグロブ
    (`*` `?` `[`)・`{`・`~user`・閉じていない引用符 — を含む Bash は、target と無関係でも拒否される
    (判定不能は deny)。変数や置換を使わず、パスを字義どおりに書くこと。拒否を別構文で回避しない。
    target を読むのは Read / Grep / Glob で行う。
@@ -108,7 +114,9 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
    fde は target root で実行する。両者で同じ結果になるよう、`CMD` は実行場所に依存しない形にする。
 5. テストが最初から通る(=既に適合している)要件は RED にせず、
    `fde evidence pass --req <REQ-ID> --cmd '<CMD>' [TARGET]` で「適合済み」として記録する。
-   RED を記録した要件に PASS は付けられない(exit 1)。
+   RED を記録した要件に PASS は付けられない(exit 1)。**PASS だけでは要件は完了にならない**(2026-11-04 のユーザー
+   裁定。verify も report も 1)。完了させるには、その要件を突いて失敗するテストで RED を取り、GREEN まで回す
+   (PASS → RED → GREEN は完了)。
 
 ## (d) fix — 実装を委譲する
 
@@ -122,16 +130,18 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
 
 ## (e) 報告
 
-1. **判定**: `fde evidence verify [TARGET]` — 0 = 全要件完了 / 1 = 欠けあり(欠けた要件は stderr)/ 2 = 判定不能。
-   完了と言えるのは exit 0 のときだけ。
+1. **判定**: `fde evidence verify [TARGET]` — 0 = 全要件が RED→GREEN / 1 = 欠けあり(unresolved・unmeasured・
+   PASS のみの要件を stderr に列挙)/ 2 = 判定不能。完了と言えるのは exit 0 のときだけ。
 2. **一覧**: `fde report [TARGET]`(批准時 HEAD と clean/dirty、現在の HEAD、要件ごとの状態と各記録の HEAD・clean/dirty、
    unresolved / unmeasured の節)。
    一覧は未批准の target でも出る(`ratification: UNRATIFIED` / `evidence: not evaluated`)が、そのときの終了コードは 1。
    exit 0 は批准済みかつ全要件が RED→GREEN のときだけ。未批准(未登録・未批准・批准後の spec 変更)や、unresolved・
-   unmeasured・PASS のみの要件があれば exit 1 で理由を stderr に出す(verify と違い PASS は完了に数えない)。2 = 判定不能。
+   unmeasured・PASS のみの要件があれば exit 1 で理由を stderr に出す(verify と同じく PASS のみは完了に数えない。
+   違いは未批准の扱いだけ)。2 = 判定不能。
 3. 最終報告には次を**逐語で**載せる:
    - unresolved(RED はあるが GREEN が無い)要件
    - unmeasured(証跡なし)要件
+   - PASS のみ(RED→GREEN を経ていない)要件
    - `fde evidence verify` と `fde report` の終了コードと stderr
    - `dirty` と表示された記録があれば、その要件と HEAD(コミットから再現できない証跡であること)
    - やっていないこと・確かめていないこと(例: 実行しなかった検査、gate に止められて進めなかった手順)
@@ -139,17 +149,21 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
 ## 終了コードの読み方(要約)
 
 - `resolve`: 0 / 2。`begin` / `ratify` / `evidence red|green|pass`: 0 記録 / 1 拒否 / 2 判定不能
-  (`ratify` は HEAD・dirty が判定できないとき、`evidence` は旧形式の批准、または現在の HEAD が批准時 HEAD の子孫でないときも 2)。
+  (`ratify` は HEAD・dirty が判定できないとき、`evidence` は旧形式の批准、現在の HEAD が批准時 HEAD の子孫でないとき、
+  CMD の実行中に HEAD が変わったときも 2)。
 - `evidence verify` / `report` は、批准時 HEAD ≤ 各記録の HEAD ≤ 現在の HEAD(祖先または同一)が成り立たない・比較できないとき 2。
 - `report`: 0 完了(批准済みかつ全要件 RED→GREEN)/ 1 未完了(未批准、または unresolved・unmeasured・PASS のみの要件あり)/ 2 判定不能。
-- `status`: 0 批准済み / 1 未批准(target が消えた〈gone〉場合も 1)/ 2 判定不能。`evidence verify`: 0 完了 / 1 欠け / 2 判定不能。
+- `status`: 0 批准済み / 1 未批准(target が消えた〈gone〉場合も 1)/ 2 判定不能。`evidence verify`: 0 完了(全要件 RED→GREEN)/ 1 欠け(PASS のみを含む)/ 2 判定不能。
 - `forget`(**人間専用。モデルは実行しない**): 0 削除 / 1 未登録 / 2 判定不能。
 - `gate`: 0 allow / 2 deny。引数エラー(clap)も 2。どれも 2 は pass ではない。
 
 ## 復旧: 登録済み target が消えた(gone)とき
 
 - 登録済み target のディレクトリが削除されると、`fde status <root>` は exit 1 で stderr に `gone` と出し、
-  gate はその元の場所(パス・cwd・root を含む Bash)を `gone` / `fde forget` を理由に拒否する。無関係な作業は止めない。
+  gate はその元の場所(パス・cwd・root を含む Bash)を `gone` / `fde forget` を理由に拒否する。全語を解決できる
+  無関係な作業は止めないが、gate が解決できない語(`$`・バッククォート・グロブ・`{`・`~user`・閉じていない引用符)
+  を含む Bash は、元の場所を避けていると示せないので拒否し、理由に `! fde forget <root>` を出す(2026-11-04 の
+  ユーザー裁定)。
 - そのときは **`fde forget` を自分で実行しない**(人間専用。モデルが実行すると gate が拒否する。別経路で state dir を
   消すのも禁止)。人間に「Claude Code のプロンプトで `! fde forget <TARGET>` と入力するか、自分の端末で
   `fde forget <TARGET>` を実行してください」と、`fde status` が示した root を添えて依頼する。

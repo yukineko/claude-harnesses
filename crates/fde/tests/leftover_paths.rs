@@ -22,7 +22,9 @@
 //!   unregistered non-git directory is refused (exit 1).
 //! * L6 — `fde ratify` / `fde evidence red` when HEAD is readable but the
 //!   dirty probe (`git status`) fails: exit 2, nothing written.
-//! * L7 — a RED whose CMD moves HEAD backwards off the ratified line.
+//! * L7 — a RED whose CMD moves HEAD backwards off the ratified line is
+//!   refused at record (user ruling 2026-11-04: nothing recorded; verify and
+//!   report stay undetermined because HEAD is no longer on the ratified line).
 
 mod common;
 
@@ -381,33 +383,37 @@ fn l6_evidence_red_with_unobservable_dirty_flag_is_undetermined() {
 
 /// A RED whose CMD resets HEAD one commit back (off the ratified line).
 ///
-/// `evidence.rs` (module docs, "Recording" step 6) observes HEAD / dirty
-/// immediately BEFORE CMD ("describes the tree CMD ran on, not what CMD left
-/// behind"), and step 7 re-observes only the ratification (fingerprint and
-/// the recorded provenance in `ratification.json`), not the current HEAD. So
-/// the RED is recorded (exit 0) with `head` = the pre-CMD commit. The
-/// ratified-history rule then makes `verify` and `report` undetermined
-/// (exit 2), because the current HEAD is no longer a descendant of R.
+/// user ruling 2026-11-04 ("Refuse at record") overturned the earlier pin
+/// that such a RED was recorded with the pre-CMD head: HEAD is re-checked
+/// after CMD, and a CMD that moved HEAD makes the record refused (exit 2,
+/// HEAD reason on stderr, nothing recorded). The CMD's reset still happened,
+/// so the current HEAD (c1) is no longer a descendant of R (c2): `verify`
+/// and `report` stay undetermined (exit 2) from the ratified-history rule,
+/// even though the ledger holds no record.
 #[test]
-fn l7_red_whose_cmd_resets_head_back_is_recorded_pre_cmd_and_verify_is_undetermined() {
+fn l7_red_whose_cmd_resets_head_back_is_refused_at_record() {
     let e = Engagement::new(&[("R1", "first")]);
     let c1 = git(e.root(), &["rev-parse", "HEAD"]).trim().to_string();
     fs::write(e.root().join("second.txt"), "2\n").unwrap();
     git(e.root(), &["add", "second.txt"]);
     git(e.root(), &["commit", "-q", "-m", "second"]);
     let c2 = git(e.root(), &["rev-parse", "HEAD"]).trim().to_string();
+    assert_ne!(c1, c2, "fixture: two distinct commits");
     e.begin();
     e.ratify();
     let ledger = key_dir(&e).join("evidence.json");
+    let before = snapshot_files(&e.state.path);
     let out = ev(&e, "red", "R1", "git reset -q --hard HEAD~1 && exit 1");
     let now = git(e.root(), &["rev-parse", "HEAD"]).trim().to_string();
     assert_eq!(now, c1, "fixture: CMD moved HEAD back to the first commit");
-    assert_code(&out, 0, "RED whose CMD resets HEAD back");
-    let v: Value = serde_json::from_slice(&fs::read(&ledger).unwrap()).unwrap();
-    let recs = v["records"].as_array().unwrap();
-    assert_eq!(recs.len(), 1, "one record: {v}");
-    assert_eq!(recs[0]["head"], json!(c2), "head is the pre-CMD HEAD");
-    assert_eq!(recs[0]["ratified_head"], json!(c2));
+    assert_undetermined(&out, "RED whose CMD resets HEAD back is refused at record");
+    assert!(
+        stderr(&out).contains("HEAD"),
+        "the refusal must mention HEAD: {}",
+        show(&out)
+    );
+    assert!(!ledger.exists(), "nothing recorded (no ledger file)");
+    assert_eq!(snapshot_files(&e.state.path), before, "state unchanged");
     assert_undetermined(
         &e.fde(&["evidence", "verify"]),
         "verify after HEAD moved off the ratified line",

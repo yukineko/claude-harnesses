@@ -271,8 +271,12 @@ fn diagnostic_location<'a>(lines: &[&'a str], i: usize) -> Option<&'a str> {
         .copied()
 }
 
-/// The compiler/lint diagnostics of `lines`, skipping header lines in `skip`
-/// (already shown elsewhere). Located diagnostics (a header with a `-->`
+/// The compiler/lint diagnostics of `lines`, skipping those already shown
+/// elsewhere in `skip`. A diagnostic is identified by its header AND its
+/// location, not by its header text alone: the same `error[E0425]: …` header
+/// in several files is several diagnostics, and one whose header text is in
+/// `skip` is skipped only if its location line is in `skip` too (an unlocated
+/// header is skipped when its header is in `skip`). Located diagnostics (a header with a `-->`
 /// location) are shown as the header plus its first location line: up to
 /// [`ERROR_HEADERS_MAX`] of them, `error` ones before `warning` ones, with a
 /// `… and N more diagnostics` line for the rest. Every unlocated `error`
@@ -285,10 +289,14 @@ fn diagnostics(lines: &[&str], skip: &[&str]) -> Vec<String> {
     let mut unlocated_err: Vec<&str> = Vec::new();
     for (i, l) in lines.iter().enumerate() {
         let err = is_error_header(l);
-        if !(err || is_warning_header(l)) || skip.contains(l) {
+        if !(err || is_warning_header(l)) {
             continue;
         }
-        match (diagnostic_location(lines, i), err) {
+        let loc = diagnostic_location(lines, i);
+        if skip.contains(l) && loc.is_none_or(|loc| skip.contains(&loc)) {
+            continue;
+        }
+        match (loc, err) {
             (Some(loc), true) => located_err.push((l, loc)),
             (Some(loc), false) => located_warn.push((l, loc)),
             (None, true) => unlocated_err.push(l),
@@ -313,10 +321,21 @@ fn diagnostics(lines: &[&str], skip: &[&str]) -> Vec<String> {
     out
 }
 
-/// Non-cargo lines that report a failure (`FAILED …`, pytest's `FAILED
-/// tests/…::name`, `… build FAILED`).
+/// Non-cargo lines that report a failure: any line containing `FAILED`
+/// (`FAILED …`, pytest's `FAILED tests/…::name`, `… build FAILED`); go test's
+/// `--- FAIL: TestName` (also indented, for subtests); python unittest's
+/// `FAIL: test_name (module.Class)`; and jest's / go's `FAIL <path>` (a `FAIL`
+/// followed by whitespace and a name). A bare `FAIL` line names nothing and is
+/// not matched.
 fn is_plain_failed_line(l: &str) -> bool {
+    let t = l.trim_start();
     l.contains("FAILED")
+        || t.starts_with("--- FAIL:")
+        || t.starts_with("FAIL:")
+        || (t.len() > 4
+            && t.starts_with("FAIL")
+            && t[4..].starts_with(char::is_whitespace)
+            && !t[4..].trim().is_empty())
 }
 
 /// The decision-relevant lines of a failing check's output. Never empty.
@@ -327,10 +346,13 @@ fn is_plain_failed_line(l: &str) -> bool {
 ///   marker; the last `failures:` name list (or, if there is none, the `test …
 ///   FAILED` lines); every `test result: FAILED` line; the diagnostics (see
 ///   below); and the final line if it says FAILED.
-/// * anything else: the diagnostics, then the lines containing `FAILED` (up to
+/// * anything else: the diagnostics, then the failing-test lines of the common
+///   runners — lines containing `FAILED`, go's `--- FAIL: …`, python
+///   unittest's `FAIL: …`, jest's/go's `FAIL <path>` (up to
 ///   [`FAILURE_NAMES_MAX`], then `… and N more FAILED lines`), then the last
 ///   [`PLAIN_TAIL_LINES`] non-empty lines (lines already in that tail are not
-///   repeated above it).
+///   repeated above it; a diagnostic is "in the tail" only if both its header
+///   and its location are).
 ///
 /// Diagnostics: each `error[…]`/`error:`/`warning[…]`/`warning:` header that
 /// has a `--> file:line:col` location is shown with that location (up to

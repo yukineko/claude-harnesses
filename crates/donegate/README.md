@@ -47,10 +47,13 @@ and reads exit codes — so it can never hit a rate limit.
    exit code and command, then only the decision-relevant digest of the output
    (for cargo-style output: each `panicked at` line with its message, the
    `failures:` name list, `test result: FAILED`, the diagnostics and a final
-   FAILED line; otherwise the diagnostics, the lines containing `FAILED` (up to
-   10) and the last 5 lines. Diagnostics are `error[…]`/`error:`/`warning:`
+   FAILED line; otherwise the diagnostics, the failing-test lines of the common
+   runners — lines containing `FAILED`, go's `--- FAIL: …`, python unittest's
+   `FAIL: …`, jest's/go's `FAIL <path>` (up to 10) — and the last 5 lines.
+   Diagnostics are `error[…]`/`error:`/`warning:`
    headers with their first `--> file:line:col` location (up to 5, errors
-   first) plus unlocated `error:` summaries such as `could not compile`. Capped
+   first; the same header in different files is kept once per location) plus
+   unlocated `error:` summaries such as `could not compile`. Capped
    at 24 lines, never empty), and the **absolute path of the full raw output**.
    Raw `--- stdout ---` / `--- stderr ---` sections and progress lines are never
    shown.

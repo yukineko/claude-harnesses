@@ -90,9 +90,11 @@ donegate gate          # チェックを手動実行（人間向けレポート�
   `record retention failed: …` 行として表示する（握りつぶさない）。
 - block 理由に表示するのは判断を促すものだけ: チェック名・exit code・コマンド、
   cargo 形式なら各 `panicked at` 行とそのメッセージ、`failures:` の名前一覧、
-  `test result: FAILED`、診断行、最終行の FAILED。それ以外の出力は診断行、`FAILED` を含む行
-  （最大 10）、末尾 5 行。診断行とは `error[…]`/`error:`/`warning:` 見出しとその最初の
-  `--> file:line:col` 位置行（最大 5 件、error 優先）、および位置を持たない `error:` 要約行
+  `test result: FAILED`、診断行、最終行の FAILED。それ以外の出力は診断行、主要なテストランナーの
+  失敗行（`FAILED` を含む行、go の `--- FAIL: …`、python unittest の `FAIL: …`、jest / go の
+  `FAIL <path>`。最大 10）、末尾 5 行。診断行とは `error[…]`/`error:`/`warning:` 見出しとその最初の
+  `--> file:line:col` 位置行（最大 5 件、error 優先。同じ見出しでもファイル・位置が違えば位置ごとに残す）、
+  および位置を持たない `error:` 要約行
   （`could not compile` 等）。1 チェック 24 行が上限で、空にはならない。そして**記録ファイルの絶対パス**。
   生の `--- stdout ---` / `--- stderr ---` 節や進捗行は表示しない。
 - 記録を保存できないときもチェックは実行し、停止もブロックする。理由に「保存できなかった」旨と

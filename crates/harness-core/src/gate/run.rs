@@ -235,7 +235,18 @@ pub fn run_guarded<R, F: FnOnce() -> R>(
     let marker = (!interactive).then(|| PanicMarker::locate(name));
     // Read-and-clear BEFORE the body: the body never returns (it exits), so
     // clearing up front is the only way a non-panicking run resets the streak.
-    let prev = match &marker {
+    let prev = take_prev(&marker);
+    let record = || record_marker(&marker);
+    match guard(interactive, stop_hook_active, prev, record, body) {
+        Ok(value) => value,
+        Err(action) => panic_exit(name, action, None),
+    }
+}
+
+/// Read-and-clear the previous-stop panic state from a located marker (see
+/// [`run_guarded`]). `None` (interactive) has no streak: `false`.
+fn take_prev(marker: &Option<Determination<PanicMarker>>) -> Determination<bool> {
+    match marker {
         Some(Determination::Known(m)) => m.take(),
         Some(Determination::Undetermined(why)) => {
             // Forward the reason without re-recording it (already recorded
@@ -243,16 +254,55 @@ pub fn run_guarded<R, F: FnOnce() -> R>(
             Determination::Undetermined(why.clone())
         }
         None => Determination::known(false),
-    };
-    let record = || match &marker {
+    }
+}
+
+/// Record "this run panicked" in a located marker; an unlocatable marker is an
+/// `Err` carrying the reason.
+fn record_marker(marker: &Option<Determination<PanicMarker>>) -> Result<(), String> {
+    match marker {
         Some(Determination::Known(m)) => m.record(),
         Some(Determination::Undetermined(why)) => Err(why.as_str().to_string()),
         None => Ok(()),
-    };
-    match guard(interactive, stop_hook_active, prev, record, body) {
-        Ok(value) => value,
-        Err(action) => panic_exit(name, action),
     }
+}
+
+/// Resolve a Stop gate whose stdin payload could not be READ through the same
+/// fail-closed machinery as a panic inside [`run_guarded`], and return the
+/// payload on success.
+///
+/// Gates that read stdin before entering [`run_guarded`] call this on the
+/// `Result` of `harness_core::hook::try_read_stdin()`:
+///
+/// * `Ok(payload)` -> returned unchanged; nothing else happens.
+/// * `Err(e)` -> the gate cannot determine anything about this stop. This never
+///   returns: it takes [`decide`]'s panic policy (block JSON on stdout + exit 0
+///   on a chain-first stop; interactive -> stderr + exit 1), with a block
+///   `reason` that names the stdin read failure and `e`.
+///
+/// `stop_hook_active` is itself part of the unreadable payload, so it is
+/// derived from the gate's own per-gate, per-session panic marker instead: if
+/// this gate's previous stop in this session also ended in a crash or an
+/// unreadable stdin (marker present) it is treated as a re-entry and the
+/// bounded allow applies (second consecutive failure); otherwise (marker
+/// absent, unreadable, or no usable session id because `CLAUDE_CODE_SESSION_ID`
+/// is unset) it is the chain-first policy: block. Without a session id the
+/// block is therefore not bounded; that is the existing [`run_guarded`]
+/// handling of a missing session id.
+pub fn read_stop_payload_guarded(
+    name: &str,
+    interactive: bool,
+    payload: std::io::Result<String>,
+) -> String {
+    let e = match payload {
+        Ok(p) => return p,
+        Err(e) => e,
+    };
+    let marker = (!interactive).then(|| PanicMarker::locate(name));
+    let prev = take_prev(&marker);
+    let reentry = matches!(&prev, Determination::Known(true));
+    let action = decide(interactive, reentry, prev, || record_marker(&marker));
+    panic_exit(name, action, Some(&format!("stdin read failed: {e}")))
 }
 
 /// Testable core of [`run_guarded`]: run `body`, returning its value on success
@@ -277,6 +327,21 @@ fn guard<R, F: FnOnce() -> R>(
 /// Pure — split out so its shape/reason is unit-testable without exiting the
 /// process.
 fn fail_closed_block_json(name: &str) -> String {
+    fail_closed_block_json_with(name, None)
+}
+
+/// [`fail_closed_block_json`] with an optional cause (e.g. a stdin read
+/// failure) named in the reason in place of the generic "crashed" wording.
+fn fail_closed_block_json_with(name: &str, cause: Option<&str>) -> String {
+    if let Some(cause) = cause {
+        let reason = format!(
+            "{name}: could not run - {cause}. The gate could not determine anything \
+             about this stop, so it is blocked as fail-closed (the check did not \
+             execute; its result is unknown). If {name} fails the same way on its \
+             very next stop it is allowed through, so the session is never trapped."
+        );
+        return serde_json::json!({ "decision": "block", "reason": reason }).to_string();
+    }
     let reason = format!(
         "{name}: internal error — the gate crashed before it could run, so this \
          stop is blocked as fail-closed (the check did not execute; its result \
@@ -321,10 +386,13 @@ fn panic_log_dir() -> PathBuf {
 
 /// Carry out a [`PanicAction`]: emit the appropriate diagnostic/decision and
 /// exit. Split from [`run_guarded`] so the policy (in [`guard`]) stays pure.
-fn panic_exit(name: &str, action: PanicAction) -> ! {
+fn panic_exit(name: &str, action: PanicAction, cause: Option<&str>) -> ! {
     match action {
         PanicAction::InteractiveError => {
-            eprintln!("{name}: internal error");
+            eprintln!(
+                "{name}: internal error{}",
+                cause.map(|c| format!(": {c}")).unwrap_or_default()
+            );
             std::process::exit(1);
         }
         PanicAction::FailClosedBlock => {
@@ -332,7 +400,11 @@ fn panic_exit(name: &str, action: PanicAction) -> ! {
             // that this stop is safe. Block it (the gates' own block protocol:
             // a `decision:block` JSON on stdout, exit 0) rather than let the
             // turn end unchecked. The consecutive-panic marker bounds this.
-            println!("{}", fail_closed_block_json(name));
+            let json = match cause {
+                Some(_) => fail_closed_block_json_with(name, cause),
+                None => fail_closed_block_json(name),
+            };
+            println!("{json}");
             std::process::exit(0);
         }
         PanicAction::BoundedAllow => {

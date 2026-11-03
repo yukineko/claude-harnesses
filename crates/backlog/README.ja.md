@@ -13,7 +13,7 @@
 - `cancel <id> --reason R` — 「やらないと決めた」としてテスト無しで閉じ、`discard` closure として記録する
 - `audit-closures` — 全終端行の closure 証拠を read-only で分類する（`--json`）。store は書かない
 - `overlap` — キュー中のタスクを宣言された `touched_files` scope でグループ化する（advisory、未宣言は別に列挙）
-- `edit <id>` — タスクの title / tags / notes / status を更新する
+- `edit <id>` — タスクの title / tags / notes / status を更新する。`--repro-test CMD` で pending タスクの repro を差し替える（「テストが無ければ起票しない」参照）
 - `sync` — store を GitHub issue と突き合わせる（一方向・ローカル優先）。`--apply` なしでは報告のみ。`--only both|create|close|body` で実行する arm を選ぶ。`--limit` は plan をそのタスク数に切り詰める
 - `session-start` — SessionStart フック: pending タスクを context として注入する
 - `install` / `uninstall` — `~/.claude/settings.json` の SessionStart フックを配線/除去する（standalone 用）
@@ -60,6 +60,13 @@ backlog uninstall                                            # 再び除去す�
 
 - 意図的な RED repro は `#[ignore = "backlog <id>: ..."]` を付けてコミットし、
   `--repro-test "cargo test -p <crate> --test <file> -- --ignored"` で起票する。
+- 起票済みタスクの RED テストを `#[ignore]` へ移したら、保存済み repro を
+  `backlog edit <id> --repro-test "cargo test -p <crate> --test <file> -- --ignored"` で更新する。
+  コマンドは `add --repro-test` と全く同じく実行され（HEAD の一時 worktree）、同じ repro 記録が
+  保存されるが、`reproduced` のときだけである。`not-reproduced` / `undetermined`（`-- --ignored`
+  無しでテストが1件も実行されない場合を含む）は outcome を名指して非0終了し、store はバイト単位で
+  変わらない。`pending` でないタスクは拒否される。同じ `edit` の他のフラグ（`--title`・`--tag` 等）は
+  repro が受理されたときにだけ一緒に書き込まれる。
 - テストを1件も実行しなかった exit 0 の実行は `not-reproduced` ではなく `undetermined`
   （拒否、`repro outcome undetermined`）。libtest の `test result:` 行（テストバイナリごとに1行）全体で
   `passed + failed` の合計が 0 の場合（`-- --ignored` 無しの `#[ignore]` テスト = `0 passed; 1 ignored`、

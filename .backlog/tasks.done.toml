@@ -65370,3 +65370,248 @@ rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
 exit = 101
 kind = "behavioural"
 overlay = ["crates/condukt/tests/check_criteria_unterminated_quote.rs"]
+
+[[task]]
+id = "658b7839"
+title = "blastguard FP4: python3 -c read-only open() misattributed as the write target"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """Cause: in a python3 -c program, blastguard pairs the mode 'w' of the scratch open('<scratch>/task-%s.json'%t['id'],'w') with the earlier read-only open('<decomposition.json>') (default mode), so the read-only file is reported as the write target. Observed 2026-11-03, blastguard 0.2.218. Repro: crates/blastguard/tests/python_c_read_open_misattributed_fp_20261103.rs (fp4_ RED; control must stay non-allow). Expected: same verdict as the command without the read open (allow in a temp-dir scratch). Verbatim denial reason: "`python3` is invoked with an inline-eval flag, and it writes `/Users/yuki/.condukt/state/harness-e77d23c7/run-20261103-102800-88064.decomposition.json` (`,'w')`) — it exists, and it is not inside a git work tree — nothing holds a second copy of these bytes". Denied command: python3 -c "import json;d=json.load(open('/Users/yuki/.condukt/state/harness-e77d23c7/run-20261103-102800-88064.decomposition.json')) / for t in d['tasks']: open('<scratchpad>/task-%s.json'%t['id'],'w').write(json.dumps(t,ensure_ascii=False,indent=1)) / print('ok')""""
+created_at = 1793675446
+updated_at = 1793727228
+weight = 0.0
+issue_number = 1506
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1506"
+issue_closed_at = 1793727231
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_c_read_open_misattributed_fp_20261103 fp4_"
+rev = "3b0d2e89dc53dedb26b69dbe7c6de874ff2abfd1"
+observed_at = 1793675446
+detail = """
+exit 101:  passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.06s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/python_c_read_open_misattributed_fp_20261103.rs (target/debug/deps/python_c_read_open_misattributed_fp_20261103-3db3e44148957530)
+error: test failed, to rerun pass `-p blastguard --test python_c_read_open_misattributed_fp_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test python_c_read_open_misattributed_fp_20261103"
+exit = 0
+passed = 2
+rev = "a02414fc3ebfb23d94f2461f076ec50e3c5b282e"
+observed_at = 1793727193
+output_digest = "sha256:5e13f98986959ee7d60bfd9270df4b209179086494eeb0d281f64f29ec859588"
+excerpt = """
+
+running 2 tests
+test control_python_c_really_writing_an_existing_unbacked_file_is_still_refused ... ok
+test fp4_read_only_open_is_not_reported_as_the_write_target ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
+   Compiling blastguard v0.2.249 (/Users/yuki/src/.harness-worktrees/session-6d697f68-c/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.52s
+     Running tests/python_c_read_open_misattributed_fp_20261103.rs (target/debug/deps/python_c_read_open_misattributed_fp_20261103-02260ecceb83b969)
+"""
+
+[task.closure.red]
+rev = "a015dbef833f0297e672353c025540324355e488"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "80b18990"
+title = "blastguard: python3 stdin program using re.compile( is asked as code-building"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard,false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-03 at blastguard 0.2.245 (measured at 0.2.246 branch base 6e6ed586). A python3 - heredoc program that only calls re.compile( (regex, not code exec) returns ask: python3 - takes its program from stdin, and that program builds or decodes the code it runs (compile() ). Test: crates/blastguard/tests/python_stdin_re_compile_fp_20261103.rs. Expected allow, actual ask."
+created_at = 1793715031
+updated_at = 1793728998
+weight = 0.0
+issue_number = 1511
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1511"
+issue_closed_at = 1793729002
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_stdin_re_compile_fp_20261103"
+rev = "6ae75e70d7167765023d22bdfaaace8de942ce2a"
+observed_at = 1793715031
+detail = """
+exit 101: wed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/python_stdin_re_compile_fp_20261103.rs (target/debug/deps/python_stdin_re_compile_fp_20261103-bd5a6e9183aab4c1)
+error: test failed, to rerun pass `-p blastguard --test python_stdin_re_compile_fp_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test python_stdin_re_compile_fp_20261103"
+exit = 0
+passed = 1
+rev = "c1d3cd4e65288a0ac4929821b8047ddf54b5476c"
+observed_at = 1793728969
+output_digest = "sha256:b6d5c2caddc2ec56c34d5687c5082a36327bacc814559cb24d9a94181d5b7e0c"
+excerpt = """
+
+running 1 test
+test fb_python_stdin_program_with_re_compile_is_allowed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/python_stdin_re_compile_fp_20261103.rs (target/debug/deps/python_stdin_re_compile_fp_20261103-9f3e9ee78f61b63e)
+"""
+
+[task.closure.red]
+rev = "a015dbef833f0297e672353c025540324355e488"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "72f471d3"
+title = "curate derive: unterminated-quote backtick span becomes a runnable golden (split_whitespace twin of GH 1518)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "curate",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """Measured 2026-11-04 at session worktree rev 7dbeeb09. crates/curate/src/derive.rs backticked_command uses inner.split_whitespace() with no shlex; condukt verify::mechanical_cmd was made fail-closed for the same input in GH 1518 (user ruling 2026-11-03: an unterminated quote yields no mechanical command). Observed: criteria with an unterminated quote yields golden cmd [cargo,test,-p,demo,--,"never_closed] (stray quote glued), and a FOO=1 head falls through to test_runner_command yielding [cargo,test,-p,demo], a different command. evalkit runs the golden and asserts exit 0. Expected: draft (no cmd), per curate's auto+draft-fallback policy. Repro: crates/curate/tests/unterminated_quote_is_draft.rs (7dbeeb09). Whether the condukt ruling extends to curate is a judgment: if a human says curate goldens are review-before-trust anyway, close as won't-do."""
+created_at = 1793718555
+updated_at = 1793728437
+weight = 0.0
+issue_number = 1522
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1522"
+issue_closed_at = 1793728441
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p curate --test unterminated_quote_is_draft"
+rev = "7dbeeb09129482fb37ead84d6c9c2a3539c45a22"
+observed_at = 1793718555
+detail = """
+exit 101: d out; finished in 0.44s
+
+   Compiling curate v0.1.13 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues/crates/curate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running tests/unterminated_quote_is_draft.rs (target/debug/deps/unterminated_quote_is_draft-9cdcccafa995c3b3)
+error: test failed, to rerun pass `-p curate --test unterminated_quote_is_draft`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p curate --test unterminated_quote_is_draft"
+exit = 0
+passed = 1
+rev = "689b42a0efa9298a146865bb3a78fc4c82ef6446"
+observed_at = 1793728382
+output_digest = "sha256:be83bde6a30e8aeaff4d805319c8cc08733126ecb99d35042c760890ed4549cc"
+excerpt = """
+
+running 1 test
+test unterminated_quote_span_yields_a_draft_not_a_runnable_golden ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/unterminated_quote_is_draft.rs (target/debug/deps/unterminated_quote_is_draft-601f15bb066eeac1)
+"""
+
+[task.closure.red]
+rev = "7dbeeb09129482fb37ead84d6c9c2a3539c45a22"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "732148d2"
+title = "condukt verify + curate derive: unterminated quote in no-backtick prose criteria still yields a command (GH 1518 extension)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "curate",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """User ruling 2026-11-04 extends GH 1518 (unterminated quote yields NO command) to the prose fallback. Observed RED at 8041551f: condukt mechanical_cmd prose arms yield [cargo,test,-p,demo] for 'cargo test -p demo -- "x exits 0' and a stray-quote pytest argv; curate test_runner_command yields a runnable golden. Repro: crates/condukt/tests/check_criteria_prose_unterminated_quote.rs, crates/curate/tests/unterminated_quote_prose_is_draft.rs."""
+created_at = 1793719666
+updated_at = 1793728485
+weight = 0.0
+issue_number = 1523
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1523"
+issue_closed_at = 1793728488
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test check_criteria_prose_unterminated_quote"
+rev = "8041551fe0e010b56f6529d4b495f4c76d5ccf19"
+observed_at = 1793719666
+detail = """
+exit 101: t v0.7.327 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-failclosed-ext/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.78s
+     Running tests/check_criteria_prose_unterminated_quote.rs (target/debug/deps/check_criteria_prose_unterminated_quote-2ce2c866e37e01f5)
+error: test failed, to rerun pass `-p condukt --test check_criteria_prose_unterminated_quote`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test check_criteria_prose_unterminated_quote"
+exit = 0
+passed = 2
+rev = "689b42a0efa9298a146865bb3a78fc4c82ef6446"
+observed_at = 1793728445
+output_digest = "sha256:984c4bf645888d8619e2e39b22b8d83d3d8945a9ef75d5e35273aa10d4b5290b"
+excerpt = """
+
+running 2 tests
+test balanced_or_plain_prose_criteria_still_yield_a_command ... ok
+test unterminated_quote_in_prose_criteria_is_not_extracted_as_a_command ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/check_criteria_prose_unterminated_quote.rs (target/debug/deps/check_criteria_prose_unterminated_quote-2ec335da07fd0dc2)
+"""
+
+[task.closure.red]
+rev = "8041551fe0e010b56f6529d4b495f4c76d5ccf19"
+exit = 101
+kind = "behavioural"

@@ -1,69 +1,4 @@
 [[task]]
-id = "658b7839"
-title = "blastguard FP4: python3 -c read-only open() misattributed as the write target"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """Cause: in a python3 -c program, blastguard pairs the mode 'w' of the scratch open('<scratch>/task-%s.json'%t['id'],'w') with the earlier read-only open('<decomposition.json>') (default mode), so the read-only file is reported as the write target. Observed 2026-11-03, blastguard 0.2.218. Repro: crates/blastguard/tests/python_c_read_open_misattributed_fp_20261103.rs (fp4_ RED; control must stay non-allow). Expected: same verdict as the command without the read open (allow in a temp-dir scratch). Verbatim denial reason: "`python3` is invoked with an inline-eval flag, and it writes `/Users/yuki/.condukt/state/harness-e77d23c7/run-20261103-102800-88064.decomposition.json` (`,'w')`) — it exists, and it is not inside a git work tree — nothing holds a second copy of these bytes". Denied command: python3 -c "import json;d=json.load(open('/Users/yuki/.condukt/state/harness-e77d23c7/run-20261103-102800-88064.decomposition.json')) / for t in d['tasks']: open('<scratchpad>/task-%s.json'%t['id'],'w').write(json.dumps(t,ensure_ascii=False,indent=1)) / print('ok')""""
-created_at = 1793675446
-updated_at = 1793675446
-weight = 0.0
-issue_number = 1506
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1506"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test python_c_read_open_misattributed_fp_20261103 fp4_"
-rev = "3b0d2e89dc53dedb26b69dbe7c6de874ff2abfd1"
-observed_at = 1793675446
-detail = """
-exit 101:  passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.06s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
-     Running tests/python_c_read_open_misattributed_fp_20261103.rs (target/debug/deps/python_c_read_open_misattributed_fp_20261103-3db3e44148957530)
-error: test failed, to rerun pass `-p blastguard --test python_c_read_open_misattributed_fp_20261103`"""
-
-[[task]]
-id = "80b18990"
-title = "blastguard: python3 stdin program using re.compile( is asked as code-building"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard,false-positive",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-03 at blastguard 0.2.245 (measured at 0.2.246 branch base 6e6ed586). A python3 - heredoc program that only calls re.compile( (regex, not code exec) returns ask: python3 - takes its program from stdin, and that program builds or decodes the code it runs (compile() ). Test: crates/blastguard/tests/python_stdin_re_compile_fp_20261103.rs. Expected allow, actual ask."
-created_at = 1793715031
-updated_at = 1793715031
-weight = 0.0
-issue_number = 1511
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1511"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test python_stdin_re_compile_fp_20261103"
-rev = "6ae75e70d7167765023d22bdfaaace8de942ce2a"
-observed_at = 1793715031
-detail = """
-exit 101: wed
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
-     Running tests/python_stdin_re_compile_fp_20261103.rs (target/debug/deps/python_stdin_re_compile_fp_20261103-bd5a6e9183aab4c1)
-error: test failed, to rerun pass `-p blastguard --test python_stdin_re_compile_fp_20261103`"""
-
-[[task]]
 id = "1943843c"
 title = "blastguard: read-only python3 -c with 'recursive rm' string data denied as rm with a wildcard"
 project = "/Users/yuki/src/harness"
@@ -183,39 +118,6 @@ test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out;
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
      Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-681c0cdedb76ebef)
 error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""
-
-[[task]]
-id = "72f471d3"
-title = "curate derive: unterminated-quote backtick span becomes a runnable golden (split_whitespace twin of GH 1518)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "curate",
-    "fail-open",
-    "p2",
-]
-touched_files = []
-status = "pending"
-notes = """Measured 2026-11-04 at session worktree rev 7dbeeb09. crates/curate/src/derive.rs backticked_command uses inner.split_whitespace() with no shlex; condukt verify::mechanical_cmd was made fail-closed for the same input in GH 1518 (user ruling 2026-11-03: an unterminated quote yields no mechanical command). Observed: criteria with an unterminated quote yields golden cmd [cargo,test,-p,demo,--,"never_closed] (stray quote glued), and a FOO=1 head falls through to test_runner_command yielding [cargo,test,-p,demo], a different command. evalkit runs the golden and asserts exit 0. Expected: draft (no cmd), per curate's auto+draft-fallback policy. Repro: crates/curate/tests/unterminated_quote_is_draft.rs (7dbeeb09). Whether the condukt ruling extends to curate is a judgment: if a human says curate goldens are review-before-trust anyway, close as won't-do."""
-created_at = 1793718555
-updated_at = 1793718555
-weight = 0.0
-issue_number = 1522
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1522"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p curate --test unterminated_quote_is_draft"
-rev = "7dbeeb09129482fb37ead84d6c9c2a3539c45a22"
-observed_at = 1793718555
-detail = """
-exit 101: d out; finished in 0.44s
-
-   Compiling curate v0.1.13 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues/crates/curate)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
-     Running tests/unterminated_quote_is_draft.rs (target/debug/deps/unterminated_quote_is_draft-9cdcccafa995c3b3)
-error: test failed, to rerun pass `-p curate --test unterminated_quote_is_draft`"""
 
 [[task]]
 id = "fd2d2362"

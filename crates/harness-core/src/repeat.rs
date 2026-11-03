@@ -45,8 +45,9 @@
 //!   than a `deny`. A human still has to answer it, but a human who answers
 //!   "yes" is no longer overruled.
 //! * This does **not** apply to a finding the user never saw. The ledger keys
-//!   on an actually-emitted block, so the first block always stands at full
-//!   strength.
+//!   on an actually-emitted block, so the first block stands at full strength
+//!   — except when its fingerprint's hash collides with one already seen in
+//!   the session (see `marker`), which waives it as a false repeat.
 //!
 //! Every waiver is recorded (see [`waivers`]) so "the gate stopped firing" is
 //! never silent — CLAUDE.md §4 forbids making an error invisible, and it
@@ -113,10 +114,13 @@ fn session_dir(state_dir: &Path, session_id: &str) -> PathBuf {
 ///
 /// The fingerprint is hashed rather than used directly: a finding fingerprint
 /// is arbitrary text (a command line, a file path, a checker's message) and
-/// would otherwise have to be escaped into a filename. The hash is only an
-/// identity key — a collision costs one over-eager waiver, never a missed
-/// block, because a collision can only make an unrelated finding look like a
-/// repeat of one the user already saw.
+/// would otherwise have to be escaped into a filename. The hash (32-bit FNV-1a)
+/// is the identity key, and a collision is NOT harmless: it makes an unrelated
+/// finding look like a repeat of one the user already saw, so a Stop gate lets
+/// that finding's stop through unblocked (a PreToolUse gate asks instead of
+/// denying) — a missed block on a finding the user never saw. The probability
+/// is small for the handful of findings one session produces, but it is the
+/// permissive side, and nothing here detects it.
 fn marker(state_dir: &Path, session_id: &str, gate: &str, fingerprint: &str) -> PathBuf {
     session_dir(state_dir, session_id).join(format!(
         "{}-{}.seen",

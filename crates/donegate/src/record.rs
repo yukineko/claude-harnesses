@@ -271,23 +271,114 @@ fn diagnostic_location<'a>(lines: &[&'a str], i: usize) -> Option<&'a str> {
         .copied()
 }
 
+/// `true` when `prefix` ends in a source location: tsc's `path(line,col)` or
+/// gcc/clang's `path:line:col` / `path:line`, with a non-empty path that does
+/// not start with whitespace (an indented code excerpt is not a header).
+fn ends_in_location(prefix: &str) -> bool {
+    if prefix.is_empty() || prefix.starts_with(char::is_whitespace) {
+        return false;
+    }
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    // tsc: `path(3,5)`
+    if let Some(inner) = prefix.strip_suffix(')') {
+        if let Some((path, lc)) = inner.rsplit_once('(') {
+            if let Some((line, col)) = lc.split_once(',') {
+                return !path.is_empty() && digits(line) && digits(col);
+            }
+        }
+        return false;
+    }
+    // gcc / clang: `path:3:5` or `path:3`
+    let Some((rest, last)) = prefix.rsplit_once(':') else {
+        return false;
+    };
+    if !digits(last) {
+        return false;
+    }
+    match rest.rsplit_once(':') {
+        Some((path, line)) if digits(line) => !path.is_empty(),
+        _ => !rest.is_empty(),
+    }
+}
+
+/// A single-line located diagnostic — the header carries its own location:
+/// tsc's `path(3,5): error TS2322: …` and gcc/clang's `path:3:5: error: …`
+/// (also `fatal error:` and `warning`). `Some(true)` for an error, `Some(false)`
+/// for a warning, `None` for anything else.
+fn single_line_diagnostic(l: &str) -> Option<bool> {
+    for (sep, err) in [
+        (": error", true),
+        (": fatal error", true),
+        (": warning", false),
+    ] {
+        let mut from = 0;
+        while let Some(p) = l[from..].find(sep) {
+            let at = from + p;
+            let after = &l[at + sep.len()..];
+            if (after.starts_with(':') || after.starts_with(' ')) && ends_in_location(&l[..at]) {
+                return Some(err);
+            }
+            from = at + sep.len();
+        }
+    }
+    None
+}
+
+/// A compiler's error-count summary line that has no `error:` prefix: tsc's
+/// `Found N error(s)…` and gcc/clang's `N error(s) generated.` (also
+/// `N warnings and N errors generated.`).
+fn is_diagnostic_summary(l: &str) -> bool {
+    let t = l.trim();
+    let starts_with_count = |s: &str| {
+        let n = s.bytes().take_while(u8::is_ascii_digit).count();
+        n > 0 && s[n..].starts_with(' ')
+    };
+    if let Some(rest) = t.strip_prefix("Found ") {
+        return starts_with_count(rest) && rest.contains(" error");
+    }
+    starts_with_count(t) && t.ends_with(" generated.") && t.contains(" error")
+}
+
 /// The compiler/lint diagnostics of `lines`, skipping those already shown
 /// elsewhere in `skip`. A diagnostic is identified by its header AND its
 /// location, not by its header text alone: the same `error[E0425]: …` header
 /// in several files is several diagnostics, and one whose header text is in
 /// `skip` is skipped only if its location line is in `skip` too (an unlocated
-/// header is skipped when its header is in `skip`). Located diagnostics (a header with a `-->`
-/// location) are shown as the header plus its first location line: up to
-/// [`ERROR_HEADERS_MAX`] of them, `error` ones before `warning` ones, with a
-/// `… and N more diagnostics` line for the rest. Every unlocated `error`
-/// header (summaries such as `error: could not compile …`) follows; only the
-/// digest's overall [`DIGEST_MAX_LINES`] cap bounds them. Unlocated `warning`
-/// headers (`warning: … generated N warnings`) are not shown.
+/// header is skipped when its header is in `skip`). Located diagnostics are
+/// either a header with a `-->` location (rustc / clippy; shown as the header
+/// plus its first location line) or a single line carrying its own location
+/// (tsc `path(3,5): error TS…: …`, gcc/clang `path:3:5: error: …`; shown as
+/// that line, skipped when it is in `skip`). Up to [`ERROR_HEADERS_MAX`] of
+/// them are shown, `error` ones before `warning` ones, with a `… and N more
+/// diagnostics` line for the rest. Every unlocated `error` header (summaries
+/// such as `error: could not compile …`) and every compiler count summary
+/// (tsc `Found N errors…`, gcc/clang `N errors generated.`) not in `skip`
+/// follows; only the digest's overall [`DIGEST_MAX_LINES`] cap bounds them.
+/// Unlocated `warning` headers (`warning: … generated N warnings`) are not
+/// shown.
 fn diagnostics(lines: &[&str], skip: &[&str]) -> Vec<String> {
-    let mut located_err: Vec<(&str, &str)> = Vec::new();
-    let mut located_warn: Vec<(&str, &str)> = Vec::new();
+    // `(header, Some(location line))` for rustc-style, `(line, None)` for a
+    // single-line diagnostic whose location is in the line itself.
+    let mut located_err: Vec<(&str, Option<&str>)> = Vec::new();
+    let mut located_warn: Vec<(&str, Option<&str>)> = Vec::new();
     let mut unlocated_err: Vec<&str> = Vec::new();
     for (i, l) in lines.iter().enumerate() {
+        if let Some(err) = single_line_diagnostic(l) {
+            if !skip.contains(l) {
+                if err {
+                    located_err.push((l, None));
+                } else {
+                    located_warn.push((l, None));
+                }
+            }
+            continue;
+        }
+        if is_diagnostic_summary(l) {
+            if !skip.contains(l) {
+                unlocated_err.push(l);
+            }
+            continue;
+        }
         let err = is_error_header(l);
         if !(err || is_warning_header(l)) {
             continue;
@@ -297,17 +388,19 @@ fn diagnostics(lines: &[&str], skip: &[&str]) -> Vec<String> {
             continue;
         }
         match (loc, err) {
-            (Some(loc), true) => located_err.push((l, loc)),
-            (Some(loc), false) => located_warn.push((l, loc)),
+            (Some(loc), true) => located_err.push((l, Some(loc))),
+            (Some(loc), false) => located_warn.push((l, Some(loc))),
             (None, true) => unlocated_err.push(l),
             (None, false) => {}
         }
     }
-    let located: Vec<(&str, &str)> = located_err.into_iter().chain(located_warn).collect();
+    let located: Vec<(&str, Option<&str>)> = located_err.into_iter().chain(located_warn).collect();
     let mut out: Vec<String> = Vec::new();
     for (h, loc) in located.iter().take(ERROR_HEADERS_MAX) {
         out.push(h.trim_end().to_string());
-        out.push(loc.trim_end().to_string());
+        if let Some(loc) = loc {
+            out.push(loc.trim_end().to_string());
+        }
     }
     if located.len() > ERROR_HEADERS_MAX {
         out.push(format!(
@@ -357,8 +450,12 @@ fn is_plain_failed_line(l: &str) -> bool {
 /// Diagnostics: each `error[…]`/`error:`/`warning[…]`/`warning:` header that
 /// has a `--> file:line:col` location is shown with that location (up to
 /// [`ERROR_HEADERS_MAX`], errors first, then `… and N more diagnostics`); the
-/// location is what the next action needs. `error` headers with no location
-/// (`error: could not compile …`, `error: test failed …`) are all shown too.
+/// location is what the next action needs. A single-line diagnostic that
+/// carries its own location — tsc `path(3,5): error TS2322: …`, gcc/clang
+/// `path:3:5: error: …` (and their warnings) — counts against the same cap.
+/// `error` headers with no location (`error: could not compile …`, `error: test
+/// failed …`) and compiler count summaries (tsc `Found N errors…`, gcc/clang
+/// `N errors generated.`) are all shown too.
 ///
 /// Raw `--- stdout ---`/`--- stderr ---` sections, `---- name stdout ----`
 /// banners, backtrace notes and passing-test progress lines are never selected.

@@ -94,14 +94,18 @@ donegate gate          # チェックを手動実行（人間向けレポート�
   失敗行（`FAILED` を含む行、go の `--- FAIL: …`、python unittest の `FAIL: …`、jest / go の
   `FAIL <path>`。最大 10）、末尾 5 行。診断行とは `error[…]`/`error:`/`warning:` 見出しとその最初の
   `--> file:line:col` 位置行（最大 5 件、error 優先。同じ見出しでもファイル・位置が違えば位置ごとに残す）、
-  および位置を持たない `error:` 要約行
-  （`could not compile` 等）。1 チェック 24 行が上限で、空にはならない。そして**記録ファイルの絶対パス**。
+  位置を行内に持つ 1 行診断（tsc の `path(3,5): error TS2322: …`、gcc/clang の
+  `path:3:5: error: …`。同じ上限 5 件に数える）、位置を持たない `error:` 要約行
+  （`could not compile` 等）、およびコンパイラの件数要約（tsc の `Found N errors…`、
+  gcc/clang の `N errors generated.`）。1 チェック 24 行が上限で、空にはならない。そして**記録ファイルの絶対パス**。
   生の `--- stdout ---` / `--- stderr ---` 節や進捗行は表示しない。
 - 記録を保存できないときもチェックは実行し、停止もブロックする。理由に「保存できなかった」旨と
   原因を明記し、表示は**減らさず増やす**（digest に加えて末尾
   `max(output_tail_lines, 40)` 行の生出力）。
-- repeat ledger は、試行ごとに変わる記録パスを正規化した理由をキーにするので、
-  2 度目の waiver は従来どおり同じ指摘を認識する。
+- repeat ledger は、試行ごとに変わる記録パスを正規化した理由をキーにする。試行カウンタ
+  （`attempt N/max`）は意図的にキーに残すので、`max_attempts` 未満では同じ失敗でも 2 度目として
+  waiver されず、毎回ブロックする。有界な出口は試行上限と give-up sentinel
+  （`donegate:giveup:<check>`）である。
 5. すべてグリーンなら exit 0 で停止を通し、いずれか必須が失敗したら `block` を出して Claude に作業を続けさせる。
 
 ### 設定

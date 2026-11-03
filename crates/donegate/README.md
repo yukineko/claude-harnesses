@@ -52,8 +52,11 @@ and reads exit codes — so it can never hit a rate limit.
    `FAIL: …`, jest's/go's `FAIL <path>` (up to 10) — and the last 5 lines.
    Diagnostics are `error[…]`/`error:`/`warning:`
    headers with their first `--> file:line:col` location (up to 5, errors
-   first; the same header in different files is kept once per location) plus
-   unlocated `error:` summaries such as `could not compile`. Capped
+   first; the same header in different files is kept once per location),
+   single-line located diagnostics in the same cap — tsc
+   `path(3,5): error TS2322: …` and gcc/clang `path:3:5: error: …` — plus
+   unlocated `error:` summaries such as `could not compile` and compiler count
+   summaries (tsc `Found N errors…`, gcc/clang `N errors generated.`). Capped
    at 24 lines, never empty), and the **absolute path of the full raw output**.
    Raw `--- stdout ---` / `--- stderr ---` sections and progress lines are never
    shown.
@@ -72,7 +75,10 @@ If the record cannot be saved, the check still runs and the stop still blocks;
 the reason says the full output could not be saved (with why) and shows **more**,
 not less: the digest plus the last `max(output_tail_lines, 40)` raw lines.
 The repeat ledger keys a block on its reason with the per-run record path
-normalised, so the second-occurrence waiver still recognises a repeat.
+normalised. The attempt counter (`attempt N/max`) is deliberately kept in that
+key, so the same failure is never waived as a repeat below `max_attempts`: every
+stop under the cap blocks. The bounded exit is the attempt cap plus its give-up
+sentinel (`donegate:giveup:<check>`, see Loop safety).
 
 ### Loop safety
 

@@ -20,9 +20,17 @@ The `/sitecraft` skill asks the user every design decision the purpose needs, re
   - `decide classify` adds `description` and `reuse` (`unconfirmed` / `confirmed` / `rejected` /
     `not-applicable`) to its JSON; `--confirm-fit yes|no` records the user's fit answer, only when
     `existing` is true.
+- `sitecraft init <dir>` — `git init` plus `<dir>/sitecraft/` for a missing or empty `<dir>` (exit 0);
+  a non-empty directory, a file, or a path inside another git work tree is exit 1 with nothing changed;
+  git missing / failing / over 30 s in total, or an IO failure, is exit 2. The scaffold target is
+  `<dir>/app/`.
 - `sitecraft serve start|stop|status` — dev-server manager for the trusted `sitecraft.toml` `command`.
+  The ready probe asks both `127.0.0.1` and `[::1]` and records the address that answered as `url`.
 - `sitecraft check pages` — opens the configured pages with the bundled Playwright script and reports
-  console errors, page errors, asset HTTP errors and broken links.
+  console errors, page errors, asset HTTP errors and broken links. node runs in `<root>/<dir>` when
+  `command` is `npm --prefix <dir> …` (Playwright resolves from there and its ancestors), else in the
+  root. Then each `api_paths` entry gets one `GET` (redirects not followed): non-2xx or no connection
+  is exit 1, more than 10 s for one path is exit 2.
 - `sitecraft check security` — secrets (printed redacted) and `.env` values in build output, dangerous
   HTML sinks in sources, `npm audit --json` high/critical (judged from the JSON shape, not the exit code).
 - `sitecraft trust` — a human records the sha256 of `sitecraft.toml`; an untrusted or changed file is never run.

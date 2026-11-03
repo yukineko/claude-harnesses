@@ -128,24 +128,59 @@ Claude Code のセッション・ツール呼び出し・ファイル編集を�
   あわせて `.claude-plugin/marketplace.json` にエントリを追加し、3 ファイルの version を lockstep させる。新規 plugin の作成は condukt で別タスクとして回す。
 - exit 2（`SITECRAFT_MARKETPLACE` 未設定・読めない）— 「既存が無い」と読まない。パスを直して再実行する。
 
-### Phase 6 — scaffold（既定 Vite）
+### Phase 6 — scaffold（既定 Vite、scaffold 先は `<root>/app/`）
 
-- 既定は **Vite**（`npm create vite@latest <dir>`）。Next.js 等は**ユーザーが選んだ場合だけ**使う（選択制。AskUserQuestion で確認する）。
-- **空でないディレクトリには scaffold しない。** 対象ディレクトリにファイルがあれば拒否し、別のディレクトリをユーザーに聞く（上書き・マージはしない）。
+- 新しい repo は `sitecraft init <dir>` で作る。`<dir>` が存在しないか空のときだけ `git init` と `<dir>/sitecraft/` を作って exit 0。空でない・ファイル・別の git work tree の中なら exit 1 で何も変えない。git が無い・`git init` 失敗・git が 30 秒を超えた・IO 失敗は exit 2（合格ではない。原因を直して再実行）。既存の project は init を経ずに続けてよい。
+- scaffold 先は **`<root>/app/`**。決定記録 `<root>/sitecraft/decisions.toml` と `sitecraft.toml`（`<root>` 直下）は `app/` の外に置く。`<root>/sitecraft/decisions.toml` がある root でも、空の（または存在しない）`app/` への scaffold は拒否しない。
+- 既定は **Vite**（`<root>` で `npm create vite@latest app`）。Next.js 等は**ユーザーが選んだ場合だけ**使う（選択制。AskUserQuestion で確認する）。
+- **空でないディレクトリには scaffold しない。** この規則は scaffold 先の `app/` に適用する: `app/` が存在して空でなければ拒否し、別のディレクトリをユーザーに聞く（上書き・マージはしない）。
+
+**フロントと API を 1 つの dev command で起動する（Vite + Hono）。** API が要るサイトでは、Hono のアプリを `@hono/vite-dev-server` で Vite の dev server に載せ、`npm --prefix app run dev` の 1 コマンドでフロントと API を同じ port で起動する（別プロセスの API server を立てない）。構成は `app/` の中に次の 2 ファイル: `app/vite.config.ts` に `devServer({ entry: 'server/app.ts', … })` を足し、`app/server/app.ts` で Hono アプリを `export default` する（API は `/api/` 以下）。`app/` で `npm i hono` と `npm i -D @hono/vite-dev-server` を入れる。確認したい API のパスは `sitecraft.toml` の `api_paths` に書く（Phase 7）。
+
+```ts
+// app/vite.config.ts
+import { defineConfig } from 'vite'
+import devServer, { defaultOptions } from '@hono/vite-dev-server'
+
+export default defineConfig({
+  plugins: [
+    devServer({
+      entry: 'server/app.ts',
+      // /api/ 以外は Vite（フロント）が返す
+      exclude: [/^(?!\/api\/).*/, ...defaultOptions.exclude],
+    }),
+  ],
+})
+```
+
+```ts
+// app/server/app.ts
+import { Hono } from 'hono'
+
+const app = new Hono()
+app.get('/api/health', (c) => c.json({ ok: true }))
+
+export default app
+```
 
 ### Phase 7 — sitecraft.toml と trust
 
-プロジェクト直下に `sitecraft.toml` を書く（キーはすべてトップレベル）:
+`<root>` 直下（`app/` の外）に `sitecraft.toml` を書く（キーはすべてトップレベル。アプリは `app/` にあるので `command` は `npm --prefix app …`）:
 
 ```toml
-command = ["npm", "run", "dev", "--", "--port", "5173", "--strictPort"]
+command = ["npm", "--prefix", "app", "run", "dev", "--", "--port", "5173", "--strictPort"]
 port = 5173
 ready_path = "/"
 ready_timeout_secs = 60
 pages = ["/"]
-build_dir = "dist"
-web_globs = ["src/**", "index.html", "public/**"]
+build_dir = "app/dist"
+web_globs = ["app/src/**", "app/index.html", "app/public/**", "app/server/**"]
+# 任意: check pages が GET で 2xx を確かめる API のパス（/ で始まる。リダイレクトは追わない）
+api_paths = ["/api/health"]
 ```
+
+- `check pages` は `command` の `npm --prefix app` から `app/` を web-app package とみなし、そこ（と祖先）の `node_modules` から Playwright を解決する。Playwright は `app/` に入れる（`npm --prefix app i -D playwright && (cd app && npx playwright install chromium)`）。
+- `api_paths` の各パスは `http://127.0.0.1:<port>`（Stop gate では `serve start` が応答を確認した loopback アドレス。`[::1]` のこともある）に GET され、2xx 以外（3xx を含む）・接続失敗は exit 1、1 パス 10 秒を超えたら exit 2。`/` で始まらない要素は設定エラー（exit 2）。
 
 書いたら **`sitecraft trust` は人間に実行してもらう。** `command` は Stop gate と `sitecraft serve start` が実行するコマンドなので、内容を人間が確認して承認する必要がある。LLM が代わりに `sitecraft trust` を実行しない。未 trust の設定では `serve start` も gate も止まる（exit 2 / block）。
 
@@ -163,7 +198,7 @@ E2E テストは既存の **`/webqa-gen`** スキルで生成する（Playwright
 ビルドしてから、次をすべて実行する:
 
 ```sh
-npm run build
+npm --prefix app run build
 sitecraft serve start
 sitecraft check pages
 sitecraft serve stop

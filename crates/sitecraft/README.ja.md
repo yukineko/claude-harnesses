@@ -16,13 +16,14 @@
 | `sitecraft decide check` | 目的と必要な判断がすべて記録済みで、整合性規則に違反しなければ 0。未回答・目的未記録（`sitecraft decide purpose --text` の案内付き）・規則違反があれば 1。記録が無い・壊れている（multi でない問いに配列がある等）なら 2 |
 | `sitecraft decide add-question --id I --text T [--choice C]… [--multi]` | 目的から起こしたドメイン固有の問いを追加する（`--choice` 無しは自由記述、`--multi` で複数選択） |
 | `sitecraft decide classify --feature F --kind simple\|dedicated-harness [--harness P] [--confirm-fit yes\|no]` | 機能を分類し、`dedicated-harness` なら `$SITECRAFT_MARKETPLACE` の marketplace.json に既存 plugin があるか（`existing`）・その `description`・`reuse`（`unconfirmed` / `confirmed` / `rejected` / `not-applicable`）を報告する。`--confirm-fit` はユーザーの適合判断を `[features.F] fit` に記録し、`existing: true` のときだけ受け付ける |
-| `sitecraft serve start` / `stop` / `status` | trust 済み `sitecraft.toml` の `command` を自前のプロセスグループで起動・停止・状態表示する（ポート空き確認、ready 待ち、停止はポート解放まで確認） |
-| `sitecraft check pages [--base-url URL]` | 同梱の `assets/check-pages.mjs` を Playwright で回し、console error・page error・asset の HTTP エラー・壊れたリンクを検出する |
+| `sitecraft init <dir>` | 新しい site repo を作る。`<dir>` が存在しないか空なら `git init` と `<dir>/sitecraft/` を作って 0。空でない・ファイル・別の git work tree の中なら何も変えずに 1。git が無い・`git init` 失敗・git が合計 30 秒超過・IO 失敗は 2（途中で作ったものは消す）。`--root` は使わない。scaffold 先は `<dir>/app/` |
+| `sitecraft serve start` / `stop` / `status` | trust 済み `sitecraft.toml` の `command` を自前のプロセスグループで起動・停止・状態表示する（ポート空き確認、ready 待ち、停止はポート解放まで確認）。ready 待ちは `127.0.0.1` と `[::1]` の両方に問い合わせ、応答した方を `url` に記録する |
+| `sitecraft check pages [--base-url URL]` | 同梱の `assets/check-pages.mjs` を Playwright で回し、console error・page error・asset の HTTP エラー・壊れたリンクを検出する。node は `command` が `npm --prefix <dir>` なら `<root>/<dir>` で（そこと祖先の `node_modules` から Playwright を解決）、それ以外は root で走る。続いて `api_paths` の各パスに GET し（リダイレクトは追わない）、2xx 以外・接続失敗は 1、1 パス 10 秒超過は 2 |
 | `sitecraft check security` | build 出力の秘密情報（伏字表示）と `.env` 値の混入、ソースの危険な HTML sink、`npm audit --json` の high/critical を検出する |
 | `sitecraft trust` | 現在の `sitecraft.toml` の sha256 を trust store に記録する（人間が実行する） |
 | `sitecraft gate` | Stop hook（stdin の Stop payload を読む） |
 
-全サブコマンド共通で `--root <dir>` を取る（既定は cwd。`gate` は payload の `cwd` を使う）。
+全サブコマンド共通で `--root <dir>` を取る（既定は cwd。`gate` は payload の `cwd` を使う。`init` は引数の `<dir>` を使う）。
 
 ### 整合性規則（`decide check`）
 
@@ -82,7 +83,10 @@
 
 ## sitecraft.toml
 
-プロジェクト直下に置く（キーはすべてトップレベル。未知のキーはエラー）。全項目つきの例と各項目の説明は
+プロジェクト直下に置く（キーはすべてトップレベル。未知のキーはエラー）。アプリは `app/` に置くので、例は
+`command = ["npm", "--prefix", "app", …]`・`build_dir = "app/dist"`・`web_globs = ["app/src/**", …]` の形。
+任意キー `api_paths`（`/` で始まる文字列の配列。既定は空。`/` で始まらない要素は設定エラー＝exit 2）は `check pages` が
+GET で検査する。trust はファイル全体が対象なので、`api_paths` を変えても再 trust が要る。全項目つきの例と各項目の説明は
 [`sitecraft.example.toml`](sitecraft.example.toml)（これをコピーして編集する）。
 
 ## trust の手順

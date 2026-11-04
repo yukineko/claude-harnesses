@@ -556,7 +556,7 @@ pub(super) fn payloads_after(rest: &[&str], pos: usize) -> Vec<String> {
 /// WORD spans — `"x='a b'` + `c"` is one word over two tokens. `None` when a
 /// quote is still open at the end of `rest`: where the word ends is then
 /// undetermined.
-fn shell_word_token_span(rest: &[&str], from: usize) -> Option<usize> {
+pub(super) fn shell_word_token_span(rest: &[&str], from: usize) -> Option<usize> {
     // `None` outside quotes, otherwise the open quote char.
     let mut open: Option<char> = None;
     for (n, tok) in rest[from..].iter().enumerate() {
@@ -593,11 +593,13 @@ fn shell_word_token_span(rest: &[&str], from: usize) -> Option<usize> {
 /// a wildcard" — a command line that exists nowhere: no process ever receives
 /// that text as an argument.
 ///
-/// NOT covered (still denied): a program whose assignment value holds a
-/// space and is followed by a NEWLINE, `python3 -c "x='recursive rm'
+/// Not handled HERE: a program whose assignment value holds a space and is
+/// followed by a NEWLINE, `python3 -c "x='recursive rm'
 /// y=a[:1]"`. `rest` was split on all whitespace, so the newline is gone and
-/// the shell pass over the whole program reads one statement whose command
-/// word is `rm'`. That loss happens before this function. Positions strictly INSIDE a word whose quotes all close are
+/// the shell pass over the whole program reads one statement; its command
+/// word was `rm'` until `command_candidates` learned to skip a quoted
+/// assignment's whole word (`literal_assignment_span`, backlog ce04adeb).
+/// Positions strictly INSIDE a word whose quotes all close are
 /// therefore not candidates; the word's whole text still is (and is read by the
 /// full program analysis: shell pass, literal descent, destructive calls).
 ///

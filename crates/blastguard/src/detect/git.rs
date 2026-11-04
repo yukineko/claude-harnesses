@@ -435,11 +435,13 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
             // the functional equal of the already-denied `git clean -fdx`, just
             // with the debris parked in a stash entry a later `stash drop`
             // erases. Every one of these was ALLOW on 0.2.19.
-            let sweeps_untracked = rest[idx + 1..].iter().any(|t| {
-                *t == "--all"
-                    || *t == "--include-untracked"
-                    || (is_short_flag(t) && (t.contains('a') || t.contains('u')))
-            });
+            let sweeps_untracked = stash_words_outside_message(&rest[idx + 1..])
+                .into_iter()
+                .any(|t| {
+                    t == "--all"
+                        || t == "--include-untracked"
+                        || (is_short_flag(t) && (t.contains('a') || t.contains('u')))
+                });
             if sweeps_untracked {
                 Decision::deny(
                     "git stash -u/-a removes untracked (and with -a, ignored) files from the \
@@ -451,4 +453,30 @@ working tree, like git clean",
         }
         _ => Decision::Allow,
     }
+}
+
+/// The stash argument tokens minus the VALUE of a separate-token `-m` /
+/// `--message` option. Backlog d0d5cc67 (#1526): the line is split on
+/// whitespace, so `git stash push -m "stray cargo fmt --all reformat"` put
+/// the message word `--all` into the flag scan and was denied as `--all`.
+///
+/// Only a value whose shell word provably ends is dropped. A message word
+/// whose quote never closes (`shell_word_token_span` is `None`) is kept in
+/// the scan, so an undetermined word end still reads its tokens as flags —
+/// the restrictive side. Glued forms (`-mMSG`, `--message=MSG`) are not
+/// recognised and are scanned exactly as before.
+fn stash_words_outside_message<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        let t = args[i];
+        out.push(t);
+        i += 1;
+        if (t == "-m" || t == "--message") && i < args.len() {
+            if let Some(span) = super::payload::shell_word_token_span(args, i) {
+                i += span;
+            }
+        }
+    }
+    out
 }

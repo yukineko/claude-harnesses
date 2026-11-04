@@ -271,7 +271,14 @@ fn slim(records: Vec<Value>, base: &str) -> Vec<Value> {
                 })
             })
         })
-        .map(|r| serde_json::json!({"id": r["id"], "affected": r["affected"]}))
+        .map(|r| {
+            serde_json::json!({
+                "id": r["id"],
+                "aliases": r["aliases"],
+                "severity": r["severity"],
+                "affected": r["affected"],
+            })
+        })
         .collect()
 }
 
@@ -385,13 +392,34 @@ pub fn parse_dpkg(text: &str) -> Result<Vec<Pkg>, String> {
     Ok(out)
 }
 
-fn affected_by(aff: &Value, v: &str) -> bool {
-    if aff["versions"]
-        .as_array()
-        .is_some_and(|vs| vs.iter().any(|x| x.as_str() == Some(v)))
+/// The lowest ECOSYSTEM `fixed` event above `v` (the version that fixes it).
+fn fixed_above(aff: &Value, v: &str) -> Option<String> {
+    aff["ranges"]
+        .as_array()?
+        .iter()
+        .filter(|r| r["type"].as_str() == Some("ECOSYSTEM"))
+        .filter_map(|r| r["events"].as_array())
+        .flatten()
+        .filter_map(|e| e["fixed"].as_str())
+        .filter(|f| dpkg_cmp(v, f) == Ordering::Less)
+        .min_by(|a, b| dpkg_cmp(a, b))
+        .map(str::to_string)
+}
+
+/// `None` = not affected; `Some(fixed)` = affected, `fixed` = the fixing
+/// version if the record names one.
+fn affected_by(aff: &Value, v: &str) -> Option<Option<String>> {
+    if affected_in_ranges(aff, v)
+        || aff["versions"]
+            .as_array()
+            .is_some_and(|vs| vs.iter().any(|x| x.as_str() == Some(v)))
     {
-        return true;
+        return Some(fixed_above(aff, v));
     }
+    None
+}
+
+fn affected_in_ranges(aff: &Value, v: &str) -> bool {
     let Some(ranges) = aff["ranges"].as_array() else {
         return false;
     };
@@ -435,6 +463,10 @@ fn affected_by(aff: &Value, v: &str) -> bool {
 pub struct Hit {
     pub pkg: Pkg,
     pub advisory: String,
+    /// The OSV record (id / aliases / severity are read from it, canon v1.1 §3.1).
+    pub record: Value,
+    /// The fixing version, `None` when the record has none (canon v1.1 §3.2: 回避策).
+    pub fixed: Option<String>,
 }
 
 /// `(records for this ecosystem, hits)`.
@@ -463,14 +495,18 @@ pub fn evaluate(feed: &Feed, eco: &Eco, pkgs: &[Pkg]) -> (usize, Vec<Hit>) {
                 continue;
             };
             for p in pkgs.iter().filter(|p| p.source == name) {
-                if affected_by(a, &p.source_version)
-                    && !hits
-                        .iter()
-                        .any(|h: &Hit| h.pkg.name == p.name && h.advisory == id)
+                let Some(fixed) = affected_by(a, &p.source_version) else {
+                    continue;
+                };
+                if !hits
+                    .iter()
+                    .any(|h: &Hit| h.pkg.name == p.name && h.advisory == id)
                 {
                     hits.push(Hit {
                         pkg: p.clone(),
                         advisory: id.clone(),
+                        record: rec.clone(),
+                        fixed,
                     });
                 }
             }

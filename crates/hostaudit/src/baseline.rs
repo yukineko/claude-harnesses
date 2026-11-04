@@ -1,14 +1,18 @@
-//! Baseline rules B1–B9 (canon §3.3, CONTRACT §4.5) and the `audit` command.
+//! Baseline rules B1–B9 (canon §3.3, CONTRACT §4.5), B5 with the v1.1
+//! per-CVE evaluation (canon v1.1 §3). The `audit` command is in `audit.rs`.
 //!
 //! Every host gets exactly one finding per rule; a rule whose input could not
 //! be observed is `undetermined`, never omitted and never clean.
 
+use crate::audit::{CveCtx, Memo};
 use crate::config::Ctx;
-use crate::finding::{self, Finding};
-use crate::inventory::{self, Host};
+use crate::cve;
+use crate::feeds;
+use crate::finding::Finding;
+use crate::inventory::Host;
 use crate::osv::{self, Feed};
-use crate::ssh::{self, Obs, Remote};
-use std::collections::BTreeMap;
+use crate::ssh::{Obs, Remote};
+use std::collections::{BTreeMap, BTreeSet};
 
 const DAY: i64 = 86_400;
 const APT_INDEX_MAX: i64 = 7 * DAY;
@@ -53,7 +57,7 @@ fn parse_int(o: &Obs, r: Remote) -> Result<Option<i64>, String> {
             .map_err(|_| format!("{} output {:?} is not unix seconds", r.id(), s.trim())),
         Obs::Absent => Ok(None),
         Obs::Unit(u) => Err(format!("{} unexpected output {u:?}", r.id())),
-        Obs::Undet(why) => Err(why.clone()),
+        Obs::Undet(why) | Obs::Missing(why) => Err(why.clone()),
     }
 }
 
@@ -261,47 +265,64 @@ fn b9(ctx: &Ctx, host: &Host, listen: &Result<Vec<Listen>, String>) -> Finding {
     }
 }
 
-// ───────────────────────────── B5 ──────────────────────────────────────────
+// ───────────────────────────── B5 (+ K2) ───────────────────────────────────
 
 pub type FeedMemo = BTreeMap<&'static str, Result<Feed, String>>;
 
-fn b5(ctx: &Ctx, t: &str, w1: &Obs, w2: &Obs, memo: &mut FeedMemo) -> Finding {
-    let os = match w1 {
-        Obs::Out(s) => s,
-        Obs::Undet(why) => return Finding::undetermined("B5", t, vec![], why),
-        other => {
-            return Finding::undetermined("B5", t, vec![], &format!("W1 unexpected {other:?}"))
-        }
-    };
-    let eco = match osv::eco_from_os_release(os) {
+/// How a CVE rule (B5 / K2) words its result.
+pub struct CveRule<'a> {
+    pub rule: &'a str,
+    /// What was checked, for the clean evidence.
+    pub scope: String,
+    /// Fix text for the affected items.
+    pub fix: fn(&[cve::Item]) -> String,
+}
+
+/// The finding of a CVE rule plus the evaluated items (`Err` = undetermined).
+pub struct CveOutcome {
+    pub finding: Finding,
+    pub items: Result<Vec<cve::Item>, String>,
+}
+
+fn undetermined_cve(rule: &str, t: &str, why: &str) -> CveOutcome {
+    CveOutcome {
+        finding: Finding::undetermined(rule, t, vec![], why),
+        items: Err(why.to_string()),
+    }
+}
+
+/// OSV match of `pkgs` (by source package / source version) plus the
+/// per-CVE evaluation of canon v1.1 §3 — shared by B5 (every installed
+/// package) and K2 (the running kernel's package only).
+pub fn cve_rule(
+    ctx: &Ctx,
+    t: &str,
+    spec: &CveRule<'_>,
+    os_release: &str,
+    pkgs: &[osv::Pkg],
+    memo: &mut Memo,
+    cx: &CveCtx,
+) -> CveOutcome {
+    let rule = spec.rule;
+    let eco = match osv::eco_from_os_release(os_release) {
         Ok(e) => e,
-        Err(e) => return Finding::undetermined("B5", t, vec![], &e),
+        Err(e) => return undetermined_cve(rule, t, &e),
     };
-    let pkgs = match w2 {
-        Obs::Out(s) => match osv::parse_dpkg(s) {
-            Ok(p) => p,
-            Err(e) => return Finding::undetermined("B5", t, vec![], &e),
-        },
-        Obs::Undet(why) => return Finding::undetermined("B5", t, vec![], why),
-        other => {
-            return Finding::undetermined("B5", t, vec![], &format!("W2 unexpected {other:?}"))
-        }
-    };
-    let feed = memo
+    let Memo {
+        osv: osv_memo, kev, ..
+    } = memo;
+    let feed = osv_memo
         .entry(eco.base())
         .or_insert_with(|| osv::load(ctx, eco.base()));
     let feed = match feed {
         Ok(f) => f,
-        Err(e) => {
-            return Finding::undetermined("B5", t, vec![], &format!("advisories unavailable: {e}"))
-        }
+        Err(e) => return undetermined_cve(rule, t, &format!("advisories unavailable: {e}")),
     };
-    let (count, hits) = osv::evaluate(feed, &eco, &pkgs);
-    let mut f = if count == 0 {
-        Finding::undetermined(
-            "B5",
+    let (count, hits) = osv::evaluate(feed, &eco, pkgs);
+    let mut out = if count == 0 {
+        undetermined_cve(
+            rule,
             t,
-            vec![],
             &format!(
                 "the advisory feed has 0 records for {}; no data is not the same as no vulnerabilities",
                 eco.label()
@@ -309,16 +330,29 @@ fn b5(ctx: &Ctx, t: &str, w1: &Obs, w2: &Obs, memo: &mut FeedMemo) -> Finding {
         )
     } else if hits.is_empty() {
         let mut ev = vec![format!(
-            "{} installed packages checked against {count} {} advisories",
-            pkgs.len(),
+            "{} checked against {count} {} advisories",
+            spec.scope,
             eco.label()
         )];
         if let Some(n) = &feed.cache_note {
             ev.push(n.clone());
         }
-        Finding::clean("B5", t, ev)
+        let (cves, counts) = cve::to_json(&[]);
+        CveOutcome {
+            finding: Finding::clean(rule, t, ev)
+                .with("cves", cves)
+                .with("priority_counts", counts),
+            items: Ok(Vec::new()),
+        }
     } else {
-        let ev: Vec<String> = hits
+        // KEV is fetched only when there is something to look up.
+        let kev = kev.get_or_insert_with(|| feeds::load_kev(ctx));
+        let (kev_set, kev_at) = match kev {
+            Ok(k) => (Ok(&k.data), Some(k.fetched_at)),
+            Err(e) => (Err(e.as_str()), None),
+        };
+        let items = cve::evaluate(&hits, kev_set, &cx.exposure, &cx.candidates);
+        let mut ev: Vec<String> = hits
             .iter()
             .map(|h| {
                 format!(
@@ -327,25 +361,83 @@ fn b5(ctx: &Ctx, t: &str, w1: &Obs, w2: &Obs, memo: &mut FeedMemo) -> Finding {
                 )
             })
             .collect();
-        let mut bins: Vec<&str> = hits.iter().map(|h| h.pkg.name.as_str()).collect();
-        bins.sort();
-        bins.dedup();
-        let mut ids: Vec<&str> = hits.iter().map(|h| h.advisory.as_str()).collect();
-        ids.sort();
-        ids.dedup();
-        Finding::violation(
-            "B5",
-            t,
-            ev,
-            &format!(
-                "sudo apt update && sudo apt install --only-upgrade {}\n# advisories: {}",
-                bins.join(" "),
-                ids.join(" ")
-            ),
-        )
+        ev.extend(cve::evidence(&items, kev_set));
+        if let Some(why) = &cx.exposure.unknown {
+            ev.push(format!("exposure unknown: {why}"));
+        }
+        if let Err(why) = &cx.candidates {
+            ev.push(format!("W14 candidate versions unknown: {why}"));
+        }
+        let (cves, counts) = cve::to_json(&items);
+        CveOutcome {
+            finding: Finding::violation(rule, t, ev, &(spec.fix)(&items))
+                .with("cves", cves)
+                .with("priority_counts", counts)
+                .with(
+                    "kev_fetched_at",
+                    kev_at
+                        .map(serde_json::Value::from)
+                        .unwrap_or(serde_json::Value::Null),
+                ),
+            items: Ok(items),
+        }
     };
-    f.advisory_fetched_at = Some(feed.fetched_at);
-    f
+    out.finding.advisory_fetched_at = Some(feed.fetched_at);
+    out
+}
+
+fn b5_fix(items: &[cve::Item]) -> String {
+    cve::fix_text(items, "", "")
+}
+
+/// B5 for one host; also returns the affected binary packages (for S7).
+fn b5(
+    ctx: &Ctx,
+    t: &str,
+    w1: &Obs,
+    w2: &Obs,
+    memo: &mut Memo,
+    cx: &CveCtx,
+) -> (Finding, Result<BTreeSet<String>, String>) {
+    let os = match w1 {
+        Obs::Out(s) => s,
+        Obs::Undet(why) => {
+            return (
+                Finding::undetermined("B5", t, vec![], why),
+                Err(why.clone()),
+            )
+        }
+        other => {
+            let why = format!("W1 unexpected {other:?}");
+            return (Finding::undetermined("B5", t, vec![], &why), Err(why));
+        }
+    };
+    let pkgs = match w2 {
+        Obs::Out(s) => match osv::parse_dpkg(s) {
+            Ok(p) => p,
+            Err(e) => return (Finding::undetermined("B5", t, vec![], &e), Err(e)),
+        },
+        Obs::Undet(why) => {
+            return (
+                Finding::undetermined("B5", t, vec![], why),
+                Err(why.clone()),
+            )
+        }
+        other => {
+            let why = format!("W2 unexpected {other:?}");
+            return (Finding::undetermined("B5", t, vec![], &why), Err(why));
+        }
+    };
+    let spec = CveRule {
+        rule: "B5",
+        scope: format!("{} installed packages", pkgs.len()),
+        fix: b5_fix,
+    };
+    let o = cve_rule(ctx, t, &spec, os, &pkgs, memo, cx);
+    let bins = o
+        .items
+        .map(|items| items.into_iter().map(|i| i.package).collect());
+    (o.finding, bins)
 }
 
 // ───────────────────────────── B6 / B7 / B8 ────────────────────────────────
@@ -364,7 +456,7 @@ fn b6(t: &str, w9: &Obs, w10: &Obs) -> Finding {
                 violation = true;
             }
         }
-        Obs::Undet(why) => undet.push(why.clone()),
+        Obs::Undet(why) | Obs::Missing(why) => undet.push(why.clone()),
         Obs::Absent => undet.push("W9 unexpected absent".to_string()),
     }
     match w10 {
@@ -385,7 +477,7 @@ fn b6(t: &str, w9: &Obs, w10: &Obs) -> Finding {
                 violation = true;
             }
         }
-        Obs::Undet(why) => undet.push(why.clone()),
+        Obs::Undet(why) | Obs::Missing(why) => undet.push(why.clone()),
         Obs::Unit(u) => undet.push(format!("W10 unexpected {u:?}")),
     }
     if violation {
@@ -465,8 +557,15 @@ fn b8(t: &str, a: &Answers) -> Finding {
     }
 }
 
-/// All nine rules for one host.
-pub fn evaluate(ctx: &Ctx, host: &Host, a: &Answers, memo: &mut FeedMemo) -> Vec<Finding> {
+/// B1–B9 for one host. Also returns the B5-affected binary packages
+/// (`Err` = B5 undetermined), which S7 needs.
+pub fn evaluate(
+    ctx: &Ctx,
+    host: &Host,
+    a: &Answers,
+    memo: &mut Memo,
+    cx: &CveCtx,
+) -> (Vec<Finding>, Result<BTreeSet<String>, String>) {
     let t = host.alias.as_str();
     let w4 = obs(a, Remote::SshdConfig);
     let listen = match obs(a, Remote::Listen) {
@@ -474,7 +573,15 @@ pub fn evaluate(ctx: &Ctx, host: &Host, a: &Answers, memo: &mut FeedMemo) -> Vec
         Obs::Undet(why) => Err(why),
         other => Err(format!("W3 unexpected {other:?}")),
     };
-    vec![
+    let (f5, bins) = b5(
+        ctx,
+        t,
+        &obs(a, Remote::OsRelease),
+        &obs(a, Remote::DpkgList),
+        memo,
+        cx,
+    );
+    let fs = vec![
         sshd_key(
             "B1",
             t,
@@ -491,53 +598,13 @@ pub fn evaluate(ctx: &Ctx, host: &Host, a: &Answers, memo: &mut FeedMemo) -> Vec
         ),
         b3(t, &obs(a, Remote::Ufw), &obs(a, Remote::Nft)),
         b4(t, &listen),
-        b5(
-            ctx,
-            t,
-            &obs(a, Remote::OsRelease),
-            &obs(a, Remote::DpkgList),
-            memo,
-        ),
+        f5,
         b6(t, &obs(a, Remote::UnattendedUnit), &obs(a, Remote::AutoUpgrades)),
         b7(t, a),
         b8(t, a),
         b9(ctx, host, &listen),
-    ]
-}
-
-/// `hostaudit audit [--json]`.
-pub fn run_audit(ctx: &Ctx, json: bool) -> i32 {
-    let sel = match inventory::read_selection(ctx) {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            finding::print_err(
-                "hostaudit audit: refused — no hosts selected. Run `hostaudit select <alias>...` or `hostaudit select --all` first.",
-            );
-            return 3;
-        }
-        Err(e) => {
-            finding::print_err(&format!(
-                "hostaudit audit: refused — the selection cannot be read ({e}); no host was contacted"
-            ));
-            return 3;
-        }
-    };
-    if sel.host.is_empty() {
-        finding::print_err(
-            "hostaudit audit: refused — the selection is empty; no host was contacted",
-        );
-        return 3;
-    }
-    let mut memo = FeedMemo::new();
-    let mut all = Vec::new();
-    for host in &sel.host {
-        let mut answers = Answers::new();
-        for r in Remote::ALL {
-            answers.insert(r, ssh::run(ctx, host, r));
-        }
-        all.extend(evaluate(ctx, host, &answers, &mut memo));
-    }
-    finding::finish(ctx, &all, json)
+    ];
+    (fs, bins)
 }
 
 #[cfg(test)]

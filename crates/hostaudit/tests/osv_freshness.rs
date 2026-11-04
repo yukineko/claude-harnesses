@@ -63,13 +63,23 @@ fn b5_matches_by_source_package_not_binary_name() {
 
 #[test]
 fn b5_record_named_after_binary_package_does_not_match() {
-    // Only a record for the *binary* name exists; source is "openssl" → no match.
+    // Only a record for the *binary* name exists; source is "openssl" -> no match.
+    // Fixture is v1.1-clean elsewhere (codename, running kernel package, openssl EOL feed),
+    // so `exit 0` proves that B5 is clean AND nothing else is non-clean.
     let feed = json!([record("USN-9999-2", "Ubuntu:22.04:LTS", "libssl3", "9.9.9")]);
-    let (o, f) = b5(
-        UBUNTU,
-        "libssl3\t3.0.2-0ubuntu1.10\topenssl\t3.0.2-0ubuntu1.10\n",
-        &feed,
+    let mut env = Env::new();
+    let mut h = clean_host();
+    h.insert(
+        W2.into(),
+        ok("libssl3\t3.0.2-0ubuntu1.10\topenssl\t3.0.2-0ubuntu1.10\n\
+linux-image-5.15.0-100-generic\t5.15.0-100.110\tlinux\t5.15.0-100.110\n"),
     );
+    env.eol_ubuntu_supported();
+    env.eol_feed("openssl", &[cyc("3.0", 400)]);
+    env.one_selected_host(&h);
+    env.osv_feed(&feed);
+    let o = env.run(&["audit", "--json"]);
+    let f = finding(&o.findings(), "web1", "B5");
     assert_eq!(f["verdict"], "clean", "{f}");
     assert_eq!(o.code, 0, "{}", o.dbg());
 }

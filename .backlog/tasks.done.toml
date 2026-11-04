@@ -65797,3 +65797,702 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "afc4db1354bbed65950187e9bacbb3cc2c97487e"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "26fcfb1a"
+title = "hostaudit daily-task --print emits bare 'hostaudit' command; not on daily's PATH so the automatic audit exits 127"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "hostaudit",
+    "security",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Measured 2026-11-04 at db134f39: stanza is command = "hostaudit audit" (and local/aws). daily runs sh -c with PATH = ~/.cargo/bin + inherited; plugin bin dirs are not on hook PATH. Expected: absolute path to the launcher (e.g. resolved from current_exe's plugin root bin/hostaudit). Two readings: (a) defect — auto-audit never runs (user goal: 自動で監査); (b) intended manual edit (stanza comment says to replace). Distinguish: the user's goal requires zero-touch automation, so (a)."""
+created_at = 1793774326
+updated_at = 1793791661
+weight = 0.0
+issue_number = 1533
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1533"
+issue_closed_at = 1793791665
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p hostaudit --test repro_daily_stanza_bare_command"
+rev = "db134f392c6eb93a6eecdcd2b08437cba3893c82"
+observed_at = 1793774326
+detail = """
+exit 101: 0s
+
+   Compiling hostaudit v0.1.3 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-5db493ee/crates/hostaudit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s
+     Running tests/repro_daily_stanza_bare_command.rs (target/debug/deps/repro_daily_stanza_bare_command-c6d12b28b8781f39)
+error: test failed, to rerun pass `-p hostaudit --test repro_daily_stanza_bare_command`"""
+
+[task.closure]
+reason = "already-fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p hostaudit --test repro_daily_stanza_bare_command"
+exit = 0
+passed = 1
+rev = "a52b11b23f34ad07fb44a3264ebd51d119ee87b0"
+observed_at = 1793791608
+output_digest = "sha256:833afb2c4bd445e065d97fc08dd6c697be0a0431ea7b40e7360643e76eab10cf"
+excerpt = """
+
+running 1 test
+test daily_stanza_commands_use_an_absolute_executable_path ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.186
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+   Compiling memchr v2.8.2
+   Compiling autocfg v1.5.1
+   Compiling equivalent v1.0.2
+   Compiling zmij v1.0.21
+   Compiling utf8parse v0.2.2
+   Compiling hashbrown v0.17.1
+   Compiling num-traits v0.2.19
+   Compiling anstyle-parse v1.0.0
+   Compiling aho-corasick v1.1.4
+   Compiling colorchoice v1.0.5
+   Compiling indexmap v2.14.0
+   Compiling option-ext v0.2.0
+   Compiling anyhow v1.0.103
+   Compiling winnow v0.7.15
+   Compiling anstyle-query v1.1.5
+   Compiling serde_json v1.0.150
+   Compiling toml_write v0.1.2
+   Compiling syn v2.0.118
+   Compiling anstyle v1.0.14
+   Compiling core-foundation-sys v0.8.7
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling regex-syntax v0.8.11
+   Compiling iana-time-zone v0.1.65
+   Compiling anstream v1.0.0
+   Compiling dirs-sys v0.4.1
+   Compiling clap_lex v1.1.0
+   Compiling itoa v1.0.18
+   Compiling strsim v0.11.1
+   Compiling heck v0.5.0
+   Compiling clap_builder v4.6.0
+   Compiling dirs v5.0.1
+   Compiling wait-timeout v0.2.1
+   Compiling getrandom v0.4.3
+   Compiling rustix v1.1.4
+   Compiling chrono v0.4.45
+   Compiling errno v0.3.14
+   Compiling bitflags v2.13.0
+   Compiling cfg-if v1.0.4
+   Compiling once_cell v1.21.4
+   Compiling fastrand v2.4.1
+   Compiling regex-automata v0.4.14
+   Compiling tempfile v3.27.0
+   Compiling serde_derive v1.0.228
+   Compiling clap_derive v4.6.1
+   Compiling clap v4.6.1
+   Compiling regex v1.12.4
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.88 (/Users/yuki/src/.harness-worktrees/session-6d697f68-e/crates/harness-core)
+   Compiling overwatch v0.2.110 (/Users/yuki/src/.harness-worktrees/session-6d697f68-e/crates/overwatch)
+   Compiling hostaudit v0.1.11 (/Users/yuki/src/.harness-worktrees/session-6d697f68-e/crates/hostaudit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 26.16s
+     Running tests/repro_daily_stanza_bare_command.rs (target/debug/deps/repro_daily_stanza_bare_command-6d2695097681b30b)
+"""
+
+[task.closure.red]
+rev = "db134f392c6eb93a6eecdcd2b08437cba3893c82"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "adf43a69"
+title = "condukt capstone e2e tests leave their fixture dirs in the temp dir after every run"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "tests",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "crates/condukt/tests/foundation_capstone_e2e.rs and schedule_conflict_capstone_e2e.rs build Fixture under std::env::temp_dir() (condukt-capstone-e2e-<pid>-<tag>, condukt-schedule-capstone-e2e-<pid>-<tag>); Fixture::new only removes a stale same-pid dir at the start, there is no Drop / end-of-test cleanup. Observed 2026-11-02: 190 condukt-capstone-e2e-*-capstone dirs (119M total, 07-10..10-06) in /tmp, deleted by the user. Repro (RED, exit 1): scripts/tests/condukt-capstone-e2e-tmp-leak.sh runs both test targets with TMPDIR=fresh dir; after a passing run 3 fixtures remain. Fix direction: tempfile::TempDir (or Drop) so cleanup also happens on panic; keep the fixture on failure only if a debugging env var asks for it. Exit 2 = cargo did not run the tests (undetermined)."
+created_at = 1793595655
+updated_at = 1793791794
+weight = 0.0
+issue_number = 1485
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1485"
+issue_closed_at = 1793791795
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/condukt-capstone-e2e-tmp-leak.sh"
+rev = "91bcea639e4eea7a2008e1f83755fb01e0030d59"
+observed_at = 1793595655
+detail = """
+exit 1: LEAK: capstone e2e fixtures left in TMPDIR after the run (cargo rc=0):
+  condukt-schedule-capstone-e2e-106529-assertions
+  condukt-schedule-capstone-e2e-106529-writes
+  condukt-capstone-e2e-106468-capstone"""
+
+[task.closure]
+reason = "already-fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/condukt-capstone-e2e-tmp-leak.sh"
+exit = 0
+passed = 1
+rev = "a363b83e720be9fbf476a8326256874d88bd0a66"
+observed_at = 1793791764
+output_digest = "sha256:eaa7899b94c2b005fee234f0622d99d7c856f85658b6fe89c90e83a45b6668a2"
+excerpt = """
+OK: no capstone e2e fixture left in TMPDIR (cargo rc=0)
+test result: ok. 1 passed; 0 failed
+"""
+
+[task.closure.red]
+rev = "91bcea639e4eea7a2008e1f83755fb01e0030d59"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "7b9c258d"
+title = "guard-maintree-bash status_records parses a rename source field starting with 1/2/u/?/! as a status record"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "done"
+notes = "Measured 2026-11-03 at main 81dbf64a (also present at gh1512 fix 674d5a1f). scripts/guard-maintree-bash.py status_records(): for rec in porcelain.split NUL: if rec[:1] in (1,2,u,?,!) -> status_paths(rec+NUL). In porcelain v2 -z a '2' rename record is followed by a separate source-path field; status_paths consumes it, status_records re-parses it. Source '1src.txt' -> IndexError (crash handler -> exit 2, refusing a possibly legitimate command); source '? weird.txt' -> phantom path 'weird.txt'. Repro: scripts/test_guard_maintree_bash_status_records_rename_source.py at a6d1d75f (2 of 3 FAIL). Readings: (a) defect, skip the source field like status_paths; (b) intended over-refusal - unlikely since the inline comment says the source field is a separate entry. Off-task note from condukt run-20261103-233558-54331 gh1512 worker."
+created_at = 1793717491
+updated_at = 1793792483
+weight = 0.0
+issue_number = 1520
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1520"
+issue_closed_at = 1793792486
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_status_records_rename_source.py"
+rev = "a6d1d75fbf47bdcfbf8ddda6fbc12599774d5543"
+observed_at = 1793717491
+detail = """
+exit 1: ============== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_status_records_rename_source.py::RenameSourceField::test_source_starting_with_1
+FAILED scripts/test_guard_maintree_bash_status_records_rename_source.py::RenameSourceField::test_source_starting_with_question_mark
+========================= 2 failed, 1 passed in 0.06s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_status_records_rename_source.py"
+exit = 0
+passed = 3
+rev = "68b13323f9f64c276c2fd7b4a17b81cafb8f0cfe"
+observed_at = 1793792481
+output_digest = "sha256:9e8db3e8bb753d85d77afed9256a91b48537bc721f74bc750ad35d900dc54ef0"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-6d697f68-e
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_guard_maintree_bash_status_records_rename_source.py ...     [100%]
+
+============================== 3 passed in 0.03s ===============================
+"""
+
+[task.closure.red]
+rev = "a6d1d75fbf47bdcfbf8ddda6fbc12599774d5543"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "a7950779"
+title = "hooks-health summarises an unverifiable hook target (relative script after an interpreter) as 'all present'"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "harness-status",
+    "harness-core",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Left by the 0.2.83 fix (6f89b169, backlog 59c6d0e4). harness_core::hook::extract_binary_path returns None for targets it cannot resolve (relative script after an interpreter, inline code, unresolved $VAR, builtin head); binary_present maps None -> present; missing_hook_binaries drops it; hooks-health then prints '[all registered hook binaries present]'. A typo like 'bash hooks/gaurd.sh' is never reported. Undetermined is collapsed into clean (CLAUDE.md §3). Fix direction (undecided): a third bucket 'unverifiable' in MissingHookBinary/HooksHealthReport rendered separately and never summarised as 'all present'. Inline code (-c) may be a legitimate 'nothing to check' vs relative script 'could not check' — decide the split. Repro: crates/harness-status/tests/hooks_health_unverifiable.rs (#[ignore]d, RED with --ignored), 7171cb76."
+created_at = 1793595186
+updated_at = 1793792616
+weight = 0.0
+issue_number = 1483
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1483"
+issue_closed_at = 1793792618
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-status --test hooks_health_unverifiable unresolvable_target_is_not_reported_as_all_present -- --ignored"
+rev = "7171cb76577ffcb256ff0220fcfb11a986132caa"
+observed_at = 1793595186
+detail = """
+exit 101: .00s
+
+   Compiling harness-status v0.1.32 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-06e1b4b9/crates/harness-status)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/hooks_health_unverifiable.rs (target/debug/deps/hooks_health_unverifiable-fa1012a0d142e315)
+error: test failed, to rerun pass `-p harness-status --test hooks_health_unverifiable`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-status --test hooks_health_unverifiable -- --include-ignored"
+exit = 0
+passed = 2
+rev = "708a005996b3fd444876ee6b4c9dbe3623467568"
+observed_at = 1793792603
+output_digest = "sha256:e25a1bf08cc5376bb7ca00e43d25e83f02406c22f1294e5371d1d6726fce00f5"
+excerpt = """
+
+running 2 tests
+test unresolvable_target_is_not_reported_as_all_present ... ok
+test non_executable_target_is_flagged ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/hooks_health_unverifiable.rs (target/debug/deps/hooks_health_unverifiable-ab101c6a537bd43c)
+"""
+
+[task.closure.red]
+rev = "6e49e7d51d056805f15f91c3b51fcd7ea12dbbfd"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "fd2d2362"
+title = "condukt autonomy_invariant RED: sitecraft/skills/sitecraft/SKILL.md has 12 AskUserQuestion sites vs ASK_ALLOWLIST 4 (8 unaudited)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "sitecraft",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Measured 2026-11-04 at branch session-c4aa3733-fde-report 65f10055 (main merged in). cargo test -p condukt --test autonomy_invariant: askuserquestion_sites_match_frozen_allowlist panics at crates/condukt/tests/autonomy_invariant.rs:732 verbatim: AskUserQuestion count changed in sitecraft/skills/sitecraft/SKILL.md (allowlist 4, found 12). Also red on main. Found by the fde-report session while fixing 81c41b1b (fde row, now audited); not caused by that session. Audit each new sitecraft site (judgment request vs approval vs route via condukt policy answer) before raising the count."
+created_at = 1793719707
+updated_at = 1793792653
+weight = 0.0
+issue_number = 1524
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1524"
+issue_closed_at = 1793792656
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test autonomy_invariant"
+rev = "65f100559f7f74e38b8833e80ba271c19bed0d11"
+observed_at = 1793719707
+detail = """
+exit 101: ilures:
+    askuserquestion_sites_match_frozen_allowlist
+
+test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-1a53e298d311f026)
+error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test autonomy_invariant"
+exit = 0
+passed = 16
+rev = "708a005996b3fd444876ee6b4c9dbe3623467568"
+observed_at = 1793792634
+output_digest = "sha256:51cebb1afbd1ec72179a9fe3c764753fac427f85670944babcba65bd8264e3a4"
+excerpt = """
+
+running 16 tests
+test invariant_prose_anchors_are_present ... ok
+test askuserquestion_sites_match_frozen_allowlist ... ok
+test autonomy_check_missing_config_defaults_to_not_autonomous ... ok
+test autonomy_check_env_override_turns_it_on ... ok
+test autonomy_check_true_config_exits_zero_and_prints_true ... ok
+test autonomy_check_false_config_exits_one_and_prints_false ... ok
+test policy_answer_approval_never_relaxes_the_irreversible_block ... ok
+test autonomy_check_env_false_overrides_config_true ... ok
+test policy_answer_approval_is_inert_when_not_autonomous ... ok
+test gated_task_is_isolated_and_never_batched ... ok
+test policy_answer_baseline_escalates_the_ambiguous_middle ... ok
+test policy_answer_approval_self_answers_when_autonomous ... ok
+test policy_answer_conflict_beats_approval ... ok
+test policy_answer_untestable_beats_approval ... ok
+test policy_answer_without_untestable_self_answers_the_safe_case ... ok
+test policy_answer_untestable_clamps_auto_to_escalate_never_self_answers ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-549b5d2c41028245)
+"""
+
+[task.closure.red]
+rev = "6e49e7d51d056805f15f91c3b51fcd7ea12dbbfd"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/condukt/tests/release_excluded_not_failure.rs"]
+
+[[task]]
+id = "81c41b1b"
+title = "condukt autonomy_invariant RED: fde/skills/fde/SKILL.md has 4 unaudited AskUserQuestion sites (not in ASK_ALLOWLIST)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fde",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Measured 2026-11-04 at main c4fef301 (merged into session worktree). cargo test -p condukt --test autonomy_invariant: askuserquestion_sites_match_frozen_allowlist panics at crates/condukt/tests/autonomy_invariant.rs:709 verbatim: unaudited AskUserQuestion site(s) in fde/skills/fde/SKILL.md (4 occurrence(s)). The fde skill was added in a67ac4f4 / touched in cfbf12ca. Fix: audit each of the 4 sites (route via condukt policy answer or justify as human-only) and add the entry to ASK_ALLOWLIST; do not just bump the count without auditing. Found off-task by the gh1518 worker in run run-20261103-233558-54331. UPDATE 2026-11-04 (fde-report session): fde row audited and added in 02c2bcfa (ratification = human-only judgment request, escalate, never auto; not routed via condukt policy answer). The fde-row panic is gone, but the same test function still fails on the sitecraft row (allowlist 4, found 12; filed as fd2d2362), so done --test cannot pass at HEAD yet. Close this with done --test cargo test -p condukt --test autonomy_invariant --red-rev de7ba2e0 once fd2d2362 is fixed."
+created_at = 1793718116
+updated_at = 1793792674
+weight = 0.0
+issue_number = 1521
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1521"
+issue_closed_at = 1793792677
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test autonomy_invariant"
+rev = "c4fef30170613d297baf26d3c4c4f3efad71bd87"
+observed_at = 1793718116
+detail = """
+exit 101: ilures:
+    askuserquestion_sites_match_frozen_allowlist
+
+test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-681c0cdedb76ebef)
+error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test autonomy_invariant"
+exit = 0
+passed = 16
+rev = "708a005996b3fd444876ee6b4c9dbe3623467568"
+observed_at = 1793792656
+output_digest = "sha256:dc7215467e8b8720c52ec797462ac544fd69d6374340c9b076fadfc8bc25ad7b"
+excerpt = """
+
+running 16 tests
+test invariant_prose_anchors_are_present ... ok
+test askuserquestion_sites_match_frozen_allowlist ... ok
+test autonomy_check_missing_config_defaults_to_not_autonomous ... ok
+test autonomy_check_env_override_turns_it_on ... ok
+test policy_answer_approval_is_inert_when_not_autonomous ... ok
+test autonomy_check_env_false_overrides_config_true ... ok
+test policy_answer_approval_never_relaxes_the_irreversible_block ... ok
+test autonomy_check_true_config_exits_zero_and_prints_true ... ok
+test autonomy_check_false_config_exits_one_and_prints_false ... ok
+test gated_task_is_isolated_and_never_batched ... ok
+test policy_answer_conflict_beats_approval ... ok
+test policy_answer_approval_self_answers_when_autonomous ... ok
+test policy_answer_baseline_escalates_the_ambiguous_middle ... ok
+test policy_answer_untestable_beats_approval ... ok
+test policy_answer_without_untestable_self_answers_the_safe_case ... ok
+test policy_answer_untestable_clamps_auto_to_escalate_never_self_answers ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-549b5d2c41028245)
+"""
+
+[task.closure.red]
+rev = "6e49e7d51d056805f15f91c3b51fcd7ea12dbbfd"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/condukt/tests/release_excluded_not_failure.rs"]
+
+[[task]]
+id = "dbc35817"
+title = "hooks-health reports a non-executable hook target as present"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "harness-status",
+    "harness-core",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "harness_core::hook::binary_present checks only Path::exists (and resolve_on_path only is_file), never the exec bit. A hook command pointing at a 0644 file is summarised as present although Claude Code cannot exec it (same dark-hook class as check-launcher-exec-bit.py). Note: for an interpreter-wrapped script (bash /abs/x.sh) the exec bit is NOT required — only direct-exec targets and PATH-resolved names need it. Repro: crates/harness-status/tests/hooks_health_unverifiable.rs (#[ignore]d, RED with --ignored), 7171cb76."
+created_at = 1793595188
+updated_at = 1793792690
+weight = 0.0
+issue_number = 1484
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1484"
+issue_closed_at = 1793792693
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-status --test hooks_health_unverifiable non_executable_target_is_flagged -- --ignored"
+rev = "7171cb76577ffcb256ff0220fcfb11a986132caa"
+observed_at = 1793595188
+detail = """
+exit 101: _executable_target_is_flagged
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/hooks_health_unverifiable.rs (target/debug/deps/hooks_health_unverifiable-fa1012a0d142e315)
+error: test failed, to rerun pass `-p harness-status --test hooks_health_unverifiable`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-status --test hooks_health_unverifiable -- --include-ignored"
+exit = 0
+passed = 2
+rev = "708a005996b3fd444876ee6b4c9dbe3623467568"
+observed_at = 1793792678
+output_digest = "sha256:4ba58872591a4568f81f8144d589ffb101baa792fe24b318199ac459078981e8"
+excerpt = """
+
+running 2 tests
+test unresolvable_target_is_not_reported_as_all_present ... ok
+test non_executable_target_is_flagged ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running tests/hooks_health_unverifiable.rs (target/debug/deps/hooks_health_unverifiable-ab101c6a537bd43c)
+"""
+
+[task.closure.red]
+rev = "6e49e7d51d056805f15f91c3b51fcd7ea12dbbfd"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "fa35fde1"
+title = "check-test-weakening: #[test] inside a macro_rules! template is UNDETERMINED (blocks a pure test addition)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "check-test-weakening",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Repro scripts/test_ctw_macro_rules_test_fn.py (RED 3/3, committed 74ebc047). test_fn_assertions cannot attribute '#[test] fn $name()' in a macro template (FN_DECL_RE misses $name) and raises Undetermined, blocking a commit that only adds a new test file. Observed on crates/fde/tests/gone_target_unresolvable.rs 2026-11-04; worked around by writing explicit fns (no justification line). Control: explicit fns are clean."
+created_at = 1793729585
+updated_at = 1793792758
+weight = 0.0
+issue_number = 1525
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1525"
+issue_closed_at = 1793792760
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_ctw_macro_rules_test_fn.py"
+rev = "74ebc04756d34fa67fa8f19cd8d07b29b44f3a8b"
+observed_at = 1793729585
+detail = """
+exit 1: 
+E   STDERR:check-test-weakening: undetermined — crates/demo/tests/macro_tests.rs: a #[test] attribute with no `fn` after it
+=========================== short test summary info ============================
+FAILED scripts/test_ctw_macro_rules_test_fn.py::MacroRulesTestFn::test_new_file_with_macro_rules_tests_is_clean
+========================= 1 failed, 1 passed in 1.45s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_ctw_macro_rules_test_fn.py"
+exit = 0
+passed = 2
+rev = "1034e26f49f581173c5e69b2411dce176c213f0a"
+observed_at = 1793792755
+output_digest = "sha256:44f31d03c43251084fda9a0c3fdd5fc4eaaf4642f3bec6e8647d11906efb8710"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-6d697f68-e
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 2 items
+
+scripts/test_ctw_macro_rules_test_fn.py ..                               [100%]
+
+============================== 2 passed in 0.64s ===============================
+"""
+
+[task.closure.red]
+rev = "6e49e7d51d056805f15f91c3b51fcd7ea12dbbfd"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "d0d5cc67"
+title = "blastguard: --all inside a git stash -m message is read as the -a flag"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-04 on deployed blastguard 0.2.251 (and at 0.2.254): git stash push -m "stray cargo fmt --all reformat" -- a/b.rs is DENIED with 'git stash -u/-a removes untracked (and with -a, ignored) files from the working tree, like git clean'. The same command with -m "plain msg" is allowed. Controls git stash push --all / -u must stay non-allow. Reading (a) defect: quoted message text is scanned as flags. (b) intentional: none found. Distinguish: the RED test."""
+created_at = 1793743978
+updated_at = 1793792780
+weight = 0.0
+issue_number = 1526
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1526"
+issue_closed_at = 1793792783
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test git_stash_message_text_flag_fp_20261104"
+rev = "610675b3ff82f30bb03f04020c2812eb57df6f4e"
+observed_at = 1793743978
+detail = """
+exit 101: astguard v0.2.256 (/Users/yuki/src/.harness-worktrees/session-6d697f68-c/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/git_stash_message_text_flag_fp_20261104.rs (target/debug/deps/git_stash_message_text_flag_fp_20261104-bfa0d4964d3d6ade)
+error: test failed, to rerun pass `-p blastguard --test git_stash_message_text_flag_fp_20261104`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test git_stash_message_text_flag_fp_20261104"
+exit = 0
+passed = 4
+rev = "1034e26f49f581173c5e69b2411dce176c213f0a"
+observed_at = 1793792761
+output_digest = "sha256:13490ceee44232e338b15d97442b0567112e497b03fa0de07daec839d8df0be9"
+excerpt = """
+
+running 4 tests
+test all_inside_stash_message_is_not_read_as_a_flag ... ok
+test control_plain_message_stays_allowed ... ok
+test control_stash_push_all_stays_non_allow ... ok
+test control_stash_push_u_stays_non_allow ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+   Compiling harness-core v0.2.89 (/Users/yuki/src/.harness-worktrees/session-6d697f68-e/crates/harness-core)
+   Compiling overwatch v0.2.110 (/Users/yuki/src/.harness-worktrees/session-6d697f68-e/crates/overwatch)
+   Compiling blastguard v0.2.259 (/Users/yuki/src/.harness-worktrees/session-6d697f68-e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.05s
+     Running tests/git_stash_message_text_flag_fp_20261104.rs (target/debug/deps/git_stash_message_text_flag_fp_20261104-8d45e41a0e909a0e)
+"""
+
+[task.closure.red]
+rev = "6e49e7d51d056805f15f91c3b51fcd7ea12dbbfd"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "ce04adeb"
+title = "blastguard: python -c spaced string literal followed by a newline is denied as rm with a wildcard"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """Observed 2026-11-04 at blastguard 0.2.252 (after the 1943843c fix): python3 -c "x='recursive rm'<newline>y=a[:1]" (no shell sink) is DENIED 'rm with a wildcard can delete many files at once'. Cause per the 1943843c implementer: tokens are split on all whitespace before word-boundary analysis, so the newline is lost and assignment skipping takes rm' as the command word. Fix needs newline-preserving tokens or quote-aware assignment skipping. Control: a real os.system('rm -rf /x') sink stays non-allow."""
+created_at = 1793743981
+updated_at = 1793792800
+weight = 0.0
+issue_number = 1527
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1527"
+issue_closed_at = 1793792802
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_c_newline_after_spaced_literal_fp_20261104"
+rev = "610675b3ff82f30bb03f04020c2812eb57df6f4e"
+observed_at = 1793743981
+detail = """
+exit 101: /src/.harness-worktrees/session-6d697f68-c/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/python_c_newline_after_spaced_literal_fp_20261104.rs (target/debug/deps/python_c_newline_after_spaced_literal_fp_20261104-29f50aa0723aadfc)
+error: test failed, to rerun pass `-p blastguard --test python_c_newline_after_spaced_literal_fp_20261104`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test python_c_newline_after_spaced_literal_fp_20261104"
+exit = 0
+passed = 2
+rev = "1034e26f49f581173c5e69b2411dce176c213f0a"
+observed_at = 1793792783
+output_digest = "sha256:9bbf6612eee69ff11208de53e60dac7d677e3dd78daf15751cf76e8de2754d4d"
+excerpt = """
+
+running 2 tests
+test python_c_newline_after_spaced_rm_literal_is_not_denied ... ok
+test control_python_c_with_real_rm_rf_sink_stays_non_allow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+   Compiling blastguard v0.2.259 (/Users/yuki/src/.harness-worktrees/session-6d697f68-e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/python_c_newline_after_spaced_literal_fp_20261104.rs (target/debug/deps/python_c_newline_after_spaced_literal_fp_20261104-9f08f010d0ecad22)
+"""
+
+[task.closure.red]
+rev = "6e49e7d51d056805f15f91c3b51fcd7ea12dbbfd"
+exit = 101
+kind = "behavioural"

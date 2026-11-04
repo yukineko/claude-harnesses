@@ -29,9 +29,9 @@
 //! checkout"; this module's own `touches_protected` refusal in
 //! [`judge_operand`] is unchanged), AFTER
 //! the worktree-storage `Allow` (backlog 873651b9) and AFTER the literal
-//! config-file exemption. Wildcards, `find -delete`, `git clean`, `truncate`,
-//! redirects and `~`/`$HOME` operands are not judged here and keep their
-//! previous verdicts.
+//! config-file exemption. Wildcards (the one wildcard `Allow`, below `/tmp`,
+//! is `tmp_glob_confined` in the rm arm), `find -delete`, `git clean`,
+//! `truncate`, redirects and `~`/`$HOME` operands are not judged here.
 //!
 //! # Verdicts
 //!

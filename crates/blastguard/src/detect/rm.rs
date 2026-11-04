@@ -47,7 +47,9 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         // A wildcard operand is not a literal path; matching it against the
         // protected globs would be a guess in the permissive direction (it can
         // only ever fail to match and thereby look clean), so it is left to the
-        // wildcard rule below, which denies it anyway.
+        // rules below: `tmp_glob_confined` (the only one that can Allow it)
+        // runs its own protected check on every name it could expand to, and
+        // everything else asks or denies it.
         if has_glob_meta(operand) {
             continue;
         }
@@ -129,12 +131,24 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     // for the cases it can decide. Only for a command `deletion_rm_eligible`
     // accepts as a whole; anything else, and every operand it cannot decide,
     // keeps the logic below.
-    if recursive && !wildcard && ctx.deletion_rm_eligible {
+    if recursive && !wildcard && ctx.deletion_rm_eligible.literal {
         match crate::deletion::judge_rm(ctx.scope, &operands, ctx.base_for("rm")) {
             crate::deletion::RmJudgement::Allow => return Decision::Allow,
             crate::deletion::RmJudgement::Deny(reason) => return Decision::deny(reason),
             crate::deletion::RmJudgement::FallThrough => {}
         }
+    }
+
+    // /tmp WILDCARD axis (user ruling 2026-11-02, verbatim
+    // 「そもそも/tmp以下はrm -frを削除していい。worktreeなどと同じあつかいにして」,
+    // backlog 486fb7de / #1531). A wildcard can only expand to entries of
+    // its literal parent directory, so when that parent provably is a real
+    // directory strictly inside the real fixed `/tmp` root (or the root itself
+    // with a literal name head of 4+ characters, ruling 2026-11-05), the
+    // blast radius is bounded exactly like a literal operand there. Every condition and every refusal is in
+    // [`tmp_glob_confined`]; anything it cannot decide keeps the logic below.
+    if wildcard && tmp_glob_confined(ctx, &operands) {
+        return Decision::Allow;
     }
 
     // LOCATION axis (see `crate::scope`), placed deliberately:
@@ -562,4 +576,154 @@ fn placeable_targets<'a>(operands: &[&'a str]) -> Option<Vec<std::borrow::Cow<'a
         }
     }
     Some(out)
+}
+
+/// The whole-command eligibility of the two deletion-principle axes of
+/// [`analyze_rm`], computed once by `Ctx::new` (on the whole line, and on the
+/// `REST` of a [`literal_cd_and_rest`] line) and carried unchanged.
+#[derive(Clone, Copy)]
+pub(super) struct DeletionEligibility {
+    /// [`deletion_rm_eligible`]: the literal-operand verdicts of
+    /// [`crate::deletion`].
+    pub(super) literal: bool,
+    /// [`tmp_glob_rm_eligible`]: the `/tmp` wildcard `Allow` of
+    /// [`tmp_glob_confined`].
+    pub(super) tmp_glob: bool,
+}
+
+impl DeletionEligibility {
+    /// `literal` is [`deletion_rm_eligible`] already combined by `eligible`;
+    /// `eligible` combines [`tmp_glob_rm_eligible`] the same way.
+    pub(super) fn of(literal: bool, eligible: impl Fn(fn(&str) -> bool) -> bool) -> Self {
+        DeletionEligibility {
+            literal,
+            tmp_glob: eligible(tmp_glob_rm_eligible),
+        }
+    }
+}
+
+/// Whole-command precondition for the `/tmp` wildcard `Allow`
+/// ([`tmp_glob_confined`]): EXACTLY [`deletion_rm_eligible`] with `*` allowed
+/// in one place only — the LAST path component of an `rm` OPERAND word
+/// ([`last_component_glob`]: literal parent, no leading `.` in the pattern,
+/// no other glob metacharacter). A `*` anywhere else (the verb, an option
+/// word, a `cd` word, a non-last component) answers `false`. With every
+/// such `*` stood in for by a plain character, the line must then pass
+/// [`deletion_rm_eligible`] unchanged: bare `rm`/`cd` segments of plain word
+/// characters (so no `?`, `[`, `{`, `$`, `~`, quote, backslash, …), no `.`/`..`
+/// component, only absolute operands when a `cd` is present, options before
+/// operands. There is no branch that answers `true` for a word it did not read.
+pub(super) fn tmp_glob_rm_eligible(command: &str) -> bool {
+    let stars_ok = command.split([';', '&', '|']).all(|seg| {
+        let words: Vec<&str> = seg.split(' ').filter(|w| !w.is_empty()).collect();
+        let is_rm = words.first().copied() == Some("rm");
+        words.iter().enumerate().all(|(i, w)| {
+            !w.contains('*')
+                || (is_rm && i > 0 && !w.starts_with('-') && last_component_glob(w).is_some())
+        })
+    });
+    stars_ok && deletion_rm_eligible(&command.replace('*', "x"))
+}
+
+/// `(parent, pattern)` for an operand whose wildcard is confined to its last
+/// path component, or `None`. `None` for: no `/` (a bare pattern would be
+/// placed only through the cwd), an empty parent (`/x*`) or pattern, any
+/// glob metacharacter or backslash in the parent, a pattern with no `*`,
+/// with a `?`/`[`/`]`/`{`/`}`/backslash, or starting with `.` (`.*` names
+/// hidden entries, and on older bash `.` and `..` themselves).
+fn last_component_glob(operand: &str) -> Option<(&str, &str)> {
+    let (parent, pattern) = operand.rsplit_once('/')?;
+    if parent.is_empty()
+        || parent.contains(['*', '?', '[', ']', '{', '}', '\\'])
+        || !pattern.contains('*')
+        || pattern.starts_with('.')
+        || pattern.contains(['?', '[', ']', '{', '}', '\\'])
+    {
+        return None;
+    }
+    Some((parent, pattern))
+}
+
+/// The `/tmp` wildcard `Allow` (user ruling 2026-11-02, backlog 486fb7de):
+/// true only when the line is [`tmp_glob_rm_eligible`], the session has no
+/// deletion refusal, `operands` is non-empty, and EVERY operand is either
+///
+///   * a literal that [`crate::deletion::judge_operand`] answers `Allow` for
+///     (exactly the literal rule), or
+///   * a wildcard [`tmp_glob_operand_allowed`] accepts.
+///
+/// A wildcard expands only to entries of its literal parent directory (`*`
+/// never crosses `/` and never matches a leading `.`), and a recursive `rm`
+/// does not follow a symlink it deletes, so what such an operand destroys is
+/// bounded by that real directory. Every other answer — including every
+/// `Undetermined` placement — is `false`; the caller then keeps the verdict
+/// it had before this rule existed. There is no default that answers `true`.
+fn tmp_glob_confined(ctx: &Ctx<'_>, operands: &[&str]) -> bool {
+    if !ctx.deletion_rm_eligible.tmp_glob
+        || operands.is_empty()
+        || ctx.scope.deletion_refusal().is_some()
+    {
+        return false;
+    }
+    let base = ctx.base_for("rm");
+    operands.iter().all(|o| {
+        if o.contains('*') || has_glob_meta(o) {
+            tmp_glob_operand_allowed(ctx.scope, o, base)
+        } else {
+            matches!(
+                crate::deletion::judge_operand(ctx.scope, o, base),
+                crate::deletion::OperandJudgement::Allow(_)
+            )
+        }
+    })
+}
+
+/// Minimum length, in characters, of the literal head before the first `*`
+/// of a wildcard placed directly in the `/tmp` root (user ruling 2026-11-05,
+/// #1531). Deeper below `/tmp` there is no minimum.
+const MIN_TMP_ROOT_GLOB_HEAD: usize = 4;
+
+/// One wildcard operand of [`tmp_glob_confined`]. True only when
+/// [`last_component_glob`] splits it into a literal parent and a `*` pattern,
+/// neither the parent nor any entry the pattern could match touches a
+/// protected path ([`exclude::glob_entry_may_touch_protected`]), and
+/// [`SafeRoots::classify_temp`] (the FIXED `/tmp` roots only — never
+/// `$TMPDIR`, never a cache root; symlinks above the anchor accepted, none
+/// below it, the parent itself included) places the parent:
+///
+///   * `Inside` the real `/tmp` root — any such pattern; or
+///   * `IsRoot` — only with a literal head of at least
+///     [`MIN_TMP_ROOT_GLOB_HEAD`] characters before the first `*` (user ruling
+///     2026-11-05, #1531: `/tmp/name*` yes; `/tmp/*`, `/tmp/c*`, `/tmp/cla*`
+///     never), and only when the parent is spelled
+///     as the canonical root itself or a single top-level component (`/tmp`),
+///     so a symlink below `/tmp` that resolves back to the root is refused.
+///
+/// `Outside` and every `Undetermined` (unresolvable, no resolver, a symlink
+/// below the root, `..` left after normalisation) answer `false`.
+fn tmp_glob_operand_allowed(scope: &SafeRoots, operand: &str, base: Option<&str>) -> bool {
+    let Some((parent, pattern)) = last_component_glob(operand) else {
+        return false;
+    };
+    if exclude::touches_protected(parent)
+        || exclude::glob_entry_may_touch_protected(parent, pattern)
+    {
+        return false;
+    }
+    match scope.classify_temp(parent, base) {
+        Determination::Known(Placement::Inside { .. }) => true,
+        Determination::Known(Placement::IsRoot { root }) => {
+            let has_head = pattern
+                .find('*')
+                .is_some_and(|i| pattern[..i].chars().count() >= MIN_TMP_ROOT_GLOB_HEAD);
+            let spelled_as_root = match scope.lexical_absolute(parent, base) {
+                Determination::Known(l) => {
+                    l == root || l.strip_prefix('/').is_some_and(|t| !t.contains('/'))
+                }
+                Determination::Undetermined(_) => false,
+            };
+            has_head && spelled_as_root
+        }
+        Determination::Known(Placement::Outside { .. }) | Determination::Undetermined(_) => false,
+    }
 }

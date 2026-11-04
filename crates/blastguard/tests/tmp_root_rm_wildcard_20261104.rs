@@ -2,10 +2,10 @@
 //! RED regression for the user ruling 2026-11-02 (verbatim):
 //! 「そもそも/tmp以下はrm -frを削除していい。worktreeなどと同じあつかいにして」.
 //!
-//! A recursive `rm` of a LITERAL operand strictly inside `/tmp` is already
-//! Allow. The unimplemented gap is a WILDCARD operand below `/tmp`
-//! (`rm -rf /tmp/<dir>/name-*`, `rm -rf /tmp/<head>-*`), which still comes back
-//! Deny/Ask.
+//! A recursive `rm` of a LITERAL operand strictly inside `/tmp` was already
+//! Allow. The gap was a WILDCARD operand below `/tmp`
+//! (`rm -rf /tmp/<dir>/name-*`, `rm -rf /tmp/<head>-*`), which came back
+//! Deny/Ask until blastguard 0.2.262 (backlog 486fb7de, #1531).
 //!
 //! Fixture: deliberately NOT `support/neutral_base.rs` (on Linux it panics with
 //! "no neutral fixture parent … /tmp is equal to or under the fixed temp root",
@@ -160,7 +160,6 @@ fn control_literal_operand_inside_tmp_is_allow() {
 
 /// RED: wildcard in the last component, literal parent strictly inside /tmp.
 #[test]
-#[ignore = "RED repro: /tmp wildcard rm not Allow yet (user ruling 2026-11-02, see backlog); run with --ignored"]
 fn wildcard_last_component_inside_tmp_dir_is_allow() {
     let f = Fx::new("insub");
     let lit = f.decide(&format!("rm -rf {}/sub/b", f.t()));
@@ -171,7 +170,6 @@ fn wildcard_last_component_inside_tmp_dir_is_allow() {
 
 /// RED: wildcard directly under /tmp with a literal name head.
 #[test]
-#[ignore = "RED repro: /tmp wildcard rm not Allow yet (user ruling 2026-11-02, see backlog); run with --ignored"]
 fn wildcard_with_literal_head_directly_under_tmp_is_allow() {
     let f = Fx::new("head");
     let lit = f.decide(&format!("rm -rf {}/sub/b", f.t()));
@@ -194,4 +192,141 @@ fn control_glob_in_non_last_component_is_not_allow() {
     let f = Fx::new("mid");
     let d = f.decide("rm -rf /tmp/*/x");
     assert_ne!(d, "allow", "rm -rf /tmp/*/x must NOT be Allow");
+}
+
+// ---------------------------------------------------------------------------
+// User ruling 2026-11-05 (#1531): directly under the /tmp root, a wildcard
+// operand is Allow only when the literal head before the first `*` is at
+// least 4 characters. Deeper under /tmp (`/tmp/<dir>/name-*`) any head length
+// stays Allow. The same rule applies to the `/private/tmp` spelling.
+//
+// Heads are prefixes of HEAD4. They are chosen NOT to prefix any protected
+// path component: a head like `b` or `s` is already non-Allow for an
+// unrelated reason (`b*` may expand to `bin`, `s*` to `settings.local.json`,
+// both protected), which would make a short-head case pass for the wrong
+// reason. Each short head is therefore paired with a same-fixture control:
+// the SAME head one level below `/tmp/<uniq>` must be Allow, so a non-Allow
+// directly under the root can only come from the head-length rule. blastguard
+// never expands a glob, so the decision does not depend on what exists in
+// /tmp; nothing is created there for these heads.
+// ---------------------------------------------------------------------------
+
+/// A 4-char literal head; its 1..=3 prefixes are the short heads.
+const HEAD4: &str = "zqxv";
+
+/// True on hosts (macOS) where /tmp is a symlink to /private/tmp.
+fn host_tmp_is_private_tmp() -> bool {
+    PathBuf::from("/tmp").canonicalize().unwrap() == std::path::Path::new("/private/tmp")
+}
+
+/// The tmp-root spellings to exercise on this host.
+fn tmp_roots() -> Vec<&'static str> {
+    let mut roots = vec!["/tmp"];
+    if host_tmp_is_private_tmp() {
+        roots.push("/private/tmp");
+    }
+    roots
+}
+
+fn assert_short_heads_not_allow(f: &Fx, root: &str) {
+    // Same-fixture control: the 4-char head is Allow directly under the root.
+    let ctl = format!("rm -rf {root}/{HEAD4}*");
+    let d = f.decide(&ctl);
+    assert_decision(&format!("control {ctl}"), &d, "allow");
+    let mut allowed = Vec::new();
+    for n in 1..=3 {
+        let head = &HEAD4[..n];
+        // Same-fixture control: this head one level deeper is Allow, so the
+        // head itself is not refused for a protected-name reason.
+        let deeper = format!("rm -rf {root}/{}/{head}*", f.uniq);
+        let d = f.decide(&deeper);
+        assert_decision(&format!("control {deeper}"), &d, "allow");
+        let cmd = format!("rm -rf {root}/{head}*");
+        if f.decide(&cmd) == "allow" {
+            allowed.push(cmd);
+        }
+    }
+    assert!(
+        allowed.is_empty(),
+        "a head of 1-3 chars directly under the tmp root must NOT be Allow \
+         (ruling 2026-11-05), but these were: {allowed:?}"
+    );
+}
+
+/// RED (ruling 2026-11-05): `/tmp/z*`, `/tmp/zq*`, `/tmp/zqx*` are not Allow.
+#[test]
+fn short_head_1_to_3_directly_under_tmp_is_not_allow() {
+    let f = Fx::new("short");
+    assert_short_heads_not_allow(&f, "/tmp");
+}
+
+/// RED (ruling 2026-11-05): the same rule spelled `/private/tmp`. Only
+/// meaningful where /tmp is /private/tmp; elsewhere it prints that it did not
+/// run and returns.
+#[test]
+fn short_head_1_to_3_directly_under_private_tmp_is_not_allow() {
+    let f = Fx::new("pshort");
+    if !host_tmp_is_private_tmp() {
+        println!("NOT RUN ON THIS HOST: /tmp is not /private/tmp");
+        return;
+    }
+    assert_short_heads_not_allow(&f, "/private/tmp");
+}
+
+/// RED (ruling 2026-11-05, the ruling's own examples verbatim): `/tmp/c*`,
+/// `/tmp/cl*`, `/tmp/cla*` are not Allow while `/tmp/clau*` is, under every
+/// tmp-root spelling this host has.
+#[test]
+fn ruling_examples_c_cl_cla_directly_under_tmp_are_not_allow() {
+    let f = Fx::new("clau");
+    let mut allowed = Vec::new();
+    for root in tmp_roots() {
+        let ctl = format!("rm -rf {root}/clau*");
+        let d = f.decide(&ctl);
+        assert_decision(&format!("control {ctl}"), &d, "allow");
+        for head in ["c", "cl", "cla"] {
+            let cmd = format!("rm -rf {root}/{head}*");
+            if f.decide(&cmd) == "allow" {
+                allowed.push(cmd);
+            }
+        }
+    }
+    assert!(
+        allowed.is_empty(),
+        "the ruling's short-head examples must NOT be Allow, but these were: {allowed:?}"
+    );
+}
+
+/// CONTROL: heads of exactly 4 and of more than 4 characters directly under
+/// the tmp root (every spelling this host has) are Allow, including the
+/// `<head>-*` shape with a 4+ char head.
+#[test]
+fn control_head_of_4_or_more_directly_under_tmp_is_allow() {
+    let f = Fx::new("long");
+    for root in tmp_roots() {
+        for pattern in [
+            format!("{HEAD4}*"),
+            format!("{HEAD4}k*"),
+            format!("{HEAD4}-*"),
+            format!("{}*", f.uniq),
+        ] {
+            let cmd = format!("rm -rf {root}/{pattern}");
+            let d = f.decide(&cmd);
+            assert_decision(&cmd, &d, "allow");
+        }
+    }
+}
+
+/// CONTROL: one and two levels below the tmp root, a 1-char head is Allow
+/// (`/tmp/<dir>/n*`, `/tmp/<dir>/sub/n*`), for every spelling this host has.
+#[test]
+fn control_short_head_one_level_deeper_is_allow() {
+    let f = Fx::new("deep");
+    for root in tmp_roots() {
+        for rel in ["n*", "sub/n*", "z*"] {
+            let cmd = format!("rm -rf {root}/{}/{rel}", f.uniq);
+            let d = f.decide(&cmd);
+            assert_decision(&cmd, &d, "allow");
+        }
+    }
 }

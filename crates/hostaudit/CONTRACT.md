@@ -415,3 +415,28 @@ B5 stays one finding per host. It (and K2) additionally carries:
 - **Command timeout** [choice]: `~/.hostaudit/config.toml` key `remote_command_timeout_secs`, default 60, clamp 5..=600
   (0 becomes 5, never "no limit"). It bounds each remote command's execution (ssh `ConnectTimeout` only bounds the connection).
   A timed-out command makes the rules depending on it `undetermined` with a `reason` containing `時間切れ`; other rules are unaffected.
+
+## 12.10 Post-review fail-open fixes for 8d92ab99 (tests: `v11_review.rs`, test names `itemN_*`)
+
+Each point is **[choice, post-review 2026-11-04]**.
+
+1. **S5**: a `sources.list.d` file that was read but yields zero repository URLs is `undetermined` (an unparsed file is not a clean file).
+   deb822 field names are case-insensitive (`uris:`, `URIS:`); a value may continue on the following lines (indented), or start on the next line.
+   `uris: https://foreign.example/` gives `warning`.
+2. **KEV**: a feed with an empty list (`{"vulnerabilities":[]}`, also `{}` / `[]`) is KEV **unknown**, never "not in KEV"; B5 text shows `KEV 不明`.
+   A non-empty list lacking the CVE is still `kev: "no"`.
+3. **W12b `(deleted)`**: ` (deleted)` is stripped to identify the product by basename. The path stays unsafe: W22 is not sent, and the S8 item is
+   `undetermined` (kept, not dropped), mentioning the product.
+4. **Versioned interpreters**: basenames `python3`, `python3.9`, `python3.12`, ... map to the python product; a safe path then gets W22 (`<path> --version`).
+5. **WN4**: `Enabled` true/1 enabled; false/0 disabled (violation); anything else (2, strings, null) or a missing field: undetermined.
+6. **WN1**: the build prefix match needs a dot boundary (`10.0.203480` does not match `10.0.20348`); more than one matching cycle: undetermined.
+7. **WN2/WN3**: `InstalledOn` later than `HOSTAUDIT_NOW` (negative age): WN2 undetermined; WN3 undetermined when the reboot key is `True`.
+8. **W21/W22 absence**: a product is absent only when exit is 127 and stderr does **not** contain `error while loading shared libraries`; with that loader
+   error the item is `undetermined`.
+9. **S1/K4**: an `Inst ` line whose origin group `( ... )` is missing, unterminated or empty: S1 undetermined; K4 undetermined when the package is `linux-*`.
+10. **Empty W12 output** on a reachable host: CVE `exposed` = `unknown` (not `no`).
+11. **K1**: the W17 fallback only when the endoflife data is unobtainable (fetch/cache failure). A loaded feed with no cycle for `VERSION_ID`: undetermined.
+    A W17 output that is empty or has no codename-shaped (lowercase letters, one word) lines: undetermined, not violation.
+12. **W13 usrmerge**: `no path found` for a path under `/usr/bin`, `/usr/sbin`, `/usr/lib` also queries `LC_ALL=C dpkg -S <path without /usr>`.
+    Both `no path found`: not dpkg-managed (W22 runs against the original path). Alias owned by a package: dpkg-managed. If the alias query fails: ownership unknown,
+    so exposure is `unknown` (never `no` merely because of usrmerge).

@@ -41,8 +41,8 @@ An evidence CMD must not move HEAD (user ruling 2026-11-04): right after the
 CMD exits, before its exit status is judged, HEAD is observed again; if it
 cannot be observed or differs from the pre-CMD HEAD in any way — moved back,
 moved forward to a new commit, or anything else — the answer is exit 2 naming
-both commits, and nothing is recorded. Forward movement is refused too (a
-coordinator decision under that ruling): the record's HEAD would no longer
+both commits, and nothing is recorded. Forward movement and an unobservable HEAD are refused too (ratified
+by the user on 2026-11-05): the record's HEAD would no longer
 describe the tree the result belongs to, and a CMD that commits its own fix
 could otherwise satisfy the history rule. Only the two observations (before
 and after the CMD) are compared: a CMD that moves HEAD and then restores it

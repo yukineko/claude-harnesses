@@ -58,10 +58,26 @@ impl Fx {
         std::fs::create_dir_all(tmp.join("sub/b")).unwrap();
         std::fs::create_dir_all(tmp.join("sub/name-1")).unwrap();
         std::fs::create_dir_all(tmp.join("sub/name-2")).unwrap();
-        // Real path of /tmp/<uniq> must be under /tmp (no symlinked /tmp).
+        // The host's canonical spelling of /tmp must be one of the fixed temp
+        // roots blastguard recognises (`/tmp` on Linux, `/private/tmp` on
+        // macOS where /tmp is a symlink to it). Any other host cannot run this
+        // test meaningfully and says so instead of passing.
+        let tmp_real = PathBuf::from("/tmp")
+            .canonicalize()
+            .unwrap_or_else(|e| panic!("HOST CANNOT RUN THIS TEST: cannot canonicalize /tmp: {e}"));
         assert!(
-            tmp.canonicalize().unwrap().starts_with("/tmp/"),
-            "/tmp/<uniq> does not resolve under /tmp on this host"
+            tmp_real == std::path::Path::new("/tmp")
+                || tmp_real == std::path::Path::new("/private/tmp"),
+            "HOST CANNOT RUN THIS TEST: /tmp resolves to {tmp_real:?}, which is \
+             not a fixed temp root blastguard recognises (/tmp, /private/tmp)"
+        );
+        // Real path of /tmp/<uniq> must be strictly under the real /tmp root
+        // (no symlink below /tmp redirecting the victims elsewhere).
+        let uniq_real = tmp.canonicalize().unwrap();
+        assert!(
+            uniq_real == tmp_real.join(&uniq),
+            "/tmp/<uniq> resolves to {uniq_real:?}, not directly under the real \
+             /tmp root {tmp_real:?}"
         );
         Fx {
             base,

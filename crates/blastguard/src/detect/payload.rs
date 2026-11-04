@@ -556,7 +556,7 @@ pub(super) fn payloads_after(rest: &[&str], pos: usize) -> Vec<String> {
 /// WORD spans — `"x='a b'` + `c"` is one word over two tokens. `None` when a
 /// quote is still open at the end of `rest`: where the word ends is then
 /// undetermined.
-fn shell_word_token_span(rest: &[&str], from: usize) -> Option<usize> {
+pub(super) fn shell_word_token_span(rest: &[&str], from: usize) -> Option<usize> {
     // `None` outside quotes, otherwise the open quote char.
     let mut open: Option<char> = None;
     for (n, tok) in rest[from..].iter().enumerate() {

@@ -12,8 +12,9 @@ positive or false negative (4a64e6ff and ~30 sibling tickets).
 
   PreToolUse (Bash)   snapshot main: `git status --porcelain=v2 -z
                       --untracked-files=all`, a content hash of every dirty or
-                      untracked path, HEAD, and whether MERGE_HEAD exists.
-                      Stored under <git-common-dir>/maintree-guard/ keyed by
+                      untracked path, HEAD, and whether MERGE_HEAD exists;
+                      while it exists, also the oids it names and the staged
+                      index entries (`git diff-index --cached HEAD`). Stored under <git-common-dir>/maintree-guard/ keyed by
                       session_id + tool_use_id. Any command text is allowed.
   PostToolUse / PostToolUseFailure (Bash)
                       re-snapshot and compare with the stored Pre snapshot:
@@ -43,6 +44,18 @@ positive or false negative (4a64e6ff and ~30 sibling tickets).
                       is the clean `git merge-tree` of HEAD with a local
                       branch not yet in HEAD (backlog 2dee8b0e; see
                       in_flight_merge_window)               -> 0
+                      MERGE_HEAD existed before and is gone after, and the new
+                      HEAD's parents are exactly [Pre HEAD] + all Pre MERGE_HEAD
+                      oids in order, and the new HEAD's tree is exactly the
+                      Pre index (every path the commit changes vs Pre HEAD was
+                      staged at Pre with that same mode and blob, and every
+                      path staged at Pre is in the commit), and the paths
+                      dirty after are exactly the unstaged / untracked paths
+                      dirty before, with the same content hash (a `git commit`
+                      concluding a merge staged by an earlier call; backlog
+                      c181dd41; see merge_concluded_by_commit. An unreadable
+                      Pre MERGE_HEAD or Pre staged index -> not covered)
+                                                            -> 0
                       anything else                        -> 2, naming the paths
 
 Exit 2 at Post cannot undo the command — the write has happened. It stops the
@@ -202,6 +215,8 @@ def snapshot(main: Path, common: Path) -> dict:
         "head": git(main, "rev-parse", "HEAD").strip(),
         "merge_head": merge_head,
         "merge_head_oid": merge_head_oid(common) if merge_head else None,
+        "merge_head_oids": merge_head_oids(common) if merge_head else None,
+        "merge_staged": staged_index_entries(main) if merge_head else None,
     }
 
 
@@ -233,6 +248,155 @@ def merge_head_oid(common: Path) -> str | None:
     if not first or len(first[0]) not in (40, 64) or not all(c in "0123456789abcdef" for c in first[0]):
         return None
     return first[0]
+
+
+def merge_head_oids(common: Path) -> list[str] | None:
+    """EVERY oid MERGE_HEAD names, in order, or None when any of it cannot be read
+    as an oid (an octopus merge names several). None is never evidence."""
+    try:
+        words = (common / "MERGE_HEAD").read_text().split()
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not words:
+        return None
+    for w in words:
+        if len(w) not in (40, 64) or not all(c in "0123456789abcdef" for c in w):
+            return None
+    return words
+
+
+ZERO_OIDS = ("0" * 40, "0" * 64)
+
+
+def raw_diff_entries(out: str) -> dict[str, list[str]] | None:
+    """path -> [dst mode, dst oid] from `git diff-index` / `git diff-tree` raw
+    `-z --no-renames` output (":srcmode dstmode srcoid dstoid STATUS\\0path\\0").
+
+    None when the output cannot be read exactly that way: an unmerged entry
+    ("U", conflicts not resolved), a rename/copy record, a malformed header, a
+    path named twice, or a dst oid that is not a full hex oid. None is never
+    evidence (CLAUDE.md 3).
+    """
+    fields = out.split("\0")
+    if fields and fields[-1] == "":
+        fields.pop()
+    if len(fields) % 2:
+        return None
+    entries: dict[str, list[str]] = {}
+    for i in range(0, len(fields), 2):
+        head, path = fields[i], fields[i + 1]
+        parts = head.split(" ")
+        if len(parts) != 5 or not head.startswith(":") or not path:
+            return None
+        dst_mode, dst_oid, status = parts[1], parts[3], parts[4]
+        if status not in ("A", "D", "M", "T"):
+            return None
+        if len(dst_oid) not in (40, 64) or not all(c in "0123456789abcdef" for c in dst_oid):
+            return None
+        if path in entries:
+            return None
+        entries[path] = [dst_mode, dst_oid]
+    return entries
+
+
+def staged_index_entries(main: Path) -> dict[str, list[str]] | None:
+    """Every path whose INDEX entry differs from HEAD, as path -> [index mode,
+    index oid] (a staged deletion is [000000, zero oid]), from the read-only
+    `git diff-index --cached -r -z --no-renames HEAD`. Recorded at Pre only
+    while MERGE_HEAD exists. None when git fails or the output is not readable
+    (see raw_diff_entries); post() then has no staged merge set to compare with
+    and refuses (CLAUDE.md 3).
+    """
+    try:
+        out = git(main, "diff-index", "--cached", "-r", "-z", "--no-renames", "HEAD")
+    except Undetermined:
+        return None
+    return raw_diff_entries(out)
+
+
+def worktree_dirty_paths(porcelain: str) -> set[str] | None:
+    """Paths whose WORKING TREE differs from the index at Pre: the primary path
+    of a "1"/"2" record whose Y (worktree) column is not ".", and every
+    untracked ("?") path. None when the status holds a conflict ("u") record
+    or a record whose XY cannot be read (CLAUDE.md 3)."""
+    out = set()
+    for rec, paths in status_entries(porcelain):
+        kind = rec[0]
+        if kind in "12":
+            if len(rec) < 4 or rec[1] != " ":
+                return None
+            if rec[3] != ".":
+                out.add(paths[0])
+        elif kind == "?":
+            out.add(paths[0])
+        elif kind == "!":
+            continue
+        else:
+            return None
+    return out
+
+
+def merge_concluded_by_commit(main: Path, before: dict, after: dict) -> bool:
+    """True if this call only concluded an in-progress merge with `git commit`
+    (backlog c181dd41), i.e. it committed EXACTLY the index that was staged
+    at Pre and changed nothing else. ALL of:
+      - MERGE_HEAD was present at Pre and is gone at Post; HEAD moved;
+      - the new HEAD's parents are exactly [Pre HEAD] + the Pre MERGE_HEAD
+        oids, all of them, in order (`git rev-list --parents -n1`);
+      - the new HEAD's tree is the Pre INDEX tree: `git diff-tree -r -z
+        --no-renames <Pre HEAD> <new HEAD>` names exactly the paths whose
+        index entry differed from HEAD at Pre (staged_index_entries), each
+        with the same mode and blob oid as the Pre index entry. A path staged
+        or re-staged with other content in this call, or an untracked /
+        unstaged-only path committed in this call, fails this;
+      - the Pre status had no conflict record, and the paths dirty at Post
+        are exactly the Pre worktree-dirty paths (worktree_dirty_paths:
+        unstaged edits and untracked files), each with the same content hash;
+        one whose index was NOT staged at Pre also keeps a byte-identical
+        status record, and one that was ALSO staged at Pre now has a "1"
+        record with "." in the X (index) column. A Pre worktree-dirty path
+        deleted, edited or staged in this call, or a path newly dirty, fails
+        this; a staged-only Pre path must be clean at Post.
+    Anything missing or unreadable (Pre oids, Pre staged entries, git failure,
+    parse failure) is False -> the caller refuses (CLAUDE.md 3).
+    """
+    if not before.get("merge_head") or after["merge_head"]:
+        return False
+    oids = before.get("merge_head_oids")
+    if not isinstance(oids, list) or not oids or not all(isinstance(o, str) and o for o in oids):
+        return False
+    staged = before.get("merge_staged")
+    if not isinstance(staged, dict):
+        return False
+    if after["head"] == before["head"]:
+        return False
+    parents = git(main, "rev-list", "--parents", "-n1", after["head"]).split()
+    if not parents or parents[0] != after["head"]:
+        return False
+    if parents[1:] != [before["head"]] + oids:
+        return False
+    committed = raw_diff_entries(
+        git(main, "diff-tree", "-r", "-z", "--no-renames", before["head"], after["head"])
+    )
+    if committed is None or committed != staged:
+        return False
+    dirty_pre = worktree_dirty_paths(before["porcelain"])
+    if dirty_pre is None:
+        return False
+    ra, rb = status_records(before["porcelain"]), status_records(after["porcelain"])
+    if set(rb) != dirty_pre:
+        return False
+    a, b = before["hashes"], after["hashes"]
+    for p in dirty_pre:
+        if p not in a or p not in b or a[p] != b[p]:
+            return False
+        rec = rb[p]
+        if p in staged:
+            if not rec.startswith("1 .") or rec[3:4] == ".":
+                return False
+        elif ra.get(p) != rec:
+            return False
+    return True
 
 
 def merge_abort_back_to_head(main: Path, before: dict, after: dict) -> bool:
@@ -557,6 +721,8 @@ def post(payload: dict, common: Path, main: Path) -> int:
         pass  # a merge / conflict resolution is in progress
     elif merge_abort_back_to_head(main, before, after):
         pass  # aborting one's own in-progress merge back to HEAD
+    elif merge_concluded_by_commit(main, before, after):
+        pass  # `git commit` concluding a merge staged by an earlier call
     elif after["head"] != before["head"] and (
         only_unchanged_preexisting(before, after)
         or in_flight_merge_window(main, common, before, after, has_orig_field, before_orig, after_orig)

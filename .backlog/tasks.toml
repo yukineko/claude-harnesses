@@ -190,3 +190,33 @@ exit 101: tes/overwatch)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 9.03s
      Running tests/tmp_root_rm_wildcard_20261104.rs (target/debug/deps/tmp_root_rm_wildcard_20261104-cf8ac3de27ec62ae)
 error: test failed, to rerun pass `-p blastguard --test tmp_root_rm_wildcard_20261104`"""
+
+[[task]]
+id = "b942eb2c"
+title = 'blastguard: quoted/escaped git stash flags ("-u", --"all", \-u) are allowed although they dequote to -u/--all (fail-open)'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Measured 2026-11-04 on main (blastguard 0.2.259/0.2.260) by the #1526 verifier: git stash push "-u", git stash push --"all", git stash push \-u, git stash push -m x \-u are ALLOWED; after shell quote removal they are -u/--all, which remove untracked files like git clean. Unquoted -u is denied. Pre-existing (allowed on main before the #1526 fix too); the #1526 fix unmasked the -m variants that used to be denied only by the message-text FP. -"u" and -'u' are still denied. RED repro committed in 4de0c95a (4 #[ignore] RED cases + 2 controls). Readings: (a) defect: flag matching must use dequoted words (fail-open in a destructive-command gate); (b) intended: none found. Fix: dequote tokens before stash flag matching; remove the #[ignore]s.'''
+created_at = 1793793102
+updated_at = 1793793102
+weight = 0.0
+issue_number = 1535
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1535"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test git_stash_quoted_flag_failopen_20261104 -- --ignored"
+rev = "a202c0ae492dbb7b98790d12c201e2e1025e538f"
+observed_at = 1793793102
+detail = """
+exit 101: astguard v0.2.260 (/Users/yuki/src/.harness-worktrees/session-6d697f68-e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.91s
+     Running tests/git_stash_quoted_flag_failopen_20261104.rs (target/debug/deps/git_stash_quoted_flag_failopen_20261104-9c26bc8988c05cde)
+error: test failed, to rerun pass `-p blastguard --test git_stash_quoted_flag_failopen_20261104`"""

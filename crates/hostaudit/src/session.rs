@@ -4,13 +4,10 @@
 use crate::config::Ctx;
 use harness_core::verdict::Required;
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
-/// The running executable as a shell word for `sh -c`: an absolute path to
-/// an existing file, single-quoted only when it contains a character outside
-/// `[A-Za-z0-9/._+@:,=-]`. `Err` when it cannot be resolved — the caller must
-/// fail rather than print a bare `hostaudit` (daily runs tasks with a PATH
-/// that does not contain plugin bin dirs, so a bare name exits 127).
-fn self_command() -> Result<String, String> {
+/// The running executable: absolute and an existing file.
+fn current_exe() -> Result<PathBuf, String> {
     let exe = std::env::current_exe()
         .map_err(|e| format!("cannot resolve the hostaudit executable path: {e}"))?;
     if !exe.is_absolute() {
@@ -25,16 +22,76 @@ fn self_command() -> Result<String, String> {
             exe.display()
         ));
     }
-    let s = exe.to_str().ok_or_else(|| {
-        format!(
-            "the hostaudit executable path {} is not UTF-8",
-            exe.display()
-        )
-    })?;
+    Ok(exe)
+}
+
+/// (Re)create the stable `$HOME/.hostaudit/bin/hostaudit` symlink to the
+/// running executable (canon v1.1 §9 item 13, CONTRACT §12.11 item 3) and
+/// return its path. Creates `~/.hostaudit/bin`, replaces a missing, stale or
+/// dangling symlink (atomically, via rename), refuses to replace anything
+/// that is not a symlink, and checks that the link resolves to the running
+/// executable. `Err` on any failure.
+pub fn refresh_stable_link() -> Result<PathBuf, String> {
+    let home = std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(PathBuf::from)
+        .ok_or("HOME is not set; cannot place ~/.hostaudit/bin/hostaudit")?;
+    if !home.is_absolute() {
+        return Err(format!("HOME {} is not absolute", home.display()));
+    }
+    let exe = current_exe()?;
+    let dir = home.join(".hostaudit").join("bin");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let link = dir.join("hostaudit");
+    match std::fs::symlink_metadata(&link) {
+        Ok(m) if !m.file_type().is_symlink() => {
+            return Err(format!(
+                "{} exists and is not a symlink; refusing to replace it",
+                link.display()
+            ))
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("cannot inspect {}: {e}", link.display())),
+    }
+    let tmp = dir.join(format!(".hostaudit.tmp-{}", std::process::id()));
+    // A leftover temp link from a crashed run with the same pid.
+    if std::fs::symlink_metadata(&tmp).is_ok() {
+        std::fs::remove_file(&tmp)
+            .map_err(|e| format!("cannot remove stale {}: {e}", tmp.display()))?;
+    }
+    std::os::unix::fs::symlink(&exe, &tmp)
+        .map_err(|e| format!("cannot create symlink {}: {e}", tmp.display()))?;
+    if let Err(e) = std::fs::rename(&tmp, &link) {
+        // Best-effort cleanup; the error that matters is the rename's.
+        if let Err(c) = std::fs::remove_file(&tmp) {
+            return Err(format!(
+                "cannot move symlink into {}: {e} (and {} was left behind: {c})",
+                link.display(),
+                tmp.display()
+            ));
+        }
+        return Err(format!("cannot move symlink into {}: {e}", link.display()));
+    }
+    let (a, b) = (std::fs::canonicalize(&link), std::fs::canonicalize(&exe));
+    match (a, b) {
+        (Ok(a), Ok(b)) if a == b => Ok(link),
+        (a, b) => Err(format!(
+            "symlink {} does not resolve to the running executable ({a:?} vs {b:?})",
+            link.display()
+        )),
+    }
+}
+
+/// `path` as a shell word for `sh -c`: single-quoted only when it contains a
+/// character outside `[A-Za-z0-9/._+@:,=-]`. `Err` for a non-UTF-8 path or a
+/// control character.
+fn shell_word(path: &Path) -> Result<String, String> {
+    let s = path
+        .to_str()
+        .ok_or_else(|| format!("the path {} is not UTF-8", path.display()))?;
     if s.chars().any(char::is_control) {
-        return Err(format!(
-            "the hostaudit executable path {s:?} contains a control character"
-        ));
+        return Err(format!("the path {s:?} contains a control character"));
     }
     let plain = s.chars().all(|c| {
         c.is_ascii_alphanumeric()
@@ -61,11 +118,12 @@ fn toml_str(s: &str) -> String {
     out
 }
 
-/// `hostaudit daily-task --print` (CONTRACT §10). Never includes `aws apply`.
-/// Every task command starts with the absolute path of this executable;
-/// `Err` when that path cannot be resolved (nothing is printed then).
+/// `hostaudit daily-task --print` (CONTRACT §10, §12.11). Never includes
+/// `aws apply`. Refreshes the stable symlink first; every task command
+/// starts with its absolute path `$HOME/.hostaudit/bin/hostaudit`. `Err`
+/// when the symlink cannot be provided (nothing is printed then).
 pub fn daily_stanza() -> Result<String, String> {
-    let exe = self_command()?;
+    let exe = shell_word(&refresh_stable_link()?)?;
     let task = |name: &str, verb: &str| {
         format!(
             "[[task]]\nname = {}\ncommand = {}\n",
@@ -75,9 +133,11 @@ pub fn daily_stanza() -> Result<String, String> {
     };
     Ok(format!(
         "# hostaudit — append to ~/.daily/config.toml (runs once a day; read-only audits).\n\
-         # The commands use the absolute path of this hostaudit binary, because daily's\n\
-         # task shell does not have plugin bin dirs on its PATH. Re-run\n\
-         # `hostaudit daily-task --print` after the plugin is upgraded to a new path.\n\
+         # The commands use the stable path ~/.hostaudit/bin/hostaudit (daily's task shell\n\
+         # does not have plugin bin dirs on its PATH). It is a symlink to the current\n\
+         # hostaudit binary that this command and the SessionStart hook re-point on every\n\
+         # run, so this stanza survives plugin upgrades. If the link target is gone the\n\
+         # task fails with exit 127 in daily.\n\
          # A non-zero exit means a violation or an undetermined check — see\n\
          # ~/.hostaudit/reports.jsonl or `overwatch review-queue`. The last output line\n\
          # counts violation / undetermined / warning / clean separately.\n\

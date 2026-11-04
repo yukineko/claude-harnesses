@@ -208,7 +208,7 @@ impl Remote {
         match self {
             Remote::OsRelease => "LC_ALL=C cat /etc/os-release".into(),
             Remote::DpkgList => {
-                r"LC_ALL=C dpkg-query -W -f '${Package}\t${Version}\t${source:Package}\t${source:Version}\n'".into()
+                r"LC_ALL=C dpkg-query -W -f '${db:Status-Abbrev}\t${Package}\t${Version}\t${source:Package}\t${source:Version}\n'".into()
             }
             Remote::Listen => "LC_ALL=C ss -H -tln".into(),
             Remote::SshdConfig => "sudo -n LC_ALL=C sshd -T".into(),

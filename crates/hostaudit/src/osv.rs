@@ -361,24 +361,54 @@ pub struct Pkg {
     pub source_version: String,
 }
 
-/// Parse W2. Not-installed entries (empty version) are skipped; a malformed
-/// line is `Err`.
+/// `${db:Status-Abbrev}` → installed? (CONTRACT §12.11 item 1): two ASCII
+/// letters `<want><state>` plus an optional trailing space; installed iff the
+/// state is `i`. Anything else is `None` (unreadable install state).
+fn installed(status: &str) -> Option<bool> {
+    let b = status.as_bytes();
+    let ok = matches!(b.len(), 2 | 3)
+        && b[0].is_ascii_alphabetic()
+        && b[1].is_ascii_alphabetic()
+        && b.get(2).is_none_or(|c| *c == b' ');
+    ok.then(|| b[1] == b'i')
+}
+
+/// Parse W2 (`status\tpackage\tversion\tsource\tsource version`). Only
+/// installed rows are returned (`rc` and every other state is skipped); a
+/// malformed line, an unreadable status, or an installed row without a
+/// version is `Err` (never "not installed").
 pub fn parse_dpkg(text: &str) -> Result<Vec<Pkg>, String> {
     let mut out = Vec::new();
     for (i, line) in text.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        let f: Vec<&str> = line.split('\t').collect();
-        if f.len() != 4 {
+        let all: Vec<&str> = line.split('\t').collect();
+        if all.len() != 5 {
             return Err(format!(
-                "dpkg-query line {} has {} fields, expected 4",
+                "dpkg-query line {} has {} fields, expected 5",
                 i + 1,
-                f.len()
+                all.len()
             ));
         }
+        match installed(all[0]) {
+            None => {
+                return Err(format!(
+                    "dpkg-query line {} has an unreadable install status {:?}",
+                    i + 1,
+                    all[0]
+                ))
+            }
+            Some(false) => continue,
+            Some(true) => {}
+        }
+        let f = &all[1..];
         if f[1].is_empty() {
-            continue;
+            return Err(format!(
+                "dpkg-query line {}: installed package {} has no version",
+                i + 1,
+                f[0]
+            ));
         }
         let source = if f[2].is_empty() { f[0] } else { f[2] };
         let source_version = if f[3].is_empty() { f[1] } else { f[3] };

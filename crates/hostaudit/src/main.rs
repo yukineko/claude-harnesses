@@ -121,18 +121,31 @@ fn run(cli: Cli) -> i32 {
             }
             Err(e) => {
                 print_err(&format!(
-                    "hostaudit daily-task: {e}; refusing to print a stanza with a bare `hostaudit` command (it would exit 127 under daily)"
+                    "hostaudit daily-task: {e}; no stanza is printed (the stable path ~/.hostaudit/bin/hostaudit could not be provided, and a bare `hostaudit` would exit 127 under daily)"
                 ));
                 1
             }
         };
     }
+    // SessionStart re-points the stable daily symlink on every run (CONTRACT
+    // §12.11 item 3); a failure is appended to the visible line, never hidden.
+    let link_note = if matches!(cli.command, Cmd::SessionStart) {
+        match session::refresh_stable_link() {
+            Ok(_) => String::new(),
+            Err(e) => format!(
+                "; daily symlink ~/.hostaudit/bin/hostaudit NOT refreshed — the daily audit may not run, state UNKNOWN ({e})"
+            ),
+        }
+    } else {
+        String::new()
+    };
     let ctx = match config::load() {
         Ok(c) => c,
         Err(e) => {
             if matches!(cli.command, Cmd::SessionStart) {
                 // The user-visible line must still appear, saying it is unknown.
-                let msg = format!("hostaudit: configuration error — state UNKNOWN ({e})");
+                let msg =
+                    format!("hostaudit: configuration error — state UNKNOWN ({e}){link_note}");
                 print_out(&serde_json::json!({ "systemMessage": msg }).to_string());
                 return 0;
             }
@@ -142,7 +155,7 @@ fn run(cli: Cli) -> i32 {
     match cli.command {
         Cmd::DailyTask { .. } => 0,
         Cmd::SessionStart => {
-            let msg = session::session_message(&ctx);
+            let msg = format!("{}{link_note}", session::session_message(&ctx));
             print_out(&serde_json::json!({ "systemMessage": msg }).to_string());
             0
         }

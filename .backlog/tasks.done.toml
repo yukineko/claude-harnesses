@@ -65736,3 +65736,64 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "a015dbef833f0297e672353c025540324355e488"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "36ccbc8c"
+title = "daily security task: non-Cargo first session consumes the day's cargo-deny audit; ok rows don't record dir"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "daily",
+    "security",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Measured 2026-11-04 at afc4db13: ~/.daily/reports.jsonl 2026-07-09..2026-11-04 has 79 security runs, 62 fail, all 'the directory … doesn't contain a Cargo.toml file' (vpnproxy, medipartner_transaction). Cause: default security task runs in session cwd (resolve_task_dir None → cwd, crates/daily/src/main.rs:357) and mark_done runs regardless of outcome (main.rs:216), so a non-Cargo first session uses up the day and no Cargo project is audited. ok rows lack dir so 'was repo X audited' is unobservable. Two readings: (a) defect — security audit silently skipped most days; (b) intended once-per-day-anywhere. Distinguish: the default task exists to audit Rust deps (cargo deny), meaningless outside a Cargo project, so (a). Expected: non-Cargo cwd = not-applicable (not fail, does not consume the slot); report rows carry dir. User asked to fix this first (2026-11-04)."
+created_at = 1793770546
+updated_at = 1793770791
+weight = 0.0
+issue_number = 1532
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1532"
+issue_closed_at = 1793770794
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p daily --test repro_security_noncargo_cwd_consumes_day"
+rev = "afc4db1354bbed65950187e9bacbb3cc2c97487e"
+observed_at = 1793770546
+detail = """
+exit 101:  daily v0.3.27 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-5db493ee/crates/daily)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.95s
+     Running tests/repro_security_noncargo_cwd_consumes_day.rs (target/debug/deps/repro_security_noncargo_cwd_consumes_day-de9a2ece534978dc)
+error: test failed, to rerun pass `-p daily --test repro_security_noncargo_cwd_consumes_day`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p daily --test repro_security_noncargo_cwd_consumes_day"
+exit = 0
+passed = 3
+rev = "3c0cc79b5011918ef8012041ee0967080dc8f4a1"
+observed_at = 1793770771
+output_digest = "sha256:3d74b2e13746a0616b0e4ac66e8b12021922f5837ed4ebcf16f8892826903e1a"
+excerpt = """
+
+running 3 tests
+test noncargo_session_is_not_reported_as_audit_fail ... ok
+test security_report_records_audited_directory ... ok
+test noncargo_first_session_does_not_starve_cargo_project_audit ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/repro_security_noncargo_cwd_consumes_day.rs (target/debug/deps/repro_security_noncargo_cwd_consumes_day-2f5a92bee3b38dc3)
+"""
+
+[task.closure.red]
+rev = "afc4db1354bbed65950187e9bacbb3cc2c97487e"
+exit = 101
+kind = "behavioural"

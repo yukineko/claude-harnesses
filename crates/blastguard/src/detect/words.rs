@@ -193,8 +193,12 @@ pub(super) fn command_candidates(tokens: &[&str]) -> Vec<usize> {
     let mut i = 0;
     while i < tokens.len() {
         let t = tokens[i];
-        if t.is_empty() || is_assignment(t) {
+        if t.is_empty() {
             i += 1;
+            continue;
+        }
+        if is_assignment(t) {
+            i += literal_assignment_span(tokens, i);
             continue;
         }
         if is_exec_wrapper(&normalized_command(t)) {
@@ -206,6 +210,26 @@ pub(super) fn command_candidates(tokens: &[&str]) -> Vec<usize> {
         return vec![i];
     }
     Vec::new()
+}
+
+/// Tokens [`command_candidates`] skips for the leading assignment at
+/// `tokens[i]`: the whole shell word when its quoted value spans several
+/// whitespace-split tokens (`x='recursive rm'` is `x='recursive` + `rm'`),
+/// otherwise 1.
+///
+/// Backlog ce04adeb (#1527): skipping only `x='recursive` made `rm'` the
+/// command word, and `python3 -c "x='recursive rm'<newline>y=a[:1]"` (the
+/// newline lost to the whitespace split) was denied as "rm with a wildcard".
+///
+/// The multi-token skip applies only when the word provably ends
+/// (`shell_word_token_span` is `Some`) AND holds no `$` or backtick, i.e.
+/// no expansion or command substitution can run inside it. Anything else
+/// keeps the one-token skip, so the tokens after it stay candidates.
+fn literal_assignment_span(tokens: &[&str], i: usize) -> usize {
+    match super::payload::shell_word_token_span(tokens, i) {
+        Some(span) if !tokens[i..i + span].iter().any(|t| t.contains(['$', '`'])) => span,
+        _ => 1,
+    }
 }
 
 /// Indices of the command words an exec-wrapper chain can actually run —

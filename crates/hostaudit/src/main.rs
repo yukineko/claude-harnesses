@@ -1,22 +1,28 @@
 //! hostaudit — configuration / operations security audit (canon:
 //! docs/hostaudit-baseline-v1.md; testable interface: crates/hostaudit/CONTRACT.md).
 //!
-//! Exit codes (CONTRACT §2): 0 all clean / not_applicable (or success),
-//! 1 at least one violation / undetermined, 2 usage error, 3 refused,
-//! 4 inventory undetermined.
+//! Exit codes (CONTRACT §2, §12.1): 0 all clean / not_applicable / warning
+//! (or success), 1 at least one violation / undetermined, 2 usage error,
+//! 3 refused, 4 inventory undetermined.
 
 mod apply;
+mod audit;
 mod aws;
 mod baseline;
 mod config;
+mod cve;
+mod feeds;
 mod finding;
 mod inventory;
+mod linux11;
 mod local;
 mod osv;
+mod products;
 mod redact;
 mod session;
 mod ssh;
 mod tls;
+mod windows;
 
 use clap::{Parser, Subcommand};
 use finding::{print_err, print_out};
@@ -108,8 +114,18 @@ fn run(cli: Cli) -> i32 {
         if !*print {
             return usage("daily-task: use `hostaudit daily-task --print`");
         }
-        print_out(&session::daily_stanza());
-        return 0;
+        return match session::daily_stanza() {
+            Ok(s) => {
+                print_out(&s);
+                0
+            }
+            Err(e) => {
+                print_err(&format!(
+                    "hostaudit daily-task: {e}; refusing to print a stanza with a bare `hostaudit` command (it would exit 127 under daily)"
+                ));
+                1
+            }
+        };
     }
     let ctx = match config::load() {
         Ok(c) => c,
@@ -245,7 +261,7 @@ fn run(cli: Cli) -> i32 {
                 }
             }
         }
-        Cmd::Audit { json } => baseline::run_audit(&ctx, json),
+        Cmd::Audit { json } => audit::run_audit(&ctx, json),
         Cmd::Local { json } => local::run_local(&ctx, json),
         Cmd::Aws { json, sub } => match sub {
             None => aws::run_aws(&ctx, json),

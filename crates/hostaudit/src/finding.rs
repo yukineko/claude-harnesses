@@ -1,13 +1,16 @@
-//! Findings, the four-valued per-rule verdict, report rows and the overwatch
-//! review-queue append (canon §1, §2, §8; CONTRACT §8).
+//! Findings, the five-valued per-rule verdict, report rows and the overwatch
+//! review-queue append (canon v1 §1, §2, §8; v1.1 §1; CONTRACT §8, §12.1).
 //!
-//! The verdict is four-valued, not the shared three-valued
-//! `harness_core::verdict::Verdict`, because canon §2 requires
-//! `NotApplicable` as a value distinct from `Clean`. The fail-closed property
-//! is kept by construction: a `Finding` can only be built through
-//! [`Finding::clean`] / [`Finding::not_applicable`] / [`Finding::violation`] /
-//! [`Finding::undetermined`]; a violation without a fix and an undetermined
-//! without a reason are replaced by placeholders that say so, never by a pass.
+//! The verdict is five-valued, not the shared three-valued
+//! `harness_core::verdict::Verdict`, because canon v1 §2 requires
+//! `NotApplicable` as a value distinct from `Clean` and canon v1.1 §1 adds
+//! `Warning` (observed, meets the baseline, but needs a human's plan; exit 0,
+//! always counted separately, never sent to the review queue). The
+//! fail-closed property is kept by construction: a `Finding` can only be
+//! built through [`Finding::clean`] / [`Finding::not_applicable`] /
+//! [`Finding::warning`] / [`Finding::violation`] / [`Finding::undetermined`];
+//! a violation or warning without a fix and an undetermined without a reason
+//! are replaced by placeholders that say so, never by a pass.
 
 use crate::redact;
 use serde::Serialize;
@@ -19,6 +22,7 @@ use std::path::Path;
 pub enum Status {
     Clean,
     NotApplicable,
+    Warning,
     Violation,
     Undetermined,
 }
@@ -28,13 +32,29 @@ impl Status {
         match self {
             Status::Clean => "clean",
             Status::NotApplicable => "not_applicable",
+            Status::Warning => "warning",
             Status::Violation => "violation",
             Status::Undetermined => "undetermined",
         }
     }
-    /// Violation and Undetermined make the command exit non-zero (canon §2).
+
+    /// Violation and Undetermined make the command exit non-zero (canon v1 §2);
+    /// Warning does not (canon v1.1 §1). The same predicate selects what goes
+    /// to the overwatch review queue, so warnings are never queued.
     pub fn is_failing(self) -> bool {
         matches!(self, Status::Violation | Status::Undetermined)
+    }
+
+    /// Order for multi-item rules (canon v1.1 §1):
+    /// Violation > Undetermined > Warning > Clean (> NotApplicable).
+    pub fn rank(self) -> u8 {
+        match self {
+            Status::Violation => 4,
+            Status::Undetermined => 3,
+            Status::Warning => 2,
+            Status::Clean => 1,
+            Status::NotApplicable => 0,
+        }
     }
 }
 
@@ -76,6 +96,10 @@ pub struct Finding {
     pub apt_index_time: Option<i64>,
     #[serde(flatten)]
     pub sg: Option<SgDetail>,
+    /// v1.1 rule-specific fields (`cves`, `priority_counts`, `kev_fetched_at`,
+    /// `eol_fetched_at`), flattened into the finding object.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Finding {
@@ -91,6 +115,7 @@ impl Finding {
             advisory_fetched_at: None,
             apt_index_time: None,
             sg: None,
+            extra: serde_json::Map::new(),
         }
     }
 
@@ -117,6 +142,18 @@ impl Finding {
         f
     }
 
+    /// Canon v1.1 §1: a warning always carries advice in `fix`.
+    pub fn warning(rule: &str, target: &str, evidence: Vec<String>, fix: &str) -> Finding {
+        let mut f = Self::base(rule, target, Status::Warning, evidence);
+        let fix = redact::clean_text(fix, "\n");
+        f.fix = Some(if fix.trim().is_empty() {
+            format!("{rule}: see docs/hostaudit-baseline-v1.1.md for the advice")
+        } else {
+            fix
+        });
+        f
+    }
+
     pub fn undetermined(rule: &str, target: &str, evidence: Vec<String>, reason: &str) -> Finding {
         let mut f = Self::base(rule, target, Status::Undetermined, evidence);
         let r = redact::cap_bytes(&redact::clean_text(reason, " / "), 2048);
@@ -126,6 +163,30 @@ impl Finding {
             r
         });
         f
+    }
+
+    /// Build a finding for `status`, routing `fix` / `reason` to the field the
+    /// verdict requires (multi-item rules, canon v1.1 §1).
+    pub fn of(
+        status: Status,
+        rule: &str,
+        target: &str,
+        evidence: Vec<String>,
+        fix: &str,
+        reason: &str,
+    ) -> Finding {
+        match status {
+            Status::Violation => Self::violation(rule, target, evidence, fix),
+            Status::Warning => Self::warning(rule, target, evidence, fix),
+            Status::Undetermined => Self::undetermined(rule, target, evidence, reason),
+            Status::Clean => Self::clean(rule, target, evidence),
+            Status::NotApplicable => Self::not_applicable(rule, target, evidence, reason),
+        }
+    }
+
+    pub fn with(mut self, key: &str, v: serde_json::Value) -> Finding {
+        self.extra.insert(key.to_string(), v);
+        self
     }
 
     pub fn with_id(mut self, id: String) -> Finding {
@@ -147,8 +208,9 @@ impl Finding {
     }
 }
 
-/// Exit code for a finished command (CONTRACT §2): 0 only if every finding is
-/// clean / not_applicable. An empty finding list is a bug, never a pass.
+/// Exit code for a finished command (CONTRACT §2, §12.1): 0 only if every
+/// finding is clean / not_applicable / warning. An empty finding list is a
+/// bug, never a pass.
 pub fn exit_code(findings: &[Finding]) -> i32 {
     if findings.is_empty() || findings.iter().any(|f| f.verdict.is_failing()) {
         1
@@ -177,11 +239,59 @@ pub fn print_err(text: &str) {
     let _ = std::io::stderr().lock().write_all(s.as_bytes());
 }
 
-/// Render findings: `{"findings":[...]}` with `json`, a listing otherwise.
+/// Per-verdict counts (canon v1.1 §1: warning is always its own number).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counts {
+    pub violation: usize,
+    pub undetermined: usize,
+    pub warning: usize,
+    pub clean: usize,
+    pub not_applicable: usize,
+}
+
+impl Counts {
+    pub fn of(findings: &[Finding]) -> Counts {
+        let mut c = Counts::default();
+        for f in findings {
+            match f.verdict {
+                Status::Violation => c.violation += 1,
+                Status::Undetermined => c.undetermined += 1,
+                Status::Warning => c.warning += 1,
+                Status::Clean => c.clean += 1,
+                Status::NotApplicable => c.not_applicable += 1,
+            }
+        }
+        c
+    }
+
+    /// `violation V / undetermined U / warning W / clean C / not_applicable N`
+    /// (canon v1.1 §1 example, CONTRACT §12.1).
+    pub fn line(&self) -> String {
+        format!(
+            "violation {} / undetermined {} / warning {} / clean {} / not_applicable {}",
+            self.violation, self.undetermined, self.warning, self.clean, self.not_applicable
+        )
+    }
+
+    pub fn to_json(self) -> serde_json::Value {
+        serde_json::json!({
+            "violation": self.violation,
+            "undetermined": self.undetermined,
+            "warning": self.warning,
+            "clean": self.clean,
+            "not_applicable": self.not_applicable,
+        })
+    }
+}
+
+/// Render findings: `{"findings":[...], "summary":{...}}` with `json`, a
+/// listing otherwise. The listing's last line is the one-line summary the
+/// daily task shows (canon v1 §1, v1.1 §1), with warnings counted on their own.
 pub fn render(findings: &[Finding], json: bool) {
+    let counts = Counts::of(findings);
     if json {
         let arr: Vec<serde_json::Value> = findings.iter().map(Finding::to_value).collect();
-        print_out(&serde_json::json!({ "findings": arr }).to_string());
+        print_out(&serde_json::json!({ "findings": arr, "summary": counts.to_json() }).to_string());
         return;
     }
     let mut s = String::new();
@@ -205,24 +315,12 @@ pub fn render(findings: &[Finding], json: bool) {
             }
         }
     }
-    let (v, u) = counts(findings);
     s.push_str(&format!(
-        "hostaudit: {} findings, {v} violation, {u} undetermined\n",
-        findings.len()
+        "hostaudit: {} findings — {}\n",
+        findings.len(),
+        counts.line()
     ));
     print_out(&s);
-}
-
-pub fn counts(findings: &[Finding]) -> (usize, usize) {
-    let v = findings
-        .iter()
-        .filter(|f| f.verdict == Status::Violation)
-        .count();
-    let u = findings
-        .iter()
-        .filter(|f| f.verdict == Status::Undetermined)
-        .count();
-    (v, u)
 }
 
 /// Append one row per finding to `~/.hostaudit/reports.jsonl` (canon §8).
@@ -248,15 +346,16 @@ pub fn append_reports(dir: &Path, findings: &[Finding], now: i64) -> Result<(), 
         .map_err(|e| format!("cannot append to {}: {e}", path.display()))
 }
 
-/// Append every Violation / Undetermined finding to overwatch's
-/// `review_findings.jsonl` through overwatch's own library writer
-/// (`overwatch::store::append_review_finding`), so the path (keyed by the
-/// main-worktree root of `cwd`) and the row schema are overwatch's, not a
-/// copy. Rows are stored `Unverified`: hostaudit is an observer, not an
-/// adversarial verifier (same rule as `overwatch::store::record_finding`).
+/// Append every Violation / Undetermined finding (never a Warning, canon
+/// v1.1 §1) to overwatch's `review_findings.jsonl` through overwatch's own
+/// library writer (`overwatch::store::append_review_finding`), so the path
+/// (keyed by the main-worktree root of `cwd`) and the row schema are
+/// overwatch's, not a copy. Rows are stored `Unverified`: hostaudit is an
+/// observer, not an adversarial verifier (same rule as
+/// `overwatch::store::record_finding`).
 pub fn append_review_queue(cwd: &Path, findings: &[Finding], now: i64) -> Result<usize, String> {
     let mut n = 0;
-    for f in findings.iter().filter(|f| f.verdict.is_failing()) {
+    for f in findings.iter().filter(|f| queued(f.verdict)) {
         let detail = match (&f.reason, f.evidence.first()) {
             (Some(r), _) => r.clone(),
             (None, Some(e)) => e.clone(),
@@ -293,6 +392,12 @@ pub fn append_review_queue(cwd: &Path, findings: &[Finding], now: i64) -> Result
     Ok(n)
 }
 
+/// Which verdicts go to the overwatch review queue: Violation and
+/// Undetermined only (canon v1 §1); Warning is excluded (canon v1.1 §1).
+fn queued(s: Status) -> bool {
+    matches!(s, Status::Violation | Status::Undetermined)
+}
+
 /// Record a finished command's findings (report + review queue) and return the
 /// exit code. A recording failure is reported on stderr and makes the exit
 /// non-zero: a result nobody can read later is not a clean result.
@@ -312,4 +417,26 @@ pub fn finish(ctx: &crate::config::Ctx, findings: &[Finding], json: bool) -> i32
         code = 1;
     }
     code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn warning_is_counted_apart_and_not_queued_nor_failing() {
+        let fs = vec![
+            Finding::warning("S5", "h", vec![], "check the repo"),
+            Finding::clean("B1", "h", vec![]),
+        ];
+        assert_eq!(exit_code(&fs), 0);
+        let c = Counts::of(&fs);
+        assert_eq!(
+            (c.warning, c.clean, c.violation, c.undetermined),
+            (1, 1, 0, 0)
+        );
+        assert!(!queued(Status::Warning));
+        assert!(queued(Status::Violation) && queued(Status::Undetermined));
+        assert!(fs[0].fix.as_deref().is_some_and(|x| !x.is_empty()));
+    }
 }

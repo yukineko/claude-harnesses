@@ -106,7 +106,7 @@ Builds the inventory exactly as `inventory` does (same exit 4 conditions), then:
 | id | remote command string |
 |---|---|
 | W1 | `LC_ALL=C cat /etc/os-release` |
-| W2 | `LC_ALL=C dpkg-query -W -f '${Package}\t${Version}\t${source:Package}\t${source:Version}\n'` (literal backslash-t / backslash-n, single-quoted) |
+| W2 | `LC_ALL=C dpkg-query -W -f '${db:Status-Abbrev}\t${Package}\t${Version}\t${source:Package}\t${source:Version}\n'` (v1.1 item 13: status column first, see 12.11) (literal backslash-t / backslash-n, single-quoted) |
 | W3 | `LC_ALL=C ss -H -tln` |
 | W4 | `sudo -n LC_ALL=C sshd -T` |
 | W5 | `sudo -n LC_ALL=C ufw status` |
@@ -206,6 +206,7 @@ Files: `~/.claude/settings.json`, `~/.claude/settings.local.json`, `<cwd>/.claud
 ## 10. `daily-task --print`
 
 Prints a TOML snippet for `~/.daily/config.toml` with one or more `[[task]]` tables (`name`, `command`); taken together the commands run `hostaudit audit`, `hostaudit local` and `hostaudit aws` (never `aws apply`). Exit 0.
+Item 13: every command starts with the absolute stable path `<HOME>/.hostaudit/bin/hostaudit`; `--print` (re)creates that symlink (12.11).
 
 ## 11. Not covered by this test batch
 
@@ -440,3 +441,47 @@ Each point is **[choice, post-review 2026-11-04]**.
 12. **W13 usrmerge**: `no path found` for a path under `/usr/bin`, `/usr/sbin`, `/usr/lib` also queries `LC_ALL=C dpkg -S <path without /usr>`.
     Both `no path found`: not dpkg-managed (W22 runs against the original path). Alias owned by a package: dpkg-managed. If the alias query fails: ownership unknown,
     so exposure is `unknown` (never `no` merely because of usrmerge).
+
+## 12.11 Canon ed704868 item 13 (tests: `v11_item13.rs`, `v11_daily_symlink.rs`)
+
+1. **W2 install status** [choice: column position]. The wire string is
+   `LC_ALL=C dpkg-query -W -f '${db:Status-Abbrev}\t${Package}\t${Version}\t${source:Package}\t${source:Version}\n'`
+   (literal backslash-t / backslash-n, single-quoted; byte-exact, the fake ssh matches on it). The status is the **first**
+   column. `${db:Status-Abbrev}` is three characters, e.g. `ii ` (trailing space), `rc `, `iU `, `hi `.
+   Harness note: `common::w2_with_status` (applied by `Env::ssh_host` to the W2 response) prefixes `ii ` to every legacy
+   4-field fixture row, so older fixtures mean "installed"; a row with 5 fields is used verbatim.
+   - A row is **installed** iff its status is a well-formed `<want><state>` pair whose second character (the state) is `i`.
+     `rc` (removed, config files remain) and every other state is not installed and is ignored by B5, S9, K2 and K3 (and
+     by anything else that reads W2). Example: removed `python3.9` (`rc`) does not make S9 a violation; a removed newer
+     `linux-image-*` (`rc`) is not a K3 reboot-pending kernel; an `rc` curl is not a B5 hit.
+   - **Unparseable status** (empty, wrong length, not two letters + optional space, e.g. `""`, `i`, `!!!`, `ii extra`)
+     makes the W2 observation undetermined: B5 is `undetermined` (an unreadable install state is never "not installed").
+   - [choice] K2 when the running package `linux-image-<uname -r>` exists only as an `rc` row: it is not installed, so K2 cannot
+     evaluate it and is anything but `clean` (test asserts `!= clean`). An `rc` row never shadows an installed row of the same name.
+2. **CVE exposure** (supersedes the 12.5 `exposed` definition): `yes` iff a process owned (W12b, W13) by a binary package of the
+   CVE's source package listens on **any non-loopback address** (anything outside `127.0.0.0/8` and `::1`), e.g. `203.0.113.5:443`,
+   `[2001:db8::1]:443`, `10.0.0.7:22`, as well as `0.0.0.0` / `[::]` / `*`. `no` iff W12 was observed and every such listener is
+   loopback-only (`127.0.0.1`, `127.0.0.2`, `127.255.255.254`, `[::1]`). One external bind among loopback ones is `yes`.
+   [choice] an address that does not parse as an IP and is not a wildcard (e.g. `1127.0.0.1`) is not loopback: never `no`.
+   Unobservable W12/W12b/W13 stays `unknown`. **B4 is unchanged**: it still looks only at wildcard binds; a DB port on a specific
+   IP (`203.0.113.5:3306`) is B4 `clean` (regression guard `b4_specific_ip_db_bind_is_still_ignored`).
+3. **Stable daily path.** Every `daily-task --print` task command starts with the absolute path `<HOME>/.hostaudit/bin/hostaudit`
+   (unquoted or single-quoted; `<HOME>` is `$HOME` of the process). `--print` (re)creates that path as a symlink to the current
+   executable (`std::env::current_exe`): it creates `~/.hostaudit/bin`, replaces a missing, stale or dangling symlink, and the link
+   resolves (canonicalised) to the executable that ran. `session-start` refreshes the same symlink on every run.
+   - If the symlink cannot be created (e.g. `~/.hostaudit/bin` is a regular file), `daily-task --print` exits **non-zero**, prints
+     **no** stanza on stdout (no `command =` line, no `[[task]]`), and says why on stderr.
+   - [choice] `session-start` with an uncreatable symlink still exits 0 and prints its JSON `systemMessage`, and the message surfaces
+     the failure (contains `UNKNOWN`, `symlink` or `daily`); it must not read as healthy.
+   - The existing `repro_daily_stanza_bare_command` assertions still hold: the first token is absolute and `is_file()` through the symlink.
+   - A daily run whose symlink target is gone fails as exit 127 in daily; that is daily's own failure and not a hostaudit verdict
+     (not tested here).
+4. **Loader error wording** (canon 2 W21, matches item 8 of 12.10): "the product is absent" is read from `exit 127`, `command not found` or
+   `No such file`; **except** that stderr containing `error while loading shared libraries` (the product exists but is broken; the loader
+   message itself contains `No such file or directory`) is checked first and makes the W21/W22 item `undetermined`, whatever the exit code.
+   Tests: `v11_review.rs::item8_*`.
+5. W22 execution stays canon (unchanged).
+
+Honest RED note for this round: because the W2 wire string and fixtures now carry the status column, every test that reaches W2
+(B5/S9/K2/K3 and anything keyed on dpkg) is RED against an implementation that still sends the 4-field W2, until the implementer
+adopts the new wire string and parser.

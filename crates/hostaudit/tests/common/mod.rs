@@ -21,8 +21,7 @@ pub const NOW: i64 = 1_800_000_000; // 2027-01-15T08:00:00Z
 pub const DAY: i64 = 86_400;
 
 pub const W1: &str = "LC_ALL=C cat /etc/os-release";
-pub const W2: &str =
-    r"LC_ALL=C dpkg-query -W -f '${Package}\t${Version}\t${source:Package}\t${source:Version}\n'";
+pub const W2: &str = r"LC_ALL=C dpkg-query -W -f '${db:Status-Abbrev}\t${Package}\t${Version}\t${source:Package}\t${source:Version}\n'";
 pub const W3: &str = "LC_ALL=C ss -H -tln";
 pub const W4: &str = "sudo -n LC_ALL=C sshd -T";
 pub const W5: &str = "sudo -n LC_ALL=C ufw status";
@@ -281,6 +280,11 @@ impl Env {
         let _ = std::fs::remove_dir_all(&hd);
         std::fs::create_dir_all(&hd).unwrap();
         for (i, (cmd, r)) in resp.iter().enumerate() {
+            let mut r = r.clone();
+            if cmd == W2 {
+                r.out = w2_with_status(&r.out);
+            }
+            let r = &r;
             std::fs::write(hd.join(format!("{i}.cmd")), cmd).unwrap();
             std::fs::write(hd.join(format!("{i}.out")), &r.out).unwrap();
             std::fs::write(hd.join(format!("{i}.err")), &r.err).unwrap();
@@ -936,4 +940,20 @@ pub fn is_sudo_cmd(cmd: &str) -> bool {
     SUDO_CMDS.contains(&cmd)
         || [W12, W16, W23].contains(&cmd)
         || cmd.starts_with("sudo -n LC_ALL=C readlink /proc/")
+}
+
+/// W2 fixtures are written as `pkg<TAB>ver<TAB>src<TAB>srcver`. Since v1.1 item 13
+/// the wire format has a leading `${db:Status-Abbrev}` column (CONTRACT 12.11): this
+/// harness shim prefixes `ii ` to every 4-field row, so legacy fixtures mean
+/// "installed". Rows that already have 5 fields (status explicit) are untouched.
+pub fn w2_with_status(out: &str) -> String {
+    out.lines()
+        .map(|l| {
+            if l.split('\t').count() == 4 {
+                format!("ii \t{l}\n")
+            } else {
+                format!("{l}\n")
+            }
+        })
+        .collect()
 }

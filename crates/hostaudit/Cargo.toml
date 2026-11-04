@@ -1,0 +1,23 @@
+[package]
+name = "hostaudit"
+version = "0.1.0"
+edition = "2021"
+rust-version.workspace = true
+description = "Configuration and operations security audit for servers (ssh, read-only), AWS resources (read-only; security-group fixes only on explicit confirmation) and local Claude Code settings, judged against a fixed baseline with fix instructions for every violation."
+license = "MIT"
+
+[[bin]]
+name = "hostaudit"
+path = "src/main.rs"
+
+[dependencies]
+harness-core = { path = "../harness-core" }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+chrono = { workspace = true }
+dirs = "5"
+
+[dev-dependencies]
+tempfile = { workspace = true }

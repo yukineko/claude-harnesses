@@ -66496,3 +66496,209 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "6e49e7d51d056805f15f91c3b51fcd7ea12dbbfd"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "486fb7de"
+title = "blastguard: implement user ruling 2026-11-02 (/tmp以下はrm -frを削除していい) for wildcard operands"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "ruling",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Ruling verbatim: 「そもそも/tmp以下はrm -frを削除していい。worktreeなどと同じあつかいにして」. Literal operands inside /tmp are Allow; wildcards are not: rm -rf /tmp/<dir>/name-* -> ask, rm -rf /tmp/<head>-* -> deny. Repro c4ea7415 crates/blastguard/tests/tmp_root_rm_wildcard_20261104.rs (2 RED ignored + controls: literal Allow, /tmp/* and /tmp/*/x not Allow). Prior unported implementation (pre-detect-split, rejected by fail-open-guard/fail-open-diff/raw-io-ratchet) parked at refs/parked/blastguard-tmp-rm. Not covered: symlink negatives, ?/[] patterns, /tmp/.*, $TMPDIR spelling. GATE crate: canary rollout."
+created_at = 1793758083
+updated_at = 1793808123
+weight = 0.0
+issue_number = 1531
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1531"
+issue_closed_at = 1793808126
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test tmp_root_rm_wildcard_20261104 -- --ignored"
+rev = "c4ea7415f25efa4c2b55365ced15bbfdc851d536"
+observed_at = 1793758083
+detail = """
+exit 101: 07s
+
+   Compiling blastguard v0.2.257 (/home/hiroyuki_nakayama/src/.harness-worktrees/session-7d8b5ad9/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.68s
+     Running tests/tmp_root_rm_wildcard_20261104.rs (target/debug/deps/tmp_root_rm_wildcard_20261104-f6ba2a3362a66138)
+error: test failed, to rerun pass `-p blastguard --test tmp_root_rm_wildcard_20261104`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test tmp_root_rm_wildcard_20261104"
+exit = 0
+passed = 10
+rev = "4130ea56a7db1c8a64310c881d40a04547335958"
+observed_at = 1793808098
+output_digest = "sha256:2d74c519ae8b28e46d24acec369e693d2b4ba83e457b50656e8cb49c2f310cbc"
+excerpt = """
+
+running 10 tests
+test control_literal_operand_inside_tmp_is_allow ... ok
+test control_glob_in_non_last_component_is_not_allow ... ok
+test control_bare_tmp_star_is_not_allow ... ok
+test wildcard_last_component_inside_tmp_dir_is_allow ... ok
+test wildcard_with_literal_head_directly_under_tmp_is_allow ... ok
+test control_short_head_one_level_deeper_is_allow ... ok
+test control_head_of_4_or_more_directly_under_tmp_is_allow ... ok
+test short_head_1_to_3_directly_under_private_tmp_is_not_allow ... ok
+test short_head_1_to_3_directly_under_tmp_is_not_allow ... ok
+test ruling_examples_c_cl_cla_directly_under_tmp_are_not_allow ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.77s
+
+   Compiling blastguard v0.2.264 (/Users/yuki/src/.harness-worktrees/session-6d697f68-f/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.03s
+     Running tests/tmp_root_rm_wildcard_20261104.rs (target/debug/deps/tmp_root_rm_wildcard_20261104-1095defaebf697fe)
+"""
+
+[task.closure.red]
+rev = "aab9036a70d592b8e7f53ca012dace3f9cfb4930"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "0862d9f8"
+title = "blastguard tmp_root_rm_wildcard_20261104: 3 controls fail on macOS before reaching blastguard (/tmp is /private/tmp)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Measured 2026-11-04 at main a52b11b2 on Darwin 25.6. 3 of 5 tests (control_bare_tmp_star_is_not_allow, control_literal_operand_inside_tmp_is_allow, control_glob_in_non_last_component_is_not_allow; the other 2 are #[ignore]) panic at crates/blastguard/tests/tmp_root_rm_wildcard_20261104.rs:62 verbatim: '/tmp/<uniq> does not resolve under /tmp on this host'. The fixture asserts tmp.canonicalize() starts_with /tmp/, but on macOS /tmp -> /private/tmp, so the assert fires before any hook call. Added in c4ea7415 (#1531 RED repros). Makes donegate test-changed red for every blastguard change on macOS. Readings: (a) test defect: the precondition should accept the host's canonical tmp or skip-as-undetermined explicitly; (b) intended host-guard: then it should be a documented skip, not a panic that reads as a product failure. Distinguish by asking the c4ea7415 author's intent; behaviour fix belongs with #1531."
+created_at = 1793792454
+updated_at = 1793808155
+weight = 0.0
+issue_number = 1534
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1534"
+issue_closed_at = 1793808157
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test tmp_root_rm_wildcard_20261104"
+rev = "a363b83e720be9fbf476a8326256874d88bd0a66"
+observed_at = 1793792454
+detail = """
+exit 101: tes/overwatch)
+   Compiling blastguard v0.2.257 (/Users/yuki/src/.harness-worktrees/session-6d697f68-e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.03s
+     Running tests/tmp_root_rm_wildcard_20261104.rs (target/debug/deps/tmp_root_rm_wildcard_20261104-cf8ac3de27ec62ae)
+error: test failed, to rerun pass `-p blastguard --test tmp_root_rm_wildcard_20261104`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test tmp_root_rm_wildcard_20261104"
+exit = 0
+passed = 10
+rev = "4130ea56a7db1c8a64310c881d40a04547335958"
+observed_at = 1793808136
+output_digest = "sha256:6c0d1753852b0d720252027a7cfab8be7b236278f1d649c1b385808d2dd8f56a"
+excerpt = """
+
+running 10 tests
+test control_literal_operand_inside_tmp_is_allow ... ok
+test control_bare_tmp_star_is_not_allow ... ok
+test control_glob_in_non_last_component_is_not_allow ... ok
+test wildcard_with_literal_head_directly_under_tmp_is_allow ... ok
+test wildcard_last_component_inside_tmp_dir_is_allow ... ok
+test control_short_head_one_level_deeper_is_allow ... ok
+test short_head_1_to_3_directly_under_private_tmp_is_not_allow ... ok
+test control_head_of_4_or_more_directly_under_tmp_is_allow ... ok
+test short_head_1_to_3_directly_under_tmp_is_not_allow ... ok
+test ruling_examples_c_cl_cla_directly_under_tmp_are_not_allow ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.52s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/tmp_root_rm_wildcard_20261104.rs (target/debug/deps/tmp_root_rm_wildcard_20261104-1095defaebf697fe)
+"""
+
+[task.closure.red]
+rev = "59acc38b2325f663fc589147552d7b4324c892b1"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/blastguard/tests/approval_memory.rs"]
+
+[[task]]
+id = "bbd48223"
+title = "bash write attribution keeps a whole command containing $(...) even when every statement naming a worktree is read-only (donegate then gates another session's worktree)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "harness-core",
+    "donegate",
+    "attribution",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-04 session 7d8b5ad9: a Bash command 'for p in /proc/[0-9]*; do c=$(readlink $p/cwd); ...; done; ...; cd <wt-A> && git status --short; cd <wt-B> && git status && git log' made wt-A/wt-B (other sessions' WIP worktrees) donegate/tdd Stop roots; donegate then blocked on their failing tests. Cause: attribution.rs statements() returns None on $( so writing_statements keeps the whole command. Repro c4ea7415 crates/harness-core/tests/session_roots_readonly_substitution.rs (2 RED ignored + 2 controls). Constraint: attribution_read_only_bash.rs::group3_unparseable_constructs_stay_conservative requires 'cat $(echo src/a.js)' to stay attributed. Not covered: causality control (same statements without $()), backticks, heredocs, relative cd."
+created_at = 1793758080
+updated_at = 1793808203
+weight = 0.0
+issue_number = 1530
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1530"
+issue_closed_at = 1793808205
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test session_roots_readonly_substitution -- --ignored"
+rev = "c4ea7415f25efa4c2b55365ced15bbfdc851d536"
+observed_at = 1793758080
+detail = """
+exit 101: e
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.03s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/session_roots_readonly_substitution.rs (target/debug/deps/session_roots_readonly_substitution-fecc63fbe9670720)
+error: test failed, to rerun pass `-p harness-core --test session_roots_readonly_substitution`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test session_roots_readonly_substitution -- --include-ignored"
+exit = 0
+passed = 4
+rev = "4130ea56a7db1c8a64310c881d40a04547335958"
+observed_at = 1793808187
+output_digest = "sha256:bd687bf9ed64c4df179a66602f49a8393f06364e78d91b953880a4acafb46169"
+excerpt = """
+
+running 4 tests
+test minimal_read_only_substitution_does_not_root_a_worktree ... ok
+test read_only_substitution_and_read_only_statements_do_not_root_a_worktree ... ok
+test control_substitution_with_a_writing_statement_still_roots_the_worktree ... ok
+test control_writing_substitution_still_roots_the_worktree ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/session_roots_readonly_substitution.rs (target/debug/deps/session_roots_readonly_substitution-6ddfbf365be55db8)
+"""
+
+[task.closure.red]
+rev = "77793cfed3b217c4bc75696d5195b6bc024bceb3"
+exit = 101
+kind = "behavioural"

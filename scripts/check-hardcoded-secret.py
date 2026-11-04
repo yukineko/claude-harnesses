@@ -72,9 +72,14 @@ COMMENT_RE = re.compile(r"^\s*(#|//)")
 EXCLUDED_SUFFIXES = {".py"}
 
 # Genuine, reviewed exceptions: a hit is suppressed when one of these
-# substrings appears in the offending line. Empty until a real one is filed —
-# unlike check-fail-open.py's ALLOWLIST, there is no known exception yet.
-ALLOWLIST: list[str] = []
+# substrings appears in the offending line. Each entry names its reason.
+ALLOWLIST: list[str] = [
+    # AWS's published documentation example secret access key (not a real
+    # credential; the trailing "EXAMPLEKEY" is AWS's own marker). Used as the
+    # redaction fixture in crates/hostaudit/tests/report_secrets.rs, which must
+    # prove an AWS-key-shaped value never reaches the report. Reviewed 2026-11-04.
+    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+]
 
 # git's fixed empty-tree object, used as the diff base on an unborn branch
 # (the very first commit in a repo) so "no HEAD yet" reads as "everything in

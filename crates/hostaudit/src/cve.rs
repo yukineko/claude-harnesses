@@ -26,8 +26,8 @@ impl Tri {
 /// KEV lookup: `Err` = the catalogue could not be obtained (`kev: unknown`).
 pub type KevSet<'a> = Result<&'a BTreeSet<String>, &'a str>;
 
-/// Which source packages have an executable listening on 0.0.0.0 / [::] / *
-/// (canon v1.1 §3.1 外部公開).
+/// Which source packages have an executable listening on any non-loopback
+/// address (canon v1.1 §3.1 外部公開, item 13; CONTRACT §12.11 item 2).
 #[derive(Clone, Debug, Default)]
 pub struct Exposure {
     pub yes: BTreeSet<String>,

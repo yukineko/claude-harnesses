@@ -48,6 +48,7 @@ pub enum Exe {
 #[derive(Clone, Debug)]
 pub struct Listener {
     pub line: String,
+    /// Bound to a non-loopback address (see `is_external`).
     pub external: bool,
     /// `Err(raw)` = a `pid=` value that is not digits only (never sent).
     pub pids: Vec<Result<Pid, String>>,
@@ -67,8 +68,23 @@ fn obs(a: &Answers, r: &Remote) -> Obs {
     }
 }
 
+/// CVE exposure bind (canon v1.1 §3.1 item 13, CONTRACT §12.11 item 2):
+/// external unless the address parses as loopback (`127.0.0.0/8`, `::1`,
+/// or an IPv4-mapped loopback). Wildcards, specific IPs and anything that
+/// does not parse as an IP are external (never "not exposed").
 fn is_external(addr: &str) -> bool {
-    matches!(addr, "0.0.0.0" | "[::]" | "*" | "::")
+    let a = addr
+        .strip_prefix('[')
+        .and_then(|r| r.strip_suffix(']'))
+        .unwrap_or(addr);
+    let a = a.split('%').next().unwrap_or(a);
+    match a.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => !v4.is_loopback(),
+        Ok(std::net::IpAddr::V6(v6)) => {
+            !(v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|m| m.is_loopback()))
+        }
+        Err(_) => true,
+    }
 }
 
 /// Parse W12 (`ss -H -tlnp`).
@@ -85,7 +101,6 @@ fn parse_listeners(text: &str) -> Result<Vec<Listener>, String> {
         let (addr, _port) = local
             .rsplit_once(':')
             .ok_or_else(|| format!("local address {local:?} has no port"))?;
-        let addr = addr.split('%').next().unwrap_or(addr);
         let mut pids = Vec::new();
         let mut rest = line;
         while let Some(pos) = rest.find("pid=") {

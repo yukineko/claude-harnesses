@@ -39,7 +39,7 @@
 | W18 | `cat /etc/apt/sources.list` ＋ `ls /etc/apt/sources.list.d` ＋ 列挙された各 `*.list` / `*.sources` の `cat`（ファイル名は ls 出力のうち `[A-Za-z0-9._-]+` に一致するものだけ） | sources.list の No such file → 「無し」 |
 | W19 | `dpkg --audit` | なし |
 | W20 | `apt-mark showhold` | なし |
-| W21 | 製品ごとの固定 version コマンド（§4.1 の表。存在するものだけが答える） | exit 127 / `command not found` / `No such file` → 「その製品は無い」 |
+| W21 | 製品ごとの固定 version コマンド（§4.1 の表。存在するものだけが答える） | exit 127 / `command not found` / `No such file` → 「その製品は無い」。ただし stderr に `error while loading shared libraries` を含むもの（製品はあるが壊れている）は Undetermined |
 | W22 | W12b で得た実行ファイルのうち、basename が §4.1 の表にあるものに対する同表の version 引数 | 同上 |
 | W23 [sudo] | `docker ps --format '{{.Image}}'` | docker 無し（exit 127 / command not found）→ 「docker 無し」 |
 | W24 | `uname -r` | なし |
@@ -62,7 +62,7 @@ B5 は v1 どおり **host ごとに 1 finding**（該当あり → Violation）
 | 深刻度 | OSV `severity[]` の `type: "Ubuntu"` の score（negligible/low/medium/high/critical）。無ければ `type: "CVSS_V3"` のベクトルから基本スコアを計算して ≥9.0 critical / ≥7.0 high / ≥4.0 medium / >0 low | `unknown`（low 扱いにしない） |
 | 悪用の実績（KEV） | CISA KEV の JSON（`vulnerabilities[].cveID`）をローカルで取得して照合 | `kev: unknown`（「KEV 不明」と明示） |
 | 修正版 | OSV の `fixed` ＋ W14 の候補版 | `unknown` |
-| 外部公開 | W12 でその**ソースパッケージ**に属する実行ファイル（W12b → W13 → W2 の source）が 0.0.0.0 / [::] / * で LISTEN | `unknown` |
+| 外部公開 | W12 でその**ソースパッケージ**に属する実行ファイル（W12b → W13 → W2 の source）が loopback（127.0.0.0/8・::1）以外のアドレスで LISTEN（0.0.0.0 / [::] / * に限らず、特定の IP への bind も外部公開とみなす。B4 の判定は v1 のまま） | `unknown` |
 
 ### 3.2 優先度（決定論。2026-11-04 承認のまま）
 
@@ -187,6 +187,12 @@ B5 は v1 どおり **host ごとに 1 finding**（該当あり → Violation）
 10. Warning は新しい判定値として足し、exit は 0。件数は必ず別に出す（§1）。
 11. K6 は情報源未特定のため保留（§5、要裁定）。
 12. canon 化後の機械的な補正（2026-11-04、テスト作成で判明。いずれも既存裁定の範囲内）: W12b は §2 の表どおり [sudo]（`sudo -n LC_ALL=C readlink …`。root 所有プロセスの exe は root でしか読めないため。CONTRACT 初版が sudo 無しで書いていたのを訂正）／W13 の条件を満たさない path は Undetermined／S7 の Undetermined 条件／S9 に Warning 帯なし／コマンド実行時間上限。
+13. 2026-11-04 ユーザー指示「残りを修正してほしい」による改訂:
+   - W21/W22 の「その製品は無い」から共有ライブラリ読み込みエラーを除外（上の §2 表。実装済みの挙動に文言を合わせた）。
+   - CVE の外部公開は loopback 以外の全アドレスを対象にする（§3.1。特定の公開 IP への bind を「公開なし」と読まない）。
+   - W2 の解析では、インストール状態でないパッケージ（`dpkg-query` の状態が `rc` などで、`${db:Status-Abbrev}` の 2 文字目が `i` でないもの）を B5 / S9 / K2 / K3 の対象から外す。そのため W2 の書式に `${db:Status-Abbrev}` を足す（v1 §3.2 W2 の改訂）。状態が読めない行は Undetermined。
+   - daily の task は、プラグインの版ごとのディレクトリではなく、版を跨いで変わらないパス `~/.hostaudit/bin/hostaudit`（現在の実行ファイルへの symlink）を使う。symlink は `daily-task --print` と SessionStart hook が毎回張り直す。張り直せないときは `daily-task --print` が非0 で終わる。リンク先が消えていれば daily の task は exit 127 で失敗する（失敗が見える形で残る）。
+   - W22（サーバ上で LISTEN している実行ファイルの `--version` を監査ユーザーとして実行）は canon どおり残す。そのプロセスは既にサーバ上で動いているコードであり、監査ユーザーの権限で走るだけで sudo は付けない。
 
 ## 10. このマシンで v1.1 を当てたときに出ると予想されるもの（未観測の予測。実装後に実測で確かめる）
 

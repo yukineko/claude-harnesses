@@ -5,7 +5,11 @@
 //! Every rule yields exactly one finding. Anything that could not be
 //! observed — ssh failure, timeout (`時間切れ`), tool missing, unparseable
 //! output, an unsafe executable path that is never sent to ssh — makes the
-//! dependent rule or item `undetermined`, never clean.
+//! dependent rule or item `undetermined`, never clean. For an unsafe W12b
+//! path the dependent items are its CVE exposure (always `unknown`) and,
+//! when its basename (` (deleted)` stripped) is a §4.1 product, its S8 item
+//! (kept as `undetermined`, never dropped); a basename that is no §4.1
+//! product has no S8 item at all (canon v1.1 §2 W22).
 
 use crate::audit::{CveCtx, Memo, OsInfo, Probe};
 use crate::baseline::{self, Answers, CveRule};
@@ -121,8 +125,43 @@ fn parse_owner(text: &str, path: &str) -> Result<Owner, String> {
     ))
 }
 
+/// The §4.1 product of an (unsafe, never sent) W12b path by its basename,
+/// with a trailing ` (deleted)` stripped (CONTRACT §12.10 item 3).
 fn product_of_basename(raw: &str) -> Option<(&'static str, &'static str)> {
+    let raw = raw.strip_suffix(" (deleted)").unwrap_or(raw);
     products::by_basename(raw.rsplit('/').next().unwrap_or(raw))
+}
+
+/// One W13 query: `Ok(None)` = `no path found`.
+fn dpkg_query(p: &mut Probe<'_>, path: &SafePath) -> Result<Option<Owner>, String> {
+    match p.get(Remote::DpkgOwner(path.clone())) {
+        Obs::Absent => Ok(None),
+        Obs::Out(t) => parse_owner(&t, path.as_str()).map(Some),
+        Obs::Undet(w) | Obs::Missing(w) => Err(w),
+        other => Err(format!("W13 unexpected {other:?}")),
+    }
+}
+
+/// W13 with the usrmerge alias (CONTRACT §12.10 item 12): `no path found`
+/// for `/usr/{bin,sbin,lib}/x` also asks about `/{bin,sbin,lib}/x`. Not
+/// dpkg-managed only when both say `no path found`; a failed alias query is
+/// ownership unknown.
+fn owner_of(p: &mut Probe<'_>, path: &SafePath) -> Result<Owner, String> {
+    if let Some(o) = dpkg_query(p, path)? {
+        return Ok(o);
+    }
+    let Some(alias) = path.usrmerge_alias() else {
+        return Ok(Owner::NotDpkg);
+    };
+    match dpkg_query(p, &alias) {
+        Ok(Some(o)) => Ok(o),
+        Ok(None) => Ok(Owner::NotDpkg),
+        Err(w) => Err(format!(
+            "{} is not known to dpkg and its usrmerge alias {} could not be queried: {w}",
+            path.as_str(),
+            alias.as_str()
+        )),
+    }
 }
 
 /// Run every v1.1 command for a Debian-family host (memoised in `p`).
@@ -145,12 +184,7 @@ pub fn collect(p: &mut Probe<'_>, os: &OsInfo) -> Data {
                     match SafePath::parse(&raw) {
                         None => Exe::Unsafe(raw),
                         Some(path) => {
-                            let owner = match p.get(Remote::DpkgOwner(path.clone())) {
-                                Obs::Absent => Ok(Owner::NotDpkg),
-                                Obs::Out(t) => parse_owner(&t, path.as_str()),
-                                Obs::Undet(w) | Obs::Missing(w) => Err(w),
-                                other => Err(format!("W13 unexpected {other:?}")),
-                            };
+                            let owner = owner_of(p, &path);
                             Exe::Path(path, owner)
                         }
                     }
@@ -217,9 +251,24 @@ fn dpkg_pkgs(a: &Answers) -> Result<Vec<Pkg>, String> {
 /// One W14 `Inst` line.
 struct Inst {
     name: String,
-    candidate: Option<String>,
-    security: bool,
+    /// `(candidate, from a -security origin)`; `Err` when the `( … )` origin
+    /// group is missing, unterminated or empty (CONTRACT §12.10 item 9).
+    origin: Result<(String, bool), String>,
     line: String,
+}
+
+impl Inst {
+    fn security(&self) -> bool {
+        self.origin.as_ref().is_ok_and(|(_, s)| *s)
+    }
+}
+
+/// The `Inst` lines whose origin group could not be read, as a reason.
+fn malformed<'a>(insts: impl Iterator<Item = &'a Inst>) -> Option<String> {
+    let bad: Vec<String> = insts
+        .filter_map(|i| i.origin.as_ref().err().cloned())
+        .collect();
+    (!bad.is_empty()).then(|| bad.join("; "))
 }
 
 fn inst_lines(a: &Answers) -> Result<Vec<Inst>, String> {
@@ -233,14 +282,24 @@ fn inst_lines(a: &Answers) -> Result<Vec<Inst>, String> {
         let Some(name) = line.split_whitespace().nth(1) else {
             return Err(format!("W14 `Inst` line without a package: {line:?}"));
         };
-        let origins = match (line.find('('), line.rfind(')')) {
-            (Some(o), Some(c)) if c > o => &line[o + 1..c],
-            _ => "",
+        let origin = match (line.find('('), line.rfind(')')) {
+            (Some(o), Some(c)) if c > o => {
+                let g = &line[o + 1..c];
+                match g.split_whitespace().next() {
+                    Some(cand) => Ok((cand.to_string(), g.contains("-security"))),
+                    None => Err(format!(
+                        "W14 `Inst` line with an empty origin group: {line:?}"
+                    )),
+                }
+            }
+            (Some(_), _) => Err(format!(
+                "W14 `Inst` line with an unterminated origin group: {line:?}"
+            )),
+            (None, _) => Err(format!("W14 `Inst` line without an origin group: {line:?}")),
         };
         out.push(Inst {
             name: name.to_string(),
-            candidate: origins.split_whitespace().next().map(str::to_string),
-            security: origins.contains("-security"),
+            origin,
             line: line.trim().to_string(),
         });
     }
@@ -253,6 +312,11 @@ pub fn cve_ctx(d: &Data, a: &Answers) -> CveCtx {
     let mut unknown: Vec<String> = Vec::new();
     match &d.listeners {
         Err(e) => unknown.push(format!("W12: {e}")),
+        // CONTRACT §12.10 item 10: a reachable host always listens on ssh, so
+        // an empty `ss` output is unobserved, not "nothing is exposed".
+        Ok(ls) if ls.is_empty() => {
+            unknown.push("W12 printed no listening socket (sshd itself is not shown)".into())
+        }
         Ok(ls) => {
             let pkgs = dpkg_pkgs(a);
             for l in ls.iter().filter(|l| l.external) {
@@ -298,9 +362,10 @@ pub fn cve_ctx(d: &Data, a: &Answers) -> CveCtx {
     }
     unknown.dedup();
     // W14 failure stays an error: candidates are then "unknown", never "none".
+    // A malformed line gives that package an unknown (`Err`) candidate.
     let candidates = inst_lines(a).map(|is| {
         is.into_iter()
-            .filter_map(|i| Some((i.name, i.candidate?)))
+            .map(|i| (i.name, i.origin.map(|(c, _)| c)))
             .collect()
     });
     CveCtx {
@@ -328,8 +393,12 @@ fn s1(t: &str, a: &Answers, fs: &[Finding]) -> Finding {
         Ok(i) => i,
         Err(e) => return Finding::undetermined("S1", t, vec![], &e),
     };
-    let sec: Vec<&Inst> = insts.iter().filter(|i| i.security).collect();
+    let sec: Vec<&Inst> = insts.iter().filter(|i| i.security()).collect();
+    let bad = malformed(insts.iter());
     if sec.is_empty() {
+        if let Some(why) = bad {
+            return Finding::undetermined("S1", t, vec![], &why);
+        }
         return Finding::clean(
             "S1",
             t,
@@ -340,6 +409,9 @@ fn s1(t: &str, a: &Answers, fs: &[Finding]) -> Finding {
         .iter()
         .any(|f| f.rule == "B7" && f.verdict == Status::Violation);
     let mut ev: Vec<String> = sec.iter().map(|i| i.line.clone()).collect();
+    if let Some(why) = bad {
+        ev.push(format!("also not judged (origin unreadable): {why}"));
+    }
     let mut names: Vec<&str> = sec.iter().map(|i| i.name.as_str()).collect();
     names.dedup();
     let mut fix = format!(
@@ -359,21 +431,27 @@ fn k4(t: &str, a: &Answers) -> Finding {
         Ok(i) => i,
         Err(e) => return Finding::undetermined("K4", t, vec![], &e),
     };
-    let k: Vec<&Inst> = insts
-        .iter()
-        .filter(|i| i.security && i.name.starts_with("linux-"))
-        .collect();
+    let kernel = || insts.iter().filter(|i| i.name.starts_with("linux-"));
+    let k: Vec<&Inst> = kernel().filter(|i| i.security()).collect();
+    let bad = malformed(kernel());
     if k.is_empty() {
+        if let Some(why) = bad {
+            return Finding::undetermined("K4", t, vec![], &why);
+        }
         Finding::clean(
             "K4",
             t,
             vec!["no pending kernel update from a -security origin".into()],
         )
     } else {
+        let mut ev: Vec<String> = k.iter().map(|i| i.line.clone()).collect();
+        if let Some(why) = bad {
+            ev.push(format!("also not judged (origin unreadable): {why}"));
+        }
         Finding::violation(
             "K4",
             t,
-            k.iter().map(|i| i.line.clone()).collect(),
+            ev,
             "sudo apt update && sudo apt upgrade → 計画停止枠で再起動 (sudo reboot)",
         )
     }
@@ -555,16 +633,34 @@ fn is_official(url: &str) -> bool {
 }
 
 /// Repository URLs of a one-line `.list` or a deb822 `.sources` text.
+/// deb822 field names are case-insensitive and a `URIs` value may continue
+/// on following indented lines (or start on the next one) (CONTRACT §12.10
+/// item 1).
 fn source_urls(text: &str) -> Vec<String> {
     let mut out = Vec::new();
+    let mut in_uris = false;
     for line in text.lines() {
         let l = line.trim();
-        if l.is_empty() || l.starts_with('#') {
+        if l.is_empty() {
+            in_uris = false;
             continue;
         }
-        if let Some(rest) = l.strip_prefix("URIs:") {
-            out.extend(rest.split_whitespace().map(str::to_string));
+        if l.starts_with('#') {
             continue;
+        }
+        if line.starts_with([' ', '\t']) && in_uris {
+            out.extend(l.split_whitespace().map(str::to_string));
+            continue;
+        }
+        in_uris = false;
+        if let Some((key, rest)) = l.split_once(':') {
+            if !key.is_empty() && !key.contains(char::is_whitespace) {
+                if key.eq_ignore_ascii_case("uris") {
+                    out.extend(rest.split_whitespace().map(str::to_string));
+                    in_uris = true;
+                }
+                continue;
+            }
         }
         let mut toks = l.split_whitespace();
         if matches!(toks.next(), Some("deb" | "deb-src")) {
@@ -632,14 +728,32 @@ fn s5(t: &str, d: &Data, a: &Answers) -> Finding {
     let mut foreign = Vec::new();
     let mut files = BTreeSet::new();
     let mut total = 0usize;
+    let mut unparsed = Vec::new();
     for (file, text) in &texts {
-        for url in source_urls(text) {
+        let urls = source_urls(text);
+        // CONTRACT §12.10 item 1: a listed .d file that yields no URL was not
+        // understood; it is not a clean file.
+        if urls.is_empty() && file.starts_with("/etc/apt/sources.list.d/") {
+            unparsed.push(file.clone());
+        }
+        for url in urls {
             total += 1;
             if !is_official(&url) {
                 foreign.push(format!("{file}: {url}"));
                 files.insert(file.clone());
             }
         }
+    }
+    if !unparsed.is_empty() {
+        return Finding::undetermined(
+            "S5",
+            t,
+            foreign,
+            &format!(
+                "no repository URL could be read from {}",
+                unparsed.join(", ")
+            ),
+        );
     }
     if foreign.is_empty() {
         Finding::clean(
@@ -697,16 +811,24 @@ fn s7(t: &str, a: &Answers, b5_bins: &Result<BTreeSet<String>, String>) -> Findi
     if holds.is_empty() {
         return Finding::clean("S7", t, vec!["apt-mark showhold: no held package".into()]);
     }
+    // (names with a -security origin, names whose origin is unreadable)
     let s1 = inst_lines(a).map(|is| {
-        is.into_iter()
-            .filter(|i| i.security)
-            .map(|i| i.name)
-            .collect::<BTreeSet<String>>()
+        let sec = is
+            .iter()
+            .filter(|i| i.security())
+            .map(|i| i.name.clone())
+            .collect::<BTreeSet<String>>();
+        let bad = is
+            .iter()
+            .filter(|i| i.origin.is_err())
+            .map(|i| i.name.clone())
+            .collect::<BTreeSet<String>>();
+        (sec, bad)
     });
     let mut blocked: Vec<&String> = holds
         .iter()
         .filter(|h| {
-            s1.as_ref().is_ok_and(|s| s.contains(*h))
+            s1.as_ref().is_ok_and(|(s, _)| s.contains(*h))
                 || b5_bins.as_ref().is_ok_and(|b| b.contains(*h))
         })
         .collect();
@@ -727,8 +849,21 @@ fn s7(t: &str, a: &Answers, b5_bins: &Result<BTreeSet<String>, String>) -> Findi
         return Finding::violation("S7", t, ev, &format!("hold の理由を確認してから:\n{fix}"));
     }
     let mut undet = Vec::new();
-    if let Err(e) = &s1 {
-        undet.push(format!("S1 (W14) undetermined: {e}"));
+    match &s1 {
+        Err(e) => undet.push(format!("S1 (W14) undetermined: {e}")),
+        Ok((_, bad)) => {
+            let held_bad: Vec<&String> = holds.iter().filter(|h| bad.contains(*h)).collect();
+            if !held_bad.is_empty() {
+                undet.push(format!(
+                    "S1 (W14) origin unreadable for held {}",
+                    held_bad
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ));
+            }
+        }
     }
     if let Err(e) = b5_bins {
         undet.push(format!("B5 undetermined: {e}"));
@@ -1061,7 +1196,9 @@ fn eol_slug(id: &str) -> Option<&'static str> {
     })
 }
 
-/// K1: release support from endoflife.date, else (Ubuntu / Debian) W17.
+/// K1: release support from endoflife.date; only when that feed cannot be
+/// obtained (or the OS has no endoflife.date product), Ubuntu / Debian fall
+/// back to W17.
 pub fn k1(ctx: &Ctx, t: &str, os: &OsInfo, w17: Option<&Obs>, memo: &mut Memo) -> Finding {
     const FIX: &str = "リリースアップグレードを計画してください（Ubuntu: `sudo do-release-upgrade` は人間が計画停止枠で実行。Debian: 次リリースへの移行手順に従う）";
     let label = format!("{} {}", os.id, os.version_id);
@@ -1070,10 +1207,21 @@ pub fn k1(ctx: &Ctx, t: &str, os: &OsInfo, w17: Option<&Obs>, memo: &mut Memo) -
         Some(slug) => match memo.eol(ctx, slug) {
             Err(e) => format!("endoflife.date `{slug}` unavailable: {e}"),
             Ok(feed) => match feeds::match_cycle(&feed.data, &os.version_id) {
-                None => format!(
-                    "endoflife.date `{slug}` has no cycle for VERSION_ID {:?}",
-                    os.version_id
-                ),
+                // CONTRACT §12.10 item 11: W17 is the fallback for an
+                // unobtainable feed only; a loaded feed without our cycle is
+                // undetermined.
+                None => {
+                    return Finding::undetermined(
+                        "K1",
+                        t,
+                        vec![],
+                        &format!(
+                            "endoflife.date `{slug}` has no cycle for VERSION_ID {:?}",
+                            os.version_id
+                        ),
+                    )
+                    .with("eol_fetched_at", json!(feed.fetched_at))
+                }
                 Some(c) => {
                     let ev = vec![format!(
                         "{label}: {slug} cycle {} eol {}, extendedSupport {}",
@@ -1120,7 +1268,23 @@ pub fn k1(ctx: &Ctx, t: &str, os: &OsInfo, w17: Option<&Obs>, memo: &mut Memo) -
                     &format!("{feed_why}; W1 has no VERSION_CODENAME to look up in distro-info"),
                 );
             };
-            let supported: Vec<&str> = s.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+            let lines: Vec<&str> = s.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+            // CONTRACT §12.10 item 11: only codename-shaped lines (one word of
+            // lowercase letters) are a supported list; empty or any other
+            // line means the output was not understood.
+            let shaped = |l: &&str| l.chars().all(|c| c.is_ascii_lowercase());
+            if lines.is_empty() || !lines.iter().all(shaped) {
+                return Finding::undetermined(
+                    "K1",
+                    t,
+                    vec![],
+                    &format!(
+                        "{feed_why}; W17 output is not a list of codenames: {:?}",
+                        s.trim()
+                    ),
+                );
+            }
+            let supported = lines;
             let ev = vec![
                 format!("{feed_why}; fallback distro-info --supported: {}", supported.join(" ")),
                 format!("current codename: {code}"),

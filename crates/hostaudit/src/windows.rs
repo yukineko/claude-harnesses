@@ -59,18 +59,48 @@ fn wn1(ctx: &Ctx, t: &str, o: &Obs, memo: &mut Memo) -> Finding {
             )
         }
     };
-    let Some(c) = feed.data.iter().find(|c| {
-        c.latest
-            .as_deref()
-            .is_some_and(|l| !version.is_empty() && l.starts_with(version))
-    }) else {
-        return Finding::undetermined(
-            "WN1",
-            t,
-            vec![ev0],
-            &format!("no endoflife.date {slug} cycle whose `latest` starts with {version}"),
-        )
-        .with("eol_fetched_at", json!(feed.fetched_at));
+    // CONTRACT §12.10 item 6: `latest` must equal the version or continue it
+    // after a dot; more than one such cycle is ambiguous (undetermined).
+    let matches: Vec<&feeds::Cycle> = feed
+        .data
+        .iter()
+        .filter(|c| {
+            c.latest.as_deref().is_some_and(|l| {
+                !version.is_empty()
+                    && l.strip_prefix(version)
+                        .is_some_and(|r| r.is_empty() || r.starts_with('.'))
+            })
+        })
+        .collect();
+    let c = match matches.as_slice() {
+        [c] => *c,
+        [] => {
+            return Finding::undetermined(
+                "WN1",
+                t,
+                vec![ev0],
+                &format!(
+                    "no endoflife.date {slug} cycle whose `latest` is {version} or {version}.<n>"
+                ),
+            )
+            .with("eol_fetched_at", json!(feed.fetched_at))
+        }
+        many => {
+            return Finding::undetermined(
+                "WN1",
+                t,
+                vec![ev0],
+                &format!(
+                    "{} endoflife.date {slug} cycles match {version} ({}); the cycle is ambiguous",
+                    many.len(),
+                    many.iter()
+                        .map(|c| c.cycle.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+            .with("eol_fetched_at", json!(feed.fetched_at))
+        }
     };
     let ev = vec![
         ev0,
@@ -136,6 +166,13 @@ fn wn2_age(ctx: &Ctx, o: &Obs) -> Result<(i64, String), String> {
     }
     let at = hotfix_time(&v)?;
     let id = v["HotFixID"].as_str().unwrap_or("?");
+    // CONTRACT §12.10 item 7: a future InstalledOn (negative age) is not "fresh".
+    if at > ctx.now {
+        return Err(format!(
+            "WN2 latest hotfix {id} InstalledOn {} is later than now; its age cannot be measured",
+            feeds::ymd(at)
+        ));
+    }
     Ok((
         ctx.now - at,
         format!("latest hotfix {id} installed {}", feeds::ymd(at)),
@@ -198,13 +235,14 @@ fn wn3(t: &str, o: &Obs, age: &Result<(i64, String), String>) -> Finding {
     }
 }
 
+/// CONTRACT §12.10 item 5: `true` / `1` enabled, `false` / `0` disabled;
+/// anything else (other numbers, strings, null, missing) is `None` (undetermined).
 fn enabled(v: &Value) -> Option<bool> {
     match v {
         Value::Bool(b) => Some(*b),
-        Value::Number(n) => n.as_i64().map(|n| n != 0),
-        Value::String(s) => match s.as_str() {
-            "True" | "true" | "1" => Some(true),
-            "False" | "false" | "0" => Some(false),
+        Value::Number(n) => match n.as_i64() {
+            Some(1) => Some(true),
+            Some(0) => Some(false),
             _ => None,
         },
         _ => None,

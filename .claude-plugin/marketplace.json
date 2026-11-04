@@ -1150,7 +1150,7 @@
     {
       "name": "hostaudit",
       "description": "Configuration and operations security audit for servers (ssh, read-only), AWS resources (read-only; security-group fixes only on explicit confirmation) and local Claude Code settings, judged against a fixed baseline with fix instructions for every violation.",
-      "version": "0.1.8",
+      "version": "0.1.9",
       "category": "security",
       "keywords": [
         "security",

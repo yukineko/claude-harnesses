@@ -28,7 +28,16 @@ pub const W21: [(&str, &str); 20] = [
 
 /// W22: the product and the W21 arguments for a listening executable's
 /// basename (CONTRACT §12.3: same args as that product's W21 command).
+/// Versioned interpreter names (`python3.12`, `python2.7`) map to their
+/// unversioned W21 entry (CONTRACT §12.10 item 4).
 pub fn by_basename(base: &str) -> Option<(&'static str, &'static str)> {
+    let base = ["python3.", "python2."]
+        .iter()
+        .find(|p| {
+            base.strip_prefix(**p)
+                .is_some_and(|m| !m.is_empty() && m.chars().all(|c| c.is_ascii_digit()))
+        })
+        .map_or(base, |p| &p[..p.len() - 1]);
     W21.iter().find_map(|(slug, cmd)| {
         let (exe, args) = cmd.split_once(' ')?;
         let b = exe.rsplit('/').next().unwrap_or(exe);

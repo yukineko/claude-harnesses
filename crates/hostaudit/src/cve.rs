@@ -238,7 +238,7 @@ pub fn evaluate(
     hits: &[Hit],
     kev: KevSet<'_>,
     exposure: &Exposure,
-    candidates: &Result<BTreeMap<String, String>, String>,
+    candidates: &Result<BTreeMap<String, Result<String, String>>, String>,
 ) -> Vec<Item> {
     let mut items: Vec<Item> = hits
         .iter()
@@ -263,10 +263,10 @@ pub fn evaluate(
                 severity: sev,
                 kev: kev_t,
                 fixed: h.fixed.clone(),
-                candidate: candidates
-                    .as_ref()
-                    .map(|c| c.get(&h.pkg.name).cloned())
-                    .map_err(Clone::clone),
+                candidate: match candidates {
+                    Err(e) => Err(e.clone()),
+                    Ok(c) => c.get(&h.pkg.name).cloned().transpose(),
+                },
                 exposed,
                 priority: priority(sev, kev_t, exposed),
             }

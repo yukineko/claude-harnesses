@@ -73,8 +73,9 @@ impl Memo {
 /// Exposure and W14 candidates for the CVE evaluation (B5 / K2).
 pub struct CveCtx {
     pub exposure: Exposure,
-    /// `Err(why)` when W14 was not observed (candidates unknown).
-    pub candidates: Result<BTreeMap<String, String>, String>,
+    /// W14 candidate per binary package (`Err` per package when its `Inst`
+    /// origin group is unreadable); outer `Err(why)` when W14 was not observed.
+    pub candidates: Result<BTreeMap<String, Result<String, String>>, String>,
 }
 
 /// `/etc/os-release` fields.

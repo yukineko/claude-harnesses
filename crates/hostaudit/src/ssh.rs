@@ -52,6 +52,14 @@ impl SafePath {
     pub fn basename(&self) -> &str {
         self.0.rsplit('/').next().unwrap_or(&self.0)
     }
+    /// The usrmerge alias (CONTRACT §12.10 item 12): `/usr/bin/x` → `/bin/x`,
+    /// `/usr/sbin/x` → `/sbin/x`, `/usr/lib/x` → `/lib/x`; `None` otherwise.
+    pub fn usrmerge_alias(&self) -> Option<SafePath> {
+        ["/usr/bin/", "/usr/sbin/", "/usr/lib/"]
+            .iter()
+            .find(|p| self.0.starts_with(**p) && self.0.len() > p.len())
+            .map(|_| SafePath(self.0["/usr".len()..].to_string()))
+    }
 }
 
 /// A file name listed in `/etc/apt/sources.list.d` that may be `cat`ed
@@ -162,7 +170,9 @@ enum Kind {
     Unit,
     /// stderr `command not found` (any exit) → tool missing.
     Tool,
-    /// W21/W22: exit 127 / `command not found` / `No such file` → product absent;
+    /// W21/W22: exit 127 / `command not found` / `No such file` → product
+    /// absent, unless stderr has `error while loading shared libraries`
+    /// (then undetermined);
     /// stdout and stderr are both the observation.
     Product,
     /// W13: exit 1 + `no path found` → not managed by dpkg.
@@ -359,10 +369,14 @@ pub fn classify(r: &Remote, code: i32, stdout: &str, stderr: &str) -> Obs {
             return Obs::Absent
         }
         Kind::Tool if stderr.contains("command not found") => return Obs::Missing(tail_of(stderr)),
+        // canon v1.1 W21 (exit 127 / `command not found` / `No such file`),
+        // except a dynamic loader error (CONTRACT §12.10 item 8): that binary
+        // exists but cannot run, so it is undetermined, not absent.
         Kind::Product
-            if code == 127
+            if (code == 127
                 || stderr.contains("command not found")
-                || stderr.contains("No such file") =>
+                || stderr.contains("No such file"))
+                && !stderr.contains("error while loading shared libraries") =>
         {
             return Obs::Absent
         }

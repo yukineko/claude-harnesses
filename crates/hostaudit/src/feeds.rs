@@ -125,12 +125,17 @@ fn cached(
 
 // ───────────────────────────── KEV ─────────────────────────────────────────
 
-/// Load the KEV catalogue as a set of CVE ids.
+/// Load the KEV catalogue as a set of CVE ids. An empty or list-less
+/// catalogue is `Err` (KEV unknown), never an empty set.
 pub fn load_kev(ctx: &Ctx) -> Result<Fetched<BTreeSet<String>>, String> {
     let f = cached(ctx, "kev-cache", "kev", &ctx.kev_url, |v| {
         let arr = v["vulnerabilities"]
             .as_array()
             .ok_or("KEV feed has no `vulnerabilities` array")?;
+        // CONTRACT §12.10 item 2: an empty catalogue is not "no CVE is in KEV".
+        if arr.is_empty() {
+            return Err("KEV feed has an empty `vulnerabilities` list".into());
+        }
         let mut ids = Vec::new();
         for x in arr {
             let id = x["cveID"]
@@ -150,6 +155,9 @@ pub fn load_kev(ctx: &Ctx) -> Result<Fetched<BTreeSet<String>>, String> {
                 .ok_or("cached KEV id not a string")
         })
         .collect::<Result<BTreeSet<String>, &str>>()?;
+    if ids.is_empty() {
+        return Err("cached KEV list is empty; KEV unknown".into());
+    }
     Ok(Fetched {
         data: ids,
         fetched_at: f.fetched_at,

@@ -151,6 +151,37 @@ fn default_security_task() -> Task {
     }
 }
 
+/// Whether the built-in default `security` task (and nothing else) is in
+/// effect, i.e. the config registers no tasks. Only then does
+/// [`default_task_not_applicable`] apply: a user-registered task — even one
+/// named `security` with the same command — keeps the plain
+/// "attempt once per day, failure consumes the day" semantics, because the
+/// user chose where and what it runs.
+fn uses_builtin_default(config: &Config) -> bool {
+    config.task.is_empty()
+}
+
+/// Is the built-in default `security` task NOT APPLICABLE in `dir`?
+///
+/// The default task is `cargo deny check …`, which can only audit a Cargo
+/// project; run in a directory without a `Cargo.toml` it fails with "the
+/// directory … doesn't contain a Cargo.toml file". That is not an audit
+/// result, so the caller does not spawn it, does not stamp `mark_done()` (a
+/// later session in a Cargo project the same day still runs it), and records
+/// no report row and no summary entry for that session — absence of an `ok`
+/// row means "not audited", never "audit ok".
+///
+/// Only an observed `NotFound` for `dir/Cargo.toml` counts as not applicable.
+/// Any other outcome (it exists, or its metadata cannot be read) returns
+/// `false` so the task runs as before and cargo-deny's own exit status decides
+/// — an unreadable manifest is never silently turned into a skip.
+fn default_task_not_applicable(dir: &Path) -> bool {
+    matches!(
+        std::fs::metadata(dir.join("Cargo.toml")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
 /// The tasks to consider: the registered ones, or the default security task
 /// when none are registered.
 fn effective_tasks(config: &Config) -> Vec<Task> {
@@ -215,15 +246,30 @@ fn session_start_cmd() -> ! {
         // runs regardless of outcome — one attempt per calendar day, so a
         // FAILED task still counts as "ran today" (it won't retry until
         // tomorrow); the failure is captured in the report instead.
+        //
+        // Exception: the built-in default `security` task in a directory with
+        // no Cargo.toml is not applicable (see `default_task_not_applicable`):
+        // it is not spawned, not stamped, and not reported, so the day's
+        // audit stays pending for a later session in a Cargo project.
+        let builtin = uses_builtin_default(&config);
         let mut results: Vec<(String, Outcome)> = Vec::new();
         for task in effective_tasks(&config) {
             let guard = DailyGuard::new(&state_dir, &task.name, &today);
             if !guard.should_run() {
                 continue;
             }
-            let outcome = run_task(&task, &cwd);
+            if builtin {
+                if let Ok(dir) = resolve_task_dir(task.dir.as_deref(), &cwd) {
+                    if default_task_not_applicable(&dir) {
+                        continue;
+                    }
+                }
+            }
+            let (outcome, ran_in) = run_task_in(&task, &cwd);
             guard.mark_done().ok();
-            append_report(&ReportEntry::of(&today, &stamp, &task.name, &outcome));
+            let mut entry = ReportEntry::of(&today, &stamp, &task.name, &outcome);
+            entry.dir = ran_in.map(|d| d.display().to_string());
+            append_report(&entry);
             results.push((task.name, outcome));
         }
 
@@ -406,17 +452,21 @@ fn resolve_task_dir(task_dir: Option<&str>, cwd: &Path) -> Result<PathBuf, Strin
 /// construct it could not analyse and refuses to guess about), so the verdict
 /// is [`hardened`](blastguard::model::Decision::hardened): `Ask` collapses to
 /// `Deny` and the command is refused exactly like a destructive one.
-fn run_task(task: &Task, cwd: &Path) -> Outcome {
+///
+/// Also returns the canonical directory the command was spawned in — `Some`
+/// exactly when a spawn was attempted (`Ok`/`Failed`/`SpawnError`), `None`
+/// when the task was `Blocked` before spawning.
+fn run_task_in(task: &Task, cwd: &Path) -> (Outcome, Option<PathBuf>) {
     let input = serde_json::json!({ "command": task.command });
     if let blastguard::model::Decision::Deny(reason) =
         blastguard::detect::detect("Bash", Some(&input)).hardened()
     {
-        return Outcome::Blocked(reason);
+        return (Outcome::Blocked(reason), None);
     }
 
     let dir = match resolve_task_dir(task.dir.as_deref(), cwd) {
         Ok(d) => d,
-        Err(reason) => return Outcome::Blocked(reason),
+        Err(reason) => return (Outcome::Blocked(reason), None),
     };
 
     let mut cmd = Command::new("sh");
@@ -425,7 +475,7 @@ fn run_task(task: &Task, cwd: &Path) -> Outcome {
         cmd.env("PATH", path);
     }
 
-    match cmd.output() {
+    let outcome = match cmd.output() {
         Ok(out) if out.status.success() => Outcome::Ok,
         Ok(out) => {
             let combined = format!(
@@ -439,7 +489,8 @@ fn run_task(task: &Task, cwd: &Path) -> Outcome {
             }
         }
         Err(e) => Outcome::SpawnError(e.to_string()),
-    }
+    };
+    (outcome, Some(dir))
 }
 
 /// Build the one-line summary injected as `additionalContext`, or `None` when
@@ -468,6 +519,12 @@ fn summary(results: &[(String, Outcome)]) -> Option<String> {
     Some(format!("{icon} daily: ran {}", parts.join(", ")))
 }
 
+/// `run_task_in` without the spawn directory (test convenience).
+#[cfg(test)]
+fn run_task(task: &Task, cwd: &Path) -> Outcome {
+    run_task_in(task, cwd).0
+}
+
 // ─────────────────────────── report ────────────────────────────────────────
 
 /// One recorded task run, appended as a JSON line to `~/.daily/reports.jsonl`.
@@ -479,7 +536,7 @@ struct ReportEntry {
     at: String,
     /// Task name.
     task: String,
-    /// One of "ok" | "fail" | "error".
+    /// One of "ok" | "fail" | "error" | "blocked".
     status: String,
     /// Process exit code (present for ok/fail; absent for spawn errors).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -487,6 +544,12 @@ struct ReportEntry {
     /// Brief detail for a failure/error (empty for ok).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     detail: String,
+    /// Canonical directory the task was spawned in. Present for runs that
+    /// spawned (ok/fail/error); absent for `blocked` runs and for rows written
+    /// before this field existed (so "which repo was audited?" is unknown for
+    /// those, not "this one").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dir: Option<String>,
 }
 
 impl ReportEntry {
@@ -504,6 +567,7 @@ impl ReportEntry {
             status: status.to_string(),
             code,
             detail,
+            dir: None,
         }
     }
 

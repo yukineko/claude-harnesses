@@ -23,7 +23,7 @@
 - spawn 前に blastguard が拒否した → `name (blocked: <理由>)`
 - 当日実行すべきものが無い → 沈黙する
 
-spawn の前に、`task.command` は PreToolUse フックと同じ `blastguard` 検出器にかけられる。blastguard が **Deny**（破壊的）と判定したコマンドは spawn されず、`name (blocked: <理由>)` として要約／レポートに記録される。blastguard が `Ask`（解析できない構文で、推測を拒否した）を返したコマンドも拒否される: SessionStart にはそれに答える人間がいないため、`src/main.rs` の `run_task` は `Ask` を `Deny` に硬化（`Decision::hardened`）し、そのコマンドは spawn されずに `name (blocked: <理由>)` として記録される。
+spawn の前に、`task.command` は PreToolUse フックと同じ `blastguard` 検出器にかけられる。blastguard が **Deny**（破壊的）と判定したコマンドは spawn されず、`name (blocked: <理由>)` として要約／レポートに記録される。blastguard が `Ask`（解析できない構文で、推測を拒否した）を返したコマンドも拒否される: SessionStart にはそれに答える人間がいないため、`src/main.rs` の `run_task_in` は `Ask` を `Deny` に硬化（`Decision::hardened`）し、そのコマンドは spawn されずに `name (blocked: <理由>)` として記録される。
 
 各タスクは `dir`（無ければセッションの `cwd`）で実行される。`dir` は正規化され、セッションの `cwd` 自身かその**配下**でなければならない: 存在しない・正規化できない・セッション `cwd` の外に解決される（`../../etc` や別の場所の絶対パス等）`dir` を持つタスクは**拒否される**: spawn されず（代わりにセッションの `cwd` で実行されることもない）、`name (blocked: task dir …)` として記録される。また `$CARGO_HOME/bin` を `PATH` の先頭に足して実行される（`~/.cargo/bin` が PATH に無くても `cargo-deny` 等の cargo サブコマンドが解決できる）。デフォルトの security タスクを機能させるには `cargo-deny` を別途インストールする必要がある（`cargo install cargo-deny`）。
 
@@ -66,9 +66,11 @@ spawn の前に、`task.command` は PreToolUse フックと同じ `blastguard` 
 
 各タスクの日次ゲートは**実行後に exit code に関わらず刻まれる** — 失敗したタスクも「今日実行済み」となり、翌日まで再試行しない。失敗は失われず、代わりにレポート（とセッション要約）に記録される。
 
+**例外 — 組み込みのデフォルト `security` タスクを Cargo プロジェクト外で実行する場合。** タスクが 1 つも登録されておらず、セッションの `cwd` に `Cargo.toml` が無いとき、`cargo deny` には監査対象が無いので、その回は**適用外（not applicable）**として扱う: spawn せず、日次ゲートも**刻まず**、レポートにも要約にも何も書かない。同じ日に後から Cargo プロジェクトで開始したセッションで監査が実行される。適用外とするのは `Cargo.toml` が存在しないことを観測できた場合だけで、メタデータが読めない場合は通常どおり実行し、cargo-deny の exit status で判定する。ユーザーが登録したタスク（`security` という名前でも）は上記の通常の挙動のまま。したがって `ok` 行が無いことは「監査していない」を意味し、「監査 ok」を意味しない。
+
 ### レポート
 
-タスク実行ごとに 1 行の JSON が `~/.daily/reports.jsonl` に追記される（`{date, at, task, status, code, detail}`、`status` ∈ `ok`/`fail`/`error`/`blocked`）。追記に失敗した場合は stderr に `warning: daily log: … this record is LOST` が出る。`daily report` で確認する。
+タスク実行ごとに 1 行の JSON が `~/.daily/reports.jsonl` に追記される（`{date, at, task, status, code, detail, dir}`、`status` ∈ `ok`/`fail`/`error`/`blocked`）。`dir` はタスクを spawn した正規化済みディレクトリで、`blocked` の回と、このフィールドが追加される前に書かれた行には無い。追記に失敗した場合は stderr に `warning: daily log: … this record is LOST` が出る。`daily report` で確認する。
 
 ```sh
 daily report                 # 今日の実行結果

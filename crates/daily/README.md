@@ -24,7 +24,7 @@ the PreToolUse hook uses. A command blastguard **denies** (destructive) is refus
 never spawned — and reported as `name (blocked: <reason>)` in the summary/report
 instead of running. An `Ask` verdict (a construct blastguard cannot analyse and
 refuses to guess about) blocks too: no human is present at SessionStart to answer it,
-so `run_task` in `src/main.rs` hardens `Ask` to `Deny` (`Decision::hardened`) and the
+so `run_task_in` in `src/main.rs` hardens `Ask` to `Deny` (`Decision::hardened`) and the
 command is reported as `name (blocked: <reason>)` without being spawned.
 
 With **no tasks registered**, a built-in default `security` task runs, preserving the
@@ -101,10 +101,22 @@ task counts as "ran today" and will not retry until tomorrow. The failure isn't 
 is recorded in the report (and surfaced in the session summary) instead of blocking or
 looping.
 
+**Exception — the built-in default `security` task outside a Cargo project.** When no
+tasks are registered and the session `cwd` has no `Cargo.toml`, `cargo deny` has nothing
+to audit, so the run is *not applicable*: it is not spawned, the daily gate is **not**
+stamped, and nothing is written to the report or the summary. A later session the same
+day that starts in a Cargo project still runs the audit. Only an observed missing
+`Cargo.toml` counts; if its metadata can't be read, the task runs as usual and
+cargo-deny's exit status decides. A user-registered task (even one named `security`)
+keeps the plain semantics above. An absent `ok` row therefore means "not audited", never
+"audit ok".
+
 ## Report
 
 Every task run is appended as one JSON line to `~/.daily/reports.jsonl`
-(`{date, at, task, status, code, detail}`, `status` ∈ `ok`/`fail`/`error`/`blocked`). If an append fails, a
+(`{date, at, task, status, code, detail, dir}`, `status` ∈ `ok`/`fail`/`error`/`blocked`).
+`dir` is the canonical directory the task was spawned in; it is absent for `blocked`
+runs and for rows written before the field existed. If an append fails, a
 `warning: daily log: … this record is LOST` line goes to stderr. Inspect it
 with `daily report`:
 

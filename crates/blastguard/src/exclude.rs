@@ -671,6 +671,61 @@ pub fn touches_protected(path: &str) -> bool {
         || holds_protected_paths(path)
 }
 
+/// True when SOME entry `<parent>/<name>` that the one-component wildcard
+/// `pattern` (`*` is its only metacharacter) could expand to touches a
+/// protected path ([`touches_protected`]) — i.e. when a literal operand the
+/// glob may stand for would be refused by the protected-path precedence.
+///
+/// blastguard does no directory listing, so the candidate names are every
+/// literal (`*`-free) component of every [`PROTECTED_GLOBS`] entry, matched
+/// case-insensitively (the protected sets are). A name that matches a
+/// protected pattern only through a `*`/`**` component there makes `parent`
+/// itself match a derived directory prefix, which the caller refuses through
+/// [`touches_protected`] on the parent. Over-matching only withholds an
+/// `Allow`, the restrictive direction. A `pattern` with any other glob
+/// metacharacter (`?`, `[`) is answered `true`: it is not modelled.
+pub fn glob_entry_may_touch_protected(parent: &str, pattern: &str) -> bool {
+    if pattern.contains(['?', '[', ']', '\\']) {
+        return true;
+    }
+    let pattern = pattern.to_ascii_lowercase();
+    let parent = parent.trim_end_matches('/');
+    PROTECTED_GLOBS
+        .iter()
+        .flat_map(|p| p.split('/'))
+        .filter(|c| !c.is_empty() && !c.contains('*'))
+        .any(|c| {
+            star_match(&pattern, &c.to_ascii_lowercase())
+                && touches_protected(&format!("{parent}/{c}"))
+        })
+}
+
+/// `*`-only wildcard match of a whole `name` (`*` matches any run of
+/// characters, every other character itself). Iterative with single-star
+/// backtracking, so it is linear-ish and cannot recurse deeply.
+fn star_match(pattern: &str, name: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let n: Vec<char> = name.chars().collect();
+    let (mut pi, mut ni) = (0usize, 0usize);
+    let mut star: Option<(usize, usize)> = None;
+    while ni < n.len() {
+        if pi < p.len() && p[pi] == '*' {
+            star = Some((pi, ni));
+            pi += 1;
+        } else if pi < p.len() && p[pi] == n[ni] {
+            pi += 1;
+            ni += 1;
+        } else if let Some((sp, sn)) = star {
+            pi = sp + 1;
+            ni = sn + 1;
+            star = Some((sp, sn + 1));
+        } else {
+            return false;
+        }
+    }
+    p[pi..].iter().all(|c| *c == '*')
+}
+
 /// The derived directory set, matched CASE-INSENSITIVELY for the same reason as
 /// [`protected_set`]: folding here can only ever classify MORE paths as
 /// containers of protected files, which is the restrictive direction.

@@ -99,7 +99,7 @@ use find_xargs::{analyze_find, analyze_xargs, xargs_command_start, xargs_reads_a
 
 use rm::{
     analyze_rm, checkout_exempt_eligible, deletion_rm_eligible, literal_cd_and_rest,
-    worktree_rm_eligible,
+    worktree_rm_eligible, DeletionEligibility,
 };
 
 use fileops::{
@@ -276,9 +276,9 @@ struct Ctx<'a> {
     /// line in [`Ctx::new`] and carried unchanged into every derived context.
     worktree_rm_eligible: bool,
     /// Whether the TOP-LEVEL command may use the deletion-principle verdicts
-    /// of [`crate::deletion`] at all — see [`deletion_rm_eligible`]. Computed
-    /// once in [`Ctx::new`], carried unchanged like `worktree_rm_eligible`.
-    deletion_rm_eligible: bool,
+    /// at all — literal ([`deletion_rm_eligible`]) and `/tmp` wildcard — see
+    /// [`DeletionEligibility`]. Computed once in [`Ctx::new`], carried unchanged.
+    deletion_rm_eligible: DeletionEligibility,
     /// Whether the TOP-LEVEL command may lift the protected-path rule for a
     /// path inside a linked worktree checkout at all — see
     /// [`Ctx::in_worktree_checkout`] and [`checkout_exempt_eligible`].
@@ -343,7 +343,7 @@ impl<'a> Ctx<'a> {
             rewritten_base: scope.session_cwd(),
             raw_base: scope.session_cwd().map(str::to_string),
             worktree_rm_eligible: eligible(worktree_rm_eligible),
-            deletion_rm_eligible: eligible(deletion_rm_eligible),
+            deletion_rm_eligible: DeletionEligibility::of(eligible(deletion_rm_eligible), eligible),
             checkout_exempt_eligible: eligible(checkout_exempt_eligible),
             program_text_redirects: None,
         }

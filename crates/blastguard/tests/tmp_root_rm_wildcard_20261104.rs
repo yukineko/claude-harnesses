@@ -2,10 +2,10 @@
 //! RED regression for the user ruling 2026-11-02 (verbatim):
 //! 「そもそも/tmp以下はrm -frを削除していい。worktreeなどと同じあつかいにして」.
 //!
-//! A recursive `rm` of a LITERAL operand strictly inside `/tmp` is already
-//! Allow. The unimplemented gap is a WILDCARD operand below `/tmp`
-//! (`rm -rf /tmp/<dir>/name-*`, `rm -rf /tmp/<head>-*`), which still comes back
-//! Deny/Ask.
+//! A recursive `rm` of a LITERAL operand strictly inside `/tmp` was already
+//! Allow. The gap was a WILDCARD operand below `/tmp`
+//! (`rm -rf /tmp/<dir>/name-*`, `rm -rf /tmp/<head>-*`), which came back
+//! Deny/Ask until blastguard 0.2.262 (backlog 486fb7de, #1531).
 //!
 //! Fixture: deliberately NOT `support/neutral_base.rs` (on Linux it panics with
 //! "no neutral fixture parent … /tmp is equal to or under the fixed temp root",
@@ -160,7 +160,6 @@ fn control_literal_operand_inside_tmp_is_allow() {
 
 /// RED: wildcard in the last component, literal parent strictly inside /tmp.
 #[test]
-#[ignore = "RED repro: /tmp wildcard rm not Allow yet (user ruling 2026-11-02, see backlog); run with --ignored"]
 fn wildcard_last_component_inside_tmp_dir_is_allow() {
     let f = Fx::new("insub");
     let lit = f.decide(&format!("rm -rf {}/sub/b", f.t()));
@@ -171,7 +170,6 @@ fn wildcard_last_component_inside_tmp_dir_is_allow() {
 
 /// RED: wildcard directly under /tmp with a literal name head.
 #[test]
-#[ignore = "RED repro: /tmp wildcard rm not Allow yet (user ruling 2026-11-02, see backlog); run with --ignored"]
 fn wildcard_with_literal_head_directly_under_tmp_is_allow() {
     let f = Fx::new("head");
     let lit = f.decide(&format!("rm -rf {}/sub/b", f.t()));

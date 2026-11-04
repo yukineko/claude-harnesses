@@ -788,7 +788,7 @@ impl SafeRoots {
     /// root (user ruling 2026-10-28: the truncation relaxation covers
     /// `/private/tmp`, scratchpad included, and nothing wider). Same pipeline,
     /// same no-symlink-below rule, same raw-cwd refusal. Used by the
-    /// truncating-redirect rule in `detect.rs`.
+    /// truncating redirect and the rm `/tmp` wildcard rules in `detect`.
     pub(crate) fn classify_temp(
         &self,
         operand: &str,

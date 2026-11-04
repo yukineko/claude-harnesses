@@ -1146,6 +1146,32 @@
         "path": "crates/refactor",
         "ref": "main"
       }
+    },
+    {
+      "name": "hostaudit",
+      "description": "Configuration and operations security audit for servers (ssh, read-only), AWS resources (read-only; security-group fixes only on explicit confirmation) and local Claude Code settings, judged against a fixed baseline with fix instructions for every violation.",
+      "version": "0.1.2",
+      "category": "security",
+      "keywords": [
+        "security",
+        "audit",
+        "ssh",
+        "aws",
+        "security-group",
+        "baseline",
+        "rust"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/yukineko/claude-harnesses/tree/main/crates/hostaudit",
+      "author": {
+        "name": "yukineko"
+      },
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/yukineko/claude-harnesses.git",
+        "path": "crates/hostaudit",
+        "ref": "main"
+      }
     }
   ]
 }

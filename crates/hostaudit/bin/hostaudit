@@ -1,0 +1,32 @@
+#!/bin/sh
+# hostaudit plugin launcher — execs the bundled hostaudit-<os>-<arch> build.
+# No build for the host => exit 127 with the reason on stderr: the audit did NOT
+# run and its result is UNKNOWN (never exit 0, which would read as a clean audit).
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+case "$(uname -s)" in
+  Linux)  os=linux ;;
+  Darwin) os=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) os=windows ;;
+  *)      os="$(uname -s)" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)   arch=x86_64 ;;
+  arm64|aarch64)  arch=arm64 ;;
+  *)              arch="$(uname -m)" ;;
+esac
+
+ext=""
+[ "$os" = windows ] && ext=".exe"
+
+binary="$root/hostaudit-$os-$arch$ext"
+if [ -x "$binary" ]; then
+  exec "$binary" "$@"
+fi
+
+echo "hostaudit: no bundled binary for $os-$arch ($binary)." >&2
+fix="Build it with scripts/build-plugin-bin.sh for $os-$arch, or remove the hostaudit plugin."
+
+
+echo "hostaudit: '$*' did NOT run (no bundled binary for $os-$arch), so its result is UNKNOWN — not empty and not success. $fix" >&2
+exit 127

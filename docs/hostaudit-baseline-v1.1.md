@@ -31,6 +31,7 @@
 | W12 [sudo] | `ss -H -tlnp` | なし |
 | W12b [sudo] | `readlink /proc/<pid>/exe`（pid は W12 の `pid=<数字>` から取った**数字のみ**。それ以外は実行しない） | なし |
 | W13 | `dpkg -S <path>`（path は W12b の出力で、`/` 始まり・空白／引用符／`;|&$\`` を含まないものに限る） | `no path found` → 「dpkg 管理外」 |
+| — | （W13 の条件を満たさない path は ssh へ渡さない。その実行ファイルに関わる項目〈§3.1 の外部公開、S8/W22〉は Undetermined） | — |
 | W14 | `apt-get -s -o Debug::NoLocking=1 dist-upgrade` | なし |
 | W15 | `pro security-status --format json`（Ubuntu のみ） | command not found → 「ツール未導入」 |
 | W16 [sudo] | `needrestart -b -r l` | command not found → 「ツール未導入」 |
@@ -46,6 +47,7 @@
 | WN1〜WN5 | §7 の固定 PowerShell | §7 |
 
 - **ツール未導入**（pro / needrestart / distro-info）のサーバは、そのルールを NotApplicable ではなく **Undetermined**（「ツール未導入のため確認不能」＋導入コマンド `sudo apt install ubuntu-pro-client` / `needrestart` / `distro-info`）にする（2026-11-04 裁定）。
+- **1 コマンドの実行時間上限**: ssh の ConnectTimeout は接続だけを縛り、リモートコマンドの実行時間を縛らない。v1.1 の各コマンドは既定 60 秒（clamp 5..=600）で打ち切り、打ち切ったら Undetermined（「時間切れ」）。`pro security-status` が監査機上で 120 秒以上戻らなかったことを 2026-11-04 に観測したため。
 - Debian の `debsecan` は v1.1 では使わない（サーバからネットワーク取得するため）。
 
 ## 3. CVE 評価（v1 B5 の拡張）
@@ -85,11 +87,12 @@ B5 は v1 どおり **host ごとに 1 finding**（該当あり → Violation）
 | S3 | W16 に `NEEDRESTART-SVC:` 行がある（古いライブラリのまま動くサービス）→ **Violation**。`NEEDRESTART-KSTA:` が 0（不明）→ Undetermined。どちらも無く KSTA=1 → Clean（カーネルは K3 が見る） | `sudo systemctl restart <svc>`（サービスを列挙）／計画再起動 |
 | S5 | W18 に公式リポジトリ以外がある → **Warning**（意図的な導入もあるため。一覧を提示して確認を促す）。公式のみ → Clean | 一覧と「意図したものか確認。不要なら該当ファイルを削除」 |
 | S6 | W19 が何か出力する → **Violation**。空 → Clean | `sudo dpkg --configure -a` |
-| S7 | W20 に、S1 の対象または B5 の該当パッケージが含まれる → **Violation**（hold のせいで修正できない）。それ以外 → Clean（hold 一覧は evidence に出す） | hold の理由を確認 → `sudo apt-mark unhold <pkg>` |
+| S7 | W20 に、S1 の対象または B5 の該当パッケージが含まれる → **Violation**（hold のせいで修正できない）。hold があり、S1（W14）か B5 が Undetermined で Violation が出ていない → Undetermined。hold が無い、または hold が両方の観測結果と重ならない → Clean（hold 一覧は evidence に出す） | hold の理由を確認 → `sudo apt-mark unhold <pkg>` |
 | S8 | **dpkg 管理外**（W21/W22/W23 で見つかり、W13 で dpkg 管理外、または W23 のコンテナ）の処理系・ミドルウェアについて、版のサイクルが upstream のサポート期限切れ → **Violation**（「security patch が提供されない版」）。期限まで 90 日以内 → **Warning** | 後継のサポート版への移行手順（例 `mysql:5.7` → 8.0 / 8.4 LTS） |
 | S9 | **apt（dpkg）で入っている**処理系・ミドルウェアについて、版のサイクルが upstream のサポート期限切れ → **Violation**（2026-11-04 裁定で warning から変更。ディストリのバックポートの範囲は S2 を参照と併記） | 後継版への移行手順 |
 
 - S4（リリースのサポート期限）は §5 の **K1 に置き換える**。
+- S9 には期限接近の Warning 帯を設けない（承認済み草案どおり。期限前は Clean）。期限接近の Warning は S8（dpkg 管理外）だけ。
 - S5 の公式リポジトリ（固定）: `archive.ubuntu.com`, `*.archive.ubuntu.com`, `security.ubuntu.com`, `ports.ubuntu.com`, `esm.ubuntu.com`, `deb.debian.org`, `security.debian.org`, `*.ec2.archive.ubuntu.com`（AWS 内ミラー）。
 - S8/S9 は host ごとに各 1 finding（項目 = 製品×版×出所）。どの出所にも製品が 1 つも見つからない → NotApplicable。版が取れない（コマンド失敗・パース不能・docker image の tag が `latest`／無し／digest のみ）、製品が endoflife.date に無い、取得できない → その項目は Undetermined（合格にしない）。
 - 同じ製品が dpkg と PATH 上で別の版（例: dpkg の nodejs 20 と PATH の node v25）なら、**両方を別項目**として出す（2026-11-04 実測で起きた事例）。
@@ -183,6 +186,7 @@ B5 は v1 どおり **host ごとに 1 finding**（該当あり → Violation）
 9. WN2 の閾値は 45 日。
 10. Warning は新しい判定値として足し、exit は 0。件数は必ず別に出す（§1）。
 11. K6 は情報源未特定のため保留（§5、要裁定）。
+12. canon 化後の機械的な補正（2026-11-04、テスト作成で判明。いずれも既存裁定の範囲内）: W12b は §2 の表どおり [sudo]（`sudo -n LC_ALL=C readlink …`。root 所有プロセスの exe は root でしか読めないため。CONTRACT 初版が sudo 無しで書いていたのを訂正）／W13 の条件を満たさない path は Undetermined／S7 の Undetermined 条件／S9 に Warning 帯なし／コマンド実行時間上限。
 
 ## 10. このマシンで v1.1 を当てたときに出ると予想されるもの（未観測の予測。実装後に実測で確かめる）
 

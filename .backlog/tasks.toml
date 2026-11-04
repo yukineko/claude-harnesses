@@ -29,3 +29,47 @@ exit 101: yuki_nakayama/src/.harness-worktrees/session-7d8b5ad9/crates/overwatch
     Finished `test` profile [unoptimized + debuginfo] target(s) in 18.04s
      Running unittests src/lib.rs (target/debug/deps/blastguard-5000abc1aaccd059)
 error: test failed, to rerun pass `-p blastguard --lib`"""
+
+[[task]]
+id = "6542f542"
+title = "guard-maintree-bash refuses unrelated worktree command during foreign merge window (test RED on main)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+Measurement point: main 2f9f927e, 2026-11-05 (also reported failing by a verifier at aab9036a, e430812c, 83dc6e61). Pre-existing committed test, already RED on main; no new test added.
+
+Repro: python3 -m pytest scripts/test_guard_maintree_bash_foreign_merge_window.py -q
+Observed (verbatim, 2f9f927e): "1 failed, 1 passed in 1.33s"
+FAILED scripts/test_guard_maintree_bash_foreign_merge_window.py::ForeignMergeWindow::test_foreign_merge_window_does_not_refuse_unrelated_command
+scripts/test_guard_maintree_bash_foreign_merge_window.py:100: AssertionError
+  AssertionError: 2 != 0 : command never touched main but was refused:
+  Refused: ORIG_HEAD was rewritten during this call while HEAD did not move and there is no MERGE_HEAD. That is what another session's in-flight `git merge` in this project's MAIN working tree looks like (a concurrent merge in main is one possible cause), but this command's own reset / merge / rebase produces it too. The change below is therefore NOT asserted to be this command's; it is still refused because a verdict that cannot be determined resolves to refuse (CLAUDE.md 3).
+  Changed in .../main:
+    feature.txt
+
+Readings:
+(a) real defect: the guard (scripts/guard-maintree-bash) refuses a command that ran in its own worktree while ANOTHER process's merge was in flight in main (pre-merge-commit window: ORIG_HEAD rewritten, HEAD not yet moved, no MERGE_HEAD). The test asserts the guard should attribute this window to the foreign merge and allow (rc 0); the guard instead refuses as undetermined. Fix = distinguish the foreign-merge window from this command's own reset/merge/rebase.
+(b) intended: the refusal text says the window is indistinguishable from this command's own reset/merge/rebase and resolves undetermined to refuse (CLAUDE.md 3). If that indistinguishability is the accepted ruling, the test is stale and should be rewritten/removed by a ruling, not left red on main.
+How to tell apart: check whether a later commit deliberately changed the guard to refuse this window (git log -S "ORIG_HEAD was rewritten" -- scripts/) and whether the test was written before or after that change; if the guard change postdates the test with an explicit ruling, (b); if the guard can observe something that distinguishes the command's own cwd (worktree, not main) — the command here ran with cwd=self.wt — (a). Either way a committed test is RED on main and must be resolved."""
+created_at = 1793810624
+updated_at = 1793810624
+weight = 0.0
+issue_number = 1536
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1536"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_foreign_merge_window.py -q"
+rev = "2f9f927e6f87dbd428bb883f9b6a7c81a847bb8e"
+observed_at = 1793810624
+detail = """
+exit 1: and did write into main, revert it or move the work into a worktree.
+
+scripts/test_guard_maintree_bash_foreign_merge_window.py:100: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_foreign_merge_window.py::ForeignMergeWindow::test_foreign_merge_window_does_not_refuse_unrelated_command
+1 failed, 1 passed in 1.21s"""

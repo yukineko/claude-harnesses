@@ -138,8 +138,13 @@ IGNORE_ATTR_RE = re.compile(r"#\s*\[\s*ignore\b")
 SHOULD_PANIC_RE = re.compile(r"#\s*\[\s*should_panic\b")
 
 # A function declaration, capturing its name — used to attribute a `#[test]`
-# attribute to the body it belongs to (see `test_fn_assertions`).
-FN_DECL_RE = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
+# attribute to the body it belongs to (see `test_fn_assertions`). A
+# `macro_rules!` metavariable name (`fn $name`) is accepted too, so a `#[test]`
+# inside a macro template is attributed to the template body instead of
+# skipping ahead to the next real `fn` (backlog fa35fde1 / GH #1525). Such a
+# function is a TEMPLATE: how many tests it expands to depends on invocations,
+# which are not counted -- see `scan` for where that is judged.
+FN_DECL_RE = re.compile(r"\bfn\s+(\$?[A-Za-z_][A-Za-z0-9_]*)")
 # Everything Rust permits between an attribute and the `fn` it applies to:
 # further attributes, visibility, and the asyncness/constness/ABI qualifiers.
 # Anything else means the `#[test]` we matched is not that function's attribute.
@@ -1008,6 +1013,10 @@ def test_fn_assertions(surface: str, path: str) -> dict:
     Names are keys, so two same-named test functions in different `#[cfg(test)]`
     modules of one file SUM. A decrease in the sum is still a real decrease, and
     the alternative (dropping duplicates) would hide one of them.
+
+    A `#[test] fn $name` inside a `macro_rules!` template is keyed by its
+    metavariable (`$name`); `counts` reports how many such templates exist so
+    `scan` can refuse to judge a change against a base that has the file.
     """
     out: dict = {}
     code = _mask_noncode(surface, path)
@@ -1038,12 +1047,15 @@ def counts(surface: str, path: str = "") -> dict:
     # `#[test]` mentioned in a comment or string is prose, not code, and must
     # neither be reported as added nor offset a real removal.
     code = _mask_noncode(surface, path)
+    fn_assertions = test_fn_assertions(surface, path)
     return {
         "assertions": len(ASSERT_RE.findall(code)),
         "tests": len(TEST_ATTR_RE.findall(code)),
         "ignores": len(IGNORE_ATTR_RE.findall(code)),
         "should_panics": len(SHOULD_PANIC_RE.findall(code)),
-        "fn_assertions": test_fn_assertions(surface, path),
+        "fn_assertions": fn_assertions,
+        # `#[test]` functions inside a `macro_rules!` template (`fn $name`).
+        "template_tests": sum(1 for n in fn_assertions if n.startswith("$")),
     }
 
 
@@ -1764,6 +1776,18 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                 counts(test_surface(after_src, new, after_side), new)
                 if after_src else counts("")
             )
+            if before_src and (before["template_tests"] or after["template_tests"]):
+                # A `macro_rules!` test template expands once per invocation,
+                # and invocations are not counted: dropping `t!(case, ...)` or
+                # turning explicit tests into a template removes tests with no
+                # textual `#[test]` / assertion change. Against a base where
+                # the file existed we cannot judge that. Only a file with no
+                # base (`before` all zero, so no finding can exist) is judged.
+                raise Undetermined(
+                    f"{rep}: #[test] inside a macro_rules! template in a file "
+                    "that exists at the base -- macro invocations are not "
+                    "counted, so removed generated tests cannot be ruled out"
+                )
             found = findings_for(rep, before, after)
         for p, kind, detail in found:
             results.append(

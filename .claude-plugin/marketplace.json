@@ -156,7 +156,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.330",
+      "version": "0.7.331",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -484,7 +484,7 @@
     {
       "name": "harness-status",
       "description": "Unified human-on-the-loop status dashboard for Claude Code: a /status command that aggregates budgetguard spend and gauge session records into one read-only view.",
-      "version": "0.1.34",
+      "version": "0.1.35",
       "category": "observability",
       "keywords": [
         "status",

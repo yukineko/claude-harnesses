@@ -255,14 +255,11 @@ fn main() {
                 println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
             } else if !r.settings_found {
                 println!("[no settings.json found at {}]", r.settings_path);
-            } else if r.missing.is_empty() {
+            } else if r.all_present() {
                 println!("[all registered hook binaries present]");
             } else {
-                for m in &r.missing {
-                    println!(
-                        "⚠ missing hook binary: {} ({}): {}",
-                        m.event, m.binary_path, m.command
-                    );
+                for line in r.warning_lines() {
+                    println!("{line}");
                 }
             }
         }
@@ -325,6 +322,36 @@ fn main() {
                     sections.push(format!(
                         "harness-status: {} 件の登録済みhookのbinaryが見つかりません（rollout未実行の可能性）:\n{}\n`harness-status hooks-health` で詳細確認、`scripts/rollout-plugins.sh` で反映してください。",
                         r.missing.len(),
+                        lines.join("\n")
+                    ));
+                }
+                if !r.not_executable.is_empty() {
+                    let lines: Vec<String> = r
+                        .not_executable
+                        .iter()
+                        .map(|m| format!("  ⚠ {} ({}): {}", m.event, m.binary_path, m.command))
+                        .collect();
+                    sections.push(format!(
+                        "harness-status: {} 件の登録済みhookのbinaryが実行可能ではありません（exec bit なし。hook は起動しません）:\n{}\n`harness-status hooks-health` で詳細確認してください。",
+                        r.not_executable.len(),
+                        lines.join("\n")
+                    ));
+                }
+                if let Some(e) = &r.settings_error {
+                    sections.push(format!(
+                        "harness-status: {} を読めませんでした（判定不能 — hook の健全性は未確認）: {e}",
+                        r.settings_path
+                    ));
+                }
+                if !r.unverifiable.is_empty() {
+                    let lines: Vec<String> = r
+                        .unverifiable
+                        .iter()
+                        .map(|u| format!("  ? {} ({}): {}", u.event, u.reason, u.command))
+                        .collect();
+                    sections.push(format!(
+                        "harness-status: {} 件の登録済みhookの実行対象を検証できませんでした（判定不能 — present とはみなしていません）:\n{}\n`harness-status hooks-health` で詳細確認してください。",
+                        r.unverifiable.len(),
                         lines.join("\n")
                     ));
                 }

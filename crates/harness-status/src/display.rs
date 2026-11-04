@@ -134,20 +134,36 @@ pub fn print_status(report: &StatusReport) {
     println!();
 
     // Hook binary health: registered hooks in ~/.claude/settings.json whose
-    // command binary no longer exists on disk (stale rollout, pruned cache, …).
+    // command target is missing (stale rollout, pruned cache, …), not
+    // executable, or could not be checked — the last is never shown as present.
     println!("── Hook binary health (settings.json) ────────────");
     if !hooks_health.settings_found {
         println!(
             "  [no settings.json found at {}]",
             hooks_health.settings_path
         );
-    } else if hooks_health.missing.is_empty() {
+    } else if hooks_health.all_present() {
         println!("  all registered hook binaries present");
     } else {
+        if let Some(e) = &hooks_health.settings_error {
+            println!("  ⚠ SETTINGS UNREADABLE  {e} — hook health UNKNOWN");
+        }
         for m in &hooks_health.missing {
             println!(
                 "  ⚠ MISSING BINARY  {} | {} | {}",
                 m.event, m.binary_path, m.command
+            );
+        }
+        for m in &hooks_health.not_executable {
+            println!(
+                "  ⚠ NOT EXECUTABLE  {} | {} | {}",
+                m.event, m.binary_path, m.command
+            );
+        }
+        for u in &hooks_health.unverifiable {
+            println!(
+                "  ? UNVERIFIABLE  {} | {} | {}",
+                u.event, u.reason, u.command
             );
         }
     }

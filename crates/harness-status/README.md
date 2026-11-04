@@ -8,7 +8,7 @@ It does **not** register a general-purpose `SessionStart` dashboard hook.
 - **Recent sessions** (gauge): the last N sessions with turns, tokens, and USD cost, from `~/.gauge/store/sessions/`.
 - **Stop-hook latency**: per-session totals from `~/.harness/state/hook-latency.jsonl`.
 - **UserPromptSubmit injection size**: per-turn totals from `~/.harness/state/inject-metrics.jsonl`.
-- **Hook binary health**: hooks registered in `~/.claude/settings.json` whose binary is missing on disk.
+- **Hook binary health**: hooks registered in `~/.claude/settings.json` whose target is missing on disk, not executable, or could not be verified (an unverifiable target is reported, never counted as present).
 - **PATH shadowing**: a stray binary on `PATH` that shadows a plugin-cache binary of the same name.
 
 It registers exactly one hook: a `SessionStart` hook (`hooks/hooks.json`) that runs the hooks-binary health check (`harness-status session-start`).
@@ -49,7 +49,7 @@ harness-status sessions --sessions 10  # recent sessions (limit N)
 harness-status hooks                 # Stop-hook latency aggregation (budget monitor)
 harness-status inject                # UserPromptSubmit injection-size aggregation (budget monitor)
 harness-status plugins               # classify every plugin by activation scope
-harness-status hooks-health          # settings.json hooks whose binary is missing
+harness-status hooks-health          # settings.json hooks whose target is missing / not executable / unverifiable
 harness-status path-shadow           # stray PATH binaries shadowing plugin-cache ones
 harness-status --json                # machine-readable output (with the full dashboard, budget, sessions, hooks, inject, plugins, hooks-health, path-shadow)
 ```

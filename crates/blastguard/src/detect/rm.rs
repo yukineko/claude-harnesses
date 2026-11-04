@@ -144,8 +144,8 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     // backlog 486fb7de / #1531). A wildcard can only expand to entries of
     // its literal parent directory, so when that parent provably is a real
     // directory strictly inside the real fixed `/tmp` root (or the root itself
-    // with a literal name head), the blast radius is bounded exactly like a
-    // literal operand there. Every condition and every refusal is in
+    // with a literal name head of 4+ characters, ruling 2026-11-05), the
+    // blast radius is bounded exactly like a literal operand there. Every condition and every refusal is in
     // [`tmp_glob_confined`]; anything it cannot decide keeps the logic below.
     if wildcard && tmp_glob_confined(ctx, &operands) {
         return Decision::Allow;
@@ -678,6 +678,11 @@ fn tmp_glob_confined(ctx: &Ctx<'_>, operands: &[&str]) -> bool {
     })
 }
 
+/// Minimum length, in characters, of the literal head before the first `*`
+/// of a wildcard placed directly in the `/tmp` root (user ruling 2026-11-05,
+/// #1531). Deeper below `/tmp` there is no minimum.
+const MIN_TMP_ROOT_GLOB_HEAD: usize = 4;
+
 /// One wildcard operand of [`tmp_glob_confined`]. True only when
 /// [`last_component_glob`] splits it into a literal parent and a `*` pattern,
 /// neither the parent nor any entry the pattern could match touches a
@@ -687,8 +692,10 @@ fn tmp_glob_confined(ctx: &Ctx<'_>, operands: &[&str]) -> bool {
 /// below it, the parent itself included) places the parent:
 ///
 ///   * `Inside` the real `/tmp` root — any such pattern; or
-///   * `IsRoot` — only with a non-empty literal head before the first `*`
-///     (`/tmp/<head>-*`; never `/tmp/*`), and only when the parent is spelled
+///   * `IsRoot` — only with a literal head of at least
+///     [`MIN_TMP_ROOT_GLOB_HEAD`] characters before the first `*` (user ruling
+///     2026-11-05, #1531: `/tmp/name*` yes; `/tmp/*`, `/tmp/c*`, `/tmp/cla*`
+///     never), and only when the parent is spelled
 ///     as the canonical root itself or a single top-level component (`/tmp`),
 ///     so a symlink below `/tmp` that resolves back to the root is refused.
 ///
@@ -706,7 +713,9 @@ fn tmp_glob_operand_allowed(scope: &SafeRoots, operand: &str, base: Option<&str>
     match scope.classify_temp(parent, base) {
         Determination::Known(Placement::Inside { .. }) => true,
         Determination::Known(Placement::IsRoot { root }) => {
-            let has_head = matches!(pattern.find('*'), Some(i) if i > 0);
+            let has_head = pattern
+                .find('*')
+                .is_some_and(|i| pattern[..i].chars().count() >= MIN_TMP_ROOT_GLOB_HEAD);
             let spelled_as_root = match scope.lexical_absolute(parent, base) {
                 Determination::Known(l) => {
                     l == root || l.strip_prefix('/').is_some_and(|t| !t.contains('/'))

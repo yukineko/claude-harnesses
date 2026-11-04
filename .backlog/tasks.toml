@@ -10,13 +10,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "Measured 2026-11-04 on main 141afb24 (Linux/WSL2): cargo test -p blastguard --lib -> 417 passed, 8 failed (detect::tests::a_truncating_redirect_into_worktree_source_asks_exactly_as_its_twin_does, deletion_escape_spellings_are_not_allowed, deletion_roots_themselves_are_not_allowed, deletion_symlinked_cache_root_is_not_a_root, deletion_temp_and_cache_subpaths_are_allowed, deletion_temp_root_must_exist_as_a_real_directory, deletion_tmpdir_is_not_a_root_when_home_is_unset, deletion_tmpdir_naming_a_system_dir_or_a_home_subtree_is_not_a_root). Panic verbatim (scope.rs:1777): 'no neutral fixture parent: every candidate was rejected ... std::env::temp_dir() (/tmp): /tmp is equal to or under the fixed temp root /tmp'. On Linux temp_dir() IS the fixed temp root, so the only candidate is rejected. Supersedes the never-merged d158b410 (/private/tmp hard-code, fixed by #1486). An earlier /var/tmp attempt is parked at refs/parked/blastguard-linux-tests (pre-detect-split)."
+notes = "Measured 2026-11-04 on main 141afb24 (Linux/WSL2): cargo test -p blastguard --lib -> 417 passed, 8 failed (detect::tests::a_truncating_redirect_into_worktree_source_asks_exactly_as_its_twin_does, deletion_escape_spellings_are_not_allowed, deletion_roots_themselves_are_not_allowed, deletion_symlinked_cache_root_is_not_a_root, deletion_temp_and_cache_subpaths_are_allowed, deletion_temp_root_must_exist_as_a_real_directory, deletion_tmpdir_is_not_a_root_when_home_is_unset, deletion_tmpdir_naming_a_system_dir_or_a_home_subtree_is_not_a_root). Panic verbatim (scope.rs:1777): 'no neutral fixture parent: every candidate was rejected ... std::env::temp_dir() (/tmp): /tmp is equal to or under the fixed temp root /tmp'. On Linux temp_dir() IS the fixed temp root, so the only candidate is rejected. Supersedes the never-merged d158b410 (/private/tmp hard-code, fixed by #1486). An earlier /var/tmp attempt is parked at refs/parked/blastguard-linux-tests (pre-detect-split). UPDATE 2026-11-05 (session c4aa3733, run-20261105-005429-67429): does NOT reproduce on macOS: TMPDIR=/tmp cargo test -p blastguard --lib at 2f9f927e -> 425 passed, 0 failed, because neutral_fixture_candidates() (crates/blastguard/src/scope.rs:1676-1681) adds getconf DARWIN_USER_TEMP_DIR under cfg(target_os=macos). refs/parked/blastguard-linux-tests is absent from the macOS clone. User ruling 2026-11-05: leave for a Linux/WSL host session where RED is observable; do not fix blind on macOS."
 created_at = 1793756666
-updated_at = 1793756666
+updated_at = 1793832843
 weight = 0.0
 issue_number = 1529
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1529"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

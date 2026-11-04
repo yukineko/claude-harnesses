@@ -39,14 +39,14 @@ fn only_whitelisted_commands_reach_ssh_with_batchmode_and_timeout() {
     for argv in &log {
         let cmd = argv.last().unwrap().as_str();
         assert!(
-            WHITELIST.contains(&cmd),
+            is_whitelisted(cmd),
             "non-whitelisted remote command: {cmd:?}"
         );
         assert!(cmd.starts_with("LC_ALL=C ") || cmd.starts_with("sudo -n LC_ALL=C "));
         assert_eq!(
             cmd.starts_with("sudo"),
-            SUDO_CMDS.contains(&cmd),
-            "sudo only for W4–W6: {cmd:?}"
+            is_sudo_cmd(cmd),
+            "sudo only for [sudo] commands: {cmd:?}"
         );
         let pair = |k: &str| argv.windows(2).any(|w| w[0] == "-o" && w[1] == k);
         assert!(pair("BatchMode=yes"), "BatchMode=yes missing: {argv:?}");

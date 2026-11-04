@@ -23,7 +23,14 @@ fn report_rows_have_target_rule_verdict_time() {
         assert!(row["rule"].is_string(), "{row}");
         let v = row["verdict"].as_str().unwrap_or("");
         assert!(
-            ["clean", "not_applicable", "violation", "undetermined"].contains(&v),
+            [
+                "clean",
+                "not_applicable",
+                "violation",
+                "undetermined",
+                "warning"
+            ]
+            .contains(&v),
             "{row}"
         );
         assert_eq!(row["time"], NOW, "{row}");

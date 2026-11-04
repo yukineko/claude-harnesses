@@ -1,6 +1,8 @@
-# hostaudit — implementation contract (v1, tests: `crates/hostaudit/tests/`)
+# hostaudit — implementation contract (v1 + v1.1, tests: `crates/hostaudit/tests/`)
 
-Canon: `docs/hostaudit-baseline-v1.md` (baseline v1). This file fixes the
+Canon: `docs/hostaudit-baseline-v1.md` (baseline v1) and `docs/hostaudit-baseline-v1.1.md`
+(baseline v1.1, contract in §12 below; where v1.1 contradicts v1, v1.1 wins, e.g. the `warning`
+verdict and the exit code). This file fixes the
 **testable interface** the canon leaves open. Where this file and the canon
 disagree, the canon wins and this file is the bug. Choices made here that the
 canon does not dictate are marked **[choice]**; gaps in the canon are marked
@@ -30,7 +32,7 @@ An unparseable `HOSTAUDIT_NOW` is a usage error (exit 2).
 
 | code | meaning |
 |---|---|
-| 0 | the command ran and every finding is `clean` or `not_applicable` (for `inventory`/`select`/`daily-task`: success) |
+| 0 | the command ran and every finding is `clean`, `not_applicable` or (v1.1) `warning` (for `inventory`/`select`/`daily-task`: success) |
 | 1 | the command ran and at least one finding is `violation` or `undetermined` (for `aws apply`: the change ran but the re-audit is not clean) |
 | 2 | usage error (bad flags) |
 | 3 | **refused**: precondition not met — unknown alias, no selection, `--all` resolved to empty, `aws apply` without valid confirmation, unknown/non-applicable finding id, dry-run permission failure, port-22 lockout without `--replace-cidr` |
@@ -208,3 +210,196 @@ Prints a TOML snippet for `~/.daily/config.toml` with one or more `[[task]]` tab
 ## 11. Not covered by this test batch
 
 overwatch `review_findings.jsonl` append and the SessionStart one-line systemMessage (canon §1) are part of the canon but have no tests yet; the http(s) OSV fetch path and the built-in TLS probe are not exercised (tests use `file://` and `HOSTAUDIT_TLS_PROBE`).
+
+---
+
+# 12. v1.1 additions (canon: `docs/hostaudit-baseline-v1.1.md`; tests: `tests/v11_*.rs`)
+
+Everything in §1–§11 stays unless this section says otherwise. Marking as above:
+**[choice]** = fixed here, canon does not dictate; **[canon gap]** = canon is silent or
+inconsistent and a decision log is needed.
+
+## 12.0 Test-harness changes the implementer must know
+
+- `tests/common/mod.rs::Env::new()` now also sets `HOSTAUDIT_KEV_URL` and `HOSTAUDIT_EOL_URL`
+  to **non-existent** `file://` paths (= fetch failure), so no test can reach the network.
+- `common::clean_host()` now answers every v1.1 command with a clean Ubuntu 22.04 answer
+  (jammy, kernel 5.15.0-100-generic). Existing v1 tests keep passing because they only assert
+  B-rule behaviour and "exit 0 on a clean host"; the latter now requires the v1.1 rules to be
+  clean/not_applicable on that host (K1 via the W17 fallback, because the endoflife feed is absent there).
+- The v1 test `only_whitelisted_commands_reach_ssh...` now uses `common::is_whitelisted` /
+  `is_sudo_cmd` (v1 plus v1.1 whitelist); the v1 report-row test accepts verdict `warning`.
+
+## 12.1 Verdict `warning`, exit codes, summary
+
+- Finding JSON `verdict` additionally takes `"warning"`. A `warning` has a non-empty `fix`
+  (the advice). It is never silent: it appears in `--json`, text output, and `reports.jsonl`.
+- Exit code: `1` iff any finding is `violation` or `undetermined`; **warnings alone exit 0**
+  (this replaces the §2 wording "every finding is clean or not_applicable").
+- Text output (no `--json`) of `audit` contains the literal fragment
+  `violation <V> / undetermined <U> / warning <W> / clean <C>` (canon §1 example). [choice] a trailing
+  ` / not_applicable <N>` may follow.
+- `audit --json` prints `{"findings":[...], "summary": {"violation":V,"undetermined":U,"warning":W,"clean":C,"not_applicable":N}}`. [choice: the `summary` key]
+- Multi-item rules (B5 CVEs, S8, S9) take the worst item: Violation > Undetermined > Warning > Clean.
+  No item at all gives `not_applicable` (S8/S9).
+- Rows appended to `reports.jsonl` follow §8 with `verdict: "warning"`.
+- SessionStart count line, daily 1-line summary and the overwatch review-queue exclusion of warnings are
+  canon requirements **not covered by tests** (same status as §11).
+
+## 12.2 Findings per host, rule set, OS dispatch
+
+For every selected host exactly one finding per rule in
+`B1..B9, S1, S2, S3, S5, S6, S7, S8, S9, K1..K5, WN1..WN5` (target = alias, id `<rule>:<target>`).
+**K6 is parked: no finding at all.** (S4 is replaced by K1; there is no S4.)
+
+OS dispatch:
+1. Run W1. exit 0 means Linux. `ID=ubuntu|debian` is the Debian family (all rules). Any other `ID`
+   (e.g. `amzn`): B1-B4, B6-B9 as in v1, K1 evaluated, and S1,S2,S3,S5,S6,S7,S8,S9,K2,K3,K4,K5 are
+   `undetermined` with a `reason` containing `未実装`. B5 keeps the v1 behaviour (non Ubuntu/Debian: undetermined).
+2. W1 non-zero: run W0 (`cmd /c ver`). Output contains `Microsoft Windows` means Windows: B*/S*/K* are
+   `not_applicable`, WN1..WN5 are evaluated. [choice] On a Windows host **no other command** than
+   W1, W0 and WN1..WN5 is sent. W0 is **never** sent when W1 succeeded.
+3. Neither (W1 non-zero and W0 not Windows / failed / ssh 255): **every** rule (incl. WN*) is
+   `undetermined` with a reason.
+4. Linux host: WN1..WN5 are `not_applicable`.
+5. Debian: S2 and K5 are `not_applicable` (canon: not Ubuntu).
+
+## 12.3 Remote command strings (byte-exact; the fake ssh matches on these)
+
+All `LC_ALL=C`-prefixed; `[sudo]` ones are `sudo -n LC_ALL=C ...` (same convention as §4.4).
+The outcome rules of §4.4 apply (255 is undetermined, other non-zero is undetermined) except the
+per-command exceptions below. **[choice]** "command not found" is recognised by the substring
+`command not found` in stderr regardless of exit code (so both `exit 127` and
+`sudo: <tool>: command not found` with exit 1 mean "tool missing").
+
+| id | remote command string |
+|---|---|
+| W0 | `cmd /c ver` (no `LC_ALL`, Windows) |
+| W12 [sudo] | `sudo -n LC_ALL=C ss -H -tlnp` |
+| W12b | `LC_ALL=C readlink /proc/<pid>/exe` where `<pid>` is digits only, taken from `pid=<digits>` in W12 |
+| W13 | `LC_ALL=C dpkg -S <path>`; path starts with `/`, no whitespace, no quote, none of `;` `\|` `&` `$` or backtick. Exit 1 + stderr `no path found` means "not managed by dpkg" |
+| W14 | `LC_ALL=C apt-get -s -o Debug::NoLocking=1 dist-upgrade` |
+| W15 | `LC_ALL=C pro security-status --format json` |
+| W16 [sudo] | `sudo -n LC_ALL=C needrestart -b -r l` |
+| W17 | `LC_ALL=C ubuntu-distro-info --supported` (Ubuntu) / `LC_ALL=C debian-distro-info --supported` (Debian) |
+| W18 | `LC_ALL=C cat /etc/apt/sources.list`, `LC_ALL=C ls /etc/apt/sources.list.d`, then per listed file `LC_ALL=C cat /etc/apt/sources.list.d/<name>`; name matches `[A-Za-z0-9._-]+` **and** ends in `.list` or `.sources` (other names are never sent) |
+| W19 | `LC_ALL=C dpkg --audit` |
+| W20 | `LC_ALL=C apt-mark showhold` |
+| W21 | `LC_ALL=C <cmd>` with `<cmd>` from the list below |
+| W22 | `LC_ALL=C <exe-path> <version-args>`; `<exe-path>` = W12b output of a listening process whose W13 says "not managed by dpkg", sanitised as for W13, whose basename is a §4.1 product executable. dpkg-owned and non-product executables are **never executed** |
+| W23 [sudo] | `sudo -n LC_ALL=C docker ps --format '{{.Image}}'` (single quotes literal) |
+| W24 | `LC_ALL=C uname -r` |
+| W25 | `LC_ALL=C pro status --format json` |
+
+W21 commands (exact; `common::W21_CMDS`): `node --version`, `python3 --version`,
+`python2 --version`, `java -version`, `ruby -v`, `docker --version`, `containerd --version`,
+`openssl version`, `php -v`, `nginx -v`, `apache2 -v`, `httpd -v`, `postgres --version`,
+`/usr/lib/postgresql/*/bin/postgres --version` (glob left to the remote shell),
+`mysqld --version`, `mariadbd --version`, `redis-server --version`, `mongod --version`,
+`catalina.sh version`, `go version`. stdout **and** stderr are both read for the version.
+Exit 127 / stderr `command not found` / `No such file` means "product absent" (not an error).
+Any other non-zero exit, or 255, makes that item `undetermined`.
+
+W22 [choice]: the version args are the same as the W21 command's args for that executable's product.
+
+Windows [choice]: the remote string is `powershell -NoProfile -NonInteractive -Command "<canon string>"`
+with the canon text verbatim and `|` unescaped (constants `common::WN1..WN5`):
+- WN1 `Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber | ConvertTo-Json`
+- WN2 `Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 1 HotFixID,InstalledOn | ConvertTo-Json`
+- WN3 `Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'`
+- WN4 `Get-NetFirewallProfile | Select-Object Name,Enabled | ConvertTo-Json`
+- WN5 `Get-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication | ConvertTo-Json`
+
+[choice] Windows "now" is `HOSTAUDIT_NOW` (no remote clock command is in the whitelist).
+
+## 12.4 External feeds, caches, env seams
+
+| variable | meaning | default when unset |
+|---|---|---|
+| `HOSTAUDIT_KEV_URL` | CISA KEV feed. `file://` MUST be supported. Body `{"vulnerabilities":[{"cveID":"CVE-..."}, ...]}` | `https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json` |
+| `HOSTAUDIT_EOL_URL` | endoflife.date, one fetch per product slug; the literal `{product}` is replaced by the slug. `file://` MUST be supported. Body: JSON array of `{"cycle":"20","eol":"2026-04-30" or true or false,"extendedSupport":"<date>" or true or false (optional),"latest":"..." (optional)}` | `https://endoflife.date/api/{product}.json` |
+
+- Caches [choice]: `~/.hostaudit/kev-cache/` and `~/.hostaudit/eol-cache/` (layout free; EOL keyed
+  **by slug**, KEV one entry); both record the fetch time (`HOSTAUDIT_NOW`). They **share**
+  `osv_cache_max_age_hours` (default 24, clamp 1..=168) with OSV. Fetch failure: fresh cache, else "unobtainable".
+- Only the product slug / the fixed KEV URL leave the machine; EOL fetches happen only for products actually found.
+- Fields [choice]: B5 and K2 carry `kev_fetched_at` (unix secs of the KEV data used; absent or null when unobtainable);
+  S8, S9, K1, WN1 carry `eol_fetched_at` when endoflife data was used.
+- `eol` as a date: expired iff `HOSTAUDIT_NOW` is **after** that day (UTC). `true` = expired, `false` = supported.
+  S8 Warning: expiry within 90 days (89 days left: warning, 91: clean).
+
+## 12.5 B5 / K2 CVE evaluation fields
+
+B5 stays one finding per host. It (and K2) additionally carries:
+
+```json
+"cves": [ {"id": "UBUNTU-CVE-2024-1234",
+           "cve": "CVE-2024-1234",
+           "package": "libssl3",
+           "severity": "unknown",
+           "kev": "yes",
+           "fixed": "<version>",
+           "exposed": "no",
+           "priority": "P2"} ],
+"priority_counts": {"P0": 0, "P1": 0, "P2": 1, "P3": 0}
+```
+
+- `cve` is a string taken from `id` or `aliases`, or `null` when only an advisory id exists. [choice] `package` = binary package.
+- `severity` in `negligible|low|medium|high|critical|unknown`: OSV `severity[]` `type:"Ubuntu"` score if present;
+  else `type:"CVSS_V3"` base score computed from the vector (>=9.0 critical, >=7.0 high, >=4.0 medium, >0 low); else `unknown`.
+- [choice] `kev` and `exposed` are the strings `yes|no|unknown`; `fixed` is a version string or `"unknown"`;
+  `cves` is ordered P0 first.
+- `exposed`: `yes` iff a process whose executable is owned (W12b, W13) by a binary package of the CVE's **source**
+  package listens on `0.0.0.0` / `[::]` / `*`; `no` iff W12 was observed and no such process; `unknown` iff W12/W12b/W13 failed.
+- Priority: canon §3.2 verbatim. KEV unknown never yields P0, and the output states `KEV 不明`.
+- Fix text: one `sudo apt update && sudo apt install --only-upgrade <pkgs...>` for all fixable CVEs (exactly one
+  `--only-upgrade`); CVEs without a fixed version are listed with the word `回避策`.
+- K2 uses the same objects but only for the source package/version of `linux-image-<uname -r>`.
+
+## 12.6 Observation formats and rule details
+
+- **W14**: only lines starting `Inst ` count. "security" = the parenthesised origin list contains `-security`
+  (`jammy-security`, `stable-security`). `Conf`/`Remv` lines are ignored. Failure makes S1/K4 undetermined.
+  K4 additionally requires the package name to start with `linux-`.
+- **S1 with B7**: if B7 is a violation (stale index), S1's text contains `下限`.
+- **W15** [canon gap: the real `pro` schema is not pinned by the canon]: top-level `packages` array of
+  `{"package","service_name","status"}`; `status` in {`pending_attach`, `pending_enable`} means "fixed only by ESM, ESM off"
+  and gives an S2 violation; other statuses are fine. Missing `packages` or non-JSON gives undetermined.
+- **W25** [canon gap]: `services` array of `{"name","status"}`; livepatch is enabled iff the `livepatch` entry has
+  `status:"enabled"`; no `services` array gives K5 undetermined.
+- **Tool missing** (stderr contains `command not found`): `undetermined` with a `reason` containing the install
+  command: `sudo apt install ubuntu-pro-client` (S2, K5), `sudo apt install needrestart` (S3), a string containing
+  `distro-info` (K1 fallback). An ssh failure is NOT a missing tool (no install hint).
+- **W16**: `NEEDRESTART-SVC: <unit>` lines give an S3 violation (units listed in evidence and in `systemctl restart <unit>`);
+  `NEEDRESTART-KSTA: 0` is undetermined; no SVC and `KSTA: 1` is clean. (KSTA 2/3: [canon gap], untested.)
+- **S5**: official hosts exactly as the canon list; the match is on the URL **host** (lookalikes such as
+  `archive.ubuntu.com.evil.example`, `evilarchive.ubuntu.com`, userinfo tricks are not official). `#` lines ignored;
+  `deb`/`deb-src` lines and deb822 `URIs:` are parsed. Evidence = the non-official lines/URIs and the file name.
+  An absent `sources.list` (`No such file`) counts as no entries. A listed file whose `cat` fails: undetermined.
+- **S7**: hold set intersecting (S1 package names union B5-affected binary packages) gives a violation whose fix contains
+  `sudo apt-mark unhold <pkg>` only for those; otherwise clean with the hold list in evidence; empty list clean; W20 failure undetermined.
+- **S8 items** = W21 version output per product (PATH) + W22 process executables + W23 images. **S9 items** = dpkg packages
+  mapped by the §4.1 table to a product (version = dpkg version without epoch, leading dotted number; suffixes such as `nodesource1` ignored).
+  An evidence line per item contains the product, the version string and the cycle.
+  **[choice]** a W21 (PATH) version whose cycle equals the dpkg package's cycle for the same product is the dpkg binary:
+  one S9 item, no S8 item. A different cycle is a separate S8 item (the measured nodejs 20 + node v25 case).
+  Docker image: product by the repository name's last path segment; tag = leading dotted version of the tag
+  (`7.2-alpine` gives 7.2); no tag / `latest` / digest makes that item undetermined. Images not in the §4.1 table are ignored.
+  `mysqld --version` output containing `MariaDB` is a mariadb item, never mysql.
+  W23: `command not found` (any exit) or an empty list means no container items; password required / 255 / other non-zero makes S8 undetermined.
+- **K1**: slug by `ID` (`ubuntu`, `debian`, `rhel`, `centos`, `amzn` as `amazon-linux`), cycle = `VERSION_ID` (`22.04`, `12`, `2023`).
+  The W17 fallback is used only when the endoflife data is unobtainable; the current codename is `VERSION_CODENAME` from W1.
+  Warning text contains `延長サポート` and `ESM` or `ELTS`. Fix contains `do-release-upgrade`.
+- **K2/K3**: the running package is `linux-image-<uname -r>` in W2. K3 flavour = the suffix after the version part (`-generic`, `-aws`);
+  version order = dpkg order (so `5.15.0-100` is newer than `5.15.0-99`). K3 text mentions `K2` when K2 is a violation; K3 fix says `再起動`.
+- **K5**: warning iff livepatch is not enabled and K2 has a `high`/`critical` CVE; text mentions `再起動`; fix `sudo pro enable livepatch`.
+- **WN1** [canon gap]: slug `windows-server` when `Caption` contains `Server`, else `windows`; the cycle is the entry whose
+  `latest` starts with the JSON `Version` (`10.0.20348`). No match: undetermined.
+  Warning iff the standard support is over and `extendedSupport` is still in the future; violation iff both are over (`false` = none).
+- **WN2** date forms accepted: ISO `YYYY-MM-DDTHH:MM:SS...` and PowerShell-5 `\/Date(<ms>)\/`. More than 45 days: violation; up to 45: clean;
+  empty / `null` / unparseable: undetermined. Fix contains `Windows Update`.
+- **WN3**: output `True`/`False` (CR/LF tolerated); `True` and WN2 age over 7 days: violation; `True` within 7: clean; `True` with no usable WN2: undetermined;
+  other text: undetermined.
+- **WN4**: JSON array/object of `{Name, Enabled}`; `Enabled` 0/false = disabled gives a violation (evidence names the profile; fix
+  `Set-NetFirewallProfile -Profile <name> -Enabled True`); empty list or garbage: undetermined.
+- **WN5**: JSON with numeric `UserAuthentication`; not 1 gives a violation (fix contains `ネットワークレベル認証`); key missing or garbage: undetermined.

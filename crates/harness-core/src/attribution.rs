@@ -367,19 +367,42 @@ pub fn attribute_own_writes(root: &Path, transcript_path: &str, changed: &[Strin
 /// anywhere in it keeps the whole pipeline, because `grep -l x a.js | xargs
 /// sed -i …` writes a file only the read-only stage names.
 ///
+/// A command substitution (`$(…)`, backticks, `<(…)`, `>(…)`) is followed to
+/// its balanced end and makes its WHOLE enclosing statement opaque: that
+/// statement is always kept (its text includes the substitution body), since
+/// neither the inner command nor what the outer command does with its output
+/// is judged. Only the OTHER statements of the command may still be dropped
+/// (GH #1530: one read-only `c=$(readlink …)` used to keep every `cd <wt> &&
+/// git status` of the same command and made peers' worktrees Stop roots).
+///
+/// A `cd` statement is kept when any LATER statement is kept: the directory it
+/// enters is where that later statement's relative paths land.
+///
 /// Anything this parser cannot follow keeps the WHOLE command (the old,
-/// over-attributing rule): command substitution (`$(…)`, backticks), a
-/// heredoc (`<<`), an unterminated quote. Being unable to tell is not "read
-/// only" (CLAUDE.md 第3節).
+/// over-attributing rule): a heredoc (`<<`), an unterminated quote or
+/// substitution, and a substitution holding `case`, a comment, a heredoc or a
+/// nested backtick. Being unable to tell is not "read only" (CLAUDE.md 第3節).
 fn writing_statements(command: &str) -> Vec<&str> {
-    match statements(command) {
-        Some(stmts) => stmts
-            .into_iter()
-            .filter(|s| !s.stages.iter().all(read_only_stage))
-            .map(|s| &command[s.start..s.end])
-            .collect(),
-        None => vec![command],
+    let Some(stmts) = statements(command) else {
+        return vec![command];
+    };
+    let mut keep: Vec<bool> = stmts
+        .iter()
+        .map(|s| s.opaque || !s.stages.iter().all(read_only_stage))
+        .collect();
+    let mut later_kept = false;
+    for (k, s) in stmts.iter().enumerate().rev() {
+        if later_kept && s.stages.iter().any(|st| program(st) == Some("cd")) {
+            keep[k] = true;
+        }
+        later_kept |= keep[k];
     }
+    stmts
+        .iter()
+        .zip(keep)
+        .filter(|(_, k)| *k)
+        .map(|(s, _)| &command[s.start..s.end])
+        .collect()
 }
 
 #[derive(Default)]
@@ -393,6 +416,71 @@ struct Statement {
     start: usize,
     end: usize,
     stages: Vec<Stage>,
+    /// Holds a command substitution: kept whatever its stages are.
+    opaque: bool,
+}
+
+/// End (exclusive) of the `$(…)` / `<(…)` / `>(…)` whose `(` is at `open`.
+/// `None` when it is unterminated or holds what a paren count cannot follow:
+/// `case` (unbalanced `)` patterns), a comment, a heredoc.
+fn paren_subst_end(command: &str, open: usize) -> Option<usize> {
+    let b = command.as_bytes();
+    let mut depth = 0usize;
+    let mut j = open;
+    loop {
+        match *b.get(j)? {
+            b'\\' => j += 2,
+            b'\'' => j = command.get(j + 1..)?.find('\'')? + j + 2,
+            b'"' => j = dquote_end(command, j)? + 1,
+            b'`' => j = backtick_end(command, j)?,
+            b'<' if b.get(j + 1) == Some(&b'<') => return None,
+            b'#' if b" \t\n;&|(".contains(&b[j - 1]) => return None,
+            b'(' => {
+                depth += 1;
+                j += 1;
+            }
+            b')' => {
+                depth -= 1;
+                j += 1;
+                if depth == 0 {
+                    return (!command[open..j].contains("case")).then_some(j);
+                }
+            }
+            _ => j += 1,
+        }
+    }
+}
+
+/// End (exclusive) of the backtick substitution opened at `open`. `None` when
+/// unterminated, nested (an escaped backtick inside) or holding a heredoc.
+fn backtick_end(command: &str, open: usize) -> Option<usize> {
+    let b = command.as_bytes();
+    let mut j = open + 1;
+    loop {
+        match *b.get(j)? {
+            b'\\' if b.get(j + 1) == Some(&b'`') => return None,
+            b'\\' => j += 2,
+            b'`' => return Some(j + 1),
+            b'<' if b.get(j + 1) == Some(&b'<') => return None,
+            _ => j += 1,
+        }
+    }
+}
+
+/// Index of the `"` closing the double quote opened at `open`, stepping over
+/// the substitutions inside it.
+fn dquote_end(command: &str, open: usize) -> Option<usize> {
+    let b = command.as_bytes();
+    let mut j = open + 1;
+    loop {
+        match *b.get(j)? {
+            b'"' => return Some(j),
+            b'\\' => j += 2,
+            b'`' => j = backtick_end(command, j)?,
+            b'$' if b.get(j + 1) == Some(&b'(') => j = paren_subst_end(command, j + 1)?,
+            _ => j += 1,
+        }
+    }
 }
 
 /// Quote-aware split of `command` into pipelines. `None` = a construct this
@@ -405,6 +493,7 @@ fn statements(command: &str) -> Option<Vec<Statement>> {
     let mut word = String::new();
     let mut in_word = false;
     let mut start = 0;
+    let mut opaque = false;
     let mut i = 0;
 
     fn end_word(stage: &mut Stage, word: &mut String, in_word: &mut bool) {
@@ -438,23 +527,26 @@ fn statements(command: &str) -> Option<Vec<Statement>> {
                 continue;
             }
             b'"' => {
-                let mut j = i + 1;
-                loop {
-                    match b.get(j)? {
-                        b'"' => break,
-                        b'\\' => j += 2,
-                        b'`' => return None,
-                        b'$' if b.get(j + 1) == Some(&b'(') => return None,
-                        _ => j += 1,
-                    }
-                }
-                word.push_str(&command[i + 1..j]);
+                let j = dquote_end(command, i)?;
+                let inner = &command[i + 1..j];
+                opaque |= inner.contains("$(") || inner.contains('`');
+                word.push_str(inner);
                 in_word = true;
                 i = j + 1;
                 continue;
             }
-            b'`' => return None,
-            b'$' if b.get(i + 1) == Some(&b'(') => return None,
+            b'`' | b'$' | b'<' | b'>' if c == b'`' || b.get(i + 1) == Some(&b'(') => {
+                let end = if c == b'`' {
+                    backtick_end(command, i)?
+                } else {
+                    paren_subst_end(command, i + 1)?
+                };
+                word.push_str(&command[i..end]);
+                in_word = true;
+                opaque = true;
+                i = end;
+                continue;
+            }
             b'<' if b.get(i + 1) == Some(&b'<') => return None,
             b'>' => {
                 end_word(&mut stage, &mut word, &mut in_word);
@@ -477,9 +569,32 @@ fn statements(command: &str) -> Option<Vec<Statement>> {
                         j += 1;
                     }
                     let t = j;
-                    while b.get(j).is_some_and(|d| !b" \t\n;&|()<>".contains(d)) {
-                        j += 1;
+                    // The target word, stepping over quotes and substitutions
+                    // (`> "$(f)"`, `> out$(date)`) so their bodies are not
+                    // split off as statements of their own.
+                    while let Some(&d) = b.get(j) {
+                        match d {
+                            b'`' => {
+                                j = backtick_end(command, j)?;
+                                opaque = true;
+                            }
+                            b'$' if b.get(j + 1) == Some(&b'(') => {
+                                j = paren_subst_end(command, j + 1)?;
+                                opaque = true;
+                            }
+                            b'"' => {
+                                let e = dquote_end(command, j)?;
+                                let inner = &command[j + 1..e];
+                                opaque |= inner.contains("$(") || inner.contains('`');
+                                j = e + 1;
+                            }
+                            b'\'' => j = command.get(j + 1..)?.find('\'')? + j + 2,
+                            b'\\' => j += 2,
+                            _ if b" \t\n;&|()<>".contains(&d) => break,
+                            _ => j += 1,
+                        }
                     }
+                    j = j.min(b.len());
                     if &command[t..j] != "/dev/null" {
                         stage.writes = true;
                     }
@@ -506,6 +621,7 @@ fn statements(command: &str) -> Option<Vec<Statement>> {
                     start,
                     end: i,
                     stages: std::mem::take(&mut stages),
+                    opaque: std::mem::take(&mut opaque),
                 });
                 let mut j = i + 1;
                 if (c == b'&' || c == b'|') && b.get(j) == Some(&c) {
@@ -534,6 +650,7 @@ fn statements(command: &str) -> Option<Vec<Statement>> {
         start,
         end: b.len(),
         stages,
+        opaque,
     });
     Some(out)
 }
@@ -604,6 +721,17 @@ fn read_only_stage(stage: &Stage) -> bool {
         "tdd" | "reviewgate" => rest.get(1) == Some(&"skip"),
         _ => false,
     }
+}
+
+/// Basename of the program a stage runs, past the introducing keywords.
+fn program(stage: &Stage) -> Option<&str> {
+    let first = stage.words.iter().map(String::as_str).find(|w| {
+        !matches!(
+            *w,
+            "if" | "then" | "else" | "elif" | "do" | "while" | "until" | "!" | "time"
+        )
+    })?;
+    first.rsplit('/').next()
 }
 
 fn is_keyword(w: &str) -> bool {
@@ -685,15 +813,20 @@ pub fn session_written_paths(transcript_path: &str) -> Determination<SessionWrit
     for call in &bash {
         let cwd = call.cwd.as_deref().map(Path::new);
         for text in writing_statements(&call.command) {
+            let mut after_cd = false;
             for raw in text.split_whitespace() {
                 let w = raw.trim_matches(|c: char| matches!(c, '"' | '\'' | '>' | ';' | '(' | ')'));
+                // A `cd` target is a directory even without `/` or `.`.
+                let cd_target = std::mem::replace(&mut after_cd, matches!(w, "cd" | "pushd"));
                 if w.is_empty() || w.starts_with('-') {
                     continue;
                 }
                 let p = Path::new(w);
                 let abs = if p.is_absolute() {
                     p.to_path_buf()
-                } else if let Some(c) = cwd.filter(|_| w.contains('/') || w.contains('.')) {
+                } else if let Some(c) =
+                    cwd.filter(|_| cd_target || w.contains('/') || w.contains('.'))
+                {
                     c.join(p)
                 } else {
                     continue;

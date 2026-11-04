@@ -17,7 +17,7 @@ enforces the SHAPE of migration: the count of raw calls may not RISE above a
 committed baseline. A regression (new raw call added) fails; so does an
 unlocked improvement (a call site migrated away, dropping the count) — the
 latter must be locked in by re-pinning the baseline, mirroring
-`check-fail-open.py --ratchet`'s exact contract (this script is deliberately
+the contract of the retired check-fail-open.py ratchet (this script was
 modelled on it: same baseline-file shape, same three exit codes, same
 "cannot-determine fails closed" discipline for empty discovery / unreadable
 baseline).
@@ -77,7 +77,7 @@ reachable via `.`).
 
 Usage:
   python3 scripts/check-raw-io-ratchet.py                # gate surface, blocking (exit 1 on drift, 2 undetermined)
-  python3 scripts/check-raw-io-ratchet.py --ratchet       # same as default (kept for check-fail-open.py symmetry)
+  python3 scripts/check-raw-io-ratchet.py --ratchet       # same as default (accepted as an alias of the default)
   python3 scripts/check-raw-io-ratchet.py --update-baseline  # re-pin baseline to current count
   python3 scripts/check-raw-io-ratchet.py --list          # print every counted call site (file:line), exit 0 always
 """

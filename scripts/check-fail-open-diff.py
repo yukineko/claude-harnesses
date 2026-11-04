@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Diff-scoped fail-open ratchet: block a commit that ADDS a fail-open swallow.
 
-`check-fail-open.py --ratchet` compares ONE whole-workspace count against a
-pinned baseline, and no hook ever ran it (backlog 2133b6fe): the count had
-drifted from the pin (63 pinned, 43 live at 74aad11f) without anyone noticing.
-It also cannot simply be wired into pre-commit. Under CLAUDE.md §8 other
+The former whole-workspace burn-down mode of check-fail-open.py compared ONE count
+against a pinned baseline, and no hook ever ran it (backlog 2133b6fe): the count
+had drifted from the pin (63 pinned, 43 live at 74aad11f) without anyone
+noticing. It was retired by user ruling 2026-11-03; this per-file gate is the
+gate. A whole-workspace count also could not simply be wired into pre-commit. Under CLAUDE.md §8 other
 sessions are always committing in parallel, so a whole-workspace number moves
 under a commit that did not cause the move, and that commit would be blocked
 for someone else's change.
@@ -83,7 +84,7 @@ its blob in every parent of P are never read.
 
 Scope and patterns are check-fail-open.py's `--all` surface: `crates/*/src/**`
 `.rs` and `scripts/*.sh`, with every pattern (blocking and advisory classes
-alike, like `--ratchet`) and the same ALLOWLIST.
+alike, as in the `--all` advisory output) and the same ALLOWLIST.
 
 Exit codes: 0 no file's count rose / 1 a staged file adds a swallow /
 2 cannot determine (no HEAD, git failure, unreadable MERGE_HEAD, a non-blob

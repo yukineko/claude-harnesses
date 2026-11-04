@@ -5,6 +5,7 @@ mod config;
 mod dedup;
 mod divergence;
 mod driver;
+mod edit_repro;
 mod evidence;
 mod github;
 mod hooks;
@@ -21,7 +22,7 @@ mod audit_b1_0_tests;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use harness_core::boundary;
-use harness_core::hook::{read_stdin, run_hook, HookInput};
+use harness_core::hook::{run_hook, try_read_stdin, HookInput};
 use harness_core::verdict::{Determination, Required};
 use serde_json::json;
 use std::collections::HashSet;
@@ -285,6 +286,10 @@ enum Command {
         /// New status
         #[arg(long)]
         status: Option<String>,
+
+        /// Replace a PENDING task's repro: run as `add --repro-test`; only `reproduced` is stored
+        #[arg(long = "repro-test")]
+        repro_test: Option<String>,
     },
 
     /// SessionStart hook: reads stdin JSON and injects pending tasks as context
@@ -1615,32 +1620,29 @@ fn run(cli: Cli) -> Result<()> {
             tags,
             notes,
             status,
+            repro_test,
         } => {
             let tasks_path = write_store_path("backlog edit")?;
-            let tags_opt = if tags.is_empty() { None } else { Some(tags) };
-            store::edit(
-                &tasks_path,
-                &id,
-                title.as_deref(),
-                tags_opt,
-                notes.as_deref(),
-                status.as_deref(),
-            )?;
+            let fields = edit_repro::Fields {
+                title: title.as_deref(),
+                tags: if tags.is_empty() { None } else { Some(tags) },
+                notes: notes.as_deref(),
+                status: status.as_deref(),
+            };
+            // GitHub mirror: none needed here, see the `edit_repro` module docs.
+            edit_repro::edit_with_repro_test(&tasks_path, &id, fields, repro_test.as_deref())?;
             println!("updated: {id}");
-            // No mirror close here, and none is needed: a terminal transition
-            // mirrors its close whichever verb performed it, and since
-            // close-evidence `edit` is not such a verb — `store::edit` refuses
-            // every `--status` but `pending` / `failed`, with nothing written,
-            // so `edit --status done|cancelled` can no longer finish work
-            // locally while the issue stays open (the gap that once made this
-            // arm call `mirror_close_for`). The verbs that CAN reach a terminal
-            // state — `done`, `cancel` — each mirror inline.
-            // Pinned by tests/mirror_gaps_after_0323.rs
-            // (`edit_status_terminal_is_refused_and_leaves_store_and_issue_untouched`).
         }
 
         Command::SessionStart => {
-            let raw = read_stdin();
+            // A stdin READ ERROR takes the same visible-failure path as a
+            // malformed payload (backlog 8004d80f).
+            let raw = match try_read_stdin() {
+                Ok(raw) => raw,
+                Err(e) => anyhow::bail!(
+                    "backlog session-start: stdin read failed: {e}; backlog context was NOT injected"
+                ),
+            };
             // Don't silently coerce malformed stdin to an empty default —
             // that would run session-start against a blank input and could
             // mis-key the project. Nor exit 0 with empty stdout: that is

@@ -22,6 +22,11 @@ use std::time::Duration;
 
 use wait_timeout::ChildExt;
 
+mod mechanical;
+pub use mechanical::mechanical_cmd;
+#[cfg(test)]
+use mechanical::parse_argv;
+
 /// How many trailing lines of raw output to retain in [`FailureDigest::output_tail`].
 const OUTPUT_TAIL_LINES: usize = 20;
 
@@ -1653,72 +1658,6 @@ pub fn mechanical_skip_verdict(
     (out, !passed)
 }
 
-/// Tokenize a command string into argv respecting shell quoting/escaping
-/// (e.g. `"cargo test -- --path \"a b/c\""` keeps `a b/c` as one token),
-/// unlike `split_whitespace` which would split it into `a`, `b/c"`. Falls
-/// back to `split_whitespace` on unterminated-quote input that `shlex`
-/// cannot parse, so a malformed hint still yields a best-effort argv rather
-/// than silently dropping the mechanical check.
-fn parse_argv(s: &str) -> Vec<String> {
-    shlex::split(s).unwrap_or_else(|| s.split_whitespace().map(String::from).collect())
-}
-
-/// Extract a runnable command from a done_criteria string for mechanical gate
-/// checking. Returns `None` when no mechanical check can be derived (the LLM
-/// verifier is then required). This is about *runnability* only: it returns
-/// the FIRST runnable command and says nothing about whether that command
-/// discharges the whole criteria. [`classify_criteria`] layers the behavioral
-/// veto and [`criteria_coverage_for`] (fed THIS function's returned argv)
-/// layers the coverage veto on top.
-///
-/// `mechanical_check_hint` is the interpreter-declared, structured
-/// [`crate::model::Task::mechanical_check`] fact. When `Some`, its `cmd` is
-/// authoritative and returned as-is (split into argv). Otherwise: the first
-/// backticked span whose head is an [`is_criteria_runner`], then recognised
-/// runner prose (`cargo test`, `npm test`, pytest via [`prose_pytest_argv`],
-/// `go test`).
-pub fn mechanical_cmd(
-    done_criteria: &str,
-    mechanical_check_hint: Option<&crate::model::MechanicalCheck>,
-) -> Option<Vec<String>> {
-    if let Some(check) = mechanical_check_hint {
-        return Some(parse_argv(&check.cmd));
-    }
-    // Prefer an explicit backtick command: `cargo test -p condukt`
-    if let Ok(re) = regex::Regex::new(r"`([^`]+)`") {
-        for caps in re.captures_iter(done_criteria) {
-            if let Some(inner) = caps.get(1) {
-                let argv = parse_argv(inner.as_str());
-                if argv.first().is_some_and(|p| is_criteria_runner(p)) {
-                    return Some(argv);
-                }
-            }
-        }
-    }
-    // Fall back to recognised test-runner prose.
-    let lower = done_criteria.to_lowercase();
-    if lower.contains("cargo test") {
-        let mut cmd = vec!["cargo".to_string(), "test".to_string()];
-        if let Ok(re2) = regex::Regex::new(r"-p\s+([A-Za-z0-9_-]+)") {
-            if let Some(c) = re2.captures(done_criteria).and_then(|c| c.get(1)) {
-                cmd.push("-p".to_string());
-                cmd.push(c.as_str().to_string());
-            }
-        }
-        return Some(cmd);
-    }
-    if lower.contains("npm test") {
-        return Some(vec!["npm".to_string(), "test".to_string()]);
-    }
-    if lower.contains("pytest") {
-        return Some(prose_pytest_argv(done_criteria));
-    }
-    if lower.contains("go test") {
-        return Some(vec!["go".to_string(), "test".to_string()]);
-    }
-    None
-}
-
 /// Extract the pytest command as written in prose: keeps an optional
 /// `python[3] -m` prefix and the argument tokens that follow the FIRST
 /// `pytest` (paths, flags, and the value of a value-taking flag such as
@@ -2211,7 +2150,7 @@ mod tests {
     /// `split_whitespace` which would split it in two.
     #[test]
     fn parse_argv_respects_quoted_spaces() {
-        let argv = parse_argv(r#"cargo test -- --path "a b/c""#);
+        let argv = parse_argv(r#"cargo test -- --path "a b/c""#).unwrap();
         assert_eq!(
             argv,
             vec!["cargo", "test", "--", "--path", "a b/c"]
@@ -2234,17 +2173,27 @@ mod tests {
         assert_eq!(argv, vec!["pytest".to_string(), "tests/a b.py".to_string()]);
     }
 
-    /// Unterminated-quote input (unparseable by shlex) falls back to
-    /// split_whitespace rather than dropping the mechanical check entirely.
+    /// User ruling 2026-11-03: an unterminated quote (unparseable by shlex)
+    /// yields NO argv. There is no `split_whitespace` fallback; the criteria is
+    /// undetermined and the LLM verifier is required (fail-closed).
     #[test]
-    fn parse_argv_falls_back_on_unterminated_quote() {
-        let argv = parse_argv(r#"cargo test "unterminated"#);
+    fn parse_argv_unterminated_quote_yields_none() {
+        assert_eq!(parse_argv(r#"cargo test "unterminated"#), None);
+    }
+
+    /// Same property through `mechanical_cmd`: neither the hint path nor the
+    /// backtick path (nor the prose fallback behind it) returns a command.
+    #[test]
+    fn mechanical_cmd_unterminated_quote_yields_none() {
+        let hint = crate::model::MechanicalCheck {
+            cmd: r#"cargo test "unterminated"#.to_string(),
+            expect_exit: None,
+            expect_substring: None,
+        };
+        assert_eq!(mechanical_cmd("irrelevant prose", Some(&hint)), None);
         assert_eq!(
-            argv,
-            vec!["cargo", "test", "\"unterminated"]
-                .into_iter()
-                .map(String::from)
-                .collect::<Vec<_>>()
+            mechanical_cmd(r#"`cargo test -p demo -- "never_closed` passes"#, None),
+            None
         );
     }
 

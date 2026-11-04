@@ -192,7 +192,7 @@ indistinguishable from "verified current".
 
 (b) applies only to plugins that HAVE a binary, and that is decided from the
 SOURCE (does crates/<name> declare a bin target?), never from whether one is
-present in the deployed tree. Three plugins — daily-report, scout and flow
+present in the deployed tree. Four plugins — daily-report, scout, refactor and flow
 (skills-only since 0.2.7, when its one hook was retired and the crate went with
 it) — are skills and hooks only, with no Rust crate at all; they have no compiled
 artifact whose
@@ -544,8 +544,8 @@ def _crate_ships_binary(crate):
     decide whether a binary was expected would let that failure certify itself.
 
     A plugin may legitimately ship no binary at all (skills/ and hooks/ only,
-    with no Rust crate under crates/<name> — daily-report, scout and flow are the
-    three such plugins today). Those have no compiled artifact whose provenance could
+    with no Rust crate under crates/<name> — daily-report, scout, flow and refactor are the
+    four such plugins today). Those have no compiled artifact whose provenance could
     drift, and are the sole case allowed to pass with no manifest.
     """
     crate_dir = os.path.join(CRATES, crate)

@@ -59,10 +59,18 @@
   ブロックするのは (1) bypass ledger に未ゲート commit が残っていないか（`scripts/gate-bypass.py`）、
   (2) push される各 tip の `cargo check --workspace --all-targets`（使い捨て worktree に checkout して
   判定する。作業ツリーではない）、(3) 同じ tip に対する `scripts/check-compile-fail.py`（trybuild の
-  compile-fail 型契約）、(4) 同じ tip に対する `specguard map gate-check`（gate crate の変更が spec-doc
+  compile-fail 型契約。target ごとに、入力〈その crate と推移的 path 依存の git tree・その crate の依存閉包
+  （全 dep kind・registry/git 依存を含む全 package）の resolved package id 一覧〈`cargo metadata` の
+  `resolve` 由来。`Cargo.lock` ファイル自体は入力にも dirty 判定にも含めないので、閉包外の package
+  だけを動かす lock 変更では cache が当たる〉・root `Cargo.toml`・`rust-toolchain.toml`・`.cargo`・`rustc -vV`/`cargo -V`・スクリプト自身・build 系 env〉の
+  hash が以前 pass した時と一致し、かつ入力が clean な時だけ cargo を飛ばして pass とみなす。入力を
+  判定できない・cache が読めない時は従来どおり実行する。`CHECK_COMPILE_FAIL_NO_CACHE=1` で常に全実行）、(4) 同じ tip に対する `specguard map gate-check`（gate crate の変更が spec-doc
   binding か理由付き ack で覆われているか。backlog 0c277117、2026-10-02 配線）。いずれも判定不能は
   block に倒す。advisory は GATE_CRATES 変更検知・rollout drift・autonomy chain の 3 本で、これらは
-  push を止めない。
+  push を止めない。各フェーズの所要秒数は判定に関与しない observability として stderr の 1 行と
+  `prepush-timing.jsonl`（git common dir）に記録される。typecheck の前に、肥大した共有 target dir を
+  上限付きで掃除する判定に関与しない保守フェーズ（`target-cleanup`。判定不能なら削除しない）がある
+  （詳細はどちらも `docs/repo-operations.md`）。
   この行はかつて「push 自体は止めない設計（fail-soft）」と書いていたが、bypass ledger 以降の実装と
   食い違っていた（CLAUDE.md 第4節: 散文が実装と食い違ったら散文を直す）。chronically-red CI の
   チェックは GitHub Actions 禁止（CLAUDE.md 第7節）に伴い撤去済みで、もう存在しない。
@@ -257,7 +265,7 @@ tdd/condukt の2コピーが実際にドリフトした前例がある以上、�
 
 **当時対象外にした理由**: 発見したタスクの `touched_files` は `scripts/check-gate-crates-sync.py` の
 編集のみを許可しており、`scripts/check-fail-open.py` はスコープ外だった。また「実測ゼロ件」の観点でも、
-`check-fail-open.py` は CI の `fail-open.yml`（`--ratchet` 付き、非バイパス本ゲート）で常時
+`check-fail-open.py` は pre-commit（`check-fail-open-diff.py`）で常時
 稼働しており実測ゼロ件とは言えないため、当時の是正基準（重複**かつ**実測ゼロ件の両方を満たす）を
 満たさず、統合せず次の是正対象の候補として記録するに留めた（別タスクでの追跡を推奨）。
 

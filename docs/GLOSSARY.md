@@ -48,6 +48,7 @@
 | difflog | always-on | SessionStart で HEAD をスナップショット、SessionEnd で git diff サマリを記録する |
 | donegate | always-on | Stop で受け入れコマンドを実行し全 green まで完了を阻止する |
 | evalkit | manual | golden `*.jsonl` を実行し契約劣化で非ゼロ終了するオフライン回帰評価ハーネス |
+| fde | always-on | 未知リポから逐語証拠付き spec を推定・批准後 RED→GREEN。PreToolUse fail-closed で批准前編集ブロック |
 | flow | manual | source（compass/backlog）→executor（condukt）を 1 ループで束ねる統合 driver（`/flow` skill のみ。SessionStart の自動提案は 2026-08-20 に廃止） |
 | fugu-router | always-on | 検証実績から cheap-first でモデル選択する per-model ルーター |
 | gauge | always-on | Stop でトークン/コスト/ツール呼び出し/レイテンシをローカル計測する LLMOps テレメトリ |
@@ -55,10 +56,11 @@
 | hypothesis | always-on | PDO 仮説のライフサイクル管理（作成・検証・棄却・compass 紐づけ） |
 | jev | manual | jev (TypeSafe AI System One) の **advisory 専用**ラッパ。型付き・較正済み判定（Noul/Choice/Score）をランキング・重複検出・人間向け注記にだけ使う。**subscription-native ではない**（課金される第三者クラウド API）ため `TYPESAFE_API_KEY` が無ければ**ネットワーク呼び出し 0 回**で何もしない。`Advice` に clean 相当の variant が無く `Verdict` と結合しないので、ゲート権限を構造的に持てない（第7節）。配線可否の正典は `docs/jev-integration-scenes.md` |
 | overwatch | always-on | project-global 実行台帳＋cross-session 重複ガード（begin 同一 key で live 他 session を skip）＋PDO 進行管理ビュー（各session/backlog/hypothesis/condukt run/compass gap を fail-soft 集約）＋操作(pause/resume/reassign/reap)＋PDO session anchor（Lease に scope/done_criteria、`begin --scope/--done-criteria`、`lease --session`、begin が scope_overlap/possible_duplicate を早期警告） |
-| parallelguard | always-on | 1 セッション内の同時実行数を binary が数えて強制するゲート（GATE crate）。PreToolUse で in-flight な `Bash`（shell プール）と `Task`/`Agent`（subagent プール）を数え、上限（既定それぞれ 3。`HARNESS_MAX_PARALLEL` で下げられるが上げられない）を超える呼び出しを deny する。PostToolUse で slot を返し、ターン境界（SessionStart/UserPromptSubmit/Stop）で台帳を消す。プールを 2 本に分けるのは共有 1 本が deadlock するため（subagent は生存期間ずっと slot を持つので、上限数の subagent が live だとその subagent 自身の `Bash` が全部 deny される）。判定不能（payload 不正・台帳読めない・lock 取れない・書き込み失敗・panic・binary 欠損）は deny （PreToolUse の「無出力 exit 0」は allow そのものなので、沈黙は degrade として使えない） |
+| parallelguard | always-on | 1 セッション内の同時実行数を binary が数えて強制するゲート（GATE crate）。PreToolUse で in-flight な `Bash`（shell プール）と `Task`/`Agent`（subagent プール）を数え、上限（既定それぞれ 3。`HARNESS_MAX_PARALLEL` で下げられるが上げられない）を超える呼び出しを deny する。PostToolUse で slot を返し、ターン境界（SessionStart/UserPromptSubmit/Stop）で台帳を消す。プールを 2 本に分けるのは共有 1 本が deadlock するため（subagent は生存期間ずっと slot を持つので、上限数の subagent が live だとその subagent 自身の `Bash` が全部 deny される）。判定不能（payload 不正・台帳読めない・lock 取れない・書き込み失敗・panic・binary 欠損）は deny （PreToolUse の「無出力 exit 0」は allow そのものなので、沈黙は degrade として使えない）（parked） |
 | playbook | always-on | UserPromptSubmit で関連アトミックノートを予算内でコンテキスト注入する |
 | precommit-audit | always-on | Stop で汎用＋プロジェクトルールを diff に照合し clean まで完了を阻止する |
 | propguard | always-on | done_criteria から 3–5 個の意味的不変条件を導出し fail-closed で Stop を検証する |
+| refactor | manual | 肥大ファイルを 1 コミット 1 モジュールの純粋移動で分割し、各ステップを stdlib 証明ツール（ordered / multiset / tests compare、exit 0/1/2）で挙動保存と示す返済 skill（`/refactor` のみ。ゲートではない） |
 | replaykit | manual | tracekit の run trace を evalkit golden へ再生する回帰ハーネス |
 | reviewgate | always-on | Stop で diff をレビューするコードレビューゲート（既定 mode=off で何もしない。inject/subprocess は opt-in） |
 | runbook | always-on | UserPromptSubmit で `!name` マクロを repo 手順（`.runbook/<name>.md`）に展開する（plugin 名 runbook） |

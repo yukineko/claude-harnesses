@@ -7,6 +7,7 @@ use globset::{Glob, GlobSetBuilder};
 use harness_core::verdict::{Determination, Reason, Required, Verdict};
 
 use crate::config::{Check, Config};
+use crate::record::{self, Record};
 use crate::runner::{self, Outcome};
 
 /// What the git scan could say about the change scope, in the shared
@@ -148,7 +149,6 @@ pub fn evaluate(cfg: &Config, root: &Path) -> GateReport {
                 check,
                 root,
                 cfg.default_timeout_secs,
-                cfg.output_tail_lines,
                 &tmp_dir,
             ));
         } else {
@@ -163,8 +163,58 @@ pub fn evaluate(cfg: &Config, root: &Path) -> GateReport {
     }
 }
 
+/// Move every failing check's temporary log into the durable session record
+/// (`<state_dir>/records/<session>/…`, see [`crate::record`]). Called once the
+/// attempt number is known, on every path after [`evaluate`] (green, block and
+/// give-up) so no temporary log is left behind.
+///
+/// A record that cannot be saved becomes [`Record::NotSaved`] with the reason;
+/// the verdict is untouched (the check still failed, the stop still blocks) and
+/// the display falls back to showing more raw output.
+pub fn save_records(
+    v: &mut GateReport,
+    state_dir: &Path,
+    session: &str,
+    attempt: u32,
+    output_tail_lines: usize,
+) {
+    let tail_lines = output_tail_lines.max(record::FALLBACK_MIN_LINES);
+    for o in v.ran.iter_mut() {
+        if let Record::Pending(tmp) = &o.record {
+            let tmp = tmp.clone();
+            o.record = match record::save(state_dir, session, attempt, &o.name, &tmp) {
+                Ok(saved) => Record::Saved(saved.path, saved.retention),
+                Err(why) => Record::NotSaved {
+                    why,
+                    temp: tmp.exists().then_some(tmp),
+                    tail_lines,
+                },
+            };
+        }
+    }
+}
+
 /// Render one outcome as an indented block for the model / terminal.
+///
+/// A passing check is one line plus its command. A failing check shows only the
+/// decision-relevant digest of its output ([`record::digest`]) and the absolute
+/// path of the full-output record. If no record could be kept, it says so with
+/// the reason and additionally shows the raw tail — more output, never less.
 fn render_outcome(o: &Outcome) -> String {
+    render_outcome_as(o, false)
+}
+
+/// `stable = true` renders the per-run file paths (the record and temporary
+/// logs, which embed a timestamp / pid) as fixed placeholders, for the repeat
+/// identity in [`block_fingerprint`]. Everything else is identical.
+fn render_outcome_as(o: &Outcome, stable: bool) -> String {
+    let shown = |p: &Path, placeholder: &str| -> String {
+        if stable {
+            placeholder.to_string()
+        } else {
+            p.display().to_string()
+        }
+    };
     let mark = if o.passed { "✓" } else { "✗" };
     let detail = if o.timed_out {
         "timed out".to_string()
@@ -180,20 +230,86 @@ fn render_outcome(o: &Outcome) -> String {
         "{mark} {} ({detail}, {:.1}s)\n    $ {}",
         o.name, o.duration_secs, o.cmd
     );
-    if !o.passed {
-        let tail = o.output_tail.trim_end();
-        if !tail.is_empty() {
-            for line in tail.lines() {
-                s.push_str("\n    ");
-                s.push_str(line);
+    if o.passed {
+        return s;
+    }
+    let indent = |s: &mut String, line: &str| {
+        s.push_str("\n    ");
+        s.push_str(line);
+    };
+    for line in record::digest(&o.output_tail) {
+        indent(&mut s, &line);
+    }
+    let (note, tail_lines) = match &o.record {
+        Record::Saved(p, retention) => {
+            indent(&mut s, &format!("full output: {}", shown(p, "<record>")));
+            if let Some(why) = retention {
+                // Visible, never swallowed: old records may now be accumulating.
+                let why = if stable { "<why>" } else { why.as_str() };
+                indent(&mut s, &format!("record retention failed: {why}"));
             }
+            return s;
         }
+        Record::NotSaved {
+            why,
+            temp,
+            tail_lines,
+        } => {
+            let temp = match temp {
+                Some(t) => format!(
+                    " A temporary, unretained copy is at {}.",
+                    shown(t, "<temp>")
+                ),
+                None => String::new(),
+            };
+            (
+                format!("the full output could not be saved to the session record ({why}).{temp}"),
+                *tail_lines,
+            )
+        }
+        Record::Pending(t) => (
+            format!(
+                "the full output was not saved to the session record; temporary log: {}.",
+                shown(t, "<temp>")
+            ),
+            record::FALLBACK_MIN_LINES,
+        ),
+        Record::None => (
+            "the full output was not saved (no record was made).".to_string(),
+            record::FALLBACK_MIN_LINES,
+        ),
+    };
+    indent(&mut s, &note);
+    indent(&mut s, &format!("last {tail_lines} raw lines instead:"));
+    for line in record::raw_tail(&o.output_tail, tail_lines) {
+        indent(&mut s, &format!("  {line}"));
     }
     s
 }
 
 /// The reason string injected back into the model when the stop is blocked.
 pub fn block_reason(v: &GateReport, attempt: u32, max: u32) -> String {
+    block_reason_as(v, attempt, max, false)
+}
+
+/// The repeat-ledger identity of [`block_reason`]: the same text with the
+/// per-run record/temp paths replaced by placeholders. Each attempt's record
+/// file has a fresh timestamped name, so keying the ledger on the displayed
+/// reason would make every block look new and the second-occurrence waiver
+/// (`harness_core::repeat`) unreachable. Passed to `emit_stop_block_keyed`.
+///
+/// The attempt counter (`attempt N/max`) is deliberately KEPT in the
+/// fingerprint: each stop below `max_attempts` has a new attempt number, so the
+/// same failure is never waived as a repeat below the cap — it blocks every
+/// time. The bounded exit for a failure that will not go green is the attempt
+/// cap and its give-up sentinel (`donegate:giveup:<check>`), not the waiver.
+/// The waiver applies only when the whole fingerprint, attempt number included,
+/// recurs (e.g. a counter reset by `reset_after_secs`, or a give-up cycle).
+pub fn block_fingerprint(v: &GateReport, attempt: u32, max: u32) -> String {
+    block_reason_as(v, attempt, max, true)
+}
+
+fn block_reason_as(v: &GateReport, attempt: u32, max: u32, stable: bool) -> String {
     let failing = v.blocking();
     // Report the observation, not an inference about work donegate cannot see.
     // Everything it knows is in `GateReport`: which configured checks ran and
@@ -211,7 +327,7 @@ pub fn block_reason(v: &GateReport, attempt: u32, max: u32) -> String {
     );
     for o in &failing {
         out.push('\n');
-        out.push_str(&render_outcome(o));
+        out.push_str(&render_outcome_as(o, stable));
         out.push('\n');
     }
     let warns = v.warnings();
@@ -233,6 +349,17 @@ pub fn block_reason(v: &GateReport, attempt: u32, max: u32) -> String {
 
 /// A compact human report for manual `donegate gate` runs.
 pub fn human_report(v: &GateReport) -> String {
+    report_lines(v, true)
+}
+
+/// The human report WITHOUT the required failing checks, for a manual run that
+/// blocks: those checks are rendered by [`block_reason`], which is printed right
+/// after on the same stream, so including them here would print them twice.
+pub fn human_context(v: &GateReport) -> String {
+    report_lines(v, false)
+}
+
+fn report_lines(v: &GateReport, include_blocking: bool) -> String {
     let mut out = String::new();
     // Three scopes, three distinct lines. A merely-failed scan must never render
     // as "no git repo" (a false statement about a directory that does have one).
@@ -248,6 +375,9 @@ pub fn human_report(v: &GateReport) -> String {
         Determination::Known(Some(_)) => {}
     }
     for o in &v.ran {
+        if !include_blocking && !o.passed && !o.optional {
+            continue;
+        }
         out.push_str(&render_outcome(o));
         out.push('\n');
     }
@@ -256,6 +386,10 @@ pub fn human_report(v: &GateReport) -> String {
             "skipped (no matching changes): {}\n",
             v.skipped.join(", ")
         ));
+    }
+    if !include_blocking {
+        // The count and the failing checks follow in the block reason.
+        return out.trim_end().to_string();
     }
     let blocking = v.blocking();
     if blocking.is_empty() {
@@ -597,6 +731,7 @@ mod tests {
             spawn_error: None,
             duration_secs: 0.0,
             output_tail: String::new(),
+            record: Record::None,
         });
         let v = failing.verdict();
         assert!(matches!(v, Verdict::Violation(_)), "got {v:?}");
@@ -670,6 +805,7 @@ mod tests {
                 "Diff in src/main.rs at line 10".to_string()
             },
             optional: false,
+            record: Record::None,
         }
     }
 

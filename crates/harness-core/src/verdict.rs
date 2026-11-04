@@ -69,7 +69,7 @@
 //!    flags the hand-written arms (`undetermined-arm-empty-fallback`) and the
 //!    extension-trait call form `.require().unwrap_or_default()` /
 //!    `.require().is_ok()` (`require-ext-erase`, backlog f12c2168) — both
-//!    ADVISORY in that script: printed and counted on the `--ratchet` baseline
+//!    ADVISORY in that script: printed on the `--all` advisory output
 //!    and excluded from its blocking verdict, so existing sites do not block.
 //!    A commit that ADDS a site is blocked by `scripts/check-fail-open-diff.py`
 //!    (pre-commit, a rise-ratchet over every pattern). Both are lexical (a
@@ -553,7 +553,7 @@ impl<T> Determination<T> {
 /// that re-adds `unwrap_or_default` / `is_ok` is flagged at its call sites
 /// (`.require().unwrap_or_default()`, `.require().is_ok()`) by the same
 /// script's `require-ext-erase` pattern — also ADVISORY there: printed and
-/// counted on the `--ratchet` baseline, excluded from that script's blocking
+/// shown on the `--all` advisory output, excluded from that script's blocking
 /// verdict (a newly ADDED site is still blocked at pre-commit by
 /// `scripts/check-fail-open-diff.py`), and lexical only (it cannot see which
 /// trait the method resolves to, nor a method under another name).

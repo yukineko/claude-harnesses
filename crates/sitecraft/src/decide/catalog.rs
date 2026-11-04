@@ -47,6 +47,9 @@ pub struct Question {
     pub text: String,
     /// Allowed answers. Empty means free text.
     pub choices: Vec<String>,
+    /// Multi-select: the answer is a non-empty array of distinct choices
+    /// (rulings D8). In the catalog only `notification.channel` is multi.
+    pub multi: bool,
     /// `None` for a representative question (always asked once the area is
     /// relevant); `Some` for a follow-up asked only when the condition holds.
     pub when: Option<Condition>,
@@ -57,7 +60,8 @@ pub struct Question {
 pub struct Condition {
     /// The question (same area) whose answer gates this one.
     pub question_id: String,
-    /// The follow-up is active iff that question's recorded answer is one of these.
+    /// The follow-up is active iff that question's recorded answer (for a
+    /// multi question: any of its elements) is one of these (any-of, D8).
     pub answer_in: Vec<String>,
 }
 
@@ -67,7 +71,16 @@ fn q(id: &str, text: &str, choices: &[&str]) -> Question {
         id: id.to_string(),
         text: text.to_string(),
         choices: choices.iter().map(|c| (*c).to_string()).collect(),
+        multi: false,
         when: None,
+    }
+}
+
+/// Build a multi-select representative question (rulings D8).
+fn multi(id: &str, text: &str, choices: &[&str]) -> Question {
+    Question {
+        multi: true,
+        ..q(id, text, choices)
     }
 }
 
@@ -294,9 +307,9 @@ fn catalog() -> Vec<Area> {
             "notification",
             "通知",
             vec![
-                q(
+                multi(
                     "channel",
-                    "通知の手段はどれにしますか？（email: メール / web-push: ブラウザのプッシュ通知 / in-app: サイト内の通知 / chat: Slack・Discord 等）",
+                    "通知の手段はどれにしますか？（複数選択可。email: メール / web-push: ブラウザのプッシュ通知 / in-app: サイト内の通知 / chat: Slack・Discord 等）",
                     &["email", "web-push", "in-app", "chat"],
                 ),
                 follow(
@@ -434,14 +447,36 @@ pub fn area_by_id(area_id: &str) -> Determination<Area> {
     }
 }
 
-/// Is `q` active given the area's `answers`?
+/// A recorded answer as seen by an activation condition: a single string, or
+/// (for a multi question) the set of selected elements.
+pub trait AnswerChoice {
+    /// Does the answer (any of its elements, for a multi answer) lie in `set`?
+    fn any_in(&self, set: &[String]) -> bool;
+}
+
+impl AnswerChoice for String {
+    fn any_in(&self, set: &[String]) -> bool {
+        set.contains(self)
+    }
+}
+
+impl AnswerChoice for Vec<String> {
+    fn any_in(&self, set: &[String]) -> bool {
+        self.iter().any(|a| set.contains(a))
+    }
+}
+
+/// Is `q` active given the area's `answers`? A follow-up is active iff its
+/// gate question has a recorded answer and that answer — for a multi answer,
+/// any of its elements (any-of, rulings D8) — is in the condition's set. An
+/// absent gate answer makes the follow-up inactive.
 #[must_use]
-pub fn is_active(q: &Question, answers: &Answers) -> bool {
+pub fn is_active<V: AnswerChoice>(q: &Question, answers: &BTreeMap<String, V>) -> bool {
     match &q.when {
         None => true,
         Some(c) => answers
             .get(&c.question_id)
-            .is_some_and(|a| c.answer_in.contains(a)),
+            .is_some_and(|a| a.any_in(&c.answer_in)),
     }
 }
 

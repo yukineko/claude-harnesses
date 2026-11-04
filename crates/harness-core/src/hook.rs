@@ -157,15 +157,33 @@ impl HookInput {
 /// read stops an oversized or endless stdin from exhausting memory (DoS guard).
 pub const MAX_STDIN_BYTES: u64 = 10 * 1024 * 1024;
 
-/// Read stdin into a String, capped at [`MAX_STDIN_BYTES`]. Errors are swallowed
-/// (returns what was read, possibly empty) so a hook never aborts on a read
-/// hiccup; input past the cap is truncated rather than read unbounded. Reads as
-/// bytes and lossily decodes so a multi-byte char split at the cap can't error.
+/// Read stdin into a String, capped at [`MAX_STDIN_BYTES`]; input past the cap
+/// is truncated rather than read unbounded. Reads as bytes and lossily decodes
+/// so a multi-byte char split at the cap can't error.
+///
+/// A stdin READ ERROR is NOT swallowed: an empty or partial payload would be
+/// indistinguishable from "nothing was piped" / a complete payload (CLAUDE.md
+/// §3: IO failure is cannot-determine). This function therefore refuses by
+/// panicking (user ruling 2026-11-03, backlog 8004d80f). What that panic
+/// becomes depends on where it is raised: inside `gate::run::run_guarded`'s
+/// body it is that barrier's fail-closed block (bounded allow on a consecutive
+/// re-entry); inside [`run_pretooluse_guarded`] it is exit 2 (tool call
+/// blocked); inside [`run_hook`] it is swallowed (exit 0, nothing emitted);
+/// anywhere else (e.g. a gate's `main` before `run_guarded`) it is an uncaught
+/// panic (exit 101), which is NOT a block decision. So callers that can handle
+/// the failure themselves use [`try_read_stdin`]; Stop gates reading before
+/// `gate::run::run_guarded` use `gate::run::read_stop_payload_guarded`.
 pub fn read_stdin() -> String {
     read_capped(std::io::stdin())
 }
 
-/// The pure core of [`read_stdin`]: apply the [`MAX_STDIN_BYTES`] cap and the
+/// Fallible [`read_stdin`]: a read error at any point (including after a
+/// partial read) is `Err`, never a partial `Ok`.
+pub fn try_read_stdin() -> std::io::Result<String> {
+    try_read_capped(std::io::stdin())
+}
+
+/// The pure core of [`try_read_stdin`]: apply the [`MAX_STDIN_BYTES`] cap and the
 /// lossy decode to an arbitrary reader.
 ///
 /// This exists so the cap and the decode can be exercised **without touching
@@ -178,10 +196,26 @@ pub fn read_stdin() -> String {
 /// `hook.rs:158 read_stdin -> read_to_end -> read(2)` for over five minutes
 /// under exactly that fd, while the same binary with stdin on `/dev/null`
 /// finished in 6.3s.
-pub fn read_capped<R: Read>(r: R) -> String {
+pub fn try_read_capped<R: Read>(r: R) -> std::io::Result<String> {
     let mut buf = Vec::new();
-    let _ = r.take(MAX_STDIN_BYTES).read_to_end(&mut buf);
-    String::from_utf8_lossy(&buf).into_owned()
+    r.take(MAX_STDIN_BYTES).read_to_end(&mut buf)?;
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Infallible wrapper over [`try_read_capped`]: same cap and lossy decode, but
+/// a read error (including after a partial read) panics instead of returning
+/// the empty or partial payload (user ruling 2026-11-03, backlog 8004d80f).
+/// The panic is a block only inside `gate::run::run_guarded`; see
+/// [`read_stdin`] for what it becomes elsewhere.
+#[allow(
+    clippy::panic,
+    reason = "user ruling 2026-11-03 (backlog 8004d80f): a stdin read error must refuse, never become an empty/partial Ok payload; the panic is a block only inside run_guarded (swallowed under run_hook, exit 101 elsewhere)"
+)]
+pub fn read_capped<R: Read>(r: R) -> String {
+    match try_read_capped(r) {
+        Ok(s) => s,
+        Err(e) => panic!("stdin read failed: {e} (refusing to return an empty or partial payload)"),
+    }
 }
 
 /// True when stdout is NOT a terminal — i.e. the hook is running headless
@@ -203,24 +237,42 @@ pub fn is_headless() -> bool {
 /// SessionEnd (or any) hook that can fire in an interactive terminal where
 /// stdin has no EOF: blocking there would hang the turn. When stdin is piped
 /// (the normal Claude Code hook path), delegates to [`read_stdin`] to read the
-/// payload with the usual [`MAX_STDIN_BYTES`] cap. Pure: only inspects/reads
-/// the stdin fd.
+/// payload with the usual [`MAX_STDIN_BYTES`] cap; a read error panics there
+/// (see [`read_stdin`]). Use [`try_read_stdin_if_piped`] to get the error.
 pub fn read_stdin_if_piped() -> String {
     read_if_piped(std::io::stdin().is_terminal(), std::io::stdin())
 }
 
-/// The pure core of [`read_stdin_if_piped`]: the terminal check is an argument
-/// rather than an ambient probe of fd 0, and the payload comes from an
+/// Fallible [`read_stdin_if_piped`]: a read error is `Err`.
+pub fn try_read_stdin_if_piped() -> std::io::Result<String> {
+    try_read_if_piped(std::io::stdin().is_terminal(), std::io::stdin())
+}
+
+/// The pure core of [`try_read_stdin_if_piped`]: the terminal check is an
+/// argument rather than an ambient probe of fd 0, and the payload comes from an
 /// arbitrary reader.
 ///
 /// Both branches are therefore reachable from a test without the test
-/// depending on how its own runner happened to wire fd 0. See [`read_capped`]
+/// depending on how its own runner happened to wire fd 0. See [`try_read_capped`]
 /// for why depending on that is not merely flaky but silently verdict-less.
-pub fn read_if_piped<R: Read>(stdin_is_terminal: bool, r: R) -> String {
+pub fn try_read_if_piped<R: Read>(stdin_is_terminal: bool, r: R) -> std::io::Result<String> {
     if stdin_is_terminal {
-        return String::new();
+        return Ok(String::new());
     }
-    read_capped(r)
+    try_read_capped(r)
+}
+
+/// Infallible wrapper over [`try_read_if_piped`]: a read error panics (see
+/// [`read_capped`]; user ruling 2026-11-03, backlog 8004d80f).
+#[allow(
+    clippy::panic,
+    reason = "user ruling 2026-11-03 (backlog 8004d80f): a stdin read error must refuse, never become an empty/partial Ok payload"
+)]
+pub fn read_if_piped<R: Read>(stdin_is_terminal: bool, r: R) -> String {
+    match try_read_if_piped(stdin_is_terminal, r) {
+        Ok(s) => s,
+        Err(e) => panic!("stdin read failed: {e} (refusing to return an empty or partial payload)"),
+    }
 }
 
 /// Run `f`, swallowing any panic. Returns `true` if `f` completed without
@@ -845,29 +897,6 @@ mod tests {
         );
     }
 
-    /// A reader that serves `head` and then fails with an [`std::io::Error`].
-    ///
-    /// [`read_capped`]'s doc comment claims "Errors are swallowed (returns what
-    /// was read, possibly empty)". That is prose about a path no other test
-    /// reaches, so it needs a reader that actually errors part way through.
-    struct ErrAfter {
-        head: Vec<u8>,
-        drained: bool,
-    }
-
-    impl std::io::Read for ErrAfter {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            if self.drained {
-                return Err(std::io::Error::other("synthetic mid-stream read failure"));
-            }
-            let n = self.head.len().min(buf.len());
-            buf[..n].copy_from_slice(&self.head[..n]);
-            self.head.drain(..n);
-            self.drained = self.head.is_empty();
-            Ok(n)
-        }
-    }
-
     /// A reader whose `read` must never be called.
     ///
     /// Panicking is strictly stronger than asserting an empty result: an empty
@@ -924,20 +953,6 @@ mod tests {
             "\u{FFFD}",
             "input that is entirely invalid must still yield the replacement \
              char, not the empty string a swallowed decode error would give"
-        );
-    }
-
-    #[test]
-    fn read_capped_returns_partial_content_when_the_reader_errors_midway() {
-        let got = read_capped(ErrAfter {
-            head: b"partial".to_vec(),
-            drained: false,
-        });
-        assert_eq!(
-            got, "partial",
-            "read_capped's doc comment promises errors are swallowed and what \
-             was read is returned; a reader that serves bytes then fails must \
-             therefore yield those bytes, not the empty string"
         );
     }
 

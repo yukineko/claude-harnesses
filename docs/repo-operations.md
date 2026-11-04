@@ -13,6 +13,20 @@
     に隠蔽・検証バイパス・egress 文言が植わっていないか走査（防御 framing は除外）。ローカルは
     `git config core.hooksPath .githooks` で pre-commit を有効化（速い advisory 層。CI の `injectguard` job が
     非バイパスの本ゲート）。
+- **file-growth ratchet（pre-commit、`file-growth`）** — `python3 scripts/check-file-growth.py`。
+  **staged（index）** の追加/変更 `.rs` / `.py` を `git show :<path>` の行数（末尾改行なしの最終行も
+  1 行と数える）で検査し、2000 行を超えたら block する。既に 2000 行を超えていたファイルは
+  `scripts/check-file-growth.baseline`（`<max_lines> <path>`、`#` 行・空行は無視）に導入時点の行数を
+  上限として記録してあり、その上限を超えたら block する。**上限は下げる方向にしか動かない**:
+  staged の baseline が HEAD の baseline より上限を上げると block。HEAD の baseline に無い 2000 超の
+  新規エントリ（HEAD に baseline 自体が無い場合を含む）は、**HEAD の tree で既にその行数以上ある
+  ファイルの追認**としてだけ許す（上限 ≤ `git show HEAD:<path>` の行数）。HEAD にそのパスが無い・
+  上限が HEAD の行数を超える・HEAD が unborn のときは block（成長の追認は不可）。2000 以下の新規
+  エントリは締める方向なので可。HEAD:<path> を読む git が失敗したら判定不能（exit 2）。
+  下げる・消すのは可。直し方はファイルを分割して 2000 行未満にし、同じ commit でエントリを下げるか
+  消すこと。working tree だけの変更・stage していないファイルは見ない。exit 0 = pass / 1 = 違反
+  （path・行数・上限を表示）/ 2 = 判定不能（git 失敗・baseline の解釈不能行・重複エントリ）で、
+  2 も block する。テスト: `python3 -m unittest scripts/test_check_file_growth.py`。
 - **Continuous-Audit 自動起動導線** — `git config core.hooksPath .githooks` を有効化していれば
   `.githooks/pre-push` が GATE_CRATES（blastguard/propguard/specguard/stuckguard/mutategate/overwatch）配下の
   変更を検知し、`scripts/continuous-audit.sh --dry-run` を勧める advisory メッセージを出す
@@ -27,6 +41,33 @@
   が未検査のまま origin に届いた（`scripts/test_prepush_ref_moved_during_hook.py`）。**この再確認は窓を
   狭めるだけで閉じない** — 再確認から transport の読み直しまでの間に ref が動けば同じことが起きる。
   残余の窓は残っており、race は閉じていない。
+- **pre-push のフェーズ計時（observability のみ）** — `.githooks/pre-push` は各フェーズの wall-clock 秒
+  （`date +%s`）を測る: `bypass-ledger` / `nudges` / `rollout`（スクリプトがある時のみ）/
+  push される sha ごとの `typecheck(<sha8>)`（worktree 作成＋`cargo check`）・`compile-fail(<sha8>)`
+  （trybuild target ごとの内訳つき。pass cache で飛ばした target は秒数の代わりに `skipped`）・`specguard(<sha8>)`（gate crate を触る range か、その diff が取れなかった時のみ）/
+  `cleanup`（検査用 worktree の削除）/ `ref-recheck`。EXIT trap で、block や失敗で抜けた場合も含めて
+  その時点までの計測を `pre-push timing: ...; total <N>s (exit <rc>)` の 1 行で stderr に出し、
+  `$(git rev-parse --git-common-dir)/prepush-timing.jsonl` に 1 push 1 行の JSON（`start` / `shas` /
+  `phases` / `total` / `exit`）を追記する。`date` が使えない時の秒数は `?`（JSON では `null`）。
+  ログを書けない時は 1 行の警告だけを出す。**判定を持たない**: 下流消費者は stderr を読む人間と、
+  遅い push を診断する時に jsonl を読む人間だけで、これを読むゲートは無い。block/allow・exit code・
+  フェーズ順は変えない（trap は入った時の終了コードで exit し直す）。cargo の
+  `Blocking waiting for file lock` は記録しない: hook の cargo 呼び出しはすべて `--quiet`
+  （または stderr を捕捉して失敗時にしか出さない `check-compile-fail.py` 経由）で、cargo はその
+  status 行を `--quiet` で抑止するため、拾うには利用者に見える出力を変える必要がある。
+- **pre-push の共有 target dir の上限付き掃除** — `$GIT_COMMON/prepush-typecheck-target` は push を
+  またいで残り、誰も prune していなかった（2026-11-03 実測: main clone の `debug/deps` に 488,578 entry、
+  最古は 2026-08-06）。typecheck の前の `target-cleanup` フェーズで、`debug/deps` の entry 数が
+  `PREPUSH_TARGET_MAX_DEPS`（既定 20000。非負整数でなければ既定値）を超えていたら target dir ごと
+  `rm -rf` し、その push は cold build になる。entry 数は python3 の `os.scandir` で閾値+1 まで数える
+  （同日実測: `ls -f | awk` 60 秒、全件 scandir 3.55 秒、20001 で打ち切り 0.19 秒）。**削除が破壊側なので、
+  判定不能は削除しない**: python3 が無い・数えられない・別の pre-push の `prepush-typecheck.<pid>` worktree
+  があり pid が生きている・target 配下の `.cargo-lock`（debug / release / `<triple>/debug` /
+  `tests/trybuild[/<triple>]/debug`）のどれかが flock で保持されているかその状態を読めない — いずれも
+  理由を 1 行出して削除せず続行する。lock test から `rm` までの間に始まった cargo は成果物を失って失敗し
+  得るが、それはその push を block する側にしか倒れない。block/allow は変えない。結果は timing の
+  `target-cleanup` フェーズ（`deps_entries_seen` / `threshold` / `action` = kept・removed・skipped-busy・
+  skipped-undetermined・rm-failed）に記録される。
 
 ## 記録そのものの定期監査 — `scripts/record-audit.py`（backlog 0f55003a）
 

@@ -27,7 +27,7 @@ blastguard は Claude Code の **PreToolUse** フックである。エージェ�
   読むインタプリタ（`… | python3 -`、`python3 /dev/stdin`）は判定を拒否する（下の
   「既知の high-frequency deny」節を参照）。
 - **ファイル操作**: 既存ファイルを**空内容で置き換える** Write（＝ファイルの抹消）、
-  および **git 内部**（`.git/**`）を上書きする Write は deny。**保護パス**（下記）への
+  および **git 内部**（`.git/**`）を上書きする Write は deny（保護パスの ask より先に判定するので、保護パスでもある `.git/config`・`.git/hooks/**` への Write も deny のまま）。**保護パス**（下記）への
   Write / Edit / MultiEdit / NotebookEdit は `ask`（人間が答えられない場では deny）。
   **システムディレクトリ**への Write / Edit / MultiEdit / NotebookEdit
   （`/etc/paths.d/x`、`/Library/LaunchDaemons/x.plist`、`/usr/local/bin/x` 等。Bash
@@ -80,7 +80,7 @@ session id 未設定や台帳の IO 失敗では deny のまま。
 `.claude/**`、`**/package.json`、`**/*.toml` / `*.yaml` / `*.yml` / `*.lock`、
 `.config/**` などは除外（allow）する。**ただし `.claude/settings.json` /
 `.claude/settings.local.json` / `.claude/hooks.json` / `.claude/hooks/**` /
-`.githooks/**`、デプロイ済みプラグインの実行ファイルと hook 配線（`.claude/plugins/cache/**/bin/**`・
+`.githooks/**` / `.git/hooks/**` / `.git/config`（`core.hooksPath` を決める。backlog 03885f11）、デプロイ済みプラグインの実行ファイルと hook 配線（`.claude/plugins/cache/**/bin/**`・
 `.claude/plugins/cache/**/hooks/**`。exec bit を外された launcher は `Permission denied` で起動せず、
 finding も出ないので gate が赤ではなく暗転する — backlog 1b82a049。ここでは読み/実行権の剥奪・`rm`・`mv` は deny、
 書き込みは ask〈人間が答えられない場では deny に硬化〉、読み取りと `chmod +x` は allow）
@@ -229,7 +229,7 @@ directory tree` で拒否されたこと。
   コマンドが**ちょうど** `cd D && 残り` の形で、`D` が字面どおりの絶対パス（展開・引用符・
   glob・`~`・`.`/`..` 成分・`cd` のオプションなし）かつ実在する本物のディレクトリに解決され、
   残りに `;`・`|`・改行・`..`・`&&` 以外の `&` が一切無いときに限り、適格性を「残り」単体でも
-  判定する（`src/detect.rs` の `literal_cd_and_rest`）。`&&` だけで繋がれていれば `cd` 失敗時に
+  判定する（`src/detect/rm.rs` の `literal_cd_and_rest`）。`&&` だけで繋がれていれば `cd` 失敗時に
   残りは走らず、別サブシェルにもならないので、残りの相対オペランド（判定時には既に
   `D/<オペランド>` に書き換え済み）は絶対パス表記と同じ判定になる。それ以外の形は従来どおり。
 - **`..` 規則**（0.2.88、独立検証者が 0.2.87 で脱出を実測したための修正）: 位置判定
@@ -372,7 +372,7 @@ git の probe の失敗・タイムアウト（各呼び出し 1.5 秒）・解�
 `rm -rf x 2>/dev/null`）／シェル展開・引用符・glob 文字／単独の `-`、`--`、最初の
 オペランドより後ろのオプション風の語。
 
-優先順位は変わらない: 保護パス（`.git`、`.git/hooks`、`.claude`、`.githooks`、ゲート
+優先順位は変わらない: 保護パス（`.git`、`.git/hooks`、`.git/config`、`.claude`、`.githooks`、ゲート
 設定。linked worktree チェックアウト内側は除く）の `deny` が最初、次に worktree 置き場の `allow`、次に設定ファイル除外、その後に
 この節の判定。ライブラリ利用（`detect::detect`、`SafeRoots::none()`）には一時・
 キャッシュのルートも git probe も無いので、従来の判定のまま。
@@ -548,9 +548,9 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   deny されることはもう無い。opener 自身の書き込み先は上の順で判定し、他の全ルールは
 >   本文を読む。引用無しの区切り・閉じていない本文・インタプリタ/シェルの読み手・
 >   here-document の後のコマンドがあれば従来通り本文も走査する
->   （`src/detect.rs` の `redirect_view_without_quoted_here_document_body`）。
+>   （`src/detect/heredoc.rs` の `redirect_view_without_quoted_here_document_body`）。
 > - **code-interpreter-inline-eval**: 「形」での一律 deny は廃止され、プログラム本文を
->   監査する（`analyze_code_interpreter` / `interpreter_code_verdict`）。破壊的な呼び出し
+>   監査する（`analyze_code_interpreter` / `interpreter_code_verdict`、`src/detect/interpreter.rs`）。破壊的な呼び出し
 >   や破壊的なシェル行を含めば `deny`、保護パスを名指しすれば `ask`、
 >   `python3 -c "print(1)"` のような無害なものは allow（0.2.59）。stdin からプログラムを
 >   読む形（`… | python3 -`、`python3 /dev/stdin`、here-doc）は判定を拒否する。

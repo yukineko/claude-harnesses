@@ -63225,3 +63225,2514 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "345d07d5dfeaf838898bd321094828e8e9ba6301"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "e46c1fa6"
+title = "donegate block_fingerprint includes attempt N/max and duration so a repeat is never recognised"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = "spec ruling 2026-11-03: a repeat below max_attempts is deliberately blocked; the bounded exit is the attempt cap plus the give-up sentinel (giveup_sentinel / refusal_giveup_sentinel tests)"
+created_at = 1793670400
+updated_at = 1793672543
+weight = 0.0
+issue_number = 1491
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1491"
+issue_closed_at = 1793672545
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test quiet_feedback_more -- a_repeat_is_recognised_in_the_normal_flow_with_a_rising_attempt"
+rev = "c1f396421e08a577855d13b7bed11b9a3b60098e"
+observed_at = 1793670400
+detail = """
+exit 101: _recognised_in_the_normal_flow_with_a_rising_attempt
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.48s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/quiet_feedback_more.rs (target/debug/deps/quiet_feedback_more-e74e027558bd0ada)
+error: test failed, to rerun pass `-p donegate --test quiet_feedback_more`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "spec ruling 2026-11-03: a repeat below max_attempts is deliberately blocked; the bounded exit is the attempt cap plus the give-up sentinel (giveup_sentinel / refusal_giveup_sentinel tests)"
+
+[[task]]
+id = "e0085090"
+title = "blastguard FP: quoted git commit -F heredoc body trailer read as relative redirect EOF"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = 'Observed 2026-11-03 in a subagent session (Ask hardened to deny, stalled work). Verbatim reason: [> EOF is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve - it cannot tell whether this lands in a system directory or on a protected gate/config path, and refuses to guess]. Shapes reproduced on 0.2.215 (both ask; the -m equivalents allow): (1) cd ABS && git add QUOTED-PATH && git commit -q -F - <<EOF-quoted with message ending in the Co-Authored-By ... <noreply@anthropic.com> trailer; (2) same with unquoted git add path but a command (git log -1) after the closing EOF. The cd target is an absolute literal path, so could-not-statically-resolve is itself a wrong reason. Suspected location (read, not tested): crates/blastguard/src/detect.rs strip_here_document_body / opener_consumer / permitted_prefix_line (~3865-3990): literal() rejects quoted git add paths and any non-inert line after the close keeps the body, so the trailer > plus the EOF line tokenise as > EOF. Fix must keep controls in the same test file green (real relative > out after cd "$(...)" still asks).'
+created_at = 1793668854
+updated_at = 1793672902
+weight = 0.0
+issue_number = 1489
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1489"
+issue_closed_at = 1793672904
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_opener_misparse_fp_20261103 fp1_quoted_heredoc_after_absolute_cd_is_not_a_relative_redirect"
+rev = "10edd4d8eb70a8d1a5d32ffb842b9ac5a6585125"
+observed_at = 1793668854
+detail = """
+exit 101: piling blastguard v0.2.216 (/Users/yuki/src/.harness-worktrees/blastguard-heredoc-fp/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.11s
+     Running tests/heredoc_opener_misparse_fp_20261103.rs (target/debug/deps/heredoc_opener_misparse_fp_20261103-bb221da0ad197b11)
+error: test failed, to rerun pass `-p blastguard --test heredoc_opener_misparse_fp_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test heredoc_opener_misparse_fp_20261103 fp1_"
+exit = 0
+passed = 1
+rev = "6a3ef5da9909fcf5e796b092f9f49b2be2164e5a"
+observed_at = 1793672880
+output_digest = "sha256:70826d58a7d5922dc0776a077386a5f617944879a96a2a0dec468759b245bfca"
+excerpt = """
+
+running 1 test
+test fp1_quoted_heredoc_after_absolute_cd_is_not_a_relative_redirect ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.35s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/heredoc_opener_misparse_fp_20261103.rs (target/debug/deps/heredoc_opener_misparse_fp_20261103-7cac482ce88762c0)
+"""
+
+[task.closure.red]
+rev = "2cc2d63b66c0dfbf795d282cc05608cc0dcf2fbe"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "ef015a66"
+title = "blastguard FP: backticks in quoted python3 heredoc body read as run-time command word"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-03 in subagent sessions (Ask hardened to deny). First report: cat > /abs/file.md <<EOF-quoted with Markdown backtick body denied with [the command word decide is an expansion whose value only exists at run time - blastguard cannot tell what program this runs]; that cat shape did NOT reproduce on 0.2.215 in tests (pinned as a passing regression test in the same file; the exact original command was not captured). Live reproduced shape: the reporting subagent own python3 - <<PY-quoted call (program doing s.replace(a, Run BACKTICK sitecraft decide purpose --text BACKTICK x)) was denied with [the command word BACKTICK-BACKTICK-sitecraft is an expansion whose value only exists at run time - blastguard cannot tell what program this runs]; the same program without backticks is allowed. In a quoted heredoc the body is never expanded, so backticks are literal. Reason site: crates/blastguard/src/detect.rs ~8629 (CommandWordOrigin NoReachingAssignment/AssignedButUnknowable arm); the body reaches the per-segment command-word loop because strip_here_document_body only removes bodies for cat/tee/git commit readers (python3 is not a data reader), so the inline-eval/segment scan tokenises backtick text inside the python string as a substitution. Control in same file: unquoted heredoc body with $(rm -rf /) must stay not-allowed."
+created_at = 1793668869
+updated_at = 1793672924
+weight = 0.0
+issue_number = 1490
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1490"
+issue_closed_at = 1793672926
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_opener_misparse_fp_20261103 fp2_backticks_in_quoted_python_heredoc_body_are_not_command_words"
+rev = "10edd4d8eb70a8d1a5d32ffb842b9ac5a6585125"
+observed_at = 1793668869
+detail = """
+exit 101: rds
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.33s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/heredoc_opener_misparse_fp_20261103.rs (target/debug/deps/heredoc_opener_misparse_fp_20261103-bb221da0ad197b11)
+error: test failed, to rerun pass `-p blastguard --test heredoc_opener_misparse_fp_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test heredoc_opener_misparse_fp_20261103 fp2_"
+exit = 0
+passed = 2
+rev = "6a3ef5da9909fcf5e796b092f9f49b2be2164e5a"
+observed_at = 1793672905
+output_digest = "sha256:8fe50f6208f3ec12bf4dac6197211b632f21db236f157f5f286c87619d8b130e"
+excerpt = """
+
+running 2 tests
+test fp2_backticks_in_quoted_python_heredoc_body_are_not_command_words ... ok
+test fp2_backticks_in_quoted_heredoc_body_are_not_command_words ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.50s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/heredoc_opener_misparse_fp_20261103.rs (target/debug/deps/heredoc_opener_misparse_fp_20261103-7cac482ce88762c0)
+"""
+
+[task.closure.red]
+rev = "2cc2d63b66c0dfbf795d282cc05608cc0dcf2fbe"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "61558e27"
+title = "blastguard FP3: python3 - <<'EOF' program naming .git only as string data is asked as a protected gate/config path"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-03 run-20261103-102800-88064. Cause: interpreter_program_verdict runs exclude::touches_protected on every whitespace-free string literal at EVERY quote layer; in the live shape .git is a string nested inside a Python string literal (Rust source being inserted). NO SOUND DISCRIMINATOR FOUND (2026-11-03, blastguard 0.2.218): ignoring protected names at nested layers loses protection measured on HEAD 2cc2d63b, where each of these is caught ONLY at the nested layer: (1) subprocess.run(["python3","-c","open('.git/hooks/pre-commit','w').write('x')"]) - the argv re-join does not catch it; (2) '# it''s here' comment then open(".git/hooks/pre-commit","w") - quoted_string_literals mis-nests on the apostrophe; (3) open('".git/hooks/pre-commit"'.strip('"'),'w'). Separating these from FP3 needs to know whether a literal is executed or turned into a path (data flow), which the lexer cannot answer. Needs a human ruling or a real per-language parser.
+user ruling 2026-11-03: accepted as a limit. No sound discriminator: ignoring .git at nested quote layers loses 3 measured real .git/hooks writes (HEAD 2cc2d63b). The FP fails toward Ask (restrictive side); workaround is the standing Write-tool route."""
+created_at = 1793672949
+updated_at = 1793690053
+weight = 0.0
+issue_number = 1492
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1492"
+issue_closed_at = 1793690055
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_stdin_git_string_fp_20261103 fp3_"
+rev = "6a3ef5da9909fcf5e796b092f9f49b2be2164e5a"
+observed_at = 1793672949
+detail = """
+exit 101: ite
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.38s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/python_stdin_git_string_fp_20261103.rs (target/debug/deps/python_stdin_git_string_fp_20261103-752bb3b1e3271a9d)
+error: test failed, to rerun pass `-p blastguard --test python_stdin_git_string_fp_20261103`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "user ruling 2026-11-03: accepted as a limit. No sound discriminator: ignoring .git at nested quote layers loses 3 measured real .git/hooks writes (HEAD 2cc2d63b). The FP fails toward Ask (restrictive side); workaround is the standing Write-tool route."
+
+[[task]]
+id = "61666b2f"
+title = "guard-maintree-bash refuses a command that never touches main when another process's git merge is in its pre-merge-commit window"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "cancelled"
+notes = """
+Observed 2026-11-01 ~01:18: cargo test --manifest-path <own worktree>/Cargo.toml -p blastguard refused by scripts/guard-maintree-bash.py (concurrent_merge wording: ORIG_HEAD rewritten, HEAD unmoved, no MERGE_HEAD) while another agent's git merge --no-ff into main was in flight. 2dee8b0e/in_flight_merge_window covers only a later merge of the SAME command after an integration HEAD move. Limit: on-disk state alone is identical for foreign vs own-command window; fix needs another signal (e.g. cwd/command not in main, or merge-process liveness). Control test (own write in main stays refused) passes today. NOT FIXED BY USER RULING 2026-11-01 (session c5b9c02b): no sound signal proves the in-flight merge belongs to another process. Each candidate was tested and found unsound: (a) process ancestry, since a backgrounded child is reparented to pid 1, a merge can be delegated to a pre-existing daemon, and all agent shells share one claude parent; (b) Pre-recorded markers, since a terminal merge leaves none and an orphan persists up to 24h; (c) cwd and argv. The disk-only extension is unsafe: `git reset -q HEAD; git cherry-pick -n <branch>` in main reproduces every in_flight_merge_window disk signal with HEAD unmoved, and that state never resolves. The user declined the relaxed rule (disk evidence plus a live `git merge` process in main). The guard stays fail-closed; the false refusal is accepted.
+user ruling 2026-11-01, confirmed 2026-11-03: accepted as a limit. No sound signal proves an in-flight merge in main belongs to another process; the guard stays fail-closed and the false refusal is accepted."""
+created_at = 1793464948
+updated_at = 1793690056
+weight = 0.0
+issue_number = 1481
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1481"
+issue_closed_at = 1793690058
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_foreign_merge_window.py"
+rev = "d50ec5554b0a01b0df54bcb945f5cfa7df142899"
+observed_at = 1793464948
+detail = """
+exit 1: nto a worktree.
+
+scripts/test_guard_maintree_bash_foreign_merge_window.py:100: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_foreign_merge_window.py::ForeignMergeWindow::test_foreign_merge_window_does_not_refuse_unrelated_command
+========================= 1 failed, 1 passed in 2.09s =========================="""
+
+[task.closure]
+reason = "discard"
+discard_reason = "user ruling 2026-11-01, confirmed 2026-11-03: accepted as a limit. No sound signal proves an in-flight merge in main belongs to another process; the guard stays fail-closed and the false refusal is accepted."
+
+[[task]]
+id = "1ea85cbd"
+title = "[sitecraft-capabilities:R1] 目的を decisions.toml の [purpose] text に記録でき、未記録なら sitecraft decide check が exit 1 で記録方法を案内する。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R1",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R1 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: 目的を decisions.toml の [purpose] text に記録でき、未記録なら sitecraft decide check が exit 1 で記録方法を案内する。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - sitecraft decide purpose --text "<要約>" の後、sitecraft/decisions.toml の [purpose] text に前後空白を除いた空でない文字列が保存されている
+  - 空白だけの --text を渡すと decisions.toml は変わらず exit 1
+  - [purpose] が無い（または text が空白のみ）状態で他の記録が揃っていても sitecraft decide check が exit 1 になり、出力に `sitecraft decide purpose --text` の案内を含む
+  - sitecraft decide next は purpose を問いとして返さない
+  - 値の違う purpose を再記録すると [[history]] に area = "purpose", question = "text" の行が 1 つ追記される
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D1
+  - docs/specs/sitecraft-capabilities-rulings.md#D8
+"""
+created_at = 1793674776
+updated_at = 1793677545
+weight = 0.0
+issue_number = 1494
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1494"
+issue_closed_at = 1793677547
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r1_purpose"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674776
+detail = """
+exit 101: arness-worktrees/session-6d697f68/crates/sitecraft)
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling flate2 v1.1.9
+   Compiling png v0.18.1
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s
+     Running tests/spec_r1_purpose.rs (target/debug/deps/spec_r1_purpose-74e46e048b59888c)
+error: test failed, to rerun pass `-p sitecraft --test spec_r1_purpose`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r1_purpose"
+exit = 0
+passed = 10
+rev = "eb23ef8a03d19042a9ea8b78eeb17a8a91e70f74"
+observed_at = 1793677527
+output_digest = "sha256:5bc236cff0cb0295d629ac56c4dbd682107e4c72ae0d6c0492990a71423aaec2"
+excerpt = """
+
+running 10 tests
+test check_with_purpose_and_all_areas_is_clean ... ok
+test next_never_asks_purpose_when_everything_else_is_settled ... ok
+test blank_purpose_on_absent_record_is_exit_1_and_creates_nothing ... ok
+test next_never_asks_purpose_on_an_empty_record ... ok
+test check_with_blank_purpose_text_is_exit_1_with_the_purpose_hint ... ok
+test blank_purpose_text_is_exit_1_and_changes_nothing ... ok
+test purpose_on_absent_record_creates_it ... ok
+test purpose_text_is_recorded_trimmed ... ok
+test check_without_purpose_is_exit_1_with_the_purpose_hint ... ok
+test rerecording_a_different_purpose_appends_one_history_row ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s
+
+   Compiling sitecraft v0.1.7 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.12s
+     Running tests/spec_r1_purpose.rs (target/debug/deps/spec_r1_purpose-e71b3c79f0d3dfd1)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "0191013a"
+title = "[sitecraft-capabilities:R7] sitecraft decide check は、D7 の閉じた 6 行の規則表（W1, V1〜V5）でカタログ回答の組を検査する。violation は exit 1、W1 は終了コードを変えない warning とする。domain 問いは判定しない。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R7",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R7 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: sitecraft decide check は、D7 の閉じた 6 行の規則表（W1, V1〜V5）でカタログ回答の組を検査する。violation は exit 1、W1 は終了コードを変えない warning とする。domain 問いは判定しない。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - 規則表は crates/sitecraft/src/decide/ 内にあり、W1, V1, V2, V3, V4, V5 のちょうど 6 行で、条件は D7 の表のとおり
+  - 6 規則のそれぞれについて、発火する例と発火しない例のテストがあり、どちらも pass する
+  - V1〜V5 が発火すると exit 1 になり、出力に `<id>: <表示文>` と関与した (area, question, answer) が並ぶ
+  - W1（auth.relevance=relevant かつ exposure.relevance=irrelevant）だけが成立する記録では、stderr に `warning: W1: …` が出て、終了コードは W1 が無い場合と同じ（ほかが揃っていれば 0）
+  - 記録の無い回答（領域 irrelevant・follow-up 非活性・未回答）を参照する条件項は偽として評価する。multi の回答は、いずれかの要素が集合に含まれれば真
+  - domain 問いの回答をどう変えても、規則表の判定は変わらない
+  - SKILL.md の Phase 4 は、done の後に LLM が回答一覧（domain 問いを含む）を読み直し、食い違いがあれば AskUserQuestion で確認する手順を持つ
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D7
+  - docs/specs/sitecraft-capabilities-rulings.md#C1
+  - docs/specs/sitecraft-capabilities-rulings.md#C3
+  - docs/specs/sitecraft-capabilities-rulings.md#U4
+"""
+created_at = 1793674799
+updated_at = 1793677563
+weight = 0.0
+issue_number = 1500
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1500"
+issue_closed_at = 1793677566
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r7_rules"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674799
+detail = """
+exit 101:  16 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/spec_r7_rules.rs (target/debug/deps/spec_r7_rules-03fc873c1fc6c105)
+error: test failed, to rerun pass `-p sitecraft --test spec_r7_rules`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r7_rules"
+exit = 0
+passed = 16
+rev = "eb23ef8a03d19042a9ea8b78eeb17a8a91e70f74"
+observed_at = 1793677548
+output_digest = "sha256:2205a365e772928a6c28e9152807c26dc1f9234a202dd9cc2106de05faad3fcd"
+excerpt = """
+
+running 16 tests
+test skill_phase_4_rereads_the_answers_and_asks_about_contradictions ... ok
+test the_rule_table_lives_in_src_decide_with_exactly_six_ids ... ok
+test v2_fires_on_static_hosting_with_local_disk_files ... ok
+test v4_does_not_fire_without_an_admin_ui_or_with_login ... ok
+test v3_does_not_fire_for_a_single_user_or_with_login ... ok
+test v1_fires_on_static_hosting_with_server_side_processing ... ok
+test v2_does_not_fire_for_object_storage_or_an_inactive_follow_up ... ok
+test v1_does_not_fire_for_browser_processing_or_server_hosting ... ok
+test v4_fires_on_an_admin_ui_without_login ... ok
+test v5_fires_on_failure_notification_without_notifications ... ok
+test w1_does_not_change_the_exit_code_of_a_pending_record ... ok
+test w1_fires_on_auth_relevant_with_exposure_irrelevant ... ok
+test v3_fires_on_several_users_without_login ... ok
+test w1_does_not_fire_when_exposure_is_relevant_or_auth_irrelevant ... ok
+test v5_does_not_fire_for_retry_or_with_notifications ... ok
+test domain_answers_never_change_the_rule_verdict ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+   Compiling sitecraft v0.1.7 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.53s
+     Running tests/spec_r7_rules.rs (target/debug/deps/spec_r7_rules-fc93c4901a1c36b7)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "5b588d44"
+title = "[sitecraft-capabilities:R8] 回答の複数選択（multi）と補足（--note）を記録でき、follow-up は any-of で活性化し、値が変わる再記録は [[history]] に追記されて changed 行を出す。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R8",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R8 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: 回答の複数選択（multi）と補足（--note）を記録でき、follow-up は any-of で活性化し、値が変わる再記録は [[history]] に追記されて changed 行を出す。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - カタログで multi = true なのは notification.channel だけ。decide add-question --multi で domain 問いを multi にできる
+  - multi の問いは --answer の繰り返しを配列で保存する（1 個でも配列）。空要素・重複・choices 外の要素は記録を変えずに失敗終了する。multi でない問いへの --answer 2 個以上も同じく失敗終了する
+  - multi の問いに旧形式の文字列があれば 1 要素の配列として読む。multi でない問いに配列があれば exit 2
+  - channel=[web-push, email] と記録すると、decide next が email-sender を問う
+  - --note はカタログ回答なら [areas.<a>.notes] <q>、domain 問いなら [[questions]] の note に保存する。--note を付けない再記録は既存の note を残す
+  - 値（回答・relevance・note・purpose・capability）が変わる記録ごとに [[history]] に {area, question, old, new, at}（at は UTC RFC 3339、note の変更は question = "<q>#note"）が追記され、stdout に `changed: <old> -> <new>` が 1 行出る
+  - 同じ値の再記録では history が増えず、changed も出ない
+  - follow-up の剪定で消える回答は {…, new = "", pruned = true} として history に残る
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D8
+"""
+created_at = 1793674802
+updated_at = 1793677583
+weight = 0.0
+issue_number = 1501
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1501"
+issue_closed_at = 1793677586
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r8_multi_history"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674802
+detail = """
+exit 101:  measured; 0 filtered out; finished in 1.07s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.53s
+     Running tests/spec_r8_multi_history.rs (target/debug/deps/spec_r8_multi_history-6a6507a76d14fae0)
+error: test failed, to rerun pass `-p sitecraft --test spec_r8_multi_history`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r8_multi_history"
+exit = 0
+passed = 13
+rev = "eb23ef8a03d19042a9ea8b78eeb17a8a91e70f74"
+observed_at = 1793677566
+output_digest = "sha256:fcb018ab2f993f5511c5adaceab39528492d4124e886784cca44c4c5ecc2f8ce"
+excerpt = """
+
+running 13 tests
+test legacy_string_under_channel_reads_as_one_element ... ok
+test array_under_a_non_multi_question_is_exit_2 ... ok
+test non_multi_domain_question_rejects_two_answers ... ok
+test domain_question_can_be_multi ... ok
+test channel_is_multi_and_stores_an_array ... ok
+test any_of_channel_activates_email_sender ... ok
+test changed_answer_appends_history_and_prints_one_changed_line ... ok
+test invalid_multi_answers_change_nothing ... ok
+test notes_are_stored_and_kept ... ok
+test pruned_follow_up_is_kept_in_history ... ok
+test same_value_rerecord_adds_no_history_and_no_changed_line ... ok
+test relevance_and_note_changes_are_history_rows ... ok
+test only_channel_is_multi_in_the_catalog ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.31s
+
+   Compiling sitecraft v0.1.7 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/spec_r8_multi_history.rs (target/debug/deps/spec_r8_multi_history-b8a3e1c58d693b40)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "91c69f00"
+title = "[sitecraft-capabilities:R9] classify の dedicated-harness 出力に description と reuse を加え、ユーザーが --confirm-fit yes を記録するまで既存 plugin の再利用を許可しない。simple / dedicated-harness の境界を SKILL に明記する。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R9",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R9 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: classify の dedicated-harness 出力に description と reuse を加え、ユーザーが --confirm-fit yes を記録するまで既存 plugin の再利用を許可しない。simple / dedicated-harness の境界を SKILL に明記する。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - dedicated-harness の出力 JSON に description（existing=true なら marketplace.json の当該 description、false なら null）と reuse が含まれる
+  - reuse は existing=true で fit の記録が無ければ unconfirmed、fit=yes なら confirmed、fit=no なら rejected、existing=false か kind=simple なら not-applicable
+  - --confirm-fit yes|no は existing=true のときだけ受け付けて [features.<F>] fit に記録し、それ以外では失敗終了する
+  - SKILL.md は、description を AskUserQuestion で示してユーザーの回答だけを --confirm-fit に記録すること、confirmed のときだけ既存 plugin を使うこと、unconfirmed を再利用許可と読まないこと、rejected は新規 plugin（別名）の経路に進むことを明記し、旧文言「existing: true ならその plugin を使う」を含まない
+  - SKILL.md に D9 の境界が明記されている: アプリのプロセス内で動き、アプリ利用者のための機能（ジョブ実行・予算制御・通知送信・認証など）は simple。Claude Code のセッション・ツール呼び出し・ファイル編集を判定するもの（hook・gate・検査ハーネス）だけが dedicated-harness
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D9
+  - crates/sitecraft/skills/sitecraft/SKILL.md#Phase 5
+"""
+created_at = 1793674806
+updated_at = 1793677601
+weight = 0.0
+issue_number = 1502
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1502"
+issue_closed_at = 1793677603
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r9_classify_fit"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674806
+detail = """
+exit 101: ; 0 measured; 0 filtered out; finished in 0.53s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/spec_r9_classify_fit.rs (target/debug/deps/spec_r9_classify_fit-6f4c26b1cf0f4aed)
+error: test failed, to rerun pass `-p sitecraft --test spec_r9_classify_fit`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r9_classify_fit"
+exit = 0
+passed = 8
+rev = "eb23ef8a03d19042a9ea8b78eeb17a8a91e70f74"
+observed_at = 1793677586
+output_digest = "sha256:f3e0e55a53021a86a16bcf7bae4986f98b40f05b2cba75e062ee8cc4fb93fb1a"
+excerpt = """
+
+running 8 tests
+test skill_states_the_simple_dedicated_harness_boundary ... ok
+test skill_asks_the_user_about_fit_and_reuses_only_confirmed ... ok
+test simple_feature_is_not_applicable ... ok
+test missing_plugin_is_not_applicable_with_null_description ... ok
+test existing_plugin_without_fit_is_unconfirmed_with_its_description ... ok
+test confirm_fit_no_is_rejected_and_recorded ... ok
+test confirm_fit_yes_is_confirmed_and_recorded ... ok
+test confirm_fit_is_refused_when_nothing_exists_to_reuse ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+   Compiling sitecraft v0.1.7 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/spec_r9_classify_fit.rs (target/debug/deps/spec_r9_classify_fit-85cc3d8f4d625ed4)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "4336e9c2"
+title = "[sitecraft-capabilities:R6] sitecraft init <dir> は D6 の規則で git repo と sitecraft/ を作る。scaffold 先は <root>/app/ とし、決定記録と分ける。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R6",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R6 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: sitecraft init <dir> は D6 の規則で git repo と sitecraft/ を作る。scaffold 先は <root>/app/ とし、決定記録と分ける。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - <dir> が存在しない、または空なら、ディレクトリを作り（必要なら）、git init と <dir>/sitecraft/ を作って exit 0
+  - <dir> が空でない、またはファイルなら、何も変えずに exit 1
+  - <dir> の親が別の git work tree の中にあるなら、何も変えずに exit 1
+  - git が無い・git init が非 0・30 秒の時間制限超過・IO 失敗は exit 2
+  - SKILL.md の不変条件「空でないディレクトリには scaffold しない」は文言を変えずに残し、scaffold 先を <root>/app/ と明記する（app/ が存在して空でなければ拒否する）
+  - SKILL.md の sitecraft.toml の例が `npm --prefix app …`・build_dir = "app/dist"・web_globs = ["app/src/**", …] の形になっている
+  - <root>/sitecraft/decisions.toml がある root でも、空の app/ への scaffold 手順は拒否されない
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D6
+  - docs/specs/sitecraft-capabilities-rulings.md#C5
+  - crates/sitecraft/skills/sitecraft/SKILL.md#Phase 6
+"""
+created_at = 1793674796
+updated_at = 1793678365
+weight = 0.0
+issue_number = 1499
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1499"
+issue_closed_at = 1793678368
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r6_init"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674796
+detail = """
+exit 101: ed; 11 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/spec_r6_init.rs (target/debug/deps/spec_r6_init-d0083c9dc99ee536)
+error: test failed, to rerun pass `-p sitecraft --test spec_r6_init`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r6_init"
+exit = 0
+passed = 11
+rev = "672a1ed212d558544c67a8247bc06f8c76be4571"
+observed_at = 1793678318
+output_digest = "sha256:62d0691354becc62ac697dd22e2003121a2ba9bfb7dcc33c71e69075e0fcdd07"
+excerpt = """
+
+running 11 tests
+test init_creates_a_missing_directory ... ok
+test init_accepts_an_empty_directory ... ok
+test skill_phase_6_scaffolds_into_app_even_with_a_decision_record ... ok
+test skill_keeps_the_invariant_and_names_app_as_the_target ... ok
+test skill_sitecraft_toml_example_uses_app ... ok
+test init_refuses_a_directory_inside_another_work_tree ... ok
+test init_without_git_is_exit_2 ... ok
+test init_refuses_a_non_empty_directory_or_a_file ... ok
+test io_failure_creating_the_directory_is_exit_2 ... ok
+test git_init_failure_is_exit_2 ... ok
+test git_exceeding_30_seconds_is_exit_2 ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.68s
+
+   Compiling sitecraft v0.1.8 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.09s
+     Running tests/spec_r6_init.rs (target/debug/deps/spec_r6_init-53070e4d7150acf7)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "07d216cc"
+title = "[sitecraft-capabilities:R10] sitecraft.toml の任意キー api_paths を check pages が GET で検査し、SKILL に Vite + Hono（@hono/vite-dev-server）を 1 つの dev command で起動する手順を持つ。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R10",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R10 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: sitecraft.toml の任意キー api_paths を check pages が GET で検査し、SKILL に Vite + Hono（@hono/vite-dev-server）を 1 つの dev command で起動する手順を持つ。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - api_paths（/ で始まる文字列の配列、既定は空）を sitecraft.toml が受け付け、/ で始まらない要素はエラーになる。trust 対象は従来どおりファイル全体
+  - check pages は各 api_paths に http://127.0.0.1:<port> から GET し（リダイレクトは追わない）、2xx 以外と接続失敗は exit 1、1 パスあたり 10 秒超過は exit 2
+  - SKILL.md に、Vite + Hono（@hono/vite-dev-server）でフロントと API を 1 つの dev command で起動する手順（vite.config.ts と server/app.ts の構成）がある
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D10
+"""
+created_at = 1793674809
+updated_at = 1793678395
+weight = 0.0
+issue_number = 1503
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1503"
+issue_closed_at = 1793678398
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r10_api_paths"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674809
+detail = """
+exit 101: gnored; 0 measured; 0 filtered out; finished in 0.47s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/spec_r10_api_paths.rs (target/debug/deps/spec_r10_api_paths-0132eaf6a5f8ceb1)
+error: test failed, to rerun pass `-p sitecraft --test spec_r10_api_paths`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r10_api_paths"
+exit = 0
+passed = 7
+rev = "672a1ed212d558544c67a8247bc06f8c76be4571"
+observed_at = 1793678368
+output_digest = "sha256:a60ba8f67aa63d3785ebc0705fb357eb9c0b13ddf6f7c103c0b63bc6b34337f3"
+excerpt = """
+
+running 7 tests
+test skill_has_the_vite_hono_one_command_step ... ok
+test unreachable_api_server_is_a_violation ... ok
+test api_paths_all_2xx_is_clean ... ok
+test api_paths_stay_under_whole_file_trust ... ok
+test api_path_without_leading_slash_is_unusable ... ok
+test non_2xx_api_paths_are_violations ... ok
+test api_path_slower_than_10_seconds_is_exit_2 ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.46s
+
+   Compiling sitecraft v0.1.8 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/spec_r10_api_paths.rs (target/debug/deps/spec_r10_api_paths-9b8f8bffa575bdfa)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "56303611"
+title = "sitecraft check pages: cannot resolve playwright from the npm --prefix app package dir (F12)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1793668551
+updated_at = 1793678413
+weight = 0.0
+issue_number = 1488
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1488"
+issue_closed_at = 1793678415
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test check_pages_app_subdir playwright_in_app_subdir_named_by_npm_prefix_is_resolved"
+rev = "c76993884cb84ad252dfc6efca1d725431f95c0e"
+observed_at = 1793668551
+detail = """
+exit 101: sured; 2 filtered out; finished in 0.45s
+
+   Compiling sitecraft v0.1.4 (/Users/yuki/src/.harness-worktrees/sitecraft-f12-f13/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running tests/check_pages_app_subdir.rs (target/debug/deps/check_pages_app_subdir-05f09da1ec31ea57)
+error: test failed, to rerun pass `-p sitecraft --test check_pages_app_subdir`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test check_pages_app_subdir"
+exit = 0
+passed = 3
+rev = "672a1ed212d558544c67a8247bc06f8c76be4571"
+observed_at = 1793678398
+output_digest = "sha256:04e8d5654bb051216ba9cd65acfe7d761f152bf53d15c9d2110c3d0e3548a0f4"
+excerpt = """
+
+running 3 tests
+test control_playwright_nowhere_still_not_installed ... ok
+test playwright_in_app_subdir_named_by_npm_prefix_is_resolved ... ok
+test control_playwright_in_root_is_clean ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+   Compiling sitecraft v0.1.8 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running tests/check_pages_app_subdir.rs (target/debug/deps/check_pages_app_subdir-2c399f2ba9b056c1)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "55cea09a"
+title = "sitecraft serve start: ready probe misses an IPv6-only (::1) dev server (F13)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1793668543
+updated_at = 1793678438
+weight = 0.0
+issue_number = 1487
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1487"
+issue_closed_at = 1793678441
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test serve_ready_ipv6 serve_start_detects_server_listening_only_on_ipv6_loopback"
+rev = "c76993884cb84ad252dfc6efca1d725431f95c0e"
+observed_at = 1793668543
+detail = """
+exit 101: ; 0 ignored; 0 measured; 1 filtered out; finished in 5.60s
+
+   Compiling sitecraft v0.1.4 (/Users/yuki/src/.harness-worktrees/sitecraft-f12-f13/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+     Running tests/serve_ready_ipv6.rs (target/debug/deps/serve_ready_ipv6-6711ec267f416d9a)
+error: test failed, to rerun pass `-p sitecraft --test serve_ready_ipv6`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test serve_ready_ipv6"
+exit = 0
+passed = 2
+rev = "672a1ed212d558544c67a8247bc06f8c76be4571"
+observed_at = 1793678416
+output_digest = "sha256:5011e7b1c2d1abaee4aaec6b78ffe29b9b4bf206c768d667172510cc73fb6fe2"
+excerpt = """
+
+running 2 tests
+test serve_start_detects_server_listening_only_on_ipv6_loopback ... ok
+test serve_start_still_undetermined_when_nothing_ever_answers ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.52s
+
+   Compiling sitecraft v0.1.8 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running tests/serve_ready_ipv6.rs (target/debug/deps/serve_ready_ipv6-98765ad89ac20a94)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "e3d38715"
+title = "[sitecraft-capabilities:R2] Web アプリ以外の能力を sitecraft decide capability で [capabilities.<name>] に登録できる。verify.kind は閉じた 3 種で、command 種の argv は D2-trust の digest で人間の trust を要する。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R2",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R2 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: Web アプリ以外の能力を sitecraft decide capability で [capabilities.<name>] に登録できる。verify.kind は閉じた 3 種で、command 種の argv は D2-trust の digest で人間の trust を要する。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - sitecraft decide capability --name N --relevance R --how T --done-when T --verify-kind K と種別ごとの引数で、[capabilities.N] に relevance・how・done_when・verify が保存される
+  - name が ^[a-z0-9][a-z0-9-]*$ に一致しない場合は記録されず、失敗終了する
+  - verify.kind が builtin:blender-headless / builtin:threejs-render / command 以外、必須キー（blender-headless: script・glb・render、threejs-render: page、command: argv（空でない文字列配列、先頭は空白でない）・inputs（空でない glob 配列））の欠落、または型不一致のとき、sitecraft decide check が exit 2
+  - relevance=relevant の能力で how / done_when / verify のどれかが無いとき、sitecraft decide check が exit 1
+  - [capabilities] テーブルが無い project では、能力に関する指摘を何も出さない（能力なしとして扱う）
+  - sitecraft trust は、command 種の能力が 1 つ以上あれば、[name, argv] を name 昇順に並べた JSON 配列の sha256 を trust store のキー `<canonical root>#capabilities` に記録する。command 種が 0 個ならこのキーを要求しない
+  - command 種の argv を変えた後、trust し直す前に sitecraft check capability <name> を実行すると、コマンドを実行せず exit 2 になり、sitecraft trust の案内を出す。trust store が読めない場合も exit 2
+  - how / done_when / builtin 種の verify の変更では D2-trust の記録は無効にならない
+  - 値の違う能力を再記録すると [[history]] に area = "capability", question = N で追記される
+  - SKILL.md は、能力の how / done_when を AskUserQuestion でユーザーに決めてもらう手順を持ち、LLM が sitecraft trust を代わりに実行しないことを明記している
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#U1
+  - docs/specs/sitecraft-capabilities-rulings.md#D2
+  - docs/specs/sitecraft-capabilities-rulings.md#C4
+  - crates/sitecraft/skills/sitecraft/SKILL.md#不変条件
+  - crates/sitecraft/README.ja.md#trust の手順
+"""
+created_at = 1793674780
+updated_at = 1793691804
+weight = 0.0
+issue_number = 1495
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1495"
+issue_closed_at = 1793691807
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r2_capability_decide"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674780
+detail = """
+exit 101:  filtered out; finished in 0.55s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/spec_r2_capability_decide.rs (target/debug/deps/spec_r2_capability_decide-31c1ffd003005f5f)
+error: test failed, to rerun pass `-p sitecraft --test spec_r2_capability_decide`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r2_capability_decide"
+exit = 0
+passed = 16
+rev = "2cf34c307ff5262ab45d01b7f59403d0440dc8c1"
+observed_at = 1793691783
+output_digest = "sha256:d9e377436d593ab715f3b9af8382ae0b3d1736f9f0b9a5888aab73cf13ee3656"
+excerpt = """
+
+running 16 tests
+test project_without_capabilities_table_gets_no_capability_findings ... ok
+test decide_capability_records_a_command_capability ... ok
+test skill_has_the_ask_step_for_how_and_done_when ... ok
+test decide_capability_records_a_threejs_render_capability ... ok
+test skill_says_llm_does_not_run_trust ... ok
+test decide_capability_records_a_blender_headless_capability ... ok
+test trust_records_the_command_argv_digest_under_the_capabilities_key ... ok
+test rerecording_a_changed_capability_appends_a_history_row ... ok
+test trust_without_command_capabilities_does_not_write_the_capabilities_key ... ok
+test relevant_capability_missing_how_done_when_or_verify_is_exit_1 ... ok
+test invalid_capability_names_are_not_recorded ... ok
+test valid_capabilities_of_each_kind_check_clean ... ok
+test changed_argv_is_not_run_until_trusted_again ... ok
+test unusable_verify_tables_make_decide_check_exit_2 ... ok
+test how_done_when_and_builtin_verify_changes_keep_the_trust ... ok
+test unreadable_trust_store_is_exit_2_without_running_the_command ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.48s
+
+   Compiling sitecraft v0.1.10 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.87s
+     Running tests/spec_r2_capability_decide.rs (target/debug/deps/spec_r2_capability_decide-2f4f42949ac5bcc0)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "d6feb3ed"
+title = "[sitecraft-capabilities:R3] sitecraft capability probe <name> は実環境で試して feasible / infeasible / undetermined の三値を JSON と終了コードで返す。プローブ結果は記録せず、完成判定にも使わない。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R3",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R3 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: sitecraft capability probe <name> は実環境で試して feasible / infeasible / undetermined の三値を JSON と終了コードで返す。プローブ結果は記録せず、完成判定にも使わない。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - stdout に JSON がちょうど 1 個 {"capability":N,"result":…,"reason":…} 出る。終了コードは feasible 0 / infeasible 1 / undetermined 2
+  - 未登録の name は exit 2
+  - 120 秒を超えると result=undetermined、reason=timeout、exit 2
+  - blender の探索: SITECRAFT_BLENDER が空でなければそれだけを使い、指すファイルが無い・実行できない場合は undetermined。未設定なら PATH の blender、次に /Applications/Blender.app/Contents/MacOS/Blender の順に探し、どれも無ければ infeasible
+  - blender が見つかったら --background --factory-startup --python <最小スクリプト> を実行し、終了 0 かつ <state>/probe-tmp/ 配下の出力が D4 の GLB 条件を満たせば feasible。非 0 終了・条件不成立は infeasible、spawn 失敗は undetermined
+  - three.js プローブ: check pages と同じ方法で解決した Playwright の Chromium を headless で起動し、about:blank で webgl2 か webgl の context が取れれば feasible、どちらも取れなければ infeasible、Playwright か Chromium が起動できなければ undetermined
+  - command 種: argv[0] が実行可能（`/` を含むならそのパスのファイル、含まなければ PATH で解決）なら feasible、そうでなければ infeasible。コマンド自体は実行せず、trust も要求しない
+  - probe の実行で capability-results・decisions.toml のどちらにも書き込みが起きない
+  - SKILL.md は、プローブ結果を AskUserQuestion でユーザーに示す手順を持ち、probe の feasible を完成の根拠にしないことを明記している
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D3
+  - docs/specs/sitecraft-capabilities-rulings.md#U2
+"""
+created_at = 1793674784
+updated_at = 1793691825
+weight = 0.0
+issue_number = 1496
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1496"
+issue_closed_at = 1793691827
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r3_probe"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674784
+detail = """
+exit 101:  18 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/spec_r3_probe.rs (target/debug/deps/spec_r3_probe-ff702f264c7060ee)
+error: test failed, to rerun pass `-p sitecraft --test spec_r3_probe`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r3_probe"
+exit = 0
+passed = 18
+rev = "2cf34c307ff5262ab45d01b7f59403d0440dc8c1"
+observed_at = 1793691807
+output_digest = "sha256:92d9c41ca6682face482f250569bf186cf885a18bb259719c33388c9a8ed4f7c"
+excerpt = """
+
+running 20 tests
+test no_blender_anywhere_is_infeasible ... ignored, only meaningful where /Applications/Blender.app is absent; this Mac has it
+test probe_times_out_after_120_seconds ... ignored, takes > 120 s: the probe time limit is 120 s (rulings D3)
+test blender_spawn_failure_is_undetermined ... ok
+test sitecraft_blender_not_executable_is_undetermined ... ok
+test sitecraft_blender_pointing_at_nothing_is_undetermined_and_path_is_not_used ... ok
+test skill_says_feasible_is_not_completion ... ok
+test skill_shows_probe_results_to_the_user ... ok
+test threejs_probe_when_chromium_cannot_start_is_undetermined ... ok
+test command_probe_resolves_argv0_without_running_it ... ok
+test threejs_probe_with_only_webgl_is_feasible ... ok
+test threejs_probe_with_webgl2_is_feasible ... ok
+test threejs_probe_without_playwright_is_undetermined ... ok
+test threejs_probe_without_webgl_is_infeasible ... ok
+test blender_nonzero_exit_is_infeasible ... ok
+test blender_on_path_is_used_when_sitecraft_blender_is_unset ... ok
+test blender_probe_with_a_valid_glb_is_feasible ... ok
+test probing_writes_neither_results_nor_decisions ... ok
+test empty_sitecraft_blender_falls_back_to_path ... ok
+test unregistered_name_is_exit_2 ... ok
+test blender_output_failing_the_glb_condition_is_infeasible ... ok
+
+test result: ok. 18 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 2.20s
+
+   Compiling sitecraft v0.1.10 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+     Running tests/spec_r3_probe.rs (target/debug/deps/spec_r3_probe-651bd601123e9d6d)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "5cdeb78a"
+title = "[sitecraft-capabilities:R4] sitecraft check capability <name> は、能力が実機で動いた証拠を D4 の画素規則と GLB 条件で判定し、0 clean / 1 violation / 2 undetermined を返す。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R4",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R4 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: sitecraft check capability <name> は、能力が実機で動いた証拠を D4 の画素規則と GLB 条件で判定し、0 clean / 1 violation / 2 undetermined を返す。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - 未登録または relevance=irrelevant の name は exit 2。300 秒を超えると exit 2（reason timeout）
+  - 画素規則: 背景色は 4 隅の RGB の最頻値。最頻値が一意でなければ、描画率が最小になる候補を背景色にする。描画画素は R/G/B のいずれかで背景との差の絶対値が 16 を超える画素。描画率 1% 以上で clean、1% 未満と幅か高さが 0 の画像は violation。単色画像が violation、1% 以上描かれた画像が clean になることをテストで観測する
+  - GLB 条件: 先頭 4 バイトが glTF、version(uint32 LE)=2、length(uint32 LE) がファイルサイズと一致。0 バイトのファイルと条件不成立のファイルは violation
+  - builtin:blender-headless: 実行前に既存の glb と render を削除し、cwd=root で `<blender> --background --factory-startup --python <script> -- --glb <絶対パス> --render <絶対パス>` を実行する。非 0 終了・出力が無い・PNG として読めない・GLB 条件不成立・画素規則 violation は exit 1。blender が見つからない・script が無い・読み取りの IO 失敗は exit 2
+  - builtin:threejs-render: trust 済み sitecraft.toml が無いか未 trust なら exit 2。dev server が止まっていれば自分で起動し、終了時に自分が起動したものだけを止める。http://127.0.0.1:<port><page> を headless Chromium で開き、selector（既定 canvas）が 30 秒以内に可視にならなければ exit 1。可視になったら 2000 ms 後に要素のスクリーンショットを撮り、画素規則で判定する。Playwright か Chromium が起動できなければ exit 2
+  - command: D2-trust が無ければ実行せず exit 2。trust 済みなら cwd=root で argv を実行し、終了 0 は exit 0、終了 2 は exit 2、それ以外の非 0 と signal 終了は exit 1、spawn 失敗は exit 2
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D4
+  - docs/specs/sitecraft-capabilities-rulings.md#U2
+  - crates/sitecraft/skills/sitecraft/SKILL.md#終了コード規約
+"""
+created_at = 1793674787
+updated_at = 1793691856
+weight = 0.0
+issue_number = 1497
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1497"
+issue_closed_at = 1793691858
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r4_check_capability"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674787
+detail = """
+exit 101: ; 0 filtered out; finished in 1.02s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s
+     Running tests/spec_r4_check_capability.rs (target/debug/deps/spec_r4_check_capability-40bd56346b984fa3)
+error: test failed, to rerun pass `-p sitecraft --test spec_r4_check_capability`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r4_check_capability"
+exit = 0
+passed = 28
+rev = "2cf34c307ff5262ab45d01b7f59403d0440dc8c1"
+observed_at = 1793691827
+output_digest = "sha256:f97133a5e10ffe28d4e50a1c9ac1620f6c0b68d65b9506c7344a5a1f4b6c70f7"
+excerpt = """
+
+running 29 tests
+test check_times_out_after_300_seconds ... ignored, takes > 300 s: the check capability time limit is 300 s (rulings D4)
+test blender_is_run_with_the_documented_argv_and_cwd ... ok
+test blender_not_found_is_exit_2 ... ok
+test blender_nonzero_exit_is_a_violation ... ok
+test command_spawn_failure_is_exit_2 ... ok
+test command_without_capability_trust_is_not_run ... ok
+test alpha_is_ignored ... ok
+test four_distinct_corner_colours_pick_the_candidate_with_the_smallest_drawn_ratio ... ok
+test missing_script_is_exit_2 ... ok
+test render_drawn_below_one_percent_is_a_violation ... ok
+test channel_difference_must_exceed_16 ... ok
+test missing_render_is_a_violation ... ok
+test stale_outputs_are_deleted_before_the_run ... ok
+test render_drawn_at_one_percent_or_more_is_clean ... ok
+test single_colour_render_is_a_violation ... ok
+test threejs_selector_never_visible_is_a_violation ... ok
+test threejs_custom_selector_is_used ... ok
+test threejs_drawn_canvas_is_clean_and_the_server_it_started_is_stopped ... ok
+test command_exit_codes_map_to_the_verdict ... ok
+test threejs_leaves_an_already_running_server_running ... ok
+test threejs_single_colour_canvas_is_a_violation ... ok
+test glb_condition_failures_are_violations ... ok
+test threejs_chromium_or_playwright_unavailable_is_exit_2 ... ok
+test tied_corner_colours_pick_the_candidate_with_the_smallest_drawn_ratio ... ok
+test unregistered_and_irrelevant_capabilities_are_exit_2 ... ok
+test unreadable_outputs_are_exit_2 ... ok
+test zero_sized_or_unreadable_png_is_a_violation ... ok
+test threejs_with_untrusted_sitecraft_toml_is_exit_2 ... ok
+test threejs_without_sitecraft_toml_is_exit_2 ... ok
+
+test result: ok. 28 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 12.99s
+
+   Compiling sitecraft v0.1.10 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+     Running tests/spec_r4_check_capability.rs (target/debug/deps/spec_r4_check_capability-f80a5c840c926c1c)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "255b6411"
+title = "[sitecraft-capabilities:R5] check capability は結果を入力ハッシュ付きで記録し、Stop gate は能力を実行せずに、relevant な全能力の記録の鮮度を確かめ、そろっていなければ block する。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R5",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R5 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: check capability は結果を入力ハッシュ付きで記録し、Stop gate は能力を実行せずに、relevant な全能力の記録の鮮度を確かめ、そろっていなければ block する。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - check capability は終了のたびに <state>/capability-results/<root-key>/<name>.json に {name, exit, input_hash, sitecraft_version, at} を一時ファイルからの rename で書く。<root-key> は canonical root パスの sha256 hex。書けなければ check capability 自体が exit 2
+  - input_hash は、[capabilities.<name>] のキー昇順の正規化 JSON に続けて、種別ごとの入力ファイル集合（blender-headless: script と verify.inputs、threejs-render: sitecraft.toml・web_globs・verify.inputs、command: verify.inputs）を root 相対パス昇順に (パス, 内容の sha256) として連結したものの sha256。command 種で一致が 0 件、または読めないファイルがあれば exit 2
+  - trust 済み sitecraft.toml がある project で、relevant な能力の記録が無い・exit≠0・sitecraft_version 不一致・input_hash 不一致・読めない・再計算できないときは gate が block し、reason に能力名と `sitecraft check capability <name>` を含める
+  - 入力ファイルを 1 バイト変えると、check capability を再実行するまで gate が block する
+  - gate の実行中に blender も Chromium も能力の command も spawn されない
+  - 能力の判定は既存の検査と Verdict::worst_of で合成され、既存の bounded give-up（max_attempts 後の NOTHING WAS VERIFIED 付き通過）と panic barrier は変わらない
+  - relevant な能力が無い decisions.toml では、gate の判定が変更前と同じになる
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D5
+  - crates/sitecraft/README.ja.md#Stop gate
+"""
+created_at = 1793674791
+updated_at = 1793691907
+weight = 0.0
+issue_number = 1498
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1498"
+issue_closed_at = 1793691911
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r5_results_gate"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674791
+detail = """
+exit 101: ; 0 measured; 0 filtered out; finished in 2.44s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/spec_r5_results_gate.rs (target/debug/deps/spec_r5_results_gate-6f89fa03571585eb)
+error: test failed, to rerun pass `-p sitecraft --test spec_r5_results_gate`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r5_results_gate"
+exit = 0
+passed = 17
+rev = "2cf34c307ff5262ab45d01b7f59403d0440dc8c1"
+observed_at = 1793691859
+output_digest = "sha256:592f6654dfaf28a7bfdc5a5d4e7ac51d6adaa5e4251882f7f5dfbfc52eb1eefc"
+excerpt = """
+
+running 17 tests
+test blender_input_hash_covers_the_script_and_verify_inputs ... ok
+test a_violating_run_is_recorded_too ... ok
+test check_capability_writes_the_result_record ... ok
+test command_inputs_matching_nothing_or_unreadable_are_exit_2 ... ok
+test gate_still_runs_under_the_panic_barrier ... ok
+test changing_one_input_byte_blocks_until_the_check_is_rerun ... ok
+test gate_blocks_on_a_failed_record ... ok
+test fresh_capability_does_not_mask_another_failing_check ... ok
+test gate_spawns_no_capability ... ok
+test gate_blocks_on_a_stale_or_broken_record ... ok
+test input_hash_tracks_exactly_the_inputs_and_the_table ... ok
+test gate_blocks_without_a_record_and_allows_after_the_check ... ok
+test gate_does_not_rerun_a_freshly_checked_command ... ok
+test stale_capability_keeps_the_bounded_give_up ... ok
+test unwritable_results_dir_makes_the_check_exit_2 ... ok
+test no_relevant_capability_leaves_the_gate_as_before ... ok
+test threejs_input_hash_covers_sitecraft_toml_web_globs_and_verify_inputs ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.82s
+
+   Compiling sitecraft v0.1.10 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.43s
+     Running tests/spec_r5_results_gate.rs (target/debug/deps/spec_r5_results_gate-240351a4dcf1153f)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "d8791c47"
+title = "[sitecraft-capabilities:R11] D11 の閉じた一覧のすべての subprocess に時間制限があり、各検査の結果を履歴に残す。sitecraft status は state を D11 の判定式と優先順で JSON に出し、SKILL は stuck と waiting-human を D12 の手順で扱う（対象は /sitecraft のビルドループに限る）。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R11",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R11 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: D11 の閉じた一覧のすべての subprocess に時間制限があり、各検査の結果を履歴に残す。sitecraft status は state を D11 の判定式と優先順で JSON に出し、SKILL は stuck と waiting-human を D12 の手順で扱う（対象は /sitecraft のビルドループに限る）。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - probe は 120 秒、check capability は 300 秒、init の git は 30 秒、api_paths は 1 パス 10 秒で時間切れになり、exit 2（reason timeout）。既存の deadline_for・npm audit 300 秒・ready_timeout_secs は変わらない
+  - decide check・check pages・check security・check capability <name> は、CLI でも gate 経由でも、終了ごとに <state>/check-history/<root-key>.jsonl に {name, exit, fingerprint, elapsed_ms, timed_out, at} を 1 行追記する（name は decide / pages / security / capability:<name>）。追記できなければその検査が exit 2
+  - fingerprint は、exit≠0 なら stdout+stderr の時刻を <time>、絶対パスを <path>、数字列を 0 にこの順で置換した文字列の sha256 hex。時間切れなら sha256("timeout")、exit 0 なら null。時刻・パス・数字だけが違う 2 つの失敗が同じ指紋になることをテストで観測する
+  - sitecraft status は stdout に {"checks":[{name, last_exit, consecutive_same_failure, elapsed_ms, state}]} を出す。state は waiting-human > stuck（同一指紋の連続失敗 3 以上）> failing > slow（exit 0 かつ elapsed_ms が制限の 50% 以上。decide は slow にならない）> ok の優先順で決まる
+  - status の終了コード: 全検査が ok か slow なら 0、failing / stuck / waiting-human のどれかがあれば 1。履歴が無い・読めない・パースできない行がある・state dir が決まらない場合は 2
+  - pages と、capability: のうち threejs-render 種と command 種は、sitecraft.toml または D2-trust の digest が未 trust なら、失敗の連続数にかかわらず waiting-human になる
+  - SKILL.md は、stuck を見たら再実行ループを止め、D12 の (a)〜(d) でハーネス側か対象アプリ側かを切り分けて記録すること、ハーネス側なら harness repo の worktree で RED を観測した再現テストを添えて backlog add し、修正と rollout の後に再開すること、対象アプリ側で同じ指紋の stuck がさらに 3 回続けば Ask することを明記している
+  - SKILL.md は、waiting-human を停滞として扱わず、trust が要るファイルを示してユーザーに Ask し、待ち続けないことを明記している。この手順の対象を /sitecraft のビルドループに限ることも明記している（U6）
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D11
+  - docs/specs/sitecraft-capabilities-rulings.md#D12
+  - docs/specs/sitecraft-capabilities-rulings.md#C2
+  - docs/specs/sitecraft-capabilities-rulings.md#U5
+  - docs/specs/sitecraft-capabilities-rulings.md#U6
+"""
+created_at = 1793674812
+updated_at = 1793691948
+weight = 0.0
+issue_number = 1504
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1504"
+issue_closed_at = 1793691950
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r11_status_history"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674812
+detail = """
+exit 101: red; 0 filtered out; finished in 0.91s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.49s
+     Running tests/spec_r11_status_history.rs (target/debug/deps/spec_r11_status_history-09dbcb318d8103c4)
+error: test failed, to rerun pass `-p sitecraft --test spec_r11_status_history`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r11_status_history"
+exit = 0
+passed = 16
+rev = "2cf34c307ff5262ab45d01b7f59403d0440dc8c1"
+observed_at = 1793691911
+output_digest = "sha256:78a27a9fd0eeabdc4f73c2ae18dea6c9cde1f5ab14a89cbb33d459a589c9c843"
+excerpt = """
+
+running 17 tests
+test existing_time_limits_are_unchanged ... ok
+test passing_checks_are_ok_and_decide_is_never_slow ... ok
+test skill_handles_stuck_with_the_d12_procedure ... ok
+test skill_treats_waiting_human_as_an_ask_and_scopes_to_the_build_loop ... ok
+test failures_differing_only_in_paths_share_a_fingerprint ... ok
+test capability_at_half_its_limit_is_slow ... ok
+test command_capability_without_digest_trust_is_waiting_human_but_blender_is_not ... ok
+test timed_out_check_has_the_timeout_fingerprint ... ignored, takes ~105 s: check pages' own deadline (30 + 45 x 1 page + 30 s) must expire
+test three_same_failures_are_stuck ... ok
+test fewer_or_interrupted_failures_are_failing ... ok
+test failures_differing_only_in_times_and_digits_share_a_fingerprint ... ok
+test unappendable_history_makes_the_check_exit_2 ... ok
+test status_without_a_usable_history_is_exit_2 ... ok
+test untrusted_pages_are_waiting_human_even_when_stuck ... ok
+test the_gate_appends_history_lines_too ... ok
+test every_check_appends_a_history_line ... ok
+test api_path_time_limit_reports_timeout ... ok
+
+test result: ok. 16 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 16.08s
+
+   Compiling sitecraft v0.1.10 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s
+     Running tests/spec_r11_status_history.rs (target/debug/deps/spec_r11_status_history-1bb8b7cedd49d0a4)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "a258c41b"
+title = "[sitecraft-capabilities:R12] ~/src/3d-pipeline-web で D13 の 4 項目がすべて観測されたとき spec を完成とし、GLB→VRM 変換は完了条件に含めない。"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "spec",
+    "spec:sitecraft-capabilities",
+    "req:sitecraft-capabilities:R12",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+specforge が spec sitecraft-capabilities の requirement R12 から自動起票 (ratify 時).
+spec title: sitecraft を Web アプリを超える課題（能力・実機検証・停滞検知）まで拡張する
+statement: ~/src/3d-pipeline-web で D13 の 4 項目がすべて観測されたとき spec を完成とし、GLB→VRM 変換は完了条件に含めない。
+
+done_criteria (spec の acceptance を逐語で。言い換えないこと):
+  - ~/src/3d-pipeline-web で [purpose] が記録され、sitecraft decide check が exit 0、stderr に `warning: W1:` が表示される
+  - blender-headless（builtin:blender-headless）と threejs-render（builtin:threejs-render）が relevance=relevant で登録され、両方の sitecraft capability probe が exit 0（feasible）
+  - 両方の sitecraft check capability が、/Applications/Blender.app の実 Blender と Playwright Chromium で exit 0
+  - その状態で sitecraft gate が block を返さない
+  - SKILL.md の完成報告の条件に、relevant な全能力の sitecraft check capability が exit 0 であることが加わっている（probe の feasible だけでは完成と報告しない）
+  - command 種はテスト内の fixture で検証し、テストベッドの完了条件には含めない
+
+canon:
+  - docs/specs/sitecraft-capabilities-rulings.md#D13
+  - docs/specs/sitecraft-capabilities-rulings.md#U2
+  - docs/specs/sitecraft-capabilities-rulings.md#U3
+  - crates/sitecraft/skills/sitecraft/SKILL.md#不変条件
+"""
+created_at = 1793674815
+updated_at = 1793691968
+weight = 0.0
+issue_number = 1505
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1505"
+issue_closed_at = 1793691971
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p sitecraft --test spec_r12_skill_completion"
+rev = "d7c734089b7d5a2ccb6e7607ea0a9a6cf26ce2de"
+observed_at = 1793674815
+detail = """
+exit 101:  filtered out; finished in 0.00s
+
+   Compiling sitecraft v0.1.5 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running tests/spec_r12_skill_completion.rs (target/debug/deps/spec_r12_skill_completion-f07f6ea7031ccc97)
+error: test failed, to rerun pass `-p sitecraft --test spec_r12_skill_completion`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p sitecraft --test spec_r12_skill_completion"
+exit = 0
+passed = 3
+rev = "2cf34c307ff5262ab45d01b7f59403d0440dc8c1"
+observed_at = 1793691950
+output_digest = "sha256:448527235f8931b75b750afdb42c67bf4f282a1fdb8293bf6aa59ea3cd69f0d5"
+excerpt = """
+
+running 4 tests
+test d13_testbed_is_complete ... ignored, D13 testbed: needs ~/src/3d-pipeline-web, /Applications/Blender.app and Playwright Chromium (run by hand)
+test invariant_5_lists_check_capability ... ok
+test phase_11_requires_check_capability_exit_0_for_relevant_capabilities ... ok
+test phase_11_says_probe_feasible_is_not_completion ... ok
+
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling sitecraft v0.1.10 (/Users/yuki/src/.harness-worktrees/session-6d697f68/crates/sitecraft)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/spec_r12_skill_completion.rs (target/debug/deps/spec_r12_skill_completion-1d046c012637dfa6)
+"""
+
+[task.closure.red]
+rev = "289f4bdc0119abeab2f88bdd34b4904844aa05ad"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "49e95d32"
+title = "tdd Stop gate: credit tests the same session wrote in sibling worktrees; name the judged root in the block reason"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "tdd",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-03T10:44:15Z in session c4aa3733 (tdd 0.1.60, hook cwd /Users/yuki/src/harness): verbatim '🔴 tdd: write a test first — 399 new implementation line(s) added, and no test is visible in the uncommitted changes and this session's own commits ... implementation changed: crates/fde/src/evidence.rs, crates/fde/src/gate.rs, crates/fde/src/main.rs, crates/fde/src/ratify.rs, crates/fde/src/target.rs'. CAUSE (traced, not assumed): all fde writes were by condukt-worker subagents in 14 condukt worktrees (run-20261103-171621-35629-*), all still live at the stop (removed ~11:00Z). harness_core::session_roots makes every checkout the session wrote into a separate root; tdd main.rs evaluates each root alone and reports the first blocking one; attribution (attribute_own_writes) keys Edit/Write on that root's absolute path. The impl list equals exactly the scaffold worker's Write set in run-...-scaffold, whose HEAD held only 9520b448 (437 added src lines, no test); the session's RED tests were Written at sibling worktree paths, so that root saw no test. Neither hypothesis 'merge/ff hides commits' (committed_added_lines walks --no-merges HEAD, merged-in commits ARE scanned) nor 'subagent impl attributed but not tests' (both are subagent Writes) is the cause; it is per-root isolation. Replay: tdd gate on HEAD with the transcript truncated to the stop, worktrees gone, ALLOWS (all fde lines attributed in one root) — consistent. MEASURED at rev a387f7fe (2026-11-03): cargo test -p tdd --test cross_worktree_test_credit_20261103 -> '1 passed; 3 failed'. Control control_no_test_written_anywhere_blocks passes. RED: test_written_by_this_session_in_a_sibling_worktree_is_credited (observed shape), session_test_commit_in_the_impl_worktree_history_is_credited (impl worktree cut after RED ff-merge: the test commit is in wt-impl's own HEAD history yet is excluded because it was Written at the wt-red path), missing_test_block_names_the_checkout_it_judged (reason: 'the block judged .../wt-impl but its reason does not name it'). READING (a) real defect: the unit tdd should judge is the session's work; a test this session wrote and committed is not 'not visible' because it was written in a sibling checkout; and a multi-root block that does not name its root sends the reader to the wrong tree (the parent had to guess). READING (b) intentional: session_roots/main.rs say 'Every checkout the session wrote into is evaluated' — per-checkout judgment is by design, and the scaffold checkout genuinely held 437 impl lines with no test (scaffold written before any test = a real test-first violation for that task). HOW TO TELL APART: a human ruling on the unit of judgment (per checkout vs per session). Under (b), tests 1-2 are wrong spec and only test 3 (name the root) stands — split rather than cancel. Note tdd 0.1.61 bump (tests only) needs rollout-plugins.sh after merge."
+created_at = 1793709196
+updated_at = 1793715545
+weight = 0.0
+issue_number = 1509
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1509"
+issue_closed_at = 1793715547
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p tdd --test cross_worktree_test_credit_20261103"
+rev = "a387f7fe2f7d57a1dfe27c161362d17ba9bc8f37"
+observed_at = 1793709196
+detail = """
+exit 101:  in 1.68s
+
+   Compiling tdd v0.1.61 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-followups/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.76s
+     Running tests/cross_worktree_test_credit_20261103.rs (target/debug/deps/cross_worktree_test_credit_20261103-51ec6359cbedde29)
+error: test failed, to rerun pass `-p tdd --test cross_worktree_test_credit_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p tdd --test cross_worktree_test_credit_20261103"
+exit = 0
+passed = 4
+rev = "5ba389aa4c9a7e312c90e9a65bbdb96c99e10eb0"
+observed_at = 1793715499
+output_digest = "sha256:64f5ef8d19a3edec9d0c17db67534903e1540db468fc20d6517bbb60b1389116"
+excerpt = """
+
+running 4 tests
+test control_no_test_written_anywhere_blocks ... ok
+test missing_test_block_names_the_checkout_it_judged ... ok
+test session_test_commit_in_the_impl_worktree_history_is_credited ... ok
+test test_written_by_this_session_in_a_sibling_worktree_is_credited ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.46s
+
+   Compiling aho-corasick v1.1.4
+   Compiling bstr v1.12.2
+   Compiling log v0.4.33
+   Compiling regex-automata v0.4.14
+   Compiling regex v1.12.4
+   Compiling globset v0.4.18
+   Compiling harness-core v0.2.87 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-fixes/crates/harness-core)
+   Compiling overwatch v0.2.110 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-fixes/crates/overwatch)
+   Compiling tdd v0.1.66 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-fixes/crates/tdd)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.48s
+     Running tests/cross_worktree_test_credit_20261103.rs (target/debug/deps/cross_worktree_test_credit_20261103-56fea9b71bde0efd)
+"""
+
+[task.closure.red]
+rev = "7057a4d75031347557f878cead08146110461f56"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "8004d80f"
+title = "harness-core read_stdin/read_capped: surface stdin read errors instead of returning empty/partial payload"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "harness-core",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = '''Measured 2026-11-03 at rev 69c03215 (worktree session-c4aa3733-followups): cargo test -p harness-core --test read_stdin_error_erased_20261103 -> 'test result: FAILED. 0 passed; 2 failed'. Verbatim: 'assertion left != right failed: a stdin read ERROR came back as Ok("") — identical to nothing was piped; the failure is invisible to the caller' and 'a stdin read that FAILED after "{\"a\":1}" came back identical to a complete, error-free read of the same bytes'. Cause: crates/harness-core/src/hook.rs read_capped does 'let _ = r.take(MAX_STDIN_BYTES).read_to_end(&mut buf);'. Verdict-bearing consumers of the erased value: fetchguard scan ('if raw.trim().is_empty() { return; }' = no warning; its main.rs doc admits read_stdin is outside the barriers), stuckguard watch (early return). parallelguard maps empty to Deny (not affected). donegate has its own read_stdin twin with the same 'let _ = read_to_string' (gate-audit mirror). READING (a) real defect: CLAUDE.md §3 says an IO failure is cannot-determine and must not be representable as empty/clean; the erasure is a fail-open for fetchguard/stuckguard. READING (b) intentional: read_stdin's doc says 'Errors are swallowed (returns what was read, possibly empty) so a hook never aborts on a read hiccup', and in-crate test read_capped_returns_partial_content_when_the_reader_errors_midway (commit 97a2498d, 2026-09-11) pins returning the partial prefix. Note the doc's 'never aborts' rationale is the §1 'don't break the turn' wording that CLAUDE.md flags as a red signal on verdict paths. HOW TO TELL APART: (b) holds only if no verdict-bearing caller consumes read_stdin's output; list callers (grep read_stdin crates/*/src) — fetchguard scan is a PostToolUse warning emitter whose silence is read as 'nothing found', so (a) unless a human rules fetchguard/stuckguard non-verdict. The fix decision (panic vs Determination return type vs keep) and the fate of the conflicting pinned in-crate test need a human ruling; if the return type changes, re-target the RED file at the new API rather than counting a compile error as GREEN.'''
+created_at = 1793708588
+updated_at = 1793715574
+weight = 0.0
+issue_number = 1507
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1507"
+issue_closed_at = 1793715577
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p harness-core --test read_stdin_error_erased_20261103"
+rev = "69c03215bcccef57ff052fbb6d110e8db0b0d89e"
+observed_at = 1793708588
+detail = """
+exit 101: te_payload
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/read_stdin_error_erased_20261103.rs (target/debug/deps/read_stdin_error_erased_20261103-716cb226bca33b49)
+error: test failed, to rerun pass `-p harness-core --test read_stdin_error_erased_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p harness-core --test read_stdin_error_erased_20261103"
+exit = 0
+passed = 2
+rev = "5ba389aa4c9a7e312c90e9a65bbdb96c99e10eb0"
+observed_at = 1793715552
+output_digest = "sha256:98dc58b2fd1900628cdb11bf96662bf2872f21a5273e80a0078af97ef513486b"
+excerpt = """
+
+running 2 tests
+test read_error_before_any_byte_is_not_the_empty_payload ... ok
+test read_error_midway_is_not_a_complete_payload ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Compiling serde_core v1.0.228
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling getrandom v0.3.4
+   Compiling num-traits v0.2.19
+   Compiling zerocopy v0.8.52
+   Compiling winnow v1.0.4
+   Compiling target-triple v1.0.1
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling glob v0.3.3
+   Compiling unarray v0.1.4
+   Compiling chrono v0.4.45
+   Compiling termcolor v1.4.1
+   Compiling syn v2.0.118
+   Compiling rand_core v0.9.5
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.4
+   Compiling serde_derive v1.0.228
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_json v1.0.150
+   Compiling serde_spanned v1.1.1
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling serde v1.0.228
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.9.0
+   Compiling proptest v1.11.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling trybuild v1.0.118
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.87 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-fixes/crates/harness-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.24s
+     Running tests/read_stdin_error_erased_20261103.rs (target/debug/deps/read_stdin_error_erased_20261103-da4507d9e6034d86)
+"""
+
+[task.closure.red]
+rev = "7057a4d75031347557f878cead08146110461f56"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "4591e6e1"
+title = "docs/GLOSSARY.md: mark parked plugins (parallelguard) as parked, and tie GLOSSARY to parked-plugins.json"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "docs",
+    "glossary",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Measured 2026-11-03 at rev 22051d62: python3 -m pytest -q scripts/test_glossary_parked_marking_20261103.py -> '1 failed, 1 passed'; verbatim 'AssertionError: Lists differ ... GLOSSARY rows for parked plugins carry no parked marking: [parallelguard]'. Control (every parked plugin has a GLOSSARY row) passes; the fde row ('...批准前編集ブロック（parked）', added 6f1efba8 2026-11-03) satisfies the property, so the test can go GREEN. scripts/parked-plugins.json parks parallelguard for ENABLEMENT since 2026-08-28 (stays false in settings.json); its GLOSSARY row reads 'always-on' and says it denies calls over the cap. No checker reads both files (grep: parked-plugins.json is read only by check-plugin-rollout.py / session-rollout-drift.py / their tests; no script compares GLOSSARY with it). READING (a) real defect: GLOSSARY is the first doc every session reads (CLAUDE.md context strategy step 1); a row describing an inert gate as always-on denying is a doc-vs-actual-state contradiction (§4 docstring rule, §6 LLM duty 1), and fde's ad-hoc mark shows the intended convention. READING (b) intentional: the GLOSSARY 起動スコープ column describes design scope, not deployment state; parallelguard is parked for enablement only and still rolled out, so 'always-on' describes how it would run when armed, and fde's '（parked）' is a one-off not a rule. HOW TO TELL APART: a human ruling on whether GLOSSARY rows must reflect parked state; if yes, mark the parallelguard row and keep this test (or fold it into a checker); if no, remove the fde mark or cancel this item with the ruling."
+created_at = 1793708695
+updated_at = 1793715584
+weight = 0.0
+issue_number = 1508
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1508"
+issue_closed_at = 1793715588
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q scripts/test_glossary_parked_marking_20261103.py"
+rev = "22051d62dd505b4ab0000ef9fe1d431da5e64073"
+observed_at = 1793708695
+detail = """
+exit 1: ard']
+E       + [] : GLOSSARY rows for parked plugins carry no parked marking: ['parallelguard']
+
+scripts/test_glossary_parked_marking_20261103.py:51: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_glossary_parked_marking_20261103.py::GlossaryParkedMarking::test_every_parked_plugin_row_is_marked_parked
+1 failed, 1 passed in 0.04s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q scripts/test_glossary_parked_marking_20261103.py"
+exit = 0
+passed = 2
+rev = "5ba389aa4c9a7e312c90e9a65bbdb96c99e10eb0"
+observed_at = 1793715577
+output_digest = "sha256:0a97b591ab7ce9644866a9aea8e19c37ff6647585418c546d0481e0cb92bfbc7"
+excerpt = """
+..                                                                       [100%]
+2 passed in 0.14s
+"""
+
+[task.closure.red]
+rev = "7057a4d75031347557f878cead08146110461f56"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "03885f11"
+title = "blastguard: writes to .git/config are not protected (.git/config missing from PROTECTED_GLOBS)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "fail-open",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """Already present before 0.2.218 (found 2026-11-03 by the FP3 test author). python3 - <<'EOF' open('.git/config','a').write('[core] hooksPath = /tmp'), echo x >> .git/config and python3 -c "open('.git/config','a')..." are all ALLOWED, while git config core.hooksPath /tmp is denied, so a plain file write can set hooksPath and disable the gates. exclude.rs PROTECTED_GLOBS has .git/hooks/** but not .git/config."""
+created_at = 1793672951
+updated_at = 1793716172
+weight = 0.0
+issue_number = 1493
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1493"
+issue_closed_at = 1793716175
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_stdin_git_string_fp_20261103 control_python_stdin_program_appending_git_config"
+rev = "6a3ef5da9909fcf5e796b092f9f49b2be2164e5a"
+observed_at = 1793672951
+detail = """
+exit 101: wed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.33s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/python_stdin_git_string_fp_20261103.rs (target/debug/deps/python_stdin_git_string_fp_20261103-752bb3b1e3271a9d)
+error: test failed, to rerun pass `-p blastguard --test python_stdin_git_string_fp_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test git_config_write_protected_20261103"
+exit = 0
+passed = 10
+rev = "507f65a38499777d55bced4792dce71d06f7a34a"
+observed_at = 1793716154
+output_digest = "sha256:d4bd7ca8ac9d39590aae9b057aba338fb9d07c3afe2dd031f44e3c78ff3db730"
+excerpt = """
+
+running 10 tests
+test control_git_config_get_hookspath_stays_allowed ... ok
+test control_cat_git_config_stays_allowed ... ok
+test bash_printf_truncate_write_to_git_config_is_not_allowed ... ok
+test bash_append_redirect_to_git_config_is_not_allowed ... ok
+test bash_python_c_append_hookspath_to_git_config_is_not_allowed ... ok
+test control_append_to_unrelated_git_config_named_file_stays_allowed ... ok
+test edit_tool_on_git_config_is_not_allowed ... ok
+test bash_append_redirect_to_nested_repo_git_config_is_not_allowed ... ok
+test write_tool_on_git_config_is_not_allowed ... ok
+test sanity_bash_write_to_git_hooks_is_refused_in_this_fixture ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+   Compiling blastguard v0.2.248 (/Users/yuki/src/.harness-worktrees/session-6d697f68-b/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.03s
+     Running tests/git_config_write_protected_20261103.rs (target/debug/deps/git_config_write_protected_20261103-48dd8ed3b7e776e4)
+"""
+
+[task.closure.red]
+rev = "fcdf557969d40b02708edca31a6eb3ce5781d240"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "7ac39b44"
+title = "backlog tests: a fresh per-fixture condukt shim's first exec (~2.3s on this host) trips the 2.5s claim-check timeout"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "backlog",
+    "flaky-test",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Measured 2026-11-03 at main fcbcfc3f. cargo test -p backlog --test closure_evidence failed 3 of 3 parallel runs (14, 17 and 15 of 31 failed) and also failed with --test-threads=1 (14 of 31). Each failure was 'add refused: the cross-session claim check could not be made (timed out after 2.5s)'. Probe: a newly written 3-line #!/bin/sh script took real 2.35s and 2.32s on its first exec and 0.00s on later execs, so this is not load (load average was 6 at the time). Cause: tests/common/mod.rs Fixture::new writes a NEW condukt shim (NOT_CLAIMED_CONDUKT) into a unique dir per fixture. Its first exec pays the host's new-executable cost, which uses up nearly all of IS_CLAIMED_TIMEOUT (2.5s). The shared condukt_shim_dir() (backlog-test-condukt-shim-v2) avoids that cost. Not caused by the stdin work (run-20261103-214242-9422): the shim's stdin is null. Do NOT fix by raising the timeout (coordinator ruling)."
+created_at = 1793714987
+updated_at = 1793717637
+weight = 0.0
+issue_number = 1510
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1510"
+issue_closed_at = 1793717641
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test closure_evidence"
+rev = "6e6ed5868bb00709ffecb183c567418f86bf6f5d"
+observed_at = 1793714987
+detail = """
+exit 101: rness-worktrees/session-c4aa3733-fixes/crates/harness-core)
+   Compiling backlog v0.3.76 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-fixes/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.77s
+     Running tests/closure_evidence.rs (target/debug/deps/closure_evidence-221df5dead63d61c)
+error: test failed, to rerun pass `-p backlog --test closure_evidence`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test fixture_shared_condukt_shim"
+exit = 0
+passed = 2
+rev = "4eb398a691b6232cdfbb71e3fcc1f784b147633a"
+observed_at = 1793717623
+output_digest = "sha256:3b9dbf09e3bb2802c07c449d079e0a13c0994c541ecf70a359ca216951ab37d6"
+excerpt = """
+
+running 2 tests
+test default_fixture_does_not_write_a_fresh_condukt_executable ... ok
+test default_fixture_add_of_a_reproduced_ticket_still_lands ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/fixture_shared_condukt_shim.rs (target/debug/deps/fixture_shared_condukt_shim-562da4c457ff7438)
+"""
+
+[task.closure.red]
+rev = "2fb979df373e585c682dfce63a94d9eca995c5e1"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/backlog/tests/fixture_shared_condukt_shim.rs"]
+
+[[task]]
+id = "fbc2d42e"
+title = "guard-maintree-bash refuses a real merge when main has an unchanged pre-existing tracked modification (misleading 'not a merge / fast-forward')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "guard-maintree-bash,false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Measured at rev 3d58ecce, 2026-11-03. Observed in the field: condukt worktree merge c23cc705 (parents 800b3318, 6f7136e8) and fcbcfc3f (parents b13a47cf, 3dc82ddd) refused with 'HEAD 800b33189836 -> c23cc705e421 (not a merge / fast-forward)'. Cause NOT proven for those two events; this test reproduces the identical message for a two-parent merge when main had an unrelated tracked modification at Pre that is byte-identical at Post: only_unchanged_untracked() (scripts/guard-maintree-bash.py:428) returns False for any non-'? ' record, so integration_head() is never asked and the REFUSE text blames not-a-merge. Test: scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py. Expected rc 0; actual rc 2: 'AssertionError: 2 != 0 : genuine two-parent merge refused (rc=2): ... HEAD 231020add0ed -> 470036e66b84 (not a merge / fast-forward)'. Note the refuse message is emitted for any HEAD-moved refusal regardless of reason, so it cannot distinguish causes."
+created_at = 1793715182
+updated_at = 1793717856
+weight = 0.0
+issue_number = 1512
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1512"
+issue_closed_at = 1793717859
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py -q"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715182
+detail = """
+exit 1: ` before reverting anything.
+
+scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py:47: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py::MergeWithPreexistingTrackedMod::test_red_merge_allowed_with_unchanged_preexisting_tracked_modification
+1 failed in 1.34s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py"
+exit = 0
+passed = 1
+rev = "85502452f35aeef15f6b57de8bd7246543562234"
+observed_at = 1793717853
+output_digest = "sha256:b7290914241cf54da04b66d4a5d9bc4f91e811df46cb1f6c167d4a5ff9e1f026"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py . [100%]
+
+============================== 1 passed in 0.52s ===============================
+"""
+
+[task.closure.red]
+rev = "e0efebd1d11cdeceff507599b3a36231c8f53d6e"
+exit = 1
+kind = "behavioural"
+overlay = ["scripts/test_guard_maintree_bash_merge_with_preexisting_tracked_mod.py"]
+
+[[task]]
+id = "c74364bf"
+title = "check-test-weakening: #[cfg(test)] text inside a comment is treated as an attribute"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "check-test-weakening,false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Measured at rev 3d58ecce, 2026-11-03. Test: scripts/test_check_test_weakening_f_findings.py. Production fn losing one assert! (2 -> 1) is reported 'assertion-removed' because cfg_test_modules() (scripts/check-test-weakening.py:720) runs CFG_TEST_RE.finditer on RAW src and takes src.find('{') after the match. Expected exit 0; actual: 'AssertionError: 1 != 0 ... STDOUT:[BLOCK] crates/demo/src/lib.rs: assertion-removed (assertion macros 2 -> 1)'. Sub-case: comment."
+created_at = 1793715205
+updated_at = 1793718419
+weight = 0.0
+issue_number = 1513
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1513"
+issue_closed_at = 1793718423
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_f_findings.py -q -k in_comment"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715205
+detail = """
+exit 1: ay so in the commit message:
+E         test-weakening-justified: <path>:<kind> - <reason>
+
+scripts/test_check_test_weakening_f_findings.py:45: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_f_findings.py::CfgTestTextIsNotAnAttribute::test_cfg_test_in_comment_is_not_an_attribute
+1 failed, 3 deselected in 0.55s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_f_findings.py::CfgTestTextIsNotAnAttribute::test_cfg_test_in_comment_is_not_an_attribute"
+exit = 0
+passed = 1
+rev = "03354638010df0e1981041ec6f72c40e2b114c4b"
+observed_at = 1793718416
+output_digest = "sha256:790e4e4bdcf87857d85c66d48597022bce214e47897a3f1c620b743f6b403191"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_check_test_weakening_f_findings.py .                        [100%]
+
+============================== 1 passed in 0.72s ===============================
+"""
+
+[task.closure.red]
+rev = "ec6754d683e7b21c0d6818e448af683cb083caa6"
+exit = 1
+kind = "behavioural"
+overlay = ["scripts/test_check_test_weakening_f_findings.py"]
+
+[[task]]
+id = "1cdb1503"
+title = "check-test-weakening: #[cfg(test)] text inside a string literal is treated as an attribute"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "check-test-weakening,false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Measured at rev 3d58ecce, 2026-11-03. Test: scripts/test_check_test_weakening_f_findings.py. Production fn losing one assert! (2 -> 1) is reported 'assertion-removed' because cfg_test_modules() (scripts/check-test-weakening.py:720) runs CFG_TEST_RE.finditer on RAW src and takes src.find('{') after the match. Expected exit 0; actual: 'AssertionError: 1 != 0 ... STDOUT:[BLOCK] crates/demo/src/lib.rs: assertion-removed (assertion macros 2 -> 1)'. Sub-case: string literal."
+created_at = 1793715208
+updated_at = 1793718433
+weight = 0.0
+issue_number = 1514
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1514"
+issue_closed_at = 1793718436
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_f_findings.py -q -k in_string_literal"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715208
+detail = """
+exit 1: n the commit message:
+E         test-weakening-justified: <path>:<kind> - <reason>
+
+scripts/test_check_test_weakening_f_findings.py:49: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_f_findings.py::CfgTestTextIsNotAnAttribute::test_cfg_test_in_string_literal_is_not_an_attribute
+1 failed, 3 deselected in 0.50s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_f_findings.py::CfgTestTextIsNotAnAttribute::test_cfg_test_in_string_literal_is_not_an_attribute"
+exit = 0
+passed = 1
+rev = "03354638010df0e1981041ec6f72c40e2b114c4b"
+observed_at = 1793718424
+output_digest = "sha256:bf3e0120b94ae3d2460e0204f29e31669b9b42edda5f08ac52b883d60c385c84"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_check_test_weakening_f_findings.py .                        [100%]
+
+============================== 1 passed in 2.19s ===============================
+"""
+
+[task.closure.red]
+rev = "ec6754d683e7b21c0d6818e448af683cb083caa6"
+exit = 1
+kind = "behavioural"
+overlay = ["scripts/test_check_test_weakening_f_findings.py"]
+
+[[task]]
+id = "9371508a"
+title = "check-test-weakening: #[cfg(test)] use x; captures the next unrelated block"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "check-test-weakening,false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Measured at rev 3d58ecce, 2026-11-03. Test: scripts/test_check_test_weakening_f_findings.py. Production fn losing one assert! (2 -> 1) is reported 'assertion-removed' because cfg_test_modules() (scripts/check-test-weakening.py:720) runs CFG_TEST_RE.finditer on RAW src and takes src.find('{') after the match. Expected exit 0; actual: 'AssertionError: 1 != 0 ... STDOUT:[BLOCK] crates/demo/src/lib.rs: assertion-removed (assertion macros 2 -> 1)'. Sub-case: cfg(test) use statement followed by a production fn."
+created_at = 1793715210
+updated_at = 1793718442
+weight = 0.0
+issue_number = 1515
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1515"
+issue_closed_at = 1793718446
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_f_findings.py -q -k cfg_test_use"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715210
+detail = """
+exit 1:  in the commit message:
+E         test-weakening-justified: <path>:<kind> - <reason>
+
+scripts/test_check_test_weakening_f_findings.py:53: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_f_findings.py::CfgTestTextIsNotAnAttribute::test_cfg_test_use_does_not_capture_the_next_block
+1 failed, 3 deselected in 0.61s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_f_findings.py::CfgTestTextIsNotAnAttribute::test_cfg_test_use_does_not_capture_the_next_block"
+exit = 0
+passed = 1
+rev = "03354638010df0e1981041ec6f72c40e2b114c4b"
+observed_at = 1793718436
+output_digest = "sha256:471a99c44c1e7c6953f10cbb1659a8959a19308a37068c8314ff2b27db694550"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_check_test_weakening_f_findings.py .                        [100%]
+
+============================== 1 passed in 1.07s ===============================
+"""
+
+[task.closure.red]
+rev = "ec6754d683e7b21c0d6818e448af683cb083caa6"
+exit = 1
+kind = "behavioural"
+overlay = ["scripts/test_check_test_weakening_f_findings.py"]
+
+[[task]]
+id = "b1787e4c"
+title = "check-test-weakening: weakened test body behind an unsearched declarer (inline mod a { mod tests; }) is clean"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "check-test-weakening,fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Measured at rev 3d58ecce, 2026-11-03. Test: scripts/test_check_test_weakening_f_findings.py::UnreachedDeclarer. lib.rs declares 'mod a { #[cfg(test)] mod tests; }'; only crates/demo/src/a/tests.rs changes and loses one assert_eq!. test_body_root does not find the inline-block declarer so the body is scanned as production code. Expected exit 1 or 2; actual: 'AssertionError: 0 not found in (1, 2) : weakened test body scanned as production: clean STDOUT:check-test-weakening: no unacknowledged test weakening.'"
+created_at = 1793715213
+updated_at = 1793718449
+weight = 0.0
+issue_number = 1516
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1516"
+issue_closed_at = 1793718452
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_f_findings.py -q -k inline_mod_declarer"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715213
+detail = """
+exit 1:   STDOUT:check-test-weakening: no unacknowledged test weakening.
+E       
+E       STDERR:
+
+scripts/test_check_test_weakening_f_findings.py:68: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_f_findings.py::UnreachedDeclarer::test_body_file_behind_inline_mod_declarer_is_not_clean
+1 failed, 3 deselected in 0.56s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_f_findings.py::UnreachedDeclarer::test_body_file_behind_inline_mod_declarer_is_not_clean"
+exit = 0
+passed = 1
+rev = "03354638010df0e1981041ec6f72c40e2b114c4b"
+observed_at = 1793718446
+output_digest = "sha256:4809083e081d209b39c2bef1ab21e8c0484b690f6a69ae2fc1ddaa0daa344c84"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 1 item
+
+scripts/test_check_test_weakening_f_findings.py .                        [100%]
+
+============================== 1 passed in 0.62s ===============================
+"""
+
+[task.closure.red]
+rev = "ec6754d683e7b21c0d6818e448af683cb083caa6"
+exit = 1
+kind = "behavioural"
+overlay = ["scripts/test_check_test_weakening_f_findings.py"]
+
+[[task]]
+id = "772b2f3a"
+title = "condukt: parse_argv turns an unterminated-quote command into a whitespace-split argv instead of undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt,fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """Measured at rev 3d58ecce (condukt 0.7.322), 2026-11-03. crates/condukt/src/verify.rs:1663 parse_argv = shlex::split(s).unwrap_or_else(whitespace split). Caller: mechanical_cmd -> state check-criteria, which RUNS the argv and sets skip_verifier from its exit code, so it is not display-only. Test: crates/condukt/tests/check_criteria_unterminated_quote.rs. done_criteria with backtick span cargo test -p demo -- "never_closed. Expected: no cmd extracted (undetermined); actual: 'extracted as argv Some(Array [cargo,test,-p,demo,--,"never_closed])' and it was executed. Note: unit test parse_argv_falls_back_on_unterminated_quote in verify.rs pins the current fallback (frozen assert) and will need re-anchoring when fixed."""
+created_at = 1793715216
+updated_at = 1793718648
+weight = 0.0
+issue_number = 1518
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1518"
+issue_closed_at = 1793718650
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test check_criteria_unterminated_quote"
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+observed_at = 1793715216
+detail = """
+exit 101: 
+   Compiling condukt v0.7.322 (/Users/yuki/src/.harness-worktrees/file-script-findings-20261103/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.76s
+     Running tests/check_criteria_unterminated_quote.rs (target/debug/deps/check_criteria_unterminated_quote-0c8c16d8b5d6828f)
+error: test failed, to rerun pass `-p condukt --test check_criteria_unterminated_quote`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test check_criteria_unterminated_quote"
+exit = 0
+passed = 1
+rev = "e03b12f9b8f41192919bc0c96d264452bf5a4dec"
+observed_at = 1793718624
+output_digest = "sha256:8efc62b98ca3a57107a9387696bd720b8b24dafc10c59ca1ec5a9a9d33513f7b"
+excerpt = """
+
+running 1 test
+test unterminated_quote_in_criteria_command_is_not_extracted_as_a_command ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
+
+   Compiling condukt v0.7.326 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.54s
+     Running tests/check_criteria_unterminated_quote.rs (target/debug/deps/check_criteria_unterminated_quote-6e5b1a4635b05bc3)
+"""
+
+[task.closure.red]
+rev = "3d58eccef0c94f55a67389489b0e89d392d0a2c5"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/condukt/tests/check_criteria_unterminated_quote.rs"]
+
+[[task]]
+id = "658b7839"
+title = "blastguard FP4: python3 -c read-only open() misattributed as the write target"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """Cause: in a python3 -c program, blastguard pairs the mode 'w' of the scratch open('<scratch>/task-%s.json'%t['id'],'w') with the earlier read-only open('<decomposition.json>') (default mode), so the read-only file is reported as the write target. Observed 2026-11-03, blastguard 0.2.218. Repro: crates/blastguard/tests/python_c_read_open_misattributed_fp_20261103.rs (fp4_ RED; control must stay non-allow). Expected: same verdict as the command without the read open (allow in a temp-dir scratch). Verbatim denial reason: "`python3` is invoked with an inline-eval flag, and it writes `/Users/yuki/.condukt/state/harness-e77d23c7/run-20261103-102800-88064.decomposition.json` (`,'w')`) — it exists, and it is not inside a git work tree — nothing holds a second copy of these bytes". Denied command: python3 -c "import json;d=json.load(open('/Users/yuki/.condukt/state/harness-e77d23c7/run-20261103-102800-88064.decomposition.json')) / for t in d['tasks']: open('<scratchpad>/task-%s.json'%t['id'],'w').write(json.dumps(t,ensure_ascii=False,indent=1)) / print('ok')""""
+created_at = 1793675446
+updated_at = 1793727228
+weight = 0.0
+issue_number = 1506
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1506"
+issue_closed_at = 1793727231
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_c_read_open_misattributed_fp_20261103 fp4_"
+rev = "3b0d2e89dc53dedb26b69dbe7c6de874ff2abfd1"
+observed_at = 1793675446
+detail = """
+exit 101:  passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.06s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/python_c_read_open_misattributed_fp_20261103.rs (target/debug/deps/python_c_read_open_misattributed_fp_20261103-3db3e44148957530)
+error: test failed, to rerun pass `-p blastguard --test python_c_read_open_misattributed_fp_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test python_c_read_open_misattributed_fp_20261103"
+exit = 0
+passed = 2
+rev = "a02414fc3ebfb23d94f2461f076ec50e3c5b282e"
+observed_at = 1793727193
+output_digest = "sha256:5e13f98986959ee7d60bfd9270df4b209179086494eeb0d281f64f29ec859588"
+excerpt = """
+
+running 2 tests
+test control_python_c_really_writing_an_existing_unbacked_file_is_still_refused ... ok
+test fp4_read_only_open_is_not_reported_as_the_write_target ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
+   Compiling blastguard v0.2.249 (/Users/yuki/src/.harness-worktrees/session-6d697f68-c/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.52s
+     Running tests/python_c_read_open_misattributed_fp_20261103.rs (target/debug/deps/python_c_read_open_misattributed_fp_20261103-02260ecceb83b969)
+"""
+
+[task.closure.red]
+rev = "a015dbef833f0297e672353c025540324355e488"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "80b18990"
+title = "blastguard: python3 stdin program using re.compile( is asked as code-building"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard,false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-03 at blastguard 0.2.245 (measured at 0.2.246 branch base 6e6ed586). A python3 - heredoc program that only calls re.compile( (regex, not code exec) returns ask: python3 - takes its program from stdin, and that program builds or decodes the code it runs (compile() ). Test: crates/blastguard/tests/python_stdin_re_compile_fp_20261103.rs. Expected allow, actual ask."
+created_at = 1793715031
+updated_at = 1793728998
+weight = 0.0
+issue_number = 1511
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1511"
+issue_closed_at = 1793729002
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_stdin_re_compile_fp_20261103"
+rev = "6ae75e70d7167765023d22bdfaaace8de942ce2a"
+observed_at = 1793715031
+detail = """
+exit 101: wed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/python_stdin_re_compile_fp_20261103.rs (target/debug/deps/python_stdin_re_compile_fp_20261103-bd5a6e9183aab4c1)
+error: test failed, to rerun pass `-p blastguard --test python_stdin_re_compile_fp_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test python_stdin_re_compile_fp_20261103"
+exit = 0
+passed = 1
+rev = "c1d3cd4e65288a0ac4929821b8047ddf54b5476c"
+observed_at = 1793728969
+output_digest = "sha256:b6d5c2caddc2ec56c34d5687c5082a36327bacc814559cb24d9a94181d5b7e0c"
+excerpt = """
+
+running 1 test
+test fb_python_stdin_program_with_re_compile_is_allowed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/python_stdin_re_compile_fp_20261103.rs (target/debug/deps/python_stdin_re_compile_fp_20261103-9f3e9ee78f61b63e)
+"""
+
+[task.closure.red]
+rev = "a015dbef833f0297e672353c025540324355e488"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "72f471d3"
+title = "curate derive: unterminated-quote backtick span becomes a runnable golden (split_whitespace twin of GH 1518)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "curate",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """Measured 2026-11-04 at session worktree rev 7dbeeb09. crates/curate/src/derive.rs backticked_command uses inner.split_whitespace() with no shlex; condukt verify::mechanical_cmd was made fail-closed for the same input in GH 1518 (user ruling 2026-11-03: an unterminated quote yields no mechanical command). Observed: criteria with an unterminated quote yields golden cmd [cargo,test,-p,demo,--,"never_closed] (stray quote glued), and a FOO=1 head falls through to test_runner_command yielding [cargo,test,-p,demo], a different command. evalkit runs the golden and asserts exit 0. Expected: draft (no cmd), per curate's auto+draft-fallback policy. Repro: crates/curate/tests/unterminated_quote_is_draft.rs (7dbeeb09). Whether the condukt ruling extends to curate is a judgment: if a human says curate goldens are review-before-trust anyway, close as won't-do."""
+created_at = 1793718555
+updated_at = 1793728437
+weight = 0.0
+issue_number = 1522
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1522"
+issue_closed_at = 1793728441
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p curate --test unterminated_quote_is_draft"
+rev = "7dbeeb09129482fb37ead84d6c9c2a3539c45a22"
+observed_at = 1793718555
+detail = """
+exit 101: d out; finished in 0.44s
+
+   Compiling curate v0.1.13 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues/crates/curate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running tests/unterminated_quote_is_draft.rs (target/debug/deps/unterminated_quote_is_draft-9cdcccafa995c3b3)
+error: test failed, to rerun pass `-p curate --test unterminated_quote_is_draft`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p curate --test unterminated_quote_is_draft"
+exit = 0
+passed = 1
+rev = "689b42a0efa9298a146865bb3a78fc4c82ef6446"
+observed_at = 1793728382
+output_digest = "sha256:be83bde6a30e8aeaff4d805319c8cc08733126ecb99d35042c760890ed4549cc"
+excerpt = """
+
+running 1 test
+test unterminated_quote_span_yields_a_draft_not_a_runnable_golden ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/unterminated_quote_is_draft.rs (target/debug/deps/unterminated_quote_is_draft-601f15bb066eeac1)
+"""
+
+[task.closure.red]
+rev = "7dbeeb09129482fb37ead84d6c9c2a3539c45a22"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "732148d2"
+title = "condukt verify + curate derive: unterminated quote in no-backtick prose criteria still yields a command (GH 1518 extension)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "curate",
+    "fail-open",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = """User ruling 2026-11-04 extends GH 1518 (unterminated quote yields NO command) to the prose fallback. Observed RED at 8041551f: condukt mechanical_cmd prose arms yield [cargo,test,-p,demo] for 'cargo test -p demo -- "x exits 0' and a stray-quote pytest argv; curate test_runner_command yields a runnable golden. Repro: crates/condukt/tests/check_criteria_prose_unterminated_quote.rs, crates/curate/tests/unterminated_quote_prose_is_draft.rs."""
+created_at = 1793719666
+updated_at = 1793728485
+weight = 0.0
+issue_number = 1523
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1523"
+issue_closed_at = 1793728488
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test check_criteria_prose_unterminated_quote"
+rev = "8041551fe0e010b56f6529d4b495f4c76d5ccf19"
+observed_at = 1793719666
+detail = """
+exit 101: t v0.7.327 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-failclosed-ext/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.78s
+     Running tests/check_criteria_prose_unterminated_quote.rs (target/debug/deps/check_criteria_prose_unterminated_quote-2ce2c866e37e01f5)
+error: test failed, to rerun pass `-p condukt --test check_criteria_prose_unterminated_quote`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test check_criteria_prose_unterminated_quote"
+exit = 0
+passed = 2
+rev = "689b42a0efa9298a146865bb3a78fc4c82ef6446"
+observed_at = 1793728445
+output_digest = "sha256:984c4bf645888d8619e2e39b22b8d83d3d8945a9ef75d5e35273aa10d4b5290b"
+excerpt = """
+
+running 2 tests
+test balanced_or_plain_prose_criteria_still_yield_a_command ... ok
+test unterminated_quote_in_prose_criteria_is_not_extracted_as_a_command ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/check_criteria_prose_unterminated_quote.rs (target/debug/deps/check_criteria_prose_unterminated_quote-2ec335da07fd0dc2)
+"""
+
+[task.closure.red]
+rev = "8041551fe0e010b56f6529d4b495f4c76d5ccf19"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "1943843c"
+title = "blastguard: read-only python3 -c with 'recursive rm' string data denied as rm with a wildcard"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard,false-positive",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-03 at blastguard 0.2.245 (re-measured at branch base 6e6ed586 + test, 0.2.247). A python3 -c program that only opens a file, json-parses lines and prints, with the string literal 'recursive rm' as data, is denied: rm with a wildcard can delete many files at once. Test: crates/blastguard/tests/python_c_recursive_rm_literal_fp_20261103.rs. Expected: not deny; actual: deny."
+created_at = 1793715217
+updated_at = 1793743967
+weight = 0.0
+issue_number = 1517
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1517"
+issue_closed_at = 1793743969
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_c_recursive_rm_literal_fp_20261103 -- --ignored"
+rev = "03bc65978e28d44ac6f89347fcef561fd70b1c72"
+observed_at = 1793730406
+detail = """
+exit 101: uard v0.2.252 (/Users/yuki/src/.harness-worktrees/session-064f2060/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.99s
+     Running tests/python_c_recursive_rm_literal_fp_20261103.rs (target/debug/deps/python_c_recursive_rm_literal_fp_20261103-92f39f4cb8faf911)
+error: test failed, to rerun pass `-p blastguard --test python_c_recursive_rm_literal_fp_20261103`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test python_c_recursive_rm_literal_fp_20261103"
+exit = 0
+passed = 1
+rev = "610675b3ff82f30bb03f04020c2812eb57df6f4e"
+observed_at = 1793743952
+output_digest = "sha256:4486a311fc5e1b7ea67a53b475836bc3c4098510659cc61a4e4ca25b1c16a0f6"
+excerpt = """
+
+running 1 test
+test fa_python_c_reading_file_with_recursive_rm_literal_is_not_denied ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/python_c_recursive_rm_literal_fp_20261103.rs (target/debug/deps/python_c_recursive_rm_literal_fp_20261103-680beac9b97673cb)
+"""
+
+[task.closure.red]
+rev = "a015dbef833f0297e672353c025540324355e488"
+exit = 101
+kind = "behavioural"

@@ -34,7 +34,7 @@
 #                                                 the commit's own files so a
 #                                                 parallel session's change
 #                                                 cannot block this one (the
-#                                                 whole-workspace --ratchet
+#                                                 whole-workspace count
 #                                                 would); backlog 2133b6fe
 #   doc-duplication    check-doc-duplication.py   a change that ADDS a copy of a
 #                                                 block (Jaccard >= 0.6 over
@@ -138,6 +138,15 @@
 #                                                 Scoped to what the working
 #                                                 tree changed vs HEAD (backlog
 #                                                 7ecf3797)
+#   file-growth      check-file-growth.py       a staged .rs/.py file (index
+#                                                 content) over 2000 lines, or a
+#                                                 grandfathered file over its cap
+#                                                 in scripts/check-file-growth.
+#                                                 baseline, or a staged baseline
+#                                                 that raises a cap vs HEAD / adds
+#                                                 an entry over 2000 above that
+#                                                 file's size at HEAD. Caps only
+#                                                 go down
 #
 # Plus one Rust gate (not python3):
 #   main-tree-guard    condukt guard main-tree    a commit from the SHARED primary
@@ -238,6 +247,7 @@ run check-launcher-exec-bit.py launcher-exec-bit
 run check-clippy-lints.py     clippy-lints
 run check-backlog-store.py    backlog-store
 run check-projkey-store-classification.py projkey-classification
+run check-file-growth.py      file-growth
 
 # main-tree-guard — CLAUDE.md §8, the one gate here that is Rust rather than
 # python3, because its decision is a tri-state over injectable inputs and is
@@ -434,7 +444,13 @@ Remediation hints:
                     `chmod +x` does nothing here, since this repo sets
                     core.fileMode=false and git therefore ignores the working
                     tree's mode entirely.
-  main-tree-guard   commit from a worktree instead of the shared primary tree
+  file-growth       a staged .rs/.py file is over 2000 lines (or over its cap in
+                    scripts/check-file-growth.baseline). Split it into smaller
+                    modules; never raise a cap, and a new baseline entry over
+                    2000 may only record a file's existing size at HEAD (not
+                    growth). After a split, lower or delete the entry in the same
+                    commit.
+  main-tree-guard  commit from a worktree instead of the shared primary tree
                     (`condukt worktree create`, or `git stash` + `git worktree
                     add`). Merges and rebases in the main tree already pass. If
                     you must commit here anyway, say why:

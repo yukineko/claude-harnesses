@@ -12,6 +12,50 @@ path = "crates/blastguard/src/callgraph.rs"
 reason = "Thin re-export of harness_core::callgraph; blastguard.md does not mention callgraph. The behaviour belongs to harness-core, not this gate's spec."
 
 [[ack]]
+path = "crates/blastguard/src/detect/tests.rs"
+reason = "Pure test move: the inline unit tests of detect.rs relocated verbatim (de-indented) into src/detect/tests.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/segment.rs"
+reason = "Pure move: the command-line segment splitters (split_segments, split_segments_paren_aware, split_segments_with_separators, SegmentSep, SeparatedSegment and the assignment-reach helpers) relocated verbatim out of detect.rs; the spec's split_segments description is unchanged, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/heredoc.rs"
+reason = "Pure move: the here-document recognisers and body strippers (here_document_delimiter_is_quoted through here_document_consumer_is_data) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/substitution.rs"
+reason = "Pure move: the process-/command-substitution payload scanners (process_substitution_payloads through command_substitution_payloads, Stop, scan_balanced) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/words.rs"
+reason = "Pure move: the command-word and flag helpers (basename through foreign_shell_runs_code, incl. is_short_flag, has_short, is_redirect_token, is_bare_redirect_op, takes_shell_command_flag) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/interpreter.rs"
+reason = "Pure move: the code-interpreter audit (is_code_interpreter through analyze_code_interpreter, incl. INTERPRETER_* call tables, strip_hash_comments, protected_operand_ask, quoted_string_literals) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/payload.rs"
+reason = "Pure move: the stdin-exec and payload-extraction helpers (stage_has_program_operand through unclosed_substitution_opener_end, incl. analyze_interpreter_stdin_exec, shell_here_string_verdict, dash_c_payloads, payloads_after, inline_command_payloads) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/vars.rs"
+reason = "Pure move: the expansion/variable resolvers (CommandWordOrigin, opens_unmodelled_construct through resolve_expanded_command_word, has_unresolvable_expansion, unresolvable_command_word) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/redirect.rs"
+reason = "Pure move: the redirect-target placers and scanners (place_redirect_target through redirect_target_is_safe, resolve_redirect_target_at through is_angle_placeholder_close) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/cwd.rs"
+reason = "Pure move: the shell working-directory tracker (CwdState through segment_cwd_states, verb_operands_are_rewritten, SubshellCwdScopes, cwd_rewrite_was_lost, line_changes_cwd_before) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/compound.rs"
+reason = "Pure move: the compound-command views (COMPOUND_PREFIX_WORDS through strip_unmatched_close_parens, analyze_expanded_data through loop_variants) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
 path = "crates/blastguard/src/detect/executors.rs"
 reason = "blastguard.md's detect section covers shells and eval wrappers but not the awk system()/git -c pager/env -S executor rules this file adds (daf7611b). Spec debt."
 
@@ -190,3 +234,43 @@ reason = "Unit-test submodule (classified impl by the path heuristic) blinding b
 [[ack]]
 path = "crates/specguard/src/gitenv_testutil.rs"
 reason = "test-only fixture (#[cfg(test)]) for GIT_DIR scrub tests; no production behaviour to specify"
+
+[[ack]]
+path = "crates/blastguard/src/detect/protected.rs"
+reason = "Pure move: the protected-path and system-path verdicts (protected_path_block through protected_glob_deny, incl. MAX_SYMLINK_HOPS, physical_landing, system_path_block, glob_literal_prefix) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/readonly.rs"
+reason = "Pure move: the read-only command table and recognised-verb helpers (READ_ONLY_COMMANDS through backlog_writes_operand_paths, plus is_recognized_command) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/fileops.rs"
+reason = "Pure move: the per-verb file-operation analysers and operand helpers (analyze_unlink_rmdir through analyze_uniq, has_glob_meta through mode_removes_read, positional_operands through analyze_sed) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/rm.rs"
+reason = "Pure move: the rm analyser and its eligibility helpers (analyze_rm through placeable_targets, incl. checkout_exempt_eligible, literal_cd_and_rest, worktree_rm_eligible, deletion_rm_eligible, worktree_confined) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/find_xargs.rs"
+reason = "Pure move: the find and xargs analysers (find_search_roots through find_confined_root, analyze_find through xargs_reads_arg_file, incl. NARROWING_PREDICATES, xargs_command_start, XARGS_* flag tables) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/git.rs"
+reason = "Pure move: the git analysers (git_subcommand_index through checkout_pathspec_verdict, incl. HOOKSPATH_REASON, git_global_config_assignments, sets_hookspath_inline; and analyze_git) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/gh.rs"
+reason = "Pure move: the gh invocation classifier (analyze_gh and analyze_gh_api) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/sinks.rs"
+reason = "Pure move: the egress and fetched-payload-exec sinks (split_statements_into_pipe_stages through analyze_nc, incl. analyze_pipe_egress, analyze_process_substitution_egress, analyze_here_string_egress, HereStringSpan, contains_dev_tcp_or_udp, analyze_fetch) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/src/detect/high_blast.rs"
+reason = "Pure move: the high-blast Ask tier (analyze_high_blast_tier through high_blast_outside_tree_rm, incl. high_blast_git_force_push, refspec_source_is_force, high_blast_schemeless_upload) relocated verbatim out of detect.rs; no behavior or spec-visible change, so no spec text is owed."
+
+[[ack]]
+path = "crates/blastguard/tests/python_stdin_git_string_fp_20261103.rs"
+reason = "Test-only file, not gate implementation: RED repro (fp3) for backlog 61558e27, cancelled as an accepted limit by user ruling 2026-11-03, plus two controls that .git writes from a python stdin program stay non-allow. Its #[ignore] (df77dc73) documents that limit; no docs/specs doc describes individual regression tests."

@@ -140,15 +140,33 @@ as code — these cases are still ask/deny today: {not_allowed:#?}"
     );
 }
 
+const PYTHON3_LABEL: &str = "reader not on the safe list (python3): body still analysed";
+const PERL_LABEL: &str = "perl body backtick is a real shell substitution";
+
 /// Negative controls: shapes that must NOT be allowed, because at least one of
 /// the safe-reader conditions fails. Per spec these should already hold on
 /// today's (unfixed) code, since body-skipping does not exist yet — every one
 /// of these already gets full body analysis, and the ones with a genuinely
 /// destructive/unresolvable body line are already `ask`/`deny`. Any case that
 /// is NOT ask/deny today is flagged as a pre-existing gap, not papered over.
+///
+/// Two cases are additionally pinned to an EXACT decision, not just ask/deny:
+///
+/// * python3 — this control was added in c4682476 (blastguard 0.2.70, backlog
+///   6cf12ce9) to pin that python3 is NOT on the safe-reader list, i.e. its
+///   heredoc body is still analysed. It originally used a backtick body
+///   (`` `x` ``) as a proxy for that property. Per the user ruling (option A,
+///   2026-11-03) the proxy was replaced: a backtick inside a Python body is
+///   literal text, not a shell substitution (FP2, backlog ef015a66), so an
+///   ask on it is a false positive rather than evidence of body analysis. The
+///   control is re-anchored to the property itself: a destructive body line
+///   (`rm -rf ~/work`) must be seen and must resolve to exactly `deny`, which
+///   can only happen if the body is analysed.
+/// * perl — the backtick proxy moves here, because in a Perl body a backtick
+///   IS a real shell substitution (qx), so it must stay exactly `ask`.
 #[test]
 fn negative_controls_stay_ask_or_deny() {
-    let cases: [(&str, &str); 12] = [
+    let cases: [(&str, &str); 13] = [
         (
             "unrecognised reader (bash) even with a quoted delimiter",
             "bash <<'EOF'\nrm -rf ~/work\nEOF",
@@ -173,10 +191,8 @@ fn negative_controls_stay_ask_or_deny() {
             "git commit -F - with an UNQUOTED delimiter",
             "git commit -F - <<EOF\n`done` is set\nEOF",
         ),
-        (
-            "reader not on the safe list (python3)",
-            "python3 - <<'PY'\n`x`\nPY",
-        ),
+        (PYTHON3_LABEL, "python3 - <<'PY'\nrm -rf ~/work\nPY"),
+        (PERL_LABEL, "perl - <<'PL'\n`x`\nPL"),
         (
             "code after `;` on the opener's own line",
             "cat <<'EOF'; $CMD x\n`done`\nEOF",
@@ -199,12 +215,29 @@ fn negative_controls_stay_ask_or_deny() {
         ),
     ];
     let mut not_gated: Vec<(&str, &str, String, String)> = Vec::new();
+    let mut wrong_exact: Vec<(&str, &str, &str, String, String)> = Vec::new();
     for (label, cmd) in cases {
         let (decision, reason) = verdict(cmd);
+        let exact = match label {
+            PYTHON3_LABEL => Some("deny"),
+            PERL_LABEL => Some("ask"),
+            _ => None,
+        };
+        if let Some(want) = exact {
+            if decision != want {
+                wrong_exact.push((label, cmd, want, decision.clone(), reason.clone()));
+            }
+        }
         if decision != "ask" && decision != "deny" {
             not_gated.push((label, cmd, decision, reason));
         }
     }
+    assert!(
+        wrong_exact.is_empty(),
+        "exact-decision controls (label, cmd, expected, actual, reason): \
+python3 must be `deny` (body analysed — c4682476 property), perl backtick \
+must be `ask` (real shell substitution): {wrong_exact:#?}"
+    );
     assert!(
         not_gated.is_empty(),
         "these negative controls are NOT currently ask/deny — pre-existing gap, \

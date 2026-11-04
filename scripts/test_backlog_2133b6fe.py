@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Closure regression for backlog 2133b6fe.
 
-2133b6fe: `check-fail-open.py --ratchet` (which scores the empty-collection
-fallback class, e.g. `Err(_) => Vec::new()`) was not called by ANY hook, so a
+2133b6fe: `check-fail-open.py` whole-workspace counting (which scored the empty-collection
+fallback class, e.g. `Err(_) => Vec::new()`) was not called by ANY hook (that mode was retired by user ruling 2026-11-03), so a
 new intrusion of that class was measured but never stopped. Completion
 condition: pick one of the options and prove a NEW intrusion is detected.
 The user chose (b), a diff-scoped ratchet (check-fail-open-diff.py).

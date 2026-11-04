@@ -37,10 +37,10 @@ mod git;
 mod git_env_red_tests;
 mod install;
 mod model;
+mod record;
 mod runner;
 mod state;
 
-use std::io::Read;
 use std::path::Path;
 
 use clap::{Parser, Subcommand};
@@ -96,12 +96,6 @@ enum Command {
         #[arg(long)]
         reason: String,
     },
-}
-
-fn read_stdin() -> String {
-    let mut buf = String::new();
-    let _ = std::io::stdin().read_to_string(&mut buf);
-    buf
 }
 
 fn main() {
@@ -169,7 +163,16 @@ fn exit_on_err(r: anyhow::Result<()>) {
 /// is surfaced (exit 1) in manual CLI mode. Real `process::exit` calls inside
 /// `gate_run` terminate directly, so only genuine panics ever reach the guard.
 fn gate_command() -> ! {
-    let raw = read_stdin();
+    // A read ERROR is "cannot determine", never an empty payload: it blocks
+    // (hook mode) and exits inside `read_stop_payload_guarded`. The payload is
+    // unknown on Err, so hook-vs-manual-CLI cannot come from parsing it; use
+    // whether stdin is a terminal (a hook's stdin is a pipe).
+    use std::io::IsTerminal;
+    let raw = harness_core::gate::run::read_stop_payload_guarded(
+        "donegate",
+        std::io::stdin().is_terminal(),
+        harness_core::hook::try_read_stdin(),
+    );
     let hook = HookInput::parse(&raw);
     let interactive = hook.is_none();
     // On a post-block re-entry Claude Code sets stop_hook_active; the panic guard
@@ -320,17 +323,21 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         let mut unconfigured: Vec<String> = Vec::new();
         let mut configured_empty = false;
         let mut blocks: Vec<String> = Vec::new();
+        // The repeat-ledger identity of each block (record paths normalised).
+        let mut block_keys: Vec<String> = Vec::new();
         for (i, r) in roots.roots.iter().enumerate() {
             let (rcfg, rdecl) = Config::resolve(r);
             if rdecl.is_refusal() {
                 all_opted_out = false;
                 any_ran = true;
                 if i != 0 {
-                    blocks.push(format!(
+                    let b = format!(
                         "[root: {}] donegate refuses to run this root's checks: {}",
                         r.display(),
                         declaration_note(r, &rdecl)
-                    ));
+                    );
+                    block_keys.push(b.clone());
+                    blocks.push(b);
                 }
                 continue;
             }
@@ -350,11 +357,26 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             if i == 0 {
                 continue;
             }
-            let report = gate::evaluate(&rcfg, r);
+            let mut report = gate::evaluate(&rcfg, r);
             if report.all_green() {
+                // Only failing optional checks can have a log here; keep them too.
+                gate::save_records(
+                    &mut report,
+                    &rcfg.state_dir,
+                    &session,
+                    0,
+                    rcfg.output_tail_lines,
+                );
                 continue;
             }
             let attempt = state::bump(&rcfg.state_dir, &session, rcfg.reset_after_secs);
+            gate::save_records(
+                &mut report,
+                &rcfg.state_dir,
+                &session,
+                attempt,
+                rcfg.output_tail_lines,
+            );
             let failing: Vec<String> = report.blocking().iter().map(|o| o.name.clone()).collect();
             if attempt > rcfg.max_attempts {
                 state::reset(&rcfg.state_dir, &session);
@@ -375,9 +397,14 @@ fn gate_run(hook: Option<HookInput>) -> ! {
                 r.display(),
                 gate::block_reason(&report, attempt, rcfg.max_attempts)
             ));
+            block_keys.push(format!(
+                "[root: {}]\n{}",
+                r.display(),
+                gate::block_fingerprint(&report, attempt, rcfg.max_attempts)
+            ));
         }
         if !blocks.is_empty() {
-            stop_block_now(&blocks.join("\n\n"), interactive);
+            stop_block_now_keyed(&blocks.join("\n\n"), &block_keys.join("\n\n"), interactive);
         }
         if roots.wrote_any && !any_ran && !all_opted_out && !configured_empty {
             // Every written root has no donegate config at all: allow (donegate is
@@ -412,9 +439,17 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         }
     }
 
-    let report = gate::evaluate(&cfg, &root);
+    let mut report = gate::evaluate(&cfg, &root);
 
     if report.all_green() {
+        // Only failing optional checks can have a log here; keep them too.
+        gate::save_records(
+            &mut report,
+            &cfg.state_dir,
+            &session,
+            0,
+            cfg.output_tail_lines,
+        );
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "green", &ran_names(&report), 0);
         if interactive {
@@ -430,6 +465,15 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 
     // blocking failures present
     let attempt = state::bump(&cfg.state_dir, &session, cfg.reset_after_secs);
+    // Every failing check's full output goes to the durable session record
+    // before anything is rendered; the reason shows only a digest + the path.
+    gate::save_records(
+        &mut report,
+        &cfg.state_dir,
+        &session,
+        attempt,
+        cfg.output_tail_lines,
+    );
     let failing: Vec<String> = report.blocking().iter().map(|o| o.name.clone()).collect();
 
     if attempt > cfg.max_attempts {
@@ -504,8 +548,13 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     let reason = gate::block_reason(&report, attempt, cfg.max_attempts);
 
     if interactive {
-        eprintln!("{}", gate::human_report(&report));
-        eprintln!("\n{reason}");
+        // The failing checks are rendered once, in `reason`; the context lines
+        // (scope caveat, passing/optional checks, skipped) carry no copy of them.
+        let context = gate::human_context(&report);
+        if !context.is_empty() {
+            eprintln!("{context}\n");
+        }
+        eprintln!("{reason}");
         harness_core::hook_latency::record(
             "donegate",
             &session,
@@ -523,7 +572,13 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // same blocking JSON on a first occurrence and announces a waiver — never
     // falls silent — on a second. The old `None` arm's job (never let a
     // non-green gate end the turn by printing nothing) is preserved inside it.
-    harness_core::repeat::emit_stop_block("donegate", &reason);
+    // Keyed on `block_fingerprint`: the reason minus the per-attempt record path,
+    // which is fresh on every run and would otherwise defeat the repeat ledger.
+    harness_core::repeat::emit_stop_block_keyed(
+        "donegate",
+        &reason,
+        &gate::block_fingerprint(&report, attempt, cfg.max_attempts),
+    );
     harness_core::hook_latency::record("donegate", &session, __start.elapsed().as_millis() as u64);
     std::process::exit(0);
 }
@@ -531,11 +586,17 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 /// Emit a blocking verdict and exit: hook mode prints the Stop `decision:block`
 /// JSON (exit 0 toward Claude), manual CLI mode prints to stderr and exits 1.
 fn stop_block_now(reason: &str, interactive: bool) -> ! {
+    stop_block_now_keyed(reason, reason, interactive)
+}
+
+/// [`stop_block_now`] with a repeat-ledger identity distinct from the displayed
+/// reason (see `gate::block_fingerprint`).
+fn stop_block_now_keyed(reason: &str, fingerprint: &str, interactive: bool) -> ! {
     if interactive {
         eprintln!("{reason}");
         std::process::exit(1);
     }
-    harness_core::repeat::emit_stop_block("donegate", reason);
+    harness_core::repeat::emit_stop_block_keyed("donegate", reason, fingerprint);
     std::process::exit(0);
 }
 
@@ -1007,7 +1068,7 @@ const HEADER: &str = r#"# donegate.toml — completion gate for Claude Code.
 enabled = true
 max_attempts = 3          # give up (allow stop) after N consecutive blocks
 default_timeout_secs = 300
-output_tail_lines = 40
+output_tail_lines = 40    # raw lines shown only if a failing check's record can't be saved
 reset_after_secs = 600    # attempt counter resets after this idle gap
 "#;
 

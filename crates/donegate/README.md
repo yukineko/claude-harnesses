@@ -39,11 +39,46 @@ and reads exit codes — so it can never hit a rate limit.
 2. loads `./donegate.toml` (or `~/.donegate/config.toml`);
 3. asks `git` which files changed, and selects the checks whose `when_changed`
    globs match (unscoped checks always run);
-4. runs each selected check as a subprocess, with a per-check timeout, capturing
-   a **bounded tail** of its output (never the whole log);
+4. runs each selected check as a subprocess, with a per-check timeout, streaming
+   its combined output to a temporary log and reading back only a bounded window;
 5. **all green** → exits 0, the stop proceeds;
    **any required failure** → emits `{"decision":"block","reason":…}` so Claude
-   keeps working, with the failing command + output tail in the reason.
+   keeps working. The reason is **quiet**: per failing check it shows the name,
+   exit code and command, then only the decision-relevant digest of the output
+   (for cargo-style output: each `panicked at` line with its message, the
+   `failures:` name list, `test result: FAILED`, the diagnostics and a final
+   FAILED line; otherwise the diagnostics, the failing-test lines of the common
+   runners — lines containing `FAILED`, go's `--- FAIL: …`, python unittest's
+   `FAIL: …`, jest's/go's `FAIL <path>` (up to 10) — and the last 5 lines.
+   Diagnostics are `error[…]`/`error:`/`warning:`
+   headers with their first `--> file:line:col` location (up to 5, errors
+   first; the same header in different files is kept once per location),
+   single-line located diagnostics in the same cap — tsc
+   `path(3,5): error TS2322: …` and gcc/clang `path:3:5: error: …` — plus
+   unlocated `error:` summaries such as `could not compile` and compiler count
+   summaries (tsc `Found N errors…`, gcc/clang `N errors generated.`). Capped
+   at 24 lines, never empty), and the **absolute path of the full raw output**.
+   Raw `--- stdout ---` / `--- stderr ---` sections and progress lines are never
+   shown.
+
+### Session records of failing output
+
+Every failing check's full raw output is saved byte-for-byte to
+`<state_dir>/records/<session>/<unix-ms>-a<attempt>-<check>.log` (`<session>`
+is the sanitised session id, `nosession` if empty). Retention keeps the newest
+20 session directories and the newest 50 records per session; the current
+session's directory is never deleted. A retention failure (anything but
+"not found") never undoes the save; it is shown as a
+`record retention failed: …` line under the record path.
+
+If the record cannot be saved, the check still runs and the stop still blocks;
+the reason says the full output could not be saved (with why) and shows **more**,
+not less: the digest plus the last `max(output_tail_lines, 40)` raw lines.
+The repeat ledger keys a block on its reason with the per-run record path
+normalised. The attempt counter (`attempt N/max`) is deliberately kept in that
+key, so the same failure is never waived as a repeat below `max_attempts`: every
+stop under the cap blocks. The bounded exit is the attempt cap plus its give-up
+sentinel (`donegate:giveup:<check>`, see Loop safety).
 
 ### Loop safety
 

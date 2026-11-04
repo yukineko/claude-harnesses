@@ -54,7 +54,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
-use harness_core::hook::read_stdin;
 use serde_json::json;
 
 use config::{Config, Mode};
@@ -213,7 +212,15 @@ fn exit_on_err(r: anyhow::Result<()>) {
 /// bounds to `allow` on a second consecutive crash (`stop_hook_active`) so the
 /// session cannot be trapped in an endless block loop.
 fn check_command() -> ! {
-    let raw = read_stdin();
+    // A stdin READ ERROR is "cannot determine", never an empty payload
+    // (backlog 8004d80f): `read_stop_payload_guarded` blocks (hook mode) and
+    // exits. The payload is unknown on Err, so hook-vs-manual mode comes from
+    // whether stdin is a terminal (a hook's stdin is a pipe).
+    let raw = harness_core::gate::run::read_stop_payload_guarded(
+        "propguard",
+        std::io::IsTerminal::is_terminal(&std::io::stdin()),
+        harness_core::hook::try_read_stdin(),
+    );
     let hook = HookInput::parse(&raw);
     let interactive = hook.is_none();
     // On a post-block re-entry Claude Code sets stop_hook_active; the panic guard

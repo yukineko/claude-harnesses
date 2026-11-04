@@ -52,7 +52,7 @@ It matches `Bash`, `Edit`, `Write`, `MultiEdit`, and `NotebookEdit`.
 Inline-eval interpreters (`python3`/`perl`/`ruby`/`node`/`php`/`lua` with
 `-c`/`-e`/…) are no longer denied for their **shape**: the program text is
 audited (`analyze_code_interpreter` / `interpreter_code_verdict` in
-`src/detect.rs`). A program that demonstrably deletes something, or whose
+`src/detect/interpreter.rs`). A program that demonstrably deletes something, or whose
 embedded shell line is destructive, is a deny; one that names a protected
 gate/config path is an ask; a benign program such as `python3 -c "print(1)"`
 is allowed (0.2.59). Running a script **file** (`python3 app.py`,
@@ -67,7 +67,9 @@ delimiter line (backlog 4a1cf1ad).
 ### File operations
 
 - **Write** that replaces a file with **empty content** (wipes it), or that
-  overwrites **git internals** (`.git/**`) → denied.
+  overwrites **git internals** (`.git/**`) → denied. This deny is checked
+  before the protected-path `ask`, so a Write over `.git/config` or
+  `.git/hooks/**` (both also protected) stays a deny.
 - **Write / Edit / MultiEdit / NotebookEdit** of a **protected gate/config
   path** (see below) → `ask` (hardened to deny where no human can answer):
   blastguard can see that the path controls which gates run, but not whether
@@ -115,6 +117,7 @@ exempt, its `src/main.rs` is not).
 Protected gate paths outrank this exemption and are never exempt: Claude Code settings
 and hook wiring (`.claude/settings.json`, `settings.local.json`,
 `.claude/hooks.json`, `.claude/hooks/**`), `.githooks/**`, `.git/hooks/**`,
+`.git/config` (it decides `core.hooksPath`),
 shell rc files (`.zshrc`, `.bashrc`, `.profile`, …), the gate config tomls
 (`deny.toml`, `donegate.toml`, `blastguard.toml`, …, `.precommit-audit.toml`),
 and the deployed plugin cache's executables and hook wiring
@@ -291,7 +294,7 @@ longer denied as ``> `Err` ``. The opener's own target is still judged by the
 steps above, and every other rule still reads the body. An unquoted delimiter,
 an unterminated body, an interpreter or shell reader, or any command after the
 here-document keeps the body in the scan, as before
-(`redirect_view_without_quoted_here_document_body` in `src/detect.rs`).
+(`redirect_view_without_quoted_here_document_body` in `src/detect/heredoc.rs`).
 
 Measured on the 0.2.108 debug build (2026-10-14): `echo hi > existing.txt` on
 an untracked file in the session's git repo → allow; the same to an existing

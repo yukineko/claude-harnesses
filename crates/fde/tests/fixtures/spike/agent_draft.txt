@@ -1,0 +1,11 @@
+[[requirement]]
+id = "R1"
+statement = "fde は登録 target の外にだけ書き込む"
+acceptance = ["draft 実行前後で target の全 path と内容が一致する", "draft spec は state dir に出る"]
+canon = ["docs/fde.md#target-untouched"]
+falsifiable = true
+
+<<<SPEC_DRAFT>>>
+rigor: pass
+needs_user: no
+summary: spike stub draft (deterministic, no LLM)

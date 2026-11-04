@@ -1,33 +1,4 @@
 [[task]]
-id = "61666b2f"
-title = "guard-maintree-bash refuses a command that never touches main when another process's git merge is in its pre-merge-commit window"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p2"]
-touched_files = []
-status = "pending"
-notes = "Observed 2026-11-01 ~01:18: cargo test --manifest-path <own worktree>/Cargo.toml -p blastguard refused by scripts/guard-maintree-bash.py (concurrent_merge wording: ORIG_HEAD rewritten, HEAD unmoved, no MERGE_HEAD) while another agent's git merge --no-ff into main was in flight. 2dee8b0e/in_flight_merge_window covers only a later merge of the SAME command after an integration HEAD move. Limit: on-disk state alone is identical for foreign vs own-command window; fix needs another signal (e.g. cwd/command not in main, or merge-process liveness). Control test (own write in main stays refused) passes today. NOT FIXED BY USER RULING 2026-11-01 (session c5b9c02b): no sound signal proves the in-flight merge belongs to another process. Each candidate was tested and found unsound: (a) process ancestry, since a backgrounded child is reparented to pid 1, a merge can be delegated to a pre-existing daemon, and all agent shells share one claude parent; (b) Pre-recorded markers, since a terminal merge leaves none and an orphan persists up to 24h; (c) cwd and argv. The disk-only extension is unsafe: `git reset -q HEAD; git cherry-pick -n <branch>` in main reproduces every in_flight_merge_window disk signal with HEAD unmoved, and that state never resolves. The user declined the relaxed rule (disk evidence plus a live `git merge` process in main). The guard stays fail-closed; the false refusal is accepted."
-created_at = 1793464948
-updated_at = 1793466384
-weight = 0.0
-issue_number = 1481
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1481"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_guard_maintree_bash_foreign_merge_window.py"
-rev = "d50ec5554b0a01b0df54bcb945f5cfa7df142899"
-observed_at = 1793464948
-detail = """
-exit 1: nto a worktree.
-
-scripts/test_guard_maintree_bash_foreign_merge_window.py:100: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_guard_maintree_bash_foreign_merge_window.py::ForeignMergeWindow::test_foreign_merge_window_does_not_refuse_unrelated_command
-========================= 1 failed, 1 passed in 2.09s =========================="""
-
-[[task]]
 id = "a7950779"
 title = "hooks-health summarises an unverifiable hook target (relative script after an interpreter) as 'all present'"
 project = "/home/hiroyuki_nakayama/src/harness"
@@ -124,3 +95,223 @@ exit 1: LEAK: capstone e2e fixtures left in TMPDIR after the run (cargo rc=0):
   condukt-schedule-capstone-e2e-106529-assertions
   condukt-schedule-capstone-e2e-106529-writes
   condukt-capstone-e2e-106468-capstone"""
+
+[[task]]
+id = "a09d8297"
+title = "condukt circuit breaker: releasing a claimed item excluded for overlap is logged 'unspecified' and counted as a failure"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-03 at condukt 0.7.322 (rev 3227fcd7). A flow driver claimed 9 items, re-checked overlap after claiming and excluded 3 (#1511/#1517 scope_overlap with a live blastguard lease, #1518 escalated design question). state release-task accepts only --outcome done|failed; omitted is logged 'unspecified', which circuit check counts as a failure, so run flow-c4aa3733-70d7-4ffe-b0e7-4c370c052e65 tripped verbatim: reason failure_streak, streak 3, streak_cap 3, streak_source release_log, before any work started. Repro: crates/condukt/tests/release_excluded_not_failure.rs at 4ad4c187 (RED: clap rejects --outcome excluded). Two readings: (a) defect: an exclusion is neither success nor failure and needs its own outcome that the streak skips; (b) intended: claiming then excluding is wasted work and should count. Distinguish: the flow skill tells drivers to re-check overlap after claiming, so (a) is what the skill's own procedure needs; alternative fix is to move the overlap re-check before claim-task. Spelling 'excluded' is the test author's. Do not fix in the GH-issues run (user ruling 2026-11-03)."
+created_at = 1793716434
+updated_at = 1793716434
+weight = 0.0
+issue_number = 1519
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1519"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test release_excluded_not_failure"
+rev = "4ad4c1879023d2fc446c2c6c9cbb5e9338f68b24"
+observed_at = 1793716434
+detail = """
+exit 101: finished in 0.89s
+
+   Compiling condukt v0.7.323 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.00s
+     Running tests/release_excluded_not_failure.rs (target/debug/deps/release_excluded_not_failure-24a993f271d84aa0)
+error: test failed, to rerun pass `-p condukt --test release_excluded_not_failure`"""
+
+[[task]]
+id = "7b9c258d"
+title = "guard-maintree-bash status_records parses a rename source field starting with 1/2/u/?/! as a status record"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-03 at main 81dbf64a (also present at gh1512 fix 674d5a1f). scripts/guard-maintree-bash.py status_records(): for rec in porcelain.split NUL: if rec[:1] in (1,2,u,?,!) -> status_paths(rec+NUL). In porcelain v2 -z a '2' rename record is followed by a separate source-path field; status_paths consumes it, status_records re-parses it. Source '1src.txt' -> IndexError (crash handler -> exit 2, refusing a possibly legitimate command); source '? weird.txt' -> phantom path 'weird.txt'. Repro: scripts/test_guard_maintree_bash_status_records_rename_source.py at a6d1d75f (2 of 3 FAIL). Readings: (a) defect, skip the source field like status_paths; (b) intended over-refusal - unlikely since the inline comment says the source field is a separate entry. Off-task note from condukt run-20261103-233558-54331 gh1512 worker."
+created_at = 1793717491
+updated_at = 1793717491
+weight = 0.0
+issue_number = 1520
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1520"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_status_records_rename_source.py"
+rev = "a6d1d75fbf47bdcfbf8ddda6fbc12599774d5543"
+observed_at = 1793717491
+detail = """
+exit 1: ============== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_status_records_rename_source.py::RenameSourceField::test_source_starting_with_1
+FAILED scripts/test_guard_maintree_bash_status_records_rename_source.py::RenameSourceField::test_source_starting_with_question_mark
+========================= 2 failed, 1 passed in 0.06s =========================="""
+
+[[task]]
+id = "81c41b1b"
+title = "condukt autonomy_invariant RED: fde/skills/fde/SKILL.md has 4 unaudited AskUserQuestion sites (not in ASK_ALLOWLIST)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "fde",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-04 at main c4fef301 (merged into session worktree). cargo test -p condukt --test autonomy_invariant: askuserquestion_sites_match_frozen_allowlist panics at crates/condukt/tests/autonomy_invariant.rs:709 verbatim: unaudited AskUserQuestion site(s) in fde/skills/fde/SKILL.md (4 occurrence(s)). The fde skill was added in a67ac4f4 / touched in cfbf12ca. Fix: audit each of the 4 sites (route via condukt policy answer or justify as human-only) and add the entry to ASK_ALLOWLIST; do not just bump the count without auditing. Found off-task by the gh1518 worker in run run-20261103-233558-54331. UPDATE 2026-11-04 (fde-report session): fde row audited and added in 02c2bcfa (ratification = human-only judgment request, escalate, never auto; not routed via condukt policy answer). The fde-row panic is gone, but the same test function still fails on the sitecraft row (allowlist 4, found 12; filed as fd2d2362), so done --test cannot pass at HEAD yet. Close this with done --test cargo test -p condukt --test autonomy_invariant --red-rev de7ba2e0 once fd2d2362 is fixed."
+created_at = 1793718116
+updated_at = 1793719721
+weight = 0.0
+issue_number = 1521
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1521"
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test autonomy_invariant"
+rev = "c4fef30170613d297baf26d3c4c4f3efad71bd87"
+observed_at = 1793718116
+detail = """
+exit 101: ilures:
+    askuserquestion_sites_match_frozen_allowlist
+
+test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-681c0cdedb76ebef)
+error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""
+
+[[task]]
+id = "fd2d2362"
+title = "condukt autonomy_invariant RED: sitecraft/skills/sitecraft/SKILL.md has 12 AskUserQuestion sites vs ASK_ALLOWLIST 4 (8 unaudited)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "sitecraft",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-04 at branch session-c4aa3733-fde-report 65f10055 (main merged in). cargo test -p condukt --test autonomy_invariant: askuserquestion_sites_match_frozen_allowlist panics at crates/condukt/tests/autonomy_invariant.rs:732 verbatim: AskUserQuestion count changed in sitecraft/skills/sitecraft/SKILL.md (allowlist 4, found 12). Also red on main. Found by the fde-report session while fixing 81c41b1b (fde row, now audited); not caused by that session. Audit each new sitecraft site (judgment request vs approval vs route via condukt policy answer) before raising the count."
+created_at = 1793719707
+updated_at = 1793719707
+weight = 0.0
+issue_number = 1524
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1524"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test autonomy_invariant"
+rev = "65f100559f7f74e38b8833e80ba271c19bed0d11"
+observed_at = 1793719707
+detail = """
+exit 101: ilures:
+    askuserquestion_sites_match_frozen_allowlist
+
+test result: FAILED. 15 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/autonomy_invariant.rs (target/debug/deps/autonomy_invariant-1a53e298d311f026)
+error: test failed, to rerun pass `-p condukt --test autonomy_invariant`"""
+
+[[task]]
+id = "fa35fde1"
+title = "check-test-weakening: #[test] inside a macro_rules! template is UNDETERMINED (blocks a pure test addition)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate",
+    "check-test-weakening",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Repro scripts/test_ctw_macro_rules_test_fn.py (RED 3/3, committed 74ebc047). test_fn_assertions cannot attribute '#[test] fn $name()' in a macro template (FN_DECL_RE misses $name) and raises Undetermined, blocking a commit that only adds a new test file. Observed on crates/fde/tests/gone_target_unresolvable.rs 2026-11-04; worked around by writing explicit fns (no justification line). Control: explicit fns are clean."
+created_at = 1793729585
+updated_at = 1793729585
+weight = 0.0
+issue_number = 1525
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1525"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_ctw_macro_rules_test_fn.py"
+rev = "74ebc04756d34fa67fa8f19cd8d07b29b44f3a8b"
+observed_at = 1793729585
+detail = """
+exit 1: 
+E   STDERR:check-test-weakening: undetermined — crates/demo/tests/macro_tests.rs: a #[test] attribute with no `fn` after it
+=========================== short test summary info ============================
+FAILED scripts/test_ctw_macro_rules_test_fn.py::MacroRulesTestFn::test_new_file_with_macro_rules_tests_is_clean
+========================= 1 failed, 1 passed in 1.45s =========================="""
+
+[[task]]
+id = "d0d5cc67"
+title = "blastguard: --all inside a git stash -m message is read as the -a flag"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-04 on deployed blastguard 0.2.251 (and at 0.2.254): git stash push -m "stray cargo fmt --all reformat" -- a/b.rs is DENIED with 'git stash -u/-a removes untracked (and with -a, ignored) files from the working tree, like git clean'. The same command with -m "plain msg" is allowed. Controls git stash push --all / -u must stay non-allow. Reading (a) defect: quoted message text is scanned as flags. (b) intentional: none found. Distinguish: the RED test."""
+created_at = 1793743978
+updated_at = 1793743978
+weight = 0.0
+issue_number = 1526
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1526"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test git_stash_message_text_flag_fp_20261104"
+rev = "610675b3ff82f30bb03f04020c2812eb57df6f4e"
+observed_at = 1793743978
+detail = """
+exit 101: astguard v0.2.256 (/Users/yuki/src/.harness-worktrees/session-6d697f68-c/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/git_stash_message_text_flag_fp_20261104.rs (target/debug/deps/git_stash_message_text_flag_fp_20261104-bfa0d4964d3d6ade)
+error: test failed, to rerun pass `-p blastguard --test git_stash_message_text_flag_fp_20261104`"""
+
+[[task]]
+id = "ce04adeb"
+title = "blastguard: python -c spaced string literal followed by a newline is denied as rm with a wildcard"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-04 at blastguard 0.2.252 (after the 1943843c fix): python3 -c "x='recursive rm'<newline>y=a[:1]" (no shell sink) is DENIED 'rm with a wildcard can delete many files at once'. Cause per the 1943843c implementer: tokens are split on all whitespace before word-boundary analysis, so the newline is lost and assignment skipping takes rm' as the command word. Fix needs newline-preserving tokens or quote-aware assignment skipping. Control: a real os.system('rm -rf /x') sink stays non-allow."""
+created_at = 1793743981
+updated_at = 1793743981
+weight = 0.0
+issue_number = 1527
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1527"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_c_newline_after_spaced_literal_fp_20261104"
+rev = "610675b3ff82f30bb03f04020c2812eb57df6f4e"
+observed_at = 1793743981
+detail = """
+exit 101: /src/.harness-worktrees/session-6d697f68-c/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/python_c_newline_after_spaced_literal_fp_20261104.rs (target/debug/deps/python_c_newline_after_spaced_literal_fp_20261104-29f50aa0723aadfc)
+error: test failed, to rerun pass `-p blastguard --test python_c_newline_after_spaced_literal_fp_20261104`"""

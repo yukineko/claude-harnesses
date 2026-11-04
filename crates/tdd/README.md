@@ -32,7 +32,16 @@ On each stop `tdd gate`:
    the transcript records as written (`harness_core::session_roots`); each root is
    evaluated, not only the cwd. An unresolvable written root, or a session that wrote
    files while no root had an implementation change to evaluate, blocks naming the
-   roots;
+   roots. The gate judges **per session**: a test this session wrote (per its
+   transcript) and committed since the session started in any of those roots is
+   credited to the session's implementation change in every root, so an
+   implementation worktree whose test lives in a sibling worktree is not blocked
+   (the credit is printed on stderr). A test left uncommitted counts only for the
+   root it is in, never across roots. An undetermined root (a failed `git`
+   command), an undetermined attribution (no / unreadable transcript) or an
+   undetermined session start credits nothing — each root is then judged on its
+   own changes. A missing-test block names
+   the checkout path it judged;
 2. loads `./tdd.toml` (or `~/.tdd/config.toml`, or language-aware defaults);
 3. asks `git` what changed and which lines were **added**, then keeps only the
    files **this session wrote**: a file counts as this session's when its
@@ -53,12 +62,36 @@ On each stop `tdd gate`:
    shell glob, a script) is excluded too;
 4. counts *added implementation lines* (impl-glob files, minus test files and
    inline test markers) and looks for **test evidence** (an added `#[test]` /
-   `def test_` / `func Test…` / `it(...)`, or a changed file under `tests/`);
+   `def test_` / `func Test…` / `it(...)`, or a changed file under `tests/`).
+   **Pure moves are recognised automatically**: an added impl line is not
+   counted when it is part of a *run* — at least 3 consecutive added lines of
+   one file (one diff hunk, or a whole new untracked file) that equal, in the
+   same order, consecutive lines *removed from one impl file* (one hunk) in
+   the same change set (working tree + index + this session's commits). A
+   multiset: each removed line cancels at most one added line, so a copy
+   (nothing removed) still counts. Matching normalisation: in brace languages
+   (`rs go c h cc cpp hpp java js jsx ts tsx mjs cjs cs swift kt kts scala php
+   dart`) the line is trimmed and one leading `pub` / `pub(..)` is dropped; in
+   every other file (Python, YAML, no extension, …) only trailing whitespace
+   is dropped, because there a dedent changes control flow. Lines that are
+   only a `use …;` statement (multi-line too) or a `mod name;` declaration
+   are not impl lines; they and blank lines are skipped inside a run (neither
+   counted toward it nor breaking it). Removals from docs or test files never
+   cancel. The number of lines read as moved is printed to stderr on every
+   run. **Known limits:** (a) a block of 3+ lines moved to another place in
+   its own file (or to another file) reads as a move even where the new
+   position changes behaviour (e.g. statements reordered as whole blocks);
+   (b) matching is on text only, so 3+ consecutive lines of boilerplate
+   deleted in one place can vouch for the same 3+ lines added elsewhere;
+   (c) a run is 3 lines, so a moved 1–2 line function still counts as new;
+   (d) a lone path-shaped statement right after a dangling added
+   `use x::{` is swallowed as part of the `use`;
 5. **impl added + no test** → `{"decision":"block","reason":…}` so Claude writes
    a test and continues; otherwise the stop proceeds.
 
 A per-session attempt counter gives up after `max_attempts` so a stuck agent is
-never trapped. Escape hatch, for genuine refactors/renames/docs: `tdd skip
+never trapped. Escape hatch, for genuine refactors that edit lines (a pure
+move no longer needs it — see step 4) and docs: `tdd skip
 --reason "<why>"` — reason required, scoped to the issuing session, consumed
 once, and recorded in the gate log at both issue and consumption. (The old shared
 `.tdd-skip` file in the project root was removed: a one-shot marker in a shared

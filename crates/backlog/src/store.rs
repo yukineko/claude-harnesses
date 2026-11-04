@@ -880,7 +880,11 @@ fn with_tasks_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
 ///
 /// The guard drops (releasing the lock) on every exit path, including `f`
 /// returning `Err` or unwinding.
-fn with_tasks_lock_required<T>(path: &Path, op: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+pub(crate) fn with_tasks_lock_required<T>(
+    path: &Path,
+    op: &str,
+    f: impl FnOnce() -> Result<T>,
+) -> Result<T> {
     let Some(_guard) = try_acquire_tasks_lock(path) else {
         return Err(anyhow!(
             "backlog {op} refused: the tasks-file lock {} could not be acquired within {}s, so \
@@ -2383,81 +2387,8 @@ pub fn mark_cancelled(path: &Path, id: &str, reason: &str) -> Result<()> {
     })
 }
 
-/// フィールドの一部を更新して保存。None のフィールドは変更しない。
-///
-/// CA-backlog-004: an unknown `status` is REJECTED (validated against the
-/// stored [`crate::task::STATUSES`] vocabulary) BEFORE any write.
-/// Previously `edit --status open` wrote the raw typo through, stranding the
-/// task out of `next`/`next_claim` (neither `open` nor any non-vocabulary
-/// value is `is_pending()`) with no path back — `requeue_expired` only rescues
-/// deferred/stale-claimed tasks, so the typo'd task was lost. Rejecting up
-/// front keeps the task in its last valid state.
-pub fn edit(
-    path: &Path,
-    id: &str,
-    title: Option<&str>,
-    tags: Option<Vec<String>>,
-    notes: Option<&str>,
-    status: Option<&str>,
-) -> Result<()> {
-    with_tasks_lock_required(path, "edit", || {
-        // CA-backlog-004: reject an unknown --status up front so a typo can
-        // never be persisted and strand the task. Validated against the STORED
-        // vocabulary, so the derived `claimed` is refused too (0dafa254).
-        if let Some(w) = crate::task::stored_status_error(status) {
-            return Err(anyhow!("{w}"));
-        }
-        let status: Option<Status> = match status.map(str::parse::<Status>).transpose() {
-            Ok(v) => v,
-            Err(e) => return Err(anyhow!("{e}")),
-        };
-        // Close-evidence: `edit --status` is not a route to any status that
-        // needs a recorded closure. Terminal statuses need one (`backlog done
-        // ... --test/--doc-only/--duplicate-of`, `backlog cancel --reason`'s
-        // discard).
-        if let Some(v) = status {
-            if v != STATUS_PENDING && v != STATUS_FAILED {
-                return Err(anyhow!(
-                    "refused: `edit --status {v}` is not allowed. `done` needs evidence: \
-                     `backlog done ID --test CMD --red-rev REV`, `--doc-only COMMIT` or \
-                     `--duplicate-of ID`; `cancelled` is `backlog cancel ID --reason R` (a \
-                     recorded discard). There is no evidence-free close: an item no test \
-                     reproduces is cancelled"
-                ));
-            }
-        }
-        let mut tasks = load(path)?;
-        let task = tasks
-            .iter_mut()
-            .find(|t| t.id == id)
-            .ok_or_else(|| anyhow!("task not found: {}", id))?;
-        // backlog 45c3a699: terminal is monotonic. Refuse BEFORE touching any
-        // field so a refused edit leaves the task exactly as it was.
-        if let Some(v) = status {
-            if is_terminal_status(&task.status) && !is_terminal_status(&v) {
-                return Err(anyhow!(
-                    "refused: task {id} is {} (terminal) and terminal status is final; \
-                     `edit --status {v}` would reopen it. File a new task for the remaining work",
-                    task.status
-                ));
-            }
-        }
-        if let Some(v) = title {
-            task.title = v.to_string();
-        }
-        if let Some(v) = tags {
-            task.tags = v;
-        }
-        if let Some(v) = notes {
-            task.notes = v.to_string();
-        }
-        if let Some(v) = status {
-            task.status = v;
-        }
-        touch(task, now_unix());
-        save(path, &tasks)
-    })
-}
+#[cfg(test)]
+pub use crate::edit_repro::edit;
 
 /// Like [`add_with_weight`], but additionally attempts a fail-soft, one-way
 /// push of the new task to GitHub as an issue (Phase 1: `backlog add` ->
@@ -3082,7 +3013,7 @@ fn bare_name_matches_path(bare: &str, path_like: &str) -> bool {
 }
 
 /// 現在の Unix タイムスタンプ (秒)。
-fn now_unix() -> i64 {
+pub(crate) fn now_unix() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

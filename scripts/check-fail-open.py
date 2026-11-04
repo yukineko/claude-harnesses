@@ -47,27 +47,9 @@ the gate crates' `src/` and `scripts/*.sh`, where a fail-open is load-bearing.
 raw discovery aid, not a merge gate, so pre-existing swallows in non-gate crates
 do not block unrelated work.
 
-`--ratchet` turns that whole-workspace count into an enforced burn-down WITHOUT
-demanding every pre-existing swallow be fixed at once: it compares the live
-`--all` count against a committed baseline (scripts/check-fail-open.baseline) and
-fails on any drift — a count ABOVE the baseline is a new swallow (regression),
-and a count BELOW it is an improvement that must be locked in by lowering the
-baseline in the same change. So a new swallow cannot land without EITHER a fix
-OR a visible, reviewed edit to the committed baseline. Note the boundary: this
-script enforces "live count == pinned number" in BOTH directions; it does NOT
-by itself compare the baseline against its prior value, so a PR that RAISES the
-pin (to admit new swallows) still passes. That the pin only ever *decreases*
-over time is enforced by human review of its one-line diff, not by this gate.
-A missing/malformed baseline or an empty workspace
-discovery is a cannot-determine and fails CLOSED (exit 2), never a pass — the
-advisory `--all` was itself a fail-open (it detects but exits 0), and this is the
-enforcement half. `--update-baseline` re-pins the baseline to the current count.
-
 Usage:
   python3 scripts/check-fail-open.py            # gate surface, blocking (exit 1 on hit)
   python3 scripts/check-fail-open.py --all      # whole workspace, advisory (exit 0)
-  python3 scripts/check-fail-open.py --ratchet  # enforce burn-down vs baseline (0 hold / 1 drift / 2 undetermined)
-  python3 scripts/check-fail-open.py --update-baseline  # re-pin baseline to current count
   python3 scripts/check-fail-open.py <file>...   # scan explicit files (blocking)
 """
 
@@ -79,13 +61,6 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-
-# The committed ratchet baseline: the pinned count of un-allowlisted fail-open
-# swallows across the whole workspace (`--all`). `--ratchet` fails when the live
-# count drifts from this number in EITHER direction. The pin's direction (that it
-# only decreases over time) is enforced by review of its one-line diff, not by
-# the script — nothing here compares the baseline against its prior value.
-BASELINE_FILE = REPO / "scripts" / "check-fail-open.baseline"
 
 # The crates whose gates guard the fleet (CLAUDE.md GATE_CRATES). A fail-open
 # here is load-bearing, so these are the merge-blocking surface.
@@ -129,11 +104,11 @@ RS_READDIR = re.compile(r"\bread_dir\s*\(")
 # ── the empty-collection fallback class (backlog b0cacd15, added 2026-08-06) ──
 #
 # The two read_dir shapes above are the ones this scanner shipped with, and the
-# pinned baseline of 0 was read for a long time as "zero fail-open". It was not:
+# count of 0 was read for a long time as "zero fail-open". It was not:
 # it was "zero of those two shapes". The class below is the one CLAUDE.md §3
 # names outright — エラー時に空の集合を返さない — because downstream reads an
 # empty result as "nothing to inspect, therefore clean". It is scored on the
-# ADVISORY / `--ratchet` surface only (see ADVISORY_ONLY_PATTERNS).
+# ADVISORY surface only (the `--all` output; see ADVISORY_ONLY_PATTERNS).
 
 # `Err(_) => Vec::new()` / `Err(_) => Ok(Vec::new())` / `Err(e) => X::default()`
 # — the error is discarded and an EMPTY value takes its place. The fixed forms
@@ -185,8 +160,8 @@ RS_ERR_ARM_EMPTY = re.compile(
 #
 # No ALLOWLIST entry for this pattern (user ruling 2026-10-02): the five sites
 # once grandfathered there (each with an executed-test FP argument) are now
-# COUNTED in the ratchet baseline instead, like every other advisory-class hit.
-# The burn-down pressure is the pinned number, not a per-site exemption.
+# PRINTED on the advisory `--all` output instead, like every other advisory-class hit.
+# Visibility, not a per-site exemption, is the pressure.
 _UNDET_EMPTY_VALUE = r"(?:" + _EMPTY_VALUE + r"|None\b)"
 _UNDET_ARM_HEAD = (
     r"\b(?:(?:Required::)?Blocked|(?:Determination::)?Undetermined)"
@@ -226,9 +201,9 @@ RS_RECORDS_UNDETERMINED = re.compile(
 # lexical scan cannot see which trait the method resolves to (an unrelated type
 # with its own `require()` returning a `Result` is flagged too), nor a trait
 # method called under another name; that is why this is advisory HERE (printed
-# on every run, counted on `--ratchet`, excluded from this script's blocking
+# on every run, excluded from this script's blocking
 # verdict). It is not unblocked everywhere: scripts/check-fail-open-diff.py
-# (pre-commit) is a rise-ratchet over every pattern, advisory ones included, so
+# (pre-commit) is a per-file rise check over every pattern, advisory ones included, so
 # a commit that ADDS an occurrence is still blocked there.
 _REQUIRE_ERASE_METHODS = (
     r"(?:unwrap_or_default|unwrap_or_else|unwrap_or|ok|is_ok|is_err)\s*\("
@@ -267,7 +242,7 @@ RS_PUSH = re.compile(r"\.(?:push|insert|extend)\s*\(")
 LOOP_WINDOW = 4
 PUSH_WINDOW = 3
 
-# Pattern names scored on the ADVISORY / `--ratchet` surface but deliberately
+# Pattern names reported on the ADVISORY surface (the `--all` output) but deliberately
 # kept OUT of the merge-blocking gate-surface verdict (decision of 2026-08-06).
 #
 # Rationale, recorded so a later reader does not "tidy" it away: this class fires
@@ -275,9 +250,8 @@ PUSH_WINDOW = 3
 # would make the only way through a commit an ALLOWLIST entry per site — which
 # converts the reviewed-exception hatch into the default escape route, exactly
 # what CLAUDE.md §5 forbids ("skip 機構は理由を書いて一度だけ。恒常的な迂回に
-# 使わない"). The burn-down pressure is the baseline diff instead: a NEW instance
-# raises the live count above the pin and `--ratchet` fails, while removing one
-# forces a visible, reviewed edit to the pinned number. Hits are still PRINTED on
+# 使わない"). The gate for NEW instances is scripts/check-fail-open-diff.py (a per-file
+# rise check over every pattern, advisory ones included). Hits are still PRINTED on
 # every run, tagged `advisory`; they are silent nowhere.
 ADVISORY_ONLY_PATTERNS = frozenset(
     {
@@ -297,8 +271,8 @@ def blocking_hits(hits: list[tuple[int, str, str]]) -> list[tuple[int, str, str]
     """The subset of `hits` that counts toward a merge-BLOCKING verdict.
 
     Drops the advisory-only class (see ADVISORY_ONLY_PATTERNS). This is the ONLY
-    filter: `all_crates_count`/`--ratchet` deliberately do not call it, so an
-    advisory-class regression still moves the pinned number."""
+    filter: the advisory `--all` output deliberately does not call it, so advisory-class
+    hits stay visible."""
     return [h for h in hits if h[2] not in ADVISORY_ONLY_PATTERNS]
 
 # ── shell patterns ──────────────────────────────────────────────────────────
@@ -335,8 +309,7 @@ ALLOWLIST: list[dict[str, str]] = [
     # (No `undetermined-arm-empty-fallback` entries: user ruling 2026-10-02
     # moved the five grandfathered `=> None` sites — backlog liveness.rs and
     # main.rs, stuckguard main.rs and verdict_monotonicity.rs, donegate
-    # gate.rs — into the counted ratchet baseline. Do not re-add them here;
-    # the burn-down pressure for that class is the pinned number.)
+    # gate.rs — onto the counted advisory surface. Do not re-add them here.)
     # (The two transcript.rs peer-footprint entries added by 42b5b567 on
     # 2026-10-04 were removed by backlog eef58891: user ruling 2026-10-20
     # 「空を維持（10-02）」 kept this list empty for the class and fixed the code
@@ -641,150 +614,22 @@ def scan_file(path: Path) -> list[tuple[int, str, str]]:
     return filter_allowlisted(rel, raw_hits)
 
 
-class BaselineError(Exception):
-    """The ratchet baseline or the live count could not be DETERMINED.
-
-    Per house doctrine a cannot-determine must resolve to a STOP, never to a
-    silent pass: a baseline we cannot read is NOT a baseline of zero, and a
-    workspace whose file discovery came up empty is NOT a workspace with zero
-    swallows. The ratchet caller maps this to exit 2 (block), the same
-    undetermined channel as check-test-weakening.py."""
-
-
-def read_baseline(path: Path | None = None) -> int:
-    """Read the pinned fail-open count from the baseline file.
-
-    `path` defaults to BASELINE_FILE, bound at CALL time (not def time) so the
-    module-level constant is the single source of truth even if it is reassigned.
-
-    Format: exactly one non-negative integer on its own line; blank lines and
-    `#`-comment lines are ignored. A missing file, no integer, more than one
-    integer, or a negative / non-numeric value raises BaselineError so the
-    caller fails closed. We deliberately do NOT default a missing or malformed
-    baseline to zero — that would read "cannot determine the floor" as "the
-    floor is zero, everything is a regression / nothing is", which is the very
-    fail-open this scanner polices."""
-    if path is None:
-        path = BASELINE_FILE
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError as e:
-        raise BaselineError(f"baseline file not found: {path}") from e
-    except OSError as e:
-        raise BaselineError(f"baseline file unreadable: {path}: {e}") from e
-    nums = [s for s in (ln.strip() for ln in raw.splitlines())
-            if s and not s.startswith("#")]
-    if len(nums) != 1:
-        raise BaselineError(
-            f"baseline file {path} must contain exactly one integer line, "
-            f"found {len(nums)}"
-        )
-    try:
-        val = int(nums[0])
-    except ValueError as e:
-        raise BaselineError(f"baseline value is not an integer: {nums[0]!r}") from e
-    if val < 0:
-        raise BaselineError(f"baseline value is negative: {val}")
-    return val
-
-
-def all_crates_count() -> int:
-    """Total un-allowlisted fail-open swallows across the whole workspace.
-
-    Fails CLOSED on empty discovery (raises BaselineError): an empty `--all`
-    target list means file discovery is broken, and reading that as a count of
-    zero would let the ratchet report a spurious improvement-to-zero — the exact
-    cannot-determine-as-clean this scanner exists to police."""
-    files = iter_target_files(all_crates=True)
-    if not files:
-        raise BaselineError(
-            "workspace discovery found ZERO files — cannot compute a trustworthy "
-            "fail-open count (broken checkout / wrong cwd), refusing to fail open"
-        )
-    return sum(len(scan_file(path)) for path in files)
-
-
-def ratchet_verdict(count: int, baseline: int) -> tuple[int, str]:
-    """Pure ratchet comparison over an already-determined count and baseline.
-
-    Returns (exit_code, message): 0 when the live count matches the baseline;
-    1 on any drift — a REGRESSION (count above the baseline: a new swallow), or
-    an unlocked IMPROVEMENT (count below the baseline: a gain that must be
-    committed into the baseline so it cannot silently regress). The IO-layer
-    cannot-determine cases (unreadable baseline / empty discovery) are exit 2 and
-    are handled by the caller, not here."""
-    if count > baseline:
-        return 1, (
-            f"fail-open-guard RATCHET: count ROSE {baseline} -> {count}. A new "
-            f"fail-open swallow was introduced. Fix it (fail closed / capture the "
-            f"rc), or, if it is a reviewed exception, add it to ALLOWLIST with a "
-            f"reason. Raising the pinned baseline to admit it passes this script "
-            f"but is caught in review — the pin is meant to move only DOWN."
-        )
-    if count < baseline:
-        return 1, (
-            f"fail-open-guard RATCHET: count FELL {baseline} -> {count} — an "
-            f"improvement that is not yet locked in. Ratchet the baseline down so "
-            f"the gain cannot silently regress: run `python3 "
-            f"scripts/check-fail-open.py --update-baseline` and commit "
-            f"scripts/check-fail-open.baseline."
-        )
-    return 0, (
-        f"fail-open-guard RATCHET: count == baseline ({baseline}); no new "
-        f"fail-open, burn-down floor held."
-    )
-
-
-def _write_baseline(count: int) -> None:
-    BASELINE_FILE.write_text(
-        "# fail-open-guard ratchet baseline. This is the pinned count of\n"
-        "# un-allowlisted fail-open swallows across the whole workspace (the\n"
-        "# `--all` scan). The `--ratchet` CI gate fails when the live count\n"
-        "# drifts from this number in either direction. Lowering it locks in a\n"
-        "# fix; RAISING it (to admit new swallows) still passes the script and is\n"
-        "# caught only by review of this file's diff. Regenerate after a fix with:\n"
-        "#   python3 scripts/check-fail-open.py --update-baseline\n"
-        f"{count}\n",
-        encoding="utf-8",
-    )
-
-
 def main(argv: list[str]) -> int:
     args = argv[1:]
 
-    if "--update-baseline" in args:
-        try:
-            count = all_crates_count()
-        except BaselineError as e:
-            print(f"fail-open-guard: cannot compute count to pin: {e}",
-                  file=sys.stderr)
-            return 2
-        _write_baseline(count)
-        print(f"fail-open-guard: baseline pinned to {count} ({BASELINE_FILE}).")
-        return 0
-
-    if "--ratchet" in args:
-        try:
-            count = all_crates_count()
-            baseline = read_baseline()
-        except BaselineError as e:
-            print(
-                f"fail-open-guard RATCHET: cannot determine ({e}) — failing "
-                f"closed (exit 2). A baseline or count we cannot trust is NOT a "
-                f"pass.",
-                file=sys.stderr,
-            )
-            return 2
-        code, msg = ratchet_verdict(count, baseline)
-        # On a regression, surface WHICH swallows exist so the new one is findable.
-        if code == 1 and count > baseline:
-            for path in iter_target_files(all_crates=True):
-                for lineno, text, name in scan_file(path):
-                    rel = path.relative_to(REPO) if REPO in path.parents else path
-                    loc = str(lineno) if lineno != UNREADABLE else "?"
-                    print(f"{rel}:{loc}: [{name}] {text.strip()}")
-        print(msg, file=sys.stdout if code == 0 else sys.stderr)
-        return code
+    # Only `--all` and explicit paths are recognised. Any other dash-prefixed
+    # argument (a typo, or a retired mode flag) must not be silently ignored:
+    # that would run a different check than the caller asked for and report
+    # clean. Refuse instead (cannot-determine -> exit 2).
+    unknown = [a for a in args if a.startswith("-") and a != "--all"]
+    if unknown:
+        print(
+            f"fail-open-guard: unrecognised argument(s): {' '.join(unknown)}. "
+            f"Only `--all` and explicit file paths are accepted. The per-file "
+            f"gate is scripts/check-fail-open-diff.py.",
+            file=sys.stderr,
+        )
+        return 2
 
     all_crates = "--all" in args
     explicit = [Path(a) for a in args if not a.startswith("-")]
@@ -827,8 +672,8 @@ def main(argv: list[str]) -> int:
     if advisory_class:
         print(
             f"\nfail-open-guard: {advisory_class} hit(s) of the empty-collection "
-            f"fallback class (b0cacd15). Scored on the --ratchet burn-down, NOT "
-            f"on this verdict — see ADVISORY_ONLY_PATTERNS for why no ALLOWLIST "
+            f"fallback class (b0cacd15). Advisory (`--all` output), NOT "
+            f"part of this verdict — see ADVISORY_ONLY_PATTERNS for why no ALLOWLIST "
             f"entry is the right answer here.",
             file=sys.stderr,
         )

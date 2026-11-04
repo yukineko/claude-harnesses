@@ -368,19 +368,71 @@ fn to_result(out: CommandOutput) -> RunResult {
 /// Sum of every `<N> passed` in `output`, or `None` when no such count
 /// appears at all (the run did not say how many tests it ran).
 pub fn passed_count(output: &str) -> Option<u64> {
+    count_of(output, "passed")
+}
+
+/// Sum of every `<N> <word>` in `output` (the word may carry trailing
+/// punctuation), or `None` when no such count appears at all.
+fn count_of(output: &str, word: &str) -> Option<u64> {
     let words: Vec<&str> = output
         .split(|c: char| c.is_whitespace() || c == ';' || c == ',')
         .filter(|w| !w.is_empty())
         .collect();
     let mut total: Option<u64> = None;
     for pair in words.windows(2) {
-        if pair[1] == "passed" || pair[1].starts_with("passed") {
+        if pair[1].starts_with(word) {
             if let Ok(n) = pair[0].parse::<u64>() {
                 total = Some(total.unwrap_or(0).saturating_add(n));
             }
         }
     }
     total
+}
+
+/// Why an exit-0 repro run executed no test, or `None` when it is shown to
+/// have executed at least one.
+///
+/// Output is "recognisably libtest" when it contains a `test result:` line.
+/// Such a run executed zero tests iff the sum of `passed + failed` over ALL
+/// its `test result:` lines (one per test binary) is 0, e.g. `0 passed; 0
+/// failed; 1 ignored` (an `#[ignore]`d repro run without `-- --ignored`) or
+/// `... 1 filtered out` (a filter matching nothing). A `cargo test` run with
+/// no `test result:` line at all shows no test ran either. Non-cargo output
+/// that is not libtest is left alone (`None`): pytest / scripts keep their
+/// exit-code polarity.
+fn zero_tests_ran(cmd: &TestCmd, output: &str) -> Option<String> {
+    let results: Vec<&str> = output
+        .lines()
+        .filter(|l| l.contains("test result:"))
+        .collect();
+    if results.is_empty() {
+        return match cmd.runner {
+            Runner::CargoTest => Some(
+                "cargo exited 0 without any `test result:` line, so no test is shown to have run"
+                    .to_string(),
+            ),
+            _ => None,
+        };
+    }
+    let ran: u64 = results
+        .iter()
+        .map(|l| {
+            passed_count(l)
+                .unwrap_or(0)
+                .saturating_add(count_of(l, "failed").unwrap_or(0))
+        })
+        .fold(0u64, u64::saturating_add);
+    if ran == 0 {
+        Some(format!(
+            "exit 0 but ZERO tests ran (passed + failed = 0 over {} `test result:` line(s)); \
+             a run that executed no test is not a not-reproduced observation. An `#[ignore]`d \
+             repro must be run with `-- --ignored` (e.g. `cargo test -p <crate> --test <file> \
+             -- --ignored`), and a test-name filter must match the repro",
+            results.len()
+        ))
+    } else {
+        None
+    }
 }
 
 /// Markers of a BUILD failure (the test never ran), as opposed to a test that
@@ -861,8 +913,11 @@ fn run_in_temp_worktree(
 
 /// Run a finding's repro test at HEAD and record the outcome. Polarity: a
 /// repro that FAILS behaviourally reproduces the bug (same as a RED test);
-/// exit 0 is not-reproduced; everything that cannot be run to a conclusion is
-/// undetermined, with the cause in `detail`. Never returns an error: the
+/// exit 0 is not-reproduced only when a test is shown to have run (see
+/// [`zero_tests_ran`]: an exit-0 libtest run with `passed + failed = 0`, or a
+/// `cargo test` exit 0 with no `test result:` line, is undetermined);
+/// everything that cannot be run to a conclusion is undetermined, with the
+/// cause in `detail`. Never returns an error: the
 /// caller (`add`) files a task only on `reproduced` and writes nothing for
 /// any other outcome.
 pub fn run_repro(cwd: &Path, text: &str, now: i64) -> Repro {
@@ -899,6 +954,9 @@ pub fn run_repro(cwd: &Path, text: &str, now: i64) -> Repro {
         }
     };
     if r.exit == 0 {
+        if let Some(why) = zero_tests_ran(&cmd, &r.output) {
+            return undetermined(format!("{why}: {}", excerpt_short(&r.output)), Some(head));
+        }
         return Repro {
             outcome: REPRO_NOT_REPRODUCED.to_string(),
             cmd: text.to_string(),

@@ -30,6 +30,7 @@ mod gate;
 mod git;
 mod install;
 mod model;
+mod moved;
 mod proof;
 mod runner;
 mod state;
@@ -38,8 +39,7 @@ mod transition;
 mod trust_worktree_tests;
 mod warned;
 
-use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use serde_json::json;
@@ -148,12 +148,6 @@ enum Command {
     },
 }
 
-fn read_stdin() -> String {
-    let mut buf = String::new();
-    let _ = std::io::stdin().read_to_string(&mut buf);
-    buf
-}
-
 fn main() {
     let cli = Cli::parse();
     match cli.command {
@@ -229,8 +223,23 @@ fn skip_cmd(reason: &str) -> anyhow::Result<()> {
 /// violation emits `decision:block`. It is bounded by the gate's existing
 /// per-session attempt counter (`max_attempts`, default 3) and its give-up,
 /// exactly like a parsed payload — no separate retry mechanism.
+///
+/// # A stdin READ ERROR is not "no stdin" either
+///
+/// An empty stdin is manual CLI mode, but a stdin that could not be READ is
+/// "cannot determine" (backlog 8004d80f): it used to be discarded with
+/// `let _ =`, the empty buffer was taken for "a human ran `tdd gate`", and the
+/// stop was ALLOWED. `read_stop_payload_guarded` resolves it to a fail-closed
+/// `decision:block` (reason "stdin read failed: ...") and exits; the payload is
+/// unknown on `Err`, so hook-vs-manual mode comes from whether stdin is a
+/// terminal (a hook's stdin is a pipe).
 fn gate_command() -> ! {
-    let raw = read_stdin();
+    use std::io::IsTerminal;
+    let raw = harness_core::gate::run::read_stop_payload_guarded(
+        "tdd",
+        std::io::stdin().is_terminal(),
+        harness_core::hook::try_read_stdin(),
+    );
     let hook = HookInput::parse(&raw).or_else(|| {
         if raw.trim().is_empty() {
             None
@@ -307,6 +316,15 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // (a session in a linked worktree while the hook runs in the primary tree
     // would otherwise be judged on the clean primary tree). The first root whose
     // verdict blocks is the one reported; an undetermined root blocks.
+    //
+    // The gate judges PER SESSION (user ruling 2026-11-03, backlog 49e95d32):
+    // every enabled root is evaluated first, then the test evidence the session
+    // wrote AND committed since the session start in ANY of them (attributed
+    // via the transcript) is credited to the implementation change in every
+    // root (`gate::session_test_evidence`). An uncommitted test counts for its
+    // own root only. An undetermined root, attribution or session start makes
+    // that fold undetermined: no credit, each root is judged on its own scan
+    // alone, and the block reason says why.
     let sr = match harness_core::session_roots::resolve(&root, &input.transcript_path) {
         Determination::Known(sr) => sr,
         Determination::Undetermined(why) => stop_block_now(
@@ -324,6 +342,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     let mut first: Option<gate::Report> = None;
     let mut evaluated_something = false;
     let mut all_opted_out = true;
+    let mut evaluated: Vec<(usize, PathBuf, Config, gate::Report)> = Vec::new();
     for (i, r) in sr.roots.iter().enumerate() {
         let rcfg = if i == 0 { cfg.clone() } else { Config::load(r) };
         if !rcfg.enabled {
@@ -331,10 +350,24 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         }
         all_opted_out = false;
         let rep = gate::evaluate(&rcfg, r, &input.transcript_path);
+        evaluated.push((i, r.clone(), rcfg, rep));
+    }
+    let credit = {
+        let reps: Vec<&gate::Report> = evaluated.iter().map(|(_, _, _, rep)| rep).collect();
+        gate::session_test_evidence(&reps)
+    };
+    for (i, r, rcfg, mut rep) in evaluated {
+        rep.credit = credit.clone();
+        if let Some(note) = gate::credit_note(&rep) {
+            eprintln!("{note}");
+        }
+        if let Some(note) = moved::moved_note(&rep) {
+            eprintln!("{} ({})", note, r.display());
+        }
         if rep.blocks(&rcfg) {
             if chosen.is_none() {
                 cfg = rcfg;
-                root = r.clone();
+                root = r;
                 chosen = Some(rep);
             }
             continue;
@@ -598,6 +631,9 @@ fn status() {
     // whole checkout is scanned (and the note says so).
     let verdict = gate::evaluate(&cfg, &root, "");
     if let Some(note) = gate::attribution_note(&verdict) {
+        println!("{note}");
+    }
+    if let Some(note) = moved::moved_note(&verdict) {
         println!("{note}");
     }
     if let Some(note) = gate::committed_note(&verdict) {

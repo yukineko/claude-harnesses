@@ -861,13 +861,13 @@ enum LessonsAction {
 /// The two durable positions of the shared autonomy switch. Two values, not a
 /// bool, so `autonomy-set` rejects anything else at the CLI boundary instead of
 /// writing a file that would later read back as `Undetermined`.
-/// The outcome a stateless driver declares when releasing a finished item
-/// (`state release-task --outcome`). Omitted = unspecified, which the circuit
-/// breaker counts as NOT done.
+/// Outcome a driver declares on `state release-task --outcome`. Omitted = unspecified (counted as
+/// NOT done); excluded = dropped after claiming, neither a failure nor progress.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 enum ReleaseOutcome {
     Done,
     Failed,
+    Excluded,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -1088,9 +1088,9 @@ enum StateAction {
         /// An empty or whitespace-only hashkey is rejected as a usage error (exit 2).
         #[arg(long, required = true, value_parser = parse_task_hashkey)]
         hashkey: Vec<String>,
-        /// The item's outcome: `done` (resets the circuit breaker's failure
-        /// streak) or `failed`. Omitted → recorded as `unspecified`, which the
-        /// breaker counts as a failure: an unasserted success is not progress.
+        /// The item's outcome: `done` (resets the failure streak), `failed`, or `excluded` (claimed
+        /// then dropped without work: neither counts toward the streak nor resets it). Omitted →
+        /// `unspecified`, which the breaker counts as a failure: an unasserted success is not progress.
         #[arg(long, value_enum)]
         outcome: Option<ReleaseOutcome>,
     },
@@ -5114,12 +5114,12 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             hashkey,
             outcome,
         } => {
-            // Record the outcome FIRST (backlog cccc9c43): a release the circuit
-            // breaker cannot see would silently shorten the failure streak, so a
-            // failed write releases nothing and fails loudly.
+            // Record the outcome FIRST (backlog cccc9c43): a release the circuit breaker cannot
+            // see would shorten the failure streak, so a failed write releases nothing, loudly.
             let outcome = match outcome {
                 Some(ReleaseOutcome::Done) => gatelog::RELEASE_OUTCOME_DONE,
                 Some(ReleaseOutcome::Failed) => gatelog::RELEASE_OUTCOME_FAILED,
+                Some(ReleaseOutcome::Excluded) => gatelog::RELEASE_OUTCOME_EXCLUDED,
                 None => gatelog::RELEASE_OUTCOME_UNSPECIFIED,
             };
             let dir = state::run_dir(cfg, cwd, &run)?;

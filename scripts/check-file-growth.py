@@ -12,7 +12,12 @@ ratchet only turns one way:
   * a staged file listed in the baseline passes iff its line count <= its cap;
   * a staged file NOT listed passes iff its line count <= LIMIT;
   * the STAGED baseline may not raise any cap relative to the baseline at HEAD.
-    A NEW entry (absent from HEAD's baseline, or no baseline at HEAD) whose
+    During a merge (MERGE_HEAD present) the reference is every parent: a cap
+    may be kept up to the highest cap that path has in any parent's committed
+    baseline (HEAD or a MERGE_HEAD), since each was certified when that parent
+    was committed; never above it. An unreadable/empty MERGE_HEAD, or one
+    naming a non-commit, is undetermined (exit 2).
+    A NEW entry (absent from every parent's baseline, or no baseline at all) whose
     cap > LIMIT is allowed only to grandfather a file that is already that big
     in HEAD's tree: its cap must be <= the line count of `git show HEAD:<path>`.
     It is a violation if the path is absent at HEAD, the cap exceeds the HEAD
@@ -162,14 +167,55 @@ def _head_line_count(root: str, path: str) -> int | None:
     return None
 
 
-def _head_baseline(root: str) -> dict[str, int]:
-    if not _head_exists(root):
-        return {}
-    listed = _git(root, "ls-tree", "-z", "HEAD", "--", BASELINE_PATH)
+def _baseline_at(root: str, rev: str) -> dict[str, int]:
+    listed = _git(root, "ls-tree", "-z", rev, "--", BASELINE_PATH)
     if not listed.strip(b"\0"):
         return {}
-    blob = _git(root, "show", f"HEAD:{BASELINE_PATH}")
-    return _parse_baseline(blob.decode("utf-8", "surrogateescape"), f"HEAD:{BASELINE_PATH}")
+    blob = _git(root, "show", f"{rev}:{BASELINE_PATH}")
+    return _parse_baseline(blob.decode("utf-8", "surrogateescape"), f"{rev}:{BASELINE_PATH}")
+
+
+def _merge_heads(root: str) -> list[str]:
+    """Commit ids in MERGE_HEAD (one per line; several for an octopus merge),
+    or [] when no merge is in progress.
+
+    Absence of the file is the only "no merge" signal. A file that exists but
+    cannot be read, is empty, or names something that is not a commit is
+    UNDETERMINED (exit 2) — never silently "no merge" and never a free pass.
+    """
+    rel = _git(root, "rev-parse", "--git-path", "MERGE_HEAD").decode("utf-8", "surrogateescape").strip()
+    path = rel if rel.startswith("/") else f"{root}/{rel}"
+    try:
+        with open(path, "rb") as fh:
+            text = fh.read().decode("ascii")
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeDecodeError) as e:
+        raise Undetermined(f"cannot read MERGE_HEAD ({path}): {e}") from e
+    heads = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not heads:
+        raise Undetermined(f"MERGE_HEAD ({path}) exists but names no commit")
+    return [
+        _git(root, "rev-parse", "--verify", f"{h}^{{commit}}").decode("ascii").strip()
+        for h in heads
+    ]
+
+
+def _parent_caps(root: str, head_exists: bool) -> dict[str, int]:
+    """Per path, the highest cap any parent of the commit being made already
+    carries in its own committed baseline.
+
+    Parents are HEAD plus, during a merge, every MERGE_HEAD. A cap recorded in
+    a parent's baseline was certified when that parent was committed, so a
+    merge may keep it; it may never exceed it. Outside a merge this is exactly
+    HEAD's baseline (the pre-merge behaviour).
+    """
+    revs = (["HEAD"] if head_exists else []) + _merge_heads(root)
+    caps: dict[str, int] = {}
+    for rev in revs:
+        for path, cap in _baseline_at(root, rev).items():
+            caps[path] = max(cap, caps.get(path, cap))
+    return caps
 
 
 def _staged_sources(root: str) -> list[str]:
@@ -189,14 +235,14 @@ def check(root: str) -> list[str]:
     violations: list[str] = []
     staged_caps = _staged_baseline(root)
     head_exists = _head_exists(root)
-    head_caps = _head_baseline(root)
+    parent_caps = _parent_caps(root, head_exists)
 
     for path, cap in sorted(staged_caps.items()):
-        if path in head_caps:
-            if cap > head_caps[path]:
+        if path in parent_caps:
+            if cap > parent_caps[path]:
                 violations.append(
                     f"{BASELINE_PATH}: cap for {path} raised from "
-                    f"{head_caps[path]} to {cap} (caps may only go down)"
+                    f"{parent_caps[path]} to {cap} (caps may only go down)"
                 )
             continue
         if cap <= LIMIT:

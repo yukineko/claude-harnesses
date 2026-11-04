@@ -8,9 +8,7 @@
 //! removal `"-u"`, `--"all"`, `\-u` are the very same argv words, yet
 //! blastguard allows them: the flag check sees the quoted/escaped spelling.
 //!
-//! The RED cases are `#[ignore]`d so main stays green; run them with
-//! `cargo test -p blastguard --test git_stash_quoted_flag_failopen_20261104 -- --ignored`.
-//! Remove the ignores once the scanner judges the dequoted word.
+//! The scanner now judges the dequoted word, so these cases run by default.
 
 #[path = "support/bounded.rs"]
 mod bounded;
@@ -83,25 +81,21 @@ fn assert_not_allowed(tag: &str, command: &str) {
 }
 
 #[test]
-#[ignore = "RED repro: quoted stash flags allowed (fail-open); remove when fixed"]
 fn double_quoted_dash_u_is_not_allowed() {
     assert_not_allowed("dq-u", r#"git stash push "-u""#);
 }
 
 #[test]
-#[ignore = "RED repro: quoted stash flags allowed (fail-open); remove when fixed"]
 fn partially_quoted_dash_dash_all_is_not_allowed() {
     assert_not_allowed("pq-all", r#"git stash push --"all""#);
 }
 
 #[test]
-#[ignore = "RED repro: quoted stash flags allowed (fail-open); remove when fixed"]
 fn backslash_escaped_dash_u_is_not_allowed() {
     assert_not_allowed("bs-u", r"git stash push \-u");
 }
 
 #[test]
-#[ignore = "RED repro: quoted stash flags allowed (fail-open); remove when fixed"]
 fn backslash_escaped_dash_u_after_message_is_not_allowed() {
     assert_not_allowed("msg-bs-u", r"git stash push -m x \-u");
 }

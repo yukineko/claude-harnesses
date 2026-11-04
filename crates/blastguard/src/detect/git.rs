@@ -435,48 +435,276 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
             // the functional equal of the already-denied `git clean -fdx`, just
             // with the debris parked in a stash entry a later `stash drop`
             // erases. Every one of these was ALLOW on 0.2.19.
-            let sweeps_untracked = stash_words_outside_message(&rest[idx + 1..])
-                .into_iter()
-                .any(|t| {
-                    t == "--all"
-                        || t == "--include-untracked"
-                        || (is_short_flag(t) && (t.contains('a') || t.contains('u')))
-                });
-            if sweeps_untracked {
-                Decision::deny(
-                    "git stash -u/-a removes untracked (and with -a, ignored) files from the \
-working tree, like git clean",
-                )
-            } else {
-                Decision::Allow
+            //
+            // Backlog b942eb2c: the flags are judged on the argv words bash
+            // would hand to git (`stash_argv_words`), not on the
+            // whitespace-split tokens, so `"-u"`, `--"all"`, `\-u` and
+            // `$'-u'` are the `-u`/`--all` they become.
+            let args = &rest[idx + 1..];
+            const SWEEP_REASON: &str = "git stash -u/-a removes untracked (and with -a, ignored) \
+files from the working tree, like git clean";
+            match stash_argv_words(&args.join(" ")) {
+                Determination::Known(words) => {
+                    if stash_words_outside_message(words)
+                        .iter()
+                        .any(|w| is_stash_sweep_flag(w))
+                    {
+                        Decision::deny(SWEEP_REASON)
+                    } else {
+                        Decision::Allow
+                    }
+                }
+                // Where the argv words are cannot be determined, every
+                // reading of every token is a flag candidate (no message
+                // value is skipped); if none of them sweeps, the line is
+                // still not provably harmless, so it is put to a human.
+                Determination::Undetermined(_) => {
+                    let any_reading_sweeps = args.iter().any(|t| {
+                        let stripped: String = t
+                            .chars()
+                            .filter(|c| !matches!(c, '\'' | '"' | '\\' | '$'))
+                            .collect();
+                        is_stash_sweep_flag(t)
+                            || is_stash_sweep_flag(&stripped)
+                            || super::words::first_shell_word(t)
+                                .is_some_and(|w| is_stash_sweep_flag(&w))
+                    });
+                    if any_reading_sweeps {
+                        Decision::deny(SWEEP_REASON)
+                    } else {
+                        Decision::ask(
+                            "blastguard cannot determine the argument words of this git stash \
+(an unclosed quote, a command substitution or an escaped line break), so it cannot rule out \
+-u/-a, which removes untracked files from the working tree",
+                        )
+                    }
+                }
             }
         }
         _ => Decision::Allow,
     }
 }
 
-/// The stash argument tokens minus the VALUE of a separate-token `-m` /
-/// `--message` option. Backlog d0d5cc67 (#1526): the line is split on
-/// whitespace, so `git stash push -m "stray cargo fmt --all reformat"` put
-/// the message word `--all` into the flag scan and was denied as `--all`.
+/// True for a stash argv word that sweeps untracked files out of the working
+/// tree: `--all`, `--include-untracked`, or a short-flag bundle holding `a`
+/// or `u`. Exact spellings only (abbreviated long options are not matched).
+fn is_stash_sweep_flag(w: &str) -> bool {
+    w == "--all"
+        || w == "--include-untracked"
+        || (is_short_flag(w) && (w.contains('a') || w.contains('u')))
+}
+
+/// The stash argv words minus the VALUE of a separate-word `-m` / `--message`
+/// option. Backlog d0d5cc67 (#1526): `git stash push -m "stray cargo fmt
+/// --all reformat"` used to put the message word `--all` into the flag scan.
 ///
-/// Only a value whose shell word provably ends is dropped. A message word
-/// whose quote never closes (`shell_word_token_span` is `None`) is kept in
-/// the scan, so an undetermined word end still reads its tokens as flags —
-/// the restrictive side. Glued forms (`-mMSG`, `--message=MSG`) are not
-/// recognised and are scanned exactly as before.
-fn stash_words_outside_message<'a>(args: &[&'a str]) -> Vec<&'a str> {
-    let mut out = Vec::with_capacity(args.len());
-    let mut i = 0;
-    while i < args.len() {
-        let t = args[i];
-        out.push(t);
-        i += 1;
-        if (t == "-m" || t == "--message") && i < args.len() {
-            if let Some(span) = super::payload::shell_word_token_span(args, i) {
-                i += span;
-            }
+/// `words` are whole argv words (`stash_argv_words`), so the word after an
+/// exact `-m` / `--message` word is the value git takes, whatever it looks
+/// like (`"-m" -u` stashes with message `-u`). A word that merely STARTS with
+/// `-m` (`-mMSG`, or the single word `-m x'` from `"-m x'"`) is a glued
+/// value and drops nothing; `--message=MSG` likewise.
+fn stash_words_outside_message(words: Vec<String>) -> Vec<String> {
+    let mut out = Vec::with_capacity(words.len());
+    let mut it = words.into_iter();
+    while let Some(w) = it.next() {
+        let takes_value = w == "-m" || w == "--message";
+        out.push(w);
+        if takes_value {
+            it.next();
         }
     }
     out
+}
+
+/// Split the stash argument text into the argv words bash would produce,
+/// with quote removal applied, WITHOUT any expansion.
+///
+/// Covered exactly: whitespace word splitting (quote-aware, so a quote opened
+/// in one whitespace token continues into the next), `'…'`, `"…"` (escapes
+/// `\"` `\\` `\$` and backquote; any other backslash is kept), `\x` outside
+/// quotes, `$'…'` ANSI-C quoting (`\a \b \e \E \f \n \r \t \v \\ \' \" \?`,
+/// octal `\nnn`, `\xHH`, `\uHHHH`, `\UHHHHHHHH`, `\cX`; any other escape is
+/// kept with its backslash, as bash does), and `$"…"` read as `"…"` (the
+/// locale translation it requests is a runtime message catalog that is not
+/// on the command line).
+///
+/// NOT expanded, left as literal text: `$VAR`, `~`, globs — their value is
+/// runtime state, the same reach limit as `normalized_command`.
+///
+/// `Undetermined` (the caller resolves it restrictively): an unclosed quote,
+/// a `$(`, `${` or backquote (their nested quoting is not modelled), a
+/// backslash before whitespace or at the very end (`text` was re-joined
+/// with single spaces, so whether that was an escaped space or a line
+/// continuation that glues two words is no longer known), and an ANSI-C
+/// numeric escape with no digits or an invalid code point.
+fn stash_argv_words(text: &str) -> Determination<Vec<String>> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        i += 1;
+        match c {
+            c if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            '\'' => {
+                in_word = true;
+                let Some(end) = chars[i..].iter().position(|&d| d == '\'') else {
+                    return Determination::undetermined("stash: unclosed single quote");
+                };
+                cur.extend(&chars[i..i + end]);
+                i += end + 1;
+            }
+            '"' => {
+                in_word = true;
+                match read_double_quoted(&chars, i, &mut cur) {
+                    Some(next) => i = next,
+                    None => {
+                        return Determination::undetermined(
+                            "stash: undeterminable double-quoted word",
+                        )
+                    }
+                }
+            }
+            '\\' => {
+                in_word = true;
+                match chars.get(i) {
+                    Some(&d) if !d.is_whitespace() => {
+                        cur.push(d);
+                        i += 1;
+                    }
+                    _ => {
+                        return Determination::undetermined(
+                            "stash: backslash before whitespace or at end",
+                        )
+                    }
+                }
+            }
+            '$' if chars.get(i) == Some(&'\'') => {
+                in_word = true;
+                match read_ansi_c(&chars, i + 1, &mut cur) {
+                    Some(next) => i = next,
+                    None => return Determination::undetermined("stash: undeterminable $'…' word"),
+                }
+            }
+            '$' if chars.get(i) == Some(&'"') => {
+                in_word = true;
+                match read_double_quoted(&chars, i + 1, &mut cur) {
+                    Some(next) => i = next,
+                    None => {
+                        return Determination::undetermined("stash: undeterminable $\"…\" word")
+                    }
+                }
+            }
+            '$' if matches!(chars.get(i), Some('(' | '{')) => {
+                return Determination::undetermined("stash: command or parameter substitution");
+            }
+            '`' => return Determination::undetermined("stash: backquote substitution"),
+            c => {
+                in_word = true;
+                cur.push(c);
+            }
+        }
+    }
+    if in_word {
+        words.push(cur);
+    }
+    Determination::known(words)
+}
+
+/// Body of a `"…"` starting at `chars[i]` (just past the opening quote),
+/// appended to `out`. Returns the index just past the closing quote, or
+/// `None` when undeterminable: no closing quote, a `$(` / `${` / backquote
+/// inside, or a backslash before whitespace (possibly a line continuation).
+fn read_double_quoted(chars: &[char], mut i: usize, out: &mut String) -> Option<usize> {
+    while let Some(&d) = chars.get(i) {
+        i += 1;
+        match d {
+            '"' => return Some(i),
+            '\\' => {
+                let e = *chars.get(i)?;
+                if e.is_whitespace() {
+                    return None;
+                }
+                i += 1;
+                if !matches!(e, '"' | '\\' | '$' | '`') {
+                    out.push('\\');
+                }
+                out.push(e);
+            }
+            '`' => return None,
+            '$' if matches!(chars.get(i), Some('(' | '{')) => return None,
+            d => out.push(d),
+        }
+    }
+    None
+}
+
+/// Body of a `$'…'` starting at `chars[i]` (just past the opening quote),
+/// decoded as bash's ANSI-C quoting and appended to `out`. Returns the index
+/// just past the closing quote, or `None` when undeterminable (no closing
+/// quote, a numeric escape without digits, an invalid code point, `\c` at the
+/// end).
+fn read_ansi_c(chars: &[char], mut i: usize, out: &mut String) -> Option<usize> {
+    // Up to `max` digits of `radix` starting at `chars[*i]`; None if none.
+    fn digits(chars: &[char], i: &mut usize, radix: u32, max: usize) -> Option<u32> {
+        let mut v: u32 = 0;
+        let mut n = 0;
+        while n < max {
+            let Some(d) = chars.get(*i).and_then(|c| c.to_digit(radix)) else {
+                break;
+            };
+            v = v.checked_mul(radix)?.checked_add(d)?;
+            *i += 1;
+            n += 1;
+        }
+        (n > 0).then_some(v)
+    }
+    while let Some(&d) = chars.get(i) {
+        i += 1;
+        if d == '\'' {
+            return Some(i);
+        }
+        if d != '\\' {
+            out.push(d);
+            continue;
+        }
+        let e = *chars.get(i)?;
+        i += 1;
+        let decoded = match e {
+            'a' => '\u{07}',
+            'b' => '\u{08}',
+            'e' | 'E' => '\u{1b}',
+            'f' => '\u{0c}',
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            'v' => '\u{0b}',
+            '\\' | '\'' | '"' | '?' => e,
+            '0'..='7' => {
+                i -= 1;
+                char::from_u32(digits(chars, &mut i, 8, 3)? & 0xff)?
+            }
+            'x' => char::from_u32(digits(chars, &mut i, 16, 2)?)?,
+            'u' => char::from_u32(digits(chars, &mut i, 16, 4)?)?,
+            'U' => char::from_u32(digits(chars, &mut i, 16, 8)?)?,
+            'c' => {
+                let x = *chars.get(i)?;
+                i += 1;
+                char::from_u32(if x == '?' { 0x7f } else { (x as u32) & 0x1f })?
+            }
+            other => {
+                out.push('\\');
+                other
+            }
+        };
+        out.push(decoded);
+    }
+    None
 }

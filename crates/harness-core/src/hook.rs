@@ -422,11 +422,44 @@ pub struct MissingHookBinary {
 /// `if …`) yields `None`; one pair of surrounding quotes is stripped; `~` and
 /// `$HOME` are expanded as the shell would, any other `$VAR` yields `None`;
 /// a relative path containing `/` yields `None` (cwd-relative at hook time).
+///
+/// `None` means "could not be checked", not "fine": a caller that needs a
+/// verdict uses [`hook_target_status`], which reports it as `Unverifiable`.
 pub fn extract_binary_path(command: &str, plugin_root: Option<&str>) -> Option<String> {
+    match resolve_command(command, plugin_root) {
+        Resolved::Target { path, .. } => Some(path),
+        Resolved::Unresolved(_) => None,
+    }
+}
+
+/// What a hook command resolves to, for the health check.
+enum Resolved {
+    /// A concrete target: an absolute path, or a bare name not found on
+    /// `$PATH`. `direct` is true when the hook execs it itself (so it needs
+    /// the exec bit) and false for a script handed to an interpreter.
+    Target { path: String, direct: bool },
+    /// The checker cannot tell which file the hook runs; the reason says why.
+    Unresolved(&'static str),
+}
+
+const WHY_EMPTY: &str = "no command to check (empty, or only assignments / wrappers)";
+const WHY_BUILTIN: &str = "the command starts with a shell builtin or keyword, not a file";
+const WHY_VAR: &str = "contains a variable the checker cannot expand \
+     (e.g. ${CLAUDE_PLUGIN_ROOT} outside the hook's runtime env)";
+const WHY_INLINE: &str = "inline interpreter code (-c / -m / -e …): the file it runs, if any, \
+     cannot be checked";
+const WHY_REL_SCRIPT: &str = "relative script after an interpreter: it resolves against the \
+     hook's runtime cwd, which the checker cannot know";
+const WHY_REL_PATH: &str = "relative command path: it resolves against the hook's runtime cwd, \
+     which the checker cannot know";
+
+fn resolve_command(command: &str, plugin_root: Option<&str>) -> Resolved {
     let mut tokens = command.split_whitespace().map(unquote).peekable();
     // Skip assignments and transparent wrappers in front of the real command.
     let first = loop {
-        let tok = tokens.next()?;
+        let Some(tok) = tokens.next() else {
+            return Resolved::Unresolved(WHY_EMPTY);
+        };
         if is_assignment(tok) {
             continue;
         }
@@ -439,40 +472,52 @@ pub fn extract_binary_path(command: &str, plugin_root: Option<&str>) -> Option<S
         break tok;
     };
     if SHELL_BUILTINS.contains(&first) {
-        return None;
+        return Resolved::Unresolved(WHY_BUILTIN);
     }
-    let first = expand_token(first, plugin_root)?;
+    let Some(first) = expand_token(first, plugin_root) else {
+        return Resolved::Unresolved(WHY_VAR);
+    };
     if let Some(kind) = interpreter_kind(&first) {
         let mut prev_was_flag = false;
         for tok in tokens {
             if tok.starts_with('-') {
                 if is_inline_code_flag(kind, tok) {
-                    return None;
+                    return Resolved::Unresolved(WHY_INLINE);
                 }
                 prev_was_flag = tok != "--";
                 continue;
             }
-            let arg = expand_token(tok, plugin_root)?;
+            let Some(arg) = expand_token(tok, plugin_root) else {
+                return Resolved::Unresolved(WHY_VAR);
+            };
             if Path::new(&arg).is_absolute() {
-                return Some(arg);
+                return Resolved::Target {
+                    path: arg,
+                    direct: false,
+                };
             }
             if prev_was_flag {
                 // Likely the value of an option (`-o pipefail`, `-W ignore`).
                 prev_was_flag = false;
                 continue;
             }
-            // A relative script: resolved against the hook's runtime cwd.
-            return None;
+            return Resolved::Unresolved(WHY_REL_SCRIPT);
         }
         // Bare interpreter with no script argument: check the interpreter.
     }
     if Path::new(&first).is_absolute() {
-        return Some(first);
+        return Resolved::Target {
+            path: first,
+            direct: true,
+        };
     }
     if first.contains('/') {
-        return None;
+        return Resolved::Unresolved(WHY_REL_PATH);
     }
-    Some(resolve_on_path(&first).unwrap_or(first))
+    Resolved::Target {
+        path: resolve_on_path(&first).unwrap_or(first),
+        direct: true,
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -577,24 +622,47 @@ fn expand_token(token: &str, plugin_root: Option<&str>) -> Option<String> {
     (!expanded.contains('$')).then_some(expanded)
 }
 
-/// First `$PATH` entry holding a file named `name`. Pure lookup — spawns
-/// nothing. Empty `$PATH` entries are skipped rather than read as the cwd.
+/// The `$PATH` entry the shell would run for `name`: the first *executable*
+/// file named `name`. When only non-executable files match, the first of
+/// those is returned so the caller can report it as not executable rather
+/// than missing. Pure lookup — spawns nothing. Empty `$PATH` entries are
+/// skipped rather than read as the cwd.
 fn resolve_on_path(name: &str) -> Option<String> {
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
+    let files: Vec<_> = std::env::split_paths(&path)
         .filter(|dir| !dir.as_os_str().is_empty())
         .map(|dir| dir.join(name))
-        .find(|cand| cand.is_file())
+        .filter(|cand| cand.is_file())
+        .collect();
+    files
+        .iter()
+        .find(|cand| std::fs::metadata(cand).is_ok_and(|m| has_exec_bit(&m)))
+        .or_else(|| files.first())
         .map(|cand| cand.to_string_lossy().into_owned())
 }
 
-/// True if `command`'s extracted binary path exists on disk. A command with no
+/// True if any exec bit is set (same notion as `check-launcher-exec-bit.py`).
+#[cfg(unix)]
+fn has_exec_bit(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o111 != 0
+}
+
+/// No exec bit exists off unix; a regular file is runnable as far as the
+/// filesystem says.
+#[cfg(not(unix))]
+fn has_exec_bit(_meta: &std::fs::Metadata) -> bool {
+    true
+}
+
+/// False only if `command`'s extracted binary path is concrete and absent —
+/// the narrow "missing" bucket of [`missing_hook_binaries`]. A command with no
 /// extractable/resolvable path (empty, malformed, an unresolved
-/// `${CLAUDE_PLUGIN_ROOT}`, inline interpreter code, or a relative script) is
-/// treated as "exists" — i.e. not reported missing — since there's nothing
-/// concrete to check; this function only flags a *concrete, absent* path. A
-/// bare name (no `/`) reaching here was not found on `$PATH`, so it is
-/// missing — it is never existence-checked against the checker's cwd.
+/// `${CLAUDE_PLUGIN_ROOT}`, inline interpreter code, or a relative script)
+/// yields true here because it is not *missing*; that is NOT a claim that it
+/// was checked — [`hook_target_status`] reports it as `Unverifiable`. A bare
+/// name (no `/`) reaching here was not found on `$PATH`, so it is missing —
+/// it is never existence-checked against the checker's cwd.
 fn binary_present(command: &str, plugin_root: Option<&str>) -> bool {
     match extract_binary_path(command, plugin_root) {
         Some(path) if path.contains('/') => Path::new(&path).exists(),
@@ -609,9 +677,14 @@ fn binary_present(command: &str, plugin_root: Option<&str>) -> bool {
 /// `${CLAUDE_PLUGIN_ROOT}` prefix in a command (health-check runs happen
 /// outside the env Claude Code sets, so callers that know the intended root —
 /// e.g. checking one plugin's own install — can pass it; a caller scanning the
-/// whole file across plugins generally can't, and those entries are silently
-/// skipped rather than false-flagged). Never panics: a malformed/non-object
+/// whole file across plugins generally can't, and those entries are skipped
+/// here rather than false-flagged). Never panics: a malformed/non-object
 /// `settings` or a hook group missing expected fields is simply skipped.
+///
+/// This lists only the *missing* bucket. An empty result does NOT mean every
+/// hook is healthy: unresolvable targets, non-executable targets and
+/// malformed entries are not in it. A caller that renders a health verdict
+/// must use [`hook_target_findings`].
 pub fn missing_hook_binaries(
     settings: &Value,
     plugin_root: Option<&str>,
@@ -640,6 +713,125 @@ pub fn missing_hook_binaries(
                             binary_path,
                         });
                     }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Health of one hook command's target. Only `Present` is healthy: an
+/// `Unverifiable` target was *not checked* and must never be summarised as
+/// present (CLAUDE.md §3 — undetermined is not clean).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum HookTargetStatus {
+    /// The target exists and (when the hook execs it directly) is executable.
+    Present,
+    /// The target path (or bare name not on `$PATH`) does not exist.
+    Missing { binary_path: String },
+    /// The target exists but cannot be run: a direct-exec target without any
+    /// exec bit, or a directory. A script handed to an interpreter
+    /// (`bash /abs/x.sh`) does not need the exec bit.
+    NotExecutable { binary_path: String },
+    /// The checker cannot tell which file the hook runs, or cannot stat it.
+    Unverifiable { reason: String },
+}
+
+/// A registered hook whose target is not [`HookTargetStatus::Present`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HookTargetFinding {
+    /// The `hooks.<event>` key (or `hooks` for a malformed top level).
+    pub event: String,
+    /// The full `command` string as written in `settings.json` (empty when
+    /// the entry is malformed and has none).
+    pub command: String,
+    pub status: HookTargetStatus,
+}
+
+/// Classify one hook `command`'s target. See [`extract_binary_path`] for how
+/// the target is found; every shape it cannot resolve is `Unverifiable` with
+/// the reason, never `Present`.
+pub fn hook_target_status(command: &str, plugin_root: Option<&str>) -> HookTargetStatus {
+    let (path, direct) = match resolve_command(command, plugin_root) {
+        Resolved::Unresolved(why) => {
+            return HookTargetStatus::Unverifiable {
+                reason: why.to_string(),
+            }
+        }
+        Resolved::Target { path, direct } => (path, direct),
+    };
+    if !path.contains('/') {
+        // A bare name that `$PATH` lookup did not find.
+        return HookTargetStatus::Missing { binary_path: path };
+    }
+    match std::fs::metadata(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            HookTargetStatus::Missing { binary_path: path }
+        }
+        Err(e) => HookTargetStatus::Unverifiable {
+            reason: format!("cannot stat {path}: {e}"),
+        },
+        Ok(m) if m.is_dir() || (direct && !has_exec_bit(&m)) => {
+            HookTargetStatus::NotExecutable { binary_path: path }
+        }
+        Ok(_) => HookTargetStatus::Present,
+    }
+}
+
+/// Scan a parsed `settings.json` and return every registered command hook
+/// whose target is not `Present` — missing, not executable, or unverifiable
+/// — in settings order. A malformed `hooks` structure (non-object `hooks`,
+/// non-array event, group without a `hooks` array, a command hook without a
+/// command string) is itself reported as `Unverifiable`: the hooks it should
+/// hold could not be checked. An empty result means every command hook was
+/// checked and is present. Non-command hooks (`"type": "prompt"` …) have no
+/// target and are skipped. A `settings` without a `hooks` key has no hooks.
+pub fn hook_target_findings(settings: &Value, plugin_root: Option<&str>) -> Vec<HookTargetFinding> {
+    let mut out = Vec::new();
+    let malformed = |event: &str, why: &str| HookTargetFinding {
+        event: event.to_string(),
+        command: String::new(),
+        status: HookTargetStatus::Unverifiable {
+            reason: format!("malformed settings: {why}"),
+        },
+    };
+    let Some(hooks) = settings.get("hooks") else {
+        if !settings.is_object() {
+            out.push(malformed("hooks", "settings is not a JSON object"));
+        }
+        return out;
+    };
+    let Some(events) = hooks.as_object() else {
+        out.push(malformed("hooks", "`hooks` is not an object"));
+        return out;
+    };
+    for (event, groups) in events {
+        let Some(groups) = groups.as_array() else {
+            out.push(malformed(event, "event value is not an array"));
+            continue;
+        };
+        for group in groups {
+            let Some(hooks) = group.get("hooks").and_then(Value::as_array) else {
+                out.push(malformed(event, "hook group has no `hooks` array"));
+                continue;
+            };
+            for h in hooks {
+                let kind = h.get("type").and_then(Value::as_str).unwrap_or("command");
+                if kind != "command" {
+                    continue;
+                }
+                let Some(command) = h.get("command").and_then(Value::as_str) else {
+                    out.push(malformed(event, "command hook has no `command` string"));
+                    continue;
+                };
+                let status = hook_target_status(command, plugin_root);
+                if status != HookTargetStatus::Present {
+                    out.push(HookTargetFinding {
+                        event: event.clone(),
+                        command: command.to_string(),
+                        status,
+                    });
                 }
             }
         }

@@ -8,7 +8,7 @@
 - **直近セッション (gauge)**: 直近 N 件のセッションの turn 数・トークン数・USD コスト。`~/.gauge/store/sessions/` から読む。
 - **Stop-hook レイテンシ**: `~/.harness/state/hook-latency.jsonl` からのセッション単位の合計。
 - **UserPromptSubmit 注入サイズ**: `~/.harness/state/inject-metrics.jsonl` からのターン単位の合計。
-- **hook binary の健全性**: `~/.claude/settings.json` に登録された hook のうち、binary がディスク上に無いもの。
+- **hook binary の健全性**: `~/.claude/settings.json` に登録された hook のうち、実行対象がディスク上に無い・実行可能でない・検証できないもの（検証できない対象は present に数えず明示する）。
 - **PATH shadowing**: plugin cache の同名 binary を PATH 上で覆い隠している PATH 上のコピー。
 
 `SessionStart` hook (`hooks/hooks.json`) を 1 本だけ登録し、hook-binary health check (`harness-status session-start`) を実行する。
@@ -49,7 +49,7 @@ harness-status sessions --sessions 10  # 直近セッション (件数 N を指�
 harness-status hooks                 # Stop-hook レイテンシ集約 (予算モニタ)
 harness-status inject                # UserPromptSubmit 注入サイズ集約 (予算モニタ)
 harness-status plugins               # 全プラグインを活性化スコープで分類
-harness-status hooks-health          # settings.json の hook のうち binary 欠落のもの
+harness-status hooks-health          # settings.json の hook のうち実行対象が欠落 / 実行不可 / 検証不能のもの
 harness-status path-shadow           # plugin cache 版を覆う PATH 上の binary
 harness-status --json                # 機械可読出力 (フルダッシュボード・budget・sessions・hooks・inject・plugins・hooks-health・path-shadow で有効)
 ```

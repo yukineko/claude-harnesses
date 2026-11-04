@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Repros for two gaps left by the 0.2.83 hook-health fix (harness-core
-//! `extract_binary_path`). Both are #[ignore]d: RED with `--ignored`.
+//! `extract_binary_path`). Fixed in harness-status 0.1.35 (GH #1483 / #1484).
 //!
 //! 1. A hook whose target the check cannot resolve (relative script after an
 //!    interpreter, e.g. a typo `bash hooks/gaurd.sh`) is dropped from the
@@ -40,7 +40,6 @@ fn hooks_health(home: &std::path::Path) -> String {
 }
 
 #[test]
-#[ignore = "repro: RED until hooks-health distinguishes 'could not check' from 'present' (run with --ignored)"]
 fn unresolvable_target_is_not_reported_as_all_present() {
     let home = sandbox("relative");
     write_settings(home.path(), "bash hooks/gaurd.sh");
@@ -52,7 +51,6 @@ fn unresolvable_target_is_not_reported_as_all_present() {
 }
 
 #[test]
-#[ignore = "repro: RED until hooks-health checks the exec bit (run with --ignored)"]
 fn non_executable_target_is_flagged() {
     let home = sandbox("noexec");
     let target = home.path().join("hook-bin");

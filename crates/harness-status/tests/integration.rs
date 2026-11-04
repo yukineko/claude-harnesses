@@ -176,3 +176,46 @@ fn session_start_warns_via_additional_context_when_binary_missing() {
         "expected warning to mention the missing binary path, got: {ctx}"
     );
 }
+
+#[test]
+fn session_start_surfaces_unverifiable_and_non_executable_targets() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = temp_sandbox("session-start-unverifiable");
+    let claude_dir = sandbox.join(".claude");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    let noexec = sandbox.join("noexec-hook");
+    std::fs::write(&noexec, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&noexec, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::write(
+        claude_dir.join("settings.json"),
+        serde_json::json!({"hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": "bash hooks/gaurd.sh"},
+            {"type": "command", "command": format!("{} run", noexec.display())}
+        ]}]}})
+        .to_string(),
+    )
+    .unwrap();
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_harness-status"))
+        .args(["session-start"])
+        .current_dir(&sandbox)
+        .env("HOME", &sandbox)
+        .output()
+        .expect("binary runs");
+    std::fs::remove_dir_all(&sandbox).ok();
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("expected JSON additionalContext, got {stdout:?}: {e}"));
+    let ctx = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(
+        ctx.contains("hooks/gaurd.sh"),
+        "unverifiable target not surfaced: {ctx}"
+    );
+    assert!(
+        ctx.contains("noexec-hook"),
+        "non-executable target not surfaced: {ctx}"
+    );
+}

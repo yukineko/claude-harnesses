@@ -140,7 +140,6 @@ fn under(paths: &[PathBuf], dir: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-#[ignore = "RED repro: $() makes bash attribution keep read-only statements (see backlog); run with --ignored"]
 fn read_only_substitution_and_read_only_statements_do_not_root_a_worktree() {
     let f = fixture();
     let a = f.wt_a.display();
@@ -168,7 +167,6 @@ fn read_only_substitution_and_read_only_statements_do_not_root_a_worktree() {
 }
 
 #[test]
-#[ignore = "RED repro: $() makes bash attribution keep read-only statements (see backlog); run with --ignored"]
 fn minimal_read_only_substitution_does_not_root_a_worktree() {
     let f = fixture();
     let a = f.wt_a.display();

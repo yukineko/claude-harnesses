@@ -9,7 +9,8 @@
 #
 # The tests run with TMPDIR pointed at a fresh empty dir; after they finish
 # (pass or fail) that dir must hold nothing they created.
-# Exit 0 = no leak; exit 1 = leak (RED); exit 2 = could not determine.
+# Exit 0 = no leak (prints a `test result: ok. 1 passed` line for closure
+# evidence); exit 1 = leak (RED); exit 2 = could not determine.
 set -u
 repo="$(cd "$(dirname "$0")/../.." && pwd)" || exit 2
 # shellcheck disable=SC1091
@@ -36,4 +37,5 @@ if [ -n "$leaked" ]; then
   exit 1
 fi
 echo "OK: no capstone e2e fixture left in TMPDIR (cargo rc=$rc)"
+echo "test result: ok. 1 passed; 0 failed"
 exit 0

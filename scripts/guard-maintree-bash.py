@@ -148,10 +148,15 @@ def hash_path(path: Path) -> str:
     return h.hexdigest()
 
 
-def status_paths(porcelain: str) -> list[str]:
-    """Every path named by `git status --porcelain=v2 -z` output."""
+def status_entries(porcelain: str) -> list[tuple[str, list[str]]]:
+    """(record, paths it names) for each `git status --porcelain=v2 -z` record.
+
+    A rename/copy record ("2 ...") is followed by a SEPARATE NUL field holding
+    the source path; it is consumed here as part of that record, never parsed
+    as a record of its own (GH #1520). An unrecognized record is Undetermined.
+    """
     fields = porcelain.split("\0")
-    paths = []
+    entries = []
     i = 0
     while i < len(fields):
         rec = fields[i]
@@ -160,19 +165,25 @@ def status_paths(porcelain: str) -> list[str]:
             continue
         kind = rec[0]
         if kind == "1":
-            paths.append(rec.split(" ", 8)[8])
+            paths = [rec.split(" ", 8)[8]]
         elif kind == "2":
-            paths.append(rec.split(" ", 9)[9])
+            paths = [rec.split(" ", 9)[9]]
             if i < len(fields):
                 paths.append(fields[i])  # the rename/copy source
                 i += 1
         elif kind == "u":
-            paths.append(rec.split(" ", 10)[10])
+            paths = [rec.split(" ", 10)[10]]
         elif kind in "?!":
-            paths.append(rec[2:])
+            paths = [rec[2:]]
         else:
             raise Undetermined("unrecognized git status record %r" % rec[:40])
-    return paths
+        entries.append((rec, paths))
+    return entries
+
+
+def status_paths(porcelain: str) -> list[str]:
+    """Every path named by `git status --porcelain=v2 -z` output."""
+    return [p for _, paths in status_entries(porcelain) for p in paths]
 
 
 def snapshot(main: Path, common: Path) -> dict:
@@ -465,11 +476,10 @@ def only_unchanged_preexisting(before: dict, after: dict) -> bool:
 def status_records(porcelain: str) -> dict[str, str]:
     """path -> its status record line, for naming index-only changes."""
     out = {}
-    for rec in porcelain.split("\0"):
-        if rec[:1] in ("1", "2", "u", "?", "!"):
-            for p in status_paths(rec + "\0"):
-                if p:  # a rename record's source field is a separate entry
-                    out[p] = rec
+    for rec, paths in status_entries(porcelain):
+        for p in paths:  # a rename's source maps to the rename record too
+            if p:
+                out[p] = rec
     return out
 
 

@@ -66702,3 +66702,283 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "77793cfed3b217c4bc75696d5195b6bc024bceb3"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "a09d8297"
+title = "condukt circuit breaker: releasing a claimed item excluded for overlap is logged 'unspecified' and counted as a failure"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Measured 2026-11-03 at condukt 0.7.322 (rev 3227fcd7). A flow driver claimed 9 items, re-checked overlap after claiming and excluded 3 (#1511/#1517 scope_overlap with a live blastguard lease, #1518 escalated design question). state release-task accepts only --outcome done|failed; omitted is logged 'unspecified', which circuit check counts as a failure, so run flow-c4aa3733-70d7-4ffe-b0e7-4c370c052e65 tripped verbatim: reason failure_streak, streak 3, streak_cap 3, streak_source release_log, before any work started. Repro: crates/condukt/tests/release_excluded_not_failure.rs at 4ad4c187 (RED: clap rejects --outcome excluded). Two readings: (a) defect: an exclusion is neither success nor failure and needs its own outcome that the streak skips; (b) intended: claiming then excluding is wasted work and should count. Distinguish: the flow skill tells drivers to re-check overlap after claiming, so (a) is what the skill's own procedure needs; alternative fix is to move the overlap re-check before claim-task. Spelling 'excluded' is the test author's. Do not fix in the GH-issues run (user ruling 2026-11-03)."
+created_at = 1793716434
+updated_at = 1793810264
+weight = 0.0
+issue_number = 1519
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1519"
+issue_closed_at = 1793810267
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test release_excluded_not_failure"
+rev = "4ad4c1879023d2fc446c2c6c9cbb5e9338f68b24"
+observed_at = 1793716434
+detail = """
+exit 101: finished in 0.89s
+
+   Compiling condukt v0.7.323 (/Users/yuki/src/.harness-worktrees/session-c4aa3733-gh-issues/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.00s
+     Running tests/release_excluded_not_failure.rs (target/debug/deps/release_excluded_not_failure-24a993f271d84aa0)
+error: test failed, to rerun pass `-p condukt --test release_excluded_not_failure`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test release_excluded_not_failure"
+exit = 0
+passed = 2
+rev = "2f9f927e6f87dbd428bb883f9b6a7c81a847bb8e"
+observed_at = 1793810229
+output_digest = "sha256:6bad8408ec87c7e3eef14e2e9cdb354d7d57876e5e1daeb55223dfb07c42507d"
+excerpt = """
+
+running 2 tests
+test three_overlap_exclusions_do_not_trip_the_failure_streak ... ok
+test an_exclusion_does_not_reset_a_preceding_failure_streak ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s
+
+   Compiling libc v0.2.186
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.228
+   Compiling memchr v2.8.2
+   Compiling serde v1.0.228
+   Compiling cfg-if v1.0.4
+   Compiling autocfg v1.5.1
+   Compiling version_check v0.9.5
+   Compiling regex-syntax v0.8.11
+   Compiling num-traits v0.2.19
+   Compiling generic-array v0.14.7
+   Compiling aho-corasick v1.1.4
+   Compiling utf8parse v0.2.2
+   Compiling zmij v1.0.21
+   Compiling hashbrown v0.17.1
+   Compiling equivalent v1.0.2
+   Compiling indexmap v2.14.0
+   Compiling regex-automata v0.4.14
+   Compiling anstyle-parse v1.0.0
+   Compiling syn v2.0.118
+   Compiling core-foundation-sys v0.8.7
+   Compiling toml_write v0.1.2
+   Compiling anstyle v1.0.14
+   Compiling anstyle-query v1.1.5
+   Compiling typenum v1.20.1
+   Compiling anyhow v1.0.103
+   Compiling option-ext v0.2.0
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling getrandom v0.3.4
+   Compiling serde_json v1.0.150
+   Compiling colorchoice v1.0.5
+   Compiling winnow v0.7.15
+   Compiling anstream v1.0.0
+   Compiling dirs-sys v0.4.1
+   Compiling iana-time-zone v0.1.65
+   Compiling clap_lex v1.1.0
+   Compiling strsim v0.11.1
+   Compiling itoa v1.0.18
+   Compiling heck v0.5.0
+   Compiling clap_builder v4.6.0
+   Compiling regex v1.12.4
+   Compiling chrono v0.4.45
+   Compiling dirs v5.0.1
+   Compiling wait-timeout v0.2.1
+   Compiling zerocopy v0.8.52
+   Compiling rand_core v0.9.5
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling bitflags v2.13.0
+   Compiling rustix v1.1.4
+   Compiling getrandom v0.4.3
+   Compiling digest v0.10.7
+   Compiling cpufeatures v0.2.17
+   Compiling errno v0.3.14
+   Compiling bstr v1.12.2
+   Compiling log v0.4.33
+   Compiling sha2 v0.10.9
+   Compiling globset v0.4.18
+   Compiling once_cell v1.21.4
+   Compiling fastrand v2.4.1
+   Compiling rand_xorshift v0.4.0
+   Compiling rand v0.9.4
+   Compiling serde_derive v1.0.228
+   Compiling clap_derive v4.6.1
+   Compiling shlex v1.3.0
+   Compiling unarray v0.1.4
+   Compiling tempfile v3.27.0
+   Compiling clap v4.6.1
+   Compiling ppv-lite86 v0.2.21
+   Compiling rand_chacha v0.9.0
+   Compiling proptest v1.11.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling toml_edit v0.22.27
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.90 (/Users/yuki/src/.harness-worktrees/session-c4aa3733/crates/harness-core)
+   Compiling overwatch v0.2.110 (/Users/yuki/src/.harness-worktrees/session-c4aa3733/crates/overwatch)
+   Compiling schemaguard v0.1.25 (/Users/yuki/src/.harness-worktrees/session-c4aa3733/crates/schemaguard)
+   Compiling blastguard v0.2.265 (/Users/yuki/src/.harness-worktrees/session-c4aa3733/crates/blastguard)
+   Compiling condukt v0.7.332 (/Users/yuki/src/.harness-worktrees/session-c4aa3733/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.40s
+     Running tests/release_excluded_not_failure.rs (target/debug/deps/release_excluded_not_failure-8136428679b00192)
+"""
+
+[task.closure.red]
+rev = "aab9036a70d592b8e7f53ca012dace3f9cfb4930"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "b942eb2c"
+title = 'blastguard: quoted/escaped git stash flags ("-u", --"all", \-u) are allowed although they dequote to -u/--all (fail-open)'
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = '''Measured 2026-11-04 on main (blastguard 0.2.259/0.2.260) by the #1526 verifier: git stash push "-u", git stash push --"all", git stash push \-u, git stash push -m x \-u are ALLOWED; after shell quote removal they are -u/--all, which remove untracked files like git clean. Unquoted -u is denied. Pre-existing (allowed on main before the #1526 fix too); the #1526 fix unmasked the -m variants that used to be denied only by the message-text FP. -"u" and -'u' are still denied. RED repro committed in 4de0c95a (4 #[ignore] RED cases + 2 controls). Readings: (a) defect: flag matching must use dequoted words (fail-open in a destructive-command gate); (b) intended: none found. Fix: dequote tokens before stash flag matching; remove the #[ignore]s.'''
+created_at = 1793793102
+updated_at = 1793810289
+weight = 0.0
+issue_number = 1535
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1535"
+issue_closed_at = 1793810292
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test git_stash_quoted_flag_failopen_20261104 -- --ignored"
+rev = "a202c0ae492dbb7b98790d12c201e2e1025e538f"
+observed_at = 1793793102
+detail = """
+exit 101: astguard v0.2.260 (/Users/yuki/src/.harness-worktrees/session-6d697f68-e/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.91s
+     Running tests/git_stash_quoted_flag_failopen_20261104.rs (target/debug/deps/git_stash_quoted_flag_failopen_20261104-9c26bc8988c05cde)
+error: test failed, to rerun pass `-p blastguard --test git_stash_quoted_flag_failopen_20261104`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test git_stash_quoted_flag_failopen_20261104"
+exit = 0
+passed = 6
+rev = "2f9f927e6f87dbd428bb883f9b6a7c81a847bb8e"
+observed_at = 1793810267
+output_digest = "sha256:4bce7c32e32480183d6fb2ff2582708930c375f75ee09c883b7f31034b2bea56"
+excerpt = """
+
+running 6 tests
+test control_plain_stash_with_message_is_allowed ... ok
+test partially_quoted_dash_dash_all_is_not_allowed ... ok
+test backslash_escaped_dash_u_is_not_allowed ... ok
+test backslash_escaped_dash_u_after_message_is_not_allowed ... ok
+test double_quoted_dash_u_is_not_allowed ... ok
+test control_unquoted_dash_u_is_not_allowed ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+   Compiling serde_core v1.0.228
+   Compiling num-traits v0.2.19
+   Compiling winnow v1.0.4
+   Compiling target-triple v1.0.1
+   Compiling toml_writer v1.1.2+spec-1.1.0
+   Compiling termcolor v1.4.1
+   Compiling glob v0.3.3
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling chrono v0.4.45
+   Compiling serde v1.0.228
+   Compiling serde_json v1.0.150
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling toml v1.1.3+spec-1.1.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling toml_edit v0.22.27
+   Compiling trybuild v1.0.118
+   Compiling toml v0.8.23
+   Compiling harness-core v0.2.90 (/Users/yuki/src/.harness-worktrees/session-c4aa3733/crates/harness-core)
+   Compiling overwatch v0.2.110 (/Users/yuki/src/.harness-worktrees/session-c4aa3733/crates/overwatch)
+   Compiling blastguard v0.2.265 (/Users/yuki/src/.harness-worktrees/session-c4aa3733/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.79s
+     Running tests/git_stash_quoted_flag_failopen_20261104.rs (target/debug/deps/git_stash_quoted_flag_failopen_20261104-44febddce2dec420)
+"""
+
+[task.closure.red]
+rev = "ba6f7f5bb742161e3855fe32c19cb5d5f325cb1a"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "c181dd41"
+title = "guard-maintree-bash refuses a git commit that concludes an in-progress merge in the main tree"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "guard-maintree-bash",
+    "gate",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-04 (session 7d8b5ad9): main had MERGE_HEAD from an earlier call (merge --no-ff --no-commit, conflicts resolved + staged); a separate call ran only 'git commit -F -', producing 2-parent merge 2957604f (parent2 = MERGE_HEAD, tree clean). PostToolUse refused verbatim: 'not classified as merge or fast-forward: the working tree / index also changed during this call (paths below), so the HEAD move was refused without checking it'. Cause (code reading, not measured): post() — staged merge paths go dirty->clean so only_unchanged_preexisting() is False, in_flight_merge_window() n/a, falls to verdict = REFUSE before integration_head() runs. Fix must check: MERGE_HEAD present at Pre, new HEAD's parent1 = Pre HEAD and parent2.. = Pre MERGE_HEAD oids, and changed paths limited to the pre-staged merge set. Controls (stay refused): ordinary commit with in-call staging, ordinary commit of a pre-staged change. Not covered: merge --continue, octopus, extra non-merge path in the concluding commit. Repro b8aa4b48."
+created_at = 1793755882
+updated_at = 1793810298
+weight = 0.0
+issue_number = 1528
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1528"
+issue_closed_at = 1793810301
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_conclude_merge_commit.py -q"
+rev = "b8aa4b48d62bd7ab49878ee7ccec7ddb3ef52c3a"
+observed_at = 1793755882
+detail = """
+exit 1: /tmp/mtg-observe-145jeds6/main status` before reverting anything.
+
+scripts/test_guard_maintree_bash_conclude_merge_commit.py:101: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_conclude_merge_commit.py::ConcludeMergeWithCommit::test_red_commit_concluding_in_progress_merge_is_allowed
+1 failed, 2 passed in 0.47s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_conclude_merge_commit.py -q"
+exit = 0
+passed = 3
+rev = "2f9f927e6f87dbd428bb883f9b6a7c81a847bb8e"
+observed_at = 1793810293
+output_digest = "sha256:eff550436e72f8540ed5f6a0f1187cee8df15ed5b7ba92fb0ea4266cfb397225"
+excerpt = """
+...                                                                      [100%]
+3 passed in 1.46s
+"""
+
+[task.closure.red]
+rev = "aab9036a70d592b8e7f53ca012dace3f9cfb4930"
+exit = 1
+kind = "behavioural"

@@ -692,7 +692,7 @@ pub fn add_v11_clean(m: &mut BTreeMap<String, Resp>) {
         ok("LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:((\"sshd\",pid=812,fd=3))\n"),
     );
     m.insert(
-        "LC_ALL=C readlink /proc/812/exe".into(),
+        "sudo -n LC_ALL=C readlink /proc/812/exe".into(),
         ok("/usr/sbin/sshd\n"),
     );
     m.insert(
@@ -926,12 +926,14 @@ pub fn is_whitelisted(cmd: &str) -> bool {
     if W21_CMDS.iter().any(|(_, c)| w21(c) == cmd) {
         return true;
     }
-    cmd.starts_with("LC_ALL=C readlink /proc/")
+    cmd.starts_with("sudo -n LC_ALL=C readlink /proc/")
         || cmd.starts_with("LC_ALL=C dpkg -S /")
         || cmd.starts_with("LC_ALL=C cat /etc/apt/sources.list.d/")
         || cmd.starts_with("LC_ALL=C /")
 }
 
 pub fn is_sudo_cmd(cmd: &str) -> bool {
-    SUDO_CMDS.contains(&cmd) || [W12, W16, W23].contains(&cmd)
+    SUDO_CMDS.contains(&cmd)
+        || [W12, W16, W23].contains(&cmd)
+        || cmd.starts_with("sudo -n LC_ALL=C readlink /proc/")
 }

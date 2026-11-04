@@ -276,7 +276,7 @@ per-command exceptions below. **[choice]** "command not found" is recognised by 
 |---|---|
 | W0 | `cmd /c ver` (no `LC_ALL`, Windows) |
 | W12 [sudo] | `sudo -n LC_ALL=C ss -H -tlnp` |
-| W12b | `LC_ALL=C readlink /proc/<pid>/exe` where `<pid>` is digits only, taken from `pid=<digits>` in W12 |
+| W12b [sudo] | `sudo -n LC_ALL=C readlink /proc/<pid>/exe` where `<pid>` is digits only, taken from `pid=<digits>` in W12 |
 | W13 | `LC_ALL=C dpkg -S <path>`; path starts with `/`, no whitespace, no quote, none of `;` `\|` `&` `$` or backtick. Exit 1 + stderr `no path found` means "not managed by dpkg" |
 | W14 | `LC_ALL=C apt-get -s -o Debug::NoLocking=1 dist-upgrade` |
 | W15 | `LC_ALL=C pro security-status --format json` |
@@ -403,3 +403,15 @@ B5 stays one finding per host. It (and K2) additionally carries:
 - **WN4**: JSON array/object of `{Name, Enabled}`; `Enabled` 0/false = disabled gives a violation (evidence names the profile; fix
   `Set-NetFirewallProfile -Profile <name> -Enabled True`); empty list or garbage: undetermined.
 - **WN5**: JSON with numeric `UserAuthentication`; not 1 gives a violation (fix contains `ネットワークレベル認証`); key missing or garbage: undetermined.
+
+## 12.9 Canon amendment 4322e061 (tests: `v11_timeout.rs` and the cases named below)
+
+- **W12b** is `sudo -n LC_ALL=C readlink /proc/<pid>/exe` (corrects the first draft of this section).
+- **Unsafe path** (fails the W13 conditions): never sent to ssh. Every item depending on that executable is Undetermined:
+  B5/K2 `exposed` = `unknown` (`unsafe_executable_path_makes_exposure_unknown`), and the S8/W22 item
+  (`s8_item_of_an_unsafe_executable_path_is_undetermined_and_never_sent`).
+- **S7**: a hold exists, no violation is shown, and S1 (W14) or B5 is undetermined: Undetermined. An observed violation still wins.
+- **S9** has no warning band: clean before EOL, even within 90 days (`s9_has_no_warning_band_near_eol`). The 90-day warning is S8 only.
+- **Command timeout** [choice]: `~/.hostaudit/config.toml` key `remote_command_timeout_secs`, default 60, clamp 5..=600
+  (0 becomes 5, never "no limit"). It bounds each remote command's execution (ssh `ConnectTimeout` only bounds the connection).
+  A timed-out command makes the rules depending on it `undetermined` with a `reason` containing `時間切れ`; other rules are unaffected.

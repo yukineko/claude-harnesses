@@ -428,3 +428,36 @@ fn kev_cache_shares_the_osv_max_age_setting() {
     let f = finding(&o.findings(), "web1", "B5");
     assert_eq!(cves(&f)[0]["kev"], "unknown", "3h > configured 2h: {f}");
 }
+
+#[test]
+fn unsafe_executable_path_makes_exposure_unknown() {
+    // sshd listens on 0.0.0.0 but its exe path fails W13 sanitisation: ownership cannot be
+    // established, so exposure is unknown (not "no").
+    let feed = vec![osv_rec(
+        "UBUNTU-CVE-2024-0002",
+        &[],
+        Some(("Ubuntu", "high")),
+        "openssh",
+        Some("1:9.9p1-1"),
+    )];
+    let r = run(feed, Some(&[]), |h| {
+        set(h, W12, ok(SSHD_ANY));
+        set(
+            h,
+            "sudo -n LC_ALL=C readlink /proc/812/exe",
+            ok("/usr/sbin/ss hd\n"),
+        );
+    });
+    let c = &cves(&r.b5)[0];
+    assert_eq!(c["exposed"], "unknown", "{c}");
+    let cmds = remote_cmds(&r.env);
+    assert!(
+        cmds.iter()
+            .any(|x| x == "sudo -n LC_ALL=C readlink /proc/812/exe"),
+        "liveness: {cmds:?}"
+    );
+    assert!(
+        !cmds.iter().any(|x| x.contains("ss hd")),
+        "unsafe path reached ssh: {cmds:?}"
+    );
+}

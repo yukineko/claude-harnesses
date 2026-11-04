@@ -433,7 +433,7 @@ fn s8_non_dpkg_listening_process_is_versioned_via_its_own_path() {
     let h = host(&[
         (W12.into(), ok(LISTEN_NODE)),
         (
-            "LC_ALL=C readlink /proc/900/exe".into(),
+            "sudo -n LC_ALL=C readlink /proc/900/exe".into(),
             ok("/opt/node-v25/bin/node\n"),
         ),
         (
@@ -466,7 +466,7 @@ fn s8_dpkg_owned_process_is_not_run_and_not_an_s8_item() {
         (W2.into(), dpkg(&dpkg_line("nodejs", "22.1.0-1"))),
         (W12.into(), ok(LISTEN_NODE)),
         (
-            "LC_ALL=C readlink /proc/900/exe".into(),
+            "sudo -n LC_ALL=C readlink /proc/900/exe".into(),
             ok("/usr/bin/node\n"),
         ),
         (
@@ -597,5 +597,19 @@ fn s8_docker_unobservable_is_undetermined() {
         let f = finding(&fs, "web1", "S8");
         assert_eq!(f["verdict"], "undetermined", "{r:?}: {f}");
         assert_eq!(o.code, 1, "{}", o.dbg());
+    }
+}
+
+#[test]
+fn s9_has_no_warning_band_near_eol() {
+    for days in [30, 89] {
+        let h = host(&[(W2.into(), dpkg(&dpkg_line("nodejs", "22.1.0-1nodesource1")))]);
+        let (_, o, fs) = run(&h, &[("nodejs", vec![cyc("22", days)])]);
+        let f = finding(&fs, "web1", "S9");
+        assert_eq!(
+            f["verdict"], "clean",
+            "{days} days to EOL: S9 is clean, not warning: {f}"
+        );
+        assert_eq!(o.code, 0, "{}", o.dbg());
     }
 }

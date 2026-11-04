@@ -489,7 +489,8 @@ fn every_issued_command_is_whitelisted_lc_all_and_sudo_only_where_declared() {
         assert!(cmds.iter().any(|x| *x == w21(c)), "W21 never issued: {c}");
     }
     assert!(
-        cmds.iter().any(|c| c == "LC_ALL=C readlink /proc/812/exe"),
+        cmds.iter()
+            .any(|c| c == "sudo -n LC_ALL=C readlink /proc/812/exe"),
         "W12b: {cmds:?}"
     );
     assert!(
@@ -527,12 +528,12 @@ LISTEN 0 128 0.0.0.0:108 0.0.0.0:* users:((\"c\",pid=108,fd=3))\n";
     let mut over: Vec<(String, Resp)> = vec![(W12.to_string(), ok(w12))];
     for (pid, path) in bad {
         over.push((
-            format!("LC_ALL=C readlink /proc/{pid}/exe"),
+            format!("sudo -n LC_ALL=C readlink /proc/{pid}/exe"),
             ok(&format!("{path}\n")),
         ));
     }
     over.push((
-        "LC_ALL=C readlink /proc/108/exe".into(),
+        "sudo -n LC_ALL=C readlink /proc/108/exe".into(),
         ok("/opt/good/bin/node\n"),
     ));
     over.push((
@@ -550,13 +551,13 @@ LISTEN 0 128 0.0.0.0:108 0.0.0.0:* users:((\"c\",pid=108,fd=3))\n";
     let cmds = remote_cmds(&env);
     let readlink = regex_free_readlink(&cmds);
     assert!(
-        readlink.contains(&"LC_ALL=C readlink /proc/108/exe".to_string()),
+        readlink.contains(&"sudo -n LC_ALL=C readlink /proc/108/exe".to_string()),
         "{cmds:?}"
     );
     for c in &cmds {
-        if c.starts_with("LC_ALL=C readlink /proc/") {
+        if c.starts_with("sudo -n LC_ALL=C readlink /proc/") {
             let pid = c
-                .trim_start_matches("LC_ALL=C readlink /proc/")
+                .trim_start_matches("sudo -n LC_ALL=C readlink /proc/")
                 .trim_end_matches("/exe");
             assert!(
                 !pid.is_empty() && pid.chars().all(|x| x.is_ascii_digit()),
@@ -595,7 +596,7 @@ LISTEN 0 128 0.0.0.0:108 0.0.0.0:* users:((\"c\",pid=108,fd=3))\n";
 
 fn regex_free_readlink(cmds: &[String]) -> Vec<String> {
     cmds.iter()
-        .filter(|c| c.starts_with("LC_ALL=C readlink /proc/"))
+        .filter(|c| c.starts_with("sudo -n LC_ALL=C readlink /proc/"))
         .cloned()
         .collect()
 }
@@ -610,7 +611,7 @@ fn w22_is_not_run_for_unmonitored_or_dpkg_owned_executables() {
     );
     set(
         &mut h,
-        "LC_ALL=C readlink /proc/900/exe",
+        "sudo -n LC_ALL=C readlink /proc/900/exe",
         ok("/usr/local/bin/foo\n"),
     );
     set(
@@ -625,7 +626,8 @@ fn w22_is_not_run_for_unmonitored_or_dpkg_owned_executables() {
     let cmds = remote_cmds(&env);
     // Liveness: the listener was really examined (W12b ran for pid 900).
     assert!(
-        cmds.iter().any(|c| c == "LC_ALL=C readlink /proc/900/exe"),
+        cmds.iter()
+            .any(|c| c == "sudo -n LC_ALL=C readlink /proc/900/exe"),
         "W12b never issued: {cmds:?}"
     );
     assert!(
@@ -635,4 +637,78 @@ fn w22_is_not_run_for_unmonitored_or_dpkg_owned_executables() {
                 || c.starts_with("LC_ALL=C /usr/sbin/sshd")),
         "executables are only run for monitored products that dpkg does not own: {cmds:?}"
     );
+}
+
+// ---------------------------------------------------------------- canon amendment 4322e061
+
+#[test]
+fn s7_hold_with_undetermined_s1_or_b5_is_undetermined() {
+    // S1 (W14) unobservable, B5 clean: a hold exists, no violation can be shown -> Undetermined.
+    let (_, _, fs) = audit(&host(&[(W20, ok("vim\n")), (W14, ssh_down())]));
+    assert_eq!(verdict(&fs, "web1", "S1"), "undetermined", "fixture");
+    let f = finding(&fs, "web1", "S7");
+    assert_eq!(f["verdict"], "undetermined", "{f}");
+    assert!(!reason_of(&f).is_empty(), "{f}");
+    // B5 undetermined (advisory feed unobtainable), S1 observed clean.
+    let mut env = Env::new();
+    env.one_selected_host(&host(&[(W20, ok("vim\n"))]));
+    env.osv_broken();
+    env.eol_ubuntu_supported();
+    let o = env.run(&["audit", "--json"]);
+    let fs = o.findings();
+    assert_eq!(verdict(&fs, "web1", "B5"), "undetermined", "fixture");
+    assert_eq!(verdict(&fs, "web1", "S7"), "undetermined", "{}", o.dbg());
+}
+
+#[test]
+fn s7_violation_still_wins_over_an_undetermined_side() {
+    // S1 shows curl pending while B5 is undetermined: the observed violation stands.
+    let mut env = Env::new();
+    env.one_selected_host(&host(&[
+        (
+            W14,
+            ok("Inst curl [7.81.0-1] (7.81.0-2 Ubuntu:22.04/jammy-security [amd64])\n"),
+        ),
+        (W20, ok("curl\n")),
+    ]));
+    env.osv_broken();
+    env.eol_ubuntu_supported();
+    let o = env.run(&["audit", "--json"]);
+    assert_eq!(
+        verdict(&o.findings(), "web1", "S7"),
+        "violation",
+        "{}",
+        o.dbg()
+    );
+}
+
+#[test]
+fn s8_item_of_an_unsafe_executable_path_is_undetermined_and_never_sent() {
+    let w12 = "LISTEN 0 128 0.0.0.0:3000 0.0.0.0:* users:((\"node\",pid=900,fd=19))\n";
+    let h = host(&[
+        (W12, ok(w12)),
+        (
+            "sudo -n LC_ALL=C readlink /proc/900/exe",
+            ok("/opt/no de/bin/node\n"),
+        ),
+    ]);
+    let mut env = Env::new();
+    env.eol_ubuntu_supported();
+    env.eol_feed("nodejs", &[cyc("25", 400)]);
+    let o = env.audit_one(&h);
+    let fs = o.findings();
+    let f = finding(&fs, "web1", "S8");
+    assert_eq!(f["verdict"], "undetermined", "{f}");
+    assert!(!reason_of(&f).is_empty(), "{f}");
+    let cmds = remote_cmds(&env);
+    assert!(
+        cmds.iter()
+            .any(|c| c == "sudo -n LC_ALL=C readlink /proc/900/exe"),
+        "liveness: {cmds:?}"
+    );
+    assert!(
+        !cmds.iter().any(|c| c.contains("no de")),
+        "unsafe path reached ssh: {cmds:?}"
+    );
+    assert_eq!(o.code, 1, "{}", o.dbg());
 }

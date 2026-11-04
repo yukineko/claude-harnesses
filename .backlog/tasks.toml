@@ -315,3 +315,36 @@ exit 101: /src/.harness-worktrees/session-6d697f68-c/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
      Running tests/python_c_newline_after_spaced_literal_fp_20261104.rs (target/debug/deps/python_c_newline_after_spaced_literal_fp_20261104-29f50aa0723aadfc)
 error: test failed, to rerun pass `-p blastguard --test python_c_newline_after_spaced_literal_fp_20261104`"""
+
+[[task]]
+id = "c181dd41"
+title = "guard-maintree-bash refuses a git commit that concludes an in-progress merge in the main tree"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "guard-maintree-bash",
+    "gate",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-04 (session 7d8b5ad9): main had MERGE_HEAD from an earlier call (merge --no-ff --no-commit, conflicts resolved + staged); a separate call ran only 'git commit -F -', producing 2-parent merge 2957604f (parent2 = MERGE_HEAD, tree clean). PostToolUse refused verbatim: 'not classified as merge or fast-forward: the working tree / index also changed during this call (paths below), so the HEAD move was refused without checking it'. Cause (code reading, not measured): post() — staged merge paths go dirty->clean so only_unchanged_preexisting() is False, in_flight_merge_window() n/a, falls to verdict = REFUSE before integration_head() runs. Fix must check: MERGE_HEAD present at Pre, new HEAD's parent1 = Pre HEAD and parent2.. = Pre MERGE_HEAD oids, and changed paths limited to the pre-staged merge set. Controls (stay refused): ordinary commit with in-call staging, ordinary commit of a pre-staged change. Not covered: merge --continue, octopus, extra non-merge path in the concluding commit. Repro b8aa4b48."
+created_at = 1793755882
+updated_at = 1793755882
+weight = 0.0
+issue_number = 1528
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1528"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_conclude_merge_commit.py -q"
+rev = "b8aa4b48d62bd7ab49878ee7ccec7ddb3ef52c3a"
+observed_at = 1793755882
+detail = """
+exit 1: /tmp/mtg-observe-145jeds6/main status` before reverting anything.
+
+scripts/test_guard_maintree_bash_conclude_merge_commit.py:101: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_conclude_merge_commit.py::ConcludeMergeWithCommit::test_red_commit_concluding_in_progress_merge_is_allowed
+1 failed, 2 passed in 0.47s"""

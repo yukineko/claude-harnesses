@@ -858,9 +858,6 @@ enum LessonsAction {
     },
 }
 
-/// The two durable positions of the shared autonomy switch. Two values, not a
-/// bool, so `autonomy-set` rejects anything else at the CLI boundary instead of
-/// writing a file that would later read back as `Undetermined`.
 /// Outcome a driver declares on `state release-task --outcome`. Omitted = unspecified (counted as
 /// NOT done); excluded = dropped after claiming, neither a failure nor progress.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -870,6 +867,9 @@ enum ReleaseOutcome {
     Excluded,
 }
 
+/// The two durable positions of the shared autonomy switch. Two values, not a
+/// bool, so `autonomy-set` rejects anything else at the CLI boundary instead of
+/// writing a file that would later read back as `Undetermined`.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 enum AutonomySwitch {
     On,

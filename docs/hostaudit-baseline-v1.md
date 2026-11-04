@@ -71,7 +71,7 @@
 
 - 認証は利用者の `aws login`（または既存 profile）。`aws sts get-caller-identity` 失敗 → 全 AWS ルール Undetermined（「ログインが切れている」と表示）。
 - whitelist（完全列挙。いずれも Describe/List/Get）:
-  AW1 `sts get-caller-identity` / AW2 `ec2 describe-regions` / AW3 `ec2 describe-security-groups` / AW4 `ec2 describe-instances` /
+  AW1 `sts get-caller-identity` / AW2 `ec2 describe-regions` / AW3 `ec2 describe-security-groups`・`ec2 describe-security-group-rules`（sgr ID 取得用。2026-11-04 ユーザー裁定で追加） / AW4 `ec2 describe-instances` /
   AW5 `ec2 describe-network-interfaces` / AW6 `s3api list-buckets`・`get-public-access-block`・`get-bucket-policy-status` /
   AW7 `rds describe-db-instances` / AW8 `iam get-account-summary` / AW9 `cloudtrail describe-trails`・`get-trail-status`
 - AW4 の EC2（public IP / private IP）は §3 の inventory に取り込む（ssh 接続は select した場合のみ）。
@@ -97,7 +97,7 @@
 2. **自動適用は opt-in**: `hostaudit aws apply --finding <id>` のときだけ、
    (a) 変更前後の差分を表示 → (b) EC2 API の `--dry-run` で権限確認 → (c) finding ごとに人間の明示確認 → (d) 実行 → (e) AW3 で再監査して解消を確認、
    の順で行う。確認が取れない（非対話・自律モード）なら実行しない（自答しない）。対象は SG の ingress ルールの revoke / 置き換えのみ。
-3. 22 番を閉じると自分の ssh 経路を失う可能性がある場合（監査機の送信元 IP しか許可が残らない等）は警告し、置き換え CIDR の指定を必須にする。
+3. 22 番を閉じる変更で、**同じ SG の他の ingress ルールが 22 を一切カバーしなくなる**場合は警告して拒否し、置き換え CIDR（`--replace-cidr`）の指定を必須にする（2026-11-04 ユーザー裁定。同一インスタンスの他 SG は見ない）。
 
 ## 6. ローカル設定
 

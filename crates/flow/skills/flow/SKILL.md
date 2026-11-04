@@ -423,6 +423,10 @@ condukt state release-task --run "flow-$CLAUDE_CODE_SESSION_ID" --outcome done -
 condukt state release-task --run "flow-$CLAUDE_CODE_SESSION_ID" --hashkey <hashkey>
 ```
 release-task は解放の前に item の outcome を run の item-outcome log に記録する。flow run には run state が無いので、3-4 の `condukt circuit check` はこの log の末尾から連続する done 以外の件数を failure streak として数える。`--outcome done` を付け忘れると成功した item も失敗として数えられる。
+claim した後に除外した item（claim 後の重複再確認で他セッションとの overlap が判明した、作業せずに escalate した、等）は `--outcome excluded` を付けて解放すること。excluded は failure streak に数えられず、直前までの streak をリセットもしない（done だけがリセットする）:
+```bash
+condukt state release-task --run "flow-$CLAUDE_CODE_SESSION_ID" --outcome excluded --hashkey <hashkey>
+```
 バッチなら item ごとに release すること（6/a で控えた `hashkey` を使う）。
 別 run が保持している hashkey は解放されず、release-task は exit 1 で終わる。
 

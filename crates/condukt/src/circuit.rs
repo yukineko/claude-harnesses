@@ -517,7 +517,8 @@ impl TranscriptAxes<'_> {
 /// whose run state is ABSENT (a stateless `/flow` driver) it is the trailing
 /// non-`done` outcomes in the item-outcome log that `state release-task`
 /// writes ([`crate::gatelog::release_failure_streak`]; a release without
-/// `--outcome done` counts as a failure). A streak that cannot be counted (an
+/// `--outcome done` counts as a failure; `--outcome excluded` entries are
+/// skipped: neither counted nor a reset). A streak that cannot be counted (an
 /// unreadable run state, an unreadable or unparseable outcome log) trips
 /// [`CircuitReason::StreakUnmeasured`] while the streak axis is on, and the
 /// JSON's `streak` is then `null` with `streak_unknown_reason` set

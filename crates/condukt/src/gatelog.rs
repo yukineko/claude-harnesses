@@ -286,6 +286,10 @@ pub fn load_circuit_records(dir: &Path, run_id: &str) -> Vec<CircuitRecord> {
 pub const RELEASE_OUTCOME_DONE: &str = "done";
 /// The item was sunk as a failure (`backlog fail`).
 pub const RELEASE_OUTCOME_FAILED: &str = "failed";
+/// The item was claimed and then dropped without work (e.g. overlap found on
+/// the post-claim re-check). Neither a failure (not counted in the streak) nor
+/// progress (does not reset a preceding streak): the circuit breaker skips it.
+pub const RELEASE_OUTCOME_EXCLUDED: &str = "excluded";
 /// No outcome was declared. Counted as NOT done by the circuit breaker: an
 /// item whose success nobody asserted is not evidence of progress.
 pub const RELEASE_OUTCOME_UNSPECIFIED: &str = "unspecified";
@@ -295,7 +299,7 @@ pub const RELEASE_OUTCOME_UNSPECIFIED: &str = "unspecified";
 pub struct ReleaseRecord {
     /// The task hashkey that was released.
     pub hashkey: String,
-    /// `"done"`, `"failed"` or `"unspecified"`.
+    /// `"done"`, `"failed"`, `"excluded"` or `"unspecified"`.
     pub outcome: String,
     /// Unix seconds when the release was recorded.
     pub released_at: i64,
@@ -316,7 +320,8 @@ pub fn append_release(dir: &Path, run_id: &str, entry: &ReleaseRecord) -> std::i
     harness_core::append::append_line(&release_log_path(dir, run_id), &line)
 }
 
-/// The trailing consecutive non-`done` outcomes in the run's item-outcome log.
+/// The trailing consecutive non-`done` outcomes in the run's item-outcome log,
+/// skipping `excluded` entries (neither counted nor a reset).
 /// Missing file → `Known(0)` (no item has finished yet). An unreadable file or
 /// ANY unparseable line → `Undetermined`: a skipped line could be the failure
 /// that completes the streak, so the count is not known.
@@ -351,6 +356,7 @@ pub fn release_failure_streak(dir: &Path, run_id: &str) -> Determination<u32> {
     let streak = records
         .iter()
         .rev()
+        .filter(|r| r.outcome != RELEASE_OUTCOME_EXCLUDED)
         .take_while(|r| r.outcome != RELEASE_OUTCOME_DONE)
         .count();
     Determination::known(u32::try_from(streak).unwrap_or(u32::MAX))

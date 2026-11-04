@@ -616,12 +616,43 @@ fn policy_answer_conflict_beats_approval() {
 ///   reorientation layer, not part of the autonomy self-driving loop.
 /// tdd SKILL (1): HOTL (L39, optional confirmation while authoring a test).
 /// hypothesis add SKILL (1): HOTL (L14, prompt for a missing argument).
-/// sitecraft SKILL (4): arrived with f87de40b unregistered (main was red);
-///   audited 2026-11-01. PROSE x1 (L23, the ban on filling an unanswered question
-///   with a default) + HOTL x3 (L32 purpose, L68 an unanswered `decide` question,
-///   L109 framework choice). All are judgment requests about WHAT site to build,
-///   never permission approvals; sitecraft is a human-driven build surface, not
-///   part of the scout/condukt/flow autonomy loop.
+/// sitecraft SKILL (12): arrived with f87de40b unregistered (main was red);
+///   audited 2026-11-01 at 4 sites. PROSE x1 (L23, the ban on filling an
+///   unanswered question with a default) + HOTL x3 (L32 purpose, then-L68 an
+///   unanswered `decide` question, then-L109 framework choice). All are judgment
+///   requests about WHAT site to build, never permission approvals; sitecraft is
+///   a human-driven build surface, not part of the scout/condukt/flow autonomy
+///   loop (none of the flow / condukt / scout skills reference it).
+///
+///   Re-audited 2026-11-04 at 12 sites (backlog 81c41b1b, GH #1521): eight
+///   arrived unregistered with f9487476 / 69c4828b / 564ec9b9 (sitecraft 0.1.6,
+///   0.1.9, 0.1.10). Earlier sites moved: the `decide next` prompt is now L97
+///   and the framework choice L159. Current lines:
+///   PROSE x2 — L23 (as above); L137 (`reuse: unconfirmed` is not permission to
+///   reuse: "上の AskUserQuestion で確認するまで先へ進まない" refers back to the
+///   L129 prompt and adds no prompt of its own).
+///   HOTL x8, category (c) genuine judgment requests about what to build —
+///   L32 purpose; L65 a relevant capability's how / done_when ("LLM が決めない"
+///   — the LLM proposes, the user decides); L85 the capability probe result,
+///   and on infeasible / undetermined the choice between preparing the
+///   environment and changing how / verify; L97 the `decide next` question loop;
+///   L107 `decide check` exit 1 (unanswered questions / V1-V5 rule violations
+///   confirmed and re-recorded); L109 a domain-vs-catalog answer inconsistency
+///   the binary cannot judge, which must not be resolved by LLM judgment;
+///   L129 whether an existing same-name plugin fits this purpose
+///   (`--confirm-fit yes|no` — yes/no in form but a fit judgment, not a
+///   permission to proceed; the LLM is forbidden to self-answer it); L159
+///   framework choice (Vite default, others only if the user picks them).
+///   BLOCKED-style stop x1 — L253: after the same `stuck` fingerprint persists
+///   three more times on the target-app side, stop looping and hand the
+///   isolation record to the user (the sitecraft analogue of (a)).
+///   GATED-style approval x1 — L255: `waiting-human` asks the human to run
+///   `sitecraft trust`, which records approval of commands the Stop gate and
+///   `serve start` will execute. It is human-only by design (the LLM must never
+///   run `sitecraft trust`; untrusted config makes `serve start` exit 2 and the
+///   gate block), so it is the sitecraft analogue of (b), not a rubber stamp
+///   an autonomous loop could skip. It sits in sitecraft's own human-invoked
+///   build loop (Phase 8-10), outside scout/condukt/flow.
 /// fde SKILL (4): arrived with a67ac4f4 / cfbf12ca unregistered (main was red,
 ///   backlog 81c41b1b); audited 2026-11-04. HDR x2 (L3 the `description`
 ///   naming the ratification prompt, L5 `allowed-tools`) + HOTL x1 (section
@@ -635,6 +666,13 @@ fn policy_answer_conflict_beats_approval() {
 ///   It is deliberately NOT routed through `condukt policy answer` (whose auto
 ///   verdict could answer it) and carries no `--approval`. A new residual stop,
 ///   deliberately; fde is a human-driven engagement surface.
+/// refactor SKILL (1): arrived with 7fc5d42e unregistered (main was red, GH
+///   #1524 / backlog fd2d2362); audited 2026-11-04. HDR x1 (L5
+///   `allowed-tools`). The skill body never names the tool; its only stop is
+///   L18 "Exit 2 is never a pass: stop, report the output verbatim, and ask."
+///   — an undetermined-proof escalation (category (c), cannot-determine goes to
+///   a human), not a permission approval. refactor is a manually invoked
+///   pay-down surface, not part of the scout/condukt/flow loop.
 const ASK_ALLOWLIST: &[(&str, usize)] = &[
     ("compass/skills/compass/SKILL.md", 3),
     ("condukt/skills/condukt/SKILL.md", 25),
@@ -645,8 +683,11 @@ const ASK_ALLOWLIST: &[(&str, usize)] = &[
     // ce76ce72: five per-command HOTL gates consolidated into one prohibition
     // covering the same five commands (pause/resume/reassign/reap/end).
     ("overwatch/skills/overwatch/SKILL.md", 2),
+    // fd2d2362: allowed-tools header only; manual pay-down surface.
+    ("refactor/skills/refactor/SKILL.md", 1),
     ("scout/skills/scout/SKILL.md", 10),
-    ("sitecraft/skills/sitecraft/SKILL.md", 4),
+    // 81c41b1b: re-audited 2026-11-04; 12 sites, all HOTL/PROSE/BLOCKED/GATED-style.
+    ("sitecraft/skills/sitecraft/SKILL.md", 12),
     ("tdd/skills/tdd/SKILL.md", 1),
 ];
 

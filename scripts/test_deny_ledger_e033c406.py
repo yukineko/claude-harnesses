@@ -89,6 +89,7 @@ class _Fixture(unittest.TestCase):
         # The fallback ledger lives under tempfile.gettempdir(): keep it in
         # this fixture too.
         env["TMPDIR"] = self.tmpdir
+        env["STOP_VERIFY_WORKTREE_STATE_DIR"] = os.path.join(self.tmpdir, "svw-state")
         env["CLAUDECODE"] = "1"
         env["CLAUDE_CODE_ENTRYPOINT"] = "cli" if interactive else "sdk-cli"
         return env
@@ -346,9 +347,14 @@ class StopDetectsChange(_Fixture):
         self.assertEqual(self.stop().returncode, 0)
 
     def test_stop_hook_active_is_the_bounded_allow(self):
+        # Per-gate marker contract (user ruling 2026-11-05): the bounded allow
+        # fires only after THIS gate's own previous stop blocked.
         self.deny_main()
         os.remove(self.target)
-        self.assertEqual(self.stop(active=True).returncode, 0)
+        self.assertEqual(self.stop().returncode, 2)  # blocks, writes marker
+        r = self.stop(active=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("systemMessage", r.stdout)
 
     def test_other_session_stop_is_unaffected(self):
         self.deny_main()

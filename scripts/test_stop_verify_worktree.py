@@ -114,3 +114,8 @@ def test_5b_reentry_unusable_marker_dir_explicit_allow_with_message(env, tmp_pat
     dirty(repo)
     r = run(repo, e, session_id="s5", stop_hook_active=True)
     assert r.returncode == 0 and has_sysmsg(r), (r.returncode, r.stdout)
+
+
+if __name__ == "__main__":
+    import unittest
+    unittest.main()

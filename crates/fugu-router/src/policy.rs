@@ -805,6 +805,43 @@ mod tests {
         assert_eq!(d.basis, "gated");
     }
 
+    // RED repro (scout 2026-11-05). Observed route rationale for a task with 0
+    // samples: "cleared 60% (posterior mean 50%)". Two readings: (1) the
+    // rationale means the Thompson *sample* cleared the bar, which is only an
+    // exploration draw — then "cleared 60%" next to a 50% mean misleads the
+    // reader into thinking the tier's evidence clears the threshold; (2) a real
+    // bug. Either way a rationale for a tier with no evidence must not claim the
+    // threshold was cleared while the printed posterior mean is below it.
+    #[test]
+    #[ignore = "backlog 0eafbf95: open defect (scout 2026-11-05) bandit rationale says 'cleared 60% (posterior mean 50%)' with 0 samples"]
+    fn bandit_zero_sample_rationale_does_not_claim_cleared_below_threshold() {
+        let mut offenders = Vec::new();
+        for seed in 1..200u64 {
+            let mut rng = Rng::new(seed);
+            let d = decide_bandit(
+                "implement an endpoint",
+                &[],
+                "parallel",
+                &[],
+                0.6,
+                2,
+                &mut rng,
+            );
+            if d.basis == "bandit"
+                && d.rationale.contains("cleared 60%")
+                && d.rationale.contains("posterior mean 50%")
+            {
+                offenders.push(d.rationale);
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "{} of 199 seeds, e.g. {:?}",
+            offenders.len(),
+            offenders.first()
+        );
+    }
+
     // Helper: build a Neighbor with explicit cost_usd.
     fn nb_cost(model: &str, pass: bool, cost_usd: f64) -> Neighbor {
         let mut n = nb(model, pass);

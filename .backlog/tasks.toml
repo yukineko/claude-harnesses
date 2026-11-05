@@ -1,1 +1,448 @@
-task = []
+[[task]]
+id = "abdc3ad3"
+title = "condukt lock: lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe fails on base (fixture inconclusive: holder never probed while alive)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05 at main e97692da (worker reported on ~aa4f21ee..6c91fff5; re-confirmed here by running the repro below alone). Verbatim: crates/condukt/src/lock.rs:1361 panicked: 'fixture inconclusive: the holder (pid N) was never probed while alive (0 alive + 1 dead), so this did not exercise a MID-wait death'. Fails when run alone, so not cross-test interference. Two readings: (a) fixture race/timing defect in the backlog_e9262d91 test (holder dies before the first probe, so the test cannot see a mid-wait death) -> test needs a deterministic handshake; (b) product regression in lock-wait probing order. Tell apart: run with the probe/sleep instrumented, or check whether the first probe now happens before the holder can die. Note: the --lib form in the scout brief does not exist (condukt has no lib target); use --bin condukt."
+created_at = 1793867193
+updated_at = 1793867193
+weight = 0.0
+issue_number = 1537
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1537"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --bin condukt lock::backlog_e9262d91::lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe"
+rev = "e97692da331149b126959735ed1ee4c862b0d563"
+observed_at = 1793867193
+detail = """
+exit 101: lock::backlog_e9262d91::lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 951 filtered out; finished in 3.56s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/main.rs (target/debug/deps/condukt-b3bce53a49382bf7)
+error: test failed, to rerun pass `-p condukt --bin condukt`"""
+
+[[task]]
+id = "958bd7c7"
+title = "condukt tests: check_criteria_japanese_prose case1-4 fail where pytest is not installed (host-environment assumption)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05 at main e97692da. crates/condukt/tests/check_criteria_japanese_prose.rs:181 'green tests must report passed=true' fails for case1-4 (1 passed; 4 failed). Evidence in the assertion output: '/usr/bin/python3: No module named pytest' and 'ModuleNotFoundError: No module named _pytest' -- the tests run a real pytest on this host. Readings: (a) test-environment defect: tests should use a shim/fake runner (as backlog_2becbabe.rs does for tdd) instead of requiring host pytest; (b) product defect in check-criteria prose parsing. (b) is NOT supported by observed output: the failing commands are parsed correctly (cmd [python3,-m,pytest,scripts/test_a.py]); they fail only because pytest is absent. Tell apart: run on a host with pytest installed; if it passes, (a). Filed because it is an unignored red test on base that hides whether the Japanese-prose parsing is actually covered."
+created_at = 1793867289
+updated_at = 1793867289
+weight = 0.0
+issue_number = 1538
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1538"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test check_criteria_japanese_prose"
+rev = "e97692da331149b126959735ed1ee4c862b0d563"
+observed_at = 1793867289
+detail = """
+exit 101: ned_by_japanese_particle
+
+test result: FAILED. 1 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.48s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/check_criteria_japanese_prose.rs (target/debug/deps/check_criteria_japanese_prose-954c79b5fa245571)
+error: test failed, to rerun pass `-p condukt --test check_criteria_japanese_prose`"""
+
+[[task]]
+id = "7d9a38d5"
+title = "condukt tests: editgate cargo_missing_from_path test panics on hosts where /usr/bin/cargo exists (precondition assumption)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05 at main e97692da. crates/condukt/tests/editgate_hook_reason_f7a0cadc.rs:192 panics: 'precondition: /usr/bin must not contain cargo' (cargo_missing_from_path_blocks_with_an_environment_reason_not_a_compile_claim); the other 2 tests in the file pass. The test builds a PATH of /usr/bin and assumes cargo is not there, so it cannot pin the f7a0cadc behaviour (cargo-missing -> environment reason, not a compile claim) on any host that has /usr/bin/cargo; the guarantee is therefore unobserved there. Reading: test-environment assumption, not a product defect. Fix direction: point PATH at an empty temp dir plus an absolute sh, instead of /usr/bin."
+created_at = 1793867301
+updated_at = 1793867301
+weight = 0.0
+issue_number = 1539
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1539"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test editgate_hook_reason_f7a0cadc"
+rev = "e97692da331149b126959735ed1ee4c862b0d563"
+observed_at = 1793867301
+detail = """
+exit 101: ason_not_a_compile_claim
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running tests/editgate_hook_reason_f7a0cadc.rs (target/debug/deps/editgate_hook_reason_f7a0cadc-5f18baa08eae94ee)
+error: test failed, to rerun pass `-p condukt --test editgate_hook_reason_f7a0cadc`"""
+
+[[task]]
+id = "be502f51"
+title = "condukt lock: lock_wait_probes_a_changed_holder_pid_immediately fails on base (changed holder not probed within 30s, probes: [])"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05 at main e97692da (worker report + re-confirmed alone here). Verbatim: crates/condukt/src/lock.rs:1540 panicked: 'the holder changed from live pid A to dead pid B mid-wait, but the lock was not acquired within 30s: the changed holder was not probed immediately (probes: [])'; stderr 'condukt: state lock ...held.lock contended for 30s; lock NOT acquired'. Takes ~60s. Sibling of abdc3ad3 (dying_mid_wait test). Two readings: (a) test fixture never lets the wait loop observe the pid change (race in fixture); (b) product defect: a changed holder pid is not re-probed immediately and a dead holder is never reaped, a real lock-liveness bug. Tell apart: instrument probe calls; if probes stays empty even when the holder file is rewritten before the loop starts, (b). Use --bin condukt (no lib target)."
+created_at = 1793867311
+updated_at = 1793867311
+weight = 0.0
+issue_number = 1540
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1540"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --bin condukt lock::backlog_e9262d91::lock_wait_probes_a_changed_holder_pid_immediately"
+rev = "e97692da331149b126959735ed1ee4c862b0d563"
+observed_at = 1793867311
+detail = """
+exit 101: ures:
+    lock::backlog_e9262d91::lock_wait_probes_a_changed_holder_pid_immediately
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 951 filtered out; finished in 31.67s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/main.rs (target/debug/deps/condukt-b3bce53a49382bf7)
+error: test failed, to rerun pass `-p condukt --bin condukt`"""
+
+[[task]]
+id = "9f90b96f"
+title = "blastguard: quoted heredoc body trailer line ending in '>' before the delimiter is read as redirect '> MSG' (git commit -F- <<'MSG')"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-05: a worker's heredoc commit (git commit -F- <<'MSG' ... MSG) was denied; reason read the quoted delimiter as a relative redirect '> MSG' after an earlier cd. RECONSTRUCTED trigger (original not preserved), found by probing target/debug/blastguard at main e97692da: 'cd /tmp/wt; git commit -F- <<'MSG'\nfix(x): y\n\nCo-Authored-By: A <a@b>\nMSG' -> ask "'> MSG' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve" (the trailing '>' of the Co-Authored-By email followed by the delimiter line). Ask is turned into deny inside subagents, hence the observed deny. Without the trailer '>' the same command is allowed. Readings: the quoted-delimiter body is data (shell does no parsing), so Allow is correct; the only defensible alternative is Ask, and Ask is not harmless for workers (becomes deny). Distinguish: any quoted-heredoc body must give the same verdict as the same command with an innocuous body. Test asserts allow. Existing sibling tests (heredoc_quoted_body_redirect_false_positive) did not cover the unresolved-cd + body-ending-in-'>' shape.'''
+created_at = 1793867385
+updated_at = 1793867385
+weight = 0.0
+issue_number = 1541
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1541"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_heredoc_data_body_fp_20261105 -- --ignored a_git_commit_heredoc"
+rev = "6d883979823e67f82dffb1209be106b46d50a539"
+observed_at = 1793867385
+detail = """
+exit 101: g blastguard v0.2.267 (/home/hiroyuki_nakayama/src/.harness-worktrees/bk-gates/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.73s
+     Running tests/backlog_heredoc_data_body_fp_20261105.rs (target/debug/deps/backlog_heredoc_data_body_fp_20261105-fa45ef3eec54fb52)
+error: test failed, to rerun pass `-p blastguard --test backlog_heredoc_data_body_fp_20261105`"""
+
+[[task]]
+id = "27795e6e"
+title = "blastguard: python stdin heredoc with 'os.unlink('/'os.remove' only inside a string literal is denied as deletion"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-05: python stdin heredoc whose body mentioned os.unlink(/os.remove was denied as a deletion. Probed at main e97692da: 'python3 - <<'PY'\nx = "docs: os.unlink( removes a file"\nprint(x)\nPY' -> deny "a quoted string in its program spells unlink(, which deletes files or directories outright if that string is run as code; blastguard cannot show it is not". (A real call os.unlink('/tmp/x.tmp') denied too, which is probably right; a '#' comment mention is only Ask.) POSSIBLY INTENDED: blastguard does not parse python and a string may reach exec/eval, so deny-by-default is conservative. Reading 2: a string that never reaches exec/eval/compile is data and should at most Ask like the comment case. Tell apart: control test b_control_string_fed_to_exec_stays_denied pins exec("...os.unlink...") must not be allowed; the failing test asserts a bare string is not deny. Commands reconstructed.'''
+created_at = 1793867397
+updated_at = 1793867397
+weight = 0.0
+issue_number = 1542
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1542"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_heredoc_data_body_fp_20261105 -- --ignored b_python_string"
+rev = "6d883979823e67f82dffb1209be106b46d50a539"
+observed_at = 1793867397
+detail = """
+exit 101: est result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/backlog_heredoc_data_body_fp_20261105.rs (target/debug/deps/backlog_heredoc_data_body_fp_20261105-fa45ef3eec54fb52)
+error: test failed, to rerun pass `-p blastguard --test backlog_heredoc_data_body_fp_20261105`"""
+
+[[task]]
+id = "2f5c8cb0"
+title = "schemaguard: decomposition schema reports valid:true for wrong-typed touched_files/deps that condukt's parser rejects"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-05: 'schemaguard check --schema decomposition --file <decomp>' returned valid:true while not_checked listed most fields. Measured at main e97692da: the schema inspects only goal and tasks[].{id,title,class,done_criteria,suggested_model,confidence} (crates/schemaguard/src/registry.rs). Input {"goal":"g","tasks":[{"id":"t1","title":"x","touched_files":"not-a-list","deps":5,"class":"parallel"}]} -> valid:true, errors:[], not_checked: touched_files/deps 'not declared in this schema — unknown extra fields are allowed and were not inspected'. condukt::model::Task declares touched_files: Vec<String> and deps: Vec<String>, so its serde parse fails on this input (not run; from the struct definition). Readings: (1) intended precheck design, unknown fields waived and surfaced in not_checked; (2) defect: the fields are known to condukt, and valid:true/exit 0 reads as clean (CLAUDE.md section 1 silence = fail-open). Tell apart: feed the same JSON to condukt's parser; if it errors, the precheck is wrong about validity."""
+created_at = 1793867489
+updated_at = 1793867489
+weight = 0.0
+issue_number = 1543
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1543"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p schemaguard --test backlog_decomposition_declared_fields_uninspected_20261105 -- --ignored"
+rev = "6d883979823e67f82dffb1209be106b46d50a539"
+observed_at = 1793867489
+detail = """
+exit 101:  filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_decomposition_declared_fields_uninspected_20261105.rs (target/debug/deps/backlog_decomposition_declared_fields_uninspected_20261105-3adec8efd098ab15)
+error: test failed, to rerun pass `-p schemaguard --test backlog_decomposition_declared_fields_uninspected_20261105`"""
+
+[[task]]
+id = "0eafbf95"
+title = "fugu-router: bandit rationale says 'cleared 60% (posterior mean 50%)' for a tier with 0 samples"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-05 route rationale for a 0-sample task: "cleared 60% (posterior mean 50%)". Built at crates/fugu-router/src/policy.rs decide_bandit: format!("Thompson(cost-adj): {m} cleared {:.0}% (posterior mean {:.0}%, efficiency {:.3}, {count} sample(s))"). Measured: decide_bandit(title, [], parallel, [], 0.6, 2, Rng::new(seed)) for seeds 1..200 -> 168 give "haiku cleared 60% (posterior mean 50%, efficiency 0.811, 0 sample(s))". Cause: 'cleared' refers to the Thompson random draw clearing the bar, not the evidence. Readings: (1) intended exploration draw, wording misleading; (2) bug. Either way the string asserts a threshold cleared next to a lower mean with 0 samples. Tell apart: the draw is not printed; a fix could print the sample or say 'explored (0 samples)'."""
+created_at = 1793867493
+updated_at = 1793867493
+weight = 0.0
+issue_number = 1544
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1544"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p fugu-router --bin fugu-router bandit_zero_sample -- --ignored"
+rev = "6d883979823e67f82dffb1209be106b46d50a539"
+observed_at = 1793867493
+detail = """
+exit 101: sts::bandit_zero_sample_rationale_does_not_claim_cleared_below_threshold
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 132 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/main.rs (target/debug/deps/fugu_router-dd0961e017c3ed7d)
+error: test failed, to rerun pass `-p fugu-router --bin fugu-router`"""
+
+[[task]]
+id = "5651745b"
+title = "blastguard: quoted heredoc body containing '> {x}' after an unresolvable cd is read as a RELATIVE redirect (cat <<'EOF')"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-05 (deny reason verbatim): "'> {' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve — it cannot tell whether this lands in a system directory or on a protected gate/config path, and refuses to guess". RECONSTRUCTED probe at main e97692da: 'cd "$WT" && cat <<'EOF'\nthe value > {bar} holds\nEOF' -> ask with that reason (deny in subagents). Quoted-delimiter heredoc body is data; cat writes only to stdout. Readings: Allow is right; Ask is the only defensible alternative but becomes deny for workers. Python-stdin variants (print(f"a > {x}")) return Ask with a different program-aware reason, acceptable, not filed. Control c_control_real_relative_redirect_after_unresolved_cd_still_blocked pins a real 'echo hi > {bar}' stays non-allow.'''
+created_at = 1793867501
+updated_at = 1793867501
+weight = 0.0
+issue_number = 1545
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1545"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_heredoc_data_body_fp_20261105 -- --ignored c_cat_quoted"
+rev = "6d883979823e67f82dffb1209be106b46d50a539"
+observed_at = 1793867501
+detail = """
+exit 101: est result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.02s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_heredoc_data_body_fp_20261105.rs (target/debug/deps/backlog_heredoc_data_body_fp_20261105-fa45ef3eec54fb52)
+error: test failed, to rerun pass `-p blastguard --test backlog_heredoc_data_body_fp_20261105`"""
+
+[[task]]
+id = "8cd825f3"
+title = "backlog list --json rewrites terminal status (done/cancelled) to deferred when defer_until is in the future"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05 by the t2 verifier (run-20261105-153137-85814), main e97692da. crates/backlog/src/main.rs:1097-1102 applies is_deferred (task.rs:373) to every task, whatever its status, so overwatch counts a done row as deferred. Reading A (intentional): d65da48d made deferred a derived status for the JSON feed, and every CLI close path clears defer_until, so such rows should not occur. Reading B (defect): terminal statuses must never be rewritten. To tell them apart, check whether every close path (done/cancel/legacy imports) clears defer_until. The repro plants a legacy row."
+created_at = 1793867705
+updated_at = 1793867705
+weight = 0.0
+issue_number = 1546
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1546"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_scout_20261105_json_defer_overrides_terminal -- --ignored"
+rev = "450c8fedd7646d020afad9eee8140fd20c0ba0bd"
+observed_at = 1793867705
+detail = """
+exit 101: ama/src/.harness-worktrees/bk-overwatch/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.96s
+     Running tests/backlog_scout_20261105_json_defer_overrides_terminal.rs (target/debug/deps/backlog_scout_20261105_json_defer_overrides_terminal-dd838c897c46ad4a)
+error: test failed, to rerun pass `-p backlog --test backlog_scout_20261105_json_defer_overrides_terminal`"""
+
+[[task]]
+id = "03e655dc"
+title = "compass carve-state.json: unlocked load-save with fixed tmp name loses concurrent answers"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05, main e97692da, found by the t4 worker. crates/compass/src/carve.rs:57-69 carve::save writes .compass/carve-state.json via a fixed carve-state.json.tmp (path.with_extension) with no lock. This is the same lost-update race that t4 (e97692da) fixed for outcomes and opportunities. Concurrent 'compass apply' runs (12x4) kept 7 of 48 answers."
+created_at = 1793867723
+updated_at = 1793867723
+weight = 0.0
+issue_number = 1547
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1547"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --test backlog_scout_20261105 concurrent_carve_apply_loses_no_answers -- --ignored"
+rev = "ebb8c4442a3c530993eb019f76abcf9e108ba3e2"
+observed_at = 1793867723
+detail = """
+exit 101: sured; 2 filtered out; finished in 0.39s
+
+   Compiling compass v0.1.44 (/home/hiroyuki_nakayama/src/.harness-worktrees/bk-compass/crates/compass)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.28s
+     Running tests/backlog_scout_20261105.rs (target/debug/deps/backlog_scout_20261105-cbb100ba59252986)
+error: test failed, to rerun pass `-p compass --test backlog_scout_20261105`"""
+
+[[task]]
+id = "dab2d6f3"
+title = "compass outcome::record seq = last+1 duplicates seq when the store is not monotonic"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05, main e97692da. Seeding seqs [0,3,1,2] and recording once more gives [0,3,1,2,3], a duplicate. Reading A: hand-edited stores are outside the contract. Reading B: seq is documented monotonic and record never repairs or refuses a bad store. To tell them apart: decide whether record should use max(seq)+1 or refuse non-monotonic input."
+created_at = 1793867730
+updated_at = 1793867730
+weight = 0.0
+issue_number = 1548
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1548"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --test backlog_scout_20261105 outcome_seq_is_unique_when_last_entry_has_lower_seq -- --ignored"
+rev = "ebb8c4442a3c530993eb019f76abcf9e108ba3e2"
+observed_at = 1793867730
+detail = """
+exit 101: e_seq_is_unique_when_last_entry_has_lower_seq
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.02s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/backlog_scout_20261105.rs (target/debug/deps/backlog_scout_20261105-cbb100ba59252986)
+error: test failed, to rerun pass `-p compass --test backlog_scout_20261105`"""
+
+[[task]]
+id = "b0353884"
+title = "compass opportunity slug_id derives from title only: same title under different outcomes collides"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05, main e97692da. 'speed up CI' added under outcome-A and outcome-B both get id speed-up-ci-6cf559. Reading A: the id is meant as a title-stable key, in which case the second add should be refused. Reading B: ids must be unique per record. The test accepts either distinct ids or refusal of the second add."
+created_at = 1793867733
+updated_at = 1793867733
+weight = 0.0
+issue_number = 1549
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1549"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --test backlog_scout_20261105 same_title_under_different_outcomes_gets_distinct_ids_or_is_refused -- --ignored"
+rev = "ebb8c4442a3c530993eb019f76abcf9e108ba3e2"
+observed_at = 1793867733
+detail = """
+exit 101: rent_outcomes_gets_distinct_ids_or_is_refused
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.03s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_scout_20261105.rs (target/debug/deps/backlog_scout_20261105-cbb100ba59252986)
+error: test failed, to rerun pass `-p compass --test backlog_scout_20261105`"""
+
+[[task]]
+id = "6140e776"
+title = "check-test-weakening blocks newly added #[ignore] backlog repro files (contradicts backlog filing protocol)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-05 at main e97692da: the pre-commit gate check-test-weakening blocks a commit that ADDS A NEW test file with #[ignore = "backlog: ..."] RED repros. Verbatim: '[BLOCK] crates/compass/tests/backlog_scout_20261105.rs: ignore-added (#[ignore] attributes 0 -> 3)' / 'test-weakening: blocked (exit 1).' The file did not exist before, so no existing test was weakened. crates/backlog/README.ja.md requires committing such repros, so the gate and protocol contradict; every filing needs a test-weakening-justified: ack, which the auto-mode classifier denied as [CI Bypass] until a human approved. Readings: (A) defect: new file 0->N ignores is not a weakening; (B) intentional: gate makes every new ignore visible. How to tell apart: gate docstring + git log -p. Evidence favours (A): the script's own docstring says 'A file that did not exist at the base cannot have had existing coverage weakened', and the Python half deliberately exempts new skipped repros ('a new skipped test hides no coverage that existed'), while the Rust half counts #[ignore] per file (findings_for, KIND_IGNORE_ADDED). User ruling 2026-11-05 allowed the ack line meanwhile. Repro test committed in ed9c8aef; control (ignore on existing test still blocks) passes."""
+created_at = 1793867945
+updated_at = 1793867945
+weight = 0.0
+issue_number = 1550
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1550"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_new_file_ignore.py::NewFileIgnore::test_new_file_with_backlog_ignores_is_not_blocked"
+rev = "ed9c8aeff365434828396083a5e5a639c1c76c01"
+observed_at = 1793867945
+detail = '''
+exit 1: justified: <path>:<kind> - <reason>\n'
+
+scripts/test_check_test_weakening_new_file_ignore.py:104: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_new_file_ignore.py::NewFileIgnore::test_new_file_with_backlog_ignores_is_not_blocked
+============================== 1 failed in 1.20s ==============================='''

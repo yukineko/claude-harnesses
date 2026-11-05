@@ -1773,4 +1773,63 @@ mod tests {
              `== Sessions ==` defect from backlog 7d820338"
         );
     }
+
+    // --- RED (scout 2026-11-05): non-pending statuses must not be counted as
+    // pending. Status vocabulary: crates/backlog/src/status.rs `Status::ALL`
+    // = pending | done | failed | cancelled | claimed (kebab-case serde).
+
+    fn aggregate_rows(status: &str, n: usize) -> String {
+        let row = format!(r#"{{"status": "{status}", "priority": "P1"}}"#);
+        format!("[{}]", vec![row; n].join(","))
+    }
+
+    #[test]
+    fn aggregate_backlog_all_cancelled_rows_are_not_pending() {
+        let s = parse_backlog(&aggregate_rows("cancelled", 652)).unwrap();
+        assert_eq!(s.pending, 0, "652 cancelled rows displayed as pending");
+        assert!(s.pending_by_priority.is_empty());
+    }
+
+    #[test]
+    fn aggregate_backlog_failed_is_not_pending() {
+        let s = parse_backlog(&aggregate_rows("failed", 3)).unwrap();
+        assert_eq!(s.pending, 0, "failed rows counted as pending");
+    }
+
+    #[test]
+    fn aggregate_backlog_claimed_is_not_pending() {
+        let s = parse_backlog(&aggregate_rows("claimed", 2)).unwrap();
+        assert_eq!(s.pending, 0, "claimed rows counted as pending");
+    }
+
+    #[test]
+    fn aggregate_backlog_unknown_status_is_counted_explicitly_not_pending() {
+        let s = parse_backlog(&aggregate_rows("weird-status", 4)).unwrap();
+        assert_eq!(s.pending, 0, "unknown status counted as pending");
+        let v = serde_json::to_value(&s).unwrap();
+        let unknown = v
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(k, _)| k.contains("unknown") || k.contains("undetermined"))
+            .filter_map(|(_, n)| n.as_u64())
+            .sum::<u64>();
+        assert_eq!(
+            unknown, 4,
+            "no unknown/undetermined count in serialized summary: {v}"
+        );
+    }
+
+    #[test]
+    fn aggregate_backlog_done_and_deferred_counts_unchanged() {
+        let json = r#"[
+            {"status": "done"}, {"status": "done"},
+            {"status": "deferred"},
+            {"status": "pending", "priority": "P0"}
+        ]"#;
+        let s = parse_backlog(json).unwrap();
+        assert_eq!(s.done, 2);
+        assert_eq!(s.deferred, 1);
+        assert_eq!(s.pending, 1);
+    }
 }

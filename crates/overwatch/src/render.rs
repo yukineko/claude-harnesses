@@ -506,4 +506,24 @@ mod tests {
         let out = format_compass_gap(&observed_empty(), Some("need more coverage"));
         assert!(out.contains("need more coverage"));
     }
+
+    /// RED (scout 2026-11-05): an unrecognised backlog status must be visible
+    /// in the PDO view, not silently dropped.
+    #[test]
+    fn aggregate_unknown_status_count_is_rendered_in_pdo_view() {
+        let summary = crate::aggregate::parse_backlog(
+            r#"[{"status":"weird-status"},{"status":"weird-status"},{"status":"weird-status"}]"#,
+        )
+        .unwrap();
+        let out = format_backlog(&observed_empty(), Some(&summary));
+        let lower = out.to_lowercase();
+        assert!(
+            (lower.contains("unknown") || lower.contains("undetermined")) && out.contains('3'),
+            "unknown count not rendered: {out}"
+        );
+        assert!(
+            !out.contains("pending:  3"),
+            "unknown counted as pending: {out}"
+        );
+    }
 }

@@ -1,1 +1,132 @@
-task = []
+[[task]]
+id = "abdc3ad3"
+title = "condukt lock: lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe fails on base (fixture inconclusive: holder never probed while alive)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05 at main e97692da (worker reported on ~aa4f21ee..6c91fff5; re-confirmed here by running the repro below alone). Verbatim: crates/condukt/src/lock.rs:1361 panicked: 'fixture inconclusive: the holder (pid N) was never probed while alive (0 alive + 1 dead), so this did not exercise a MID-wait death'. Fails when run alone, so not cross-test interference. Two readings: (a) fixture race/timing defect in the backlog_e9262d91 test (holder dies before the first probe, so the test cannot see a mid-wait death) -> test needs a deterministic handshake; (b) product regression in lock-wait probing order. Tell apart: run with the probe/sleep instrumented, or check whether the first probe now happens before the holder can die. Note: the --lib form in the scout brief does not exist (condukt has no lib target); use --bin condukt."
+created_at = 1793867193
+updated_at = 1793867193
+weight = 0.0
+issue_number = 1537
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1537"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --bin condukt lock::backlog_e9262d91::lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe"
+rev = "e97692da331149b126959735ed1ee4c862b0d563"
+observed_at = 1793867193
+detail = """
+exit 101: lock::backlog_e9262d91::lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 951 filtered out; finished in 3.56s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/main.rs (target/debug/deps/condukt-b3bce53a49382bf7)
+error: test failed, to rerun pass `-p condukt --bin condukt`"""
+
+[[task]]
+id = "958bd7c7"
+title = "condukt tests: check_criteria_japanese_prose case1-4 fail where pytest is not installed (host-environment assumption)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05 at main e97692da. crates/condukt/tests/check_criteria_japanese_prose.rs:181 'green tests must report passed=true' fails for case1-4 (1 passed; 4 failed). Evidence in the assertion output: '/usr/bin/python3: No module named pytest' and 'ModuleNotFoundError: No module named _pytest' -- the tests run a real pytest on this host. Readings: (a) test-environment defect: tests should use a shim/fake runner (as backlog_2becbabe.rs does for tdd) instead of requiring host pytest; (b) product defect in check-criteria prose parsing. (b) is NOT supported by observed output: the failing commands are parsed correctly (cmd [python3,-m,pytest,scripts/test_a.py]); they fail only because pytest is absent. Tell apart: run on a host with pytest installed; if it passes, (a). Filed because it is an unignored red test on base that hides whether the Japanese-prose parsing is actually covered."
+created_at = 1793867289
+updated_at = 1793867289
+weight = 0.0
+issue_number = 1538
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1538"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test check_criteria_japanese_prose"
+rev = "e97692da331149b126959735ed1ee4c862b0d563"
+observed_at = 1793867289
+detail = """
+exit 101: ned_by_japanese_particle
+
+test result: FAILED. 1 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.48s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/check_criteria_japanese_prose.rs (target/debug/deps/check_criteria_japanese_prose-954c79b5fa245571)
+error: test failed, to rerun pass `-p condukt --test check_criteria_japanese_prose`"""
+
+[[task]]
+id = "7d9a38d5"
+title = "condukt tests: editgate cargo_missing_from_path test panics on hosts where /usr/bin/cargo exists (precondition assumption)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05 at main e97692da. crates/condukt/tests/editgate_hook_reason_f7a0cadc.rs:192 panics: 'precondition: /usr/bin must not contain cargo' (cargo_missing_from_path_blocks_with_an_environment_reason_not_a_compile_claim); the other 2 tests in the file pass. The test builds a PATH of /usr/bin and assumes cargo is not there, so it cannot pin the f7a0cadc behaviour (cargo-missing -> environment reason, not a compile claim) on any host that has /usr/bin/cargo; the guarantee is therefore unobserved there. Reading: test-environment assumption, not a product defect. Fix direction: point PATH at an empty temp dir plus an absolute sh, instead of /usr/bin."
+created_at = 1793867301
+updated_at = 1793867301
+weight = 0.0
+issue_number = 1539
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1539"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test editgate_hook_reason_f7a0cadc"
+rev = "e97692da331149b126959735ed1ee4c862b0d563"
+observed_at = 1793867301
+detail = """
+exit 101: ason_not_a_compile_claim
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+     Running tests/editgate_hook_reason_f7a0cadc.rs (target/debug/deps/editgate_hook_reason_f7a0cadc-5f18baa08eae94ee)
+error: test failed, to rerun pass `-p condukt --test editgate_hook_reason_f7a0cadc`"""
+
+[[task]]
+id = "be502f51"
+title = "condukt lock: lock_wait_probes_a_changed_holder_pid_immediately fails on base (changed holder not probed within 30s, probes: [])"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05 at main e97692da (worker report + re-confirmed alone here). Verbatim: crates/condukt/src/lock.rs:1540 panicked: 'the holder changed from live pid A to dead pid B mid-wait, but the lock was not acquired within 30s: the changed holder was not probed immediately (probes: [])'; stderr 'condukt: state lock ...held.lock contended for 30s; lock NOT acquired'. Takes ~60s. Sibling of abdc3ad3 (dying_mid_wait test). Two readings: (a) test fixture never lets the wait loop observe the pid change (race in fixture); (b) product defect: a changed holder pid is not re-probed immediately and a dead holder is never reaped, a real lock-liveness bug. Tell apart: instrument probe calls; if probes stays empty even when the holder file is rewritten before the loop starts, (b). Use --bin condukt (no lib target)."
+created_at = 1793867311
+updated_at = 1793867311
+weight = 0.0
+issue_number = 1540
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1540"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --bin condukt lock::backlog_e9262d91::lock_wait_probes_a_changed_holder_pid_immediately"
+rev = "e97692da331149b126959735ed1ee4c862b0d563"
+observed_at = 1793867311
+detail = """
+exit 101: ures:
+    lock::backlog_e9262d91::lock_wait_probes_a_changed_holder_pid_immediately
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 951 filtered out; finished in 31.67s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/main.rs (target/debug/deps/condukt-b3bce53a49382bf7)
+error: test failed, to rerun pass `-p condukt --bin condukt`"""

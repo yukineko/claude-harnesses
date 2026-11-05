@@ -363,6 +363,19 @@ fn check_edit_in_env(
     }
 }
 
+/// Test-only deterministic panic trigger for `run_editgate` (main.rs): when env
+/// `CONDUKT_TEST_PANIC_EDITGATE=1`, panic. Proves the editgate panic barrier
+/// blocks rather than exiting 0 silently (tests/editgate_failclosed.rs).
+#[expect(
+    clippy::panic,
+    reason = "intentional test-only fault injection for the editgate fail-closed panic barrier"
+)]
+pub(crate) fn test_panic_hook() {
+    if std::env::var_os("CONDUKT_TEST_PANIC_EDITGATE").is_some_and(|v| v == "1") {
+        panic!("CONDUKT_TEST_PANIC_EDITGATE=1: injected editgate panic");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -81,8 +81,8 @@ enum Command {
     /// edit-time compile gate) whether the edit left the crate broken. On a real
     /// non-fallback broken verdict it prints one line of JSON
     /// `{"decision":"block","reason":<diagnostics>}` so the worker fixes it in
-    /// the same turn. Fail-soft everywhere else: any other outcome or error
-    /// prints nothing and exits 0 (a hook must never break a turn).
+    /// the same turn. A panic in the gate body also blocks (fail-closed via
+    /// `run_posttooluse_guarded`); other non-broken outcomes print nothing.
     Editgate,
     /// SubagentStop hook: when a child sub-agent terminates, advance the owning
     /// run task's durable `updated_at` — the timestamp `state probe`, `circuit
@@ -1871,7 +1871,7 @@ enum PrAction {
 fn main() {
     let cli = Cli::parse();
     match cli.command {
-        // Hooks never break a turn: swallow panics and always exit 0.
+        // Non-verdict hooks use run_hook (swallow panics, exit 0); Editgate is fail-closed.
         Command::Restore => run_hook(|| {
             if Config::disabled() {
                 return;
@@ -1908,12 +1908,14 @@ fn main() {
             let input = model::HookInput::parse(&raw);
             hooks::statusline::run(input.cwd.as_deref().unwrap_or(""));
         }),
-        Command::Editgate => run_hook(|| {
-            if Config::disabled() {
-                return;
-            }
-            run_editgate();
-        }),
+        Command::Editgate => {
+            harness_core::hook::run_posttooluse_guarded("condukt editgate", || {
+                if Config::disabled() {
+                    return;
+                }
+                run_editgate();
+            })
+        }
         Command::SessionHeartbeat => {
             let heartbeat = try_read_stdin()
                 .context(
@@ -1991,11 +1993,8 @@ fn editgate_block_reason(verdict: &serde_json::Value) -> String {
 /// I/O error, which is not the same as an empty payload). Out-of-scope paths
 /// (non-edit tool, no file, non-Rust file, out-of-worktree edit), a clean
 /// build, and empty/invalid stdin that was read successfully print nothing.
-/// Called under [`run_hook`], so the process exits 0 — exit status is not this
-/// hook's verdict channel; the printed block line is. Note that `run_hook`
-/// swallows a panic, and a panic before the block line is printed therefore
-/// leaves stdout empty, which the harness reads as "no block": that path is
-/// NOT fail-closed today.
+/// Called under `harness_core::hook::run_posttooluse_guarded`: the printed block line, not exit
+/// status, is the verdict; a panic here prints a block naming the crash, never a silent exit 0.
 fn run_editgate() {
     // A stdin READ ERROR is not "no payload": which file was edited (and so
     // whether it is in scope) is unknown, so block, stated (user ruling
@@ -2022,6 +2021,7 @@ fn run_editgate() {
         Some(i) => i,
         None => return,
     };
+    editgate::test_panic_hook();
 
     // Only file-mutating edit tools are in scope. `HookInput::target()` also
     // yields a path for Read/NotebookEdit, so gate on the tool name explicitly.
@@ -2814,7 +2814,7 @@ fn run_user(cmd: Command) -> Result<()> {
             json,
         } => run_review_order(&cwd, diff_file, from_git, &base, &head, json)?,
         Command::ShadowRun { action } => run_shadow_run(&cfg, &cwd, action)?,
-        // These are dispatched as hooks in main() (via run_hook, which exits and
+        // These are dispatched as hooks in main() (via a hook barrier that exits;
         // never returns here). Reaching this arm would be an internal dispatch
         // bug; return a clean error instead of panicking the process.
         Command::Restore

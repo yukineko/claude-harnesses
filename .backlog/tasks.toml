@@ -1,1 +1,29 @@
-task = []
+[[task]]
+id = "8cd825f3"
+title = "backlog list --json rewrites terminal status (done/cancelled) to deferred when defer_until is in the future"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05 by the t2 verifier (run-20261105-153137-85814), main e97692da. crates/backlog/src/main.rs:1097-1102 applies is_deferred (task.rs:373) to every task, whatever its status, so overwatch counts a done row as deferred. Reading A (intentional): d65da48d made deferred a derived status for the JSON feed, and every CLI close path clears defer_until, so such rows should not occur. Reading B (defect): terminal statuses must never be rewritten. To tell them apart, check whether every close path (done/cancel/legacy imports) clears defer_until. The repro plants a legacy row."
+created_at = 1793867705
+updated_at = 1793867705
+weight = 0.0
+issue_number = 1546
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1546"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test backlog_scout_20261105_json_defer_overrides_terminal -- --ignored"
+rev = "450c8fedd7646d020afad9eee8140fd20c0ba0bd"
+observed_at = 1793867705
+detail = """
+exit 101: ama/src/.harness-worktrees/bk-overwatch/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.96s
+     Running tests/backlog_scout_20261105_json_defer_overrides_terminal.rs (target/debug/deps/backlog_scout_20261105_json_defer_overrides_terminal-dd838c897c46ad4a)
+error: test failed, to rerun pass `-p backlog --test backlog_scout_20261105_json_defer_overrides_terminal`"""

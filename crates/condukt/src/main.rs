@@ -81,8 +81,8 @@ enum Command {
     /// edit-time compile gate) whether the edit left the crate broken. On a real
     /// non-fallback broken verdict it prints one line of JSON
     /// `{"decision":"block","reason":<diagnostics>}` so the worker fixes it in
-    /// the same turn. Fail-soft everywhere else: any other outcome or error
-    /// prints nothing and exits 0 (a hook must never break a turn).
+    /// the same turn. A panic in the gate body also blocks (fail-closed via
+    /// `run_posttooluse_guarded`); other non-broken outcomes print nothing.
     Editgate,
     /// SubagentStop hook: when a child sub-agent terminates, advance the owning
     /// run task's durable `updated_at` — the timestamp `state probe`, `circuit
@@ -1871,7 +1871,7 @@ enum PrAction {
 fn main() {
     let cli = Cli::parse();
     match cli.command {
-        // Hooks never break a turn: swallow panics and always exit 0.
+        // Non-verdict hooks use run_hook (swallow panics, exit 0); Editgate is fail-closed.
         Command::Restore => run_hook(|| {
             if Config::disabled() {
                 return;
@@ -2814,7 +2814,7 @@ fn run_user(cmd: Command) -> Result<()> {
             json,
         } => run_review_order(&cwd, diff_file, from_git, &base, &head, json)?,
         Command::ShadowRun { action } => run_shadow_run(&cfg, &cwd, action)?,
-        // These are dispatched as hooks in main() (via run_hook, which exits and
+        // These are dispatched as hooks in main() (via a hook barrier that exits;
         // never returns here). Reaching this arm would be an internal dispatch
         // bug; return a clean error instead of panicking the process.
         Command::Restore

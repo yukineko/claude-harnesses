@@ -28,6 +28,7 @@
 mod config;
 mod gate;
 mod git;
+mod impl_evidence;
 mod install;
 mod model;
 mod moved;
@@ -336,6 +337,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             interactive,
         ),
     };
+    let first_cfg = cfg.clone();
     let mut cfg = cfg;
     let mut root = root;
     let mut chosen: Option<gate::Report> = None;
@@ -391,11 +393,35 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // Only when the session wrote into a root other than the hook cwd: with the
     // cwd as the sole root, "wrote a file that has no uncommitted implementation
     // change" is the long-standing allow (tests/session_scope_own.rs).
+    //
+    // "Wrote files" counts only writes tdd itself treats as an implementation
+    // change (`impl_evidence::session_wrote_impl`, user ruling 2026-11-05): a `cd`
+    // target, a `.backlog/*.toml`, a script path or a file outside every repo
+    // is bookkeeping, not an implementation write, so a merge / backlog /
+    // rollout-only session is not blocked here. An implementation file written
+    // with an empty scan still blocks, and an unreadable transcript counts as
+    // an implementation write (CLAUDE.md §3).
     if !verdict.blocks(&cfg)
         && sr.roots.len() > 1
         && sr.wrote_any
         && !evaluated_something
         && !all_opted_out
+        && {
+            let root_cfgs: Vec<(PathBuf, Config)> = sr
+                .roots
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    let c = if i == 0 {
+                        first_cfg.clone()
+                    } else {
+                        Config::load(r)
+                    };
+                    (r.clone(), c)
+                })
+                .collect();
+            impl_evidence::session_wrote_impl(&root_cfgs, &first_cfg, &input.transcript_path)
+        }
     {
         let names = sr
             .roots

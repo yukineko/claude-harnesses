@@ -335,7 +335,7 @@ impl Report {
     }
 }
 
-fn build_globset(globs: &[String]) -> GlobSet {
+pub(crate) fn build_globset(globs: &[String]) -> GlobSet {
     let mut b = GlobSetBuilder::new();
     for g in globs {
         if let Ok(glob) = Glob::new(g) {

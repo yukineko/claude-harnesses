@@ -56,6 +56,18 @@ positive or false negative (4a64e6ff and ~30 sibling tickets).
                       c181dd41; see merge_concluded_by_commit. An unreadable
                       Pre MERGE_HEAD or Pre staged index -> not covered)
                                                             -> 0
+                      HEAD unchanged, no MERGE_HEAD, ORIG_HEAD rewritten
+                      between Pre and Post, the call demonstrably did not run
+                      in or point at main (Pre and Post payload cwd both
+                      resolve to a linked worktree, not main; command text
+                      names neither main nor its git dir and has no cd /
+                      pushd / popd / chdir / -C / --git-dir / --work-tree /
+                      --directory / GIT_* / CLAUDE_PROJECT_DIR; no GIT_DIR /
+                      GIT_WORK_TREE / GIT_COMMON_DIR in the hook env), and the
+                      dirty tree is a clean merge window (same evidence as
+                      in_flight_merge_window): ANOTHER process's `git merge`
+                      in main caught in its pre-merge-commit window (see
+                      command_cannot_target_main)           -> 0
                       anything else                        -> 2, naming the paths
 
 Exit 2 at Post cannot undo the command — the write has happened. It stops the
@@ -81,23 +93,38 @@ committing it by non-merge means and with ORIG_HEAD reset to HEAD (observed:
 on-disk identical to a later merge's pre-merge-commit window and is allowed
 (in_flight_merge_window). Changes by ANOTHER session
 between this call's Pre and Post are still REFUSED (they cannot be told apart
-from this call's own writes) and the message says so. When the Post lands in
+from this call's own writes) and the message says so, with ONE exception: a
+foreign `git merge` window in main (below) when the call demonstrably did not
+run in or point at main. When the Post lands in
 another session's `git merge` window (merged tree already in main's index and
 working tree, HEAD not moved, no MERGE_HEAD yet because git is running
 pre-merge-commit) and ORIG_HEAD was rewritten between Pre and Post with HEAD
 unchanged (observed: git writes ORIG_HEAD at merge start, MERGE_HEAD only after
-pre-merge-commit), the refusal reports that evidence as AMBIGUOUS: a concurrent
-merge in main is a possible cause, but this command's own reset/merge/rebase
-rewrites ORIG_HEAD too, so the change is not asserted to be this command's (and
-is still refused). Evidence = ORIG_HEAD differs between Pre and Post (including
-absent OR unreadable at Pre, both stored as None, and readable at Post), HEAD unchanged, no MERGE_HEAD. With HEAD unchanged that evidence changes WORDING only:
-it is recorded in the snapshot as `orig_head` but is excluded from the
-before==after comparison and from every verdict branch except one: when HEAD
-DID move by integration, an ORIG_HEAD rewritten to the current HEAD is one of
-several required (never sufficient alone) pieces of in_flight_merge_window
-evidence; a Pre snapshot without
-the field (key missing, not merely None), or an ORIG_HEAD that is absent or unreadable at
-Post, means no evidence (existing wording).
+pre-merge-commit):
+  - if the call's Pre and Post cwd both resolve to a linked worktree (not main,
+    git dir not main's), its command text cannot redirect it to main (see
+    command_cannot_target_main), and main's dirty state is a clean merge
+    window (in_flight_merge_window evidence), it is ALLOWED: main's ORIG_HEAD
+    lives in main's own git dir, which git run from a linked worktree does not
+    write. Residual: a program the command runs (script file, build script)
+    can still chdir / run git on main invisibly to the command text; it goes
+    unrefused only if it leaves exactly a clean merge window in main.
+  - otherwise (cwd missing / unresolvable / main / not a git work tree, Pre
+    snapshot without `cwd`, command text naming main or a redirect marker, or
+    not a clean merge window) the refusal reports that evidence as AMBIGUOUS:
+    a concurrent merge in main is a possible cause, but this command's own
+    reset/merge/rebase rewrites ORIG_HEAD too, so the change is not asserted to
+    be this command's (and is still refused, CLAUDE.md 3).
+Evidence = ORIG_HEAD differs between Pre and Post (including
+absent OR unreadable at Pre, both stored as None, and readable at Post), HEAD
+unchanged, no MERGE_HEAD. It is recorded in the snapshot as `orig_head` (and
+the Pre payload cwd as `cwd`), both excluded from the before==after comparison.
+ORIG_HEAD enters exactly two verdict branches, never sufficient alone: the
+foreign-window allow above, and, when HEAD DID move by integration, an
+ORIG_HEAD rewritten to the current HEAD as one of several required pieces of
+in_flight_merge_window evidence. Otherwise it changes WORDING only; a Pre
+snapshot without the field (key missing, not merely None), or an ORIG_HEAD
+that is absent or unreadable at Post, means no evidence (existing wording).
 """
 
 from __future__ import annotations
@@ -105,6 +132,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -223,7 +251,9 @@ def snapshot(main: Path, common: Path) -> dict:
 def orig_head_identity(common: Path) -> list | None:
     """[content, mtime_ns, inode] of ORIG_HEAD, or None when absent/unreadable.
 
-    Wording evidence only (see post()): None means "no evidence", never a verdict.
+    Never sufficient alone (see post()): it is one required piece of the
+    in_flight_merge_window and foreign-window evidence, otherwise wording only.
+    None means "no evidence", never a verdict.
     git rewrites ORIG_HEAD via a lockfile rename, so the inode/mtime change even
     when the oid is the same as before.
     """
@@ -593,6 +623,84 @@ def in_flight_merge_window(
     return False
 
 
+# Command-text markers that can point a process at a directory / git repository
+# other than its cwd. Any of them in the command makes attribution undetermined.
+REDIRECT_MARKERS = re.compile(
+    r"(?:^|[^\w-])(?:cd|pushd|popd|chdir)(?:$|[^\w-])"
+    r"|(?:^|\s)-C"
+    r"|--git-dir|--work-tree|--directory"
+    r"|GIT_[A-Z_]*|CLAUDE_PROJECT_DIR"
+)
+
+
+def _toplevel_and_gitdir(cwd: Path) -> tuple[Path, Path] | None:
+    """(work tree top level, git dir) of `cwd`, both resolved; None when git cannot say."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--path-format=absolute",
+             "--show-toplevel", "--git-dir"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    lines = proc.stdout.splitlines()
+    if proc.returncode != 0 or len(lines) != 2 or not all(lines):
+        return None
+    return Path(os.path.realpath(lines[0])), Path(os.path.realpath(lines[1]))
+
+
+def command_cannot_target_main(main: Path, common: Path, payload: dict, pre_cwd) -> bool:
+    """True only if this call demonstrably did not run in, or point at, main.
+
+    Used ONLY to attribute a `git merge` window in main (ORIG_HEAD rewritten,
+    HEAD unmoved, no MERGE_HEAD) to ANOTHER process. main's ORIG_HEAD,
+    AUTO_MERGE and index live in main's own git dir (<common>); a linked
+    worktree's live in its own git dir under <common>/worktrees/. Every piece
+    of evidence is required; anything missing or unresolvable is False
+    (-> the existing refusal, CLAUDE.md 3):
+      - the Pre and Post payload `cwd` are both non-empty strings naming
+        existing directories,
+      - each resolves (`git rev-parse --show-toplevel --git-dir`) to a work tree
+        other than main whose git dir is not main's (i.e. a linked worktree; a
+        cwd that is not inside a git work tree at all is not accepted),
+      - the command text is a string that contains neither main's path nor its
+        git dir (as given or resolved), nor a marker that can move a process to
+        another directory or repository (cd / pushd / popd / chdir, `-C`,
+        --git-dir, --work-tree, --directory, any GIT_* variable name,
+        CLAUDE_PROJECT_DIR),
+      - no GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR in this hook's environment.
+    Known residual (stated plainly): a program the command runs (a script file,
+    a build script) can still change directory or run git on main without the
+    command text showing it. The caller therefore also requires the on-disk
+    state to be a genuine clean merge window (in_flight_merge_window), so such a
+    program goes unrefused only if what it leaves in main is exactly that window.
+    """
+    if any(os.environ.get(v) for v in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")):
+        return False
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str):
+        return False
+    main_real = Path(os.path.realpath(main))
+    common_real = Path(os.path.realpath(common))
+    for needle in {str(main), str(main_real), str(common), str(common_real)}:
+        if needle in command:
+            return False
+    if REDIRECT_MARKERS.search(command):
+        return False
+    for cwd in (pre_cwd, payload.get("cwd")):
+        if not isinstance(cwd, str) or not cwd or not os.path.isdir(cwd):
+            return False
+        resolved = _toplevel_and_gitdir(Path(cwd))
+        if resolved is None:
+            return False
+        top, gitdir = resolved
+        if top == main_real or gitdir == common_real:
+            return False
+    return True
+
+
 def changed_paths(before: dict, after: dict) -> list[str]:
     """Paths whose content hash or status record (index state) differs."""
     a, b = before["hashes"], after["hashes"]
@@ -673,6 +781,9 @@ def sweep_orphans(state_dir: Path) -> None:
 
 def pre(payload: dict, common: Path, main: Path) -> int:
     snap = snapshot(main, common)
+    # Attribution evidence only (see command_cannot_target_main): where the
+    # command started. Popped in post() before the before==after comparison.
+    snap["cwd"] = payload.get("cwd")
     path = state_file(common, payload)
     sweep_orphans(path.parent)
     try:
@@ -696,11 +807,15 @@ def post(payload: dict, common: Path, main: Path) -> int:
     if not isinstance(before, dict) or not {"porcelain", "hashes", "head", "merge_head"} <= set(before):
         raise Undetermined("Pre snapshot %s is malformed" % path)
     after = snapshot(main, common)
-    # Wording evidence only: stripped so it never enters the verdict logic.
+    # Stripped so it never enters the before==after comparison; it reaches a
+    # verdict only as one required piece of the window evidence below.
     # A MISSING key (old-format Pre snapshot) is no evidence; a present None
     # (ORIG_HEAD absent at Pre) is a real value.
     has_orig_field = "orig_head" in before
     before_orig = before.pop("orig_head", None)
+    # A MISSING key (old-format Pre snapshot) is no attribution evidence.
+    has_pre_cwd = "cwd" in before
+    pre_cwd = before.pop("cwd", None)
     after_orig = after.pop("orig_head", None)
     concurrent_merge = (
         has_orig_field
@@ -723,6 +838,13 @@ def post(payload: dict, common: Path, main: Path) -> int:
         pass  # aborting one's own in-progress merge back to HEAD
     elif merge_concluded_by_commit(main, before, after):
         pass  # `git commit` concluding a merge staged by an earlier call
+    elif (
+        concurrent_merge
+        and has_pre_cwd
+        and command_cannot_target_main(main, common, payload, pre_cwd)
+        and in_flight_merge_window(main, common, before, after, has_orig_field, before_orig, after_orig)
+    ):
+        pass  # ANOTHER process's `git merge` in main, caught in its pre-merge-commit window
     elif after["head"] != before["head"] and (
         only_unchanged_preexisting(before, after)
         or in_flight_merge_window(main, common, before, after, has_orig_field, before_orig, after_orig)

@@ -378,6 +378,72 @@ pub fn pretooluse_exit_code<W: std::io::Write>(
     }
 }
 
+/// Run a verdict-bearing PostToolUse hook body under a FAIL-CLOSED panic
+/// barrier, then exit.
+///
+/// * The body returned normally: exit 0. Whatever it already printed (a
+///   `{"decision":"block","reason":...}` line, or nothing = no block) stands.
+/// * The body panicked — anywhere: a panic is a cannot-determine (CLAUDE.md
+///   §3), so it resolves to block, never to the silent exit 0 that the harness
+///   reads as "no block". A `{"decision":"block","reason":...}` line naming the
+///   crash is written to stdout (the same protocol a PostToolUse gate uses for
+///   its own blocks) and the process exits 0 so Claude Code reads that JSON.
+///   If that stdout write itself fails (e.g. EPIPE — stdout may be what
+///   panicked), the block is carried by stderr + exit 2 instead, which Claude
+///   Code also feeds back to the model for PostToolUse.
+///
+/// Why not [`run_hook`]: it swallows the panic and exits 0 with nothing
+/// printed — fail-open for a verdict-bearing hook. Why not
+/// [`run_pretooluse_guarded`]: exit 2 there is the PreToolUse block channel;
+/// for PostToolUse the established block channel is the stdout JSON, which is
+/// only read on exit 0. Why not `crate::gate::run::run_guarded`: that is the
+/// Stop protocol with a `stop_hook_active`-bounded allow; a blocked PostToolUse
+/// does not trap the session (the tool already ran), so no bounded allow is
+/// needed and every panic blocks.
+pub fn run_posttooluse_guarded<F: FnOnce()>(gate_name: &str, body: F) -> ! {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+    std::process::exit(posttooluse_exit_code(
+        gate_name,
+        outcome,
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    ))
+}
+
+/// Pure core of [`run_posttooluse_guarded`]: 0 when the body completed; when
+/// it panicked, the block JSON is written to `out` and 0 is returned, or — if
+/// writing/flushing `out` fails — a block message goes to `err` and
+/// [`PRETOOLUSE_BLOCK_EXIT`] (2) is returned. A panic never yields a silent 0.
+pub fn posttooluse_exit_code<O: std::io::Write, E: std::io::Write>(
+    gate_name: &str,
+    outcome: std::thread::Result<()>,
+    out: &mut O,
+    err: &mut E,
+) -> i32 {
+    let payload = match outcome {
+        Ok(()) => return 0,
+        Err(payload) => payload,
+    };
+    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "(non-string panic payload)".to_string()
+    };
+    let reason = format!(
+        "{gate_name}: internal error — the PostToolUse gate crashed (panic: {msg}) before it \
+         could judge this tool call, so it is BLOCKED as fail-closed (the check did not \
+         complete; its result is unknown), not passed"
+    );
+    let line = serde_json::json!({ "decision": "block", "reason": reason }).to_string();
+    if writeln!(out, "{line}").and_then(|()| out.flush()).is_ok() {
+        return 0;
+    }
+    let _ = writeln!(err, "[harness hook panic] {reason}");
+    PRETOOLUSE_BLOCK_EXIT
+}
+
 /// A hook registered in `settings.json` whose command's binary could not be
 /// found on disk — surfaced for observability (e.g. a stale rollout, a
 /// re-build that never ran `rollout-plugins.sh`/`rebuild-plugins.sh`).

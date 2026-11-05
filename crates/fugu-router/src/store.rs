@@ -107,6 +107,14 @@ pub struct Episode {
     /// actually predicted the outcome.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route_basis: Option<String>,
+    /// The model the decomposition SUGGESTED for this task, independent of the
+    /// model that actually ran it (`model`, unchanged). `None` = unknown /
+    /// not supplied (manual `record` without `--suggested-model`, an empty
+    /// `--suggested-model` is rejected at the CLI, and legacy episodes that
+    /// predate this field): it is never stored as `""`. Absent from the JSON
+    /// when `None`. Measurement-only — never consulted by routing/scoring.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_model: Option<String>,
     /// The routing `Decision`'s `confidence` ("high"|"low") at the time this
     /// task was routed. Same provenance/measurement-only caveats as
     /// `route_basis`.

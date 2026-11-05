@@ -12,11 +12,11 @@
 2480 crates/blastguard/src/scope.rs
 4095 crates/condukt/src/claim.rs
 7271 crates/condukt/src/main.rs
-6460 crates/condukt/src/state.rs
+6322 crates/condukt/src/state.rs
 4892 crates/condukt/src/verify.rs
 5254 crates/condukt/src/worktree.rs
 2699 crates/condukt/src/wt_reconcile.rs
-2345 crates/fugu-router/src/main.rs
+2176 crates/fugu-router/src/main.rs
 3647 crates/overwatch/src/store.rs
 2100 crates/overwatch/tests/cli_contract.rs
 3648 crates/propguard/src/gate.rs

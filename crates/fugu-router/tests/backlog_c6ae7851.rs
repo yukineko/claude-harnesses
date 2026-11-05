@@ -54,7 +54,6 @@ fn backlog_c6ae7851_control_record_writes_the_store() {
 }
 
 #[test]
-#[ignore = "backlog c6ae7851: open defect, remove ignore when fixed"]
 fn backlog_c6ae7851_record_persists_suggested_model() {
     let home = temp_home("suggested");
     let out = record(&home, &["--suggested-model", "sonnet"]);

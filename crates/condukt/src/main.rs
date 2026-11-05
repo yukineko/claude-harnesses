@@ -6451,7 +6451,7 @@ fn spawn_fugu_record(
         .args(["--class", &s.class])
         .args(["--model", model])
         .args(["--status", &s.status])
-        .args(["--role", role]);
+        .args(state::role_args(s, role));
     // Forward a resolved or manually-set cost unchanged (an explicit 0 is sent
     // as 0). `None` = the cost could not be resolved: OMIT `--cost`, which
     // fugu-router (0.1.41+) records as unmeasured and excludes from every cost

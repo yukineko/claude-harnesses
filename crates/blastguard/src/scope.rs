@@ -1669,15 +1669,15 @@ pub(crate) mod test_fixture_roots {
     }
 
     /// The candidates [`neutral_fixture_parent`] is given in practice:
-    /// `std::env::temp_dir()` and, on macOS only, `getconf
-    /// DARWIN_USER_TEMP_DIR`. A candidate that cannot be produced carries the
-    /// reason as its `Err` (never a silent omission). `$HOME` is never a
-    /// candidate.
+    /// `temp_dir()`; macOS `getconf DARWIN_USER_TEMP_DIR`; Linux `/run/lock`
+    /// (`/dev/shm` is a deletion system prefix). Never `$HOME`.
     pub(crate) fn neutral_fixture_candidates() -> Vec<(&'static str, Result<PathBuf, String>)> {
         #[allow(unused_mut)]
         let mut out = vec![("std::env::temp_dir()", Ok(std::env::temp_dir()))];
         #[cfg(target_os = "macos")]
         out.push(("getconf DARWIN_USER_TEMP_DIR", darwin_user_temp_dir()));
+        #[cfg(target_os = "linux")]
+        out.push(("/run/lock", Ok(PathBuf::from("/run/lock"))));
         out
     }
 

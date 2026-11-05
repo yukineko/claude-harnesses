@@ -4052,8 +4052,7 @@ fn write_into_worktree_source_is_not_excused_by_the_config_allowlist() {
 /// needs a real file — and the scratch directory holding it is passed to
 /// `SafeRoots::new` explicitly rather than assumed to be a root, so the
 /// verdict does not depend on the runner exporting `TMPDIR` or on which OS
-/// `temp_dir()` resolves for. The pid in the name keeps concurrent
-/// `cargo test` runs off each other's fixture. Two preconditions are
+/// `temp_dir()` resolves for. Two preconditions are
 /// enforced by `neutral_fixture_parent` (which panics rather than guess):
 /// the scratch parent must sit outside any git work tree, or the earlier
 /// recoverability axis answers `Allow` for both sides and the comparison
@@ -4063,10 +4062,11 @@ fn write_into_worktree_source_is_not_excused_by_the_config_allowlist() {
 #[allow(clippy::expect_used)]
 fn a_truncating_redirect_into_worktree_source_asks_exactly_as_its_twin_does() {
     use crate::scope::test_fixture_roots as fr;
-    let scratch = fr::neutral_fixture_parent(&fr::neutral_fixture_candidates()).join(format!(
-        "blastguard-worktree-redirect-{}",
-        std::process::id()
-    ));
+    let tmp = tempfile::Builder::new()
+        .prefix("blastguard-worktree-redirect-")
+        .tempdir_in(fr::neutral_fixture_parent(&fr::neutral_fixture_candidates()))
+        .expect("create the neutral scratch directory");
+    let scratch = tmp.path();
     let inside_dir = scratch.join(".claude/worktrees/agent-x/src");
     let outside_dir = scratch.join("notclaude/worktrees/agent-x/src");
     std::fs::create_dir_all(&inside_dir).expect("create the worktree-shaped fixture");

@@ -32,12 +32,27 @@ pub struct SessionRoster {
 /// Backlog summary.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BacklogSummary {
-    /// Total pending items.
+    /// Total pending items. Counts ONLY rows whose status is exactly
+    /// `pending`; cancelled / failed / claimed / unrecognised rows have their
+    /// own counters below and are never folded in here.
     pub pending: usize,
     /// Total done items.
     pub done: usize,
     /// Total deferred items.
     pub deferred: usize,
+    /// Total cancelled items (`status == "cancelled"`).
+    #[serde(default)]
+    pub cancelled: usize,
+    /// Total failed items (`status == "failed"`).
+    #[serde(default)]
+    pub failed: usize,
+    /// Total claimed (in-progress) items (`status == "claimed"`).
+    #[serde(default)]
+    pub claimed: usize,
+    /// Rows whose status is unrecognised or missing: undetermined, never
+    /// counted as pending (or any other bucket).
+    #[serde(default)]
+    pub unknown_status: usize,
     /// Pending count per priority (e.g. {"P0": 5, "P1": 3}). `default` pairs
     /// with `skip_serializing_if` so a round-trip through JSON that omitted
     /// this field (because it was empty) deserializes back to an empty map
@@ -316,12 +331,18 @@ pub fn parse_backlog(json: &str) -> Result<BacklogSummary, String> {
         match item.status.as_deref() {
             Some("done") => summary.done += 1,
             Some("deferred") => summary.deferred += 1,
-            _ => {
+            Some("cancelled") => summary.cancelled += 1,
+            Some("failed") => summary.failed += 1,
+            Some("claimed") => summary.claimed += 1,
+            Some("pending") => {
                 summary.pending += 1;
                 if let Some(pri) = item.priority {
                     *pending_by_priority.entry(pri).or_insert(0) += 1;
                 }
             }
+            // Unrecognised or missing status: undetermined, never pending.
+            // (backlog always serializes `status`, so None is unrecognised.)
+            _ => summary.unknown_status += 1,
         }
     }
 
@@ -1252,6 +1273,7 @@ mod tests {
             done: 10,
             deferred: 2,
             pending_by_priority: BTreeMap::new(),
+            ..Default::default()
         };
         summary.pending_by_priority.insert("P0".to_string(), 3);
         summary.pending_by_priority.insert("P1".to_string(), 2);
@@ -1319,14 +1341,17 @@ mod tests {
 
     #[test]
     fn test_parse_backlog_default_status() {
-        // Items without a status field should be treated as pending
+        // Items without a status field are undetermined, NOT pending:
+        // backlog's Task.status is a required field (crates/backlog/src/task.rs,
+        // no serde default), so a row lacking it is not something backlog emits.
         let json = r#"[
             {"priority": "P0"},
             {"status": "done", "priority": "P1"}
         ]"#;
 
         let summary = parse_backlog(json).expect("valid fixture JSON");
-        assert_eq!(summary.pending, 1);
+        assert_eq!(summary.pending, 0);
+        assert_eq!(summary.unknown_status, 1);
         assert_eq!(summary.done, 1);
     }
 

@@ -253,7 +253,7 @@ fn format_hypotheses(view: &ProgressView, hypotheses: Option<&HypoBuckets>) -> S
     }
 }
 
-/// Format the backlog summary (pending/done/deferred + priority breakdown).
+/// Format the backlog summary (pending/done/deferred/cancelled/failed/claimed/unknown + priority breakdown).
 fn format_backlog(view: &ProgressView, backlog: Option<&BacklogSummary>) -> String {
     match backlog {
         None => placeholder(view, SOURCE_BACKLOG, "(none)\n"),
@@ -262,6 +262,14 @@ fn format_backlog(view: &ProgressView, backlog: Option<&BacklogSummary>) -> Stri
             let _ = writeln!(out, "  pending:  {}", summary.pending);
             let _ = writeln!(out, "  done:     {}", summary.done);
             let _ = writeln!(out, "  deferred: {}", summary.deferred);
+            let _ = writeln!(out, "  cancelled: {}", summary.cancelled);
+            let _ = writeln!(out, "  failed:   {}", summary.failed);
+            let _ = writeln!(out, "  claimed:  {}", summary.claimed);
+            let _ = writeln!(
+                out,
+                "  unknown status (undetermined, not pending): {}",
+                summary.unknown_status
+            );
             if summary.pending_by_priority.is_empty() {
                 out.push_str("  by priority: (none)\n");
             } else {
@@ -461,6 +469,7 @@ mod tests {
             done: 10,
             deferred: 1,
             pending_by_priority,
+            ..Default::default()
         };
         let out = format_backlog(&observed_empty(), Some(&summary));
         assert!(out.contains("pending:  5"));
@@ -474,6 +483,7 @@ mod tests {
             done: 0,
             deferred: 0,
             pending_by_priority: BTreeMap::new(),
+            ..Default::default()
         };
         let out = format_backlog(&observed_empty(), Some(&summary));
         assert!(out.contains("by priority: (none)"));

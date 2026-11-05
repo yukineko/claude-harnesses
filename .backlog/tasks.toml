@@ -130,3 +130,159 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 951 filtered out
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
      Running unittests src/main.rs (target/debug/deps/condukt-b3bce53a49382bf7)
 error: test failed, to rerun pass `-p condukt --bin condukt`"""
+
+[[task]]
+id = "9f90b96f"
+title = "blastguard: quoted heredoc body trailer line ending in '>' before the delimiter is read as redirect '> MSG' (git commit -F- <<'MSG')"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-05: a worker's heredoc commit (git commit -F- <<'MSG' ... MSG) was denied; reason read the quoted delimiter as a relative redirect '> MSG' after an earlier cd. RECONSTRUCTED trigger (original not preserved), found by probing target/debug/blastguard at main e97692da: 'cd /tmp/wt; git commit -F- <<'MSG'\nfix(x): y\n\nCo-Authored-By: A <a@b>\nMSG' -> ask "'> MSG' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve" (the trailing '>' of the Co-Authored-By email followed by the delimiter line). Ask is turned into deny inside subagents, hence the observed deny. Without the trailer '>' the same command is allowed. Readings: the quoted-delimiter body is data (shell does no parsing), so Allow is correct; the only defensible alternative is Ask, and Ask is not harmless for workers (becomes deny). Distinguish: any quoted-heredoc body must give the same verdict as the same command with an innocuous body. Test asserts allow. Existing sibling tests (heredoc_quoted_body_redirect_false_positive) did not cover the unresolved-cd + body-ending-in-'>' shape.'''
+created_at = 1793867385
+updated_at = 1793867385
+weight = 0.0
+issue_number = 1541
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1541"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_heredoc_data_body_fp_20261105 -- --ignored a_git_commit_heredoc"
+rev = "6d883979823e67f82dffb1209be106b46d50a539"
+observed_at = 1793867385
+detail = """
+exit 101: g blastguard v0.2.267 (/home/hiroyuki_nakayama/src/.harness-worktrees/bk-gates/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.73s
+     Running tests/backlog_heredoc_data_body_fp_20261105.rs (target/debug/deps/backlog_heredoc_data_body_fp_20261105-fa45ef3eec54fb52)
+error: test failed, to rerun pass `-p blastguard --test backlog_heredoc_data_body_fp_20261105`"""
+
+[[task]]
+id = "27795e6e"
+title = "blastguard: python stdin heredoc with 'os.unlink('/'os.remove' only inside a string literal is denied as deletion"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-05: python stdin heredoc whose body mentioned os.unlink(/os.remove was denied as a deletion. Probed at main e97692da: 'python3 - <<'PY'\nx = "docs: os.unlink( removes a file"\nprint(x)\nPY' -> deny "a quoted string in its program spells unlink(, which deletes files or directories outright if that string is run as code; blastguard cannot show it is not". (A real call os.unlink('/tmp/x.tmp') denied too, which is probably right; a '#' comment mention is only Ask.) POSSIBLY INTENDED: blastguard does not parse python and a string may reach exec/eval, so deny-by-default is conservative. Reading 2: a string that never reaches exec/eval/compile is data and should at most Ask like the comment case. Tell apart: control test b_control_string_fed_to_exec_stays_denied pins exec("...os.unlink...") must not be allowed; the failing test asserts a bare string is not deny. Commands reconstructed.'''
+created_at = 1793867397
+updated_at = 1793867397
+weight = 0.0
+issue_number = 1542
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1542"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_heredoc_data_body_fp_20261105 -- --ignored b_python_string"
+rev = "6d883979823e67f82dffb1209be106b46d50a539"
+observed_at = 1793867397
+detail = """
+exit 101: est result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running tests/backlog_heredoc_data_body_fp_20261105.rs (target/debug/deps/backlog_heredoc_data_body_fp_20261105-fa45ef3eec54fb52)
+error: test failed, to rerun pass `-p blastguard --test backlog_heredoc_data_body_fp_20261105`"""
+
+[[task]]
+id = "2f5c8cb0"
+title = "schemaguard: decomposition schema reports valid:true for wrong-typed touched_files/deps that condukt's parser rejects"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-05: 'schemaguard check --schema decomposition --file <decomp>' returned valid:true while not_checked listed most fields. Measured at main e97692da: the schema inspects only goal and tasks[].{id,title,class,done_criteria,suggested_model,confidence} (crates/schemaguard/src/registry.rs). Input {"goal":"g","tasks":[{"id":"t1","title":"x","touched_files":"not-a-list","deps":5,"class":"parallel"}]} -> valid:true, errors:[], not_checked: touched_files/deps 'not declared in this schema — unknown extra fields are allowed and were not inspected'. condukt::model::Task declares touched_files: Vec<String> and deps: Vec<String>, so its serde parse fails on this input (not run; from the struct definition). Readings: (1) intended precheck design, unknown fields waived and surfaced in not_checked; (2) defect: the fields are known to condukt, and valid:true/exit 0 reads as clean (CLAUDE.md section 1 silence = fail-open). Tell apart: feed the same JSON to condukt's parser; if it errors, the precheck is wrong about validity."""
+created_at = 1793867489
+updated_at = 1793867489
+weight = 0.0
+issue_number = 1543
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1543"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p schemaguard --test backlog_decomposition_declared_fields_uninspected_20261105 -- --ignored"
+rev = "6d883979823e67f82dffb1209be106b46d50a539"
+observed_at = 1793867489
+detail = """
+exit 101:  filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_decomposition_declared_fields_uninspected_20261105.rs (target/debug/deps/backlog_decomposition_declared_fields_uninspected_20261105-3adec8efd098ab15)
+error: test failed, to rerun pass `-p schemaguard --test backlog_decomposition_declared_fields_uninspected_20261105`"""
+
+[[task]]
+id = "0eafbf95"
+title = "fugu-router: bandit rationale says 'cleared 60% (posterior mean 50%)' for a tier with 0 samples"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-05 route rationale for a 0-sample task: "cleared 60% (posterior mean 50%)". Built at crates/fugu-router/src/policy.rs decide_bandit: format!("Thompson(cost-adj): {m} cleared {:.0}% (posterior mean {:.0}%, efficiency {:.3}, {count} sample(s))"). Measured: decide_bandit(title, [], parallel, [], 0.6, 2, Rng::new(seed)) for seeds 1..200 -> 168 give "haiku cleared 60% (posterior mean 50%, efficiency 0.811, 0 sample(s))". Cause: 'cleared' refers to the Thompson random draw clearing the bar, not the evidence. Readings: (1) intended exploration draw, wording misleading; (2) bug. Either way the string asserts a threshold cleared next to a lower mean with 0 samples. Tell apart: the draw is not printed; a fix could print the sample or say 'explored (0 samples)'."""
+created_at = 1793867493
+updated_at = 1793867493
+weight = 0.0
+issue_number = 1544
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1544"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p fugu-router --bin fugu-router bandit_zero_sample -- --ignored"
+rev = "6d883979823e67f82dffb1209be106b46d50a539"
+observed_at = 1793867493
+detail = """
+exit 101: sts::bandit_zero_sample_rationale_does_not_claim_cleared_below_threshold
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 132 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/main.rs (target/debug/deps/fugu_router-dd0961e017c3ed7d)
+error: test failed, to rerun pass `-p fugu-router --bin fugu-router`"""
+
+[[task]]
+id = "5651745b"
+title = "blastguard: quoted heredoc body containing '> {x}' after an unresolvable cd is read as a RELATIVE redirect (cat <<'EOF')"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-05 (deny reason verbatim): "'> {' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve — it cannot tell whether this lands in a system directory or on a protected gate/config path, and refuses to guess". RECONSTRUCTED probe at main e97692da: 'cd "$WT" && cat <<'EOF'\nthe value > {bar} holds\nEOF' -> ask with that reason (deny in subagents). Quoted-delimiter heredoc body is data; cat writes only to stdout. Readings: Allow is right; Ask is the only defensible alternative but becomes deny for workers. Python-stdin variants (print(f"a > {x}")) return Ask with a different program-aware reason, acceptable, not filed. Control c_control_real_relative_redirect_after_unresolved_cd_still_blocked pins a real 'echo hi > {bar}' stays non-allow.'''
+created_at = 1793867501
+updated_at = 1793867501
+weight = 0.0
+issue_number = 1545
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1545"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_heredoc_data_body_fp_20261105 -- --ignored c_cat_quoted"
+rev = "6d883979823e67f82dffb1209be106b46d50a539"
+observed_at = 1793867501
+detail = """
+exit 101: est result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.02s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_heredoc_data_body_fp_20261105.rs (target/debug/deps/backlog_heredoc_data_body_fp_20261105-fa45ef3eec54fb52)
+error: test failed, to rerun pass `-p blastguard --test backlog_heredoc_data_body_fp_20261105`"""

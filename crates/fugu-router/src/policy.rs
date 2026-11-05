@@ -813,7 +813,7 @@ mod tests {
     // bug. Either way a rationale for a tier with no evidence must not claim the
     // threshold was cleared while the printed posterior mean is below it.
     #[test]
-    #[ignore = "backlog: open defect (scout 2026-11-05) bandit rationale says 'cleared 60% (posterior mean 50%)' with 0 samples"]
+    #[ignore = "backlog 0eafbf95: open defect (scout 2026-11-05) bandit rationale says 'cleared 60% (posterior mean 50%)' with 0 samples"]
     fn bandit_zero_sample_rationale_does_not_claim_cleared_below_threshold() {
         let mut offenders = Vec::new();
         for seed in 1..200u64 {

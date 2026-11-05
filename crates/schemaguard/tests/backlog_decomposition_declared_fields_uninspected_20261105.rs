@@ -21,7 +21,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 #[test]
-#[ignore = "backlog: open defect (scout 2026-11-05) decomposition schema reports valid:true for wrong-typed touched_files/deps"]
+#[ignore = "backlog 2f5c8cb0: open defect (scout 2026-11-05) decomposition schema reports valid:true for wrong-typed touched_files/deps"]
 fn decomposition_with_wrong_typed_declared_task_fields_is_not_valid() {
     let payload = r#"{"goal":"g","tasks":[{"id":"t1","title":"x","touched_files":"not-a-list","deps":5,"class":"parallel"}]}"#;
     let mut child = Command::new(env!("CARGO_BIN_EXE_schemaguard"))

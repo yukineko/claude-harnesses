@@ -316,3 +316,101 @@ exit 101: ama/src/.harness-worktrees/bk-overwatch/crates/backlog)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.96s
      Running tests/backlog_scout_20261105_json_defer_overrides_terminal.rs (target/debug/deps/backlog_scout_20261105_json_defer_overrides_terminal-dd838c897c46ad4a)
 error: test failed, to rerun pass `-p backlog --test backlog_scout_20261105_json_defer_overrides_terminal`"""
+
+[[task]]
+id = "03e655dc"
+title = "compass carve-state.json: unlocked load-save with fixed tmp name loses concurrent answers"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05, main e97692da, found by the t4 worker. crates/compass/src/carve.rs:57-69 carve::save writes .compass/carve-state.json via a fixed carve-state.json.tmp (path.with_extension) with no lock. This is the same lost-update race that t4 (e97692da) fixed for outcomes and opportunities. Concurrent 'compass apply' runs (12x4) kept 7 of 48 answers."
+created_at = 1793867723
+updated_at = 1793867723
+weight = 0.0
+issue_number = 1547
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1547"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --test backlog_scout_20261105 concurrent_carve_apply_loses_no_answers -- --ignored"
+rev = "ebb8c4442a3c530993eb019f76abcf9e108ba3e2"
+observed_at = 1793867723
+detail = """
+exit 101: sured; 2 filtered out; finished in 0.39s
+
+   Compiling compass v0.1.44 (/home/hiroyuki_nakayama/src/.harness-worktrees/bk-compass/crates/compass)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.28s
+     Running tests/backlog_scout_20261105.rs (target/debug/deps/backlog_scout_20261105-cbb100ba59252986)
+error: test failed, to rerun pass `-p compass --test backlog_scout_20261105`"""
+
+[[task]]
+id = "dab2d6f3"
+title = "compass outcome::record seq = last+1 duplicates seq when the store is not monotonic"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05, main e97692da. Seeding seqs [0,3,1,2] and recording once more gives [0,3,1,2,3], a duplicate. Reading A: hand-edited stores are outside the contract. Reading B: seq is documented monotonic and record never repairs or refuses a bad store. To tell them apart: decide whether record should use max(seq)+1 or refuse non-monotonic input."
+created_at = 1793867730
+updated_at = 1793867730
+weight = 0.0
+issue_number = 1548
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1548"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --test backlog_scout_20261105 outcome_seq_is_unique_when_last_entry_has_lower_seq -- --ignored"
+rev = "ebb8c4442a3c530993eb019f76abcf9e108ba3e2"
+observed_at = 1793867730
+detail = """
+exit 101: e_seq_is_unique_when_last_entry_has_lower_seq
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.02s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/backlog_scout_20261105.rs (target/debug/deps/backlog_scout_20261105-cbb100ba59252986)
+error: test failed, to rerun pass `-p compass --test backlog_scout_20261105`"""
+
+[[task]]
+id = "b0353884"
+title = "compass opportunity slug_id derives from title only: same title under different outcomes collides"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "scout-2026-11-05",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-05, main e97692da. 'speed up CI' added under outcome-A and outcome-B both get id speed-up-ci-6cf559. Reading A: the id is meant as a title-stable key, in which case the second add should be refused. Reading B: ids must be unique per record. The test accepts either distinct ids or refusal of the second add."
+created_at = 1793867733
+updated_at = 1793867733
+weight = 0.0
+issue_number = 1549
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1549"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --test backlog_scout_20261105 same_title_under_different_outcomes_gets_distinct_ids_or_is_refused -- --ignored"
+rev = "ebb8c4442a3c530993eb019f76abcf9e108ba3e2"
+observed_at = 1793867733
+detail = """
+exit 101: rent_outcomes_gets_distinct_ids_or_is_refused
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.03s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_scout_20261105.rs (target/debug/deps/backlog_scout_20261105-cbb100ba59252986)
+error: test failed, to rerun pass `-p compass --test backlog_scout_20261105`"""

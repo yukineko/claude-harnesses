@@ -45,10 +45,34 @@ exists cannot be re-snapshotted and blocks as undetermined until the ledger is
 cleared or pruned. A payload without a session_id key has no ledger
 (deny_ledger.py, RESIDUALS).
 
-Bounded allow: `stop_hook_active` (a re-entrant stop after this hook already
-fired) resolves to allow, so a genuinely stuck state cannot trap the turn — the
-same bounded-allow the repo's other Stop gates use. It applies to the ledger
-check too.
+Bounded allow (per-gate, per-session marker — the design of harness_core's
+`gate::run::run_guarded`). `stop_hook_active` alone says only that SOME Stop
+hook blocked the previous stop; it does not say THIS gate did. So:
+
+  * every time this gate blocks (exit 2, ledger or cwd check) it writes the
+    marker `<state dir>/<session_id>`; every run that does not block removes it.
+    The state dir is `$STOP_VERIFY_WORKTREE_STATE_DIR`, defaulting to
+    `~/.claude/state/stop-verify-worktree/`.
+  * first stop of a chain (`stop_hook_active` false): the full check runs and a
+    violation blocks, whatever the marker says.
+  * re-entry with this gate's marker present: this gate blocked the previous
+    stop of the chain, so the stop is let through ONCE (the marker is consumed)
+    with a `{"systemMessage": ...}` on stdout naming the bounded allow. The
+    violation is NOT re-checked; the message says unverified, never clean.
+  * re-entry with no marker: another gate blocked the previous stop. The full
+    check runs and a violation still blocks (and writes the marker, so the next
+    re-entry is bounded).
+  * re-entry with no usable session_id, or a marker that cannot be read /
+    removed / whose directory cannot be used: whether this gate blocked last
+    cannot be told, and blocking would risk an unbounded trap, so the stop is an
+    EXPLICIT allow carrying a `systemMessage` saying the check was not run. It
+    is never silent.
+
+A failure to write the marker when blocking the FIRST stop of a chain does not
+soften that block (the re-entry that follows handles it). On a re-entry, a
+block that cannot be recorded would make every later re-entry see "no marker"
+and block forever, so it resolves to the same explicit allow + systemMessage
+(as run_guarded's `decide` does).
 
     exit 0   allow the stop
     exit 2   block the stop; stderr is the reason shown to the model
@@ -131,14 +155,145 @@ from a valid checkout, or fix what is stopping git from answering.
 """
 
 
+_MARKER_ENV = "STOP_VERIFY_WORKTREE_STATE_DIR"
+
+# Marker read outcomes (UNDET is shared with the git probes above).
+PRESENT = "present"
+ABSENT = "absent"
+
+_UNVERIFIED = ("so the stop is allowed WITHOUT a completed worktree / "
+               "deny-ledger check (unverified, not clean).")
+
+
+def _state_dir() -> str:
+    d = os.environ.get(_MARKER_ENV)
+    if d:
+        return d
+    return os.path.join(os.path.expanduser("~"), ".claude", "state",
+                        "stop-verify-worktree")
+
+
+def _session_id(payload) -> str | None:
+    """The session id if it is usable as a single file name, else None."""
+    if not isinstance(payload, dict):
+        return None
+    sid = payload.get("session_id")
+    if not isinstance(sid, str) or sid in ("", ".", ".."):
+        return None
+    if any(c in sid for c in ("/", os.sep, chr(0))):
+        return None
+    return sid
+
+
+def _marker_path(sid: str) -> str:
+    return os.path.join(_state_dir(), sid)
+
+
+def _take_marker(sid: str) -> tuple[str, str]:
+    """Read and consume this gate's marker: (PRESENT | ABSENT | UNDET, detail)."""
+    path = _marker_path(sid)
+    try:
+        os.stat(path)
+    except FileNotFoundError:
+        # Absent. The directory must still be usable, or a block now could not
+        # be recorded and the next re-entry would see "absent" again.
+        try:
+            os.makedirs(_state_dir(), exist_ok=True)
+        except OSError as e:
+            return UNDET, f"marker directory {_state_dir()} is unusable ({e})"
+        return ABSENT, ""
+    except OSError as e:
+        return UNDET, f"marker {path} could not be read ({e})"
+    try:
+        os.remove(path)
+    except OSError as e:
+        return UNDET, f"marker {path} exists but could not be cleared ({e})"
+    return PRESENT, ""
+
+
+def _record_block(payload) -> str | None:
+    """Write this gate's marker after a block. Returns an error, or None."""
+    sid = _session_id(payload)
+    if sid is None:
+        return "no usable session_id to key the marker on"
+    try:
+        os.makedirs(_state_dir(), exist_ok=True)
+        with open(_marker_path(sid), "w", encoding="utf-8") as f:
+            f.write("blocked\n")
+    except OSError as e:
+        return f"could not write {_marker_path(sid)} ({e})"
+    return None
+
+
+def _clear_marker(payload) -> None:
+    sid = _session_id(payload)
+    if sid is None:
+        return
+    try:
+        os.remove(_marker_path(sid))
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        # A stale marker would grant one unchecked allow on a later re-entry;
+        # say so rather than hide it.
+        sys.stderr.write(
+            f"stop-verify-worktree: could not clear marker ({e}); a later "
+            "re-entry may be bounded-allowed without a check.\n")
+
+
+def _allow_with_message(msg: str) -> int:
+    sys.stdout.write(json.dumps({"systemMessage": msg}) + "\n")
+    return 0
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
     except Exception:
         payload = {}
-    if isinstance(payload, dict) and payload.get("stop_hook_active"):
-        return 0  # bounded allow — never trap the turn
+    reentry = isinstance(payload, dict) and bool(payload.get("stop_hook_active"))
 
+    if reentry:
+        sid = _session_id(payload)
+        if sid is None:
+            return _allow_with_message(
+                "stop-verify-worktree: re-entrant stop with no usable session_id; "
+                "cannot tell whether this gate blocked the previous stop, "
+                + _UNVERIFIED)
+        state, detail = _take_marker(sid)
+        if state == PRESENT:
+            return _allow_with_message(
+                "stop-verify-worktree: bounded allow. This gate already blocked "
+                "the previous stop of this session, so this re-entry is let "
+                "through once without re-checking. The main-tree / deny-ledger "
+                "violation may still be present (unverified, not clean).")
+        if state == UNDET:
+            return _allow_with_message(
+                f"stop-verify-worktree: re-entrant stop, but {detail}; cannot "
+                "tell whether this gate blocked the previous stop, "
+                + _UNVERIFIED)
+        # ABSENT: another gate blocked the previous stop. Run the full check.
+
+    rc = _check(payload)
+    if rc != 2:
+        _clear_marker(payload)
+        return rc
+    err = _record_block(payload)
+    if err is None:
+        return rc
+    if reentry:
+        # Unrecorded block on a re-entry: every later re-entry would see "no
+        # marker" and block again, an unbounded trap. Explicit allow instead.
+        return _allow_with_message(
+            f"stop-verify-worktree: this re-entrant stop would be blocked, but "
+            f"the block marker could not be recorded ({err}); " + _UNVERIFIED)
+    sys.stderr.write(
+        f"\n(stop-verify-worktree: block marker not recorded: {err}.)\n")
+    return rc
+
+
+def _check(payload) -> int:
+    """The deny-ledger and main-tree check: 0 allow, 2 block (stderr = why)."""
     if deny_ledger is None:
         sys.stderr.write(UNDETERMINED.format(
             what=f"loading scripts/deny_ledger.py ({_LEDGER_IMPORT_ERROR})"))

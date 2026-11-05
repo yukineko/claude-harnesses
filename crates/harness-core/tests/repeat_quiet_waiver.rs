@@ -1,7 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Quiet-stop item 1: the second-occurrence waiver of `repeat::emit_stop_block`
-//! prints exactly ONE short single-line `systemMessage` (no reason text); the full
-//! reason lives only in `waivers.log`. The first occurrence still blocks.
+//! prints exactly ONE short single-line `systemMessage` (fixed message plus a
+//! one-line headline of the reason, per the 2026-11-05 ruling; never the later
+//! lines); the full reason lives only in `waivers.log`. The first occurrence still blocks.
 //! `emit_stop_block` prints, so it is observed out of process via a re-exec'd
 //! child test fn with isolated HOME and a controlled session id.
 
@@ -96,15 +97,23 @@ fn second_occurrence_waiver_is_one_short_line_and_reason_goes_to_log() {
     let w = &lines[1];
     assert!(w.get("decision").is_none(), "waiver must not be a decision");
     let msg = w["systemMessage"].as_str().expect("systemMessage string");
-    assert_eq!(
-        msg,
-        format!("{GATE}: 同じ指摘の2度目のため通しました（未解消）"),
-        "waiver one-liner must be exactly the short message"
+    // User ruling 2026-11-05 supersedes the 2026-10-27 "exactly the short
+    // message / no reason text" pin: the one-liner now ends with `— <headline>`
+    // (first line of the reason). Later lines must still never appear.
+    assert!(
+        msg.starts_with(&format!(
+            "{GATE}: 同じ指摘の2度目のため通しました（未解消）— "
+        )),
+        "waiver one-liner must be the short message followed by `— `: {msg}"
     );
     assert!(!msg.contains('\n'), "systemMessage must be single line");
     assert!(
-        !msg.contains("LONG-REASON-TEXT-MARKER"),
-        "systemMessage must not carry the reason text: {msg}"
+        msg.contains("LONG-REASON-TEXT-MARKER: tests are red in crate foo"),
+        "systemMessage must carry the first line's headline: {msg}"
+    );
+    assert!(
+        !msg.contains("second line of the reason"),
+        "systemMessage must not carry the reason's 2nd+ lines: {msg}"
     );
     assert!(
         log_text.contains(REASON) || log_text.contains("LONG-REASON-TEXT-MARKER"),

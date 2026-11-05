@@ -332,12 +332,16 @@ pub fn waive_stop_decision(
 /// (`<gate>: 同じ指摘の2度目のため通しました（未解消）`). The gate goes quiet
 /// about *blocking*, never about *having found something*.
 ///
-/// The message deliberately does NOT repeat the reason (operator ruling
-/// 2026-10-27: 「Stop時に結果の報告はあってもいいがログはいらない」 — a long
-/// log at Stop pushes the turn's result report off screen). The user already
-/// saw the full reason on the first block, and the full reason is durable in
-/// the session's `waivers.log` (written by [`must_yield`] via
-/// [`record_waiver`]), readable through [`waivers`].
+/// The message does NOT repeat the full reason (operator ruling 2026-10-27:
+/// 「Stop時に結果の報告はあってもいいがログはいらない」 — a long log at Stop
+/// pushes the turn's result report off screen). User ruling 2026-11-05 refines
+/// that: the same single line now ends with ` — <headline>`, the first non-empty
+/// line of the reason (status emoji / `<gate>: ` prefix stripped, at most 80
+/// chars, `…` when cut), so the finding is identifiable at a glance. Later
+/// lines are never shown. The user already saw the full reason on the first
+/// block, and the full reason is still only in the session's `waivers.log`
+/// (written by [`must_yield`] via [`record_waiver`]), readable through
+/// [`waivers`].
 pub fn emit_stop_block(gate: &str, reason: &str) {
     emit_stop_block_keyed(gate, reason, reason);
 }
@@ -363,9 +367,51 @@ pub fn emit_stop_block_keyed(gate: &str, reason: &str, fingerprint: &str) {
         None => println!(
             "{}",
             serde_json::json!({
-                "systemMessage": format!("{gate}: 同じ指摘の2度目のため通しました（未解消）")
+                "systemMessage": waiver_message(gate, reason)
             })
         ),
+    }
+}
+
+/// Maximum headline length (in chars, not bytes) in the waiver notice.
+const WAIVER_HEADLINE_MAX_CHARS: usize = 80;
+
+/// The one-line waiver notice (user ruling 2026-11-05): the fixed message plus
+/// ` — <headline>` when a headline can be formed from `reason`; exactly the
+/// fixed message otherwise (never a dangling `— `).
+fn waiver_message(gate: &str, reason: &str) -> String {
+    let base = format!("{gate}: 同じ指摘の2度目のため通しました（未解消）");
+    match waiver_headline(gate, reason) {
+        Some(h) => format!("{base}— {h}"),
+        None => base,
+    }
+}
+
+/// First non-empty line of the displayed `reason`, trimmed, `\r` removed, with a
+/// leading `🔴 ` and/or `<gate>: ` stripped, bounded to
+/// [`WAIVER_HEADLINE_MAX_CHARS`] chars (`…` appended when cut). `None` when no
+/// non-empty line exists.
+fn waiver_headline(gate: &str, reason: &str) -> Option<String> {
+    let line = reason
+        .lines()
+        .map(|l| l.replace('\r', ""))
+        .map(|l| l.trim().to_string())
+        .find(|l| !l.is_empty())?;
+    let mut s = line.as_str();
+    if let Some(rest) = s.strip_prefix("🔴 ") {
+        s = rest.trim_start();
+    }
+    if let Some(rest) = s.strip_prefix(&format!("{gate}: ")) {
+        s = rest.trim_start();
+    }
+    if s.is_empty() {
+        return None;
+    }
+    if s.chars().count() > WAIVER_HEADLINE_MAX_CHARS {
+        let cut: String = s.chars().take(WAIVER_HEADLINE_MAX_CHARS).collect();
+        Some(format!("{}…", cut.trim_end()))
+    } else {
+        Some(s.to_string())
     }
 }
 

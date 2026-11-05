@@ -15,7 +15,10 @@
 //! The CLI passes the project's MAIN worktree root as `<root>` (not the cwd the
 //! charter is read from), because the file is gitignored and a per-checkout
 //! store would split the history across linked worktrees. Load → append
-//! → atomic-write, mirroring the charter/hypothesis store conventions. Each
+//! → atomic-write, all under an exclusive lockfile (`outcomes.json.lock`) with
+//! a unique temp name, so concurrent `compass` processes lose no records; if
+//! the lock cannot be acquired the write is refused (non-zero exit). Mirrors
+//! the charter/hypothesis store conventions otherwise. Each
 //! record snapshots the charter's `north_star` and `current_gap` at record time
 //! so it is self-describing, plus a monotonic `seq` and a `recorded_at`
 //! timestamp (unix seconds).
@@ -99,11 +102,122 @@ fn save(root: &Path, outcomes: &[Outcome]) -> Result<()> {
         outcomes: outcomes.to_vec(),
     };
     let json = serde_json::to_string_pretty(&file).context("serializing outcomes")?;
-    // Write to a temp sibling then rename (mirror the hypothesis store).
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("renaming into {}", path.display()))?;
-    Ok(())
+    write_atomic(&path, &json)
+}
+
+/// Retry budget for acquiring a store lock: `LOCK_MAX_ATTEMPTS` tries spaced
+/// `LOCK_RETRY_DELAY_MS` apart (~5 s), mirroring the create_new lockfile
+/// convention of `harness_core::lessons::acquire_lock`.
+const LOCK_MAX_ATTEMPTS: u32 = 1000;
+const LOCK_RETRY_DELAY_MS: u64 = 5;
+
+/// An exclusive advisory lock on a store file, held as long as this guard
+/// lives. The lock IS the lockfile `<store file>.lock` (held iff it exists);
+/// dropping the guard removes it on every exit path, including errors.
+#[derive(Debug)]
+pub(crate) struct StoreLock {
+    path: PathBuf,
+}
+
+impl Drop for StoreLock {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::remove_file(&self.path) {
+            // Not silent: a lockfile we failed to remove refuses every later
+            // write, so tell the human which file it is.
+            eprintln!(
+                "compass: failed to release store lock {}: {e}; remove it by hand \
+                 once no compass process is running",
+                self.path.display()
+            );
+        }
+    }
+}
+
+/// `<store file>.lock` for a store path (e.g. `outcomes.json.lock`).
+fn lock_path_for(store: &Path) -> PathBuf {
+    let mut p = store.as_os_str().to_owned();
+    p.push(".lock");
+    PathBuf::from(p)
+}
+
+/// Acquire the exclusive lock for `store` (creating its parent dir), retrying
+/// while another process holds it. Fail-closed: if the lock cannot be acquired
+/// within the retry budget, or the lockfile cannot be created for any other
+/// reason, this returns an error naming the lock path and the caller must
+/// refuse the write. There is NO fallback to an unlocked write and NO
+/// automatic reaping of a stale lockfile: a lock left by a crashed process
+/// keeps refusing writes until a human removes the named file.
+pub(crate) fn lock_store(store: &Path) -> Result<StoreLock> {
+    let lock_path = lock_path_for(store);
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    for _ in 0..LOCK_MAX_ATTEMPTS {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(mut f) => {
+                use std::io::Write;
+                let guard = StoreLock {
+                    path: lock_path.clone(),
+                };
+                // The owner pid is diagnostic only (the lock is the file's
+                // existence), so a failed pid write does not void the lock.
+                let _ = writeln!(f, "{}", std::process::id());
+                return Ok(guard);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                std::thread::sleep(std::time::Duration::from_millis(LOCK_RETRY_DELAY_MS));
+            }
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!(
+                        "refusing to write {}: cannot create store lock {}",
+                        store.display(),
+                        lock_path.display()
+                    )
+                });
+            }
+        }
+    }
+    anyhow::bail!(
+        "refusing to write {}: store lock {} is held by another process \
+         (gave up after ~{} ms). If no compass process is running, the lock is \
+         stale: remove {} and retry.",
+        store.display(),
+        lock_path.display(),
+        u64::from(LOCK_MAX_ATTEMPTS) * LOCK_RETRY_DELAY_MS,
+        lock_path.display()
+    )
+}
+
+/// Atomically replace `path` with `contents`: write a uniquely-named temp
+/// sibling (`<file>.tmp.<pid>.<nonce>`) then rename it into place. The temp
+/// file is removed if the write or rename fails. Callers hold the store lock.
+pub(crate) fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".tmp.{}.{nanos:x}{seq:x}", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    let res = std::fs::write(&tmp, contents)
+        .with_context(|| format!("writing {}", tmp.display()))
+        .and_then(|()| {
+            std::fs::rename(&tmp, path).with_context(|| format!("renaming into {}", path.display()))
+        });
+    if res.is_err() {
+        // Best-effort cleanup; the original error is what gets reported.
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
 }
 
 /// Current wall-clock as unix seconds (0 if the system clock is before epoch).
@@ -136,6 +250,9 @@ pub fn record(
         );
     }
 
+    // The whole load/push/save runs under the store's exclusive lock so that
+    // concurrent recorders cannot lose each other's entries.
+    let _lock = lock_store(&store_path(root))?;
     let mut outcomes = load(root)?;
     let seq = outcomes.last().map(|o| o.seq + 1).unwrap_or(0);
     let outcome = Outcome {

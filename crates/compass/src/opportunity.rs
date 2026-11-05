@@ -96,10 +96,7 @@ fn save(root: &Path, opportunities: &[Opportunity]) -> Result<()> {
         opportunities: opportunities.to_vec(),
     };
     let json = serde_json::to_string_pretty(&file).context("serializing opportunities")?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("renaming into {}", path.display()))?;
-    Ok(())
+    crate::outcome::write_atomic(&path, &json)
 }
 
 /// Current wall-clock as unix seconds (0 if the system clock is before epoch).
@@ -146,6 +143,8 @@ pub fn record(root: &Path, title: &str, outcome_ref: &str, weight: f64) -> Resul
     if title.is_empty() {
         anyhow::bail!("opportunity requires a non-empty --title (a named bet, not a blank)");
     }
+    // load/push/save under the store's exclusive lock (refused if it is held).
+    let _lock = crate::outcome::lock_store(&store_path(root))?;
     let mut opportunities = load(root)?;
     let opportunity = Opportunity {
         id: slug_id(title),

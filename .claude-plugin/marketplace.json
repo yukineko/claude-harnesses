@@ -156,7 +156,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.336",
+      "version": "0.7.337",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -432,7 +432,7 @@
     {
       "name": "fugu-router",
       "description": "Per-model routing for Claude Code orchestration: learns from past task outcomes via a local episode store and suggests the cheapest model tier that historically cleared similar work.",
-      "version": "0.1.65",
+      "version": "0.1.66",
       "category": "orchestration",
       "keywords": [
         "routing",

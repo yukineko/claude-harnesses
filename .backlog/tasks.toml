@@ -77,6 +77,257 @@ FAILED scripts/test_check_test_weakening_macro_unignore.py::MacroUnignore::test_
 ============================== 1 failed in 0.54s ==============================='''
 
 [[task]]
+id = "afd18dc0"
+title = "overwatch: record every subagent and classify liveness per agent (subagents check)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "liveness",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+Filed 2026-11-07 (JST) from session c2e3bc17. RED commit 029ea0fe (overwatch 0.2.113), worktree branch session-c2e3bc17, merged with main e518bb84 at 9ea61afa.
+RED: crates/overwatch/tests/backlog_subagent_liveness_20261107.rs, 6 #[ignore]d tests. Observed with --ignored: 0 passed, 6 failed (4 fail on `unrecognized subcommand 'subagents'`, 1 on hooks.json not routing Agent/Task PostToolUse + SubagentStop to overwatch, 1 on overwatch::stalled::scan omitting an idle agent whose last entry is an attachment).
+
+USER RULINGS (verbatim, 2026-11-07):
+- 「同様の問題はかなり発生している memoryで処理せず、きちんと記録管理し、確認をいれて」
+- 「確認の方法があるのに確認していないなら嘘つきです、確認したけどわからないなら判定不能です。処理を実行していない、すべてのagentに問えばだいたいわかるはず」
+- 「sub agentを記録し、長期実行のものは確認するようなコードをいれられないか?」
+- 「コードでもないもの、コードで処理できないものへのREDはそもそもゴミなのでしない」 (so the RED asserts classification + exit code only, no prose)
+
+OBSERVED (what the main session did when asked 「sub agentはきちんと動いているか?」 at 20:50:39Z, answered "none stalled"):
+(a) sorted ~/.claude/projects/-Users-yuki-src-harness/c2e3bc17-.../subagents/*.jsonl by mtime and looked only at the top 3 of 6;
+(b) counted ps rows of cargo/tdd processes from OTHER sessions/runs as evidence (run-20261107-051052-69845 also has a t1);
+(c) explained away a contradiction (condukt run state said t1 `failed`) with a guess;
+(d) treated a recent mtime as progress.
+The last entry of most subagent transcripts is type `attachment` (hook_success), which says nothing about done vs stalled.
+User at 20:59:46Z: 「嘘です、止まってるsub agentはいて、とめました。どうしてまちがったのか」.
+
+THE STOPPED AGENT (observed in transcripts):
+- id a56b4006f1b96dc82, condukt:condukt-verifier "t5-verify: env failure classification", model haiku (Haiku 4.5), parentAgentId aa9207a745d517f90 (the condukt orchestrator for run-20261107-051454-39899), spawnDepth 2.
+- 20:28:05Z its foreground Bash `for f in scripts/test_*.py ...` (every scripts test, not needed by its task) hit the 120s timeout and was moved to background as bftamsqp2; it kept running.
+- 20:29:08Z (05:29:08 JST) last real activity: assistant TEXT "verification report", then SubagentStop hook fired. It did NOT call SubagentHandback. The harness nevertheless enqueued <status>completed</status> for a56b4006 at 20:29:11Z to the orchestrator.
+- 20:29 to 20:57 the orchestrator repeatedly wrote "Waiting on ... t5 verifier" (28 min) with no per-agent check.
+- 20:57:16Z the user messaged the agent directly: 「これ止ってない?」. 20:57:32Z the orchestrator SendMessage'd it ("you have run 34 minutes ... deliver your verdict"). 20:58:04Z orchestrator TaskStop(a56b4006) was refused: "Task a56b4006f1b96dc82 is owned by a56b4006f1b96dc82; agent aa9207a745d517f90 cannot stop it." It then killed shell pid 2348 and its pytest child; bftamsqp2 notified `failed` at 20:58:06Z. 20:58:35Z the agent finally called SubagentHandback (after a [handback-send-enforce] reminder) and ended "Done." at 20:58:36Z.
+- Over its life SubagentStop fired 4 times and `completed` was notified 3+ times for the same agent id (resumed by messages).
+
+DOES THE TRANSCRIPT GIVE A DETERMINISTIC STALL SIGNAL? Partially, and the obvious signals are wrong:
+- mtime/last entry: the last entry was an attachment (SubagentStop hook_success) -> overwatch::stalled::scan (the `overwatch status` scanner) silently treats it as fine (it only flags a last-entry assistant tool_use). RED test 6.
+- `completed` notification and SubagentStop both fired while the result was NOT delivered and the launcher was still waiting -> neither is "done". The deterministic done signal observed is a SubagentHandback tool_use whose tool_result says success:true. RED test 4.
+- Deterministic stall evidence that WAS available: no new tool_result for 28 min past its last TEXT, no SubagentHandback, launcher still waiting, plus its own background task (bftamsqp2) still running. Ambiguity: a background-launched agent whose turn ended without handback is indistinguishable, from the transcript alone, from one whose final TEXT is the intended result (agents not under handback-send-enforce); the classifier must treat "ended, no delivered result" as not-done (stalled or query_required), never done.
+
+DESIRED SHAPE (the RED's API, not implemented):
+- RECORD: `overwatch presence` (already the hook-written per-session registry under ~/.overwatch/<key>/overwatch/) also records each Agent launch from its PostToolUse payload (tool_response.agentId, async_launched; nested launches carry payload agent_id = launcher) and each SubagentStop. hooks.json must route PostToolUse Agent|Task and SubagentStop to it. UNVERIFIED: the exact PostToolUse payload shape for async Agent launches and whether nested-launch payloads carry agent_id; the fixture copies the observed toolUseResult {isAsync,status:async_launched,agentId}. Verify against a real payload before implementing.
+- CHECK: `overwatch subagents --session <id> --stall-secs <n> --json` -> {"clean", "agents":[{"agent_id","state"}]} for EVERY recorded agent of the session (nested included, other sessions excluded), state one of done / progressing / stalled / query_required / undetermined. done = delivered result (handback success). progressing = new, changing tool results within the window (entry timestamps, never mtime or hook attachments). stalled = no new tool result past threshold, OR repeated identical tool calls, OR a status query (SendMessage from parent) unanswered past the window. query_required = long-running candidate the parent must query now (names the id). undetermined = checked and still unknown (unreadable/unparseable transcript, recorded agent with no transcript, unreadable registry -> not clean). Exit 0 iff all done/progressing, else 1. Never "all fine" from a partial view; never count processes it cannot attribute to the session/run. A `--run <condukt-run-id>` selector (map run tasks' recorded agent ids to the same classification) is still to design; not in the RED.
+- A Stop/PostToolUse systemMessage that names the query_required/stalled ids so the parent actually queries them is part of the fix; not asserted in the RED (would be prose).
+
+PROCEDURE RULE (user ruling above): to answer any liveness question, enumerate EVERY agent, query each running one (SendMessage; an agent that does not answer within its next tool round is a strong stall signal), and classify each as done / progressing (answered with a concrete recent action) / stalled (no answer or no advance) / undetermined (queried and checked, still unknown). Answering without doing this is the defect: a state claimed without running an available check is a false report, not "undetermined". The main-session /flow skill and the condukt skill instructions should call `overwatch subagents` (once it exists) before answering any liveness question, and their "Waiting on X" loops should run it instead of waiting blindly.
+
+TWO READINGS and how to tell them apart:
+(a) missing mechanical check: nothing records subagents or classifies them, so the answer is unavoidably a guess. Supported by: no `subagents` subcommand, hooks.json does not route Agent/SubagentStop to overwatch, stalled::scan drops the observed shape (all RED).
+(b) intended human-judgment area: liveness was meant to be judged by the model reading transcripts. Refuted as a sufficient design by the observations: the judgment used mtime/partial views/foreign ps rows and was wrong; the user ruled it must be a record + mechanical check. Tell them apart by whether the RED's classifier can reproduce the user's verdict on the a56b4006 fixture without human input; it can (no handback + no new tool result for 28 min), so (a).
+
+SUB-FINDINGS (not fixed):
+- A verifier ran an unbounded full-suite foreground loop (`for f in scripts/test_*.py`) for ~34 min, which its task did not need. Not testable as code behavior of a crate today (it is agent behavior); a code-level guard would be a stuckguard/blastguard rule on unbounded test loops inside verifier agents. Mentioned only.
+- TaskStop from a parent agent on its own child is refused ("owned by a56b4006f1b96dc82") - harness behavior, outside this repo.
+- condukt subagent-stop logs "no ..." on every SubagentStop of these agents (cwd not in a task worktree), the coverage gap its doc already states."""
+created_at = 1793999490
+updated_at = 1793999490
+weight = 0.0
+issue_number = 1587
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1587"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test backlog_subagent_liveness_20261107 -- --ignored"
+rev = "9ea61afadbda9b6d3069333ef36cdd999d91da0c"
+observed_at = 1793999490
+detail = """
+exit 101: t_clean
+
+test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.63s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_subagent_liveness_20261107.rs (target/debug/deps/backlog_subagent_liveness_20261107-1799d8cbb2e03741)
+error: test failed, to rerun pass `-p overwatch --test backlog_subagent_liveness_20261107`"""
+
+[[task]]
+id = "ea6547c9"
+title = "condukt loses tdd RED/GREEN proofs at worktree teardown and never persists the verifier verdict"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-11-07 (epoch ~1793999100), orchestrator of condukt run run-20261107-051454-39899 (session c2e3bc17). RED commit cfe21de6 (condukt 0.7.351), written by a non-implementer test-writer agent.
+(a) tdd proofs are deleted at worktree teardown. The orchestrator ran `tdd red --task t5 --cmd ...` / `tdd green --task t5 ...` inside /Users/yuki/.condukt/worktrees/run-20261107-051454-39899-t5; tdd wrote <worktree>/.tdd/t5.red.json and t5.green.json. After `condukt worktree remove --path <wt> --branch condukt/run-20261107-051454-39899/t5`, from /Users/yuki/src/harness `tdd oracle --task t5` printed {"green_cmd":null,"has_green":false,"has_red":false,"red_cmd":null,"transition":"unknown","valid_fp_oracle":false}. The same applies to t1, t2 and t3 of that run. The only surviving trace is fp_oracle_valid:true in ~/.condukt/state/harness-e77d23c7/run-20261107-051454-39899.json. The lost proofs were NOT reconstructed.
+(b) The verifier verdict is persisted nowhere except the agent transcript: condukt state set stores only verifier_model and verifier_agent_id. The run journal holds only checkpoint lines (2 lines for this run).
+Desired: (a) persist proofs durably keyed by run id + task id before teardown, have tdd oracle / condukt state check-oracle read them after teardown, and refuse teardown (non-zero, worktree kept) when persisting fails; (b) record verifier verdict, confidence and reason in the run state for that task when the verdict is applied.
+RED: 3 failed / 4 passed. remove_persists_tdd_proofs_durably: "no durable copy of the tdd proofs survives worktree removal (red copies: [], green copies: [])"; remove_is_refused_when_proofs_cannot_be_persisted: "teardown proceeded although the proofs could not be persisted: exit=Some(0) worktree_exists=false"; state_set_records_verifier_verdict_confidence_reason: "error: unexpected argument --verifier-verdict found" (the CLI shape --verifier-verdict/--verifier-confidence/--verifier-reason was chosen by the test writer and can be changed by ruling). Depends on a real tdd binary on PATH.
+User ruling 2026-11-07: 「わからない過去を確認するより、記録して確認できるようにするのが優先」. Remove the #[ignore]s when fixed."""
+created_at = 1794000173
+updated_at = 1794000173
+weight = 0.0
+issue_number = 1588
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1588"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_records_lost_at_teardown_20261107 -- --include-ignored"
+rev = "4654feadec854373d65fbed1264853463ef70a93"
+observed_at = 1794000173
+detail = """
+exit 101: ng condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s
+     Running tests/backlog_records_lost_at_teardown_20261107.rs (target/debug/deps/backlog_records_lost_at_teardown_20261107-5c10ad0fd430eca3)
+error: test failed, to rerun pass `-p condukt --test backlog_records_lost_at_teardown_20261107`"""
+
+[[task]]
+id = "fb338793"
+title = "blastguard: system-harming commands and git exec-capable shapes not Deny (bisect run, rebase --exec, submodule foreach, -c alias/pager/editor, difftool --extcmd, --upload-pack, rm /etc/passwd, repeat downgrade)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+User rulings 2026-11-07 (relayed by coordinator):
+ R1 "any command harmful to the system must be DENY, for whatever reason; this is a critical bug".
+ R2 (design) instead of parsing what git exec-wrappers run, BAN them outright: every git subcommand/option that executes an arbitrary command must be Deny regardless of the embedded command (git bisect run, rebase --exec/-x/--exec=, submodule foreach, filter-branch any --*-filter, -c alias.X='!...' / shell alias, difftool/mergetool --extcmd, any other exec-capable shape).
+All targets assert deny. Do not fix in the filing task.
+
+Measured 2026-11-07 on main fa2e6fda (blastguard 0.2.287; target/debug/blastguard built from that rev; re-checked identical on 0.2.288 = 12e728b0, version-only bump). Bash PreToolUse payload, cwd=CLAUDE_PROJECT_DIR=/Users/yuki/src/harness, BLASTGUARD_ASK/CLAUDE_CODE_SESSION_ID/TMPDIR unset. Verbatim probe output (ALLOW = empty stdout):
+-- ban shapes, harmless embedded command --
+ALLOW | git bisect run true
+ALLOW | git bisect run make test
+ALLOW | git rebase -x 'echo ok' HEAD~1
+ALLOW | git rebase --exec 'echo ok' HEAD~1
+ALLOW | git rebase --exec='echo ok' HEAD~1
+ALLOW | git rebase -i --exec 'echo ok' HEAD~1
+ALLOW | git pull --rebase -x 'echo ok'
+ALLOW | git submodule foreach 'echo ok'
+ALLOW | git submodule foreach --recursive true
+deny  | git filter-branch --tree-filter true HEAD   (also --index/--msg/--env/--commit/--parent/--tag-name-filter: deny)
+ALLOW | git -c 'alias.x=!echo ok' x
+ALLOW | git -c alias.x='!echo ok' x
+ALLOW | git config alias.x '!echo ok'
+ALLOW | git config --global alias.x '!echo ok'
+ALLOW | git difftool --extcmd=echo HEAD
+ALLOW | git difftool -x echo HEAD
+ALLOW | git difftool --extcmd echo HEAD
+ALLOW | git -c core.pager='echo ok' log
+ALLOW | git -c core.sshCommand='echo ok' fetch
+ALLOW | git grep -O'echo ok' foo
+ALLOW | git grep --open-files-in-pager='echo ok' foo
+ALLOW | git fetch --upload-pack='echo ok' origin
+ALLOW | git clone -u 'echo ok' /x /y
+ALLOW | git clone --upload-pack='echo ok' /x /y
+ALLOW | git push --receive-pack='echo ok' origin
+ALLOW | git ls-remote --upload-pack='echo ok' origin
+ALLOW | git archive --remote=origin --exec='echo ok' HEAD
+ALLOW | git send-email --to-cmd='echo ok' x.patch
+ALLOW | git -c diff.external='echo ok' diff
+ALLOW | git -c core.editor='echo ok' commit
+ALLOW | git -c sequence.editor='echo ok' rebase -i HEAD~1
+-- exec shapes, destructive embedded command --
+ALLOW | git bisect run rm -rf /usr ; git bisect run rm -rf /usr/lib ; git bisect run sh -c 'rm -rf /usr'
+ALLOW | git rebase --exec 'rm -rf /usr' HEAD~1 ; git rebase -x 'rm -rf /usr' HEAD~1 ; git rebase -i --exec='rm -rf /usr' HEAD~1
+ALLOW | git submodule foreach 'rm -rf /usr' ; git submodule foreach --recursive rm -rf /usr
+deny  | git -c 'alias.x=!rm -rf /usr' x ; git filter-branch --tree-filter 'rm -rf /usr' HEAD
+-- bare --
+deny  | rm -rf /usr, /usr/lib, /usr/bin, /etc, /etc/hosts, /System, /System/Library, /bin, /sbin, /var, /Library, /, ~/.ssh, $HOME/.ssh, /Users/yuki/.ssh, ~
+deny  | rm -f /Users/yuki/.ssh/id_ed25519 ; rm -f ~/.ssh/authorized_keys
+ALLOW | rm -f /etc/passwd ; rm /etc/passwd ; rm /etc/hosts ; rm -f /bin/ls ; rm -f /usr/lib/libSystem.B.dylib
+ALLOW | rm -rf /private/tmp/claude-502/scratchx/foo   (control: scratch deletion)
+-- controls --
+ALLOW | git bisect start ; git bisect good ; git bisect bad ; git rebase HEAD~1 ; git log
+-- repeat --
+With CLAUDE_CODE_SESSION_ID set, the 2nd identical `rm -rf /usr/lib` in the same session is ask; reason ends "(2度目の同一要求です。blastguard は同じ指示を2度は上書きしません — この判断は人間に返されました。)". This is why the coordinator saw ask for rm -rf /usr/lib (the first request is deny).
+Not investigated: the installed cache launcher ~/.claude/plugins/cache/yukineko/blastguard/0.2.287/bin/blastguard (shell script) answered ask for EVERY probed case when invoked directly outside a hook (incl git bisect run rm -rf /usr). The test drives the debug binary from the same rev.
+
+Defects:
+(1) git exec-capable shapes are Allow (R2 ban): all listed ALLOW lines above except filter-branch, which is already deny. Cause for bisect/rebase/submodule (read, not instrumented): crates/blastguard/src/detect/git.rs analyze_git_words ends its subcommand match with `_ => Decision::Allow` (line 755 at fa2e6fda); no arm for bisect/rebase/submodule/difftool/grep/fetch/clone/push/ls-remote/archive/send-email. -c config executors (alias/pager/sshCommand/editor/diff.external) are handled in src/detect/executors.rs but a harmless value is Allow; only a destructive alias body is deny (cause not read).
+(2) R1: non-recursive rm of system files (/etc/passwd, /etc/hosts, /bin/ls, /usr/lib/libSystem.B.dylib) is Allow. Cause not read.
+(3) R1: src/main.rs downgrade_on_repeat turns a repeated system-harming Deny into Ask. RULING CONFLICT: operator ruling 2026-09-18 「ユーザの指示を2度やぶるgateはいらない。2度目はaskせよ」「全 gate で 2度目は無条件に通す」 vs R1 "must be DENY, for whatever reason". Target second_identical_rm_rf_usr_lib_stays_deny pins R1; tests/repeat_downgrade.rs uses non-system paths (/mnt/c/tmp/aegis-worktrees/..., git reset --hard, git checkout -- .) so it does not pin the opposite. Implementer should confirm scope with the user before changing downgrade_on_repeat.
+
+Readings: (a) defect - per R1/R2 every target must be Deny; (b) intended - none found for (1)/(2) (no comment, test or ruling exempts these); for (3) the 2026-09-18 ruling is intended behaviour that R1 now overrides for system-harming commands. Tell apart: grep tests/ and ticket notes for a ruling exempting a shape; absent one, (a).
+
+Repro: crates/blastguard/tests/git_exec_subcommand_failopen_20261107.rs (commit 12e728b0) - 44 targets RED (43 got "allow", 1 got "ask"), 23 controls green (bare system rm -rf deny on first request incl ~/.ssh, $HOME/.ssh; bisect start/good/bad, rebase HEAD~1, log Allow; destructive alias and all 7 filter-branch --*-filter deny; rm -rf in /private/tmp scratch and in a managed .harness-worktrees linked worktree Allow). Targets are #[ignore = "backlog <id>: ..."] after filing; run with --include-ignored."""
+created_at = 1794000962
+updated_at = 1794000962
+weight = 0.0
+issue_number = 1589
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1589"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test git_exec_subcommand_failopen_20261107 -- --include-ignored"
+rev = "12e728b0cd011e9ed84b1929a5f2b8a570e62732"
+observed_at = 1794000962
+detail = """
+exit 101: iling blastguard v0.2.288 (/Users/yuki/src/.harness-worktrees/session-0d3d5bb8/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.27s
+     Running tests/git_exec_subcommand_failopen_20261107.rs (target/debug/deps/git_exec_subcommand_failopen_20261107-cbbfb8fe5d7d5db8)
+error: test failed, to rerun pass `-p blastguard --test git_exec_subcommand_failopen_20261107`"""
+
+[[task]]
+id = "27e1f231"
+title = "donegate: shared repeat ledger waives the first stop of a new block chain (after green or give-up) when CLAUDE_CODE_SESSION_ID is set"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+REPRODUCED 2026-11-07 at rev 9cae0b93 (session-c2e3bc17, on top of main d9863f70; donegate 0.1.74). Claim source: verifier code trace in condukt run-20261107-051454-39899, previously unexecuted.
+
+Test: crates/donegate/tests/backlog_shared_ledger_new_chain_20261107.rs (black-box: spawns the donegate binary, temp HOME, trusted fixture repo, CLAUDE_CODE_SESSION_ID set; the check's output is constant so every red run renders the same block text).
+Repro cmd: cargo test -p donegate --test backlog_shared_ledger_new_chain_20261107 -- --ignored
+Observed: test result: FAILED. 0 passed; 2 failed (new_chain_after_green_first_stop_blocks_despite_shared_ledger, new_chain_after_giveup_first_stop_blocks_despite_shared_ledger). Both first stops of a NEW chain returned exit 0 with stdout {"systemMessage":"donegate: 同じ指摘の2度目のため通しました（未解消）— 🚦 donegate: 1 required check(s) failed (attempt 1/2). Fix them, then finish."} and no decision:block.
+Controls (non-ignored, pass): control_fresh_first_stop_blocks; control_after_green_without_prior_ledger_entry_blocks and control_after_giveup_without_prior_ledger_entry_blocks (identical scenarios with $HOME/.claude/harness-state/repeat/<session> deleted between chains) both BLOCK. So the shared ledger entry is the only cause.
+
+Mechanism (code reading, consistent with the observation): main.rs emits the cwd-root block via harness_core::repeat::emit_stop_block_keyed("donegate", reason, gate::block_fingerprint(..)). The fingerprint keeps "attempt N/max", but state::reset (green / give-up) resets the counter to 0, so the next chain's first block is again "attempt 1/2" with the same output = the same fingerprint as chain 1's first block. The shared ledger is session-scoped only (repeat.rs: "Two occurrences are the same when the gate name and the finding fingerprint match within one CLAUDE_CODE_SESSION_ID") and nothing in donegate clears it when a chain ends. donegate's own state::is_repeat IS chain-scoped and is not involved (attempts==0 after reset). The existing backlog_waiver_failopen_20261107.rs::f1 does not catch this because it env_removes CLAUDE_CODE_SESSION_ID, making the shared ledger Undetermined.
+Prose contradicting behaviour: gate.rs block_fingerprint doc says "The attempt counter (attempt N/max) is deliberately KEPT in this fingerprint, so this ledger alone never waives a repeat below the cap" — observed false across chains.
+
+Two readings:
+(A) Defect: the user's F1 ruling (after an intervening green, a revert is the FIRST block of a new chain and must block) and the give-up's "bounded exit" intent mean the shared ledger must not waive across chain boundaries; the 2026-09-18 ruling is about the user seeing the same block twice in a row, not about a finding seen once earlier in the session.
+(B) Intended: the 2026-09-18 ruling 「ユーザの指示を2度やぶるgateはいらない」 is session-scoped (「同一セッション内のみ」); the user already saw this exact reason once in this session, so waiving the second occurrence is what was ordered, chains notwithstanding.
+How to tell apart: a human ruling on whether "2度目" in the 2026-09-18 ruling is counted per session or per block chain (i.e. does an intervening green / give-up reset it). Under (A) the fix makes these two tests pass (e.g. chain-scope the fingerprint, or clear the donegate ledger entries on state::reset); under (B) the tests are wrong and must be deleted and the gate.rs doc corrected instead. Not fixed (task scope: test only)."""
+created_at = 1794001711
+updated_at = 1794001711
+weight = 0.0
+issue_number = 1590
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1590"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test backlog_shared_ledger_new_chain_20261107 -- --ignored"
+rev = "9cae0b93eef6990108fb4cb28509401a0fcadbfe"
+observed_at = 1794001711
+detail = """
+exit 101: ult: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.91s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_shared_ledger_new_chain_20261107.rs (target/debug/deps/backlog_shared_ledger_new_chain_20261107-82b767da7309d16b)
+error: test failed, to rerun pass `-p donegate --test backlog_shared_ledger_new_chain_20261107`"""
+
+[[task]]
 id = "43034f75"
 title = "blastguard: Ask on deleting an unmerged branch or force-removing a dirty worktree"
 project = "/Users/yuki/src/harness"
@@ -724,209 +975,3 @@ exit 1: it_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_if_fals
 FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_if_false_block_is_refused
 FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_while_false_is_refused
 ========================= 3 failed, 2 passed in 12.26s ========================="""
-
-[[task]]
-id = "afd18dc0"
-title = "overwatch: record every subagent and classify liveness per agent (subagents check)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "liveness",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-Filed 2026-11-07 (JST) from session c2e3bc17. RED commit 029ea0fe (overwatch 0.2.113), worktree branch session-c2e3bc17, merged with main e518bb84 at 9ea61afa.
-RED: crates/overwatch/tests/backlog_subagent_liveness_20261107.rs, 6 #[ignore]d tests. Observed with --ignored: 0 passed, 6 failed (4 fail on `unrecognized subcommand 'subagents'`, 1 on hooks.json not routing Agent/Task PostToolUse + SubagentStop to overwatch, 1 on overwatch::stalled::scan omitting an idle agent whose last entry is an attachment).
-
-USER RULINGS (verbatim, 2026-11-07):
-- 「同様の問題はかなり発生している memoryで処理せず、きちんと記録管理し、確認をいれて」
-- 「確認の方法があるのに確認していないなら嘘つきです、確認したけどわからないなら判定不能です。処理を実行していない、すべてのagentに問えばだいたいわかるはず」
-- 「sub agentを記録し、長期実行のものは確認するようなコードをいれられないか?」
-- 「コードでもないもの、コードで処理できないものへのREDはそもそもゴミなのでしない」 (so the RED asserts classification + exit code only, no prose)
-
-OBSERVED (what the main session did when asked 「sub agentはきちんと動いているか?」 at 20:50:39Z, answered "none stalled"):
-(a) sorted ~/.claude/projects/-Users-yuki-src-harness/c2e3bc17-.../subagents/*.jsonl by mtime and looked only at the top 3 of 6;
-(b) counted ps rows of cargo/tdd processes from OTHER sessions/runs as evidence (run-20261107-051052-69845 also has a t1);
-(c) explained away a contradiction (condukt run state said t1 `failed`) with a guess;
-(d) treated a recent mtime as progress.
-The last entry of most subagent transcripts is type `attachment` (hook_success), which says nothing about done vs stalled.
-User at 20:59:46Z: 「嘘です、止まってるsub agentはいて、とめました。どうしてまちがったのか」.
-
-THE STOPPED AGENT (observed in transcripts):
-- id a56b4006f1b96dc82, condukt:condukt-verifier "t5-verify: env failure classification", model haiku (Haiku 4.5), parentAgentId aa9207a745d517f90 (the condukt orchestrator for run-20261107-051454-39899), spawnDepth 2.
-- 20:28:05Z its foreground Bash `for f in scripts/test_*.py ...` (every scripts test, not needed by its task) hit the 120s timeout and was moved to background as bftamsqp2; it kept running.
-- 20:29:08Z (05:29:08 JST) last real activity: assistant TEXT "verification report", then SubagentStop hook fired. It did NOT call SubagentHandback. The harness nevertheless enqueued <status>completed</status> for a56b4006 at 20:29:11Z to the orchestrator.
-- 20:29 to 20:57 the orchestrator repeatedly wrote "Waiting on ... t5 verifier" (28 min) with no per-agent check.
-- 20:57:16Z the user messaged the agent directly: 「これ止ってない?」. 20:57:32Z the orchestrator SendMessage'd it ("you have run 34 minutes ... deliver your verdict"). 20:58:04Z orchestrator TaskStop(a56b4006) was refused: "Task a56b4006f1b96dc82 is owned by a56b4006f1b96dc82; agent aa9207a745d517f90 cannot stop it." It then killed shell pid 2348 and its pytest child; bftamsqp2 notified `failed` at 20:58:06Z. 20:58:35Z the agent finally called SubagentHandback (after a [handback-send-enforce] reminder) and ended "Done." at 20:58:36Z.
-- Over its life SubagentStop fired 4 times and `completed` was notified 3+ times for the same agent id (resumed by messages).
-
-DOES THE TRANSCRIPT GIVE A DETERMINISTIC STALL SIGNAL? Partially, and the obvious signals are wrong:
-- mtime/last entry: the last entry was an attachment (SubagentStop hook_success) -> overwatch::stalled::scan (the `overwatch status` scanner) silently treats it as fine (it only flags a last-entry assistant tool_use). RED test 6.
-- `completed` notification and SubagentStop both fired while the result was NOT delivered and the launcher was still waiting -> neither is "done". The deterministic done signal observed is a SubagentHandback tool_use whose tool_result says success:true. RED test 4.
-- Deterministic stall evidence that WAS available: no new tool_result for 28 min past its last TEXT, no SubagentHandback, launcher still waiting, plus its own background task (bftamsqp2) still running. Ambiguity: a background-launched agent whose turn ended without handback is indistinguishable, from the transcript alone, from one whose final TEXT is the intended result (agents not under handback-send-enforce); the classifier must treat "ended, no delivered result" as not-done (stalled or query_required), never done.
-
-DESIRED SHAPE (the RED's API, not implemented):
-- RECORD: `overwatch presence` (already the hook-written per-session registry under ~/.overwatch/<key>/overwatch/) also records each Agent launch from its PostToolUse payload (tool_response.agentId, async_launched; nested launches carry payload agent_id = launcher) and each SubagentStop. hooks.json must route PostToolUse Agent|Task and SubagentStop to it. UNVERIFIED: the exact PostToolUse payload shape for async Agent launches and whether nested-launch payloads carry agent_id; the fixture copies the observed toolUseResult {isAsync,status:async_launched,agentId}. Verify against a real payload before implementing.
-- CHECK: `overwatch subagents --session <id> --stall-secs <n> --json` -> {"clean", "agents":[{"agent_id","state"}]} for EVERY recorded agent of the session (nested included, other sessions excluded), state one of done / progressing / stalled / query_required / undetermined. done = delivered result (handback success). progressing = new, changing tool results within the window (entry timestamps, never mtime or hook attachments). stalled = no new tool result past threshold, OR repeated identical tool calls, OR a status query (SendMessage from parent) unanswered past the window. query_required = long-running candidate the parent must query now (names the id). undetermined = checked and still unknown (unreadable/unparseable transcript, recorded agent with no transcript, unreadable registry -> not clean). Exit 0 iff all done/progressing, else 1. Never "all fine" from a partial view; never count processes it cannot attribute to the session/run. A `--run <condukt-run-id>` selector (map run tasks' recorded agent ids to the same classification) is still to design; not in the RED.
-- A Stop/PostToolUse systemMessage that names the query_required/stalled ids so the parent actually queries them is part of the fix; not asserted in the RED (would be prose).
-
-PROCEDURE RULE (user ruling above): to answer any liveness question, enumerate EVERY agent, query each running one (SendMessage; an agent that does not answer within its next tool round is a strong stall signal), and classify each as done / progressing (answered with a concrete recent action) / stalled (no answer or no advance) / undetermined (queried and checked, still unknown). Answering without doing this is the defect: a state claimed without running an available check is a false report, not "undetermined". The main-session /flow skill and the condukt skill instructions should call `overwatch subagents` (once it exists) before answering any liveness question, and their "Waiting on X" loops should run it instead of waiting blindly.
-
-TWO READINGS and how to tell them apart:
-(a) missing mechanical check: nothing records subagents or classifies them, so the answer is unavoidably a guess. Supported by: no `subagents` subcommand, hooks.json does not route Agent/SubagentStop to overwatch, stalled::scan drops the observed shape (all RED).
-(b) intended human-judgment area: liveness was meant to be judged by the model reading transcripts. Refuted as a sufficient design by the observations: the judgment used mtime/partial views/foreign ps rows and was wrong; the user ruled it must be a record + mechanical check. Tell them apart by whether the RED's classifier can reproduce the user's verdict on the a56b4006 fixture without human input; it can (no handback + no new tool result for 28 min), so (a).
-
-SUB-FINDINGS (not fixed):
-- A verifier ran an unbounded full-suite foreground loop (`for f in scripts/test_*.py`) for ~34 min, which its task did not need. Not testable as code behavior of a crate today (it is agent behavior); a code-level guard would be a stuckguard/blastguard rule on unbounded test loops inside verifier agents. Mentioned only.
-- TaskStop from a parent agent on its own child is refused ("owned by a56b4006f1b96dc82") - harness behavior, outside this repo.
-- condukt subagent-stop logs "no ..." on every SubagentStop of these agents (cwd not in a task worktree), the coverage gap its doc already states."""
-created_at = 1793999490
-updated_at = 1793999490
-weight = 0.0
-issue_number = 1587
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1587"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p overwatch --test backlog_subagent_liveness_20261107 -- --ignored"
-rev = "9ea61afadbda9b6d3069333ef36cdd999d91da0c"
-observed_at = 1793999490
-detail = """
-exit 101: t_clean
-
-test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.63s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
-     Running tests/backlog_subagent_liveness_20261107.rs (target/debug/deps/backlog_subagent_liveness_20261107-1799d8cbb2e03741)
-error: test failed, to rerun pass `-p overwatch --test backlog_subagent_liveness_20261107`"""
-
-[[task]]
-id = "ea6547c9"
-title = "condukt loses tdd RED/GREEN proofs at worktree teardown and never persists the verifier verdict"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "condukt",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-Observed 2026-11-07 (epoch ~1793999100), orchestrator of condukt run run-20261107-051454-39899 (session c2e3bc17). RED commit cfe21de6 (condukt 0.7.351), written by a non-implementer test-writer agent.
-(a) tdd proofs are deleted at worktree teardown. The orchestrator ran `tdd red --task t5 --cmd ...` / `tdd green --task t5 ...` inside /Users/yuki/.condukt/worktrees/run-20261107-051454-39899-t5; tdd wrote <worktree>/.tdd/t5.red.json and t5.green.json. After `condukt worktree remove --path <wt> --branch condukt/run-20261107-051454-39899/t5`, from /Users/yuki/src/harness `tdd oracle --task t5` printed {"green_cmd":null,"has_green":false,"has_red":false,"red_cmd":null,"transition":"unknown","valid_fp_oracle":false}. The same applies to t1, t2 and t3 of that run. The only surviving trace is fp_oracle_valid:true in ~/.condukt/state/harness-e77d23c7/run-20261107-051454-39899.json. The lost proofs were NOT reconstructed.
-(b) The verifier verdict is persisted nowhere except the agent transcript: condukt state set stores only verifier_model and verifier_agent_id. The run journal holds only checkpoint lines (2 lines for this run).
-Desired: (a) persist proofs durably keyed by run id + task id before teardown, have tdd oracle / condukt state check-oracle read them after teardown, and refuse teardown (non-zero, worktree kept) when persisting fails; (b) record verifier verdict, confidence and reason in the run state for that task when the verdict is applied.
-RED: 3 failed / 4 passed. remove_persists_tdd_proofs_durably: "no durable copy of the tdd proofs survives worktree removal (red copies: [], green copies: [])"; remove_is_refused_when_proofs_cannot_be_persisted: "teardown proceeded although the proofs could not be persisted: exit=Some(0) worktree_exists=false"; state_set_records_verifier_verdict_confidence_reason: "error: unexpected argument --verifier-verdict found" (the CLI shape --verifier-verdict/--verifier-confidence/--verifier-reason was chosen by the test writer and can be changed by ruling). Depends on a real tdd binary on PATH.
-User ruling 2026-11-07: 「わからない過去を確認するより、記録して確認できるようにするのが優先」. Remove the #[ignore]s when fixed."""
-created_at = 1794000173
-updated_at = 1794000173
-weight = 0.0
-issue_number = 1588
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1588"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test backlog_records_lost_at_teardown_20261107 -- --include-ignored"
-rev = "4654feadec854373d65fbed1264853463ef70a93"
-observed_at = 1794000173
-detail = """
-exit 101: ng condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s
-     Running tests/backlog_records_lost_at_teardown_20261107.rs (target/debug/deps/backlog_records_lost_at_teardown_20261107-5c10ad0fd430eca3)
-error: test failed, to rerun pass `-p condukt --test backlog_records_lost_at_teardown_20261107`"""
-
-[[task]]
-id = "fb338793"
-title = "blastguard: system-harming commands and git exec-capable shapes not Deny (bisect run, rebase --exec, submodule foreach, -c alias/pager/editor, difftool --extcmd, --upload-pack, rm /etc/passwd, repeat downgrade)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-User rulings 2026-11-07 (relayed by coordinator):
- R1 "any command harmful to the system must be DENY, for whatever reason; this is a critical bug".
- R2 (design) instead of parsing what git exec-wrappers run, BAN them outright: every git subcommand/option that executes an arbitrary command must be Deny regardless of the embedded command (git bisect run, rebase --exec/-x/--exec=, submodule foreach, filter-branch any --*-filter, -c alias.X='!...' / shell alias, difftool/mergetool --extcmd, any other exec-capable shape).
-All targets assert deny. Do not fix in the filing task.
-
-Measured 2026-11-07 on main fa2e6fda (blastguard 0.2.287; target/debug/blastguard built from that rev; re-checked identical on 0.2.288 = 12e728b0, version-only bump). Bash PreToolUse payload, cwd=CLAUDE_PROJECT_DIR=/Users/yuki/src/harness, BLASTGUARD_ASK/CLAUDE_CODE_SESSION_ID/TMPDIR unset. Verbatim probe output (ALLOW = empty stdout):
--- ban shapes, harmless embedded command --
-ALLOW | git bisect run true
-ALLOW | git bisect run make test
-ALLOW | git rebase -x 'echo ok' HEAD~1
-ALLOW | git rebase --exec 'echo ok' HEAD~1
-ALLOW | git rebase --exec='echo ok' HEAD~1
-ALLOW | git rebase -i --exec 'echo ok' HEAD~1
-ALLOW | git pull --rebase -x 'echo ok'
-ALLOW | git submodule foreach 'echo ok'
-ALLOW | git submodule foreach --recursive true
-deny  | git filter-branch --tree-filter true HEAD   (also --index/--msg/--env/--commit/--parent/--tag-name-filter: deny)
-ALLOW | git -c 'alias.x=!echo ok' x
-ALLOW | git -c alias.x='!echo ok' x
-ALLOW | git config alias.x '!echo ok'
-ALLOW | git config --global alias.x '!echo ok'
-ALLOW | git difftool --extcmd=echo HEAD
-ALLOW | git difftool -x echo HEAD
-ALLOW | git difftool --extcmd echo HEAD
-ALLOW | git -c core.pager='echo ok' log
-ALLOW | git -c core.sshCommand='echo ok' fetch
-ALLOW | git grep -O'echo ok' foo
-ALLOW | git grep --open-files-in-pager='echo ok' foo
-ALLOW | git fetch --upload-pack='echo ok' origin
-ALLOW | git clone -u 'echo ok' /x /y
-ALLOW | git clone --upload-pack='echo ok' /x /y
-ALLOW | git push --receive-pack='echo ok' origin
-ALLOW | git ls-remote --upload-pack='echo ok' origin
-ALLOW | git archive --remote=origin --exec='echo ok' HEAD
-ALLOW | git send-email --to-cmd='echo ok' x.patch
-ALLOW | git -c diff.external='echo ok' diff
-ALLOW | git -c core.editor='echo ok' commit
-ALLOW | git -c sequence.editor='echo ok' rebase -i HEAD~1
--- exec shapes, destructive embedded command --
-ALLOW | git bisect run rm -rf /usr ; git bisect run rm -rf /usr/lib ; git bisect run sh -c 'rm -rf /usr'
-ALLOW | git rebase --exec 'rm -rf /usr' HEAD~1 ; git rebase -x 'rm -rf /usr' HEAD~1 ; git rebase -i --exec='rm -rf /usr' HEAD~1
-ALLOW | git submodule foreach 'rm -rf /usr' ; git submodule foreach --recursive rm -rf /usr
-deny  | git -c 'alias.x=!rm -rf /usr' x ; git filter-branch --tree-filter 'rm -rf /usr' HEAD
--- bare --
-deny  | rm -rf /usr, /usr/lib, /usr/bin, /etc, /etc/hosts, /System, /System/Library, /bin, /sbin, /var, /Library, /, ~/.ssh, $HOME/.ssh, /Users/yuki/.ssh, ~
-deny  | rm -f /Users/yuki/.ssh/id_ed25519 ; rm -f ~/.ssh/authorized_keys
-ALLOW | rm -f /etc/passwd ; rm /etc/passwd ; rm /etc/hosts ; rm -f /bin/ls ; rm -f /usr/lib/libSystem.B.dylib
-ALLOW | rm -rf /private/tmp/claude-502/scratchx/foo   (control: scratch deletion)
--- controls --
-ALLOW | git bisect start ; git bisect good ; git bisect bad ; git rebase HEAD~1 ; git log
--- repeat --
-With CLAUDE_CODE_SESSION_ID set, the 2nd identical `rm -rf /usr/lib` in the same session is ask; reason ends "(2度目の同一要求です。blastguard は同じ指示を2度は上書きしません — この判断は人間に返されました。)". This is why the coordinator saw ask for rm -rf /usr/lib (the first request is deny).
-Not investigated: the installed cache launcher ~/.claude/plugins/cache/yukineko/blastguard/0.2.287/bin/blastguard (shell script) answered ask for EVERY probed case when invoked directly outside a hook (incl git bisect run rm -rf /usr). The test drives the debug binary from the same rev.
-
-Defects:
-(1) git exec-capable shapes are Allow (R2 ban): all listed ALLOW lines above except filter-branch, which is already deny. Cause for bisect/rebase/submodule (read, not instrumented): crates/blastguard/src/detect/git.rs analyze_git_words ends its subcommand match with `_ => Decision::Allow` (line 755 at fa2e6fda); no arm for bisect/rebase/submodule/difftool/grep/fetch/clone/push/ls-remote/archive/send-email. -c config executors (alias/pager/sshCommand/editor/diff.external) are handled in src/detect/executors.rs but a harmless value is Allow; only a destructive alias body is deny (cause not read).
-(2) R1: non-recursive rm of system files (/etc/passwd, /etc/hosts, /bin/ls, /usr/lib/libSystem.B.dylib) is Allow. Cause not read.
-(3) R1: src/main.rs downgrade_on_repeat turns a repeated system-harming Deny into Ask. RULING CONFLICT: operator ruling 2026-09-18 「ユーザの指示を2度やぶるgateはいらない。2度目はaskせよ」「全 gate で 2度目は無条件に通す」 vs R1 "must be DENY, for whatever reason". Target second_identical_rm_rf_usr_lib_stays_deny pins R1; tests/repeat_downgrade.rs uses non-system paths (/mnt/c/tmp/aegis-worktrees/..., git reset --hard, git checkout -- .) so it does not pin the opposite. Implementer should confirm scope with the user before changing downgrade_on_repeat.
-
-Readings: (a) defect - per R1/R2 every target must be Deny; (b) intended - none found for (1)/(2) (no comment, test or ruling exempts these); for (3) the 2026-09-18 ruling is intended behaviour that R1 now overrides for system-harming commands. Tell apart: grep tests/ and ticket notes for a ruling exempting a shape; absent one, (a).
-
-Repro: crates/blastguard/tests/git_exec_subcommand_failopen_20261107.rs (commit 12e728b0) - 44 targets RED (43 got "allow", 1 got "ask"), 23 controls green (bare system rm -rf deny on first request incl ~/.ssh, $HOME/.ssh; bisect start/good/bad, rebase HEAD~1, log Allow; destructive alias and all 7 filter-branch --*-filter deny; rm -rf in /private/tmp scratch and in a managed .harness-worktrees linked worktree Allow). Targets are #[ignore = "backlog <id>: ..."] after filing; run with --include-ignored."""
-created_at = 1794000962
-updated_at = 1794000962
-weight = 0.0
-issue_number = 1589
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1589"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test git_exec_subcommand_failopen_20261107 -- --include-ignored"
-rev = "12e728b0cd011e9ed84b1929a5f2b8a570e62732"
-observed_at = 1794000962
-detail = """
-exit 101: iling blastguard v0.2.288 (/Users/yuki/src/.harness-worktrees/session-0d3d5bb8/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.27s
-     Running tests/git_exec_subcommand_failopen_20261107.rs (target/debug/deps/git_exec_subcommand_failopen_20261107-cbbfb8fe5d7d5db8)
-error: test failed, to rerun pass `-p blastguard --test git_exec_subcommand_failopen_20261107`"""

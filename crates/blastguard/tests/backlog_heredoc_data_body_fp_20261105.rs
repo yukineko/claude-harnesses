@@ -63,7 +63,6 @@ fn verdict(command: &str) -> (String, String) {
 }
 
 #[test]
-#[ignore = "backlog 9f90b96f: open defect (scout 2026-11-05) quoted heredoc body trailer `>` read as `> MSG` redirect"]
 fn a_git_commit_heredoc_trailer_gt_before_delimiter_is_not_a_redirect() {
     let cmd = "cd /tmp/wt; git commit -F- <<'MSG'\nfix(x): y\n\nCo-Authored-By: A <a@b>\nMSG";
     let (d, r) = verdict(cmd);
@@ -89,7 +88,6 @@ fn b_control_string_fed_to_exec_stays_denied() {
 }
 
 #[test]
-#[ignore = "backlog 5651745b: open defect (scout 2026-11-05) quoted heredoc body `> {x}` read as relative redirect after cd"]
 fn c_cat_quoted_heredoc_body_gt_brace_after_unresolved_cd_is_not_a_redirect() {
     let cmd = "cd \"$WT\" && cat <<'EOF'\nthe value > {bar} holds\nEOF";
     let (d, r) = verdict(cmd);

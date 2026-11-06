@@ -142,7 +142,7 @@ fn fully_populated_payload_reports_nothing_as_not_checked() {
     // always lists every field would pass that assertion while proving nothing.
     // Here every declared field is present and every declared constraint is
     // actually evaluated, so nothing may be reported as not-checked.
-    let payload = r#"{"goal":"x","tasks":[{"id":"t1","title":"do","class":"serial","done_criteria":"d","suggested_model":"sonnet","confidence":"high"}]}"#;
+    let payload = r#"{"goal":"x","tasks":[{"id":"t1","title":"do","touched_files":["a.rs"],"deps":["t0"],"class":"serial","done_criteria":"d","suggested_model":"sonnet","confidence":"high"}]}"#;
     let (code, stdout) = run(&["check", "--schema", "decomposition"], payload);
     assert_eq!(code, 0, "fully-populated valid payload must exit 0");
     assert!(

@@ -28,7 +28,7 @@
 # run `donegate trust` once per clone, or this file silently does nothing.
 
 enabled = true
-max_attempts = 3          # give up (allow stop) after N consecutive blocks
+max_attempts = 2         # give up (allow stop) after N consecutive blocks
 default_timeout_secs = 300
 output_tail_lines = 40
 reset_after_secs = 600    # attempt counter resets after this idle gap

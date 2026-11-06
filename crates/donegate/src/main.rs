@@ -308,6 +308,18 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // "green, checks: []"). Extra roots are evaluated here; the hook cwd keeps
     // the existing flow below. Placed after the operator escapes (see
     // `tests/gate_escape_ordering.rs`).
+    // Non-blocking stop messages (give-ups, identical-finding waivers) collected
+    // from every root; printed once as a single `systemMessage` JSON at the exit.
+    let mut notices: Vec<String> = Vec::new();
+    // The identical-finding waiver applies only to a Stop hook carrying a real
+    // session id. Manual CLI mode reports failure by exit code and must keep
+    // exiting 1 (verifier F3a); a payload without a session id shares the
+    // `_local` bucket with every other such session, so a repeat cannot be
+    // attributed and the stop blocks (F3b).
+    let waiver_allowed = !interactive && !input.session_id.trim().is_empty();
+    // Whether some extra root's red verdict was waived this stop: then the
+    // chain of blocks has not ended, even if the cwd root is green.
+    let mut waived_any = false;
     {
         let names = roots
             .roots
@@ -367,7 +379,27 @@ fn gate_run(hook: Option<HookInput>) -> ! {
                     0,
                     rcfg.output_tail_lines,
                 );
+                state::forget(&rcfg.state_dir, &session, r);
                 continue;
+            }
+            // Identical-finding waiver, checked BEFORE the counter is bumped: a
+            // waived stop is not a block and does not count toward max_attempts.
+            let sig = red_signature(r, &report);
+            if waiver_allowed {
+                if let Some(sig) = &sig {
+                    if state::is_repeat(&rcfg.state_dir, &session, r, sig, rcfg.reset_after_secs) {
+                        let failing: Vec<String> =
+                            report.blocking().iter().map(|o| o.name.clone()).collect();
+                        log_event(&rcfg, &session, "repeat-waived", &failing, 0);
+                        notices.push(format!(
+                            "[root: {}] {}",
+                            r.display(),
+                            repeat_message(&failing)
+                        ));
+                        waived_any = true;
+                        continue;
+                    }
+                }
             }
             let attempt = state::bump(&rcfg.state_dir, &session, rcfg.reset_after_secs);
             gate::save_records(
@@ -388,10 +420,25 @@ fn gate_run(hook: Option<HookInput>) -> ! {
                     rcfg.max_attempts,
                     failing.join(", ")
                 );
+                notices.push(format!(
+                    "[root: {}] {}",
+                    r.display(),
+                    giveup_message(&failing, rcfg.max_attempts)
+                ));
                 continue;
             }
             log_event(&rcfg, &session, "blocked", &failing, attempt);
             emit_violations(r, &session, &failing, Outcome::Blocked);
+            if waiver_allowed {
+                let chain = state::chain_for_block(&rcfg.state_dir, &session, attempt);
+                state::remember(
+                    &rcfg.state_dir,
+                    &session,
+                    r,
+                    sig.as_deref(),
+                    chain.as_deref(),
+                );
+            }
             blocks.push(format!(
                 "[root: {}]\n{}",
                 r.display(),
@@ -404,7 +451,13 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             ));
         }
         if !blocks.is_empty() {
-            stop_block_now_keyed(&blocks.join("\n\n"), &block_keys.join("\n\n"), interactive);
+            // Give-up / waiver notices of other roots ride along in the block
+            // reason (verifier F6): the block JSON is the only thing printed, so
+            // a separate systemMessage would be lost. Not part of the
+            // repeat-ledger key.
+            let mut reason = blocks.join("\n\n");
+            append_notices(&mut reason, &notices);
+            stop_block_now_keyed(&reason, &block_keys.join("\n\n"), interactive);
         }
         if roots.wrote_any && !any_ran && !all_opted_out && !configured_empty {
             // Every written root has no donegate config at all: allow (donegate is
@@ -450,11 +503,20 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             0,
             cfg.output_tail_lines,
         );
-        state::reset(&cfg.state_dir, &session);
+        if waived_any {
+            // An extra root is still red (its identical finding was waived):
+            // the chain has not ended, so only this root's memory is cleared.
+            state::forget(&cfg.state_dir, &session, &root);
+        } else {
+            // Green ends the chain: counter AND every remembered signature
+            // (verifier F1 — a later revert to a blocked tree blocks again).
+            state::reset(&cfg.state_dir, &session);
+        }
         log_event(&cfg, &session, "green", &ran_names(&report), 0);
         if interactive {
             println!("{}", gate::human_report(&report));
         }
+        emit_notices(&notices, interactive);
         harness_core::hook_latency::record(
             "donegate",
             &session,
@@ -464,6 +526,27 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
 
     // blocking failures present
+    //
+    // Identical-finding waiver, checked BEFORE the counter is bumped: a waived
+    // stop is not a block and does not count toward max_attempts (verifier F2).
+    let sig = red_signature(&root, &report);
+    if waiver_allowed {
+        if let Some(sig) = &sig {
+            if state::is_repeat(&cfg.state_dir, &session, &root, sig, cfg.reset_after_secs) {
+                let failing: Vec<String> =
+                    report.blocking().iter().map(|o| o.name.clone()).collect();
+                log_event(&cfg, &session, "repeat-waived", &failing, 0);
+                notices.push(repeat_message(&failing));
+                emit_notices(&notices, interactive);
+                harness_core::hook_latency::record(
+                    "donegate",
+                    &session,
+                    __start.elapsed().as_millis() as u64,
+                );
+                std::process::exit(0);
+            }
+        }
+    }
     let attempt = state::bump(&cfg.state_dir, &session, cfg.reset_after_secs);
     // Every failing check's full output goes to the durable session record
     // before anything is rendered; the reason shows only a digest + the path.
@@ -535,6 +618,8 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             cfg.max_attempts,
             failing.join(", ")
         );
+        notices.push(giveup_message(&failing, cfg.max_attempts));
+        emit_notices(&notices, interactive);
         harness_core::hook_latency::record(
             "donegate",
             &session,
@@ -545,7 +630,20 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 
     log_event(&cfg, &session, "blocked", &failing, attempt);
     emit_violations(&root, &session, &failing, Outcome::Blocked);
-    let reason = gate::block_reason(&report, attempt, cfg.max_attempts);
+    if waiver_allowed {
+        let chain = state::chain_for_block(&cfg.state_dir, &session, attempt);
+        state::remember(
+            &cfg.state_dir,
+            &session,
+            &root,
+            sig.as_deref(),
+            chain.as_deref(),
+        );
+    }
+    let mut reason = gate::block_reason(&report, attempt, cfg.max_attempts);
+    // Extra roots' give-up / waiver notices ride along in the reason (verifier
+    // F6); the repeat-ledger key below stays the bare fingerprint.
+    append_notices(&mut reason, &notices);
 
     if interactive {
         // The failing checks are rendered once, in `reason`; the context lines
@@ -581,6 +679,77 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     );
     harness_core::hook_latency::record("donegate", &session, __start.elapsed().as_millis() as u64);
     std::process::exit(0);
+}
+
+/// The still-red-check guidance appended to every non-blocking message that
+/// leaves a red check standing (give-up and identical-finding waiver).
+fn red_guidance(failing: &[String]) -> String {
+    format!(
+        "Still RED: {}. Order of response: (1) a red check can be treated as a problem, so it \
+         is testable: write a failing test that pins it; if that test has no contradiction with \
+         the requirement, fix until it passes and the red is resolved. (2) If writing the test \
+         exposes a contradiction (check vs spec, test vs intent, two requirements), the problem \
+         is misframed: fix the premise (spec, check or test expectation) first and do not keep \
+         retrying the implementation. (3) Only if no alternative response exists does this \
+         give-up stand; then report the red check output verbatim.",
+        failing.join(", ")
+    )
+}
+
+/// systemMessage text for the bounded give-up after `max` blocks.
+fn giveup_message(failing: &[String], max: u32) -> String {
+    format!(
+        "donegate gave up after {max} consecutive blocks and is ALLOWING the stop; the check(s) \
+         are NOT green. {}",
+        red_guidance(failing)
+    )
+}
+
+/// systemMessage text for a stop whose tree and failing output are unchanged
+/// since the previous block.
+fn repeat_message(failing: &[String]) -> String {
+    format!(
+        "donegate did not block again: the tree and the failing output of {} are identical to \
+         the previous block, so NOTHING NEW WAS VERIFIED. The check(s) are still RED. {}",
+        failing.join(", "),
+        red_guidance(failing)
+    )
+}
+
+/// Signature of a red verdict for the identical-finding waiver. `None` (tree
+/// fingerprint undeterminable) means "cannot show it is a repeat" -> block.
+fn red_signature(root: &Path, report: &gate::GateReport) -> Option<String> {
+    let tree = state::tree_fingerprint(root)?;
+    let checks: Vec<(String, Option<i32>, String)> = report
+        .blocking()
+        .iter()
+        .map(|o| (o.name.clone(), o.exit_code, o.output_tail.clone()))
+        .collect();
+    Some(state::signature(root, &tree, &checks))
+}
+
+/// Append the collected non-blocking messages (other roots' give-ups and
+/// waivers) to a block reason, so they are not lost when the stop blocks.
+fn append_notices(reason: &mut String, notices: &[String]) {
+    if notices.is_empty() {
+        return;
+    }
+    reason.push_str("\n\n(other roots, not blocking this stop:)\n");
+    reason.push_str(&notices.join("\n\n"));
+}
+
+/// Print the collected non-blocking messages as one Stop-hook `systemMessage`
+/// (no `decision`), or to stderr in interactive mode. Nothing collected: nothing.
+fn emit_notices(notices: &[String], interactive: bool) {
+    if notices.is_empty() {
+        return;
+    }
+    let msg = notices.join("\n\n");
+    if interactive {
+        eprintln!("{msg}");
+    } else {
+        println!("{}", json!({ "systemMessage": msg }));
+    }
 }
 
 /// Emit a blocking verdict and exit: hook mode prints the Stop `decision:block`
@@ -806,6 +975,9 @@ fn refuse(
     }
 
     let attempt = state::bump(&cfg.state_dir, session, cfg.reset_after_secs);
+    // A refusal block is a different finding from any remembered red verdict:
+    // drop the chain id so no earlier signature can waive the next stop.
+    state::end_chain(&cfg.state_dir, session);
     if attempt > cfg.max_attempts {
         state::reset(&cfg.state_dir, session);
         harness_core::gate::run::concede(&cfg.state_dir, session);
@@ -1066,7 +1238,7 @@ const HEADER: &str = r#"# donegate.toml — completion gate for Claude Code.
 #
 # Global:
 enabled = true
-max_attempts = 3          # give up (allow stop) after N consecutive blocks
+max_attempts = 2          # give up (allow stop) after N consecutive blocks
 default_timeout_secs = 300
 output_tail_lines = 40    # raw lines shown only if a failing check's record can't be saved
 reset_after_secs = 600    # attempt counter resets after this idle gap

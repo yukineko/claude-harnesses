@@ -31,7 +31,7 @@ donegate は、この「未検証のまま完了宣言する」問題を停止�
 
 無限ループにエージェントを閉じ込めないための安全装置も組み込まれている。
 
-- **試行カウンタ**: セッションごとに連続ブロック回数を数え、`max_attempts`（既定 3）回に達したら諦めて停止を許す。本当に詰まったエージェントが罠にかからないようにするためだ。カウンタは `reset_after_secs` のアイドル後、またはグリーンになった時点でリセットされる。
+- **試行カウンタ**: セッションごとに連続ブロック回数を数え、`max_attempts`（既定 2）回に達したら諦めて停止を許す。本当に詰まったエージェントが罠にかからないようにするためだ。カウンタは `reset_after_secs` のアイドル後、またはグリーンになった時点でリセットされる。
 - **エスケープハッチ**: `donegate skip --reason "<理由>"`。一度だけ消費されて次の停止を通し、**発行したセッションにだけ**適用される。理由は必須で、発行と消費の両方がゲートログに追記されるため、記録の残らないバイパスは起こらない。（旧来の project root の `.donegate-skip` ファイルは撤去した。共有の 1 回限りマーカーは次に停止したセッションが消費してしまい、その*別*セッションの正当なゲートを素通りさせる — CLAUDE.md §5 が並行セッション下で禁じているのはまさにこれ。）
 - **キルスイッチ**: `DONEGATE_DISABLE=1`。ただし **Claude Code 自身を起動した環境**でのみ有効で、ツール呼び出しから export しても、このフックはアプリの環境を継承するため届かない。
 - **オプトイン**: 設定ファイルが 1 つも無い（`<root>/donegate.toml` も `~/.donegate/config.toml` も無い）か、読み込んだ設定に `[[check]]` が 1 つも無ければ、ゲートはすべての停止を許す。フックを入れただけで、オプトインしていないプロジェクトをブロックすることはない。セッションが書き込んだ root がすべて donegate の設定を一切持たない場合も停止は許可され、stdout は空になる（`systemMessage` は出さない。2026-10-27 のユーザー裁定）。代わりに stderr に「donegate not configured for <roots>: no checks ran」を出し、`<state_dir>/log.jsonl` にセッションと各 root（`roots`）を記した `"verdict":"unconfigured"` の行を追記する。
@@ -102,9 +102,18 @@ donegate gate          # チェックを手動実行（人間向けレポート�
 - 記録を保存できないときもチェックは実行し、停止もブロックする。理由に「保存できなかった」旨と
   原因を明記し、表示は**減らさず増やす**（digest に加えて末尾
   `max(output_tail_lines, 40)` 行の生出力）。
-- repeat ledger は、試行ごとに変わる記録パスを正規化した理由をキーにする。試行カウンタ
-  （`attempt N/max`）は意図的にキーに残すので、`max_attempts` 未満では同じ失敗でも 2 度目として
-  waiver されず、毎回ブロックする。有界な出口は試行上限と give-up sentinel
+- repeat ledger は、試行ごとに変わる記録パスを正規化した理由をキーにする（試行カウンタ
+  `attempt N/max` はキーに残る）。
+- **同一所見の waiver**（backlog b80023b3）: 連続ブロックの 1 チェーン内で、root のツリー
+  （HEAD・追跡差分・未追跡ファイル）と失敗チェック出力が前回ブロック時と同一の Stop は再ブロックせず、
+  「新しく検証したものは無い・チェックはまだ RED」と書いた JSON `systemMessage` 付きで通す。waiver した
+  停止は `max_attempts` に数えず、ツリーが変わればブロックする。適用は `session_id` が空でない Stop hook
+  payload のみ（手動 `donegate gate` は exit 1 のまま、session id の無い payload はブロック）。記憶は
+  チェーン終了（グリーン・give-up・skip・`reset_after_secs` のアイドルリセット）で消える。これとは別に、
+  共有の `harness_core::repeat` ledger（2026-09-18 裁定）は同一セッション内で同文のブロックが再発すれば
+  通しうる。ツリーや署名が判定できなければブロックする。waiver は
+  gate log に `repeat-waived` として残るが overwatch ledger には書かない。別 root がブロックするときは、
+  他 root の waiver / give-up 通知をブロック理由に追記する。有界な出口は試行上限と give-up sentinel
   （`donegate:giveup:<check>`）である。
 5. すべてグリーンなら exit 0 で停止を通し、いずれか必須が失敗したら `block` を出して Claude に作業を続けさせる。
 

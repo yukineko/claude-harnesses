@@ -32,6 +32,20 @@ static DECOMPOSITION_TASK_FIELDS: &[Field] = &[
         items: &[],
     },
     Field {
+        name: "touched_files",
+        ty: Ty::StringArray,
+        required: false,
+        enum_values: &[],
+        items: &[],
+    },
+    Field {
+        name: "deps",
+        ty: Ty::StringArray,
+        required: false,
+        enum_values: &[],
+        items: &[],
+    },
+    Field {
         name: "class",
         ty: Ty::String,
         required: false,

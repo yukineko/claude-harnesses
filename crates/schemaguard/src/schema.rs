@@ -36,6 +36,10 @@ pub enum Ty {
     Number,
     Bool,
     Array,
+    /// An array whose every element must be a string (e.g. `Vec<String>`).
+    /// A non-array value or any non-string element is a violation naming the
+    /// offending path (`field[i]`); there is no permissive fallback.
+    StringArray,
     /// Accept an object value. Reserved for schemas that embed sub-objects
     /// inline without a named per-element items slice.
     #[allow(dead_code)]
@@ -51,6 +55,7 @@ impl std::fmt::Display for Ty {
             Ty::Number => write!(f, "number"),
             Ty::Bool => write!(f, "bool"),
             Ty::Array => write!(f, "array"),
+            Ty::StringArray => write!(f, "array of strings"),
             Ty::Object => write!(f, "object"),
             Ty::Any => write!(f, "any"),
         }
@@ -312,6 +317,20 @@ pub fn validate_report(value: &serde_json::Value, fields: &[Field], path: &str) 
             Ty::Number => val.is_number(),
             Ty::Bool => val.is_boolean(),
             Ty::Array => val.is_array(),
+            Ty::StringArray => match val.as_array() {
+                Some(arr) => {
+                    for (i, elem) in arr.iter().enumerate() {
+                        if !elem.is_string() {
+                            report.violations.push(Violation {
+                                path: format!("{}[{}]", field_path, i),
+                                problem: format!("expected string, got {}", json_type_name(elem)),
+                            });
+                        }
+                    }
+                    true
+                }
+                None => false,
+            },
             Ty::Object => val.is_object(),
             Ty::Any => {
                 // Declared permissive: `Ty::Any` accepts any JSON value without
@@ -569,6 +588,32 @@ mod tests {
             "got: {:?}",
             violations
         );
+    }
+
+    static STRING_ARRAY_FIELD: &[Field] = &[Field {
+        name: "files",
+        ty: Ty::StringArray,
+        required: false,
+        enum_values: &[],
+        items: &[],
+    }];
+
+    #[test]
+    fn string_array_type_checks_container_and_elements() {
+        let ok = validate(&json!({"files": ["a", "b"]}), STRING_ARRAY_FIELD, "");
+        assert!(ok.is_empty(), "got: {:?}", ok);
+        let empty = validate(&json!({"files": []}), STRING_ARRAY_FIELD, "");
+        assert!(empty.is_empty(), "got: {:?}", empty);
+        let scalar = validate(&json!({"files": "x"}), STRING_ARRAY_FIELD, "");
+        assert!(
+            scalar.iter().any(|v| v.path == "files"),
+            "got: {:?}",
+            scalar
+        );
+        let null = validate(&json!({"files": null}), STRING_ARRAY_FIELD, "");
+        assert!(!null.is_empty(), "null must not pass");
+        let bad = validate(&json!({"files": ["a", 5]}), STRING_ARRAY_FIELD, "");
+        assert!(bad.iter().any(|v| v.path == "files[1]"), "got: {:?}", bad);
     }
 
     #[test]

@@ -415,7 +415,7 @@ pub fn decide_bandit(
     // appear "free" and incorrectly beat known-cheap tiers on random samples.
     let default_cpp = if max_cpp > 0.0 { max_cpp } else { 0.0 };
 
-    let mut chosen: Option<(String, f64, usize, f64)> = None; // (tier, mean, count, efficiency)
+    let mut chosen: Option<(String, f64, usize, f64, f64)> = None; // (tier, mean, count, efficiency, draw)
     for (idx, tier) in TIERS.iter().enumerate() {
         let (mean, sd, count) = posterior(tier);
         // Draw a pass-rate, then add a cheap-tier exploration bonus so the cheaper
@@ -440,30 +440,41 @@ pub fn decide_bandit(
             };
             if chosen
                 .as_ref()
-                .is_none_or(|(_, _, _, best_eff)| efficiency > *best_eff)
+                .is_none_or(|(_, _, _, best_eff, _)| efficiency > *best_eff)
             {
-                chosen = Some((tier.to_string(), mean, count, efficiency));
+                chosen = Some((tier.to_string(), mean, count, efficiency, sample));
             }
         } else {
             // No cost data at all — cheapest-first (original behaviour): take the
             // first qualifying tier and stop so haiku is always preferred over sonnet
             // when both sample above the bar (preserves exploration tests).
-            chosen = Some((tier.to_string(), mean, count, sample));
+            chosen = Some((tier.to_string(), mean, count, sample, sample));
             break;
         }
     }
 
     let (worker, basis, confidence, rationale) = match chosen {
-        Some((m, mean, count, eff)) => (
+        Some((m, mean, count, eff, draw)) => (
             m.clone(),
             "bandit",
             if count >= min_samples { "high" } else { "low" },
-            format!(
-                "Thompson(cost-adj): {m} cleared {:.0}% (posterior mean {:.0}%, efficiency {:.3}, {count} sample(s))",
-                pass_threshold * 100.0,
-                mean * 100.0,
-                eff,
-            ),
+            if count == 0 {
+                format!(
+                    "Thompson(cost-adj): {m} explored with 0 samples (no evidence; exploration draw {:.0}% >= threshold {:.0}%, prior mean {:.0}%, efficiency {:.3})",
+                    draw * 100.0,
+                    pass_threshold * 100.0,
+                    mean * 100.0,
+                    eff,
+                )
+            } else {
+                format!(
+                    "Thompson(cost-adj): {m} draw {:.0}% >= threshold {:.0}% (posterior mean {:.0}%, efficiency {:.3}, {count} sample(s))",
+                    draw * 100.0,
+                    pass_threshold * 100.0,
+                    mean * 100.0,
+                    eff,
+                )
+            },
         ),
         None => {
             // No tier sampled the bar — exploit the best posterior mean we have,
@@ -813,7 +824,6 @@ mod tests {
     // bug. Either way a rationale for a tier with no evidence must not claim the
     // threshold was cleared while the printed posterior mean is below it.
     #[test]
-    #[ignore = "backlog 0eafbf95: open defect (scout 2026-11-05) bandit rationale says 'cleared 60% (posterior mean 50%)' with 0 samples"]
     fn bandit_zero_sample_rationale_does_not_claim_cleared_below_threshold() {
         let mut offenders = Vec::new();
         for seed in 1..200u64 {

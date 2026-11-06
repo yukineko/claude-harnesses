@@ -591,6 +591,8 @@ fn apply_command(args: ApplyArgs) -> Result<()> {
     let json = read_arg_or_stdin(args.answer.unwrap_or_default())?;
     let answer: Answer = serde_json::from_str(&json).context("parsing answer JSON")?;
 
+    // Exclusive lock across the whole load-modify-save (refused if held).
+    let _carve_lock = carve::lock(&root)?;
     // Resume the carve; if none persisted, start one over the current gather.
     let mut state = match carve::load(&root)? {
         Some(s) => s,

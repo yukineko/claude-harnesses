@@ -9,7 +9,6 @@
 mod common;
 
 #[test]
-#[ignore = "backlog: open defect (scout 2026-11-05) list --json overwrites terminal status with deferred"]
 fn done_row_with_future_defer_until_keeps_status_done_in_json() {
     let fx = common::Fixture::new("json-defer-terminal");
     fx.plant_legacy_done("aaaa1111", "closed but carries a stale defer_until", "done");

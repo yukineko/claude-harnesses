@@ -446,3 +446,35 @@ scripts/test_check_test_weakening_new_file_ignore.py:104: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_check_test_weakening_new_file_ignore.py::NewFileIgnore::test_new_file_with_backlog_ignores_is_not_blocked
 ============================== 1 failed in 1.20s ==============================='''
+
+[[task]]
+id = "433ca3be"
+title = "pre-commit: per-phase timing is not recorded (pre-push has prepush-timing.jsonl, pre-commit has nothing)"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "observability",
+    "precommit",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-06 at main b2f2cbd1: .githooks/pre-push times each phase via date +%s and appends one JSON line per run to <git-common-dir>/prepush-timing.jsonl (9 lines; latest b2f2cbd1 typecheck 46s). .githooks/pre-commit (555 lines) has no timing code (grep time/date/SECONDS/elapsed/duration hits prose only) and no log exists. Fix direction: port pre-push's _tm_* helpers; per-scanner phases, append to precommit-timing.jsonl, one stderr summary 'pre-commit timing: ... total Ns (exit RC)'. Observability only: must not change any verdict/exit code; unwritable log warns, same rc. Readings: (a) missing observability (gate cost invisible); (b) intentional omission because pre-commit is fast. Distinguish: no doc says pre-commit timing was deliberately omitted; the repro test pins (a). Repro: python3 -m pytest scripts/test_precommit_timing.py (3 RED at 7e1548a5)."
+created_at = 1793925984
+updated_at = 1793925984
+weight = 0.0
+issue_number = 1551
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1551"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_precommit_timing.py"
+rev = "7e1548a586cf480896fa468dc832c9d285de2ba4"
+observed_at = 1793925984
+detail = """
+exit 1: ==========================
+FAILED scripts/test_precommit_timing.py::PrecommitTiming::test_blocking_run_still_logs_with_nonzero_exit
+FAILED scripts/test_precommit_timing.py::PrecommitTiming::test_clean_run_appends_one_timing_line
+FAILED scripts/test_precommit_timing.py::PrecommitTiming::test_stderr_has_one_summary_line
+============================== 3 failed in 1.04s ==============================="""

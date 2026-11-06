@@ -204,7 +204,6 @@ fn control_different_named_sessions_do_not_waive_each_other() {
 }
 
 #[test]
-#[ignore = "RED: b80023b3 waiver fail-open (verifier F1/F2/F3) 2026-11-07; remove when fixed"]
 fn f1_revert_to_blocked_state_after_green_is_a_new_chain_and_blocks() {
     let f = Fixture::new();
     let s1 = f.hook(Some("s-f1"), false);
@@ -229,7 +228,6 @@ fn f1_revert_to_blocked_state_after_green_is_a_new_chain_and_blocks() {
 }
 
 #[test]
-#[ignore = "RED: b80023b3 waiver fail-open (verifier F1/F2/F3) 2026-11-07; remove when fixed"]
 fn f2_waived_stop_does_not_consume_an_attempt_changed_tree_still_blocks() {
     let f = Fixture::new(); // default max_attempts (2), reset_after_secs 600
     let s1 = f.hook(Some("s-f2"), false);
@@ -253,7 +251,6 @@ fn f2_waived_stop_does_not_consume_an_attempt_changed_tree_still_blocks() {
 }
 
 #[test]
-#[ignore = "RED: b80023b3 waiver fail-open (verifier F1/F2/F3) 2026-11-07; remove when fixed"]
 fn f3a_manual_cli_twice_on_unchanged_red_tree_exits_1_both_times() {
     let f = Fixture::new();
     let first = f.run(None);
@@ -274,7 +271,6 @@ fn f3a_manual_cli_twice_on_unchanged_red_tree_exits_1_both_times() {
 }
 
 #[test]
-#[ignore = "RED: b80023b3 waiver fail-open (verifier F1/F2/F3) 2026-11-07; remove when fixed"]
 fn f3b_hook_stops_from_different_sessions_without_session_id_do_not_waive_each_other() {
     let f = Fixture::new();
     let a = f.hook(None, false);

@@ -100,7 +100,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             enabled: true,
-            max_attempts: 3,
+            max_attempts: 2,
             default_timeout_secs: 300,
             output_tail_lines: 40,
             reset_after_secs: 600,

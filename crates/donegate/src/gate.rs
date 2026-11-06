@@ -298,13 +298,13 @@ pub fn block_reason(v: &GateReport, attempt: u32, max: u32) -> String {
 /// reason would make every block look new and the second-occurrence waiver
 /// (`harness_core::repeat`) unreachable. Passed to `emit_stop_block_keyed`.
 ///
-/// The attempt counter (`attempt N/max`) is deliberately KEPT in the
-/// fingerprint: each stop below `max_attempts` has a new attempt number, so the
-/// same failure is never waived as a repeat below the cap — it blocks every
-/// time. The bounded exit for a failure that will not go green is the attempt
-/// cap and its give-up sentinel (`donegate:giveup:<check>`), not the waiver.
-/// The waiver applies only when the whole fingerprint, attempt number included,
-/// recurs (e.g. a counter reset by `reset_after_secs`, or a give-up cycle).
+/// The attempt counter (`attempt N/max`) is deliberately KEPT in this
+/// fingerprint, so this ledger alone never waives a repeat below the cap. The
+/// identical-finding waiver (same tree content AND same failing output as the
+/// previous block in the session) is decided separately in `main.rs` via
+/// `state::is_repeat`, before this fingerprint is consulted; the attempt cap and
+/// its give-up sentinel (`donegate:giveup:<check>`) remain the bounded exit for
+/// a failure that keeps changing the tree without going green.
 pub fn block_fingerprint(v: &GateReport, attempt: u32, max: u32) -> String {
     block_reason_as(v, attempt, max, true)
 }

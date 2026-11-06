@@ -208,7 +208,6 @@ fn control_clean_branch_merges() {
 }
 
 #[test]
-#[ignore = "backlog: condukt worktree merge lands a task branch whose tip fails cargo fmt --check (RED repro 2026-11-07)"]
 fn merge_refuses_branch_whose_tip_fails_cargo_fmt_check() {
     let f = Fixture::new();
     let (wt, branch) = f.task_branch("fmt", FMT_VIOLATION);
@@ -221,7 +220,6 @@ fn merge_refuses_branch_whose_tip_fails_cargo_fmt_check() {
 }
 
 #[test]
-#[ignore = "backlog: condukt worktree merge lands a task branch whose tip fails cargo clippy -D warnings (RED repro 2026-11-07)"]
 fn merge_refuses_branch_whose_tip_fails_cargo_clippy() {
     let f = Fixture::new();
     let (wt, branch) = f.task_branch("clippy", CLIPPY_VIOLATION);

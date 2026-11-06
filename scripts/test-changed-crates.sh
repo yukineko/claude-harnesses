@@ -131,15 +131,45 @@ fi
 "$REPO/scripts/cap-target-dir.sh"
 
 echo "test-changed-crates: testing$pkgs"
+# Where cap-target-dir.sh leaves its "cleaned at <epoch>" marker (best effort).
+cap_marker=""
+if meta="$(cargo metadata --no-deps --format-version=1)"; then
+    td="$(printf '%s' "$meta" | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
+    [ -n "$td" ] && cap_marker="${td%/}/.cap-cleaned-at"
+fi
+
 failed=""
+env_failed=""
 for p in $pkgs; do
-    if ! cargo test -p "$p" --quiet; then
-        failed="$failed $p"
+    run_start="$(date +%s)"
+    out_file="$(mktemp)"
+    # stderr is merged into stdout so the output can be inspected, then replayed.
+    cargo test -p "$p" --quiet >"$out_file" 2>&1
+    rc=$?
+    cat "$out_file"
+    if [ "$rc" -ne 0 ]; then
+        # Environment failure ONLY on two observed facts together: the spawn
+        # NotFound signature in the output AND a cap-target-dir clean stamped
+        # during this run. Either alone stays an ordinary failure.
+        cleaned_at=""
+        [ -n "$cap_marker" ] && [ -f "$cap_marker" ] && cleaned_at="$(cat "$cap_marker")"
+        case "$cleaned_at" in '' | *[!0-9]*) cleaned_at="" ;; esac
+        if grep -q 'kind: NotFound' "$out_file" && [ -n "$cleaned_at" ] && [ "$cleaned_at" -ge "$run_start" ]; then
+            env_failed="$env_failed $p"
+        else
+            failed="$failed $p"
+        fi
     fi
+    rm -f "$out_file"
 done
 
+if [ -n "$env_failed" ]; then
+    echo "test-changed-crates: ENVIRONMENT failure for$env_failed - undetermined, not a test verdict: the target dir was cleaned (cap-target-dir.sh cargo clean) while this run was executing, deleting the test binary (NotFound on spawn). Re-run." >&2
+fi
 if [ -n "$failed" ]; then
     echo "test-changed-crates: FAILED for$failed" >&2
+fi
+if [ -n "$failed$env_failed" ]; then
     exit 1
 fi
 

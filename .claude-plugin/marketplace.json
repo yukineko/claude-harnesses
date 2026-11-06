@@ -57,7 +57,7 @@
     {
       "name": "blastguard",
       "description": "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary.",
-      "version": "0.2.284",
+      "version": "0.2.286",
       "category": "security",
       "keywords": [
         "hooks",
@@ -156,7 +156,7 @@
     {
       "name": "condukt",
       "description": "Deterministic orchestration engine for Claude Code: schedules parallel and serial task batches by file-conflict analysis, manages git worktrees, tracks run state and gates completion.",
-      "version": "0.7.349",
+      "version": "0.7.350",
       "category": "orchestration",
       "keywords": [
         "orchestration",
@@ -331,7 +331,7 @@
     {
       "name": "donegate",
       "description": "Completion-verification gate for Claude Code: on Stop it runs your acceptance commands and blocks until every applicable check is green, feeding failures back for an auto-fix loop.",
-      "version": "0.1.66",
+      "version": "0.1.71",
       "category": "quality",
       "keywords": [
         "hooks",

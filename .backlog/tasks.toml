@@ -81,7 +81,10 @@ id = "43034f75"
 title = "blastguard: Ask on deleting an unmerged branch or force-removing a dirty worktree"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p1"]
+tags = [
+    "p1",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -91,11 +94,11 @@ Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 3 of 6 cases hav
 Readings: (a) 'merged' = ancestor of the default branch (audit; pinned); (b) git's own -d rule (merged into upstream or HEAD). Fixture cannot separate them (HEAD is main, no upstream). To tell apart: add a branch merged into a non-default HEAD but not main: (a) Ask, (b) Allow. Dirty worktree has both a tracked edit and an untracked file; an untracked-only case would decide whether untracked alone counts as dirty.
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
 created_at = 1793998241
-updated_at = 1793998841
+updated_at = 1794001884
 weight = 0.0
 issue_number = 1568
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1568"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -115,7 +118,10 @@ id = "e9325654"
 title = "blastguard: Ask on whole-tree stage (git add -A/--all/., commit -a)"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p1"]
+tags = [
+    "p1",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -125,11 +131,11 @@ Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 6 of 9 cases hav
 Readings: (a) `git add .` is always Ask (pinned); (b) Ask only when the pathspec reaches files outside the session's own changes. To tell apart: under (b) `add .` in a clean tree is Allow, so a clean-tree case would be needed.
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
 created_at = 1793998286
-updated_at = 1793998844
+updated_at = 1794001886
 weight = 0.0
 issue_number = 1569
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1569"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -150,7 +156,10 @@ id = "ef7c9fbe"
 title = "blastguard: Ask on git clone / mkdir -p / cp -r outside managed places"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -161,11 +170,11 @@ Readings: (a) any destination outside scratchpad/$TMPDIR/.harness-worktrees/proj
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
 User ruling 2026-11-07 (AskUserQuestion): `mkdir -p` is NOT in the Ask set — only git clone / cp -r outside managed places. Drop the mkdir -p case from the RED."""
 created_at = 1793998290
-updated_at = 1793999884
+updated_at = 1794001895
 weight = 0.0
 issue_number = 1570
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1570"
-rev = 2
+rev = 3
 
 [task.repro]
 outcome = "reproduced"
@@ -186,7 +195,10 @@ id = "1ca662ec"
 title = "condukt verify: refuse a task whose worktree differs from HEAD"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p1"]
+tags = [
+    "p1",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -196,11 +208,11 @@ Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left 
 Readings: (a) refuse when the task worktree has uncommitted changes (pinned); (b) require the tdd green proof bound to HEAD^{tree} - proofs record no tree hash today (only passed/cmd), so (b) needs a tdd proof-format change and is not RED-testable via today's API. To tell apart: a clean tree whose proof was recorded at an older commit is refused only under (b).
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
 created_at = 1793998293
-updated_at = 1793998869
+updated_at = 1794001885
 weight = 0.0
 issue_number = 1571
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1571"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -219,7 +231,10 @@ id = "aaae849b"
 title = "condukt state abandon --task: refuse while the worker transcript is fresh"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p1"]
+tags = [
+    "p1",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -229,11 +244,11 @@ Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left 
 Ambiguity: transcript location is an assumed convention ($HOME/.claude/projects/<slug(run cwd)>/<session>/subagents/agent-<agent_id>.jsonl, literal and canonical spellings). A fix looking elsewhere (e.g. worktree-path slug) fails this test while possibly valid; check the real layout first. A --force <reason> escape is not exercised.
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
 created_at = 1793998368
-updated_at = 1793998876
+updated_at = 1794001888
 weight = 0.0
 issue_number = 1572
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1572"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -253,7 +268,10 @@ id = "6180333a"
 title = "condukt: name found .tdd proof ids on oracle reject; refuse worktree remove for unverified tasks"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -263,11 +281,11 @@ Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): oracle_refusal_n
 Two sub-defects in one file (can be split by --exact test name). Refusal reason says 'tdd oracle exited non-zero / could not be determined' rather than naming the wrong id.
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
 created_at = 1793998372
-updated_at = 1793998883
+updated_at = 1794001893
 weight = 0.0
 issue_number = 1573
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1573"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -287,7 +305,10 @@ id = "6e97a022"
 title = "condukt schedule: name the matched command/token in force-gate warnings"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -297,11 +318,11 @@ Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): the force-gate w
 The memory's original `->` prose FP no longer reproduces (control: a `->` title schedules in parallel). Readings: (a) name the culprit command/token (pinned); (b) print a blastguard rule id - RiskAssessment has no rule-id field, needs blastguard API change. To tell apart: (b) only if a rule id string appears in the warning.
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
 created_at = 1793998378
-updated_at = 1793998887
+updated_at = 1794001893
 weight = 0.0
 issue_number = 1574
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1574"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -321,7 +342,10 @@ id = "3da84f08"
 title = "condukt guard main-tree: treat a stale backlog lock as live when the holder transcript is fresh"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -331,11 +355,11 @@ Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left 
 condukt half only (maintree::parse_backlog_lock drops stale:true locks without a transcript check). The backlog half (`backlog lock acquire --force` refusing on a fresh transcript) has NO RED here. Transcript path $HOME/.claude/projects/<slug(repo)>/<session-id>.jsonl is an assumed convention; liveness inputs are PATH stubs as in main_tree_guard_cli.rs.
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
 created_at = 1793998382
-updated_at = 1793998896
+updated_at = 1794001894
 weight = 0.0
 issue_number = 1575
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1575"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -355,7 +379,10 @@ id = "b3f5e3af"
 title = "backlog defer --ruling: deferred tickets are never handed out by next --claim"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p1"]
+tags = [
+    "p1",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -365,11 +392,11 @@ Observed RED 2026-11-07 at 34ece122 (base fc7b5dd9) (verbatim): `backlog defer <
 Readings: (A) new `defer` subcommand + status (memory plan; pinned - so at HEAD it fails on the missing subcommand); (B) next --claim skips tickets whose notes record a ruling (見送り/defer) - not tested (note-text matching is fragile). To tell apart: under A a ruling only in notes is still claimable; under B not. Control: the un-deferred ticket is still handed out.
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
 created_at = 1793998389
-updated_at = 1793998914
+updated_at = 1794001887
 weight = 0.0
 issue_number = 1576
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1576"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -389,7 +416,10 @@ id = "78cee053"
 title = "next --claim re-runs the stored repro and refuses to hand out a now-GREEN ticket"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -399,11 +429,11 @@ Observed RED 2026-11-07 at 34ece122 (base fc7b5dd9) (verbatim): panicked at ...a
 Design choice left to the fix: skip the GREEN ticket vs refuse the whole claim; the test asserts only that the GREEN ticket is not handed out and the still-RED one is (control).
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
 created_at = 1793998404
-updated_at = 1793998919
+updated_at = 1794001889
 weight = 0.0
 issue_number = 1577
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1577"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -423,7 +453,10 @@ id = "f500c25a"
 title = "donegate default max_attempts=2: give up visibly on the 3rd stop"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = '''
@@ -433,11 +466,11 @@ Observed RED 2026-11-07 at 35d0d2bf (base fc7b5dd9) (verbatim): stop 3 blocked a
 Related but separate from backlog b80023b3 (repeat waiver defeated by attempt number in the fingerprint); if that lands, stop 2 may become a waiver - the control accepts it. Visible give-up = marker donegate:giveup:typecheck in the violation ledger. tests/giveup_sentinel.rs sets max_attempts=3 explicitly (unaffected); the template line max_attempts = 3 at crates/donegate/src/main.rs:1069 needs updating with the fix.
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.'''
 created_at = 1793998413
-updated_at = 1793998926
+updated_at = 1794001891
 weight = 0.0
 issue_number = 1578
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1578"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -457,7 +490,10 @@ id = "e95bf58f"
 title = "compass looks_like_path: do not flag slash lists or bare filenames in DoD prose"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -467,11 +503,11 @@ Observed RED 2026-11-07 at b555d70a (base fc7b5dd9) (verbatim): prose tokens wer
 The memory's own example 入力が無い/ゼロ is NOT flagged at HEAD (CJK split leaves token '/', an existing path); kept as a guard. Real FPs are ASCII slash lists and bare *.rs names. Control: crates/nope/missing.rs under an existing top-level dir still trips. Conflict: planned rule 'only tokens rooted at an existing top-level dir' contradicts dod_missing_path_trips_when_check_enabled (expects src/does_not_exist.rs to trip in a tempdir without src/); reconcile e.g. by creating src/ in that fixture.
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
 created_at = 1793998435
-updated_at = 1793998931
+updated_at = 1794001892
 weight = 0.0
 issue_number = 1579
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1579"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -491,7 +527,10 @@ id = "04f53dbe"
 title = "context-governor injector dedup keys on the hook input session_id, not env"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = '''
@@ -501,11 +540,11 @@ Observed RED 2026-11-07 at c564dbb9 (base fc7b5dd9) (verbatim): session X's ledg
 Readings: (A) hook input session_id is authoritative (audit; pinned); (B) env session authoritative - memory says they always match in production, so defect is only test hermeticity. To tell apart: capture a live hook stdin/env pair and see whether session_id can differ from env. Extra: the written row's session field shows the env session although LedgerNode.session is set from input.session_id (Ledger::open overrides it).
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.'''
 created_at = 1793998442
-updated_at = 1793998936
+updated_at = 1794001893
 weight = 0.0
 issue_number = 1580
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1580"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -525,7 +564,10 @@ id = "4b8e8cb0"
 title = "check-workspace-tests.py / mutation-gate.sh refuse to start while a live cargo test exists"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -535,11 +577,11 @@ Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): check-workspace-
 Audit said 'exit 2', but in check-workspace-tests exit 2 already means PYTHON_FAILURE, so the test requires 'non-zero and cargo not launched' there; mutation-gate.sh must exit 2. Fix picks ENVIRONMENT (5) or a new class. Caveat: after the fix, the controls see any real cargo test from another session on the machine.
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
 created_at = 1793998459
-updated_at = 1793998951
+updated_at = 1794001891
 weight = 0.0
 issue_number = 1581
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1581"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -557,7 +599,10 @@ id = "4620134f"
 title = "pre-commit ratchet: refuse new thread::scope spawns without catch_unwind in gate crates"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -568,11 +613,11 @@ Test runs every `run X.py` scanner in .githooks/pre-commit against a fixture rep
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
 User ruling 2026-11-07 (AskUserQuestion): accept the ~80s added to the pre-push python suites; do not shrink detection strength for speed."""
 created_at = 1793998463
-updated_at = 1793999885
+updated_at = 1794001892
 weight = 0.0
 issue_number = 1582
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1582"
-rev = 2
+rev = 3
 
 [task.repro]
 outcome = "reproduced"
@@ -592,7 +637,10 @@ id = "4f9189da"
 title = "UserPromptSubmit blocks /flow unless permission_mode is bypassPermissions"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -602,11 +650,11 @@ Observed RED 2026-11-07 at ee3e6d1a (base fc7b5dd9) (verbatim): prompt "/flow" w
 Owner readings: (A) autoflow prompt-submit, the existing UserPromptSubmit hook that already knows /flow (pinned); (B) a new hook in the flow plugin (crates/flow is skill-only today) - test moves, property same. Either way prompt_submit_command goes through run_hook (never blocks); giving it a verdict means moving it off run_hook per CLAUDE.md s1. Missing permission_mode = cannot determine -> block (s3). Controls: /flow under bypassPermissions and 'hello' under auto pass.
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
 created_at = 1793998479
-updated_at = 1793998944
+updated_at = 1794001896
 weight = 0.0
 issue_number = 1583
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1583"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -626,7 +674,10 @@ id = "4f19b628"
 title = "pre-push runs check-fail-open-mutation.py per changed Undetermined arm"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -636,11 +687,11 @@ Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): AssertionError: 
 Test checks wiring only; 'per changed arm' needs an interface the fix defines and must pin with its own test - this RED goes green on wiring alone. Depends on audit B item 19 (mutate by deletion).
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
 created_at = 1793998487
-updated_at = 1793998962
+updated_at = 1794001897
 weight = 0.0
 issue_number = 1584
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1584"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -661,7 +712,10 @@ id = "d425cfc3"
 title = "check-fail-open-mutation.py: mutate by deleting the construct, not if false"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -672,11 +726,11 @@ Control: each scenario's anchor occurs exactly once in its target file. Untested
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
 User ruling 2026-11-07 (AskUserQuestion): `if true { return ...; }` (always-taken early return) is ALSO banned as neutralize-in-place; the mutant must delete the guard. Extend the RED to assert no `if true {` either."""
 created_at = 1793998489
-updated_at = 1793999884
+updated_at = 1794001898
 weight = 0.0
 issue_number = 1585
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1585"
-rev = 2
+rev = 3
 
 [task.repro]
 outcome = "reproduced"
@@ -697,7 +751,10 @@ id = "32ac2ceb"
 title = "pre-commit ratchet: refuse newly added never-executed constructs in crates src"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = [
+    "p2",
+    "memory-audit-b",
+]
 touched_files = []
 status = "pending"
 notes = """
@@ -708,11 +765,11 @@ Diff-scoped ratchet: existing occurrences counted, nothing new added (ratchet gu
 Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
 User ruling 2026-11-07 (AskUserQuestion): accept the ~80s added to the pre-push python suites; do not shrink detection strength for speed."""
 created_at = 1793998491
-updated_at = 1793999885
+updated_at = 1794001898
 weight = 0.0
 issue_number = 1586
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1586"
-rev = 2
+rev = 3
 
 [task.repro]
 outcome = "reproduced"

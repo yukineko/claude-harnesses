@@ -11,9 +11,13 @@ and .git/ holds no precommit-timing.jsonl.
 What this pins (observability only — the timing must not change any verdict):
   1. A clean run appends exactly one JSON line to
      <git-common-dir>/precommit-timing.jsonl with `exit` == hook rc (0) and a
-     non-empty `phases` list whose entries carry `phase` and `secs`.
+     non-empty `phases` list whose entries carry `phase`, `secs` and `rc`
+     (the gate's own exit status), one entry per gate label, in run order.
   2. A blocking run (one scanner exits 1) still appends one line, with `exit`
      equal to the (non-zero) hook rc — timing must not swallow the block.
+  2b. Per-gate verdicts: on that blocking run the phase of the failing gate has
+      rc 1 and every other gate rc 0, so which gate spoke is recoverable from
+      the log alone (the input for deciding which gates must run per commit).
   3. stderr carries one `pre-commit timing: ... total Ns (exit RC)` summary.
 
 Run: `python3 scripts/test_precommit_timing.py` (stdlib `unittest` only).
@@ -69,6 +73,7 @@ class PrecommitTiming(HookTestCase):
         for p in phases:
             self.assertIn("phase", p)
             self.assertIn("secs", p)
+            self.assertEqual(p.get("rc"), 0, p)
 
     def test_blocking_run_still_logs_with_nonzero_exit(self):
         h, log = self.timed_harness(exits={EXPECTED_SCANNERS[0]: 1})
@@ -77,6 +82,11 @@ class PrecommitTiming(HookTestCase):
         lines = self._lines(log)
         self.assertEqual(len(lines), 1, lines)
         self.assertEqual(lines[0].get("exit"), proc.returncode)
+        rcs = {p.get("phase"): p.get("rc") for p in lines[0].get("phases", [])}
+        self.assertEqual(rcs.get("injectguard"), 1, rcs)
+        others = {k: v for k, v in rcs.items() if k != "injectguard"}
+        self.assertTrue(others, "other gates must be logged too: %r" % rcs)
+        self.assertTrue(all(v == 0 for v in others.values()), rcs)
 
     def test_stderr_has_one_summary_line(self):
         h, _ = self.timed_harness()

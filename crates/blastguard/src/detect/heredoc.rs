@@ -427,10 +427,11 @@ pub(super) enum OutputTargets {
 /// the Rust doc comment `/// corrupt => \`Err\`` was denied as the redirect
 /// ``> `Err` ``.
 ///
-/// The shape rule is exactly [`strip_data_here_document_bodies`]'s (permitted
-/// lines before the opener, one opener line with no `$`/backtick, a reader on
-/// the closed `cat`/`tee`/`git commit -F -` list, no `|`, `;` or `&`, a CLOSED
-/// body, only blank or comment lines after it), with three differences:
+/// The shape rule is [`strip_data_here_document_bodies`]'s (permitted
+/// lines before the opener, one opener line, a reader on the closed
+/// `cat`/`tee`/`git commit -F -` list, a CLOSED body, only blank or comment
+/// lines after it), where the opener-line conditions (no `$`/backtick, no `|`,
+/// `;` or `&`) apply to the consumer text, with four differences:
 ///   * the delimiter MUST be quoted (`'EOF'`, `"EOF"`, `\EOF`). An unquoted
 ///     one lets the shell expand `$(…)` and backticks in the body, so the body
 ///     stays in the view;
@@ -440,7 +441,14 @@ pub(super) enum OutputTargets {
 ///   * when the reader stores the body in no file
 ///     ([`here_document_reader_stores_nothing`]: bare `cat`, `git commit -F -`,
 ///     no output redirect), ANY lines may follow the closing delimiter. They
-///     stay in the view and are judged like every other line.
+///     stay in the view and are judged like every other line;
+///   * the consumer text is [`redirect_view_consumer`]'s: besides the heads
+///     [`opener_consumer`] splits, further `cd <one word>` heads split at `;`
+///     or `&&` are peeled, even with an unresolvable operand like `"$WT"`. The
+///     `$`/backtick check then applies only to the remaining reader text, not
+///     to the whole opener line. The `cd` heads stay in the view and are judged
+///     like every other line; a head that is not `cd <word>`, or whose operand
+///     holds a backtick or `$(`, is not peeled and the line stays refused.
 ///
 /// Every other rule (the per-segment loop, the interpreter and egress scans)
 /// still reads the full text, body included.
@@ -487,16 +495,34 @@ pub(super) fn strip_here_document_body(
         return unchanged;
     };
     let openers = here_document_openers(&opener_line);
-    if openers.len() != 1
-        || openers[0].delimiter.is_empty()
-        || opener_line.contains(['$', '`'])
-        || !quotes_balance(&opener_line)
-        || !here_document_consumer_is_data(opener_consumer(&opener_line), targets)
-    {
+    // The redirect view removes a body only when the shell cannot expand it.
+    let redirect_view_of_quoted =
+        targets == OutputTargets::AnyTarget && here_document_delimiter_is_quoted(&opener_line);
+    if targets == OutputTargets::AnyTarget && !redirect_view_of_quoted {
         return unchanged;
     }
-    // The redirect view removes a body only when the shell cannot expand it.
-    if targets == OutputTargets::AnyTarget && !here_document_delimiter_is_quoted(&opener_line) {
+    // Quoted delimiter, redirect view: further `cd <word>` heads (split at `;`
+    // or `&&`) are peeled too, even with an unresolvable operand like "$WT".
+    // They run BEFORE the reader and never see the body, and they stay in the
+    // command text so every rule still judges them; `$` / backtick are then
+    // refused only in the remaining reader text. [`opener_consumer`]'s own
+    // contract is unchanged.
+    let consumer = if redirect_view_of_quoted {
+        redirect_view_consumer(&opener_line)
+    } else {
+        opener_consumer(&opener_line)
+    };
+    let expansion_free = if redirect_view_of_quoted {
+        !consumer.contains(['$', '`'])
+    } else {
+        !opener_line.contains(['$', '`'])
+    };
+    if openers.len() != 1
+        || openers[0].delimiter.is_empty()
+        || !expansion_free
+        || !quotes_balance(&opener_line)
+        || !here_document_consumer_is_data(consumer, targets)
+    {
         return unchanged;
     }
     // The body, up to the first exact delimiter line.
@@ -513,8 +539,8 @@ pub(super) fn strip_here_document_body(
     // reader stores the body nowhere a later command could run it from
     // ([`here_document_reader_stores_nothing`]): those lines stay in the view
     // and every redirect rule still judges them; only the body leaves.
-    let later_commands_ok = targets == OutputTargets::AnyTarget
-        && here_document_reader_stores_nothing(opener_consumer(&opener_line));
+    let later_commands_ok =
+        targets == OutputTargets::AnyTarget && here_document_reader_stores_nothing(consumer);
     if lines[close + 1..]
         .iter()
         .any(|l| odd_whitespace(&text(l)) || !(later_commands_ok || inert(&text(l))))
@@ -561,6 +587,39 @@ pub(super) fn opener_consumer(line: &str) -> &str {
         rest = tail;
     }
     rest
+}
+
+/// [`opener_consumer`], then further `cd <one word>` heads split at `&&` or
+/// `;` are peeled, for the redirect view of a QUOTED-delimiter here-document
+/// only (backlog 9f90b96f: `cd /tmp/wt; git commit -F- <<'MSG'`; backlog
+/// 5651745b: `cd "$WT" && cat <<'EOF'`). A `cd` runs before the reader and never
+/// sees the body, so it cannot make the body code; its operand may be
+/// unresolvable (`"$WT"`) because the opener line, `cd` included, stays in the
+/// command and the cwd walk and every redirect rule still judge it. A head
+/// whose operand holds a backtick or `$(`, or that is anything but `cd <word>`,
+/// stops the peeling; the remaining text is then judged (and refused) as before.
+pub(super) fn redirect_view_consumer(line: &str) -> &str {
+    let mut rest = opener_consumer(line);
+    loop {
+        let cut = [
+            rest.find("&&").map(|i| (i, 2)),
+            rest.find(';').map(|i| (i, 1)),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        let Some((i, len)) = cut else { return rest };
+        let (head, tail) = (&rest[..i], &rest[i + len..]);
+        let words = quote_aware_words(head);
+        let peelable = matches!(words.as_slice(), [cd, _] if cd == "cd")
+            && !head.contains(['`', '<', '>', '|', '&', '(', ')', '\\'])
+            && !head.contains("$(")
+            && quotes_balance(head);
+        if !peelable {
+            return rest;
+        }
+        rest = tail;
+    }
 }
 
 /// True when `consumer` (the opener-line text [`opener_consumer`] returns, which
@@ -848,5 +907,30 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
             })
         }
         _ => false,
+    }
+}
+
+/// Backlog 9f90b96f / 5651745b: the redirect view peels `cd <word>` heads of a
+/// QUOTED-delimiter here-document, and nothing else.
+#[cfg(test)]
+mod peel_tests {
+    use super::*;
+
+    #[test]
+    fn redirect_view_peels_cd_heads_only_for_quoted_data_here_documents() {
+        let view = redirect_view_without_quoted_here_document_body;
+        let stripped = |c: &str| view(c).len() < c.len();
+        // Quoted delimiter, data reader, cd heads (`;`, `&&`, unresolved operand).
+        assert!(stripped("cd /tmp/wt; git commit -F- <<'MSG'\nA <a@b>\nMSG"));
+        assert!(stripped("cd \"$WT\" && cat <<'EOF'\nv > {bar}\nEOF"));
+        // Unquoted delimiter: the shell expands the body, so it stays in the view.
+        assert!(!stripped("cd /tmp/wt; git commit -F- <<MSG\nA <a@b>\nMSG"));
+        assert!(!stripped("cd \"$WT\" && cat <<EOF\nv > {bar}\nEOF"));
+        // A reader that executes its stdin keeps the body.
+        assert!(!stripped("cd /tmp/wt; sh <<'EOF'\necho > x\nEOF"));
+        assert!(!stripped("cd \"$WT\" && bash <<'EOF'\necho > x\nEOF"));
+        // A non-cd head, or a cd whose operand substitutes a command, is not peeled.
+        assert!(!stripped("rm x; cat <<'EOF'\nv > {bar}\nEOF"));
+        assert!(!stripped("cd $(evil) && cat <<'EOF'\nv > {bar}\nEOF"));
     }
 }

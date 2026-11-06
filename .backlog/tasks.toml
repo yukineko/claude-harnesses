@@ -329,3 +329,81 @@ scripts/test_check_test_weakening_macro_unignore.py:100: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_check_test_weakening_macro_unignore.py::MacroUnignore::test_removing_template_ignore_with_same_invocations_passes
 ============================== 1 failed in 0.54s ==============================='''
+
+[[task]]
+id = "afd18dc0"
+title = "overwatch: record every subagent and classify liveness per agent (subagents check)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "liveness",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+Filed 2026-11-07 (JST) from session c2e3bc17. RED commit 029ea0fe (overwatch 0.2.113), worktree branch session-c2e3bc17, merged with main e518bb84 at 9ea61afa.
+RED: crates/overwatch/tests/backlog_subagent_liveness_20261107.rs, 6 #[ignore]d tests. Observed with --ignored: 0 passed, 6 failed (4 fail on `unrecognized subcommand 'subagents'`, 1 on hooks.json not routing Agent/Task PostToolUse + SubagentStop to overwatch, 1 on overwatch::stalled::scan omitting an idle agent whose last entry is an attachment).
+
+USER RULINGS (verbatim, 2026-11-07):
+- 「同様の問題はかなり発生している memoryで処理せず、きちんと記録管理し、確認をいれて」
+- 「確認の方法があるのに確認していないなら嘘つきです、確認したけどわからないなら判定不能です。処理を実行していない、すべてのagentに問えばだいたいわかるはず」
+- 「sub agentを記録し、長期実行のものは確認するようなコードをいれられないか?」
+- 「コードでもないもの、コードで処理できないものへのREDはそもそもゴミなのでしない」 (so the RED asserts classification + exit code only, no prose)
+
+OBSERVED (what the main session did when asked 「sub agentはきちんと動いているか?」 at 20:50:39Z, answered "none stalled"):
+(a) sorted ~/.claude/projects/-Users-yuki-src-harness/c2e3bc17-.../subagents/*.jsonl by mtime and looked only at the top 3 of 6;
+(b) counted ps rows of cargo/tdd processes from OTHER sessions/runs as evidence (run-20261107-051052-69845 also has a t1);
+(c) explained away a contradiction (condukt run state said t1 `failed`) with a guess;
+(d) treated a recent mtime as progress.
+The last entry of most subagent transcripts is type `attachment` (hook_success), which says nothing about done vs stalled.
+User at 20:59:46Z: 「嘘です、止まってるsub agentはいて、とめました。どうしてまちがったのか」.
+
+THE STOPPED AGENT (observed in transcripts):
+- id a56b4006f1b96dc82, condukt:condukt-verifier "t5-verify: env failure classification", model haiku (Haiku 4.5), parentAgentId aa9207a745d517f90 (the condukt orchestrator for run-20261107-051454-39899), spawnDepth 2.
+- 20:28:05Z its foreground Bash `for f in scripts/test_*.py ...` (every scripts test, not needed by its task) hit the 120s timeout and was moved to background as bftamsqp2; it kept running.
+- 20:29:08Z (05:29:08 JST) last real activity: assistant TEXT "verification report", then SubagentStop hook fired. It did NOT call SubagentHandback. The harness nevertheless enqueued <status>completed</status> for a56b4006 at 20:29:11Z to the orchestrator.
+- 20:29 to 20:57 the orchestrator repeatedly wrote "Waiting on ... t5 verifier" (28 min) with no per-agent check.
+- 20:57:16Z the user messaged the agent directly: 「これ止ってない?」. 20:57:32Z the orchestrator SendMessage'd it ("you have run 34 minutes ... deliver your verdict"). 20:58:04Z orchestrator TaskStop(a56b4006) was refused: "Task a56b4006f1b96dc82 is owned by a56b4006f1b96dc82; agent aa9207a745d517f90 cannot stop it." It then killed shell pid 2348 and its pytest child; bftamsqp2 notified `failed` at 20:58:06Z. 20:58:35Z the agent finally called SubagentHandback (after a [handback-send-enforce] reminder) and ended "Done." at 20:58:36Z.
+- Over its life SubagentStop fired 4 times and `completed` was notified 3+ times for the same agent id (resumed by messages).
+
+DOES THE TRANSCRIPT GIVE A DETERMINISTIC STALL SIGNAL? Partially, and the obvious signals are wrong:
+- mtime/last entry: the last entry was an attachment (SubagentStop hook_success) -> overwatch::stalled::scan (the `overwatch status` scanner) silently treats it as fine (it only flags a last-entry assistant tool_use). RED test 6.
+- `completed` notification and SubagentStop both fired while the result was NOT delivered and the launcher was still waiting -> neither is "done". The deterministic done signal observed is a SubagentHandback tool_use whose tool_result says success:true. RED test 4.
+- Deterministic stall evidence that WAS available: no new tool_result for 28 min past its last TEXT, no SubagentHandback, launcher still waiting, plus its own background task (bftamsqp2) still running. Ambiguity: a background-launched agent whose turn ended without handback is indistinguishable, from the transcript alone, from one whose final TEXT is the intended result (agents not under handback-send-enforce); the classifier must treat "ended, no delivered result" as not-done (stalled or query_required), never done.
+
+DESIRED SHAPE (the RED's API, not implemented):
+- RECORD: `overwatch presence` (already the hook-written per-session registry under ~/.overwatch/<key>/overwatch/) also records each Agent launch from its PostToolUse payload (tool_response.agentId, async_launched; nested launches carry payload agent_id = launcher) and each SubagentStop. hooks.json must route PostToolUse Agent|Task and SubagentStop to it. UNVERIFIED: the exact PostToolUse payload shape for async Agent launches and whether nested-launch payloads carry agent_id; the fixture copies the observed toolUseResult {isAsync,status:async_launched,agentId}. Verify against a real payload before implementing.
+- CHECK: `overwatch subagents --session <id> --stall-secs <n> --json` -> {"clean", "agents":[{"agent_id","state"}]} for EVERY recorded agent of the session (nested included, other sessions excluded), state one of done / progressing / stalled / query_required / undetermined. done = delivered result (handback success). progressing = new, changing tool results within the window (entry timestamps, never mtime or hook attachments). stalled = no new tool result past threshold, OR repeated identical tool calls, OR a status query (SendMessage from parent) unanswered past the window. query_required = long-running candidate the parent must query now (names the id). undetermined = checked and still unknown (unreadable/unparseable transcript, recorded agent with no transcript, unreadable registry -> not clean). Exit 0 iff all done/progressing, else 1. Never "all fine" from a partial view; never count processes it cannot attribute to the session/run. A `--run <condukt-run-id>` selector (map run tasks' recorded agent ids to the same classification) is still to design; not in the RED.
+- A Stop/PostToolUse systemMessage that names the query_required/stalled ids so the parent actually queries them is part of the fix; not asserted in the RED (would be prose).
+
+PROCEDURE RULE (user ruling above): to answer any liveness question, enumerate EVERY agent, query each running one (SendMessage; an agent that does not answer within its next tool round is a strong stall signal), and classify each as done / progressing (answered with a concrete recent action) / stalled (no answer or no advance) / undetermined (queried and checked, still unknown). Answering without doing this is the defect: a state claimed without running an available check is a false report, not "undetermined". The main-session /flow skill and the condukt skill instructions should call `overwatch subagents` (once it exists) before answering any liveness question, and their "Waiting on X" loops should run it instead of waiting blindly.
+
+TWO READINGS and how to tell them apart:
+(a) missing mechanical check: nothing records subagents or classifies them, so the answer is unavoidably a guess. Supported by: no `subagents` subcommand, hooks.json does not route Agent/SubagentStop to overwatch, stalled::scan drops the observed shape (all RED).
+(b) intended human-judgment area: liveness was meant to be judged by the model reading transcripts. Refuted as a sufficient design by the observations: the judgment used mtime/partial views/foreign ps rows and was wrong; the user ruled it must be a record + mechanical check. Tell them apart by whether the RED's classifier can reproduce the user's verdict on the a56b4006 fixture without human input; it can (no handback + no new tool result for 28 min), so (a).
+
+SUB-FINDINGS (not fixed):
+- A verifier ran an unbounded full-suite foreground loop (`for f in scripts/test_*.py`) for ~34 min, which its task did not need. Not testable as code behavior of a crate today (it is agent behavior); a code-level guard would be a stuckguard/blastguard rule on unbounded test loops inside verifier agents. Mentioned only.
+- TaskStop from a parent agent on its own child is refused ("owned by a56b4006f1b96dc82") - harness behavior, outside this repo.
+- condukt subagent-stop logs "no ..." on every SubagentStop of these agents (cwd not in a task worktree), the coverage gap its doc already states."""
+created_at = 1793999490
+updated_at = 1793999490
+weight = 0.0
+issue_number = 1587
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1587"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test backlog_subagent_liveness_20261107 -- --ignored"
+rev = "9ea61afadbda9b6d3069333ef36cdd999d91da0c"
+observed_at = 1793999490
+detail = """
+exit 101: t_clean
+
+test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.63s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_subagent_liveness_20261107.rs (target/debug/deps/backlog_subagent_liveness_20261107-1799d8cbb2e03741)
+error: test failed, to rerun pass `-p overwatch --test backlog_subagent_liveness_20261107`"""

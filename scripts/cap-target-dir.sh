@@ -105,4 +105,10 @@ if [ "$mb" -gt "$cap" ]; then
   # Even a failed clean is not a build failure; the build below can still run
   # against whatever survived.
   cargo clean || true
+  # Leave observable evidence that a clean happened, for callers that need to
+  # tell "binary deleted under my run" from a genuine failure (see
+  # test-changed-crates.sh). Kept INSIDE the target dir (ignored by git; the dir was just
+  # emptied, so it is recreated). Content = epoch seconds. Best effort: failure to write it only
+  # means the caller reports the ordinary failure.
+  mkdir -p "$target_dir" && date +%s > "$target_dir/.cap-cleaned-at" || true
 fi

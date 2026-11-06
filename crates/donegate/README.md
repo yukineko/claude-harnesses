@@ -75,15 +75,29 @@ If the record cannot be saved, the check still runs and the stop still blocks;
 the reason says the full output could not be saved (with why) and shows **more**,
 not less: the digest plus the last `max(output_tail_lines, 40)` raw lines.
 The repeat ledger keys a block on its reason with the per-run record path
-normalised. The attempt counter (`attempt N/max`) is deliberately kept in that
-key, so the same failure is never waived as a repeat below `max_attempts`: every
-stop under the cap blocks. The bounded exit is the attempt cap plus its give-up
-sentinel (`donegate:giveup:<check>`, see Loop safety).
+normalised (the attempt counter `attempt N/max` stays in that key).
+
+**Identical-finding waiver** (backlog b80023b3). Within one chain of consecutive
+blocks, a Stop whose root tree (HEAD, tracked diff, untracked files) and failing
+check outputs are identical to that root's previous block is NOT blocked again:
+donegate allows it with a JSON `systemMessage` saying nothing new was verified
+and the checks are still RED. A waived stop does not count toward
+`max_attempts`; a changed tree still blocks. It applies only to a Stop hook
+payload with a non-empty `session_id` (manual `donegate gate` keeps exiting 1;
+a payload without a session id blocks). The memory is cleared when the chain
+ends (green, give-up, skip, or the counter's `reset_after_secs` idle reset).
+Separately, the shared `harness_core::repeat` ledger (ruling 2026-09-18) can
+still waive a block whose text recurs in the same session. A tree or
+signature that cannot be determined blocks. Waived stops are logged
+(`repeat-waived` in the gate log) but write no overwatch ledger entry.
+When another root blocks the stop, the other roots' waiver / give-up notices are
+appended to the block reason. The bounded exit is the attempt cap plus its
+give-up sentinel (`donegate:giveup:<check>`, see Loop safety).
 
 ### Loop safety
 
 - A per-session **attempt counter** gives up after `max_attempts` consecutive
-  blocks (default 3) and allows the stop, so a genuinely stuck agent isn't
+  blocks (default 2) and allows the stop, so a genuinely stuck agent isn't
   trapped. The counter resets after `reset_after_secs` of idle, or on any green.
 - **Escape hatch**: `donegate skip --reason "<why>"` — consumed once, allows
   the next stop, and applies only to the session that issued it. A reason is

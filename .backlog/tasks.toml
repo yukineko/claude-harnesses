@@ -491,3 +491,63 @@ exit 101: ss-core v0.2.92 (/Users/yuki/src/.harness-worktrees/session-0d3d5bb8/c
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.88s
      Running tests/backlog_quoted_prose_path_root_20261107.rs (target/debug/deps/backlog_quoted_prose_path_root_20261107-734c0ac96bf9a6d1)
 error: test failed, to rerun pass `-p harness-core --test backlog_quoted_prose_path_root_20261107`"""
+
+[[task]]
+id = "7483e85b"
+title = "blastguard: a protected-path literal returns Ask early and masks a later unrecoverable-write Deny in interpreter programs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-07 (session-bf349dd5, rev 691e13d7; also deployed 0.2.269): python3 -c with x='.githooks' then open('/etc/hosts','w').write('') gives ask; without the literal gives deny. interpreter_program_verdict per-literal loop: exclude::touches_protected(candidate) returns Decision::ask before the recoverability probe runs on later literals/layers. Reported by condukt run-20261107-000302-82136 t1 worker. Readings: (a) defect, Deny must outrank Ask (model.rs); (b) intended final word — but then any protected-path string downgrades an irreversible write."
+created_at = 1793984483
+updated_at = 1793984483
+weight = 0.0
+issue_number = 1557
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1557"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_protected_path_ask_masks_deny_20261107"
+rev = "691e13d71d2b33b0cf928e211c700fc81f4dfc9e"
+observed_at = 1793984483
+detail = """
+exit 101: /Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.63s
+     Running tests/backlog_protected_path_ask_masks_deny_20261107.rs (target/debug/deps/backlog_protected_path_ask_masks_deny_20261107-be156aafdf3cdbbf)
+error: test failed, to rerun pass `-p blastguard --test backlog_protected_path_ask_masks_deny_20261107`"""
+
+[[task]]
+id = "b4c03877"
+title = "blastguard: timeit and other string-executing APIs are not dynamic-execution markers, so a run string gets the inert-literal Ask instead of Deny"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-07 (session-bf349dd5, rev 691e13d7 = ba8a9525 behaviour): python3 stdin heredoc import timeit, os; timeit.timeit("os.unlink('/tmp/x.tmp')", number=1) gives ask (deployed 0.2.269: deny). timeit absent from DYNAMIC_EXECUTION_MARKERS in crates/blastguard/src/detect/interpreter/inert_literal.rs. Likely same gap (unobserved): cProfile.run, pdb.run, node setTimeout/setInterval string, vm.runIn*. Found by condukt run-20261107-011838-71703 t1b verifier. Readings: (a) defect, a string that reaches an executor must keep Deny; (b) accepted residual since the result is Ask (a refusal) and the marker list is documented as a heuristic."""
+created_at = 1793984487
+updated_at = 1793984487
+weight = 0.0
+issue_number = 1558
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1558"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_string_exec_api_not_marked_20261107"
+rev = "691e13d71d2b33b0cf928e211c700fc81f4dfc9e"
+observed_at = 1793984487
+detail = """
+exit 101: 0.2.274 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running tests/backlog_string_exec_api_not_marked_20261107.rs (target/debug/deps/backlog_string_exec_api_not_marked_20261107-162d5f5c3d830a5b)
+error: test failed, to rerun pass `-p blastguard --test backlog_string_exec_api_not_marked_20261107`"""

@@ -1,16 +1,21 @@
 // このファイルは丸ごと integration test なので unwrap/expect を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! Tests for various inert-looking literal mentions of destructive calls.
-//! Each test verifies that these patterns are correctly identified as Deny
-//! (the decision must be exactly "deny" to confirm the pattern is being detected).
+//! Fail-closed controls for backlog 27795e6e (condukt replan run
+//! run-20261107-011838-71703, task t1a; written by the orchestrator, not by the
+//! implementer of the fix). Every program below spells a destructive call in a
+//! place that is NOT positively inert: an interpolating or prefixed literal, an
+//! unterminated quote, or next to dynamic execution / a real call. Each is Deny
+//! at base (1e140b21) and must stay Deny after the string-only downgrade lands.
+//! Programs are fed through quoted-delimiter heredocs so the shell passes them
+//! verbatim.
 
 #[path = "support/bounded.rs"]
 mod bounded;
 
 use std::process::{Command, Stdio};
 
-fn decision(command: &str) -> String {
+fn decision(command: &str) -> (String, String) {
     let bin = env!("CARGO_BIN_EXE_blastguard");
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
@@ -29,110 +34,84 @@ fn decision(command: &str) -> String {
     assert_eq!(out.status.code(), Some(0), "hook must exit 0 ({command:?})");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     if stdout.trim().is_empty() {
-        return "allow".to_string();
+        return ("allow".to_string(), String::new());
     }
     let doc: serde_json::Value = serde_json::from_str(stdout.trim())
         .unwrap_or_else(|e| panic!("stdout not JSON for {command:?} ({e}): {stdout}"));
-    doc.get("hookSpecificOutput")
+    let hso = doc.get("hookSpecificOutput");
+    let d = hso
         .and_then(|h| h.get("permissionDecision"))
         .and_then(|v| v.as_str())
         .unwrap_or_else(|| panic!("no permissionDecision for {command:?}: {stdout}"))
-        .to_string()
+        .to_string();
+    let r = hso
+        .and_then(|h| h.get("permissionDecisionReason"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    (d, r)
+}
+
+fn assert_deny(cmd: &str) {
+    let (d, r) = decision(cmd);
+    assert_eq!(d, "deny", "must stay Deny: {cmd:?} (reason: {r})");
 }
 
 #[test]
-fn python_fstring_with_unlink_mention_and_brace() {
-    let cmd = "python3 -c \"print(f\\\"{x} os.unlink(\\\")\"";
-    assert_eq!(
-        decision(cmd),
-        "deny",
-        "f-string containing unlink( must be denied: {cmd:?}"
+fn python_fstring_with_brace_is_code() {
+    assert_deny("python3 - <<'PY'\nx = 1\nprint(f\"{x} os.unlink( docs\")\nPY");
+}
+
+#[test]
+fn python_raw_prefixed_literal_is_not_proven_inert() {
+    assert_deny("python3 - <<'PY'\nx = r\"docs: os.unlink( removes a file\"\nprint(x)\nPY");
+}
+
+#[test]
+fn python_bytes_prefixed_literal_is_not_proven_inert() {
+    assert_deny("python3 - <<'PY'\nx = b\"docs: os.unlink( removes a file\"\nprint(x)\nPY");
+}
+
+#[test]
+fn ruby_hash_brace_interpolation_is_code() {
+    assert_deny("ruby - <<'RB'\nputs \"#{1} File.delete( docs\"\nRB");
+}
+
+#[test]
+fn perl_at_brace_interpolation_is_code() {
+    assert_deny("perl - <<'PL'\nprint \"@{[ 1 ]} unlink( docs\";\nPL");
+}
+
+#[test]
+fn literal_with_dollar_paren_is_not_proven_inert() {
+    assert_deny("python3 - <<'PY'\nx = \"$(true) os.unlink( docs\"\nprint(x)\nPY");
+}
+
+#[test]
+fn backtick_literal_is_code() {
+    assert_deny("perl - <<'PL'\nmy $x = `echo unlink( docs`;\nPL");
+}
+
+#[test]
+fn unterminated_quote_is_not_proven_inert() {
+    assert_deny("python3 - <<'PY'\nx = \"docs: os.unlink( removes a file\nprint(x)\nPY");
+}
+
+#[test]
+fn inert_looking_literal_plus_getattr_stays_denied() {
+    assert_deny(
+        "python3 - <<'PY'\nimport os\nx = \"docs: os.unlink(\"\ngetattr(os, \"remove\")(\"/tmp/x.tmp\")\nPY",
     );
 }
 
 #[test]
-fn ruby_double_quote_interpolation_with_file_delete() {
-    let cmd = "ruby -e \"puts #{File.delete}\"";
-    let d = decision(cmd);
-    assert!(d == "deny" || d == "ask", "ruby double-quoted interpolation with File.delete must be refused (deny or ask); got {d:?}: {cmd:?}");
-}
-
-#[test]
-fn perl_double_quote_array_interpolation_with_unlink() {
-    let cmd = "perl -e \"print @{[ unlink('/tmp/x') ]}\"";
-    assert_eq!(
-        decision(cmd),
-        "deny",
-        "perl double-quoted string with @{{ unlink }} interpolation must be denied: {cmd:?}"
+fn inert_looking_literal_plus_real_call_stays_denied() {
+    assert_deny(
+        "python3 - <<'PY'\nimport os\nx = \"docs: os.unlink(\"\nos.unlink('/tmp/x.tmp')\nPY",
     );
 }
 
 #[test]
-fn python_double_quote_with_command_substitution() {
-    let cmd = "python3 -c \"x = \\\"$( os.unlink('/tmp') )\\\"; print(x)\"";
-    assert_eq!(
-        decision(cmd),
-        "deny",
-        "python string containing $( with unlink must be denied: {cmd:?}"
-    );
-}
-
-#[test]
-fn perl_backtick_with_unlink() {
-    let cmd = "perl -e \"`os.unlink()`\"";
-    assert_eq!(
-        decision(cmd),
-        "deny",
-        "perl backtick string with unlink must be denied: {cmd:?}"
-    );
-}
-
-#[test]
-fn ruby_backtick_with_file_delete() {
-    let cmd = "ruby -e \"`File.delete()`\"";
-    assert_eq!(
-        decision(cmd),
-        "deny",
-        "ruby backtick string with File.delete must be denied: {cmd:?}"
-    );
-}
-
-#[test]
-fn python_unterminated_quote_with_unlink() {
-    let cmd = "python3 -c \"x = \\\" os.unlink(";
-    assert_eq!(
-        decision(cmd),
-        "deny",
-        "python unterminated quote with unlink must be denied: {cmd:?}"
-    );
-}
-
-#[test]
-fn python_literal_string_plus_getattr_unlink() {
-    let cmd = "python3 -c \"x = 'docs: os.unlink('; y = getattr(os, 'unlink')\"";
-    assert_eq!(
-        decision(cmd),
-        "deny",
-        "literal docs comment plus getattr(os, 'unlink') must be denied: {cmd:?}"
-    );
-}
-
-#[test]
-fn python_literal_string_with_real_unlink_call() {
-    let cmd = "python3 -c \"x = 'docs: os.unlink('; os.unlink('/tmp/x.tmp')\"";
-    assert_eq!(
-        decision(cmd),
-        "deny",
-        "literal docs string with real unlink call must be denied: {cmd:?}"
-    );
-}
-
-#[test]
-fn python_exec_with_unlink_call() {
-    let cmd = "python3 -c \"exec(\\\"import os; os.unlink('/tmp/x.tmp')\\\")\"";
-    let d = decision(cmd);
-    assert!(
-        d == "deny" || d == "ask",
-        "exec with unlink call must be refused (deny or ask); got {d:?}: {cmd:?}"
-    );
+fn literal_passed_to_exec_stays_denied() {
+    assert_deny("python3 - <<'PY'\nexec(\"import os; os.unlink('/tmp/x.tmp')\")\nPY");
 }

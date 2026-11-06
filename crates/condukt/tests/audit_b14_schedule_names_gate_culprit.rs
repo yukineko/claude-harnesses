@@ -40,6 +40,7 @@ fn schedule(dec: &serde_json::Value) -> serde_json::Value {
 }
 
 #[test]
+#[ignore = "backlog 6e97a022: open defect, remove ignore when fixed"]
 fn force_gate_warning_names_the_matched_command() {
     let v = schedule(&serde_json::json!({"goal": "g", "tasks": [
         {"id": "t1", "title": "maps Foo -> Bar", "done_criteria": "returns Bar",

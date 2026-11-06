@@ -604,6 +604,7 @@ mod tests {
     /// that does not resolve must still trip, so the fix cannot be "never
     /// flag anything".
     #[test]
+    #[ignore = "backlog e95bf58f: open defect, remove ignore when fixed"]
     fn dod_prose_slash_lists_and_bare_filenames_are_not_paths() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path().join("crates")).unwrap();

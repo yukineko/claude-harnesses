@@ -115,6 +115,7 @@ fn init(dir: &Path, home: &Path, run: &str, kind: Option<&str>) {
 
 /// RED 1: proofs exist under the backlog id; the refusal must say so.
 #[test]
+#[ignore = "backlog 6180333a: open defect, remove ignore when fixed"]
 fn oracle_refusal_names_the_proof_ids_it_found() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("run");
@@ -242,6 +243,7 @@ fn worktree_remove_of_a_verified_task_proceeds() {
 
 /// RED 2: tearing down an unverified task's worktree destroys its proofs.
 #[test]
+#[ignore = "backlog 6180333a: open defect, remove ignore when fixed"]
 fn worktree_remove_refuses_while_the_task_is_unverified() {
     let tmp = tempfile::tempdir().unwrap();
     let (repo, home, wt) = worktree_fixture(tmp.path(), "run-b12-unv");

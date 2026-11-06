@@ -42,7 +42,9 @@ fn default_weight() -> f64 {
 /// (`Eq` is intentionally not derived: `weight` is an `f64`.)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Opportunity {
-    /// Stable, human-readable id derived from the title (slug + short hash).
+    /// Stable, human-readable id derived from the title and outcome_ref (slug +
+    /// short hash). Computed once at record time and stored; never recomputed on
+    /// load, so ids written by older versions stay as recorded.
     pub id: String,
     /// The opportunity statement (non-empty, trimmed).
     pub title: String,
@@ -143,6 +145,7 @@ fn slug_id(title: &str, outcome_ref: &str) -> String {
 /// persisted [`Opportunity`].
 pub fn record(root: &Path, title: &str, outcome_ref: &str, weight: f64) -> Result<Opportunity> {
     let title = title.trim();
+    let outcome_ref = outcome_ref.trim();
     if title.is_empty() {
         anyhow::bail!("opportunity requires a non-empty --title (a named bet, not a blank)");
     }
@@ -152,7 +155,7 @@ pub fn record(root: &Path, title: &str, outcome_ref: &str, weight: f64) -> Resul
     let opportunity = Opportunity {
         id: slug_id(title, outcome_ref),
         title: title.to_string(),
-        outcome_ref: outcome_ref.trim().to_string(),
+        outcome_ref: outcome_ref.to_string(),
         weight,
         created_at: now_unix(),
     };

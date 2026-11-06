@@ -1126,27 +1126,26 @@ pub enum MergeOutcome {
 /// Staying inside condukt's own id space is the whole point.
 ///
 /// **Fail CLOSED on ambiguity.** The hold keeps blocking unless we have POSITIVE
-/// evidence its placer run is dead: only a CLEAN registry read that finds no
-/// fresh claim ([`crate::claim::RunLiveness::Dead`]) drops it. `Live` obviously
-/// keeps it, and `Undetermined` — a present-but-unreadable/corrupt registry, or
-/// an UNATTRIBUTED hold (empty `run_id`, no placer to test) — ALSO keeps it.
-/// Letting the merge proceed on "could not determine liveness" is precisely the
-/// silent fail-open this gate exists to prevent (the reverted disjoint-id bug's
-/// failure class — an empty read making every hold look dead — re-entering via
-/// registry absence instead of id mismatch).
+/// evidence its placer run is dead ([`crate::claim::RunLiveness::Dead`]): a
+/// CLEAN registry read that finds no fresh claim AND a run-state file for
+/// `run_id` that is genuinely absent or has every task terminal
+/// (verified/cancelled/discarded). `Live` obviously keeps it, and
+/// `Undetermined` — a present-but-unreadable/corrupt registry or run-state
+/// file, or an UNATTRIBUTED hold (empty `run_id`, no placer to test) — ALSO
+/// keeps it. Letting the merge proceed on "could not determine liveness" is
+/// precisely the silent fail-open this gate exists to prevent (the reverted
+/// disjoint-id bug's failure class — an empty read making every hold look dead
+/// — re-entering via registry absence instead of id mismatch).
 ///
-/// **Known residual (tracked, not a cannot-determine fail-open).** Liveness is
-/// keyed purely on the claim registry, so a run that placed a hold but holds NO
-/// claim under `run_id` — e.g. a task whose decomposition `touched_files` was
-/// empty (claims key off declared `touched_files`, while the hold is placed off
-/// the actual git diff), or a run that already released its claims at the
-/// `verified` transition while an open hold lingers — reads as `Dead` and its
-/// hold drops. This is a positive-evidence heuristic (a CLEAN read finding no
-/// live claim), the SAME basis the reaper uses — categorically different from the
-/// `Undetermined` fail-closed path above. The proper closure is a second
-/// positive signal (is `run_id` a currently-active, non-terminal run in
-/// `state::RunState`?); tracked as a backlog follow-up rather than coupling
-/// run-state into this gate under the current fix.
+/// **Zero claims is not death (backlog 4fa94cba).** A live run can hold NO
+/// claim (claims passed over by the cross-session claim gate, empty declared
+/// `touched_files`, or released at `verified` while another task stays open);
+/// its state file still has a non-terminal task, so
+/// [`crate::claim::run_liveness`] reads it `Live` and the hold keeps blocking.
+/// Deliberate consequence (fail-closed): a run that crashed with non-terminal
+/// tasks keeps its holds blocking until the hold is resolved or its tasks are
+/// made terminal (e.g. `state cancel`); only a run whose state is gone or fully
+/// terminal AND whose claims aged out lets a stale hold drop for a reused branch.
 fn hold_placed_by_live_run(cfg: &Config, repo: &Path, run_id: &str, now: i64) -> bool {
     match crate::claim::run_liveness(cfg, repo, run_id, now) {
         crate::claim::RunLiveness::Dead => false,
@@ -2473,9 +2472,9 @@ mod worktree_remove_tests {
     }
 
     /// DEAD holder by ABSENCE (e117d351): an OPEN `RuntimeOverlap` hold whose
-    /// holder run holds NO claim in condukt's registry (a fully
-    /// abandoned/crashed run whose claims were released or never re-recorded)
-    /// must NOT block a task that REUSES the same `condukt/<task.id>` branch
+    /// holder run holds NO claim in condukt's registry AND has no run-state file
+    /// (a fully gone run whose claims were released or never re-recorded) must
+    /// NOT block a task that REUSES the same `condukt/<task.id>` branch
     /// name. The stale hold is filtered by holder-run liveness, so `merge()`
     /// proceeds and returns `Merged`. RED without the liveness filter (the hold
     /// matches by branch name and the merge comes back `Held`); GREEN with it.

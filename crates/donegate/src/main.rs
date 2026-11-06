@@ -35,11 +35,14 @@ mod git;
 #[cfg(test)]
 #[path = "gitenv_red.rs"]
 mod git_env_red_tests;
+mod inflight;
 mod install;
 mod model;
 mod record;
+mod rootcheck;
 mod runner;
 mod state;
+mod subagent;
 
 use std::path::Path;
 
@@ -64,12 +67,15 @@ struct Cli {
 enum Command {
     /// Stop hook: run applicable checks; block the stop until they pass.
     Gate,
-    /// Merge the donegate Stop hook into ~/.claude/settings.json.
+    /// SubagentStop hook: judge the roots the stopping subagent wrote; block
+    /// its stop until their checks pass.
+    SubagentGate,
+    /// Merge the donegate Stop and SubagentStop hooks into ~/.claude/settings.json.
     Install {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Remove the donegate Stop hook from ~/.claude/settings.json.
+    /// Remove the donegate Stop and SubagentStop hooks from ~/.claude/settings.json.
     Uninstall {
         #[arg(long)]
         dry_run: bool,
@@ -102,6 +108,7 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::Gate => gate_command(),
+        Command::SubagentGate => subagent::subagent_gate_command(),
         Command::Install { dry_run } => exit_on_err(install::install(dry_run)),
         Command::Uninstall { dry_run } => exit_on_err(install::uninstall(dry_run)),
         Command::Init { force } => exit_on_err(init(force)),
@@ -213,6 +220,17 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             interactive,
         ),
     };
+    // A root ONLY still-running background subagents wrote is left to their
+    // SubagentStop (`inflight` module docs; backlog 95deaa32). Never silent: each
+    // is named on stderr now and in the stop's systemMessage / block reason.
+    // An undeterminable deferral keeps every root and adds a notice saying so.
+    let mut roots = roots;
+    let (kept, deferred_notices) =
+        inflight::split(std::mem::take(&mut roots.roots), &input.transcript_path);
+    roots.roots = kept;
+    for n in &deferred_notices {
+        eprintln!("donegate: {n}");
+    }
     // Only the single-root, no-writes case may take the early "nothing declared"
     // allow below; every other shape is judged by the per-root loop that follows
     // the operator escapes.
@@ -308,9 +326,10 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // "green, checks: []"). Extra roots are evaluated here; the hook cwd keeps
     // the existing flow below. Placed after the operator escapes (see
     // `tests/gate_escape_ordering.rs`).
-    // Non-blocking stop messages (give-ups, identical-finding waivers) collected
-    // from every root; printed once as a single `systemMessage` JSON at the exit.
-    let mut notices: Vec<String> = Vec::new();
+    // Non-blocking stop messages (deferred in-flight roots, give-ups,
+    // identical-finding waivers) collected from every root; printed once as a
+    // single `systemMessage` JSON at the exit, or appended to a block reason.
+    let mut notices: Vec<String> = deferred_notices;
     // The identical-finding waiver applies only to a Stop hook carrying a real
     // session id. Manual CLI mode reports failure by exit code and must keep
     // exiting 1 (verifier F3a); a payload without a session id shares the
@@ -369,86 +388,14 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             if i == 0 {
                 continue;
             }
-            let mut report = gate::evaluate(&rcfg, r);
-            if report.all_green() {
-                // Only failing optional checks can have a log here; keep them too.
-                gate::save_records(
-                    &mut report,
-                    &rcfg.state_dir,
-                    &session,
-                    0,
-                    rcfg.output_tail_lines,
-                );
-                state::forget(&rcfg.state_dir, &session, r);
-                continue;
-            }
-            // Identical-finding waiver, checked BEFORE the counter is bumped: a
-            // waived stop is not a block and does not count toward max_attempts.
-            let sig = red_signature(r, &report);
-            if waiver_allowed {
-                if let Some(sig) = &sig {
-                    if state::is_repeat(&rcfg.state_dir, &session, r, sig, rcfg.reset_after_secs) {
-                        let failing: Vec<String> =
-                            report.blocking().iter().map(|o| o.name.clone()).collect();
-                        log_event(&rcfg, &session, "repeat-waived", &failing, 0);
-                        notices.push(format!(
-                            "[root: {}] {}",
-                            r.display(),
-                            repeat_message(&failing)
-                        ));
-                        waived_any = true;
-                        continue;
-                    }
+            match rootcheck::judge(&rcfg, r, &session, waiver_allowed, &mut notices) {
+                rootcheck::Judged::Green | rootcheck::Judged::GaveUp => {}
+                rootcheck::Judged::Waived => waived_any = true,
+                rootcheck::Judged::Blocked { reason, key } => {
+                    blocks.push(reason);
+                    block_keys.push(key);
                 }
             }
-            let attempt = state::bump(&rcfg.state_dir, &session, rcfg.reset_after_secs);
-            gate::save_records(
-                &mut report,
-                &rcfg.state_dir,
-                &session,
-                attempt,
-                rcfg.output_tail_lines,
-            );
-            let failing: Vec<String> = report.blocking().iter().map(|o| o.name.clone()).collect();
-            if attempt > rcfg.max_attempts {
-                state::reset(&rcfg.state_dir, &session);
-                log_event(&rcfg, &session, "giveup", &failing, attempt);
-                eprintln!(
-                    "donegate: root {} still failing after {} attempts ({}); giving up on it. \
-                     The checks are still RED.",
-                    r.display(),
-                    rcfg.max_attempts,
-                    failing.join(", ")
-                );
-                notices.push(format!(
-                    "[root: {}] {}",
-                    r.display(),
-                    giveup_message(&failing, rcfg.max_attempts)
-                ));
-                continue;
-            }
-            log_event(&rcfg, &session, "blocked", &failing, attempt);
-            emit_violations(r, &session, &failing, Outcome::Blocked);
-            if waiver_allowed {
-                let chain = state::chain_for_block(&rcfg.state_dir, &session, attempt);
-                state::remember(
-                    &rcfg.state_dir,
-                    &session,
-                    r,
-                    sig.as_deref(),
-                    chain.as_deref(),
-                );
-            }
-            blocks.push(format!(
-                "[root: {}]\n{}",
-                r.display(),
-                gate::block_reason(&report, attempt, rcfg.max_attempts)
-            ));
-            block_keys.push(format!(
-                "[root: {}]\n{}",
-                r.display(),
-                gate::block_fingerprint(&report, attempt, rcfg.max_attempts)
-            ));
         }
         if !blocks.is_empty() {
             // Give-up / waiver notices of other roots ride along in the block
@@ -473,6 +420,8 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             );
             eprintln!("{msg}");
             log_unconfigured(&cfg, &session, &unconfigured);
+            // Only deferred-root notices can be pending here (no check ran).
+            emit_notices(&notices, interactive);
             harness_core::hook_latency::record(
                 "donegate",
                 &session,
@@ -481,14 +430,13 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             std::process::exit(0);
         }
         if roots.wrote_any && !any_ran && !all_opted_out {
-            stop_block_now(
-                &format!(
-                    "donegate: BLOCKED - the session wrote files but no check ran for any root \
-                     (an empty check set is not a pass). Roots judged: {names}. Declare checks \
-                     in a donegate.toml or use `donegate skip --reason ...` if this is intended."
-                ),
-                interactive,
+            let mut reason = format!(
+                "donegate: BLOCKED - the session wrote files but no check ran for any root \
+                 (an empty check set is not a pass). Roots judged: {names}. Declare checks \
+                 in a donegate.toml or use `donegate skip --reason ...` if this is intended."
             );
+            append_notices(&mut reason, &notices);
+            stop_block_now(&reason, interactive);
         }
     }
 

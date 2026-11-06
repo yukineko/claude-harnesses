@@ -42,7 +42,9 @@ fn default_weight() -> f64 {
 /// (`Eq` is intentionally not derived: `weight` is an `f64`.)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Opportunity {
-    /// Stable, human-readable id derived from the title (slug + short hash).
+    /// Stable, human-readable id derived from the title and outcome_ref (slug +
+    /// short hash). Computed once at record time and stored; never recomputed on
+    /// load, so ids written by older versions stay as recorded.
     pub id: String,
     /// The opportunity statement (non-empty, trimmed).
     pub title: String,
@@ -107,14 +109,17 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// A stable, human-readable id for an opportunity title: an ASCII slug plus a
-/// 6-hex hash suffix for uniqueness. A purely non-ASCII title (e.g. Japanese)
-/// slugs to empty, so it falls back to `opp-<hash>`. Deterministic per title
-/// (mirrors the slug-id convention used by curate/replaykit).
-fn slug_id(title: &str) -> String {
+/// A stable, human-readable id for an opportunity: an ASCII slug plus a
+/// 6-hex hash suffix for uniqueness. The hash includes both title and outcome_ref,
+/// so the same title under different outcomes gets distinct IDs. A purely non-ASCII
+/// title (e.g. Japanese) slugs to empty, so it falls back to `opp-<hash>`.
+/// Deterministic per (title, outcome_ref) pair (mirrors the slug-id convention used
+/// by curate/replaykit).
+fn slug_id(title: &str, outcome_ref: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     title.hash(&mut h);
+    outcome_ref.hash(&mut h);
     let suffix = format!("{:06x}", h.finish() & 0xff_ffff);
     let slug = title
         .trim()
@@ -140,6 +145,7 @@ fn slug_id(title: &str) -> String {
 /// persisted [`Opportunity`].
 pub fn record(root: &Path, title: &str, outcome_ref: &str, weight: f64) -> Result<Opportunity> {
     let title = title.trim();
+    let outcome_ref = outcome_ref.trim();
     if title.is_empty() {
         anyhow::bail!("opportunity requires a non-empty --title (a named bet, not a blank)");
     }
@@ -147,9 +153,9 @@ pub fn record(root: &Path, title: &str, outcome_ref: &str, weight: f64) -> Resul
     let _lock = crate::outcome::lock_store(&store_path(root))?;
     let mut opportunities = load(root)?;
     let opportunity = Opportunity {
-        id: slug_id(title),
+        id: slug_id(title, outcome_ref),
         title: title.to_string(),
-        outcome_ref: outcome_ref.trim().to_string(),
+        outcome_ref: outcome_ref.to_string(),
         weight,
         created_at: now_unix(),
     };
@@ -300,11 +306,14 @@ mod tests {
     #[test]
     fn slug_id_falls_back_for_non_ascii() {
         // a purely non-ASCII (Japanese) title slugs to empty => opp-<hash>.
-        let id = slug_id("機会の層");
+        let id = slug_id("機会の層", "test-outcome");
         assert!(id.starts_with("opp-"), "got {id}");
-        // deterministic per title.
-        assert_eq!(id, slug_id("機会の層"));
+        // deterministic per (title, outcome_ref) pair.
+        assert_eq!(id, slug_id("機会の層", "test-outcome"));
         // distinct titles get distinct ids (overwhelmingly likely).
-        assert_ne!(slug_id("alpha"), slug_id("beta"));
+        assert_ne!(
+            slug_id("alpha", "test-outcome"),
+            slug_id("beta", "test-outcome")
+        );
     }
 }

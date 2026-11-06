@@ -152,7 +152,6 @@ fn outcome_seq_is_unique_when_last_entry_has_lower_seq() {
 }
 
 #[test]
-#[ignore = "backlog: open defect (scout 2026-11-05) opportunity id derived from title only"]
 fn same_title_under_different_outcomes_gets_distinct_ids_or_is_refused() {
     let fx = fixture();
     let add = |outcome: &str| {

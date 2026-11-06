@@ -156,7 +156,33 @@ them first.",
     ))
 }
 
+/// Reason for the head-brace Ask: an unexpanded brace list among the words up
+/// to and including the git subcommand word.
+const HEAD_BRACE_REASON: &str = "blastguard cannot determine which git subcommand this runs: \
+bash brace expansion (a comma list or a `..` range) in the words up to the subcommand can build \
+a different subcommand and arguments (e.g. `git {stash,push} -u` runs `git stash push -u`, \
+which removes untracked files from the working tree)";
+
+/// Backlog debc6df3: the words from `git`'s first argument up to and including
+/// the subcommand word (global options and their values included; every word
+/// when there is no subcommand) are tested with [`has_brace_expansion`]. A
+/// brace list there can BUILD the subcommand (`git {stash,push} -u`,
+/// `git {,stash} push -u`), so the per-subcommand arms would classify a word
+/// git never sees. Such a line is never Allowed: an Allow from the analysis is
+/// raised to Ask; a Deny/Ask from it stands (the stricter verdict wins).
+/// Braces in LATER words (`git stash pop stash@{0}`) are not part of this
+/// test.
 pub(super) fn analyze_git(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    let head_end = git_subcommand_index(rest).map_or(rest.len(), |i| i + 1);
+    let head_brace = rest[..head_end].iter().any(|w| has_brace_expansion(w));
+    let verdict = analyze_git_words(rest, ctx);
+    if head_brace && matches!(verdict, Decision::Allow) {
+        return Decision::ask(HEAD_BRACE_REASON);
+    }
+    verdict
+}
+
+fn analyze_git_words(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     let idx = match git_subcommand_index(rest) {
         Some(i) => i,
         // No subcommand: still inspect the globals. A bare

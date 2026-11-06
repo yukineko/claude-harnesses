@@ -270,7 +270,7 @@ pub fn attribute_from_transcript(
 ///   test, so it OVER-attributes (`src/a.rs` also matches a mention of
 ///   `crates/x/src/a.rs`); over-attribution keeps more files in the gate, the
 ///   restrictive side. A statement made only of read-only commands
-///   (`git diff a.js`, `grep … a.js | head`, `tdd skip --reason "… a.js …"`)
+///   (`git diff a.js`, `grep … a.js | head`, `tdd skip --reason "… a.js …"`, `donegate skip --reason "… a.js …"`)
 ///   does not count: before this rule, reading a peer's dirty file — or
 ///   naming it in the very skip reason that says "not mine" — made the file
 ///   this session's and blocked every later stop (observed 2026-10-20,
@@ -718,7 +718,7 @@ fn read_only_stage(stage: &Stage) -> bool {
                 )
             ) && !rest.iter().any(|a| a.starts_with("--output"))
         }
-        "tdd" | "reviewgate" => rest.get(1) == Some(&"skip"),
+        "tdd" | "reviewgate" | "donegate" => rest.get(1) == Some(&"skip"),
         _ => false,
     }
 }

@@ -416,38 +416,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; 
 error: test failed, to rerun pass `-p compass --test backlog_scout_20261105`"""
 
 [[task]]
-id = "6140e776"
-title = "check-test-weakening blocks newly added #[ignore] backlog repro files (contradicts backlog filing protocol)"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "scout-2026-11-05",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-05 at main e97692da: the pre-commit gate check-test-weakening blocks a commit that ADDS A NEW test file with #[ignore = "backlog: ..."] RED repros. Verbatim: '[BLOCK] crates/compass/tests/backlog_scout_20261105.rs: ignore-added (#[ignore] attributes 0 -> 3)' / 'test-weakening: blocked (exit 1).' The file did not exist before, so no existing test was weakened. crates/backlog/README.ja.md requires committing such repros, so the gate and protocol contradict; every filing needs a test-weakening-justified: ack, which the auto-mode classifier denied as [CI Bypass] until a human approved. Readings: (A) defect: new file 0->N ignores is not a weakening; (B) intentional: gate makes every new ignore visible. How to tell apart: gate docstring + git log -p. Evidence favours (A): the script's own docstring says 'A file that did not exist at the base cannot have had existing coverage weakened', and the Python half deliberately exempts new skipped repros ('a new skipped test hides no coverage that existed'), while the Rust half counts #[ignore] per file (findings_for, KIND_IGNORE_ADDED). User ruling 2026-11-05 allowed the ack line meanwhile. Repro test committed in ed9c8aef; control (ignore on existing test still blocks) passes."""
-created_at = 1793867945
-updated_at = 1793867945
-weight = 0.0
-issue_number = 1550
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1550"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest scripts/test_check_test_weakening_new_file_ignore.py::NewFileIgnore::test_new_file_with_backlog_ignores_is_not_blocked"
-rev = "ed9c8aeff365434828396083a5e5a639c1c76c01"
-observed_at = 1793867945
-detail = '''
-exit 1: justified: <path>:<kind> - <reason>\n'
-
-scripts/test_check_test_weakening_new_file_ignore.py:104: AssertionError
-=========================== short test summary info ============================
-FAILED scripts/test_check_test_weakening_new_file_ignore.py::NewFileIgnore::test_new_file_with_backlog_ignores_is_not_blocked
-============================== 1 failed in 1.20s ==============================='''
-
-[[task]]
 id = "af5dcf5c"
 title = "blastguard: abbreviated (--al, --include-u) and brace-expanded ({-u,}) git stash sweep flags are allowed (fail-open)"
 project = "/Users/yuki/src/harness"

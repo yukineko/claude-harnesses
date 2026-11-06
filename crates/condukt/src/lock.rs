@@ -1542,13 +1542,14 @@ mod backlog_e9262d91 {
     /// same-holder throttle interval.
     ///
     /// Choreography, driven by the fake `kill` itself (no sleeps, no helper
-    /// thread): the lock starts held by a live foreign pid A. The FIRST probe
-    /// of A answers "alive" and, before returning, atomically renames a lock
-    /// naming a dead pid B into place. A correct waiter then probes B on the
-    /// next poll, reaps it, and acquires. A waiter that treats B as the same
-    /// holder cannot probe again until the throttle interval after A's probe
-    /// started, which is past the deadline below, so it must give up WITHOUT
-    /// ever probing B.
+    /// thread; see [`changed_holder_scenario`]): the lock starts held by a
+    /// live foreign pid A. The FIRST probe of A, on entry and before
+    /// `/bin/kill` answers, atomically renames a lock naming a dead pid B
+    /// into place; that probe then answers "alive" for A. A correct waiter
+    /// probes B on the next poll, reaps it, and acquires. A waiter that
+    /// treats B as the same holder cannot probe again until the throttle
+    /// interval after A's probe started, which is past the deadline below, so
+    /// it must give up WITHOUT ever probing B.
     ///
     /// The wait runs through `acquire_at_with_probe_interval` (the same loop
     /// production runs with `LIVENESS_PROBE_INTERVAL`) with an interval of an
@@ -1557,120 +1558,46 @@ mod backlog_e9262d91 {
     /// outran it, failing a correct waiter (backlog c77cdc98). With the
     /// interval far above the deadline the discrimination no longer depends
     /// on scheduling: a correct waiter acquires as soon as it gets to run two
-    /// probes, a same-holder waiter can never probe B inside the deadline. If
-    /// A's probe alone still took longer than the deadline, that is reported
-    /// as INCONCLUSIVE — a failure, never a pass.
+    /// probes, a same-holder waiter can never probe B inside the deadline.
+    ///
+    /// Two fixture outcomes are reported as INCONCLUSIVE — a failure, never a
+    /// pass — instead of blaming the product (backlog be502f51): the fake
+    /// `kill` never ran for A at all (so the holder never changed), or the
+    /// holder change itself only happened at or after the deadline.
     #[cfg(unix)]
     #[test]
     fn lock_wait_probes_a_changed_holder_pid_immediately() {
-        use std::os::unix::fs::PermissionsExt;
         let _serial = serial();
         const DEADLINE: Duration = Duration::from_secs(30);
-        const PROBE_INTERVAL: Duration = Duration::from_secs(3600);
-        assert!(
-            DEADLINE < PROBE_INTERVAL,
-            "fixture: the deadline must be below the same-holder throttle interval"
-        );
-
-        let tmp = tempfile::TempDir::new().unwrap();
-        let lock = tmp.path().join("held.lock");
-        let log = tmp.path().join("kill.log");
-        let flag = tmp.path().join("rewritten.flag");
-        let b_json = tmp.path().join("b.json");
-        let b_stage = tmp.path().join("b.stage");
-
-        let holder_a = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("fixture: spawn `sleep 30` as live holder A");
-        let guard = ChildGuard(holder_a);
-        let pid_a = guard.0.id();
-        let mut short = std::process::Command::new("true")
-            .spawn()
-            .expect("fixture: spawn a short-lived child for dead pid B");
-        let pid_b = short.id();
-        assert!(
-            short.wait().expect("fixture: reap B").success(),
-            "fixture: `true` must exit 0"
-        );
-
-        write_lock(&lock, pid_a);
-        write_lock(&b_json, pid_b);
-
-        let bin = tmp.path().join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        let fake = bin.join("kill");
-        std::fs::write(
-            &fake,
-            format!(
-                "#!/bin/sh\n/bin/kill \"$@\"\nrc=$?\n\
-                 if [ $rc -eq 0 ]; then echo \"alive $2\" >> '{log}'; \
-                 else echo \"dead $2\" >> '{log}'; fi\n\
-                 if [ \"$2\" = \"{pid_a}\" ] && [ ! -e '{flag}' ]; then \
-                 : > '{flag}'; cp '{b_json}' '{b_stage}' && mv '{b_stage}' '{lock}'; fi\n\
-                 exit $rc\n",
-                log = log.display(),
-                flag = flag.display(),
-                b_json = b_json.display(),
-                b_stage = b_stage.display(),
-                lock = lock.display(),
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        // Warm-up (first exec of a fresh script is slow on macOS); probes our
-        // own pid, so it neither matches A nor touches the lock. Reset the log.
-        let warm = std::process::Command::new(&fake)
-            .args(["-0", &std::process::id().to_string()])
-            .output()
-            .expect("fixture: warm-up exec of the fake `kill`");
-        assert!(warm.status.success(), "fixture: warm-up must exit 0");
-        std::fs::remove_file(&log).expect("fixture: reset the probe log after warm-up");
-        let mut parts = vec![bin];
-        if let Some(p) = std::env::var_os("PATH") {
-            parts.extend(std::env::split_paths(&p));
-        }
-        let kill_path = std::env::join_paths(parts).unwrap();
-
-        let wall_start = std::time::SystemTime::now();
-        let got = RunLock::acquire_at_with_probe_interval(
-            lock.clone(),
-            DEADLINE,
-            Some(&kill_path),
-            PROBE_INTERVAL,
-        );
-
-        let probes: Vec<String> = std::fs::read_to_string(&log)
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_string)
-            .collect();
-        let a_probe_done = std::fs::metadata(&flag)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(wall_start).ok());
-        if !got.held() {
-            if let Some(took) = a_probe_done {
+        let r = changed_holder_scenario(false, DEADLINE);
+        let (pid_a, pid_b, probes) = (r.pid_a, r.pid_b, &r.probes);
+        if !r.held {
+            assert!(
+                r.a_probe_started,
+                "INCONCLUSIVE (not a pass): the fake `kill` never ran for holder A (pid \
+                 {pid_a}), so the lock never changed to B and this run did not exercise a \
+                 CHANGED holder (probes: {probes:?})"
+            );
+            if let Some(took) = r.rewritten_after {
                 assert!(
                     took < DEADLINE,
-                    "INCONCLUSIVE (not a pass): A's first probe alone took {took:?} >= the \
-                     {DEADLINE:?} deadline, so the waiter could not reach B's probe in time \
-                     even if correct (probes: {probes:?})"
+                    "INCONCLUSIVE (not a pass): the holder change from A to B only happened \
+                     {took:?} into the wait (>= the {DEADLINE:?} deadline), so the waiter \
+                     could not reach B's probe in time even if correct (probes: {probes:?})"
                 );
             }
         }
         assert!(
-            got.held(),
+            r.held,
             "the holder changed from live pid {pid_a} to dead pid {pid_b} mid-wait, but the \
              lock was not acquired within {DEADLINE:?}: the changed holder was not probed \
              immediately (probes: {probes:?})"
         );
         assert_eq!(
             probes,
-            vec![format!("alive {pid_a}"), format!("dead {pid_b}")],
+            &vec![format!("alive {pid_a}"), format!("dead {pid_b}")],
             "expected exactly one probe of A (alive) then one of B (dead, reaped on first probe)"
         );
-        drop(guard);
     }
 
     /// Outcome of one run of the changed-holder scenario
@@ -1685,6 +1612,9 @@ mod backlog_e9262d91 {
         /// Whether the fake `kill` was ever STARTED for holder A (its entry
         /// marker exists), independent of whether that probe answered.
         a_probe_started: bool,
+        /// When the A-to-B rewrite happened, measured from the start of the
+        /// wait (the rewrite flag's mtime); `None` if it never happened.
+        rewritten_after: Option<Duration>,
     }
 
     /// The choreography of `lock_wait_probes_a_changed_holder_pid_immediately`
@@ -1707,10 +1637,15 @@ mod backlog_e9262d91 {
     /// waiter (correctly) does not steal a live holder, and the test blames
     /// the product with "the changed holder was not probed immediately".
     ///
-    /// The shim's structure: an entry block run once for A (records the
-    /// marker, then the injected fault), the real `/bin/kill`, the log line,
-    /// and the A-to-B rewrite gated on the flag — the last two in the same
-    /// order as the guarded test.
+    /// The fix (be502f51) decouples the holder change from A's probe
+    /// answering. The shim's structure: an entry block run once for A that
+    /// records the started marker, performs the A-to-B rewrite (flag, then
+    /// `cp` + atomic `mv`), and only THEN runs the injected fault; after it,
+    /// the real `/bin/kill` and the log line. So a killed/unanswered first
+    /// probe of A still leaves the lock naming B, and the waiter's next poll
+    /// sees a CHANGED pid. Where the shim never runs for A at all (no started
+    /// marker), the holder never changes and callers must report the run as
+    /// INCONCLUSIVE rather than as a product failure.
     #[cfg(unix)]
     fn changed_holder_scenario(kill_first_a_probe: bool, deadline: Duration) -> ChangedHolder {
         use std::os::unix::fs::PermissionsExt;
@@ -1760,13 +1695,12 @@ mod backlog_e9262d91 {
                 "#!/bin/sh\n\
                  if [ \"$2\" = \"{pid_a}\" ] && [ ! -e '{started}' ]; then\n\
                  : > '{started}'\n\
+                 : > '{flag}'; cp '{b_json}' '{b_stage}' && mv '{b_stage}' '{lock}'\n\
                  {fault}\
                  fi\n\
                  /bin/kill \"$@\"\nrc=$?\n\
                  if [ $rc -eq 0 ]; then echo \"alive $2\" >> '{log}'; \
                  else echo \"dead $2\" >> '{log}'; fi\n\
-                 if [ \"$2\" = \"{pid_a}\" ] && [ ! -e '{flag}' ]; then \
-                 : > '{flag}'; cp '{b_json}' '{b_stage}' && mv '{b_stage}' '{lock}'; fi\n\
                  exit $rc\n",
                 started = started.display(),
                 log = log.display(),
@@ -1792,6 +1726,7 @@ mod backlog_e9262d91 {
         }
         let kill_path = std::env::join_paths(parts).unwrap();
 
+        let wall_start = std::time::SystemTime::now();
         let got = RunLock::acquire_at_with_probe_interval(
             lock.clone(),
             deadline,
@@ -1805,6 +1740,10 @@ mod backlog_e9262d91 {
             .map(str::to_string)
             .collect();
         let a_probe_started = started.exists();
+        let rewritten_after = std::fs::metadata(&flag)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(wall_start).ok());
         drop(guard);
         ChangedHolder {
             pid_a,
@@ -1812,6 +1751,7 @@ mod backlog_e9262d91 {
             held: got.held(),
             probes,
             a_probe_started,
+            rewritten_after,
         }
     }
 
@@ -1825,7 +1765,6 @@ mod backlog_e9262d91 {
     /// hour-long same-holder throttle), finds it dead, reaps and acquires.
     #[cfg(unix)]
     #[test]
-    #[ignore = "backlog be502f51: changed-holder fixture rewrites A to B only after A's probe completes, so an unanswered first probe fails as `probes: []` (RED)"]
     fn lock_wait_changed_holder_fixture_is_conclusive_when_first_probe_is_unanswered() {
         let _serial = serial();
         const DEADLINE: Duration = Duration::from_secs(30);

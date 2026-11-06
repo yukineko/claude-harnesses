@@ -186,8 +186,43 @@ fn block_reason(out: &Output) -> String {
 
 #[test]
 fn cargo_missing_from_path_blocks_with_an_environment_reason_not_a_compile_claim() {
+    cargo_missing_from_path_body("/usr/bin");
+}
+
+/// Models a host whose "system bin dir" (the dir the test above assumes is
+/// /usr/bin) ALREADY holds a `cargo` (e.g. distro-packaged rust). The hook must
+/// still resolve the toolchain from its own hermetic PATH rather than from an
+/// ambient system dir, so the test's "no cargo on PATH" precondition has to be
+/// constructed, not assumed from the host's /usr/bin. /usr/bin is SIP-protected
+/// here, so the host is faked with a temp dir: symlinks to the tools the hook
+/// needs plus an executable fake `cargo`.
+#[test]
+fn cargo_missing_from_path_blocks_even_when_the_host_system_bin_dir_has_cargo() {
+    let sysbin = tempfile::tempdir().unwrap();
+    for tool in ["git", "sh"] {
+        for src in [
+            Path::new("/usr/bin").join(tool),
+            Path::new("/bin").join(tool),
+        ] {
+            if src.exists() {
+                std::os::unix::fs::symlink(&src, sysbin.path().join(tool)).unwrap();
+                break;
+            }
+        }
+    }
+    let fake_cargo = sysbin.path().join("cargo");
+    std::fs::write(&fake_cargo, "#!/bin/sh\nexit 0\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake_cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    cargo_missing_from_path_body(sysbin.path().to_str().unwrap());
+}
+
+fn cargo_missing_from_path_body(system_bin: &str) {
     // Precondition, asserted: this PATH has no `cargo` (but keeps git etc.).
-    let path = "/usr/bin:/bin";
+    let path = format!("{system_bin}:/bin");
+    let path = path.as_str();
     for d in path.split(':') {
         assert!(
             !Path::new(d).join("cargo").exists(),

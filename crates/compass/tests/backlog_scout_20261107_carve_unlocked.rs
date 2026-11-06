@@ -76,7 +76,6 @@ fn sh(fx: &Fx, go: &Path, script: &str, args: &[String]) -> std::process::Child 
 }
 
 #[test]
-#[ignore = "backlog pending-id: compass evaluate load-modify-saves carve state without carve::lock, losing concurrent apply answers (RED)"]
 fn concurrent_evaluate_and_apply_lose_no_answers() {
     let fx = fixture();
     let go = fx.proj.parent().unwrap().join("go");

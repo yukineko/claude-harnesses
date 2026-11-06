@@ -348,13 +348,14 @@ Audit B item 16 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補�
 Source memory: deletion-and-scratch (formerly scratch-artifacts-in-deletable-places).
 Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 3 of 8 cases have the wrong verdict: `git clone <repo> <home>/scratch-clone`, `mkdir -p <home>/scratch/a/b`, `cp -r <repo> <home>/scratch-copy` each 'want ask, got allow ()'; test result: FAILED. Controls (clone into /private/tmp and .harness-worktrees, mkdir -p in project and /private/tmp, cp -r of a file into /private/tmp) stay Allow.
 Readings: (a) any destination outside scratchpad/$TMPDIR/.harness-worktrees/project is Ask (pinned); (b) only real $HOME asset dirs are Ask. Fixture HOME lives under macOS /var/folders/.../T (TMPDIR is removed from the hook env, so only /tmp and /private/tmp are temp roots); a fix that hard-codes /var/folders/*/T as managed cannot go GREEN here - move the fixture, not the rule. Human to confirm `mkdir -p` into $HOME belongs in the Ask set (audit-only).
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
+User ruling 2026-11-07 (AskUserQuestion): `mkdir -p` is NOT in the Ask set — only git clone / cp -r outside managed places. Drop the mkdir -p case from the RED."""
 created_at = 1793998290
-updated_at = 1793998848
+updated_at = 1793999884
 weight = 0.0
 issue_number = 1570
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1570"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -754,13 +755,14 @@ Audit B item 9 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補え
 Source memory: thread-scope-reraises-panic.
 Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): no pre-commit scanner refuses a newly added thread::scope spawn without catch_unwind in crates/blastguard/src/store.rs. Scanners accepting the wrapped control: ['check-backlog-store.py', 'check-clippy-lints.py', ... 'check-version-bumped.py']; their exit codes on the bare diff: {... all 0}
 Test runs every `run X.py` scanner in .githooks/pre-commit against a fixture repo (independent of the new scanner's name); only scanners passing the wrapped control count, so the new scanner must be runnable in a minimal fixture repo. Ratchet guard (an existing bare spawn is not refused) passes today. Runtime ~30s.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
+User ruling 2026-11-07 (AskUserQuestion): accept the ~80s added to the pre-push python suites; do not shrink detection strength for speed."""
 created_at = 1793998463
-updated_at = 1793998961
+updated_at = 1793999885
 weight = 0.0
 issue_number = 1582
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1582"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -857,13 +859,14 @@ Audit B item 19 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補�
 Source memory: fail-open-review-checklist s7 (formerly mutation-remove-dont-disable); ruled 2026-11-07.
 Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): - ['parallelguard (crates/parallelguard/src/model.rs): +1 `if false`'] / + [] : mutants must delete the construct, not wrap it in `if false` (ruling 2026-11-07)
 Control: each scenario's anchor occurs exactly once in its target file. Untested reading: the stuckguard scenario replaces the threshold guard with `if true { return None; }` (always-taken early return, also 'neutralize in place'); the RED asserts only 'no if false' per the ruling - human to decide whether `if true {` is also out.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
+User ruling 2026-11-07 (AskUserQuestion): `if true { return ...; }` (always-taken early return) is ALSO banned as neutralize-in-place; the mutant must delete the guard. Extend the RED to assert no `if true {` either."""
 created_at = 1793998489
-updated_at = 1793998963
+updated_at = 1793999884
 weight = 0.0
 issue_number = 1585
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1585"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"
@@ -892,13 +895,14 @@ Audit B item 20 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補�
 Source memory: fail-open-review-checklist s7 (new item; user ruling 2026-11-07 絶対に処理されないコードはプログラムとコンパイラのゴミ).
 Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): no pre-commit scanner refuses a newly added `if false {` in crates/fixturecrate/src/lib.rs. Scanners accepting the live control: ['check-backlog-store.py', ... 'check-version-bumped.py']; their exit codes on the dead diff: {... all 0} (same for `while false {` and `if false && flag {`)
 Diff-scoped ratchet: existing occurrences counted, nothing new added (ratchet guard and live control pass today). Only `run` lines in .githooks/pre-commit are tried, so wiring is implied; the new scanner must run in a minimal fixture repo. Runtime ~50s.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
+User ruling 2026-11-07 (AskUserQuestion): accept the ~80s added to the pre-push python suites; do not shrink detection strength for speed."""
 created_at = 1793998491
-updated_at = 1793998976
+updated_at = 1793999885
 weight = 0.0
 issue_number = 1586
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1586"
-rev = 1
+rev = 2
 
 [task.repro]
 outcome = "reproduced"

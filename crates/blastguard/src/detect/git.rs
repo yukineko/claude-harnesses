@@ -445,10 +445,17 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
 files from the working tree, like git clean";
             match stash_argv_words(&args.join(" ")) {
                 Determination::Known(words) => {
+                    // The brace test covers EVERY word, message values
+                    // included: bash splits a brace list in any position
+                    // (`-m {a,-u}` becomes `-m a -u`), so a message value is
+                    // no exemption. Only the sweep-flag test skips the
+                    // separate-word -m/--message value (a literal `-u`
+                    // there is the message git stores, not a flag).
+                    let any_brace = words.iter().any(|w| has_brace_expansion(w));
                     let outside = stash_words_outside_message(words);
                     if outside.iter().any(|w| is_stash_sweep_flag(w)) {
                         Decision::deny(SWEEP_REASON)
-                    } else if outside.iter().any(|w| has_brace_expansion(w)) {
+                    } else if any_brace {
                         Decision::ask(
                             "blastguard cannot determine the argument words of this git stash \
 (bash brace expansion such as a comma list can produce -u/-a, which removes untracked files \
@@ -519,6 +526,13 @@ fn is_stash_sweep_flag(w: &str) -> bool {
 /// (unbalanced: not provably literal). Otherwise false, so `stash@` followed
 /// by `{0}` stays literal. This may also flag words bash would not expand
 /// (a quoted `{`, or `{x},y`); that over-flagging is the intended side.
+///
+/// The caller applies it to EVERY stash argv word, including the value of
+/// `-m` / `--message` and the glued `--message=` / `-mVALUE` forms: bash
+/// splits a brace list wherever it stands (`-m {a,-u}` runs as `-m a -u`),
+/// and quote removal has already erased whether the brace was quoted. So a
+/// quoted message such as `-m "fix {a,b}"` is deliberately put to a human
+/// (Ask) too.
 fn has_brace_expansion(w: &str) -> bool {
     let Some(first_open) = w.find('{') else {
         return false;

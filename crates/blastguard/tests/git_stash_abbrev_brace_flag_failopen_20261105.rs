@@ -135,6 +135,21 @@ fn brace_with_quoted_close_brace_is_not_allowed() {
     assert_not_allowed("brace-quot", "git stash push {-mx'}',-u}");
 }
 
+/// Verifier finding on c9f58ff1 (2026-11-07): the brace check skipped the
+/// `-m` / `--message` value word, but bash splits a comma brace list there
+/// into several argv words: `-m {a,-u}` expands to `-m a -u` (a sweep).
+#[test]
+fn brace_in_message_value_slot_is_not_allowed() {
+    assert_not_allowed("brace-msg", "git stash push -m {a,-u}");
+}
+
+/// Same hole through the long option with an empty first alternative:
+/// `--message {,-u}` expands to `--message '' -u`.
+#[test]
+fn brace_in_long_message_value_slot_is_not_allowed() {
+    assert_not_allowed("brace-lmsg", "git stash push --message {,-u}");
+}
+
 /// Control: a stash ref `stash@{0}` is not a brace expansion (no comma, no
 /// `..`), so popping it must stay allowed.
 #[test]

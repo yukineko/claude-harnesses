@@ -16,9 +16,7 @@
 //! `is_stash_sweep_flag` matches exact spellings only and the argv splitter
 //! does no brace expansion, so all three are allowed.
 //!
-//! The RED cases are `#[ignore]`d so main stays green; run them with
-//! `cargo test -p blastguard --test git_stash_abbrev_brace_flag_failopen_20261105 -- --include-ignored`.
-//! Remove the ignores once the scanner judges these readings.
+//! The RED cases were `#[ignore]`d until the scanner judged these readings; the ignores are removed.
 
 #[path = "support/bounded.rs"]
 mod bounded;
@@ -91,19 +89,16 @@ fn assert_not_allowed(tag: &str, command: &str) {
 }
 
 #[test]
-#[ignore = "RED repro: abbreviated stash --all allowed (fail-open); remove when fixed"]
 fn abbreviated_all_is_not_allowed() {
     assert_not_allowed("abbr-al", "git stash push --al");
 }
 
 #[test]
-#[ignore = "RED repro: abbreviated stash --include-untracked allowed (fail-open); remove when fixed"]
 fn abbreviated_include_untracked_is_not_allowed() {
     assert_not_allowed("abbr-incu", "git stash push --include-u");
 }
 
 #[test]
-#[ignore = "RED repro: brace-expanded stash -u allowed (fail-open); remove when fixed"]
 fn brace_expanded_dash_u_is_not_allowed() {
     assert_not_allowed("brace-u", "git stash push {-u,}");
 }

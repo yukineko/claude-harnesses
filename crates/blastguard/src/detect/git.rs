@@ -445,11 +445,15 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
 files from the working tree, like git clean";
             match stash_argv_words(&args.join(" ")) {
                 Determination::Known(words) => {
-                    if stash_words_outside_message(words)
-                        .iter()
-                        .any(|w| is_stash_sweep_flag(w))
-                    {
+                    let outside = stash_words_outside_message(words);
+                    if outside.iter().any(|w| is_stash_sweep_flag(w)) {
                         Decision::deny(SWEEP_REASON)
+                    } else if outside.iter().any(|w| has_brace_expansion(w)) {
+                        Decision::ask(
+                            "blastguard cannot determine the argument words of this git stash \
+(bash brace expansion such as a comma list can produce -u/-a, which removes untracked files \
+from the working tree)",
+                        )
                     } else {
                         Decision::Allow
                     }
@@ -486,12 +490,42 @@ files from the working tree, like git clean";
 }
 
 /// True for a stash argv word that sweeps untracked files out of the working
-/// tree: `--all`, `--include-untracked`, or a short-flag bundle holding `a`
-/// or `u`. Exact spellings only (abbreviated long options are not matched).
+/// tree: `--all`, `--include-untracked`, any non-empty prefix of either that
+/// git's option parser accepts as an abbreviation (`--al`, `--include-u`,
+/// with or without an `=value` tail), or a short-flag bundle holding `a` or
+/// `u`. No other `git stash push` long option (patch, staged, keep-index,
+/// no-keep-index, quiet, message, pathspec-from-file, pathspec-file-nul)
+/// starts with `a` or `i`, so every such prefix is unambiguous; and were it
+/// ambiguous, treating it as a sweep is the restrictive side anyway.
 fn is_stash_sweep_flag(w: &str) -> bool {
-    w == "--all"
-        || w == "--include-untracked"
-        || (is_short_flag(w) && (w.contains('a') || w.contains('u')))
+    if let Some(rest) = w.strip_prefix("--") {
+        let name = rest.split('=').next().unwrap_or("");
+        return !name.is_empty()
+            && ("all".starts_with(name) || "include-untracked".starts_with(name));
+    }
+    is_short_flag(w) && (w.contains('a') || w.contains('u'))
+}
+
+/// True when the word holds a bash brace expansion (comma list or `..`
+/// sequence), which can turn into a sweep flag at runtime. A plain
+/// `stash@` followed by `{0}` is not one.
+fn has_brace_expansion(w: &str) -> bool {
+    let mut rest = w;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        match after.find('}') {
+            Some(close) => {
+                let inner = &after[..close];
+                if inner.contains(',') || inner.contains("..") {
+                    return true;
+                }
+                rest = &after[close + 1..];
+            }
+            // Unbalanced brace: not provably literal.
+            None => return true,
+        }
+    }
+    false
 }
 
 /// The stash argv words minus the VALUE of a separate-word `-m` / `--message`

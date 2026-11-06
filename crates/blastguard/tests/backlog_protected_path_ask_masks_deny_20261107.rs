@@ -57,7 +57,6 @@ fn control_unrecoverable_write_alone_is_denied() {
 }
 
 #[test]
-#[ignore = "backlog 7483e85b: protected-path literal Ask masks a later unrecoverable-write Deny (RED)"]
 fn protected_path_literal_does_not_mask_a_later_unrecoverable_write() {
     let cmd = "python3 -c \"x='.githooks'; open('/etc/hosts','w').write('')\"";
     assert_eq!(

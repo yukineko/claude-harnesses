@@ -6,8 +6,11 @@
 //! as pytest args: that makes pytest report "file not found" and the criteria
 //! fail although the tests are green (false negative).
 //!
-//! Drives the binary BUILT FROM THIS TREE. No skip path: if python3 / pytest /
-//! git is unusable the test FAILS (cannot determine is not pass).
+//! Drives the binary BUILT FROM THIS TREE. Hermetic: the host's pytest is never
+//! used. The binary runs under a per-case shim dir (fake `pytest` / `python3`)
+//! prepended to a system-only PATH, so the cases pass on hosts without pytest.
+//! No skip path: if the shim or git is unusable the test FAILS (cannot
+//! determine is not pass).
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -15,6 +18,10 @@ use std::process::{Command, Output};
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_condukt")
 }
+
+/// PATH modelling a host WITHOUT pytest: only the system directories, never the
+/// inherited PATH (which may carry a venv python3 that has pytest installed).
+const PYTESTLESS_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 fn scrub(cmd: &mut Command) -> &mut Command {
     for (k, _) in std::env::vars_os() {
@@ -38,10 +45,55 @@ fn git(repo: &Path, args: &[&str]) {
     );
 }
 
-fn condukt(repo: &Path, home: &Path, args: &[&str]) -> Output {
+/// POSIX-sh pytest stand-in (hermetic: the host may have no pytest). Mirrors
+/// the behaviour the cases depend on: an arg that is not an existing file is a
+/// usage error (exit 4, so prose leaking into argv fails), a test file whose
+/// body asserts False fails (exit 1), otherwise exit 0.
+const PYTEST_BODY: &str = r#"
+case "$1" in --version) echo "pytest shim 0.0"; exit 0;; esac
+rc=0
+for a in "$@"; do
+  case "$a" in
+    -*) continue;;
+  esac
+  if [ ! -f "$a" ]; then
+    echo "ERROR: file or directory not found: $a" >&2
+    exit 4
+  fi
+  if grep -q 'assert False' "$a"; then
+    echo "FAILED $a" >&2
+    rc=1
+  fi
+done
+exit $rc
+"#;
+
+/// Create the shim dir (`pytest` + a `python3` that serves `-m pytest` and
+/// passes everything else to the system python3 by absolute path).
+fn make_shim(dir: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir).unwrap();
+    let write = |name: &str, body: String| {
+        let f = dir.join(name);
+        std::fs::write(&f, body).unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    write("pytest", format!("#!/bin/sh\n{PYTEST_BODY}"));
+    write(
+        "python3",
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"-m\" ] && [ \"$2\" = \"pytest\" ]; then\n  shift 2\n  exec \"{}/pytest\" \"$@\"\nfi\nexec /usr/bin/python3 \"$@\"\n",
+            dir.display()
+        ),
+    );
+    format!("{}:{PYTESTLESS_PATH}", dir.display())
+}
+
+fn condukt(repo: &Path, home: &Path, path: &str, args: &[&str]) -> Output {
     scrub(&mut Command::new(bin()))
         .current_dir(repo)
         .env("HOME", home)
+        .env("PATH", path)
         .env("CONDUKT_AUTONOMOUS", "0")
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -56,18 +108,24 @@ struct Observed {
 }
 
 fn run_case(tag: &str, criteria: &str, b_fails: bool) -> Observed {
-    let py = Command::new("python3")
-        .args(["-m", "pytest", "--version"])
-        .output()
-        .expect("python3 must be runnable (cannot determine otherwise)");
-    assert!(
-        py.status.success(),
-        "python3 -m pytest unusable; cannot determine: {}",
-        String::from_utf8_lossy(&py.stderr)
-    );
-
     let tmp = std::env::temp_dir().join(format!("condukt-cc-ja-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
+    let path = make_shim(&tmp.join("shim"));
+    for probe in [
+        vec!["python3", "-m", "pytest", "--version"],
+        vec!["pytest", "--version"],
+    ] {
+        let py = Command::new(probe[0])
+            .env("PATH", &path)
+            .args(&probe[1..])
+            .output()
+            .expect("shim runner must be runnable (cannot determine otherwise)");
+        assert!(
+            py.status.success() && String::from_utf8_lossy(&py.stdout).contains("shim"),
+            "pytest shim unusable via {probe:?}; cannot determine: {}",
+            String::from_utf8_lossy(&py.stderr)
+        );
+    }
     let home = tmp.join("home");
     let repo = tmp.join("repo");
     std::fs::create_dir_all(home.join(".condukt/state")).unwrap();
@@ -106,6 +164,7 @@ fn run_case(tag: &str, criteria: &str, b_fails: bool) -> Observed {
     let init = condukt(
         &repo,
         &home,
+        &path,
         &["state", "init", "--file", decomp.to_str().unwrap()],
     );
     let init_out = format!(
@@ -123,6 +182,7 @@ fn run_case(tag: &str, criteria: &str, b_fails: bool) -> Observed {
     let cc = condukt(
         &repo,
         &home,
+        &path,
         &["state", "check-criteria", "--run", &rid, "--task", "t1"],
     );
     let stdout = String::from_utf8_lossy(&cc.stdout).into_owned();

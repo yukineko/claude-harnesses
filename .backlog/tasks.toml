@@ -132,36 +132,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 951 filtered out
 error: test failed, to rerun pass `-p condukt --bin condukt`"""
 
 [[task]]
-id = "9f90b96f"
-title = "blastguard: quoted heredoc body trailer line ending in '>' before the delimiter is read as redirect '> MSG' (git commit -F- <<'MSG')"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "scout-2026-11-05",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = '''Observed 2026-11-05: a worker's heredoc commit (git commit -F- <<'MSG' ... MSG) was denied; reason read the quoted delimiter as a relative redirect '> MSG' after an earlier cd. RECONSTRUCTED trigger (original not preserved), found by probing target/debug/blastguard at main e97692da: 'cd /tmp/wt; git commit -F- <<'MSG'\nfix(x): y\n\nCo-Authored-By: A <a@b>\nMSG' -> ask "'> MSG' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve" (the trailing '>' of the Co-Authored-By email followed by the delimiter line). Ask is turned into deny inside subagents, hence the observed deny. Without the trailer '>' the same command is allowed. Readings: the quoted-delimiter body is data (shell does no parsing), so Allow is correct; the only defensible alternative is Ask, and Ask is not harmless for workers (becomes deny). Distinguish: any quoted-heredoc body must give the same verdict as the same command with an innocuous body. Test asserts allow. Existing sibling tests (heredoc_quoted_body_redirect_false_positive) did not cover the unresolved-cd + body-ending-in-'>' shape.'''
-created_at = 1793867385
-updated_at = 1793867385
-weight = 0.0
-issue_number = 1541
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1541"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_heredoc_data_body_fp_20261105 -- --ignored a_git_commit_heredoc"
-rev = "6d883979823e67f82dffb1209be106b46d50a539"
-observed_at = 1793867385
-detail = """
-exit 101: g blastguard v0.2.267 (/home/hiroyuki_nakayama/src/.harness-worktrees/bk-gates/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.73s
-     Running tests/backlog_heredoc_data_body_fp_20261105.rs (target/debug/deps/backlog_heredoc_data_body_fp_20261105-fa45ef3eec54fb52)
-error: test failed, to rerun pass `-p blastguard --test backlog_heredoc_data_body_fp_20261105`"""
-
-[[task]]
 id = "27795e6e"
 title = "blastguard: python stdin heredoc with 'os.unlink('/'os.remove' only inside a string literal is denied as deletion"
 project = "/home/hiroyuki_nakayama/src/harness"
@@ -255,37 +225,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 132 filtered out
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
      Running unittests src/main.rs (target/debug/deps/fugu_router-dd0961e017c3ed7d)
 error: test failed, to rerun pass `-p fugu-router --bin fugu-router`"""
-
-[[task]]
-id = "5651745b"
-title = "blastguard: quoted heredoc body containing '> {x}' after an unresolvable cd is read as a RELATIVE redirect (cat <<'EOF')"
-project = "/home/hiroyuki_nakayama/src/harness"
-project_unresolved = false
-tags = [
-    "scout-2026-11-05",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = '''Observed 2026-11-05 (deny reason verbatim): "'> {' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve — it cannot tell whether this lands in a system directory or on a protected gate/config path, and refuses to guess". RECONSTRUCTED probe at main e97692da: 'cd "$WT" && cat <<'EOF'\nthe value > {bar} holds\nEOF' -> ask with that reason (deny in subagents). Quoted-delimiter heredoc body is data; cat writes only to stdout. Readings: Allow is right; Ask is the only defensible alternative but becomes deny for workers. Python-stdin variants (print(f"a > {x}")) return Ask with a different program-aware reason, acceptable, not filed. Control c_control_real_relative_redirect_after_unresolved_cd_still_blocked pins a real 'echo hi > {bar}' stays non-allow.'''
-created_at = 1793867501
-updated_at = 1793867501
-weight = 0.0
-issue_number = 1545
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1545"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_heredoc_data_body_fp_20261105 -- --ignored c_cat_quoted"
-rev = "6d883979823e67f82dffb1209be106b46d50a539"
-observed_at = 1793867501
-detail = """
-exit 101: est result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.02s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running tests/backlog_heredoc_data_body_fp_20261105.rs (target/debug/deps/backlog_heredoc_data_body_fp_20261105-fa45ef3eec54fb52)
-error: test failed, to rerun pass `-p blastguard --test backlog_heredoc_data_body_fp_20261105`"""
 
 [[task]]
 id = "8cd825f3"

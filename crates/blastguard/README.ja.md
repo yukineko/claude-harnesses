@@ -277,7 +277,8 @@ directory tree` で拒否されたこと。
   置き場の*厳密な*内側にあるときだけ `allow`。
 - **変わらないもの**: 保護パスの優先（`<置き場>/x/.git/hooks` などは従来どおり deny）
   ／置き場それ自身とその上（`rm -rf ~/.condukt/worktrees` は deny）／内外混在
-  （従来の判定へ落ちる）／glob（`~/.condukt/worktrees/*`）／`..` 成分を含む
+  （従来の判定へ落ちる）／glob（`~/.condukt/worktrees/*`。linked worktree チェックアウトの
+  厳密な内側を親とする wildcard は 0.2.287 から別規則で `allow`、下記）／`..` 成分を含む
   オペランドすべて（外へ出るかどうかに関わらず）・symlink で外を指すもの／解決できないパス（`Undetermined` は allow にならない）／
   ライブラリ利用（`SafeRoots::none()` には置き場が無い）／非再帰 `rm`・`rm -d`。
 - **既知の未修正事項**: 安全ルート（プロジェクト・一時ディレクトリ）に対する `ask`
@@ -286,6 +287,39 @@ directory tree` で拒否されたこと。
   プロジェクトを名指しするが、実際に消えるのは `<lnk の指す先の親>/x`。`cd lnk/..` による
   cwd 追跡も、`<project>/lnk/..` と綴られた payload の cwd も同様にずれる（payload の
   cwd の規則が止めるのは worktree の `allow` だけで、この `ask` は止めない）。`allow` にはならないが、人間に見せる質問が誤っている。
+
+### linked worktree チェックアウト内の作業ツリー破棄・wildcard `rm` は `allow` — 0.2.287（ユーザー裁定 2026-11-07）
+
+削除方針の裁定（「消してはいけないのはシステム構成と取り返しのつかない資産だけ。管理された
+使い捨ての場所にある作業成果物は消してよい」）により、**管理された使い捨ての場所**（worktree
+置き場の直下にある linked worktree チェックアウト、および `/tmp`・`/private/tmp`）の中の次の操作は
+確認なしで `allow` になる。
+
+- **git の作業ツリー破棄**（`git restore`、`git checkout --force` / `-- .` / `.` / `-- <path>`、
+  `git reset --hard`、`git clean -f[dx]`、`git switch --force` / `--discard-changes`、
+  `git stash -u` / `-a`）: git が repo を探す起点のディレクトリ（`-C <dir>`、無ければ
+  そのセグメントの解決済み cwd — 行頭の `cd D && ` を含む）が**それ自体** linked worktree
+  チェックアウトであるとき。チェックアウトかどうかはパス文字列ではなく**ディスクの観測**で決める
+  （`SafeRoots::is_linked_worktree_checkout`）: worktree 置き場の直下 1 階層の実ディレクトリ
+  （symlink でない）で、`.git` が `gitdir:` で始まる通常ファイル、置き場より下に symlink が無い。
+  `--work-tree` は同じチェックアウトを指すときだけ可。
+  - 行全体の条件（`git_worktree_eligible`）: 1 つの素の `git` コマンド（または
+    `literal_cd_and_rest` が受理する `cd D && git …`）。区切り文字・クォート・`$`・glob・
+    リダイレクト等なし、先頭語がちょうど `git`、どの語にも `..` 成分なし。`-C`（1 回まで）と
+    `--work-tree` 以外のグローバルオプション（`--git-dir`、`-c`、`--config-env` …）があれば対象外。
+  - **据え置き（従来の判定のまま）**: primary の作業ツリー（`.git` ディレクトリ）、チェックアウトの
+    サブディレクトリ、置き場そのもの、symlink 経由の綴り、展開できない `-C "$WT"`、`..` を含む綴り、
+    複合コマンド、チェックアウトの probe 失敗。`git stash drop` / `clear` は**対象外**
+    （`refs/stash` は全 worktree で共有され、linked worktree から primary の stash が見えることを
+    実測した — 消すと管理外の作業が消える）。オブジェクトストア破壊（`gc --prune` 等）と
+    保護パスの判定も変わらない。
+  - 併せて `git clean` の閉じ込め判定は `-C` / `--work-tree` が示すディレクトリを基準にする
+    （以前はセッションの cwd で判定していた）。綴りが解決できない場合は従来の基準のまま。
+- **wildcard を含む再帰 `rm`**（`rm -rf <wt>/subdir/*`）: wildcard の親ディレクトリがチェックアウトの
+  **厳密な内側**（`classify_worktree_checkout` が `Inside`）なら、`/tmp` wildcard と同じ行条件
+  （`tmp_glob_rm_eligible`）で `allow`。親そのものが保護パス（`<wt>/.githooks/pre-*`）なら据え置き。
+  展開先が保護名に当たりうる場合（裸の `*` は常に当たりうる）は `Ctx::in_worktree_checkout` の
+  リフト（絶対パス・1 つの素のコマンド）が要る。チェックアウトそのもの（`<wt>/*`）は対象外。
 
 ## 再帰 `rm` は「何が消えるか」で判定する — 0.2.95（ユーザー裁定、backlog 3aa215e1）
 

@@ -93,7 +93,7 @@ use sinks::{
     here_string_spans, split_statements_into_pipe_stages, upload_flag_operand,
 };
 
-use git::{analyze_git, git_subcommand_index};
+use git::{analyze_git, git_subcommand_index, git_worktree_eligible};
 
 use find_xargs::{analyze_find, analyze_xargs, xargs_command_start, xargs_reads_arg_file};
 
@@ -284,6 +284,14 @@ struct Ctx<'a> {
     /// [`Ctx::in_worktree_checkout`] and [`checkout_exempt_eligible`].
     /// Computed once in [`Ctx::new`], carried unchanged into derived contexts.
     checkout_exempt_eligible: bool,
+    /// `Some(words after git)` ONLY when the TOP-LEVEL command line (or the
+    /// `REST` of a [`literal_cd_and_rest`] line) is ONE plain `git` command
+    /// ([`git_worktree_eligible`]): the precondition of the git
+    /// working-tree-discard `Allow` inside a linked worktree checkout (user
+    /// ruling 2026-11-07). The git arm compares it with the words it is
+    /// judging, so a NESTED git invocation (an alias body, `bisect run git …`)
+    /// never inherits it. Computed once in [`Ctx::new`], carried unchanged.
+    git_eligible_rest: Option<String>,
     /// `Some` ONLY while [`interpreter_code_verdict`] runs its shell pass over
     /// interpreter PROGRAM TEXT (user ruling R2, 2026-10-14). A truncating
     /// redirect whose target cannot be determined (it carries a shell
@@ -345,47 +353,9 @@ impl<'a> Ctx<'a> {
             worktree_rm_eligible: eligible(worktree_rm_eligible),
             deletion_rm_eligible: DeletionEligibility::of(eligible(deletion_rm_eligible), eligible),
             checkout_exempt_eligible: eligible(checkout_exempt_eligible),
+            git_eligible_rest: git_worktree_eligible(command)
+                .or_else(|| tied_rest.and_then(git_worktree_eligible)),
             program_text_redirects: None,
-        }
-    }
-
-    /// True ONLY when `path` is a protected-NAMED path that is the checkout's
-    /// own file: spelled ABSOLUTE, no glob/expansion, on a command line that is
-    /// a single plain command ([`checkout_exempt_eligible`]), and placed by
-    /// [`SafeRoots::classify_worktree_checkout`] as
-    /// [`Placement::Inside`] a linked worktree checkout under a worktree
-    /// storage root (user ruling 2026-10-03:
-    /// 「worktreeの編集や削除を拒むのはむしろ不正なのでなおしてほしい」).
-    ///
-    /// Every other answer — relative spelling, an ineligible command line,
-    /// `IsRoot`, `Outside`, and every `Undetermined` — is `false`, i.e. the
-    /// protected-path rule applies exactly as before. There is no default that
-    /// answers `true`.
-    ///
-    /// Relative operands are refused because the base they are judged against
-    /// is this analysis' model of the cwd, and a cwd change it does not model
-    /// (`env -C`, `git -C`, a `cd` that fails) would place a main-tree file
-    /// inside a checkout. An absolute operand's placement depends on no base.
-    /// (After a `cd D &&` that [`literal_cd_and_rest`] accepts, a relative
-    /// redirect target, and a relative operand of the verbs the cwd walk
-    /// rewrites ([`verb_targets`]), reach here already re-expressed as the
-    /// absolute `D/<operand>`; any other relative operand is still relative
-    /// and still refused by the check below.)
-    /// The placement (symlinks included) is observed at JUDGE time; that is
-    /// why the whole line must be one plain command — see
-    /// [`checkout_exempt_eligible`].
-    fn in_worktree_checkout(&self, path: &str) -> bool {
-        if !self.checkout_exempt_eligible
-            || !path.starts_with('/')
-            || has_glob_meta(path)
-            || has_unresolvable_expansion(path)
-        {
-            return false;
-        }
-        match self.scope.classify_worktree_checkout(path, None) {
-            Determination::Known(Placement::Inside { .. }) => true,
-            Determination::Known(Placement::IsRoot { .. } | Placement::Outside { .. })
-            | Determination::Undetermined(_) => false,
         }
     }
 
@@ -404,6 +374,7 @@ impl<'a> Ctx<'a> {
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
+            git_eligible_rest: self.git_eligible_rest.clone(),
             program_text_redirects: self.program_text_redirects,
         }
     }
@@ -420,6 +391,7 @@ impl<'a> Ctx<'a> {
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
+            git_eligible_rest: self.git_eligible_rest.clone(),
             program_text_redirects: self.program_text_redirects,
         }
     }

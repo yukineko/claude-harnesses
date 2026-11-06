@@ -6,8 +6,11 @@
 //! as pytest args: that makes pytest report "file not found" and the criteria
 //! fail although the tests are green (false negative).
 //!
-//! Drives the binary BUILT FROM THIS TREE. No skip path: if python3 / pytest /
-//! git is unusable the test FAILS (cannot determine is not pass).
+//! Drives the binary BUILT FROM THIS TREE. Hermetic: the host's pytest is never
+//! used. The binary runs under a per-case shim dir (fake `pytest` / `python3`)
+//! prepended to a system-only PATH, so the cases pass on hosts without pytest.
+//! No skip path: if the shim or git is unusable the test FAILS (cannot
+//! determine is not pass).
 
 use std::path::Path;
 use std::process::{Command, Output};

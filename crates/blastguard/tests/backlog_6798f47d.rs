@@ -97,14 +97,17 @@ fn real_rmtree_call_after_a_comment_is_still_denied() {
     );
 }
 
-/// A mention only inside a quoted string is still refused, but the reason does
-/// not claim the program runs it.
+/// A mention only inside a quoted string is still refused with Deny or Ask (never
+/// Allow), but the reason does not claim the program runs it. Ask is also a refusal
+/// (model.rs:9).
 #[test]
 fn rmtree_only_in_a_string_is_refused_without_claiming_a_call() {
     let cmd = "python3 - <<'EOF'\nprint('see shutil.rmtree docs')\nEOF\n";
     let out = verdict(cmd);
     assert!(
-        out.contains("\"deny\"") && !out.contains(CLAIM) && out.contains("quoted string"),
+        (out.contains("\"deny\"") || out.contains("\"ask\""))
+            && !out.contains(CLAIM)
+            && out.contains("quoted string"),
         "a string-only mention must stay refused without asserting a call; got {out:?}"
     );
 }

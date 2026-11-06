@@ -61,6 +61,39 @@ and reads exit codes — so it can never hit a rate limit.
    Raw `--- stdout ---` / `--- stderr ---` sections and progress lines are never
    shown.
 
+### Roots of still-running background subagents (SubagentStop)
+
+A root that **only** still-running background subagents wrote is not judged
+at the parent's Stop: the subagent is still editing it, so judging it would
+race those edits. donegate names each such root (stderr, and the stop's
+`systemMessage` or the block reason): `[root: …] NOT judged at this stop: only
+background subagent(s) <ids> wrote it …`. A subagent counts as still running
+when its `agent-<id>.meta.json` names a `toolUseId`, a transcript (the parent's
+or a sidechain's, so a nested launcher counts too) holds the matching
+`toolUseResult {isAsync: true, status: "async_launched", agentId}`, and no
+transcript holds a `<task-notification>` (`task-id`) for it. The parent's Stop
+still judges the root as before when any of these holds: the subagent's state
+cannot be determined, the subagent has finished, the parent or any other
+subagent that is not observed running also wrote the root (including a Bash call
+whose cwd lies in it), the root is the hook cwd, or any transcript cannot be read.
+In the last case the same channels carry a notice saying that the in-flight
+roots could not be determined and every root was judged.
+
+`donegate subagent-gate` is the **SubagentStop** hook (registered in
+`hooks/hooks.json`, and by `donegate install`). It judges the roots the stopping
+subagent wrote (`agent_transcript_path`, or
+`<transcript dir>/<stem>/subagents/agent-<agent_id>.jsonl`). It uses the same
+per-root logic as the parent's extra roots: green allows, red blocks the
+subagent's stop with `{"decision":"block"}`, an identical repeat is waived with a
+`systemMessage`, and `max_attempts` gives up. The counter and the waiver memory
+are keyed `<session>-agent-<agent_id>`, so the subagent's chain is separate from
+the parent's. A subagent that wrote nothing is allowed silently. Roots with no
+config or no declared checks are not judged here. A root whose checks donegate
+refuses to run blocks. An unlocatable or unreadable agent transcript, or roots
+that cannot be determined, also block. `donegate skip` is not consumed at
+SubagentStop because it belongs to the parent session. Once the subagent has
+finished, the parent's Stop judges the root again.
+
 ### Session records of failing output
 
 Every failing check's full raw output is saved byte-for-byte to
@@ -135,7 +168,7 @@ cargo install --path .
 cd your/project
 donegate init          # writes a starter donegate.toml for your stack
 donegate trust         # honor this project's donegate.toml (project configs are trust-gated)
-donegate install       # merges the Stop hook into ~/.claude/settings.json (backs it up)
+donegate install       # merges the Stop + SubagentStop hooks into ~/.claude/settings.json (backs it up)
 ```
 
 A project `donegate.toml` is only honored once the project is trusted

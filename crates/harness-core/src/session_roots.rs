@@ -335,7 +335,7 @@ pub fn resolve_with_store(
     origin_store: &Path,
 ) -> Determination<SessionRoots> {
     let cwd_c = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
-    let mut roots = vec![cwd_c];
+    let roots = vec![cwd_c];
     if transcript_path.is_empty() {
         return Determination::known(SessionRoots {
             roots,
@@ -365,6 +365,23 @@ pub fn resolve_with_store(
             ))
         }
     };
+    roots_of_writes(cwd, &writes, transcript_path, origin_store)
+}
+
+/// The roots for an already-read set of writes, with the same mapping and
+/// failure contract as [`resolve_with_store`] (which is this applied to
+/// [`crate::attribution::session_written_paths`]). Lets a caller resolve the
+/// writes of ONE transcript ([`crate::attribution::own_written_paths`]) to the
+/// roots they produce. `transcript_path` is the SESSION's transcript; it only
+/// locates the session's own scratchpad.
+pub fn roots_of_writes(
+    cwd: &Path,
+    writes: &crate::attribution::SessionWrites,
+    transcript_path: &str,
+    origin_store: &Path,
+) -> Determination<SessionRoots> {
+    let cwd_c = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let mut roots = vec![cwd_c];
     let wrote_any = !writes.edited.is_empty() || !writes.bash.is_empty();
     let mut checked_linked: Vec<PathBuf> = Vec::new();
     // The first unresolvable write decides the verdict (Undetermined), but the

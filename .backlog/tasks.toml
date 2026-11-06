@@ -265,3 +265,36 @@ exit 101: stguard v0.2.278 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.70s
      Running tests/git_stash_cmdpos_brace_failopen_20261107.rs (target/debug/deps/git_stash_cmdpos_brace_failopen_20261107-6d83ceeef943de78)
 error: test failed, to rerun pass `-p blastguard --test git_stash_cmdpos_brace_failopen_20261107`"""
+
+[[task]]
+id = "4e53960f"
+title = "compass evaluate load-modify-saves carve-state.json without carve::lock, losing concurrent apply answers"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "compass",
+    "lost-update",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-07 by the c2-03e655dc worker and confirmed by its verifier (run-20261107-034825-70254, worktree base 4f2a6248). After 03e655dc, apply_command holds carve::lock across load-modify-save (crates/compass/src/main.rs ~595), but evaluate_command (main.rs ~526-576) loads at ~543 and saves at ~570 without it. carve::save docstring (carve.rs ~64-65) says 'callers doing load-modify-save hold [lock]', false for this caller. RED at 0da2ccd9: 4 appliers x 8 apply + 4 evaluators x 8 evaluate kept 26/32, 28/32, 31/32 answers in 3 runs (assert at tests/backlog_scout_20261107_carve_unlocked.rs:115). Readings: (a) defect, same lost-update race as 03e655dc; (b) intended if evaluate is never run concurrently with apply, but nothing enforces that. Related unfiled (no deterministic test could be built): carve::reset (carve.rs ~79-86) removes the state file without the lock, so an apply save can resurrect a reset state. Fix direction: take carve::lock in evaluate_command (and reset) the same way; remove the ignore."
+created_at = 1793993355
+updated_at = 1793993355
+weight = 0.0
+issue_number = 1561
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1561"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --test backlog_scout_20261107_carve_unlocked concurrent_evaluate_and_apply_lose_no_answers -- --ignored"
+rev = "0da2ccd971a07e3971a31ccd812c6343846132e5"
+observed_at = 1793993355
+detail = """
+exit 101: s
+
+   Compiling compass v0.1.47 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/crates/compass)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.10s
+     Running tests/backlog_scout_20261107_carve_unlocked.rs (target/debug/deps/backlog_scout_20261107_carve_unlocked-9ebd50962ca46e9b)
+error: test failed, to rerun pass `-p compass --test backlog_scout_20261107_carve_unlocked`"""

@@ -1,7 +1,7 @@
 use super::{
-    confined_ask, dotgit_link_deny, exclude, glob_literal_prefix, has_glob_meta, home_asset_deny,
-    is_short_flag, protected_disarm_deny, protected_tree_deny, Ctx, Decision, Determination,
-    Placement, SafeRoots,
+    confined_ask, dotgit_link_deny, exclude, glob_literal_prefix, has_glob_meta,
+    has_unresolvable_expansion, home_asset_deny, is_short_flag, protected_disarm_deny,
+    protected_tree_deny, Ctx, Decision, Determination, Placement, SafeRoots,
 };
 
 pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
@@ -145,7 +145,10 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     // its literal parent directory, so when that parent provably is a real
     // directory strictly inside the real fixed `/tmp` root (or the root itself
     // with a literal name head of 4+ characters, ruling 2026-11-05), the
-    // blast radius is bounded exactly like a literal operand there. Every condition and every refusal is in
+    // blast radius is bounded exactly like a literal operand there. The same
+    // holds for a parent strictly inside a linked worktree checkout under a
+    // worktree storage root (user ruling 2026-11-07, managed disposable
+    // place). Every condition and every refusal is in
     // [`tmp_glob_confined`]; anything it cannot decide keeps the logic below.
     if wildcard && tmp_glob_confined(ctx, &operands) {
         return Decision::Allow;
@@ -175,6 +178,48 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         Decision::deny("recursive rm (-r) can delete an entire directory tree")
     } else {
         Decision::deny("rm with a wildcard can delete many files at once")
+    }
+}
+
+impl Ctx<'_> {
+    /// True ONLY when `path` is a protected-NAMED path that is the checkout's
+    /// own file: spelled ABSOLUTE, no glob/expansion, on a command line that is
+    /// a single plain command ([`checkout_exempt_eligible`]), and placed by
+    /// [`SafeRoots::classify_worktree_checkout`] as
+    /// [`Placement::Inside`] a linked worktree checkout under a worktree
+    /// storage root (user ruling 2026-10-03:
+    /// 「worktreeの編集や削除を拒むのはむしろ不正なのでなおしてほしい」).
+    ///
+    /// Every other answer — relative spelling, an ineligible command line,
+    /// `IsRoot`, `Outside`, and every `Undetermined` — is `false`, i.e. the
+    /// protected-path rule applies exactly as before. There is no default that
+    /// answers `true`.
+    ///
+    /// Relative operands are refused because the base they are judged against
+    /// is this analysis' model of the cwd, and a cwd change it does not model
+    /// (`env -C`, `git -C`, a `cd` that fails) would place a main-tree file
+    /// inside a checkout. An absolute operand's placement depends on no base.
+    /// (After a `cd D &&` that [`literal_cd_and_rest`] accepts, a relative
+    /// redirect target, and a relative operand of the verbs the cwd walk
+    /// rewrites ([`super::verb_targets`]), reach here already re-expressed as the
+    /// absolute `D/<operand>`; any other relative operand is still relative
+    /// and still refused by the check below.)
+    /// The placement (symlinks included) is observed at JUDGE time; that is
+    /// why the whole line must be one plain command — see
+    /// [`checkout_exempt_eligible`].
+    pub(super) fn in_worktree_checkout(&self, path: &str) -> bool {
+        if !self.checkout_exempt_eligible
+            || !path.starts_with('/')
+            || has_glob_meta(path)
+            || has_unresolvable_expansion(path)
+        {
+            return false;
+        }
+        match self.scope.classify_worktree_checkout(path, None) {
+            Determination::Known(Placement::Inside { .. }) => true,
+            Determination::Known(Placement::IsRoot { .. } | Placement::Outside { .. })
+            | Determination::Undetermined(_) => false,
+        }
     }
 }
 
@@ -602,8 +647,8 @@ impl DeletionEligibility {
     }
 }
 
-/// Whole-command precondition for the `/tmp` wildcard `Allow`
-/// ([`tmp_glob_confined`]): EXACTLY [`deletion_rm_eligible`] with `*` allowed
+/// Whole-command precondition for the `/tmp` (and linked-worktree-checkout)
+/// wildcard `Allow` ([`tmp_glob_confined`]): EXACTLY [`deletion_rm_eligible`] with `*` allowed
 /// in one place only — the LAST path component of an `rm` OPERAND word
 /// ([`last_component_glob`]: literal parent, no leading `.` in the pattern,
 /// no other glob metacharacter). A `*` anywhere else (the verb, an option
@@ -644,7 +689,9 @@ fn last_component_glob(operand: &str) -> Option<(&str, &str)> {
     Some((parent, pattern))
 }
 
-/// The `/tmp` wildcard `Allow` (user ruling 2026-11-02, backlog 486fb7de):
+/// The `/tmp` wildcard `Allow` (user ruling 2026-11-02, backlog 486fb7de),
+/// which since 0.2.287 also covers a wildcard whose parent is strictly inside
+/// a linked worktree checkout (user ruling 2026-11-07; the name is kept):
 /// true only when the line is [`tmp_glob_rm_eligible`], the session has no
 /// deletion refusal, `operands` is non-empty, and EVERY operand is either
 ///
@@ -668,7 +715,7 @@ fn tmp_glob_confined(ctx: &Ctx<'_>, operands: &[&str]) -> bool {
     let base = ctx.base_for("rm");
     operands.iter().all(|o| {
         if o.contains('*') || has_glob_meta(o) {
-            tmp_glob_operand_allowed(ctx.scope, o, base)
+            tmp_glob_operand_allowed(ctx, o, base)
         } else {
             matches!(
                 crate::deletion::judge_operand(ctx.scope, o, base),
@@ -685,29 +732,54 @@ const MIN_TMP_ROOT_GLOB_HEAD: usize = 4;
 
 /// One wildcard operand of [`tmp_glob_confined`]. True only when
 /// [`last_component_glob`] splits it into a literal parent and a `*` pattern,
-/// neither the parent nor any entry the pattern could match touches a
-/// protected path ([`exclude::glob_entry_may_touch_protected`]), and
-/// [`SafeRoots::classify_temp`] (the FIXED `/tmp` roots only — never
-/// `$TMPDIR`, never a cache root; symlinks above the anchor accepted, none
-/// below it, the parent itself included) places the parent:
+/// the parent itself touches no protected path ([`exclude::touches_protected`]:
+/// `<wt>/.githooks/pre-*` keeps its verdict even inside a checkout), and the
+/// parent is placed in a managed disposable place:
 ///
-///   * `Inside` the real `/tmp` root — any such pattern; or
-///   * `IsRoot` — only with a literal head of at least
-///     [`MIN_TMP_ROOT_GLOB_HEAD`] characters before the first `*` (user ruling
-///     2026-11-05, #1531: `/tmp/name*` yes; `/tmp/*`, `/tmp/c*`, `/tmp/cla*`
-///     never), and only when the parent is spelled
-///     as the canonical root itself or a single top-level component (`/tmp`),
-///     so a symlink below `/tmp` that resolves back to the root is refused.
+///   * STRICTLY inside a linked worktree checkout under a worktree storage
+///     root ([`SafeRoots::classify_worktree_checkout`] answers `Inside`: no
+///     `..` in the spelling, no `.git` component below the checkout, no
+///     symlink below the storage root, the parent itself included; user ruling
+///     2026-11-07). The checkout itself (`IsRoot`) does not count. When an
+///     ENTRY the pattern could match may touch a protected path
+///     ([`exclude::glob_entry_may_touch_protected`] — a bare `*` always may,
+///     since it is matched against every protected name, e.g.
+///     `settings.local.json`), it is accepted only when
+///     [`Ctx::in_worktree_checkout`] lifts the protected-path rule for the
+///     parent (absolute spelling, one plain command line) — the lift a literal
+///     operand inside the checkout gets (user ruling 2026-10-03); every entry
+///     is strictly below the parent and so inside the same checkout. Otherwise:
+///   * no entry the pattern could match touches a protected path, and
+///     [`SafeRoots::classify_temp`] (the FIXED `/tmp`
+///     roots only — never `$TMPDIR`, never a cache root; symlinks above the
+///     anchor accepted, none below it, the parent itself included) places the
+///     parent:
+///     * `Inside` the real `/tmp` root — any such pattern; or
+///     * `IsRoot` — only with a literal head of at least
+///       [`MIN_TMP_ROOT_GLOB_HEAD`] characters before the first `*` (user
+///       ruling 2026-11-05, #1531: `/tmp/name*` yes; `/tmp/*`, `/tmp/c*`,
+///       `/tmp/cla*` never), and only when the parent is spelled as the
+///       canonical root itself or a single top-level component (`/tmp`), so a
+///       symlink below `/tmp` that resolves back to the root is refused.
 ///
 /// `Outside` and every `Undetermined` (unresolvable, no resolver, a symlink
 /// below the root, `..` left after normalisation) answer `false`.
-fn tmp_glob_operand_allowed(scope: &SafeRoots, operand: &str, base: Option<&str>) -> bool {
+fn tmp_glob_operand_allowed(ctx: &Ctx<'_>, operand: &str, base: Option<&str>) -> bool {
+    let scope = ctx.scope;
     let Some((parent, pattern)) = last_component_glob(operand) else {
         return false;
     };
-    if exclude::touches_protected(parent)
-        || exclude::glob_entry_may_touch_protected(parent, pattern)
-    {
+    if exclude::touches_protected(parent) {
+        return false;
+    }
+    let entry_may_be_protected = exclude::glob_entry_may_touch_protected(parent, pattern);
+    if matches!(
+        scope.classify_worktree_checkout(parent, base),
+        Determination::Known(Placement::Inside { .. })
+    ) {
+        return !entry_may_be_protected || ctx.in_worktree_checkout(parent);
+    }
+    if entry_may_be_protected {
         return false;
     }
     match scope.classify_temp(parent, base) {

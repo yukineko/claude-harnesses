@@ -112,6 +112,190 @@ fn sets_hookspath_inline(globals: &[&str]) -> bool {
     })
 }
 
+/// Whole-command precondition for the git working-tree-discard `Allow` inside
+/// a linked worktree checkout (user ruling 2026-11-07; see
+/// [`managed_worktree_git`]). `Some(<the words after git, joined by one
+/// space>)` only when the line is ONE plain `git` command:
+///
+///   * every character is a Unicode alphanumeric, space, or one of
+///     `/ . _ - + , = : @ %` — no segment separator (`;`, `&`, `|`), quote,
+///     `$`, backtick, parenthesis, brace, redirection, glob, `~`, `#`, `!`,
+///     backslash, newline, tab or other control character. So no other
+///     command on the line can create, move or link the checkout (or its
+///     `.git` file) between this judgement and git running, and no shell
+///     expansion decides an argument;
+///   * the first word is exactly `git` (no `/usr/bin/git`, `command git`,
+///     `env`, `sudo`, `VAR=x git`);
+///   * no word has a component that is exactly `..` (split on `/` and `=`):
+///     `..` is collapsed lexically by [`crate::scope`] while the kernel
+///     resolves it physically.
+///
+/// [`Ctx::new`] also evaluates it on the `REST` of a `cd D && REST` line that
+/// [`super::literal_cd_and_rest`] accepts (the `cd` neither creates nor links
+/// anything, and `&&` guarantees `REST` runs in `D`), exactly like the other
+/// whole-command eligibility predicates. Anything else is `None` and the git
+/// arm keeps the verdict it had before the ruling. Over-matching here only
+/// withholds the `Allow`.
+pub(super) fn git_worktree_eligible(command: &str) -> Option<String> {
+    let plain = |c: char| {
+        c.is_alphanumeric()
+            || matches!(
+                c,
+                ' ' | '/' | '.' | '_' | '-' | '+' | ',' | '=' | ':' | '@' | '%'
+            )
+    };
+    if !command.chars().all(plain) {
+        return None;
+    }
+    let words: Vec<&str> = command.split(' ').filter(|w| !w.is_empty()).collect();
+    if words.first().copied() != Some("git") {
+        return None;
+    }
+    if words.iter().any(|w| w.split(['/', '=']).any(|c| c == "..")) {
+        return None;
+    }
+    Some(words[1..].join(" "))
+}
+
+/// Where git runs, as git's global options move it: `Known(Some(dir))` — the
+/// lexically normalised absolute directory git's work tree is named by (the
+/// `--work-tree` value when given, else the cumulative `-C` directory);
+/// `Known(None)` — no global option moves it (git runs in `base`);
+/// `Undetermined` — it cannot be named: a second `--work-tree`, a glued
+/// `-C<dir>` (git rejects it, but no directory is named), a missing value, or
+/// a value that is not a placeable literal path (a shell expansion, a
+/// relative path with no known base, a residual `..`).
+///
+/// `-C` values apply cumulatively, as git applies them (a relative one is
+/// relative to the previous); a relative `--work-tree` is relative to the
+/// directory `-C` left git in.
+fn git_moved_dir(
+    scope: &crate::scope::SafeRoots,
+    globals: &[&str],
+    base: Option<&str>,
+) -> Determination<Option<String>> {
+    let mut cur: Option<String> = base.map(str::to_string);
+    let mut moved = false;
+    let mut work_tree: Option<&str> = None;
+    let mut i = 0;
+    while i < globals.len() {
+        let t = globals[i];
+        let value = if t == "-C" || t == "--work-tree" {
+            let Some(v) = globals.get(i + 1) else {
+                return Determination::undetermined(format!("git {t} has no value"));
+            };
+            i += 2;
+            *v
+        } else if let Some(v) = t.strip_prefix("--work-tree=") {
+            i += 1;
+            v
+        } else {
+            if t.starts_with("-C") && t.len() > 2 {
+                return Determination::undetermined("glued git -C<dir> names no directory");
+            }
+            i += 1;
+            continue;
+        };
+        if t == "-C" {
+            cur = match scope.lexical_absolute(value, cur.as_deref()) {
+                Determination::Known(d) => Some(d),
+                Determination::Undetermined(u) => return Determination::Undetermined(u),
+            };
+            moved = true;
+        } else if work_tree.replace(value).is_some() {
+            return Determination::undetermined("git --work-tree given twice");
+        }
+    }
+    if let Some(wt) = work_tree {
+        return match scope.lexical_absolute(wt, cur.as_deref()) {
+            Determination::Known(d) => Determination::known(Some(d)),
+            Determination::Undetermined(u) => Determination::Undetermined(u),
+        };
+    }
+    if moved {
+        Determination::known(cur)
+    } else {
+        Determination::known(None)
+    }
+}
+
+/// The git working-tree-discard `Allow` (user ruling 2026-11-07: work
+/// products in a managed disposable place may be deleted): true ONLY when
+///
+///   * the top-level line is one plain git command
+///     ([`git_worktree_eligible`]) and `rest` is exactly ITS words — a nested
+///     git invocation (an alias body, a `bisect run git …`) is a different
+///     word list and never qualifies;
+///   * every global option before the subcommand is `-C <dir>` (at most
+///     once), `--work-tree <dir>` / `--work-tree=<dir>` (at most once), or
+///     absent. Any other global — `--git-dir` (repoints the repository away
+///     from the checkout), `-c`/`--config-env` (`core.worktree`, aliases),
+///     `--namespace`, `-p`, … — withholds the `Allow`;
+///   * the directory git discovers its repository from (the `-C` directory,
+///     else this segment's resolved working directory) is ITSELF a linked
+///     worktree checkout directly under a worktree storage root, observed on
+///     disk by [`crate::scope::SafeRoots::is_linked_worktree_checkout`] — a
+///     subdirectory of a checkout, a primary working tree (`.git`
+///     directory), the storage root and every probe failure do not qualify;
+///   * a `--work-tree`, when given, resolves to that SAME checkout (another
+///     work tree under the checkout's index would discard changes that are
+///     not this checkout's).
+///
+/// Every other answer is `false`: the caller keeps the exact verdict it had.
+fn managed_worktree_git(ctx: &Ctx<'_>, rest: &[&str], idx: usize) -> bool {
+    if ctx.git_eligible_rest.as_deref() != Some(rest.join(" ").as_str()) {
+        return false;
+    }
+    let globals = &rest[..idx];
+    let mut c_count = 0;
+    let mut i = 0;
+    while i < globals.len() {
+        match globals[i] {
+            "-C" => {
+                c_count += 1;
+                i += 2;
+            }
+            "--work-tree" => i += 2,
+            t if t.starts_with("--work-tree=") => i += 1,
+            _ => return false,
+        }
+    }
+    if c_count > 1 {
+        return false;
+    }
+    let base = ctx.base_for("git");
+    let discovery = match globals.iter().position(|t| *t == "-C") {
+        Some(p) => match globals.get(p + 1) {
+            Some(d) => match ctx.scope.lexical_absolute(d, base) {
+                Determination::Known(d) => d,
+                Determination::Undetermined(_) => return false,
+            },
+            None => return false,
+        },
+        None => match base {
+            Some(b) => b.to_string(),
+            None => return false,
+        },
+    };
+    if !matches!(
+        ctx.scope.is_linked_worktree_checkout(&discovery, None),
+        Determination::Known(true)
+    ) {
+        return false;
+    }
+    match git_moved_dir(ctx.scope, globals, base) {
+        Determination::Known(Some(work)) if work != discovery => {
+            matches!(
+                ctx.scope.is_linked_worktree_checkout(&work, None),
+                Determination::Known(true)
+            ) && ctx.scope.resolve(&work).is_some()
+                && ctx.scope.resolve(&work) == ctx.scope.resolve(&discovery)
+        }
+        Determination::Known(_) => true,
+        Determination::Undetermined(_) => false,
+    }
+}
+
 /// One pathspec of `git checkout [<tree-ish>] -- <pathspec>`: Allow only when
 /// git reports nothing at or below it that the overwrite would destroy; Deny
 /// when it reports uncommitted changes; Ask whenever that cannot be observed.
@@ -204,6 +388,12 @@ fn analyze_git_words(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         return Decision::deny(HOOKSPATH_REASON);
     }
     let sub = normalized_command(rest[idx]);
+    // User ruling 2026-11-07: discarding working-tree changes of a linked
+    // worktree checkout under a worktree storage root (a managed disposable
+    // place) is Allow. Consulted only by the working-tree-discard arms below;
+    // the object-store rule right after this, `stash clear/drop` and every
+    // protected-path check are unaffected. See `managed_worktree_git`.
+    let managed = managed_worktree_git(ctx, rest, idx);
     // Object-store destruction, checked before the per-subcommand arms below.
     //
     // These matter more here than anywhere else in this file: the recoverability
@@ -230,10 +420,41 @@ fn analyze_git_words(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
             } else {
                 pathspec
             };
-            let clean_confined = ctx.confined_root_or_root_itself("git", &clean_targets);
-            if has_f && (has_d || has_x) {
+            // The pathspec is relative to where git RUNS, which `-C` /
+            // `--work-tree` move (they used to be ignored here, so
+            // `git -C /elsewhere clean -fd` was judged against the session
+            // cwd). A directory they name that cannot be placed is
+            // UNDETERMINED: the confinement is then judged on this segment's
+            // own base exactly as before (the old confined Ask inside a safe
+            // root, the old Deny elsewhere; never an Allow, `managed` is false
+            // for it), and an Ask from it states that the directory git runs
+            // in was NOT placed, so its "resolved strictly inside" wording is
+            // not taken as covering it.
+            let (clean_ctx, unplaced) =
+                match git_moved_dir(ctx.scope, &rest[..idx], ctx.base_for("git")) {
+                    Determination::Known(Some(dir)) => (ctx.after_cd(&dir), None),
+                    Determination::Known(None) => (ctx.clone(), None),
+                    Determination::Undetermined(why) => {
+                        (ctx.clone(), Some(why.reason().as_str().to_string()))
+                    }
+                };
+            let clean_confined = clean_ctx.confined_root_or_root_itself("git", &clean_targets);
+            let confined_ask = |action: &str, root: &str| match (
+                confined_ask(action, root, &clean_targets),
+                &unplaced,
+            ) {
+                (Decision::Ask(reason), Some(why)) => Decision::Ask(format!(
+                    "{reason} NOTE: the directory git -C / --work-tree names could not be placed \
+({why}); the targets were judged against the current directory instead, so where git will \
+actually delete is undetermined."
+                )),
+                (d, _) => d,
+            };
+            if has_f && managed {
+                Decision::Allow
+            } else if has_f && (has_d || has_x) {
                 match &clean_confined {
-                    Some(root) => confined_ask("git clean -f with -d/-x", root, &clean_targets),
+                    Some(root) => confined_ask("git clean -f with -d/-x", root),
                     None => {
                         Decision::deny("git clean -f with -d/-x deletes untracked files & dirs")
                     }
@@ -246,7 +467,7 @@ fn analyze_git_words(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
                 // (they are untracked, so git has no copy). `-n`/`--dry-run`
                 // carries no `f` and is unaffected.
                 match &clean_confined {
-                    Some(root) => confined_ask("git clean -f", root, &clean_targets),
+                    Some(root) => confined_ask("git clean -f", root),
                     None => Decision::deny("git clean -f deletes untracked files irreversibly"),
                 }
             } else {
@@ -254,19 +475,21 @@ fn analyze_git_words(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
             }
         }
         "reset" => {
-            if rest.contains(&"--hard") {
+            if rest.contains(&"--hard") && !managed {
                 Decision::deny("git reset --hard discards working-tree changes")
             } else {
                 Decision::Allow
             }
         }
         "checkout" => {
-            if rest.contains(&"--force") || has_short(rest, 'f') {
+            if (rest.contains(&"--force") || has_short(rest, 'f')) && !managed {
                 return Decision::deny("git checkout --force discards working-tree changes");
             }
             // Round 3, MIRROR GAP. The `restore` arm below denies
-            // `git restore <path>` UNCONDITIONALLY, because it overwrites the
-            // working tree from the index and throws away uncommitted work.
+            // `git restore <path>` UNCONDITIONALLY (outside a managed linked
+            // worktree checkout, see `managed_worktree_git`), because it
+            // overwrites the working tree from the index and throws away
+            // uncommitted work.
             // `git checkout -- <path>` is that same operation under its older
             // spelling — git's own docs describe `restore` as the split-out
             // half of `checkout` — yet this arm only caught `--force` and the
@@ -284,6 +507,12 @@ fn analyze_git_words(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
                 if let Some(deny) = protected_tree_deny(ctx, "git checkout", op) {
                     return deny;
                 }
+            }
+            // Inside a linked worktree checkout every remaining form (`--force`,
+            // `-- .`, `.`, `-- <path>`) only discards that checkout's own
+            // working-tree changes.
+            if managed {
+                return Decision::Allow;
             }
             if let Some(pos) = rest.iter().position(|t| *t == "--") {
                 if rest[pos + 1..].iter().any(|t| *t == "." || *t == "./") {
@@ -360,9 +589,10 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
         // A plain `git switch <branch>` REFUSES to run with a dirty tree, so it
         // is not the same command and stays allowed; likewise `-c/--create`.
         "switch" => {
-            if rest.contains(&"--force")
+            if (rest.contains(&"--force")
                 || rest.contains(&"--discard-changes")
-                || has_short(rest, 'f')
+                || has_short(rest, 'f'))
+                && !managed
             {
                 Decision::deny("git switch --force/--discard-changes discards working-tree changes")
             } else {
@@ -399,10 +629,12 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
             // from the index (or a source), discarding uncommitted changes — the
             // same hazard as the already-denied `git checkout -- .` form.
             // `git restore --staged <path>` (without `--worktree`) only unstages
-            // and leaves the working tree intact, so it stays allowed.
+            // and leaves the working tree intact, so it stays allowed. Inside a
+            // managed linked worktree checkout every form is allowed (user
+            // ruling 2026-11-07, `managed_worktree_git`).
             let staged = rest.contains(&"--staged") || has_short(rest, 'S');
             let worktree = rest.contains(&"--worktree") || has_short(rest, 'W');
-            if staged && !worktree {
+            if (staged && !worktree) || managed {
                 Decision::Allow
             } else {
                 Decision::deny("git restore discards working-tree changes")
@@ -479,7 +711,9 @@ files from the working tree, like git clean";
                     // there is the message git stores, not a flag).
                     let any_brace = words.iter().any(|w| has_brace_expansion(w));
                     let outside = stash_words_outside_message(words);
-                    if outside.iter().any(|w| is_stash_sweep_flag(w)) {
+                    // The sweep only parks the checkout's untracked files in
+                    // a stash entry; inside a managed checkout that is Allow.
+                    if outside.iter().any(|w| is_stash_sweep_flag(w)) && !managed {
                         Decision::deny(SWEEP_REASON)
                     } else if any_brace {
                         Decision::ask(

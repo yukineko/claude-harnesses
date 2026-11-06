@@ -265,3 +265,34 @@ exit 101: stguard v0.2.278 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.70s
      Running tests/git_stash_cmdpos_brace_failopen_20261107.rs (target/debug/deps/git_stash_cmdpos_brace_failopen_20261107-6d83ceeef943de78)
 error: test failed, to rerun pass `-p blastguard --test git_stash_cmdpos_brace_failopen_20261107`"""
+
+[[task]]
+id = "4fa94cba"
+title = "condukt merge-hold gate ignores a runtime-overlap hold whose placer run holds zero claims (run_liveness reads no-claims as Dead)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "defect",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observation (2026-11-07, rev 9a48ef64 on session-bf349dd5, condukt 0.7.333 installed binary, run run-20261107-035654-25350 task ta): 'condukt state set --status running' for task ta returned 'skipped' (the cross-session claim gate refused because another live run held .claude-plugin/marketplace.json and Cargo.lock). So run run-20261107-035654-25350 never held any claim in the claim registry, although it was live (its run-state file existed with pending/done tasks and the orchestrator was actively driving it). 'condukt state set --status done' for ta then recorded a runtime-overlap merge hold: overwatch merge_conflicts.jsonl row conflict_id run-20261107-035654-25350/ta/runtime-overlap, origin runtime-overlap, run_id run-20261107-035654-25350, branch condukt/run-20261107-035654-25350/ta, stderr: condukt: runtime overlap detected for task 'ta' -- merge held for review (overwatch review-queue [merge-conflict]). Without any resolution being recorded, 'condukt worktree merge --branch condukt/run-20261107-035654-25350/ta' then exited 0 and fast-forwarded (reflog ts 1793992785). Only afterwards (ts 1793992786) was the hold auto-cleared with note 'auto-cleared: branch landed'. Code path: crates/condukt/src/worktree.rs open_runtime_overlap_hold keeps a hold only if hold_placed_by_live_run is true; that calls crates/condukt/src/claim.rs run_liveness, which returns RunLiveness::Dead when the registry has no non-stale claim with that run_id (claim.rs ~1383-1391: let live = reg.files.values().chain(reg.task_claims.values()).any(|c| c.run_id == run_id && !is_stale(c, now, ttl)); if live { Live } else { Dead }). A run that holds zero claims (because its claims were skipped) is therefore read as Dead, and its own hold is ignored: the merge it was supposed to stop proceeds. Two readings: (a) real defect -- absence of claims is not evidence of death; a run with a loadable non-terminal run-state is live, so the hold must block (CLAUDE.md s3: cannot-determine resolves restrictive); (b) intended -- liveness is defined purely by claims. Distinguish: the doc on hold_placed_by_live_run/open_runtime_overlap_hold says 'a hold from a LIVE run still blocks'; a test with a live run-state but no claims decides it. Note: the hold_placed_by_live_run doc already lists this as a 'Known residual (tracked)' with the proposed closure 'is run_id a currently-active non-terminal run in state::RunState'. Repro test (RED, #[ignore]): crates/condukt/tests/backlog_hold_liveness_no_claims_20261107.rs runtime_overlap_hold_from_live_run_with_zero_claims_still_blocks_merge -- observed: worktree merge exited 0 with 'merged condukt/t2 into main' while the hold placed by the live zero-claim run was open."
+created_at = 1793993087
+updated_at = 1793993087
+weight = 0.0
+issue_number = 1560
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1560"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_hold_liveness_no_claims_20261107 -- --include-ignored --exact runtime_overlap_hold_from_live_run_with_zero_claims_still_blocks_merge"
+rev = "26aa79633a7265ac3ea7cf74b22cb756b8041300"
+observed_at = 1793993087
+detail = """
+exit 101: ing condukt v0.7.346 (/Users/yuki/src/.harness-worktrees/file-hold-liveness/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.83s
+     Running tests/backlog_hold_liveness_no_claims_20261107.rs (target/debug/deps/backlog_hold_liveness_no_claims_20261107-ce8174c797e64a66)
+error: test failed, to rerun pass `-p condukt --test backlog_hold_liveness_no_claims_20261107`"""

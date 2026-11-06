@@ -61,3 +61,238 @@ exit 101: s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.10s
      Running tests/backlog_scout_20261107_carve_unlocked.rs (target/debug/deps/backlog_scout_20261107_carve_unlocked-9ebd50962ca46e9b)
 error: test failed, to rerun pass `-p compass --test backlog_scout_20261107_carve_unlocked`"""
+
+[[task]]
+id = "b80023b3"
+title = "donegate re-blocks the Stop on an identical finding (same tree, same red output): attempt counter in block_fingerprint defeats the repeat waiver"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-11-07, session c2e3bc17, measured at rev 30d95437 (donegate 0.1.66; installed binary logged in ~/.donegate/state/log.jsonl). On root ~/.condukt/worktrees/run-20261107-034825-70254-c2-debc6df3, donegate blocked the parent session's Stop with verdict "blocked" at attempt 1 (04:33:38), attempt 2 (04:34:11) and attempt 3 (04:37:00), then "giveup" at attempt 4 (04:37:40), all on checks ["lint-changed","test-changed"]. The records are 1793993618644-a1-lint-changed.log, 1793993618645-a1-test-changed.log, 1793993651289-a2-*, 1793993820791-a3-* and 1793993860766-a4-* under ~/.donegate/state/records/c2e3bc17-0cb5-4fa4-9cb6-597c73764614/. Every block carried the same `lint-changed: cargo fmt --check FAILED for blastguard` and the same 2 failing tests in crates/blastguard/tests/backlog_debc6df3_head_brace_pins_20261107.rs. The parent made no change to that root in between. NOTE: the caller's account said "blocked 4 times", but log.jsonl shows 3 blocks plus a giveup at a4.
+
+Mechanism: harness_core::repeat already waives a second identical Stop block (the operator ruling of 2026-09-18). But gate::block_fingerprint deliberately keeps the `attempt N/max` counter (gate.rs doc: "the same failure is never waived as a repeat below the cap"), so every stop below max_attempts has a new fingerprint and the waiver is unreachable. Only the attempt cap ends the loop. That applies to both the extra-root loop (main.rs ~395-404) and the cwd-root flow (main.rs ~577).
+
+User ruling 2026-11-07: 「同一の指摘によって止めてるのはあきらかに無駄」.
+
+Desired: when the root's tree fingerprint and the failing check output are unchanged since the previous block in the same session, the next stop is NOT a decision:block. It must not be silent either, because silence is fail-open (CLAUDE.md §1): a systemMessage names the still-red check verbatim and says NOTHING NEW WAS VERIFIED.
+
+RED (cargo test -p donegate --test backlog_repeat_identical_block_20261107 -- --include-ignored second_identical_stop): 2 failed / 0 passed. Both fail with `assertion left != right failed: the second stop re-blocked on an IDENTICAL finding`. The second stdout was {"decision":"block","reason":"... 1 required check(s) failed (attempt 2/50) ..."}. The control control_changed_tree_with_same_red_output_still_blocks passes and must keep passing: a changed tree with the same output still blocks.
+
+Readings:
+(a) Defect: an identical re-block carries no information, and the repeat ledger exists for exactly this case.
+(b) Intended: the gate.rs doc says the attempt number is kept on purpose so a failure "blocks every time" below the cap, and the cap is the bounded exit.
+How to tell them apart: the user ruling above overrides (b) for the unchanged-tree case. What remains is to define "unchanged": the tree fingerprint must cover tracked and untracked content, and the check output must be compared verbatim. The control test pins that a changed tree still blocks. Remove the #[ignore] when fixed."""
+created_at = 1793995633
+updated_at = 1793995633
+weight = 0.0
+issue_number = 1563
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1563"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test backlog_repeat_identical_block_20261107 -- --include-ignored second_identical_stop"
+rev = "30d954377e2b64fc6a40bb69d1c3d772d99c2de9"
+observed_at = 1793995633
+detail = """
+exit 101: piling donegate v0.1.66 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.70s
+     Running tests/backlog_repeat_identical_block_20261107.rs (target/debug/deps/backlog_repeat_identical_block_20261107-58bbe9ff9df736eb)
+error: test failed, to rerun pass `-p donegate --test backlog_repeat_identical_block_20261107`"""
+
+[[task]]
+id = "95deaa32"
+title = "donegate judges a root only an in-flight background subagent wrote on the PARENT's Stop (lint races inference); no SubagentStop hook"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''
+Observed 2026-11-07, session c2e3bc17, measured at rev 30d95437 (donegate 0.1.66). Root ~/.condukt/worktrees/run-20261107-034825-70254-c2-debc6df3 was mid-edit by a still-running subagent. A test-writer had swapped in the pre-fix git.rs to watch pins fail, so the tree was not the fix candidate. donegate ran lint-changed and test-changed on that root at the PARENT's Stop. log.jsonl shows "blocked" at attempts 1-3 (04:33:38, 04:34:11, 04:37:00) and "giveup" at attempt 4 (04:37:40). It reported mid-edit state to an agent that did not own the root and could not fix it. In the observed case the writer was a condukt worker, i.e. a nested subagent. Its launch record sits in the sidechain of the depth-1 general-purpose agent a1b0b358b487f1afc (meta.json requestShape "background"), not in the parent transcript.
+
+User ruling 2026-11-07: 「lintと推論が競合しているのは解消したい」. The user chose BOTH readings of this conflict as separate tickets; the fmt/clippy-before-merge ticket is the other one.
+
+Mechanism: harness_core::session_roots::resolve turns every path written in the parent transcript AND in every sidechain `<stem>/subagents/*.jsonl` into a root of the parent's Stop. It does that through attribution::session_written_paths, with no notion of the root's owner or whether that owner is still running. crates/donegate/hooks/hooks.json registers only "Stop", so nothing judges the root at the owner's own stop. condukt already has a SubagentStop hook (crates/condukt/src/subagent_stop.rs), which shows the payload is usable.
+
+In-flight signal as Claude Code records it (shape copied from the observed parent transcript):
+- the Agent tool_result carries toolUseResult {isAsync:true, status:"async_launched", agentId};
+- agent-<id>.meta.json carries toolUseId;
+- no <task-notification> with status completed has arrived for that agent yet.
+
+Desired: a root written ONLY by an in-flight subagent is not judged at the parent's Stop. The skip must not be silent: the root is named in the output. The root is judged at the owner's SubagentStop. Fail-closed: if ownership or liveness cannot be determined, or the parent itself also wrote the root, keep blocking as today.
+
+RED (cargo test -p donegate --test backlog_inflight_subagent_root_20261107 -- --include-ignored parent_stop_does_not_judge donegate_registers): 2 failed / 0 passed.
+- parent_stop_does_not_judge_a_root_only_an_inflight_subagent_wrote: `assertion left != right failed: the parent's Stop blocked on a root that only a still-running background subagent wrote`. The stdout was {"decision":"block","reason":"[root: .../subagent-wt]\n... 1 required check(s) failed (attempt 1/50) ...".
+- donegate_registers_a_subagent_stop_hook: `.../crates/donegate/hooks/hooks.json registers no SubagentStop hook running donegate; registered events: Some(["Stop"])`.
+The controls control_undetermined_liveness_still_blocks and control_parent_also_wrote_the_root_still_blocks pass today and must keep passing.
+
+Readings:
+(a) Defect: judging a root whose owner is still writing races with in-flight inference. The finding is about a tree nobody claims as a candidate, and it lands on an agent that cannot act on it.
+(b) Intended: session_roots deliberately includes sidechains so that subagent-written files are not dropped from the gate (the attribution.rs doc: "a missing sidechain would turn a subagent-written file into 'not mine'"). Without a SubagentStop check, the parent Stop is the ONLY place such a root is ever judged.
+How to tell them apart: (b) holds only while no SubagentStop judgment exists. The fix must add the SubagentStop check (second RED) BEFORE the parent stops judging in-flight roots (first RED). Otherwise subagent work is never checked at all, which is fail-open. Remove both #[ignore] together.'''
+created_at = 1793995712
+updated_at = 1793995712
+weight = 0.0
+issue_number = 1564
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1564"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test backlog_inflight_subagent_root_20261107 -- --include-ignored parent_stop_does_not_judge donegate_registers"
+rev = "30d954377e2b64fc6a40bb69d1c3d772d99c2de9"
+observed_at = 1793995712
+detail = """
+exit 101: piling donegate v0.1.66 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running tests/backlog_inflight_subagent_root_20261107.rs (target/debug/deps/backlog_inflight_subagent_root_20261107-2829e11fc38e7c6a)
+error: test failed, to rerun pass `-p donegate --test backlog_inflight_subagent_root_20261107`"""
+
+[[task]]
+id = "0a68823d"
+title = "condukt worktree merge lands a task branch whose tip fails cargo fmt --check / cargo clippy -D warnings (no automatic lint before merge)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-11-07, session c2e3bc17, measured at rev 30d95437 (condukt 0.7.349). Condukt workers produced code that failed clippy (collapsible_if, crates/blastguard/src/detect/interpreter.rs:1168) and rustfmt, and committed it. Nothing on the worker -> commit -> `condukt worktree merge` path ran fmt or clippy automatically, so the first thing to notice was donegate on the PARENT's Stop, after the fact. CLAUDE.md says no gate enforces fmt/clippy, and .githooks/pre-commit runs neither (check-clippy-lints.py only scans [lints] config).
+
+User ruling 2026-11-07: 「lintと推論が競合しているのは解消したい」. The user chose BOTH readings as separate tickets; this is the "lint runs on the worker's side before integration" half. The other half is the donegate in-flight-subagent-root ticket.
+
+Choke point: crates/condukt/src/worktree.rs `merge` is the one deterministic step every task branch passes before main. It already refuses on an unresolvable branch, a base not on main, missing Condukt-Task trailers and an open overlap hold, all before any checkout. An automatic fmt+clippy step on the pinned `tip` belongs in the same pre-checkout block.
+
+RED (cargo test -p condukt --test backlog_merge_unlinted_branch_20261107 -- --include-ignored merge_refuses): 2 failed / 0 passed.
+- merge_refuses_branch_whose_tip_fails_cargo_fmt_check: "condukt worktree merge landed a branch whose tip fails `cargo fmt --check`: exit=Some(0), main c14af5fb.. -> 8f3aec71.. stdout=merged 'run-unlinted/b-fmt' into main". The SHAs are per-run.
+- merge_refuses_branch_whose_tip_fails_cargo_clippy: the same, with "merged 'run-unlinted/b-clippy' into main".
+Each RED first asserts that `cargo fmt -- --check` / `cargo clippy --all-targets -- -D warnings` really fails in the fixture worktree. The control control_clean_branch_merges passes, so the fixture can merge at all.
+
+Readings:
+(a) Defect: unlinted worker code reaches main, and the lint finding surfaces later on an unrelated agent's Stop (see the in-flight ticket).
+(b) Intended: merge is a pure integration step, and lint is the worker's or donegate's job.
+How to tell them apart: (b) needs some automatic fmt/clippy step that a task branch cannot bypass before main. None exists today: the worker prompt is prose, pre-commit runs no cargo, donegate checks only uncommitted changes (see the committed-but-unmerged ticket) and only on the parent. A fix at another single choke point (e.g. a pre-merge hook in condukt's worker commit path) would also satisfy the test, as long as `worktree merge` refuses. Design notes for the fixer:
+- Scope the lint to the crates the branch changed, the way lint-changed-crates.sh does.
+- A cargo that cannot run is "undetermined", so the merge must refuse (CLAUDE.md §3).
+- Remove the #[ignore]s when fixed."""
+created_at = 1793995716
+updated_at = 1793995716
+weight = 0.0
+issue_number = 1565
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1565"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_merge_unlinted_branch_20261107 -- --include-ignored merge_refuses"
+rev = "30d954377e2b64fc6a40bb69d1c3d772d99c2de9"
+observed_at = 1793995716
+detail = """
+exit 101:  Compiling condukt v0.7.349 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.39s
+     Running tests/backlog_merge_unlinted_branch_20261107.rs (target/debug/deps/backlog_merge_unlinted_branch_20261107-6e9aa46da8e01ea5)
+error: test failed, to rerun pass `-p condukt --test backlog_merge_unlinted_branch_20261107`"""
+
+[[task]]
+id = "355d3b12"
+title = "lint-changed-crates.sh / test-changed-crates.sh report no crate touched for committed-but-unmerged branch work on a clean tree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-11-07, session c2e3bc17, measured at rev 30d95437. After a subagent committed its work in a run-20261107-034825-70254 task worktree, scripts/lint-changed-crates.sh and scripts/test-changed-crates.sh printed "no crate touched" for it. Both compute the changed set from `git diff --name-only HEAD` plus `git ls-files --others` only. So committed-but-unmerged branch work, changed against the branch's merge-base with main, is never checked by donegate's lint-changed/test-changed. The worker's branch therefore reaches merge unchecked; see the fmt/clippy-before-merge ticket.
+
+RED (python3 -m pytest -q scripts/test_changed_crates_committed_unmerged_20261107.py): 2 failed, 2 passed.
+- test_lint_changed_checks_committed_unmerged_fmt_violation: "lint-changed-crates.sh: committed-but-unmerged crate change on a clean tree was reported as nothing to check (exit 0) --- output --- lint-changed-crates: no crate touched — nothing to lint".
+- test_test_changed_checks_committed_unmerged_failing_test: the same, with "test-changed-crates: no crate touched — nothing to test".
+The fixture is a linked worktree on branch `task`, with a clean tree, a committed change in crates/alpha, and `git diff main...HEAD` naming it. The controls (the same change left uncommitted is caught, exit != 0) pass.
+
+TWIN (the same gap, not covered by this test, and it must be fixed together or the script fix is unreachable): donegate's own scoping, crates/donegate/src/git.rs changed_files, uses `git diff --name-only`, `git diff --cached --name-only` and `ls-files --others`, all uncommitted-only. So on a clean tree the `when_changed = ["**/*.rs"]` checks are SKIPPED ("skipped (no matching changes)") before either script even runs.
+
+Readings:
+(a) Defect: a worktree's unmerged commits are exactly the work that has not yet been checked anywhere. "Nothing changed vs HEAD" reads as "nothing to check", and that is fail-open (CLAUDE.md §3).
+(b) Intended: the scripts are documented as a per-turn tripwire for "crates touched in the working tree" (their headers say so), and committed work is meant to be checked elsewhere.
+How to tell them apart: (b) needs an "elsewhere" that runs. Today nothing runs fmt/clippy/test on commit or merge (pre-commit runs no cargo, and condukt merge runs none: see the fmt/clippy-before-merge ticket). If a merge-time lint+test lands first, (b) becomes true for lint, and this ticket narrows to test-changed or can be closed by ruling. Design notes for the fixer:
+- Diff against the merge-base with the default branch (`git merge-base HEAD main`, or the condukt-recorded branch.<b>.conduktBase).
+- A merge-base that cannot be determined is undetermined and must not mean "nothing to check"."""
+created_at = 1793995742
+updated_at = 1793995742
+weight = 0.0
+issue_number = 1566
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1566"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q scripts/test_changed_crates_committed_unmerged_20261107.py"
+rev = "30d954377e2b64fc6a40bb69d1c3d772d99c2de9"
+observed_at = 1793995742
+detail = """
+exit 1: hort test summary info ============================
+FAILED scripts/test_changed_crates_committed_unmerged_20261107.py::CommittedUnmergedChangesAreChecked::test_lint_changed_checks_committed_unmerged_fmt_violation
+FAILED scripts/test_changed_crates_committed_unmerged_20261107.py::CommittedUnmergedChangesAreChecked::test_test_changed_checks_committed_unmerged_failing_test
+2 failed, 2 passed in 8.72s"""
+
+[[task]]
+id = "9c678b33"
+title = "test-changed-crates.sh reports a test binary deleted by a concurrent cap-target-dir cargo clean as an ordinary FAILED red"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """
+Observed 2026-11-07, session c2e3bc17, measured at rev 30d95437. On root ~/.condukt/worktrees/run-20261107-034825-70254-c2-8cd825f3, donegate's test-changed failed with `binary spawns: Os { code: 2, kind: NotFound }` at crates/backlog/tests/common/mod.rs:275 (CARGO_BIN_EXE_backlog). It did not reproduce at main: backlog 672 passed / 0 failed. The cause in that event is UNVERIFIED. The candidates are a worker's concurrent cargo in the same per-worktree target dir, or scripts/cap-target-dir.sh's `cargo clean`. That worktree has since been removed, so its target size cannot be measured any more.
+
+One sufficient mechanism, measured deterministically on 2026-11-07 with cargo 1.97.1 (c980f4866 2026-06-30): `cargo clean` does NOT wait for a `cargo test` that is already executing its test binary. It printed "Removed 154 files, 5.7MiB total" and exited 0 at once, and the waiting test then failed with exactly `binary spawns: Os { code: 2, kind: NotFound, message: "No such file or directory" }`. cap-target-dir.sh runs `cargo clean` whenever the target dir is over CARGO_TARGET_CAP_MB (default 20000). test-changed-crates.sh and lint-changed-crates.sh both call it, so two cargo users on one root can delete each other's binaries.
+
+RED (python3 -m pytest -q scripts/test_test_changed_env_failure_20261107.py): 1 failed, 1 passed, and it failed 4 of 4 runs. The fixture test writes `ready`, then waits for `go`. The driver runs cap-target-dir.sh with CARGO_TARGET_CAP_MB=1 between the two. test-changed's own lines were exactly "test-changed-crates: testing scratch-race" and "test-changed-crates: FAILED for scratch-race", with exit 1. The control (the same crate with no interference) exits 0.
+
+Readings:
+(a) Defect: an environment failure, where the binary was deleted under the run, is reported with the same words as a real test failure. In this session that was read as a red to be fixed by an agent who could not fix it. Separately, cap-target-dir.sh destroys a target dir that another cargo process is using.
+(b) Intended: both outcomes are non-zero and fail-closed, so labeling is cosmetic. The panic text (NotFound) is in the record for anyone who reads it.
+How to tell them apart: (b) keeps the verdict correct, so the question is only whether an environment red must be distinguishable. CLAUDE.md §3 lists "subprocess abnormal" and "undetermined" as their own class, and the user rulings on decision-relevant output are relevant here. The test accepts either fix:
+- exit 0, e.g. cap-target-dir does not clean an in-use target dir, or the failing package is re-run once;
+- a test-changed line that names the failure as environment/undetermined.
+Either way the result must stay non-zero when the failure is not shown to be environmental."""
+created_at = 1793995753
+updated_at = 1793995753
+weight = 0.0
+issue_number = 1567
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1567"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q scripts/test_test_changed_env_failure_20261107.py"
+rev = "30d954377e2b64fc6a40bb69d1c3d772d99c2de9"
+observed_at = 1793995753
+detail = """
+exit 1: scratch-race
+E       test-changed-crates: FAILED for scratch-race
+
+scripts/test_test_changed_env_failure_20261107.py:172: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_test_changed_env_failure_20261107.py::TestChangedEnvironmentFailure::test_target_dir_cleaned_under_running_test_is_not_an_ordinary_red
+1 failed, 1 passed in 7.97s"""

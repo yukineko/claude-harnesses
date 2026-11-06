@@ -103,6 +103,16 @@ Two consequences of that design, stated so they read as decisions:
   appears only in a comment is no longer `ignore-added`, and an `assert!` in a
   doc comment can no longer offset a real assertion removal.
 
+  One narrow exemption from `ignore-added` for Rust: a file the diff reports as
+  ADDED (absent at the base) whose every counted `#[ignore]` carries a
+  `backlog` reason (`#[ignore = "backlog <id>: ..."]`) is not reported. This is
+  the protocol's RED-repro commit (crates/backlog/README.ja.md), and the same
+  reasoning the Python half uses for new skipped tests. An ignore without that
+  reason in the same new file still blocks, an ignore added to a file that
+  existed at the base still blocks, and an unreadable base never reaches this
+  path (it is Undetermined before the diff is judged). Other kinds on such a file
+  are unaffected.
+
   What this deliberately does NOT do: pair functions across a rename. A function
   present at the base and absent at HEAD is not reported as assertion loss -- a
   rename is ordinary refactoring, and guessing which new name is "the same test"
@@ -1540,6 +1550,29 @@ def per_fn_losses(before: dict, after: dict) -> list:
     return losses
 
 
+# A backlog-filed red repro carries its ticket in the ignore reason:
+# `#[ignore = "backlog deadbeef: intentional RED repro"]` (crates/backlog/README.ja.md).
+# Matched on the RAW source at an offset that the masked scan already found as a
+# real `#[ignore]`, because the reason string itself is blanked by `_mask_noncode`.
+BACKLOG_IGNORE_REASON_RE = re.compile(r'#\s*\[\s*ignore\s*=\s*"\s*backlog\b')
+
+
+def _ignores_all_backlog_reasoned(surface: str, path: str) -> bool:
+    """True iff EVERY counted `#[ignore]` in `surface` carries a `backlog` reason.
+
+    Vacuously True for a surface with no ignores; the caller only consults it when
+    the ignore count rose. A real ignore without the reason (or one whose reason
+    cannot be located at the same offset in the raw source) makes this False, so
+    the finding stays. Only the masked scan decides WHAT is an ignore, so a
+    commented-out `#[ignore = "backlog ..."]` cannot launder a bare real one.
+    """
+    code = _mask_noncode(surface, path)
+    for m in IGNORE_ATTR_RE.finditer(code):
+        if BACKLOG_IGNORE_REASON_RE.match(surface, m.start()) is None:
+            return False
+    return True
+
+
 def findings_for(path: str, before: dict, after: dict) -> list:
     out = []
     losses = per_fn_losses(before["fn_assertions"], after["fn_assertions"])
@@ -1751,6 +1784,10 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
 
     results = []
     for old, new in sorted(set(pairs), key=lambda pr: (pr[1] or "", pr[0] or "")):
+        # Taken BEFORE the body remap below: only a path the diff reports as an
+        # addition (absent at the base) is a new file. A body file re-keyed to None
+        # by `body_base` existed at the base and must not inherit that exemption.
+        added_in_diff = old is None
         if old in body_base:
             old = None
         if new in body_after:
@@ -1772,10 +1809,8 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                 counts(test_surface(before_src, old, base_side), old)
                 if before_src else counts("")
             )
-            after = (
-                counts(test_surface(after_src, new, after_side), new)
-                if after_src else counts("")
-            )
+            after_surface = test_surface(after_src, new, after_side) if after_src else ""
+            after = counts(after_surface, new) if after_src else counts("")
             if before_src and (before["template_tests"] or after["template_tests"]):
                 # A `macro_rules!` test template expands once per invocation,
                 # and invocations are not counted: dropping `t!(case, ...)` or
@@ -1789,6 +1824,18 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                     "counted, so removed generated tests cannot be ruled out"
                 )
             found = findings_for(rep, before, after)
+            if (
+                added_in_diff
+                and after_src
+                and after["ignores"] > 0
+                and _ignores_all_backlog_reasoned(after_surface, new)
+            ):
+                # A file absent at the base cannot have had a surviving test
+                # skipped, and a backlog-filed RED repro is the protocol's way to
+                # record a known failure. Only the ignore-added kind is lifted;
+                # any other finding on the file still stands. A bare #[ignore]
+                # (no backlog reason) in the same file keeps the finding.
+                found = [f for f in found if f[1] != KIND_IGNORE_ADDED]
         for p, kind, detail in found:
             results.append(
                 {

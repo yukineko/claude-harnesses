@@ -540,39 +540,45 @@ fn evaluate_command() -> Result<()> {
 
     // Initialize-or-load: a fresh evaluate re-seeds the bundle from gather (so
     // it reflects the current repo state); a resumed carve keeps its answers.
-    let mut state = match carve::load(&root)? {
-        Some(mut s) => {
-            // Refresh the freshly-gathered material but keep recorded answers
-            // folded back in (they were appended as High fragments by `apply`).
-            s.bundle = bundle.clone();
-            for ans in &s.answers {
-                if !ans.defer {
-                    s.bundle.fragments.push(interrogate::Fragment {
-                        text: ans.value.clone(),
-                        source_path: format!("interrogate:answer:{}:{}", ans.gate, ans.reference),
-                        authority: interrogate::Authority::High,
-                        score: 0,
-                        anchor: None,
-                    });
+    // The whole load -> evaluate -> save runs under the carve-state lock
+    // (`carve::update`, backlog 03e655dc) so a concurrent `apply` cannot have
+    // its answer overwritten; an unreadable state or lock failure is an Err.
+    let view = carve::update(&root, |current| {
+        let mut state = match current {
+            Some(mut s) => {
+                // Refresh the freshly-gathered material but keep recorded answers
+                // folded back in (they were appended as High fragments by `apply`).
+                s.bundle = bundle.clone();
+                for ans in &s.answers {
+                    if !ans.defer {
+                        s.bundle.fragments.push(interrogate::Fragment {
+                            text: ans.value.clone(),
+                            source_path: format!(
+                                "interrogate:answer:{}:{}",
+                                ans.gate, ans.reference
+                            ),
+                            authority: interrogate::Authority::High,
+                            score: 0,
+                            anchor: None,
+                        });
+                    }
                 }
+                s
             }
-            s
+            None => CarveState::new(bundle, cfg.carve.max_rounds),
+        };
+
+        let open = interrogate::evaluate(&gates, &state.bundle);
+        // Reflect emptiness in status without consuming a round (round bumps only on
+        // `apply`): a clean floor at round 0 reads as resolved for the skill.
+        if open.is_empty() && state.round == 0 {
+            state.status = interrogate::CarveStatus::Resolved;
         }
-        None => CarveState::new(bundle, cfg.carve.max_rounds),
-    };
+        let view = serde_json::to_string_pretty(&CarveView::new(open, &state))?;
+        Ok((state, view))
+    })?;
 
-    let open = interrogate::evaluate(&gates, &state.bundle);
-    // Reflect emptiness in status without consuming a round (round bumps only on
-    // `apply`): a clean floor at round 0 reads as resolved for the skill.
-    if open.is_empty() && state.round == 0 {
-        state.status = interrogate::CarveStatus::Resolved;
-    }
-    carve::save(&root, &state)?;
-
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&CarveView::new(open, &state))?
-    );
+    println!("{view}");
     Ok(())
 }
 
@@ -591,15 +597,6 @@ fn apply_command(args: ApplyArgs) -> Result<()> {
     let json = read_arg_or_stdin(args.answer.unwrap_or_default())?;
     let answer: Answer = serde_json::from_str(&json).context("parsing answer JSON")?;
 
-    // Resume the carve; if none persisted, start one over the current gather.
-    let mut state = match carve::load(&root)? {
-        Some(s) => s,
-        None => {
-            let bundle = gather::gather(&root, &charter, &cfg)?;
-            CarveState::new(bundle, cfg.carve.max_rounds)
-        }
-    };
-
     let gates = CompassGates {
         cfg: &cfg,
         repo_root: &root,
@@ -607,13 +604,25 @@ fn apply_command(args: ApplyArgs) -> Result<()> {
         charter: &charter,
     };
 
-    let open = interrogate::apply(&gates, &mut state, answer);
-    carve::save(&root, &state)?;
+    // Resume the carve; if none persisted, start one over the current gather.
+    // load -> apply -> save runs under the carve-state lock (`carve::update`,
+    // backlog 03e655dc) so concurrent applies serialize instead of losing
+    // answers. An unreadable state or a lock failure is an Err, never a fresh
+    // state that would overwrite recorded answers.
+    let view = carve::update(&root, |current| {
+        let mut state = match current {
+            Some(s) => s,
+            None => {
+                let bundle = gather::gather(&root, &charter, &cfg)?;
+                CarveState::new(bundle, cfg.carve.max_rounds)
+            }
+        };
+        let open = interrogate::apply(&gates, &mut state, answer);
+        let view = serde_json::to_string_pretty(&CarveView::new(open, &state))?;
+        Ok((state, view))
+    })?;
 
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&CarveView::new(open, &state))?
-    );
+    println!("{view}");
     Ok(())
 }
 

@@ -16,6 +16,10 @@ fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_condukt")
 }
 
+/// PATH modelling a host WITHOUT pytest: only the system directories, never the
+/// inherited PATH (which may carry a venv python3 that has pytest installed).
+const PYTESTLESS_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+
 fn scrub(cmd: &mut Command) -> &mut Command {
     for (k, _) in std::env::vars_os() {
         if k.to_string_lossy().starts_with("GIT_") {
@@ -42,6 +46,7 @@ fn condukt(repo: &Path, home: &Path, args: &[&str]) -> Output {
     scrub(&mut Command::new(bin()))
         .current_dir(repo)
         .env("HOME", home)
+        .env("PATH", PYTESTLESS_PATH)
         .env("CONDUKT_AUTONOMOUS", "0")
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -57,6 +62,7 @@ struct Observed {
 
 fn run_case(tag: &str, criteria: &str, b_fails: bool) -> Observed {
     let py = Command::new("python3")
+        .env("PATH", PYTESTLESS_PATH)
         .args(["-m", "pytest", "--version"])
         .output()
         .expect("python3 must be runnable (cannot determine otherwise)");

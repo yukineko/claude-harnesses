@@ -135,7 +135,6 @@ fn under(paths: &[PathBuf], dir: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-#[ignore = "backlog f2de7f69: RED repro — path inside quoted `donegate skip --reason` becomes a session root"]
 fn path_inside_quoted_skip_reason_is_not_a_written_path_nor_root() {
     let f = fixture();
     let w = f.foreign.display();

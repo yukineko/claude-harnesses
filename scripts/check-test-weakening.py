@@ -1789,6 +1789,15 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                     "counted, so removed generated tests cannot be ruled out"
                 )
             found = findings_for(rep, before, after)
+        # A file that did not exist at the base cannot have had existing
+        # coverage weakened. Filter out ignore-added and should-panic-added
+        # findings when the file is new (old is None), as these cannot
+        # indicate coverage loss in a file with no prior tests.
+        if old is None:
+            found = [
+                (p, kind, detail) for p, kind, detail in found
+                if kind not in (KIND_IGNORE_ADDED, KIND_SHOULD_PANIC_ADDED)
+            ]
         for p, kind, detail in found:
             results.append(
                 {

@@ -53,7 +53,16 @@ pub fn load(root: &Path) -> Result<Option<CarveState>> {
     })
 }
 
-/// Persist `state` to `.compass/carve-state.json`, creating parent dirs.
+/// Take the exclusive carve-state lock (`carve-state.json.lock`). A read-modify-write
+/// of the state (load then [`save`]) must hold this guard across both, or concurrent
+/// `compass apply` runs lose each other's answers. Fail-closed: a lock that cannot be
+/// acquired is an `Err` (non-zero exit), never an unlocked fallback.
+pub(crate) fn lock(root: &Path) -> Result<crate::outcome::StoreLock> {
+    crate::outcome::lock_store(&state_path(root))
+}
+
+/// Persist `state` to `.compass/carve-state.json`, creating parent dirs. Uses a
+/// unique temp name; callers doing load-modify-save hold [`lock`].
 pub fn save(root: &Path, state: &CarveState) -> Result<()> {
     let path = state_path(root);
     if let Some(parent) = path.parent() {
@@ -61,11 +70,7 @@ pub fn save(root: &Path, state: &CarveState) -> Result<()> {
             .with_context(|| format!("creating {}", parent.display()))?;
     }
     let json = serde_json::to_string_pretty(state).context("serializing carve state")?;
-    // Write to a temp sibling then rename (mirror the outcomes store).
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json).with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("renaming into {}", path.display()))?;
-    Ok(())
+    crate::outcome::write_atomic(&path, &json)
 }
 
 /// Clear the persisted carve state (start fresh). Idempotent: a missing file is

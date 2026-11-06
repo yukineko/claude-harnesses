@@ -60,7 +60,6 @@ fn fixture() -> Fx {
 }
 
 #[test]
-#[ignore = "backlog: open defect (scout 2026-11-05) carve::save is unlocked + fixed tmp name"]
 fn concurrent_carve_apply_loses_no_answers() {
     let fx = fixture();
     let go = fx.proj.parent().unwrap().join("go");

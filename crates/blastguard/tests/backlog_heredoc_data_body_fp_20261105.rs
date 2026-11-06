@@ -70,7 +70,6 @@ fn a_git_commit_heredoc_trailer_gt_before_delimiter_is_not_a_redirect() {
 }
 
 #[test]
-#[ignore = "backlog 27795e6e: open defect (scout 2026-11-05) python string literal mentioning os.unlink( denied"]
 fn b_python_string_literal_mentioning_unlink_is_not_denied() {
     let cmd = "python3 - <<'PY'\nx = \"docs: os.unlink( removes a file\"\nprint(x)\nPY";
     let (d, r) = verdict(cmd);

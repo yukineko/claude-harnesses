@@ -7,6 +7,9 @@ use super::{
 };
 use crate::exclude;
 
+mod inert_literal;
+use inert_literal::{has_dynamic_code_execution, inert_literal_bodies};
+
 /// Non-shell interpreters that run an inline program supplied as a string
 /// argument (e.g. `python3 -c "…"`, `perl -e "…"`). Like a shell's `-c`, this
 /// lets `find -exec <interp> -c "<payload>"` run an arbitrary destructive
@@ -469,6 +472,11 @@ fn interpreter_destructive_call(payload: &str) -> Option<&'static str> {
 /// With `blank_strings`, the contents of quoted strings are dropped too (the
 /// quote characters stay). That text is used ONLY to choose the wording of a
 /// Deny — "it runs `x`" versus "a quoted string spells `x`" — never the verdict.
+/// In particular it is NOT the precondition of the string-only downgrade
+/// (backlog 27795e6e): blanking every quoted body also blanks code inside
+/// interpolation (`f"{os.unlink(p)}"`, `"#{File.delete(p)}"`), so "the spelling
+/// disappears" proves nothing. That downgrade is decided by
+/// [`inert_literal_bodies`] instead.
 fn strip_hash_comments(payload: &str, blank_strings: bool) -> String {
     let mut out = String::with_capacity(payload.len());
     let mut quote: Option<char> = None;
@@ -517,6 +525,19 @@ fn strip_hash_comments(payload: &str, blank_strings: bool) -> String {
         prev = Some(c);
     }
     out
+}
+
+/// Every [`INTERPRETER_DESTRUCTIVE_CALLS`] spelling present in `payload`
+/// (case-folded). [`interpreter_destructive_call`] returns only the first; the
+/// inert-literal downgrade must hold for ALL of them, or a second spelling in
+/// code would ride along with the first one's string-only proof.
+fn interpreter_destructive_calls(payload: &str) -> Vec<&'static str> {
+    let lowered = payload.to_ascii_lowercase();
+    INTERPRETER_DESTRUCTIVE_CALLS
+        .iter()
+        .filter(|needle| lowered.contains(**needle))
+        .copied()
+        .collect()
 }
 
 /// Commands whose effect cannot be undone after the fact, sitting beside the
@@ -895,7 +916,7 @@ pub(super) fn interpreter_code_verdict(
         program_text_redirects: Some(&redirects),
         ..ctx.clone()
     };
-    let comment_mention = std::cell::Cell::new(None);
+    let mentions = Mentions::default();
     let verdict = interpreter_program_verdict(
         shape,
         payloads,
@@ -903,14 +924,38 @@ pub(super) fn interpreter_code_verdict(
         ctx,
         &program_ctx,
         expansion_possible,
-        &comment_mention,
+        &mentions,
     );
+    // A destructive spelling that `inert_literal_bodies` showed sits only inside
+    // plain, non-interpolating quoted literals of the layer-0 program, with no
+    // dynamic-execution marker anywhere in it (backlog 27795e6e). Recorded
+    // during the scan rather than returned from it, so a Deny found anywhere
+    // else — an unrecoverable write, a shell command, a deeper layer — still
+    // outranks it (model.rs). Otherwise it is an Ask, never Allow: the marker
+    // list is a heuristic, so blastguard cannot show the string is never run.
+    let verdict = match (mentions.string.get(), verdict) {
+        (_, Decision::Deny(reason)) => Decision::Deny(reason),
+        (None, v) => v,
+        (Some(call), v) => {
+            let finding = format!(
+                "{shape}, and its program spells `{call}` only inside plain quoted string \
+literals (no interpolation, no dynamic-execution marker seen); blastguard does not parse the \
+program's language, so it cannot show that string is never run as code."
+            );
+            match v {
+                Decision::Ask(reason) => {
+                    recommend_against(Decision::ask(format!("{reason}; {finding}")))
+                }
+                _ => recommend_against(Decision::ask(finding)),
+            }
+        }
+    };
     // A destructive spelling seen ONLY inside what reads as a `#` comment
     // (backlog 6798f47d). Not a Deny — the reason would claim a call nobody
     // observed — and not silence either: `strip_hash_comments` is not a parser
     // for the program's language, so a misread comment cannot be shown to be
     // inert. A Deny found elsewhere still wins.
-    let verdict = match (comment_mention.get(), verdict) {
+    let verdict = match (mentions.comment.get(), verdict) {
         (_, Decision::Deny(reason)) => Decision::Deny(reason),
         (None, v) => v,
         (Some(call), v) => {
@@ -943,6 +988,18 @@ string, but blastguard cannot show that it is not a redirect."
     }
 }
 
+/// Destructive spellings [`interpreter_program_verdict`] saw but did not deny
+/// on the spot. Each becomes an Ask in [`interpreter_code_verdict`] unless the
+/// scan returns a Deny, which outranks it.
+#[derive(Default)]
+struct Mentions {
+    /// Spelled only in what reads as a `#` comment (backlog 6798f47d).
+    comment: std::cell::Cell<Option<&'static str>>,
+    /// Spelled only inside literals [`inert_literal_bodies`] proved inert, in a
+    /// layer-0 program with no dynamic-execution marker (backlog 27795e6e).
+    string: std::cell::Cell<Option<&'static str>>,
+}
+
 /// The body of [`interpreter_code_verdict`]. `program_ctx` is `ctx` with
 /// [`Ctx::program_text_redirects`] set; it is used ONLY for the shell pass
 /// over each program-text layer, so every other check judges exactly as before
@@ -954,7 +1011,7 @@ fn interpreter_program_verdict(
     ctx: &Ctx<'_>,
     program_ctx: &Ctx<'_>,
     expansion_possible: bool,
-    comment_mention: &std::cell::Cell<Option<&'static str>>,
+    mentions: &Mentions,
 ) -> Decision {
     // Descend through nested quoting rather than stopping at the first layer.
     // A destructive command can sit several quote layers down —
@@ -967,6 +1024,15 @@ fn interpreter_program_verdict(
     // PreToolUse hook, so the number of them a single command line can provoke
     // is bounded rather than left to the length of the program.
     const MAX_RECOVERY_PROBES: usize = 6;
+    // Backlog 27795e6e: the inert-literal downgrade is only considered when no
+    // layer-0 payload carries a dynamic-execution marker — a program that can
+    // run a string is not one whose strings are shown to be data.
+    let dynamic_execution = payloads.iter().any(|p| has_dynamic_code_execution(p));
+    // Bodies of layer-0 literals `inert_literal_bodies` proved inert. A deeper
+    // layer is exempt from the destructive-spelling Deny ONLY when it is
+    // verbatim one of these (it is the same string contents one layer down);
+    // every other deeper-layer payload keeps the Deny.
+    let mut inert_bodies: Vec<String> = Vec::new();
     let mut layer: Vec<String> = payloads.to_vec();
     for depth_of_layer in 0..MAX_QUOTE_LAYERS {
         if layer.is_empty() {
@@ -977,27 +1043,60 @@ fn interpreter_program_verdict(
             // Backlog 6798f47d: judged on the text with `#` comments removed,
             // so a mention in a comment is not reported as a call. A spelling
             // that exists ONLY in a comment is recorded, not dropped.
-            if let Some(call) = interpreter_destructive_call(&strip_hash_comments(payload, false)) {
-                // Layer 0 is the program text itself; deeper layers, and any
-                // spelling found only inside a quoted string of layer 0, are
-                // string contents that may or may not be run as code — the
-                // reason says so rather than claiming a call. Same Deny either
-                // way: only the wording depends on this.
-                let outside_strings = depth_of_layer == 0
-                    && interpreter_destructive_call(&strip_hash_comments(payload, true)).is_some();
-                if outside_strings {
+            let calls = interpreter_destructive_calls(&strip_hash_comments(payload, false));
+            if let Some(&call) = calls.first() {
+                // Backlog 27795e6e: a spelling that sits only inside literals
+                // `inert_literal_bodies` positively proved inert (layer 0, every
+                // destructive spelling in the payload, no dynamic-execution
+                // marker in the program) is recorded as a PENDING Ask and the
+                // scan continues, so a Deny earned anywhere else still outranks
+                // it. It is never an early return.
+                let proven_inert: Option<Vec<String>> = if dynamic_execution {
+                    None
+                } else if depth_of_layer == 0 {
+                    calls
+                        .iter()
+                        .map(|c| inert_literal_bodies(payload, c))
+                        .collect::<Option<Vec<Vec<&str>>>>()
+                        .map(|v| v.into_iter().flatten().map(str::to_string).collect())
+                } else if inert_bodies.iter().any(|b| b == payload) {
+                    Some(Vec::new())
+                } else {
+                    None
+                };
+                if let Some(bodies) = proven_inert {
+                    if mentions.string.get().is_none() {
+                        mentions.string.set(Some(call));
+                    }
+                    for body in bodies {
+                        if !inert_bodies.contains(&body) {
+                            inert_bodies.push(body);
+                        }
+                    }
+                } else {
+                    // Layer 0 is the program text itself; deeper layers, and
+                    // any spelling found only inside a quoted string of layer
+                    // 0, are string contents that may or may not be run as
+                    // code — the reason says so rather than claiming a call.
+                    // Same Deny either way: only the wording depends on
+                    // `strip_hash_comments(payload, true)`.
+                    let outside_strings = depth_of_layer == 0
+                        && interpreter_destructive_call(&strip_hash_comments(payload, true))
+                            .is_some();
+                    if outside_strings {
+                        return Decision::deny(format!(
+                            "{shape}, and it runs `{call}`, which deletes files or directories \
+outright"
+                        ));
+                    }
                     return Decision::deny(format!(
-                        "{shape}, and it runs `{call}`, which deletes files or directories outright"
+                        "{shape}, and a quoted string in its program spells `{call}`, which deletes \
+files or directories outright if that string is run as code; blastguard cannot show it is not"
                     ));
                 }
-                return Decision::deny(format!(
-                    "{shape}, and a quoted string in its program spells `{call}`, which deletes \
-files or directories outright if that string is run as code; blastguard cannot show it is not"
-                ));
-            }
-            if comment_mention.get().is_none() {
+            } else if mentions.comment.get().is_none() {
                 if let Some(call) = interpreter_destructive_call(payload) {
-                    comment_mention.set(Some(call));
+                    mentions.comment.set(Some(call));
                 }
             }
             // `program_ctx`: an undeterminable redirect target is recorded for

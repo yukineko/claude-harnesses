@@ -88,19 +88,16 @@ fn assert_not_allowed(tag: &str, command: &str) {
 }
 
 #[test]
-#[ignore = "backlog: command-position brace builds the git stash subcommand (RED 2026-11-07)"]
 fn brace_list_building_stash_push_is_not_allowed() {
     assert_not_allowed("cmd-list", "git {stash,push} -u");
 }
 
 #[test]
-#[ignore = "backlog: command-position brace builds the git stash subcommand (RED 2026-11-07)"]
 fn brace_list_including_sweep_flag_is_not_allowed() {
     assert_not_allowed("cmd-list-u", "git {stash,push,-u}");
 }
 
 #[test]
-#[ignore = "backlog: command-position brace builds the git stash subcommand (RED 2026-11-07)"]
 fn brace_with_empty_alternative_before_stash_is_not_allowed() {
     assert_not_allowed("cmd-empty", "git {,stash} push -u");
 }

@@ -135,7 +135,7 @@ echo "test-changed-crates: testing$pkgs"
 cap_marker=""
 if meta="$(cargo metadata --no-deps --format-version=1)"; then
     td="$(printf '%s' "$meta" | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
-    [ -n "$td" ] && cap_marker="${td%/}.cap-cleaned-at"
+    [ -n "$td" ] && cap_marker="${td%/}/.cap-cleaned-at"
 fi
 
 failed=""

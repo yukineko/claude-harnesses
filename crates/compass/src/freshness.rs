@@ -595,4 +595,50 @@ mod tests {
         // "rs" is < 3 chars => dropped as ASCII noise.
         assert!(!toks.contains(&"rs".to_string()));
     }
+
+    /// Audit B item 10 (memory compass-gotchas, "DoD refs false-positive"):
+    /// ordinary Japanese prose that uses `/` as a list separator, or names a
+    /// bare `*.rs` file, must not be read as a missing repo path. Planned fix
+    /// (memory): `looks_like_path` accepts only tokens rooted at an existing
+    /// top-level dir. CONTROL: a token rooted at an existing top-level dir
+    /// that does not resolve must still trip, so the fix cannot be "never
+    /// flag anything".
+    #[test]
+    fn dod_prose_slash_lists_and_bare_filenames_are_not_paths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("crates")).unwrap();
+        let prose = [
+            "入力が無い/ゼロのときも落ちない",
+            "groom/inject/snapshotの3経路が通る",
+            "ledger/stateの整合が取れる",
+            "types.rsとhandlers.rsの責務を分ける",
+        ];
+        let control = "crates/nope/missing.rsを参照する";
+        let mut dod: Vec<String> = prose.iter().map(|s| s.to_string()).collect();
+        dod.push(control.to_string());
+        let charter = Charter {
+            north_star: "x".to_string(),
+            definition_of_done: dod,
+            ..Charter::default()
+        };
+        let charter_path = Charter::project_path(dir.path());
+        let f = check(dir.path(), &charter_path, &charter, &Config::default());
+        assert!(
+            f.reasons
+                .iter()
+                .any(|r| r.contains("crates/nope/missing.rs")),
+            "control: a missing path under an existing top-level dir must still trip: {:?}",
+            f.reasons
+        );
+        let flagged: Vec<&String> = f
+            .reasons
+            .iter()
+            .filter(|r| r.contains("DoD references missing path"))
+            .filter(|r| !r.contains("crates/nope/missing.rs"))
+            .collect();
+        assert!(
+            flagged.is_empty(),
+            "prose tokens were flagged as missing paths: {flagged:?}"
+        );
+    }
 }

@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "backlog"
-version = "0.3.89"
+version = "0.3.90"
 dependencies = [
  "anyhow",
  "clap",
@@ -298,7 +298,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "compass"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "anyhow",
  "clap",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "context-governor"
-version = "0.1.26"
+version = "0.1.27"
 dependencies = [
  "anyhow",
  "harness-core",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.66"
+version = "0.1.67"
 dependencies = [
  "anyhow",
  "chrono",

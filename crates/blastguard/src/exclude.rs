@@ -105,9 +105,22 @@ const PROTECTED_GLOBS: &[&str] = &[
     // such as `core.fsmonitor`): one appended `[core] hooksPath = /dev/null`
     // disables every git hook, `.githooks/` included, without touching either
     // hook tree (backlog 03885f11). Only the config file itself is named —
-    // the rest of `.git/` keeps its ordinary rules.
+    // the rest of `.git/` keeps its ordinary rules. The config TWINS carry the
+    // same keys and git reads them too, so they are named alongside it:
+    // `config.worktree` (per-worktree config under `extensions.worktreeConfig`)
+    // and the linked-worktree admin copies `worktrees/<name>/config` /
+    // `worktrees/<name>/config.worktree`. `*` matches exactly one segment (the
+    // worktree name). A shell write to any of them was allowed while
+    // `.git/config` was refused (the Write tool already denied all via
+    // `is_git_internal`).
     ".git/config",
     "**/.git/config",
+    ".git/config.worktree",
+    "**/.git/config.worktree",
+    ".git/worktrees/*/config",
+    "**/.git/worktrees/*/config",
+    ".git/worktrees/*/config.worktree",
+    "**/.git/worktrees/*/config.worktree",
     // ---- deployed plugin executables & hook wiring (backlog 1b82a049) ----
     // The plugin cache is where every hook actually runs FROM: `bin/` holds
     // the launcher and the per-platform binaries, `hooks/` the `hooks.json`

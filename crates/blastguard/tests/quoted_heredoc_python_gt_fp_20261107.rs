@@ -147,7 +147,7 @@ fn assert_judged_like_neutral(tag: &str, cmd: &str, neutral: &str) {
 
 /// TARGET (RED at d9863f70): the exact observed command.
 #[test]
-#[ignore = "backlog PENDING: quoted `>` after a python stdin heredoc is judged as its program text"]
+#[ignore = "backlog aafeaa05: quoted `>` after a python stdin heredoc is judged as its program text"]
 fn exact_observed_python_heredoc_command_is_not_denied_for_a_later_quoted_gt() {
     let neutral = EXACT.replace("grep '^>'", "grep '^X'");
     assert_judged_like_neutral("exact", EXACT, &neutral);
@@ -156,7 +156,7 @@ fn exact_observed_python_heredoc_command_is_not_denied_for_a_later_quoted_gt() {
 /// TARGET (RED at d9863f70): minimal shape — a program that writes nothing,
 /// then a shell command whose single-quoted argument is `>`.
 #[test]
-#[ignore = "backlog PENDING: quoted `>` after a python stdin heredoc is judged as its program text"]
+#[ignore = "backlog aafeaa05: quoted `>` after a python stdin heredoc is judged as its program text"]
 fn minimal_python_heredoc_then_quoted_gt_argument_is_not_denied() {
     for (i, (cmd, neutral)) in [
         (

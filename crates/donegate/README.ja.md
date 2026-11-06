@@ -109,8 +109,9 @@ donegate gate          # チェックを手動実行（人間向けレポート�
   「新しく検証したものは無い・チェックはまだ RED」と書いた JSON `systemMessage` 付きで通す。waiver した
   停止は `max_attempts` に数えず、ツリーが変わればブロックする。適用は `session_id` が空でない Stop hook
   payload のみ（手動 `donegate gate` は exit 1 のまま、session id の無い payload はブロック）。記憶は
-  チェーン終了（グリーン・give-up・skip・`reset_after_secs` のアイドルリセット）で消えるので、グリーンの後に
-  以前ブロックされたツリーへ戻せば再びブロックする。ツリーや署名が判定できなければブロックする。waiver は
+  チェーン終了（グリーン・give-up・skip・`reset_after_secs` のアイドルリセット）で消える。これとは別に、
+  共有の `harness_core::repeat` ledger（2026-09-18 裁定）は同一セッション内で同文のブロックが再発すれば
+  通しうる。ツリーや署名が判定できなければブロックする。waiver は
   gate log に `repeat-waived` として残るが overwatch ledger には書かない。別 root がブロックするときは、
   他 root の waiver / give-up 通知をブロック理由に追記する。有界な出口は試行上限と give-up sentinel
   （`donegate:giveup:<check>`）である。

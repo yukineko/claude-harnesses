@@ -85,8 +85,9 @@ and the checks are still RED. A waived stop does not count toward
 `max_attempts`; a changed tree still blocks. It applies only to a Stop hook
 payload with a non-empty `session_id` (manual `donegate gate` keeps exiting 1;
 a payload without a session id blocks). The memory is cleared when the chain
-ends (green, give-up, skip, or the counter's `reset_after_secs` idle reset), so
-returning to an earlier blocked tree after a green stop blocks again. A tree or
+ends (green, give-up, skip, or the counter's `reset_after_secs` idle reset).
+Separately, the shared `harness_core::repeat` ledger (ruling 2026-09-18) can
+still waive a block whose text recurs in the same session. A tree or
 signature that cannot be determined blocks. Waived stops are logged
 (`repeat-waived` in the gate log) but write no overwatch ledger entry.
 When another root blocks the stop, the other roots' waiver / give-up notices are

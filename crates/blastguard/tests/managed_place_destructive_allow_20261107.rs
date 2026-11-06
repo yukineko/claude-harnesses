@@ -459,3 +459,84 @@ fn control_rm_rf_primary_tree_subdir_not_allow() {
     let out = f.bash(&case);
     assert_verdict(&case, &out, "deny");
 }
+
+#[test]
+fn control_rm_rf_primary_tree_subdir_wildcard_not_allow() {
+    let f = Fixture::new("c_rmglob_primary_subdir");
+    let case = format!("rm -rf {}/*", f.repo.join(SUBDIR).display());
+    let out = f.bash(&case);
+    assert_verdict(&case, &out, "ask");
+}
+
+/// The temp root itself is not a place inside the temp root. The hook only
+/// judges the command; nothing is executed.
+#[test]
+fn control_rm_rf_private_tmp_root_itself_not_allow() {
+    let f = Fixture::new("c_rm_private_tmp_root");
+    let case = "rm -rf /private/tmp";
+    let out = f.bash(case);
+    assert_verdict(case, &out, "deny");
+}
+
+/// `<hw>/wt/../../repo/subdir` lexically starts in the harness worktree but
+/// lands in the primary tree.
+#[test]
+fn control_rm_rf_dotdot_from_harness_worktree_into_primary_not_allow() {
+    let f = Fixture::new("c_rm_dotdot_hw");
+    let op = f.hwt.join("../../repo").join(SUBDIR);
+    assert_eq!(
+        op.canonicalize().unwrap(),
+        f.repo.join(SUBDIR).canonicalize().unwrap(),
+        "fixture: operand must land in the primary tree"
+    );
+    let case = format!("rm -rf {}", op.display());
+    let out = f.bash(&case);
+    assert_verdict(&case, &out, "ask");
+}
+
+/// `$HOME/.condukt/worktrees/RUN-t2/../../../../src/repo/subdir` lands in the
+/// primary tree.
+#[test]
+fn control_rm_rf_dotdot_from_condukt_worktree_into_primary_not_allow() {
+    let f = Fixture::new("c_rm_dotdot_condukt");
+    let op = f.cwt.join("../../../../src/repo").join(SUBDIR);
+    assert_eq!(
+        op.canonicalize().unwrap(),
+        f.repo.join(SUBDIR).canonicalize().unwrap(),
+        "fixture: operand must land in the primary tree"
+    );
+    let case = format!("rm -rf {}", op.display());
+    let out = f.bash(&case);
+    assert_verdict(&case, &out, "ask");
+}
+
+/// `git -C <hw>/wt/../../repo restore` targets the primary tree.
+#[test]
+fn control_restore_with_dotdot_from_harness_worktree_into_primary_not_allow() {
+    let f = Fixture::new("c_restore_dotdot_hw");
+    let dir = f.hwt.join("../../repo");
+    assert_eq!(
+        dir.canonicalize().unwrap(),
+        f.repo.canonicalize().unwrap(),
+        "fixture: -C dir must land in the primary tree"
+    );
+    let case = format!("git -C {} restore {DIRTY_FILE}", dir.display());
+    let out = f.bash(&case);
+    assert_verdict(&case, &out, "deny");
+}
+
+/// `git -C $HOME/.condukt/worktrees/RUN-t2/../../../../src/repo restore`
+/// targets the primary tree.
+#[test]
+fn control_restore_with_dotdot_from_condukt_worktree_into_primary_not_allow() {
+    let f = Fixture::new("c_restore_dotdot_condukt");
+    let dir = f.cwt.join("../../../../src/repo");
+    assert_eq!(
+        dir.canonicalize().unwrap(),
+        f.repo.canonicalize().unwrap(),
+        "fixture: -C dir must land in the primary tree"
+    );
+    let case = format!("git -C {} restore {DIRTY_FILE}", dir.display());
+    let out = f.bash(&case);
+    assert_verdict(&case, &out, "deny");
+}

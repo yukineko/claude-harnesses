@@ -374,6 +374,14 @@ impl Task {
         matches!(self.defer_until, Some(t) if t > now)
     }
 
+    /// True when the task should be *displayed* as `deferred`: its
+    /// `defer_until` is in the future AND its status is not terminal. A
+    /// `done` / `cancelled` task keeps its terminal status whatever its
+    /// `defer_until` says (backlog 8cd825f3).
+    pub fn is_displayed_deferred(&self, now: i64) -> bool {
+        !self.status.is_terminal() && self.is_deferred(now)
+    }
+
     /// Returns true when the task carries a [`TAG_WONTFIX`] tag (ASCII
     /// case-insensitive): a human ruling "do not implement" (backlog 016c2562).
     /// Such a task is never handed out by `next` / `next --claim`, whatever its

@@ -161,37 +161,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; 
 error: test failed, to rerun pass `-p compass --test backlog_scout_20261105`"""
 
 [[task]]
-id = "af5dcf5c"
-title = "blastguard: abbreviated (--al, --include-u) and brace-expanded ({-u,}) git stash sweep flags are allowed (fail-open)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = "Measured 2026-11-05/06 at main 2f9f927e (blastguard 0.2.265) and re-observed at 615e64f8 (0.2.269): git stash push --al, git stash push --include-u, and git stash push {-u,} are Allowed. Real git 2.50.1 in a scratch repo: --al and --include-u each removed the untracked file; bash -c 'git stash push {-u,}' too (bash expands to -u; under zsh it fails with 'empty string is not a valid pathspec'). Test 615e64f8: 3 #[ignore] RED cases (3 failed with --include-ignored), 2 controls green (--all non-allow, -m msg allowed). Readings: (a) defect: git accepts unambiguous long-option abbreviations and bash brace-expands, so exact-spelling matching is a fail-open in a destructive-command gate; (b) accepted limit: is_stash_sweep_flag doc in crates/blastguard/src/detect/git.rs says 'Exact spellings only (abbreviated long options are not matched)'. Distinguish: the user ruling for b942eb2c accepted Ask on undeterminable stash args, which favours (a): match any prefix of --all/--include-untracked of length >= git's unambiguity, and Ask on any word containing an unquoted brace. Fix: then remove the #[ignore]s."
-created_at = 1793974211
-updated_at = 1793974211
-weight = 0.0
-issue_number = 1555
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1555"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test git_stash_abbrev_brace_flag_failopen_20261105 -- --include-ignored"
-rev = "615e64f898c5c5e6dea20c395ab59c0d87564860"
-observed_at = 1793974211
-detail = """
-exit 101: ssed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
-     Running tests/git_stash_abbrev_brace_flag_failopen_20261105.rs (target/debug/deps/git_stash_abbrev_brace_flag_failopen_20261105-068358c03ec2c0ba)
-error: test failed, to rerun pass `-p blastguard --test git_stash_abbrev_brace_flag_failopen_20261105`"""
-
-[[task]]
 id = "f2de7f69"
 title = "harness-core attribution: path inside quoted donegate skip --reason becomes a session root (tdd/reviewgate skip twin missing)"
 project = "/Users/yuki/src/harness"
@@ -266,3 +235,33 @@ exit 101: /Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.63s
      Running tests/backlog_protected_path_ask_masks_deny_20261107.rs (target/debug/deps/backlog_protected_path_ask_masks_deny_20261107-be156aafdf3cdbbf)
 error: test failed, to rerun pass `-p blastguard --test backlog_protected_path_ask_masks_deny_20261107`"""
+
+[[task]]
+id = "debc6df3"
+title = "blastguard: command-position brace (git {stash,push} -u, git {,stash} push -u) builds an untracked-removing git stash and is allowed (fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Verifier finding on the af5dcf5c fix (branch 63e70497), filed per user ruling 2026-11-07 on escalation esc-2efa0125 (option A: merge af5dcf5c, file this). Re-observed at 47a5ee8e (blastguard 0.2.278) on darwin: git {stash,push} -u, git {stash,push,-u} and git {,stash} push -u are Allowed; real bash expands each to 'git stash push -u' (printf check: 'git stash push -u'). The af5dcf5c fix only asks on braces inside stash arguments; a brace building the subcommand word means the stash detector never runs. Readings: (a) defect: a destructive-command gate must Ask on any unexpanded brace before the git subcommand; (b) accepted limit of a static argv splitter. The user ruling favours (a). Repro: 3 #[ignore] RED cases + 1 control in crates/blastguard/tests/git_stash_cmdpos_brace_failopen_20261107.rs (1 passed; 3 failed with --include-ignored). Fix then remove the ignores."
+created_at = 1793985726
+updated_at = 1793985726
+weight = 0.0
+issue_number = 1559
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1559"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test git_stash_cmdpos_brace_failopen_20261107 -- --include-ignored"
+rev = "47a5ee8e131513c5a8a4a22083882de62495ac44"
+observed_at = 1793985726
+detail = """
+exit 101: stguard v0.2.278 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.70s
+     Running tests/git_stash_cmdpos_brace_failopen_20261107.rs (target/debug/deps/git_stash_cmdpos_brace_failopen_20261107-6d83ceeef943de78)
+error: test failed, to rerun pass `-p blastguard --test git_stash_cmdpos_brace_failopen_20261107`"""

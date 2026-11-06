@@ -67845,3 +67845,71 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 132 filtered out; fi
 rev = "875220fb264c37a1ac4683830a387b0df9a8584c"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "af5dcf5c"
+title = "blastguard: abbreviated (--al, --include-u) and brace-expanded ({-u,}) git stash sweep flags are allowed (fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Measured 2026-11-05/06 at main 2f9f927e (blastguard 0.2.265) and re-observed at 615e64f8 (0.2.269): git stash push --al, git stash push --include-u, and git stash push {-u,} are Allowed. Real git 2.50.1 in a scratch repo: --al and --include-u each removed the untracked file; bash -c 'git stash push {-u,}' too (bash expands to -u; under zsh it fails with 'empty string is not a valid pathspec'). Test 615e64f8: 3 #[ignore] RED cases (3 failed with --include-ignored), 2 controls green (--all non-allow, -m msg allowed). Readings: (a) defect: git accepts unambiguous long-option abbreviations and bash brace-expands, so exact-spelling matching is a fail-open in a destructive-command gate; (b) accepted limit: is_stash_sweep_flag doc in crates/blastguard/src/detect/git.rs says 'Exact spellings only (abbreviated long options are not matched)'. Distinguish: the user ruling for b942eb2c accepted Ask on undeterminable stash args, which favours (a): match any prefix of --all/--include-untracked of length >= git's unambiguity, and Ask on any word containing an unquoted brace. Fix: then remove the #[ignore]s."
+created_at = 1793974211
+updated_at = 1793985637
+weight = 0.0
+issue_number = 1555
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1555"
+issue_closed_at = 1793985640
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test git_stash_abbrev_brace_flag_failopen_20261105 -- --include-ignored"
+rev = "615e64f898c5c5e6dea20c395ab59c0d87564860"
+observed_at = 1793974211
+detail = """
+exit 101: ssed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/git_stash_abbrev_brace_flag_failopen_20261105.rs (target/debug/deps/git_stash_abbrev_brace_flag_failopen_20261105-068358c03ec2c0ba)
+error: test failed, to rerun pass `-p blastguard --test git_stash_abbrev_brace_flag_failopen_20261105`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test git_stash_abbrev_brace_flag_failopen_20261105 -- --include-ignored"
+exit = 0
+passed = 10
+rev = "65b3d26e1d6b0a95407ad4fc1b3eef19d70b472f"
+observed_at = 1793985622
+output_digest = "sha256:be20a51dd5b16137a7bdcde510a4577a7361ae2dbfdb9b06428e2d071dba20c8"
+excerpt = """
+
+running 10 tests
+test brace_with_quoted_close_brace_is_not_allowed ... ok
+test brace_in_message_value_slot_is_not_allowed ... ok
+test brace_expanded_dash_u_is_not_allowed ... ok
+test abbreviated_include_untracked_is_not_allowed ... ok
+test control_exact_all_is_not_allowed ... ok
+test brace_with_escaped_close_brace_is_not_allowed ... ok
+test abbreviated_all_is_not_allowed ... ok
+test brace_in_long_message_value_slot_is_not_allowed ... ok
+test control_plain_stash_with_message_is_allowed ... ok
+test control_stash_ref_brace_is_allowed ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/git_stash_abbrev_brace_flag_failopen_20261105.rs (target/debug/deps/git_stash_abbrev_brace_flag_failopen_20261105-6fef7e2d72799a28)
+"""
+
+[task.closure.red]
+rev = "875220fb264c37a1ac4683830a387b0df9a8584c"
+exit = 101
+kind = "behavioural"

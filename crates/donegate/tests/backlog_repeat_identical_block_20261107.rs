@@ -234,7 +234,6 @@ fn assert_second_identical_stop_does_not_reblock(f: &Fixture, cwd: &Path) {
 /// The observed shape: hook cwd = primary tree, the red root is a linked
 /// worktree the session wrote into (the per-root loop in gate_run).
 #[test]
-#[ignore = "backlog: donegate re-blocks the Stop on an identical finding (extra root) — RED repro 2026-11-07"]
 fn second_identical_stop_on_extra_root_is_not_a_block_but_says_nothing_new() {
     let f = Fixture::new();
     assert_second_identical_stop_does_not_reblock(&f, &f.primary.clone());
@@ -242,7 +241,6 @@ fn second_identical_stop_on_extra_root_is_not_a_block_but_says_nothing_new() {
 
 /// Same property on the hook-cwd root (the single-root flow in gate_run).
 #[test]
-#[ignore = "backlog: donegate re-blocks the Stop on an identical finding (cwd root) — RED repro 2026-11-07"]
 fn second_identical_stop_on_cwd_root_is_not_a_block_but_says_nothing_new() {
     let f = Fixture::new();
     assert_second_identical_stop_does_not_reblock(&f, &f.wt.clone());

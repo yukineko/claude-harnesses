@@ -210,7 +210,6 @@ fn control_first_stop_blocks_and_names_check() {
 }
 
 #[test]
-#[ignore = "RED: backlog b80023b3 giveup-after-2 ruling 2026-11-07; remove when fixed"]
 fn default_max_attempts_is_two_third_stop_gives_up() {
     let f = Fixture::new();
     let (s1, s2, s3) = run_three(&f);
@@ -238,7 +237,6 @@ fn default_max_attempts_is_two_third_stop_gives_up() {
 }
 
 #[test]
-#[ignore = "RED: backlog b80023b3 giveup-after-2 ruling 2026-11-07; remove when fixed"]
 fn giveup_is_explicit_allow_with_nonempty_system_message() {
     let f = Fixture::new();
     let (_s1, _s2, s3) = run_three(&f);
@@ -258,7 +256,6 @@ fn giveup_is_explicit_allow_with_nonempty_system_message() {
 }
 
 #[test]
-#[ignore = "RED: backlog b80023b3 giveup-after-2 ruling 2026-11-07; remove when fixed"]
 fn third_identical_content_stop_is_not_a_block() {
     let f = Fixture::new();
     let tp = f.transcript();
@@ -273,7 +270,6 @@ fn third_identical_content_stop_is_not_a_block() {
 }
 
 #[test]
-#[ignore = "RED: backlog b80023b3 giveup-after-2 ruling 2026-11-07; remove when fixed"]
 fn repo_donegate_toml_max_attempts_is_two() {
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../donegate.toml");
     let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));

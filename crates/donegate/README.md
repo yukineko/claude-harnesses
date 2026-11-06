@@ -83,7 +83,7 @@ sentinel (`donegate:giveup:<check>`, see Loop safety).
 ### Loop safety
 
 - A per-session **attempt counter** gives up after `max_attempts` consecutive
-  blocks (default 3) and allows the stop, so a genuinely stuck agent isn't
+  blocks (default 2) and allows the stop, so a genuinely stuck agent isn't
   trapped. The counter resets after `reset_after_secs` of idle, or on any green.
 - **Escape hatch**: `donegate skip --reason "<why>"` — consumed once, allows
   the next stop, and applies only to the session that issued it. A reason is

@@ -308,6 +308,9 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // "green, checks: []"). Extra roots are evaluated here; the hook cwd keeps
     // the existing flow below. Placed after the operator escapes (see
     // `tests/gate_escape_ordering.rs`).
+    // Non-blocking stop messages (give-ups, identical-finding waivers) collected
+    // from every root; printed once as a single `systemMessage` JSON at the exit.
+    let mut notices: Vec<String> = Vec::new();
     {
         let names = roots
             .roots
@@ -388,10 +391,30 @@ fn gate_run(hook: Option<HookInput>) -> ! {
                     rcfg.max_attempts,
                     failing.join(", ")
                 );
+                notices.push(format!(
+                    "[root: {}] {}",
+                    r.display(),
+                    giveup_message(&failing, rcfg.max_attempts)
+                ));
                 continue;
+            }
+            let sig = red_signature(r, &report);
+            if let Some(sig) = &sig {
+                if state::is_repeat(&rcfg.state_dir, &session, r, sig) {
+                    log_event(&rcfg, &session, "repeat-waived", &failing, attempt);
+                    notices.push(format!(
+                        "[root: {}] {}",
+                        r.display(),
+                        repeat_message(&failing)
+                    ));
+                    continue;
+                }
             }
             log_event(&rcfg, &session, "blocked", &failing, attempt);
             emit_violations(r, &session, &failing, Outcome::Blocked);
+            if let Some(sig) = &sig {
+                state::remember(&rcfg.state_dir, &session, r, sig);
+            }
             blocks.push(format!(
                 "[root: {}]\n{}",
                 r.display(),
@@ -404,6 +427,9 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             ));
         }
         if !blocks.is_empty() {
+            for n in &notices {
+                eprintln!("donegate: {n}");
+            }
             stop_block_now_keyed(&blocks.join("\n\n"), &block_keys.join("\n\n"), interactive);
         }
         if roots.wrote_any && !any_ran && !all_opted_out && !configured_empty {
@@ -455,6 +481,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         if interactive {
             println!("{}", gate::human_report(&report));
         }
+        emit_notices(&notices, interactive);
         harness_core::hook_latency::record(
             "donegate",
             &session,
@@ -535,6 +562,8 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             cfg.max_attempts,
             failing.join(", ")
         );
+        notices.push(giveup_message(&failing, cfg.max_attempts));
+        emit_notices(&notices, interactive);
         harness_core::hook_latency::record(
             "donegate",
             &session,
@@ -543,8 +572,25 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
+    let sig = red_signature(&root, &report);
+    if let Some(sig) = &sig {
+        if state::is_repeat(&cfg.state_dir, &session, &root, sig) {
+            log_event(&cfg, &session, "repeat-waived", &failing, attempt);
+            notices.push(repeat_message(&failing));
+            emit_notices(&notices, interactive);
+            harness_core::hook_latency::record(
+                "donegate",
+                &session,
+                __start.elapsed().as_millis() as u64,
+            );
+            std::process::exit(0);
+        }
+    }
     log_event(&cfg, &session, "blocked", &failing, attempt);
     emit_violations(&root, &session, &failing, Outcome::Blocked);
+    if let Some(sig) = &sig {
+        state::remember(&cfg.state_dir, &session, &root, sig);
+    }
     let reason = gate::block_reason(&report, attempt, cfg.max_attempts);
 
     if interactive {
@@ -581,6 +627,67 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     );
     harness_core::hook_latency::record("donegate", &session, __start.elapsed().as_millis() as u64);
     std::process::exit(0);
+}
+
+/// The still-red-check guidance appended to every non-blocking message that
+/// leaves a red check standing (give-up and identical-finding waiver).
+fn red_guidance(failing: &[String]) -> String {
+    format!(
+        "Still RED: {}. Order of response: (1) a red check can be treated as a problem, so it \
+         is testable: write a failing test that pins it; if that test has no contradiction with \
+         the requirement, fix until it passes and the red is resolved. (2) If writing the test \
+         exposes a contradiction (check vs spec, test vs intent, two requirements), the problem \
+         is misframed: fix the premise (spec, check or test expectation) first and do not keep \
+         retrying the implementation. (3) Only if no alternative response exists does this \
+         give-up stand; then report the red check output verbatim.",
+        failing.join(", ")
+    )
+}
+
+/// systemMessage text for the bounded give-up after `max` blocks.
+fn giveup_message(failing: &[String], max: u32) -> String {
+    format!(
+        "donegate gave up after {max} consecutive blocks and is ALLOWING the stop; the check(s) \
+         are NOT green. {}",
+        red_guidance(failing)
+    )
+}
+
+/// systemMessage text for a stop whose tree and failing output are unchanged
+/// since the previous block.
+fn repeat_message(failing: &[String]) -> String {
+    format!(
+        "donegate did not block again: the tree and the failing output of {} are identical to \
+         the previous block, so NOTHING NEW WAS VERIFIED. The check(s) are still RED. {}",
+        failing.join(", "),
+        red_guidance(failing)
+    )
+}
+
+/// Signature of a red verdict for the identical-finding waiver. `None` (tree
+/// fingerprint undeterminable) means "cannot show it is a repeat" -> block.
+fn red_signature(root: &Path, report: &gate::GateReport) -> Option<String> {
+    let tree = state::tree_fingerprint(root)?;
+    let checks: Vec<(String, Option<i32>, String)> = report
+        .blocking()
+        .iter()
+        .map(|o| (o.name.clone(), o.exit_code, o.output_tail.clone()))
+        .collect();
+    Some(state::signature(root, &tree, &checks))
+}
+
+/// Print the collected non-blocking messages as one Stop-hook `systemMessage`
+/// (no `decision`), or to stderr in interactive mode. Nothing collected: nothing.
+fn emit_notices(notices: &[String], interactive: bool) {
+    if notices.is_empty() {
+        return;
+    }
+    let msg = notices.join("\n\n");
+    if interactive {
+        eprintln!("{msg}");
+    } else {
+        println!("{}", json!({ "systemMessage": msg }));
+    }
 }
 
 /// Emit a blocking verdict and exit: hook mode prints the Stop `decision:block`
@@ -1066,7 +1173,7 @@ const HEADER: &str = r#"# donegate.toml — completion gate for Claude Code.
 #
 # Global:
 enabled = true
-max_attempts = 3          # give up (allow stop) after N consecutive blocks
+max_attempts = 2          # give up (allow stop) after N consecutive blocks
 default_timeout_secs = 300
 output_tail_lines = 40    # raw lines shown only if a failing check's record can't be saved
 reset_after_secs = 600    # attempt counter resets after this idle gap

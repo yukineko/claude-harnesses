@@ -492,13 +492,13 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "User direction 2026-11-06: decide which gates run on every commit only after measuring (a) per-gate timing/verdict (433ca3be) and (b) severity when a gate breaks, defined by the user as: fires (does it block an injected violation now), caught_by (with only that gate disabled, which remaining layers stop it: other pre-commit gates, commit-msg, pre-push, cargo test), leak (local-commit|push|rollout|undetermined when nothing catches it). Not in scope: time-to-detect. Motivation data: transcripts 2026-10-08..11-06 show 0 blocks for injectguard, doc-duplication, version-lockstep, fault-injection-adoption, worktree-isolation, gate-crates-sync, gate-protection, crossx-constants, launcher-exec-bit, clippy-lints, backlog-store, projkey-classification; 0 blocks cannot distinguish unneeded / caught upstream / dark. Build scripts/gate-severity-probe.py --json: one representative fixture per gate, applied in throwaway worktrees only (never the caller's tree/index); undetermined never folded into fires=false or leak=null. Repro: python3 -m pytest scripts/test_gate_severity_probe.py (4 RED: probe missing)."
+notes = "User direction 2026-11-06: decide which gates run on every commit only after measuring (a) per-gate timing/verdict (433ca3be) and (b) severity when a gate breaks, defined by the user as: fires (does it block an injected violation now), caught_by (with only that gate disabled, which remaining layers stop it: other pre-commit gates, commit-msg, pre-push, cargo test), leak (local-commit|push|rollout|undetermined when nothing catches it). Not in scope: time-to-detect. Motivation data: transcripts 2026-10-08..11-06 show 0 blocks for injectguard, doc-duplication, version-lockstep, fault-injection-adoption, worktree-isolation, gate-crates-sync, gate-protection, crossx-constants, launcher-exec-bit, clippy-lints, backlog-store, projkey-classification; 0 blocks cannot distinguish unneeded / caught upstream / dark. Build scripts/gate-severity-probe.py --json: one representative fixture per gate, applied in throwaway worktrees only (never the caller's tree/index); undetermined never folded into fires=false or leak=null. Repro: python3 -m pytest scripts/test_gate_severity_probe.py (4 RED: probe missing). Tiering policy for using the result (user 2026-11-06): minor issues may move from per-commit to a periodic audit (cost vs effect and speed are key metrics; perfectionism can be harmful); security-relevant gates (e.g. injectguard, secret-guard) stay per-commit regardless of the data — harm must not be let in. So the report should mark each gate security-relevant or not (human-declared list, not inferred)."
 created_at = 1793926370
-updated_at = 1793926370
+updated_at = 1793926398
 weight = 0.0
 issue_number = 1552
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1552"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

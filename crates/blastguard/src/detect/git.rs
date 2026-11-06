@@ -506,26 +506,30 @@ fn is_stash_sweep_flag(w: &str) -> bool {
     is_short_flag(w) && (w.contains('a') || w.contains('u'))
 }
 
-/// True when the word holds a bash brace expansion (comma list or `..`
-/// sequence), which can turn into a sweep flag at runtime. A plain
-/// `stash@` followed by `{0}` is not one.
+/// True when the word MAY hold a bash brace expansion (comma list or `..`
+/// sequence), which can turn into a sweep flag at runtime.
+///
+/// `w` is a word after quote removal (`stash_argv_words`), so a quoted or
+/// escaped `}` (raw `{-mx\},-u}` or `{-mx'}',-u}`) is indistinguishable here
+/// from a real one; pairing the first `{` with the first `}` would let
+/// bash's real expansion (`-mx}` and `-u`) through. The test is therefore
+/// deliberately over-approximate, resolving to the restrictive side: true
+/// when a `{` is followed ANYWHERE later in the word by a `,` or `..` (no
+/// brace pairing at all), or when the last `{` has no `}` after it
+/// (unbalanced: not provably literal). Otherwise false, so `stash@` followed
+/// by `{0}` stays literal. This may also flag words bash would not expand
+/// (a quoted `{`, or `{x},y`); that over-flagging is the intended side.
 fn has_brace_expansion(w: &str) -> bool {
-    let mut rest = w;
-    while let Some(open) = rest.find('{') {
-        let after = &rest[open + 1..];
-        match after.find('}') {
-            Some(close) => {
-                let inner = &after[..close];
-                if inner.contains(',') || inner.contains("..") {
-                    return true;
-                }
-                rest = &after[close + 1..];
-            }
-            // Unbalanced brace: not provably literal.
-            None => return true,
-        }
+    let Some(first_open) = w.find('{') else {
+        return false;
+    };
+    let after_first = &w[first_open + 1..];
+    if after_first.contains(',') || after_first.contains("..") {
+        return true;
     }
-    false
+    // Unbalanced: the last `{` has no `}` after it.
+    let last_open = w.rfind('{').unwrap_or(first_open);
+    !w[last_open + 1..].contains('}')
 }
 
 /// The stash argv words minus the VALUE of a separate-word `-m` / `--message`

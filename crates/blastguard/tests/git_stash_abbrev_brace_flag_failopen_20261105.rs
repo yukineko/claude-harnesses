@@ -118,3 +118,29 @@ fn control_plain_stash_with_message_is_allowed() {
     let (d, r) = verdict(&dir, command);
     assert_eq!(d, "allow", "{command:?} must stay allowed, got {d}: {r}");
 }
+
+/// Verifier finding on 3e82109e (2026-11-07): a quoted / escaped `}` inside
+/// the brace hides the comma from a first-`{`-to-first-`}` scan after quote
+/// removal. Real bash expands `{-mx\},-u}` to the two words `-mx}` and `-u`,
+/// i.e. `git stash push -mx} -u` (an untracked sweep).
+#[test]
+fn brace_with_escaped_close_brace_is_not_allowed() {
+    assert_not_allowed("brace-esc", "git stash push {-mx\\},-u}");
+}
+
+/// Same shape with a single-quoted `}`: bash expands `{-mx'}',-u}` to
+/// `-mx}` and `-u`.
+#[test]
+fn brace_with_quoted_close_brace_is_not_allowed() {
+    assert_not_allowed("brace-quot", "git stash push {-mx'}',-u}");
+}
+
+/// Control: a stash ref `stash@{0}` is not a brace expansion (no comma, no
+/// `..`), so popping it must stay allowed.
+#[test]
+fn control_stash_ref_brace_is_allowed() {
+    let dir = fresh_dir("stash-ref");
+    let command = "git stash pop stash@{0}";
+    let (d, r) = verdict(&dir, command);
+    assert_eq!(d, "allow", "{command:?} must stay allowed, got {d}: {r}");
+}

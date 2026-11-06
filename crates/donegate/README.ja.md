@@ -40,7 +40,7 @@ donegate は、この「未検証のまま完了宣言する」問題を停止�
 
 ## どう使うか
 
-donegate はプラグインに同梱された 1 つのバイナリと 1 つの Stop フックだけで動く（サブスクリプション完結・API キー不要）。フックは `${CLAUDE_PLUGIN_ROOT}/bin/donegate gate` を Stop に配線する。
+donegate はプラグインに同梱された 1 つのバイナリと 2 つのフック（Stop / SubagentStop）だけで動く（サブスクリプション完結・API キー不要）。フックは `${CLAUDE_PLUGIN_ROOT}/bin/donegate gate` を Stop に、`${CLAUDE_PLUGIN_ROOT}/bin/donegate subagent-gate` を SubagentStop に配線する。
 
 CLI を手動で使う場合の典型的な流れ:
 
@@ -49,7 +49,7 @@ cargo install --path .
 cd your/project
 donegate init          # スタックを自動検出してスターター donegate.toml を生成
 donegate trust         # このプロジェクトの donegate.toml を信頼する（プロジェクト設定は信頼ゲート付き）
-donegate install       # Stop フックを ~/.claude/settings.json にマージ（バックアップを取る）
+donegate install       # Stop / SubagentStop フックを ~/.claude/settings.json にマージ（バックアップを取る）
 ```
 
 その後、何が走るかを確認する:
@@ -64,8 +64,9 @@ donegate gate          # チェックを手動実行（人間向けレポート�
 | サブコマンド | 役割 |
 |---|---|
 | `donegate gate` | Stop フック本体。適用対象のチェックを実行し、グリーンになるまで停止をブロックする。 |
+| `donegate subagent-gate` | SubagentStop フック本体。停止する subagent が書いた root のチェックを実行し、グリーンになるまでその停止をブロックする。 |
 | `donegate init` | プロジェクト種別（Cargo / npm / Python / Go）を自動検出して `./donegate.toml` を生成する。 |
-| `donegate install` / `uninstall` | `~/.claude/settings.json` への Stop フックの追加 / 削除。 |
+| `donegate install` / `uninstall` | `~/.claude/settings.json` への Stop / SubagentStop フックの追加 / 削除。 |
 | `donegate status` | 解決済みの設定と、現在の作業ツリーに対して実行されるチェックを表示する。 |
 | `donegate trust` | 現在のプロジェクトをワークスペース信頼リストに追加し、そのプロジェクト固有の `donegate.toml` のコマンドを Stop 時に honor させる。 |
 
@@ -79,6 +80,37 @@ donegate gate          # チェックを手動実行（人間向けレポート�
 2. `./donegate.toml`（または `~/.donegate/config.toml`）を読み込む。
 3. `git` に変更ファイルを尋ね、`when_changed` のグロブが一致するチェックを選ぶ（スコープなしのチェックは常に走る）。
 4. 選ばれた各チェックをサブプロセスとして、チェックごとのタイムアウト付きで実行し、結合出力を一時ログへ流して、読み戻すのは**一定量の窓だけ**にする。
+
+#### 実行中のバックグラウンド subagent の root（SubagentStop）
+
+実行中のバックグラウンド subagent **だけ**が書いた root は、親の Stop では判定しない。subagent がまだ編集中なので、判定すると推論中の編集と競合する。その root は黙って飛ばさず名指しする。stderr に出し、Stop の `systemMessage` またはブロック理由にも `[root: …] NOT judged at this stop: only background subagent(s) <ids> wrote it …` として載せる。「実行中」と判定するには次の 3 つがすべて要る。
+
+- `agent-<id>.meta.json` に `toolUseId` がある。
+- いずれかの transcript（親か sidechain。入れ子の起動元も含む）に、対応する `toolUseResult {isAsync: true, status: "async_launched", agentId}` がある。
+- どの transcript にもその agent の `<task-notification>`（`task-id`）がない。
+
+次のいずれかに当たれば、親の Stop は従来どおりその root を判定する。
+
+- 状態が判定できない。
+- subagent が終了済み。
+- 親自身、または実行中と観測できない他の subagent もその root に書いた（cwd がその root 内の Bash 呼び出しを含む）。
+- その root が hook cwd である。
+- transcript を読めない。この場合は「実行中 root を判定できず、全 root を判定した」という通知を同じ経路で出す。
+
+`donegate subagent-gate` は **SubagentStop** フックで、`hooks/hooks.json` と `donegate install` が登録する。停止する subagent が書いた root を判定する。その subagent の transcript は `agent_transcript_path`、無ければ `<transcript dir>/<stem>/subagents/agent-<agent_id>.jsonl` から読む。判定は親の追加 root と同じロジックで行う。
+
+- green なら許可する。
+- red なら `{"decision":"block"}` で subagent の停止をブロックする。
+- 同一指摘の再発は `systemMessage` 付きで見送る。
+- `max_attempts` に達したら give-up する。
+
+カウンタと見送り記憶は `<session>-agent-<agent_id>` をキーにするので、親の連鎖とは混ざらない。何も書かなかった subagent は黙って許可する。config が無い root やチェックを宣言していない root は、ここでは判定しない。次の場合はブロックする。
+
+- donegate がその root のチェック実行を拒否した。
+- agent transcript の場所が分からない、または読めない。
+- root を判定できない。
+
+`donegate skip` は親セッションのものなので、SubagentStop では消費しない。subagent が終了した後は、親の Stop が改めてその root を判定する。
 
 #### 失敗出力の session 記録と静かな表示
 

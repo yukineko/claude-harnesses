@@ -6,6 +6,13 @@
           { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/donegate gate", "timeout": 600 }
         ]
       }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/bin/donegate subagent-gate", "timeout": 600 }
+        ]
+      }
     ]
   }
 }

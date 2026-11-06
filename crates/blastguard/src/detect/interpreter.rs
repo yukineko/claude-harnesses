@@ -1033,6 +1033,12 @@ fn interpreter_program_verdict(
     // verbatim one of these (it is the same string contents one layer down);
     // every other deeper-layer payload keeps the Deny.
     let mut inert_bodies: Vec<String> = Vec::new();
+    // Backlog 7483e85b: an Ask earned inside the descent (a protected-path
+    // literal, a write confined to a safe root) is PENDING, never an early
+    // return — every literal of every layer is still scanned, so a Deny earned
+    // anywhere else outranks it (Deny over Ask over Allow, model.rs). The
+    // first pending Ask is kept so its reason is the one reported.
+    let mut pending_ask: Option<Decision> = None;
     let mut layer: Vec<String> = payloads.to_vec();
     for depth_of_layer in 0..MAX_QUOTE_LAYERS {
         if layer.is_empty() {
@@ -1159,11 +1165,11 @@ files or directories outright if that string is run as code; blastguard cannot s
                 if candidate.is_empty() || candidate.contains(char::is_whitespace) {
                     continue;
                 }
-                if exclude::touches_protected(candidate) {
-                    return Decision::ask(format!(
+                if exclude::touches_protected(candidate) && pending_ask.is_none() {
+                    pending_ask = Some(Decision::ask(format!(
                         "{shape}, and that program names `{candidate}`, a protected gate/config \
 path — changing it changes which hooks and gates run, and blastguard will not do that implicitly"
-                    ));
+                    )));
                 }
                 // RECOVERABILITY of what the program OVERWRITES.
                 //
@@ -1209,21 +1215,39 @@ path — changing it changes which hooks and gates run, and blastguard will not 
                     if let crate::reversible::Recovery::Unrecoverable(why) = &recovery {
                         let call = write_call.unwrap_or("a write");
                         if let Some(root) = ctx.confined_root("interpreter write", &[candidate]) {
-                            return confined_ask(
-                                &format!("`{call}` onto `{candidate}`"),
-                                &root,
-                                &[candidate],
-                            );
+                            if pending_ask.is_none() {
+                                pending_ask = Some(confined_ask(
+                                    &format!("`{call}` onto `{candidate}`"),
+                                    &root,
+                                    &[candidate],
+                                ));
+                            }
+                            continue;
                         }
                         return Decision::deny(format!(
                             "{shape}, and it writes `{candidate}` (`{call}`) — {why}"
                         ));
+                    }
+                    // An unanswered probe is not "recoverable" (CLAUDE.md §3):
+                    // it is a pending Ask, outranked by any Deny the rest of
+                    // the program earns, and never left to reach Allow.
+                    if let crate::reversible::Recovery::Undetermined(why) = &recovery {
+                        if pending_ask.is_none() {
+                            let call = write_call.unwrap_or("a write");
+                            pending_ask = Some(Decision::ask(format!(
+                                "{shape}, and it writes `{candidate}` (`{call}`) — {why}"
+                            )));
+                        }
                     }
                 }
             }
             next.extend(literals);
         }
         layer = next;
+    }
+    // The whole descent ran without a Deny; an Ask it recorded now stands.
+    if let Some(ask) = pending_ask {
+        return ask;
     }
     // THE EMPTY SET IS NOT A CLEAN SCAN (CLAUDE.md §3). Everything below turns
     // on the program text having been READ; if there was no text, nothing was

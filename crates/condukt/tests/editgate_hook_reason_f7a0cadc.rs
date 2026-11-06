@@ -220,13 +220,21 @@ fn cargo_missing_from_path_blocks_even_when_the_host_system_bin_dir_has_cargo() 
 }
 
 fn cargo_missing_from_path_body(system_bin: &str) {
-    // Precondition, asserted: this PATH has no `cargo` (but keeps git etc.).
-    let path = format!("{system_bin}:/bin");
-    let path = path.as_str();
+    // The hook PATH is a fresh EMPTY temp dir, never `system_bin` or /bin: the
+    // only thing the hook spawns is `cargo` (editgate.rs `Command::new("cargo")`),
+    // so no other tool is needed, and a host whose system bin dir holds a cargo
+    // cannot leak it into the hook's PATH.
+    let empty_bin = tempfile::tempdir().unwrap();
+    let path = empty_bin.path().to_str().unwrap();
+    // Precondition, asserted against the PATH actually handed to the hook.
     for d in path.split(':') {
         assert!(
             !Path::new(d).join("cargo").exists(),
             "precondition: {d} must not contain cargo"
+        );
+        assert!(
+            Path::new(d) != Path::new(system_bin) && d != "/bin",
+            "hook PATH must not include the host system bin dir {system_bin}"
         );
     }
     let fx = setup();

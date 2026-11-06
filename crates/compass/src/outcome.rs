@@ -254,7 +254,14 @@ pub fn record(
     // concurrent recorders cannot lose each other's entries.
     let _lock = lock_store(&store_path(root))?;
     let mut outcomes = load(root)?;
-    let seq = outcomes.last().map(|o| o.seq + 1).unwrap_or(0);
+    // max+1, not last+1: the store may be non-monotonic (hand edit, merge),
+    // and last+1 would then duplicate an existing seq. Overflow fails closed.
+    let seq = match outcomes.iter().map(|o| o.seq).max() {
+        None => 0,
+        Some(m) => m.checked_add(1).ok_or_else(|| {
+            anyhow::anyhow!("outcome seq overflow: store already holds seq {m} (u64::MAX)")
+        })?,
+    };
     let outcome = Outcome {
         seq,
         recorded_at: now_unix(),

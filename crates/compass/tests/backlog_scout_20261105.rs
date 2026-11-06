@@ -115,7 +115,6 @@ fn concurrent_carve_apply_loses_no_answers() {
 }
 
 #[test]
-#[ignore = "backlog: open defect (scout 2026-11-05) outcome seq = last+1 duplicates on non-monotonic store"]
 fn outcome_seq_is_unique_when_last_entry_has_lower_seq() {
     let fx = fixture();
     let store = fx.proj.join(".compass/outcomes.json");

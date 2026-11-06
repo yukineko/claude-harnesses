@@ -1,14 +1,16 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Scout 2026-11-07 findings for compass stores.
 //!
-//! 1. `evaluate_command` (src/main.rs) does load, overwrite and `carve::save`
+//! 1. `evaluate_command` (src/main.rs) did load, overwrite and `carve::save`
 //!    of the carve state WITHOUT holding `carve::lock`, so a concurrent
-//!    `compass apply` loses answers (RED, `#[ignore]`d while the item is open).
+//!    `compass apply` lost answers (backlog 4e53960f; fixed, the test now
+//!    guards it).
 //! 2. `outcome::record` fails on seq overflow (`checked_add`); PINNING test,
 //!    green at HEAD (not a defect).
 //!
-//! F2 (`carve::reset` without the lock) is not filed: the reset-vs-apply
-//! interleaving could not be made deterministic from outside the process.
+//! `carve::reset` now also takes the carve lock (fixed with 4e53960f); the
+//! reset-vs-apply interleaving has no test here because it could not be made
+//! deterministic from outside the process.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

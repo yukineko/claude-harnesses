@@ -110,11 +110,11 @@ touched_files = []
 status = "pending"
 notes = "Observed 2026-11-05 at main e97692da (worker report + re-confirmed alone here). Verbatim: crates/condukt/src/lock.rs:1540 panicked: 'the holder changed from live pid A to dead pid B mid-wait, but the lock was not acquired within 30s: the changed holder was not probed immediately (probes: [])'; stderr 'condukt: state lock ...held.lock contended for 30s; lock NOT acquired'. Takes ~60s. Sibling of abdc3ad3 (dying_mid_wait test). Two readings: (a) test fixture never lets the wait loop observe the pid change (race in fixture); (b) product defect: a changed holder pid is not re-probed immediately and a dead holder is never reaped, a real lock-liveness bug. Tell apart: instrument probe calls; if probes stays empty even when the holder file is rewritten before the loop starts, (b). Use --bin condukt (no lib target)."
 created_at = 1793867311
-updated_at = 1793867311
+updated_at = 1793977235
 weight = 0.0
 issue_number = 1540
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1540"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

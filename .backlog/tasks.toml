@@ -329,3 +329,641 @@ scripts/test_check_test_weakening_macro_unignore.py:100: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_check_test_weakening_macro_unignore.py::MacroUnignore::test_removing_template_ignore_with_same_invocations_passes
 ============================== 1 failed in 0.54s ==============================='''
+
+[[task]]
+id = "43034f75"
+title = "blastguard: Ask on deleting an unmerged branch or force-removing a dirty worktree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 1 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: worktree-always-merge-then-delete.
+Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 3 of 6 cases have the wrong verdict: `git branch -D unmerged`, `git branch --delete --force unmerged`, `git worktree remove --force <...>/.harness-worktrees/dirty` each 'want ask, got allow ()'; test result: FAILED. Controls (branch -d/-D merged, worktree remove clean) stay Allow.
+Readings: (a) 'merged' = ancestor of the default branch (audit; pinned); (b) git's own -d rule (merged into upstream or HEAD). Fixture cannot separate them (HEAD is main, no upstream). To tell apart: add a branch merged into a non-default HEAD but not main: (a) Ask, (b) Allow. Dirty worktree has both a tracked edit and an untracked file; an untracked-only case would decide whether untracked alone counts as dirty.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998241
+updated_at = 1793998241
+weight = 0.0
+issue_number = 1568
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1568"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 -- deleting_unmerged_branch_or_dirty_worktree_is_ask"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998241
+detail = """
+exit 101: s/crates/overwatch)
+   Compiling blastguard v0.2.287 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 31.51s
+     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-8c7abc9ab9451764)
+error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
+
+[[task]]
+id = "e9325654"
+title = "blastguard: Ask on whole-tree stage (git add -A/--all/., commit -a)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 3 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: condukt-operator-gotchas (formerly condukt-worker-dirty-tree-commit).
+Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 6 of 9 cases have the wrong verdict: `git add -A`, `git add --all`, `git add .`, `git commit -a -m wip`, `git commit -am wip`, `git commit --all -m wip` each 'want ask, got allow ()'; test result: FAILED. Controls (add tracked.txt, commit -m msg, commit -m msg -- tracked.txt) stay Allow.
+Readings: (a) `git add .` is always Ask (pinned); (b) Ask only when the pathspec reaches files outside the session's own changes. To tell apart: under (b) `add .` in a clean tree is Allow, so a clean-tree case would be needed.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998286
+updated_at = 1793998286
+weight = 0.0
+issue_number = 1569
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1569"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 -- whole_tree_stage_or_commit_all_is_ask"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998286
+detail = """
+exit 101: _or_commit_all_is_ask
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 1.48s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
+     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-8c7abc9ab9451764)
+error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
+
+[[task]]
+id = "ef7c9fbe"
+title = "blastguard: Ask on git clone / mkdir -p / cp -r outside managed places"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 16 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: deletion-and-scratch (formerly scratch-artifacts-in-deletable-places).
+Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 3 of 8 cases have the wrong verdict: `git clone <repo> <home>/scratch-clone`, `mkdir -p <home>/scratch/a/b`, `cp -r <repo> <home>/scratch-copy` each 'want ask, got allow ()'; test result: FAILED. Controls (clone into /private/tmp and .harness-worktrees, mkdir -p in project and /private/tmp, cp -r of a file into /private/tmp) stay Allow.
+Readings: (a) any destination outside scratchpad/$TMPDIR/.harness-worktrees/project is Ask (pinned); (b) only real $HOME asset dirs are Ask. Fixture HOME lives under macOS /var/folders/.../T (TMPDIR is removed from the hook env, so only /tmp and /private/tmp are temp roots); a fix that hard-codes /var/folders/*/T as managed cannot go GREEN here - move the fixture, not the rule. Human to confirm `mkdir -p` into $HOME belongs in the Ask set (audit-only).
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998290
+updated_at = 1793998290
+weight = 0.0
+issue_number = 1570
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1570"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 -- scratch_tree_outside_managed_places_is_ask"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998290
+detail = """
+exit 101: managed_places_is_ask
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.97s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-8c7abc9ab9451764)
+error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
+
+[[task]]
+id = "1ca662ec"
+title = "condukt verify: refuse a task whose worktree differs from HEAD"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 2 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: green-tests-prove-worktree-not-head.
+Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left != right` failed: state set --status verified accepted a task whose worktree has an UNCOMMITTED change to tracked source (gate.rs)... stderr: run 'run-b02-dirty': 1/1 verified  left: 0 right: 0 / test result: FAILED. 1 passed; 1 failed
+Readings: (a) refuse when the task worktree has uncommitted changes (pinned); (b) require the tdd green proof bound to HEAD^{tree} - proofs record no tree hash today (only passed/cmd), so (b) needs a tdd proof-format change and is not RED-testable via today's API. To tell apart: a clean tree whose proof was recorded at an older commit is refused only under (b).
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998293
+updated_at = 1793998293
+weight = 0.0
+issue_number = 1571
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1571"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b02_verify_dirty_worktree"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998293
+detail = """
+exit 101: rwatch v0.2.112 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/overwatch)
+   Compiling tdd v0.1.72 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/tdd)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.53s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.54s
+error: test failed, to rerun pass `-p condukt --test audit_b02_verify_dirty_worktree`"""
+
+[[task]]
+id = "aaae849b"
+title = "condukt state abandon --task: refuse while the worker transcript is fresh"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 5 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: condukt-operator-gotchas (formerly condukt-redispatch-stuck-worker-dup).
+Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left != right` failed: state abandon --task reset a running task whose worker transcript (agent-a0b05f00dfeedbeef.jsonl) was modified seconds ago... stderr: abandoned 1 task(s): t1  left: 0 right: 0 / test result: FAILED. 1 passed; 1 failed
+Ambiguity: transcript location is an assumed convention ($HOME/.claude/projects/<slug(run cwd)>/<session>/subagents/agent-<agent_id>.jsonl, literal and canonical spellings). A fix looking elsewhere (e.g. worktree-path slug) fails this test while possibly valid; check the real layout first. A --force <reason> escape is not exercised.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998368
+updated_at = 1793998368
+weight = 0.0
+issue_number = 1572
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1572"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b05_abandon_live_worker"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998368
+detail = """
+exit 101: tered out; finished in 0.64s
+
+   Compiling condukt v0.7.350 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running tests/audit_b05_abandon_live_worker.rs (target/debug/deps/audit_b05_abandon_live_worker-ea8fc0809feab530)
+error: test failed, to rerun pass `-p condukt --test audit_b05_abandon_live_worker`"""
+
+[[task]]
+id = "6180333a"
+title = "condukt: name found .tdd proof ids on oracle reject; refuse worktree remove for unverified tasks"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 12 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: condukt-operator-gotchas (formerly condukt-fp-oracle-task-id).
+Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): oracle_refusal_names_the_proof_ids_it_found: 'the oracle refusal does not name the proof id it found in .tdd/ (bl-9f3a17c2.red.json)... stderr: condukt: refusing to verify task 't1': no valid fail-to-pass reproduction oracle (tdd oracle exited non-zero ...)'; worktree_remove_refuses_while_the_task_is_unverified: 'condukt worktree remove deleted the worktree of task t1 (status running, not verified)... exit Some(0), exists afterwards: false' / test result: FAILED. 1 passed; 2 failed
+Two sub-defects in one file (can be split by --exact test name). Refusal reason says 'tdd oracle exited non-zero / could not be determined' rather than naming the wrong id.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998372
+updated_at = 1793998372
+weight = 0.0
+issue_number = 1573
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1573"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b12_oracle_ids_and_teardown"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998372
+detail = """
+exit 101: inished in 1.57s
+
+   Compiling condukt v0.7.350 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.26s
+     Running tests/audit_b12_oracle_ids_and_teardown.rs (target/debug/deps/audit_b12_oracle_ids_and_teardown-626973c2e623459a)
+error: test failed, to rerun pass `-p condukt --test audit_b12_oracle_ids_and_teardown`"""
+
+[[task]]
+id = "6e97a022"
+title = "condukt schedule: name the matched command/token in force-gate warnings"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 14 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: condukt-operator-gotchas (formerly condukt-schedule-arrow-forcegate).
+Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): the force-gate warning does not name what matched (expected the culprit command 'git push origin main' / token 'git push'); warning: task 't2' force-gated: high-risk irreversible action (declared class Parallel) / test result: FAILED. 0 passed; 1 failed
+The memory's original `->` prose FP no longer reproduces (control: a `->` title schedules in parallel). Readings: (a) name the culprit command/token (pinned); (b) print a blastguard rule id - RiskAssessment has no rule-id field, needs blastguard API change. To tell apart: (b) only if a rule id string appears in the warning.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998378
+updated_at = 1793998378
+weight = 0.0
+issue_number = 1574
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1574"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b14_schedule_names_gate_culprit"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998378
+detail = """
+exit 101: .71s
+
+   Compiling condukt v0.7.350 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.58s
+     Running tests/audit_b14_schedule_names_gate_culprit.rs (target/debug/deps/audit_b14_schedule_names_gate_culprit-16c149999e4b3531)
+error: test failed, to rerun pass `-p condukt --test audit_b14_schedule_names_gate_culprit`"""
+
+[[task]]
+id = "3da84f08"
+title = "condukt guard main-tree: treat a stale backlog lock as live when the holder transcript is fresh"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 15 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: liveness-and-observability (formerly maintree-guard-stale-lock).
+Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left == right` failed: guard main-tree passed a staged primary-tree commit although the lock holder holder-sess-b15 wrote its transcript seconds ago (lock heartbeat stale, pid dead - neither proves the session ended). left: Some(0) right: Some(1) / test result: FAILED. 1 passed; 1 failed
+condukt half only (maintree::parse_backlog_lock drops stale:true locks without a transcript check). The backlog half (`backlog lock acquire --force` refusing on a fresh transcript) has NO RED here. Transcript path $HOME/.claude/projects/<slug(repo)>/<session-id>.jsonl is an assumed convention; liveness inputs are PATH stubs as in main_tree_guard_cli.rs.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998382
+updated_at = 1793998382
+weight = 0.0
+issue_number = 1575
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1575"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b15_maintree_transcript_liveness"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998382
+detail = """
+exit 101: s
+
+   Compiling condukt v0.7.350 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running tests/audit_b15_maintree_transcript_liveness.rs (target/debug/deps/audit_b15_maintree_transcript_liveness-5129ca38a71c2bd4)
+error: test failed, to rerun pass `-p condukt --test audit_b15_maintree_transcript_liveness`"""
+
+[[task]]
+id = "b3f5e3af"
+title = "backlog defer --ruling: deferred tickets are never handed out by next --claim"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 4 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: scope-and-standing-rulings (formerly check-ticket-rulings-before-dispatch).
+Observed RED 2026-11-07 at 34ece122 (base fc7b5dd9) (verbatim): `backlog defer <id> --ruling <quote>` must record the ruling: error: unrecognized subcommand 'defer' ... left: 2 right: 0 / test result: FAILED
+Readings: (A) new `defer` subcommand + status (memory plan; pinned - so at HEAD it fails on the missing subcommand); (B) next --claim skips tickets whose notes record a ruling (見送り/defer) - not tested (note-text matching is fragile). To tell apart: under A a ruling only in notes is still claimable; under B not. Control: the un-deferred ticket is still handed out.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998389
+updated_at = 1793998389
+weight = 0.0
+issue_number = 1576
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1576"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test audit_b4_defer_excludes_claim"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998389
+detail = """
+exit 101: tems-reds/crates/harness-core)
+   Compiling backlog v0.3.90 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.84s
+     Running tests/audit_b4_defer_excludes_claim.rs (target/debug/deps/audit_b4_defer_excludes_claim-4f96c5f128ee6ca3)
+error: test failed, to rerun pass `-p backlog --test audit_b4_defer_excludes_claim`"""
+
+[[task]]
+id = "78cee053"
+title = "next --claim re-runs the stored repro and refuses to hand out a now-GREEN ticket"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 6 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: backlog-evidence-rules (formerly red-tickets-often-already-fixed).
+Observed RED 2026-11-07 at 34ece122 (base fc7b5dd9) (verbatim): panicked at ...audit_b6_claim_rejects_green_repro.rs:52:5: next --claim handed out 66b554ab, whose stored repro passes at HEAD / test result: FAILED
+Design choice left to the fix: skip the GREEN ticket vs refuse the whole claim; the test asserts only that the GREEN ticket is not handed out and the still-RED one is (control).
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998404
+updated_at = 1793998404
+weight = 0.0
+issue_number = 1577
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1577"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test audit_b6_claim_rejects_green_repro"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998404
+detail = """
+exit 101: ished in 2.62s
+
+   Compiling backlog v0.3.90 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.95s
+     Running tests/audit_b6_claim_rejects_green_repro.rs (target/debug/deps/audit_b6_claim_rejects_green_repro-75b95f71ce853f72)
+error: test failed, to rerun pass `-p backlog --test audit_b6_claim_rejects_green_repro`"""
+
+[[task]]
+id = "f500c25a"
+title = "donegate default max_attempts=2: give up visibly on the 3rd stop"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = '''
+Audit B item 7 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: ask-policy (formerly gate-block-giveup-after-two).
+Observed RED 2026-11-07 at 35d0d2bf (base fc7b5dd9) (verbatim): stop 3 blocked again: the default cap allows more than two blocks; stdout="{\"decision\":\"block\",\"reason\":\"donegate: 1 required check(s) failed (attempt 3/3)... / test result: FAILED
+Related but separate from backlog b80023b3 (repeat waiver defeated by attempt number in the fingerprint); if that lands, stop 2 may become a waiver - the control accepts it. Visible give-up = marker donegate:giveup:typecheck in the violation ledger. tests/giveup_sentinel.rs sets max_attempts=3 explicitly (unaffected); the template line max_attempts = 3 at crates/donegate/src/main.rs:1069 needs updating with the fix.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.'''
+created_at = 1793998413
+updated_at = 1793998413
+weight = 0.0
+issue_number = 1578
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1578"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test audit_b7_default_giveup_after_two"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998413
+detail = """
+exit 101: tes/overwatch)
+   Compiling donegate v0.1.67 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.68s
+     Running tests/audit_b7_default_giveup_after_two.rs (target/debug/deps/audit_b7_default_giveup_after_two-24aa559a6b21d755)
+error: test failed, to rerun pass `-p donegate --test audit_b7_default_giveup_after_two`"""
+
+[[task]]
+id = "e95bf58f"
+title = "compass looks_like_path: do not flag slash lists or bare filenames in DoD prose"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 10 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: compass-gotchas (formerly compass-dod-refs-slash-falsepos).
+Observed RED 2026-11-07 at b555d70a (base fc7b5dd9) (verbatim): prose tokens were flagged as missing paths: ["DoD references missing path `groom/inject/snapshot`", "DoD references missing path `ledger/state`", "DoD references missing path `types.rs`", "DoD references missing path `handlers.rs`"] / test result: FAILED
+The memory's own example 入力が無い/ゼロ is NOT flagged at HEAD (CJK split leaves token '/', an existing path); kept as a guard. Real FPs are ASCII slash lists and bare *.rs names. Control: crates/nope/missing.rs under an existing top-level dir still trips. Conflict: planned rule 'only tokens rooted at an existing top-level dir' contradicts dod_missing_path_trips_when_check_enabled (expects src/does_not_exist.rs to trip in a tempdir without src/); reconcile e.g. by creating src/ in that fixture.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998435
+updated_at = 1793998435
+weight = 0.0
+issue_number = 1579
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1579"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --bin compass dod_prose_slash_lists_and_bare_filenames_are_not_paths"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998435
+detail = """
+exit 101: sult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.11s
+
+   Compiling compass v0.1.49 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/compass)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.35s
+     Running unittests src/main.rs (target/debug/deps/compass-710d69d642e2b569)
+error: test failed, to rerun pass `-p compass --bin compass`"""
+
+[[task]]
+id = "04f53dbe"
+title = "context-governor injector dedup keys on the hook input session_id, not env"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = '''
+Audit B item 11 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: cg-injector-dedup-env-session.
+Observed RED 2026-11-07 at c564dbb9 (base fc7b5dd9) (verbatim): session X's ledger was written for a hook whose input names session Y: .../audit-b11-env-x/ledger.jsonl = "{\"event\":\"injected\",...\"session\":\"audit-b11-env-x\"...}" / test result: FAILED
+Readings: (A) hook input session_id is authoritative (audit; pinned); (B) env session authoritative - memory says they always match in production, so defect is only test hermeticity. To tell apart: capture a live hook stdin/env pair and see whether session_id can differ from env. Extra: the written row's session field shows the env session although LedgerNode.session is set from input.session_id (Ledger::open overrides it).
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.'''
+created_at = 1793998442
+updated_at = 1793998442
+weight = 0.0
+issue_number = 1580
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1580"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p context-governor --test audit_b11_injector_session"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998442
+detail = """
+exit 101: rness-core)
+   Compiling context-governor v0.1.27 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/context-governor)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.63s
+     Running tests/audit_b11_injector_session.rs (target/debug/deps/audit_b11_injector_session-9dc9e61dfd3b9a61)
+error: test failed, to rerun pass `-p context-governor --test audit_b11_injector_session`"""
+
+[[task]]
+id = "4b8e8cb0"
+title = "check-workspace-tests.py / mutation-gate.sh refuse to start while a live cargo test exists"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 8 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: liveness-and-observability (formerly killed-task-leaves-orphan-loop).
+Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): check-workspace-tests launched `cargo test --workspace` while another `cargo test` was live (rc=0); the measurement is void / mutation-gate.sh started `cargo mutants` while another `cargo test` was live (rc=2): ... (exit status 70: not a completed mutation run
+Audit said 'exit 2', but in check-workspace-tests exit 2 already means PYTHON_FAILURE, so the test requires 'non-zero and cargo not launched' there; mutation-gate.sh must exit 2. Fix picks ENVIRONMENT (5) or a new class. Caveat: after the fix, the controls see any real cargo test from another session on the machine.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998459
+updated_at = 1793998459
+weight = 0.0
+issue_number = 1581
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1581"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_audit_b_live_cargo_refusal.py"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998459
+detail = """
+exit 1: rt test summary info ============================
+FAILED scripts/test_audit_b_live_cargo_refusal.py::RefuseWhileCargoTestIsLive::test_check_workspace_tests_refuses_while_cargo_test_is_live
+FAILED scripts/test_audit_b_live_cargo_refusal.py::RefuseWhileCargoTestIsLive::test_mutation_gate_refuses_while_cargo_test_is_live
+========================= 2 failed, 2 passed in 1.78s =========================="""
+
+[[task]]
+id = "4620134f"
+title = "pre-commit ratchet: refuse new thread::scope spawns without catch_unwind in gate crates"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 9 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: thread-scope-reraises-panic.
+Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): no pre-commit scanner refuses a newly added thread::scope spawn without catch_unwind in crates/blastguard/src/store.rs. Scanners accepting the wrapped control: ['check-backlog-store.py', 'check-clippy-lints.py', ... 'check-version-bumped.py']; their exit codes on the bare diff: {... all 0}
+Test runs every `run X.py` scanner in .githooks/pre-commit against a fixture repo (independent of the new scanner's name); only scanners passing the wrapped control count, so the new scanner must be runnable in a minimal fixture repo. Ratchet guard (an existing bare spawn is not refused) passes today. Runtime ~30s.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998463
+updated_at = 1793998463
+weight = 0.0
+issue_number = 1582
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1582"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_audit_b_scoped_spawn_unwind.py"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998463
+detail = """
+exit 1: py': 0, 'check-version-bumped.py': 0}
+
+scripts/test_audit_b_scoped_spawn_unwind.py:58: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_audit_b_scoped_spawn_unwind.py::ScopedSpawnNeedsCatchUnwind::test_added_scoped_spawn_without_catch_unwind_is_refused
+========================= 1 failed, 2 passed in 13.01s ========================="""
+
+[[task]]
+id = "4f9189da"
+title = "UserPromptSubmit blocks /flow unless permission_mode is bypassPermissions"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 17 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: flow-bypass-permissions-mode.
+Observed RED 2026-11-07 at ee3e6d1a (base fc7b5dd9) (verbatim): prompt "/flow" with permission_mode Some("auto") must be blocked until the session is in bypassPermissions; got exit Some(0) stdout="" stderr="" (same for "default" and None) / test result: FAILED. 2 passed; 3 failed
+Owner readings: (A) autoflow prompt-submit, the existing UserPromptSubmit hook that already knows /flow (pinned); (B) a new hook in the flow plugin (crates/flow is skill-only today) - test moves, property same. Either way prompt_submit_command goes through run_hook (never blocks); giving it a verdict means moving it off run_hook per CLAUDE.md s1. Missing permission_mode = cannot determine -> block (s3). Controls: /flow under bypassPermissions and 'hello' under auto pass.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998479
+updated_at = 1793998479
+weight = 0.0
+issue_number = 1583
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1583"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p autoflow --test audit_b_flow_bypass"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998479
+detail = """
+exit 101: uki/src/.harness-worktrees/b-items-reds/crates/overwatch)
+   Compiling autoflow v0.1.44 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/autoflow)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.99s
+     Running tests/audit_b_flow_bypass.rs (target/debug/deps/audit_b_flow_bypass-e9827b0071357878)
+error: test failed, to rerun pass `-p autoflow --test audit_b_flow_bypass`"""
+
+[[task]]
+id = "4f19b628"
+title = "pre-push runs check-fail-open-mutation.py per changed Undetermined arm"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 18 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: fail-open-review-checklist (formerly forwarding-arms-have-zero-kill-rate).
+Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): AssertionError: [] is not true : .githooks/pre-push never executes scripts/check-fail-open-mutation.py; forwarding Undetermined arms stay unmeasured
+Test checks wiring only; 'per changed arm' needs an interface the fix defines and must pin with its own test - this RED goes green on wiring alone. Depends on audit B item 19 (mutate by deletion).
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998487
+updated_at = 1793998487
+weight = 0.0
+issue_number = 1584
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1584"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_audit_b_mutation_prepush.py"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998487
+detail = """
+exit 1: ermined arms stay unmeasured (zero-kill arms ship silently)
+
+scripts/test_audit_b_mutation_prepush.py:43: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_audit_b_mutation_prepush.py::MutationHarnessWiredInPrePush::test_pre_push_runs_fail_open_mutation
+========================= 1 failed, 1 passed in 0.07s =========================="""
+
+[[task]]
+id = "d425cfc3"
+title = "check-fail-open-mutation.py: mutate by deleting the construct, not if false"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 19 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: fail-open-review-checklist s7 (formerly mutation-remove-dont-disable); ruled 2026-11-07.
+Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): - ['parallelguard (crates/parallelguard/src/model.rs): +1 `if false`'] / + [] : mutants must delete the construct, not wrap it in `if false` (ruling 2026-11-07)
+Control: each scenario's anchor occurs exactly once in its target file. Untested reading: the stuckguard scenario replaces the threshold guard with `if true { return None; }` (always-taken early return, also 'neutralize in place'); the RED asserts only 'no if false' per the ruling - human to decide whether `if true {` is also out.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998489
+updated_at = 1793998489
+weight = 0.0
+issue_number = 1585
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1585"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_audit_b_mutation_deletes.py"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998489
+detail = """
+exit 1: rd (crates/parallelguard/src/model.rs): +1 `if false`
+
+scripts/test_audit_b_mutation_deletes.py:60: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_audit_b_mutation_deletes.py::MutantsDeleteRatherThanDisable::test_generated_mutant_contains_no_if_false
+========================= 1 failed, 1 passed in 0.10s =========================="""
+
+[[task]]
+id = "32ac2ceb"
+title = "pre-commit ratchet: refuse newly added never-executed constructs in crates src"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = """
+Audit B item 20 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: fail-open-review-checklist s7 (new item; user ruling 2026-11-07 絶対に処理されないコードはプログラムとコンパイラのゴミ).
+Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): no pre-commit scanner refuses a newly added `if false {` in crates/fixturecrate/src/lib.rs. Scanners accepting the live control: ['check-backlog-store.py', ... 'check-version-bumped.py']; their exit codes on the dead diff: {... all 0} (same for `while false {` and `if false && flag {`)
+Diff-scoped ratchet: existing occurrences counted, nothing new added (ratchet guard and live control pass today). Only `run` lines in .githooks/pre-commit are tried, so wiring is implied; the new scanner must run in a minimal fixture repo. Runtime ~50s.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998491
+updated_at = 1793998491
+weight = 0.0
+issue_number = 1586
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1586"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_audit_b_never_executed_ratchet.py"
+rev = "e1ef7d1acfb9d13d2a135f0fc533d8e05efd5450"
+observed_at = 1793998491
+detail = """
+exit 1: it_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_if_false_and_guard_is_refused
+FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_if_false_block_is_refused
+FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_while_false_is_refused
+========================= 3 failed, 2 passed in 23.56s ========================="""

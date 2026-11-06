@@ -47,6 +47,16 @@ const DYNAMIC_EXECUTION_MARKERS: &[&str] = &[
     ".apply(",
     "instance_eval",
     "class_eval",
+    // APIs that execute a string argument as code (backlog b4c03877). A false
+    // hit only keeps the Deny.
+    "timeit",
+    "cprofile",
+    "profile.run",
+    "pdb.run",
+    "settimeout",
+    "setinterval",
+    "vm.run",
+    "new function",
     "`",
 ];
 

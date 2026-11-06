@@ -538,6 +538,10 @@ fn evaluate_command() -> Result<()> {
         charter: &charter,
     };
 
+    // Exclusive lock across the whole load-modify-save, same as `apply`: an
+    // unlocked evaluate would overwrite answers a concurrent `apply` saved in
+    // between. Acquisition failure is an error; we never save unlocked.
+    let _carve_lock = carve::lock(&root)?;
     // Initialize-or-load: a fresh evaluate re-seeds the bundle from gather (so
     // it reflects the current repo state); a resumed carve keeps its answers.
     let mut state = match carve::load(&root)? {

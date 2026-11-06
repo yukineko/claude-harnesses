@@ -309,7 +309,6 @@ fn control_check_oracle_valid_before_removal() {
 /// (a1) After `worktree remove`, durable copies of the red+green proofs exist
 /// outside the worktree and check-oracle still reports a valid F->P oracle.
 #[test]
-#[ignore = "RED: condukt records lost at teardown (tdd proofs, verifier verdict) 2026-11-07"]
 fn remove_persists_tdd_proofs_durably() {
     let fx = Fx::new();
     let (wt, branch) = fx.worktree("t5");
@@ -341,7 +340,6 @@ fn remove_persists_tdd_proofs_durably() {
 /// tree itself (whose parent must stay writable so a plain removal CAN
 /// succeed -- proven by the control below).
 #[test]
-#[ignore = "RED: condukt records lost at teardown (tdd proofs, verifier verdict) 2026-11-07"]
 fn remove_is_refused_when_proofs_cannot_be_persisted() {
     let fx = Fx::new();
     let (wt, branch) = fx.worktree("t5");
@@ -412,7 +410,6 @@ fn control_lockdown_does_not_block_removal_without_proofs() {
 /// (b1) Applying a verifier verdict records verdict, confidence and reason in
 /// run state.
 #[test]
-#[ignore = "RED: condukt records lost at teardown (tdd proofs, verifier verdict) 2026-11-07"]
 fn state_set_records_verifier_verdict_confidence_reason() {
     let fx = Fx::new();
     let out = fx.condukt(&[

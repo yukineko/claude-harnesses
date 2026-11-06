@@ -16,9 +16,7 @@
 //! `is_stash_sweep_flag` matches exact spellings only and the argv splitter
 //! does no brace expansion, so all three are allowed.
 //!
-//! The RED cases are `#[ignore]`d so main stays green; run them with
-//! `cargo test -p blastguard --test git_stash_abbrev_brace_flag_failopen_20261105 -- --include-ignored`.
-//! Remove the ignores once the scanner judges these readings.
+//! The RED cases were `#[ignore]`d until the scanner judged these readings; the ignores are removed.
 
 #[path = "support/bounded.rs"]
 mod bounded;
@@ -91,19 +89,16 @@ fn assert_not_allowed(tag: &str, command: &str) {
 }
 
 #[test]
-#[ignore = "RED repro: abbreviated stash --all allowed (fail-open); remove when fixed"]
 fn abbreviated_all_is_not_allowed() {
     assert_not_allowed("abbr-al", "git stash push --al");
 }
 
 #[test]
-#[ignore = "RED repro: abbreviated stash --include-untracked allowed (fail-open); remove when fixed"]
 fn abbreviated_include_untracked_is_not_allowed() {
     assert_not_allowed("abbr-incu", "git stash push --include-u");
 }
 
 #[test]
-#[ignore = "RED repro: brace-expanded stash -u allowed (fail-open); remove when fixed"]
 fn brace_expanded_dash_u_is_not_allowed() {
     assert_not_allowed("brace-u", "git stash push {-u,}");
 }
@@ -120,6 +115,47 @@ fn control_exact_all_is_not_allowed() {
 fn control_plain_stash_with_message_is_allowed() {
     let dir = fresh_dir("plain-msg");
     let command = "git stash push -m msg";
+    let (d, r) = verdict(&dir, command);
+    assert_eq!(d, "allow", "{command:?} must stay allowed, got {d}: {r}");
+}
+
+/// Verifier finding on 3e82109e (2026-11-07): a quoted / escaped `}` inside
+/// the brace hides the comma from a first-`{`-to-first-`}` scan after quote
+/// removal. Real bash expands `{-mx\},-u}` to the two words `-mx}` and `-u`,
+/// i.e. `git stash push -mx} -u` (an untracked sweep).
+#[test]
+fn brace_with_escaped_close_brace_is_not_allowed() {
+    assert_not_allowed("brace-esc", "git stash push {-mx\\},-u}");
+}
+
+/// Same shape with a single-quoted `}`: bash expands `{-mx'}',-u}` to
+/// `-mx}` and `-u`.
+#[test]
+fn brace_with_quoted_close_brace_is_not_allowed() {
+    assert_not_allowed("brace-quot", "git stash push {-mx'}',-u}");
+}
+
+/// Verifier finding on c9f58ff1 (2026-11-07): the brace check skipped the
+/// `-m` / `--message` value word, but bash splits a comma brace list there
+/// into several argv words: `-m {a,-u}` expands to `-m a -u` (a sweep).
+#[test]
+fn brace_in_message_value_slot_is_not_allowed() {
+    assert_not_allowed("brace-msg", "git stash push -m {a,-u}");
+}
+
+/// Same hole through the long option with an empty first alternative:
+/// `--message {,-u}` expands to `--message '' -u`.
+#[test]
+fn brace_in_long_message_value_slot_is_not_allowed() {
+    assert_not_allowed("brace-lmsg", "git stash push --message {,-u}");
+}
+
+/// Control: a stash ref `stash@{0}` is not a brace expansion (no comma, no
+/// `..`), so popping it must stay allowed.
+#[test]
+fn control_stash_ref_brace_is_allowed() {
+    let dir = fresh_dir("stash-ref");
+    let command = "git stash pop stash@{0}";
     let (d, r) = verdict(&dir, command);
     assert_eq!(d, "allow", "{command:?} must stay allowed, got {d}: {r}");
 }

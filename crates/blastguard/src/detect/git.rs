@@ -445,11 +445,22 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
 files from the working tree, like git clean";
             match stash_argv_words(&args.join(" ")) {
                 Determination::Known(words) => {
-                    if stash_words_outside_message(words)
-                        .iter()
-                        .any(|w| is_stash_sweep_flag(w))
-                    {
+                    // The brace test covers EVERY word, message values
+                    // included: bash splits a brace list in any position
+                    // (`-m {a,-u}` becomes `-m a -u`), so a message value is
+                    // no exemption. Only the sweep-flag test skips the
+                    // separate-word -m/--message value (a literal `-u`
+                    // there is the message git stores, not a flag).
+                    let any_brace = words.iter().any(|w| has_brace_expansion(w));
+                    let outside = stash_words_outside_message(words);
+                    if outside.iter().any(|w| is_stash_sweep_flag(w)) {
                         Decision::deny(SWEEP_REASON)
+                    } else if any_brace {
+                        Decision::ask(
+                            "blastguard cannot determine the argument words of this git stash \
+(bash brace expansion such as a comma list can produce -u/-a, which removes untracked files \
+from the working tree)",
+                        )
                     } else {
                         Decision::Allow
                     }
@@ -486,12 +497,53 @@ files from the working tree, like git clean";
 }
 
 /// True for a stash argv word that sweeps untracked files out of the working
-/// tree: `--all`, `--include-untracked`, or a short-flag bundle holding `a`
-/// or `u`. Exact spellings only (abbreviated long options are not matched).
+/// tree: `--all`, `--include-untracked`, any non-empty prefix of either that
+/// git's option parser accepts as an abbreviation (`--al`, `--include-u`,
+/// with or without an `=value` tail), or a short-flag bundle holding `a` or
+/// `u`. No other `git stash push` long option (patch, staged, keep-index,
+/// no-keep-index, quiet, message, pathspec-from-file, pathspec-file-nul)
+/// starts with `a` or `i`, so every such prefix is unambiguous; and were it
+/// ambiguous, treating it as a sweep is the restrictive side anyway.
 fn is_stash_sweep_flag(w: &str) -> bool {
-    w == "--all"
-        || w == "--include-untracked"
-        || (is_short_flag(w) && (w.contains('a') || w.contains('u')))
+    if let Some(rest) = w.strip_prefix("--") {
+        let name = rest.split('=').next().unwrap_or("");
+        return !name.is_empty()
+            && ("all".starts_with(name) || "include-untracked".starts_with(name));
+    }
+    is_short_flag(w) && (w.contains('a') || w.contains('u'))
+}
+
+/// True when the word MAY hold a bash brace expansion (comma list or `..`
+/// sequence), which can turn into a sweep flag at runtime.
+///
+/// `w` is a word after quote removal (`stash_argv_words`), so a quoted or
+/// escaped `}` (raw `{-mx\},-u}` or `{-mx'}',-u}`) is indistinguishable here
+/// from a real one; pairing the first `{` with the first `}` would let
+/// bash's real expansion (`-mx}` and `-u`) through. The test is therefore
+/// deliberately over-approximate, resolving to the restrictive side: true
+/// when a `{` is followed ANYWHERE later in the word by a `,` or `..` (no
+/// brace pairing at all), or when the last `{` has no `}` after it
+/// (unbalanced: not provably literal). Otherwise false, so `stash@` followed
+/// by `{0}` stays literal. This may also flag words bash would not expand
+/// (a quoted `{`, or `{x},y`); that over-flagging is the intended side.
+///
+/// The caller applies it to EVERY stash argv word, including the value of
+/// `-m` / `--message` and the glued `--message=` / `-mVALUE` forms: bash
+/// splits a brace list wherever it stands (`-m {a,-u}` runs as `-m a -u`),
+/// and quote removal has already erased whether the brace was quoted. So a
+/// quoted message such as `-m "fix {a,b}"` is deliberately put to a human
+/// (Ask) too.
+fn has_brace_expansion(w: &str) -> bool {
+    let Some(first_open) = w.find('{') else {
+        return false;
+    };
+    let after_first = &w[first_open + 1..];
+    if after_first.contains(',') || after_first.contains("..") {
+        return true;
+    }
+    // Unbalanced: the last `{` has no `}` after it.
+    let last_open = w.rfind('{').unwrap_or(first_open);
+    !w[last_open + 1..].contains('}')
 }
 
 /// The stash argv words minus the VALUE of a separate-word `-m` / `--message`

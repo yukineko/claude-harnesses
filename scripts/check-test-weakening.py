@@ -1751,6 +1751,9 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
 
     results = []
     for old, new in sorted(set(pairs), key=lambda pr: (pr[1] or "", pr[0] or "")):
+        # Remember whether the old side was absent in the original pair,
+        # before reassignments for out-of-line cfg(test) body files.
+        old_is_new = old is None
         if old in body_base:
             old = None
         if new in body_after:
@@ -1789,6 +1792,15 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                     "counted, so removed generated tests cannot be ruled out"
                 )
             found = findings_for(rep, before, after)
+        # A file that did not exist at the base cannot have had existing
+        # coverage weakened. Filter out ignore-added findings when the file is
+        # new (old_is_new), as these cannot indicate coverage loss in a file
+        # with no prior tests.
+        if old_is_new:
+            found = [
+                (p, kind, detail) for p, kind, detail in found
+                if kind != KIND_IGNORE_ADDED
+            ]
         for p, kind, detail in found:
             results.append(
                 {

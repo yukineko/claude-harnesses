@@ -1336,37 +1336,159 @@ mod backlog_e9262d91 {
     #[test]
     fn lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe() {
         let _serial = serial();
-        let (tmp, count, kill_path) = counting_kill_path();
-        let mut child = std::process::Command::new("sleep")
-            .arg("1")
-            .spawn()
-            .expect("fixture: spawn `sleep 1` as the soon-to-die holder");
-        let holder_pid = child.id();
-        let reaper = std::thread::spawn(move || child.wait());
-
-        let lock = tmp.path().join("held.lock");
-        write_lock(&lock, holder_pid);
-
         let deadline = Duration::from_secs(5);
-        let start = Instant::now();
-        let got = RunLock::acquire_at_with_env_path(lock.clone(), deadline, Some(&kill_path));
-        let elapsed = start.elapsed();
-        let status = reaper
-            .join()
-            .expect("fixture: reaper thread panicked")
-            .expect("fixture: wait for the holder to exit");
-        assert!(status.success(), "fixture: `sleep 1` must exit 0");
-
-        let (alive, dead) = probe_log(&count);
+        let r = mid_wait_death_scenario(Duration::ZERO, deadline);
+        let (holder_pid, alive, dead, elapsed) = (r.holder_pid, r.alive, r.dead, r.elapsed);
         assert!(
             alive >= 1,
             "fixture inconclusive: the holder (pid {holder_pid}) was never probed while alive \
              ({alive} alive + {dead} dead), so this did not exercise a MID-wait death"
         );
         assert!(
-            got.held(),
-            "holder pid {holder_pid} died ~1s into the wait but the lock was not acquired \
+            r.held,
+            "holder pid {holder_pid} died right after its first alive probe but the lock was not acquired \
              before the {deadline:?} deadline (elapsed {elapsed:?}; {alive} alive + {dead} dead probes)"
+        );
+        assert_eq!(
+            dead, 1,
+            "the holder (pid {holder_pid}) must be reaped on the FIRST probe that observes its \
+             death: got {dead} dead probes ({alive} alive)"
+        );
+    }
+
+    /// Outcome of one run of the MID-wait-death scenario
+    /// ([`mid_wait_death_scenario`]).
+    #[cfg(unix)]
+    struct MidWaitDeath {
+        holder_pid: u32,
+        held: bool,
+        alive: usize,
+        dead: usize,
+        elapsed: Duration,
+    }
+
+    /// The MID-wait-death scenario of
+    /// `lock_wait_on_holder_dying_mid_wait_reaps_on_first_dead_probe`, with
+    /// every `kill -0 <holder>` probe slowed down by `probe_delay` before the
+    /// real `/bin/kill` runs (probes of our own pid — the warm-up — are not
+    /// delayed). The delay models what was observed on loaded hosts: one
+    /// fork+exec of the shell wrapper taking 0.7–2.4s, which is longer than
+    /// the holder's lifetime.
+    ///
+    /// The holder's death is GATED on an observed alive probe, not scheduled
+    /// by wall clock (backlog condukt-lock-probe-race: a wall-clock `sleep 1`
+    /// holder was already dead when a slow first probe finally ran, so the
+    /// run never exercised a death DURING the wait and the guarded test
+    /// panicked as "fixture inconclusive (0 alive + 1 dead)"). The holder is a
+    /// long-lived `sleep 30`; a reaper thread waits until the fake `kill` has
+    /// logged an `alive` line, then SIGKILLs and reaps the holder (not a
+    /// zombie, which `kill -0` would still report alive). If no alive line
+    /// shows up before `deadline` it kills the holder anyway so the fixture
+    /// cannot leak a process; the test then fails as inconclusive.
+    #[cfg(unix)]
+    fn mid_wait_death_scenario(probe_delay: Duration, deadline: Duration) -> MidWaitDeath {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let count = tmp.path().join("kill.count");
+        let fake = bin.join("kill");
+        let own = std::process::id();
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$2\" != \"{own}\" ]; then sleep {delay}; fi\n\
+                 /bin/kill \"$@\"\nrc=$?\n\
+                 if [ $rc -eq 0 ]; then echo alive >> '{c}'; else echo dead >> '{c}'; fi\n\
+                 exit $rc\n",
+                delay = probe_delay.as_secs_f64(),
+                c = count.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut parts = vec![bin];
+        if let Some(p) = std::env::var_os("PATH") {
+            parts.extend(std::env::split_paths(&p));
+        }
+        let kill_path = std::env::join_paths(parts).unwrap();
+        // Warm-up (first exec of a fresh script is slow on macOS), as in
+        // `counting_kill_path`; own pid, so not delayed. Reset the log.
+        let warm = std::process::Command::new(&fake)
+            .args(["-0", &own.to_string()])
+            .output()
+            .expect("fixture: warm-up exec of the fake `kill`");
+        assert!(
+            warm.status.success(),
+            "fixture: warm-up `kill -0 <self>` must exit 0"
+        );
+        std::fs::remove_file(&count).expect("fixture: reset the probe log after warm-up");
+
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("fixture: spawn `sleep 30` as the holder to be killed after a probe");
+        let holder_pid = child.id();
+        let alive_log = count.clone();
+        let reaper = std::thread::spawn(move || {
+            let give_up = Instant::now() + deadline;
+            while Instant::now() < give_up {
+                let seen = std::fs::read_to_string(&alive_log)
+                    .map(|t| t.lines().any(|l| l == "alive"))
+                    .unwrap_or(false);
+                if seen {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let _ = child.kill();
+            child.wait()
+        });
+
+        let lock = tmp.path().join("held.lock");
+        write_lock(&lock, holder_pid);
+
+        let start = Instant::now();
+        let got = RunLock::acquire_at_with_env_path(lock.clone(), deadline, Some(&kill_path));
+        let elapsed = start.elapsed();
+        reaper
+            .join()
+            .expect("fixture: reaper thread panicked")
+            .expect("fixture: wait for the holder to exit");
+        let (alive, dead) = probe_log(&count);
+        MidWaitDeath {
+            holder_pid,
+            held: got.held(),
+            alive,
+            dead,
+            elapsed,
+        }
+    }
+
+    /// The MID-wait-death guard must stay CONCLUSIVE however slow a single
+    /// liveness probe is: the holder has to be observed alive at least once
+    /// and then reaped on the first probe that sees it dead. A probe latency
+    /// of 3s (> the holder's 1s wall-clock lifetime) must not turn the run
+    /// into a dead-on-first-probe case: the holder's death is gated on an
+    /// observed alive probe, not timed by wall clock.
+    #[cfg(unix)]
+    #[test]
+    fn lock_wait_mid_wait_death_fixture_is_conclusive_under_slow_probe() {
+        let _serial = serial();
+        let deadline = Duration::from_secs(30);
+        let r = mid_wait_death_scenario(Duration::from_secs(3), deadline);
+        let (holder_pid, alive, dead, elapsed) = (r.holder_pid, r.alive, r.dead, r.elapsed);
+        assert!(
+            alive >= 1,
+            "fixture inconclusive under a 3s probe latency: the holder (pid {holder_pid}) was \
+             never probed while alive ({alive} alive + {dead} dead), so this did not exercise \
+             a MID-wait death"
+        );
+        assert!(
+            r.held,
+            "holder pid {holder_pid} died mid-wait but the lock was not acquired before the \
+             {deadline:?} deadline (elapsed {elapsed:?}; {alive} alive + {dead} dead probes)"
         );
         assert_eq!(
             dead, 1,

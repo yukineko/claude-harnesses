@@ -1079,8 +1079,10 @@ fn run(cli: Cli) -> Result<()> {
                 // normalization themselves.
                 //
                 // `status` carries the SAME derived value the text renderer
-                // shows: a task whose `defer_until` is still in the future is
-                // `deferred` (backlog d65da48d). `deferred` is never stored —
+                // shows: a non-terminal task whose `defer_until` is still in the
+                // future is `deferred` (backlog d65da48d); a done/cancelled task
+                // keeps its terminal status whatever its `defer_until` says
+                // (backlog 8cd825f3). `deferred` is never stored —
                 // it is computed from `defer_until` (still present in the row)
                 // — so overwatch's `status == "deferred"` counter is reachable
                 // only through this derivation.

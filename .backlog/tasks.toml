@@ -446,3 +446,34 @@ scripts/test_check_test_weakening_new_file_ignore.py:104: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_check_test_weakening_new_file_ignore.py::NewFileIgnore::test_new_file_with_backlog_ignores_is_not_blocked
 ============================== 1 failed in 1.20s ==============================='''
+
+[[task]]
+id = "af5dcf5c"
+title = "blastguard: abbreviated (--al, --include-u) and brace-expanded ({-u,}) git stash sweep flags are allowed (fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Measured 2026-11-05/06 at main 2f9f927e (blastguard 0.2.265) and re-observed at 615e64f8 (0.2.269): git stash push --al, git stash push --include-u, and git stash push {-u,} are Allowed. Real git 2.50.1 in a scratch repo: --al and --include-u each removed the untracked file; bash -c 'git stash push {-u,}' too (bash expands to -u; under zsh it fails with 'empty string is not a valid pathspec'). Test 615e64f8: 3 #[ignore] RED cases (3 failed with --include-ignored), 2 controls green (--all non-allow, -m msg allowed). Readings: (a) defect: git accepts unambiguous long-option abbreviations and bash brace-expands, so exact-spelling matching is a fail-open in a destructive-command gate; (b) accepted limit: is_stash_sweep_flag doc in crates/blastguard/src/detect/git.rs says 'Exact spellings only (abbreviated long options are not matched)'. Distinguish: the user ruling for b942eb2c accepted Ask on undeterminable stash args, which favours (a): match any prefix of --all/--include-untracked of length >= git's unambiguity, and Ask on any word containing an unquoted brace. Fix: then remove the #[ignore]s."
+created_at = 1793974211
+updated_at = 1793974211
+weight = 0.0
+issue_number = 1555
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1555"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test git_stash_abbrev_brace_flag_failopen_20261105 -- --include-ignored"
+rev = "615e64f898c5c5e6dea20c395ab59c0d87564860"
+observed_at = 1793974211
+detail = """
+exit 101: ssed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/git_stash_abbrev_brace_flag_failopen_20261105.rs (target/debug/deps/git_stash_abbrev_brace_flag_failopen_20261105-068358c03ec2c0ba)
+error: test failed, to rerun pass `-p blastguard --test git_stash_abbrev_brace_flag_failopen_20261105`"""

@@ -294,42 +294,36 @@ fn rm_subdir_wildcard_in(root: Root, name: &str) -> (String, String) {
 // ---- TARGETS: must be Allow --------------------------------------------------
 
 #[test]
-#[ignore = "RED: current verdict deny (git restore discards working-tree changes)"]
 fn target_restore_in_condukt_worktree_allow() {
     let (case, out) = restore_in(Root::Condukt, "t_restore_condukt");
     assert_allow(&case, &out);
 }
 
 #[test]
-#[ignore = "RED: current verdict deny (git restore discards working-tree changes)"]
 fn target_restore_in_harness_worktree_allow() {
     let (case, out) = restore_in(Root::Harness, "t_restore_hw");
     assert_allow(&case, &out);
 }
 
 #[test]
-#[ignore = "RED: current verdict deny (git reset --hard discards working-tree changes)"]
 fn target_reset_hard_in_condukt_worktree_allow() {
     let (case, out) = reset_hard_in(Root::Condukt, "t_reset_condukt");
     assert_allow(&case, &out);
 }
 
 #[test]
-#[ignore = "RED: current verdict deny (git reset --hard discards working-tree changes)"]
 fn target_reset_hard_in_harness_worktree_allow() {
     let (case, out) = reset_hard_in(Root::Harness, "t_reset_hw");
     assert_allow(&case, &out);
 }
 
 #[test]
-#[ignore = "RED: current verdict ask (git clean -f with -d/-x is confined to a safe root)"]
 fn target_clean_fd_in_condukt_worktree_allow() {
     let (case, out) = clean_fd_in(Root::Condukt, "t_clean_condukt");
     assert_allow(&case, &out);
 }
 
 #[test]
-#[ignore = "RED: current verdict ask (git clean -f with -d/-x is confined to a safe root)"]
 fn target_clean_fd_in_harness_worktree_allow() {
     let (case, out) = clean_fd_in(Root::Harness, "t_clean_hw");
     assert_allow(&case, &out);
@@ -348,14 +342,12 @@ fn target_rm_rf_subdir_in_harness_worktree_allow() {
 }
 
 #[test]
-#[ignore = "RED: current verdict deny (recursive rm (-r) can delete an entire directory tree)"]
 fn target_rm_rf_subdir_wildcard_in_condukt_worktree_allow() {
     let (case, out) = rm_subdir_wildcard_in(Root::Condukt, "t_rmglob_condukt");
     assert_allow(&case, &out);
 }
 
 #[test]
-#[ignore = "RED: current verdict deny (recursive rm (-r) can delete an entire directory tree)"]
 fn target_rm_rf_subdir_wildcard_in_harness_worktree_allow() {
     let (case, out) = rm_subdir_wildcard_in(Root::Harness, "t_rmglob_hw");
     assert_allow(&case, &out);

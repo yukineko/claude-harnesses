@@ -259,7 +259,6 @@ impl Drop for Fixture {
 /// the parent's Stop must not block on that worktree's mid-edit state, and
 /// must say (not silently skip) that the root was left to its owner.
 #[test]
-#[ignore = "backlog: donegate judges an in-flight subagent's root on the parent's Stop — RED repro 2026-11-07"]
 fn parent_stop_does_not_judge_a_root_only_an_inflight_subagent_wrote() {
     let f = Fixture::new();
     let tp = f.parent_transcript(true, false);
@@ -284,7 +283,6 @@ fn parent_stop_does_not_judge_a_root_only_an_inflight_subagent_wrote() {
 /// The other half: the root must be judged at its owner's stop, which needs a
 /// SubagentStop hook. donegate registers only Stop today.
 #[test]
-#[ignore = "backlog: donegate registers no SubagentStop hook, so a subagent's root is never judged at its owner's stop — RED repro 2026-11-07"]
 fn donegate_registers_a_subagent_stop_hook() {
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("hooks/hooks.json");
     let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();

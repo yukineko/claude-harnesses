@@ -449,7 +449,7 @@ FAILED scripts/test_check_test_weakening_new_file_ignore.py::NewFileIgnore::test
 
 [[task]]
 id = "433ca3be"
-title = "pre-commit: per-phase timing is not recorded (pre-push has prepush-timing.jsonl, pre-commit has nothing)"
+title = "pre-commit: per-gate timing and verdict are not recorded (pre-push has prepush-timing.jsonl, pre-commit has nothing)"
 project = "/home/hiroyuki_nakayama/src/harness"
 project_unresolved = false
 tags = [
@@ -459,22 +459,55 @@ tags = [
 ]
 touched_files = []
 status = "pending"
-notes = "Observed 2026-11-06 at main b2f2cbd1: .githooks/pre-push times each phase via date +%s and appends one JSON line per run to <git-common-dir>/prepush-timing.jsonl (9 lines; latest b2f2cbd1 typecheck 46s). .githooks/pre-commit (555 lines) has no timing code (grep time/date/SECONDS/elapsed/duration hits prose only) and no log exists. Fix direction: port pre-push's _tm_* helpers; per-scanner phases, append to precommit-timing.jsonl, one stderr summary 'pre-commit timing: ... total Ns (exit RC)'. Observability only: must not change any verdict/exit code; unwritable log warns, same rc. Readings: (a) missing observability (gate cost invisible); (b) intentional omission because pre-commit is fast. Distinguish: no doc says pre-commit timing was deliberately omitted; the repro test pins (a). Repro: python3 -m pytest scripts/test_precommit_timing.py (3 RED at 7e1548a5)."
+notes = "Observed 2026-11-06 at main b2f2cbd1: .githooks/pre-push times each phase via date +%s and appends one JSON line per run to <git-common-dir>/prepush-timing.jsonl (9 lines; latest b2f2cbd1 typecheck 46s). .githooks/pre-commit (555 lines) has no timing code and no log. Purpose (user 2026-11-06): decide which gates must run on EVERY commit vs path-triggered vs pre-push, from data. Transcript count 2026-10-08..11-06 found 12 of 18 pre-commit gates with 0 blocks; scanner wall time with empty stage: projkey-classification 6.1s, all others <=0.7s. Fix: port pre-push _tm_* helpers; one phase per gate label (incl. main-tree-guard and commit-msg test-weakening if feasible) with secs and rc; append one JSON line to precommit-timing.jsonl; one stderr summary 'pre-commit timing: ... total Ns (exit RC)'. Observability only: no verdict/exit change; unwritable log warns, same rc. Repro: python3 -m pytest scripts/test_precommit_timing.py."
 created_at = 1793925984
-updated_at = 1793925984
+updated_at = 1793926329
 weight = 0.0
 issue_number = 1551
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1551"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
 cmd = "python3 -m pytest scripts/test_precommit_timing.py"
-rev = "7e1548a586cf480896fa468dc832c9d285de2ba4"
-observed_at = 1793925984
+rev = "51785391bdc9913f5b6a75a72e7a9d6ee199d12d"
+observed_at = 1793926328
 detail = """
 exit 1: ==========================
 FAILED scripts/test_precommit_timing.py::PrecommitTiming::test_blocking_run_still_logs_with_nonzero_exit
 FAILED scripts/test_precommit_timing.py::PrecommitTiming::test_clean_run_appends_one_timing_line
 FAILED scripts/test_precommit_timing.py::PrecommitTiming::test_stderr_has_one_summary_line
-============================== 3 failed in 1.04s ==============================="""
+============================== 3 failed in 0.97s ==============================="""
+
+[[task]]
+id = "dfa2c9d3"
+title = "gate-severity-probe: measure per pre-commit gate whether it fires, which other layers catch the same violation, and how far it leaks"
+project = "/home/hiroyuki_nakayama/src/harness"
+project_unresolved = false
+tags = [
+    "observability",
+    "precommit",
+    "gate-severity",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "User direction 2026-11-06: decide which gates run on every commit only after measuring (a) per-gate timing/verdict (433ca3be) and (b) severity when a gate breaks, defined by the user as: fires (does it block an injected violation now), caught_by (with only that gate disabled, which remaining layers stop it: other pre-commit gates, commit-msg, pre-push, cargo test), leak (local-commit|push|rollout|undetermined when nothing catches it). Not in scope: time-to-detect. Motivation data: transcripts 2026-10-08..11-06 show 0 blocks for injectguard, doc-duplication, version-lockstep, fault-injection-adoption, worktree-isolation, gate-crates-sync, gate-protection, crossx-constants, launcher-exec-bit, clippy-lints, backlog-store, projkey-classification; 0 blocks cannot distinguish unneeded / caught upstream / dark. Build scripts/gate-severity-probe.py --json: one representative fixture per gate, applied in throwaway worktrees only (never the caller's tree/index); undetermined never folded into fires=false or leak=null. Repro: python3 -m pytest scripts/test_gate_severity_probe.py (4 RED: probe missing)."
+created_at = 1793926370
+updated_at = 1793926370
+weight = 0.0
+issue_number = 1552
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1552"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_gate_severity_probe.py"
+rev = "a9682edfd03944196ecad90571148db0e2a92bf1"
+observed_at = 1793926370
+detail = """
+exit 1: rity_probe.py::GateSeverityProbe::test_caller_tree_untouched
+FAILED scripts/test_gate_severity_probe.py::GateSeverityProbe::test_covers_every_gate
+FAILED scripts/test_gate_severity_probe.py::GateSeverityProbe::test_entry_schema
+FAILED scripts/test_gate_severity_probe.py::GateSeverityProbe::test_known_firing_gates_fire
+============================== 4 failed in 0.11s ==============================="""

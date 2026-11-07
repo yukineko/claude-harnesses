@@ -140,7 +140,6 @@ fn next_claim_reruns_the_repro_in_the_ticket_project_root_not_the_cwd() {
 /// the cwd checkout. The repro is committed ONLY in the linked worktree, so a
 /// project-root-only re-run (main checkout, no repro file) cannot reproduce.
 #[test]
-#[ignore = "backlog 78cee053: RED, remove ignore when fixed"]
 fn next_claim_reruns_in_the_cwd_when_it_is_a_linked_worktree_of_the_ticket_project() {
     use std::os::unix::fs::PermissionsExt;
     let td = tempfile::tempdir().unwrap();

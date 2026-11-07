@@ -1,6 +1,11 @@
 //! `next --claim` with the stored repro re-run before the ticket is handed out
 //! (backlog 78cee053). Split out of `main.rs` to keep it under its line cap.
-//! The re-run happens in the ticket's project root (ruling 2026-11-07).
+//! Where the repro is re-run (user ruling 2026-11-07, "Cwd if same project"):
+//! the cwd's checkout (its git toplevel) when it belongs to the ticket's
+//! project — the same `store::canonical_project_id`, so a linked worktree
+//! matches its main checkout — otherwise the ticket's project root. When
+//! either identity is undetermined, or the chosen location is not a usable
+//! git checkout, the claim is REFUSED (see [`rerun_dir`]).
 
 use crate::{claim_ledger, evidence, live_lease_view, store, task};
 use anyhow::Result;
@@ -13,12 +18,69 @@ use std::path::{Path, PathBuf};
 /// non-zero refusal, never a claim of an un-rechecked ticket.
 const RECHECK_ATTEMPTS: usize = 3;
 
-/// The directory the candidate's stored repro is re-run in: the TICKET'S
-/// project root (the row's `project` field), never the process cwd (user
-/// ruling 2026-11-07, "Re-run from project root"). `Err` (the caller refuses
-/// the claim) when the root is unresolved, empty, missing, or not itself the
-/// top of a git checkout — a cwd fallback would re-run the repro against an
-/// unrelated tree and hand out (or skip) a ticket on someone else's evidence.
+/// The directory the candidate's stored repro is re-run in (user ruling
+/// 2026-11-07, "Cwd if same project"):
+///   1. the cwd's checkout (its git toplevel) when its
+///      `store::canonical_project_id` equals that of the ticket's `project`
+///      field (a linked worktree maps to its main checkout, so a worktree of
+///      the ticket's project re-runs in the worktree);
+///   2. otherwise (the cwd belongs to another project, is not inside a repo,
+///      or its toplevel is not resolvable by git) the ticket's project root,
+///      validated by [`project_root`].
+///
+/// `Err` (the caller refuses the claim) when the ticket's project field is
+/// unresolved or empty, when EITHER project identity is `Undetermined` (or the
+/// cwd itself cannot be read) — an undetermined identity is never read as
+/// "same project" nor as "different project" — or when the fallback project
+/// root is not a usable git checkout.
+fn rerun_dir(cand: &task::Task) -> std::result::Result<PathBuf, String> {
+    if cand.project_unresolved {
+        return Err(format!(
+            "its project root was recorded as unresolved ({:?}), so its project identity cannot \
+             be determined",
+            cand.project
+        ));
+    }
+    if cand.project.trim().is_empty() {
+        return Err(
+            "it records no project root, so its project identity cannot be determined".to_string(),
+        );
+    }
+    let ticket_id = match store::canonical_project_id(Path::new(&cand.project)) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Err(format!(
+                "the project identity of its project root {:?} cannot be determined: {why}",
+                cand.project
+            ));
+        }
+    };
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("the cwd cannot be read, so whether it belongs to the ticket's project cannot be determined: {e}"))?;
+    let cwd_id = match store::canonical_project_id(&cwd) {
+        Determination::Known(p) => p,
+        Determination::Undetermined(why) => {
+            return Err(format!(
+                "the project identity of the cwd {} cannot be determined: {why}",
+                cwd.display()
+            ));
+        }
+    };
+    if cwd_id == ticket_id {
+        if let Ok(top) = evidence::repo_toplevel(&cwd) {
+            if let Ok(top) = top.canonicalize() {
+                return Ok(top);
+            }
+        }
+    }
+    project_root(cand)
+}
+
+/// The ticket's project root (the row's `project` field) as a re-run
+/// location. `Err` (the caller refuses the claim) when the root is
+/// unresolved, empty, missing, or not itself the top of a git checkout —
+/// re-running against any other tree would hand out (or skip) a ticket on
+/// someone else's evidence.
 fn project_root(cand: &task::Task) -> std::result::Result<PathBuf, String> {
     if cand.project_unresolved {
         return Err(format!(
@@ -68,8 +130,9 @@ fn project_root(cand: &task::Task) -> std::result::Result<PathBuf, String> {
 /// (backlog 78cee053, audit B item 6: a RED ticket is often already fixed).
 ///
 /// Each round: peek the top candidate (a pure read, NO lock held), re-run its
-/// stored repro at HEAD of the ticket's project root ([`project_root`], NOT the
-/// process cwd; an unusable root refuses the claim) via `evidence::run_repro`
+/// stored repro at HEAD of the location [`rerun_dir`] picks (the cwd checkout
+/// when it belongs to the ticket's project, else the ticket's project root; an
+/// undetermined identity or an unusable root refuses the claim) via `evidence::run_repro`
 /// (can be a long `cargo test`, so it runs outside the ledger lock and the
 /// tasks-file lock), then:
 ///   - `not-reproduced` (GREEN): not handed out. A notice naming the id, cmd
@@ -110,7 +173,7 @@ pub(crate) fn claim_rechecked(
                 cand.id
             ));
         };
-        let root = match project_root(&cand) {
+        let root = match rerun_dir(&cand) {
             Ok(r) => r,
             Err(why) => {
                 return Err(anyhow::anyhow!(

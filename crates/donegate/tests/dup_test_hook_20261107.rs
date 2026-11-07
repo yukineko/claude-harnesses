@@ -194,7 +194,7 @@ impl Fx {
 }
 
 #[test]
-#[ignore = "backlog PENDING: donegate dup-test hook not implemented"]
+#[ignore = "backlog 2913b970: donegate dup-test hook not implemented"]
 fn dup_same_cmd_same_tree_after_success_is_denied() {
     let fx = Fx::new(true);
     fx.run_ok(CARGO, "t1");
@@ -205,7 +205,7 @@ fn dup_same_cmd_same_tree_after_success_is_denied() {
 }
 
 #[test]
-#[ignore = "backlog PENDING: donegate dup-test hook not implemented"]
+#[ignore = "backlog 2913b970: donegate dup-test hook not implemented"]
 fn c_tracked_edit_allows() {
     let fx = Fx::new(true);
     fx.run_ok(CARGO, "t1");
@@ -214,7 +214,7 @@ fn c_tracked_edit_allows() {
 }
 
 #[test]
-#[ignore = "backlog PENDING: donegate dup-test hook not implemented"]
+#[ignore = "backlog 2913b970: donegate dup-test hook not implemented"]
 fn c_untracked_file_allows() {
     let fx = Fx::new(true);
     fx.run_ok(CARGO, "t1");
@@ -223,7 +223,7 @@ fn c_untracked_file_allows() {
 }
 
 #[test]
-#[ignore = "backlog PENDING: donegate dup-test hook not implemented"]
+#[ignore = "backlog 2913b970: donegate dup-test hook not implemented"]
 fn c_extra_filter_allows() {
     let fx = Fx::new(true);
     fx.run_ok(CARGO, "t1");
@@ -231,7 +231,7 @@ fn c_extra_filter_allows() {
 }
 
 #[test]
-#[ignore = "backlog PENDING: donegate dup-test hook not implemented"]
+#[ignore = "backlog 2913b970: donegate dup-test hook not implemented"]
 fn c_include_ignored_allows() {
     let fx = Fx::new(true);
     fx.run_ok(CARGO, "t1");
@@ -239,7 +239,7 @@ fn c_include_ignored_allows() {
 }
 
 #[test]
-#[ignore = "backlog PENDING: donegate dup-test hook not implemented"]
+#[ignore = "backlog 2913b970: donegate dup-test hook not implemented"]
 fn c_failed_run_is_not_recorded() {
     let fx = Fx::new(true);
     assert!(!fx.pre_denies(CARGO, "t1"));
@@ -250,7 +250,7 @@ fn c_failed_run_is_not_recorded() {
 }
 
 #[test]
-#[ignore = "backlog PENDING: donegate dup-test hook not implemented"]
+#[ignore = "backlog 2913b970: donegate dup-test hook not implemented"]
 fn c_interrupted_run_is_not_recorded() {
     let fx = Fx::new(true);
     assert!(!fx.pre_denies(CARGO, "t1"));
@@ -261,7 +261,7 @@ fn c_interrupted_run_is_not_recorded() {
 }
 
 #[test]
-#[ignore = "backlog PENDING: donegate dup-test hook not implemented"]
+#[ignore = "backlog 2913b970: donegate dup-test hook not implemented"]
 fn c_undeterminable_success_is_not_recorded() {
     // No hook_event_name, and separately no tool_response / no `interrupted`.
     let fx = Fx::new(true);
@@ -290,7 +290,7 @@ fn c_undeterminable_success_is_not_recorded() {
 }
 
 #[test]
-#[ignore = "backlog PENDING: donegate dup-test hook not implemented"]
+#[ignore = "backlog 2913b970: donegate dup-test hook not implemented"]
 fn c_tree_changed_during_the_call_is_not_recorded() {
     let fx = Fx::new(true);
     assert!(!fx.pre_denies(CARGO, "t1"));
@@ -301,7 +301,7 @@ fn c_tree_changed_during_the_call_is_not_recorded() {
 }
 
 #[test]
-#[ignore = "backlog PENDING: donegate dup-test hook not implemented"]
+#[ignore = "backlog 2913b970: donegate dup-test hook not implemented"]
 fn c_compound_commands_are_never_recorded_nor_denied() {
     let fx = Fx::new(true);
     for (i, cmd) in [
@@ -327,7 +327,7 @@ fn c_compound_commands_are_never_recorded_nor_denied() {
 }
 
 #[test]
-#[ignore = "backlog PENDING: donegate dup-test hook not implemented"]
+#[ignore = "backlog 2913b970: donegate dup-test hook not implemented"]
 fn c_not_a_git_repo_allows() {
     let fx = Fx::new(false);
     fx.run_ok(CARGO, "t1");
@@ -335,7 +335,7 @@ fn c_not_a_git_repo_allows() {
 }
 
 #[test]
-#[ignore = "backlog PENDING: donegate dup-test hook not implemented"]
+#[ignore = "backlog 2913b970: donegate dup-test hook not implemented"]
 fn c_corrupt_store_allows() {
     let fx = Fx::new(true);
     let before = fx.files_outside_project();
@@ -356,7 +356,7 @@ fn c_corrupt_store_allows() {
 }
 
 #[test]
-#[ignore = "backlog PENDING: donegate dup-test hook not implemented"]
+#[ignore = "backlog 2913b970: donegate dup-test hook not implemented"]
 fn c_not_cargo_test_allows() {
     let fx = Fx::new(true);
     fx.run_ok("cargo build -p foo", "t1");

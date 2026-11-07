@@ -925,3 +925,32 @@ exit 101: 54s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 18.48s
      Running tests/backlog_eof_redirect_fp_20261107.rs (target/debug/deps/backlog_eof_redirect_fp_20261107-10d2a5402ba5d093)
 error: test failed, to rerun pass `-p blastguard --test backlog_eof_redirect_fp_20261107`"""
+
+[[task]]
+id = "2913b970"
+title = "donegate: 同一ツリー・同一コマンドで通過済みの cargo test 再実行を PreToolUse で止める"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = "Surface chosen: `donegate dup-test pre|post` (PreToolUse(Bash) deny via hookSpecificOutput.permissionDecision=deny; PostToolUse records only when hook_event_name==PostToolUse && tool_response.interrupted==false (Bash tool_response has no exit code; failures arrive as PostToolUseFailure) && plain single `cargo test` && tree key unchanged pre->post by tool_use_id). Tests: crates/donegate/tests/dup_test_hook_20261107.rs (1 RED dup_same_cmd_same_tree_after_success_is_denied + 12 controls c_*). Verbatim RED at HEAD 5a288ec8: `assertion left == right failed: pre hook must exit 0; stdout=  left: Some(2) right: Some(0)` (subcommand missing, clap exit 2; all 13 fail so controls are not yet independently proven). Do NOT weaken the test to pass; remove the ignore marker when fixed."
+created_at = 1794039203
+updated_at = 1794039203
+weight = 0.0
+issue_number = 1616
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1616"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test dup_test_hook_20261107 dup_same_cmd_same_tree_after_success_is_denied -- --ignored"
+rev = "5a288ec8412fe6e16383b35850ed0948529d3e14"
+observed_at = 1794039203
+detail = """
+exit 101: asured; 12 filtered out; finished in 0.67s
+
+   Compiling donegate v0.1.86 (/Users/yuki/src/.harness-worktrees/red-dup-test-hook/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.31s
+     Running tests/dup_test_hook_20261107.rs (target/debug/deps/dup_test_hook_20261107-cdcd9381dcdb48c9)
+error: test failed, to rerun pass `-p donegate --test dup_test_hook_20261107`"""

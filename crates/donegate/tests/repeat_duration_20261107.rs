@@ -115,7 +115,6 @@ fn waived(r: &Run) -> bool {
 }
 
 #[test]
-#[ignore = "RED: repeat identity includes check duration 2026-11-07"]
 fn a_repeat_is_recognised_when_only_the_check_duration_differs() {
     let f = fixture(
         "rep-dur",

@@ -205,7 +205,7 @@ fn render_outcome(o: &Outcome) -> String {
 }
 
 /// `stable = true` renders the per-run file paths (the record and temporary
-/// logs, which embed a timestamp / pid) as fixed placeholders, for the repeat
+/// logs, which embed a timestamp / pid) and the check duration as fixed placeholders, for the repeat
 /// identity in [`block_fingerprint`]. Everything else is identical.
 fn render_outcome_as(o: &Outcome, stable: bool) -> String {
     let shown = |p: &Path, placeholder: &str| -> String {
@@ -226,10 +226,13 @@ fn render_outcome_as(o: &Outcome, stable: bool) -> String {
             None => "killed".to_string(),
         }
     };
-    let mut s = format!(
-        "{mark} {} ({detail}, {:.1}s)\n    $ {}",
-        o.name, o.duration_secs, o.cmd
-    );
+    // The runtime is jitter: it must not leak into the repeat identity.
+    let secs = if stable {
+        "<secs>".to_string()
+    } else {
+        format!("{:.1}s", o.duration_secs)
+    };
+    let mut s = format!("{mark} {} ({detail}, {secs})\n    $ {}", o.name, o.cmd);
     if o.passed {
         return s;
     }
@@ -293,7 +296,8 @@ pub fn block_reason(v: &GateReport, attempt: u32, max: u32) -> String {
 }
 
 /// The repeat-ledger identity of [`block_reason`]: the same text with the
-/// per-run record/temp paths replaced by placeholders. Each attempt's record
+/// per-run record/temp paths (`<record>`, the retention-failure text `<why>`)
+/// and the per-check duration (`<secs>`) replaced by placeholders. Each attempt's record
 /// file has a fresh timestamped name, so keying the ledger on the displayed
 /// reason would make every block look new and the second-occurrence waiver
 /// (`harness_core::repeat`) unreachable. Passed to `emit_stop_block_keyed`.
@@ -815,6 +819,23 @@ mod tests {
             skipped: Vec::new(),
             scope: files_scope(),
         }
+    }
+
+    /// The shown reason keeps the real duration; the repeat identity ignores it.
+    #[test]
+    fn displayed_reason_shows_duration_but_fingerprint_ignores_it() {
+        let mut fast = outcome("fmt", false);
+        fast.duration_secs = 0.0;
+        let mut slow = outcome("fmt", false);
+        slow.duration_secs = 7.3;
+        let shown = block_reason(&report_with(vec![slow]), 1, 3);
+        assert!(shown.contains("(exit 1, 7.3s)"), "{shown}");
+        let mut slow = outcome("fmt", false);
+        slow.duration_secs = 7.3;
+        let fp_fast = block_fingerprint(&report_with(vec![fast]), 1, 3);
+        let fp_slow = block_fingerprint(&report_with(vec![slow]), 1, 3);
+        assert_eq!(fp_fast, fp_slow);
+        assert!(!fp_slow.contains("7.3s"), "{fp_slow}");
     }
 
     /// (a) The dishonest claim.

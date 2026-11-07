@@ -366,7 +366,357 @@ pub(super) fn analyze_git(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     verdict
 }
 
+/// An exec-capable git shape found on a command line: why it is refused, and
+/// the command line(s) git would run when they are spelled out on the line
+/// (empty when the command is only named by reference, e.g. an env var).
+pub(super) struct GitExecBan {
+    pub(super) reason: String,
+    pub(super) embedded: Vec<String>,
+}
+
+/// The shared tail of every exec-ban reason.
+const EXEC_BAN_TAIL: &str = "Every git shape that runs a command of the caller's choosing is \
+refused outright, whatever that command is (user ruling 2026-11-07) — run the command directly, \
+where blastguard judges it, instead of through git";
+
+fn exec_ban(shape: &str, embedded: Option<String>) -> Option<GitExecBan> {
+    Some(GitExecBan {
+        reason: format!("`git {shape}` makes git run a command. {EXEC_BAN_TAIL}"),
+        embedded: embedded.into_iter().filter(|e| !e.is_empty()).collect(),
+    })
+}
+
+/// True when `t` is a spelling git's option parser accepts for the long
+/// option `full` (with or without `=value`): the exact name or an
+/// abbreviation of at least `min` characters (git accepts any unambiguous
+/// prefix; `min` is chosen so the prefix is unambiguous for the subcommands
+/// it is checked on).
+fn long_opt(t: &str, full: &str, min: usize) -> bool {
+    let name = t.split_once('=').map_or(t, |(n, _)| n);
+    name.len() >= min && full.starts_with(name)
+}
+
+/// The value of the option at `args[i]`: the `=`-joined value, else the next
+/// word.
+fn long_value(args: &[String], i: usize) -> Option<String> {
+    match args[i].split_once('=') {
+        Some((_, v)) => Some(v.to_string()),
+        None => args.get(i + 1).cloned(),
+    }
+}
+
+/// In a short-option bundle `args[i]` (`-ix`, `-x`, `-xCMD`), whether the
+/// letter `letter` is present before any letter in `stops` (a value-taking
+/// option, whose glued value is not more letters). `Some(value)` when found:
+/// the glued remainder, else the next word.
+fn short_opt(args: &[String], i: usize, letter: char, stops: &str) -> Option<Option<String>> {
+    let t = args[i].as_str();
+    if !t.starts_with('-') || t.starts_with("--") || t.len() < 2 {
+        return None;
+    }
+    let body = &t[1..];
+    for (pos, c) in body.char_indices() {
+        if c == letter {
+            let glued = &body[pos + c.len_utf8()..];
+            return Some(if glued.is_empty() {
+                args.get(i + 1).cloned()
+            } else {
+                Some(glued.to_string())
+            });
+        }
+        if stops.contains(c) {
+            return None;
+        }
+    }
+    None
+}
+
+/// Exec-capable git shapes, BANNED outright (backlog fb338793, user rulings
+/// 2026-11-07: 「git bisectでいろいろ構文を処理できてしまうくらいなら使用を
+/// 禁止した方がいいのでは?」 — every git subcommand or option that executes an
+/// arbitrary command is Deny regardless of the embedded command, so `git bisect
+/// run true` is Deny). `None` for every other git line, which the
+/// per-subcommand arms judge as before.
+///
+/// Before this, `analyze_git_words` ended in `_ => Decision::Allow`, so an
+/// unmodelled subcommand never had its embedded command analysed: `git bisect
+/// run rm -rf /usr` was Allow while `rm -rf /usr` is Deny.
+///
+/// Banned (the words are shell-unquoted first, so `-c 'alias.x=!…'` and
+/// `-c alias.x='!…'` are the same word):
+///   * global `-c` setting a command-valued key
+///     ([`super::executors::git_config_command`]: `core.pager`,
+///     `core.sshCommand`, `core.editor`, `sequence.editor`, `diff.external`,
+///     `pager.<cmd>`, `alias.<x>=!…`, `credential.helper`, …), and the same
+///     keys written by `git config [scope] <key> <value>` /
+///     `git config set <key> <value>` or set by `git clone -c`/`--config`;
+///   * `bisect run`; `rebase`/`pull` `-x`/`--exec`; `submodule foreach`;
+///   * `difftool`/`mergetool` `-x`/`--extcmd`; `grep -O<cmd>` /
+///     `--open-files-in-pager=<cmd>` (a bare `-O` / `--open-files-in-pager`
+///     runs the configured pager and is not banned);
+///   * `--upload-pack`/`--receive-pack`/`--exec` on
+///     `fetch`/`pull`/`clone`/`ls-remote`/`push`/`archive`/`fetch-pack`/`send-pack`,
+///     and `-u` on `clone`/`ls-remote`;
+///   * `send-email` `--to-cmd`/`--cc-cmd`/`--header-cmd`/`--sendmail-cmd`.
+///
+/// `filter-branch` is not here: [`irreversible_git_subcommand`] already
+/// denies every use of it. Plain `bisect start/good/bad`, `rebase <upstream>`,
+/// `-c pager.log=false`, an empty value (`-c credential.helper=`) and a
+/// non-`!` alias run no caller-chosen command and are not banned.
+///
+/// Known-safe values are not banned (user ruling 2026-11-07, "Allow
+/// known-safe values"): a command-valued key set to a value on the fixed list
+/// of `executors::is_safe_command_value` — pager `less`/`more`/`cat`, editor
+/// `vim`/`nano`/`code`/`true`/`:`, credential helper
+/// `osxkeychain`/`store`/`cache`, `gpg.program` `gpg`, `core.sshCommand`
+/// `ssh` with plain flags (never `-o`/`-F`) — each with flag-only arguments.
+/// Any other value stays banned. `git --config-env <key>=VAR` keeps the Ask
+/// `judge_git_config` gives it (the value is in the environment; pinned by a
+/// pre-existing control).
+pub(super) fn git_exec_ban(rest: &[&str]) -> Option<GitExecBan> {
+    use super::executors::git_config_command;
+    let words: Vec<String> = super::quote_aware_words(&rest.join(" "))
+        .iter()
+        .map(|w| super::first_shell_word(w).unwrap_or_else(|| w.clone()))
+        .collect();
+    let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+    let idx = git_subcommand_index(&refs);
+    let globals = &refs[..idx.unwrap_or(refs.len())];
+    // Global config: `-c k=v`, `-ck=v`. (`--config-env k=VAR` takes the value
+    // from the environment; it keeps the Ask `judge_git_config` gives it —
+    // see the doc comment above.)
+    let mut i = 0;
+    while i < globals.len() {
+        let t = globals[i];
+        let (assignment, step) = if t == "-c" {
+            (globals.get(i + 1).copied(), 2)
+        } else if let Some(v) = t.strip_prefix("-c").filter(|v| !v.is_empty()) {
+            (Some(v), 1)
+        } else if matches!(
+            t,
+            "-C" | "--git-dir" | "--work-tree" | "--namespace" | "--super-prefix" | "--config-env"
+        ) {
+            (None, 2)
+        } else {
+            (None, 1)
+        };
+        if let Some((key, value)) = assignment.and_then(|a| a.split_once('=')) {
+            let key = key.trim().to_ascii_lowercase();
+            if let Some(cmd) = git_config_command(&key, value) {
+                return exec_ban(&format!("-c {key}=…"), Some(cmd));
+            }
+        }
+        i += step;
+    }
+    let idx = idx?;
+    let sub = normalized_command(refs[idx]);
+    let args: Vec<String> = words[idx + 1..].to_vec();
+    let rebase_exec = |args: &[String]| -> Option<GitExecBan> {
+        for i in 0..args.len() {
+            if long_opt(&args[i], "--exec", 4) {
+                return exec_ban(&format!("{sub} --exec"), long_value(args, i));
+            }
+            if let Some(v) = short_opt(args, i, 'x', "sSXCjo") {
+                return exec_ban(&format!("{sub} -x"), v);
+            }
+        }
+        None
+    };
+    let pack_exec = |args: &[String], short_u: bool, stops: &str| -> Option<GitExecBan> {
+        for i in 0..args.len() {
+            let t = args[i].as_str();
+            if t == "--" {
+                break;
+            }
+            for (full, min) in [("--upload-pack", 5), ("--receive-pack", 6), ("--exec", 4)] {
+                if long_opt(t, full, min) {
+                    return exec_ban(&format!("{sub} {full}"), long_value(args, i));
+                }
+            }
+            if short_u {
+                if let Some(v) = short_opt(args, i, 'u', stops) {
+                    return exec_ban(&format!("{sub} -u"), v);
+                }
+            }
+        }
+        None
+    };
+    match sub.as_str() {
+        "bisect" if args.first().map(String::as_str) == Some("run") => {
+            exec_ban("bisect run", Some(args[1..].join(" ")))
+        }
+        "rebase" => rebase_exec(&args),
+        "pull" => rebase_exec(&args).or_else(|| pack_exec(&args, false, "")),
+        "submodule" => {
+            let pos = args.iter().position(|a| !a.starts_with('-'))?;
+            if args[pos] != "foreach" {
+                return None;
+            }
+            let cmd: Vec<&str> = args[pos + 1..]
+                .iter()
+                .map(String::as_str)
+                .skip_while(|a| a.starts_with('-'))
+                .collect();
+            exec_ban("submodule foreach", Some(cmd.join(" ")))
+        }
+        "difftool" | "mergetool" => (0..args.len()).find_map(|i| {
+            if long_opt(&args[i], "--extcmd", 5) {
+                return exec_ban(&format!("{sub} --extcmd"), long_value(&args, i));
+            }
+            short_opt(&args, i, 'x', "t").and_then(|v| exec_ban(&format!("{sub} -x"), v))
+        }),
+        "grep" => {
+            let mut i = 0;
+            while i < args.len() {
+                let t = args[i].as_str();
+                if t == "--" {
+                    break;
+                }
+                // The pager value is OPTIONAL and only ever glued (`-O<cmd>`,
+                // `--open-files-in-pager=<cmd>`): the next word is never it.
+                // Bare `-O` / `--open-files-in-pager` runs the configured
+                // pager, not a caller-chosen command, and is not banned (user
+                // ruling 2026-11-07).
+                if long_opt(t, "--open-files-in-pager", 6) {
+                    match t.split_once('=') {
+                        Some((_, v)) if !v.is_empty() => {
+                            return exec_ban("grep --open-files-in-pager", Some(v.to_string()))
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(glued) = t.strip_prefix('-').filter(|_| !t.starts_with("--")) {
+                    for (pos, c) in glued.char_indices() {
+                        if c == 'O' {
+                            let v = &glued[pos + 1..];
+                            if v.is_empty() {
+                                break;
+                            }
+                            return exec_ban("grep -O", Some(v.to_string()));
+                        }
+                        if "efABCm".contains(c) {
+                            break;
+                        }
+                    }
+                }
+                // A pattern/file given in separate form is not an option.
+                i += if matches!(t, "-e" | "-f") { 2 } else { 1 };
+            }
+            None
+        }
+        "clone" => {
+            if let Some(ban) = pack_exec(&args, true, "obcj") {
+                return Some(ban);
+            }
+            for i in 0..args.len() {
+                let t = args[i].as_str();
+                let assignment = if t == "-c" || t == "--config" {
+                    args.get(i + 1).cloned()
+                } else if let Some(v) = t.strip_prefix("--config=") {
+                    Some(v.to_string())
+                } else {
+                    t.strip_prefix("-c")
+                        .filter(|v| !v.is_empty())
+                        .map(str::to_string)
+                };
+                if let Some((key, value)) = assignment.as_deref().and_then(|a| a.split_once('=')) {
+                    let key = key.trim().to_ascii_lowercase();
+                    if let Some(cmd) = git_config_command(&key, value) {
+                        return exec_ban(&format!("clone -c {key}=…"), Some(cmd));
+                    }
+                }
+            }
+            None
+        }
+        "ls-remote" => pack_exec(&args, true, "o"),
+        "fetch" | "push" | "archive" | "fetch-pack" | "send-pack" => pack_exec(&args, false, ""),
+        "send-email" => (0..args.len()).find_map(|i| {
+            [
+                ("--to-cmd", 7),
+                ("--cc-cmd", 7),
+                ("--header-cmd", 10),
+                ("--sendmail-cmd", 12),
+            ]
+            .into_iter()
+            .find(|(full, min)| long_opt(&args[i], full, *min))
+            .and_then(|(full, _)| exec_ban(&format!("send-email {full}"), long_value(&args, i)))
+        }),
+        "config" => git_config_write_exec(&args),
+        _ => None,
+    }
+}
+
+/// `git config` writing a command-valued key (`git config [--global]
+/// alias.x '!…'`, `git config set core.pager …`): the stored command runs on a
+/// later, innocent-looking git call, so the write is banned like the `-c`
+/// form. Reads, `--unset*`, section renames/removals and any key that runs
+/// nothing are `None`.
+fn git_config_write_exec(args: &[String]) -> Option<GitExecBan> {
+    const VALUE_FLAGS: &[&str] = &[
+        "-f",
+        "--file",
+        "--blob",
+        "--type",
+        "--default",
+        "--comment",
+        "--value",
+    ];
+    const NOT_A_WRITE: &[&str] = &[
+        "--get",
+        "--get-all",
+        "--get-regexp",
+        "--get-urlmatch",
+        "--get-color",
+        "--get-colorbool",
+        "--list",
+        "-l",
+        "--unset",
+        "--unset-all",
+        "--rename-section",
+        "--remove-section",
+        "--edit",
+        "-e",
+    ];
+    let mut positional: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let t = args[i].as_str();
+        if NOT_A_WRITE.contains(&t) {
+            return None;
+        }
+        if VALUE_FLAGS.contains(&t) {
+            i += 2;
+            continue;
+        }
+        if !t.starts_with('-') {
+            positional.push(t);
+        }
+        i += 1;
+    }
+    let (key, value) = match positional.as_slice() {
+        ["set", key, value, ..] => (*key, *value),
+        [verb, ..]
+            if matches!(
+                *verb,
+                "get" | "list" | "unset" | "rename-section" | "remove-section" | "edit"
+            ) =>
+        {
+            return None
+        }
+        [key, value, ..] => (*key, *value),
+        _ => return None,
+    };
+    let key = key.to_ascii_lowercase();
+    let cmd = super::executors::git_config_command(&key, value)?;
+    exec_ban(&format!("config {key} …"), Some(cmd))
+}
+
 fn analyze_git_words(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    // Backlog fb338793: exec-capable shapes never reach the per-subcommand
+    // arms (and so never the `_ => Allow` at the end). See `git_exec_ban`.
+    if let Some(ban) = git_exec_ban(rest) {
+        return Decision::deny(ban.reason);
+    }
     let idx = match git_subcommand_index(rest) {
         Some(i) => i,
         // No subcommand: still inspect the globals. A bare

@@ -28,6 +28,13 @@
 #               convention that hook branches exit 0 and carry the verdict in
 #               the body.
 #
+#   dup-test pre|post  PreToolUse / PostToolUse(Failure) Bash hooks. Deny-only
+#               de-duplicator: its sole verdict is "deny a proven duplicate
+#               `cargo test`", and doubt resolves to not denying. With no binary
+#               it falls to the exit 1 below, which Claude Code reports as a
+#               visible non-blocking hook error (the command runs, nothing is
+#               recorded) — the same outcome the binary gives on any doubt.
+#
 #   everything else (status / trust / init / install / uninstall) is consumed by humans, skills and scripts,
 #   where an EMPTY stdout reads as a real answer (`status` printing nothing reads as "no checks are configured"). Those exit
 #   non-zero — an error must not return an empty set (CLAUDE.md §3), mirroring

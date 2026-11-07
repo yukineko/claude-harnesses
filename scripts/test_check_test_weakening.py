@@ -406,7 +406,6 @@ class DetectsWeakening(GateTestCase):
         repo.git("add", TEST_PATH)  # staged, deliberately NOT committed
         self.assertBlocks(*self.run_gate(repo.root), kind="assertion-removed")
 
-    @unittest.expectedFailure  # backlog 54de84b4: open defect
     def test_unstaged_working_tree_weakening_is_not_reported(self):
         """An UNSTAGED weakening is not part of the commit, so it is not
         reported (user ruling 2026-11-08, backlog 54de84b4: "Index

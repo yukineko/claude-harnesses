@@ -375,3 +375,48 @@ fn f5_known_safe_ssh_flags_are_allow() {
         ],
     );
 }
+
+// ---- f6 quoted heredoc: `$CMD` inside a python string literal is data ----
+
+/// Faithful reconstruction of the command blastguard wrongly blocked (a python
+/// edit script run via a quoted heredoc; `$CMD` only appears inside string
+/// literals passed to `str.replace`, never to os.system/subprocess).
+fn python_edit_script_with_literal_cmd() -> String {
+    [
+        "python3 - <<'EOF'",
+        "import re",
+        "p='crates/x/tests/t.rs'",
+        "s=open(p).read()",
+        "s=s.replace(\"h7 embedded `$CMD` command word.\",\"(h7 dropped.)\")",
+        "note = \"os.system('$CMD')\"",
+        "open(p,'w').write(s + note)",
+        "EOF",
+    ]
+    .join("\n")
+}
+
+#[test]
+#[ignore = "backlog 3c750df2: FP: quoted-heredoc python script with $CMD only in string literals (str.replace) must be Allow"]
+fn f6_quoted_heredoc_python_literal_cmd_is_allow() {
+    Fixture::new("f6").assert_all(
+        "f6 literal $CMD in python string",
+        "allow",
+        &[
+            python_edit_script_with_literal_cmd().as_str(),
+            "python3 - <<'PY'\ns=open('f').read()\ns=s.replace(\"a `$CMD` b\",\"c\")\nopen('f','w').write(s)\nPY",
+        ],
+    );
+}
+
+#[test]
+fn control_heredoc_that_calls_os_system_cmd_is_not_allow() {
+    let f = Fixture::new("ctl2");
+    let cmd = "python3 - <<'PY'\nimport os\nos.system('$CMD')\nPY";
+    let main = f.decision(cmd, Role::Main, &f.fresh_case());
+    let sub = f.decision(cmd, Role::Sub, &f.fresh_case());
+    assert!(
+        main == "ask" || main == "deny",
+        "[main] actually calling os.system('$CMD') must not be Allow, got {main}"
+    );
+    assert_eq!(sub, "deny", "[subagent] must be deny");
+}

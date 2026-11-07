@@ -154,7 +154,8 @@ SHOULD_PANIC_RE = re.compile(r"#\s*\[\s*should_panic\b")
 # inside a macro template is attributed to the template body instead of
 # skipping ahead to the next real `fn` (backlog fa35fde1 / GH #1525). Such a
 # function is a TEMPLATE: how many tests it expands to depends on invocations,
-# which are not counted -- see `scan` for where that is judged.
+# which `counts` does not count -- see `scan` for where that is judged (and
+# weakening_macro.py for the one shape whose invocations ARE counted).
 FN_DECL_RE = re.compile(r"\bfn\s+(\$?[A-Za-z_][A-Za-z0-9_]*)")
 # Everything Rust permits between an attribute and the `fn` it applies to:
 # further attributes, visibility, and the asyncness/constness/ABI qualifiers.
@@ -190,6 +191,7 @@ from weakening_vcs import (  # noqa: E402
     worktree_content,
     worktree_or_none,
 )
+from weakening_macro import template_invocation_edit_is_safe  # noqa: E402
 
 
 # --- test-surface extraction ----------------------------------------------
@@ -1666,6 +1668,17 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                         rep,
                     )
                 )
+                and not (
+                    old == new
+                    and is_integration_tests_file(rep)
+                    and test_surface(before_src, old, base_side) == before_src
+                    and test_surface(after_src, new, after_side) == after_src
+                    and template_invocation_edit_is_safe(
+                        before_src, after_src,
+                        _mask_noncode(before_src, rep), _mask_noncode(after_src, rep),
+                        TEST_ATTR_RE,
+                    )
+                )
             ):
                 # A `macro_rules!` test template expands once per invocation,
                 # and invocations are not counted: dropping `t!(case, ...)` or
@@ -1682,10 +1695,18 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                 # template body is then byte-identical with the same meaning,
                 # so no generated test can have been removed or weakened; such
                 # a change falls through to the ordinary findings below.
+                # A second proven-safe shape (backlog 4f3da889): an integration
+                # test file (no out-of-line bodies) whose invocations ARE
+                # counted, per template, by `template_invocation_edit_is_safe`
+                # (weakening_macro.py) -- every template body and other item is
+                # unchanged and in place, no invocation is removed, and only an
+                # invocation's arguments may change or new invocations be added.
+                # Everything that module cannot prove stays Undetermined.
                 raise Undetermined(
                     f"{rep}: #[test] inside a macro_rules! template in a file "
-                    "that exists at the base -- macro invocations are not "
-                    "counted, so removed generated tests cannot be ruled out"
+                    "that exists at the base -- the change is not one of the "
+                    "proven-safe shapes (invocation counting included), so "
+                    "removed generated tests cannot be ruled out"
                 )
             found = findings_for(rep, before, after)
         # A file that did not exist at the base cannot have had existing

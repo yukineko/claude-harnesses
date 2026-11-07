@@ -235,19 +235,16 @@ class MacroRulesInvocationArgs(unittest.TestCase):
 
     # -- RED ---------------------------------------------------------------
 
-    @unittest.expectedFailure  # backlog 4f3da889: open defect
     def test_invocation_args_changed_is_clean(self) -> None:
         self.on_main_then_branch(BASE)
         rc, out = self.scan(TEMPLATES + INV_T1_ARGS_CHANGED + INV_T2 + INV_C1)
         self.assert_clean(rc, out)
 
-    @unittest.expectedFailure  # backlog 4f3da889: open defect
     def test_invocation_added_is_clean(self) -> None:
         self.on_main_then_branch(BASE)
         rc, out = self.scan(BASE + INV_C2_NEW)
         self.assert_clean(rc, out)
 
-    @unittest.expectedFailure  # backlog 4f3da889: open defect
     def test_blastguard_fix_shape_args_changed_and_control_added_is_clean(self) -> None:
         self.on_main_then_branch(BASE)
         rc, out = self.scan(TEMPLATES + INV_T1_ARGS_CHANGED + INV_T2 + INV_C1 + INV_C2_NEW)

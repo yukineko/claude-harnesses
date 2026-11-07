@@ -952,3 +952,169 @@ exit 101: 54s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.68s
      Running tests/system_harm_bypass_round2_20261107.rs (target/debug/deps/system_harm_bypass_round2_20261107-16d12ff5dd4045b8)
 error: test failed, to rerun pass `-p blastguard --test system_harm_bypass_round2_20261107`"""
+
+[[task]]
+id = "8ada7ad9"
+title = "condukt worktree merge: 45s timeout kills git mid-merge, leaves staged half-merge with no MERGE_HEAD"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-07 at main e6fc7abf, run run-20261107-114313-25739 task t3: 'condukt: merge of condukt/run-20261107-114313-25739/t3 into main failed: git [merge --no-edit -m ... 3087c5e6...] in /Users/yuki/src/harness timed out after 45s and was killed'; afterwards main had incoming changes STAGED (M  scripts/lint-changed-crates.sh, M  scripts/test-changed-crates.sh), no MERGE_HEAD (a foreign concurrent git merge was also running); same merge later succeeded in seconds. Reproduced deterministically at 56764042/8a9df328 with a pre-merge-commit hook sleeping past GIT_TIMEOUT (worktree.rs:27, final git merge at ~l.1316): HEAD unmoved, staged=task.txt, MERGE_HEAD absent, no recovery text in output. Fix direction: on timeout, restore index/worktree (reset --merge) or report recovery. Cause of the original slowness (lock contention vs other) undetermined; the half-applied outcome is reproduced."
+created_at = 1794027785
+updated_at = 1794027785
+weight = 0.0
+issue_number = 1605
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1605"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_merge_timeout_halfapplied_20261107 -- --ignored"
+rev = "8a9df328ad310a95e1cdcac50cb27e20b02b3e59"
+observed_at = 1794027785
+detail = """
+exit 101: .366 (/Users/yuki/.condukt/worktrees/run-20261107-114313-25739-fileA/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.24s
+     Running tests/backlog_merge_timeout_halfapplied_20261107.rs (target/debug/deps/backlog_merge_timeout_halfapplied_20261107-80093ed1dde55fdb)
+error: test failed, to rerun pass `-p condukt --test backlog_merge_timeout_halfapplied_20261107`"""
+
+[[task]]
+id = "b83ef4b1"
+title = "test-changed-crates.sh: unborn-HEAD branch discards git ls-files exit status -> 'no crate touched' exit 0 (fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Measured at worktree HEAD f900159d (main 56764042), 2026-11-07. scripts/test-changed-crates.sh l.63-65: diff_out=$(git ls-files 2>/dev/null); diff_rc=0 -- ls-files rc never checked. Repro (unborn repo, staged crates/foo/src/main.rs, shim: exact 'git ls-files' exits 128): test-changed-crates.sh exit=0 'no crate touched -- nothing to test'; control without shim sees the crate. lint-changed-crates.sh l.139-141 ALREADY fixed at this rev (diff_rc=0; diff_out=$(git ls-files) || diff_rc=$?) and exits 1 in the repro, so only test-changed-crates.sh is affected. Related variant (rev-parse --verify -q HEAD rc 128 conflated with unborn at the same line, diff also failing, committed repo with staged crate file): NOT an observable fail-open -- the later head_rc block fails closed in both scripts (exit 1 'cannot determine whether HEAD is born'); notes only."
+created_at = 1794022495
+updated_at = 1794022495
+weight = 0.0
+issue_number = 1603
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1603"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/changed-crates-lsfiles-unborn-failclosed.sh"
+rev = "8010c8206e283a92ff904df484ccf5acd97e8023"
+observed_at = 1794022495
+detail = """
+exit 1: test-changed-crates.sh exit=0
+lint-changed-crates.sh exit=1
+FAIL: test-changed-crates.sh exited 0 although 'git ls-files' failed (128) on an unborn HEAD
+  | test-changed-crates: no crate touched — nothing to test"""
+
+[[task]]
+id = "f9bc1da8"
+title = "blastguard: git restore --staged --worktree denied even when file content is byte-identical to a blob already in a commit (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Measured at worktree HEAD 8010c820 (main 56764042), 2026-11-07. Subagent Bash 'cd /Users/yuki/src/harness && git restore --staged --worktree -- scripts/lint-changed-crates.sh scripts/test-changed-crates.sh && ...' blocked verbatim 'PreToolUse:Bash hook error: git restore discards working-tree changes' although staged+worktree content was byte-identical to commit 3087c5e6; user approved, blastguard blocked twice, user ran it themselves. Rule: crates/blastguard/src/detect/git.rs 'restore' arm (denies unless --staged-only or managed worktree). RED test crates/blastguard/tests/backlog_git_restore_content_in_commit_fp_20261107.rs (content on other branch => got deny, want allow); control (content in no commit stays blocked) passes. Two readings, undetermined: (a) FP to fix by checking blob reachability (content in any commit => nothing lost => Allow); (b) intended by design: rule classifies command shape only, not blast radius, and the deny cannot be approved in a subagent. Per false-positives-not-tolerated, (a) unless owner rules (b)."
+created_at = 1794022498
+updated_at = 1794022498
+weight = 0.0
+issue_number = 1604
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1604"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_git_restore_content_in_commit_fp_20261107 -- --ignored"
+rev = "8010c8206e283a92ff904df484ccf5acd97e8023"
+observed_at = 1794022498
+detail = """
+exit 101: /worktrees/run-20261107-114313-25739-fileB/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.02s
+     Running tests/backlog_git_restore_content_in_commit_fp_20261107.rs (target/debug/deps/backlog_git_restore_content_in_commit_fp_20261107-3ce13a81332f8e0f)
+error: test failed, to rerun pass `-p blastguard --test backlog_git_restore_content_in_commit_fp_20261107`"""
+
+[[task]]
+id = "a63ee085"
+title = "blastguard: 引用付き heredoc 本文の孤立バッククォートで Ask になる誤検知"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = 'Split from 547cf2f6 (user ruling 2026-11-07). Shape: cd <literal abs dir> && cat > crates/condukt/tests/x.rs with a quoted heredoc whose body is a lone backtick, plus one trailing line (ls) after EOF. RED at clean b5e9c16d: assertion left==right failed: quoted body is data  left: "deny" (subagent-hardened Ask)  right: "allow". Implementer measured the underlying verdict as Ask("the command word ` is an expansion whose value only exists at run time ..."). The Ask comes from the body-as-code scan the README documents (a command after the heredoc keeps the body scanned), not from cd resolution, so fixing it requires a ruling to change that documented scan. Do NOT weaken the test to pass; remove the ignore marker when fixed.'
+created_at = 1794021465
+updated_at = 1794021465
+weight = 0.0
+issue_number = 1602
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1602"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_cd_redirect_fp_20261107 -- --include-ignored lone_backtick_in_quoted_body_with_trailing_line_is_allow"
+rev = "b5e9c16d988dd6c4a35c30c0922ee74e0141f144"
+observed_at = 1794021465
+detail = """
+exit 101: d; 0 ignored; 0 measured; 6 filtered out; finished in 0.71s
+
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.01s
+     Running tests/backlog_cd_redirect_fp_20261107.rs (target/debug/deps/backlog_cd_redirect_fp_20261107-7e2be18d741cbb2f)
+error: test failed, to rerun pass `-p blastguard --test backlog_cd_redirect_fp_20261107`"""
+
+[[task]]
+id = "5c9f9a75"
+title = "autoflow Stop hook rewrites condukt run-state via lossy mirror struct: drops agent_id/model/branch_sha/verifier_*/started_at/paused, unlocked"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Observed run run-20261107-114313-25739 (state /Users/yuki/.condukt/state/harness-e77d23c7/run-20261107-114313-25739.json, measured 2026-11-07 by reading state + .checkpoints.json): checkpoint seq 2 (verified:t3, ts 1794021143) holds t3 agent_id=af4bf84534761cb46; checkpoint seq 3 (ts 1794028444) already shows t2/t4/t5 status=running updated_at=1794021266 worktree=null and t3 agent_id=null, model=null, branch_sha=null, no verifier_*; current file t2/t5 same, t3 retains only worktree/branch/updated_at (+later merge_completed_at). Coincides with overwatch entry [systemic] ts=1794021266 <autoflow:condukt-pending>. WRITER (current code, file:line at main aa8872da): crates/autoflow/src/condukt.rs:36-55 private TaskState{id,status,worktree,branch,updated_at} + RunState{run_id,goal,tasks}; mark_running (:149-181) loads via load_latest (:190), flips pending/failed->running (:164-171) for ids autoflow main.rs:331-367 passes, then save_run (:232) writes the mirror back over condukt's file: serde drops every unmodelled field, run-level paused/terminal_label/recorded_*, and it takes no condukt run-state lock (condukt state.rs:with_run_locked). find_pending (:60-103) stale-running sweep uses the same save_run. Explains (a) t2/t4/t5 pending->running with no worktree/started_at (documented autoflow behaviour, main.rs:296-327) and (b) t3 loss (touched-by-rewrite though untouched). Not version skew: reproduces on current source. Reading 2 (not excluded): installed condukt 0.7.333 could also drop fields on its own load/save if its TaskState predates the fields - but t3 retained worktree/branch/updated_at and lost exactly the non-mirror fields, and the 1794021266 timestamp matches the autoflow review-queue entry, so autoflow is the supported cause; discriminate by running installed condukt state set on a seeded file. Also noted (not filed, no RED): condukt state init (main.rs:4250-4290) rs.save unconditionally overwrites an existing same-id run file, unlocked; only ensure_init_does_not_shadow_legacy guards."
+created_at = 1794029069
+updated_at = 1794029069
+weight = 0.0
+issue_number = 1608
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1608"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p autoflow --test runstate_roundtrip_drops_fields_20261107 -- --ignored"
+rev = "446c1ba0be485fa578ed4b5141e9c96a590dfa50"
+observed_at = 1794029069
+detail = """
+exit 101: w v0.1.46 (/Users/yuki/.condukt/worktrees/run-20261107-114313-25739-fileC/crates/autoflow)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.43s
+     Running tests/runstate_roundtrip_drops_fields_20261107.rs (target/debug/deps/runstate_roundtrip_drops_fields_20261107-4f5eea4905080610)
+error: test failed, to rerun pass `-p autoflow --test runstate_roundtrip_drops_fields_20261107`"""
+
+[[task]]
+id = "0fccf1eb"
+title = "blastguard: git commit -F - <<'EOF' の本文行を相対 redirect と誤読する誤検知"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = '''VERBATIM RED (HEAD 81903ff2, blastguard 0.2.305, subagent payload): exact_observed_commit_command_is_allow: assertion left == right failed: quoted heredoc commit message is data; left: "deny", right: "allow". Deny reason: '> EOF' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve — it cannot tell whether this lands in a system directory or on a protected gate/config path, and refuses to guess. MINIMIZED TRIGGER: a quoted heredoc body LINE ENDING IN '>' immediately before the closing delimiter, when a second command sits between the cd and the heredoc: cd D; true && cat <<'EOF'\nx>\nEOF (also cd D; ls; cat <<'EOF'..., cd D; git add -A && git commit -F - <<'EOF'\nCo-Authored-By: A <n@a.com>\nEOF). The scanner reads '>' newline 'EOF' as the redirect '> EOF'. NOT triggering: cd D; cat <<'EOF' (single command), cd D && A && git commit (all &&), body without a trailing '>'. README.ja.md only exempts quoted bodies without | ; & (documented conservative scan), but the delimiter line must not be taken as a redirect target and the cd (a literal absolute path) is resolvable. Tests: crates/blastguard/tests/backlog_eof_redirect_fp_20261107.rs. Do NOT weaken the test to pass; remove the ignore marker when fixed.'''
+created_at = 1794031849
+updated_at = 1794031849
+weight = 0.0
+issue_number = 1613
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1613"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_eof_redirect_fp_20261107 -- --include-ignored"
+rev = "81903ff2a1cfd91e6f404405eebbcaedd74714d7"
+observed_at = 1794031849
+detail = """
+exit 101: 54s
+
+   Compiling blastguard v0.2.305 (/Users/yuki/src/.harness-worktrees/bg-eof-redirect-fp/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.48s
+     Running tests/backlog_eof_redirect_fp_20261107.rs (target/debug/deps/backlog_eof_redirect_fp_20261107-10d2a5402ba5d093)
+error: test failed, to rerun pass `-p blastguard --test backlog_eof_redirect_fp_20261107`"""

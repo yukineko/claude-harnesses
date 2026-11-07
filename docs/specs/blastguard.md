@@ -278,8 +278,12 @@ forge・condukt のスケジューラが再利用）。
   (3) history rewrite（`HISTORY_SIGNALS`: rebase/`--amend`/filter-branch）→ Medium/reversible、
   (4) その他 → Low/reversible。`has_word` が `ownership`⊃`ship` 等の偽陽性を防ぐ。lib 経由で condukt が
   GATED ゲート強制に利用する。
-- **`model`** — 判定型 `Decision::{Allow, Deny(String)}`（`deny()`/`is_deny()`）。system-harm の Deny は
-  `deny_system_harm()` で理由に `SYSTEM_HARM_MARK` を付け、`is_system_harm()` で識別する。
+- **`model`** — 判定型 `Decision::{Allow, Deny(String), Ask(String)}`（`deny()`/`ask()`/`is_deny()`）。
+  system-harm の Deny は `deny_system_harm()` で理由に `SYSTEM_HARM_MARK` を付け、`is_system_harm()` で識別する。
+- **`detect/verdict_acc`** — `detect` の再解析ループ（segment・`-c` payload・command-word 候補・`-exec` tail）が
+  共有する `VerdictAcc`。`Deny > Ask > Allow` の順位で畳み、`Deny` は即座に返し、`Ask` は最初の 1 件を保持して
+  走査を続ける（後続の `Deny` を `Ask` が隠さない）。順位は `harness_core::verdict::Verdict::worst_of` そのもので、
+  `Decision`↔`Verdict` の変換は境界の 2 関数だけが行う。
 - **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。

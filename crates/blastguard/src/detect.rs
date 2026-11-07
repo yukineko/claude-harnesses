@@ -53,14 +53,12 @@
 //! An `Ask` is only emitted by the hook when a human is actually there to
 //! answer it (see [`crate::interactive`]); otherwise it is hardened to a Deny.
 
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::exclude;
 use crate::model::Decision;
 use crate::scope::{Placement, SafeRoots};
-use harness_core::verdict::{Determination, Verdict};
+use harness_core::verdict::Determination;
 
 mod compound;
 mod cwd;
@@ -83,7 +81,10 @@ mod sinks;
 mod substitution;
 mod system_paths;
 mod vars;
+mod verdict_acc;
 mod words;
+
+use verdict_acc::VerdictAcc;
 
 use gh::analyze_gh;
 
@@ -138,7 +139,7 @@ use cwd::verb_targets;
 
 use cwd::{
     advance_cwd_and_rewrite, cwd_rewrite_was_lost, is_relative_operand, line_changes_cwd_before,
-    segment_cwd_states, verb_operands_are_rewritten, CwdState, SubshellCwdScopes,
+    segment_cwd_states, verb_operands_are_rewritten, CwdState, CwdWalks,
 };
 
 use substitution::{
@@ -149,7 +150,8 @@ use substitution::{
 use heredoc::{
     first_line_quoted_here_document_body, here_document_delimiter_is_quoted, here_document_layout,
     interpreter_program_body_segments, opens_here_document, python_program_body_segments,
-    redirect_view_without_quoted_here_document_body, strip_data_here_document_bodies,
+    quoted_here_document_body_walks, redirect_view_without_quoted_here_document_body,
+    strip_data_here_document_bodies,
 };
 #[cfg(test)]
 use heredoc::{
@@ -782,90 +784,6 @@ fn take_budget() -> bool {
     })
 }
 
-/// Combines sub-analysis verdicts under the `Deny > Ask > Allow` ranking.
-///
-/// Every re-analysis loop in this file (segments, `-c` payload candidates,
-/// command-word candidates, `-exec` tails) evaluates several sub-commands and
-/// must report the STRONGEST verdict any of them produced. Two mistakes are
-/// possible here and both are fail-opens:
-///
-///   * testing `is_deny()` and returning early on it alone — an `Ask` from a
-///     sub-analysis is then dropped and the loop falls through to Allow;
-///   * returning the FIRST blocking verdict — an early `Ask` would then mask a
-///     later `Deny` on the same line, downgrading a known-destructive command
-///     to a question.
-///
-/// So: a `Deny` short-circuits (nothing can outrank it), an `Ask` is remembered
-/// but the scan continues in case a `Deny` follows, and `finish` reports the
-/// remembered `Ask` only if no `Deny` was ever seen.
-///
-/// Internally this ranking is exactly [`harness_core::verdict::Verdict`]'s own
-/// `Violation > Undetermined > Clean` priority (`Verdict::worst_of`), renamed
-/// to this crate's domain vocabulary at the two edges (see
-/// [`decision_to_verdict`]/[`verdict_to_decision`]) rather than re-implemented.
-#[derive(Default)]
-struct VerdictAcc {
-    // Holds at most one Undetermined (the first one seen) — a Violation is
-    // resolved and returned by `record` immediately so it never sits here,
-    // and Clean carries nothing worth keeping.
-    rest: Vec<Verdict>,
-}
-
-impl VerdictAcc {
-    /// Record a sub-verdict. Returns `Some(deny)` when the caller must stop and
-    /// return it immediately; `None` when the scan should continue.
-    fn record(&mut self, d: Decision) -> Option<Decision> {
-        match decision_to_verdict(d) {
-            // Nothing recorded so far can outrank a Violation, so there is no
-            // need to fold it into `rest` first — report it straight away.
-            v @ Verdict::Violation(_) => Some(verdict_to_decision(v)),
-            v @ Verdict::Undetermined(_) => {
-                // Keep only the FIRST undetermined, so the reported reason is
-                // the outermost / earliest unanalysable construct rather than
-                // the last one. `Verdict::worst_of` joins every `Undetermined`
-                // reason it is handed, so recording just the first is what
-                // preserves that "first wins" behavior through to `finish`.
-                if !self
-                    .rest
-                    .iter()
-                    .any(|r| matches!(r, Verdict::Undetermined(_)))
-                {
-                    self.rest.push(v);
-                }
-                None
-            }
-            Verdict::Clean(_) => None,
-        }
-    }
-
-    /// The strongest verdict seen, given no `Deny` short-circuited the caller.
-    fn finish(self) -> Decision {
-        verdict_to_decision(Verdict::worst_of(self.rest))
-    }
-}
-
-/// Boundary conversion: this crate's domain-specific three answers map
-/// one-to-one onto `harness_core`'s generic three answers, in the same
-/// priority order (`Deny`/`Violation` > `Ask`/`Undetermined` > `Allow`/`Clean`).
-fn decision_to_verdict(d: Decision) -> Verdict {
-    match d {
-        Decision::Allow => Verdict::from_findings(vec![]),
-        Decision::Deny(reason) => Verdict::violation(reason),
-        Decision::Ask(reason) => Verdict::undetermined(reason),
-    }
-}
-
-/// The inverse of [`decision_to_verdict`], used at the boundary where a
-/// computation finishes with a generic `Verdict` and must report back in this
-/// crate's own `Decision` vocabulary.
-fn verdict_to_decision(v: Verdict) -> Decision {
-    match v {
-        Verdict::Clean(_) => Decision::Allow,
-        Verdict::Violation(reason) => Decision::deny(reason.as_str().to_string()),
-        Verdict::Undetermined(reason) => Decision::ask(reason.as_str().to_string()),
-    }
-}
-
 /// Re-analyse a payload string that a shell-evaluation position will EXECUTE
 /// (`sh -c <payload>`, `eval <payload>`, `flock -c <payload>`).
 ///
@@ -1402,8 +1320,6 @@ cannot tell whether it is a protected gate/config file or a system directory"
         return deny;
     }
 
-    let mut cwd = CwdState::Root;
-    let mut aliases: HashMap<String, String> = HashMap::new();
     // ENUMERATED, so `unknown_wrapper_ask` can ask `resolve_expanded_command_word`
     // what an expansion-valued command word in THIS segment was assigned by an
     // EARLIER one. `advance_cwd_and_rewrite` below rewrites a segment's text but
@@ -1412,11 +1328,15 @@ cannot tell whether it is a protected gate/config file or a system directory"
     // Compound-command syntax (`for … in`, `do`, `then`, `{`, `case` patterns)
     // separated from the command each segment really runs; see
     // `compound_views`. Index-aligned with `split_segments(cmd)`.
-    let views = compound_views(cmd);
-    let mut scopes = SubshellCwdScopes::new(&views);
+    let views = compound_views(cmd); // The cwd, alias table and subshell-group bookkeeping, one walk for the
+                                     // line and one per quoted here-document body (backlog 547cf2f6); see
+                                     // `CwdWalks`. `segment_cwd_states` replays the same walks.
+    let mut walks = CwdWalks::new(cmd, &views);
     // `for`/`select` variables bound so far on this line; see `loop_variants`.
     let mut bindings: Vec<LoopBinding> = Vec::new();
     for (seg_idx, seg) in split_segments(cmd).into_iter().enumerate() {
+        let walk = walks.walk_for(seg_idx);
+        let cwd = walk.cwd.clone();
         // The base for THIS segment's relative operands is the cwd state as it
         // stands BEFORE the segment runs — the same state
         // `advance_cwd_and_rewrite` rewrites the segment against — so it is
@@ -1442,11 +1362,15 @@ cannot tell whether it is a protected gate/config file or a system directory"
         if let Some(b) = binding {
             bindings.push(b);
         }
-        let cwd_before = cwd.clone();
-        let aliases_before = aliases.clone();
-        scopes.enter(views.get(seg_idx));
-        let (effective_seg, extra, next_cwd) = advance_cwd_and_rewrite(command, &cwd, &mut aliases);
-        cwd = scopes.leave(views.get(seg_idx), &cwd_before, next_cwd).0;
+        let cwd_before = cwd;
+        let aliases_before = walk.aliases.clone();
+        walk.scopes.enter(views.get(seg_idx));
+        let (effective_seg, extra, next_cwd) =
+            advance_cwd_and_rewrite(command, &cwd_before, &mut walk.aliases);
+        walk.cwd = walk
+            .scopes
+            .leave(views.get(seg_idx), &cwd_before, next_cwd)
+            .0;
         // The same segment once more for every value its loop variables take
         // (see `loop_variants`), IN ADDITION to the judgement of the text as
         // written below — so this can only add verdicts, never remove one.

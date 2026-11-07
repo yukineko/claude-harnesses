@@ -86,13 +86,20 @@ fi
 # reason. An unborn HEAD has no commits at all, hence nothing committed to add.
 committed_out=""
 committed_rc=0
-if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
+head_rc=0
+git rev-parse --verify -q HEAD >/dev/null 2>&1 || head_rc=$?
+if [ "$head_rc" -eq 0 ]; then
     mb="$(git merge-base HEAD main 2>/dev/null)" || committed_rc=$?
     if [ "$committed_rc" -eq 0 ] && [ -n "$mb" ]; then
         committed_out="$(git diff --name-only "$mb" HEAD -- 2>/dev/null)" || committed_rc=$?
     elif [ "$committed_rc" -eq 0 ]; then
         committed_rc=1
     fi
+elif [ "$head_rc" -ne 1 ]; then
+    # Only rc 1 means an unborn HEAD; any other failure (e.g. 128) is unknowable.
+    echo "test-changed-crates: cannot determine whether HEAD is born (rev-parse rc=$head_rc) — committed-but-unmerged changes cannot be enumerated" >&2
+    echo "  refusing to pass a turn as 'nothing to test' when the change set is unknown — fix the repo state, or disable this check in donegate.toml" >&2
+    exit 1
 fi
 if [ "$committed_rc" -ne 0 ]; then
     echo "test-changed-crates: cannot determine the merge-base of HEAD with main (rc=$committed_rc) — committed-but-unmerged changes cannot be enumerated" >&2

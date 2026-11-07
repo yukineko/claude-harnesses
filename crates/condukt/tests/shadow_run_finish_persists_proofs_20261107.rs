@@ -48,7 +48,6 @@ fn find_named(roots: &[&Path], name: &str, skip: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-#[ignore = "RED: shadow-run finish discards without persisting tdd proofs 2026-11-07"]
 fn shadow_run_finish_keeps_a_durable_copy_of_the_tdd_proofs() {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().canonicalize().unwrap();

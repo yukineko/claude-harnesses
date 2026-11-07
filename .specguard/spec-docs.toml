@@ -443,3 +443,8 @@ reason = "Review-queue section bullet 'overwatch undetermined-metrics' (aggregat
 path = "crates/overwatch/src/subagents.rs"
 doc = "docs/specs/overwatch.md"
 reason = "Section subagent registry と per-agent liveness (overwatch subagents): RECORD via presence hook (Agent|Task PostToolUse, SubagentStop) into subagents.json, classify() state order, clean definition, fail-closed resolution of undetermined/IO failure."
+
+[[spec]]
+path = "crates/blastguard/src/detect/verdict_acc.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `detect/verdict_acc`: VerdictAcc folds sub-verdicts Deny > Ask > Allow via Verdict::worst_of; moved out of detect.rs unchanged (file-growth cap)."

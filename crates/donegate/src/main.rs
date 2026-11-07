@@ -38,6 +38,7 @@ mod git_env_red_tests;
 mod inflight;
 mod install;
 mod model;
+mod passcache;
 mod record;
 mod rootcheck;
 mod runner;
@@ -618,8 +619,9 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // same blocking JSON on a first occurrence and announces a waiver — never
     // falls silent — on a second. The old `None` arm's job (never let a
     // non-green gate end the turn by printing nothing) is preserved inside it.
-    // Keyed on `block_fingerprint`: the reason minus the per-attempt record path,
-    // which is fresh on every run and would otherwise defeat the repeat ledger.
+    // Keyed on `block_fingerprint`: the reason minus the per-run record path,
+    // retention-failure text (`<why>`) and per-check duration (`<secs>`), which
+    // vary on every run and would otherwise defeat the repeat ledger.
     harness_core::repeat::emit_stop_block_keyed(
         "donegate",
         &reason,

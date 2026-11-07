@@ -82,6 +82,7 @@ impl Fx {
             .env("HOME", &self.home)
             .env("BLASTGUARD_APPROVALS_DIR", self.base.join("store"))
             .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+            .env("CLAUDECODE", "1")
             .env_remove("BLASTGUARD_ASK")
             .env_remove("TMPDIR")
             .env_remove("CLAUDE_CODE_SESSION_ID")

@@ -13,7 +13,6 @@ mod common;
 use common::Fixture;
 
 #[test]
-#[ignore = "backlog 78cee053: open defect, remove ignore when fixed"]
 fn next_claim_does_not_hand_out_a_ticket_whose_repro_went_green() {
     let f = Fixture::new("auditb6");
     // A repro whose verdict follows a committed file: RED while state=broken.

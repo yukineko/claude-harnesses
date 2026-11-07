@@ -1,5 +1,6 @@
 mod audit_open;
 mod claim_ledger;
+mod claim_recheck;
 mod closecmd;
 mod config;
 mod dedup;
@@ -1246,31 +1247,13 @@ fn run(cli: Cli) -> Result<()> {
                          {why}"
                     ));
                 }
-                let claimed = claim_ledger::claim_next(
+                claim_recheck::claim_rechecked(
                     &tasks_path,
                     tag.as_deref(),
                     effective_project.as_deref(),
                     &identity,
                     session_id.as_deref(),
-                    None,
-                )?;
-                match claimed {
-                    Determination::Known(t) => t,
-                    // REFUSED, not empty. Non-zero exit, reason on stderr,
-                    // nothing on stdout — the identical shape
-                    // `guard_store_divergence` uses, and the shape
-                    // `autoflow::backlog::find_open` reads as
-                    // `Determination::Undetermined` rather than "no work".
-                    // Rendering this as `no pending tasks` on exit 0 is the
-                    // fail-open this whole path exists to close.
-                    Determination::Undetermined(why) => {
-                        return Err(anyhow::anyhow!(
-                            "backlog next --claim REFUSED to claim (this is NOT \
-                             \"no pending tasks\" — nothing was claimed and the queue was not \
-                             judged empty): {why}"
-                        ));
-                    }
-                }
+                )?
             } else {
                 // A pure read, but claim-aware: a task holding a live lease in
                 // the project-wide ledger (claimed in this or any other

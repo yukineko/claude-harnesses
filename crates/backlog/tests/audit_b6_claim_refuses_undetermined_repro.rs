@@ -18,7 +18,6 @@ mod common;
 use common::Fixture;
 
 #[test]
-#[ignore = "backlog 78cee053: RED, remove ignore when fixed"]
 fn next_claim_refuses_a_ticket_whose_repro_rerun_is_undetermined() {
     let f = Fixture::new("b78cee053");
     f.write_script("tests/repro_gone.sh", "echo 'bug present'; exit 1");

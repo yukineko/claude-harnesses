@@ -71523,3 +71523,59 @@ scripts/test_ctw_macro_rules_helper_plus_invocations.py ...........      [100%]
 rev = "58eae660a5bed638eaa0e0f3ce85dee02136583b"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "54de84b4"
+title = "check-test-weakening: index ではなく working tree を判定し、unstaged 変更で block し staged 弱体化を見逃す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794067425
+updated_at = 1794073170
+weight = 0.0
+issue_number = 1634
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1634"
+issue_closed_at = 1794073173
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_check_test_weakening_index_not_worktree.py"
+rev = "525608cbf061e82514d36c56c1e45e7ab67050dd"
+observed_at = 1794067425
+detail = """
+exit 1: ree_restored_blocks
+FAILED scripts/test_check_test_weakening_index_not_worktree.py::IndexNotWorktree::test_unstaged_ignore_in_a_with_only_b_staged_is_not_reported
+FAILED scripts/test_check_test_weakening_index_not_worktree.py::IndexNotWorktree::test_unstaged_unproven_macro_change_with_only_b_staged_is_not_undetermined
+========================= 5 failed, 2 passed in 2.57s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_check_test_weakening_index_not_worktree.py"
+exit = 0
+passed = 7
+rev = "6679097a03701d93f7058b6805b9d83762dc4a79"
+observed_at = 1794073162
+output_digest = "sha256:6236c3d9735e238ab1ca521700df6c7640d68887b6fdac51d255585af9b21dc5"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/red-tw-index
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 7 items
+
+scripts/test_check_test_weakening_index_not_worktree.py .......          [100%]
+
+============================== 7 passed in 3.20s ===============================
+"""
+
+[task.closure.red]
+rev = "525608cbf061e82514d36c56c1e45e7ab67050dd"
+exit = 1
+kind = "behavioural"

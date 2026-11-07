@@ -45,11 +45,22 @@ proven safe only when ALL hold:
   change. Dropping one invocation and adding another of the same template
   under a new name is a removal, never an argument edit;
 * every INSERTED element is either a template invocation, or a plain
-  top-level helper `fn` (`_is_safe_inserted_fn`): no attribute in front, one
-  balanced item, no `macro_rules`/`macro_use`/inner attribute, and a name
-  that occurs nowhere in the base, so it shadows nothing an existing item
-  calls. An inserted `macro_rules!` (a new or redefined template), a method
-  added inside an existing `impl`, or any other inserted item is not proven.
+  top-level item `_is_safe_inserted_item` accepts (backlog 25b88447): a plain
+  helper `fn` with no attribute, a `#[test] fn` (only `test` / `ignore` /
+  `should_panic` attributes, the last two then counted by the ordinary
+  findings), or a `#[cfg(test)] mod` -- each one balanced item, with no
+  `macro_rules`/`macro_use`/inner attribute, under a name that occurs nowhere
+  in the base (a `#[test] fn` may also reuse an existing generated test's
+  name: rustc E0428, a loud failure). An inserted `macro_rules!` (a new or
+  redefined template), a method added inside an existing `impl`, an item
+  under any other attribute (`#[cfg(any())]`, ...) or any other inserted item
+  is not proven. `//` and `///` comments are masked out, so adding or
+  editing them between items changes no element; a comment that changes
+  code on its line changes the element it is in.
+
+  So one judgement covers helper fns, comments, inserted tests and
+  invocation edits together, which the line-diff shape
+  (`_only_proven_safe_line_changes`) cannot combine with invocation edits.
 
 So per template the invocation count can only rise, and every generated test
 still exists with the same body. What this does NOT see: an argument change
@@ -296,14 +307,36 @@ _PLAIN_FN_RE = re.compile(
 _INSERT_FORBIDDEN_RE = re.compile(r"\bmacro_rules\b|\bmacro_use\b|#[ \t\n]*!")
 
 
-def _is_safe_inserted_fn(masked_item: str, masked_before: str) -> bool:
-    """True when an inserted top-level item is a plain `fn` that cannot change
-    an existing test: one balanced item ending at its own body's `}`, no
-    `macro_rules`/`macro_use`/inner attribute in it, and a name that does not
-    occur anywhere in the base -- so it shadows nothing an existing item calls
-    (a local fn silently shadows a glob-imported or prelude one)."""
-    m = _PLAIN_FN_RE.match(masked_item)
-    if not m or not masked_item.endswith("}") or _INSERT_FORBIDDEN_RE.search(masked_item):
+_PLAIN_MOD_RE = re.compile(r"\Amod\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{")
+_ATTR_OPEN_RE = re.compile(r"\s*#\s*\[")
+_ATTR_NAME_RE = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_]*)")
+# Attributes an inserted `#[test] fn` may carry. `ignore` / `should_panic` are
+# allowed only because the ordinary findings then count them (`ignore-added` /
+# `should-panic-added`), so they still block; anything else (`cfg`, a
+# constructor hook, ...) could hide or pre-empt code and is not proven.
+_TEST_FN_ATTRS = frozenset({"test", "ignore", "should_panic"})
+
+
+def _leading_attrs(masked_item: str):
+    """`(names, rest_index)` for the outer attributes at the start of a masked
+    item (`#[name ...]`), or None when one does not balance."""
+    names, k = [], 0
+    while True:
+        m = _ATTR_OPEN_RE.match(masked_item, k)
+        if not m:
+            return names, len(masked_item) - len(masked_item[k:].lstrip())
+        close = _close(masked_item, m.end() - 1)
+        if close is None:
+            return None
+        n = _ATTR_NAME_RE.match(masked_item, m.end())
+        content = re.sub(r"\s+", "", masked_item[m.end():close])
+        names.append((n.group(1) if n else "", content))
+        k = close + 1
+
+
+def _one_balanced_item(masked_item: str) -> bool:
+    """One balanced item ending at the `}` that closes its own body."""
+    if not masked_item.endswith("}"):
         return False
     depth = 0
     for k, c in enumerate(masked_item):
@@ -313,10 +346,60 @@ def _is_safe_inserted_fn(masked_item: str, masked_before: str) -> bool:
             depth -= 1
             if depth < 0 or (depth == 0 and c == "}" and k != len(masked_item) - 1):
                 return False
-    if depth != 0:
+    return depth == 0
+
+
+def _is_safe_inserted_item(masked_item: str, masked_before: str, generated: set) -> bool:
+    """True when an inserted top-level item cannot change an existing test.
+
+    Every accepted item is one balanced item with no `macro_rules` /
+    `macro_use` / inner attribute in it, and is exactly one of:
+
+    * a plain helper `fn` with NO attribute, whose name occurs nowhere in the
+      base -- so it shadows nothing an existing item calls (a local fn silently
+      shadows a glob-imported or prelude one);
+    * a `#[test] fn` whose attributes are only `test` / `ignore` /
+      `should_panic` (the last two are then reported by the ordinary
+      findings), whose name occurs nowhere in the base OR is the name of an
+      existing generated test (a duplicate is rustc E0428, a loud compile
+      failure, never a silent weakening; coordinator pin 2026-11-08);
+    * a `#[cfg(test)] mod` (that attribute only) whose name occurs nowhere in
+      the base, and every attribute inside which is `test` / `ignore` /
+      `should_panic` / `cfg(test)`: it only adds tests.
+
+    `///` doc comments are masked to blanks, so they are not attributes here."""
+    if _INSERT_FORBIDDEN_RE.search(masked_item):
         return False
-    word = r"(?<![A-Za-z0-9_])" + re.escape(m.group(1)) + r"(?![A-Za-z0-9_])"
-    return not re.search(word, masked_before)
+    parsed = _leading_attrs(masked_item)
+    if parsed is None:
+        return False
+    attrs, rest_at = parsed
+    rest = masked_item[rest_at:]
+    if not _one_balanced_item(rest):
+        return False
+
+    def unseen(name: str) -> bool:
+        word = r"(?<![A-Za-z0-9_])" + re.escape(name) + r"(?![A-Za-z0-9_])"
+        return not re.search(word, masked_before)
+
+    names = [n for n, _ in attrs]
+    fn = _PLAIN_FN_RE.match(rest)
+    if fn and not attrs:
+        return unseen(fn.group(1))
+    if fn and "test" in names and set(names) <= _TEST_FN_ATTRS:
+        return unseen(fn.group(1)) or fn.group(1) in generated
+    mod = _PLAIN_MOD_RE.match(rest)
+    if mod and [c for _, c in attrs] == ["cfg(test)"]:
+        for inner in re.finditer(r"#\s*\[", rest):
+            close = _close(rest, inner.end() - 1)
+            if close is None:
+                return False
+            content = re.sub(r"\s+", "", rest[inner.end():close])
+            name = _ATTR_NAME_RE.match(content)
+            if content != "cfg(test)" and not (name and name.group(1) in _TEST_FN_ATTRS):
+                return False
+        return unseen(mod.group(1))
+    return False
 
 
 def template_invocation_edit_is_safe(before: str, after: str, masked_before: str,
@@ -336,6 +419,8 @@ def template_invocation_edit_is_safe(before: str, after: str, masked_before: str
     # every element not matched must be an insertable one. Matched greedily:
     # consuming an equal element is never worse than inserting it, so this
     # finds a match whenever one exists, independent of any line diff.
+    generated = {k[2] for k, _ in eb if k[0] == "inv"
+                 and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k[2])}
     i = 0
     for key, masked_item in ea:
         if i < len(eb) and key == eb[i][0]:
@@ -343,7 +428,7 @@ def template_invocation_edit_is_safe(before: str, after: str, masked_before: str
             continue
         if key[0] == "inv":
             continue
-        if not _is_safe_inserted_fn(masked_item, masked_before):
+        if not _is_safe_inserted_item(masked_item, masked_before, generated):
             return False
     if i != len(eb):
         return False

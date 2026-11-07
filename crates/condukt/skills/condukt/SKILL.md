@@ -873,7 +873,10 @@ condukt state check-oracle --run "$RID" --task "<id>"
 valid_fp_oracle:false` のときは昇格を**拒否**する (非0終了・理由を出力)。
 `tdd` が無い環境でもこの拒否は同じで、`kind: fix/feature` のタスクは本物の Fail→Pass 再現が
 記録されるまで `verified` にできない。
-`fallback:true` (kind が fix/feature でないタスク等) のときは verifier agent の pass/fail 判定に委ねる。
+加えて全タスクについて、そのタスクのワークツリー (同じ呼び出しの `--worktree`。未指定か `--clear-worktree` 時は記録済みのもの) に
+`.backlog/` 以外の追跡ファイルへの未コミット変更 (staged/unstaged。未追跡・ignore 済みは数えない) があると、
+該当ファイル名を示して昇格を拒否し、そのワークツリーが読めない (自身の git worktree の最上位でない・存在しない・
+`git status` が非0終了) ときも拒否する。ワークツリーが渡されも記録されもしていないタスクは検査しない (backlog `1ca662ec`)。`fallback:true` (kind が fix/feature でないタスク等) のときは verifier agent の pass/fail 判定に委ねる。
 
 done の各タスクを `condukt-verifier` 相当で done_criteria 照合する。検証する子の **model は
 worker と必ず別モデルにする**（同一モデルだと generation と verification が同じ盲点を共有するため）。

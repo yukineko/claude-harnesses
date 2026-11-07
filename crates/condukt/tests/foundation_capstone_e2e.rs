@@ -95,6 +95,16 @@ impl Fixture {
             "broken_capstone_fixture",
             "pub fn f() -> i32 {\n    let s: &str = \"nope\";\n    s\n}\n",
         );
+        // A real, committed git worktree (backlog 1ca662ec): `state set
+        // --status verified` refuses a recorded worktree git cannot read, and
+        // one with uncommitted tracked changes. `target/` (editgate's
+        // CARGO_TARGET_DIR) is ignored so its `cargo check` never dirties it.
+        std::fs::write(broken_wt.join(".gitignore"), "target/\n").unwrap();
+        run_git(&broken_wt, &["init", "-q"]);
+        run_git(&broken_wt, &["config", "user.email", "t@t.t"]);
+        run_git(&broken_wt, &["config", "user.name", "t"]);
+        run_git(&broken_wt, &["add", "."]);
+        run_git(&broken_wt, &["commit", "-q", "-m", "broken fixture"]);
 
         Self {
             base,

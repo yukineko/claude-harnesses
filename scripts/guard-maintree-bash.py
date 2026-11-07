@@ -56,6 +56,14 @@ positive or false negative (4a64e6ff and ~30 sibling tickets).
                       c181dd41; see merge_concluded_by_commit. An unreadable
                       Pre MERGE_HEAD or Pre staged index -> not covered)
                                                             -> 0
+                      MERGE_HEAD existed before and is gone after, the new
+                      HEAD's parents are exactly [Pre HEAD] + all Pre MERGE_HEAD
+                      oids in order, and `git status` names no path after
+                      (resolving a conflicted merge, staging and committing it
+                      in one call: what the call changed is inside the merge
+                      commit; backlog 47592729; see merge_concluded_clean. An
+                      unreadable Pre MERGE_HEAD -> not covered)
+                                                            -> 0
                       HEAD unchanged, no MERGE_HEAD, ORIG_HEAD rewritten
                       between Pre and Post, the call demonstrably did not run
                       in or point at main (Pre and Post payload cwd both
@@ -427,6 +435,36 @@ def merge_concluded_by_commit(main: Path, before: dict, after: dict) -> bool:
         elif ra.get(p) != rec:
             return False
     return True
+
+
+def merge_concluded_clean(main: Path, before: dict, after: dict) -> bool:
+    """True if this call concluded the merge in progress at Pre into a commit
+    and left NOTHING uncommitted (backlog 47592729: resolve a conflicted merge,
+    `git add`, `git commit` in one call). ALL of:
+      - MERGE_HEAD was present at Pre and is gone at Post; HEAD moved;
+      - the new HEAD's parents are exactly [Pre HEAD] + the Pre MERGE_HEAD
+        oids, all of them, in order (so no other commit was made on the way);
+      - `git status` at Post names no path at all (ignored files aside).
+    Whatever the call staged or edited is then inside that merge commit, i.e.
+    it is the merge's resolution (CLAUDE.md 8: conflict resolution is
+    integration). Unlike merge_concluded_by_commit this does not need the Pre
+    index (which holds unmerged entries during a conflict) and does not allow
+    any dirty path at Post. Unreadable Pre oids -> False; a git failure raises
+    Undetermined -> the caller refuses (CLAUDE.md 3).
+    """
+    if not before.get("merge_head") or after["merge_head"]:
+        return False
+    if after["head"] == before["head"]:
+        return False
+    oids = before.get("merge_head_oids")
+    if not isinstance(oids, list) or not oids or not all(isinstance(o, str) and o for o in oids):
+        return False
+    if any(rec[0] != "!" for rec, _ in status_entries(after["porcelain"])):
+        return False
+    parents = git(main, "rev-list", "--parents", "-n1", after["head"]).split()
+    if not parents or parents[0] != after["head"]:
+        return False
+    return parents[1:] == [before["head"]] + oids
 
 
 def merge_abort_back_to_head(main: Path, before: dict, after: dict) -> bool:
@@ -838,6 +876,8 @@ def post(payload: dict, common: Path, main: Path) -> int:
         pass  # aborting one's own in-progress merge back to HEAD
     elif merge_concluded_by_commit(main, before, after):
         pass  # `git commit` concluding a merge staged by an earlier call
+    elif merge_concluded_clean(main, before, after):
+        pass  # resolving + committing the in-progress merge, tree clean after
     elif (
         concurrent_merge
         and has_pre_cwd

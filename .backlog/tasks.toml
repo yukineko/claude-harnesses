@@ -1071,3 +1071,32 @@ exit 101: in 2.82s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 3.35s
      Running tests/backlog_cd_redirect_fp_20261107.rs (target/debug/deps/backlog_cd_redirect_fp_20261107-fd37e9f81e875de8)
 error: test failed, to rerun pass `-p blastguard --test backlog_cd_redirect_fp_20261107`"""
+
+[[task]]
+id = "a63ee085"
+title = "blastguard: 引用付き heredoc 本文の孤立バッククォートで Ask になる誤検知"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = 'Split from 547cf2f6 (user ruling 2026-11-07). Shape: cd <literal abs dir> && cat > crates/condukt/tests/x.rs with a quoted heredoc whose body is a lone backtick, plus one trailing line (ls) after EOF. RED at clean b5e9c16d: assertion left==right failed: quoted body is data  left: "deny" (subagent-hardened Ask)  right: "allow". Implementer measured the underlying verdict as Ask("the command word ` is an expansion whose value only exists at run time ..."). The Ask comes from the body-as-code scan the README documents (a command after the heredoc keeps the body scanned), not from cd resolution, so fixing it requires a ruling to change that documented scan. Do NOT weaken the test to pass; remove the ignore marker when fixed.'
+created_at = 1794021465
+updated_at = 1794021465
+weight = 0.0
+issue_number = 1602
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1602"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_cd_redirect_fp_20261107 -- --include-ignored lone_backtick_in_quoted_body_with_trailing_line_is_allow"
+rev = "b5e9c16d988dd6c4a35c30c0922ee74e0141f144"
+observed_at = 1794021465
+detail = """
+exit 101: d; 0 ignored; 0 measured; 6 filtered out; finished in 0.71s
+
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 35.01s
+     Running tests/backlog_cd_redirect_fp_20261107.rs (target/debug/deps/backlog_cd_redirect_fp_20261107-7e2be18d741cbb2f)
+error: test failed, to rerun pass `-p blastguard --test backlog_cd_redirect_fp_20261107`"""

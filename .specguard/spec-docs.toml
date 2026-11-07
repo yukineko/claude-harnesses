@@ -75,6 +75,46 @@ doc = "docs/specs/blastguard.md"
 reason = "Section '安定 rule id（overwatch 署名の粒度確保）' describes rule_id(reason) -> &'static str and its lockstep with detect wording."
 
 [[spec]]
+path = "crates/blastguard/src/detect/git.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullets 'コマンド別 deny 規則' (analyze_git arms), 'managed な使い捨て場所での working-tree 破棄の Allow' (managed_worktree_git) and 'git の exec-capable 形は一律 Deny' (git_exec_ban, backlog fb338793)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/executors.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'git の exec-capable 形は一律 Deny': git_config_command (command-valued git config keys) and is_safe_command_value (fixed known-safe value list, ruling 2026-11-07) used by the ban (backlog fb338793)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/rm.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullets 'コマンド別 deny 規則' (analyze_rm) and 'system-harm（システムを壊すコマンド）は常に Deny' (rm_system_harm_deny, backlog fb338793)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/protected.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullets 'disarm-by-non-write 規則' (protected path verdicts) and 'system-harm…は常に Deny' (system_path_block carries SYSTEM_HARM_MARK)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullets 'inert literal の Deny→Ask 降格' and '埋め込み shell 文字列の Ask と osascript の削除' (SHELL_STRING_EXEC_MARKERS pending Ask, and the analyze_code_interpreter call into interpreter/osascript.rs, backlog 0fefcd3b)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/osascript.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '埋め込み shell 文字列の Ask と osascript の削除': osascript_app_delete (Finder / System Events delete or empty trash is Deny, backlog 0fefcd3b)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/comments.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'inert literal の Deny→Ask 降格': strip_hash_comments decides the comment-only-mention Ask (backlog 6798f47d); moved unchanged out of interpreter.rs for the file-size cap."
+
+[[spec]]
+path = "crates/blastguard/src/deletion.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'system-harm…は常に Deny': deletion's system-directory refusals carry SYSTEM_HARM_MARK so a repeat stays Deny (backlog fb338793)."
+
+[[spec]]
 path = "crates/propguard/src/main.rs"
 doc = "docs/specs/propguard.md"
 reason = "'振る舞い': clap Command enum and the check/derive/status/install/uninstall/init/trust subcommands."

@@ -733,3 +733,66 @@ fn t1b_f4b_case_variant_of_default_branch_is_ask() {
     }
     check_all_in(&f, &cases);
 }
+
+/// True when git, run in `dir`, resolves `refs/heads/<name>` (the filesystem
+/// folded the spelling onto an existing loose ref).
+fn git_resolves_branch(dir: &Path, name: &str) -> bool {
+    let mut cmd = git_env::pinned(dir);
+    cmd.args(["rev-parse", "--verify", "-q", &format!("refs/heads/{name}")])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    bounded::run_bounded_stdin(&mut cmd, bounded::ChildStdin::Null, bounded::TOOL_DEADLINE)
+        .status
+        .success()
+}
+
+/// Finding 4c: the filesystem may fold characters beyond ASCII case (APFS
+/// folds U+017F LATIN SMALL LETTER LONG S onto `s`, which Rust's
+/// `to_lowercase` does not), so `git branch -D maſter` deletes `master`.
+/// Whatever spelling git resolves to the default branch, or to an unmerged
+/// branch, must be Ask.
+///
+/// Each variant is asserted ONLY if git, in the fixture, really resolves it
+/// to the target ref (probed with `rev-parse`); variants git does not resolve
+/// are reported on stderr and skipped. Controls always run.
+#[test]
+fn t1b_f4c_non_ascii_fold_variant_of_default_branch_is_ask() {
+    let f = Fixture::new("t1b_f4c");
+    let m = f.base.join("src/foldrepo");
+    seed_repo(&m, "master");
+    git(&m, &["config", "init.defaultBranch", "master"]);
+    git(&m, &["branch", "feat", "master~1"]);
+    git(&m, &["branch", "work", "master~1"]);
+    add_unmerged_branch(&m, "stale-work", "master");
+    // `master` holds a commit that is on no other branch.
+    write(&m.join("only-master.txt"), "only on master\n");
+    git(&m, &["add", "."]);
+    git(&m, &["commit", "-q", "-m", "only on master"]);
+    git(&m, &["switch", "-q", "work"]);
+
+    let mut cases: Vec<(String, PathBuf, &str)> = vec![
+        // Controls (always run).
+        ("git branch -D feat".to_string(), m.clone(), "allow"),
+        ("git branch -D master".to_string(), m.clone(), "ask"),
+        ("git branch -D stale-work".to_string(), m.clone(), "ask"),
+    ];
+    let variants = [
+        ("ma\u{17f}ter", "master"),
+        ("\u{ff4d}aster", "master"),
+        ("MA\u{17f}TER", "master"),
+        ("\u{17f}tale-work", "stale-work"),
+        ("\u{17f}TALE-work", "stale-work"),
+    ];
+    for (v, target) in variants {
+        if git_resolves_branch(&m, v) {
+            eprintln!("t1b_f4c: RAN variant {v:?} (git resolves it to {target})");
+            cases.push((format!("git branch -D {v}"), m.clone(), "ask"));
+            if target == "master" {
+                cases.push((format!("git branch --delete --force {v}"), m.clone(), "ask"));
+            }
+        } else {
+            eprintln!("t1b_f4c: SKIPPED variant {v:?} (git does not resolve it on this FS)");
+        }
+    }
+    check_all_in(&f, &cases);
+}

@@ -222,6 +222,82 @@ pub(super) fn segment_closes_here_document(seg: &str, opener: &HereDocOpener) ->
     line == opener.delimiter
 }
 
+/// The BODY of the here-document opened on the first line of `cmd` — the lines
+/// strictly between the opener line and its closing delimiter line — when, and
+/// only when, `stage` (one pipe stage of `cmd`) is the stage on that first line
+/// that opens it and the shape leaves no doubt about where the body ends.
+/// Otherwise `None`, and the caller keeps treating everything after the first
+/// newline as the program (the restrictive over-approximation).
+///
+/// Backlog aafeaa05: `payload::analyze_interpreter_stdin_exec` took
+/// "everything after the first newline" as the program of
+/// `python3 - <<'PY'`, so a quoted, non-redirect `>` in an ordinary shell
+/// command AFTER the `PY` terminator (`echo '>'`, `grep '^>' x`) was reported
+/// as "the program text contains a `>`" of that program (user ruling R2's
+/// Ask, a Deny in a subagent). The lines after the terminator are not the
+/// program: the shell stops feeding stdin at the delimiter line, and those
+/// lines are judged as ordinary shell by every other rule of `detect_bash`
+/// (a real redirect there, `echo x > .git/hooks/pre-commit`, is still denied
+/// by those rules — pinned by tests/quoted_heredoc_python_gt_fp_20261107.rs).
+///
+/// Restrictive on every doubt; `None` unless ALL of these hold:
+///   * `cmd` has no whitespace other than space, tab and newline (bash keeps a
+///     `\r` in the delimiter word, so a `PY` line would not close `<<'PY'\r`);
+///   * the first line has balanced quotes, does not end in `\` (a
+///     continuation), and contains exactly one `<<` — counted textually, not
+///     quote-aware, so a here-string `<<<` or a second opener also refuses;
+///   * that one opener has a non-empty, QUOTED delimiter. With an unquoted
+///     delimiter bash processes backslash-newline inside the body, so a
+///     delimiter-looking line need not close it;
+///   * `stage` contains `<<` and is a substring of the first line;
+///   * some later line is exactly the delimiter (leading tabs stripped for
+///     `<<-`), see [`segment_closes_here_document`];
+///   * the text after that closing line contains no `<<` at all (textually),
+///     so no later stage can open a second here-document whose body this
+///     narrowing would hide from a stage that merely looks the same.
+pub(super) fn first_line_quoted_here_document_body<'a>(
+    cmd: &'a str,
+    stage: &str,
+) -> Option<&'a str> {
+    if cmd
+        .chars()
+        .any(|c| c.is_whitespace() && !matches!(c, ' ' | '\t' | '\n'))
+    {
+        return None;
+    }
+    let (first, after_first) = cmd.split_once('\n')?;
+    if !quotes_balance(first) || first.ends_with('\\') || first.matches("<<").count() != 1 {
+        return None;
+    }
+    if !here_document_delimiter_is_quoted(first) {
+        return None;
+    }
+    let openers = here_document_openers(first);
+    let [opener] = openers.as_slice() else {
+        return None;
+    };
+    if opener.delimiter.is_empty() {
+        return None;
+    }
+    let stage = stage.trim();
+    if !stage.contains("<<") || !first.contains(stage) {
+        return None;
+    }
+    let mut offset = 0;
+    for line in after_first.split('\n') {
+        if segment_closes_here_document(line, opener) {
+            let rest = &after_first[offset + line.len()..];
+            if rest.contains("<<") {
+                return None;
+            }
+            // The body without the newline that precedes the closing line.
+            return Some(after_first[..offset].strip_suffix('\n').unwrap_or(""));
+        }
+        offset += line.len() + 1;
+    }
+    None
+}
+
 /// Which segments are here-document BODY (data the shell never executes), and
 /// whether any here-document is left OPEN at the end of the line.
 ///

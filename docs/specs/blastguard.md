@@ -108,6 +108,26 @@ forge・condukt のスケジューラが再利用）。
   （累積 `-C`〈相対は segment の base 起点〉・`--git-dir`・`--work-tree`）で走らせ、相対 worktree path は
   その `-C` directory 起点で置く。判定不能 — operand 無し・base 不明（`cd "$VAR"` 後など）・置けない/
   未知の global option・default branch 解決不能・probe の想定外 exit / spawn 失敗 / timeout — は全て Ask。
+- **whole-tree staging は Ask（`detect/git_stage.rs`、backlog e9325654、blastguard 0.2.300）** —
+  他セッションの未 commit 作業を自分の commit に巻き込むため。argv だけで判定し、どの repo に作用するか
+  （`-C`・`--git-dir`・`--work-tree`・`-c`）には依存しない（probe しない。linked worktree の免除も無い）。
+  `git add` / `git stage` は `-A`・`--all`・`--no-ignore-removal`・`-u`・`--update`・`--renormalize` を
+  **pathspec 無し**で使うと Ask（pathspec 付きならその pathspec を判定する）。`git commit` は `-a` /
+  `--all`（短縮束 `-am`・`-va` を含む）で Ask（pathspec 併用でも Ask。git 自身が拒否するので無害）。
+  短縮束は git の parse-options どおり読む: `-m`/`-F`/`-C`/`-c`/`-t` の後ろは値、`-u`/`-S` は stuck の
+  optional 値なので、`-mabc`・`-Fa`・`-uall` の `a` は flag ではない。pathspec が whole-tree
+  （字句正規化で `.`/`..` 成分だけ = cwd か祖先〈`.`・`./`・`..`・`a/..`・空〉、`:` 始まりの magic
+  〈`:/`・`:!x`〉、glob 文字 `*`/`?`/`[` を含む）なら `add`・`commit` とも Ask。`--pathspec-from-file` も
+  Ask。long option の省略形は git と同じく前方一致で読み、候補に sweep 系が含まれれば Ask（`--al`・`--up`）。
+  判定不能 — 閉じない quote / substitution、空白前の backslash、未知の option・短縮 flag、flag / pathspec
+  位置の runtime 展開（`$VAR`・`$(…)`・`` `…` ``・`$'…'`・先頭 `~`）、quote 外の展開・glob・brace list
+  （shell が語を割りうる。`-m *` は全 file を pathspec にする）— は全て Ask。double quote 内の展開が
+  値を取る option の値である場合（`-m "$(cat <<'EOF' … EOF)"`）は 1 語として値に消費されるので Allow。
+  **残余（未対応）**: 明示的な directory pathspec（`git add src/`、repo root を指す絶対 path）は Allow の
+  まま（file と区別するには filesystem を読む必要がある）。`add -A` / `commit -a` を本体に持つ git alias、
+  `GIT_*` 環境変数。**過剰側（意図的に Ask）**: substitution scanner は here-document 本文を model しない
+  ため、`$(…)` 内の本文に奇数個の apostrophe（`don't`）があると語が判定不能になり Ask（reason に
+  `git commit -F - <<'EOF'` を案内する）。
 - **disarm-by-non-write 規則（保護パスを『書かずに無力化』する経路）** — 保護ファイル
   （`.claude/settings.json`・`settings.local.json`・`hooks.json`・`hooks/**`、`.githooks/**`、
   `.git/hooks/**`、shell rc、gate config toml）に対する削除（`rm`〈再帰 `-r` に加え空ディレクトリ削除

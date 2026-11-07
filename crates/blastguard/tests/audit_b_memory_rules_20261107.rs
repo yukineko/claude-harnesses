@@ -325,7 +325,6 @@ fn deleting_unmerged_branch_or_dirty_worktree_is_ask() {
 
 /// Item 3 (memory `condukt-worker-dirty-tree-commit`).
 #[test]
-#[ignore = "backlog e9325654: open defect, remove ignore when fixed"]
 fn whole_tree_stage_or_commit_all_is_ask() {
     let f = Fixture::new("stage_all");
     let r = f.repo.display().to_string();

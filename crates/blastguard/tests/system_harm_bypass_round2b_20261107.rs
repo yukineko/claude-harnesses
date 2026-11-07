@@ -294,7 +294,6 @@ fn h5_system_file_mutators_are_deny() {
 // ---- h6 osascript obfuscation ----
 
 #[test]
-#[ignore = "backlog 3c750df2: osascript Finder delete with split string literal (\"Fin\" & \"der\") must be Deny"]
 fn h6_osascript_string_concat_obfuscation_is_deny() {
     Fixture::new("h6").assert_all(
         "h6 osascript concat",
@@ -396,7 +395,6 @@ fn python_edit_script_with_literal_cmd() -> String {
 }
 
 #[test]
-#[ignore = "backlog 3c750df2: FP: quoted-heredoc python script with $CMD only in string literals (str.replace) must be Allow"]
 fn f6_quoted_heredoc_python_literal_cmd_is_allow() {
     Fixture::new("f6").assert_all(
         "f6 literal $CMD in python string",

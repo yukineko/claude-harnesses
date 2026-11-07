@@ -1635,7 +1635,7 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
         return deny;
     }
 
-    acc.finish()
+    interpreter::python_body_segment_verdict(line, seg_idx, acc.finish())
 }
 
 /// ASK-2: an unrecognised command word standing in front of something that

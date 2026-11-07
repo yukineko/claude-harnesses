@@ -132,9 +132,33 @@ forge・condukt のスケジューラが再利用）。
   `do shell script` 等）を含むとき pending Ask として残す（従来は捨てられ、
   `os.system('echo x > .git/hooks/pre-commit')` が Allow だった。top-level の同じ redirect は保護パス Ask で、
   人間不在時は Deny）。「command word が展開」由来の Ask（`detect::EXPANSION_HEAD_TAIL`）は残さない（`os.system('echo "$HOME"')`・argv list `['echo','$HOME']` の literal は data。`interpreter::is_expansion_head_ask` で除外、blastguard 0.2.301）。
-  `osascript` は、program が `"Finder"`/`"System Events"` を名指しし、かつ double-quote 文字列の外に
-  `delete` か `empty … trash` があれば Deny（`detect/interpreter/osascript.rs` の `osascript_app_delete`。
-  `display notification "x"` 等は従来どおり）。
+  `osascript` は、program の文字列 literal の外に削除動詞（`delete`・`empty … trash`・`move … trash`）があり、
+  かつ（a）文字列 literal で `Finder`/`System Events`/`com.apple.finder`/`com.apple.systemevents` を名指しする
+  （`tell application id "…"`・JXA `Application("Finder")` を含む）か、（b）`application`/`app` の対象が単一の
+  plain 文字列 literal でない（`"Fin" & "der"`・`+` 連結・変数）とき system-harm Deny
+  （`Decision::deny_system_harm`。repeat も Deny）。program は届き方を問わず判定する: `-e`・here-string
+  （`osascript_app_delete`）、here-document（quoted/unquoted/`-`、`-l JavaScript` も）と `echo`/`printf` の
+  pipe（`detect/payload.rs` の stdin program text → `osascript_program_delete`）。言語が不明なので
+  AppleScript（`"` のみ）と JXA（`"`/`'`/`` ` ``）の 2 通りで字句解析し、どちらかで該当すれば Deny
+  （backlog 3c750df2）。`display notification "x"`・Finder の get/open/reveal は従来どおり Allow。
+- **interpreter program の OS 呼び出し（backlog 3c750df2、`detect/interpreter/shell_calls.rs`）** —
+  layer-0 の program を Python 規則で字句解析し（`#` comment・triple quote・`r`/`b`/`f` prefix）、**code 上の
+  呼び出し**だけを読む。文字列 literal はその呼び出しの引数であるときだけ shell / argv として扱い、それ以外は
+  data（`note = "os.system('$CMD')"`・`s.replace("`$CMD`", "")` は判定しない）。
+  (1) path 変更系（`rename`・`remove`・`unlink`・`rmdir`・`rmtree`・`move`・`truncate`・`chmod`・`chown` 等の
+  最終 component、`os.replace`）の文字列引数がシステムディレクトリ内なら system-harm Deny
+  （`os.rename('/etc/hosts','/tmp/x')`）。(2) `os.exec*`/`os.spawn*`/`os.posix_spawn*` は `(path, argv0, args…)`
+  を path＋args の argv に組み直し、argv list の `subprocess.*` と同様に判定（Deny のみ採用）。
+  (3) `os.system`/`popen`/`getoutput`/`getstatusoutput`/`subprocess.*(…, shell=True)` の literal 第 1 引数は
+  shell 行として full shell analyser で判定し、Ask も残す（`os.system('$CMD')` は Ask、subagent では Deny）。
+  (2)(3) の argv / 単純コマンドが `rm`/`rmdir`/`unlink`/`mv`/`shred`/`truncate`/`chmod`/`chown`/`chgrp` で
+  いずれかの operand が、または `cp`/`ln`/`install` で最後の operand がシステムディレクトリ内なら
+  system-harm Deny（`os.system('mv /etc/hosts /tmp/x')`）。引数が literal でない呼び出し（変数）は
+  ここでは判定せず、従来の program audit に残る（未対応の residual）。
+  併せて、quoted-delimiter here-document を Python が読む body 行（`python_program_body_segments`）では、
+  top-level segment 解析の「command word が展開」Ask（`EXPANSION_HEAD_TAIL`）を落とす
+  （`python_body_segment_verdict`。shell はその body を parse しない。program が実際に shell に渡すかは
+  上記 (3) が判定する）。
 - **disarm-by-non-write 規則（保護パスを『書かずに無力化』する経路）** — 保護ファイル
   （`.claude/settings.json`・`settings.local.json`・`hooks.json`・`hooks/**`、`.githooks/**`、
   `.git/hooks/**`、shell rc、gate config toml）に対する削除（`rm`〈再帰 `-r` に加え空ディレクトリ削除

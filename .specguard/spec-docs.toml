@@ -102,7 +102,17 @@ reason = "'振る舞い' bullets 'inert literal の Deny→Ask 降格' and '埋�
 [[spec]]
 path = "crates/blastguard/src/detect/interpreter/osascript.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'振る舞い' bullet '埋め込み shell 文字列の Ask と osascript の削除': osascript_app_delete (Finder / System Events delete or empty trash is Deny, backlog 0fefcd3b)."
+reason = "'振る舞い' bullet '埋め込み shell 文字列の Ask と osascript の削除': osascript_app_delete / osascript_program_delete (Finder / System Events delete, empty or move to trash, or an application target that is not one plain literal, is a system-harm Deny however the program arrives; backlog 0fefcd3b, 3c750df2)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/shell_calls.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'interpreter program の OS 呼び出し': program_call_verdict (path-mutating / exec / shell-line calls read from code, system-harm Deny on system files, os.system('$CMD') Ask) and python_body_segment_verdict (expansion-head Ask dropped on quoted Python here-document body lines), backlog 3c750df2."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/unit_tests.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Unit tests of interpreter.rs private helpers (compile_call_is_regex_method, literal_is_read_only_open), moved unchanged out of interpreter.rs for the file-size cap; they pin the 'inert literal' / read-only open behaviour of the '振る舞い' bullets."
 
 [[spec]]
 path = "crates/blastguard/src/detect/interpreter/comments.rs"

@@ -263,7 +263,6 @@ fn g3_rm_operand_spellings_are_deny() {
 // ---- 4. osascript ----
 
 #[test]
-#[ignore = "backlog 3c750df2: osascript Finder delete (heredoc/pipe/app-id/JXA/move to trash) of system file must be Deny"]
 fn g4_osascript_finder_delete_is_deny() {
     Fixture::new("g4").assert_all_deny(
         "g4 osascript",
@@ -282,7 +281,6 @@ fn g4_osascript_finder_delete_is_deny() {
 // ---- 5. python exec*/spawn*/rename/system ----
 
 #[test]
-#[ignore = "backlog 3c750df2: python os.exec*/spawn*/rename/system on system files must be Deny"]
 fn g5_python_os_calls_on_system_files_are_deny() {
     let body = |line: &str| format!("python3 - <<'PY'\nimport os\n{line}\nPY");
     let cmds = [

@@ -111,6 +111,15 @@ blastguard cannot read it",
                 continue;
             };
             let rest = &tokens[idx + 1..];
+            // `osascript` removing files through Finder / System Events, however
+            // the program arrives — judged before the program-file test, since
+            // `osascript -l JavaScript <<'E'` reads `JavaScript` as one.
+            if normalized_command(tokens[idx]) == "osascript" && (i > 0 || heredoc_open) {
+                let texts = stdin_program_texts(cmd, stage, &statement, i, heredoc_open);
+                if let Some(deny) = super::interpreter::osascript_program_delete(&texts) {
+                    return deny;
+                }
+            }
             let has_program_file = stage_has_program_operand(rest);
             let takes_stdin_program = interpreter_stdin_operand(rest).is_some()
                 || (!has_program_file && (i > 0 || heredoc_open));
@@ -129,34 +138,7 @@ blastguard cannot read it",
             // unrelated statement become the finding: `rmdir olddir; echo hi |
             // python3` was denied for "runs `rmdir`" when the program was `hi`.
             // A reason must name what was observed about THIS program.
-            let mut program_texts: Vec<String> = Vec::new();
-            if heredoc_open {
-                // The here-document body. When THIS stage opens a quoted
-                // here-document on the first line and its closing line is
-                // found ([`first_line_quoted_here_document_body`]), the body is
-                // exactly the lines in between: the lines after the closing
-                // delimiter are ordinary shell, judged by every other rule, and
-                // a quoted `>` there (`echo '>'`) is not this program's text
-                // (backlog aafeaa05). On any doubt it stays everything after
-                // the first newline, the restrictive over-approximation.
-                if let Some(body) = first_line_quoted_here_document_body(cmd, stage) {
-                    program_texts.push(body.to_string());
-                } else if let Some((_, body)) = cmd.split_once('\n') {
-                    program_texts.push(body.to_string());
-                }
-            }
-            if i > 0 {
-                // Piped in: the program is whatever the upstream stage of THIS
-                // statement emits, which is readable when it emits a literal.
-                // A backtick there is a command SUBSTITUTION, not a quote: the
-                // stage emits the body's OUTPUT, not its text. Read as a quote,
-                // `echo \`ls\` | sh` offered `ls` as the program and was
-                // allowed, while `echo $(ls) | sh` asked. Spelled as its
-                // `$( )` twin, it gets the twin's verdict.
-                program_texts.extend(quoted_string_literals(&backticks_as_dollar_paren(
-                    &statement[i - 1],
-                )));
-            }
+            let program_texts = stdin_program_texts(cmd, stage, &statement, i, heredoc_open);
             let shape = format!("`{}` takes its program from stdin", stage.trim());
             if let Some(deny) = acc.record(interpreter_code_verdict(
                 &shape,
@@ -210,6 +192,49 @@ the command line, so blastguard cannot read the program",
         }
     }
     acc.finish()
+}
+
+/// The program text an interpreter stage receives on stdin: the
+/// here-document body and/or the literals the upstream `echo`/`printf` stage
+/// of THIS statement emits. Shared by the stdin-program audit of
+/// [`analyze_interpreter_stdin_exec`] and its `osascript` application-delete
+/// check.
+fn stdin_program_texts(
+    cmd: &str,
+    stage: &str,
+    statement: &[String],
+    i: usize,
+    heredoc_open: bool,
+) -> Vec<String> {
+    let mut program_texts: Vec<String> = Vec::new();
+    if heredoc_open {
+        // The here-document body. When THIS stage opens a quoted
+        // here-document on the first line and its closing line is
+        // found ([`first_line_quoted_here_document_body`]), the body is
+        // exactly the lines in between: the lines after the closing
+        // delimiter are ordinary shell, judged by every other rule, and
+        // a quoted `>` there (`echo '>'`) is not this program's text
+        // (backlog aafeaa05). On any doubt it stays everything after
+        // the first newline, the restrictive over-approximation.
+        if let Some(body) = first_line_quoted_here_document_body(cmd, stage) {
+            program_texts.push(body.to_string());
+        } else if let Some((_, body)) = cmd.split_once('\n') {
+            program_texts.push(body.to_string());
+        }
+    }
+    if i > 0 {
+        // Piped in: the program is whatever the upstream stage of THIS
+        // statement emits, which is readable when it emits a literal.
+        // A backtick there is a command SUBSTITUTION, not a quote: the
+        // stage emits the body's OUTPUT, not its text. Read as a quote,
+        // `echo \`ls\` | sh` offered `ls` as the program and was
+        // allowed, while `echo $(ls) | sh` asked. Spelled as its
+        // `$( )` twin, it gets the twin's verdict.
+        program_texts.extend(quoted_string_literals(&backticks_as_dollar_paren(
+            &statement[i - 1],
+        )));
+    }
+    program_texts
 }
 
 /// True when `stage` emits only text spelled in its own arguments: its

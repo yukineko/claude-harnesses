@@ -702,19 +702,18 @@ title = "blastguard: '> path' inside a single-quoted python3 -c program is read 
 project = "/Users/yuki/src/harness"
 project_unresolved = false
 tags = [
-    "blastguard-fp",
-    "needs-ruling",
     "p1",
+    "blastguard-fp",
 ]
 touched_files = []
 status = "pending"
-notes = """Observed 2026-11-07 (batch 3): the orchestrator's own python3 -c '...' read-only transcript scan, whose program text contained the string literal "> /Users/yuki/.condukt/worktrees/mab3-3da84f08/crates/condukt/src/maintree.rs", got the verbatim block: '> ...maintree.rs' destroys the file's current contents and it is inside a git work tree, but not one of this session's trees (...). Minimal repro: python3 -c 'import sys; s="> <tracked file>"; print(s)' -> deny; test asserts allow. OPEN QUESTION for the user: the inline-eval program-text scan for '>' is ruling R2 (Ask for undeterminable targets); whether R2 is meant to Deny determinable targets in program text decides if the allow assert is right. Do not fix before that ruling. Related unfiled: python3 -c 'print(1)' > file; awk '{...}' file gets an Ask citing inline-eval program text (scan may read across the redirect/awk). Remove the ignore when fixed."""
+notes = """Observed 2026-11-07 (batch 3): python3 -c '...' read-only program whose text contained the string literal "> /Users/yuki/.condukt/worktrees/mab3-3da84f08/crates/condukt/src/maintree.rs" got the verbatim block: '> ...maintree.rs' destroys the file's current contents and it is inside a git work tree, but not one of this session's trees (...). Minimal repro: python3 -c 'import sys; s="> <tracked file>"; print(s)' -> deny. USER RULING 2026-11-07: Allow is correct (the test's allow assert stands). Related unfiled: python3 -c 'print(1)' > file; awk '{...}' file gets an Ask citing inline-eval program text. Remove the ignore when fixed."""
 created_at = 1794053691
-updated_at = 1794053691
+updated_at = 1794057084
 weight = 0.0
 issue_number = 1626
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1626"
-rev = 0
+rev = 2
 
 [task.repro]
 outcome = "reproduced"

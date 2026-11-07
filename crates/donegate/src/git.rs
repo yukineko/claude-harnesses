@@ -32,7 +32,8 @@ pub enum ChangeScan {
 }
 
 /// Changed paths relative to the repo root: tracked changes vs HEAD, staged
-/// changes, and untracked-but-not-ignored files. Returns `NotRepo` when there is
+/// changes, untracked-but-not-ignored files, and committed-but-unmerged files
+/// (vs the merge-base with `main`). Returns `NotRepo` when there is
 /// no git repo, `Failed` when the repo state is undetermined or any sub-command
 /// errored (non-zero exit / spawn failure), and `Files` on a successful scan.
 /// Repository detection goes through `harness_core::git_probe::probe_repo_scrubbed`,
@@ -60,12 +61,50 @@ pub fn changed_files(root: &Path) -> ChangeScan {
             &["ls-files", "--others", "--exclude-standard"],
             &mut out,
         );
-    if !ok {
+    if !ok || !collect_committed_unmerged(root, &mut out) {
         return ChangeScan::Failed;
     }
     out.sort();
     out.dedup();
     ChangeScan::Files(out)
+}
+
+/// Append files changed on this branch but not yet on the default branch
+/// (`main`): `git diff --name-only $(git merge-base HEAD main) HEAD`. Without
+/// this, a worker that COMMITTED its work in a task worktree (clean tree) reads
+/// as "no changes" and every `when_changed` check is skipped (backlog 355d3b12).
+///
+/// Returns `false` (→ `ChangeScan::Failed` → every check applies) when the
+/// merge-base cannot be determined: no `main`, unrelated history, git failure.
+/// Undetermined is never "nothing changed". An unborn HEAD has no commits, so
+/// there is nothing committed to add and that is a determined `true`.
+fn collect_committed_unmerged(root: &Path, out: &mut Vec<String>) -> bool {
+    let mut probe = Command::new("git");
+    harness_core::git_env::scrub(&mut probe);
+    match probe
+        .current_dir(root)
+        .args(["rev-parse", "--verify", "-q", "HEAD"])
+        .output()
+    {
+        Ok(o) if o.status.success() => {}
+        // exit 1 with -q = ref does not exist (unborn branch): determined.
+        Ok(o) if o.status.code() == Some(1) => return true,
+        _ => return false,
+    }
+    let mut cmd = Command::new("git");
+    harness_core::git_env::scrub(&mut cmd);
+    let base = match cmd
+        .current_dir(root)
+        .args(["merge-base", "HEAD", "main"])
+        .output()
+    {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => return false,
+    };
+    if base.is_empty() {
+        return false;
+    }
+    collect(root, &["diff", "--name-only", &base, "HEAD"], out)
 }
 
 /// Run one `git` sub-command, appending its trimmed non-empty stdout lines to

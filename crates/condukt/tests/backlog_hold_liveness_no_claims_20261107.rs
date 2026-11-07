@@ -143,7 +143,6 @@ fn find_by_suffix(root: &Path, suffix: &str) -> Option<PathBuf> {
 }
 
 #[test]
-#[ignore = "backlog 4fa94cba: RED repro — runtime-overlap hold placed by a live run with zero claims is ignored and the merge proceeds"]
 fn runtime_overlap_hold_from_live_run_with_zero_claims_still_blocks_merge() {
     let fx = Fixture::new("holdliveness");
     // t3 stays pending, so the run-state is non-terminal (the run is live).

@@ -145,8 +145,8 @@ use substitution::{
 };
 
 use heredoc::{
-    here_document_delimiter_is_quoted, here_document_layout, interpreter_program_body_segments,
-    opens_here_document, python_program_body_segments,
+    first_line_quoted_here_document_body, here_document_delimiter_is_quoted, here_document_layout,
+    interpreter_program_body_segments, opens_here_document, python_program_body_segments,
     redirect_view_without_quoted_here_document_body, strip_data_here_document_bodies,
 };
 #[cfg(test)]

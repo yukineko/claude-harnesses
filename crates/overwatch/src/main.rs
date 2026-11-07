@@ -28,6 +28,7 @@ pub mod rollback;
 mod rollback_cli;
 pub mod stalled;
 pub mod store;
+pub mod subagents;
 pub mod undetermined_metrics;
 pub mod violation;
 mod violation_cli;
@@ -102,6 +103,20 @@ enum Command {
     },
     /// Hook-only: record a Claude Code hook payload (stdin) in presence.json
     Presence,
+    /// Classify every recorded subagent of a session (done / progressing /
+    /// stalled / query_required / ended_undelivered / undetermined). Exit 0
+    /// only when all are done or progressing, 1 otherwise.
+    Subagents {
+        /// Session id whose recorded agents are checked.
+        #[arg(long)]
+        session: String,
+        /// Stall window in seconds (1..=86400).
+        #[arg(long, default_value_t = 600,
+              value_parser = clap::value_parser!(u64).range(1..=86_400))]
+        stall_secs: u64,
+        #[arg(long)]
+        json: bool,
+    },
     /// List sessions
     Sessions {
         #[arg(long)]
@@ -642,6 +657,13 @@ fn main() -> Result<()> {
         }
         Command::Presence => {
             presence::run_hook()?;
+        }
+        Command::Subagents {
+            session,
+            stall_secs,
+            json,
+        } => {
+            std::process::exit(subagents::run_cli(&session, stall_secs, json));
         }
         Command::Sessions { json } => {
             render::sessions(json)?;

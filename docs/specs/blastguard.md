@@ -76,6 +76,20 @@ forge・condukt のスケジューラが再利用）。
   `truncate`/`shred`/`dd of=`/`mkfs*`、再帰 `chmod`/`chown`（`-R`/`--recursive`）、
   `sort`/`uniq`（read-only ではない: `sort -o <保護パス>`／`uniq <in> <保護パス>` は出力ファイルを
   truncate するので deny。純粋な読取・非保護 output は allow — `analyze_sort`/`analyze_uniq`）。
+- **managed な使い捨て場所での working-tree 破棄の Allow（ユーザー裁定 2026-11-07、blastguard 0.2.287）** —
+  `git -C <dir>`（または discovery で決まる作業ツリー）が worktree storage root 直下の **linked worktree
+  checkout そのもの**だと観測できたときに限り、working-tree 破棄の arm（`clean -f`・`reset --hard`・
+  `checkout --force`/`-f`・`restore`・`switch -f`・`stash -u/-a` 等）を allow する（`detect/git.rs` の
+  `managed_worktree_git` → `scope/checkout.rs` の `SafeRoots::is_linked_worktree_checkout`）。
+  top-level の単一 git コマンドで、subcommand 前の global option が `-C <dir>`（1 回まで）と
+  `--work-tree`（同じ checkout を指すもの）だけのときに限る（`--git-dir`・`-c` 等があれば不成立。
+  alias 本体や `bisect run git …` のような入れ子の git は対象外）。
+  `Known(true)` は、セッションが refused でない・checkout probe がある・綴りに `..` が無い・storage root
+  直下ちょうど 1 component（`.git` でない）・実ディレクトリに `gitdir:` で始まる `.git` **ファイル**がある
+  （main checkout は `.git` ディレクトリなので `Known(false)`）・root 以下に symlink が無い、を**全て観測した**
+  ときだけ返る。probe 失敗・refusal・symlink・置けない綴りは `Undetermined` で、呼び出し側は
+  `Known(false)` と同じく**元の verdict を保持**する（Allow へ倒さない）。main の作業ツリー・`.git` 内部・
+  保護パス・`git stash drop/clear`（全 worktree で共有）は対象外のまま。
 - **disarm-by-non-write 規則（保護パスを『書かずに無力化』する経路）** — 保護ファイル
   （`.claude/settings.json`・`settings.local.json`・`hooks.json`・`hooks/**`、`.githooks/**`、
   `.git/hooks/**`、shell rc、gate config toml）に対する削除（`rm`〈再帰 `-r` に加え空ディレクトリ削除
@@ -97,6 +111,19 @@ forge・condukt のスケジューラが再利用）。
   `compile`/`subprocess`/… および文字列引数を実行する `timeit`/`cprofile`/`profile.run`/`pdb.run`/
   `settimeout`/`setinterval`/`vm.run`/`new function`）を 1 つでも含めば降格しない（substring
   heuristic なので false hit は Deny 側に倒れる）。program 内の別の実呼び出しが出す Deny は降格に優先する。
+- **stdin here-document の program text は body だけ（`detect/payload.rs` の
+  `analyze_interpreter_stdin_exec`、`detect/heredoc.rs` の `first_line_quoted_here_document_body`、
+  backlog aafeaa05）** — `python3 - <<'PY'` 等で stdin から program を受け取る stage の program text
+  （user ruling R2 の「program text 中の `>` は判定不能な redirect → `RECOMMEND_NO` 付き Ask」を含む
+  全 program 検査の対象）は、その stage が**1 行目で quoted delimiter の here-document を開き**、
+  終端行が見つかるときに限り、opener 行と終端行の**間の行だけ**とする。終端行より後の行は stdin に
+  渡らない普通の shell であり、`detect_bash` の他の全規則が通常どおり判定する（終端後の
+  `echo '>'`／`grep '^>' x` の quoted `>` を program text と誤認しない。終端後の実 redirect
+  `echo x > .git/hooks/pre-commit` は従来どおり Deny）。次のいずれかに当たれば従来どおり
+  「最初の改行より後の全文」を program とする（制限側の過大近似）: space/tab/newline 以外の空白
+  （`\r` 等）を含む、1 行目の quote 不均衡・行末 `\`・`<<` が（quote を見ずに数えて）ちょうど 1 個でない、
+  delimiter が unquoted または空、stage が `<<` を含まないか 1 行目の部分文字列でない、終端行が無い、
+  終端行より後に `<<` が（文字列として）1 つでもある。
 
 ### module 責務
 

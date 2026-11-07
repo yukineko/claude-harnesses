@@ -121,7 +121,7 @@ fn decision(cwd: &Path, command: &str) -> String {
 /// TARGET (RED at 91531ac1): the exact observed command is judged like the same
 /// command whose quoted heredoc body is replaced by `x` (which is Allow).
 #[test]
-#[ignore = "backlog PLACEHOLDER_ID: open defect, remove ignore when fixed"]
+#[ignore = "backlog 547cf2f6: open defect, remove ignore when fixed"]
 fn exact_observed_command_is_judged_like_its_neutral_body_variant() {
     let (head, rest) = EXACT.split_once("<<'EOF'\n").expect("opener");
     let (_body, tail) = rest.rsplit_once("\nEOF").expect("terminator");
@@ -140,7 +140,7 @@ fn exact_observed_command_is_judged_like_its_neutral_body_variant() {
 /// non-protected directory, a relative non-protected redirect target, a quoted
 /// body that is a single unbalanced delimiter, one trailing command line.
 #[test]
-#[ignore = "backlog PLACEHOLDER_ID: open defect, remove ignore when fixed"]
+#[ignore = "backlog 547cf2f6: open defect, remove ignore when fixed"]
 fn unbalanced_delimiter_in_quoted_body_does_not_unresolve_a_literal_cd() {
     let base = fresh_dir("min");
     let wt = base.display();

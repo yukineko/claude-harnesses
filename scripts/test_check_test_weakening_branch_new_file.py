@@ -153,7 +153,6 @@ class BranchNewFileWeakening(unittest.TestCase):
 
     # -- RED -------------------------------------------------------------
 
-    @unittest.expectedFailure  # backlog 78817f03: open defect
     def test_skip_added_to_test_committed_earlier_on_branch_blocks(self) -> None:
         self.branch_commit_1(PASSING)
         self.write(NEW_REL, SKIPPED_A)

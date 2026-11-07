@@ -4,7 +4,23 @@ use super::{
     protected_tree_deny, Ctx, Decision, Determination, Placement, SafeRoots,
 };
 
+mod operand_words;
+use operand_words::{expand_operand, place_literal, rm_operand_words, OperandSpelling, Placed};
+
 pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    let mut unplaced: Option<String> = None;
+    let verdict = analyze_rm_placed(rest, ctx, &mut unplaced);
+    // A literal operand the system-harm check could not place (see
+    // [`SystemHarm::Unplaced`]) is not an Allow by default: when every other
+    // rule would have let the rm through, ask instead. Any Deny / Ask from the
+    // other rules stands as it is.
+    match (verdict, unplaced) {
+        (Decision::Allow, Some(why)) => Decision::ask(why),
+        (verdict, _) => verdict,
+    }
+}
+
+fn analyze_rm_placed(rest: &[&str], ctx: &Ctx<'_>, unplaced: &mut Option<String>) -> Decision {
     let recursive = rest
         .iter()
         .any(|t| (is_short_flag(t) && (t.contains('r') || t.contains('R'))) || *t == "--recursive");
@@ -77,8 +93,10 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     // recursive and wildcard operands too, so every `rm` into a system
     // directory carries the system-harm marker whichever later rule would
     // have refused it. See [`rm_system_harm_deny`].
-    if let Some(deny) = rm_system_harm_deny(ctx, &operands, recursive) {
-        return deny;
+    match rm_system_harm_deny(ctx, &rm_operand_words(rest), recursive) {
+        SystemHarm::Deny(deny) => return deny,
+        SystemHarm::Unplaced(why) => *unplaced = Some(why),
+        SystemHarm::Clear => {}
     }
 
     if !recursive && !wildcard {
@@ -205,75 +223,131 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
 /// final component is what `rm` unlinks, so it is not followed): `rm
 /// <proj>/esc/etc/passwd` with `esc -> /` unlinks `/etc/passwd`. A wildcard
 /// operand is judged by its literal directory prefix (`/usr/lib/*` cannot
-/// expand outside `/usr/lib`; `/*` is `/`). An operand that cannot be placed
-/// (an expansion, a relative path with no known base) is not judged here and
-/// keeps every rule below — this predicate only ever adds a Deny.
+/// expand outside `/usr/lib`; `/*` is `/`).
+///
+/// Each operand is first read as a shell word ([`operand_words`], backlog
+/// 3c750df2): quotes removed, brace lists expanded, `~`/`$HOME` expanded, and
+/// a home-relative climb above home also judged rooted at `/`. An operand
+/// whose text contains any other expansion (`$X`, `$(…)`, a backtick) is NOT
+/// skipped: what it deletes is unknown, so it is a system-harm Deny (fail
+/// closed). A literal operand that is not a filename (a control character, a
+/// `{}` placeholder) is [`SystemHarm::Unplaced`]: every rule below still
+/// runs, and an Allow they would give becomes an Ask ([`analyze_rm`]). A
+/// relative operand with no known working directory is NOT judged here (kept
+/// as before this check existed; see `operand_words::Placed::RelativeWithoutBase`).
 pub(super) fn rm_system_harm_deny(
     ctx: &Ctx<'_>,
-    operands: &[&str],
+    operands: &[String],
     recursive: bool,
-) -> Option<Decision> {
-    for op in operands {
-        let spelled: String = if has_glob_meta(op) {
-            match glob_literal_prefix(op) {
-                Some(p) if p.is_empty() && op.starts_with('/') => "/".to_string(),
-                Some(p) if !p.is_empty() => p,
-                _ => continue,
+) -> SystemHarm {
+    let mut unplaced: Option<String> = None;
+    for word in operands {
+        let paths = match expand_operand(word, ctx.scope.home_real()) {
+            OperandSpelling::Paths(p) => p,
+            OperandSpelling::Unresolvable(why) => {
+                return SystemHarm::Deny(Decision::deny_system_harm(format!(
+                    "this rm operand `{word}` cannot be resolved to a path ({why}), so what it \
+deletes is unknown — it may be an OS file or directory, and an rm whose target cannot be \
+determined is refused rather than assumed harmless"
+                )));
             }
-        } else {
-            (*op).to_string()
         };
-        let lexical = match ctx.scope.lexical_absolute(&spelled, ctx.base_for("rm")) {
-            Determination::Known(l) => l,
-            Determination::Undetermined(_) => continue,
-        };
-        let parent_real = lexical.rsplit_once('/').and_then(|(parent, name)| {
-            let parent = if parent.is_empty() { "/" } else { parent };
-            ctx.scope.resolve(parent).map(|p| {
-                let p = match p.strip_prefix("/System/Volumes/Data/") {
-                    Some(rest) => format!("/{rest}"),
-                    None => p,
-                };
-                if name.is_empty() {
-                    p
-                } else {
-                    format!("{}/{name}", p.trim_end_matches('/'))
-                }
-            })
-        });
-        let is_system = |p: &str| p == "/" || crate::scope::is_inside_system_dir(p);
-        let hit = if is_system(&lexical) {
-            Some(lexical.clone())
-        } else {
-            parent_real.filter(|r| is_system(r))
-        };
-        let Some(hit) = hit else {
-            continue;
-        };
-        if ctx.confined_root("rm", &[lexical.as_str()]).is_some() {
-            continue;
+        for p in &paths {
+            match rm_path_system_harm_deny(ctx, word, p, recursive) {
+                SystemHarm::Deny(deny) => return SystemHarm::Deny(deny),
+                SystemHarm::Unplaced(why) => unplaced = unplaced.or(Some(why)),
+                SystemHarm::Clear => {}
+            }
         }
-        let shown = if hit == lexical {
-            format!("`{op}`")
-        } else {
-            format!("`{op}` (which lands on `{hit}`)")
-        };
-        // The shape clause keeps the wording `crate::rule_id` already files
-        // recursive / wildcard rm under; a single named file gets its own.
-        let shape = if recursive {
-            "recursive rm (-r) can delete an entire directory tree, and this one"
-        } else if has_glob_meta(op) {
-            "rm with a wildcard can delete many files at once, and this one"
-        } else {
-            "this rm"
-        };
-        return Some(Decision::deny_system_harm(format!(
-            "{shape} deletes from a system directory: {shown} — removing an OS file or \
+    }
+    unplaced.map_or(SystemHarm::Clear, SystemHarm::Unplaced)
+}
+
+/// The system-harm answer for an `rm` operand list.
+pub(super) enum SystemHarm {
+    /// An operand lands in a system directory, or cannot be resolved at all.
+    Deny(Decision),
+    /// No operand lands in a system directory, but a literal operand could
+    /// not be placed as an absolute path (a control character, a `{}`
+    /// placeholder), so "outside every system directory" is not established
+    /// for it.
+    /// [`analyze_rm`] turns what would otherwise be an Allow into an Ask with
+    /// this reason.
+    Unplaced(String),
+    /// Every operand was placed, and none is in a system directory.
+    Clear,
+}
+
+/// One shell-expanded `rm` operand path `op` (spelled `word`) against the
+/// system directories; see [`rm_system_harm_deny`].
+fn rm_path_system_harm_deny(ctx: &Ctx<'_>, word: &str, op: &str, recursive: bool) -> SystemHarm {
+    let spelled: String = if has_glob_meta(op) {
+        match glob_literal_prefix(op) {
+            Some(p) if p.is_empty() && op.starts_with('/') => "/".to_string(),
+            Some(p) if !p.is_empty() => p,
+            // A relative glob with no literal directory (`*.o`, `a*/b`)
+            // expands inside the working directory.
+            _ => ".".to_string(),
+        }
+    } else {
+        op.to_string()
+    };
+    let lexical = match place_literal(&spelled, ctx.base_for("rm")) {
+        Placed::Absolute(l) => l,
+        // Kept as before this check existed; see `Placed::RelativeWithoutBase`.
+        Placed::RelativeWithoutBase => return SystemHarm::Clear,
+        Placed::NotLiteral(why) => {
+            return SystemHarm::Unplaced(format!(
+                "rm operand `{word}` could not be placed as an absolute path ({why}), so \
+blastguard cannot establish that it is outside every system directory"
+            ));
+        }
+    };
+    let parent_real = lexical.rsplit_once('/').and_then(|(parent, name)| {
+        let parent = if parent.is_empty() { "/" } else { parent };
+        ctx.scope.resolve(parent).map(|p| {
+            let p = match p.strip_prefix("/System/Volumes/Data/") {
+                Some(rest) => format!("/{rest}"),
+                None => p,
+            };
+            if name.is_empty() {
+                p
+            } else {
+                format!("{}/{name}", p.trim_end_matches('/'))
+            }
+        })
+    });
+    let is_system = |p: &str| p == "/" || crate::scope::is_inside_system_dir(p);
+    let hit = if is_system(&lexical) {
+        Some(lexical.clone())
+    } else {
+        parent_real.filter(|r| is_system(r))
+    };
+    let Some(hit) = hit else {
+        return SystemHarm::Clear;
+    };
+    if ctx.confined_root("rm", &[lexical.as_str()]).is_some() {
+        return SystemHarm::Clear;
+    }
+    let shown = if hit == lexical {
+        format!("`{word}`")
+    } else {
+        format!("`{word}` (which lands on `{hit}`)")
+    };
+    // The shape clause keeps the wording `crate::rule_id` already files
+    // recursive / wildcard rm under; a single named file gets its own.
+    let shape = if recursive {
+        "recursive rm (-r) can delete an entire directory tree, and this one"
+    } else if has_glob_meta(op) {
+        "rm with a wildcard can delete many files at once, and this one"
+    } else {
+        "this rm"
+    };
+    SystemHarm::Deny(Decision::deny_system_harm(format!(
+        "{shape} deletes from a system directory: {shown} — removing an OS file or \
 directory (a binary, a library, `/etc` configuration) can break the machine itself, so \
 blastguard refuses it whatever the flags and however few files it names"
-        )));
-    }
-    None
+    )))
 }
 
 impl Ctx<'_> {

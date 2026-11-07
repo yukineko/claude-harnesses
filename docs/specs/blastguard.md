@@ -122,7 +122,14 @@ forge・condukt のスケジューラが再利用）。
   `/System`・`/Library`・`/opt`・`/private/etc` 等。`/var`・`/dev` は含まない）の中を指すとき、非再帰の
   1 ファイル（`rm /etc/passwd`・`rm -f /bin/ls`）でも Deny（`detect/rm.rs` の `rm_system_harm_deny`。
   字句の絶対パスと、親ディレクトリを symlink 解決したパスの両方で判定。ワイルドカードは literal prefix で
-  判定。セッションの safe root 内〈`/opt/myproj` の project 等〉は対象外）。この Deny、システムディレクトリへの
+  判定。セッションの safe root 内〈`/opt/myproj` の project 等〉は対象外）。operand は shell の単語として
+  読む（`detect/rm/operand_words.rs`、backlog 3c750df2）: 引用（`'…'`・`"…"`・`$'…'`〈`\xHH`・8 進含む〉・
+  連結・backslash）を外し、brace のカンマ列は展開、連番 `{a..b}` は `*` 扱い、`~`・`$HOME`・`${HOME}` は
+  home へ展開（home 起点で `..` が home より上へ登る綴り〈`~/../../etc/passwd`〉は `/` 起点としても判定）。
+  それ以外の展開（`$X`・`$(…)`・backtick・`~user`・未対応 escape・不均衡な引用）を含む operand は解決不能
+  として飛ばさず、system-harm Deny に倒す（fail closed）。展開後もファイル名にならない operand（制御文字・
+  `{}` placeholder）は、他の rm 規則が Allow を返すときだけ Ask にする。cwd 不明の相対 operand は従来どおり
+  この判定の対象外。redirect 語（`2>/dev/null` 等）は operand に数えない。この Deny、システムディレクトリへの
   書き込み Deny（`system_path_block`）、`crate::deletion` のシステムディレクトリ refusal は理由に
   `model::SYSTEM_HARM_MARK` を含み、`main::downgrade_on_repeat` は `Decision::is_system_harm` の Deny を
   2 度目以降も Ask に落とさない（他の Deny の repeat 降格〈運用者裁定 2026-09-18〉は不変）。

@@ -851,6 +851,22 @@ fn task_identity_key(branch: &str) -> String {
     format!("branch.{branch}.conduktTask")
 }
 
+/// The `<run>/<task>` identity recorded for `branch` by [`record_task_identity`].
+/// `Ok(None)` = git answered "no such key" (exit 1); any other non-zero exit is
+/// an `Err` (could not read is not "unrecorded").
+pub(crate) fn recorded_task_identity(repo: &Path, branch: &str) -> Result<Option<String>> {
+    let key = task_identity_key(branch);
+    let (ok, stdout, stderr) = git_try(repo, &["config", "--local", "--get", &key])?;
+    if ok {
+        let v = stdout.trim();
+        return Ok((!v.is_empty()).then(|| v.to_string()));
+    }
+    match git_exit_code(repo, &["config", "--local", "--get", &key])? {
+        1 => Ok(None),
+        code => bail!("git config --get {key} exited {code}: {}", stderr.trim()),
+    }
+}
+
 /// The commit trailer key every task-branch commit must carry.
 pub const TASK_TRAILER: &str = "Condukt-Task";
 

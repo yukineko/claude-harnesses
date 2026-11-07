@@ -681,6 +681,22 @@ fn scan_create_calls(text: &str, is_worktree_rs: bool) -> ScanResult {
             continue;
         }
 
+        // A path call on some OTHER TYPE (`File::create(..)`,
+        // `std::fs::File::create(..)`, `Foo::create(..)`) is unrelated to the
+        // worktree constructor. The qualifier segment right before `::` is a
+        // type when it starts uppercase. A lowercase module qualifier
+        // (`worktree::`, `crate::worktree::`, `wt::`, `super::`) and a bare
+        // `create(` stay flagged.
+        if off >= 2 && &code[off - 2..off] == b"::" {
+            let mut s = off - 2;
+            while s > 0 && (code[s - 1].is_ascii_alphanumeric() || code[s - 1] == b'_') {
+                s -= 1;
+            }
+            if code.get(s).is_some_and(|b| b.is_ascii_uppercase()) {
+                continue;
+            }
+        }
+
         // Allow-list #1: the definition itself.
         let trimmed = String::from_utf8_lossy(&code[..off]).trim_end().to_string();
         if is_worktree_rs && trimmed.ends_with("fn") {
@@ -778,6 +794,29 @@ fn scanner_discriminates_real_calls_from_comments_and_cfg_test() {
         lookalikes.offenders.is_empty(),
         "create_namespaced / create_dir_all / .create(true) must not trip the scan, got {:?}",
         lookalikes.offenders
+    );
+
+    // Path calls ending in `worktree::create(` stay flagged, however qualified;
+    // `File::create(` (any type-qualified path) is not.
+    let paths = scan_create_calls(
+        "fn run() {\n\
+         worktree::create(&r, &b, &t, &br)?;\n\
+         crate::worktree::create(&r, &b, &t, &br)?;\n\
+         let f = File::create(&p)?;\n\
+         let g = std::fs::File::create(&p)?;\n\
+         }\n",
+        false,
+    );
+    assert_eq!(
+        paths.offenders,
+        vec![2, 3],
+        "worktree::create / crate::worktree::create must be flagged and File::create must not"
+    );
+    let bare = scan_create_calls("fn run() {\n    create(&r, &b, &t, &br)?;\n}\n", true);
+    assert_eq!(
+        bare.offenders,
+        vec![2],
+        "a bare create( must still be flagged"
     );
 
     // The two allow-listed sites in worktree.rs are recognised as such.

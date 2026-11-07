@@ -719,30 +719,3 @@ exit 101:  v0.2.379 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/
     Finished `test` profile [unoptimized + debuginfo] target(s) in 16.43s
      Running tests/scratchpad_truncating_redirect_fp_20261107.rs (target/debug/deps/scratchpad_truncating_redirect_fp_20261107-92f2eef15545e45e)
 error: test failed, to rerun pass `-p blastguard --test scratchpad_truncating_redirect_fp_20261107`"""
-
-[[task]]
-id = "ed82c49b"
-title = "check-test-weakening: macro_rules! テストファイルで top-level helper 追加と呼び出し編集の併用を Undetermined にする"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = []
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1794066055
-updated_at = 1794066055
-weight = 0.0
-issue_number = 1633
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1633"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_ctw_macro_rules_helper_plus_invocations.py"
-rev = "58eae660a5bed638eaa0e0f3ce85dee02136583b"
-observed_at = 1794066055
-detail = """
-exit 1: r_fn_after_brace_item_alone_is_clean
-FAILED scripts/test_ctw_macro_rules_helper_plus_invocations.py::HelperPlusInvocations::test_helper_fn_after_brace_item_plus_invocation_edits_is_clean
-FAILED scripts/test_ctw_macro_rules_helper_plus_invocations.py::HelperPlusInvocations::test_helper_fn_plus_invocation_edits_is_clean
-========================= 3 failed, 8 passed in 5.06s =========================="""

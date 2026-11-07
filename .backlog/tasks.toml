@@ -377,51 +377,6 @@ exit 101: ompiling blastguard v0.2.290 (/Users/yuki/src/.harness-worktrees/sessi
 error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_python_gt_fp_20261107`"""
 
 [[task]]
-id = "27e1f231"
-title = "donegate: shared repeat ledger waives the first stop of a new block chain (after green or give-up) when CLAUDE_CODE_SESSION_ID is set"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "donegate",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-REPRODUCED 2026-11-07 at rev 9cae0b93 (session-c2e3bc17, on top of main d9863f70; donegate 0.1.74). Claim source: verifier code trace in condukt run-20261107-051454-39899, previously unexecuted.
-
-Test: crates/donegate/tests/backlog_shared_ledger_new_chain_20261107.rs (black-box: spawns the donegate binary, temp HOME, trusted fixture repo, CLAUDE_CODE_SESSION_ID set; the check's output is constant so every red run renders the same block text).
-Repro cmd: cargo test -p donegate --test backlog_shared_ledger_new_chain_20261107 -- --ignored
-Observed: test result: FAILED. 0 passed; 2 failed (new_chain_after_green_first_stop_blocks_despite_shared_ledger, new_chain_after_giveup_first_stop_blocks_despite_shared_ledger). Both first stops of a NEW chain returned exit 0 with stdout {"systemMessage":"donegate: 同じ指摘の2度目のため通しました（未解消）— 🚦 donegate: 1 required check(s) failed (attempt 1/2). Fix them, then finish."} and no decision:block.
-Controls (non-ignored, pass): control_fresh_first_stop_blocks; control_after_green_without_prior_ledger_entry_blocks and control_after_giveup_without_prior_ledger_entry_blocks (identical scenarios with $HOME/.claude/harness-state/repeat/<session> deleted between chains) both BLOCK. So the shared ledger entry is the only cause.
-
-Mechanism (code reading, consistent with the observation): main.rs emits the cwd-root block via harness_core::repeat::emit_stop_block_keyed("donegate", reason, gate::block_fingerprint(..)). The fingerprint keeps "attempt N/max", but state::reset (green / give-up) resets the counter to 0, so the next chain's first block is again "attempt 1/2" with the same output = the same fingerprint as chain 1's first block. The shared ledger is session-scoped only (repeat.rs: "Two occurrences are the same when the gate name and the finding fingerprint match within one CLAUDE_CODE_SESSION_ID") and nothing in donegate clears it when a chain ends. donegate's own state::is_repeat IS chain-scoped and is not involved (attempts==0 after reset). The existing backlog_waiver_failopen_20261107.rs::f1 does not catch this because it env_removes CLAUDE_CODE_SESSION_ID, making the shared ledger Undetermined.
-Prose contradicting behaviour: gate.rs block_fingerprint doc says "The attempt counter (attempt N/max) is deliberately KEPT in this fingerprint, so this ledger alone never waives a repeat below the cap" — observed false across chains.
-
-Two readings:
-(A) Defect: the user's F1 ruling (after an intervening green, a revert is the FIRST block of a new chain and must block) and the give-up's "bounded exit" intent mean the shared ledger must not waive across chain boundaries; the 2026-09-18 ruling is about the user seeing the same block twice in a row, not about a finding seen once earlier in the session.
-(B) Intended: the 2026-09-18 ruling 「ユーザの指示を2度やぶるgateはいらない」 is session-scoped (「同一セッション内のみ」); the user already saw this exact reason once in this session, so waiving the second occurrence is what was ordered, chains notwithstanding.
-How to tell apart: a human ruling on whether "2度目" in the 2026-09-18 ruling is counted per session or per block chain (i.e. does an intervening green / give-up reset it). Under (A) the fix makes these two tests pass (e.g. chain-scope the fingerprint, or clear the donegate ledger entries on state::reset); under (B) the tests are wrong and must be deleted and the gate.rs doc corrected instead. Not fixed (task scope: test only)."""
-created_at = 1794001711
-updated_at = 1794001711
-weight = 0.0
-issue_number = 1590
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1590"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p donegate --test backlog_shared_ledger_new_chain_20261107 -- --ignored"
-rev = "9cae0b93eef6990108fb4cb28509401a0fcadbfe"
-observed_at = 1794001711
-detail = """
-exit 101: ult: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.91s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
-     Running tests/backlog_shared_ledger_new_chain_20261107.rs (target/debug/deps/backlog_shared_ledger_new_chain_20261107-82b767da7309d16b)
-error: test failed, to rerun pass `-p donegate --test backlog_shared_ledger_new_chain_20261107`"""
-
-[[task]]
 id = "43034f75"
 title = "blastguard: Ask on deleting an unmerged branch or force-removing a dirty worktree"
 project = "/Users/yuki/src/harness"

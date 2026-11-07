@@ -1,20 +1,11 @@
 // このファイルは丸ごと integration test なので unwrap/expect/panic を許可する。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! Behavior pin for an unverified verifier claim (condukt run-20261107-051454-39899):
-//! "With CLAUDE_CODE_SESSION_ID set, the shared `harness_core::repeat` ledger (operator
-//! ruling 2026-09-18) can still waive the FIRST stop of a NEW block chain in donegate
-//! when the block text repeats."
-//!
-//! donegate's own identical-finding memory (`state::is_repeat`) is chain-scoped, but
-//! the block is also routed through `repeat::emit_stop_block_keyed`, keyed on
-//! `gate::block_fingerprint` (which keeps `attempt N/max`), and that ledger lives under
-//! `$HOME/.claude/harness-state/repeat/<CLAUDE_CODE_SESSION_ID>/` and is never cleared
-//! when a chain ends. The existing `backlog_waiver_failopen_20261107.rs::f1_*` removes
-//! CLAUDE_CODE_SESSION_ID, so the shared ledger is Undetermined there and never waives;
-//! this file sets it.
+//! Controls for the shared `harness_core::repeat` ledger across block chains.
+//! User ruling 2026-11-07 (backlog 27e1f231): "2度目" is counted per SESSION, so a
+//! repeat of the same block text after a green or give-up is waived by design; only
+//! the no-prior-ledger cases are pinned here (first red stop must block).
 //!
 //! Only the stdout decision and the exit code are asserted (no prose).
-//! Written by a disinterested author (CLAUDE.md section 2(a)): no fix exists.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -220,7 +211,6 @@ fn control_fresh_first_stop_blocks() {
 }
 
 /// CONTROL: chain ended by green, shared ledger removed before the new chain -> blocks.
-/// Differs from the green-RED test only in the absence of the prior ledger entry.
 #[test]
 fn control_after_green_without_prior_ledger_entry_blocks() {
     let f = Fixture::new();
@@ -244,20 +234,4 @@ fn control_after_giveup_without_prior_ledger_entry_blocks() {
     );
     std::fs::remove_dir_all(f.shared_ledger()).unwrap();
     assert_new_chain_first_stop_blocks(&f, "s-ctl-giveup", "control(give-up, no ledger)");
-}
-
-#[test]
-#[ignore = "RED 2026-11-07: shared repeat ledger waives first stop of a new chain; remove ignore when fixed"]
-fn new_chain_after_green_first_stop_blocks_despite_shared_ledger() {
-    let f = Fixture::new();
-    f.chain_ended_by_green("s-green");
-    assert_new_chain_first_stop_blocks(&f, "s-green", "after green");
-}
-
-#[test]
-#[ignore = "RED 2026-11-07: shared repeat ledger waives first stop of a new chain; remove ignore when fixed"]
-fn new_chain_after_giveup_first_stop_blocks_despite_shared_ledger() {
-    let f = Fixture::new();
-    f.chain_ended_by_giveup("s-giveup");
-    assert_new_chain_first_stop_blocks(&f, "s-giveup", "after give-up");
 }

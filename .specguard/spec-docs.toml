@@ -30,6 +30,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' detect and the whole '振る舞い' section (detect_write, detect_bash, split_segments, analyze_segment, analyze_rm/git/find, disarm-by-non-write rules)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/git_unmerged.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未マージ branch の force-delete / dirty worktree の force-remove は Ask': branch_verdict / worktree_verdict, target-repo resolution (-C/--git-dir/--work-tree), default-branch resolution order, and the cannot-determine -> Ask cases (backlog 43034f75)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/interpreter/inert_literal.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'inert literal の Deny→Ask 降格': inert_literal_bodies proof conditions, DYNAMIC_EXECUTION_MARKERS (incl. string-executing APIs, b4c03877), real-call Deny precedence (backlog 27795e6e)."

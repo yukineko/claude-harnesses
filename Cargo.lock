@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "condukt"
-version = "0.7.364"
+version = "0.7.365"
 dependencies = [
  "anyhow",
  "blastguard",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.79"
+version = "0.1.80"
 dependencies = [
  "anyhow",
  "chrono",

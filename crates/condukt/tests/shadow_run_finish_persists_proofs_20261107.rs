@@ -84,8 +84,16 @@ fn shadow_run_finish_keeps_a_durable_copy_of_the_tdd_proofs() {
 
     assert!(run(&["shadow-run", "enable"]).status.success());
     let ex = run(&[
-        "shadow-run", "exec", "--run", "run-shadow", "--topic", "t5", "--branch", "b-t5",
-        "--model", "m",
+        "shadow-run",
+        "exec",
+        "--run",
+        "run-shadow",
+        "--topic",
+        "t5",
+        "--branch",
+        "b-t5",
+        "--model",
+        "m",
     ]);
     assert!(ex.status.success(), "exec: {ex:?}");
     let wt = PathBuf::from(String::from_utf8_lossy(&ex.stdout).trim());
@@ -95,11 +103,25 @@ fn shadow_run_finish_keeps_a_durable_copy_of_the_tdd_proofs() {
     std::fs::write(wt.join(".tdd/t5.green.json"), "{\"green\":true}").unwrap();
 
     let fin = run(&[
-        "shadow-run", "finish", "--path", wt.to_str().unwrap(), "--branch", "b-t5", "--run",
-        "run-shadow", "--title", "x", "--model", "m", "--pass",
+        "shadow-run",
+        "finish",
+        "--path",
+        wt.to_str().unwrap(),
+        "--branch",
+        "b-t5",
+        "--run",
+        "run-shadow",
+        "--title",
+        "x",
+        "--model",
+        "m",
+        "--pass",
     ]);
     assert!(fin.status.success(), "finish: {fin:?}");
-    assert!(!wt.exists(), "apparatus: finish must have discarded the worktree");
+    assert!(
+        !wt.exists(),
+        "apparatus: finish must have discarded the worktree"
+    );
 
     let red = find_named(&[&home, &repo], "t5.red.json", &wt);
     let green = find_named(&[&home, &repo], "t5.green.json", &wt);

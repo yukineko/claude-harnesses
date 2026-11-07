@@ -7,7 +7,6 @@
 //! `quiet_feedback_more::a_repeat_is_recognised_when_only_the_record_path_differs`.
 
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -24,7 +23,6 @@ fn scratch(tag: &str) -> PathBuf {
 struct Fixture {
     home: PathBuf,
     root: PathBuf,
-    sd: PathBuf,
 }
 
 /// A trusted project with one required check that prints `raw.txt` and exits 1.
@@ -50,7 +48,7 @@ fn fixture(tag: &str, raw: &str, extra: &str) -> Fixture {
         format!("trusted = [\"{}\"]\n", canon.display()),
     )
     .expect("write trust.toml");
-    Fixture { home, root, sd }
+    Fixture { home, root }
 }
 
 struct Run {
@@ -112,13 +110,6 @@ fn reason_of(r: &Run) -> String {
     })
 }
 
-fn full_output_path(reason: &str) -> Option<PathBuf> {
-    reason
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("full output: "))
-        .map(PathBuf::from)
-}
-
 fn waived(r: &Run) -> bool {
     block_reason(r).is_none() && r.stdout.contains("systemMessage")
 }
@@ -126,7 +117,11 @@ fn waived(r: &Run) -> bool {
 #[test]
 #[ignore = "RED: repeat identity includes check duration 2026-11-07"]
 fn a_repeat_is_recognised_when_only_the_check_duration_differs() {
-    let f = fixture("rep-dur", "boom: always the same\n", "reset_after_secs = 1\n");
+    let f = fixture(
+        "rep-dur",
+        "boom: always the same\n",
+        "reset_after_secs = 1\n",
+    );
     let r1 = stop(&f, "s-rep-dur");
     let reason1 = reason_of(&r1);
     std::thread::sleep(std::time::Duration::from_millis(2300));

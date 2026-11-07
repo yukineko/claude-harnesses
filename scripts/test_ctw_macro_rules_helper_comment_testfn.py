@@ -237,7 +237,6 @@ class HelperCommentTestFn(unittest.TestCase):
 
     # -- RED: the full combination (the real file's shape) --------------------
 
-    @unittest.expectedFailure  # backlog 25b88447: open defect
     def test_full_combination_real_shape_is_clean(self) -> None:
         self.assert_clean(FULL)
 

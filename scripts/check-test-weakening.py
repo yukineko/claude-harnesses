@@ -1714,8 +1714,10 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                 # (weakening_macro.py) -- every template body and other item is
                 # unchanged and in place, no invocation is removed, and only an
                 # invocation's arguments may change, new invocations be added,
-                # or plain top-level helper fns be inserted (backlog ed82c49b;
-                # judged on the top-level item sequence, not a line diff).
+                # or plain top-level helper fns, `#[test] fn`s and
+                # `#[cfg(test)] mod`s be inserted, comments included (backlog
+                # ed82c49b / 25b88447; judged on the top-level item sequence,
+                # not a line diff).
                 # Everything that module cannot prove stays Undetermined.
                 raise Undetermined(
                     f"{rep}: #[test] inside a macro_rules! template in a file "

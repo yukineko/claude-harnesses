@@ -642,4 +642,101 @@ mod tests {
             "prose tokens were flagged as missing paths: {flagged:?}"
         );
     }
+
+    /// Run `check` on a one-item DoD in `dir` and report whether the exact
+    /// token `tok` was flagged as a missing path.
+    fn dod_token_flagged(dir: &Path, item: &str, tok: &str) -> (bool, Vec<String>) {
+        let charter = Charter {
+            north_star: "x".to_string(),
+            definition_of_done: vec![item.to_string()],
+            ..Charter::default()
+        };
+        let charter_path = Charter::project_path(dir);
+        let f = check(dir, &charter_path, &charter, &Config::default());
+        let needle = format!("DoD references missing path `{tok}`");
+        (f.reasons.iter().any(|r| r == &needle), f.reasons)
+    }
+
+    // ---- e95bf58f rule: a token is checked only if it has `/` AND one of
+    // (a) absolute, (b) first segment starts with `.`, (c) last segment has
+    // an extension, (d) <root>/<first segment> exists. ----
+
+    /// CONTROL (passes at base): rule (a) absolute missing path trips.
+    #[test]
+    fn dod_rule_a_absolute_missing_path_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let abs = dir.path().join("nonexistent_abs_dir").join("missing");
+        let abs = abs.to_string_lossy().to_string();
+        let (hit, reasons) = dod_token_flagged(dir.path(), &format!("see {abs} here"), &abs);
+        assert!(
+            hit,
+            "rule (a): a missing absolute path must be flagged: {reasons:?}"
+        );
+    }
+
+    /// CONTROL (passes at base): rule (b) leading-dot first segment, no extension.
+    #[test]
+    fn dod_rule_b_leading_dot_segment_missing_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (hit, reasons) =
+            dod_token_flagged(dir.path(), "see .somedot/missing here", ".somedot/missing");
+        assert!(
+            hit,
+            "rule (b): a missing path whose first segment starts with `.` must be flagged: {reasons:?}"
+        );
+    }
+
+    /// CONTROL (passes at base): rule (c) last segment has an extension even
+    /// though the first segment does not exist.
+    #[test]
+    fn dod_rule_c_extension_with_missing_first_segment_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (hit, reasons) =
+            dod_token_flagged(dir.path(), "see nodir/missing.rs here", "nodir/missing.rs");
+        assert!(
+            hit,
+            "rule (c): a missing `dir/file.ext` path must be flagged even when dir is absent: {reasons:?}"
+        );
+    }
+
+    /// CONTROL (passes at base): rule (d) first segment exists, no extension.
+    #[test]
+    fn dod_rule_d_existing_first_segment_missing_leaf_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("existingdir")).unwrap();
+        let (hit, reasons) = dod_token_flagged(
+            dir.path(),
+            "see existingdir/missing here",
+            "existingdir/missing",
+        );
+        assert!(
+            hit,
+            "rule (d): a missing leaf under an existing first segment must be flagged: {reasons:?}"
+        );
+    }
+
+    /// RED at base: no leading dot, no extension, first segment absent ->
+    /// prose slash list, never checked.
+    #[test]
+    #[ignore = "backlog e95bf58f: RED, remove ignore when fixed"]
+    fn dod_slash_token_without_dot_ext_or_existing_root_is_not_checked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (hit, reasons) = dod_token_flagged(dir.path(), "see alpha/beta here", "alpha/beta");
+        assert!(
+            !hit,
+            "`alpha/beta` (not absolute, no leading dot, no extension, `alpha` absent) must not be flagged: {reasons:?}"
+        );
+    }
+
+    /// RED at base: a bare filename (no `/`) is never checked against disk.
+    #[test]
+    #[ignore = "backlog e95bf58f: RED, remove ignore when fixed"]
+    fn dod_bare_filename_without_slash_is_never_checked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (hit, reasons) = dod_token_flagged(dir.path(), "see missing.rs here", "missing.rs");
+        assert!(
+            !hit,
+            "bare `missing.rs` (no `/`) must not be flagged: {reasons:?}"
+        );
+    }
 }

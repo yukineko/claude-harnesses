@@ -219,7 +219,13 @@ forge・condukt のスケジューラが再利用）。
   `\`・`$`・backtick・`{}`・`~` を含むもの、引用外の展開が長い語の一部として単語分割されるものは解決しない
   （Ask のまま）。解決して system 外になった operand も Ask のまま（この解決は Deny を足すだけ）。
   引用符内の glob 文字は展開されないので、`-r`/`-d` なしの `rm "*.tmp"` は wildcard rm ではない
-  （`for f in *.tmp; do rm "$f"; done` の loop 値代入版がこの形になり、glob は `for` のもの）。その引用除去後の
+  （`for f in *.tmp; do rm "$f"; done` の loop 値代入版がこの形になり、glob は `for` のもの）。loop header の
+  語が引用・`\`・`$`・backtick・brace・括弧を含まない素の glob（`*.tmp`・`build/*.o`）なら、各反復の値は
+  その glob が一致した 1 エントリなので、本体の引用外の参照（`rm $f`）にも値を `"…"` で囲んで代入する
+  （`detect/compound.rs` の `LoopValue::glob_matched`。ユーザー裁定 2026-11-07: `for f in *.tmp; do rm $f; done`
+  は wildcard rm Deny ではなく、書かれたままの `$f` の解決不能 Ask。subagent は Deny）。literal prefix による
+  system-harm 判定は残る（`for f in /etc/*; do rm $f; done` は Deny）。引用された header 語
+  （`for f in "*.tmp"`）は literal な pattern で、本体の引用外 `$f` が実際に glob 展開するので囲まない。その引用除去後の
   operand は protected path（literal として、および pattern として literal prefix で）に照合する。
   展開後もファイル名にならない operand（制御文字・`{}` placeholder）も、他の rm 規則が Allow を返すときだけ
   Ask にする。cwd 不明の相対 operand は従来どおり
@@ -246,7 +252,11 @@ forge・condukt のスケジューラが再利用）。
   literal prefix、safe root 内は対象外、`/var/folders`・`/dev/null` は対象外）に入れば
   `Decision::deny_system_harm`。operand は quote-aware に再分割し shell と同じく unquote する。先頭の
   `~`/`$HOME`/`${HOME}` は home に展開し、それ以外の `$`/backtick 展開（`$'…'` 含む）を含む対象 operand は
-  **Ask**（判定不能は制限側。例: `chmod +x "$f"`・`mv "$a" b`）。`find -exec` の `{}` と rsync の remote
+  **Ask**（判定不能は制限側。例: `chmod +x "$f"`・`mv "$a" b`）。ただし rm と同じく、同じ行のテキストが値を
+  決める展開（前セグメントの literal 代入・literal 語の `$(echo …)`）は解決して判定し、システムパスなら
+  system-harm Deny（`system_paths::known_mutation_harm`、`rm::known_path_harm` から呼ぶ。
+  `X=/etc/passwd; unlink $X`・`X=/etc/hosts; mv $X /tmp/h`・`X=/etc/passwd; chmod 000 $X`）。解決して system 外
+  なら Ask のまま（`X=build.log; unlink $X`）。`find -exec` の `{}` と rsync の remote
   operand（`host:/path`）は判定しない。base 不明の相対 operand は rm と同じく判定しない（他の rule は残る）。
 - **pipeline で供給される `xargs rm`/`xargs unlink`（backlog 3c750df2）** — `analyze_xargs` は xargs 自身の
   token しか見ないため `echo /etc/passwd | xargs rm` は operand 無しの `rm` として Allow だった。

@@ -209,7 +209,6 @@ impl Fixture {
 // ---- Targets ----
 
 #[test]
-#[ignore = "RED: loop var rm / mutator var resolution"]
 fn t1_for_loop_unquoted_var_rm_is_not_deny_for_main() {
     Fixture::new("t1").assert_main_not_deny(
         "t1 for-loop var rm",
@@ -221,7 +220,6 @@ fn t1_for_loop_unquoted_var_rm_is_not_deny_for_main() {
 }
 
 #[test]
-#[ignore = "RED: loop var rm / mutator var resolution"]
 fn t2_for_loop_unquoted_var_rm_tmp_glob_is_ask_for_main() {
     Fixture::new("t2").assert_split_main_ask();
 }
@@ -238,7 +236,6 @@ impl Fixture {
 }
 
 #[test]
-#[ignore = "RED: loop var rm / mutator var resolution"]
 fn t3_mutator_var_resolving_to_system_path_is_deny_on_repeat() {
     Fixture::new("t3").assert_deny_repeat(
         "t3 mutator var system path",

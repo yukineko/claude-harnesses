@@ -73,43 +73,6 @@ exit 101: ished in 1.41s
 error: test failed, to rerun pass `-p backlog --test audit_b6_claim_rejects_green_repro`"""
 
 [[task]]
-id = "e95bf58f"
-title = "compass looks_like_path: do not flag slash lists or bare filenames in DoD prose"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 10 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: compass-gotchas (formerly compass-dod-refs-slash-falsepos).
-Observed RED 2026-11-07 at b555d70a (base fc7b5dd9) (verbatim): prose tokens were flagged as missing paths: ["DoD references missing path `groom/inject/snapshot`", "DoD references missing path `ledger/state`", "DoD references missing path `types.rs`", "DoD references missing path `handlers.rs`"] / test result: FAILED
-The memory's own example 入力が無い/ゼロ is NOT flagged at HEAD (CJK split leaves token '/', an existing path); kept as a guard. Real FPs are ASCII slash lists and bare *.rs names. Control: crates/nope/missing.rs under an existing top-level dir still trips. Conflict: planned rule 'only tokens rooted at an existing top-level dir' contradicts dod_missing_path_trips_when_check_enabled (expects src/does_not_exist.rs to trip in a tempdir without src/); reconcile e.g. by creating src/ in that fixture.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998435
-updated_at = 1794001892
-weight = 0.0
-issue_number = 1579
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1579"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p compass --bin compass dod_prose_slash_lists_and_bare_filenames_are_not_paths -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998927
-detail = """
-exit 101: sult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.05s
-
-   Compiling compass v0.1.50 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/compass)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.57s
-     Running unittests src/main.rs (target/debug/deps/compass-8133ee8f753b6f53)
-error: test failed, to rerun pass `-p compass --bin compass`"""
-
-[[task]]
 id = "04f53dbe"
 title = "context-governor injector dedup keys on the hook input session_id, not env"
 project = "/Users/yuki/src/harness"

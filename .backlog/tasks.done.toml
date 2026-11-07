@@ -71093,3 +71093,77 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "35d0d2bf18258b6b96ff64458d81c3818b07479d"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "e95bf58f"
+title = "compass looks_like_path: do not flag slash lists or bare filenames in DoD prose"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 10 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: compass-gotchas (formerly compass-dod-refs-slash-falsepos).
+Observed RED 2026-11-07 at b555d70a (base fc7b5dd9) (verbatim): prose tokens were flagged as missing paths: ["DoD references missing path `groom/inject/snapshot`", "DoD references missing path `ledger/state`", "DoD references missing path `types.rs`", "DoD references missing path `handlers.rs`"] / test result: FAILED
+The memory's own example 入力が無い/ゼロ is NOT flagged at HEAD (CJK split leaves token '/', an existing path); kept as a guard. Real FPs are ASCII slash lists and bare *.rs names. Control: crates/nope/missing.rs under an existing top-level dir still trips. Conflict: planned rule 'only tokens rooted at an existing top-level dir' contradicts dod_missing_path_trips_when_check_enabled (expects src/does_not_exist.rs to trip in a tempdir without src/); reconcile e.g. by creating src/ in that fixture.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998435
+updated_at = 1794053901
+weight = 0.0
+issue_number = 1579
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1579"
+issue_closed_at = 1794053903
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --bin compass dod_prose_slash_lists_and_bare_filenames_are_not_paths -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998927
+detail = """
+exit 101: sult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.05s
+
+   Compiling compass v0.1.50 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/compass)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.57s
+     Running unittests src/main.rs (target/debug/deps/compass-8133ee8f753b6f53)
+error: test failed, to rerun pass `-p compass --bin compass`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p compass --bin compass dod_ -- --include-ignored"
+exit = 0
+passed = 10
+rev = "07a6c6f671c124b1e7fc25611af8d93067321ef9"
+observed_at = 1794053864
+output_digest = "sha256:49953a58d01562fac4718d46a179d64369eb8bf4aca96636627cf023c6f12a5e"
+excerpt = """
+
+running 10 tests
+test freshness::tests::dod_missing_path_trips_when_check_enabled ... ok
+test freshness::tests::dod_prose_slash_lists_and_bare_filenames_are_not_paths ... ok
+test freshness::tests::dod_bare_filename_without_slash_is_never_checked ... ok
+test freshness::tests::dod_rule_b_leading_dot_segment_missing_trips ... ok
+test freshness::tests::dod_present_path_does_not_trip_on_that_signal ... ok
+test freshness::tests::dod_rule_a_absolute_missing_path_trips ... ok
+test freshness::tests::dod_rule_c_extension_with_missing_first_segment_trips ... ok
+test freshness::tests::dod_rule_d_existing_first_segment_missing_leaf_trips ... ok
+test freshness::tests::dod_slash_token_without_dot_ext_or_existing_root_is_not_checked ... ok
+test gates::tests::c2_fires_on_missing_dod_path ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.31s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running unittests src/main.rs (target/debug/deps/compass-5d743d1ca694aebc)
+"""
+
+[task.closure.red]
+rev = "6590ea815d1a7f259b75f0abe5ee9647b702dbd0"
+exit = 101
+kind = "behavioural"

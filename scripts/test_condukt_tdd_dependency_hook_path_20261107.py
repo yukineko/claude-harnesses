@@ -51,7 +51,7 @@ class CondukTddDependencyUnderHookPath(unittest.TestCase):
         self.assertFalse(_has_tdd(_hook_like_path()),
                          "control: simulated hook PATH must not already hold tdd")
 
-    @unittest.expectedFailure  # backlog BACKLOGID: open defect, remove when fixed
+    @unittest.expectedFailure  # backlog 214ebb1f: open defect, remove when fixed
     def test_condukt_control_test_passes_without_ambient_tdd(self):
         env = dict(os.environ)
         env["PATH"] = _hook_like_path()

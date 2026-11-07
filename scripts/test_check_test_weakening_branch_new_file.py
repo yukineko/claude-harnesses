@@ -29,11 +29,24 @@ HEAD vs worktree/staged), or every commit in merge-base..HEAD, or the file's
 birth commit on the branch. The fixture has exactly one prior branch commit,
 so all of these satisfy it; the RED does not choose between them.
 
-Controls (pass today):
+User ruling 2026-11-07 (settles the base): for a file absent at the
+merge-base, skip/xfail markers ADDED to a test that exists at HEAD are judged
+against HEAD and block; assertion removal against HEAD is NOT blocked (too
+common during refactoring). Fixed at 78933b13. The assertion-removal case is
+kept as a PIN (rc 0) so that changing it later is a visible decision.
+
+Controls:
   * the same skip on a file that exists at merge-base blocks (ignore-added);
   * the new file's FIRST commit with an already-skipped test is allowed
     (pinned: a new skipped test hides no coverage that existed);
   * a non-weakening edit (adding a test/assertion) in commit 2 is allowed.
+
+Acknowledgement path: a `test-weakening-justified: <path>:<kind> - <reason>`
+line in the pending message clears the HEAD-judged ignore-added /
+should-panic-added (unittest.expectedFailure) finding; without it, it blocks.
+
+Set CTW_SCRIPT to run against another copy of the gate (e.g. the pre-fix one
+in a detached worktree) to observe RED.
 
 Repro:  python3 -m pytest --runxfail scripts/test_check_test_weakening_branch_new_file.py
 """
@@ -47,7 +60,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent / "check-test-weakening.py"
+SCRIPT = Path(os.environ.get(
+    "CTW_SCRIPT", str(Path(__file__).resolve().parent / "check-test-weakening.py")))
 
 PASSING = """\
 import unittest
@@ -70,6 +84,12 @@ if __name__ == "__main__":
 SKIPPED_A = PASSING.replace(
     "    def test_a(self):\n",
     "    @unittest.skip(\"open defect\")\n    def test_a(self):\n",
+)
+
+# test_a gains an expected-failure marker (gate kind should-panic-added).
+XFAILED_A = PASSING.replace(
+    "    def test_a(self):\n",
+    "    @unittest.expectedFailure\n    def test_a(self):\n",
 )
 
 # test_a loses one of its two assertions; nothing else changes.
@@ -122,11 +142,11 @@ class BranchNewFileWeakening(unittest.TestCase):
         self.git("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
                  "commit", "-q", "-m", msg)
 
-    def scan(self) -> tuple[int, dict, str]:
+    def scan(self, message: str = "commit 2\n") -> tuple[int, dict, str]:
         """Run the gate the way .githooks/commit-msg does for the staged commit."""
         self.git("add", "-A")
         msg = self.tmp / "COMMIT_EDITMSG"
-        msg.write_text("commit 2\n")
+        msg.write_text(message)
         r = subprocess.run([sys.executable, str(SCRIPT), "--repo", str(self.repo),
                             "--pending-msg", str(msg), "--json"],
                            cwd=self.repo, env=self.env, capture_output=True,
@@ -163,14 +183,59 @@ class BranchNewFileWeakening(unittest.TestCase):
                          "branch commit 1, yet the gate did not block: " + out)
         self.assertIn("ignore-added", self.kinds(data, NEW_REL), out)
 
-    @unittest.expectedFailure  # backlog 78817f03: open defect
-    def test_assertion_removed_from_test_committed_earlier_on_branch_blocks(self) -> None:
+    def test_xfail_added_to_test_committed_earlier_on_branch_blocks(self) -> None:
+        self.branch_commit_1(PASSING)
+        self.write(NEW_REL, XFAILED_A)
+        rc, data, out = self.scan()
+        self.assertEqual(rc, 1, "commit 2 adds expectedFailure to test_a, which "
+                         "passed in branch commit 1, yet the gate did not block: " + out)
+        self.assertIn("should-panic-added", self.kinds(data, NEW_REL), out)
+
+    def test_pin_assertion_removed_in_branch_new_file_is_allowed(self) -> None:
+        # PIN per user ruling 2026-11-07: for a file absent at the merge-base,
+        # assertion removal against HEAD is NOT blocked ("too common during
+        # refactoring"). Was RED 2 of backlog 78817f03 (expected rc 1); re-scoped
+        # to rc 0 so that a future change to this is a visible decision.
         self.branch_commit_1(PASSING)
         self.write(NEW_REL, ASSERT_REMOVED_A)
+        self.assertIn(NEW_REL, self.git("diff", "--name-only", "HEAD"),
+                      "anti-vacuity: commit 2 changes the file")
         rc, data, out = self.scan()
-        self.assertEqual(rc, 1, "commit 2 removes an assertion from test_a, which "
-                         "branch commit 1 had, yet the gate did not block: " + out)
-        self.assertIn("assertion-removed", self.kinds(data, NEW_REL), out)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("assertion-removed", self.kinds(data, NEW_REL), out)
+
+    # -- acknowledgement path --------------------------------------------
+
+    def _ack(self, kind: str) -> str:
+        return ("commit 2\n\ntest-weakening-justified: "
+                f"{NEW_REL}:{kind} - intentional open-defect repro\n")
+
+    def test_ack_clears_head_judged_ignore_added(self) -> None:
+        self.branch_commit_1(PASSING)
+        self.write(NEW_REL, SKIPPED_A)
+        rc, data, out = self.scan(self._ack("ignore-added"))
+        self.assertEqual(rc, 0, out)
+        acked = [f for f in data.get("findings", [])
+                 if f["path"] == NEW_REL and f["kind"] == "ignore-added"]
+        self.assertTrue(acked and all(f["acknowledged"] for f in acked),
+                        "anti-vacuity: the finding exists and is acknowledged: " + out)
+
+    def test_ack_clears_head_judged_should_panic_added(self) -> None:
+        self.branch_commit_1(PASSING)
+        self.write(NEW_REL, XFAILED_A)
+        rc, data, out = self.scan(self._ack("should-panic-added"))
+        self.assertEqual(rc, 0, out)
+        acked = [f for f in data.get("findings", [])
+                 if f["path"] == NEW_REL and f["kind"] == "should-panic-added"]
+        self.assertTrue(acked and all(f["acknowledged"] for f in acked),
+                        "anti-vacuity: the finding exists and is acknowledged: " + out)
+
+    def test_ack_for_other_kind_does_not_clear_ignore_added(self) -> None:
+        self.branch_commit_1(PASSING)
+        self.write(NEW_REL, SKIPPED_A)
+        rc, data, out = self.scan(self._ack("should-panic-added"))
+        self.assertEqual(rc, 1, out)
+        self.assertIn("ignore-added", self.kinds(data, NEW_REL), out)
 
     # -- controls (pass today) --------------------------------------------
 

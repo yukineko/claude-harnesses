@@ -16,6 +16,9 @@
 //! last entry cannot be parsed, is reported as [`StallState::Unknown`] with the
 //! reason; it is never omitted and never treated as clean. Only a genuinely
 //! absent projects/subagents directory (NotFound) means "nothing to list".
+//! Entries of the project dir that are positively non-directories (the
+//! `<session>.jsonl` files) are skipped; an entry whose type cannot be
+//! determined (stat error, dangling symlink) is Unknown, not skipped.
 
 use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
@@ -67,6 +70,17 @@ pub fn scan(home: &Path, project: &Path, now: SystemTime) -> Vec<StalledSubagent
         }
     };
     for sess in sessions {
+        match entry_is_dir(&sess) {
+            Ok(true) => {}
+            // Positively a non-directory (e.g. the `<session>.jsonl` file Claude
+            // Code writes beside each `<session>/` dir): not a session dir.
+            Ok(false) => continue,
+            // Type cannot be determined: fail closed, never silently skipped.
+            Err(why) => {
+                out.push(unknown("(scan)", why));
+                continue;
+            }
+        }
         let subdir = sess.join("subagents");
         let files = match read_dir_opt(&subdir) {
             Ok(v) => v,
@@ -92,6 +106,16 @@ pub fn scan(home: &Path, project: &Path, now: SystemTime) -> Vec<StalledSubagent
     }
     out.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
     out
+}
+
+/// Whether a project-dir entry is a session directory. Symlinks are FOLLOWED
+/// (`fs::metadata`): a symlink to a directory is a session dir, a symlink to a
+/// file is skipped, and a dangling/unreadable symlink or any stat failure is an
+/// `Err` (reported as Unknown by the caller, never dropped).
+fn entry_is_dir(path: &Path) -> Result<bool, String> {
+    std::fs::metadata(path)
+        .map(|m| m.is_dir())
+        .map_err(|e| format!("cannot determine type of {}: {e}", path.display()))
 }
 
 fn unknown(id: &str, reason: String) -> StalledSubagent {

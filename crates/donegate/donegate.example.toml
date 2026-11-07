@@ -9,7 +9,7 @@
 # the test suite. Omit `when_changed` to always run. No git repo ⇒ all run.
 
 enabled = true
-max_attempts = 3          # after N consecutive blocks in a session, allow the stop
+max_attempts = 2         # after N consecutive blocks in a session, allow the stop
 default_timeout_secs = 300
 output_tail_lines = 40    # trailing lines of a failing command fed back to the agent
 reset_after_secs = 600    # attempt counter resets after this idle gap between stops

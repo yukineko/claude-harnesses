@@ -35,7 +35,11 @@ INTERFACE THE IMPLEMENTER MUST PROVIDE
        sync completed.
      * on `seeded: false`, NEW_ROOT/target does not exist (or, if it existed
        before the call, is byte-for-byte untouched) and no file under NEW_ROOT
-       had its mtime changed.
+       had its mtime changed. ONE EXCEPTION (backlog 675bc422, interface E in
+       scripts/test_worktree_target_seed_background.py): when the cargo lock
+       files in the clone cannot be taken, the verdict is
+       {"seeded": false, "target_left": true, ...}: the cloned target stays,
+       but still no mtime is changed (cargo then rebuilds, never trusts).
      * mtime sync applies ONLY to paths in `git ls-files` of NEW_ROOT whose
        working-tree content hash equals the warm working-tree content hash of
        the same path (compare actual file content, not HEAD blobs, so an
@@ -56,6 +60,7 @@ Run (open defects un-skipped):
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -130,6 +135,41 @@ def _seed(warm, new):
     except ValueError:
         verdict = None
     return r, verdict
+
+
+SEED_LOG_RE = re.compile(r"seed log: (/\S+)")
+
+
+def read_seed_log_verdict(log):
+    """Last JSON object with a "seeded" key in the seed log, else None."""
+    try:
+        text = Path(log).read_text()
+    except OSError:
+        return None
+    for ln in reversed(text.splitlines()):
+        try:
+            v = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(v, dict) and "seeded" in v:
+            return v
+    return None
+
+
+def wait_seed_log_verdict(tc, hook_stdout, timeout):
+    """Find the hook's `seed log: <path>` line and wait (bounded) for a verdict."""
+    m = SEED_LOG_RE.search(hook_stdout)
+    tc.assertIsNotNone(m, f"no 'seed log: <path>' line:\n{hook_stdout}")
+    log = m.group(1)
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        v = read_seed_log_verdict(log)
+        if v is not None:
+            return v
+        time.sleep(0.2)
+    v = read_seed_log_verdict(log)
+    tc.assertIsNotNone(v, f"no seed verdict in {log} within {timeout}s")
+    return v
 
 
 def _mtimes(root, rels):
@@ -223,7 +263,14 @@ class SeedReuse(unittest.TestCase):
         self.assertEqual(os.stat(new / rel).st_mtime_ns,
                          os.stat(f.warm / rel).st_mtime_ns)
 
+    @open_defect("675bc422")
     def test_session_worktree_hook_seeds_from_main_tree(self):
+        # RE-ANCHORED by USER RULING (backlog 675bc422): the hook starts the
+        # seed in the BACKGROUND and returns immediately, so target/ need not
+        # exist when the hook returns. What this test proves is unchanged:
+        # the hook seeds the session worktree from the main tree, and the
+        # seeded worktree builds with 0 Compiling. It now waits (bounded) for
+        # the seed-log verdict (675bc422 interface B) before asserting that.
         f = Fixture(self)
         home = f.base / "home"
         home.mkdir()
@@ -236,6 +283,8 @@ class SeedReuse(unittest.TestCase):
         self.assertIn("A session worktree is ready at", out.stdout)
         wt = f.base / ".repo-worktrees" / "session-seedab12"
         self.assertTrue(wt.is_dir(), out.stdout)
+        v = wait_seed_log_verdict(self, out.stdout, timeout=120)
+        self.assertIs(v.get("seeded"), True, v)
         self.assertTrue((wt / "target" / "debug" / "app").exists(),
                         f"session worktree has no seeded target:\n{out.stdout}")
         shutil.copy2(f.warm / "Cargo.lock", wt / "Cargo.lock")

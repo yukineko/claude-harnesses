@@ -43,6 +43,22 @@ D. The seeder (and therefore the hook's background seed) clones via `cp`
    resolved from PATH, so a PATH shim can slow or gate the clone. (True at
    016cdbf8: `("cp", "-c", "-R", "-p", ...)`.)
 
+E. Cargo-lock exclusion during the mtime pass. Cargo (measured: 1.97.1) takes
+   LOCK_EX (flock) on `.cargo-lock`, `.cargo-build-lock` and
+   `.cargo-artifact-lock` in each profile dir. The seeder takes LOCK_EX on all
+   three in EVERY profile dir under the cloned NEW_ROOT/target and holds them
+   for the whole mtime pass; the interface-C pause seam is reached AFTER the
+   locks are taken. So a `cargo build` in NEW_ROOT started at the seam prints
+   "Blocking waiting for file lock" and does not finish until resume.
+   If the locks cannot be taken (another holder keeps a flock), the seeder
+   retries non-blocking for up to 30s, then gives up WITHOUT touching any
+   mtime and leaves the cloned target in place. Verdict, exit 0:
+       {"seeded": false, "target_left": true, "reason": "<text>", ...}
+   `target_left: true` = NEW_ROOT/target exists and is the clone; no mtime
+   under NEW_ROOT was changed (cargo rebuilds instead of trusting it).
+F. Env knob `SEED_WORKTREE_TARGET_LOCK_TIMEOUT_SECS=<float>` overrides the
+   30s lock retry bound (tests use a short value).
+
 Tests that need only D run against the current seeder and fail for the real
 reason, not for a missing seam (see test docstrings).
 
@@ -87,7 +103,28 @@ if [ -n "$SEED_TEST_GATE" ]; then
 elif [ -n "$SEED_TEST_CP_SLEEP" ]; then
   sleep "$SEED_TEST_CP_SLEEP"
 fi
-exec /bin/cp "$@"
+/bin/cp "$@" || exit $?
+if [ -n "$SEED_TEST_HOLD" ]; then
+  # Keep a flock on a cargo lock file in the fresh clone (dest = last arg).
+  for last; do :; done
+  "$SEED_TEST_PY" "$SEED_TEST_HOLD/holder.py" "$last" "$SEED_TEST_HOLD" \\
+      </dev/null >/dev/null 2>&1 &
+  i=0
+  while [ ! -e "$SEED_TEST_HOLD/holder-ready" ] && [ $i -lt 600 ]; do
+    sleep 0.1; i=$((i+1))
+  done
+fi
+exit 0
+"""
+
+HOLDER = """import fcntl, os, sys, time
+target, gate = sys.argv[1], sys.argv[2]
+fd = os.open(os.path.join(target, "debug", ".cargo-lock"), os.O_RDWR | os.O_CREAT)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(os.path.join(gate, "holder-ready"), "w").close()
+end = time.time() + 300
+while time.time() < end and not os.path.exists(os.path.join(gate, "holder-release")):
+    time.sleep(0.1)
 """
 
 
@@ -111,13 +148,17 @@ class BgFixture(base.Fixture):
         self.gate.mkdir()
         self.pause = self.base / "pause"
         self.pause.mkdir()
+        self.hold = self.base / "hold"
+        self.hold.mkdir()
+        (self.hold / "holder.py").write_text(HOLDER)
         # Always release anything a test left blocked, before tmp cleanup.
         tc.addCleanup(self.release)
         self.home = self.base / "home"
         self.home.mkdir()
 
     def release(self):
-        for p in (self.gate / "cp-go", self.pause / "resume"):
+        for p in (self.gate / "cp-go", self.pause / "resume",
+                  self.hold / "holder-release"):
             try:
                 p.write_text("")
             except OSError:
@@ -299,6 +340,75 @@ class CargoRacesClone(unittest.TestCase):
         leftovers = [q.name for q in new.iterdir()
                      if q.name not in ("target",) and q.name.startswith(".target")]
         self.assertEqual(leftovers, [], "partial clone left behind")
+        self.assertEqual(base._run_bin(new), "warm")
+
+
+# ───────────── E/F: cargo-lock exclusion during the mtime pass ───────────────
+
+class CargoLockDuringSync(unittest.TestCase):
+    @open_defect(BACKLOG_ID)
+    def test_cargo_build_blocks_on_lock_while_seeder_paused_in_mtime_pass(self):
+        """Needs C + E. Against 016cdbf8 this can only fail at the missing
+        seam: its mtime pass is microseconds long and takes no lock, so there
+        is no window in which to start cargo without the seam."""
+        f = BgFixture(self)
+        new = f.add_worktree("lockwait")
+        shutil.copy2(f.warm / "Cargo.lock", new / "Cargo.lock")
+        p = f.start_seeder(new, SEED_WORKTREE_TARGET_PAUSE_DIR=str(f.pause))
+        if not _wait_for((f.pause / "paused").exists, 60):
+            p.kill()
+            out, err = p.communicate()
+            self.fail("seeder never reached the SEED_WORKTREE_TARGET_PAUSE_DIR "
+                      f"seam (interface C): stdout={out!r} stderr={err!r}")
+        errlog = f.base / "cargo-lockwait.err"
+        with open(errlog, "w") as fh:
+            cargo = subprocess.Popen(["cargo", "build", "--offline"], cwd=new,
+                                     env=base._env(), stdout=subprocess.DEVNULL,
+                                     stderr=fh)
+        try:
+            saw = _wait_for(
+                lambda: "Blocking waiting for file lock" in errlog.read_text(), 20)
+            self.assertTrue(saw, "cargo did not block on the seeder's locks:\n"
+                            + errlog.read_text())
+            time.sleep(1.0)
+            self.assertIsNone(cargo.poll(),
+                              "cargo finished while the seeder held the locks")
+        finally:
+            (f.pause / "resume").write_text("")
+        v = _verdict(p, self)
+        self.assertEqual(cargo.wait(timeout=300), 0, errlog.read_text())
+        self.assertIs(v.get("seeded"), True, v)
+        self.assertEqual(base._run_bin(new), "warm")
+
+    @open_defect(BACKLOG_ID)
+    def test_unobtainable_lock_leaves_target_without_any_mtime_change(self):
+        """Needs D + E + F. Against 016cdbf8 this fails for the REAL reason:
+        it takes no lock, so it syncs mtimes while another process holds
+        cargo's lock and reports seeded:true."""
+        f = BgFixture(self)
+        new = f.add_worktree("lockskip")
+        shutil.copy2(f.warm / "Cargo.lock", new / "Cargo.lock")
+        before = base._mtimes(new, base.TRACKED)
+        t0 = time.monotonic()
+        p = f.start_seeder(new, SEED_TEST_HOLD=str(f.hold),
+                           SEED_TEST_PY=sys.executable,
+                           SEED_WORKTREE_TARGET_LOCK_TIMEOUT_SECS="2")
+        v = _verdict(p, self)
+        elapsed = time.monotonic() - t0
+        self.assertTrue((f.hold / "holder-ready").exists(),
+                        "test holder never took the lock (shim not used?)")
+        self.assertEqual(p.returncode, 0, v)
+        self.assertIs(v.get("seeded"), False, v)
+        self.assertIs(v.get("target_left"), True, v)
+        self.assertEqual(base._mtimes(new, base.TRACKED), before,
+                         "mtimes changed although cargo's lock was not obtained")
+        self.assertTrue((new / "target" / "debug" / "app").exists(),
+                        "cloned target was not left in place")
+        self.assertLess(elapsed, 25,
+                        "SEED_WORKTREE_TARGET_LOCK_TIMEOUT_SECS=2 not honoured")
+        (f.hold / "holder-release").write_text("")
+        time.sleep(0.5)
+        base._cargo_build(new)
         self.assertEqual(base._run_bin(new), "warm")
 
 

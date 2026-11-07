@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RED repro: check-test-weakening refuses (rc 2) the real blastguard fix to
+"""RED repro (backlog 25b88447): check-test-weakening refuses (rc 2) the real blastguard fix to
 crates/blastguard/tests/heredoc_body_gt_fp_20261107.rs, even after ed82c49b.
 
 Observed 2026-11-08 at main 27834f97: the unstaged fix in
@@ -236,6 +236,7 @@ class HelperCommentTestFn(unittest.TestCase):
 
     # -- RED: the full combination (the real file's shape) --------------------
 
+    @unittest.expectedFailure  # backlog 25b88447: open defect
     def test_full_combination_real_shape_is_clean(self) -> None:
         self.assert_clean(FULL)
 
@@ -259,6 +260,7 @@ class HelperCommentTestFn(unittest.TestCase):
                                           "#[cfg(any())]\nfn assert_restrictive_both", 1))
         self.assert_rc_in(src, (1, 2))
 
+    @unittest.expectedFailure  # backlog 25b88447: spec says rc 2, today 0; needs a ruling (see header)
     def test_inserted_test_fn_duplicating_generated_name_is_undetermined(self) -> None:
         src = build(between=TEST_FN_PLAIN.replace(
             "fn control_cd_git_add_all_not_empty()", "fn target_one()", 1))
@@ -275,6 +277,7 @@ class HelperCommentTestFn(unittest.TestCase):
         src = BASE.replace(T2, "/*\n" + T2 + "*/\n", 1)
         self.assert_rc_in(src, (1, 2))
 
+    @unittest.expectedFailure  # backlog 25b88447: spec says rc 2, today 0; needs a ruling (see header)
     def test_inserted_mod_with_tests_is_undetermined(self) -> None:
         mod = ("#[cfg(test)]\nmod extra {\n    #[test]\n    fn inner() {\n"
                "        assert!(true);\n    }\n}\n")

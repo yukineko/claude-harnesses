@@ -81,6 +81,17 @@ donegate gate          # チェックを手動実行（人間向けレポート�
 3. `git` に変更ファイルを尋ね、`when_changed` のグロブが一致するチェックを選ぶ（スコープなしのチェックは常に走る）。
 4. 選ばれた各チェックをサブプロセスとして、チェックごとのタイムアウト付きで実行し、結合出力を一時ログへ流して、読み戻すのは**一定量の窓だけ**にする。
 
+#### pass キャッシュ
+
+**通った（pass した）**チェックの結果だけを `<state_dir>/pass-cache/` に記録し、キーが 1 バイトも変わっていなければ次の Stop（親 Stop が subagent の root を再判定する場合も含む）では再実行しない。キーは root パス・チェック名・`cmd` 文字列・`workdir`・実効タイムアウト・`HEAD` の sha・`main` が指す sha（無ければ「無い」と確定した値。変更集合の merge-base はこの 2 つで決まる）・作業ツリーの内容。作業ツリーの内容は、空の一時 index（`GIT_INDEX_FILE`、`<state_dir>/tmp` 配下）に `git add -A`（tracked＋ignore されていない untracked）と、本物の index が追跡している ignore 対象パスの強制 add をしてから `git write-tree` した tree。本物の index は読むだけで触らない（副作用として blob が object store に書かれる）。
+
+- キーが計算できない（repo でない・git の失敗・読めないファイル）・ストアが読めない／壊れている・保存されたキーと違う、はすべて **miss** で、チェックを実行する。
+- 失敗したチェックは保存しない。そのチェックのエントリは消す。
+- 実行の前後で tree が変わったら（チェックが tree を書き換えた・並行編集）、その回の pass は保存しない。
+- hit は黙らない。stderr に `CACHED pass … (pass cache)` と出し、人間向けレポートでも `CACHED pass from <時刻>` と表示する。
+- キーに含まれないもの: 追跡されていない ignore 対象ファイル（`target/` など）、repo 外のファイル、チェックが継承する環境変数。
+- give-up・試行回数・waiver の扱いは変わらない（hit は pass と同じ扱い）。
+
 #### 実行中のバックグラウンド subagent の root（SubagentStop）
 
 実行中のバックグラウンド subagent **だけ**が書いた root は、親の Stop では判定しない。subagent がまだ編集中なので、判定すると推論中の編集と競合する。その root は黙って飛ばさず名指しする。stderr に出し、Stop の `systemMessage` またはブロック理由にも `[root: …] NOT judged at this stop: only background subagent(s) <ids> wrote it …` として載せる。「実行中」と判定するには次の 3 つがすべて要る。

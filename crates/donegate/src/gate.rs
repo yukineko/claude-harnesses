@@ -7,6 +7,7 @@ use globset::{Glob, GlobSetBuilder};
 use harness_core::verdict::{Determination, Reason, Required, Verdict};
 
 use crate::config::{Check, Config};
+use crate::passcache;
 use crate::record::{self, Record};
 use crate::runner::{self, Outcome};
 
@@ -141,18 +142,59 @@ pub fn evaluate(cfg: &Config, root: &Path) -> GateReport {
     };
     let tmp_dir = cfg.state_dir.join("tmp");
 
+    let applicable: Vec<&Check> = cfg.checks.iter().filter(|c| applies(c, &changed)).collect();
+    let skipped: Vec<String> = cfg
+        .checks
+        .iter()
+        .filter(|c| !applies(c, &changed))
+        .map(|c| c.name.clone())
+        .collect();
+
+    // Pass cache (crate::passcache): the repo state is computed once before the
+    // checks run. `None` = undetermined = every check is a MISS and runs.
+    let before = if applicable.is_empty() {
+        None
+    } else {
+        passcache::tree_state(root, &tmp_dir)
+    };
+    let timeout_of = |c: &Check| c.timeout_secs.unwrap_or(cfg.default_timeout_secs).max(1);
+
     let mut ran = Vec::new();
-    let mut skipped = Vec::new();
-    for check in &cfg.checks {
-        if applies(check, &changed) {
-            ran.push(runner::run_check(
-                check,
-                root,
-                cfg.default_timeout_secs,
-                &tmp_dir,
-            ));
+    // Indices into `ran` of checks that were executed now and passed.
+    let mut fresh_passes = Vec::new();
+    for check in &applicable {
+        let hit = before
+            .as_ref()
+            .and_then(|s| passcache::lookup(&cfg.state_dir, root, check, timeout_of(check), s));
+        if let Some(at) = hit {
+            eprintln!(
+                "donegate: check `{}` NOT re-run in {}: CACHED pass from {at} on the identical \
+                 tree and command (pass cache)",
+                check.name,
+                root.display()
+            );
+            ran.push(runner::cached_pass(check, at));
+            continue;
+        }
+        let o = runner::run_check(check, root, cfg.default_timeout_secs, &tmp_dir);
+        if o.passed {
+            fresh_passes.push(ran.len());
         } else {
-            skipped.push(check.name.clone());
+            passcache::forget(&cfg.state_dir, root, &check.name);
+        }
+        ran.push(o);
+    }
+
+    // Store fresh passes only if the tree did not move while the checks ran (a
+    // check that rewrote it, or a concurrent edit, stores nothing).
+    if let Some(before) = &before {
+        if !fresh_passes.is_empty()
+            && passcache::tree_state(root, &tmp_dir).as_ref() == Some(before)
+        {
+            for &i in &fresh_passes {
+                let check = applicable[i];
+                passcache::store(&cfg.state_dir, root, check, timeout_of(check), before);
+            }
         }
     }
 
@@ -216,6 +258,13 @@ fn render_outcome_as(o: &Outcome, stable: bool) -> String {
         }
     };
     let mark = if o.passed { "✓" } else { "✗" };
+    if let Some(at) = &o.cached {
+        let at = if stable { "<passed_at>" } else { at.as_str() };
+        return format!(
+            "{mark} {} (CACHED pass from {at}: not re-run, identical tree and command)\n    $ {}",
+            o.name, o.cmd
+        );
+    }
     let detail = if o.timed_out {
         "timed out".to_string()
     } else if let Some(err) = &o.spawn_error {
@@ -732,6 +781,7 @@ mod tests {
             duration_secs: 0.0,
             output_tail: String::new(),
             record: Record::None,
+            cached: None,
         });
         let v = failing.verdict();
         assert!(matches!(v, Verdict::Violation(_)), "got {v:?}");
@@ -806,6 +856,7 @@ mod tests {
             },
             optional: false,
             record: Record::None,
+            cached: None,
         }
     }
 

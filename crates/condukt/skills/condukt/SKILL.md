@@ -587,7 +587,7 @@ condukt state checkpoint --run "$RID" --label baseline   # 復元フロア: 実�
 4. worker の返却 status を確認する。status に関係なく、まず `notes` の `別件:` 行を拾って
    `backlog add` する (不変条件 6・7。別件は分解に足さず、この run はそのまま続ける):
    - `done`: `condukt state set --run $RID --task <t.id> --status done` し、**他の worker の完了を待たずにその場で Phase 6 の verifier を起動する**（パイプライン化）。
-   - `needs-serial`: 分類ミス。この worktree を破棄（`condukt worktree remove --path "$WP" --branch condukt/$RID/<t.id>`。`worktree discard` は使わない: task を `discarded` にするので再実行には SKILL に無い status 戻しが要り、さらに「discarded experiment」という誤った所見を記録する）し、タスクを serial タスクとして **新しい worktree**
+   - `needs-serial`: 分類ミス。この worktree を破棄（まず `condukt state abandon --run "$RID" --task <t.id>` でタスクを pending に戻し worktree 参照を外してから `condukt worktree remove --path "$WP" --branch condukt/$RID/<t.id>`。`worktree remove` は所有タスクが `verified` / `cancelled` / `discarded` か、abandon 後の「pending かつ worktree 未記録」でない限り非0で拒否する — 未 verify の worktree を消すと F→P oracle が読む `.tdd` 証跡が消えるため（backlog 6180333a）。abandon が worker transcript の鮮度で拒否したら、worker は needs-serial を返して終了済みなので `--force "worker returned needs-serial"` を理由付きで渡す。`worktree discard` は使わない: task を `discarded` にするので再実行には SKILL に無い status 戻しが要り、さらに「discarded experiment」という誤った所見を記録する）し、タスクを serial タスクとして **新しい worktree**
      （`WP=$(condukt worktree create --run "$RID" --topic <t.id> --branch condukt/<t.id>)` →
      `state set ... --worktree "$WP" --branch condukt/$RID/<t.id>`。create の `--branch` は `--run` が
      名前空間化するので `condukt/<t.id>` を渡す）で再実装する。main の作業ツリーでは実装しない。順序は

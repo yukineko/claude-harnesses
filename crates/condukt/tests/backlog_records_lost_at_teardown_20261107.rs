@@ -218,6 +218,19 @@ impl Fx {
         );
     }
 
+    /// Mark `task` verified so `worktree remove` may tear its worktree down
+    /// (backlog 6180333a: an unverified task's worktree is refused). Setup
+    /// only: it panics if the verify itself is refused.
+    fn verify(&self, task: &str) {
+        let out = self.condukt(&[
+            "state", "set", "--run", RUN, "--task", task, "--status", "verified",
+        ]);
+        assert!(
+            out.status.success(),
+            "fixture: state set verified {task}: {out:?}"
+        );
+    }
+
     fn remove(&self, wt: &Path, branch: &str) -> Output {
         self.condukt(&[
             "worktree",
@@ -285,6 +298,7 @@ fn control_remove_deletes_a_clean_worktree() {
     let fx = Fx::new();
     let (wt, branch) = fx.worktree("c1");
     assert!(wt.is_dir());
+    fx.verify("c1");
     let out = fx.remove(&wt, &branch);
     assert!(out.status.success(), "remove of a clean worktree: {out:?}");
     assert!(
@@ -346,6 +360,7 @@ fn remove_persists_tdd_proofs_durably() {
     let fx = Fx::new();
     let (wt, branch) = fx.worktree("t5");
     fx.record_proofs(&wt, "t5");
+    fx.verify("t5");
     let out = fx.remove(&wt, &branch);
     assert!(out.status.success(), "worktree remove: {out:?}");
     assert!(!wt.exists(), "worktree should be removed");
@@ -377,6 +392,7 @@ fn remove_is_refused_when_proofs_cannot_be_persisted() {
     let fx = Fx::new();
     let (wt, branch) = fx.worktree("t5");
     fx.record_proofs(&wt, "t5");
+    fx.verify("t5");
     let condukt_home = fx.home.join(".condukt");
     lock_down(&condukt_home, &wt);
     let out = fx.remove(&wt, &branch);
@@ -430,6 +446,7 @@ fn unlock(root: &Path) {
 fn control_lockdown_does_not_block_removal_without_proofs() {
     let fx = Fx::new();
     let (wt, branch) = fx.worktree("c1");
+    fx.verify("c1");
     let condukt_home = fx.home.join(".condukt");
     lock_down(&condukt_home, &wt);
     let out = fx.remove(&wt, &branch);

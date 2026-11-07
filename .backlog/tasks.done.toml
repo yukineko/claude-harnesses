@@ -71299,3 +71299,115 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "03e67b25a1a3fc9b6e182dfa29f5ac36be6dd04e"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "4f3da889"
+title = "check-test-weakening: macro_rules! テストファイルの呼び出し引数変更を Undetermined にして正当な修正を一切通さない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794061924
+updated_at = 1794065200
+weight = 0.0
+issue_number = 1631
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1631"
+issue_closed_at = 1794065202
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_ctw_macro_rules_invocation_args.py"
+rev = "bbd05adc9e5fc7b857e45fc8a34580d43d256b58"
+observed_at = 1794061924
+detail = """
+exit 1: RulesInvocationArgs::test_blastguard_fix_shape_args_changed_and_control_added_is_clean
+FAILED scripts/test_ctw_macro_rules_invocation_args.py::MacroRulesInvocationArgs::test_invocation_added_is_clean
+FAILED scripts/test_ctw_macro_rules_invocation_args.py::MacroRulesInvocationArgs::test_invocation_args_changed_is_clean
+========================= 3 failed, 8 passed in 3.84s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_ctw_macro_rules_invocation_args.py"
+exit = 0
+passed = 11
+rev = "05403bc447a5b860fda1539276c5417e75826fcd"
+observed_at = 1794065189
+output_digest = "sha256:37d82775d94148ccf3dc960b311b154d566b3f4b1ed3248e15b7d2cfb8c360d8"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/red-tw-newfile-tests
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 11 items
+
+scripts/test_ctw_macro_rules_invocation_args.py ...........              [100%]
+
+============================== 11 passed in 4.98s ==============================
+"""
+
+[task.closure.red]
+rev = "bbd05adc9e5fc7b857e45fc8a34580d43d256b58"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "78817f03"
+title = "check-test-weakening: ブランチ内で新規追加したテストファイルの弱体化を判定しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794052324
+updated_at = 1794065225
+weight = 0.0
+issue_number = 1621
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1621"
+issue_closed_at = 1794065227
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_check_test_weakening_branch_new_file.py"
+rev = "1d8a6bae380dab1ef02f3f31b0fb01ee857821cb"
+observed_at = 1794052324
+detail = """
+exit 1: ======================
+FAILED scripts/test_check_test_weakening_branch_new_file.py::BranchNewFileWeakening::test_assertion_removed_from_test_committed_earlier_on_branch_blocks
+FAILED scripts/test_check_test_weakening_branch_new_file.py::BranchNewFileWeakening::test_skip_added_to_test_committed_earlier_on_branch_blocks
+========================= 2 failed, 4 passed in 2.32s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_check_test_weakening_branch_new_file.py"
+exit = 0
+passed = 10
+rev = "05403bc447a5b860fda1539276c5417e75826fcd"
+observed_at = 1794065210
+output_digest = "sha256:5004de2cf10692c8c74e5674c26faf5c4afadc240a8db65dd2db5623154878e3"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/red-tw-newfile-tests
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 10 items
+
+scripts/test_check_test_weakening_branch_new_file.py ..........          [100%]
+
+============================== 10 passed in 7.21s ==============================
+"""
+
+[task.closure.red]
+rev = "1d8a6bae380dab1ef02f3f31b0fb01ee857821cb"
+exit = 1
+kind = "behavioural"

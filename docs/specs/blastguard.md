@@ -316,6 +316,21 @@ forge・condukt のスケジューラが再利用）。
   （`\r` 等）を含む、1 行目の quote 不均衡・行末 `\`・`<<` が（quote を見ずに数えて）ちょうど 1 個でない、
   delimiter が unquoted または空、stage が `<<` を含まないか 1 行目の部分文字列でない、終端行が無い、
   終端行より後に `<<` が（文字列として）1 つでもある。
+- **quoted here-document body の `>` は data（tests/heredoc_body_gt_fp_20261107.rs）** —
+  (a) program の文字列 literal（layer > 0）の shell pass が R2 side channel（`Ctx::program_text_redirects`）に
+  積む「判定不能な redirect」行は、program が `SHELL_STRING_EXEC_MARKERS` を 1 つも含まないとき捨てる
+  （上の 0fefcd3b の Ask と同じ条件。`python3 - <<'EOF'` の `print(a>b, "x->y", '>')` は Allow）。
+  layer 0（program text そのもの）の行、literal 由来の Deny、shell に文字列を渡す program
+  （`os.system('echo x > /etc/hosts')` は Deny のまま）の行は従来どおり。
+  (b) line-level `>`/`>>` scan の redirect view（`redirect_view_consumer`）は、`cd <word>` に加えて
+  `permitted_prefix_line` が受理する head（`git add <paths>` 等）、literal 値の単一代入 `NAME=<literal>`、
+  body が英数字・空白・`-_./=:,@%+` だけの二重引用 substitution `cd "$(…)"` を剥がす（代入は `;`/`&&`、
+  他の 2 つは `&&` の前だけ。`git add a.txt ; git commit -F - <<'EOF'` は tests/heredoc_chain_heads.rs が
+  restrictive に固定）
+  （`WT=/x; cd "$WT" && git add -A && git commit -F - <<'EOF'`、
+  `cd "$(git rev-parse --show-toplevel)" && git commit -F - <<'EOF'` の message 行 `> quoted` を
+  未解決 cd 後の相対 redirect と誤認しない）。unquoted の `$(…)`・それ以外の head は剥がさない。
+  opener 行は view に残るので、opener の redirect（`cat <<'EOF' > /etc/hosts`）は従来どおり Deny。
 
 ### module 責務
 

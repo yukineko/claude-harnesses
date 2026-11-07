@@ -132,6 +132,15 @@ forge・condukt のスケジューラが再利用）。
   `` ` ``・`\` がある（展開される）、backtick 内の here-document、引数 token を元 segment に対応付け
   られない（空白で再結合され here-document が常に未終端に見える）場合は語が判定不能になり Ask（reason に
   `git commit -F - <<'EOF'` を案内する）。
+- **scratch tree は管理された場所にだけ作る（`detect/scratch_place.rs`、backlog ef7c9fbe、blastguard 0.2.375）** —
+  `git clone` と `cp -r`（`-R`/`-a` を含む）の作成先が、`SafeRoots::classify_managed_place` の管理された場所
+  （session scratchpad / temp roots・worktree storage roots・project）の外なら `Ask`。内側なら判定は変えない。
+  `mkdir -p` は対象外（2026-11-07 ユーザー裁定）。未知の option・verb が取る数を超える operand・literal でない
+  作成先・relative の基点不明・`..` はすべて `Ask`（判定不能は制限側）。この規則は `Allow` を `Ask` に上げるだけで、
+  他の規則の `Deny`/`Ask` はそのまま。cp/mv/install/ln の option 解析は getopt 形式の共通 parser に一本化した
+  （`-t <dir>` の clustered 形を含む）。location model の無い library 入口（`SafeRoots::none`、`detect::detect`）には
+  適用しない — その入口の契約は location model 導入前の判定のままで、condukt `gate_exec.rs`/`verify.rs`・specguard
+  `forge/implement.rs`・daily の呼び出しはこの規則の外にある（未解決として残す）。
 - **bash 3.2 の読みも判定する（`detect/readings.rs` の `detect_bash_every_reading`、blastguard 0.2.305）** —
   macOS の `/bin/bash` 3.2 と `/bin/sh` は `$(…)` 内の here-document 本文を command text として読むので、
   本文中の `)` が substitution を早く閉じ、続く text が実行されうる（2026-11-07 に harmless marker で観測:

@@ -464,3 +464,7 @@ path = "crates/blastguard/src/detect/readings.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'bash 3.2 の読みも判定する': detect_bash_every_reading's second pass under under_bash32_reading, its trigger (<< with $( or backtick), most-restrictive merge, undetermined -> Ask, per-pass budget, and the open residue (backlogs 089bedd4 e2b9ffb1 5916d385 d328ea88)."
 
+[[spec]]
+path = "crates/blastguard/src/detect/scratch_place.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'scratch tree は管理された場所にだけ作る': git clone / cp -r outside classify_managed_place -> Ask, mkdir -p excluded, cannot-determine -> Ask, raises Allow only, shared getopt parser, SafeRoots::none library entry exempt (open)."

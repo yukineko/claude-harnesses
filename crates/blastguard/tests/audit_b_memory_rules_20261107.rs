@@ -346,7 +346,6 @@ fn whole_tree_stage_or_commit_all_is_ask() {
 
 /// Item 16 (memory `scratch-artifacts-in-deletable-places`).
 #[test]
-#[ignore = "backlog ef7c9fbe: open defect, remove ignore when fixed"]
 fn scratch_tree_outside_managed_places_is_ask() {
     let f = Fixture::new("scratch_place");
     let r = f.repo.display().to_string();
@@ -363,7 +362,10 @@ fn scratch_tree_outside_managed_places_is_ask() {
     let cases = vec![
         // Unmanaged: a bare directory under $HOME.
         (format!("git clone {r} {h}/scratch-clone"), "ask"),
-        (format!("mkdir -p {h}/scratch/a/b"), "ask"),
+        // User ruling 2026-11-07 (binding, overrides the original RED):
+        // `mkdir -p` is NOT in the Ask set — only git clone / cp -r outside
+        // managed places. Pinned as an Allow control so the ruling holds.
+        (format!("mkdir -p {h}/scratch/a/b"), "allow"),
         (format!("cp -r {r} {h}/scratch-copy"), "ask"),
         // Controls: managed places.
         (format!("git clone {r} {tmp}/clone"), "allow"),

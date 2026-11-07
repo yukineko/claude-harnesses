@@ -482,6 +482,25 @@ fn target_directory(rest: &[&str]) -> Option<String> {
 /// into the very same path was DENY: the same file created, a different
 /// verdict depending only on the verb (backlog d5613105).
 pub(super) fn analyze_copy_move(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+    let verdict = copy_move_verdict(cmd, rest, ctx);
+    // Backlog ef7c9fbe: a recursive `cp` creates a whole tree; outside the
+    // managed places an otherwise-Allowed one is raised to Ask (see
+    // `scratch_place`). A Deny/Ask from the rules above always stands.
+    if cmd == "cp" && is_recursive_copy(rest) {
+        let operands = positional_operands(rest, COPY_VALUE_FLAGS);
+        return super::scratch_place::cp_recursive_verdict(
+            ctx,
+            verdict,
+            target_directory(rest),
+            &operands,
+        );
+    }
+    verdict
+}
+
+/// The protected-path / system-directory verdict of [`analyze_copy_move`],
+/// before the scratch-place rule.
+fn copy_move_verdict(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     let action = format!("{cmd} destination");
     let operands = positional_operands(rest, COPY_VALUE_FLAGS);
 

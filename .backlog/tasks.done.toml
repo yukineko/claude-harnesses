@@ -68418,6 +68418,127 @@ exit = 101
 kind = "behavioural"
 
 [[task]]
+id = "4fa94cba"
+title = "condukt merge-hold gate ignores a runtime-overlap hold whose placer run holds zero claims (run_liveness reads no-claims as Dead)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "defect",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observation (2026-11-07, rev 9a48ef64 on session-bf349dd5, condukt 0.7.333 installed binary, run run-20261107-035654-25350 task ta): 'condukt state set --status running' for task ta returned 'skipped' (the cross-session claim gate refused because another live run held .claude-plugin/marketplace.json and Cargo.lock). So run run-20261107-035654-25350 never held any claim in the claim registry, although it was live (its run-state file existed with pending/done tasks and the orchestrator was actively driving it). 'condukt state set --status done' for ta then recorded a runtime-overlap merge hold: overwatch merge_conflicts.jsonl row conflict_id run-20261107-035654-25350/ta/runtime-overlap, origin runtime-overlap, run_id run-20261107-035654-25350, branch condukt/run-20261107-035654-25350/ta, stderr: condukt: runtime overlap detected for task 'ta' -- merge held for review (overwatch review-queue [merge-conflict]). Without any resolution being recorded, 'condukt worktree merge --branch condukt/run-20261107-035654-25350/ta' then exited 0 and fast-forwarded (reflog ts 1793992785). Only afterwards (ts 1793992786) was the hold auto-cleared with note 'auto-cleared: branch landed'. Code path: crates/condukt/src/worktree.rs open_runtime_overlap_hold keeps a hold only if hold_placed_by_live_run is true; that calls crates/condukt/src/claim.rs run_liveness, which returns RunLiveness::Dead when the registry has no non-stale claim with that run_id (claim.rs ~1383-1391: let live = reg.files.values().chain(reg.task_claims.values()).any(|c| c.run_id == run_id && !is_stale(c, now, ttl)); if live { Live } else { Dead }). A run that holds zero claims (because its claims were skipped) is therefore read as Dead, and its own hold is ignored: the merge it was supposed to stop proceeds. Two readings: (a) real defect -- absence of claims is not evidence of death; a run with a loadable non-terminal run-state is live, so the hold must block (CLAUDE.md s3: cannot-determine resolves restrictive); (b) intended -- liveness is defined purely by claims. Distinguish: the doc on hold_placed_by_live_run/open_runtime_overlap_hold says 'a hold from a LIVE run still blocks'; a test with a live run-state but no claims decides it. Note: the hold_placed_by_live_run doc already lists this as a 'Known residual (tracked)' with the proposed closure 'is run_id a currently-active non-terminal run in state::RunState'. Repro test (RED, #[ignore]): crates/condukt/tests/backlog_hold_liveness_no_claims_20261107.rs runtime_overlap_hold_from_live_run_with_zero_claims_still_blocks_merge -- observed: worktree merge exited 0 with 'merged condukt/t2 into main' while the hold placed by the live zero-claim run was open."
+created_at = 1793993087
+updated_at = 1793999220
+weight = 0.0
+issue_number = 1560
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1560"
+issue_closed_at = 1793999222
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_hold_liveness_no_claims_20261107 -- --include-ignored --exact runtime_overlap_hold_from_live_run_with_zero_claims_still_blocks_merge"
+rev = "26aa79633a7265ac3ea7cf74b22cb756b8041300"
+observed_at = 1793993087
+detail = """
+exit 101: ing condukt v0.7.346 (/Users/yuki/src/.harness-worktrees/file-hold-liveness/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.83s
+     Running tests/backlog_hold_liveness_no_claims_20261107.rs (target/debug/deps/backlog_hold_liveness_no_claims_20261107-ce8174c797e64a66)
+error: test failed, to rerun pass `-p condukt --test backlog_hold_liveness_no_claims_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_hold_liveness_no_claims_20261107"
+exit = 0
+passed = 1
+rev = "39840031d772e4cb48c64c8c10531d79031d35b3"
+observed_at = 1793999186
+output_digest = "sha256:2e8694935cdb1aeeb5c0f20e5d47fe125d9dab61ff7b4f89aef658d30eabba05"
+excerpt = """
+
+running 1 test
+test runtime_overlap_hold_from_live_run_with_zero_claims_still_blocks_merge ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.91s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/backlog_hold_liveness_no_claims_20261107.rs (target/debug/deps/backlog_hold_liveness_no_claims_20261107-ac32e22c4af93a02)
+"""
+
+[task.closure.red]
+rev = "5901ceafeaf5f1777e86301b87653a465272bc7b"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "4e53960f"
+title = "compass evaluate load-modify-saves carve-state.json without carve::lock, losing concurrent apply answers"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "compass",
+    "lost-update",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-07 by the c2-03e655dc worker and confirmed by its verifier (run-20261107-034825-70254, worktree base 4f2a6248). After 03e655dc, apply_command holds carve::lock across load-modify-save (crates/compass/src/main.rs ~595), but evaluate_command (main.rs ~526-576) loads at ~543 and saves at ~570 without it. carve::save docstring (carve.rs ~64-65) says 'callers doing load-modify-save hold [lock]', false for this caller. RED at 0da2ccd9: 4 appliers x 8 apply + 4 evaluators x 8 evaluate kept 26/32, 28/32, 31/32 answers in 3 runs (assert at tests/backlog_scout_20261107_carve_unlocked.rs:115). Readings: (a) defect, same lost-update race as 03e655dc; (b) intended if evaluate is never run concurrently with apply, but nothing enforces that. Related unfiled (no deterministic test could be built): carve::reset (carve.rs ~79-86) removes the state file without the lock, so an apply save can resurrect a reset state. Fix direction: take carve::lock in evaluate_command (and reset) the same way; remove the ignore."
+created_at = 1793993355
+updated_at = 1793999257
+weight = 0.0
+issue_number = 1561
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1561"
+issue_closed_at = 1793999259
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --test backlog_scout_20261107_carve_unlocked concurrent_evaluate_and_apply_lose_no_answers -- --ignored"
+rev = "0da2ccd971a07e3971a31ccd812c6343846132e5"
+observed_at = 1793993355
+detail = """
+exit 101: s
+
+   Compiling compass v0.1.47 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/crates/compass)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.10s
+     Running tests/backlog_scout_20261107_carve_unlocked.rs (target/debug/deps/backlog_scout_20261107_carve_unlocked-9ebd50962ca46e9b)
+error: test failed, to rerun pass `-p compass --test backlog_scout_20261107_carve_unlocked`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p compass --test backlog_scout_20261107_carve_unlocked"
+exit = 0
+passed = 2
+rev = "39840031d772e4cb48c64c8c10531d79031d35b3"
+observed_at = 1793999223
+output_digest = "sha256:0cd489b63c97045e3588b6e4b879c272362d298b6bff586792d6aebf161d5895"
+excerpt = """
+
+running 2 tests
+test outcome_record_refuses_seq_overflow_and_leaves_store_unchanged ... ok
+test concurrent_evaluate_and_apply_lose_no_answers ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_scout_20261107_carve_unlocked.rs (target/debug/deps/backlog_scout_20261107_carve_unlocked-3a3b65df938b1419)
+"""
+
+[task.closure.red]
+rev = "5901ceafeaf5f1777e86301b87653a465272bc7b"
+exit = 101
+kind = "behavioural"
+
+[[task]]
 id = "b80023b3"
 title = "donegate re-blocks the Stop on an identical finding (same tree, same red output): attempt counter in block_fingerprint defeats the repeat waiver"
 project = "/Users/yuki/src/harness"
@@ -68724,3 +68845,54 @@ excerpt = """
 rev = "30d954377e2b64fc6a40bb69d1c3d772d99c2de9"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "27e1f231"
+title = "donegate: shared repeat ledger waives the first stop of a new block chain (after green or give-up) when CLAUDE_CODE_SESSION_ID is set"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "p1",
+]
+touched_files = []
+status = "cancelled"
+notes = """
+REPRODUCED 2026-11-07 at rev 9cae0b93 (session-c2e3bc17, on top of main d9863f70; donegate 0.1.74). Claim source: verifier code trace in condukt run-20261107-051454-39899, previously unexecuted.
+
+Test: crates/donegate/tests/backlog_shared_ledger_new_chain_20261107.rs (black-box: spawns the donegate binary, temp HOME, trusted fixture repo, CLAUDE_CODE_SESSION_ID set; the check's output is constant so every red run renders the same block text).
+Repro cmd: cargo test -p donegate --test backlog_shared_ledger_new_chain_20261107 -- --ignored
+Observed: test result: FAILED. 0 passed; 2 failed (new_chain_after_green_first_stop_blocks_despite_shared_ledger, new_chain_after_giveup_first_stop_blocks_despite_shared_ledger). Both first stops of a NEW chain returned exit 0 with stdout {"systemMessage":"donegate: 同じ指摘の2度目のため通しました（未解消）— 🚦 donegate: 1 required check(s) failed (attempt 1/2). Fix them, then finish."} and no decision:block.
+Controls (non-ignored, pass): control_fresh_first_stop_blocks; control_after_green_without_prior_ledger_entry_blocks and control_after_giveup_without_prior_ledger_entry_blocks (identical scenarios with $HOME/.claude/harness-state/repeat/<session> deleted between chains) both BLOCK. So the shared ledger entry is the only cause.
+
+Mechanism (code reading, consistent with the observation): main.rs emits the cwd-root block via harness_core::repeat::emit_stop_block_keyed("donegate", reason, gate::block_fingerprint(..)). The fingerprint keeps "attempt N/max", but state::reset (green / give-up) resets the counter to 0, so the next chain's first block is again "attempt 1/2" with the same output = the same fingerprint as chain 1's first block. The shared ledger is session-scoped only (repeat.rs: "Two occurrences are the same when the gate name and the finding fingerprint match within one CLAUDE_CODE_SESSION_ID") and nothing in donegate clears it when a chain ends. donegate's own state::is_repeat IS chain-scoped and is not involved (attempts==0 after reset). The existing backlog_waiver_failopen_20261107.rs::f1 does not catch this because it env_removes CLAUDE_CODE_SESSION_ID, making the shared ledger Undetermined.
+Prose contradicting behaviour: gate.rs block_fingerprint doc says "The attempt counter (attempt N/max) is deliberately KEPT in this fingerprint, so this ledger alone never waives a repeat below the cap" — observed false across chains.
+
+Two readings:
+(A) Defect: the user's F1 ruling (after an intervening green, a revert is the FIRST block of a new chain and must block) and the give-up's "bounded exit" intent mean the shared ledger must not waive across chain boundaries; the 2026-09-18 ruling is about the user seeing the same block twice in a row, not about a finding seen once earlier in the session.
+(B) Intended: the 2026-09-18 ruling 「ユーザの指示を2度やぶるgateはいらない」 is session-scoped (「同一セッション内のみ」); the user already saw this exact reason once in this session, so waiving the second occurrence is what was ordered, chains notwithstanding.
+How to tell apart: a human ruling on whether "2度目" in the 2026-09-18 ruling is counted per session or per block chain (i.e. does an intervening green / give-up reset it). Under (A) the fix makes these two tests pass (e.g. chain-scope the fingerprint, or clear the donegate ledger entries on state::reset); under (B) the tests are wrong and must be deleted and the gate.rs doc corrected instead. Not fixed (task scope: test only).
+User ruling 2026-11-07: count 2度目 per session (reading B, matches 2026-09-18 「同一セッション内のみ」). Waiver after green/give-up is intended. RED tests deleted, false gate.rs docstring clause removed (donegate 0.1.76)."""
+created_at = 1794001711
+updated_at = 1794012789
+weight = 0.0
+issue_number = 1590
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1590"
+issue_closed_at = 1794012791
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test backlog_shared_ledger_new_chain_20261107 -- --ignored"
+rev = "9cae0b93eef6990108fb4cb28509401a0fcadbfe"
+observed_at = 1794001711
+detail = """
+exit 101: ult: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.91s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/backlog_shared_ledger_new_chain_20261107.rs (target/debug/deps/backlog_shared_ledger_new_chain_20261107-82b767da7309d16b)
+error: test failed, to rerun pass `-p donegate --test backlog_shared_ledger_new_chain_20261107`"""
+
+[task.closure]
+reason = "discard"
+discard_reason = "User ruling 2026-11-07: count 2度目 per session (reading B, matches 2026-09-18 「同一セッション内のみ」). Waiver after green/give-up is intended. RED tests deleted, false gate.rs docstring clause removed (donegate 0.1.76)."

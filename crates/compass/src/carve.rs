@@ -74,8 +74,11 @@ pub fn save(root: &Path, state: &CarveState) -> Result<()> {
 }
 
 /// Clear the persisted carve state (start fresh). Idempotent: a missing file is
-/// not an error.
+/// not an error. Takes the carve lock itself so it cannot race a concurrent
+/// `apply`/`evaluate` load-modify-save; callers must NOT already hold [`lock`]
+/// (the lock is not re-entrant). A lock that cannot be acquired is an `Err`.
 pub fn reset(root: &Path) -> Result<()> {
+    let _lock = lock(root)?;
     let path = state_path(root);
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),

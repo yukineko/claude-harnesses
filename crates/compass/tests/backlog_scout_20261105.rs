@@ -7,8 +7,9 @@
 //!    processes lose each other's recorded answers / trample the tmp file.
 //! 2. `outcome::record` assigns `seq = last().seq + 1`; a store whose last entry
 //!    has a lower seq than an earlier one yields a duplicate seq.
-//! 3. `opportunity::slug_id(title)` hashes the title only, so two bets with the
-//!    same title under different outcomes get the same id.
+//! 3. `opportunity::slug_id` used to hash the title only, so two bets with the
+//!    same title under different outcomes got the same id. Fixed (backlog
+//!    b0353884): it now hashes `(title, outcome_ref)`; the test is un-ignored.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

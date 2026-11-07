@@ -299,7 +299,7 @@ pub fn block_reason(v: &GateReport, attempt: u32, max: u32) -> String {
 /// (`harness_core::repeat`) unreachable. Passed to `emit_stop_block_keyed`.
 ///
 /// The attempt counter (`attempt N/max`) is deliberately KEPT in this
-/// fingerprint, so this ledger alone never waives a repeat below the cap. The
+/// fingerprint. The
 /// identical-finding waiver (same tree content AND same failing output as the
 /// previous block in the session) is decided separately in `main.rs` via
 /// `state::is_repeat`, before this fingerprint is consulted; the attempt cap and

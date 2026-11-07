@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RED repro: check-test-weakening does not judge a weakening of a test file
+"""RED repro (backlog 78817f03): check-test-weakening does not judge a weakening of a test file
 that was ADDED EARLIER ON THE SAME BRANCH (absent at merge-base(main, HEAD)).
 
 Observed 2026-11-07: adding a skip gate (`@open_defect(...)`, a
@@ -153,6 +153,7 @@ class BranchNewFileWeakening(unittest.TestCase):
 
     # -- RED -------------------------------------------------------------
 
+    @unittest.expectedFailure  # backlog 78817f03: open defect
     def test_skip_added_to_test_committed_earlier_on_branch_blocks(self) -> None:
         self.branch_commit_1(PASSING)
         self.write(NEW_REL, SKIPPED_A)
@@ -163,6 +164,7 @@ class BranchNewFileWeakening(unittest.TestCase):
                          "branch commit 1, yet the gate did not block: " + out)
         self.assertIn("ignore-added", self.kinds(data, NEW_REL), out)
 
+    @unittest.expectedFailure  # backlog 78817f03: open defect
     def test_assertion_removed_from_test_committed_earlier_on_branch_blocks(self) -> None:
         self.branch_commit_1(PASSING)
         self.write(NEW_REL, ASSERT_REMOVED_A)

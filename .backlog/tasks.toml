@@ -776,3 +776,30 @@ scripts/test_check_test_weakening_macro_append_20261107.py:110: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_check_test_weakening_macro_append_20261107.py::MacroAppend::test_target_appending_a_standalone_test_passes
 1 failed, 2 passed in 1.78s"""
+
+[[task]]
+id = "78817f03"
+title = "check-test-weakening: ブランチ内で新規追加したテストファイルの弱体化を判定しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794052324
+updated_at = 1794052324
+weight = 0.0
+issue_number = 1621
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1621"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_check_test_weakening_branch_new_file.py"
+rev = "1d8a6bae380dab1ef02f3f31b0fb01ee857821cb"
+observed_at = 1794052324
+detail = """
+exit 1: ======================
+FAILED scripts/test_check_test_weakening_branch_new_file.py::BranchNewFileWeakening::test_assertion_removed_from_test_committed_earlier_on_branch_blocks
+FAILED scripts/test_check_test_weakening_branch_new_file.py::BranchNewFileWeakening::test_skip_added_to_test_committed_earlier_on_branch_blocks
+========================= 2 failed, 4 passed in 2.32s =========================="""

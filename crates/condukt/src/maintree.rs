@@ -1259,13 +1259,26 @@ mod tests {
     }
 
     #[test]
-    fn backlog_lock_none_and_stale_are_not_peers() {
+    fn backlog_lock_none_is_not_a_peer() {
         assert_eq!(
             parse_backlog_lock("none\n", None),
             Determination::Known(None)
         );
-        let stale = r#"{"session_id":"ghost","pid":1,"stale":true}"#;
-        assert_eq!(parse_backlog_lock(stale, None), Determination::Known(None));
+    }
+
+    /// user ruling 2026-11-07: Rewrite assert, redo tests (backlog 3da84f08).
+    /// A stale lock whose holder has no transcript is fail-closed: a peer.
+    #[test]
+    #[ignore = "backlog 3da84f08: RED, remove ignore when fixed"]
+    fn backlog_lock_stale_without_transcript_is_a_peer() {
+        let stale =
+            r#"{"session_id":"nonexistent-sess-3da84f08-9c1e7b52a6d4","pid":1,"stale":true}"#;
+        let got = parse_backlog_lock(stale, None);
+        assert!(
+            matches!(got, Determination::Known(Some(_))),
+            "a stale lock whose holder has no transcript must be treated as a live peer \
+             (fail-closed, cannot prove the session ended); got {got:?}"
+        );
     }
 
     #[test]

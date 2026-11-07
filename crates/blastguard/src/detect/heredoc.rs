@@ -796,6 +796,21 @@ pub(super) fn opener_consumer(line: &str) -> &str {
 /// command and the cwd walk and every redirect rule still judge it. A head
 /// whose operand holds a backtick or `$(`, or that is anything but `cd <word>`,
 /// stops the peeling; the remaining text is then judged (and refused) as before.
+///
+/// Three more head shapes are peeled the same way
+/// (tests/heredoc_body_gt_fp_20261107.rs: `WT=/x; cd "$WT" && git add -A &&
+/// git commit -F - <<'EOF'` and `cd "$(git rev-parse --show-toplevel)" && …`
+/// had a `> quoted` message line read as a relative redirect after an
+/// unresolvable cd), each of which runs before the reader and never sees the
+/// body ([`redirect_view_extra_head`]):
+///   * a line [`permitted_prefix_line`] accepts (`git add <paths>`, `set -e`,
+///     `mkdir -p <paths>`, `cd <literal>`), followed by `&&` only;
+///   * one assignment `NAME=<literal>` (no quote, `$`, backtick or operator in
+///     the value), followed by `;` or `&&`;
+///   * followed by `&&` only, `cd "$(<plain words>)"`: a DOUBLE-QUOTED substitution whose body is
+///     only letters, digits, spaces and `-_./=:,@%+`, so it holds no quote,
+///     nested substitution, redirect, pipe or separator. An unquoted `$(…)` is
+///     still not peeled.
 pub(super) fn redirect_view_consumer(line: &str) -> &str {
     let mut rest = opener_consumer(line);
     loop {
@@ -813,10 +828,45 @@ pub(super) fn redirect_view_consumer(line: &str) -> &str {
             && !head.contains(['`', '<', '>', '|', '&', '(', ')', '\\'])
             && !head.contains("$(")
             && quotes_balance(head);
-        if !peelable {
+        if !(peelable || redirect_view_extra_head(head, len == 2)) {
             return rest;
         }
         rest = tail;
+    }
+}
+
+/// The extra head shapes [`redirect_view_consumer`] peels; see there.
+/// `and_joined`: the head is followed by `&&`, not `;`. Only the assignment
+/// shape is also peeled before a `;` (tests/heredoc_chain_heads.rs pins
+/// `git add a.txt ; git commit -F - <<'EOF'` as restrictive).
+fn redirect_view_extra_head(head: &str, and_joined: bool) -> bool {
+    let plain = |s: &str, extra: &[char]| {
+        !s.is_empty()
+            && s.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '-' | '_' | '.' | '/' | '=' | ':' | ',' | '@' | '%' | '+')
+                    || extra.contains(&c)
+            })
+    };
+    if !quotes_balance(head) || head.contains(['\n', '\r']) {
+        return false;
+    }
+    if and_joined && permitted_prefix_line(head) {
+        return true;
+    }
+    let words = quote_aware_words(head);
+    match words.as_slice() {
+        [assign] => assign.split_once('=').is_some_and(|(name, value)| {
+            !name.is_empty()
+                && !name.starts_with(|c: char| c.is_ascii_digit())
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && (value.is_empty() || plain(value, &[]))
+        }),
+        [cd, operand] if and_joined && cd == "cd" => operand
+            .strip_prefix("\"$(")
+            .and_then(|s| s.strip_suffix(")\""))
+            .is_some_and(|inner| plain(inner, &[' '])),
+        _ => false,
     }
 }
 

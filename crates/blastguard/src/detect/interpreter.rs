@@ -1109,7 +1109,23 @@ files or directories outright if that string is run as code; blastguard cannot s
             // such as `"$HOME/x"`, which is data far more often than a command.
             // Its Deny is the same (`analyze_shell_payload` denies only through
             // `detect_bash`).
-            match super::detect_bash(payload, depth + 1, program_ctx) {
+            //
+            // The R2 side channel (`program_text_redirects`) follows the same
+            // rule as that Ask: a string literal of a program with NO
+            // shell-string marker is never a shell line, so an undeterminable
+            // `>` it holds (`print('>')`, `"x->y"`) is data, not a redirect
+            // (tests/heredoc_body_gt_fp_20261107.rs). Its rows are dropped;
+            // the program text itself (layer 0) keeps them, and a Deny from the
+            // literal still returns below. A program that hands strings to a
+            // shell keeps every row.
+            let sink_rows = program_ctx.program_text_redirects.map(|s| s.borrow().len());
+            let verdict = super::detect_bash(payload, depth + 1, program_ctx);
+            if depth_of_layer > 0 && !shell_strings {
+                if let (Some(sink), Some(rows)) = (program_ctx.program_text_redirects, sink_rows) {
+                    sink.borrow_mut().truncate(rows);
+                }
+            }
+            match verdict {
                 Decision::Deny(reason) => return Decision::Deny(reason),
                 // The "command word is an expansion" Ask (detect.rs
                 // `EXPANSION_HEAD_TAIL`) is NOT kept: a literal like `"$HOME"`

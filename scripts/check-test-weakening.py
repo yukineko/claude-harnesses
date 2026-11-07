@@ -118,6 +118,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import difflib
 import json
 import os
 import posixpath
@@ -1700,6 +1701,50 @@ def changed_pairs(repo: str, merge_base: str) -> list:
     return pairs
 
 
+# One whole line that is exactly an `#[ignore]` / `#[ignore = "reason"]`
+# attribute (a reason without quotes or backslashes inside it), nothing else.
+_IGNORE_LINE_RE = re.compile(
+    r'[ \t]*#[ \t]*\[[ \t]*ignore[ \t]*(?:=[ \t]*"[^"\\\n]*"[ \t]*)?\][ \t]*\n?'
+)
+# The same line after `_mask_noncode`: the reason literal is blanked to spaces.
+_IGNORE_LINE_MASKED_RE = re.compile(
+    r"[ \t]*#[ \t]*\[[ \t]*ignore[ \t]*(?:=[ \t]*)?\][ \t]*\n?"
+)
+
+
+def _only_ignore_lines_removed(before: str, after: str, path: str) -> bool:
+    """True only when `after` is `before` with whole `#[ignore...]` attribute
+    lines deleted and NOTHING else changed (no line added, edited or moved).
+
+    This is the one change to a file holding a `macro_rules!` test template that
+    is PROVEN not to remove or weaken a generated test: every invocation, every
+    template body and every assertion survives byte for byte, and only ignore
+    attributes go away. Each deleted line must also be an ignore attribute in
+    CODE -- the masked line must still read `#[ignore ...]` -- so deleting a
+    line that only looks like one inside a string literal or a comment (which
+    changes test data or nothing, unproven either way) does not qualify.
+    Anything else returns False and the caller stays Undetermined. A
+    tokenisation failure in `_mask_noncode` propagates as Undetermined.
+    """
+    b = before.splitlines(keepends=True)
+    a = after.splitlines(keepends=True)
+    mb = _mask_noncode(before, path).splitlines(keepends=True)
+    if len(mb) != len(b):
+        return False
+    sm = difflib.SequenceMatcher(None, b, a, autojunk=False)
+    for tag, i1, i2, _j1, _j2 in sm.get_opcodes():
+        if tag == "equal":
+            continue
+        if tag != "delete":
+            return False
+        for k in range(i1, i2):
+            if not _IGNORE_LINE_RE.fullmatch(b[k]):
+                return False
+            if not _IGNORE_LINE_MASKED_RE.fullmatch(mb[k]):
+                return False
+    return True
+
+
 def scan(repo: str, base: str, pending_msg=None) -> list:
     if not is_git_repo(repo):
         raise Undetermined(f"not a git repository: {repo}")
@@ -1779,13 +1824,32 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                 counts(test_surface(after_src, new, after_side), new)
                 if after_src else counts("")
             )
-            if before_src and (before["template_tests"] or after["template_tests"]):
+            if (
+                before_src
+                and (before["template_tests"] or after["template_tests"])
+                and not (
+                    old == new
+                    and _only_ignore_lines_removed(before_src, after_src, rep)
+                    and _only_ignore_lines_removed(
+                        test_surface(before_src, old, base_side),
+                        test_surface(after_src, new, after_side),
+                        rep,
+                    )
+                )
+            ):
                 # A `macro_rules!` test template expands once per invocation,
                 # and invocations are not counted: dropping `t!(case, ...)` or
                 # turning explicit tests into a template removes tests with no
                 # textual `#[test]` / assertion change. Against a base where
                 # the file existed we cannot judge that. Only a file with no
-                # base (`before` all zero, so no finding can exist) is judged.
+                # base (`before` all zero, so no finding can exist) is judged,
+                # plus one proven-safe shape: the same path whose whole file AND
+                # whose test surface (which includes out-of-line `#[cfg(test)]`
+                # bodies) differ from the base only by deleted whole-line
+                # `#[ignore...]` attributes in code. Every invocation and
+                # template body is then byte-identical, so no generated test
+                # can have been removed or weakened; such a change falls
+                # through to the ordinary findings below.
                 raise Undetermined(
                     f"{rep}: #[test] inside a macro_rules! template in a file "
                     "that exists at the base -- macro invocations are not "

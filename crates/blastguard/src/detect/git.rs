@@ -757,6 +757,12 @@ from the working tree)",
         // there is Ask.
         "branch" => super::git_unmerged::branch_verdict(ctx, &rest[..idx], &rest[idx + 1..]),
         "worktree" => super::git_unmerged::worktree_verdict(ctx, &rest[..idx], &rest[idx + 1..]),
+        // Backlog e9325654: whole-tree staging sweeps in other sessions' WIP.
+        // Judged in `git_stage` from the argv alone (any repository); every
+        // cannot-determine state there is Ask. `stage` is git's synonym for
+        // `add`.
+        "add" | "stage" => super::git_stage::add_verdict(&rest[idx + 1..]),
+        "commit" => super::git_stage::commit_verdict(&rest[idx + 1..]),
         _ => Decision::Allow,
     }
 }

@@ -242,6 +242,12 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("git stash -u/-a removes untracked") {
         return "git-stash-untracked";
     }
+    // Backlog e9325654: whole-tree staging (`git add -A`/`.`, `git commit -a`).
+    // ONE id for the provable sweep and the cannot-determine Ask: both
+    // wordings in `detect::git_stage` carry the phrase "whole-tree staging".
+    if reason.contains("whole-tree staging") {
+        return "git-whole-tree-stage";
+    }
     if reason.contains("git config core.hooksPath repoints every git hook") {
         return "git-config-hookspath";
     }
@@ -503,6 +509,10 @@ mod tests {
             ("Bash", json!({ "command": "git switch -f main" })),
             ("Bash", json!({ "command": "git stash clear" })),
             ("Bash", json!({ "command": "git stash -a" })),
+            // Backlog e9325654: whole-tree staging, provable and undeterminable.
+            ("Bash", json!({ "command": "git add -A" })),
+            ("Bash", json!({ "command": "git commit -am wip" })),
+            ("Bash", json!({ "command": "git add $FILES" })),
             // The `..` bypass: same protected-path class, reached through a
             // spelling that used to defeat the match entirely.
             (

@@ -1712,28 +1712,74 @@ _IGNORE_LINE_MASKED_RE = re.compile(
 )
 
 
-def _only_ignore_lines_removed(before: str, after: str, path: str) -> bool:
-    """True only when `after` is `before` with whole `#[ignore...]` attribute
-    lines deleted and NOTHING else changed (no line added, edited or moved).
+# Inserted code may not contain a (shadowing) template, a macro leaking out of
+# a module, or an inner attribute `#![...]` (applies to the whole file/module);
+# nor, at its own top level, a macro invocation (`name!`, not `!=`).
+_INSERT_FORBIDDEN_RE = re.compile(r"\bmacro_rules\b|\bmacro_use\b|#[ \t\n]*!")
+_ITEM_MACRO_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*[ \t\n]*!(?!=)")
 
-    This is the one change to a file holding a `macro_rules!` test template that
-    is PROVEN not to remove or weaken a generated test: every invocation, every
-    template body and every assertion survives byte for byte, and only ignore
-    attributes go away. Each deleted line must also be an ignore attribute in
-    CODE -- the masked line must still read `#[ignore ...]` -- so deleting a
-    line that only looks like one inside a string literal or a comment (which
-    changes test data or nothing, unproven either way) does not qualify.
-    Anything else returns False and the caller stays Undetermined. A
+
+def _inserted_block_is_safe(ma: list, j1: int, j2: int) -> bool:
+    """True only when the inserted MASKED after-lines `ma[j1:j2]` are whole
+    top-level items that cannot touch an existing test: the block starts at
+    bracket depth 0 over `{}[]()` (outside every `macro_rules!` template body,
+    whatever its delimiter, and every fn/mod body); is balanced on its own
+    (cannot wrap existing lines, e.g. `fn dead() {` ... `}` around
+    invocations); follows and ends at an item boundary (`}`/`;`), so it splits
+    no item and leaves no dangling `#[cfg(any())]` on the next invocation; and
+    has none of `_INSERT_FORBIDDEN_RE` nor a top-level macro invocation, which
+    could redefine the template so later invocations expand to nothing."""
+    prev = [ln for ln in ma[:j1] if ln.strip()]
+    if prev and not prev[-1].rstrip().endswith(("}", ";")):
+        return False
+    depth, top = 0, []
+    for ch in "".join(ma[:j1]):
+        depth += (ch in "{[(") - (ch in "}])")
+    if depth != 0:
+        return False
+    block = "".join(ma[j1:j2])
+    for ch in block:
+        depth += (ch in "{[(") - (ch in "}])")
+        if depth < 0:
+            return False
+        top.append(ch if depth == 0 and ch not in "}])" else " ")
+    last = [ln for ln in ma[j1:j2] if ln.strip()]
+    return (
+        depth == 0
+        and not _INSERT_FORBIDDEN_RE.search(block)
+        and not _ITEM_MACRO_RE.search("".join(top))
+        and not (last and not last[-1].rstrip().endswith(("}", ";")))
+    )
+
+
+def _only_proven_safe_line_changes(before: str, after: str, path: str) -> bool:
+    """True only when `after` is `before` with whole `#[ignore...]` attribute
+    lines deleted and/or blocks inserted that `_inserted_block_is_safe` proves
+    are top-level items; every other line is byte-identical AND identical after
+    masking (an insert cannot open a comment/literal swallowing existing code).
+    No line may be edited or moved.
+
+    These are the changes to a file holding a `macro_rules!` test template that
+    are PROVEN not to remove or weaken a generated test: every invocation,
+    template body and assertion survives byte for byte with the same meaning.
+    Each deleted line must also be an ignore attribute in CODE -- the masked
+    line must still read `#[ignore ...]` -- so deleting a look-alike inside a
+    string literal or a comment does not qualify. An insertion inside a
+    template (a `return;` before the asserts, a new `#[ignore]`) is not proven
+    safe. Anything else returns False and the caller stays Undetermined. A
     tokenisation failure in `_mask_noncode` propagates as Undetermined.
     """
     b = before.splitlines(keepends=True)
     a = after.splitlines(keepends=True)
     mb = _mask_noncode(before, path).splitlines(keepends=True)
-    if len(mb) != len(b):
+    ma = _mask_noncode(after, path).splitlines(keepends=True)
+    if len(mb) != len(b) or len(ma) != len(a):
         return False
     sm = difflib.SequenceMatcher(None, b, a, autojunk=False)
-    for tag, i1, i2, _j1, _j2 in sm.get_opcodes():
-        if tag == "equal":
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal" and mb[i1:i2] == ma[j1:j2]:
+            continue
+        if tag == "insert" and _inserted_block_is_safe(ma, j1, j2):
             continue
         if tag != "delete":
             return False
@@ -1829,8 +1875,8 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                 and (before["template_tests"] or after["template_tests"])
                 and not (
                     old == new
-                    and _only_ignore_lines_removed(before_src, after_src, rep)
-                    and _only_ignore_lines_removed(
+                    and _only_proven_safe_line_changes(before_src, after_src, rep)
+                    and _only_proven_safe_line_changes(
                         test_surface(before_src, old, base_side),
                         test_surface(after_src, new, after_side),
                         rep,
@@ -1846,10 +1892,12 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
                 # plus one proven-safe shape: the same path whose whole file AND
                 # whose test surface (which includes out-of-line `#[cfg(test)]`
                 # bodies) differ from the base only by deleted whole-line
-                # `#[ignore...]` attributes in code. Every invocation and
-                # template body is then byte-identical, so no generated test
-                # can have been removed or weakened; such a change falls
-                # through to the ordinary findings below.
+                # `#[ignore...]` attributes in code and/or inserted whole
+                # top-level items proven to lie outside every template and fn
+                # body (`_only_proven_safe_line_changes`). Every invocation and
+                # template body is then byte-identical with the same meaning,
+                # so no generated test can have been removed or weakened; such
+                # a change falls through to the ordinary findings below.
                 raise Undetermined(
                     f"{rep}: #[test] inside a macro_rules! template in a file "
                     "that exists at the base -- macro invocations are not "

@@ -70728,3 +70728,71 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "34ece122efc513106418993c9a114c5aef461068"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "ef7c9fbe"
+title = "blastguard: Ask on git clone / mkdir -p / cp -r outside managed places"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 16 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: deletion-and-scratch (formerly scratch-artifacts-in-deletable-places).
+Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 3 of 8 cases have the wrong verdict: `git clone <repo> <home>/scratch-clone`, `mkdir -p <home>/scratch/a/b`, `cp -r <repo> <home>/scratch-copy` each 'want ask, got allow ()'; test result: FAILED. Controls (clone into /private/tmp and .harness-worktrees, mkdir -p in project and /private/tmp, cp -r of a file into /private/tmp) stay Allow.
+Readings: (a) any destination outside scratchpad/$TMPDIR/.harness-worktrees/project is Ask (pinned); (b) only real $HOME asset dirs are Ask. Fixture HOME lives under macOS /var/folders/.../T (TMPDIR is removed from the hook env, so only /tmp and /private/tmp are temp roots); a fix that hard-codes /var/folders/*/T as managed cannot go GREEN here - move the fixture, not the rule. Human to confirm `mkdir -p` into $HOME belongs in the Ask set (audit-only).
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
+User ruling 2026-11-07 (AskUserQuestion): `mkdir -p` is NOT in the Ask set — only git clone / cp -r outside managed places. Drop the mkdir -p case from the RED."""
+created_at = 1793998290
+updated_at = 1794043368
+weight = 0.0
+issue_number = 1570
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1570"
+issue_closed_at = 1794043370
+rev = 4
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 -- --include-ignored scratch_tree_outside_managed_places_is_ask"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998844
+detail = """
+exit 101: managed_places_is_ask
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 3.20s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-6f3de29852866f22)
+error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 scratch_"
+exit = 0
+passed = 2
+rev = "799b82580630feafee29a580abee94766f74fb1e"
+observed_at = 1794043350
+output_digest = "sha256:639f28a96a92e03f274fd112e9bc47b8b5d095af0be3d9dc6093ccb4a7ca2911"
+excerpt = """
+
+running 2 tests
+test scratch_cp_clustered_target_dir_is_ask ... ok
+test scratch_tree_outside_managed_places_is_ask ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.98s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-dc832b3934759675)
+"""
+
+[task.closure.red]
+rev = "56cb4e6f82fcf5e1029b7a7069a1b772906f7a3e"
+exit = 101
+kind = "behavioural"

@@ -257,8 +257,10 @@ pub enum ShadowRunAction {
         #[arg(long)]
         model: String,
     },
-    /// Discard the shadow worktree (never merge) and best-effort record the
-    /// outcome to fugu-router for later routing comparison.
+    /// Persist the shadow worktree's tdd proofs, then discard it (never merge)
+    /// and best-effort record the outcome to fugu-router for later routing
+    /// comparison. If the proofs cannot be persisted, the discard is refused
+    /// (worktree and branch left in place) and nothing is recorded.
     Finish {
         #[arg(long)]
         path: PathBuf,
@@ -359,8 +361,9 @@ pub fn run_shadow_run(cfg: &Config, cwd: &Path, action: ShadowRunAction) -> Resu
                 cost_usd,
                 duration_secs,
             };
-            // Resolve fugu-router (plugin cache first, `$PATH` second). The
-            // worktree is discarded regardless; only recording depends on it.
+            // Resolve fugu-router (plugin cache first, `$PATH` second). Whether
+            // the worktree is discarded does not depend on this lookup (only on
+            // persisting its tdd proofs, see `finish`); only recording does.
             // Not installed (`Known(None)`) and could-not-look
             // (`Undetermined`) are reported as different things — neither is
             // ever read as "recorded".

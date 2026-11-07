@@ -726,3 +726,33 @@ exit 101:  passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
      Running tests/backlog_worktree_redirect_and_sq_fp_20261107.rs (target/debug/deps/backlog_worktree_redirect_and_sq_fp_20261107-fc5a8aeb9a3322bf)
 error: test failed, to rerun pass `-p blastguard --test backlog_worktree_redirect_and_sq_fp_20261107`"""
+
+[[task]]
+id = "eb0059ec"
+title = "blastguard: truncating redirect onto an existing scratchpad file whose on-disk name differs only in case is Ask (case-insensitive APFS)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard-fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-07 (batch 3): git commit ... > <scratchpad>/mergemain.log 2>&1 got Ask: 'truncating redirect is confined to /private/tmp — a safe root for this session ... The blast radius is bounded, so this is a question rather than a refusal'. On disk the file was mergeMain.log. Root cause (measured by debug trace): SafeRoots::no_symlink_below (crates/blastguard/src/scope.rs:1041) compares realpath with <parent real>/<typed name>, so a case-only difference reads as a symlink -> classify_temp Undetermined -> temp_disposable_redirect_target (src/detect/redirect.rs:106) returns early -> confined Ask. Contradicts user ruling 2026-10-28 (existing file in /private/tmp incl. scratchpad must Allow). Not caused by b0c29e83. Fix direction: treat case-only differences as the same file on case-insensitive FS; genuine symlinks must still fail. RED only fails on case-insensitive FS. Remove the ignore when fixed."
+created_at = 1794060201
+updated_at = 1794060201
+weight = 0.0
+issue_number = 1630
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1630"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test scratchpad_truncating_redirect_fp_20261107 -- --include-ignored"
+rev = "8b4f69e31c49b718ba3f8f9c4806820126fa7459"
+observed_at = 1794060201
+detail = """
+exit 101:  v0.2.379 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.43s
+     Running tests/scratchpad_truncating_redirect_fp_20261107.rs (target/debug/deps/scratchpad_truncating_redirect_fp_20261107-92f2eef15545e45e)
+error: test failed, to rerun pass `-p blastguard --test scratchpad_truncating_redirect_fp_20261107`"""

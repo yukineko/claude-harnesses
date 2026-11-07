@@ -163,6 +163,19 @@ impl Fixture {
     }
 }
 
+/// Whole-tree staging (`git add -A`) must not be Allow for the main agent or a
+/// subagent, whatever the heredoc body (observed: main Ask, subagent Deny).
+fn assert_stage_sweep_restrictive_both(fixture: &Fixture, command: &str) {
+    for sub in [false, true] {
+        let d = fixture.decision(command, sub);
+        assert_ne!(
+            d, "allow",
+            "`{command}` (subagent={sub}) stages the whole tree (`git add -A`) and must \
+             not be Allow, whatever the heredoc body"
+        );
+    }
+}
+
 macro_rules! target {
     ($name:ident, $cmd:expr) => {
         #[test]
@@ -183,10 +196,18 @@ macro_rules! control {
 
 // ---- FP 1: git commit -F - heredoc after a cd whose target is a runtime value ----
 // (a cd to a literal absolute dir with the same body is already Allow.)
+//
+// The `git add` head stages an EXPLICIT path. The original report used
+// `git add -A`, but whole-tree staging is Ask on its own (backlog e9325654,
+// `detect::git_stage`, argv-only), independent of the heredoc body; this RED
+// was written on a branch without that rule, so with `-A` the target could
+// never be Allow once both met on main (backlog 1389f634). An explicit path
+// keeps the `git add <paths> &&` head that `redirect_view_extra_head` peels,
+// so the `>` in the body stays the only thing under test.
 
 target!(
     target_cd_var_git_commit_heredoc,
-    "WT=/private/tmp/hdgt-wt; cd \"$WT\" && git add -A && git commit -q -F - <<'EOF'\nfix: a -> b\n\n> quoted\nEOF"
+    "WT=/private/tmp/hdgt-wt; cd \"$WT\" && git add f.txt && git commit -q -F - <<'EOF'\nfix: a -> b\n\n> quoted\nEOF"
 );
 target!(
     target_cd_subst_git_commit_heredoc,
@@ -208,8 +229,15 @@ target!(
 control!(
     control_nogt_cd_var_git_commit_heredoc,
     assert_allow_both,
-    "WT=/private/tmp/hdgt-wt; cd \"$WT\" && git commit -q -F - <<'EOF'\nfix: a to b\nEOF"
+    "WT=/private/tmp/hdgt-wt; cd \"$WT\" && git add f.txt && git commit -q -F - <<'EOF'\nfix: a to b\nEOF"
 );
+#[test]
+fn control_cd_var_git_add_all_heredoc_not_allow() {
+    assert_stage_sweep_restrictive_both(
+        &Fixture::new("control_cd_var_git_add_all_heredoc_not_allow"),
+        "WT=/private/tmp/hdgt-wt; cd \"$WT\" && git add -A && git commit -q -F - <<'EOF'\nfix: a to b\nEOF",
+    );
+}
 control!(
     control_nogt_cd_subst_git_commit_heredoc,
     assert_allow_both,

@@ -145,10 +145,16 @@ impl Fixture {
 
     /// Hook stdout for a Bash `command` (cwd = CLAUDE_PROJECT_DIR = primary).
     fn bash(&self, command: &str) -> String {
+        self.bash_cwd(command, &self.repo)
+    }
+
+    /// Like [`Fixture::bash`] but the session `cwd` in the hook payload is
+    /// `cwd` (the hook PROCESS cwd stays `<base>`, never a repo).
+    fn bash_cwd(&self, command: &str, cwd: &Path) -> String {
         let payload = serde_json::json!({
             "session_id": "audit-b-memory-rules",
             "hook_event_name": "PreToolUse",
-            "cwd": self.repo.display().to_string(),
+            "cwd": cwd.display().to_string(),
             "tool_name": "Bash",
             "tool_input": { "command": command },
         })
@@ -188,6 +194,74 @@ fn verdict(out: &str) -> &'static str {
     } else {
         "other"
     }
+}
+
+/// Like [`check_all`] but each case carries its own session cwd.
+#[track_caller]
+fn check_all_in(f: &Fixture, cases: &[(String, PathBuf, &str)]) {
+    let mut bad = Vec::new();
+    for (cmd, cwd, want) in cases {
+        let out = f.bash_cwd(cmd, cwd);
+        let got = verdict(&out);
+        if got != *want {
+            bad.push(format!(
+                "  `{cmd}` (cwd {}): want {want}, got {got} ({})",
+                cwd.display(),
+                out.trim()
+            ));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "{} of {} cases have the wrong verdict:\n{}",
+        bad.len(),
+        cases.len(),
+        bad.join("\n")
+    );
+}
+
+/// A standalone repo at `dir` whose first branch is `default`, with two
+/// commits (`c1`, then `c2` on top).
+fn seed_repo(dir: &Path, default: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    git(dir, &["init", "-q", "-b", default]);
+    write(&dir.join("f.txt"), "one\n");
+    git(dir, &["add", "f.txt"]);
+    git(dir, &["commit", "-q", "-m", "c1"]);
+    write(&dir.join("f.txt"), "two\n");
+    git(dir, &["commit", "-q", "-am", "c2"]);
+}
+
+/// Branch `name` with one commit that is not reachable from `from`; leaves
+/// `from` checked out again.
+fn add_unmerged_branch(dir: &Path, name: &str, from: &str) {
+    git(dir, &["switch", "-q", "-c", name]);
+    write(&dir.join(format!("{name}.txt")), "unique\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", name]);
+    git(dir, &["switch", "-q", from]);
+}
+
+/// Make `refs/remotes/origin/HEAD` resolve to `default` (no network).
+fn set_origin_head(dir: &Path, default: &str) {
+    let url = dir.display().to_string();
+    git(dir, &["remote", "add", "origin", &url]);
+    git(
+        dir,
+        &[
+            "update-ref",
+            &format!("refs/remotes/origin/{default}"),
+            default,
+        ],
+    );
+    git(
+        dir,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            &format!("refs/remotes/origin/{default}"),
+        ],
+    );
 }
 
 /// Run every `(command, wanted)` case and fail once, listing every mismatch,
@@ -299,4 +373,284 @@ fn scratch_tree_outside_managed_places_is_ask() {
         (format!("cp -r {r}/tracked.txt {tmp}/copy.txt"), "allow"),
     ];
     check_all(&f, &cases);
+}
+
+// ---------------------------------------------------------------------------
+// t1b: gaps found by independent verification of commit 5c251e4b.
+// ---------------------------------------------------------------------------
+
+/// Finding 1: `-d` combined with a force flag (any spelling/order) deletes
+/// like `-D`.
+#[test]
+fn t1b_f1_delete_plus_force_spellings_are_ask() {
+    let f = Fixture::new("t1b_f1");
+    let cases = vec![
+        ("git branch -d -f unmerged".to_string(), "ask"),
+        ("git branch -df unmerged".to_string(), "ask"),
+        ("git branch -fd unmerged".to_string(), "ask"),
+        ("git branch --delete -f unmerged".to_string(), "ask"),
+        ("git branch -d --force unmerged".to_string(), "ask"),
+        ("git branch --force --delete unmerged".to_string(), "ask"),
+        // Controls: same spellings on a merged branch lose nothing.
+        ("git branch -d -f merged".to_string(), "allow"),
+        ("git branch -df merged".to_string(), "allow"),
+        ("git branch -fd merged".to_string(), "allow"),
+        ("git branch --delete -f merged".to_string(), "allow"),
+        // Control: plain -d (git itself refuses unmerged) is not force.
+        ("git branch -d merged".to_string(), "allow"),
+    ];
+    check_all(&f, &cases);
+}
+
+/// Finding 2: every operand is a deletion, not just the first.
+#[test]
+fn t1b_f2_every_branch_operand_is_checked() {
+    let f = Fixture::new("t1b_f2");
+    git(&f.repo, &["branch", "merged2", "merged"]);
+    let cases = vec![
+        ("git branch -D merged unmerged".to_string(), "ask"),
+        ("git branch -D merged merged2 unmerged".to_string(), "ask"),
+        ("git branch -d -f merged unmerged".to_string(), "ask"),
+        ("git branch -D unmerged merged".to_string(), "ask"),
+        // Controls.
+        ("git branch -D merged merged2".to_string(), "allow"),
+        ("git branch -D merged2 merged".to_string(), "allow"),
+    ];
+    check_all(&f, &cases);
+}
+
+/// Finding 3: the merge check must run in the repo git will act on
+/// (`-C`, `--git-dir`), not the session cwd. Branch `x` is merged in the
+/// session repo but unmerged in `other`; `y` is the reverse, so neither a
+/// blanket Ask nor a check in the wrong repo can pass.
+#[test]
+fn t1b_f3_c_and_git_dir_target_repo_is_checked() {
+    let f = Fixture::new("t1b_f3");
+    git(&f.repo, &["branch", "x", "merged"]); // merged here
+    git(&f.repo, &["branch", "y", "unmerged"]); // unmerged here
+    let other = f.base.join("src/other");
+    seed_repo(&other, "main");
+    git(&other, &["branch", "y", "main~1"]); // merged there
+    add_unmerged_branch(&other, "x", "main"); // unmerged there
+    let o = other.display().to_string();
+    let r = f.repo.clone();
+    let cases = vec![
+        (format!("git -C {o} branch -D x"), r.clone(), "ask"),
+        (
+            format!("git --git-dir={o}/.git branch -D x"),
+            r.clone(),
+            "ask",
+        ),
+        (
+            format!("git --git-dir {o}/.git branch -D x"),
+            r.clone(),
+            "ask",
+        ),
+        // Controls: merged in `other` (unmerged in the session repo).
+        (format!("git -C {o} branch -D y"), r.clone(), "allow"),
+        (
+            format!("git --git-dir={o}/.git branch -D y"),
+            r.clone(),
+            "allow",
+        ),
+        (
+            format!("git --git-dir {o}/.git branch -D y"),
+            r.clone(),
+            "allow",
+        ),
+        // Controls: session repo itself.
+        ("git branch -D x".to_string(), r.clone(), "allow"),
+        ("git branch -D y".to_string(), r, "ask"),
+    ];
+    check_all_in(&f, &cases);
+}
+
+/// Finding 4: the default branch is resolved (origin/HEAD, init.defaultBranch),
+/// not hard-coded to `main`; deleting the default branch itself is Ask;
+/// unresolvable default is Ask.
+#[test]
+fn t1b_f4_default_branch_is_resolved_not_hardcoded() {
+    let f = Fixture::new("t1b_f4");
+    // master-default repo, resolvable via origin/HEAD, currently on `side`.
+    let m = f.base.join("src/masterrepo");
+    seed_repo(&m, "master");
+    git(&m, &["branch", "merged-into-master", "master~1"]);
+    add_unmerged_branch(&m, "unmerged", "master");
+    git(&m, &["branch", "side", "master"]);
+    set_origin_head(&m, "master");
+    git(&m, &["config", "init.defaultBranch", "master"]);
+    git(&m, &["switch", "-q", "side"]);
+
+    // Repo whose default cannot be resolved: HEAD `develop`, no remote, no
+    // config, no main/master/trunk.
+    let nd = f.base.join("src/nodefault");
+    seed_repo(&nd, "develop");
+    git(&nd, &["branch", "feat", "develop~1"]);
+
+    let cases = vec![
+        // master-default repo (session cwd = that repo, no -C).
+        (
+            "git branch -D merged-into-master".to_string(),
+            m.clone(),
+            "allow",
+        ),
+        ("git branch -D unmerged".to_string(), m.clone(), "ask"),
+        // Deleting the default branch itself, from another checked-out branch.
+        ("git branch -D master".to_string(), m.clone(), "ask"),
+        (
+            "git branch --delete --force master".to_string(),
+            m.clone(),
+            "ask",
+        ),
+        // `main`-default fixture repo, from a linked worktree (cwd = clean).
+        ("git branch -D main".to_string(), f.clean_wt.clone(), "ask"),
+        (
+            "git branch -D merged".to_string(),
+            f.clean_wt.clone(),
+            "allow",
+        ),
+        // Unresolvable default => cannot determine => Ask, even for a branch
+        // that is in fact an ancestor of HEAD.
+        ("git branch -D feat".to_string(), nd, "ask"),
+    ];
+    check_all_in(&f, &cases);
+}
+
+/// Finding 5: when the analysis cannot place the git base directory at all
+/// (`base_for("git") == None`), the verdict must be Ask, not Allow.
+///
+/// Closest observable case: `cd "$VAR" && ...` makes the analysis lose its
+/// base (`after_unknown_cd`), which is exactly the `None` branch. This proves
+/// the unknown-cwd route through the real hook binary is Ask; it does NOT
+/// prove the other way `base_for` can be None (no session cwd in the payload,
+/// no project dir), which the hook binary's own fallbacks may fill in.
+#[test]
+fn t1b_f5_unknown_git_base_is_ask() {
+    let f = Fixture::new("t1b_f5");
+    let r = f.repo.clone();
+    let cases = vec![
+        (
+            "cd \"$SOMEWHERE\" && git branch -D merged".to_string(),
+            r.clone(),
+            "ask",
+        ),
+        (
+            "cd \"$SOMEWHERE\" && git branch -D unmerged".to_string(),
+            r.clone(),
+            "ask",
+        ),
+        (
+            "cd \"$SOMEWHERE\" && git worktree remove --force clean".to_string(),
+            r.clone(),
+            "ask",
+        ),
+        // Control: a resolvable cd keeps the normal verdicts.
+        (
+            format!("cd {} && git branch -D merged", r.display()),
+            r.clone(),
+            "allow",
+        ),
+        (
+            format!("cd {} && git branch -D unmerged", r.display()),
+            r,
+            "ask",
+        ),
+    ];
+    check_all_in(&f, &cases);
+}
+
+/// Finding 6: a force-delete / force-remove with no operand cannot be judged.
+#[test]
+fn t1b_f6_missing_operand_is_ask() {
+    let f = Fixture::new("t1b_f6");
+    let r = f.repo.display().to_string();
+    let cases = vec![
+        ("git branch -D".to_string(), "ask"),
+        ("git branch --delete --force".to_string(), "ask"),
+        (format!("git -C {r} branch -D"), "ask"),
+        ("git worktree remove --force".to_string(), "ask"),
+        (format!("git -C {r} worktree remove -f"), "ask"),
+        // Controls: no force / not a delete.
+        ("git branch".to_string(), "allow"),
+        ("git branch --list".to_string(), "allow"),
+        ("git worktree list".to_string(), "allow"),
+    ];
+    check_all(&f, &cases);
+}
+
+/// Finding 7: the force flag may precede `remove`.
+#[test]
+fn t1b_f7_force_before_remove_is_ask() {
+    let f = Fixture::new("t1b_f7");
+    let r = f.repo.display().to_string();
+    let dirty = f.dirty_wt.display().to_string();
+    let clean = f.clean_wt.display().to_string();
+    let cases = vec![
+        (format!("git -C {r} worktree --force remove {dirty}"), "ask"),
+        (format!("git -C {r} worktree -f remove {dirty}"), "ask"),
+        (format!("git -C {r} worktree remove {dirty} --force"), "ask"),
+        // Controls.
+        (
+            format!("git -C {r} worktree --force remove {clean}"),
+            "allow",
+        ),
+        (format!("git -C {r} worktree -f remove {clean}"), "allow"),
+        (
+            format!("git -C {r} worktree remove --force {clean}"),
+            "allow",
+        ),
+    ];
+    check_all(&f, &cases);
+}
+
+/// Finding 8: a relative worktree path is joined to the session cwd / `-C`
+/// dir, not the hook process cwd (`<base>`).
+#[test]
+fn t1b_f8_relative_worktree_path_resolved_against_right_base() {
+    let f = Fixture::new("t1b_f8");
+    let src = f.base.join("src");
+    let rel_dirty = "../.harness-worktrees/dirty";
+    let rel_clean = "../.harness-worktrees/clean";
+    let cases = vec![
+        // cwd = repo.
+        (
+            format!("git worktree remove --force {rel_dirty}"),
+            f.repo.clone(),
+            "ask",
+        ),
+        (
+            format!("git worktree remove --force {rel_clean}"),
+            f.repo.clone(),
+            "allow",
+        ),
+        // -C relative to cwd, then the path relative to the -C dir.
+        (
+            format!("git -C repo worktree remove --force {rel_dirty}"),
+            src.clone(),
+            "ask",
+        ),
+        (
+            format!("git -C repo worktree remove --force {rel_clean}"),
+            src.clone(),
+            "allow",
+        ),
+        // -C absolute, cwd elsewhere.
+        (
+            format!(
+                "git -C {} worktree remove --force {rel_dirty}",
+                f.repo.display()
+            ),
+            src.clone(),
+            "ask",
+        ),
+        (
+            format!(
+                "git -C {} worktree remove --force {rel_clean}",
+                f.repo.display()
+            ),
+            src,
+            "allow",
+        ),
+    ];
+    check_all_in(&f, &cases);
 }

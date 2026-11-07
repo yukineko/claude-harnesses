@@ -76,6 +76,7 @@ mod high_blast;
 mod interpreter;
 mod payload;
 mod protected;
+mod readings;
 mod readonly;
 mod redirect;
 mod rm;
@@ -86,6 +87,7 @@ mod vars;
 mod words;
 
 use gh::analyze_gh;
+use readings::detect_bash_every_reading;
 
 use high_blast::{analyze_high_blast_tier, high_blast_outside_tree_rm};
 
@@ -195,13 +197,7 @@ pub fn detect_scoped(tool_name: &str, tool_input: Option<&Value>, scope: &SafeRo
                 .and_then(|v| v.get("command"))
                 .and_then(|c| c.as_str());
             match cmd {
-                Some(c) => {
-                    // D4: reset the per-command node budget at the single
-                    // top-level entry point, so each tool call gets a full
-                    // budget and no state leaks between calls.
-                    ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
-                    detect_bash(c, 0, &Ctx::new(scope, c))
-                }
+                Some(c) => detect_bash_every_reading(c, scope),
                 // A Bash call IS in jurisdiction, and the command could not be
                 // read out of it (absent key, non-string value, schema drift).
                 // That is "failed to determine", not "nothing to judge" — see

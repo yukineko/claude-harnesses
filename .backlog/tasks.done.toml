@@ -70462,3 +70462,72 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; fin
 rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "2913b970"
+title = "donegate: 同一ツリー・同一コマンドで通過済みの cargo test 再実行を PreToolUse で止める"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = "Surface chosen: `donegate dup-test pre|post` (PreToolUse(Bash) deny via hookSpecificOutput.permissionDecision=deny; PostToolUse records only when hook_event_name==PostToolUse && tool_response.interrupted==false (Bash tool_response has no exit code; failures arrive as PostToolUseFailure) && plain single `cargo test` && tree key unchanged pre->post by tool_use_id). Tests: crates/donegate/tests/dup_test_hook_20261107.rs (1 RED dup_same_cmd_same_tree_after_success_is_denied + 12 controls c_*). Verbatim RED at HEAD 5a288ec8: `assertion left == right failed: pre hook must exit 0; stdout=  left: Some(2) right: Some(0)` (subcommand missing, clap exit 2; all 13 fail so controls are not yet independently proven). Do NOT weaken the test to pass; remove the ignore marker when fixed."
+created_at = 1794039203
+updated_at = 1794039787
+weight = 0.0
+issue_number = 1616
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1616"
+issue_closed_at = 1794039789
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test dup_test_hook_20261107 dup_same_cmd_same_tree_after_success_is_denied -- --ignored"
+rev = "5a288ec8412fe6e16383b35850ed0948529d3e14"
+observed_at = 1794039203
+detail = """
+exit 101: asured; 12 filtered out; finished in 0.67s
+
+   Compiling donegate v0.1.86 (/Users/yuki/src/.harness-worktrees/red-dup-test-hook/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.31s
+     Running tests/dup_test_hook_20261107.rs (target/debug/deps/dup_test_hook_20261107-cdcd9381dcdb48c9)
+error: test failed, to rerun pass `-p donegate --test dup_test_hook_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p donegate --test dup_test_hook_20261107"
+exit = 0
+passed = 13
+rev = "c6f2ca9382e0617415f383305e150702e3ef996f"
+observed_at = 1794039761
+output_digest = "sha256:b92154472a14684b5dd9a658d8fbf945d8702de36b23f745828b1eb20dca951d"
+excerpt = """
+
+running 13 tests
+test c_not_a_git_repo_allows ... ok
+test c_failed_run_is_not_recorded ... ok
+test c_not_cargo_test_allows ... ok
+test c_interrupted_run_is_not_recorded ... ok
+test c_include_ignored_allows ... ok
+test c_extra_filter_allows ... ok
+test c_corrupt_store_allows ... ok
+test c_tracked_edit_allows ... ok
+test c_compound_commands_are_never_recorded_nor_denied ... ok
+test c_untracked_file_allows ... ok
+test c_tree_changed_during_the_call_is_not_recorded ... ok
+test dup_same_cmd_same_tree_after_success_is_denied ... ok
+test c_undeterminable_success_is_not_recorded ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.32s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/dup_test_hook_20261107.rs (target/debug/deps/dup_test_hook_20261107-d88f4040d50ad245)
+"""
+
+[task.closure.red]
+rev = "8871944066e735400047360ec1a23fbf692bab6b"
+exit = 101
+kind = "behavioural"

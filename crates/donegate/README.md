@@ -94,6 +94,22 @@ that cannot be determined, also block. `donegate skip` is not consumed at
 SubagentStop because it belongs to the parent session. Once the subagent has
 finished, the parent's Stop judges the root again.
 
+### Duplicate `cargo test` denial (dup-test hooks)
+
+`hooks/hooks.json` also wires `donegate dup-test pre` (PreToolUse, Bash) and
+`donegate dup-test post` (PostToolUse and PostToolUseFailure, Bash). `pre`
+denies (`permissionDecision: "deny"`) a plain single `cargo test ...` that
+already PASSED with the same normalized argv on the same tree; the reason says
+so, and that a genuine re-run means changing the tree or the command. Key:
+canonical cwd + git toplevel + argv + the passcache tree state (HEAD, `main`,
+working-tree content incl. untracked files). `post` records a pass only for
+`hook_event_name == "PostToolUse"` with `tool_response.interrupted == false`
+and a key equal to the one `pre` snapshotted for the same `tool_use_id`. Any
+doubt — compound commands, `cd`, quotes/`$`, `--manifest-path`/`--config`, not
+a git repo, a git error, a corrupt store, an unknown event — means no deny and
+no record. Store: `~/.donegate/dup-test/`. Non-`cargo test` calls return right
+after the stdin JSON parse. `DONEGATE_DISABLE=1` turns it off.
+
 ### Session records of failing output
 
 Every failing check's full raw output is saved byte-for-byte to

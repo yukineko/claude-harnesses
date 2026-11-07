@@ -55,6 +55,14 @@ pub(crate) struct TreeState {
     tree: String,
 }
 
+impl TreeState {
+    /// The full state as one exact string (HEAD, `main`, working-tree tree),
+    /// for keys outside this module (`duptest`).
+    pub(crate) fn fingerprint(&self) -> String {
+        serde_json::json!({ "head": self.head, "main": self.main, "tree": self.tree }).to_string()
+    }
+}
+
 fn git(root: &Path) -> Command {
     let mut c = Command::new("git");
     harness_core::git_env::scrub(&mut c);

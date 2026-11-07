@@ -151,14 +151,15 @@ pending に戻したタスクは Phase 0-alt → Phase 5 で通常通り再投�
   巻き添えにしないための設計である。
 - 本当に死んだ worker で worktree が消えている場合は `Undetermined` が続き bulk では戻らない。
   その場合は人間が明示する `condukt state abandon --run $RID --task <id>` を使う
-  (こちらは意図的に **ゲート無し**)。
+  (進捗ゲートは無いが、worker transcript が liveness window 内に更新されている／判定不能なら拒否する。
+  worker が死んでいると分かっているなら `--force <理由>` で上書きし、理由は journal に残る)。
 
 **`--all-stuck` の exit code (判定不能を黙って clean にしないための三値)**:
 
 | exit | 意味 | 取るべき行動 |
 |---|---|---|
 | `0` | **観測に失敗したタスクは無い**。stuck と確定したタスクは pending に戻した (0 件でも 0)。`awaiting-sample` (全 signal は読めたが multi-sample の観測が未完了) だけが残っている場合もここに入る — その場合もタスクは stderr に列挙される | `awaiting-sample` が出ていれば window を空けて再実行。それ以外は Phase 5 へ |
-| `3` | **`unobservable`**: durable な進捗 signal をそもそも読めなかったタスクがある (`updated_at` が無い / worktree HEAD が読めない / worktree を持たない)。これは「問題なし」ではなく「判定できなかった」 | 該当タスクを人間が確認し、死んでいるなら `--task <id>` (ゲート無しの override) で戻す |
+| `3` | **`unobservable`**: durable な進捗 signal をそもそも読めなかったタスクがある (`updated_at` が無い / worktree HEAD が読めない / worktree を持たない)。これは「問題なし」ではなく「判定できなかった」 | 該当タスクを人間が確認し、死んでいるなら `--task <id>` (進捗ゲート無しの override。transcript が新しければ拒否) で戻す |
 | `1` | 通常のエラー (run state が読めない・タスクが無い 等) | エラーを読んで修正 |
 
 exit 0/3 のどちらでも、判定不能なタスクは **必ず stderr に id・class・理由つきで出力される**。
@@ -1413,7 +1414,7 @@ condukt state cancel --run <run_id> --task <task_id>
 - 子が共有ファイルに触りたがる → 分類ミス。serial 降格し、新しい worktree で実装し直す（main の作業ツリーでは実装しない）。
 - worktree 残置 → Phase 7 で必ず閉じる。`condukt state gate` が残置を検出する。
 - **stuck worker** → `condukt state abandon --run $RID --task <id>` で `pending` に戻し Phase 5 へ
-  再投入する (この明示指定は人間の override であり意図的にゲート無し)。`--all-stuck` は TTL 超過
+  再投入する (この明示指定は人間の override で進捗ゲートは無いが、worker transcript が新しい間は拒否され、`--force <理由>` で上書きする)。`--all-stuck` は TTL 超過
   かつ **進捗が `Known(Stalled)` と確定した** running タスクだけをまとめて戻す (multi-sample な
   ので 1 回目は何も戻らないのが正常で、`awaiting-sample` として報告され exit 0。**exit 3 は
   `unobservable`** = signal を読めなかったタスクがあるという報告であり、コマンドの故障ではない。

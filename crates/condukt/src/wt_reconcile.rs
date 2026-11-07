@@ -951,7 +951,7 @@ fn claim_progress_verdict(
 /// Three-valued because an unresolvable `$HOME` is not an absence of sessions:
 /// it is an inability to look for them, and the whole point of the third term
 /// of the death rule is that it must be *looked up*, not assumed.
-fn claude_projects_root() -> Determination<PathBuf> {
+pub(crate) fn claude_projects_root() -> Determination<PathBuf> {
     match std::env::var_os("HOME") {
         Some(home) if !home.is_empty() => {
             Determination::Known(PathBuf::from(home).join(".claude").join("projects"))

@@ -136,7 +136,6 @@ fn explicit_abandon_of_task_with_idle_worker_transcript_proceeds() {
 
 /// RED: the worker's transcript was written just now — it is alive.
 #[test]
-#[ignore = "backlog aaae849b: open defect, remove ignore when fixed"]
 fn explicit_abandon_refuses_while_worker_transcript_is_fresh() {
     let (code, stderr) = abandon("fresh", true);
     assert_ne!(

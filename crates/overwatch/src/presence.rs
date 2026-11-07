@@ -5,13 +5,16 @@
 //! session runs `overwatch begin`. A session that never does so left no trace,
 //! so `status` printed `(none)` while sessions were live. This module closes
 //! that gap: `overwatch presence` is wired to the Claude Code SessionStart,
-//! PostToolUse (Edit|Write|MultiEdit|NotebookEdit) and SessionEnd hooks, reads
+//! PostToolUse (Edit|Write|MultiEdit|NotebookEdit, and Agent|Task),
+//! SubagentStop and SessionEnd hooks, reads
 //! the hook payload JSON on stdin, and records it in `presence.json` beside
 //! `leases.json` (same store, keyed by the main worktree root, so every
 //! checkout of the repository shares it). Entries are keyed by session id,
 //! and inside each entry by the worktree of each event's own cwd (see
 //! [`WorktreeActivity`]), so processes sharing a session id from different
-//! worktrees keep their writes attributed to their own worktree.
+//! worktrees keep their writes attributed to their own worktree. Agent/Task
+//! launches and SubagentStop are additionally recorded in `subagents.json`
+//! (see `crate::subagents`).
 //!
 //! Fail-closed contract (CLAUDE.md section 3): an existing `presence.json`
 //! that cannot be read or parsed aborts the hook with a non-zero exit and is
@@ -236,9 +239,22 @@ pub fn record(payload: &Value, now: i64) -> Result<()> {
     };
     let _lock = LeaseLock::acquire_strict(&cwd)
         .map_err(|e| anyhow::anyhow!("presence lock not acquired: {e}"))?;
-    let mut reg = load_presence(&cwd)?;
-    apply_event(&mut reg, payload, now)?;
-    save_presence(&cwd, &reg)
+    let presence = load_presence(&cwd)
+        .and_then(|mut reg| apply_event(&mut reg, payload, now).map(|()| reg))
+        .and_then(|reg| save_presence(&cwd, &reg));
+    // Agent launches / SubagentStop also go to the subagent registry. Recorded
+    // independently of presence.json so a corrupt presence registry cannot
+    // leave an agent unrecorded; either failure still fails the hook.
+    let subagents = if crate::subagents::applies(payload) {
+        crate::subagents::record_locked(&cwd, payload, now)
+    } else {
+        Ok(())
+    };
+    match (presence, subagents) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(e), Ok(())) | (Ok(()), Err(e)) => Err(e),
+        (Err(p), Err(s)) => bail!("presence: {p:#}; subagents: {s:#}"),
+    }
 }
 
 /// `overwatch presence`: read the hook payload from stdin and record it.

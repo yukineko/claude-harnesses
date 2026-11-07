@@ -76,7 +76,7 @@ pub const LEASE_TTL_SECS: i64 = 1800;
 /// returns `Err`. Falling back to `repo_root` would silently re-open the very
 /// partition this function closes: the caller would read a DIFFERENT, possibly
 /// empty store and report "no sessions" as if it had looked at the shared one.
-fn storage_root(cwd: &Path) -> Result<PathBuf> {
+pub(crate) fn storage_root(cwd: &Path) -> Result<PathBuf> {
     let base = harness_core::config::base_dir("overwatch");
     let main_root = match harness_core::projkey::main_worktree_root(cwd) {
         Determination::Known(root) => root,

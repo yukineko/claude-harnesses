@@ -23,7 +23,8 @@ Only exit codes are asserted, never message text.
     python3 -m pytest scripts/test_guard_maintree_bash_conflict_resolve_and_commit.py -q
 
 Written by a test author who did not implement the guard (CLAUDE.md 2.(a)).
-Do NOT weaken the RED test to pass; remove the expectedFailure marker when fixed.
+Do NOT weaken the RED test to pass. It is RED (fails) until the guard is fixed;
+repo convention for Python RED repros is a plain failing test, no skip marker.
 """
 from __future__ import annotations
 
@@ -70,7 +71,6 @@ class ConflictResolveAndCommit(ObserveGuardBase):
                            capture_output=True, text=True)
         self.assertEqual(c.returncode, 0, "anti-vacuity: commit ran: %s" % c.stderr)
 
-    @unittest.expectedFailure
     def test_red_resolve_and_commit_concluding_conflicted_merge_is_allowed(self) -> None:
         merge_head = self._start_conflicted_merge()
         old = git(self.main, "rev-parse", "HEAD").stdout.strip()

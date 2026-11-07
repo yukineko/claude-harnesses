@@ -126,6 +126,16 @@ forge・condukt のスケジューラが再利用）。
   書き込み Deny（`system_path_block`）、`crate::deletion` のシステムディレクトリ refusal は理由に
   `model::SYSTEM_HARM_MARK` を含み、`main::downgrade_on_repeat` は `Decision::is_system_harm` の Deny を
   2 度目以降も Ask に落とさない（他の Deny の repeat 降格〈運用者裁定 2026-09-18〉は不変）。
+- **pipeline で供給される `xargs rm`/`xargs unlink`（backlog 3c750df2）** — `analyze_xargs` は xargs 自身の
+  token しか見ないため `echo /etc/passwd | xargs rm` は operand 無しの `rm` として Allow だった。
+  `detect/find_xargs.rs` の `xargs_pipe_feed`（`analyze_segment` から `line`/`seg_idx` で呼ぶ）が、
+  単一 `|` で xargs segment に供給する前段を読む（stdin のみを読む `sort`/`uniq`/`head`/`tail`/`grep` 系 filter は
+  遡って透過。exec wrapper〈`sudo`・`env` 等〉の後ろの program を見る）。前段が `echo`/`printf` の operand・
+  `find` の search root・`ls` の operand でシステムディレクトリ内を指せば `rm_system_harm_deny` と同じ判定で
+  **Deny（system harm）**（相対パスは raw base〈直前の `cd` 先〉に置いて判定。置けなければ Ask）。前段の出力が
+  コマンド行から分からない（`cat FILE`・`curl`・展開 `$X`・未知 program・`git -C`）ときは **Ask**（subagent では
+  hardened Deny）。非システムの literal パス・`git ls-files`/`diff`/`diff-tree`/`ls-tree`（repo 内）は従来どおり
+  （この規則は判定を足さない）。前段が無い・`-a FILE`・remover 以外の xargs は対象外。
 - **埋め込み shell 文字列の Ask と osascript の削除（backlog 0fefcd3b）** — interpreter program の
   文字列 literal（layer > 0）に対する shell pass の **Ask** は、program が shell に文字列を渡す API
   （`SHELL_STRING_EXEC_MARKERS`: `os.system`/`os.popen`/`subprocess`/`system(`/backtick/`child_process`/

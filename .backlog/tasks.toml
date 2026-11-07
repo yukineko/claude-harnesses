@@ -71,43 +71,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; 
 error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
 
 [[task]]
-id = "6180333a"
-title = "condukt: name found .tdd proof ids on oracle reject; refuse worktree remove for unverified tasks"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 12 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: condukt-operator-gotchas (formerly condukt-fp-oracle-task-id).
-Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): oracle_refusal_names_the_proof_ids_it_found: 'the oracle refusal does not name the proof id it found in .tdd/ (bl-9f3a17c2.red.json)... stderr: condukt: refusing to verify task 't1': no valid fail-to-pass reproduction oracle (tdd oracle exited non-zero ...)'; worktree_remove_refuses_while_the_task_is_unverified: 'condukt worktree remove deleted the worktree of task t1 (status running, not verified)... exit Some(0), exists afterwards: false' / test result: FAILED. 1 passed; 2 failed
-Two sub-defects in one file (can be split by --exact test name). Refusal reason says 'tdd oracle exited non-zero / could not be determined' rather than naming the wrong id.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998372
-updated_at = 1794001893
-weight = 0.0
-issue_number = 1573
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1573"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test audit_b12_oracle_ids_and_teardown -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998877
-detail = """
-exit 101: inished in 2.79s
-
-   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.50s
-     Running tests/audit_b12_oracle_ids_and_teardown.rs (target/debug/deps/audit_b12_oracle_ids_and_teardown-cc015da9e2ee7089)
-error: test failed, to rerun pass `-p condukt --test audit_b12_oracle_ids_and_teardown`"""
-
-[[task]]
 id = "3da84f08"
 title = "condukt guard main-tree: treat a stale backlog lock as live when the holder transcript is fresh"
 project = "/Users/yuki/src/harness"

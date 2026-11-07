@@ -18,7 +18,9 @@ use anyhow::{bail, Context, Result};
 use harness_core::verdict::Determination;
 use serde::{Deserialize, Serialize};
 
+use crate::config::{self, Config};
 use crate::worktree;
+use clap::Subcommand;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 struct ShadowRunFlag {
@@ -153,13 +155,20 @@ fn resolve_discard_branch(
 }
 
 /// Finish a shadow-run: discard the shadow worktree (force-remove + force-
-/// delete its branch — the committed work is never merged) and best-effort
+/// delete its branch — the committed work is never merged) via
+/// [`crate::proof_archive::discard`], which first copies the worktree's tdd
+/// proofs (`.tdd/*.red.json` / `*.green.json`) to the condukt home. If that
+/// persist FAILS the discard is refused (worktree and branch left in place)
+/// and `finish` returns `Err` without recording anything (fail-closed). The
+/// `<run>/<task>` identity is passed as `None`, so it is read from the
+/// worktree branch's recorded task identity; when none is recorded the proofs
+/// are archived UNATTRIBUTED, never skipped. After the discard, best-effort
 /// record the outcome to fugu-router by spawning exactly `fugu_bin`. Returns
 /// whether the fugu-router record call actually landed (`false` when
 /// `fugu_bin` is `None` — the caller could not locate fugu-router, or observed
 /// it absent — or cannot be spawned or exits non-zero; the caller says which
-/// on stdout instead of claiming a record). The worktree is discarded either
-/// way.
+/// on stdout instead of claiming a record). Once the proofs are persisted the
+/// worktree is discarded regardless of the record outcome.
 ///
 /// The binary is a parameter, not a bare `"fugu-router"` PATH lookup, so the
 /// CLI can hand in the same `harness_core::plugin_bin::resolve` result
@@ -171,7 +180,10 @@ fn resolve_discard_branch(
 /// legacy, un-namespaced caller). The ref that gets deleted is resolved by
 /// [`resolve_discard_branch`] BEFORE anything is removed, so a mismatch leaves
 /// the worktree and every branch untouched.
+#[allow(clippy::too_many_arguments)] // cfg+cwd are required by proof_archive::discard
 pub fn finish(
+    cfg: &Config,
+    cwd: &Path,
     repo: &Path,
     worktree_path: &Path,
     branch: &str,
@@ -180,12 +192,13 @@ pub fn finish(
     fugu_bin: Option<&Path>,
 ) -> Result<bool> {
     let target = resolve_discard_branch(repo, worktree_path, run, branch)?;
-    worktree::discard(repo, worktree_path, Some(&target)).with_context(|| {
-        format!(
-            "failed to discard shadow worktree at {}",
-            worktree_path.display()
-        )
-    })?;
+    crate::proof_archive::discard(cfg, cwd, repo, worktree_path, Some(&target), None)
+        .with_context(|| {
+            format!(
+                "failed to discard shadow worktree at {}",
+                worktree_path.display()
+            )
+        })?;
     Ok(match fugu_bin {
         Some(bin) => record_to_fugu_router(outcome, bin),
         // No program to spawn ⇒ nothing was recorded.
@@ -212,6 +225,209 @@ fn record_to_fugu_router(outcome: &ShadowOutcome, fugu_bin: &Path) -> bool {
         Ok(status) => status.success(),
         Err(_) => false, // fugu_bin not spawnable → nothing recorded
     }
+}
+
+#[derive(Subcommand)]
+pub enum ShadowRunAction {
+    /// Permit shadow-run to fire. Off by default.
+    Enable,
+    /// Forbid shadow-run from firing (the default state).
+    Disable,
+    /// Exit 0 if shadow-run is currently enabled, 1 otherwise (mirrors
+    /// `state autonomy-check`'s exit-code contract so callers can branch on it).
+    Status,
+    /// Create the second (shadow) worktree for `--topic` on `--branch`, gated
+    /// on the enable flag. Prints the worktree path on success; the caller
+    /// (the `/condukt` skill, via a worker agent) does the actual implementation
+    /// under `--model` inside it, then calls `finish` to evaluate and discard.
+    Exec {
+        #[arg(long)]
+        topic: String,
+        #[arg(long)]
+        branch: String,
+        /// Run id to namespace the shadow worktree and its branch under, exactly
+        /// as `worktree create --run` does. Omit it for the legacy,
+        /// un-namespaced layout (byte-identical path and ref). Whatever is
+        /// passed here must be passed to `shadow-run finish` too: the branch
+        /// created is the branch deleted.
+        #[arg(long)]
+        run: Option<String>,
+        /// Model the shadow attempt will run under (recorded, not enforced —
+        /// the caller is responsible for actually invoking that model).
+        #[arg(long)]
+        model: String,
+    },
+    /// Persist the shadow worktree's tdd proofs, then discard it (never merge)
+    /// and best-effort record the outcome to fugu-router for later routing
+    /// comparison. If the proofs cannot be persisted, the discard is refused
+    /// (worktree and branch left in place) and nothing is recorded.
+    Finish {
+        #[arg(long)]
+        path: PathBuf,
+        #[arg(long)]
+        branch: String,
+        /// Run id the shadow worktree was cut under (the same `--run` that was
+        /// given to `exec`). Omit it for an un-namespaced shadow worktree. It is
+        /// checked against the branch git actually has checked out at `--path`:
+        /// a mismatch is refused outright rather than force-deleting a ref that
+        /// does not exist while the real branch survives.
+        #[arg(long)]
+        run: Option<String>,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        model: String,
+        #[arg(long)]
+        pass: bool,
+        /// Measured USD cost of the shadow attempt. OMIT it when no cost was
+        /// measured: the outcome is then recorded with the cost unmeasured
+        /// (`fugu-router record` gets no `--cost`), never with an invented
+        /// value. A supplied value must be finite and non-negative, or the
+        /// command is refused before anything is discarded (backlog `e44e233f`).
+        #[arg(long)]
+        cost: Option<f64>,
+        /// Measured wall-clock duration (seconds) of the shadow attempt. OMIT
+        /// it when not measured (recorded as unmeasured, never as 0). A
+        /// supplied value must be a finite positive number, or the command is
+        /// refused before anything is discarded (backlog `e44e233f`).
+        #[arg(long)]
+        duration: Option<f64>,
+    },
+}
+
+/// Dispatch `condukt shadow-run <action>`. All actions are gated by the
+/// on-disk enable flag except `enable`/`disable`/`status` themselves.
+pub fn run_shadow_run(cfg: &Config, cwd: &Path, action: ShadowRunAction) -> Result<()> {
+    // Overridable so integration tests never touch the real `~/.condukt`.
+    let dir = std::env::var("CONDUKT_SHADOW_RUN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| config::base_dir());
+    match action {
+        ShadowRunAction::Enable => {
+            set_enabled(&dir, true)?;
+            println!("shadow-run enabled");
+        }
+        ShadowRunAction::Disable => {
+            set_enabled(&dir, false)?;
+            println!("shadow-run disabled");
+        }
+        ShadowRunAction::Status => {
+            let enabled = is_enabled(&dir);
+            println!("{}", if enabled { "enabled" } else { "disabled" });
+            if !enabled {
+                std::process::exit(1);
+            }
+        }
+        ShadowRunAction::Exec {
+            topic,
+            branch,
+            run,
+            model,
+        } => {
+            if !is_enabled(&dir) {
+                bail!("shadow-run is disabled — run `condukt shadow-run enable` first");
+            }
+            let repo = worktree::toplevel(cwd)?;
+            let path = worktree::create_namespaced(
+                &repo,
+                &cfg.worktree_base,
+                run.as_deref(),
+                &topic,
+                &branch,
+            )?;
+            println!("{}", path.display());
+            eprintln!("condukt: shadow-run worktree ready for model '{model}' at {}; the caller implements there, then calls `shadow-run finish`", path.display());
+        }
+        ShadowRunAction::Finish {
+            path,
+            branch,
+            run,
+            title,
+            model,
+            pass,
+            cost,
+            duration,
+        } => {
+            // Validate the optional measurements BEFORE anything is discarded:
+            // an invalid supplied value is refused outright (omitting the flag
+            // is the only way to say "unmeasured").
+            let cost_usd = validate_cost(cost)?;
+            let duration_secs = validate_duration(duration)?;
+            let repo = worktree::toplevel(cwd)?;
+            let outcome = ShadowOutcome {
+                title,
+                model,
+                pass,
+                cost_usd,
+                duration_secs,
+            };
+            // Resolve fugu-router (plugin cache first, `$PATH` second). Whether
+            // the worktree is discarded does not depend on this lookup (only on
+            // persisting its tdd proofs, see `finish`); only recording does.
+            // Not installed (`Known(None)`) and could-not-look
+            // (`Undetermined`) are reported as different things — neither is
+            // ever read as "recorded".
+            match harness_core::plugin_bin::resolve("fugu-router") {
+                Determination::Known(Some(p)) => {
+                    let recorded = finish(
+                        cfg,
+                        cwd,
+                        &repo,
+                        &path,
+                        &branch,
+                        run.as_deref(),
+                        &outcome,
+                        Some(&p),
+                    )?;
+                    if recorded {
+                        println!("shadow-run discarded and recorded to fugu-router");
+                    } else {
+                        println!(
+                            "shadow-run discarded (fugu-router at {} unavailable or its record failed — outcome not recorded)",
+                            p.display()
+                        );
+                    }
+                }
+                Determination::Known(None) => {
+                    // No program ⇒ `finish` only discards; it returns `false`.
+                    finish(
+                        cfg,
+                        cwd,
+                        &repo,
+                        &path,
+                        &branch,
+                        run.as_deref(),
+                        &outcome,
+                        None,
+                    )?;
+                    println!(
+                        "shadow-run discarded (fugu-router is not installed — outcome not recorded)"
+                    );
+                }
+                Determination::Undetermined(why) => {
+                    // Discard still happens; the outcome is NOT recorded and the
+                    // could-not-look is surfaced on both streams.
+                    finish(
+                        cfg,
+                        cwd,
+                        &repo,
+                        &path,
+                        &branch,
+                        run.as_deref(),
+                        &outcome,
+                        None,
+                    )?;
+                    eprintln!(
+                        "condukt: could not determine whether fugu-router is installed: {why}"
+                    );
+                    println!(
+                        "shadow-run discarded (fugu-router could not be located: {why} — outcome not recorded)"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -311,7 +527,10 @@ mod tests {
         };
         // Explicit nonexistent binary: this test must never reach a real
         // fugu-router (or the user's real ~/.fugu-router store).
+        let cfg = Config::without_config_file();
         let recorded = finish(
+            &cfg,
+            tmp.path(),
             &repo,
             &path,
             branch,

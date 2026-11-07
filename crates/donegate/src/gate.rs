@@ -7,6 +7,7 @@ use globset::{Glob, GlobSetBuilder};
 use harness_core::verdict::{Determination, Reason, Required, Verdict};
 
 use crate::config::{Check, Config};
+use crate::passcache;
 use crate::record::{self, Record};
 use crate::runner::{self, Outcome};
 
@@ -141,18 +142,59 @@ pub fn evaluate(cfg: &Config, root: &Path) -> GateReport {
     };
     let tmp_dir = cfg.state_dir.join("tmp");
 
+    let applicable: Vec<&Check> = cfg.checks.iter().filter(|c| applies(c, &changed)).collect();
+    let skipped: Vec<String> = cfg
+        .checks
+        .iter()
+        .filter(|c| !applies(c, &changed))
+        .map(|c| c.name.clone())
+        .collect();
+
+    // Pass cache (crate::passcache): the repo state is computed once before the
+    // checks run. `None` = undetermined = every check is a MISS and runs.
+    let before = if applicable.is_empty() {
+        None
+    } else {
+        passcache::tree_state(root, &tmp_dir)
+    };
+    let timeout_of = |c: &Check| c.timeout_secs.unwrap_or(cfg.default_timeout_secs).max(1);
+
     let mut ran = Vec::new();
-    let mut skipped = Vec::new();
-    for check in &cfg.checks {
-        if applies(check, &changed) {
-            ran.push(runner::run_check(
-                check,
-                root,
-                cfg.default_timeout_secs,
-                &tmp_dir,
-            ));
+    // Indices into `ran` of checks that were executed now and passed.
+    let mut fresh_passes = Vec::new();
+    for check in &applicable {
+        let hit = before
+            .as_ref()
+            .and_then(|s| passcache::lookup(&cfg.state_dir, root, check, timeout_of(check), s));
+        if let Some(at) = hit {
+            eprintln!(
+                "donegate: check `{}` NOT re-run in {}: CACHED pass from {at} on the identical \
+                 tree and command (pass cache)",
+                check.name,
+                root.display()
+            );
+            ran.push(runner::cached_pass(check, at));
+            continue;
+        }
+        let o = runner::run_check(check, root, cfg.default_timeout_secs, &tmp_dir);
+        if o.passed {
+            fresh_passes.push(ran.len());
         } else {
-            skipped.push(check.name.clone());
+            passcache::forget(&cfg.state_dir, root, &check.name);
+        }
+        ran.push(o);
+    }
+
+    // Store fresh passes only if the tree did not move while the checks ran (a
+    // check that rewrote it, or a concurrent edit, stores nothing).
+    if let Some(before) = &before {
+        if !fresh_passes.is_empty()
+            && passcache::tree_state(root, &tmp_dir).as_ref() == Some(before)
+        {
+            for &i in &fresh_passes {
+                let check = applicable[i];
+                passcache::store(&cfg.state_dir, root, check, timeout_of(check), before);
+            }
         }
     }
 
@@ -205,7 +247,7 @@ fn render_outcome(o: &Outcome) -> String {
 }
 
 /// `stable = true` renders the per-run file paths (the record and temporary
-/// logs, which embed a timestamp / pid) as fixed placeholders, for the repeat
+/// logs, which embed a timestamp / pid) and the check duration as fixed placeholders, for the repeat
 /// identity in [`block_fingerprint`]. Everything else is identical.
 fn render_outcome_as(o: &Outcome, stable: bool) -> String {
     let shown = |p: &Path, placeholder: &str| -> String {
@@ -216,6 +258,13 @@ fn render_outcome_as(o: &Outcome, stable: bool) -> String {
         }
     };
     let mark = if o.passed { "✓" } else { "✗" };
+    if let Some(at) = &o.cached {
+        let at = if stable { "<passed_at>" } else { at.as_str() };
+        return format!(
+            "{mark} {} (CACHED pass from {at}: not re-run, identical tree and command)\n    $ {}",
+            o.name, o.cmd
+        );
+    }
     let detail = if o.timed_out {
         "timed out".to_string()
     } else if let Some(err) = &o.spawn_error {
@@ -226,10 +275,13 @@ fn render_outcome_as(o: &Outcome, stable: bool) -> String {
             None => "killed".to_string(),
         }
     };
-    let mut s = format!(
-        "{mark} {} ({detail}, {:.1}s)\n    $ {}",
-        o.name, o.duration_secs, o.cmd
-    );
+    // The runtime is jitter: it must not leak into the repeat identity.
+    let secs = if stable {
+        "<secs>".to_string()
+    } else {
+        format!("{:.1}s", o.duration_secs)
+    };
+    let mut s = format!("{mark} {} ({detail}, {secs})\n    $ {}", o.name, o.cmd);
     if o.passed {
         return s;
     }
@@ -293,13 +345,14 @@ pub fn block_reason(v: &GateReport, attempt: u32, max: u32) -> String {
 }
 
 /// The repeat-ledger identity of [`block_reason`]: the same text with the
-/// per-run record/temp paths replaced by placeholders. Each attempt's record
+/// per-run record/temp paths (`<record>`, the retention-failure text `<why>`)
+/// and the per-check duration (`<secs>`) replaced by placeholders. Each attempt's record
 /// file has a fresh timestamped name, so keying the ledger on the displayed
 /// reason would make every block look new and the second-occurrence waiver
 /// (`harness_core::repeat`) unreachable. Passed to `emit_stop_block_keyed`.
 ///
 /// The attempt counter (`attempt N/max`) is deliberately KEPT in this
-/// fingerprint, so this ledger alone never waives a repeat below the cap. The
+/// fingerprint. The
 /// identical-finding waiver (same tree content AND same failing output as the
 /// previous block in the session) is decided separately in `main.rs` via
 /// `state::is_repeat`, before this fingerprint is consulted; the attempt cap and
@@ -732,6 +785,7 @@ mod tests {
             duration_secs: 0.0,
             output_tail: String::new(),
             record: Record::None,
+            cached: None,
         });
         let v = failing.verdict();
         assert!(matches!(v, Verdict::Violation(_)), "got {v:?}");
@@ -806,6 +860,7 @@ mod tests {
             },
             optional: false,
             record: Record::None,
+            cached: None,
         }
     }
 
@@ -815,6 +870,23 @@ mod tests {
             skipped: Vec::new(),
             scope: files_scope(),
         }
+    }
+
+    /// The shown reason keeps the real duration; the repeat identity ignores it.
+    #[test]
+    fn displayed_reason_shows_duration_but_fingerprint_ignores_it() {
+        let mut fast = outcome("fmt", false);
+        fast.duration_secs = 0.0;
+        let mut slow = outcome("fmt", false);
+        slow.duration_secs = 7.3;
+        let shown = block_reason(&report_with(vec![slow]), 1, 3);
+        assert!(shown.contains("(exit 1, 7.3s)"), "{shown}");
+        let mut slow = outcome("fmt", false);
+        slow.duration_secs = 7.3;
+        let fp_fast = block_fingerprint(&report_with(vec![fast]), 1, 3);
+        let fp_slow = block_fingerprint(&report_with(vec![slow]), 1, 3);
+        assert_eq!(fp_fast, fp_slow);
+        assert!(!fp_slow.contains("7.3s"), "{fp_slow}");
     }
 
     /// (a) The dishonest claim.

@@ -378,6 +378,116 @@ fn is_git_bool(v: &str) -> bool {
     )
 }
 
+/// The command git will run because config `key` (case-folded by the caller)
+/// is set to `value`, or `None` when that setting runs nothing: a key that is
+/// not command-valued, an empty value (git runs nothing for it), a boolean
+/// for a key that also accepts one (`pager.log=false`), a non-`!` alias (a git
+/// command line, judged by the `git` arm), and `include.path` (it loads a
+/// file; asked about separately by [`judge_git_config`]).
+///
+/// Used by the git exec-capable ban (`super::git::git_exec_ban`, user ruling
+/// 2026-11-07): every setting answered `Some` here is refused outright,
+/// whatever the command is.
+pub(super) fn git_config_command(key: &str, value: &str) -> Option<String> {
+    // A known-safe value for its key ([`is_safe_command_value`]) is the
+    // ordinary program, not a command of the caller's choosing (user rulings
+    // 2026-11-07: 「false positiveは許可できない」, "Allow known-safe values").
+    if is_safe_command_value(key, value) {
+        return None;
+    }
+    match git_key_kind(key)? {
+        GitKeyKind::Include => None,
+        GitKeyKind::Alias => value
+            .trim_start()
+            .strip_prefix('!')
+            .map(|line| line.to_string()),
+        GitKeyKind::Shell { bool_ok } => {
+            if value.trim().is_empty() || (bool_ok && is_git_bool(value)) {
+                None
+            } else {
+                Some(value.strip_prefix('!').unwrap_or(value).to_string())
+            }
+        }
+    }
+}
+
+/// A plain flag word: `-R`, `-FRX`, `--wait`, `--quit-if-one-screen` — no
+/// `=value`, nothing the shell would expand or split on.
+fn is_plain_flag(w: &str) -> bool {
+    let body = w.strip_prefix("--").or_else(|| w.strip_prefix('-'));
+    body.is_some_and(|b| {
+        b.starts_with(|c: char| c.is_ascii_alphabetic())
+            && b.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    })
+}
+
+/// The FIXED known-safe values of a command-valued git config key (user
+/// ruling 2026-11-07, "Allow known-safe values"). True only when the first
+/// word of `value` is on the list for `key` and every later word is a plain
+/// flag ([`is_plain_flag`]):
+///
+/// | key | programs |
+/// |---|---|
+/// | `core.pager`, `pager.<cmd>` | `less`, `more`, `cat` |
+/// | `core.editor`, `sequence.editor` | `vim`, `nano`, `code`, `true`, `:` |
+/// | `credential.helper`, `credential.<url>.helper` | `osxkeychain`, `store`, `cache` |
+/// | `gpg.program` | `gpg` |
+/// | `core.sshcommand` | `ssh` (see below) |
+///
+/// `ssh` additionally accepts a plain value word after a flag (`ssh -i key`):
+/// letters, digits and `. _ / ~ -`, not starting with `-`. A bundle holding
+/// `o` or `F` (`-o ProxyCommand=…`, `-F <config>`) is never safe — those
+/// options carry a command (or a config file that can). Any other key, any
+/// unlisted program, `;`, `$`, a backtick, `!`, a quote or an operand makes
+/// the value unsafe, and the ban applies.
+fn is_safe_command_value(key: &str, value: &str) -> bool {
+    let mut words = value.split_whitespace();
+    let Some(prog) = words.next() else {
+        return false;
+    };
+    let dots = key.matches('.').count();
+    let progs: &[&str] = if key == "core.pager" || (key.starts_with("pager.") && dots == 1) {
+        &["less", "more", "cat"]
+    } else if key == "core.editor" || key == "sequence.editor" {
+        &["vim", "nano", "code", "true", ":"]
+    } else if key == "credential.helper"
+        || (key.starts_with("credential.") && key.ends_with(".helper"))
+    {
+        &["osxkeychain", "store", "cache"]
+    } else if key == "gpg.program" {
+        &["gpg"]
+    } else if key == "core.sshcommand" {
+        &["ssh"]
+    } else {
+        return false;
+    };
+    if !progs.contains(&prog) {
+        return false;
+    }
+    if key != "core.sshcommand" {
+        return words.all(is_plain_flag);
+    }
+    let plain_value = |w: &str| {
+        !w.starts_with('-')
+            && w.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '~' | '-'))
+    };
+    let mut after_flag = false;
+    for w in words {
+        if is_plain_flag(w) {
+            if !w.starts_with("--") && w[1..].contains(['o', 'F']) {
+                return false;
+            }
+            after_flag = true;
+        } else if after_flag && plain_value(w) {
+            after_flag = false;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
 /// Judge the command-valued config set by git's GLOBAL `-c` /
 /// `--config-env` options for the duration of this one command.
 ///

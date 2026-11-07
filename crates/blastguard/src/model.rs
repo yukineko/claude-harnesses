@@ -42,10 +42,39 @@ pub enum Decision {
     Ask(String),
 }
 
+/// Carried, verbatim, by the reason of every `Deny` that refuses a command
+/// for harming the SYSTEM itself (deleting or writing into a system
+/// directory, `/` itself). [`Decision::is_system_harm`] looks for it.
+///
+/// User ruling 2026-11-07: 「いかなる理由であれシステムに害になるコマンドは
+/// denyすべし」 and 「1は絶対にdenyでいい」 — a repeated identical request for
+/// such a command stays `Deny`; the binary's repeat downgrade to `Ask`
+/// (`downgrade_on_repeat`, operator ruling 2026-09-18) skips it. Every other
+/// `Deny` keeps that downgrade.
+///
+/// A marker in the reason, not a variant, so the exhaustive three-way match
+/// below stays exactly three ways. The marker travels with the reason through
+/// every layer that propagates a `Deny` unchanged (nested payloads, wrappers).
+/// Text in a command line can only ADD the marker to a reason (a path that
+/// happens to spell it), which makes a repeat stricter, never looser.
+pub const SYSTEM_HARM_MARK: &str =
+    "[system harm: refused on every request, never handed back as a question]";
+
 impl Decision {
     /// Convenience constructor: `Decision::deny("...")`.
     pub fn deny(reason: impl Into<String>) -> Decision {
         Decision::Deny(reason.into())
+    }
+
+    /// A `Deny` for a command that harms the system itself; the reason carries
+    /// [`SYSTEM_HARM_MARK`].
+    pub fn deny_system_harm(reason: impl Into<String>) -> Decision {
+        Decision::Deny(format!("{} {SYSTEM_HARM_MARK}", reason.into()))
+    }
+
+    /// True for a `Deny` whose reason carries [`SYSTEM_HARM_MARK`].
+    pub fn is_system_harm(&self) -> bool {
+        matches!(self, Decision::Deny(r) if r.contains(SYSTEM_HARM_MARK))
     }
 
     /// Convenience constructor: `Decision::ask("...")`.

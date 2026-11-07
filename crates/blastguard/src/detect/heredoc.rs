@@ -1,6 +1,6 @@
 use super::{
     basename, git_subcommand_index, is_code_interpreter, is_shell, quote_aware_words,
-    split_segments_with_separators, strip_version_suffix, SeparatedSegment,
+    split_segments_with_separators, strip_version_suffix, SegmentSep, SeparatedSegment,
 };
 
 /// True when this segment opens a HERE-DOCUMENT (`<<WORD`, `<<-WORD`,
@@ -222,6 +222,82 @@ pub(super) fn segment_closes_here_document(seg: &str, opener: &HereDocOpener) ->
     line == opener.delimiter
 }
 
+/// The BODY of the here-document opened on the first line of `cmd` — the lines
+/// strictly between the opener line and its closing delimiter line — when, and
+/// only when, `stage` (one pipe stage of `cmd`) is the stage on that first line
+/// that opens it and the shape leaves no doubt about where the body ends.
+/// Otherwise `None`, and the caller keeps treating everything after the first
+/// newline as the program (the restrictive over-approximation).
+///
+/// Backlog aafeaa05: `payload::analyze_interpreter_stdin_exec` took
+/// "everything after the first newline" as the program of
+/// `python3 - <<'PY'`, so a quoted, non-redirect `>` in an ordinary shell
+/// command AFTER the `PY` terminator (`echo '>'`, `grep '^>' x`) was reported
+/// as "the program text contains a `>`" of that program (user ruling R2's
+/// Ask, a Deny in a subagent). The lines after the terminator are not the
+/// program: the shell stops feeding stdin at the delimiter line, and those
+/// lines are judged as ordinary shell by every other rule of `detect_bash`
+/// (a real redirect there, `echo x > .git/hooks/pre-commit`, is still denied
+/// by those rules — pinned by tests/quoted_heredoc_python_gt_fp_20261107.rs).
+///
+/// Restrictive on every doubt; `None` unless ALL of these hold:
+///   * `cmd` has no whitespace other than space, tab and newline (bash keeps a
+///     `\r` in the delimiter word, so a `PY` line would not close `<<'PY'\r`);
+///   * the first line has balanced quotes, does not end in `\` (a
+///     continuation), and contains exactly one `<<` — counted textually, not
+///     quote-aware, so a here-string `<<<` or a second opener also refuses;
+///   * that one opener has a non-empty, QUOTED delimiter. With an unquoted
+///     delimiter bash processes backslash-newline inside the body, so a
+///     delimiter-looking line need not close it;
+///   * `stage` contains `<<` and is a substring of the first line;
+///   * some later line is exactly the delimiter (leading tabs stripped for
+///     `<<-`), see [`segment_closes_here_document`];
+///   * the text after that closing line contains no `<<` at all (textually),
+///     so no later stage can open a second here-document whose body this
+///     narrowing would hide from a stage that merely looks the same.
+pub(super) fn first_line_quoted_here_document_body<'a>(
+    cmd: &'a str,
+    stage: &str,
+) -> Option<&'a str> {
+    if cmd
+        .chars()
+        .any(|c| c.is_whitespace() && !matches!(c, ' ' | '\t' | '\n'))
+    {
+        return None;
+    }
+    let (first, after_first) = cmd.split_once('\n')?;
+    if !quotes_balance(first) || first.ends_with('\\') || first.matches("<<").count() != 1 {
+        return None;
+    }
+    if !here_document_delimiter_is_quoted(first) {
+        return None;
+    }
+    let openers = here_document_openers(first);
+    let [opener] = openers.as_slice() else {
+        return None;
+    };
+    if opener.delimiter.is_empty() {
+        return None;
+    }
+    let stage = stage.trim();
+    if !stage.contains("<<") || !first.contains(stage) {
+        return None;
+    }
+    let mut offset = 0;
+    for line in after_first.split('\n') {
+        if segment_closes_here_document(line, opener) {
+            let rest = &after_first[offset + line.len()..];
+            if rest.contains("<<") {
+                return None;
+            }
+            // The body without the newline that precedes the closing line.
+            return Some(after_first[..offset].strip_suffix('\n').unwrap_or(""));
+        }
+        offset += line.len() + 1;
+    }
+    None
+}
+
 /// Which segments are here-document BODY (data the shell never executes), and
 /// whether any here-document is left OPEN at the end of the line.
 ///
@@ -263,6 +339,126 @@ pub(super) fn here_document_layout(segs: &[SeparatedSegment]) -> (Vec<bool>, Opt
         }
     }
     (is_body, opener_idx)
+}
+
+/// Per segment of [`split_segments_with_separators`]`(cmd)`: `Some(k)` when the
+/// segment lies wholly inside the body (closing delimiter line included) of the
+/// `k`-th CLOSED, QUOTED-delimiter here-document of the line, `None` when it is
+/// the line's own shell text. An empty vector means "no segment is body": the
+/// caller keeps ONE cwd walk over every segment, exactly as before this
+/// existed.
+///
+/// Backlog 547cf2f6: the cwd walk ([`segment_cwd_states`] and the per-segment
+/// loop of [`detect_bash`]) counted the `(`/`)` of such a body as subshell
+/// groups of the line, so one unbalanced `)` in a Rust body
+/// (`.filter(|p| !before.contains(p)) {` is fine, a lone `)` line is not)
+/// marked the line unbalanced, and the literal `cd /abs/wt` before the opener
+/// then made every later relative redirect "after a cd blastguard could not
+/// statically resolve". The bash manual: with a quoted delimiter the body is
+/// not expanded, and the body is the reader's stdin — the shell never parses
+/// it, so it holds no groups and runs no `cd` of the line. The caller walks
+/// each body on its own (it is still judged as code, as if it ran) and the
+/// line past it resumes from the cwd in force at the opener.
+///
+/// Every doubt answers the empty vector (one walk, the old behaviour), because
+/// calling LINE text "body" would hide a real `cd` or `(` from the walk:
+///   * any whitespace other than space, tab or newline anywhere in `cmd`
+///     (`\r` or a no-break space changes where bash ends the delimiter word);
+///   * a non-body line with unbalanced quotes, a trailing `\`, or (on a line
+///     that opens a here-document) any of `\`, `#`, backtick, `$(`, `<(`,
+///     `>(`, `((`, `[[` — constructs where the `<<` may be no opener at all
+///     (a comment, an arithmetic shift, an escaped `\<<`) or where the body may
+///     start elsewhere;
+///   * a line opening more than one here-document, an empty delimiter, an
+///     UNQUOTED delimiter, or a here-document never closed;
+///   * a segment that straddles a body boundary or a segmentation that does not
+///     reproduce `cmd` exactly (the segmenter lost sync with the shell, e.g. a
+///     body apostrophe opened a quote that ran past the delimiter line).
+pub(super) fn quoted_here_document_body_walks(cmd: &str) -> Vec<Option<usize>> {
+    quoted_here_document_body_walks_checked(cmd).unwrap_or_default()
+}
+
+fn quoted_here_document_body_walks_checked(cmd: &str) -> Option<Vec<Option<usize>>> {
+    if !cmd.contains("<<") {
+        return None;
+    }
+    if cmd
+        .chars()
+        .any(|c| c.is_whitespace() && !matches!(c, ' ' | '\t' | '\n'))
+    {
+        return None;
+    }
+    // Byte spans [start, end) of each body: from the line after the opener's
+    // line to the end of the closing delimiter line (newline excluded).
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut pending: Option<HereDocOpener> = None;
+    let mut body_start = 0usize;
+    let mut offset = 0usize;
+    for raw in cmd.split_inclusive('\n') {
+        let line = raw.strip_suffix('\n').unwrap_or(raw);
+        let line_start = offset;
+        offset += raw.len();
+        if let Some(opener) = &pending {
+            let candidate = if opener.strips_tabs {
+                line.trim_start_matches('\t')
+            } else {
+                line
+            };
+            if candidate == opener.delimiter {
+                spans.push((body_start, line_start + line.len()));
+                pending = None;
+            }
+            continue;
+        }
+        if !quotes_balance(line) || line.ends_with('\\') {
+            return None;
+        }
+        let openers = here_document_openers(line);
+        if openers.is_empty() {
+            continue;
+        }
+        let doubtful = ["\\", "#", "`", "$(", "<(", ">(", "((", "[["];
+        if doubtful.iter().any(|d| line.contains(d))
+            || openers.len() != 1
+            || openers[0].delimiter.is_empty()
+            || !here_document_delimiter_is_quoted(line)
+        {
+            return None;
+        }
+        pending = openers.into_iter().next();
+        body_start = offset;
+    }
+    if pending.is_some() || spans.is_empty() {
+        return None;
+    }
+    let segs = split_segments_with_separators(cmd);
+    let mut out = Vec::with_capacity(segs.len());
+    let mut pos = 0usize;
+    for seg in &segs {
+        let (start, end) = (pos, pos + seg.text.len());
+        if cmd.get(start..end) != Some(seg.text.as_str()) {
+            return None;
+        }
+        let mut walk = None;
+        for (k, &(s, e)) in spans.iter().enumerate() {
+            if start >= s && end <= e {
+                walk = Some(k);
+            } else if start < e && end > s {
+                return None;
+            }
+        }
+        out.push(walk);
+        pos = end
+            + match seg.sep_after {
+                SegmentSep::Conditional => 2,
+                SegmentSep::EndOfLine => 0,
+                _ => 1,
+            };
+    }
+    if pos != cmd.len() {
+        return None;
+    }
+    Some(out)
 }
 
 /// Per segment of [`split_segments_with_separators`]`(cmd)`: true when the

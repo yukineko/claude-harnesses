@@ -54,15 +54,48 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+/// The real `tdd` under test: `CONDUKT_TEST_TDD_BIN` if set, otherwise built
+/// once from THIS workspace into the same target dir as the condukt binary.
+/// Independent of PATH and of any installed plugin-cache version.
 fn find_tdd() -> PathBuf {
-    let path = std::env::var("PATH").unwrap_or_default();
-    for d in path.split(':') {
-        let c = Path::new(d).join("tdd");
-        if c.is_file() {
-            return c;
+    static TDD: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    TDD.get_or_init(|| {
+        if let Ok(p) = std::env::var("CONDUKT_TEST_TDD_BIN") {
+            let p = PathBuf::from(p);
+            assert!(
+                p.is_file(),
+                "CONDUKT_TEST_TDD_BIN={} is not a file",
+                p.display()
+            );
+            return p;
         }
-    }
-    panic!("DEPENDENCY MISSING: no `tdd` binary on PATH; this test needs the real tdd");
+        let exe = PathBuf::from(env!("CARGO_BIN_EXE_condukt"));
+        let target = exe
+            .parent()
+            .and_then(|d| d.parent())
+            .expect("target dir above the condukt binary")
+            .to_path_buf();
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let out = Command::new(cargo)
+            .args(["build", "-p", "tdd", "--target-dir"])
+            .arg(&target)
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("spawn cargo build -p tdd");
+        assert!(
+            out.status.success(),
+            "DEPENDENCY MISSING: could not build the workspace `tdd`: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let bin = target.join("debug").join("tdd");
+        assert!(
+            bin.is_file(),
+            "DEPENDENCY MISSING: {} not built",
+            bin.display()
+        );
+        bin
+    })
+    .clone()
 }
 
 struct Fx {
@@ -309,7 +342,6 @@ fn control_check_oracle_valid_before_removal() {
 /// (a1) After `worktree remove`, durable copies of the red+green proofs exist
 /// outside the worktree and check-oracle still reports a valid F->P oracle.
 #[test]
-#[ignore = "RED: condukt records lost at teardown (tdd proofs, verifier verdict) 2026-11-07"]
 fn remove_persists_tdd_proofs_durably() {
     let fx = Fx::new();
     let (wt, branch) = fx.worktree("t5");
@@ -341,7 +373,6 @@ fn remove_persists_tdd_proofs_durably() {
 /// tree itself (whose parent must stay writable so a plain removal CAN
 /// succeed -- proven by the control below).
 #[test]
-#[ignore = "RED: condukt records lost at teardown (tdd proofs, verifier verdict) 2026-11-07"]
 fn remove_is_refused_when_proofs_cannot_be_persisted() {
     let fx = Fx::new();
     let (wt, branch) = fx.worktree("t5");
@@ -412,7 +443,6 @@ fn control_lockdown_does_not_block_removal_without_proofs() {
 /// (b1) Applying a verifier verdict records verdict, confidence and reason in
 /// run state.
 #[test]
-#[ignore = "RED: condukt records lost at teardown (tdd proofs, verifier verdict) 2026-11-07"]
 fn state_set_records_verifier_verdict_confidence_reason() {
     let fx = Fx::new();
     let out = fx.condukt(&[

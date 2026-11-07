@@ -7,8 +7,12 @@ use super::{
 };
 use crate::exclude;
 
+mod comments;
 mod inert_literal;
+mod osascript;
+use comments::strip_hash_comments;
 use inert_literal::{has_dynamic_code_execution, inert_literal_bodies};
+use osascript::osascript_app_delete;
 
 /// Non-shell interpreters that run an inline program supplied as a string
 /// argument (e.g. `python3 -c "…"`, `perl -e "…"`). Like a shell's `-c`, this
@@ -451,80 +455,6 @@ fn interpreter_destructive_call(payload: &str) -> Option<&'static str> {
         .iter()
         .find(|needle| lowered.contains(**needle))
         .copied()
-}
-
-/// `payload` with every `#` line comment removed, quote-aware.
-///
-/// Backlog 6798f47d: `# deliberately does not call shutil.rmtree` was denied
-/// as "it runs `rmtree`". A `#` opens a comment here only at the start of a
-/// line or after whitespace, and only outside `'`/`"`/`` ` `` quotes
-/// (backslash escapes honoured), so `"#{x}"`, `$#a`, `${#v}` and `this.#p`
-/// are kept. `//` is NOT stripped: in Python it is floor division, and code
-/// after it would vanish.
-///
-/// This is not a parser for any one language, and it can be wrong — a JS
-/// private field `{ #p; … }` reads as a comment. That is why its only use is
-/// to tell "a destructive spelling appears outside comments" (Deny, as before)
-/// from "it appears ONLY inside what reads as a comment" (Ask, see
-/// [`interpreter_code_verdict`]). A misreading moves a Deny to an Ask, never
-/// to an Allow.
-///
-/// With `blank_strings`, the contents of quoted strings are dropped too (the
-/// quote characters stay). That text is used ONLY to choose the wording of a
-/// Deny — "it runs `x`" versus "a quoted string spells `x`" — never the verdict.
-/// In particular it is NOT the precondition of the string-only downgrade
-/// (backlog 27795e6e): blanking every quoted body also blanks code inside
-/// interpolation (`f"{os.unlink(p)}"`, `"#{File.delete(p)}"`), so "the spelling
-/// disappears" proves nothing. That downgrade is decided by
-/// [`inert_literal_bodies`] instead.
-fn strip_hash_comments(payload: &str, blank_strings: bool) -> String {
-    let mut out = String::with_capacity(payload.len());
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-    let mut in_comment = false;
-    let mut prev: Option<char> = None;
-    for c in payload.chars() {
-        if in_comment {
-            if c == '\n' {
-                in_comment = false;
-                out.push(c);
-            }
-            prev = Some(c);
-            continue;
-        }
-        match quote {
-            Some(q) => {
-                if escaped {
-                    escaped = false;
-                } else if c == '\\' {
-                    escaped = true;
-                } else if c == q {
-                    quote = None;
-                }
-                if !blank_strings || quote.is_none() {
-                    out.push(c);
-                }
-            }
-            None => {
-                if c == '\\' {
-                    escaped = !escaped;
-                    out.push(c);
-                } else if escaped {
-                    escaped = false;
-                    out.push(c);
-                } else if c == '\'' || c == '"' || c == '`' {
-                    quote = Some(c);
-                    out.push(c);
-                } else if c == '#' && prev.is_none_or(char::is_whitespace) {
-                    in_comment = true;
-                } else {
-                    out.push(c);
-                }
-            }
-        }
-        prev = Some(c);
-    }
-    out
 }
 
 /// Every [`INTERPRETER_DESTRUCTIVE_CALLS`] spelling present in `payload`
@@ -988,6 +918,46 @@ string, but blastguard cannot show that it is not a redirect."
     }
 }
 
+/// APIs (matched case-insensitively as substrings) that hand a STRING to a
+/// shell: Python `os.system`/`os.popen`/`subprocess` (`shell=True` or not — an
+/// argv list is re-joined separately), Perl/Ruby/PHP `system`/backticks/`qx`/
+/// `%x`/`shell_exec`/`passthru`/`proc_open`/`popen`, Node `child_process`/
+/// `execSync`, AppleScript `do shell script`. A false hit only lets a
+/// shell-pass Ask on a literal stand (backlog 0fefcd3b); it never Denies.
+const SHELL_STRING_EXEC_MARKERS: &[&str] = &[
+    "os.system",
+    "os.popen",
+    "subprocess",
+    "popen",
+    "commands.getoutput",
+    "commands.getstatusoutput",
+    "pty.spawn",
+    "system(",
+    "system ",
+    "child_process",
+    "execsync",
+    "shell_exec",
+    "passthru",
+    "proc_open",
+    "qx",
+    "%x",
+    "`",
+    "do shell script",
+];
+
+/// Is `d` the plain "command word is an expansion" Ask of `detect_bash`?
+fn is_expansion_head_ask(d: &Decision) -> bool {
+    matches!(d, Decision::Ask(r) if r.contains(super::EXPANSION_HEAD_TAIL))
+}
+
+/// Does `program` contain a [`SHELL_STRING_EXEC_MARKERS`] entry?
+fn runs_shell_strings(program: &str) -> bool {
+    let lowered = program.to_ascii_lowercase();
+    SHELL_STRING_EXEC_MARKERS
+        .iter()
+        .any(|m| lowered.contains(m))
+}
+
 /// Destructive spellings [`interpreter_program_verdict`] saw but did not deny
 /// on the spot. Each becomes an Ask in [`interpreter_code_verdict`] unless the
 /// scan returns a Deny, which outranks it.
@@ -1028,6 +998,9 @@ fn interpreter_program_verdict(
     // layer-0 payload carries a dynamic-execution marker — a program that can
     // run a string is not one whose strings are shown to be data.
     let dynamic_execution = payloads.iter().any(|p| has_dynamic_code_execution(p));
+    // Backlog 0fefcd3b: whether a string of this program may be handed to a
+    // shell, which makes a shell-pass Ask on a literal count (see below).
+    let shell_strings = payloads.iter().any(|p| runs_shell_strings(p));
     // Bodies of layer-0 literals `inert_literal_bodies` proved inert. A deeper
     // layer is exempt from the destructive-spelling Deny ONLY when it is
     // verbatim one of these (it is the same string contents one layer down);
@@ -1107,8 +1080,33 @@ files or directories outright if that string is run as code; blastguard cannot s
             }
             // `program_ctx`: an undeterminable redirect target is recorded for
             // `interpreter_code_verdict` instead of denied (ruling R2).
-            if let Decision::Deny(reason) = analyze_shell_payload(payload, depth, program_ctx) {
-                return Decision::Deny(reason);
+            //
+            // Backlog 0fefcd3b: an ASK from this shell pass used to be dropped,
+            // so `os.system('echo x > .git/hooks/pre-commit')` was Allow while
+            // the same redirect at top level is the protected-path Ask (Deny
+            // wherever no human can answer). A string literal (layer > 0) of a
+            // program that hands strings to a shell ([`runs_shell_strings`])
+            // is that shell command line, so its Ask is kept as PENDING —
+            // outranked by any Deny the rest of the scan earns. `detect_bash`
+            // directly, not `analyze_shell_payload`: the latter's extra
+            // "command word is an expansion" Ask would fire on every literal
+            // such as `"$HOME/x"`, which is data far more often than a command.
+            // Its Deny is the same (`analyze_shell_payload` denies only through
+            // `detect_bash`).
+            match super::detect_bash(payload, depth + 1, program_ctx) {
+                Decision::Deny(reason) => return Decision::Deny(reason),
+                // The "command word is an expansion" Ask (detect.rs
+                // `EXPANSION_HEAD_TAIL`) is NOT kept: a literal like `"$HOME"`
+                // or an argv element `'$HOME'` is data far more often than a
+                // command. Any other Ask (protected path, ...) is kept.
+                ask @ Decision::Ask(_)
+                    if depth_of_layer > 0 && shell_strings && !is_expansion_head_ask(&ask) =>
+                {
+                    if pending_ask.is_none() {
+                        pending_ask = Some(ask);
+                    }
+                }
+                Decision::Ask(_) | Decision::Allow => {}
             }
             let literals = quoted_string_literals(payload);
             // GATE-DISABLING axis, checked on the OBJECTS rather than the verbs.
@@ -1516,6 +1514,11 @@ pub(super) fn analyze_code_interpreter(
     depth: usize,
     ctx: &Ctx<'_>,
 ) -> Decision {
+    if strip_version_suffix(cmd) == "osascript" {
+        if let Some(deny) = osascript_app_delete(rest) {
+            return deny;
+        }
+    }
     if let Some(pos) = interpreter_inline_eval_pos(cmd, rest) {
         let mut payloads = interpreter_payloads_after(rest, pos);
         // Glued forms, where the program is in the SAME token as the flag:

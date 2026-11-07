@@ -63,7 +63,9 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    従来どおり人間承認へ倒れる。非 autonomous モードでは policy_is_auto=false なので **全 gated が従来どおり
    Escalate**(後方互換・挙動不変)。decision は append-only JSONL に journal 記録され後から可観測。
    classify は散文（title/done_criteria）をコマンドとして解析せず、タスクの `commands`（+ `reproduction_tests`
-   / `checks`）だけをコマンドとして解析する（backlog dc955812）。**`commands` を宣言していないタスクは
+   / `checks`）だけをコマンドとして解析する（backlog dc955812）。schedule の force-gate で散文が効くのは
+   deploy/push/publish の signal だけで、散文が `filter-branch` / `git rebase` 等の名前を挙げているだけでは
+   force-gate しない（backlog 3a0e30a8。それらを実際に実行する宣言 `commands` は従来どおり gate する）。**`commands` を宣言していないタスクは
    判定不能として schedule で force-gate、`gate check` で Escalate になる**ので、decomposition には必ず
    `commands`（何も実行しないなら `[]`）を入れる。
 3. **共有ファイルは直列** — `condukt schedule` が `shared_globs` 設定と file 衝突解析で `serial` に
@@ -597,6 +599,8 @@ condukt state checkpoint --run "$RID" --label baseline   # 復元フロア: 実�
      で開いている質疑を見て `condukt escalate resolve --id <ID> --choice "<選択>"` で答えると、その回答を添えて
      当該タスクを resume できる。`escalate` バイナリが無い等で enqueue に失敗したときのみ従来の即時報告に
      fail-soft する。GATED タスクの承認待ちも同様にこの channel に enqueue してよい。
+
+worker/verifier の完了通知を待つ旨 (「waiting」) を書く前に、停止・未配達の sub-agent が無いか `condukt agents check --session "$SESSION_ID" --run "$RID"` で機械判定する (exit 0 以外 = stalled / ended_undelivered / 判定不能のどれかが blocking。stdout の JSON `blocking` を読み、待たずに再投入か escalate する)。
 
 バッチ内は 1 メッセージで複数 `Task` を同時発行して並列化する。worker が完了するたびに即 verifier を起動し、worker 完了の待ち合わせはしない（後続 worker が動いている間に先行タスクの検証が進む）。`serial` タスクは並列バッチから外して 1 件ずつ実装するが、**順序の制約であって場所の制約ではない**: 各 serial タスクは自分専用の worktree（上記 1.〜2. と同じ `condukt worktree create --run "$RID" --topic <t.id> ...` → `state set ... --worktree "$WP"`）で worker が実装し verifier が検証する。**各 serial タスクの Phase 6 verifier が pass した直後に、Phase 7 を待たず mid-run で**
 `condukt worktree merge --branch condukt/$RID/<t.id> --run "$RID" --task <t.id>` → `condukt worktree remove --path "$WP" --branch condukt/$RID/<t.id>` を実行して既定ブランチへ統合し、**それから次の serial タスクの worktree を作る**（後続は先行タスクの成果を見る。Phase 7 の gate は run 全体を見るので、この順序制約は Phase 7 には任せられない）。merge が HOLD / 衝突したら**次の serial タスクへ進まず止まる**（Phase 7「merge pre-flight 衝突への対処」）。 verifier が fail した serial タスクは**決して merge せず**、serial の連鎖はそこで止まる（次の serial タスクの worktree を作らない）。

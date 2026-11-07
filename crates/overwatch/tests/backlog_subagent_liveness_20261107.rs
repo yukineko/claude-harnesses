@@ -379,7 +379,6 @@ fn healthy(fx: &Fx) -> Vec<Value> {
 }
 
 #[test]
-#[ignore = "backlog subagent-liveness: no subagent registry / per-agent liveness check — RED repro 2026-11-07"]
 fn every_recorded_agent_is_classified_and_long_running_is_not_clean() {
     let fx = Fx::new();
     let mut parent = healthy(&fx);
@@ -450,7 +449,6 @@ fn every_recorded_agent_is_classified_and_long_running_is_not_clean() {
 }
 
 #[test]
-#[ignore = "backlog subagent-liveness: no subagent registry / per-agent liveness check — RED repro 2026-11-07"]
 fn control_all_done_or_progressing_is_clean() {
     let fx = Fx::new();
     let parent = healthy(&fx);
@@ -469,7 +467,6 @@ fn control_all_done_or_progressing_is_clean() {
 /// A registry that cannot be read is never clean, even when every transcript
 /// on disk looks healthy (the transcripts are a partial view without it).
 #[test]
-#[ignore = "backlog subagent-liveness: no subagent registry / per-agent liveness check — RED repro 2026-11-07"]
 fn unreadable_registry_is_not_clean() {
     let fx = Fx::new();
     let parent = healthy(&fx);
@@ -503,7 +500,6 @@ fn unreadable_registry_is_not_clean() {
 /// SubagentStop fired, NO SubagentHandback, and nothing advanced for 28
 /// minutes while the launcher waited. SubagentStop is not a delivered result.
 #[test]
-#[ignore = "backlog subagent-liveness: SubagentStop without handback must not read as done — RED repro 2026-11-07"]
 fn subagent_stop_without_handback_is_not_done() {
     let fx = Fx::new();
     fx.parent(SESSION, &[text(-3000, "dispatching")]);
@@ -531,7 +527,6 @@ fn subagent_stop_without_handback_is_not_done() {
 /// RECORD wiring: the hook that records launches/stops must actually be
 /// registered for those events (a registry nobody feeds is an empty one).
 #[test]
-#[ignore = "backlog subagent-liveness: overwatch hooks.json does not route Agent launches / SubagentStop — RED repro 2026-11-07"]
 fn hooks_route_agent_launch_and_subagent_stop_to_overwatch() {
     let raw =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/hooks/hooks.json")).unwrap();
@@ -564,7 +559,6 @@ fn hooks_route_agent_launch_and_subagent_stop_to_overwatch() {
 /// entry is a hook `attachment` (the common real shape): it is listed neither
 /// as stalled nor as unknown, so its absence reads as "fine".
 #[test]
-#[ignore = "backlog subagent-liveness: overwatch::stalled::scan omits idle agents whose last entry is an attachment — RED repro 2026-11-07"]
 fn status_scanner_does_not_drop_idle_agent_ending_in_attachment() {
     let fx = Fx::new();
     let mut s = bash(-1600, "toolu_s1", "cargo test -p y", "Running");

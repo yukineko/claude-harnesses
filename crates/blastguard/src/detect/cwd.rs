@@ -1,6 +1,7 @@
 use super::{
     basename, chmod_mode_and_targets, compound_views, has_unresolvable_expansion, is_short_flag,
-    normalized_command, positional_operands, split_segments, SegmentView,
+    normalized_command, positional_operands, quoted_here_document_body_walks, split_segments,
+    SegmentView,
 };
 use crate::exclude;
 use crate::model::Decision;
@@ -283,29 +284,121 @@ a protected gate/config path, and refuses to guess"
 /// (f1c170ab).
 pub(super) fn segment_cwd_states(cmd: &str) -> Vec<CwdState> {
     let segs = split_segments(cmd);
-    let mut cwd = CwdState::Root;
-    let mut aliases: HashMap<String, String> = HashMap::new();
     // The same compound-syntax view the loop uses, so `do cd .githooks` moves
     // the directory here exactly as it does there.
     let views = compound_views(cmd);
-    let mut scopes = SubshellCwdScopes::new(&views);
+    // The same walks the loop uses: a quoted here-document body is walked on
+    // its own (backlog 547cf2f6); see `CwdWalks`.
+    let mut walks = CwdWalks::new(cmd, &views);
     let mut out = Vec::with_capacity(segs.len());
     for (seg_idx, seg) in segs.iter().enumerate() {
-        out.push(cwd.clone());
+        let walk = walks.walk_for(seg_idx);
+        out.push(walk.cwd.clone());
         let command = views
             .get(seg_idx)
             .map_or(seg.as_str(), |v| v.command.as_str());
-        scopes.enter(views.get(seg_idx));
-        let (_, _, next_cwd) = advance_cwd_and_rewrite(command, &cwd, &mut aliases);
-        let (after, closed_dirty) = scopes.leave(views.get(seg_idx), &out[seg_idx], next_cwd);
+        walk.scopes.enter(views.get(seg_idx));
+        let (_, _, next_cwd) = advance_cwd_and_rewrite(command, &walk.cwd, &mut walk.aliases);
+        let (after, closed_dirty) = walk
+            .scopes
+            .leave(views.get(seg_idx), &out[seg_idx], next_cwd);
         // `( cd /tmp; true ) > hosts`: the redirect may belong to the group
         // (outer cwd) or sit inside it (inner cwd); see `SubshellCwdScopes`.
         if closed_dirty {
             out[seg_idx] = CwdState::Unknown;
         }
-        cwd = after;
+        walk.cwd = after;
     }
     out
+}
+
+/// The state one cwd walk carries from segment to segment: the directory, the
+/// `ln -s` alias table, and the subshell-group bookkeeping of the segments it
+/// walks.
+pub(super) struct CwdWalk {
+    pub(super) cwd: CwdState,
+    pub(super) aliases: HashMap<String, String>,
+    pub(super) scopes: SubshellCwdScopes,
+}
+
+/// The cwd walks of ONE command line: the line's own walk, plus one walk per
+/// closed quoted here-document body ([`quoted_here_document_body_walks`]).
+///
+/// Backlog 547cf2f6: the shell never parses such a body, so its `(`/`)` are
+/// not groups of the line and its `cd` moves nothing of the line. With ONE
+/// walk, a lone `)` in a Rust body made the line "unbalanced" and turned the
+/// literal `cd /abs/wt` before the opener into an unknown cwd for every later
+/// segment. Now:
+///   * the LINE walk covers only line segments, and its group bookkeeping is
+///     computed over those alone. After a body it resumes where it was at the
+///     opener;
+///   * each BODY walk starts from the line walk's state at the body's first
+///     segment (cwd and aliases copied) and keeps its own group bookkeeping
+///     over its own segments. The body is still judged as code as if it ran,
+///     so a body `cd /etc` still places a later redirect IN THE BODY in `/etc`.
+///
+/// When [`quoted_here_document_body_walks`] answers empty (any doubt), every
+/// segment is on the line walk: one walk over everything, as before.
+pub(super) struct CwdWalks<'v> {
+    walks: Vec<Option<usize>>,
+    views: &'v [SegmentView],
+    line: CwdWalk,
+    body: Option<(usize, CwdWalk)>,
+}
+
+impl<'v> CwdWalks<'v> {
+    /// The walks of `cmd`, whose [`compound_views`] are `views`.
+    pub(super) fn new(cmd: &str, views: &'v [SegmentView]) -> Self {
+        let mut walks = quoted_here_document_body_walks(cmd);
+        if walks.len() != views.len() {
+            // The two splitters disagree: no segment is body.
+            walks.clear();
+        }
+        let line_views = views
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| walks.get(*i).copied().flatten().is_none())
+            .map(|(_, v)| v);
+        let line = CwdWalk {
+            cwd: CwdState::Root,
+            aliases: HashMap::new(),
+            scopes: SubshellCwdScopes::from_views(line_views),
+        };
+        Self {
+            walks,
+            views,
+            line,
+            body: None,
+        }
+    }
+
+    /// The walk segment `seg_idx` belongs to. Call once per segment, in order.
+    pub(super) fn walk_for(&mut self, seg_idx: usize) -> &mut CwdWalk {
+        let Some(k) = self.walks.get(seg_idx).copied().flatten() else {
+            return &mut self.line;
+        };
+        if self.body.as_ref().map(|(id, _)| *id) != Some(k) {
+            let walks = &self.walks;
+            let body_views = self
+                .views
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| walks.get(*i).copied().flatten() == Some(k))
+                .map(|(_, v)| v);
+            self.body = Some((
+                k,
+                CwdWalk {
+                    cwd: self.line.cwd.clone(),
+                    aliases: self.line.aliases.clone(),
+                    scopes: SubshellCwdScopes::from_views(body_views),
+                },
+            ));
+        }
+        match &mut self.body {
+            Some((_, walk)) => walk,
+            None => &mut self.line,
+        }
+    }
 }
 
 /// What the cwd tracking knows after a `(`-group closes.
@@ -361,8 +454,9 @@ pub(super) struct SubshellCwdScopes {
 }
 
 impl SubshellCwdScopes {
-    /// Bookkeeping for the line whose views are `views`.
-    pub(super) fn new(views: &[SegmentView]) -> Self {
+    /// Bookkeeping for the segments whose views are `views`: a whole line's,
+    /// or the subset one cwd walk covers (see [`CwdWalks`]).
+    pub(super) fn from_views<'a>(views: impl Iterator<Item = &'a SegmentView>) -> Self {
         let mut depth: usize = 0;
         let mut unbalanced = false;
         for v in views {

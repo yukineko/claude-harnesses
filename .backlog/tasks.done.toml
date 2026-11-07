@@ -70059,3 +70059,89 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "62a8665c5ec8359b84b1fefd11cd317d4fb07c29"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "3c750df2"
+title = "blastguard: round-2 system-harm bypasses (env git config, unlink/mv/rmdir, quoted/brace/dynamic rm operands, osascript heredoc/app-id, python exec*, repeat marker)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "RED on branch red/bg-round2 (676f7377, main 91531ac1): crates/blastguard/tests/system_harm_bypass_round2_20261107.rs; 7 ignored targets g1a g1b g2 g3 g4 g5 g6 fail, control passes. Rulings 2026-11-07: system harm Deny through any wrapper, repeat stays Deny, exec git wrappers banned, no false positives. Failing variants are in the test failure messages. Not covered by the other fix branch."
+created_at = 1794018631
+updated_at = 1794033603
+weight = 0.0
+issue_number = 1600
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1600"
+issue_closed_at = 1794033606
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test system_harm_bypass_round2_20261107 -- --include-ignored"
+rev = "676f73774070772b04f50167311a9fbe729a958a"
+observed_at = 1794018631
+detail = """
+exit 101: 54s
+
+   Compiling blastguard v0.2.297 (/Users/yuki/src/.harness-worktrees/red-bg-round2/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.68s
+     Running tests/system_harm_bypass_round2_20261107.rs (target/debug/deps/system_harm_bypass_round2_20261107-16d12ff5dd4045b8)
+error: test failed, to rerun pass `-p blastguard --test system_harm_bypass_round2_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test system_harm_bypass_round2_20261107 --test system_harm_bypass_round2b_20261107"
+exit = 0
+passed = 22
+rev = "ae8d560cc65afc37315f25837c559e09b5cfa59a"
+observed_at = 1794033578
+output_digest = "sha256:de7faba6324836fb77e98b5900133aada149fa29f1569b77222ea209080c9850"
+excerpt = """
+
+running 8 tests
+test g1_git_fsmonitor_and_ext_transport_are_deny ... ok
+test g5_python_os_calls_on_system_files_are_deny ... ok
+test g4_osascript_finder_delete_is_deny ... ok
+test g2_unlink_rmdir_mv_system_paths_are_deny ... ok
+test control_benign_shapes_are_not_deny ... ok
+test g1_git_env_config_and_exec_vars_are_deny ... ok
+test g3_rm_operand_spellings_are_deny ... ok
+test g6_repeated_system_harm_stays_deny ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.66s
+
+
+running 14 tests
+test f4_known_safe_gpg_program_is_allow ... ok
+test f2_known_safe_pager_is_allow ... ok
+test control_heredoc_that_calls_os_system_cmd_is_not_allow ... ok
+test f6_quoted_heredoc_python_literal_cmd_is_allow ... ok
+test f3_known_safe_credential_helper_is_allow ... ok
+test f5_known_safe_ssh_flags_are_allow ... ok
+test control_unsafe_values_stay_deny ... ok
+test h3_ansi_c_quoted_git_config_is_deny ... ok
+test h6_osascript_string_concat_obfuscation_is_deny ... ok
+test f1_known_safe_editors_are_allow ... ok
+test h2_ssh_safe_list_holes_are_deny ... ok
+test h1_git_exec_keys_are_deny ... ok
+test h5_system_file_mutators_are_deny ... ok
+test h4_repeated_bisect_and_osascript_stay_deny ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.10s
+
+   Compiling overwatch v0.2.117 (/Users/yuki/src/.harness-worktrees/session-0d3d5bb8/crates/overwatch)
+   Compiling blastguard v0.2.369 (/Users/yuki/src/.harness-worktrees/session-0d3d5bb8/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.95s
+     Running tests/system_harm_bypass_round2_20261107.rs (target/debug/deps/system_harm_bypass_round2_20261107-1b70462fdeca81f6)
+     Running tests/system_harm_bypass_round2b_20261107.rs (target/debug/deps/system_harm_bypass_round2b_20261107-ab91b559dfde43d1)
+"""
+
+[task.closure.red]
+rev = "676f73774070772b04f50167311a9fbe729a958a"
+exit = 101
+kind = "behavioural"

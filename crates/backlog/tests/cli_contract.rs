@@ -1944,9 +1944,7 @@ fn claim_r_edit_status_pending_does_not_release() {
 /// any repo the identity is the canonical cwd.
 #[test]
 fn claim_r_locate_the_ledger_the_same_way() {
-    // (1) Linked worktree and its main tree share one ledger: corrupt the
-    // ledger written by a claim in the worktree; list / plain next / claim must
-    // all refuse from BOTH trees.
+    // (1) Linked worktree and main tree share one ledger: corrupt it; all must refuse.
     let f = Fixture::new("ledgersame");
     let _ = f.add("claimable");
     let _ = claim_id(&f);
@@ -1975,8 +1973,7 @@ fn claim_r_locate_the_ledger_the_same_way() {
         }
     }
 
-    // (2) Outside any repo (pinned store): the ledger is keyed by the
-    // canonical cwd, and list / next / claim all find it there.
+    // (2) Outside any repo (pinned store): ledger keyed by the canonical cwd; all find it.
     let td = tempfile::tempdir().unwrap();
     let home = td.path().join("home");
     let pinned = td.path().join("pinned");
@@ -1988,11 +1985,14 @@ fn claim_r_locate_the_ledger_the_same_way() {
         format!("store_dir = \"{}\"\n", pinned.display()),
     )
     .unwrap();
-    std::fs::write(
-        pinned.join("tasks.toml"),
-        pending_block_with_repro("pin00001", "pinned work", &cwd.to_string_lossy()),
-    )
-    .unwrap();
+    // Project = git checkout nested in the non-git cwd (in its scope), RED repro committed.
+    let g = cwd.join("proj");
+    std::fs::create_dir_all(g.join("tests")).unwrap();
+    std::fs::write(g.join("tests/repro_yes.sh"), "#!/bin/bash\nexit 1\n").unwrap();
+    let _ = [&["init", "-q"][..], &["add", "."], &["commit", "-qm", "i"]].map(|a| plain_git(&g, a));
+    let b = pending_block_with_repro("pin00001", "pinned work", &g.to_string_lossy())
+        .replace("cargo test -p fixture", "bash tests/repro_yes.sh");
+    std::fs::write(pinned.join("tasks.toml"), b).unwrap();
     let o = run_in(&home, &cwd, &["next", "--claim"]);
     assert_eq!(o.code, 0, "{}", o.both());
     let expected = format!(

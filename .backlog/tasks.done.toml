@@ -69309,6 +69309,70 @@ exit = 101
 kind = "behavioural"
 
 [[task]]
+id = "547cf2f6"
+title = "blastguard: quoted heredoc body の内容で cd 先が解決不能扱いになる誤検知を直す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = """Reproduced at 91531ac1/7d8d3a9e. Trigger: cd <literal abs non-protected dir> && cat > rel/path <<'EOF' + quoted body containing an unbalanced delimiter ( ) or backtick, or the exact body line "for p in after.iter().filter(|p| !before.contains(p)) {" + ANY shell line after the closing EOF => Ask (Deny in subagent) "RELATIVE redirect after an earlier cd ... could not statically resolve". Same body with nothing after EOF, or body "x", is Allow. RED output: exact_observed_command_is_judged_like_its_neutral_body_variant: left "deny" right "allow"; unbalanced_delimiter_in_quoted_body_does_not_unresolve_a_literal_cd: [min0] body ")": left "deny" right "allow". Controls (cd "$X", cd /etc, real redirect in body, neutral body) pass. NOT filed: python3 heredoc with ">" before closing quote (print(chr39 a > chr39)) is Ask by documented R2 ruling in interpreter.rs - needs human decision. Do NOT weaken the test to pass; remove the ignore marker when fixed."""
+created_at = 1794020087
+updated_at = 1794027865
+weight = 0.0
+issue_number = 1601
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1601"
+issue_closed_at = 1794027867
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_cd_redirect_fp_20261107 -- --include-ignored"
+rev = "7d8d3a9ec36a0a9d1c859add61811eb40de0cb45"
+observed_at = 1794020087
+detail = """
+exit 101: in 2.82s
+
+   Compiling blastguard v0.2.297 (/Users/yuki/src/.harness-worktrees/bg-cd-redirect-fp/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.35s
+     Running tests/backlog_cd_redirect_fp_20261107.rs (target/debug/deps/backlog_cd_redirect_fp_20261107-fd37e9f81e875de8)
+error: test failed, to rerun pass `-p blastguard --test backlog_cd_redirect_fp_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test backlog_cd_redirect_fp_20261107"
+exit = 0
+passed = 6
+rev = "b08de78dd8220b2233079d4ff16b8873d85820ab"
+observed_at = 1794027829
+output_digest = "sha256:a1642e792ccf2e7958e6ee171545361f705297f92f1875fdc1bcb466e272581d"
+excerpt = """
+
+running 7 tests
+test lone_backtick_in_quoted_body_with_trailing_line_is_allow ... ignored, backlog a63ee085: open defect, remove ignore when fixed
+test control_literal_cd_neutral_body_with_trailing_line_is_allow ... ok
+test control_real_redirect_in_body_with_trailing_line_is_not_allow ... ok
+test control_cd_into_system_dir_then_redirect_is_not_allow ... ok
+test control_unresolvable_cd_then_relative_redirect_is_not_allow ... ok
+test unbalanced_delimiter_in_quoted_body_does_not_unresolve_a_literal_cd ... ok
+test exact_observed_command_is_judged_like_its_neutral_body_variant ... ok
+
+test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.21s
+
+    Blocking waiting for file lock on build directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.42s
+     Running tests/backlog_cd_redirect_fp_20261107.rs (target/debug/deps/backlog_cd_redirect_fp_20261107-fda3847a940478f3)
+"""
+
+[task.closure.red]
+rev = "28e10ea3eca7b116abf821c2b06e250919fd735c"
+exit = 101
+kind = "behavioural"
+
+[[task]]
 id = "fb338793"
 title = "blastguard: system-harming commands and git exec-capable shapes not Deny (bisect run, rebase --exec, submodule foreach, -c alias/pager/editor, difftool --extcmd, --upload-pack, rm /etc/passwd, repeat downgrade)"
 project = "/Users/yuki/src/harness"

@@ -201,6 +201,14 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("this rm deletes from a system directory") {
         return "rm-system-file";
     }
+    // 3c750df2: unlink/rmdir/mv/sed -i/perl -i/chmod/chown/rsync --delete on a
+    // system file (`detect::system_paths`).
+    if reason.contains(", which is inside a system directory — removing, renaming") {
+        return "system-file-mutation";
+    }
+    if reason.contains("whose path depends on an expansion blastguard cannot resolve") {
+        return "system-file-mutation-unresolved";
+    }
     // 0fefcd3b: osascript telling Finder / System Events to delete.
     if reason.contains("`osascript` tells ") {
         return "osascript-app-delete";

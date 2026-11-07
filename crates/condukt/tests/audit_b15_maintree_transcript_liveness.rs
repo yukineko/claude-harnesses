@@ -64,6 +64,12 @@ fn slug(p: &Path) -> String {
 }
 
 fn guard(tag: &str, fresh: bool) -> Output {
+    guard_with(tag, Some(fresh))
+}
+
+/// `transcript`: `Some(fresh)` writes the holder transcript (fresh or idle);
+/// `None` writes no transcript at all.
+fn guard_with(tag: &str, transcript: Option<bool>) -> Output {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join(format!("repo-{tag}"));
     let stubs = tmp.path().join("stubs");
@@ -98,6 +104,7 @@ fn guard(tag: &str, fresh: bool) -> Output {
     for p in projects {
         let d = home.join(".claude/projects").join(slug(&p));
         std::fs::create_dir_all(&d).unwrap();
+        let Some(fresh) = transcript else { continue };
         let f = d.join(format!("{HOLDER}.jsonl"));
         std::fs::write(&f, "{\"type\":\"assistant\"}\n").unwrap();
         if !fresh {
@@ -139,7 +146,6 @@ fn stale_lock_with_idle_holder_transcript_passes() {
 
 /// RED: the holder's transcript is fresh, so the session is live.
 #[test]
-#[ignore = "backlog 3da84f08: open defect, remove ignore when fixed"]
 fn stale_lock_with_fresh_holder_transcript_blocks() {
     let out = guard("fresh", true);
     assert_eq!(
@@ -148,6 +154,22 @@ fn stale_lock_with_fresh_holder_transcript_blocks() {
         "guard main-tree passed a staged primary-tree commit although the lock holder \
          {HOLDER} wrote its transcript seconds ago (lock heartbeat stale, pid dead — \
          neither proves the session ended). stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// RED (user ruling 2026-11-07: Rewrite assert, redo tests, backlog 3da84f08):
+/// a stale lock whose holder has NO transcript cannot be proven ended, so it
+/// is fail-closed: the guard blocks.
+#[test]
+fn stale_lock_with_no_holder_transcript_blocks() {
+    let out = guard_with("notranscript", None);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "guard main-tree passed a staged primary-tree commit although the stale lock holder \
+         {HOLDER} has no transcript at all (liveness cannot be disproven, must fail closed). \
+         stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 }

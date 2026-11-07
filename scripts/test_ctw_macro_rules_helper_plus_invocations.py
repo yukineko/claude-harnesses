@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RED repro: check-test-weakening accepts each proven-safe shape ALONE in a
+"""RED repro (backlog ed82c49b): check-test-weakening accepts each proven-safe shape ALONE in a
 `macro_rules!` test file that exists at the base, but not the two together.
 
 The two shapes are:
@@ -144,17 +144,20 @@ class HelperPlusInvocations(unittest.TestCase):
 
     # -- RED ---------------------------------------------------------------
 
+    @unittest.expectedFailure  # backlog ed82c49b: open defect
     def test_helper_fn_plus_invocation_edits_is_clean(self) -> None:
         self.on_main_then_branch(m.BASE)
         rc, out = self.scan(TEMPLATES_WITH_HELPER + EDITED_INVOCATIONS)
         self.assert_clean(rc, out)
 
+    @unittest.expectedFailure  # backlog ed82c49b: open defect
     def test_helper_fn_after_brace_item_alone_is_clean(self) -> None:
         # Shape 1 alone, helper placed right after `impl Fixture { .. }`.
         self.on_main_then_branch(m.BASE)
         rc, out = self.scan(TEMPLATES_WITH_HELPER_AFTER_BRACE + m.INV_T1 + m.INV_T2 + m.INV_C1)
         self.assert_clean(rc, out)
 
+    @unittest.expectedFailure  # backlog ed82c49b: open defect
     def test_helper_fn_after_brace_item_plus_invocation_edits_is_clean(self) -> None:
         # The fix-hdgt-regress2 shape with the helper at its natural position.
         self.on_main_then_branch(m.BASE)

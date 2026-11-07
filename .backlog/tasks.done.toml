@@ -69058,3 +69058,252 @@ test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "073988436379f7fa2444c2676127cefae1b41363"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "355d3b12"
+title = "lint-changed-crates.sh / test-changed-crates.sh report no crate touched for committed-but-unmerged branch work on a clean tree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "donegate",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-11-07, session c2e3bc17, measured at rev 30d95437. After a subagent committed its work in a run-20261107-034825-70254 task worktree, scripts/lint-changed-crates.sh and scripts/test-changed-crates.sh printed "no crate touched" for it. Both compute the changed set from `git diff --name-only HEAD` plus `git ls-files --others` only. So committed-but-unmerged branch work, changed against the branch's merge-base with main, is never checked by donegate's lint-changed/test-changed. The worker's branch therefore reaches merge unchecked; see the fmt/clippy-before-merge ticket.
+
+RED (python3 -m pytest -q scripts/test_changed_crates_committed_unmerged_20261107.py): 2 failed, 2 passed.
+- test_lint_changed_checks_committed_unmerged_fmt_violation: "lint-changed-crates.sh: committed-but-unmerged crate change on a clean tree was reported as nothing to check (exit 0) --- output --- lint-changed-crates: no crate touched — nothing to lint".
+- test_test_changed_checks_committed_unmerged_failing_test: the same, with "test-changed-crates: no crate touched — nothing to test".
+The fixture is a linked worktree on branch `task`, with a clean tree, a committed change in crates/alpha, and `git diff main...HEAD` naming it. The controls (the same change left uncommitted is caught, exit != 0) pass.
+
+TWIN (the same gap, not covered by this test, and it must be fixed together or the script fix is unreachable): donegate's own scoping, crates/donegate/src/git.rs changed_files, uses `git diff --name-only`, `git diff --cached --name-only` and `ls-files --others`, all uncommitted-only. So on a clean tree the `when_changed = ["**/*.rs"]` checks are SKIPPED ("skipped (no matching changes)") before either script even runs.
+
+Readings:
+(a) Defect: a worktree's unmerged commits are exactly the work that has not yet been checked anywhere. "Nothing changed vs HEAD" reads as "nothing to check", and that is fail-open (CLAUDE.md §3).
+(b) Intended: the scripts are documented as a per-turn tripwire for "crates touched in the working tree" (their headers say so), and committed work is meant to be checked elsewhere.
+How to tell them apart: (b) needs an "elsewhere" that runs. Today nothing runs fmt/clippy/test on commit or merge (pre-commit runs no cargo, and condukt merge runs none: see the fmt/clippy-before-merge ticket). If a merge-time lint+test lands first, (b) becomes true for lint, and this ticket narrows to test-changed or can be closed by ruling. Design notes for the fixer:
+- Diff against the merge-base with the default branch (`git merge-base HEAD main`, or the condukt-recorded branch.<b>.conduktBase).
+- A merge-base that cannot be determined is undetermined and must not mean "nothing to check"."""
+created_at = 1793995742
+updated_at = 1794017701
+weight = 0.0
+issue_number = 1566
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1566"
+issue_closed_at = 1794017704
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest -q scripts/test_changed_crates_committed_unmerged_20261107.py"
+rev = "30d954377e2b64fc6a40bb69d1c3d772d99c2de9"
+observed_at = 1793995742
+detail = """
+exit 1: hort test summary info ============================
+FAILED scripts/test_changed_crates_committed_unmerged_20261107.py::CommittedUnmergedChangesAreChecked::test_lint_changed_checks_committed_unmerged_fmt_violation
+FAILED scripts/test_changed_crates_committed_unmerged_20261107.py::CommittedUnmergedChangesAreChecked::test_test_changed_checks_committed_unmerged_failing_test
+2 failed, 2 passed in 8.72s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q scripts/test_changed_crates_committed_unmerged_20261107.py"
+exit = 0
+passed = 4
+rev = "14116c545ce1f13988eb973b9d58b9f645fd811c"
+observed_at = 1794017679
+output_digest = "sha256:e8624bdfa090873c03f4e541a5930c94f1f658a79038e7282a01ba6a13855674"
+excerpt = """
+....                                                                     [100%]
+4 passed in 11.43s
+"""
+
+[task.closure.red]
+rev = "30d954377e2b64fc6a40bb69d1c3d772d99c2de9"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "ea6547c9"
+title = "condukt loses tdd RED/GREEN proofs at worktree teardown and never persists the verifier verdict"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Observed 2026-11-07 (epoch ~1793999100), orchestrator of condukt run run-20261107-051454-39899 (session c2e3bc17). RED commit cfe21de6 (condukt 0.7.351), written by a non-implementer test-writer agent.
+(a) tdd proofs are deleted at worktree teardown. The orchestrator ran `tdd red --task t5 --cmd ...` / `tdd green --task t5 ...` inside /Users/yuki/.condukt/worktrees/run-20261107-051454-39899-t5; tdd wrote <worktree>/.tdd/t5.red.json and t5.green.json. After `condukt worktree remove --path <wt> --branch condukt/run-20261107-051454-39899/t5`, from /Users/yuki/src/harness `tdd oracle --task t5` printed {"green_cmd":null,"has_green":false,"has_red":false,"red_cmd":null,"transition":"unknown","valid_fp_oracle":false}. The same applies to t1, t2 and t3 of that run. The only surviving trace is fp_oracle_valid:true in ~/.condukt/state/harness-e77d23c7/run-20261107-051454-39899.json. The lost proofs were NOT reconstructed.
+(b) The verifier verdict is persisted nowhere except the agent transcript: condukt state set stores only verifier_model and verifier_agent_id. The run journal holds only checkpoint lines (2 lines for this run).
+Desired: (a) persist proofs durably keyed by run id + task id before teardown, have tdd oracle / condukt state check-oracle read them after teardown, and refuse teardown (non-zero, worktree kept) when persisting fails; (b) record verifier verdict, confidence and reason in the run state for that task when the verdict is applied.
+RED: 3 failed / 4 passed. remove_persists_tdd_proofs_durably: "no durable copy of the tdd proofs survives worktree removal (red copies: [], green copies: [])"; remove_is_refused_when_proofs_cannot_be_persisted: "teardown proceeded although the proofs could not be persisted: exit=Some(0) worktree_exists=false"; state_set_records_verifier_verdict_confidence_reason: "error: unexpected argument --verifier-verdict found" (the CLI shape --verifier-verdict/--verifier-confidence/--verifier-reason was chosen by the test writer and can be changed by ruling). Depends on a real tdd binary on PATH.
+User ruling 2026-11-07: 「わからない過去を確認するより、記録して確認できるようにするのが優先」. Remove the #[ignore]s when fixed."""
+created_at = 1794000173
+updated_at = 1794017758
+weight = 0.0
+issue_number = 1588
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1588"
+issue_closed_at = 1794017760
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_records_lost_at_teardown_20261107 -- --include-ignored"
+rev = "4654feadec854373d65fbed1264853463ef70a93"
+observed_at = 1794000173
+detail = """
+exit 101: ng condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s
+     Running tests/backlog_records_lost_at_teardown_20261107.rs (target/debug/deps/backlog_records_lost_at_teardown_20261107-5c10ad0fd430eca3)
+error: test failed, to rerun pass `-p condukt --test backlog_records_lost_at_teardown_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_records_lost_at_teardown_20261107 -- --include-ignored"
+exit = 0
+passed = 7
+rev = "14116c545ce1f13988eb973b9d58b9f645fd811c"
+observed_at = 1794017708
+output_digest = "sha256:1fb012f6ab695d15283121709cad935690cc7ad57e2b7454536c7d95672e56f4"
+excerpt = """
+
+running 7 tests
+test control_state_set_stores_verifier_model ... ok
+test state_set_records_verifier_verdict_confidence_reason ... ok
+test control_remove_deletes_a_clean_worktree ... ok
+test control_lockdown_does_not_block_removal_without_proofs ... ok
+test control_check_oracle_valid_before_removal ... ok
+test remove_is_refused_when_proofs_cannot_be_persisted ... ok
+test remove_persists_tdd_proofs_durably ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.05s
+
+   Compiling condukt v0.7.365 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.36s
+     Running tests/backlog_records_lost_at_teardown_20261107.rs (target/debug/deps/backlog_records_lost_at_teardown_20261107-851c8ced456677ec)
+"""
+
+[task.closure.red]
+rev = "cfe21de6d545a9e0b0bec9643582b5529572617c"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "afd18dc0"
+title = "overwatch: record every subagent and classify liveness per agent (subagents check)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "liveness",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+Filed 2026-11-07 (JST) from session c2e3bc17. RED commit 029ea0fe (overwatch 0.2.113), worktree branch session-c2e3bc17, merged with main e518bb84 at 9ea61afa.
+RED: crates/overwatch/tests/backlog_subagent_liveness_20261107.rs, 6 #[ignore]d tests. Observed with --ignored: 0 passed, 6 failed (4 fail on `unrecognized subcommand 'subagents'`, 1 on hooks.json not routing Agent/Task PostToolUse + SubagentStop to overwatch, 1 on overwatch::stalled::scan omitting an idle agent whose last entry is an attachment).
+
+USER RULINGS (verbatim, 2026-11-07):
+- 「同様の問題はかなり発生している memoryで処理せず、きちんと記録管理し、確認をいれて」
+- 「確認の方法があるのに確認していないなら嘘つきです、確認したけどわからないなら判定不能です。処理を実行していない、すべてのagentに問えばだいたいわかるはず」
+- 「sub agentを記録し、長期実行のものは確認するようなコードをいれられないか?」
+- 「コードでもないもの、コードで処理できないものへのREDはそもそもゴミなのでしない」 (so the RED asserts classification + exit code only, no prose)
+
+OBSERVED (what the main session did when asked 「sub agentはきちんと動いているか?」 at 20:50:39Z, answered "none stalled"):
+(a) sorted ~/.claude/projects/-Users-yuki-src-harness/c2e3bc17-.../subagents/*.jsonl by mtime and looked only at the top 3 of 6;
+(b) counted ps rows of cargo/tdd processes from OTHER sessions/runs as evidence (run-20261107-051052-69845 also has a t1);
+(c) explained away a contradiction (condukt run state said t1 `failed`) with a guess;
+(d) treated a recent mtime as progress.
+The last entry of most subagent transcripts is type `attachment` (hook_success), which says nothing about done vs stalled.
+User at 20:59:46Z: 「嘘です、止まってるsub agentはいて、とめました。どうしてまちがったのか」.
+
+THE STOPPED AGENT (observed in transcripts):
+- id a56b4006f1b96dc82, condukt:condukt-verifier "t5-verify: env failure classification", model haiku (Haiku 4.5), parentAgentId aa9207a745d517f90 (the condukt orchestrator for run-20261107-051454-39899), spawnDepth 2.
+- 20:28:05Z its foreground Bash `for f in scripts/test_*.py ...` (every scripts test, not needed by its task) hit the 120s timeout and was moved to background as bftamsqp2; it kept running.
+- 20:29:08Z (05:29:08 JST) last real activity: assistant TEXT "verification report", then SubagentStop hook fired. It did NOT call SubagentHandback. The harness nevertheless enqueued <status>completed</status> for a56b4006 at 20:29:11Z to the orchestrator.
+- 20:29 to 20:57 the orchestrator repeatedly wrote "Waiting on ... t5 verifier" (28 min) with no per-agent check.
+- 20:57:16Z the user messaged the agent directly: 「これ止ってない?」. 20:57:32Z the orchestrator SendMessage'd it ("you have run 34 minutes ... deliver your verdict"). 20:58:04Z orchestrator TaskStop(a56b4006) was refused: "Task a56b4006f1b96dc82 is owned by a56b4006f1b96dc82; agent aa9207a745d517f90 cannot stop it." It then killed shell pid 2348 and its pytest child; bftamsqp2 notified `failed` at 20:58:06Z. 20:58:35Z the agent finally called SubagentHandback (after a [handback-send-enforce] reminder) and ended "Done." at 20:58:36Z.
+- Over its life SubagentStop fired 4 times and `completed` was notified 3+ times for the same agent id (resumed by messages).
+
+DOES THE TRANSCRIPT GIVE A DETERMINISTIC STALL SIGNAL? Partially, and the obvious signals are wrong:
+- mtime/last entry: the last entry was an attachment (SubagentStop hook_success) -> overwatch::stalled::scan (the `overwatch status` scanner) silently treats it as fine (it only flags a last-entry assistant tool_use). RED test 6.
+- `completed` notification and SubagentStop both fired while the result was NOT delivered and the launcher was still waiting -> neither is "done". The deterministic done signal observed is a SubagentHandback tool_use whose tool_result says success:true. RED test 4.
+- Deterministic stall evidence that WAS available: no new tool_result for 28 min past its last TEXT, no SubagentHandback, launcher still waiting, plus its own background task (bftamsqp2) still running. Ambiguity: a background-launched agent whose turn ended without handback is indistinguishable, from the transcript alone, from one whose final TEXT is the intended result (agents not under handback-send-enforce); the classifier must treat "ended, no delivered result" as not-done (stalled or query_required), never done.
+
+DESIRED SHAPE (the RED's API, not implemented):
+- RECORD: `overwatch presence` (already the hook-written per-session registry under ~/.overwatch/<key>/overwatch/) also records each Agent launch from its PostToolUse payload (tool_response.agentId, async_launched; nested launches carry payload agent_id = launcher) and each SubagentStop. hooks.json must route PostToolUse Agent|Task and SubagentStop to it. UNVERIFIED: the exact PostToolUse payload shape for async Agent launches and whether nested-launch payloads carry agent_id; the fixture copies the observed toolUseResult {isAsync,status:async_launched,agentId}. Verify against a real payload before implementing.
+- CHECK: `overwatch subagents --session <id> --stall-secs <n> --json` -> {"clean", "agents":[{"agent_id","state"}]} for EVERY recorded agent of the session (nested included, other sessions excluded), state one of done / progressing / stalled / query_required / undetermined. done = delivered result (handback success). progressing = new, changing tool results within the window (entry timestamps, never mtime or hook attachments). stalled = no new tool result past threshold, OR repeated identical tool calls, OR a status query (SendMessage from parent) unanswered past the window. query_required = long-running candidate the parent must query now (names the id). undetermined = checked and still unknown (unreadable/unparseable transcript, recorded agent with no transcript, unreadable registry -> not clean). Exit 0 iff all done/progressing, else 1. Never "all fine" from a partial view; never count processes it cannot attribute to the session/run. A `--run <condukt-run-id>` selector (map run tasks' recorded agent ids to the same classification) is still to design; not in the RED.
+- A Stop/PostToolUse systemMessage that names the query_required/stalled ids so the parent actually queries them is part of the fix; not asserted in the RED (would be prose).
+
+PROCEDURE RULE (user ruling above): to answer any liveness question, enumerate EVERY agent, query each running one (SendMessage; an agent that does not answer within its next tool round is a strong stall signal), and classify each as done / progressing (answered with a concrete recent action) / stalled (no answer or no advance) / undetermined (queried and checked, still unknown). Answering without doing this is the defect: a state claimed without running an available check is a false report, not "undetermined". The main-session /flow skill and the condukt skill instructions should call `overwatch subagents` (once it exists) before answering any liveness question, and their "Waiting on X" loops should run it instead of waiting blindly.
+
+TWO READINGS and how to tell them apart:
+(a) missing mechanical check: nothing records subagents or classifies them, so the answer is unavoidably a guess. Supported by: no `subagents` subcommand, hooks.json does not route Agent/SubagentStop to overwatch, stalled::scan drops the observed shape (all RED).
+(b) intended human-judgment area: liveness was meant to be judged by the model reading transcripts. Refuted as a sufficient design by the observations: the judgment used mtime/partial views/foreign ps rows and was wrong; the user ruled it must be a record + mechanical check. Tell them apart by whether the RED's classifier can reproduce the user's verdict on the a56b4006 fixture without human input; it can (no handback + no new tool result for 28 min), so (a).
+
+SUB-FINDINGS (not fixed):
+- A verifier ran an unbounded full-suite foreground loop (`for f in scripts/test_*.py`) for ~34 min, which its task did not need. Not testable as code behavior of a crate today (it is agent behavior); a code-level guard would be a stuckguard/blastguard rule on unbounded test loops inside verifier agents. Mentioned only.
+- TaskStop from a parent agent on its own child is refused ("owned by a56b4006f1b96dc82") - harness behavior, outside this repo.
+- condukt subagent-stop logs "no ..." on every SubagentStop of these agents (cwd not in a task worktree), the coverage gap its doc already states."""
+created_at = 1793999490
+updated_at = 1794017791
+weight = 0.0
+issue_number = 1587
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1587"
+issue_closed_at = 1794017794
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p overwatch --test backlog_subagent_liveness_20261107 -- --ignored"
+rev = "9ea61afadbda9b6d3069333ef36cdd999d91da0c"
+observed_at = 1793999490
+detail = """
+exit 101: t_clean
+
+test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.63s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/backlog_subagent_liveness_20261107.rs (target/debug/deps/backlog_subagent_liveness_20261107-1799d8cbb2e03741)
+error: test failed, to rerun pass `-p overwatch --test backlog_subagent_liveness_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p overwatch --test backlog_subagent_liveness_20261107 -- --include-ignored"
+exit = 0
+passed = 6
+rev = "14116c545ce1f13988eb973b9d58b9f645fd811c"
+observed_at = 1794017770
+output_digest = "sha256:97eff7f30a8fdace99bc5345b566ff129ead43055d00eae618a0fe867eb23840"
+excerpt = """
+
+running 6 tests
+test hooks_route_agent_launch_and_subagent_stop_to_overwatch ... ok
+test status_scanner_does_not_drop_idle_agent_ending_in_attachment ... ok
+test subagent_stop_without_handback_is_not_done ... ok
+test unreadable_registry_is_not_clean ... ok
+test control_all_done_or_progressing_is_clean ... ok
+test every_recorded_agent_is_classified_and_long_running_is_not_clean ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/backlog_subagent_liveness_20261107.rs (target/debug/deps/backlog_subagent_liveness_20261107-a9734287dc35d08b)
+"""
+
+[task.closure.red]
+rev = "029ea0fed56e9aa795fa6fee33b322de2dbcfd22"
+exit = 101
+kind = "behavioural"

@@ -68979,3 +68979,135 @@ test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "43034f75"
+title = "blastguard: Ask on deleting an unmerged branch or force-removing a dirty worktree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 1 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: worktree-always-merge-then-delete.
+Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 3 of 6 cases have the wrong verdict: `git branch -D unmerged`, `git branch --delete --force unmerged`, `git worktree remove --force <...>/.harness-worktrees/dirty` each 'want ask, got allow ()'; test result: FAILED. Controls (branch -d/-D merged, worktree remove clean) stay Allow.
+Readings: (a) 'merged' = ancestor of the default branch (audit; pinned); (b) git's own -d rule (merged into upstream or HEAD). Fixture cannot separate them (HEAD is main, no upstream). To tell apart: add a branch merged into a non-default HEAD but not main: (a) Ask, (b) Allow. Dirty worktree has both a tracked edit and an untracked file; an untracked-only case would decide whether untracked alone counts as dirty.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998241
+updated_at = 1794029543
+weight = 0.0
+issue_number = 1568
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1568"
+issue_closed_at = 1794029546
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 -- --include-ignored deleting_unmerged_branch_or_dirty_worktree_is_ask"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998833
+detail = """
+exit 101: ; finished in 3.13s
+
+   Compiling blastguard v0.2.288 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.43s
+     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-6f3de29852866f22)
+error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 deleting_unmerged_branch_or_dirty_worktree_is_ask"
+exit = 0
+passed = 1
+rev = "fbe9e6a44e0f496aefa429a06f71d22761b6280b"
+observed_at = 1794029509
+output_digest = "sha256:8b5145fea450338092f573ff298ebbfa3895c6bf1b6dbe2f83f4fd03a859a8c7"
+excerpt = """
+
+running 1 test
+test deleting_unmerged_branch_or_dirty_worktree_is_ask ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 1.47s
+
+   Compiling blastguard v0.2.303 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.59s
+     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-0a2375061013d473)
+"""
+
+[task.closure.red]
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "e9325654"
+title = "blastguard: Ask on whole-tree stage (git add -A/--all/., commit -a)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 3 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: condukt-operator-gotchas (formerly condukt-worker-dirty-tree-commit).
+Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 6 of 9 cases have the wrong verdict: `git add -A`, `git add --all`, `git add .`, `git commit -a -m wip`, `git commit -am wip`, `git commit --all -m wip` each 'want ask, got allow ()'; test result: FAILED. Controls (add tracked.txt, commit -m msg, commit -m msg -- tracked.txt) stay Allow.
+Readings: (a) `git add .` is always Ask (pinned); (b) Ask only when the pathspec reaches files outside the session's own changes. To tell apart: under (b) `add .` in a clean tree is Allow, so a clean-tree case would be needed.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998286
+updated_at = 1794029587
+weight = 0.0
+issue_number = 1569
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1569"
+issue_closed_at = 1794029590
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 -- --include-ignored whole_tree_stage_or_commit_all_is_ask"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998841
+detail = """
+exit 101: _or_commit_all_is_ask
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-6f3de29852866f22)
+error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 whole_tree_stage_or_commit_all_is_ask"
+exit = 0
+passed = 1
+rev = "fbe9e6a44e0f496aefa429a06f71d22761b6280b"
+observed_at = 1794029546
+output_digest = "sha256:e2646e1377e0110dc37c3382baf97e59176f9e9a2151721900c1cde78651dfaa"
+excerpt = """
+
+running 1 test
+test whole_tree_stage_or_commit_all_is_ask ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 1.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-0a2375061013d473)
+"""
+
+[task.closure.red]
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+exit = 101
+kind = "behavioural"

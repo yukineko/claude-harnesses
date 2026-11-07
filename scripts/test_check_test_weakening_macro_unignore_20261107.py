@@ -89,7 +89,6 @@ class MacroUnignore(unittest.TestCase):
                            text=True, timeout=60)
         return r.returncode, r.stdout + r.stderr
 
-    @unittest.expectedFailure  # RED: Undetermined raised before findings exist (check-test-weakening.py ~1782-1793)
     def test_target_deleting_only_template_ignore_passes(self) -> None:
         self.base(render(True, INVOCATIONS))
         self.change(render(False, INVOCATIONS))

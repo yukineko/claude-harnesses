@@ -32,81 +32,6 @@ FAILED scripts/test_check_test_weakening_macro_unignore.py::MacroUnignore::test_
 ============================== 1 failed in 0.54s ==============================='''
 
 [[task]]
-id = "43034f75"
-title = "blastguard: Ask on deleting an unmerged branch or force-removing a dirty worktree"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 1 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: worktree-always-merge-then-delete.
-Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 3 of 6 cases have the wrong verdict: `git branch -D unmerged`, `git branch --delete --force unmerged`, `git worktree remove --force <...>/.harness-worktrees/dirty` each 'want ask, got allow ()'; test result: FAILED. Controls (branch -d/-D merged, worktree remove clean) stay Allow.
-Readings: (a) 'merged' = ancestor of the default branch (audit; pinned); (b) git's own -d rule (merged into upstream or HEAD). Fixture cannot separate them (HEAD is main, no upstream). To tell apart: add a branch merged into a non-default HEAD but not main: (a) Ask, (b) Allow. Dirty worktree has both a tracked edit and an untracked file; an untracked-only case would decide whether untracked alone counts as dirty.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998241
-updated_at = 1794001884
-weight = 0.0
-issue_number = 1568
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1568"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 -- --include-ignored deleting_unmerged_branch_or_dirty_worktree_is_ask"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998833
-detail = """
-exit 101: ; finished in 3.13s
-
-   Compiling blastguard v0.2.288 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.43s
-     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-6f3de29852866f22)
-error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
-
-[[task]]
-id = "e9325654"
-title = "blastguard: Ask on whole-tree stage (git add -A/--all/., commit -a)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 3 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: condukt-operator-gotchas (formerly condukt-worker-dirty-tree-commit).
-Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 6 of 9 cases have the wrong verdict: `git add -A`, `git add --all`, `git add .`, `git commit -a -m wip`, `git commit -am wip`, `git commit --all -m wip` each 'want ask, got allow ()'; test result: FAILED. Controls (add tracked.txt, commit -m msg, commit -m msg -- tracked.txt) stay Allow.
-Readings: (a) `git add .` is always Ask (pinned); (b) Ask only when the pathspec reaches files outside the session's own changes. To tell apart: under (b) `add .` in a clean tree is Allow, so a clean-tree case would be needed.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998286
-updated_at = 1794001886
-weight = 0.0
-issue_number = 1569
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1569"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 -- --include-ignored whole_tree_stage_or_commit_all_is_ask"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998841
-detail = """
-exit 101: _or_commit_all_is_ask
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.53s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
-     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-6f3de29852866f22)
-error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
-
-[[task]]
 id = "ef7c9fbe"
 title = "blastguard: Ask on git clone / mkdir -p / cp -r outside managed places"
 project = "/Users/yuki/src/harness"
@@ -144,79 +69,6 @@ test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; 
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
      Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-6f3de29852866f22)
 error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
-
-[[task]]
-id = "1ca662ec"
-title = "condukt verify: refuse a task whose worktree differs from HEAD"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 2 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: green-tests-prove-worktree-not-head.
-Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left != right` failed: state set --status verified accepted a task whose worktree has an UNCOMMITTED change to tracked source (gate.rs)... stderr: run 'run-b02-dirty': 1/1 verified  left: 0 right: 0 / test result: FAILED. 1 passed; 1 failed
-Readings: (a) refuse when the task worktree has uncommitted changes (pinned); (b) require the tdd green proof bound to HEAD^{tree} - proofs record no tree hash today (only passed/cmd), so (b) needs a tdd proof-format change and is not RED-testable via today's API. To tell apart: a clean tree whose proof was recorded at an older commit is refused only under (b).
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998293
-updated_at = 1794001885
-weight = 0.0
-issue_number = 1571
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1571"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test audit_b02_verify_dirty_worktree -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998848
-detail = """
-exit 101: eds/crates/blastguard)
-   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.83s
-     Running tests/audit_b02_verify_dirty_worktree.rs (target/debug/deps/audit_b02_verify_dirty_worktree-fde283566c97c0c8)
-error: test failed, to rerun pass `-p condukt --test audit_b02_verify_dirty_worktree`"""
-
-[[task]]
-id = "aaae849b"
-title = "condukt state abandon --task: refuse while the worker transcript is fresh"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 5 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: condukt-operator-gotchas (formerly condukt-redispatch-stuck-worker-dup).
-Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left != right` failed: state abandon --task reset a running task whose worker transcript (agent-a0b05f00dfeedbeef.jsonl) was modified seconds ago... stderr: abandoned 1 task(s): t1  left: 0 right: 0 / test result: FAILED. 1 passed; 1 failed
-Ambiguity: transcript location is an assumed convention ($HOME/.claude/projects/<slug(run cwd)>/<session>/subagents/agent-<agent_id>.jsonl, literal and canonical spellings). A fix looking elsewhere (e.g. worktree-path slug) fails this test while possibly valid; check the real layout first. A --force <reason> escape is not exercised.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998368
-updated_at = 1794001888
-weight = 0.0
-issue_number = 1572
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1572"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test audit_b05_abandon_live_worker -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998870
-detail = """
-exit 101: tered out; finished in 3.89s
-
-   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
-     Running tests/audit_b05_abandon_live_worker.rs (target/debug/deps/audit_b05_abandon_live_worker-77dc06c4c36649c0)
-error: test failed, to rerun pass `-p condukt --test audit_b05_abandon_live_worker`"""
 
 [[task]]
 id = "6180333a"
@@ -738,6 +590,145 @@ FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::tes
 ========================= 3 failed, 2 passed in 12.26s ========================="""
 
 [[task]]
+id = "39e8e4cd"
+title = "check-test-weakening: Undetermined on additive-only edit to file with macro_rules! #[test]"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794029590
+updated_at = 1794029590
+weight = 0.0
+issue_number = 1609
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1609"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_macro_additive.py::MacroAdditive::test_additive_non_test_line_is_not_undetermined"
+rev = "fbe9e6a44e0f496aefa429a06f71d22761b6280b"
+observed_at = 1794029590
+detail = '''
+exit 1: ved generated tests cannot be ruled out\n'
+
+scripts/test_check_test_weakening_macro_additive.py:102: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_macro_additive.py::MacroAdditive::test_additive_non_test_line_is_not_undetermined
+============================== 1 failed in 0.90s ==============================='''
+
+[[task]]
+id = "e2b9ffb1"
+title = "blastguard CRITICAL: no-heredoc fail-open — # comment with a quote / escaped quote hides the next line; <(...) body unanalysed (rm -rf /etc Allow)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers; matrix in the test file doc comment). User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed; do not weaken the test."
+created_at = 1794031539
+updated_at = 1794031539
+weight = 0.0
+issue_number = 1610
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1610"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_b_same_hole_without_any_heredoc -- --include-ignored"
+rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
+observed_at = 1794031539
+detail = """
+exit 101: ng blastguard v0.2.307 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.18s
+     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
+error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
+
+[[task]]
+id = "089bedd4"
+title = "blastguard: bash 3.2 early-close of $(...) — text after ) mis-read (escaped quote, #-comment quote, <( ) hides next line → Allow)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers; matrix in the test file doc comment). User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed; do not weaken the test."
+created_at = 1794031557
+updated_at = 1794031557
+weight = 0.0
+issue_number = 1611
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1611"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_a_text_after_early_close_hides_next_line -- --include-ignored"
+rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
+observed_at = 1794031557
+detail = """
+exit 101:  result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.35s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
+error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
+
+[[task]]
+id = "5916d385"
+title = "blastguard: zsh expands unquoted <<EOF body in $( after stray ) or ' before backtick/$(P) → Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers; matrix in the test file doc comment). User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed; do not weaken the test."
+created_at = 1794031565
+updated_at = 1794031565
+weight = 0.0
+issue_number = 1612
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1612"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_c_zsh_unquoted_heredoc_expansion_after_stray_quote -- --include-ignored"
+rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
+observed_at = 1794031565
+detail = """
+exit 101:  result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.93s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
+error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
+
+[[task]]
+id = "d328ea88"
+title = "blastguard: bash 3.2 reading — comment line with quote/backtick/backslash gives Ask where Deny is wanted"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers). Fail-closed (Ask) today; Deny wanted for harmful targets. User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed."
+created_at = 1794032629
+updated_at = 1794032629
+weight = 0.0
+issue_number = 1614
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1614"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_d_comment_with_quote_is_ask_but_deny_wanted -- --include-ignored"
+rev = "64ae2a2320d93179c1f9b810f78375c47601851d"
+observed_at = 1794032629
+detail = """
+exit 101: ng blastguard v0.2.308 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.79s
+     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-38355bb113e5f23c)
+error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
+
+[[task]]
 id = "214ebb1f"
 title = "condukt tests need ambient tdd on PATH: donegate Stop hook (no plugin bin dirs) fails 4 controls with DEPENDENCY MISSING"
 project = "/Users/yuki/src/harness"
@@ -912,13 +903,15 @@ project_unresolved = false
 tags = []
 touched_files = []
 status = "pending"
-notes = '''VERBATIM RED (HEAD 81903ff2, blastguard 0.2.305, subagent payload): exact_observed_commit_command_is_allow: assertion left == right failed: quoted heredoc commit message is data; left: "deny", right: "allow". Deny reason: '> EOF' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve — it cannot tell whether this lands in a system directory or on a protected gate/config path, and refuses to guess. MINIMIZED TRIGGER: a quoted heredoc body LINE ENDING IN '>' immediately before the closing delimiter, when a second command sits between the cd and the heredoc: cd D; true && cat <<'EOF'\nx>\nEOF (also cd D; ls; cat <<'EOF'..., cd D; git add -A && git commit -F - <<'EOF'\nCo-Authored-By: A <n@a.com>\nEOF). The scanner reads '>' newline 'EOF' as the redirect '> EOF'. NOT triggering: cd D; cat <<'EOF' (single command), cd D && A && git commit (all &&), body without a trailing '>'. README.ja.md only exempts quoted bodies without | ; & (documented conservative scan), but the delimiter line must not be taken as a redirect target and the cd (a literal absolute path) is resolvable. Tests: crates/blastguard/tests/backlog_eof_redirect_fp_20261107.rs. Do NOT weaken the test to pass; remove the ignore marker when fixed.'''
+notes = '''
+VERBATIM RED (HEAD 81903ff2, blastguard 0.2.305, subagent payload): exact_observed_commit_command_is_allow: assertion left == right failed: quoted heredoc commit message is data; left: "deny", right: "allow". Deny reason: '> EOF' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve — it cannot tell whether this lands in a system directory or on a protected gate/config path, and refuses to guess. MINIMIZED TRIGGER: a quoted heredoc body LINE ENDING IN '>' immediately before the closing delimiter, when a second command sits between the cd and the heredoc: cd D; true && cat <<'EOF'\nx>\nEOF (also cd D; ls; cat <<'EOF'..., cd D; git add -A && git commit -F - <<'EOF'\nCo-Authored-By: A <n@a.com>\nEOF). The scanner reads '>' newline 'EOF' as the redirect '> EOF'. NOT triggering: cd D; cat <<'EOF' (single command), cd D && A && git commit (all &&), body without a trailing '>'. README.ja.md only exempts quoted bodies without | ; & (documented conservative scan), but the delimiter line must not be taken as a redirect target and the cd (a literal absolute path) is resolvable. Tests: crates/blastguard/tests/backlog_eof_redirect_fp_20261107.rs. Do NOT weaken the test to pass; remove the ignore marker when fixed.
+Cross-session note 2026-11-07 (session bf349dd5, merge 8d73ff09): the exact observed command stages with `git add -A`, which is now Ask by user ruling (e9325654; Deny inside a subagent). The ignored REDs exact_observed_commit_command_is_allow / body_line_ending_in_gt_* that keep `git add -A` can never reach Allow; re-anchor their staging to an explicit path (as done for control_same_commit_neutral_message_is_allow) when fixing. Ask the user if the exact-command form must stay.'''
 created_at = 1794031849
-updated_at = 1794031849
+updated_at = 1794037877
 weight = 0.0
 issue_number = 1613
 issue_url = "https://github.com/yukineko/claude-harnesses/issues/1613"
-rev = 0
+rev = 1
 
 [task.repro]
 outcome = "reproduced"

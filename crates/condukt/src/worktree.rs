@@ -14,8 +14,10 @@ use harness_core::verdict::Determination;
 use crate::config::Config;
 use crate::lock;
 
+mod dirty_tracked;
 mod lint_gate;
 mod merge_gate;
+pub use dirty_tracked::refuse_uncommitted_task_worktree;
 use merge_gate::{ensure_base_on_default_branch, ensure_commits_carry_task_trailer};
 
 /// Every `git` subprocess spawned by this module is bounded by this timeout.

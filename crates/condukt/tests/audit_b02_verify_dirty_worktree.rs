@@ -166,7 +166,6 @@ fn clean_worktree_with_valid_oracle_verifies() {
 
 /// RED: the committed tree is not the tree the green proof ran on.
 #[test]
-#[ignore = "backlog 1ca662ec: open defect, remove ignore when fixed"]
 fn verify_refuses_task_worktree_with_uncommitted_source_changes() {
     let (code, stderr) = verify("dirty", true);
     assert_ne!(

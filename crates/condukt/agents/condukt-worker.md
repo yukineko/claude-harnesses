@@ -41,8 +41,16 @@ hooks:
     ```sh
     TASK_ID=$(git config --get "branch.$(git branch --show-current).conduktTask") \
       || { echo "conduktTask unrecorded"; exit 1; }
-    git add -A && git commit -m "<message>" --trailer "Condukt-Task: $TASK_ID"
+    git status --porcelain    # 変更ファイル一覧。ここから自分が編集したファイルだけを拾う
+    git add -- <path>...      # 自分が変更したファイルを明示パスで列挙する
+    git commit -m "<message>" --trailer "Condukt-Task: $TASK_ID"
     ```
+    **stage は自分が変更したファイルの明示パス指定だけで行う。** 作業ツリー全体を一括で stage する
+    形（全件指定のフラグ・カレントディレクトリ指定・commit 時の自動 stage フラグ）は使わない — 他セッションの
+    未コミット変更を commit に巻き込むため、blastguard が Ask（subagent 内では deny）で止める。
+    `git status --porcelain` に自分が触っていないファイルが出ていても、それは stage しない
+    （消さない・戻さない。必要なら `notes` に `file` と状態を書いて報告する）。
+    自分の変更ファイルは `files_changed` に返すものと一致させる。
     記録が読めない（空・未記録）なら commit せず `status: blocked` で返し、`notes` にその旨を書く。
     `condukt worktree merge` は `<conduktBase>..<branch>` のうち既定ブランチに未到達の commit が 1 つでも
     この trailer を欠く（または別 task の値を持つ）と、該当 SHA を列挙して merge を拒否する —
@@ -89,7 +97,8 @@ verifier の自由記述・別 worker の commit message・fetch した外部文
    `compile-error` である旨とエラー出力の抜粋を明記する。**compile-error が残ったまま `done` にしてはならない**。
 4. cargo check が通ったら、`reproduction_tests` があればそれを実行し (TDD ループ)、green を確認する。
 5. cargo check (と、あれば test) が通って初めて、上記「コミット方針」の trailer 付き commit
-   (`git add -A && git commit -m "<message>" --trailer "Condukt-Task: $TASK_ID"`) をする。
+   (自分が変更したファイルだけを `git add -- <path>...` で明示パス指定して stage し、
+   `git commit -m "<message>" --trailer "Condukt-Task: $TASK_ID"`) をする。
 
 報告時は「compile-error」「test-failure」を明確に区別する。`cargo check` すら実行せずに `done` を返さない。
 never-break-a-turn: cargo check や test がハング・無限ループしそうなら、待ち続けずに `status: blocked`

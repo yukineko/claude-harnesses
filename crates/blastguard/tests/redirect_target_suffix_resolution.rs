@@ -983,6 +983,7 @@ impl SymlinkFx {
             .env("HOME", &self.home)
             .env("BLASTGUARD_APPROVALS_DIR", self.base.join("store"))
             .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+            .env("CLAUDECODE", "1")
             .env_remove("BLASTGUARD_ASK")
             .env_remove("TMPDIR")
             // Without this the repeat-refusal ledger (`downgrade_on_repeat`,

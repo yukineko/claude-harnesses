@@ -9,6 +9,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod abandon_gate;
 mod adversarial;
 mod agents_check;
 mod checkpoint;
@@ -1142,7 +1143,8 @@ enum StateAction {
     /// scan that must not be read as clean.
     ///
     /// The explicit `--task <id>` override performs no scan and therefore never
-    /// exits 3.
+    /// exits 3; it refuses (exit 1) while the task's worker transcript is fresh
+    /// or its liveness is undetermined, unless `--force <REASON>` ([`abandon_gate`]).
     Abandon {
         #[arg(long)]
         run: String,
@@ -1152,6 +1154,9 @@ enum StateAction {
         /// Abandon all stuck tasks (running + TTL exceeded) at once.
         #[arg(long)]
         all_stuck: bool,
+        /// With `--task`: reset despite a live/undetermined worker transcript; non-empty reason, journaled.
+        #[arg(long, requires = "task")]
+        force: Option<String>,
     },
     /// Pause a run: no new workers will be dispatched until resumed.
     Pause {
@@ -4416,6 +4421,21 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // decomposition (ENOENT — a real observation of absence, not a
             // failure to look) still passes through ungated.
             let mut fp_gate_value: Option<bool> = None;
+            // The task's worktree for both verified gates, resolved into an
+            // owned local *before* the `&mut` borrow below. A `--worktree W`
+            // passed in this same call wins (backlog cf70f785): it is the
+            // worktree this call records, so the proofs must be judged there,
+            // not in a previously recorded one. Mirrors the recording below
+            // (`--clear-worktree` beats `--worktree`); else the recorded one.
+            let passed_wt = if clear_worktree {
+                None
+            } else {
+                worktree.clone()
+            };
+            let task_wt = passed_wt.or_else(|| {
+                let t = rs.tasks.iter().find(|s| s.id == task);
+                t.and_then(|s| s.worktree.clone())
+            });
             if st == state::Status::Verified {
                 match state::fp_gate_scope(cfg, cwd, &run, &task) {
                     // The one deliberate carve-out: there is no decomposition
@@ -4432,31 +4452,14 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         requires_fp_oracle,
                         reproduction_tests,
                     } => {
-                        // Resolve run_dir into a local *before* taking the
-                        // `&mut` borrow below. A `--worktree W` passed in this
-                        // same call wins (backlog cf70f785): it is the worktree
-                        // this call records, so the oracle must judge the proofs
-                        // there, not in a previously recorded worktree or the
-                        // session cwd. The precedence mirrors the recording
-                        // below (`--clear-worktree` beats `--worktree`). Only
-                        // then fall back to the recorded worktree, then cwd.
+                        // The oracle judges the proofs in `task_wt`, else cwd.
                         // A missing/unreadable dir is not papered over: the
                         // `tdd` spawn fails there and `check_oracle` reports an
                         // undetermined oracle, which `enforce_fp_gate` rejects
                         // (pinned by `oracle::tests::
                         // spawn_failure_is_undetermined_and_rejects`).
-                        let passed_worktree = if clear_worktree {
-                            None
-                        } else {
-                            worktree.as_deref()
-                        };
-                        let run_dir = passed_worktree
-                            .or_else(|| {
-                                rs.tasks
-                                    .iter()
-                                    .find(|s| s.id == task)
-                                    .and_then(|s| s.worktree.as_deref())
-                            })
+                        let run_dir = task_wt
+                            .as_deref()
                             .map(std::path::PathBuf::from)
                             .unwrap_or_else(|| cwd.to_path_buf());
                         // After teardown the worktree's proofs live only in
@@ -4484,6 +4487,8 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         }
                     }
                 }
+                // Committed-tree gate (backlog 1ca662ec); see the fn's doc.
+                worktree::refuse_uncommitted_task_worktree(&task, task_wt.as_deref())?;
             }
 
             let t = rs
@@ -5252,18 +5257,16 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             run,
             task,
             all_stuck,
+            force,
         } => {
             let mut rs = state::RunState::load(cfg, cwd, &run)?;
-            // Running tasks whose staleness could not be determined at all. Only
-            // the bulk scan can produce these; the explicit `--task` override
-            // performs no scan, so it leaves this empty and never exits 3.
+            // Running tasks whose staleness could not be determined. Only the bulk
+            // scan produces these; the explicit `--task` arm never exits 3.
             let mut undetermined: Vec<state::UndeterminedTask> = Vec::new();
-            // Whether any of them is a failure to OBSERVE (as opposed to an
-            // observation still in progress) — the only thing that makes the
-            // scan non-clean.
+            // Whether any is a failure to OBSERVE (not an observation still in
+            // progress) — the only thing that makes the scan non-clean.
             let mut unobservable_present = false;
             let ids: Vec<String> = if let Some(task_id) = task {
-                // Specific task: validate it exists and is running/failed.
                 let t = rs
                     .tasks
                     .iter()
@@ -5275,19 +5278,18 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         t.status
                     );
                 }
+                abandon_gate::check_explicit(cfg, cwd, &run, t, force.as_deref())?;
                 vec![task_id]
             } else if all_stuck {
                 // Bulk path: TTL-staleness alone does NOT authorise a reset —
-                // `scan_stuck` additionally requires a confirmed
-                // `Known(Stalled)` progress verdict per task AND a worktree
-                // observed clean, because a reset clears the task's worktree
-                // reference and re-dispatches a second worker, which would
-                // orphan any uncommitted work there. A task held back by the
-                // dirty veto is named on stderr by the scan — so a shorter list
-                // here is never the only trace of a check that could not run.
-                // The explicit `--task` arm above stays deliberately ungated
-                // (human override), which is how a worker that died mid-edit,
-                // leaving a dirty worktree the bulk gate refuses, is reclaimed.
+                // `scan_stuck` also requires a confirmed `Known(Stalled)` progress
+                // verdict per task AND a worktree observed clean, because a reset
+                // clears the task's worktree reference and re-dispatches a second
+                // worker, which would orphan any uncommitted work there. A task held
+                // back by the dirty veto is named on stderr by the scan — so a shorter
+                // list here is never the only trace of a check that could not run.
+                // The explicit `--task` arm (human override, gated only on the
+                // worker transcript) reclaims a worker that died mid-edit.
                 //
                 // The scan is tri-valued: what it could NOT determine is carried
                 // out separately instead of being folded into "healthy", because
@@ -5328,12 +5330,10 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 eprintln!("abandoned {} task(s): {}", ids.len(), ids.join(", "));
             }
 
-            // Report what could NOT be determined. This runs AFTER the abandon
-            // above: a task that is confirmed stuck is still recovered even when
-            // a different task is undetermined — abandoning and reporting are
-            // independent. Reporting is also independent of the exit code: BOTH
-            // classes are printed, because the silence is the defect, and only
-            // the class decides whether the scan counts as clean.
+            // Report what could NOT be determined, AFTER the abandon above (a
+            // confirmed-stuck task is recovered even when another is undetermined)
+            // and whatever the exit code: BOTH classes are printed, because the
+            // silence is the defect; only the class decides whether it is clean.
             let unobservable: Vec<&state::UndeterminedTask> = undetermined
                 .iter()
                 .filter(|u| u.class == state::Undetermination::Unobservable)

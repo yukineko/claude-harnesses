@@ -29,9 +29,10 @@ pub(super) fn analyze_command_at(
     tokens: &[&str],
     idx: usize,
     depth: usize,
+    seg: Option<&str>,
     ctx: &Ctx<'_>,
 ) -> Decision {
-    let verdict = super::analyze_command_at(tokens, idx, depth, ctx);
+    let verdict = super::analyze_command_at(tokens, idx, depth, seg, ctx);
     mark_system_harm(tokens, idx, ctx, verdict)
 }
 

@@ -90,6 +90,62 @@ forge・condukt のスケジューラが再利用）。
   ときだけ返る。probe 失敗・refusal・symlink・置けない綴りは `Undetermined` で、呼び出し側は
   `Known(false)` と同じく**元の verdict を保持**する（Allow へ倒さない）。main の作業ツリー・`.git` 内部・
   保護パス・`git stash drop/clear`（全 worktree で共有）は対象外のまま。
+- **未マージ branch の force-delete / dirty worktree の force-remove は Ask（`detect/git_unmerged.rs`、
+  backlog 43034f75、blastguard 0.2.295）** — `git branch` で delete（`-d`/`-D`/`--delete`、短縮束を含む）と
+  force（`-f`/`-D`/`--force`、順序・束ね方を問わない）が揃うとき、**全 operand** について、default branch
+  の ref（`refs/remotes/origin/HEAD` の symbolic ref → 存在する `init.defaultBranch` → 存在する
+  `main`/`master`/`trunk` がちょうど 1 つ、の順。最後の段は repo に記録された事実ではなく名前による
+  heuristic で、前 2 段が何も与えないときだけ使う。HEAD では代用しない）から
+  `merge-base --is-ancestor`（exit 0 = 祖先 / 1 = 非祖先）で到達可能なら Allow、非祖先・default branch
+  自身の削除は Ask。APFS 等の folding する FS では `-D Main`・`-D maſter`（ſ→s）が `main`/`master` の
+  loose ref file を開いて消すので、operand の `refs/heads/<op>` が `for-each-ref` の列挙と byte 一致
+  しないときは、`--git-common-dir` 下の loose ref file の (device, inode) が一致する列挙 ref を「実際に
+  消える ref」として判定する（文字列 folding では再現しない。一致 0 件・複数・stat/probe 失敗は Ask。
+  blastguard 0.2.299）。存在しない branch（`rev-parse --verify` exit 1）は何も消えないので Allow。
+  `git worktree … remove` に force（verb の前後どちらでも）があるとき、各 operand で
+  `git status --porcelain --ignored` が exit 0 かつ空なら Allow、出力があれば Ask（ignored file も
+  削除されるので数える。`target/` のような build 出力だけでも Ask）。probe は git が実際に作用する repo
+  （累積 `-C`〈相対は segment の base 起点〉・`--git-dir`・`--work-tree`）で走らせ、相対 worktree path は
+  その `-C` directory 起点で置く。判定不能 — operand 無し・base 不明（`cd "$VAR"` 後など）・置けない/
+  未知の global option・default branch 解決不能・probe の想定外 exit / spawn 失敗 / timeout — は全て Ask。
+- **whole-tree staging は Ask（`detect/git_stage.rs`、backlog e9325654、blastguard 0.2.300）** —
+  他セッションの未 commit 作業を自分の commit に巻き込むため。argv だけで判定し、どの repo に作用するか
+  （`-C`・`--git-dir`・`--work-tree`・`-c`）には依存しない（probe しない。linked worktree の免除も無い）。
+  `git add` / `git stage` は `-A`・`--all`・`--no-ignore-removal`・`-u`・`--update`・`--renormalize` を
+  **pathspec 無し**で使うと Ask（pathspec 付きならその pathspec を判定する）。`git commit` は `-a` /
+  `--all`（短縮束 `-am`・`-va` を含む）で Ask（pathspec 併用でも Ask。git 自身が拒否するので無害）。
+  短縮束は git の parse-options どおり読む: `-m`/`-F`/`-C`/`-c`/`-t` の後ろは値、`-u`/`-S` は stuck の
+  optional 値なので、`-mabc`・`-Fa`・`-uall` の `a` は flag ではない。pathspec が whole-tree
+  （字句正規化で `.`/`..` 成分だけ = cwd か祖先〈`.`・`./`・`..`・`a/..`・空〉、`:` 始まりの magic
+  〈`:/`・`:!x`〉、glob 文字 `*`/`?`/`[` を含む）なら `add`・`commit` とも Ask。`--pathspec-from-file` も
+  Ask。long option の省略形は git と同じく前方一致で読み、候補に sweep 系が含まれれば Ask（`--al`・`--up`）。
+  判定不能 — 閉じない quote / substitution、空白前の backslash、未知の option・短縮 flag、flag / pathspec
+  位置の runtime 展開（`$VAR`・`$(…)`・`` `…` ``・`$'…'`・先頭 `~`）、quote 外の展開・glob・brace list
+  （shell が語を割りうる。`-m *` は全 file を pathspec にする）— は全て Ask。double quote 内の展開が
+  値を取る option の値である場合（`-m "$(cat <<'EOF' … EOF)"`）は 1 語として値に消費されるので Allow。
+  **残余（未対応）**: 明示的な directory pathspec（`git add src/`、repo root を指す絶対 path）は Allow の
+  まま（file と区別するには filesystem を読む必要がある）。`add -A` / `commit -a` を本体に持つ git alias、
+  `GIT_*` 環境変数。**here-document**: `$(…)` 内の here-document 本文は data として読む（本文中の
+  apostrophe `don't` は quote ではなく、`)` も何も閉じない。終端は delimiter と完全一致する行、`<<-` は
+  先頭 TAB のみ除去）。引数は改行込みの元 segment から読む。**過剰側（意図的に Ask）**: 終端行が無い
+  （字下げ・長い行の部分文字列・欠落）、delimiter が読めない、quote なし delimiter の本文に `$`・
+  `` ` ``・`\` がある（展開される）、backtick 内の here-document、引数 token を元 segment に対応付け
+  られない（空白で再結合され here-document が常に未終端に見える）場合は語が判定不能になり Ask（reason に
+  `git commit -F - <<'EOF'` を案内する）。
+- **bash 3.2 の読みも判定する（`detect/readings.rs` の `detect_bash_every_reading`、blastguard 0.2.305）** —
+  macOS の `/bin/bash` 3.2 と `/bin/sh` は `$(…)` 内の here-document 本文を command text として読むので、
+  本文中の `)` が substitution を早く閉じ、続く text が実行されうる（2026-11-07 に harmless marker で観測:
+  本文が外側の double quote も閉じる形 `hi)"; P; echo "`、および unquoted `$(…)`。zsh は実行しない）。
+  Bash の top-level 判定は、従来の読み（modern）に加え、text が `<<` と `$(` または backtick を併せ持つとき
+  だけ bash 3.2 の読み（`detect/substitution.rs` の `under_bash32_reading`）でも `detect_bash` を走らせ、
+  **厳しい方**（`Deny > Ask > Allow`、`VerdictAcc`）を返す。bash 3.2 が別の位置で閉じると証明できればその
+  parse を判定し、bash 3.2 が入力切れ（syntax error でその command 以降は実行されない）になると証明できれば
+  modern の終端で再判定する。bash 3.2 の parse をモデル化できない場合は少なくとも Ask（判定不能を Allow に
+  丸めない）。各 pass は満額の node budget から始める（D4）。**残余（未対応、RED を `#[ignore]` で固定）**:
+  早期 close 後の text の読み違い（escape した quote、quote を含む `#` comment、`<(`。backlog 089bedd4）、
+  heredoc 無しでも `#` comment 中の quote / escape した quote の次の行と `<(…)` の本体が解析されない
+  （backlog e2b9ffb1、critical）、zsh が unquoted `<<EOF` 本文を展開する形（backlog 5916d385）、bash 3.2
+  の読みで quote・backtick・backslash を含む comment 行が Deny ではなく Ask（backlog d328ea88）。
 - **git の exec-capable 形は一律 Deny（backlog fb338793、ユーザー裁定 2026-11-07「git bisectでいろいろ
   構文を処理できてしまうくらいなら使用を禁止した方がいいのでは?」）** — git が呼び出し側の選んだコマンドを
   実行する形は、埋め込みコマンドの中身に関わらず Deny（`detect/git.rs` の `git_exec_ban`。

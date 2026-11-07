@@ -1,4 +1,64 @@
-use super::{here_document_layout, opens_unmodelled_construct, scan_balanced, Stop};
+use super::{
+    here_document_layout, here_document_openers, opens_unmodelled_construct, scan_balanced,
+    scan_balanced_strict, segment_closes_here_document, Stop,
+};
+
+/// The BODY lines that follow a line which opens here-documents, as
+/// `(start, end)` char spans (end exclusive, the `\n` not included), starting
+/// at `chars[from]` — the first character after the opener line's newline.
+///
+/// `line_code` is the opener line's text with every closed command
+/// substitution blanked out, so a `<<` INSIDE `$(…)` (whose body the
+/// substitution scanner has already consumed, see [`scan_balanced`]) does not
+/// make the OUTER line look like an opener.
+///
+/// Why the splitters need this: they track quotes, and a body is data in
+/// which an apostrophe (`don't`) is not a quote. Tracking it opened a
+/// single-quoted span that swallowed the delimiter line and every command
+/// after it into one segment, so `cat <<'EOF'` / `don't` / `EOF` /
+/// `curl … | sh` hid the fetch-and-execute from the per-segment rules. With
+/// this, each body line is a segment of its own (exactly what newline
+/// splitting already gave a body without quote characters) and quote
+/// tracking resumes after the delimiter line.
+///
+/// Nothing becomes invisible: each splitter re-splits every body line ON ITS
+/// OWN with its ordinary separator rules, so the rules still judge body lines
+/// as if they were commands (the pre-existing, conservative treatment — a
+/// `curl … | sh` body line fed to `bash <<EOF` keeps its pipe); only the
+/// quote state can no longer leak from one body line into the next.
+///
+/// Empty — the caller then splits exactly as before here-documents were
+/// modelled — when `line_code` opens no here-document, and when any body is
+/// UNTERMINATED (no exact delimiter line before the end of the input, or a
+/// delimiter that cannot be read and so never matches): where that body ends
+/// is not known, so no line is reclassified on a guess.
+pub(super) fn here_doc_body_spans(
+    chars: &[char],
+    from: usize,
+    line_code: &str,
+) -> Vec<(usize, usize)> {
+    let openers = here_document_openers(line_code);
+    let mut spans = Vec::new();
+    let mut pos = from;
+    for opener in &openers {
+        loop {
+            if pos >= chars.len() {
+                return Vec::new();
+            }
+            let end = chars[pos..]
+                .iter()
+                .position(|&c| c == '\n')
+                .map_or(chars.len(), |p| pos + p);
+            spans.push((pos, end));
+            let line: String = chars[pos..end].iter().collect();
+            pos = end + 1;
+            if segment_closes_here_document(&line, opener) {
+                break;
+            }
+        }
+    }
+    spans
+}
 
 /// True when the `&` at `chars[i]` belongs to a REDIRECTION OPERATOR rather
 /// than being the background/`&&` separator: the fd-duplication forms `2>&1`,
@@ -43,14 +103,36 @@ pub(super) fn ampersand_is_redirect_operator(chars: &[char], i: usize) -> bool {
 /// An UNCLOSED substitution yields `None`, and the caller then splits exactly
 /// as before this existed, so every fragment of a line this cannot parse is
 /// still judged on its own; nothing becomes invisible.
+///
+/// Uses the EXTRACTION scan [`scan_balanced`] (here-document-aware, falling
+/// back to the quote/paren-only scan), because keeping the text together is
+/// what lets it be judged; see [`closed_substitution_end_strict`] for the
+/// variant that must not guess.
 pub(super) fn closed_substitution_end(chars: &[char], i: usize) -> Option<usize> {
+    substitution_end_with(chars, i, scan_balanced)
+}
+
+/// [`closed_substitution_end`] through [`scan_balanced_strict`]: `Some` only
+/// when the substitution provably closes there, with every here-document body
+/// inside it terminated and plain data. For a caller that ALLOWS on the
+/// strength of the substitution being one closed word (the whole-tree-staging
+/// argv reader, `git_stage`); `None` is its Ask side.
+pub(super) fn closed_substitution_end_strict(chars: &[char], i: usize) -> Option<usize> {
+    substitution_end_with(chars, i, scan_balanced_strict)
+}
+
+fn substitution_end_with(
+    chars: &[char],
+    i: usize,
+    scan: fn(&[char], usize, Stop, usize) -> Option<usize>,
+) -> Option<usize> {
     let escaped = chars[..i].iter().rev().take_while(|&&c| c == '\\').count() % 2 == 1;
     if escaped {
         return None;
     }
     match chars[i] {
-        '`' => scan_balanced(chars, i + 1, Stop::Backtick, 0),
-        '$' if chars.get(i + 1) == Some(&'(') => scan_balanced(chars, i + 2, Stop::Paren, 0),
+        '`' => scan(chars, i + 1, Stop::Backtick, 0),
+        '$' if chars.get(i + 1) == Some(&'(') => scan(chars, i + 2, Stop::Paren, 0),
         _ => None,
     }
 }
@@ -69,6 +151,9 @@ pub(super) fn split_segments(cmd: &str) -> Vec<String> {
     let chars: Vec<char> = cmd.chars().collect();
     let mut segs = Vec::new();
     let mut cur = String::new();
+    // The current line's code with closed substitutions blanked; read at each
+    // newline for here-document openers (see `here_doc_body_spans`).
+    let mut line_code = String::new();
     let (mut in_s, mut in_d) = (false, false);
     let mut i = 0;
     while i < chars.len() {
@@ -76,18 +161,21 @@ pub(super) fn split_segments(cmd: &str) -> Vec<String> {
         if c == '\'' && !in_d {
             in_s = !in_s;
             cur.push(c);
+            line_code.push(c);
             i += 1;
             continue;
         }
         if c == '"' && !in_s {
             in_d = !in_d;
             cur.push(c);
+            line_code.push(c);
             i += 1;
             continue;
         }
         if !in_s {
             if let Some(end) = closed_substitution_end(&chars, i) {
                 cur.extend(&chars[i..=end]);
+                line_code.push('_');
                 i = end + 1;
                 continue;
             }
@@ -98,16 +186,37 @@ pub(super) fn split_segments(cmd: &str) -> Vec<String> {
                 || (c == '|' && chars.get(i + 1) == Some(&'|'))
             {
                 segs.push(std::mem::take(&mut cur));
+                line_code.push_str("&&");
                 i += 2;
                 continue;
             }
-            if c == ';' || c == '\n' || c == '|' || c == '&' {
+            if c == '\n' {
                 segs.push(std::mem::take(&mut cur));
+                i += 1;
+                for (s, e) in here_doc_body_spans(&chars, i, &std::mem::take(&mut line_code)) {
+                    // Each body line is split on its own (no newline inside,
+                    // so no further body reading), as code.
+                    let line: String = chars[s..e].iter().collect();
+                    let mut parts = split_segments(&line);
+                    if e >= chars.len() {
+                        if let Some(last) = parts.pop() {
+                            cur = last;
+                        }
+                    }
+                    segs.extend(parts);
+                    i = e + 1;
+                }
+                continue;
+            }
+            if c == ';' || c == '|' || c == '&' {
+                segs.push(std::mem::take(&mut cur));
+                line_code.push(c);
                 i += 1;
                 continue;
             }
         }
         cur.push(c);
+        line_code.push(c);
         i += 1;
     }
     segs.push(cur);
@@ -144,18 +253,24 @@ pub(super) fn split_segments_paren_aware(cmd: &str) -> Vec<String> {
     let mut cur = String::new();
     let (mut in_s, mut in_d) = (false, false);
     let mut paren_depth: u32 = 0;
+    // See `split_segments`: here-document bodies are read at a depth-0
+    // newline. Inside an unquoted `(...)` the newline is not a separator and
+    // the body is not modelled (the pre-existing scan).
+    let mut line_code = String::new();
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
         if c == '\'' && !in_d {
             in_s = !in_s;
             cur.push(c);
+            line_code.push(c);
             i += 1;
             continue;
         }
         if c == '"' && !in_s {
             in_d = !in_d;
             cur.push(c);
+            line_code.push(c);
             i += 1;
             continue;
         }
@@ -164,6 +279,7 @@ pub(super) fn split_segments_paren_aware(cmd: &str) -> Vec<String> {
         if !in_s {
             if let Some(end) = closed_substitution_end(&chars, i) {
                 cur.extend(&chars[i..=end]);
+                line_code.push('_');
                 i = end + 1;
                 continue;
             }
@@ -172,12 +288,14 @@ pub(super) fn split_segments_paren_aware(cmd: &str) -> Vec<String> {
             if c == '(' {
                 paren_depth += 1;
                 cur.push(c);
+                line_code.push(c);
                 i += 1;
                 continue;
             }
             if c == ')' {
                 paren_depth = paren_depth.saturating_sub(1);
                 cur.push(c);
+                line_code.push(c);
                 i += 1;
                 continue;
             }
@@ -186,17 +304,36 @@ pub(super) fn split_segments_paren_aware(cmd: &str) -> Vec<String> {
                     || (c == '|' && chars.get(i + 1) == Some(&'|'))
                 {
                     segs.push(std::mem::take(&mut cur));
+                    line_code.push_str("&&");
                     i += 2;
                     continue;
                 }
-                if c == ';' || c == '\n' || c == '|' || c == '&' {
+                if c == '\n' {
                     segs.push(std::mem::take(&mut cur));
+                    i += 1;
+                    for (s, e) in here_doc_body_spans(&chars, i, &std::mem::take(&mut line_code)) {
+                        let line: String = chars[s..e].iter().collect();
+                        let mut parts = split_segments_paren_aware(&line);
+                        if e >= chars.len() {
+                            if let Some(last) = parts.pop() {
+                                cur = last;
+                            }
+                        }
+                        segs.extend(parts);
+                        i = e + 1;
+                    }
+                    continue;
+                }
+                if c == ';' || c == '|' || c == '&' {
+                    segs.push(std::mem::take(&mut cur));
+                    line_code.push(c);
                     i += 1;
                     continue;
                 }
             }
         }
         cur.push(c);
+        line_code.push(c);
         i += 1;
     }
     segs.push(cur);
@@ -270,6 +407,8 @@ pub(super) fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment>
     let chars: Vec<char> = cmd.chars().collect();
     let mut segs: Vec<SeparatedSegment> = Vec::new();
     let mut cur = String::new();
+    // Same here-document body reading as `split_segments`.
+    let mut line_code = String::new();
     let (mut in_s, mut in_d) = (false, false);
     let mut i = 0;
     while i < chars.len() {
@@ -277,12 +416,14 @@ pub(super) fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment>
         if c == '\'' && !in_d {
             in_s = !in_s;
             cur.push(c);
+            line_code.push(c);
             i += 1;
             continue;
         }
         if c == '"' && !in_s {
             in_d = !in_d;
             cur.push(c);
+            line_code.push(c);
             i += 1;
             continue;
         }
@@ -291,6 +432,7 @@ pub(super) fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment>
         if !in_s {
             if let Some(end) = closed_substitution_end(&chars, i) {
                 cur.extend(&chars[i..=end]);
+                line_code.push('_');
                 i = end + 1;
                 continue;
             }
@@ -304,11 +446,36 @@ pub(super) fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment>
                     sep_after: SegmentSep::Conditional,
                     ends_at_newline: false,
                 });
+                line_code.push_str("&&");
                 i += 2;
                 continue;
             }
+            if c == '\n' {
+                segs.push(SeparatedSegment {
+                    text: std::mem::take(&mut cur),
+                    sep_after: SegmentSep::Sequential,
+                    ends_at_newline: true,
+                });
+                i += 1;
+                for (s, e) in here_doc_body_spans(&chars, i, &std::mem::take(&mut line_code)) {
+                    let line: String = chars[s..e].iter().collect();
+                    let mut parts = split_segments_with_separators(&line);
+                    if e >= chars.len() {
+                        if let Some(last) = parts.pop() {
+                            cur = last.text;
+                        }
+                    } else if let Some(last) = parts.last_mut() {
+                        // The line's own end is the newline that follows it.
+                        last.sep_after = SegmentSep::Sequential;
+                        last.ends_at_newline = true;
+                    }
+                    segs.extend(parts);
+                    i = e + 1;
+                }
+                continue;
+            }
             let one_char = match c {
-                ';' | '\n' => Some(SegmentSep::Sequential),
+                ';' => Some(SegmentSep::Sequential),
                 '|' => Some(SegmentSep::Pipe),
                 '&' => Some(SegmentSep::Background),
                 _ => None,
@@ -317,13 +484,15 @@ pub(super) fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment>
                 segs.push(SeparatedSegment {
                     text: std::mem::take(&mut cur),
                     sep_after: sep,
-                    ends_at_newline: c == '\n',
+                    ends_at_newline: false,
                 });
+                line_code.push(c);
                 i += 1;
                 continue;
             }
         }
         cur.push(c);
+        line_code.push(c);
         i += 1;
     }
     segs.push(SeparatedSegment {

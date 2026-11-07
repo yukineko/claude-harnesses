@@ -519,8 +519,10 @@ pub(super) fn program_body_segments_fed_to(cmd: &str, reader: impl Fn(&str) -> b
             body += 1;
         }
         // Marked only when the body is CLOSED by its delimiter line and no
-        // body segment spans a newline (an unbalanced quote in the body, e.g.
-        // a Python `# don't`, merges lines and can bury the delimiter).
+        // body segment spans a newline (an unbalanced quote in an
+        // UNTERMINATED body, e.g. a Python `# don't`, still merges lines —
+        // the splitters read a body line by line only once its delimiter
+        // line is found, see `here_doc_body_spans`).
         let closed = body < segs.len();
         let clean = segs[idx + 1..body.min(segs.len())]
             .iter()

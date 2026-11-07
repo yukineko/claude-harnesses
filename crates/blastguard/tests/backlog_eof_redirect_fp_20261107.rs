@@ -174,15 +174,20 @@ fn control_cd_into_system_dir_then_chained_redirect_is_not_allow() {
 }
 
 /// CONTROL: the same commit with a neutral message (no `>` line end) is Allow.
+/// `git add -A` is staged as an explicit path here: whole-tree staging is Ask
+/// on its own (backlog e9325654, hardened to Deny in a subagent), which is not
+/// the property this control pins.
 #[test]
 fn control_same_commit_neutral_message_is_allow() {
     let base = fresh_dir("c-ok");
     let cmd = EXACT
         .replace(EXACT_CD, &base.display().to_string())
+        .replace("git add -A &&", "git add crates/donegate/src/main.rs &&")
         .replace(
             "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>",
             "neutral",
         );
     assert!(!cmd.contains("anthropic"), "premise: message made neutral");
+    assert!(!cmd.contains("add -A"), "premise: explicit-path staging");
     assert_eq!(decision(&base, &cmd), "allow");
 }

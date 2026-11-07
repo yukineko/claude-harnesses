@@ -143,23 +143,22 @@ use cwd::{
 
 use substitution::{
     backtick_body_as_run, command_substitution_payloads, executed_substitution_payloads,
-    process_substitution_payloads, scan_balanced, Stop,
+    process_substitution_payloads, scan_balanced, scan_balanced_strict, Stop,
 };
 
 use heredoc::{
-    here_document_delimiter_is_quoted, here_document_layout, interpreter_program_body_segments,
-    opens_here_document, python_program_body_segments,
-    redirect_view_without_quoted_here_document_body, strip_data_here_document_bodies,
+    here_document_delimiter_is_quoted, here_document_layout, here_document_openers,
+    interpreter_program_body_segments, opens_here_document, python_program_body_segments,
+    redirect_view_without_quoted_here_document_body, segment_closes_here_document,
+    strip_data_here_document_bodies,
 };
 #[cfg(test)]
-use heredoc::{
-    here_document_openers, opener_consumer, permitted_prefix_line, segment_closes_here_document,
-};
+use heredoc::{opener_consumer, permitted_prefix_line};
 
 use segment::{
     assignment_execution_is_unconditional, assignments_reach_parent_shell, closed_substitution_end,
-    split_segments, split_segments_paren_aware, split_segments_with_separators, SegmentSep,
-    SeparatedSegment,
+    closed_substitution_end_strict, here_doc_body_spans, split_segments,
+    split_segments_paren_aware, split_segments_with_separators, SegmentSep, SeparatedSegment,
 };
 
 use words::{
@@ -968,7 +967,7 @@ fn denoised_eval_rescan(region: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // exec-wrapper widening in `command_candidates`: whichever position the real
     // shell would exec is guaranteed to be among them.
     for idx in 0..tokens.len() {
-        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth, ctx)) {
+        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth, None, ctx)) {
             return deny;
         }
     }
@@ -1621,7 +1620,7 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
     // D3: analyse EVERY candidate command-word position; deny if ANY is
     // destructive. See `command_candidates`.
     for idx in command_candidates(&tokens) {
-        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth, ctx)) {
+        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth, Some(seg), ctx)) {
             return deny;
         }
     }
@@ -1925,7 +1924,18 @@ fn unknown_wrapper_ask(
     }
 }
 
-fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize, ctx: &Ctx<'_>) -> Decision {
+/// `seg` is the raw segment text `tokens` were whitespace-split from, when
+/// there is one (`None` for a de-noised rescan). It is consulted by exactly one
+/// consumer, the whole-tree-staging check ([`git_stage`]), which needs the
+/// argument text WITH its newlines to read a here-document inside a
+/// `-m "$(cat <<'EOF' … EOF)"` value; every other rule judges `tokens`.
+fn analyze_command_at(
+    tokens: &[&str],
+    idx: usize,
+    depth: usize,
+    seg: Option<&str>,
+    ctx: &Ctx<'_>,
+) -> Decision {
     // CA-blastguard-013 (verified bypass): the command word must be UNQUOTED
     // before basename matching. `\rm -rf /some/path` (the standard alias-bypass
     // idiom) and `"rm" -rf /some/path` previously matched no rule arm and fell
@@ -2064,7 +2074,7 @@ analyse — it cannot tell what this would do, so it refuses to guess"
             {
                 return deny;
             }
-            match git_acc.record(analyze_git(rest, ctx)) {
+            match git_acc.record(analyze_git(rest, seg, ctx)) {
                 Some(deny) => deny,
                 None => git_acc.finish(),
             }
@@ -2378,3 +2388,6 @@ quotes (or escape the backtick) to keep it literal"
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod heredoc_subst_tests;

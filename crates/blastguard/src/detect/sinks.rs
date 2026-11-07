@@ -1,8 +1,9 @@
 use super::{
     closed_substitution_end, command_candidates, command_substitution_payloads, depth_exhausted,
-    is_code_interpreter, is_shell, normalized_command, process_substitution_payloads,
-    scan_balanced, split_segments_paren_aware, unknown_verb_protected_ask,
-    unresolvable_command_word, xargs_command_start, Decision, Stop, VerdictAcc, MAX_SHELL_DEPTH,
+    here_doc_body_spans, is_code_interpreter, is_shell, normalized_command,
+    process_substitution_payloads, scan_balanced, split_segments_paren_aware,
+    unknown_verb_protected_ask, unresolvable_command_word, xargs_command_start, Decision, Stop,
+    VerdictAcc, MAX_SHELL_DEPTH,
 };
 
 // ---------------------------------------------------------------------------
@@ -47,18 +48,25 @@ pub(super) fn split_statements_into_pipe_stages(cmd: &str) -> Vec<Vec<String>> {
     let mut cur = String::new();
     let (mut in_s, mut in_d) = (false, false);
     let mut paren_depth: u32 = 0;
+    // Here-document bodies are read at a depth-0 newline exactly as in
+    // `split_segments` (see `here_doc_body_spans`): each body line becomes a
+    // one-stage statement of its own, and an apostrophe in a body no longer
+    // opens a quote that swallows the pipes after the delimiter line.
+    let mut line_code = String::new();
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
         if c == '\'' && !in_d {
             in_s = !in_s;
             cur.push(c);
+            line_code.push(c);
             i += 1;
             continue;
         }
         if c == '"' && !in_s {
             in_d = !in_d;
             cur.push(c);
+            line_code.push(c);
             i += 1;
             continue;
         }
@@ -68,6 +76,7 @@ pub(super) fn split_statements_into_pipe_stages(cmd: &str) -> Vec<Vec<String>> {
         if !in_s {
             if let Some(end) = closed_substitution_end(&chars, i) {
                 cur.extend(&chars[i..=end]);
+                line_code.push('_');
                 i = end + 1;
                 continue;
             }
@@ -76,12 +85,14 @@ pub(super) fn split_statements_into_pipe_stages(cmd: &str) -> Vec<Vec<String>> {
             if c == '(' {
                 paren_depth += 1;
                 cur.push(c);
+                line_code.push(c);
                 i += 1;
                 continue;
             }
             if c == ')' {
                 paren_depth = paren_depth.saturating_sub(1);
                 cur.push(c);
+                line_code.push(c);
                 i += 1;
                 continue;
             }
@@ -92,24 +103,50 @@ pub(super) fn split_statements_into_pipe_stages(cmd: &str) -> Vec<Vec<String>> {
                 {
                     stages.push(std::mem::take(&mut cur));
                     statements.push(std::mem::take(&mut stages));
+                    line_code.push_str("&&");
                     i += 2;
                     continue;
                 }
                 // A single `|` is a pipe: new stage, SAME statement.
                 if c == '|' {
                     stages.push(std::mem::take(&mut cur));
+                    line_code.push(c);
                     i += 1;
                     continue;
                 }
-                if c == ';' || c == '\n' || c == '&' {
+                if c == '\n' {
                     stages.push(std::mem::take(&mut cur));
                     statements.push(std::mem::take(&mut stages));
+                    i += 1;
+                    for (s, e) in here_doc_body_spans(&chars, i, &std::mem::take(&mut line_code)) {
+                        // Each body line is split on its own, as code: a
+                        // `curl … | sh` line fed to `bash <<EOF` keeps its pipe.
+                        let line: String = chars[s..e].iter().collect();
+                        let mut parts = split_statements_into_pipe_stages(&line);
+                        if e >= chars.len() {
+                            if let Some(mut last) = parts.pop() {
+                                if let Some(tail) = last.pop() {
+                                    cur = tail;
+                                }
+                                stages = last;
+                            }
+                        }
+                        statements.extend(parts);
+                        i = e + 1;
+                    }
+                    continue;
+                }
+                if c == ';' || c == '&' {
+                    stages.push(std::mem::take(&mut cur));
+                    statements.push(std::mem::take(&mut stages));
+                    line_code.push(c);
                     i += 1;
                     continue;
                 }
             }
         }
         cur.push(c);
+        line_code.push(c);
         i += 1;
     }
     stages.push(cur);

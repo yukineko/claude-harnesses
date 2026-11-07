@@ -356,17 +356,20 @@ which removes untracked files from the working tree)";
 /// raised to Ask; a Deny/Ask from it stands (the stricter verdict wins).
 /// Braces in LATER words (`git stash pop stash@{0}`) are not part of this
 /// test.
-pub(super) fn analyze_git(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+///
+/// `seg` is the raw segment `rest` was whitespace-split from, when known; it is
+/// handed to the whole-tree-staging check only (see [`super::git_stage`]).
+pub(super) fn analyze_git(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decision {
     let head_end = git_subcommand_index(rest).map_or(rest.len(), |i| i + 1);
     let head_brace = rest[..head_end].iter().any(|w| has_brace_expansion(w));
-    let verdict = analyze_git_words(rest, ctx);
+    let verdict = analyze_git_words(rest, seg, ctx);
     if head_brace && matches!(verdict, Decision::Allow) {
         return Decision::ask(HEAD_BRACE_REASON);
     }
     verdict
 }
 
-fn analyze_git_words(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+fn analyze_git_words(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decision {
     let idx = match git_subcommand_index(rest) {
         Some(i) => i,
         // No subcommand: still inspect the globals. A bare
@@ -761,8 +764,8 @@ from the working tree)",
         // Judged in `git_stage` from the argv alone (any repository); every
         // cannot-determine state there is Ask. `stage` is git's synonym for
         // `add`.
-        "add" | "stage" => super::git_stage::add_verdict(&rest[idx + 1..]),
-        "commit" => super::git_stage::commit_verdict(&rest[idx + 1..]),
+        "add" | "stage" => super::git_stage::add_verdict(&rest[idx + 1..], seg),
+        "commit" => super::git_stage::commit_verdict(&rest[idx + 1..], seg),
         _ => Decision::Allow,
     }
 }

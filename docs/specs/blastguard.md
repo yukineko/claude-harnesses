@@ -125,8 +125,12 @@ forge・condukt のスケジューラが再利用）。
   値を取る option の値である場合（`-m "$(cat <<'EOF' … EOF)"`）は 1 語として値に消費されるので Allow。
   **残余（未対応）**: 明示的な directory pathspec（`git add src/`、repo root を指す絶対 path）は Allow の
   まま（file と区別するには filesystem を読む必要がある）。`add -A` / `commit -a` を本体に持つ git alias、
-  `GIT_*` 環境変数。**過剰側（意図的に Ask）**: substitution scanner は here-document 本文を model しない
-  ため、`$(…)` 内の本文に奇数個の apostrophe（`don't`）があると語が判定不能になり Ask（reason に
+  `GIT_*` 環境変数。**here-document**: `$(…)` 内の here-document 本文は data として読む（本文中の
+  apostrophe `don't` は quote ではなく、`)` も何も閉じない。終端は delimiter と完全一致する行、`<<-` は
+  先頭 TAB のみ除去）。引数は改行込みの元 segment から読む。**過剰側（意図的に Ask）**: 終端行が無い
+  （字下げ・長い行の部分文字列・欠落）、delimiter が読めない、quote なし delimiter の本文に `$`・
+  `` ` ``・`\` がある（展開される）、backtick 内の here-document、引数 token を元 segment に対応付け
+  られない（空白で再結合され here-document が常に未終端に見える）場合は語が判定不能になり Ask（reason に
   `git commit -F - <<'EOF'` を案内する）。
 - **disarm-by-non-write 規則（保護パスを『書かずに無力化』する経路）** — 保護ファイル
   （`.claude/settings.json`・`settings.local.json`・`hooks.json`・`hooks/**`、`.githooks/**`、

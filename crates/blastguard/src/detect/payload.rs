@@ -1,10 +1,11 @@
 use super::{
-    backtick_body_as_run, command_candidates, first_shell_word, here_document_delimiter_is_quoted,
-    here_string_spans, interpreter_code_verdict, is_assignment, is_bare_redirect_op,
-    is_code_interpreter, is_exec_wrapper, is_foreign_shell, is_redirect_token, is_shell,
-    is_short_flag, normalized_command, opens_here_document, quoted_string_literals,
-    recommend_against, scan_balanced, split_statements_into_pipe_stages, wrapped_command_heads,
-    xargs_command_start, xargs_reads_arg_file, xargs_shell, Ctx, Decision, Stop, VerdictAcc,
+    backtick_body_as_run, command_candidates, first_line_quoted_here_document_body,
+    first_shell_word, here_document_delimiter_is_quoted, here_string_spans,
+    interpreter_code_verdict, is_assignment, is_bare_redirect_op, is_code_interpreter,
+    is_exec_wrapper, is_foreign_shell, is_redirect_token, is_shell, is_short_flag,
+    normalized_command, opens_here_document, quoted_string_literals, recommend_against,
+    scan_balanced, split_statements_into_pipe_stages, wrapped_command_heads, xargs_command_start,
+    xargs_reads_arg_file, xargs_shell, Ctx, Decision, Stop, VerdictAcc,
 };
 
 /// True if this stage names a program FILE for the interpreter to run, rather
@@ -130,9 +131,17 @@ blastguard cannot read it",
             // A reason must name what was observed about THIS program.
             let mut program_texts: Vec<String> = Vec::new();
             if heredoc_open {
-                // The here-document body: everything after the line carrying
-                // the `<<TAG`.
-                if let Some((_, body)) = cmd.split_once('\n') {
+                // The here-document body. When THIS stage opens a quoted
+                // here-document on the first line and its closing line is
+                // found ([`first_line_quoted_here_document_body`]), the body is
+                // exactly the lines in between: the lines after the closing
+                // delimiter are ordinary shell, judged by every other rule, and
+                // a quoted `>` there (`echo '>'`) is not this program's text
+                // (backlog aafeaa05). On any doubt it stays everything after
+                // the first newline, the restrictive over-approximation.
+                if let Some(body) = first_line_quoted_here_document_body(cmd, stage) {
+                    program_texts.push(body.to_string());
+                } else if let Some((_, body)) = cmd.split_once('\n') {
                     program_texts.push(body.to_string());
                 }
             }

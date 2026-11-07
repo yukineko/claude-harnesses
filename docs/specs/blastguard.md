@@ -111,6 +111,19 @@ forge・condukt のスケジューラが再利用）。
   `compile`/`subprocess`/… および文字列引数を実行する `timeit`/`cprofile`/`profile.run`/`pdb.run`/
   `settimeout`/`setinterval`/`vm.run`/`new function`）を 1 つでも含めば降格しない（substring
   heuristic なので false hit は Deny 側に倒れる）。program 内の別の実呼び出しが出す Deny は降格に優先する。
+- **stdin here-document の program text は body だけ（`detect/payload.rs` の
+  `analyze_interpreter_stdin_exec`、`detect/heredoc.rs` の `first_line_quoted_here_document_body`、
+  backlog aafeaa05）** — `python3 - <<'PY'` 等で stdin から program を受け取る stage の program text
+  （user ruling R2 の「program text 中の `>` は判定不能な redirect → `RECOMMEND_NO` 付き Ask」を含む
+  全 program 検査の対象）は、その stage が**1 行目で quoted delimiter の here-document を開き**、
+  終端行が見つかるときに限り、opener 行と終端行の**間の行だけ**とする。終端行より後の行は stdin に
+  渡らない普通の shell であり、`detect_bash` の他の全規則が通常どおり判定する（終端後の
+  `echo '>'`／`grep '^>' x` の quoted `>` を program text と誤認しない。終端後の実 redirect
+  `echo x > .git/hooks/pre-commit` は従来どおり Deny）。次のいずれかに当たれば従来どおり
+  「最初の改行より後の全文」を program とする（制限側の過大近似）: space/tab/newline 以外の空白
+  （`\r` 等）を含む、1 行目の quote 不均衡・行末 `\`・`<<` が（quote を見ずに数えて）ちょうど 1 個でない、
+  delimiter が unquoted または空、stage が `<<` を含まないか 1 行目の部分文字列でない、終端行が無い、
+  終端行より後に `<<` が（文字列として）1 つでもある。
 
 ### module 責務
 

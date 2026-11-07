@@ -377,6 +377,37 @@ fn scratch_tree_outside_managed_places_is_ask() {
     check_all(&f, &cases);
 }
 
+/// Item 16 rework: independent verification of 9f27dd1f observed
+/// `cp -rt <home dir> a`, `cp -Rt ...`, `cp -at ...` as ALLOW: a `t` inside a
+/// short-option cluster takes the next word as the target directory, but the
+/// parser read it as a source and judged the last operand (a project-relative
+/// `a`) as the landing. The landing is the `-t` directory, outside managed
+/// places, so these must be Ask like the spelled-out `-r -t DIR`.
+#[test]
+fn scratch_cp_clustered_target_dir_is_ask() {
+    let f = Fixture::new("scratch_cp_cluster_t");
+    let r = f.repo.display().to_string();
+    let h = f.home.display().to_string();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tmp = format!(
+        "/private/tmp/blastguard-audit-b-cluster-{}-{nanos}",
+        std::process::id()
+    );
+    let cases = vec![
+        (format!("cp -rt {h}/scratch-copy {r}"), "ask"),
+        (format!("cp -Rt {h}/scratch-copy {r}"), "ask"),
+        (format!("cp -at {h}/scratch-copy {r}"), "ask"),
+        (format!("cp -r -t {h}/scratch-copy {r}"), "ask"),
+        // Controls: same clusters into a managed place.
+        (format!("cp -rt {tmp} {r}"), "allow"),
+        (format!("cp -Rt {tmp} {r}"), "allow"),
+    ];
+    check_all(&f, &cases);
+}
+
 // ---------------------------------------------------------------------------
 // t1b: gaps found by independent verification of commit 5c251e4b.
 // ---------------------------------------------------------------------------

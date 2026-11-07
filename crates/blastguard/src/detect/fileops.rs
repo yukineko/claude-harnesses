@@ -424,7 +424,269 @@ const COPY_VALUE_FLAGS: &[&str] = &[
     "--strip-program",
 ];
 
+/// How a long option of `cp`/`mv`/`install`/`ln` takes its value (getopt's
+/// `no_argument` / `required_argument` / `optional_argument`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LongArg {
+    No,
+    /// `--opt=V` or `--opt V`.
+    Required,
+    /// `--opt=V` only; a following word is NOT its value.
+    Optional,
+}
+
+/// Per-verb option tables: (value-taking short letters, boolean short
+/// letters, long options). GNU coreutils and BSD/macOS letters are unioned; a
+/// letter whose arity DIFFERS between the two (`install -S`: GNU suffix value,
+/// BSD boolean) is in neither set, so it is unparseable (Ask).
+fn copy_option_table(
+    cmd: &str,
+) -> (
+    &'static str,
+    &'static str,
+    &'static [(&'static str, LongArg)],
+) {
+    use LongArg::{No, Optional, Required};
+    match cmd {
+        "cp" => (
+            "St",
+            "abcdfHilLnNPpRrsTuvXxZ",
+            &[
+                ("--archive", No),
+                ("--attributes-only", No),
+                ("--backup", Optional),
+                ("--copy-contents", No),
+                ("--debug", No),
+                ("--dereference", No),
+                ("--force", No),
+                ("--interactive", No),
+                ("--link", No),
+                ("--no-dereference", No),
+                ("--no-clobber", No),
+                ("--preserve", Optional),
+                ("--no-preserve", Required),
+                ("--parents", No),
+                ("--recursive", No),
+                ("--reflink", Optional),
+                ("--remove-destination", No),
+                ("--sparse", Required),
+                ("--strip-trailing-slashes", No),
+                ("--symbolic-link", No),
+                ("--suffix", Required),
+                ("--target-directory", Required),
+                ("--no-target-directory", No),
+                ("--update", Optional),
+                ("--verbose", No),
+                ("--keep-directory-symlink", No),
+                ("--one-file-system", No),
+                ("--context", Optional),
+                ("--help", No),
+                ("--version", No),
+            ],
+        ),
+        "mv" => (
+            "St",
+            "bfhinTuvZ",
+            &[
+                ("--backup", Optional),
+                ("--debug", No),
+                ("--exchange", No),
+                ("--force", No),
+                ("--interactive", No),
+                ("--no-clobber", No),
+                ("--no-copy", No),
+                ("--strip-trailing-slashes", No),
+                ("--suffix", Required),
+                ("--target-directory", Required),
+                ("--no-target-directory", No),
+                ("--update", Optional),
+                ("--verbose", No),
+                ("--context", No),
+                ("--help", No),
+                ("--version", No),
+            ],
+        ),
+        "install" => (
+            "BfgmoNt",
+            "bcCdDMpPsTUvZ",
+            &[
+                ("--backup", Optional),
+                ("--compare", No),
+                ("--debug", No),
+                ("--directory", No),
+                ("--group", Required),
+                ("--mode", Required),
+                ("--owner", Required),
+                ("--preserve-timestamps", No),
+                ("--strip", No),
+                ("--strip-program", Required),
+                ("--suffix", Required),
+                ("--target-directory", Required),
+                ("--no-target-directory", No),
+                ("--verbose", No),
+                ("--preserve-context", No),
+                ("--context", Optional),
+                ("--help", No),
+                ("--version", No),
+            ],
+        ),
+        // ln
+        _ => (
+            "St",
+            "bdFfhiLnPrsTvw",
+            &[
+                ("--backup", Optional),
+                ("--directory", No),
+                ("--force", No),
+                ("--interactive", No),
+                ("--logical", No),
+                ("--no-dereference", No),
+                ("--physical", No),
+                ("--relative", No),
+                ("--symbolic", No),
+                ("--suffix", Required),
+                ("--target-directory", Required),
+                ("--no-target-directory", No),
+                ("--verbose", No),
+                ("--help", No),
+                ("--version", No),
+            ],
+        ),
+    }
+}
+
+/// The argv of a `cp`/`mv`/`install`/`ln` line as getopt would split it.
+struct CopyArgs<'a> {
+    /// Positional operands, in order.
+    operands: Vec<&'a str>,
+    /// The `-t DIR` / `--target-directory DIR` value, in any spelling: bare,
+    /// glued (`-tDIR`), inside a short cluster (`-rt DIR`, `-rtDIR`), `=`-joined
+    /// or abbreviated (`--target DIR`).
+    target_dir: Option<String>,
+}
+
+/// Parse `rest` the way getopt does for `cmd` (backlog ef7c9fbe rework: the
+/// old word heuristic read `cp -rt DIR SRC` with `DIR` as a SOURCE, because
+/// only a bare `-t` / a leading `-tX` was recognised).
+///
+/// Short clusters are scanned letter by letter: a value letter takes the rest
+/// of the cluster, else the next word. Long options resolve by exact name or
+/// unique prefix. `Err(why)` for anything this cannot split with certainty —
+/// an unknown or ambiguous option, a missing value, a value on a no-argument
+/// long option, a second target directory — and the caller must not judge on
+/// a guessed split.
+fn parse_copy_args<'a>(cmd: &str, rest: &[&'a str]) -> Result<CopyArgs<'a>, String> {
+    let (value_short, bool_short, longs) = copy_option_table(cmd);
+    let mut operands = Vec::new();
+    let mut target_dir: Option<String> = None;
+    let mut set_target = |v: String| -> Result<(), String> {
+        if target_dir.replace(v).is_some() {
+            return Err(format!("`{cmd}` is given more than one target directory"));
+        }
+        Ok(())
+    };
+    let mut opts_done = false;
+    let mut i = 0;
+    while i < rest.len() {
+        let t = rest[i];
+        i += 1;
+        if t.is_empty() {
+            continue;
+        }
+        if is_bare_redirect_op(t) {
+            i += 1;
+            continue;
+        }
+        if is_redirect_token(t) {
+            continue;
+        }
+        if opts_done || !t.starts_with('-') || t == "-" {
+            operands.push(t);
+            continue;
+        }
+        if t == "--" {
+            opts_done = true;
+            continue;
+        }
+        if t.starts_with("--") {
+            let (name, glued) = match t.split_once('=') {
+                Some((n, v)) => (n, Some(v)),
+                None => (t, None),
+            };
+            let resolved = match longs.iter().find(|(l, _)| *l == name) {
+                Some(hit) => *hit,
+                None => {
+                    let hits: Vec<_> = longs.iter().filter(|(l, _)| l.starts_with(name)).collect();
+                    match hits.as_slice() {
+                        [one] => **one,
+                        [] => return Err(format!("unrecognised `{cmd}` option `{name}`")),
+                        _ => return Err(format!("ambiguous `{cmd}` option `{name}`")),
+                    }
+                }
+            };
+            let value = match (resolved.1, glued) {
+                (LongArg::No, Some(_)) => {
+                    return Err(format!("`{cmd}` option `{}` takes no value", resolved.0))
+                }
+                (LongArg::No | LongArg::Optional, None) => None,
+                (_, Some(v)) => Some(v.to_string()),
+                (LongArg::Required, None) => match rest.get(i) {
+                    Some(v) => {
+                        i += 1;
+                        Some((*v).to_string())
+                    }
+                    None => return Err(format!("`{cmd}` option `{}` has no value", resolved.0)),
+                },
+            };
+            if resolved.0 == "--target-directory" {
+                set_target(value.unwrap_or_default())?;
+            }
+            continue;
+        }
+        // Short cluster.
+        let cluster = &t[1..];
+        for (pos, c) in cluster.char_indices() {
+            if value_short.contains(c) {
+                let tail = &cluster[pos + c.len_utf8()..];
+                let value = if tail.is_empty() {
+                    match rest.get(i) {
+                        Some(v) => {
+                            i += 1;
+                            (*v).to_string()
+                        }
+                        None => return Err(format!("`{cmd} -{c}` has no value")),
+                    }
+                } else {
+                    tail.to_string()
+                };
+                if c == 't' {
+                    set_target(value)?;
+                }
+                break;
+            }
+            if !bool_short.contains(c) {
+                return Err(format!("unrecognised `{cmd}` option `-{c}`"));
+            }
+        }
+    }
+    Ok(CopyArgs {
+        operands,
+        target_dir,
+    })
+}
+
+/// The legacy word heuristic (kept ONLY as the fallback when
+/// [`parse_copy_args`] cannot split the line, so a Deny it finds still stands).
+fn legacy_copy_args<'a>(rest: &[&'a str]) -> CopyArgs<'a> {
+    CopyArgs {
+        operands: positional_operands(rest, COPY_VALUE_FLAGS),
+        target_dir: target_directory(rest),
+    }
+}
+
 /// The `-t DIR` / `--target-directory=DIR` destination directory, if given.
+/// Legacy heuristic: only a bare `-t` or a leading `-tX` (see
+/// [`legacy_copy_args`]); [`parse_copy_args`] is the real parser.
 fn target_directory(rest: &[&str]) -> Option<String> {
     let mut i = 0;
     while i < rest.len() {
@@ -482,30 +744,45 @@ fn target_directory(rest: &[&str]) -> Option<String> {
 /// into the very same path was DENY: the same file created, a different
 /// verdict depending only on the verb (backlog d5613105).
 pub(super) fn analyze_copy_move(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
-    let verdict = copy_move_verdict(cmd, rest, ctx);
+    let args = match parse_copy_args(cmd, rest) {
+        Ok(a) => a,
+        // The split is unknown, so no verdict below may be trusted to have
+        // judged the real destination. A Deny the legacy heuristic still finds
+        // stands (never weaker than before); anything else is Ask.
+        Err(why) => {
+            let legacy = copy_move_verdict(cmd, rest, ctx, &legacy_copy_args(rest));
+            if legacy.is_deny() {
+                return legacy;
+            }
+            return Decision::ask(format!(
+                "blastguard cannot determine the operands of this `{cmd}` ({why}), so it cannot \
+tell which path it writes (or, for mv, removes) and refuses to guess"
+            ));
+        }
+    };
+    let verdict = copy_move_verdict(cmd, rest, ctx, &args);
     // Backlog ef7c9fbe: a recursive `cp` creates a whole tree; outside the
     // managed places an otherwise-Allowed one is raised to Ask (see
     // `scratch_place`). A Deny/Ask from the rules above always stands.
     if cmd == "cp" && is_recursive_copy(rest) {
-        let operands = positional_operands(rest, COPY_VALUE_FLAGS);
         return super::scratch_place::cp_recursive_verdict(
             ctx,
             verdict,
-            target_directory(rest),
-            &operands,
+            args.target_dir,
+            &args.operands,
         );
     }
     verdict
 }
 
 /// The protected-path / system-directory verdict of [`analyze_copy_move`],
-/// before the scratch-place rule.
-fn copy_move_verdict(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Decision {
+/// before the scratch-place rule, on an already-split argv.
+fn copy_move_verdict(cmd: &str, rest: &[&str], ctx: &Ctx<'_>, args: &CopyArgs<'_>) -> Decision {
     let action = format!("{cmd} destination");
-    let operands = positional_operands(rest, COPY_VALUE_FLAGS);
+    let operands = args.operands.clone();
 
     // Directory-destination forms: resolve the file each source would create.
-    let (dir, sources): (Option<String>, &[&str]) = match target_directory(rest) {
+    let (dir, sources): (Option<String>, &[&str]) = match args.target_dir.clone() {
         Some(d) => (Some(d), &operands[..]),
         None => match operands.split_last() {
             Some((last, init)) if last.ends_with('/') && !init.is_empty() => {

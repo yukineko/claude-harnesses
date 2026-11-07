@@ -128,6 +128,17 @@ fn apply(path: &Path, id: &str, fields: Fields<'_>, repro: Option<Repro>) -> Res
                     task.status
                 ));
             }
+            // backlog b3f5e3af: a ruled-deferred row is off the queue by a
+            // recorded user ruling; `edit --status pending|failed` would hand it
+            // out again with the ruling still in its notes.
+            if task.status == Status::RuledDeferred {
+                return Err(anyhow!(
+                    "refused: task {id} is ruled-deferred (a recorded user ruling); \
+                     `edit --status {v}` would put it back on the queue. Close it with \
+                     `backlog cancel {id} --reason R`, or file a new task if the ruling \
+                     was lifted"
+                ));
+            }
         }
         // Re-checked under the lock: the status may have changed while the
         // repro ran.
@@ -162,6 +173,12 @@ fn apply(path: &Path, id: &str, fields: Fields<'_>, repro: Option<Repro>) -> Res
 /// recorded closure. Terminal statuses need one (`backlog done ...
 /// --test/--doc-only/--duplicate-of`, `backlog cancel --reason`'s discard).
 fn parse_edit_status(status: Option<&str>) -> Result<Option<Status>> {
+    if status == Some(Status::RuledDeferred.as_str()) {
+        return Err(anyhow!(
+            "refused: `edit --status ruled-deferred` is not allowed; a deferral records the \
+             user's ruling: `backlog defer ID --ruling QUOTE`"
+        ));
+    }
     if let Some(w) = crate::task::stored_status_error(status) {
         return Err(anyhow!("{w}"));
     }

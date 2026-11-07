@@ -157,11 +157,30 @@ fn bare_done_refusal_does_not_point_at_ruling_request() {
         "`done --help` still advertises `ruling request`: {}",
         h.both()
     );
+    // User ruling 2026-11-07 ("Narrow the assert"): the property is "no
+    // `backlog ruling ...` verb", not "the word ruling never appears" (the
+    // `defer --ruling <quote>` help legitimately mentions a ruling).
     let h = f.run(&["--help"]);
+    let help = h.both();
+    let commands: Vec<&str> = help
+        .lines()
+        .skip_while(|l| !l.trim_start().starts_with("Commands:"))
+        .skip(1)
+        .take_while(|l| !l.trim().is_empty())
+        .collect();
     assert!(
-        !h.both().contains("ruling"),
-        "top-level --help still lists a ruling verb: {}",
-        h.both()
+        !commands.is_empty(),
+        "top-level --help has no Commands section to inspect: {help}"
+    );
+    assert!(
+        !commands
+            .iter()
+            .any(|l| l.split_whitespace().next() == Some("ruling")),
+        "top-level --help still lists a `ruling` subcommand: {help}"
+    );
+    assert!(
+        !help.contains("ruling request"),
+        "top-level --help still advertises `ruling request`: {help}"
     );
 }
 

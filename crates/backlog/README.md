@@ -5,12 +5,13 @@ To drain the whole queue automatically, use `/flow` instead.
 ## Use the subcommands
 
 - `add` — Append a task (`--repro-test`); see **File only with a reproducing test**
-- `list` — List the store's tasks, filterable by `--tag` / `--status` (`pending` / `done` / `failed` / `cancelled` / `claimed`; `open` is not a status; `claimed` is derived) and `--json`. For a repo store `--project` is an assertion, not a filter — see **Scope**
+- `list` — List the store's tasks, filterable by `--tag` / `--status` (`pending` / `done` / `failed` / `cancelled` / `claimed` / `ruled-deferred`; `open` is not a status; `claimed` is derived) and `--json`. For a repo store `--project` is an assertion, not a filter — see **Scope**
 - `next` — Print the next highest-priority pending task that carries a reproduced repro, as JSON (`--claim` reserves it — see below)
 - `done <id>` — Mark a task done **with evidence**: `--test CMD --red-rev REV` (`--reason fixed|already-fixed|obsolete`), `--doc-only COMMIT`, or `--duplicate-of ID`. Exactly one of those forms is required. A bare `done <id>` is refused
   - The RED run is `--red-rev` in a detached temp worktree with HEAD's test files overlaid (every test file for `cargo test`, the named files for pytest, the script for `bash`/`sh`), so a test added with the fix exists there. A refusal because the test passes at `--red-rev` says so. When the fix itself lives in a test file, that overlay copies the fix in. `--red-overlay PATH` (repeatable) narrows the overlay to the named repro side. It only narrows: each path must already be in the default overlay. A test that passes at `--red-rev` is still refused. The narrowed set is recorded as `closure.red.overlay`.
 - `fail <id>` — Mark a task failed (`--reason`). It defers the re-run by 2 days
 - `cancel <id> --reason R` — Close as "decided not to do it": terminal, never requeued, recorded as a `discard` closure, no test needed
+- `defer <id> --ruling QUOTE` — Record a user ruling (見送り): status `ruled-deferred`, which `next` / `next --claim` never hand out and nothing requeues. The ruling is appended to the notes. `fail` and `edit --status` refuse to put the row back on the queue, and `add` refuses to re-file the same content without `--force`; it leaves only through `cancel` / `done`
 - `audit-closures` — Read-only classification of every terminal row's closure evidence (`--json`); never writes the store
 - `overlap` — Group queued tasks by declared `touched_files` scope (advisory; undeclared scopes listed separately)
 - `edit <id>` — Update a task's title / tags / notes / status; `--repro-test CMD` replaces a pending task's repro (see **File only with a reproducing test**)
@@ -30,7 +31,7 @@ The registered hook's timeout is 10s.
 
 ## Store writes need a linked worktree
 
-`add` / `done` / `fail` / `edit` / `cancel` / `sync --apply` are **refused** (non-zero exit,
+`add` / `done` / `fail` / `edit` / `cancel` / `defer` / `sync --apply` are **refused** (non-zero exit,
 nothing written) when the store lies inside the *primary* working tree of a git repo, so run them
 from a linked worktree (`git worktree add …`).
 If git cannot say which kind of checkout this is, `add` is refused too.

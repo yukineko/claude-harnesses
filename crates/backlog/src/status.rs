@@ -26,16 +26,27 @@ pub enum Status {
     /// live claim-ledger lease. A legacy row persisted with `claimed` is read
     /// back as `Pending` by `store::load`.
     Claimed,
+    /// Not terminal, not queued: a user ruling (見送り / defer) recorded by
+    /// `backlog defer ID --ruling QUOTE` (backlog b3f5e3af; user ruling
+    /// 2026-11-07 「実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない」).
+    /// `next` / `next --claim` never hand it out and nothing requeues it: it
+    /// is untimed, unlike the DERIVED `deferred` display of a row whose
+    /// `defer_until` is in the future (which comes back on its own). Its only
+    /// exits are `cancel` / `done` (a recorded closure); `edit --status` and
+    /// `fail` refuse to move it back onto the queue.
+    RuledDeferred,
 }
 
 impl Status {
-    /// Every status, in lifecycle order (the derived `Claimed` last).
-    pub const ALL: [Status; 5] = [
+    /// Every status: the core lifecycle, then the derived `Claimed`, then
+    /// `RuledDeferred` (stored, but written only by `backlog defer`).
+    pub const ALL: [Status; 6] = [
         Status::Pending,
         Status::Done,
         Status::Failed,
         Status::Cancelled,
         Status::Claimed,
+        Status::RuledDeferred,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -45,6 +56,7 @@ impl Status {
             Status::Failed => "failed",
             Status::Cancelled => "cancelled",
             Status::Claimed => "claimed",
+            Status::RuledDeferred => "ruled-deferred",
         }
     }
 

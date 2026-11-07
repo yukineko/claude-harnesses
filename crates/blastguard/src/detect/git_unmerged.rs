@@ -5,9 +5,11 @@
 //! * A force-deleted branch (`-D`, or a delete flag plus a force flag in any
 //!   spelling: `-d -f`, `-df`, `-fd`, `--delete --force`, `--force --delete`)
 //!   loses its commits unless they are reachable from the repository's default
-//!   branch. Every operand is checked. Deleting the default branch itself —
-//!   in any letter case (`-D Main` deletes `main` on a case-insensitive
-//!   filesystem) — is Ask.
+//!   branch. Every operand is checked. Deleting the default branch itself is
+//!   Ask, including through a spelling the filesystem folds onto it
+//!   (`-D Main` / `-D maſter` delete `main` / `master` on APFS): the ref
+//!   actually deleted is identified by loose-ref file identity
+//!   ([`exact_ref`]), not by string comparison.
 //! * A force-removed worktree loses everything `git status --porcelain
 //!   --ignored` reports in it. Ignored files COUNT as content: the removal
 //!   deletes the whole directory, ignored build output (e.g. `target/`)
@@ -300,6 +302,92 @@ fn operands<'a>(args: &[&'a str]) -> Vec<&'a str> {
     }
 }
 
+/// Ask for force-deleting the default branch itself.
+fn default_ask(op: &str, name: &str) -> Decision {
+    Decision::ask(format!(
+        "git branch force-delete of `{op}`, which is the repository's default branch \
+(`{name}`): deleting it removes the ref every other branch is judged against"
+    ))
+}
+
+/// The exact ref git acts on for `full`, a ref name `git rev-parse --verify`
+/// has just reported as existing.
+///
+/// * `full` byte-equal to a ref `git for-each-ref <namespace>` lists: `full`.
+/// * Otherwise git reached it only through filesystem folding of the loose
+///   ref file (APFS folds case AND e.g. `ſ` -> `s`, which no string folding
+///   here reproduces). The deleted ref is then identified by FILE IDENTITY:
+///   the listed ref whose loose file under `--git-common-dir` has the same
+///   (device, inode) as the file `full` opens. Exactly one match: that ref.
+/// * No match, more than one, a stat error other than not-found, a probe
+///   failure, or a non-unix host: Undetermined.
+fn exact_ref(t: &Target, full: &str, namespace: &str) -> Determination<String> {
+    macro_rules! known {
+        ($e:expr) => {
+            match $e {
+                Determination::Known(v) => v,
+                Determination::Undetermined(u) => return Determination::Undetermined(u),
+            }
+        };
+    }
+    let (_, listed) = known!(probe(
+        t,
+        &["for-each-ref", "--format=%(refname)", namespace],
+        &[0]
+    ));
+    let listed: Vec<&str> = listed.lines().filter(|l| !l.is_empty()).collect();
+    if listed.contains(&full) {
+        return Determination::known(full.to_string());
+    }
+    let (_, common) = known!(probe(
+        t,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        &[0]
+    ));
+    let common = std::path::PathBuf::from(common.trim());
+    let folded = |why: String| {
+        Determination::undetermined(format!(
+            "`{full}` matches no existing ref byte-for-byte, so git reaches a ref through \
+filesystem case/Unicode folding, and which one could not be established ({why})"
+        ))
+    };
+    let Some(want) = known!(file_id(&common.join(full))) else {
+        return folded("its loose ref file is absent".to_string());
+    };
+    let mut hits = Vec::new();
+    for r in listed {
+        if known!(file_id(&common.join(r))) == Some(want) {
+            hits.push(r);
+        }
+    }
+    match hits.as_slice() {
+        [one] => Determination::known((*one).to_string()),
+        [] => folded("no listed ref shares its loose ref file".to_string()),
+        many => folded(format!("several listed refs share it: {}", many.join(", "))),
+    }
+}
+
+/// (device, inode) of `p` (not following symlinks); `Known(None)` when it
+/// does not exist; Undetermined on any other error or a non-unix host.
+fn file_id(p: &std::path::Path) -> Determination<Option<(u64, u64)>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match std::fs::symlink_metadata(p) {
+            Ok(m) => Determination::known(Some((m.dev(), m.ino()))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Determination::known(None),
+            Err(e) => Determination::undetermined(format!("stat {}: {e}", p.display())),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        Determination::undetermined(format!(
+            "no file identity on this platform for {}",
+            p.display()
+        ))
+    }
+}
+
 /// `git <globals> branch <args>`. Allow unless the command force-deletes;
 /// then Allow only when every operand is observed to lose nothing: it names no
 /// existing branch, or it is an ancestor of the default branch (and is not the
@@ -349,24 +437,29 @@ commits are kept elsewhere ({why}), and a force-delete destroys unmerged work"
         } else {
             format!("refs/heads/{op}")
         };
-        // Compared case-insensitively: on a case-insensitive filesystem
-        // (macOS default) a loose `refs/heads/Main` IS the `main` ref file, so
-        // `git branch -D Main` deletes `main`, while the merge-base probe
-        // below would see `main` as an ancestor of itself and Allow. A
-        // case-variant that is a different ref on a case-sensitive
-        // filesystem is Ask too (the stricter side).
-        let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
-        if (!remotes && same(op, &default.name)) || default.refs.iter().any(|r| same(r, &full)) {
-            return Decision::ask(format!(
-                "git branch force-delete of `{op}`, the repository's default branch \
-(`{}`): deleting it removes the ref every other branch is judged against",
-                default.name
-            ));
+        if (!remotes && op == default.name) || default.refs.contains(&full) {
+            return default_ask(op, &default.name);
         }
         match ref_exists(&t, &full) {
             Determination::Known(false) => continue, // git deletes nothing for it
             Determination::Known(true) => {}
             Determination::Undetermined(u) => return ask(u.reason().as_str().to_string()),
+        }
+        // The ref git found may be ANOTHER ref reached through filesystem
+        // folding (`-D Main` / `-D maſter` open the loose `main` / `master`
+        // file on APFS), so the ref actually deleted is identified by
+        // `exact_ref`, not by the spelling.
+        let namespace = if remotes {
+            "refs/remotes"
+        } else {
+            "refs/heads"
+        };
+        let full = match exact_ref(&t, &full, namespace) {
+            Determination::Known(r) => r,
+            Determination::Undetermined(u) => return ask(u.reason().as_str().to_string()),
+        };
+        if default.refs.contains(&full) {
+            return default_ask(op, &default.name);
         }
         let mut merged = false;
         for d in &default.refs {

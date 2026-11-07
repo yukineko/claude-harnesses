@@ -97,8 +97,11 @@ forge・condukt のスケジューラが再利用）。
   `main`/`master`/`trunk` がちょうど 1 つ、の順。最後の段は repo に記録された事実ではなく名前による
   heuristic で、前 2 段が何も与えないときだけ使う。HEAD では代用しない）から
   `merge-base --is-ancestor`（exit 0 = 祖先 / 1 = 非祖先）で到達可能なら Allow、非祖先・default branch
-  自身の削除は Ask（大文字小文字を区別せず比較する: case-insensitive FS では `-D Main` が `main` を消す。
-  blastguard 0.2.297）。存在しない branch（`rev-parse --verify` exit 1）は何も消えないので Allow。
+  自身の削除は Ask。APFS 等の folding する FS では `-D Main`・`-D maſter`（ſ→s）が `main`/`master` の
+  loose ref file を開いて消すので、operand の `refs/heads/<op>` が `for-each-ref` の列挙と byte 一致
+  しないときは、`--git-common-dir` 下の loose ref file の (device, inode) が一致する列挙 ref を「実際に
+  消える ref」として判定する（文字列 folding では再現しない。一致 0 件・複数・stat/probe 失敗は Ask。
+  blastguard 0.2.299）。存在しない branch（`rev-parse --verify` exit 1）は何も消えないので Allow。
   `git worktree … remove` に force（verb の前後どちらでも）があるとき、各 operand で
   `git status --porcelain --ignored` が exit 0 かつ空なら Allow、出力があれば Ask（ignored file も
   削除されるので数える。`target/` のような build 出力だけでも Ask）。probe は git が実際に作用する repo

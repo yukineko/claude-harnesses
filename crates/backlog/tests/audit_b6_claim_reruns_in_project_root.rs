@@ -109,7 +109,6 @@ fn run_in(home: &Path, cwd: &Path, args: &[&str]) -> Out {
 }
 
 #[test]
-#[ignore = "backlog 78cee053: RED, remove ignore when fixed"]
 fn next_claim_reruns_the_repro_in_the_ticket_project_root_not_the_cwd() {
     // The ticket's project: a real, clean git checkout with a committed RED repro.
     let td = tempfile::tempdir().unwrap();
@@ -137,7 +136,6 @@ fn next_claim_reruns_the_repro_in_the_ticket_project_root_not_the_cwd() {
 }
 
 #[test]
-#[ignore = "backlog 78cee053: RED, remove ignore when fixed"]
 fn next_claim_refuses_when_the_ticket_project_root_is_not_a_git_checkout() {
     let td = tempfile::tempdir().unwrap();
     let home = td.path().join("home");

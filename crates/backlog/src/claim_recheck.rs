@@ -1,24 +1,77 @@
 //! `next --claim` with the stored repro re-run before the ticket is handed out
-//! (backlog 78cee053). Split out of `main.rs` to keep it under its line cap;
-//! the logic is unchanged.
+//! (backlog 78cee053). Split out of `main.rs` to keep it under its line cap.
+//! The re-run happens in the ticket's project root (ruling 2026-11-07).
 
 use crate::{claim_ledger, evidence, live_lease_view, store, task};
 use anyhow::Result;
 use harness_core::verdict::Determination;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// How many times `next --claim` re-checks when the locked pick is not the
 /// candidate whose repro it just re-ran (backlog 78cee053). Exhausting it is a
 /// non-zero refusal, never a claim of an un-rechecked ticket.
 const RECHECK_ATTEMPTS: usize = 3;
 
+/// The directory the candidate's stored repro is re-run in: the TICKET'S
+/// project root (the row's `project` field), never the process cwd (user
+/// ruling 2026-11-07, "Re-run from project root"). `Err` (the caller refuses
+/// the claim) when the root is unresolved, empty, missing, or not itself the
+/// top of a git checkout — a cwd fallback would re-run the repro against an
+/// unrelated tree and hand out (or skip) a ticket on someone else's evidence.
+fn project_root(cand: &task::Task) -> std::result::Result<PathBuf, String> {
+    if cand.project_unresolved {
+        return Err(format!(
+            "its project root was recorded as unresolved ({:?}), so there is no checkout to \
+             re-run it in",
+            cand.project
+        ));
+    }
+    if cand.project.trim().is_empty() {
+        return Err("it records no project root to re-run it in".to_string());
+    }
+    let root = Path::new(&cand.project).canonicalize().map_err(|e| {
+        format!(
+            "its project root {:?} cannot be resolved: {e}",
+            cand.project
+        )
+    })?;
+    if !root.is_dir() {
+        return Err(format!(
+            "its project root {} is not a directory",
+            root.display()
+        ));
+    }
+    let top = evidence::repo_toplevel(&root).map_err(|e| {
+        format!(
+            "its project root {} is not a git checkout: {e}",
+            root.display()
+        )
+    })?;
+    let top = top.canonicalize().map_err(|e| {
+        format!(
+            "the git toplevel {} of its project root cannot be resolved: {e}",
+            top.display()
+        )
+    })?;
+    if top != root {
+        return Err(format!(
+            "its project root {} is not a git checkout (it lies inside the checkout {})",
+            root.display(),
+            top.display()
+        ));
+    }
+    Ok(root)
+}
+
 /// `next --claim` with the stored repro RE-RUN before the ticket is handed out
 /// (backlog 78cee053, audit B item 6: a RED ticket is often already fixed).
 ///
 /// Each round: peek the top candidate (a pure read, NO lock held), re-run its
-/// stored repro at HEAD (`evidence::run_repro`, can be a long `cargo test`, so
-/// it runs outside the ledger lock and the tasks-file lock), then:
+/// stored repro at HEAD of the ticket's project root ([`project_root`], NOT the
+/// process cwd; an unusable root refuses the claim) via `evidence::run_repro`
+/// (can be a long `cargo test`, so it runs outside the ledger lock and the
+/// tasks-file lock), then:
 ///   - `not-reproduced` (GREEN): not handed out. A notice naming the id, cmd
 ///     and rev goes to stderr, the ticket joins `skip`, and the next candidate
 ///     is considered. Nothing is written to the store.
@@ -39,7 +92,6 @@ pub(crate) fn claim_rechecked(
 ) -> Result<Option<task::Task>> {
     const REFUSED: &str = "backlog next --claim REFUSED to claim (this is NOT \"no pending \
                            tasks\" — nothing was claimed and the queue was not judged empty)";
-    let cwd = std::env::current_dir()?;
     let mut skip: HashSet<String> = HashSet::new();
     let mut moved_rounds = 0usize;
     loop {
@@ -58,7 +110,18 @@ pub(crate) fn claim_rechecked(
                 cand.id
             ));
         };
-        let rerun = evidence::run_repro(&cwd, &stored.cmd, store::now_unix());
+        let root = match project_root(&cand) {
+            Ok(r) => r,
+            Err(why) => {
+                return Err(anyhow::anyhow!(
+                    "{REFUSED}: the re-run of candidate {}'s stored repro could not be \
+                     determined (cmd: {}): {why}",
+                    cand.id,
+                    stored.cmd
+                ));
+            }
+        };
+        let rerun = evidence::run_repro(&root, &stored.cmd, store::now_unix());
         let rev = rerun.rev.as_deref().unwrap_or("<unresolved>");
         match rerun.outcome.as_str() {
             task::REPRO_REPRODUCED => {}

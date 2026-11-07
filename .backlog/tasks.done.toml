@@ -68845,3 +68845,137 @@ excerpt = """
 rev = "30d954377e2b64fc6a40bb69d1c3d772d99c2de9"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "1ca662ec"
+title = "condukt verify: refuse a task whose worktree differs from HEAD"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 2 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: green-tests-prove-worktree-not-head.
+Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left != right` failed: state set --status verified accepted a task whose worktree has an UNCOMMITTED change to tracked source (gate.rs)... stderr: run 'run-b02-dirty': 1/1 verified  left: 0 right: 0 / test result: FAILED. 1 passed; 1 failed
+Readings: (a) refuse when the task worktree has uncommitted changes (pinned); (b) require the tdd green proof bound to HEAD^{tree} - proofs record no tree hash today (only passed/cmd), so (b) needs a tdd proof-format change and is not RED-testable via today's API. To tell apart: a clean tree whose proof was recorded at an older commit is refused only under (b).
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998293
+updated_at = 1794027974
+weight = 0.0
+issue_number = 1571
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1571"
+issue_closed_at = 1794027976
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b02_verify_dirty_worktree -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998848
+detail = """
+exit 101: eds/crates/blastguard)
+   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.83s
+     Running tests/audit_b02_verify_dirty_worktree.rs (target/debug/deps/audit_b02_verify_dirty_worktree-fde283566c97c0c8)
+error: test failed, to rerun pass `-p condukt --test audit_b02_verify_dirty_worktree`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test audit_b02_verify_dirty_worktree"
+exit = 0
+passed = 2
+rev = "61382cd76e9a9b28e6938f4582302429679c8af9"
+observed_at = 1794027892
+output_digest = "sha256:74347327168442fdb6ad03a769279183cd632b3e474364a67f2ef1fddd4d8163"
+excerpt = """
+
+running 2 tests
+test clean_worktree_with_valid_oracle_verifies ... ok
+test verify_refuses_task_worktree_with_uncommitted_source_changes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s
+
+   Compiling blastguard v0.2.302 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+   Compiling condukt v0.7.360 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.75s
+     Running tests/audit_b02_verify_dirty_worktree.rs (target/debug/deps/audit_b02_verify_dirty_worktree-fdd250ca2f8551e7)
+"""
+
+[task.closure.red]
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "aaae849b"
+title = "condukt state abandon --task: refuse while the worker transcript is fresh"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 5 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: condukt-operator-gotchas (formerly condukt-redispatch-stuck-worker-dup).
+Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left != right` failed: state abandon --task reset a running task whose worker transcript (agent-a0b05f00dfeedbeef.jsonl) was modified seconds ago... stderr: abandoned 1 task(s): t1  left: 0 right: 0 / test result: FAILED. 1 passed; 1 failed
+Ambiguity: transcript location is an assumed convention ($HOME/.claude/projects/<slug(run cwd)>/<session>/subagents/agent-<agent_id>.jsonl, literal and canonical spellings). A fix looking elsewhere (e.g. worktree-path slug) fails this test while possibly valid; check the real layout first. A --force <reason> escape is not exercised.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998368
+updated_at = 1794028026
+weight = 0.0
+issue_number = 1572
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1572"
+issue_closed_at = 1794028029
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b05_abandon_live_worker -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998870
+detail = """
+exit 101: tered out; finished in 3.89s
+
+   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/audit_b05_abandon_live_worker.rs (target/debug/deps/audit_b05_abandon_live_worker-77dc06c4c36649c0)
+error: test failed, to rerun pass `-p condukt --test audit_b05_abandon_live_worker`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test audit_b05_abandon_live_worker"
+exit = 0
+passed = 2
+rev = "61382cd76e9a9b28e6938f4582302429679c8af9"
+observed_at = 1794027979
+output_digest = "sha256:463d0a8ab506580aaffd7bf8a16f1e2d4277f4dd0dad30f74063ef9f5d5ae766"
+excerpt = """
+
+running 2 tests
+test explicit_abandon_refuses_while_worker_transcript_is_fresh ... ok
+test explicit_abandon_of_task_with_idle_worker_transcript_proceeds ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+   Compiling condukt v0.7.360 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.93s
+     Running tests/audit_b05_abandon_live_worker.rs (target/debug/deps/audit_b05_abandon_live_worker-271701fb1d2973be)
+"""
+
+[task.closure.red]
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+exit = 101
+kind = "behavioural"

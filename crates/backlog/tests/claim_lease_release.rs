@@ -491,7 +491,7 @@ fn reclaimed_old_failed_row_is_displayed_claimed() {
             format!(
                 "[[task]]\nid = \"oldfail1\"\ntitle = \"Old failure\"\nproject = \"{}\"\n\
                  tags = [\"p0\"]\nstatus = \"failed\"\nnotes = \"boom\"\ncreated_at = 1000\n\
-                 updated_at = 1000\ndefer_until = 1000\n[task.repro]\noutcome = \"reproduced\"\ncmd = \"cargo test -p fixture\"\nobserved_at = 1000\ndetail = \"fixture\"\n",
+                 updated_at = 1000\ndefer_until = 1000\n[task.repro]\noutcome = \"reproduced\"\ncmd = \"bash tests/repro.sh\"\nobserved_at = 1000\ndetail = \"fixture\"\n",
                 a.display()
             ),
         )

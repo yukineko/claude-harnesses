@@ -71467,3 +71467,59 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; fini
 rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "ed82c49b"
+title = "check-test-weakening: macro_rules! テストファイルで top-level helper 追加と呼び出し編集の併用を Undetermined にする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794066055
+updated_at = 1794067632
+weight = 0.0
+issue_number = 1633
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1633"
+issue_closed_at = 1794067636
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_ctw_macro_rules_helper_plus_invocations.py"
+rev = "58eae660a5bed638eaa0e0f3ce85dee02136583b"
+observed_at = 1794066055
+detail = """
+exit 1: r_fn_after_brace_item_alone_is_clean
+FAILED scripts/test_ctw_macro_rules_helper_plus_invocations.py::HelperPlusInvocations::test_helper_fn_after_brace_item_plus_invocation_edits_is_clean
+FAILED scripts/test_ctw_macro_rules_helper_plus_invocations.py::HelperPlusInvocations::test_helper_fn_plus_invocation_edits_is_clean
+========================= 3 failed, 8 passed in 5.06s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_ctw_macro_rules_helper_plus_invocations.py"
+exit = 0
+passed = 11
+rev = "8fbc8dbaf55ffddacb6108484969400e6ed53855"
+observed_at = 1794067619
+output_digest = "sha256:6526040600e6011f21ab85c42736a058b32dbabec92d0a70f2aa23e283661b7e"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/red-tw-macro-helper
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 11 items
+
+scripts/test_ctw_macro_rules_helper_plus_invocations.py ...........      [100%]
+
+============================== 11 passed in 4.79s ==============================
+"""
+
+[task.closure.red]
+rev = "58eae660a5bed638eaa0e0f3ce85dee02136583b"
+exit = 1
+kind = "behavioural"

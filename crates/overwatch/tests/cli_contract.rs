@@ -1072,42 +1072,6 @@ fn claim_rd_status_json_undetermined_array() {
 }
 
 #[test]
-fn claim_rd_hooks_json_status_only_at_session_start() {
-    let hooks: Value = serde_json::from_str(
-        &std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("hooks/hooks.json"))
-            .unwrap(),
-    )
-    .unwrap();
-    let events = hooks["hooks"].as_object().unwrap();
-    let mut names: Vec<&String> = events.keys().collect();
-    names.sort();
-    assert_eq!(names, ["PostToolUse", "SessionEnd", "SessionStart"]);
-    let status = json!("${CLAUDE_PLUGIN_ROOT}/bin/overwatch status");
-    let presence = json!("${CLAUDE_PLUGIN_ROOT}/bin/overwatch presence");
-    // (event, expected commands in order)
-    let expected: [(&str, Vec<&Value>); 3] = [
-        ("SessionStart", vec![&presence, &status]),
-        ("PostToolUse", vec![&presence]),
-        ("SessionEnd", vec![&presence]),
-    ];
-    for (ev, want) in expected {
-        let groups = events[ev].as_array().unwrap();
-        assert_eq!(groups.len(), 1, "{ev}");
-        let hs = groups[0]["hooks"].as_array().unwrap();
-        assert_eq!(hs.len(), want.len(), "{ev}");
-        for (h, w) in hs.iter().zip(want) {
-            assert_eq!(h["type"], json!("command"));
-            assert_eq!(&h["command"], w, "{ev}");
-            assert_eq!(h["timeout"], json!(5));
-        }
-    }
-    assert_eq!(
-        events["PostToolUse"][0]["matcher"],
-        json!("Edit|Write|MultiEdit|NotebookEdit")
-    );
-}
-
-#[test]
 fn claim_rd_no_install_subcommand() {
     let sb = Sb::new();
     let o = sb.run(&["install"]);

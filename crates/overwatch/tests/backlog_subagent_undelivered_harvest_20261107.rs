@@ -292,7 +292,6 @@ fn control_record_hook_accepts_real_shaped_payloads() {
 }
 
 #[test]
-#[ignore = "RED: subagent undelivered harvest 2026-11-07"]
 fn stop_without_handback_is_ended_undelivered_with_final_text() {
     let fx = Fx::new();
     fx.undelivered(None);
@@ -310,7 +309,6 @@ fn stop_without_handback_is_ended_undelivered_with_final_text() {
 }
 
 #[test]
-#[ignore = "RED: subagent undelivered harvest 2026-11-07"]
 fn harvested_final_text_survives_transcript_deletion() {
     let fx = Fx::new();
     fx.undelivered(None);
@@ -338,7 +336,6 @@ fn harvested_final_text_survives_transcript_deletion() {
 }
 
 #[test]
-#[ignore = "RED: subagent undelivered harvest 2026-11-07"]
 fn missing_transcript_uses_stop_payload_last_assistant_message() {
     let fx = Fx::new();
     fx.undelivered(Some(STOP_MSG));
@@ -358,7 +355,6 @@ fn missing_transcript_uses_stop_payload_last_assistant_message() {
 /// Control direction: a delivered result (SubagentHandback success) is `done`,
 /// never `ended_undelivered`, and the session is clean.
 #[test]
-#[ignore = "RED: subagent undelivered harvest 2026-11-07"]
 fn control_handback_success_is_done_not_ended_undelivered() {
     let fx = Fx::new();
     fx.parent(SESSION, &[text(-3000, "dispatching")]);

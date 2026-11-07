@@ -102,7 +102,20 @@ forge・condukt のスケジューラが再利用）。
   （値は glue された形だけ。値なしの `-O`/`--open-files-in-pager` は設定済み pager を起動するだけなので Allow）、
   `fetch`/`pull`/`clone`/`ls-remote`/`push`/`archive`/`fetch-pack`/`send-pack` の
   `--upload-pack`/`--receive-pack`/`--exec`（`clone`/`ls-remote` は `-u` も）、`send-email` の
-  `--to-cmd`/`--cc-cmd`/`--header-cmd`/`--sendmail-cmd`。語は shell の quote を外してから見る。
+  `--to-cmd`/`--cc-cmd`/`--header-cmd`/`--sendmail-cmd`、`ext::<command>` transport（`fetch`/`pull`/`push`/
+  `clone`/`ls-remote`/`remote`/`config`/`archive`/`fetch-pack`/`send-pack`/`submodule` の引数、`-c` の key/値。
+  `protocol.ext.allow` に関わらず）。command-valued key には `trailer.<x>.cmd`/`.command`・
+  `core.alternateRefsCommand`・`imap.tunnel`・`sendemail.sendmailCmd`・`submodule.<x>.update=!…`
+  （`!` 以外の値は組込み戦略なので対象外）・`core.fsmonitor`（bool 以外）も含む（backlog 3c750df2）。
+  語は shell の quote を外してから見る（ANSI-C `$'…'` も decode する。global option 中の decode できない
+  `$'…'` は ban）。**git の環境変数にも同じ ban を適用する**（backlog 3c750df2。`detect/executors.rs` の
+  `env_exec_var_verdict`）: `GIT_PAGER`/`GIT_EDITOR`/`GIT_SEQUENCE_EDITOR`/`GIT_SSH_COMMAND`/`GIT_SSH`/
+  `GIT_EXTERNAL_DIFF`/`GIT_ASKPASS`/`GIT_PROXY_COMMAND` は対応する config key の値として、
+  `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` と `GIT_CONFIG_PARAMETERS` の各 entry は `git -c key=value`
+  として、既知の安全値（下記）以外は実行内容に関わらず Deny（`GIT_PAGER=less`・`GIT_EDITOR=vim` は Allow）。
+  **ban が扱わない形は残る**（ban 理由の文言は「blastguard が認識する形」だけを主張する）: `PAGER`/`EDITOR`/
+  `VISUAL`（git も読むが git 固有でないので従来どおり値を shell line として解析するだけ）、program を指す
+  `sendemail.smtpServer`、`instaweb --httpd`、既に config ファイルに保存された設定。
   `filter-branch` は従来どおり `irreversible_git_subcommand` が全用途を Deny。埋め込みコマンドが spelled out
   されていてそれ自体が Deny のとき（`git bisect run rm -rf /usr`）はその Deny 理由を返す（system-harm
   marker を保つため。`detect.rs` の git arm）。非対象（Allow のまま）: `bisect start/good/bad`、
@@ -111,10 +124,14 @@ forge・condukt のスケジューラが再利用）。
   **既知の安全値**（ユーザー裁定 2026-11-07「Allow known-safe values」。`detect/executors.rs` の
   `is_safe_command_value`）: 先頭語が key ごとの固定リストにあり、以降が素の flag（`-R`・`--wait` 等。
   `=value`・展開・`;`・quote・operand を含まない）だけの値 — pager（`core.pager`/`pager.<cmd>`）は
-  `less`/`more`/`cat`、editor（`core.editor`/`sequence.editor`）は `vim`/`nano`/`code`/`true`/`:`、
-  `credential.helper`（`credential.<url>.helper` 含む）は `osxkeychain`/`store`/`cache`、`gpg.program` は `gpg`、
-  `core.sshCommand` は `ssh`（flag の後の素の値語〈`-i key`〉は可。`o`/`F` を含む flag〈`-o ProxyCommand=…`・
-  `-F <config>`〉は command を運ぶので不可）。`-c` と `git config` 書き込みの両方に適用。リスト外の値
+  `less`/`more`/`cat`/`delta`、editor（`core.editor`/`sequence.editor`）は `vim`/`vi`/`nvim`/`emacs`/`nano`/
+  `code`/`cursor`/`subl`/`true`/`:`（後続語は値を取らない `--wait`/`-w`/`-n`/`--new-window`/`-nw`/
+  `--no-window-system` だけ。git が編集ファイルを末尾に足すので `vim -S`・`emacs -l` はそれを code として実行する）、
+  `credential.helper`（`credential.<url>.helper` 含む）は `osxkeychain`/`store`/`cache`（`--timeout=<数字>` 可）/
+  `manager`/`manager-core`、`gpg.program` は `gpg`/`gpg2`、
+  `core.sshCommand` は `ssh`（数字 flag〈`-4`/`-6`〉と flag の後の素の値語〈`-i key`・`-J user@bastion`〉は可。
+  `o`/`F`/`I`/`E`/`S` を含む flag〈`-o ProxyCommand=…`・`-F <config>`・PKCS#11 library・log file・control
+  socket〉は command を運ぶ／code を load する／file を書くので不可）。`-c` と `git config` 書き込みの両方に適用。リスト外の値
   （`vim; rm -rf ~`・`vim $(…)`・`!…`・`ssh -o ProxyCommand=sh` 等）は ban のまま Deny。
 - **system-harm（システムを壊すコマンド）は常に Deny、repeat でも降格しない（backlog fb338793、ユーザー裁定
   2026-11-07「いかなる理由であれシステムに害になるコマンドはdenyすべし」「1は絶対にdenyでいい」）** —
@@ -133,6 +150,15 @@ forge・condukt のスケジューラが再利用）。
   書き込み Deny（`system_path_block`）、`crate::deletion` のシステムディレクトリ refusal は理由に
   `model::SYSTEM_HARM_MARK` を含み、`main::downgrade_on_repeat` は `Decision::is_system_harm` の Deny を
   2 度目以降も Ask に落とさない（他の Deny の repeat 降格〈運用者裁定 2026-09-18〉は不変）。
+  shape で Deny する規則（`find -delete`・`truncate`・`shred`・再帰 `chmod`/`chown`/`chgrp`・`dd of=`・
+  再帰/ワイルドカード `rm`・`osascript` の app delete）は、対象が `/`・システムディレクトリ・raw disk device
+  （`/dev/disk*`・`/dev/rdisk*`・`/dev/sd*` 等）・`$HOME` そのもの・home の irreplaceable asset（`~/.ssh`・
+  `~/.gnupg`・home 直下の dotfile/dotdir）のとき、同じ理由のまま marker 付きで返す（`detect/harm_mark.rs` の
+  `mark_system_harm`。`detect.rs` の command-word loop が `harm_mark::analyze_command_at` 経由で呼ぶ。
+  backlog 3c750df2）。Allow/Ask は触らない。置けない operand（展開・quote・base 不明の相対）は mark しない
+  （Deny 自体は残る）。システムパスは safe root の strict な内側なら対象外、home 側に escape は無い。
+  `git bisect run` の埋め込みコマンドは各語を re-quote して解析するので（`sh -c 'cd /etc && rm passwd'`）、
+  その system-harm Deny が ban の理由に代わって返る。`rule_id` は marker を外してから照合する。
 - **rm 以外のシステムファイル変更コマンドも system-harm Deny（backlog 3c750df2）** — `detect/system_paths.rs` の
   `system_mutation_verdict` が `analyze_command_at` の per-command arm より先に 1 箇所で判定する。対象は
   `unlink`/`rmdir` の operand、`mv` の source（`-t` 時は全 operand）、`sed -i`/`--in-place` の入力ファイル

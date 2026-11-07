@@ -69,6 +69,7 @@ mod fileops;
 mod find_xargs;
 mod gh;
 mod git;
+mod harm_mark;
 mod heredoc;
 mod high_blast;
 mod interpreter;
@@ -972,7 +973,7 @@ fn denoised_eval_rescan(region: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // exec-wrapper widening in `command_candidates`: whichever position the real
     // shell would exec is guaranteed to be among them.
     for idx in 0..tokens.len() {
-        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth, ctx)) {
+        if let Some(deny) = acc.record(harm_mark::analyze_command_at(&tokens, idx, depth, ctx)) {
             return deny;
         }
     }
@@ -1625,7 +1626,7 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
     // D3: analyse EVERY candidate command-word position; deny if ANY is
     // destructive. See `command_candidates`.
     for idx in command_candidates(&tokens) {
-        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth, ctx)) {
+        if let Some(deny) = acc.record(harm_mark::analyze_command_at(&tokens, idx, depth, ctx)) {
             return deny;
         }
     }

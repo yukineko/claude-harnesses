@@ -332,6 +332,9 @@ enum GitKeyKind {
     /// `include.path` / `includeIf.<cond>.path`: pulls in a config FILE, which
     /// can set any key above; its contents are not on the command line.
     Include,
+    /// `submodule.<name>.update`: `!cmd` is a shell line; any other value
+    /// (`checkout`/`rebase`/`merge`/`none`) names a built-in strategy.
+    BangOnly,
 }
 
 fn git_key_kind(key: &str) -> Option<GitKeyKind> {
@@ -348,6 +351,9 @@ fn git_key_kind(key: &str) -> Option<GitKeyKind> {
         | "sendemail.tocmd"
         | "sendemail.cccmd"
         | "uploadpack.packobjectshook"
+        | "core.alternaterefscommand"
+        | "imap.tunnel"
+        | "sendemail.sendmailcmd"
         | "credential.helper" => return shell,
         "core.fsmonitor" => return Some(GitKeyKind::Shell { bool_ok: true }),
         "include.path" => return Some(GitKeyKind::Include),
@@ -360,7 +366,9 @@ fn git_key_kind(key: &str) -> Option<GitKeyKind> {
         ("alias", 2, _) => Some(GitKeyKind::Alias),
         ("includeif", n, "path") if n >= 3 => Some(GitKeyKind::Include),
         (_, n, _) if n < 3 => None,
+        ("submodule", _, "update") => Some(GitKeyKind::BangOnly),
         ("credential", _, "helper")
+        | ("trailer", _, "cmd" | "command")
         | ("diff", _, "textconv" | "command")
         | ("merge", _, "driver")
         | ("filter", _, "clean" | "smudge" | "process")
@@ -397,7 +405,7 @@ pub(super) fn git_config_command(key: &str, value: &str) -> Option<String> {
     }
     match git_key_kind(key)? {
         GitKeyKind::Include => None,
-        GitKeyKind::Alias => value
+        GitKeyKind::Alias | GitKeyKind::BangOnly => value
             .trim_start()
             .strip_prefix('!')
             .map(|line| line.to_string()),
@@ -428,16 +436,24 @@ fn is_plain_flag(w: &str) -> bool {
 ///
 /// | key | programs |
 /// |---|---|
-/// | `core.pager`, `pager.<cmd>` | `less`, `more`, `cat` |
-/// | `core.editor`, `sequence.editor` | `vim`, `nano`, `code`, `true`, `:` |
-/// | `credential.helper`, `credential.<url>.helper` | `osxkeychain`, `store`, `cache` |
-/// | `gpg.program` | `gpg` |
+/// | `core.pager`, `pager.<cmd>` | `less`, `more`, `cat`, `delta` |
+/// | `core.editor`, `sequence.editor` | `vim`, `vi`, `nvim`, `emacs`, `nano`, `code`, `cursor`, `subl`, `true`, `:` |
+/// | `credential.helper`, `credential.<url>.helper` | `osxkeychain`, `store`, `cache`, `manager`, `manager-core` |
+/// | `gpg.program` | `gpg`, `gpg2` |
 /// | `core.sshcommand` | `ssh` (see below) |
 ///
-/// `ssh` additionally accepts a plain value word after a flag (`ssh -i key`):
-/// letters, digits and `. _ / ~ -`, not starting with `-`. A bundle holding
-/// `o` or `F` (`-o ProxyCommand=…`, `-F <config>`) is never safe — those
-/// options carry a command (or a config file that can). Any other key, any
+/// An editor's later words must be one of the value-less flags `--wait`,
+/// `-w`, `-n`, `--new-window`, `-nw`, `--no-window-system` (git appends the
+/// file to edit, so a value-taking flag such as `vim -S` / `emacs -l` would
+/// run that file as code). `cache` also accepts `--timeout=<digits>`.
+///
+/// `ssh` additionally accepts digit flags (`-4`, `-6`) and a plain value word
+/// after a flag (`ssh -i key`, `ssh -J user@bastion`): letters, digits and
+/// `. _ / ~ - @ : ,`, not starting with `-`, optionally after a leading
+/// `$HOME/` or `${HOME}/`. A bundle holding `o`, `F`, `I`,
+/// `E` or `S` (`-o ProxyCommand=…`, `-F <config>`, a PKCS#11 library, a log
+/// file, a control socket) is never safe — those options carry a command,
+/// load code, or write a file. Any other key, any
 /// unlisted program, `;`, `$`, a backtick, `!`, a quote or an operand makes
 /// the value unsafe, and the ban applies.
 fn is_safe_command_value(key: &str, value: &str) -> bool {
@@ -446,16 +462,18 @@ fn is_safe_command_value(key: &str, value: &str) -> bool {
         return false;
     };
     let dots = key.matches('.').count();
+    let credential =
+        key == "credential.helper" || (key.starts_with("credential.") && key.ends_with(".helper"));
     let progs: &[&str] = if key == "core.pager" || (key.starts_with("pager.") && dots == 1) {
-        &["less", "more", "cat"]
+        &["less", "more", "cat", "delta"]
     } else if key == "core.editor" || key == "sequence.editor" {
-        &["vim", "nano", "code", "true", ":"]
-    } else if key == "credential.helper"
-        || (key.starts_with("credential.") && key.ends_with(".helper"))
-    {
-        &["osxkeychain", "store", "cache"]
+        &[
+            "vim", "vi", "nvim", "emacs", "nano", "code", "cursor", "subl", "true", ":",
+        ]
+    } else if credential {
+        &["osxkeychain", "store", "cache", "manager", "manager-core"]
     } else if key == "gpg.program" {
-        &["gpg"]
+        &["gpg", "gpg2"]
     } else if key == "core.sshcommand" {
         &["ssh"]
     } else {
@@ -465,17 +483,61 @@ fn is_safe_command_value(key: &str, value: &str) -> bool {
         return false;
     }
     if key != "core.sshcommand" {
-        return words.all(is_plain_flag);
+        // `git credential-cache --timeout=<seconds>`: the one `=value` flag
+        // accepted, and only with a digits-only value.
+        let cache_timeout = |w: &str| {
+            credential
+                && prog == "cache"
+                && w.strip_prefix("--timeout=")
+                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        };
+        // An editor is run as `<value> <file>`, so a flag that takes the NEXT
+        // word would take git's file: `vim -S`, `emacs -l` / `--script` would
+        // source the commit message as code. Editors accept only flags that
+        // take no value: wait for the window to close, open a new window,
+        // no window system.
+        let editor = key == "core.editor" || key == "sequence.editor";
+        let editor_flag = |w: &str| {
+            matches!(
+                w,
+                "--wait" | "-w" | "-n" | "--new-window" | "-nw" | "--no-window-system"
+            )
+        };
+        return words.all(|w| {
+            if editor {
+                editor_flag(w)
+            } else {
+                is_plain_flag(w) || cache_timeout(w)
+            }
+        });
     }
+    // A value word may start with `$HOME/` / `${HOME}/` (`ssh -i
+    // $HOME/.ssh/k`): the expansion is a path, and an expanded value is only
+    // split and globbed by the shell, never re-parsed as a command.
     let plain_value = |w: &str| {
+        let w = w
+            .strip_prefix("$HOME/")
+            .or_else(|| w.strip_prefix("${HOME}/"))
+            .unwrap_or(w);
         !w.starts_with('-')
-            && w.chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '/' | '~' | '-'))
+            && w.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '.' | '_' | '/' | '~' | '-' | '@' | ':' | ',')
+            })
+    };
+    // ssh short-option bundles (`-4`, `-6`, `-J`, `-vT`, `-p22`): letters and
+    // digits only. `o` (an option, e.g. `ProxyCommand`), `F` (a config file),
+    // `I` (a PKCS#11 library ssh loads), `E` (a log file ssh writes) and `S`
+    // (a control socket path) are never safe.
+    let ssh_flag = |w: &str| {
+        w.strip_prefix('-')
+            .filter(|b| !b.is_empty() && !b.starts_with('-'))
+            .is_some_and(|b| b.chars().all(|c| c.is_ascii_alphanumeric()))
     };
     let mut after_flag = false;
     for w in words {
-        if is_plain_flag(w) {
-            if !w.starts_with("--") && w[1..].contains(['o', 'F']) {
+        if ssh_flag(w) || is_plain_flag(w) {
+            if !w.starts_with("--") && w[1..].contains(['o', 'F', 'I', 'E', 'S']) {
                 return false;
             }
             after_flag = true;
@@ -568,6 +630,10 @@ blastguard cannot see what would execute"
             let line = value.strip_prefix('!').unwrap_or(value);
             analyze_shell_payload(line, depth, ctx)
         }
+        GitKeyKind::BangOnly => match value.trim_start().strip_prefix('!') {
+            Some(line) => analyze_shell_payload(line, depth, ctx),
+            None => Decision::Allow,
+        },
         GitKeyKind::Alias => match value.strip_prefix('!') {
             Some(line) => analyze_shell_payload(line, depth, ctx),
             // A non-shell alias expands to a git command line, which the
@@ -690,6 +756,12 @@ fn expands_at_run_time(v: &str) -> bool {
 ///   `${NAME:=…}` / `${NAME=…}` — or exported by bare name (`export NAME`)
 ///   on a line that never assigns it with a literal `NAME=…`: its value is not
 ///   on the command line, so Ask.
+/// * Git's own variables (`GIT_PAGER`, `GIT_EDITOR`, `GIT_SEQUENCE_EDITOR`,
+///   `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`,
+///   `GIT_PROXY_COMMAND`) and the config entries of `GIT_CONFIG_KEY_<n>`/
+///   `GIT_CONFIG_VALUE_<n>` and `GIT_CONFIG_PARAMETERS` get the git exec ban
+///   (backlog 3c750df2): Deny whatever they run, unless the value is
+///   known-safe for the matching config key ([`is_safe_command_value`]).
 pub(super) fn env_exec_var_verdict(seg: &str, line: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let mut acc = VerdictAcc::default();
     let mut config_keys: Vec<(String, Option<String>)> = Vec::new();
@@ -742,16 +814,19 @@ pub(super) fn env_exec_var_verdict(seg: &str, line: &str, depth: usize, ctx: &Ct
         let verdict = if EXEC_ENV_VARS.contains(&name) {
             match value {
                 Some(v) if v.trim().is_empty() => Decision::Allow,
-                Some(v) => {
-                    // less's input preprocessor: a leading `|` (or `||`) marks
-                    // the value as a command whose output less reads.
-                    let payload = if name.starts_with("LESS") {
-                        v.trim_start_matches('|').to_string()
-                    } else {
-                        v
-                    };
-                    analyze_shell_payload(&payload, depth, ctx)
-                }
+                Some(v) => match git_env_config_key(name) {
+                    Some(key) => git_env_ban_verdict(name, key, &v, depth, ctx),
+                    None => {
+                        // less's input preprocessor: a leading `|` (or `||`) marks
+                        // the value as a command whose output less reads.
+                        let payload = if name.starts_with("LESS") {
+                            v.trim_start_matches('|').to_string()
+                        } else {
+                            v
+                        };
+                        analyze_shell_payload(&payload, depth, ctx)
+                    }
+                },
                 None => Decision::ask(format!(
                     "`{name}` is a command line a program runs, and its value `{raw_value}` \
 cannot be resolved to one literal — blastguard cannot see what would execute"
@@ -803,7 +878,12 @@ one literal — it cannot tell whether git would run its value as a command"
             .and_then(|(_, v)| v.clone())
             .filter(|v| !expands_at_run_time(v));
         let verdict = match value {
-            Some(v) => judge_git_config(&format!("{key}={v}"), false, depth, ctx),
+            Some(v) => git_env_config_verdict(
+                &format!("GIT_CONFIG_KEY_{n}/GIT_CONFIG_VALUE_{n}"),
+                &format!("{key}={v}"),
+                depth,
+                ctx,
+            ),
             // Value unresolvable, or not on this segment at all (it comes from
             // the environment): the `--config-env` case, judged the same way —
             // but reported in this variable's own terms.
@@ -924,11 +1004,72 @@ command",
         let Some(assignment) = unquote_literal_value(&entry) else {
             return unparseable();
         };
-        if let Some(deny) = acc.record(judge_git_config(&assignment, false, depth, ctx)) {
+        let verdict = git_env_config_verdict("GIT_CONFIG_PARAMETERS", &assignment, depth, ctx);
+        if let Some(deny) = acc.record(verdict) {
             return deny;
         }
     }
     acc.finish()
+}
+
+/// The git config key whose value a git environment variable overrides
+/// (`GIT_PAGER` is `core.pager`, …), or `None` for a variable git does not
+/// read (`PAGER`, `EDITOR`, … stay judged on what they run).
+fn git_env_config_key(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "GIT_PAGER" => "core.pager",
+        "GIT_EDITOR" => "core.editor",
+        "GIT_SEQUENCE_EDITOR" => "sequence.editor",
+        "GIT_SSH_COMMAND" | "GIT_SSH" => "core.sshcommand",
+        "GIT_EXTERNAL_DIFF" => "diff.external",
+        "GIT_ASKPASS" => "core.askpass",
+        "GIT_PROXY_COMMAND" => "core.gitproxy",
+        _ => return None,
+    })
+}
+
+/// A git environment variable set to `value` (backlog 3c750df2): banned like
+/// `git -c <key>=<value>` — Deny whatever it runs, unless the value is
+/// known-safe for `key` ([`is_safe_command_value`], `GIT_PAGER=less`). When
+/// the value is itself refused, that Deny (and any system-harm marker) is
+/// returned instead.
+fn git_env_ban_verdict(
+    name: &str,
+    key: &str,
+    value: &str,
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
+    if is_safe_command_value(key, value) {
+        return Decision::Allow;
+    }
+    match analyze_shell_payload(value, depth, ctx) {
+        Decision::Deny(r) => Decision::Deny(r),
+        _ => Decision::deny(super::git::env_exec_ban_reason(&format!("{name}=…"))),
+    }
+}
+
+/// One `key=value` carried by git's config environment
+/// (`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`, `GIT_CONFIG_PARAMETERS`):
+/// judged like `git -c key=value` ([`judge_git_config`]), and banned like it
+/// when the setting runs a command ([`git_config_command`]) — Deny whatever
+/// that command is (backlog 3c750df2). A Deny from the judgement wins, so its
+/// reason survives.
+fn git_env_config_verdict(what: &str, assignment: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    let judged = judge_git_config(assignment, false, depth, ctx);
+    if judged.is_deny() {
+        return judged;
+    }
+    let banned = assignment.split_once('=').and_then(|(k, v)| {
+        let key = k.trim().to_ascii_lowercase();
+        let ext = v.trim_start().to_ascii_lowercase().starts_with("ext::")
+            || key.starts_with("url.ext::");
+        (ext || git_config_command(&key, v).is_some()).then_some(key)
+    });
+    match banned {
+        Some(key) => Decision::deny(super::git::env_exec_ban_reason(&format!("{what} ({key})"))),
+        None => judged,
+    }
 }
 
 // ---------------------------------------------------------------- env -S ----

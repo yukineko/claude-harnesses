@@ -91,7 +91,6 @@ class CrossFileMacro(unittest.TestCase):
         return r.returncode, r.stdout + r.stderr
 
     # TARGET
-    @unittest.expectedFailure  # RED: cross-file macro invocation removal
     def test_target_crossfile_invocation_removal_blocks(self) -> None:
         self.base({"support/macros.rs": MACROS_RS, "a.rs": a_rs(["case_a", "case_b"])})
         self.change({"a.rs": a_rs(["case_b"])})

@@ -71028,3 +71028,68 @@ scripts/test_check_test_weakening_macro_additive.py ..                   [100%]
 rev = "91f02405b7d4f78b4382ecee65ebaa213fac47c2"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "f500c25a"
+title = "donegate default max_attempts=2: give up visibly on the 3rd stop"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = '''
+Audit B item 7 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: ask-policy (formerly gate-block-giveup-after-two).
+Observed RED 2026-11-07 at 35d0d2bf (base fc7b5dd9) (verbatim): stop 3 blocked again: the default cap allows more than two blocks; stdout="{\"decision\":\"block\",\"reason\":\"donegate: 1 required check(s) failed (attempt 3/3)... / test result: FAILED
+Related but separate from backlog b80023b3 (repeat waiver defeated by attempt number in the fingerprint); if that lands, stop 2 may become a waiver - the control accepts it. Visible give-up = marker donegate:giveup:typecheck in the violation ledger. tests/giveup_sentinel.rs sets max_attempts=3 explicitly (unaffected); the template line max_attempts = 3 at crates/donegate/src/main.rs:1069 needs updating with the fix.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.'''
+created_at = 1793998413
+updated_at = 1794052648
+weight = 0.0
+issue_number = 1578
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1578"
+issue_closed_at = 1794052651
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test audit_b7_default_giveup_after_two -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998919
+detail = """
+exit 101: ished in 2.95s
+
+   Compiling donegate v0.1.68 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.49s
+     Running tests/audit_b7_default_giveup_after_two.rs (target/debug/deps/audit_b7_default_giveup_after_two-59f886dfa0df1f53)
+error: test failed, to rerun pass `-p donegate --test audit_b7_default_giveup_after_two`"""
+
+[task.closure]
+reason = "already-fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p donegate --test audit_b7_default_giveup_after_two"
+exit = 0
+passed = 1
+rev = "801cb502f167e480e7a452b7afe0bb7038ffe455"
+observed_at = 1794052608
+output_digest = "sha256:8878c39e0b3c3aef2cf0bf2c1ae085b7ff9b4c4a872e11fd2d1298c6dfdff7e0"
+excerpt = """
+
+running 1 test
+test default_attempt_cap_gives_up_visibly_on_the_third_stop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/audit_b7_default_giveup_after_two.rs (target/debug/deps/audit_b7_default_giveup_after_two-52ffbc317b0c794e)
+"""
+
+[task.closure.red]
+rev = "35d0d2bf18258b6b96ff64458d81c3818b07479d"
+exit = 101
+kind = "behavioural"

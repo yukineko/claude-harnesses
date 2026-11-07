@@ -73,43 +73,6 @@ exit 101: ished in 1.41s
 error: test failed, to rerun pass `-p backlog --test audit_b6_claim_rejects_green_repro`"""
 
 [[task]]
-id = "f500c25a"
-title = "donegate default max_attempts=2: give up visibly on the 3rd stop"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = '''
-Audit B item 7 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: ask-policy (formerly gate-block-giveup-after-two).
-Observed RED 2026-11-07 at 35d0d2bf (base fc7b5dd9) (verbatim): stop 3 blocked again: the default cap allows more than two blocks; stdout="{\"decision\":\"block\",\"reason\":\"donegate: 1 required check(s) failed (attempt 3/3)... / test result: FAILED
-Related but separate from backlog b80023b3 (repeat waiver defeated by attempt number in the fingerprint); if that lands, stop 2 may become a waiver - the control accepts it. Visible give-up = marker donegate:giveup:typecheck in the violation ledger. tests/giveup_sentinel.rs sets max_attempts=3 explicitly (unaffected); the template line max_attempts = 3 at crates/donegate/src/main.rs:1069 needs updating with the fix.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.'''
-created_at = 1793998413
-updated_at = 1794001891
-weight = 0.0
-issue_number = 1578
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1578"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p donegate --test audit_b7_default_giveup_after_two -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998919
-detail = """
-exit 101: ished in 2.95s
-
-   Compiling donegate v0.1.68 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/donegate)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.49s
-     Running tests/audit_b7_default_giveup_after_two.rs (target/debug/deps/audit_b7_default_giveup_after_two-59f886dfa0df1f53)
-error: test failed, to rerun pass `-p donegate --test audit_b7_default_giveup_after_two`"""
-
-[[task]]
 id = "e95bf58f"
 title = "compass looks_like_path: do not flag slash lists or bare filenames in DoD prose"
 project = "/Users/yuki/src/harness"

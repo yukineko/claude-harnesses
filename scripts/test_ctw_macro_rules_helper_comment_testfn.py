@@ -35,16 +35,17 @@ Contract (same shapes as the real file; the file exists at the merge-base):
              template body commented out): rc 2 (passes today);
            * a `/* */` block comment that swallows an invocation: rc 1 or 2
              (passes today).
-  RED, BUT NEEDS A RULING (the coordinator's spec says rc 2; today rc 0):
+  CLEAN PIN (coordinator correction of spec, 2026-11-08; not a weakening):
            * an inserted `#[test] fn` whose name duplicates an existing
-             generated test name (`fn target_one`);
-           * an inserted `#[test]`-bearing item that is not a fn (a
-             `#[cfg(test)] mod` with a test).
-             Both are accepted today by the inserted-items shape (shape 1,
-             pre-existing). A duplicate name is a rustc error (E0428), so it
-             fails loudly. The mod only adds tests. So rc 0 may be correct,
-             and making these rc 2 means tightening shape 1. They are marked
-             expectedFailure under this backlog id until that is ruled.
+             generated test name (`fn target_one`) is clean: a duplicate name
+             is rustc E0428, a loud compile failure, so nothing is silently
+             weakened;
+           * an inserted `#[cfg(test)] mod` holding a test is clean: it only
+             adds tests and cannot affect existing ones.
+             The original spec asked for rc 2 here. That was a spec error, not
+             a user ruling. Both are accepted by the inserted-items shape
+             (`_only_proven_safe_line_changes`) and pinned at rc 0 so that a
+             future tightening is a visible decision.
 
 Set CTW_SCRIPT to run against another copy of the gate.
 
@@ -260,11 +261,15 @@ class HelperCommentTestFn(unittest.TestCase):
                                           "#[cfg(any())]\nfn assert_restrictive_both", 1))
         self.assert_rc_in(src, (1, 2))
 
-    @unittest.expectedFailure  # backlog 25b88447: spec says rc 2, today 0; needs a ruling (see header)
-    def test_inserted_test_fn_duplicating_generated_name_is_undetermined(self) -> None:
+    def test_inserted_test_fn_duplicating_generated_name_is_clean(self) -> None:
+        """PIN rc 0 (coordinator correction of spec, 2026-11-08; not a
+        weakening): a top-level `fn target_one` next to the generated
+        `target_one` is rustc E0428, a loud compile failure, so no existing
+        test can be silently weakened by it."""
         src = build(between=TEST_FN_PLAIN.replace(
             "fn control_cd_git_add_all_not_empty()", "fn target_one()", 1))
-        self.assert_rc_in(src, (2,))
+        self.assertIn("fn target_one()", src, "anti-vacuity: the duplicate is inserted")
+        self.assert_clean(src)
 
     def test_comment_edit_that_changes_code_on_same_line_is_undetermined(self) -> None:
         templates = TEMPLATES_PART.replace(
@@ -277,11 +282,13 @@ class HelperCommentTestFn(unittest.TestCase):
         src = BASE.replace(T2, "/*\n" + T2 + "*/\n", 1)
         self.assert_rc_in(src, (1, 2))
 
-    @unittest.expectedFailure  # backlog 25b88447: spec says rc 2, today 0; needs a ruling (see header)
-    def test_inserted_mod_with_tests_is_undetermined(self) -> None:
+    def test_inserted_mod_with_tests_is_clean(self) -> None:
+        """PIN rc 0 (coordinator correction of spec, 2026-11-08; not a
+        weakening): an inserted `#[cfg(test)] mod` is add-only. It brings new
+        tests and cannot affect any existing one."""
         mod = ("#[cfg(test)]\nmod extra {\n    #[test]\n    fn inner() {\n"
                "        assert!(true);\n    }\n}\n")
-        self.assert_rc_in(build(between=mod), (2,))
+        self.assert_clean(build(between=mod))
 
 
 if __name__ == "__main__":

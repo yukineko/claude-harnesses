@@ -100,6 +100,16 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullets 'inert literal の Deny→Ask 降格' and '埋め込み shell 文字列の Ask と osascript の削除' (SHELL_STRING_EXEC_MARKERS pending Ask, osascript_app_delete, backlog 0fefcd3b)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/interpreter/osascript.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '埋め込み shell 文字列の Ask と osascript の削除': osascript_app_delete (Finder / System Events delete or empty trash is Deny, backlog 0fefcd3b)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/comments.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'inert literal の Deny→Ask 降格': strip_hash_comments decides the comment-only-mention Ask (backlog 6798f47d); moved unchanged out of interpreter.rs for the file-size cap."
+
+[[spec]]
 path = "crates/blastguard/src/deletion.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'system-harm…は常に Deny': deletion's system-directory refusals carry SYSTEM_HARM_MARK so a repeat stays Deny (backlog fb338793)."

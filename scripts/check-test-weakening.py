@@ -67,8 +67,14 @@ Two consequences of that design, stated so they read as decisions:
   scratch file -- and it is held to the same exactness rules. This gate now runs
   from .githooks/commit-msg, where git supplies that path as $1.
 * Scope is the current branch/worktree's own changes: merge-base(local `main`,
-  HEAD) -- the fork point from the branch it integrates into -- vs the worktree,
-  not per commit and not from `origin/main`. User ruling 2026-10-25:
+  HEAD) -- the fork point from the branch it integrates into -- vs the INDEX,
+  not per commit and not from `origin/main`. "The index" is the one git hands
+  this process (`GIT_INDEX_FILE`, so `git commit -a` / `git commit <paths>`
+  judge their temporary index), in every mode including a manual CLI run;
+  unstaged changes are ignored, because they are not part of the commit (user
+  ruling 2026-11-08 "Index everywhere", backlog 54de84b4). Until then the
+  after side was read from DISK: an unstaged edit was blamed on the commit, and
+  a weakening staged while the disk copy was restored passed. User ruling 2026-10-25:
   「スキャナは現在作業しているbranch,worktreeに限定した」 (GitHub #1181, backlog
   52d17300). A stale `origin/main` behind local `main` used to charge main's
   commits to every branch commit. A base that does not resolve, or a merge-base
@@ -77,7 +83,7 @@ Two consequences of that design, stated so they read as decisions:
   file that did not exist at the base. Against the base such a file has no
   coverage to lose, so it alone yields nothing; but it may already exist at HEAD,
   committed earlier on this branch, and then its tests did exist. For such a file
-  the scanner ALSO compares HEAD with the worktree and blocks a skip or
+  the scanner ALSO compares HEAD with the index and blocks a skip or
   expected-failure marker gained by a test present on both (`ignore-added` /
   `should-panic-added`; `head_marker_findings`; backlog 78817f03, user ruling
   2026-11-07). That comparison deliberately does NOT judge assertion loss or
@@ -87,8 +93,8 @@ Two consequences of that design, stated so they read as decisions:
   and then removing its assertions or the test itself before merge -- is still
   NOT covered by this scanner; the tdd F->P oracle (a RED observation before the
   GREEN) is the control for that, not this gate. The HEAD comparison only sees
-  the step from HEAD to the worktree, so it judges each commit as it is made
-  (commit-msg); a pre-push run, where the worktree equals HEAD, adds nothing.
+  the step from HEAD to the index, so it judges each commit as it is made
+  (commit-msg); a pre-push run, where the index equals HEAD, adds nothing.
   A marker present in the file's FIRST commit (absent at HEAD) is not judged.
 * Assertion loss is counted at TWO granularities, and either one raises the
   finding. Until 2026-09-24 it was counted only NET PER FILE, and that alone was
@@ -188,8 +194,8 @@ from weakening_vcs import (  # noqa: E402
     grep_path_attr_files,
     is_git_repo,
     resolve_base,
-    worktree_content,
-    worktree_or_none,
+    index_content,
+    index_or_none,
 )
 from weakening_macro import template_invocation_edit_is_safe  # noqa: E402
 
@@ -445,7 +451,7 @@ def _mask_noncode(src: str, path: str) -> str:
 #
 # Now the body FILE is resolved with Rust's module path rules and its whole
 # contents are test surface, read from the same side as the declaring file (the
-# merge-base blob for the base, the worktree for the change). The body is
+# merge-base blob for the base, the index for the change). The body is
 # appended to the DECLARING file's surface, so findings stay keyed by the
 # declaring path on both sides: a verbatim inline -> out-of-line move compares
 # equal, while an assertion or `#[test]` lost in the move is still reported (it
@@ -1604,8 +1610,8 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
         lambda: grep_path_attr_files(repo, merge_base),
     )
     after_side = Side(
-        "worktree",
-        lambda p: worktree_or_none(repo, p),
+        "index",
+        lambda p: index_or_none(repo, p),
         lambda: grep_path_attr_files(repo, None),
     )
     head_side = Side(
@@ -1652,7 +1658,7 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
             continue
         rep = new or old  # attribute the finding to the surviving/current path
         before_src = blob_at(repo, merge_base, old) if old else ""
-        after_src = worktree_content(repo, new) if new else ""
+        after_src = index_content(repo, new) if new else ""
         if is_py_test_file(old) or is_py_test_file(new):
             # Python side(s). A side that is not a Python test file (a rename to
             # a non-test name, or an `.rs` counterpart) contributes an EMPTY
@@ -1764,7 +1770,8 @@ def main(argv=None) -> int:
         "--base",
         default="main",
         help="the branch this worktree integrates into (default: local main); "
-        "the scan covers merge-base(BASE, HEAD) to the worktree. Not origin/main: "
+        "the scan covers merge-base(BASE, HEAD) to the index (GIT_INDEX_FILE "
+        "honoured; unstaged changes are ignored). Not origin/main: "
         "a stale remote ref charges main's commits to the branch (#1181)",
     )
     ap.add_argument("--repo", default=None)

@@ -296,7 +296,8 @@ pub fn block_reason(v: &GateReport, attempt: u32, max: u32) -> String {
 }
 
 /// The repeat-ledger identity of [`block_reason`]: the same text with the
-/// per-run record/temp paths replaced by placeholders. Each attempt's record
+/// per-run record/temp paths (`<record>`, the retention-failure text `<why>`)
+/// and the per-check duration (`<secs>`) replaced by placeholders. Each attempt's record
 /// file has a fresh timestamped name, so keying the ledger on the displayed
 /// reason would make every block look new and the second-occurrence waiver
 /// (`harness_core::repeat`) unreachable. Passed to `emit_stop_block_keyed`.

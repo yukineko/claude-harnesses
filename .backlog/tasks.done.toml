@@ -71635,3 +71635,60 @@ scripts/test_check_test_weakening_index_not_worktree.py .......          [100%]
 rev = "525608cbf061e82514d36c56c1e45e7ab67050dd"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "1389f634"
+title = "blastguard: heredoc_body_gt_fp target_cd_var_git_commit_heredoc が main で赤"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794059788
+updated_at = 1794088916
+weight = 0.0
+issue_number = 1628
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1628"
+issue_closed_at = 1794088919
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_body_gt_fp_20261107 target_cd_var_git_commit_heredoc"
+rev = "6c15d77e1ff2ad16d12ebb861d8988fbcaf4eae5"
+observed_at = 1794059788
+detail = """
+exit 101: s2/crates/overwatch)
+   Compiling blastguard v0.2.378 (/Users/yuki/src/.harness-worktrees/fix-hdgt-regress2/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.35s
+     Running tests/heredoc_body_gt_fp_20261107.rs (target/debug/deps/heredoc_body_gt_fp_20261107-088ddbf05c37eb9d)
+error: test failed, to rerun pass `-p blastguard --test heredoc_body_gt_fp_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test heredoc_body_gt_fp_20261107 target_cd_var_git_commit_heredoc"
+exit = 0
+passed = 1
+rev = "f5c8e303668e7900074e57d2a382a56e6c211044"
+observed_at = 1794088891
+output_digest = "sha256:81651f5ecc860e4eb504ab8b511805882221ca186eb2154ccc693b52b99ab950"
+excerpt = """
+
+running 1 test
+test target_cd_var_git_commit_heredoc ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 1.21s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/heredoc_body_gt_fp_20261107.rs (target/debug/deps/heredoc_body_gt_fp_20261107-dea67376ddfeaaee)
+"""
+
+[task.closure.red]
+rev = "6c15d77e1ff2ad16d12ebb861d8988fbcaf4eae5"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/blastguard/tests/commit_msg_heredoc_trailing_cmd_fp_20261107.rs"]

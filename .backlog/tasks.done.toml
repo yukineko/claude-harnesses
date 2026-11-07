@@ -70462,3 +70462,115 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; fin
 rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "9d9a429e"
+title = "新しい worktree の target を clonefile で warm seed する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794040504
+updated_at = 1794042774
+weight = 0.0
+issue_number = 1617
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1617"
+issue_closed_at = 1794042777
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_worktree_target_seed.py"
+rev = "a75958f1e2938f84e7dccc7f5515599a9c3702f5"
+observed_at = 1794040504
+detail = """
+exit 1: AILED scripts/test_worktree_target_seed.py::SeedDeclines::test_existing_new_target_is_left_untouched
+FAILED scripts/test_worktree_target_seed.py::SeedDeclines::test_no_warm_target_leaves_worktree_unseeded
+FAILED scripts/test_worktree_target_seed.py::SeedDeclines::test_warm_not_a_git_checkout_cannot_compare_so_declines
+======================== 10 failed, 1 passed in 19.83s ========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_worktree_target_seed.py"
+exit = 0
+passed = 11
+rev = "0b0107ef736594d3a351f7389ec8917e321550ab"
+observed_at = 1794042726
+output_digest = "sha256:8df1e0cd41e8bdb3fe4a0439eb6e7f2d903c3d087176fa6366238481d031f4fc"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/red-warm-seed
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 11 items
+
+scripts/test_worktree_target_seed.py ...........                         [100%]
+
+============================= 11 passed in 25.71s ==============================
+"""
+
+[task.closure.red]
+rev = "a75958f1e2938f84e7dccc7f5515599a9c3702f5"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "675bc422"
+title = "warm seed を hook から background 起動し、seed 中の編集レースで warm mtime を付けない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794041450
+updated_at = 1794042987
+weight = 0.0
+issue_number = 1620
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1620"
+issue_closed_at = 1794042989
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_worktree_target_seed_background.py"
+rev = "4c9b9455c71229371f9e5bb6b945f5a6469ae1a1"
+observed_at = 1794041450
+detail = """
+exit 1: ecorded::test_background_clone_failure_reason_lands_in_printed_log
+FAILED scripts/test_worktree_target_seed_background.py::EditRace::test_edit_at_pause_seam_before_mtime_apply_is_not_given_warm_mtime
+FAILED scripts/test_worktree_target_seed_background.py::EditRace::test_edit_during_clone_window_is_not_given_warm_mtime
+==================== 4 failed, 1 passed in 85.24s (0:01:25) ===================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_worktree_target_seed_background.py"
+exit = 0
+passed = 7
+rev = "0b0107ef736594d3a351f7389ec8917e321550ab"
+observed_at = 1794042790
+output_digest = "sha256:d6387104f6e5878b13ad5bc0d0c28f3defbef9e8cdb1dc51f5860394a51f5e78"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/red-warm-seed
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 7 items
+
+scripts/test_worktree_target_seed_background.py .......                  [100%]
+
+============================== 7 passed in 43.01s ==============================
+"""
+
+[task.closure.red]
+rev = "4c9b9455c71229371f9e5bb6b945f5a6469ae1a1"
+exit = 1
+kind = "behavioural"

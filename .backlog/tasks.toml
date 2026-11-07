@@ -1,152 +1,4 @@
 [[task]]
-id = "3da84f08"
-title = "condukt guard main-tree: treat a stale backlog lock as live when the holder transcript is fresh"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 15 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: liveness-and-observability (formerly maintree-guard-stale-lock).
-Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left == right` failed: guard main-tree passed a staged primary-tree commit although the lock holder holder-sess-b15 wrote its transcript seconds ago (lock heartbeat stale, pid dead - neither proves the session ended). left: Some(0) right: Some(1) / test result: FAILED. 1 passed; 1 failed
-condukt half only (maintree::parse_backlog_lock drops stale:true locks without a transcript check). The backlog half (`backlog lock acquire --force` refusing on a fresh transcript) has NO RED here. Transcript path $HOME/.claude/projects/<slug(repo)>/<session-id>.jsonl is an assumed convention; liveness inputs are PATH stubs as in main_tree_guard_cli.rs.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998382
-updated_at = 1794001894
-weight = 0.0
-issue_number = 1575
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1575"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test audit_b15_maintree_transcript_liveness -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998888
-detail = """
-exit 101: s
-
-   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
-     Running tests/audit_b15_maintree_transcript_liveness.rs (target/debug/deps/audit_b15_maintree_transcript_liveness-ab6ebae3c3fc3ec9)
-error: test failed, to rerun pass `-p condukt --test audit_b15_maintree_transcript_liveness`"""
-
-[[task]]
-id = "78cee053"
-title = "next --claim re-runs the stored repro and refuses to hand out a now-GREEN ticket"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 6 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: backlog-evidence-rules (formerly red-tickets-often-already-fixed).
-Observed RED 2026-11-07 at 34ece122 (base fc7b5dd9) (verbatim): panicked at ...audit_b6_claim_rejects_green_repro.rs:52:5: next --claim handed out 66b554ab, whose stored repro passes at HEAD / test result: FAILED
-Design choice left to the fix: skip the GREEN ticket vs refuse the whole claim; the test asserts only that the GREEN ticket is not handed out and the still-RED one is (control).
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998404
-updated_at = 1794001889
-weight = 0.0
-issue_number = 1577
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1577"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test audit_b6_claim_rejects_green_repro -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998915
-detail = """
-exit 101: ished in 1.41s
-
-   Compiling backlog v0.3.91 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.43s
-     Running tests/audit_b6_claim_rejects_green_repro.rs (target/debug/deps/audit_b6_claim_rejects_green_repro-9f73f7bcdd949947)
-error: test failed, to rerun pass `-p backlog --test audit_b6_claim_rejects_green_repro`"""
-
-[[task]]
-id = "f500c25a"
-title = "donegate default max_attempts=2: give up visibly on the 3rd stop"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = '''
-Audit B item 7 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: ask-policy (formerly gate-block-giveup-after-two).
-Observed RED 2026-11-07 at 35d0d2bf (base fc7b5dd9) (verbatim): stop 3 blocked again: the default cap allows more than two blocks; stdout="{\"decision\":\"block\",\"reason\":\"donegate: 1 required check(s) failed (attempt 3/3)... / test result: FAILED
-Related but separate from backlog b80023b3 (repeat waiver defeated by attempt number in the fingerprint); if that lands, stop 2 may become a waiver - the control accepts it. Visible give-up = marker donegate:giveup:typecheck in the violation ledger. tests/giveup_sentinel.rs sets max_attempts=3 explicitly (unaffected); the template line max_attempts = 3 at crates/donegate/src/main.rs:1069 needs updating with the fix.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.'''
-created_at = 1793998413
-updated_at = 1794001891
-weight = 0.0
-issue_number = 1578
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1578"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p donegate --test audit_b7_default_giveup_after_two -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998919
-detail = """
-exit 101: ished in 2.95s
-
-   Compiling donegate v0.1.68 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/donegate)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.49s
-     Running tests/audit_b7_default_giveup_after_two.rs (target/debug/deps/audit_b7_default_giveup_after_two-59f886dfa0df1f53)
-error: test failed, to rerun pass `-p donegate --test audit_b7_default_giveup_after_two`"""
-
-[[task]]
-id = "e95bf58f"
-title = "compass looks_like_path: do not flag slash lists or bare filenames in DoD prose"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 10 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: compass-gotchas (formerly compass-dod-refs-slash-falsepos).
-Observed RED 2026-11-07 at b555d70a (base fc7b5dd9) (verbatim): prose tokens were flagged as missing paths: ["DoD references missing path `groom/inject/snapshot`", "DoD references missing path `ledger/state`", "DoD references missing path `types.rs`", "DoD references missing path `handlers.rs`"] / test result: FAILED
-The memory's own example 入力が無い/ゼロ is NOT flagged at HEAD (CJK split leaves token '/', an existing path); kept as a guard. Real FPs are ASCII slash lists and bare *.rs names. Control: crates/nope/missing.rs under an existing top-level dir still trips. Conflict: planned rule 'only tokens rooted at an existing top-level dir' contradicts dod_missing_path_trips_when_check_enabled (expects src/does_not_exist.rs to trip in a tempdir without src/); reconcile e.g. by creating src/ in that fixture.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998435
-updated_at = 1794001892
-weight = 0.0
-issue_number = 1579
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1579"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p compass --bin compass dod_prose_slash_lists_and_bare_filenames_are_not_paths -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998927
-detail = """
-exit 101: sult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.05s
-
-   Compiling compass v0.1.50 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/compass)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.57s
-     Running unittests src/main.rs (target/debug/deps/compass-8133ee8f753b6f53)
-error: test failed, to rerun pass `-p compass --bin compass`"""
-
-[[task]]
 id = "04f53dbe"
 title = "context-governor injector dedup keys on the hook input session_id, not env"
 project = "/Users/yuki/src/harness"
@@ -830,3 +682,94 @@ exit 1: RulesInvocationArgs::test_blastguard_fix_shape_args_changed_and_control_
 FAILED scripts/test_ctw_macro_rules_invocation_args.py::MacroRulesInvocationArgs::test_invocation_added_is_clean
 FAILED scripts/test_ctw_macro_rules_invocation_args.py::MacroRulesInvocationArgs::test_invocation_args_changed_is_clean
 ========================= 3 failed, 8 passed in 3.84s =========================="""
+
+[[task]]
+id = "e9a30875"
+title = "blastguard: overwrite of a tracked file in a session-created ~/.condukt/worktrees checkout is refused as not this session's tree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard-fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-07 (batch 3, memory-audit-b). Verbatim block: '> /Users/yuki/.condukt/worktrees/mab3-3da84f08/crates/condukt/src/maintree.rs' destroys the file's current contents and it is inside a git work tree, but not one of this session's trees (neither inside its safe roots nor a recognised worktree checkout), so git being able to restore it does not make the overwrite this session's to make. Coordinator ruling: misattribution. Test asserts only absence of the whose-tree refusal; Ctx::in_worktree_checkout (src/detect/rm.rs) grants recognised status only for a plain command or cd D && plain REST, so the chained command shape (; | $) is deliberately ineligible - the fix must relax that or change the decision for this shape. Remove the ignore when fixed."
+created_at = 1794053667
+updated_at = 1794053667
+weight = 0.0
+issue_number = 1625
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1625"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_worktree_redirect_and_sq_fp_20261107 case1 -- --include-ignored"
+rev = "602e10420e883f36b5984db3aaf6d8d67b36feae"
+observed_at = 1794053667
+detail = """
+exit 101: .376 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.67s
+     Running tests/backlog_worktree_redirect_and_sq_fp_20261107.rs (target/debug/deps/backlog_worktree_redirect_and_sq_fp_20261107-fc5a8aeb9a3322bf)
+error: test failed, to rerun pass `-p blastguard --test backlog_worktree_redirect_and_sq_fp_20261107`"""
+
+[[task]]
+id = "81a4a097"
+title = "blastguard: '> path' inside a single-quoted python3 -c program is read as an overwrite redirect"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "blastguard-fp",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-07 (batch 3): python3 -c '...' read-only program whose text contained the string literal "> /Users/yuki/.condukt/worktrees/mab3-3da84f08/crates/condukt/src/maintree.rs" got the verbatim block: '> ...maintree.rs' destroys the file's current contents and it is inside a git work tree, but not one of this session's trees (...). Minimal repro: python3 -c 'import sys; s="> <tracked file>"; print(s)' -> deny. USER RULING 2026-11-07: Allow is correct (the test's allow assert stands). Related unfiled: python3 -c 'print(1)' > file; awk '{...}' file gets an Ask citing inline-eval program text. Remove the ignore when fixed."""
+created_at = 1794053691
+updated_at = 1794057084
+weight = 0.0
+issue_number = 1626
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1626"
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_worktree_redirect_and_sq_fp_20261107 case3 -- --include-ignored"
+rev = "602e10420e883f36b5984db3aaf6d8d67b36feae"
+observed_at = 1794053691
+detail = """
+exit 101:  passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.68s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_worktree_redirect_and_sq_fp_20261107.rs (target/debug/deps/backlog_worktree_redirect_and_sq_fp_20261107-fc5a8aeb9a3322bf)
+error: test failed, to rerun pass `-p blastguard --test backlog_worktree_redirect_and_sq_fp_20261107`"""
+
+[[task]]
+id = "eb0059ec"
+title = "blastguard: truncating redirect onto an existing scratchpad file whose on-disk name differs only in case is Ask (case-insensitive APFS)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard-fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-07 (batch 3): git commit ... > <scratchpad>/mergemain.log 2>&1 got Ask: 'truncating redirect is confined to /private/tmp — a safe root for this session ... The blast radius is bounded, so this is a question rather than a refusal'. On disk the file was mergeMain.log. Root cause (measured by debug trace): SafeRoots::no_symlink_below (crates/blastguard/src/scope.rs:1041) compares realpath with <parent real>/<typed name>, so a case-only difference reads as a symlink -> classify_temp Undetermined -> temp_disposable_redirect_target (src/detect/redirect.rs:106) returns early -> confined Ask. Contradicts user ruling 2026-10-28 (existing file in /private/tmp incl. scratchpad must Allow). Not caused by b0c29e83. Fix direction: treat case-only differences as the same file on case-insensitive FS; genuine symlinks must still fail. RED only fails on case-insensitive FS. Remove the ignore when fixed."
+created_at = 1794060201
+updated_at = 1794060201
+weight = 0.0
+issue_number = 1630
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1630"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test scratchpad_truncating_redirect_fp_20261107 -- --include-ignored"
+rev = "8b4f69e31c49b718ba3f8f9c4806820126fa7459"
+observed_at = 1794060201
+detail = """
+exit 101:  v0.2.379 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 16.43s
+     Running tests/scratchpad_truncating_redirect_fp_20261107.rs (target/debug/deps/scratchpad_truncating_redirect_fp_20261107-92f2eef15545e45e)
+error: test failed, to rerun pass `-p blastguard --test scratchpad_truncating_redirect_fp_20261107`"""

@@ -1572,6 +1572,12 @@ def head_marker_findings(rep: str, new: str, head_side: Side, after_side: Side) 
     ]
 
 
+# Removed invocations of a test-generating `macro_rules!` defined in ANY file
+# (not only the scanned one): scripts/weakening_macro_resolve.py.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import weakening_macro_resolve  # noqa: E402
+
+
 def scan(repo: str, base: str, pending_msg=None) -> list:
     if not is_git_repo(repo):
         raise Undetermined(f"not a git repository: {repo}")
@@ -1587,6 +1593,10 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
     ]
 
     acked = acknowledgements(repo, merge_base, pending_msg)
+
+    # Before the cfg(test) body-file reassignment below: every changed `.rs` file.
+    macro_found = weakening_macro_resolve.macro_invocation_findings(
+        argparse.Namespace(**globals()), repo, merge_base, pairs)
 
     base_side = Side(
         f"base {merge_base[:12]}",
@@ -1626,7 +1636,10 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
             pairs.append((r, r))
             touched.add(r)
 
-    results = []
+    results = [
+        {"path": p, "kind": kind, "detail": detail, "acknowledged": (p, kind) in acked}
+        for p, kind, detail in macro_found
+    ]
     for old, new in sorted(set(pairs), key=lambda pr: (pr[1] or "", pr[0] or "")):
         # Remember whether the old side was absent in the original pair,
         # before reassignments for out-of-line cfg(test) body files.

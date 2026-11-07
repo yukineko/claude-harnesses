@@ -417,6 +417,7 @@ fn live_ids(ledger: &Ledger, now: i64) -> HashSet<String> {
 /// via `main`); `Determination::Undetermined` is a deliberate REFUSAL to
 /// claim. Both resolve to the restrictive side — no task, non-zero exit — but
 /// they are kept apart so a refusal never reads as a crash, or vice versa.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn claim_next(
     store_path: &Path,
     tag_filter: Option<&str>,
@@ -425,30 +426,126 @@ pub(crate) fn claim_next(
     session_id: Option<&str>,
     override_dir: Option<&Path>,
 ) -> Result<Determination<Option<Task>>> {
+    let (claimed, moved) = claim_inner(
+        store_path,
+        tag_filter,
+        project_filter,
+        identity,
+        session_id,
+        override_dir,
+        &HashSet::new(),
+        None,
+    )?;
+    debug_assert!(
+        moved.is_none(),
+        "an unpinned claim never reports a moved pick"
+    );
+    Ok(claimed)
+}
+
+/// The outcome of [`claim_pinned`] when the critical section ran to a pick.
+#[derive(Debug)]
+pub(crate) enum PinnedClaim {
+    /// The pinned candidate was the locked pick and is now reserved.
+    Claimed(Box<Task>),
+    /// The locked pick was NOT the pinned candidate: `Some(id)` names the
+    /// ticket the lock would have handed out instead, `None` means nothing was
+    /// eligible under the lock. NOTHING was reserved: the caller re-checks
+    /// (backlog 78cee053), so a claim never falls onto a ticket whose repro
+    /// was not re-run.
+    Moved(Option<String>),
+}
+
+/// [`claim_next`], but the claim is PINNED to `pinned` (backlog 78cee053):
+/// the candidate `next --claim` re-ran the stored repro of OUTSIDE every
+/// lock. The locked pick excludes `skip` (tickets whose repro went green this
+/// run) on top of the live leases; when that pick is not `pinned`, nothing
+/// is reserved and [`PinnedClaim::Moved`] is returned instead.
+///
+/// `Undetermined` keeps the meaning it has in [`claim_next`]: a refusal
+/// (ledger lock / read / reservation, or the tasks-file lock).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn claim_pinned(
+    store_path: &Path,
+    tag_filter: Option<&str>,
+    project_filter: Option<&str>,
+    identity: &str,
+    session_id: Option<&str>,
+    override_dir: Option<&Path>,
+    skip: &HashSet<String>,
+    pinned: &str,
+) -> Result<Determination<PinnedClaim>> {
+    let (claimed, moved) = claim_inner(
+        store_path,
+        tag_filter,
+        project_filter,
+        identity,
+        session_id,
+        override_dir,
+        skip,
+        Some(pinned),
+    )?;
+    // A mismatch is checked FIRST: the inner refused the reservation on
+    // purpose, and the Undetermined it produced for that is not a lock or IO
+    // failure, so it must not be surfaced as one.
+    if let Some(picked) = moved {
+        return Ok(Determination::known(PinnedClaim::Moved(Some(picked))));
+    }
+    Ok(match claimed {
+        Determination::Known(Some(t)) => Determination::known(PinnedClaim::Claimed(Box::new(t))),
+        Determination::Known(None) => Determination::known(PinnedClaim::Moved(None)),
+        Determination::Undetermined(why) => Determination::Undetermined(why),
+    })
+}
+
+/// The shared critical section of [`claim_next`] and [`claim_pinned`].
+/// The second element is `Some(picked)` ONLY when `pinned` is set and the
+/// locked pick was a different ticket (`picked` is its id); the reservation
+/// was then refused, so nothing was written to the ledger.
+#[allow(clippy::too_many_arguments)]
+fn claim_inner(
+    store_path: &Path,
+    tag_filter: Option<&str>,
+    project_filter: Option<&str>,
+    identity: &str,
+    session_id: Option<&str>,
+    override_dir: Option<&Path>,
+    skip: &HashSet<String>,
+    pinned: Option<&str>,
+) -> Result<(Determination<Option<Task>>, Option<String>)> {
     let dir = claims_dir(override_dir);
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        return Ok(Determination::undetermined(format!(
-            "the project-wide claim ledger directory {} could not be created ({e}); a claim that \
-             cannot be recorded project-wide would be invisible to every other checkout",
-            dir.display()
-        )));
+        return Ok((
+            Determination::undetermined(format!(
+                "the project-wide claim ledger directory {} could not be created ({e}); a claim \
+                 that cannot be recorded project-wide would be invisible to every other checkout",
+                dir.display()
+            )),
+            None,
+        ));
     }
 
     // 1. WIDE lock first: every checkout of this project serializes here.
     let _ledger_guard = match acquire_ledger_lock(&ledger_lock_path(&dir, identity)) {
         Determination::Known(g) => g,
         // Forwarded, not re-minted: the origin already recorded this give-up.
-        blocked @ Determination::Undetermined(_) => return Ok(blocked.map(|_| None)),
+        blocked @ Determination::Undetermined(_) => return Ok((blocked.map(|_| None), None)),
     };
 
     let path = ledger_path(&dir, identity);
     let mut ledger = match read_ledger(&path) {
         Determination::Known(l) => l,
-        blocked @ Determination::Undetermined(_) => return Ok(blocked.map(|_| None)),
+        blocked @ Determination::Undetermined(_) => return Ok((blocked.map(|_| None), None)),
     };
 
     let now = now_unix();
-    let excluded = live_ids(&ledger, now);
+    let mut excluded = live_ids(&ledger, now);
+    // Tickets whose repro went green this run are not candidates either
+    // (backlog 78cee053): without this the locked pick would keep landing on
+    // the skipped ticket and the pinned claim could never succeed.
+    excluded.extend(skip.iter().cloned());
+    // Set when the locked pick is not the pinned candidate (see below).
+    let mut moved: Option<String> = None;
 
     let checkout = match std::env::current_dir() {
         Ok(d) => d.to_string_lossy().into_owned(),
@@ -460,6 +557,19 @@ pub(crate) fn claim_next(
     let store_display = store_path.display().to_string();
 
     let mut reserve = |t: &Task| -> std::result::Result<(), String> {
+        // PIN (backlog 78cee053): only the candidate whose repro was re-run
+        // may be reserved. Any other pick is refused BEFORE the ledger is
+        // touched, and recorded in `moved` so the caller re-checks instead of
+        // reading this refusal as a lock / IO failure.
+        if let Some(want) = pinned {
+            if t.id != want {
+                moved = Some(t.id.clone());
+                return Err(format!(
+                    "the locked pick {} is not the re-checked candidate {want}",
+                    t.id
+                ));
+            }
+        }
         ledger.entries.push(ClaimRecord {
             id: t.id.clone(),
             hashkey: hashkey(&t.title, &t.project),
@@ -480,13 +590,14 @@ pub(crate) fn claim_next(
 
     // 2. NARROW lock inside: `next_claim_with` takes the tasks-file lock and
     //    fails closed (Undetermined) if it cannot hold it.
-    store::next_claim_with(
+    let claimed = store::next_claim_with(
         store_path,
         tag_filter,
         project_filter,
         &excluded,
         &mut reserve,
-    )
+    )?;
+    Ok((claimed, moved))
 }
 
 /// Refresh the leases `session_id` holds in `identity`'s project-wide ledger:

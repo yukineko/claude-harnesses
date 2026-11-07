@@ -364,7 +364,7 @@ fn legacy_tracked_claimed_row_without_lease_is_pending() {
             format!(
                 "[[task]]\nid = \"legacy01\"\ntitle = \"Legacy claimed\"\nproject = \"{}\"\n\
                  tags = [\"p0\"]\nstatus = \"claimed\"\nnotes = \"\"\ncreated_at = 1000\n\
-                 updated_at = {now}\n[task.repro]\noutcome = \"reproduced\"\ncmd = \"cargo test -p fixture\"\nobserved_at = 1000\ndetail = \"fixture\"\n",
+                 updated_at = {now}\n[task.repro]\noutcome = \"reproduced\"\ncmd = \"bash tests/repro.sh\"\nobserved_at = 1000\ndetail = \"fixture\"\n",
                 a.display()
             ),
         )

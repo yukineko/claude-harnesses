@@ -71028,3 +71028,274 @@ scripts/test_check_test_weakening_macro_additive.py ..                   [100%]
 rev = "91f02405b7d4f78b4382ecee65ebaa213fac47c2"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "f500c25a"
+title = "donegate default max_attempts=2: give up visibly on the 3rd stop"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = '''
+Audit B item 7 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: ask-policy (formerly gate-block-giveup-after-two).
+Observed RED 2026-11-07 at 35d0d2bf (base fc7b5dd9) (verbatim): stop 3 blocked again: the default cap allows more than two blocks; stdout="{\"decision\":\"block\",\"reason\":\"donegate: 1 required check(s) failed (attempt 3/3)... / test result: FAILED
+Related but separate from backlog b80023b3 (repeat waiver defeated by attempt number in the fingerprint); if that lands, stop 2 may become a waiver - the control accepts it. Visible give-up = marker donegate:giveup:typecheck in the violation ledger. tests/giveup_sentinel.rs sets max_attempts=3 explicitly (unaffected); the template line max_attempts = 3 at crates/donegate/src/main.rs:1069 needs updating with the fix.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.'''
+created_at = 1793998413
+updated_at = 1794052648
+weight = 0.0
+issue_number = 1578
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1578"
+issue_closed_at = 1794052651
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test audit_b7_default_giveup_after_two -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998919
+detail = """
+exit 101: ished in 2.95s
+
+   Compiling donegate v0.1.68 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.49s
+     Running tests/audit_b7_default_giveup_after_two.rs (target/debug/deps/audit_b7_default_giveup_after_two-59f886dfa0df1f53)
+error: test failed, to rerun pass `-p donegate --test audit_b7_default_giveup_after_two`"""
+
+[task.closure]
+reason = "already-fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p donegate --test audit_b7_default_giveup_after_two"
+exit = 0
+passed = 1
+rev = "801cb502f167e480e7a452b7afe0bb7038ffe455"
+observed_at = 1794052608
+output_digest = "sha256:8878c39e0b3c3aef2cf0bf2c1ae085b7ff9b4c4a872e11fd2d1298c6dfdff7e0"
+excerpt = """
+
+running 1 test
+test default_attempt_cap_gives_up_visibly_on_the_third_stop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/audit_b7_default_giveup_after_two.rs (target/debug/deps/audit_b7_default_giveup_after_two-52ffbc317b0c794e)
+"""
+
+[task.closure.red]
+rev = "35d0d2bf18258b6b96ff64458d81c3818b07479d"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "e95bf58f"
+title = "compass looks_like_path: do not flag slash lists or bare filenames in DoD prose"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 10 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: compass-gotchas (formerly compass-dod-refs-slash-falsepos).
+Observed RED 2026-11-07 at b555d70a (base fc7b5dd9) (verbatim): prose tokens were flagged as missing paths: ["DoD references missing path `groom/inject/snapshot`", "DoD references missing path `ledger/state`", "DoD references missing path `types.rs`", "DoD references missing path `handlers.rs`"] / test result: FAILED
+The memory's own example 入力が無い/ゼロ is NOT flagged at HEAD (CJK split leaves token '/', an existing path); kept as a guard. Real FPs are ASCII slash lists and bare *.rs names. Control: crates/nope/missing.rs under an existing top-level dir still trips. Conflict: planned rule 'only tokens rooted at an existing top-level dir' contradicts dod_missing_path_trips_when_check_enabled (expects src/does_not_exist.rs to trip in a tempdir without src/); reconcile e.g. by creating src/ in that fixture.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998435
+updated_at = 1794053901
+weight = 0.0
+issue_number = 1579
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1579"
+issue_closed_at = 1794053903
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --bin compass dod_prose_slash_lists_and_bare_filenames_are_not_paths -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998927
+detail = """
+exit 101: sult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.05s
+
+   Compiling compass v0.1.50 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/compass)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.57s
+     Running unittests src/main.rs (target/debug/deps/compass-8133ee8f753b6f53)
+error: test failed, to rerun pass `-p compass --bin compass`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p compass --bin compass dod_ -- --include-ignored"
+exit = 0
+passed = 10
+rev = "07a6c6f671c124b1e7fc25611af8d93067321ef9"
+observed_at = 1794053864
+output_digest = "sha256:49953a58d01562fac4718d46a179d64369eb8bf4aca96636627cf023c6f12a5e"
+excerpt = """
+
+running 10 tests
+test freshness::tests::dod_missing_path_trips_when_check_enabled ... ok
+test freshness::tests::dod_prose_slash_lists_and_bare_filenames_are_not_paths ... ok
+test freshness::tests::dod_bare_filename_without_slash_is_never_checked ... ok
+test freshness::tests::dod_rule_b_leading_dot_segment_missing_trips ... ok
+test freshness::tests::dod_present_path_does_not_trip_on_that_signal ... ok
+test freshness::tests::dod_rule_a_absolute_missing_path_trips ... ok
+test freshness::tests::dod_rule_c_extension_with_missing_first_segment_trips ... ok
+test freshness::tests::dod_rule_d_existing_first_segment_missing_leaf_trips ... ok
+test freshness::tests::dod_slash_token_without_dot_ext_or_existing_root_is_not_checked ... ok
+test gates::tests::c2_fires_on_missing_dod_path ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.31s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running unittests src/main.rs (target/debug/deps/compass-5d743d1ca694aebc)
+"""
+
+[task.closure.red]
+rev = "6590ea815d1a7f259b75f0abe5ee9647b702dbd0"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "3da84f08"
+title = "condukt guard main-tree: treat a stale backlog lock as live when the holder transcript is fresh"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 15 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: liveness-and-observability (formerly maintree-guard-stale-lock).
+Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left == right` failed: guard main-tree passed a staged primary-tree commit although the lock holder holder-sess-b15 wrote its transcript seconds ago (lock heartbeat stale, pid dead - neither proves the session ended). left: Some(0) right: Some(1) / test result: FAILED. 1 passed; 1 failed
+condukt half only (maintree::parse_backlog_lock drops stale:true locks without a transcript check). The backlog half (`backlog lock acquire --force` refusing on a fresh transcript) has NO RED here. Transcript path $HOME/.claude/projects/<slug(repo)>/<session-id>.jsonl is an assumed convention; liveness inputs are PATH stubs as in main_tree_guard_cli.rs.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998382
+updated_at = 1794055292
+weight = 0.0
+issue_number = 1575
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1575"
+issue_closed_at = 1794055296
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b15_maintree_transcript_liveness -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998888
+detail = """
+exit 101: s
+
+   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/audit_b15_maintree_transcript_liveness.rs (target/debug/deps/audit_b15_maintree_transcript_liveness-ab6ebae3c3fc3ec9)
+error: test failed, to rerun pass `-p condukt --test audit_b15_maintree_transcript_liveness`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test audit_b15_maintree_transcript_liveness -- --include-ignored"
+exit = 0
+passed = 3
+rev = "a8c08064e964fc855403fac04e3587354baceada"
+observed_at = 1794055163
+output_digest = "sha256:0950a1119d5722c1c5fa74917d89f4428951cf794913556950c434fd111be9e7"
+excerpt = """
+
+running 3 tests
+test stale_lock_with_idle_holder_transcript_passes ... ok
+test stale_lock_with_fresh_holder_transcript_blocks ... ok
+test stale_lock_with_no_holder_transcript_blocks ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/audit_b15_maintree_transcript_liveness.rs (target/debug/deps/audit_b15_maintree_transcript_liveness-e0e56282f4fb7e06)
+"""
+
+[task.closure.red]
+rev = "679c57e6dba690c81f30c80a3686562e79f472dc"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "78cee053"
+title = "next --claim re-runs the stored repro and refuses to hand out a now-GREEN ticket"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 6 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: backlog-evidence-rules (formerly red-tickets-often-already-fixed).
+Observed RED 2026-11-07 at 34ece122 (base fc7b5dd9) (verbatim): panicked at ...audit_b6_claim_rejects_green_repro.rs:52:5: next --claim handed out 66b554ab, whose stored repro passes at HEAD / test result: FAILED
+Design choice left to the fix: skip the GREEN ticket vs refuse the whole claim; the test asserts only that the GREEN ticket is not handed out and the still-RED one is (control).
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998404
+updated_at = 1794063014
+weight = 0.0
+issue_number = 1577
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1577"
+issue_closed_at = 1794063016
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test audit_b6_claim_rejects_green_repro -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998915
+detail = """
+exit 101: ished in 1.41s
+
+   Compiling backlog v0.3.91 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.43s
+     Running tests/audit_b6_claim_rejects_green_repro.rs (target/debug/deps/audit_b6_claim_rejects_green_repro-9f73f7bcdd949947)
+error: test failed, to rerun pass `-p backlog --test audit_b6_claim_rejects_green_repro`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test audit_b6_claim_rejects_green_repro -- --include-ignored"
+exit = 0
+passed = 1
+rev = "cf4416579968ebb27a0b81d116a137cc4006ac55"
+observed_at = 1794062992
+output_digest = "sha256:fc1d74736886cc5733c995012deb0acc32eb5f2ed20c4a380753c557ee572fa5"
+excerpt = """
+
+running 1 test
+test next_claim_does_not_hand_out_a_ticket_whose_repro_went_green ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/audit_b6_claim_rejects_green_repro.rs (target/debug/deps/audit_b6_claim_rejects_green_repro-377aeb22a30e0b96)
+"""
+
+[task.closure.red]
+rev = "03e67b25a1a3fc9b6e182dfa29f5ac36be6dd04e"
+exit = 101
+kind = "behavioural"

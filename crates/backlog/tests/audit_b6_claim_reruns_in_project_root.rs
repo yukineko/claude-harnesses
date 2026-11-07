@@ -135,6 +135,62 @@ fn next_claim_reruns_the_repro_in_the_ticket_project_root_not_the_cwd() {
     );
 }
 
+/// Ruling 2026-11-07, "Cwd if same project": when the cwd's checkout belongs to
+/// the ticket's project (here a LINKED WORKTREE of it), the repro is re-run in
+/// the cwd checkout. The repro is committed ONLY in the linked worktree, so a
+/// project-root-only re-run (main checkout, no repro file) cannot reproduce.
+#[test]
+#[ignore = "backlog 78cee053: RED, remove ignore when fixed"]
+fn next_claim_reruns_in_the_cwd_when_it_is_a_linked_worktree_of_the_ticket_project() {
+    use std::os::unix::fs::PermissionsExt;
+    let td = tempfile::tempdir().unwrap();
+    let home = td.path().join("home");
+    let base = td.path().canonicalize().unwrap();
+    let wt = common::linked_checkout(&base.join("wt"));
+    let main = base.join("wt.main").canonicalize().unwrap();
+    // Premises: the cwd is a linked worktree (`.git` is a file), the project is
+    // the primary checkout, and the main checkout holds no repro.
+    assert!(wt.join(".git").is_file(), "cwd must be a linked worktree");
+    assert!(!main.join("tests/repro_yes.sh").exists());
+    std::fs::create_dir_all(wt.join("tests")).unwrap();
+    let script = wt.join("tests/repro_yes.sh");
+    std::fs::write(&script, "#!/bin/bash\necho 'bug present'\nexit 1\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let git = |args: &[&str]| {
+        let out = harness_core::git_env::scrub(&mut Command::new("git"))
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .current_dir(&wt)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["add", "-f", "--", "tests/repro_yes.sh"]);
+    git(&["commit", "-q", "--no-verify", "-m", "red repro"]);
+    let proj = main.to_string_lossy().into_owned();
+    seed_pinned_store(&home, &td.path().join("pinned"), &proj);
+
+    let c = run_in(&home, &wt, &["next", "--claim", "--project", &proj]);
+    assert_eq!(
+        c.code,
+        0,
+        "next --claim run from a linked worktree of the ticket's project must re-run the \
+         repro in that worktree (where it is committed) and hand the RED ticket out: {}",
+        c.both()
+    );
+    assert!(
+        c.stdout.contains(ID),
+        "the still-RED ticket {ID} must be handed out: {}",
+        c.both()
+    );
+}
+
 #[test]
 fn next_claim_refuses_when_the_ticket_project_root_is_not_a_git_checkout() {
     let td = tempfile::tempdir().unwrap();

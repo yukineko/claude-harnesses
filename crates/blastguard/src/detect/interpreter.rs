@@ -945,6 +945,11 @@ const SHELL_STRING_EXEC_MARKERS: &[&str] = &[
     "do shell script",
 ];
 
+/// Is `d` the plain "command word is an expansion" Ask of `detect_bash`?
+fn is_expansion_head_ask(d: &Decision) -> bool {
+    matches!(d, Decision::Ask(r) if r.contains(super::EXPANSION_HEAD_TAIL))
+}
+
 /// Does `program` contain a [`SHELL_STRING_EXEC_MARKERS`] entry?
 fn runs_shell_strings(program: &str) -> bool {
     let lowered = program.to_ascii_lowercase();
@@ -1090,7 +1095,13 @@ files or directories outright if that string is run as code; blastguard cannot s
             // `detect_bash`).
             match super::detect_bash(payload, depth + 1, program_ctx) {
                 Decision::Deny(reason) => return Decision::Deny(reason),
-                ask @ Decision::Ask(_) if depth_of_layer > 0 && shell_strings => {
+                // The "command word is an expansion" Ask (detect.rs
+                // `EXPANSION_HEAD_TAIL`) is NOT kept: a literal like `"$HOME"`
+                // or an argv element `'$HOME'` is data far more often than a
+                // command. Any other Ask (protected path, ...) is kept.
+                ask @ Decision::Ask(_)
+                    if depth_of_layer > 0 && shell_strings && !is_expansion_head_ask(&ask) =>
+                {
                     if pending_ask.is_none() {
                         pending_ask = Some(ask);
                     }

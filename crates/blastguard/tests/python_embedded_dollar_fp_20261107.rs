@@ -150,7 +150,6 @@ impl Fixture {
 macro_rules! target {
     ($name:ident, $cmd:expr) => {
         #[test]
-        #[ignore = "RED: python embedded $VAR FP regression on fix/bg-harm"]
         fn $name() {
             Fixture::new(stringify!($name)).assert_allow_both($cmd);
         }

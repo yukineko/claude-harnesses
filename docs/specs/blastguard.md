@@ -131,7 +131,7 @@ forge・condukt のスケジューラが再利用）。
   （`SHELL_STRING_EXEC_MARKERS`: `os.system`/`os.popen`/`subprocess`/`system(`/backtick/`child_process`/
   `do shell script` 等）を含むとき pending Ask として残す（従来は捨てられ、
   `os.system('echo x > .git/hooks/pre-commit')` が Allow だった。top-level の同じ redirect は保護パス Ask で、
-  人間不在時は Deny）。「command word が展開」由来の Ask は対象外（`detect_bash` を直接使う）。
+  人間不在時は Deny）。「command word が展開」由来の Ask（`detect::EXPANSION_HEAD_TAIL`）は残さない（`os.system('echo "$HOME"')`・argv list `['echo','$HOME']` の literal は data。`interpreter::is_expansion_head_ask` で除外、blastguard 0.2.301）。
   `osascript` は、program が `"Finder"`/`"System Events"` を名指しし、かつ double-quote 文字列の外に
   `delete` か `empty … trash` があれば Deny（`detect/interpreter/osascript.rs` の `osascript_app_delete`。
   `display notification "x"` 等は従来どおり）。

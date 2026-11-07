@@ -876,6 +876,11 @@ fn verdict_to_decision(v: Verdict) -> Decision {
 /// Deny is checked FIRST so a payload that is both destructive and partly
 /// unresolvable (`sh -c "rm -rf $DIR"` — command word `rm`, resolvable) keeps
 /// its Deny.
+/// Tail of the "command word is an expansion" Ask. The interpreter embedded-string
+/// pass drops exactly this Ask (a literal such as `"$HOME"` is data, not a
+/// command); see `interpreter::is_expansion_head_ask`.
+pub(super) const EXPANSION_HEAD_TAIL: &str = " is an expansion whose value only exists at run time — blastguard cannot tell what program this runs";
+
 fn analyze_shell_payload(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let d = detect_bash(payload, depth + 1, ctx);
     if d.is_blocking() {
@@ -1798,9 +1803,7 @@ fn unknown_wrapper_ask(
             // change.
             CommandWordOrigin::NoReachingAssignment | CommandWordOrigin::AssignedButUnknowable => {
                 let head = tokens[idx];
-                return Decision::ask(format!(
-                    "the command word `{head}` is an expansion whose value only exists at run time — blastguard cannot tell what program this runs"
-                ));
+                return Decision::ask(format!("the command word `{head}`{EXPANSION_HEAD_TAIL}"));
             }
         }
     }

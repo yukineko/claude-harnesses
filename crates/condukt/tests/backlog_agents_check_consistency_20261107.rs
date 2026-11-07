@@ -179,3 +179,49 @@ fn e_body_clean_false_with_exit0_is_not_clean() {
     let o = fx.check(&["--agent", "X"]);
     assert_ne!(code(&o), 0, "{o:?}");
 }
+
+fn assert_undetermined(o: &Output) {
+    assert_ne!(code(o), 0, "{o:?}");
+    assert_eq!(json(o)["clean"], false, "{o:?}");
+}
+
+/// F: non-string agent_id is undeterminable.
+#[test]
+fn f_non_string_agent_id_is_not_clean() {
+    let fx = Fx::new();
+    fx.fake_overwatch(
+        r#"{"clean":true,"agents":[{"agent_id":7,"state":"done"}],"error":null}"#,
+        0,
+    );
+    assert_undetermined(&fx.check(&["--agent", "X"]));
+}
+
+/// G: agent entry without state is undeterminable.
+#[test]
+fn g_missing_state_is_not_clean() {
+    let fx = Fx::new();
+    fx.fake_overwatch(
+        r#"{"clean":true,"agents":[{"agent_id":"X"}],"error":null}"#,
+        0,
+    );
+    assert_undetermined(&fx.check(&["--agent", "X"]));
+}
+
+/// H: exit 1 while the only non-ok agent is the selected one.
+#[test]
+fn h_exit1_selected_stalled_is_not_clean() {
+    let fx = Fx::new();
+    fx.fake_overwatch(&body(&[("X", "stalled")], true), 1);
+    assert_undetermined(&fx.check(&["--agent", "X"]));
+}
+
+/// I: agents not an array is undeterminable.
+#[test]
+fn i_agents_not_array_is_not_clean() {
+    let fx = Fx::new();
+    fx.fake_overwatch(
+        r#"{"clean":true,"agents":{"X":{"state":"done"}},"error":null}"#,
+        0,
+    );
+    assert_undetermined(&fx.check(&["--agent", "X"]));
+}

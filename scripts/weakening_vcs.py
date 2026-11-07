@@ -139,15 +139,60 @@ def blob_at(repo: str, rev: str, path: str) -> str:
         raise Undetermined(f"{path}@{rev}: not valid UTF-8: {exc}") from exc
 
 
-def worktree_content(repo: str, path: str) -> str:
-    full = os.path.join(repo, path)
-    if not os.path.exists(full):
-        return ""  # deleted
+def _index_entry(repo: str, path: str):
+    """`(mode, sha)` of `path`'s stage-0 entry in the INDEX git hands us, or
+    None when the index has no entry for it.
+
+    "The index" is whatever `GIT_INDEX_FILE` names, which this process
+    inherits: `git commit -a` / `git commit <paths>` run the commit-msg hook
+    against a temporary index, and that -- not `.git/index`, not the files on
+    disk -- is what the commit will contain (backlog 54de84b4, user ruling
+    2026-11-08 "Index everywhere"). An unmerged path (stages 1-3) has no
+    single content to judge and is Undetermined; so is any output this parser
+    does not recognise.
+    """
+    out = git(repo, "-c", "core.quotePath=false", "ls-files", "-s", "-z",
+              "--full-name", "--", f":(literal){path}")
+    entries = [e for e in out.split("\0") if e]
+    if not entries:
+        return None
+    if len(entries) != 1:
+        raise Undetermined(f"{path}: {len(entries)} index entries (unmerged?)")
+    meta, sep, name = entries[0].partition("\t")
+    fields = meta.split()
+    if not sep or name != path or len(fields) != 3:
+        raise Undetermined(f"{path}: unexpected `git ls-files -s` output: {entries[0]!r}")
+    mode, sha, stage = fields
+    if stage != "0":
+        raise Undetermined(f"{path}: unmerged in the index (stage {stage})")
+    return mode, sha
+
+
+def index_content(repo: str, path: str) -> str:
+    """Content of `path` in the index, or "" when the index has no entry for
+    it (the change deletes it). Read with `git cat-file blob <sha>`; a read
+    failure or a non-UTF-8 blob is Undetermined, never "deleted"."""
+    entry = _index_entry(repo, path)
+    if entry is None:
+        return ""
+    mode, sha = entry
+    if mode not in ("100644", "100755"):
+        raise Undetermined(f"{path}: in the index but not a regular file (mode {mode})")
     try:
-        with open(full, "r", encoding="utf-8") as fh:
-            return fh.read()
-    except (OSError, UnicodeDecodeError) as exc:
-        raise Undetermined(f"{path}: unreadable in the worktree: {exc}") from exc
+        proc = subprocess.run(("git", "-C", repo, "cat-file", "blob", sha),
+                              capture_output=True)
+    except OSError as exc:
+        raise Undetermined(f"could not run git cat-file: {exc}") from exc
+    if proc.returncode != 0:
+        raise Undetermined(
+            "{}: index blob {} unreadable (git cat-file exited {}): {}".format(
+                path, sha, proc.returncode, proc.stderr.decode("utf-8", "replace").strip()
+            )
+        )
+    try:
+        return proc.stdout.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise Undetermined(f"{path}: index blob is not valid UTF-8: {exc}") from exc
 
 
 def blob_or_none(repo: str, rev: str, path: str):
@@ -159,14 +204,12 @@ def blob_or_none(repo: str, rev: str, path: str):
     return blob_at(repo, rev, path)
 
 
-def worktree_or_none(repo: str, path: str):
-    """Worktree content of `path`, None when it is not a regular file there."""
-    full = os.path.join(repo, path)
-    if not os.path.lexists(full):
+def index_or_none(repo: str, path: str):
+    """Index content of `path`, None when the index has no entry for it (a
+    non-regular entry raises, via `index_content`)."""
+    if _index_entry(repo, path) is None:
         return None
-    if not os.path.isfile(full):
-        raise Undetermined(f"{path}: present in the worktree but not a regular file")
-    return worktree_content(repo, path)
+    return index_content(repo, path)
 
 
 _PATH_ATTR_GREP = r"#[[:space:]]*\[[[:space:]]*path[[:space:]]*="
@@ -174,12 +217,14 @@ _PATH_ATTR_GREP = r"#[[:space:]]*\[[[:space:]]*path[[:space:]]*="
 
 def grep_path_attr_files(repo: str, rev: str | None) -> list:
     """`.rs` files containing a `#[path` attribute, at `rev` or (None) in the
-    worktree. `git grep` exits 1 for "no match", which is an answer; any other
-    non-zero exit is Undetermined."""
+    INDEX (`git grep --cached`; backlog 54de84b4). `git grep` exits 1 for "no
+    match", which is an answer; any other non-zero exit is Undetermined."""
     args = ["git", "-C", repo, "-c", "core.quotePath=false", "grep", "-l", "-z", "-E",
             _PATH_ATTR_GREP]
     if rev is not None:
         args.append(rev)
+    else:
+        args.insert(args.index("grep") + 1, "--cached")
     args += ["--", "*.rs"]
     try:
         proc = subprocess.run(args, capture_output=True, text=True)
@@ -223,7 +268,7 @@ def acknowledgements(repo: str, base_sha: str, pending_msg: str | None = None) -
 
     During a merge (MERGE_HEAD present) the commits being merged in are also
     read, as `base_sha..MERGE_HEAD`. The diff this gate scans runs from the
-    merge-base to the WORKTREE, and mid-merge the worktree already holds the
+    merge-base to the INDEX, and mid-merge the index already holds the
     other side's changes, so those changes are charged to the merge commit.
     Their acknowledgments live in the other side's own commit messages, which
     `base_sha..HEAD` cannot reach (backlog 0d007aa5). The same exactness rules
@@ -265,9 +310,16 @@ def acknowledgements(repo: str, base_sha: str, pending_msg: str | None = None) -
 
 
 def changed_pairs(repo: str, merge_base: str) -> list:
-    """`(old_path, new_path)` for every change between `merge_base` and the worktree.
+    """`(old_path, new_path)` for every change between `merge_base` and the INDEX.
 
-    Two git flags carry the fail-closed contract here:
+    `--cached` makes the "after" side the index git hands this process
+    (`GIT_INDEX_FILE` included), which is what the commit will contain. Until
+    backlog 54de84b4 the diff ran against the working tree: an unstaged edit
+    was blamed on the commit, and a weakening staged while the disk copy was
+    restored passed (user ruling 2026-11-08, "Index everywhere": every mode,
+    the manual CLI included, judges the index; unstaged changes are ignored).
+
+    Two more git flags carry the fail-closed contract here:
 
     * `--name-status -z` emits LITERAL, NUL-delimited paths. The default
       `--name-only` renders a non-ASCII path through `core.quotePath` as
@@ -284,7 +336,7 @@ def changed_pairs(repo: str, merge_base: str) -> list:
     """
     raw = git(
         repo, "-c", "core.quotePath=false",
-        "diff", "--name-status", "-z", "-M", merge_base,
+        "diff", "--cached", "--name-status", "-z", "-M", merge_base,
     )
     toks = raw.split("\0")
     pairs = []

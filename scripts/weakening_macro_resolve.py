@@ -18,7 +18,8 @@ Any failure to list, read, tokenise or delimit a definition raises the gate's
 Split out of check-test-weakening.py only to keep that file under the
 file-growth cap. The gate passes its own objects in as `gate` (a namespace
 of its module globals, built in `scan`), so this module uses exactly the gate's `Undetermined`, `_mask_noncode`,
-`TEST_ATTR_RE`, `blob_at` and `worktree_content`.
+`TEST_ATTR_RE`, `blob_at` and `index_content` (the after side is the index,
+backlog 54de84b4).
 """
 from __future__ import annotations
 
@@ -166,7 +167,7 @@ def macro_invocation_findings(gate, repo: str, merge_base: str, pairs: list) -> 
         if not (_is_rs(old) or _is_rs(new)):
             continue
         before_src = gate.blob_at(repo, merge_base, old) if _is_rs(old) else ""
-        after_src = gate.worktree_content(repo, new) if _is_rs(new) else ""
+        after_src = gate.index_content(repo, new) if _is_rs(new) else ""
         before = macro_invocation_counts(gate, before_src, old or "")
         after = macro_invocation_counts(gate, after_src, new or "")
         for name in sorted(before):

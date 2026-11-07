@@ -1090,3 +1090,30 @@ exit 101:  result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
      Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
 error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
+
+[[task]]
+id = "d328ea88"
+title = "blastguard: bash 3.2 reading — comment line with quote/backtick/backslash gives Ask where Deny is wanted"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers). Fail-closed (Ask) today; Deny wanted for harmful targets. User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed."
+created_at = 1794032629
+updated_at = 1794032629
+weight = 0.0
+issue_number = 1614
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1614"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_d_comment_with_quote_is_ask_but_deny_wanted -- --include-ignored"
+rev = "64ae2a2320d93179c1f9b810f78375c47601851d"
+observed_at = 1794032629
+detail = """
+exit 101: ng blastguard v0.2.308 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.79s
+     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-38355bb113e5f23c)
+error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""

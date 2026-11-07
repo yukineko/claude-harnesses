@@ -263,7 +263,6 @@ class SeedReuse(unittest.TestCase):
         self.assertEqual(os.stat(new / rel).st_mtime_ns,
                          os.stat(f.warm / rel).st_mtime_ns)
 
-    @open_defect("675bc422")
     def test_session_worktree_hook_seeds_from_main_tree(self):
         # RE-ANCHORED by USER RULING (backlog 675bc422): the hook starts the
         # seed in the BACKGROUND and returns immediately, so target/ need not

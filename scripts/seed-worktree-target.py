@@ -27,7 +27,8 @@ never produce. Hence every doubt resolves to "do not seed":
   * the mtime pass runs while holding LOCK_EX on every cargo lock file
     (`.cargo-lock`, `.cargo-build-lock`, `.cargo-artifact-lock`) of every
     profile dir in the clone, so no cargo build reads half-applied mtimes. If
-    those locks cannot be taken (bounded retry), the pass is skipped and the
+    those locks cannot be taken (bounded retry, 30s or
+    SEED_WORKTREE_TARGET_LOCK_TIMEOUT_SECS), the pass is skipped and the
     verdict is `seeded: false, target_left: true` — the clone is kept because
     cargo may be using it, and its mtimes stay fresh, which only costs a
     rebuild (backlog 675bc422 ruling).
@@ -232,7 +233,13 @@ def _take_cargo_locks(target: str) -> list[int] | None:
     paths = _lock_files(target)
     if not paths:
         return None
-    end = time.monotonic() + LOCK_WAIT_S
+    try:
+        wait = float(os.environ.get("SEED_WORKTREE_TARGET_LOCK_TIMEOUT_SECS",
+                                    LOCK_WAIT_S))
+    except ValueError:
+        wait = LOCK_WAIT_S
+    # Any bound is safe here: giving up only skips the mtime pass.
+    end = time.monotonic() + max(0.0, wait)
     while True:
         fds: list[int] = []
         try:

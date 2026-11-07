@@ -346,7 +346,6 @@ class CargoRacesClone(unittest.TestCase):
 # ───────────── E/F: cargo-lock exclusion during the mtime pass ───────────────
 
 class CargoLockDuringSync(unittest.TestCase):
-    @open_defect(BACKLOG_ID)
     def test_cargo_build_blocks_on_lock_while_seeder_paused_in_mtime_pass(self):
         """Needs C + E. Against 016cdbf8 this can only fail at the missing
         seam: its mtime pass is microseconds long and takes no lock, so there
@@ -380,7 +379,6 @@ class CargoLockDuringSync(unittest.TestCase):
         self.assertIs(v.get("seeded"), True, v)
         self.assertEqual(base._run_bin(new), "warm")
 
-    @open_defect(BACKLOG_ID)
     def test_unobtainable_lock_leaves_target_without_any_mtime_change(self):
         """Needs D + E + F. Against 016cdbf8 this fails for the REAL reason:
         it takes no lock, so it syncs mtimes while another process holds

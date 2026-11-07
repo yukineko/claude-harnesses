@@ -112,7 +112,6 @@ fn schedule_one(
 
 /// TARGET (RED at d9863f70): the exact minimal repro of the fb338793 force-gate.
 #[test]
-#[ignore = "backlog 3a0e30a8: condukt force-gates a task whose prose only names filter-branch"]
 fn prose_naming_filter_branch_without_declared_command_is_not_gated() {
     let (gated, warnings) = schedule_one("fb", "x", "filter-branch filters stay Deny", &[]);
     assert!(
@@ -125,7 +124,6 @@ fn prose_naming_filter_branch_without_declared_command_is_not_gated() {
 /// TARGET (RED at d9863f70): the other history-rewrite names in prose
 /// (`git rebase`, `rebase -i`, `--amend`) — a task that adds rules ABOUT them.
 #[test]
-#[ignore = "backlog 3a0e30a8: condukt force-gates a task whose prose only names a history-rewrite command"]
 fn prose_naming_history_rewrite_commands_without_declared_command_is_not_gated() {
     for (i, dc) in [
         "git rebase --exec shapes stay Deny",

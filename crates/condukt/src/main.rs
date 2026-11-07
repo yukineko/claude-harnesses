@@ -33,6 +33,7 @@ mod oracle;
 mod policy;
 mod pr;
 mod precedent;
+mod proof_archive;
 mod replan;
 mod review_brief;
 mod review_order;
@@ -45,8 +46,10 @@ mod state;
 mod status;
 mod store;
 mod subagent_stop;
+mod timings;
 #[cfg(test)]
 mod verifier_f7a0cadc;
+mod verifier_record;
 mod verify;
 mod worktree;
 mod wt_reap;
@@ -123,7 +126,9 @@ enum Command {
     /// Run-state tracking and the completion gate.
     State {
         #[command(subcommand)]
-        action: StateAction,
+        // Boxed: `StateAction::Set` is large (see its allow below), which
+        // would otherwise make every `Command` value that size.
+        action: Box<StateAction>,
     },
     /// Central graded autonomy policy: map a decision's risk x reversibility x
     /// confidence to auto|escalate|block.
@@ -1000,6 +1005,8 @@ enum StateAction {
         /// `gauge subagents`). Omitted → unchanged.
         #[arg(long)]
         verifier_agent_id: Option<String>,
+        #[command(flatten)]
+        verdict: verifier_record::VerdictArgs,
     },
     /// Print a run's full state as JSON.
     Show {
@@ -2269,7 +2276,7 @@ fn run_user(cmd: Command) -> Result<()> {
             }
         }
         Command::Worktree { action } => run_worktree(&cfg, &cwd, action)?,
-        Command::State { action } => run_state(&cfg, &cwd, action)?,
+        Command::State { action } => run_state(&cfg, &cwd, *action)?,
         Command::Verify { action } => match action {
             VerifyAction::Digest { file } => {
                 let raw = match file {
@@ -3853,6 +3860,10 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
             }
         },
         WtAction::Remove { path, branch } => {
+            // Persist the worktree's tdd proofs BEFORE removing it (backlog
+            // ea6547c9); a persist failure refuses the removal via `?`.
+            let kept = proof_archive::persist_before_teardown(cfg, cwd, &repo, &path, None)?;
+            kept.report();
             let undeleted = worktree::remove(&repo, &path, branch.as_deref())?;
             if let Some(b) = undeleted {
                 eprintln!(
@@ -4002,6 +4013,16 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                     continue;
                 }
                 if remove {
+                    // Persist tdd proofs first (backlog ea6547c9); failure
+                    // refuses this deletion via `?`.
+                    let kept = proof_archive::persist_before_teardown(
+                        cfg,
+                        cwd,
+                        &repo,
+                        Path::new(&e.path),
+                        None,
+                    )?;
+                    kept.report();
                     std::fs::remove_dir_all(&e.path)
                         .with_context(|| format!("removing {}", e.path))?;
                     eprintln!("removed {}", e.path);
@@ -4473,6 +4494,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             verifier_model,
             verifier_cost,
             verifier_agent_id,
+            verdict,
         } => {
             // Hold the per-run state lock across the entire load → oracle-gate →
             // mutate → save cycle so a concurrent session/worktree cannot lose
@@ -4609,6 +4631,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                             })
                             .map(std::path::PathBuf::from)
                             .unwrap_or_else(|| cwd.to_path_buf());
+                        // After teardown the worktree's proofs live only in
+                        // the durable archive (backlog ea6547c9).
+                        let run_dir = proof_archive::oracle_dir(cfg, cwd, &run, &task, &run_dir);
                         let verdict = oracle::check_oracle(
                             requires_fp_oracle,
                             reproduction_tests.as_deref(),
@@ -4702,6 +4727,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             if verifier_agent_id.is_some() {
                 t.verifier_agent_id = verifier_agent_id;
             }
+            t.verifier_verdict.apply(verdict);
             // Findings persist regardless of status (this whole handler runs for
             // any status): a failed/pending/unmerged experiment still records
             // what was learned. Preserve any existing artifact fields
@@ -5036,7 +5062,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
         }
         StateAction::Timings { run, json } => {
             let rs = state::RunState::load(cfg, cwd, &run)?;
-            print_timings(&rs, json)?;
+            timings::print_timings(&rs, json)?;
         }
         StateAction::Claim { run, session, file } => {
             let files = if file.is_empty() {
@@ -5652,6 +5678,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 .and_then(|s| s.worktree.as_deref())
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| cwd.to_path_buf());
+            // After teardown the worktree's proofs live only in the durable
+            // archive (backlog ea6547c9).
+            let run_dir = proof_archive::oracle_dir(cfg, cwd, &run, &task, &run_dir);
             let out = oracle::check_oracle(
                 t.requires_fp_oracle(),
                 t.reproduction_tests.as_deref(),
@@ -6172,74 +6201,6 @@ fn fugu_fingerprint() -> Result<Option<(PathBuf, String)>> {
     }
     let fp = String::from_utf8_lossy(&out.stdout).trim().to_string();
     Ok(Some((bin, fp)))
-}
-
-/// Wall-clock seconds spanning `[a, b]`, or `None` when the span is unmeasured.
-/// Unmeasured means EITHER endpoint was never stamped (`None`) OR the endpoints
-/// are out of order (`b < a`, a cannot-determine that resolves to unmeasured,
-/// never a negative or a fabricated 0). A genuine same-instant phase (`b == a`)
-/// is a real, measured `Some(0)` — completed-instantly is distinct from
-/// never-measured, which is the whole point of the tri-state.
-fn phase_span_secs(a: Option<i64>, b: Option<i64>) -> Option<i64> {
-    match (a, b) {
-        (Some(a), Some(b)) if b >= a => Some(b - a),
-        _ => None,
-    }
-}
-
-/// Render an optional measured span for the text table: `"{n}s"` when measured
-/// (including a real `0s`), the explicit marker `"unmeasured"` when `None`.
-fn fmt_span(secs: Option<i64>) -> String {
-    match secs {
-        Some(s) => format!("{s}s"),
-        None => "unmeasured".to_string(),
-    }
-}
-
-/// Print each task's per-phase timing breakdown. An unmeasured phase is rendered
-/// as an explicit `unmeasured` marker (text) or `null` (JSON), NEVER as 0
-/// seconds — so a never-measured phase and a completed-instantly phase (a real
-/// measured `0`) stay distinguishable, the same tri-state norm as the fugu-router
-/// duration field.
-fn print_timings(rs: &state::RunState, json: bool) -> Result<()> {
-    if json {
-        let tasks: Vec<serde_json::Value> = rs
-            .tasks
-            .iter()
-            .map(|t| {
-                let worker = phase_span_secs(t.worker_started_at, t.worker_ended_at);
-                let verifier = phase_span_secs(t.verifier_started_at, t.verifier_ended_at);
-                let verify_to_merge = phase_span_secs(t.verifier_ended_at, t.merge_completed_at);
-                serde_json::json!({
-                    "id": t.id,
-                    "worker_started_at": t.worker_started_at,
-                    "worker_ended_at": t.worker_ended_at,
-                    "verifier_started_at": t.verifier_started_at,
-                    "verifier_ended_at": t.verifier_ended_at,
-                    "merge_completed_at": t.merge_completed_at,
-                    // Derived spans: null (not 0) when unmeasured.
-                    "worker_secs": worker,
-                    "verifier_secs": verifier,
-                    "verify_to_merge_secs": verify_to_merge,
-                })
-            })
-            .collect();
-        let out = serde_json::json!({ "run": rs.run_id, "tasks": tasks });
-        println!("{}", serde_json::to_string_pretty(&out)?);
-    } else {
-        println!("run '{}' phase timings:", rs.run_id);
-        for t in &rs.tasks {
-            let worker = fmt_span(phase_span_secs(t.worker_started_at, t.worker_ended_at));
-            let verifier = fmt_span(phase_span_secs(t.verifier_started_at, t.verifier_ended_at));
-            let verify_to_merge =
-                fmt_span(phase_span_secs(t.verifier_ended_at, t.merge_completed_at));
-            println!(
-                "  {}  worker: {}  verifier: {}  verify→merge: {}",
-                t.id, worker, verifier, verify_to_merge
-            );
-        }
-    }
-    Ok(())
 }
 
 /// Record completed runs' outcomes to fugu-router. Deterministic and idempotent:

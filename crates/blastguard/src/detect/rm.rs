@@ -69,6 +69,18 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         }
     }
 
+    // SYSTEM-HARM axis (backlog fb338793, user ruling 2026-11-07:
+    // 「いかなる理由であれシステムに害になるコマンドはdenyすべし」). Ahead of the
+    // "below the destructive bar" exit for ONE file, which measures how many
+    // files vanish and not which: `rm /etc/passwd`, `rm -f /bin/ls` and
+    // `rm -f /usr/lib/libSystem.B.dylib` were Allow on 0.2.287. Applies to
+    // recursive and wildcard operands too, so every `rm` into a system
+    // directory carries the system-harm marker whichever later rule would
+    // have refused it. See [`rm_system_harm_deny`].
+    if let Some(deny) = rm_system_harm_deny(ctx, &operands, recursive) {
+        return deny;
+    }
+
     if !recursive && !wildcard {
         // Backlog eba15868: ONE file can still be the whole checkout. A linked
         // worktree's `.git` is a `gitdir:` FILE, so `rm <wt>/.git` succeeds
@@ -179,6 +191,89 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     } else {
         Decision::deny("rm with a wildcard can delete many files at once")
     }
+}
+
+/// `Deny` (system harm, [`Decision::deny_system_harm`]) when an `rm` operand
+/// names `/`, or a path at or below a system directory
+/// ([`crate::scope::is_inside_system_dir`]: `/bin`, `/etc`, `/usr`,
+/// `/System`, `/Library`, …), and the session does not own it (a project
+/// checked out under `/opt` is a safe root and escapes, exactly as for
+/// `system_path_block`).
+///
+/// Judged on the operand as written, made absolute against the segment's
+/// base, and again with its PARENT directory resolved through symlinks (the
+/// final component is what `rm` unlinks, so it is not followed): `rm
+/// <proj>/esc/etc/passwd` with `esc -> /` unlinks `/etc/passwd`. A wildcard
+/// operand is judged by its literal directory prefix (`/usr/lib/*` cannot
+/// expand outside `/usr/lib`; `/*` is `/`). An operand that cannot be placed
+/// (an expansion, a relative path with no known base) is not judged here and
+/// keeps every rule below — this predicate only ever adds a Deny.
+pub(super) fn rm_system_harm_deny(
+    ctx: &Ctx<'_>,
+    operands: &[&str],
+    recursive: bool,
+) -> Option<Decision> {
+    for op in operands {
+        let spelled: String = if has_glob_meta(op) {
+            match glob_literal_prefix(op) {
+                Some(p) if p.is_empty() && op.starts_with('/') => "/".to_string(),
+                Some(p) if !p.is_empty() => p,
+                _ => continue,
+            }
+        } else {
+            (*op).to_string()
+        };
+        let lexical = match ctx.scope.lexical_absolute(&spelled, ctx.base_for("rm")) {
+            Determination::Known(l) => l,
+            Determination::Undetermined(_) => continue,
+        };
+        let parent_real = lexical.rsplit_once('/').and_then(|(parent, name)| {
+            let parent = if parent.is_empty() { "/" } else { parent };
+            ctx.scope.resolve(parent).map(|p| {
+                let p = match p.strip_prefix("/System/Volumes/Data/") {
+                    Some(rest) => format!("/{rest}"),
+                    None => p,
+                };
+                if name.is_empty() {
+                    p
+                } else {
+                    format!("{}/{name}", p.trim_end_matches('/'))
+                }
+            })
+        });
+        let is_system = |p: &str| p == "/" || crate::scope::is_inside_system_dir(p);
+        let hit = if is_system(&lexical) {
+            Some(lexical.clone())
+        } else {
+            parent_real.filter(|r| is_system(r))
+        };
+        let Some(hit) = hit else {
+            continue;
+        };
+        if ctx.confined_root("rm", &[lexical.as_str()]).is_some() {
+            continue;
+        }
+        let shown = if hit == lexical {
+            format!("`{op}`")
+        } else {
+            format!("`{op}` (which lands on `{hit}`)")
+        };
+        // The shape clause keeps the wording `crate::rule_id` already files
+        // recursive / wildcard rm under; a single named file gets its own.
+        let shape = if recursive {
+            "recursive rm (-r) can delete an entire directory tree, and this one"
+        } else if has_glob_meta(op) {
+            "rm with a wildcard can delete many files at once, and this one"
+        } else {
+            "this rm"
+        };
+        return Some(Decision::deny_system_harm(format!(
+            "{shape} deletes from a system directory: {shown} — removing an OS file or \
+directory (a binary, a library, `/etc` configuration) can break the machine itself, so \
+blastguard refuses it whatever the flags and however few files it names"
+        )));
+    }
+    None
 }
 
 impl Ctx<'_> {

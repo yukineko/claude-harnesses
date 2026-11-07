@@ -2062,6 +2062,20 @@ analyse — it cannot tell what this would do, so it refuses to guess"
             {
                 return deny;
             }
+            // fb338793: an exec-capable git shape is banned by `analyze_git`
+            // whatever it runs. When the command it would run is spelled out
+            // and is itself refused (`git bisect run rm -rf /usr`), that
+            // refusal is reported instead, so its own reason — and its
+            // system-harm marker, which keeps a repeat a Deny — survives.
+            if let Some(ban) = git::git_exec_ban(rest) {
+                if depth < MAX_SHELL_DEPTH {
+                    for line in &ban.embedded {
+                        if let Decision::Deny(reason) = analyze_shell_payload(line, depth, ctx) {
+                            return Decision::Deny(reason);
+                        }
+                    }
+                }
+            }
             match git_acc.record(analyze_git(rest, ctx)) {
                 Some(deny) => deny,
                 None => git_acc.finish(),

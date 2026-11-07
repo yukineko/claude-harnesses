@@ -380,7 +380,8 @@ fn never_project(real: &str, home: Option<&str>) -> Option<OperandJudgement> {
     }
     if is_system_path(real) {
         return Some(OperandJudgement::Refused(format!(
-            "`{real}` is a system directory"
+            "`{real}` is a system directory {}",
+            crate::model::SYSTEM_HARM_MARK
         )));
     }
     let Some(home) = home else {
@@ -448,7 +449,10 @@ pub fn decide_project(
         ));
     }
     if is_system_path(top) {
-        return OperandJudgement::Refused(format!("work tree {top} is a system directory"));
+        return OperandJudgement::Refused(format!(
+            "work tree {top} is a system directory {}",
+            crate::model::SYSTEM_HARM_MARK
+        ));
     }
     match no_symlink {
         Determination::Known(true) => {}

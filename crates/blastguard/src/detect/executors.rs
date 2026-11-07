@@ -378,6 +378,61 @@ fn is_git_bool(v: &str) -> bool {
     )
 }
 
+/// The command git will run because config `key` (case-folded by the caller)
+/// is set to `value`, or `None` when that setting runs nothing: a key that is
+/// not command-valued, an empty value (git runs nothing for it), a boolean
+/// for a key that also accepts one (`pager.log=false`), a non-`!` alias (a git
+/// command line, judged by the `git` arm), and `include.path` (it loads a
+/// file; asked about separately by [`judge_git_config`]).
+///
+/// Used by the git exec-capable ban (`super::git::git_exec_ban`, user ruling
+/// 2026-11-07): every setting answered `Some` here is refused outright,
+/// whatever the command is.
+pub(super) fn git_config_command(key: &str, value: &str) -> Option<String> {
+    // A pager key set to a plain `less` / `more` / `cat` with only flag
+    // arguments (`less -R`, `less -FRX`) is the ordinary pager, not a
+    // command of the caller's choosing; the existing controls pin
+    // `git -c core.pager=less log` and `git -c core.pager='less -R' log` as
+    // Allow (user ruling 2026-11-07: 「false positiveは許可できない」).
+    let pager_key =
+        key == "core.pager" || (key.starts_with("pager.") && key.matches('.').count() == 1);
+    if pager_key && is_plain_pager(value) {
+        return None;
+    }
+    match git_key_kind(key)? {
+        GitKeyKind::Include => None,
+        GitKeyKind::Alias => value
+            .trim_start()
+            .strip_prefix('!')
+            .map(|line| line.to_string()),
+        GitKeyKind::Shell { bool_ok } => {
+            if value.trim().is_empty() || (bool_ok && is_git_bool(value)) {
+                None
+            } else {
+                Some(value.strip_prefix('!').unwrap_or(value).to_string())
+            }
+        }
+    }
+}
+
+/// `less` / `more` / `cat`, alone or followed only by plain flag words
+/// (`-R`, `-FRX`, `--quit-if-one-screen`) — no `+cmd`, no `=value`, no
+/// operand, nothing the shell would expand.
+fn is_plain_pager(value: &str) -> bool {
+    let mut words = value.split_whitespace();
+    let Some(prog) = words.next() else {
+        return false;
+    };
+    matches!(prog, "less" | "more" | "cat")
+        && words.all(|w| {
+            let body = w.strip_prefix("--").or_else(|| w.strip_prefix('-'));
+            body.is_some_and(|b| {
+                b.starts_with(|c: char| c.is_ascii_alphabetic())
+                    && b.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            })
+        })
+}
+
 /// Judge the command-valued config set by git's GLOBAL `-c` /
 /// `--config-env` options for the duration of this one command.
 ///

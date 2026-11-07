@@ -253,6 +253,9 @@ symlink loop",
 /// `/opt/myproj` is a safe root like any other, and `confined_root` is what
 /// decides that. The escape is asked only for paths this predicate already
 /// matched, so it can never ADMIT a system path that was not confined.
+///
+/// The Deny carries [`crate::model::SYSTEM_HARM_MARK`], so a repeat of it is
+/// never downgraded to an Ask (user ruling 2026-11-07).
 pub(super) fn system_path_block(action: &str, target: &str, ctx: &Ctx) -> Option<Decision> {
     if !crate::scope::is_inside_system_dir(target) {
         return None;
@@ -260,7 +263,7 @@ pub(super) fn system_path_block(action: &str, target: &str, ctx: &Ctx) -> Option
     if ctx.confined_root(action, &[target]).is_some() {
         return None;
     }
-    Some(Decision::deny(format!(
+    Some(Decision::deny_system_harm(format!(
         "'{action} {target}' writes into a system directory - a NEW file there is itself the \
 change (a `sudoers.d`/`paths.d` drop-in, a LaunchDaemon plist, a binary shadowing one on \
 $PATH), so whether the old bytes were recoverable does not make it safe"

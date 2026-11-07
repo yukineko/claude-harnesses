@@ -321,194 +321,164 @@ fn control_rm_rf_inside_managed_worktree_stays_allow() {
 // ---- targets: git exec-capable shapes are banned (RED on 0.2.287: Allow) ----
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_bisect_run_true() {
     Fixture::new("t_ban_git_bisect_run_true").assert_deny("git bisect run true");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_bisect_run_make_test() {
     Fixture::new("t_ban_git_bisect_run_make_test").assert_deny("git bisect run make test");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_rebase_x() {
     Fixture::new("t_ban_git_rebase_x").assert_deny("git rebase -x 'echo ok' HEAD~1");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_rebase_exec() {
     Fixture::new("t_ban_git_rebase_exec").assert_deny("git rebase --exec 'echo ok' HEAD~1");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_rebase_exec_equals() {
     Fixture::new("t_ban_git_rebase_exec_equals").assert_deny("git rebase --exec='echo ok' HEAD~1");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_rebase_i_exec() {
     Fixture::new("t_ban_git_rebase_i_exec").assert_deny("git rebase -i --exec 'echo ok' HEAD~1");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_pull_rebase_x() {
     Fixture::new("t_ban_git_pull_rebase_x").assert_deny("git pull --rebase -x 'echo ok'");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_submodule_foreach() {
     Fixture::new("t_ban_git_submodule_foreach").assert_deny("git submodule foreach 'echo ok'");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_submodule_foreach_recursive() {
     Fixture::new("t_ban_git_submodule_foreach_recursive")
         .assert_deny("git submodule foreach --recursive true");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_c_shell_alias_invoked() {
     Fixture::new("t_ban_git_c_shell_alias_invoked").assert_deny("git -c 'alias.x=!echo ok' x");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_c_shell_alias_invoked_quoted_value() {
     Fixture::new("t_ban_git_c_shell_alias_invoked_quoted_value")
         .assert_deny("git -c alias.x='!echo ok' x");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_config_defines_shell_alias() {
     Fixture::new("t_ban_git_config_defines_shell_alias")
         .assert_deny("git config alias.x '!echo ok'");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_config_global_defines_shell_alias() {
     Fixture::new("t_ban_git_config_global_defines_shell_alias")
         .assert_deny("git config --global alias.x '!echo ok'");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_difftool_extcmd_equals() {
     Fixture::new("t_ban_git_difftool_extcmd_equals").assert_deny("git difftool --extcmd=echo HEAD");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_difftool_extcmd() {
     Fixture::new("t_ban_git_difftool_extcmd").assert_deny("git difftool --extcmd echo HEAD");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_difftool_x() {
     Fixture::new("t_ban_git_difftool_x").assert_deny("git difftool -x echo HEAD");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_c_core_pager() {
     Fixture::new("t_ban_git_c_core_pager").assert_deny("git -c core.pager='echo ok' log");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_c_core_sshcommand() {
     Fixture::new("t_ban_git_c_core_sshcommand")
         .assert_deny("git -c core.sshCommand='echo ok' fetch");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_c_core_editor() {
     Fixture::new("t_ban_git_c_core_editor").assert_deny("git -c core.editor='echo ok' commit");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_c_sequence_editor() {
     Fixture::new("t_ban_git_c_sequence_editor")
         .assert_deny("git -c sequence.editor='echo ok' rebase -i HEAD~1");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_c_diff_external() {
     Fixture::new("t_ban_git_c_diff_external").assert_deny("git -c diff.external='echo ok' diff");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_grep_open_files_in_pager_short() {
     Fixture::new("t_ban_git_grep_open_files_in_pager_short")
         .assert_deny("git grep -O'echo ok' foo");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_grep_open_files_in_pager() {
     Fixture::new("t_ban_git_grep_open_files_in_pager")
         .assert_deny("git grep --open-files-in-pager='echo ok' foo");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_fetch_upload_pack() {
     Fixture::new("t_ban_git_fetch_upload_pack")
         .assert_deny("git fetch --upload-pack='echo ok' origin");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_clone_u() {
     Fixture::new("t_ban_git_clone_u").assert_deny("git clone -u 'echo ok' /x /y");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_clone_upload_pack() {
     Fixture::new("t_ban_git_clone_upload_pack")
         .assert_deny("git clone --upload-pack='echo ok' /x /y");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_push_receive_pack() {
     Fixture::new("t_ban_git_push_receive_pack")
         .assert_deny("git push --receive-pack='echo ok' origin");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_ls_remote_upload_pack() {
     Fixture::new("t_ban_git_ls_remote_upload_pack")
         .assert_deny("git ls-remote --upload-pack='echo ok' origin");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_archive_remote_exec() {
     Fixture::new("t_ban_git_archive_remote_exec")
         .assert_deny("git archive --remote=origin --exec='echo ok' HEAD");
 }
 
 #[test]
-#[ignore = "backlog fb338793: git exec-capable shape must be Deny (ban ruling)"]
 fn ban_git_send_email_to_cmd() {
     Fixture::new("t_ban_git_send_email_to_cmd")
         .assert_deny("git send-email --to-cmd='echo ok' x.patch");
@@ -517,86 +487,73 @@ fn ban_git_send_email_to_cmd() {
 // ---- targets: system-harming commands (RED on 0.2.287: Allow) ----
 
 #[test]
-#[ignore = "backlog fb338793: system-harming command must be Deny"]
 fn git_bisect_run_rm_rf_usr_is_deny() {
     Fixture::new("t_git_bisect_run_rm_rf_usr_is_deny").assert_deny("git bisect run rm -rf /usr");
 }
 
 #[test]
-#[ignore = "backlog fb338793: system-harming command must be Deny"]
 fn git_bisect_run_rm_rf_usr_lib_is_deny() {
     Fixture::new("t_git_bisect_run_rm_rf_usr_lib_is_deny")
         .assert_deny("git bisect run rm -rf /usr/lib");
 }
 
 #[test]
-#[ignore = "backlog fb338793: system-harming command must be Deny"]
 fn git_bisect_run_sh_c_rm_rf_usr_is_deny() {
     Fixture::new("t_git_bisect_run_sh_c_rm_rf_usr_is_deny")
         .assert_deny("git bisect run sh -c 'rm -rf /usr'");
 }
 
 #[test]
-#[ignore = "backlog fb338793: system-harming command must be Deny"]
 fn git_rebase_exec_rm_rf_usr_is_deny() {
     Fixture::new("t_git_rebase_exec_rm_rf_usr_is_deny")
         .assert_deny("git rebase --exec 'rm -rf /usr' HEAD~1");
 }
 
 #[test]
-#[ignore = "backlog fb338793: system-harming command must be Deny"]
 fn git_rebase_exec_equals_rm_rf_usr_is_deny() {
     Fixture::new("t_git_rebase_exec_equals_rm_rf_usr_is_deny")
         .assert_deny("git rebase -i --exec='rm -rf /usr' HEAD~1");
 }
 
 #[test]
-#[ignore = "backlog fb338793: system-harming command must be Deny"]
 fn git_rebase_x_rm_rf_usr_is_deny() {
     Fixture::new("t_git_rebase_x_rm_rf_usr_is_deny")
         .assert_deny("git rebase -x 'rm -rf /usr' HEAD~1");
 }
 
 #[test]
-#[ignore = "backlog fb338793: system-harming command must be Deny"]
 fn git_submodule_foreach_rm_rf_usr_is_deny() {
     Fixture::new("t_git_submodule_foreach_rm_rf_usr_is_deny")
         .assert_deny("git submodule foreach 'rm -rf /usr'");
 }
 
 #[test]
-#[ignore = "backlog fb338793: system-harming command must be Deny"]
 fn git_submodule_foreach_recursive_rm_rf_usr_is_deny() {
     Fixture::new("t_git_submodule_foreach_recursive_rm_rf_usr_is_deny")
         .assert_deny("git submodule foreach --recursive rm -rf /usr");
 }
 
 #[test]
-#[ignore = "backlog fb338793: system-harming command must be Deny"]
 fn rm_etc_passwd_is_deny() {
     Fixture::new("t_rm_etc_passwd_is_deny").assert_deny("rm /etc/passwd");
 }
 
 #[test]
-#[ignore = "backlog fb338793: system-harming command must be Deny"]
 fn rm_f_etc_passwd_is_deny() {
     Fixture::new("t_rm_f_etc_passwd_is_deny").assert_deny("rm -f /etc/passwd");
 }
 
 #[test]
-#[ignore = "backlog fb338793: system-harming command must be Deny"]
 fn rm_etc_hosts_is_deny() {
     Fixture::new("t_rm_etc_hosts_is_deny").assert_deny("rm /etc/hosts");
 }
 
 #[test]
-#[ignore = "backlog fb338793: system-harming command must be Deny"]
 fn rm_f_bin_ls_is_deny() {
     Fixture::new("t_rm_f_bin_ls_is_deny").assert_deny("rm -f /bin/ls");
 }
 
 #[test]
-#[ignore = "backlog fb338793: system-harming command must be Deny"]
 fn rm_f_usr_lib_libsystem_is_deny() {
     Fixture::new("t_rm_f_usr_lib_libsystem_is_deny")
         .assert_deny("rm -f /usr/lib/libSystem.B.dylib");
@@ -605,7 +562,6 @@ fn rm_f_usr_lib_libsystem_is_deny() {
 // ---- target: repeat downgrade of a system-harming deny (RED on 0.2.287: Ask) ----
 
 #[test]
-#[ignore = "backlog fb338793: repeated system-harming deny must stay Deny"]
 fn second_identical_rm_rf_usr_lib_stays_deny() {
     let f = Fixture::new("t_repeat_usr_lib");
     f.assert_deny("rm -rf /usr/lib");

@@ -197,6 +197,18 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("rm with a wildcard can delete many files at once") {
         return "rm-wildcard";
     }
+    // fb338793: a single named file in a system directory (`rm /etc/passwd`).
+    if reason.contains("this rm deletes from a system directory") {
+        return "rm-system-file";
+    }
+    // 0fefcd3b: osascript telling Finder / System Events to delete.
+    if reason.contains("`osascript` tells ") {
+        return "osascript-app-delete";
+    }
+    // fb338793: an exec-capable git shape (ban ruling 2026-11-07).
+    if reason.contains("makes git run a command. Every git shape that runs a command") {
+        return "git-exec-capable";
+    }
 
     // Bash: git.
     if reason.contains("git clean -f with -d/-x deletes untracked files") {

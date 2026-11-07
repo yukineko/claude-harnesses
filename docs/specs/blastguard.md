@@ -90,6 +90,44 @@ forge・condukt のスケジューラが再利用）。
   ときだけ返る。probe 失敗・refusal・symlink・置けない綴りは `Undetermined` で、呼び出し側は
   `Known(false)` と同じく**元の verdict を保持**する（Allow へ倒さない）。main の作業ツリー・`.git` 内部・
   保護パス・`git stash drop/clear`（全 worktree で共有）は対象外のまま。
+- **git の exec-capable 形は一律 Deny（backlog fb338793、ユーザー裁定 2026-11-07「git bisectでいろいろ
+  構文を処理できてしまうくらいなら使用を禁止した方がいいのでは?」）** — git が呼び出し側の選んだコマンドを
+  実行する形は、埋め込みコマンドの中身に関わらず Deny（`detect/git.rs` の `git_exec_ban`。
+  `analyze_git_words` の先頭で判定し、末尾の `_ => Allow` に到達させない。`git bisect run true` も Deny）。
+  対象: global `-c` で command-valued key（`core.pager`/`core.sshCommand`/`core.editor`/`sequence.editor`/
+  `diff.external`/`pager.<cmd>`/`alias.<x>=!…`/`credential.helper` 等。`detect/executors.rs` の
+  `git_config_command`）を設定、同じ key を `git config [scope] <key> <value>`/`git config set` で書く、
+  `git clone -c`/`--config` で設定、`bisect run`、`rebase`/`pull` の `-x`/`--exec`、`submodule foreach`、
+  `difftool`/`mergetool` の `-x`/`--extcmd`、`grep -O`/`--open-files-in-pager`、
+  `fetch`/`pull`/`clone`/`ls-remote`/`push`/`archive`/`fetch-pack`/`send-pack` の
+  `--upload-pack`/`--receive-pack`/`--exec`（`clone`/`ls-remote` は `-u` も）、`send-email` の
+  `--to-cmd`/`--cc-cmd`/`--header-cmd`/`--sendmail-cmd`。語は shell の quote を外してから見る。
+  `filter-branch` は従来どおり `irreversible_git_subcommand` が全用途を Deny。埋め込みコマンドが spelled out
+  されていてそれ自体が Deny のとき（`git bisect run rm -rf /usr`）はその Deny 理由を返す（system-harm
+  marker を保つため。`detect.rs` の git arm）。非対象（Allow のまま）: `bisect start/good/bad`、
+  `rebase <upstream>`、`-c pager.log=false`、空値（`-c credential.helper=`）、`!` で始まらない alias、
+  そして既存 control が固定する 2 例外 — pager key に素の `less`/`more`/`cat`（flag 引数のみ）を設定する
+  `git -c core.pager='less -R' log`（Allow）と、値が環境変数にある `git --config-env <key>=VAR`（従来の Ask）。
+  この 2 例外を ban に含めるかはユーザー判断待ち。
+- **system-harm（システムを壊すコマンド）は常に Deny、repeat でも降格しない（backlog fb338793、ユーザー裁定
+  2026-11-07「いかなる理由であれシステムに害になるコマンドはdenyすべし」「1は絶対にdenyでいい」）** —
+  `rm` の operand が `/` またはシステムディレクトリ（`scope::is_inside_system_dir`: `/bin`・`/etc`・`/usr`・
+  `/System`・`/Library`・`/opt`・`/private/etc` 等。`/var`・`/dev` は含まない）の中を指すとき、非再帰の
+  1 ファイル（`rm /etc/passwd`・`rm -f /bin/ls`）でも Deny（`detect/rm.rs` の `rm_system_harm_deny`。
+  字句の絶対パスと、親ディレクトリを symlink 解決したパスの両方で判定。ワイルドカードは literal prefix で
+  判定。セッションの safe root 内〈`/opt/myproj` の project 等〉は対象外）。この Deny、システムディレクトリへの
+  書き込み Deny（`system_path_block`）、`crate::deletion` のシステムディレクトリ refusal は理由に
+  `model::SYSTEM_HARM_MARK` を含み、`main::downgrade_on_repeat` は `Decision::is_system_harm` の Deny を
+  2 度目以降も Ask に落とさない（他の Deny の repeat 降格〈運用者裁定 2026-09-18〉は不変）。
+- **埋め込み shell 文字列の Ask と osascript の削除（backlog 0fefcd3b）** — interpreter program の
+  文字列 literal（layer > 0）に対する shell pass の **Ask** は、program が shell に文字列を渡す API
+  （`SHELL_STRING_EXEC_MARKERS`: `os.system`/`os.popen`/`subprocess`/`system(`/backtick/`child_process`/
+  `do shell script` 等）を含むとき pending Ask として残す（従来は捨てられ、
+  `os.system('echo x > .git/hooks/pre-commit')` が Allow だった。top-level の同じ redirect は保護パス Ask で、
+  人間不在時は Deny）。「command word が展開」由来の Ask は対象外（`detect_bash` を直接使う）。
+  `osascript` は、program が `"Finder"`/`"System Events"` を名指しし、かつ double-quote 文字列の外に
+  `delete` か `empty … trash` があれば Deny（`detect/interpreter.rs` の `osascript_app_delete`。
+  `display notification "x"` 等は従来どおり）。
 - **disarm-by-non-write 規則（保護パスを『書かずに無力化』する経路）** — 保護ファイル
   （`.claude/settings.json`・`settings.local.json`・`hooks.json`・`hooks/**`、`.githooks/**`、
   `.git/hooks/**`、shell rc、gate config toml）に対する削除（`rm`〈再帰 `-r` に加え空ディレクトリ削除
@@ -142,7 +180,8 @@ forge・condukt のスケジューラが再利用）。
   (3) history rewrite（`HISTORY_SIGNALS`: rebase/`--amend`/filter-branch）→ Medium/reversible、
   (4) その他 → Low/reversible。`has_word` が `ownership`⊃`ship` 等の偽陽性を防ぐ。lib 経由で condukt が
   GATED ゲート強制に利用する。
-- **`model`** — 判定型 `Decision::{Allow, Deny(String)}`（`deny()`/`is_deny()`）。
+- **`model`** — 判定型 `Decision::{Allow, Deny(String)}`（`deny()`/`is_deny()`）。system-harm の Deny は
+  `deny_system_harm()` で理由に `SYSTEM_HARM_MARK` を付け、`is_system_harm()` で識別する。
 - **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。

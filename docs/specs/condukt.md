@@ -22,10 +22,13 @@
   互いに `deps` 無しのときだけ。`entries_conflict` は不確実なら「衝突あり」に倒す（誤衝突は直列化＝安全、
   取りこぼしは同一ファイル競合＝危険）。LLM 宣言の `Class`（`parallel`/`serial`/`gated`）より file-overlap が
   優先される。`shared_globs` に触れるタスクは警告付きで直列へ降格。
-- **force-gate（risk 分類の権威）** — `blastguard::classify::classify_change(task_action_text(t),
-  task_commands(t), ..)` が `requires_gate()` / Medium 以上 / 判定不能のタスクは、LLM が宣言した `class` に
-  関わらず `gated` へ強制隔離される（deploy/push/release 等の高リスク非可逆アクション）。散文（title/
-  done_criteria/touched_files）は `classify` が deploy/history の needle だけで読み、コマンドとしては解析しない。
+- **force-gate（risk 分類の権威）** — `blastguard::classify::classify_change("", task_commands(t),
+  touched_files, ..)`（宣言コマンド + sensitive-path）が `requires_gate()` / Medium 以上 / 判定不能のタスク、
+  および散文 `classify(task_action_text(t))` が `requires_gate()`（deploy/push/publish の needle =
+  High + 非可逆）のタスクは、LLM が宣言した `class` に関わらず `gated` へ強制隔離される。散文（title/
+  done_criteria/touched_files）はコマンドとしては解析しない。散文の history-rewrite needle（`filter-branch` /
+  `git rebase` 等 = Medium + 可逆）はコマンド名を挙げているだけなので単独では force-gate しない（backlog
+  3a0e30a8）。warning は実際に gate した評価を述べ、"high-risk irreversible action" は High + 非可逆のときだけ。
   タスクが実際に実行するコマンド（宣言 `commands` + `reproduction_tests` + `checks[].cmd` +
   `mechanical_check.cmd`）は `classify_command` が別途解析する（backlog dc955812）。`commands` 未宣言は
   判定不能（Undetermined）として gated / escalate に倒れる。risk/reversibility 軸の唯一の情報源は blastguard の

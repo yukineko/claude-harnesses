@@ -776,3 +776,31 @@ scripts/test_check_test_weakening_macro_append_20261107.py:110: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_check_test_weakening_macro_append_20261107.py::MacroAppend::test_target_appending_a_standalone_test_passes
 1 failed, 2 passed in 1.78s"""
+
+[[task]]
+id = "8bb1cec8"
+title = "blastguard: python 式のパス結合を書込先 / と誤認した理由文を出す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["blastguard"]
+touched_files = []
+status = "pending"
+notes = "RED at e346bb04 (branch red-bg-copy2-reason). Reason names `/` (python path-join) as the shutil.copy2 write target; produced at crates/blastguard/src/detect/interpreter.rs recoverability probe + reversible.rs decide_recovery NotRepo row."
+created_at = 1794052505
+updated_at = 1794052505
+weight = 0.0
+issue_number = 1624
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1624"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test python_path_join_write_target_reason_20261107 path_join_slash_is_not_reported_as_write_target"
+rev = "e346bb04ca8814d6fde2b3aa0343b6e7ccf01fe0"
+observed_at = 1794052505
+detail = """
+exit 101: ssed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.47s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/python_path_join_write_target_reason_20261107.rs (target/debug/deps/python_path_join_write_target_reason_20261107-1b268248b0c8d4c3)
+error: test failed, to rerun pass `-p blastguard --test python_path_join_write_target_reason_20261107`"""

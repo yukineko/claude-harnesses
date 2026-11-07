@@ -149,9 +149,10 @@ fn path_join_copy2_program_is_still_refused() {
     );
 }
 
-/// Target (RED at HEAD): the reason must not name `/` — the path-join
+/// Target (RED at e346bb04): the reason must not name `/` — the path-join
 /// operator — as the write target and assert recoverability facts about it.
 #[test]
+#[ignore = "backlog 8bb1cec8: python path-join `/` misreported as the write target"]
 fn path_join_slash_is_not_reported_as_write_target() {
     let repo = fresh_repo("target");
     let (d, r) = verdict(&repo, &observed_command(&repo));

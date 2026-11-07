@@ -43,4 +43,5 @@ for s in test-changed-crates.sh lint-changed-crates.sh; do
     rc=1
   fi
 done
+if [ "$rc" -eq 0 ]; then echo "2 passed"; fi
 exit $rc

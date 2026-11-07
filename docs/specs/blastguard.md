@@ -144,7 +144,20 @@ forge・condukt のスケジューラが再利用）。
   （値は glue された形だけ。値なしの `-O`/`--open-files-in-pager` は設定済み pager を起動するだけなので Allow）、
   `fetch`/`pull`/`clone`/`ls-remote`/`push`/`archive`/`fetch-pack`/`send-pack` の
   `--upload-pack`/`--receive-pack`/`--exec`（`clone`/`ls-remote` は `-u` も）、`send-email` の
-  `--to-cmd`/`--cc-cmd`/`--header-cmd`/`--sendmail-cmd`。語は shell の quote を外してから見る。
+  `--to-cmd`/`--cc-cmd`/`--header-cmd`/`--sendmail-cmd`、`ext::<command>` transport（`fetch`/`pull`/`push`/
+  `clone`/`ls-remote`/`remote`/`config`/`archive`/`fetch-pack`/`send-pack`/`submodule` の引数、`-c` の key/値。
+  `protocol.ext.allow` に関わらず）。command-valued key には `trailer.<x>.cmd`/`.command`・
+  `core.alternateRefsCommand`・`imap.tunnel`・`sendemail.sendmailCmd`・`submodule.<x>.update=!…`
+  （`!` 以外の値は組込み戦略なので対象外）・`core.fsmonitor`（bool 以外）も含む（backlog 3c750df2）。
+  語は shell の quote を外してから見る（ANSI-C `$'…'` も decode する。global option 中の decode できない
+  `$'…'` は ban）。**git の環境変数にも同じ ban を適用する**（backlog 3c750df2。`detect/executors.rs` の
+  `env_exec_var_verdict`）: `GIT_PAGER`/`GIT_EDITOR`/`GIT_SEQUENCE_EDITOR`/`GIT_SSH_COMMAND`/`GIT_SSH`/
+  `GIT_EXTERNAL_DIFF`/`GIT_ASKPASS`/`GIT_PROXY_COMMAND` は対応する config key の値として、
+  `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` と `GIT_CONFIG_PARAMETERS` の各 entry は `git -c key=value`
+  として、既知の安全値（下記）以外は実行内容に関わらず Deny（`GIT_PAGER=less`・`GIT_EDITOR=vim` は Allow）。
+  **ban が扱わない形は残る**（ban 理由の文言は「blastguard が認識する形」だけを主張する）: `PAGER`/`EDITOR`/
+  `VISUAL`（git も読むが git 固有でないので従来どおり値を shell line として解析するだけ）、program を指す
+  `sendemail.smtpServer`、`instaweb --httpd`、既に config ファイルに保存された設定。
   `filter-branch` は従来どおり `irreversible_git_subcommand` が全用途を Deny。埋め込みコマンドが spelled out
   されていてそれ自体が Deny のとき（`git bisect run rm -rf /usr`）はその Deny 理由を返す（system-harm
   marker を保つため。`detect.rs` の git arm）。非対象（Allow のまま）: `bisect start/good/bad`、
@@ -153,10 +166,14 @@ forge・condukt のスケジューラが再利用）。
   **既知の安全値**（ユーザー裁定 2026-11-07「Allow known-safe values」。`detect/executors.rs` の
   `is_safe_command_value`）: 先頭語が key ごとの固定リストにあり、以降が素の flag（`-R`・`--wait` 等。
   `=value`・展開・`;`・quote・operand を含まない）だけの値 — pager（`core.pager`/`pager.<cmd>`）は
-  `less`/`more`/`cat`、editor（`core.editor`/`sequence.editor`）は `vim`/`nano`/`code`/`true`/`:`、
-  `credential.helper`（`credential.<url>.helper` 含む）は `osxkeychain`/`store`/`cache`、`gpg.program` は `gpg`、
-  `core.sshCommand` は `ssh`（flag の後の素の値語〈`-i key`〉は可。`o`/`F` を含む flag〈`-o ProxyCommand=…`・
-  `-F <config>`〉は command を運ぶので不可）。`-c` と `git config` 書き込みの両方に適用。リスト外の値
+  `less`/`more`/`cat`/`delta`、editor（`core.editor`/`sequence.editor`）は `vim`/`vi`/`nvim`/`emacs`/`nano`/
+  `code`/`cursor`/`subl`/`true`/`:`（後続語は値を取らない `--wait`/`-w`/`-n`/`--new-window`/`-nw`/
+  `--no-window-system` だけ。git が編集ファイルを末尾に足すので `vim -S`・`emacs -l` はそれを code として実行する）、
+  `credential.helper`（`credential.<url>.helper` 含む）は `osxkeychain`/`store`/`cache`（`--timeout=<数字>` 可）/
+  `manager`/`manager-core`、`gpg.program` は `gpg`/`gpg2`、
+  `core.sshCommand` は `ssh`（数字 flag〈`-4`/`-6`〉と flag の後の素の値語〈`-i key`・`-J user@bastion`〉は可。
+  `o`/`F`/`I`/`E`/`S` を含む flag〈`-o ProxyCommand=…`・`-F <config>`・PKCS#11 library・log file・control
+  socket〉は command を運ぶ／code を load する／file を書くので不可）。`-c` と `git config` 書き込みの両方に適用。リスト外の値
   （`vim; rm -rf ~`・`vim $(…)`・`!…`・`ssh -o ProxyCommand=sh` 等）は ban のまま Deny。
 - **system-harm（システムを壊すコマンド）は常に Deny、repeat でも降格しない（backlog fb338793、ユーザー裁定
   2026-11-07「いかなる理由であれシステムに害になるコマンドはdenyすべし」「1は絶対にdenyでいい」）** —
@@ -164,19 +181,93 @@ forge・condukt のスケジューラが再利用）。
   `/System`・`/Library`・`/opt`・`/private/etc` 等。`/var`・`/dev` は含まない）の中を指すとき、非再帰の
   1 ファイル（`rm /etc/passwd`・`rm -f /bin/ls`）でも Deny（`detect/rm.rs` の `rm_system_harm_deny`。
   字句の絶対パスと、親ディレクトリを symlink 解決したパスの両方で判定。ワイルドカードは literal prefix で
-  判定。セッションの safe root 内〈`/opt/myproj` の project 等〉は対象外）。この Deny、システムディレクトリへの
+  判定。セッションの safe root 内〈`/opt/myproj` の project 等〉は対象外）。operand は shell の単語として
+  読む（`detect/rm/operand_words.rs`、backlog 3c750df2）: 引用（`'…'`・`"…"`・`$'…'`〈`\xHH`・8 進含む〉・
+  連結・backslash）を外し、brace のカンマ列は展開、連番 `{a..b}` は `*` 扱い、`~`・`$HOME`・`${HOME}` は
+  home へ展開（home 起点で `..` が home より上へ登る綴り〈`~/../../etc/passwd`〉は `/` 起点としても判定）。
+  それ以外の展開（`$X`・`$(…)`・backtick・`~user`・未対応 escape・不均衡な引用）を含む operand は解決不能
+  として飛ばさず、Ask に倒す（ユーザー裁定 2026-11-07「Ask, deny known paths」。subagent では既存の
+  Ask→Deny 硬化で Deny。Allow には決してしない）: 他の rm 規則が Deny を返せば Deny、Allow を返すときは Ask。
+  ただし同じコマンド行のテキストが値を決める単純な形は解決して判定し、システムパスなら system-harm Deny の
+  まま（`detect/rm.rs` の `known_path_harm`）: 同じ行の**前の**セグメントにある literal 代入
+  （`X=/etc/passwd; rm $X`・`X=/etc/passwd && rm "$X"`・`"$X/passwd"`。採否は
+  `vars::resolve_expanded_command_word` の規則〈条件付き代入・後続の再束縛・配列・空値は不採用〉に従う）と、
+  literal 語だけを出力する `$(echo …)`・`$(printf %s …)`・backtick（`rm $(echo /etc/passwd)`）。値が引用符・
+  `\`・`$`・backtick・`{}`・`~` を含むもの、引用外の展開が長い語の一部として単語分割されるものは解決しない
+  （Ask のまま）。解決して system 外になった operand も Ask のまま（この解決は Deny を足すだけ）。
+  引用符内の glob 文字は展開されないので、`-r`/`-d` なしの `rm "*.tmp"` は wildcard rm ではない
+  （`for f in *.tmp; do rm "$f"; done` の loop 値代入版がこの形になり、glob は `for` のもの）。その引用除去後の
+  operand は protected path（literal として、および pattern として literal prefix で）に照合する。
+  展開後もファイル名にならない operand（制御文字・`{}` placeholder）も、他の rm 規則が Allow を返すときだけ
+  Ask にする。cwd 不明の相対 operand は従来どおり
+  この判定の対象外。redirect 語（`2>/dev/null` 等）は operand に数えない。この Deny、システムディレクトリへの
   書き込み Deny（`system_path_block`）、`crate::deletion` のシステムディレクトリ refusal は理由に
   `model::SYSTEM_HARM_MARK` を含み、`main::downgrade_on_repeat` は `Decision::is_system_harm` の Deny を
   2 度目以降も Ask に落とさない（他の Deny の repeat 降格〈運用者裁定 2026-09-18〉は不変）。
+  shape で Deny する規則（`find -delete`・`truncate`・`shred`・再帰 `chmod`/`chown`/`chgrp`・`dd of=`・
+  再帰/ワイルドカード `rm`・`osascript` の app delete）は、対象が `/`・システムディレクトリ・raw disk device
+  （`/dev/disk*`・`/dev/rdisk*`・`/dev/sd*` 等）・`$HOME` そのもの・home の irreplaceable asset（`~/.ssh`・
+  `~/.gnupg`・home 直下の dotfile/dotdir）のとき、同じ理由のまま marker 付きで返す（`detect/harm_mark.rs` の
+  `mark_system_harm`。`detect.rs` の command-word loop が `harm_mark::analyze_command_at` 経由で呼ぶ。
+  backlog 3c750df2）。Allow/Ask は触らない。置けない operand（展開・quote・base 不明の相対）は mark しない
+  （Deny 自体は残る）。システムパスは safe root の strict な内側なら対象外、home 側に escape は無い。
+  `git bisect run` の埋め込みコマンドは各語を re-quote して解析するので（`sh -c 'cd /etc && rm passwd'`）、
+  その system-harm Deny が ban の理由に代わって返る。`rule_id` は marker を外してから照合する。
+- **rm 以外のシステムファイル変更コマンドも system-harm Deny（backlog 3c750df2）** — `detect/system_paths.rs` の
+  `system_mutation_verdict` が `analyze_command_at` の per-command arm より先に 1 箇所で判定する。対象は
+  `unlink`/`rmdir` の operand、`mv` の source（`-t` 時は全 operand）、`sed -i`/`--in-place` の入力ファイル
+  （`-e`/`-f` が無いときの先頭 operand は script として除外。BSD `-i ''` の空 suffix はファイルではない）、
+  `perl -i` の入力ファイル（`-e` が無いときの script ファイルは除外）、`chmod`/`chown`/`chgrp` の target、
+  `rsync` の `--del*` 時の destination と `--remove-source-files` 時の source。これらが
+  `scope::is_inside_system_dir`（rm と同じ判定。字句の絶対パスと親 symlink 解決の両方、wildcard/brace は
+  literal prefix、safe root 内は対象外、`/var/folders`・`/dev/null` は対象外）に入れば
+  `Decision::deny_system_harm`。operand は quote-aware に再分割し shell と同じく unquote する。先頭の
+  `~`/`$HOME`/`${HOME}` は home に展開し、それ以外の `$`/backtick 展開（`$'…'` 含む）を含む対象 operand は
+  **Ask**（判定不能は制限側。例: `chmod +x "$f"`・`mv "$a" b`）。`find -exec` の `{}` と rsync の remote
+  operand（`host:/path`）は判定しない。base 不明の相対 operand は rm と同じく判定しない（他の rule は残る）。
+- **pipeline で供給される `xargs rm`/`xargs unlink`（backlog 3c750df2）** — `analyze_xargs` は xargs 自身の
+  token しか見ないため `echo /etc/passwd | xargs rm` は operand 無しの `rm` として Allow だった。
+  `detect/find_xargs.rs` の `xargs_pipe_feed`（`analyze_segment` から `line`/`seg_idx` で呼ぶ）が、
+  単一 `|` で xargs segment に供給する前段を読む（stdin のみを読む `sort`/`uniq`/`head`/`tail`/`grep` 系 filter は
+  遡って透過。exec wrapper〈`sudo`・`env` 等〉の後ろの program を見る）。前段が `echo`/`printf` の operand・
+  `find` の search root・`ls` の operand でシステムディレクトリ内を指せば `rm_system_harm_deny` と同じ判定で
+  **Deny（system harm）**（相対パスは raw base〈直前の `cd` 先〉に置いて判定。置けなければ Ask）。前段の出力が
+  コマンド行から分からない（`cat FILE`・`curl`・展開 `$X`・未知 program・`git -C`）ときは **Ask**（subagent では
+  hardened Deny）。非システムの literal パス・`git ls-files`/`diff`/`diff-tree`/`ls-tree`（repo 内）は従来どおり
+  （この規則は判定を足さない）。前段が無い・`-a FILE`・remover 以外の xargs は対象外。
 - **埋め込み shell 文字列の Ask と osascript の削除（backlog 0fefcd3b）** — interpreter program の
   文字列 literal（layer > 0）に対する shell pass の **Ask** は、program が shell に文字列を渡す API
   （`SHELL_STRING_EXEC_MARKERS`: `os.system`/`os.popen`/`subprocess`/`system(`/backtick/`child_process`/
   `do shell script` 等）を含むとき pending Ask として残す（従来は捨てられ、
   `os.system('echo x > .git/hooks/pre-commit')` が Allow だった。top-level の同じ redirect は保護パス Ask で、
   人間不在時は Deny）。「command word が展開」由来の Ask（`detect::EXPANSION_HEAD_TAIL`）は残さない（`os.system('echo "$HOME"')`・argv list `['echo','$HOME']` の literal は data。`interpreter::is_expansion_head_ask` で除外、blastguard 0.2.301）。
-  `osascript` は、program が `"Finder"`/`"System Events"` を名指しし、かつ double-quote 文字列の外に
-  `delete` か `empty … trash` があれば Deny（`detect/interpreter/osascript.rs` の `osascript_app_delete`。
-  `display notification "x"` 等は従来どおり）。
+  `osascript` は、program の文字列 literal の外に削除動詞（`delete`・`empty … trash`・`move … trash`）があり、
+  かつ（a）文字列 literal で `Finder`/`System Events`/`com.apple.finder`/`com.apple.systemevents` を名指しする
+  （`tell application id "…"`・JXA `Application("Finder")` を含む）か、（b）`application`/`app` の対象が単一の
+  plain 文字列 literal でない（`"Fin" & "der"`・`+` 連結・変数）とき system-harm Deny
+  （`Decision::deny_system_harm`。repeat も Deny）。program は届き方を問わず判定する: `-e`・here-string
+  （`osascript_app_delete`）、here-document（quoted/unquoted/`-`、`-l JavaScript` も）と `echo`/`printf` の
+  pipe（`detect/payload.rs` の stdin program text → `osascript_program_delete`）。言語が不明なので
+  AppleScript（`"` のみ）と JXA（`"`/`'`/`` ` ``）の 2 通りで字句解析し、どちらかで該当すれば Deny
+  （backlog 3c750df2）。`display notification "x"`・Finder の get/open/reveal は従来どおり Allow。
+- **interpreter program の OS 呼び出し（backlog 3c750df2、`detect/interpreter/shell_calls.rs`）** —
+  layer-0 の program を Python 規則で字句解析し（`#` comment・triple quote・`r`/`b`/`f` prefix）、**code 上の
+  呼び出し**だけを読む。文字列 literal はその呼び出しの引数であるときだけ shell / argv として扱い、それ以外は
+  data（`note = "os.system('$CMD')"`・`s.replace("`$CMD`", "")` は判定しない）。
+  (1) path 変更系（`rename`・`remove`・`unlink`・`rmdir`・`rmtree`・`move`・`truncate`・`chmod`・`chown` 等の
+  最終 component、`os.replace`）の文字列引数がシステムディレクトリ内なら system-harm Deny
+  （`os.rename('/etc/hosts','/tmp/x')`）。(2) `os.exec*`/`os.spawn*`/`os.posix_spawn*` は `(path, argv0, args…)`
+  を path＋args の argv に組み直し、argv list の `subprocess.*` と同様に判定（Deny のみ採用）。
+  (3) `os.system`/`popen`/`getoutput`/`getstatusoutput`/`subprocess.*(…, shell=True)` の literal 第 1 引数は
+  shell 行として full shell analyser で判定し、Ask も残す（`os.system('$CMD')` は Ask、subagent では Deny）。
+  (2)(3) の argv / 単純コマンドが `rm`/`rmdir`/`unlink`/`mv`/`shred`/`truncate`/`chmod`/`chown`/`chgrp` で
+  いずれかの operand が、または `cp`/`ln`/`install` で最後の operand がシステムディレクトリ内なら
+  system-harm Deny（`os.system('mv /etc/hosts /tmp/x')`）。引数が literal でない呼び出し（変数）は
+  ここでは判定せず、従来の program audit に残る（未対応の residual）。
+  併せて、quoted-delimiter here-document を Python が読む body 行（`python_program_body_segments`）では、
+  top-level segment 解析の「command word が展開」Ask（`EXPANSION_HEAD_TAIL`）を落とす
+  （`python_body_segment_verdict`。shell はその body を parse しない。program が実際に shell に渡すかは
+  上記 (3) が判定する）。
 - **disarm-by-non-write 規則（保護パスを『書かずに無力化』する経路）** — 保護ファイル
   （`.claude/settings.json`・`settings.local.json`・`hooks.json`・`hooks/**`、`.githooks/**`、
   `.git/hooks/**`、shell rc、gate config toml）に対する削除（`rm`〈再帰 `-r` に加え空ディレクトリ削除
@@ -229,8 +320,12 @@ forge・condukt のスケジューラが再利用）。
   (3) history rewrite（`HISTORY_SIGNALS`: rebase/`--amend`/filter-branch）→ Medium/reversible、
   (4) その他 → Low/reversible。`has_word` が `ownership`⊃`ship` 等の偽陽性を防ぐ。lib 経由で condukt が
   GATED ゲート強制に利用する。
-- **`model`** — 判定型 `Decision::{Allow, Deny(String)}`（`deny()`/`is_deny()`）。system-harm の Deny は
-  `deny_system_harm()` で理由に `SYSTEM_HARM_MARK` を付け、`is_system_harm()` で識別する。
+- **`model`** — 判定型 `Decision::{Allow, Deny(String), Ask(String)}`（`deny()`/`ask()`/`is_deny()`）。
+  system-harm の Deny は `deny_system_harm()` で理由に `SYSTEM_HARM_MARK` を付け、`is_system_harm()` で識別する。
+- **`detect/verdict_acc`** — `detect` の再解析ループ（segment・`-c` payload・command-word 候補・`-exec` tail）が
+  共有する `VerdictAcc`。`Deny > Ask > Allow` の順位で畳み、`Deny` は即座に返し、`Ask` は最初の 1 件を保持して
+  走査を続ける（後続の `Deny` を `Ask` が隠さない）。順位は `harness_core::verdict::Verdict::worst_of` そのもので、
+  `Decision`↔`Verdict` の変換は境界の 2 関数だけが行う。
 - **`hookio`** — PreToolUse `deny` の単一行 JSON 生成（`deny_json`）。
 - **`lib`** — 上記 module を公開し、検出ロジックを他クレート（specguard forge・condukt scheduler）へ
   再利用可能にする純粋 API（I/O なし）。

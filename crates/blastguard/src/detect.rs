@@ -58,10 +58,11 @@ use serde_json::Value;
 use crate::exclude;
 use crate::model::Decision;
 use crate::scope::{Placement, SafeRoots};
-use harness_core::verdict::{Determination, Verdict};
+use harness_core::verdict::Determination;
 
 mod compound;
 mod cwd;
+mod denoise;
 mod executors;
 mod fileops;
 mod find_xargs;
@@ -69,6 +70,7 @@ mod gh;
 mod git;
 mod git_stage;
 mod git_unmerged;
+mod harm_mark;
 mod heredoc;
 mod high_blast;
 mod interpreter;
@@ -81,9 +83,14 @@ mod rm;
 mod segment;
 mod sinks;
 mod substitution;
+mod system_paths;
 mod vars;
+mod verdict_acc;
 mod words;
 
+use verdict_acc::VerdictAcc;
+
+use denoise::denoised_eval_rescan;
 use gh::analyze_gh;
 use readings::detect_bash_every_reading;
 
@@ -776,90 +783,6 @@ fn take_budget() -> bool {
     })
 }
 
-/// Combines sub-analysis verdicts under the `Deny > Ask > Allow` ranking.
-///
-/// Every re-analysis loop in this file (segments, `-c` payload candidates,
-/// command-word candidates, `-exec` tails) evaluates several sub-commands and
-/// must report the STRONGEST verdict any of them produced. Two mistakes are
-/// possible here and both are fail-opens:
-///
-///   * testing `is_deny()` and returning early on it alone — an `Ask` from a
-///     sub-analysis is then dropped and the loop falls through to Allow;
-///   * returning the FIRST blocking verdict — an early `Ask` would then mask a
-///     later `Deny` on the same line, downgrading a known-destructive command
-///     to a question.
-///
-/// So: a `Deny` short-circuits (nothing can outrank it), an `Ask` is remembered
-/// but the scan continues in case a `Deny` follows, and `finish` reports the
-/// remembered `Ask` only if no `Deny` was ever seen.
-///
-/// Internally this ranking is exactly [`harness_core::verdict::Verdict`]'s own
-/// `Violation > Undetermined > Clean` priority (`Verdict::worst_of`), renamed
-/// to this crate's domain vocabulary at the two edges (see
-/// [`decision_to_verdict`]/[`verdict_to_decision`]) rather than re-implemented.
-#[derive(Default)]
-struct VerdictAcc {
-    // Holds at most one Undetermined (the first one seen) — a Violation is
-    // resolved and returned by `record` immediately so it never sits here,
-    // and Clean carries nothing worth keeping.
-    rest: Vec<Verdict>,
-}
-
-impl VerdictAcc {
-    /// Record a sub-verdict. Returns `Some(deny)` when the caller must stop and
-    /// return it immediately; `None` when the scan should continue.
-    fn record(&mut self, d: Decision) -> Option<Decision> {
-        match decision_to_verdict(d) {
-            // Nothing recorded so far can outrank a Violation, so there is no
-            // need to fold it into `rest` first — report it straight away.
-            v @ Verdict::Violation(_) => Some(verdict_to_decision(v)),
-            v @ Verdict::Undetermined(_) => {
-                // Keep only the FIRST undetermined, so the reported reason is
-                // the outermost / earliest unanalysable construct rather than
-                // the last one. `Verdict::worst_of` joins every `Undetermined`
-                // reason it is handed, so recording just the first is what
-                // preserves that "first wins" behavior through to `finish`.
-                if !self
-                    .rest
-                    .iter()
-                    .any(|r| matches!(r, Verdict::Undetermined(_)))
-                {
-                    self.rest.push(v);
-                }
-                None
-            }
-            Verdict::Clean(_) => None,
-        }
-    }
-
-    /// The strongest verdict seen, given no `Deny` short-circuited the caller.
-    fn finish(self) -> Decision {
-        verdict_to_decision(Verdict::worst_of(self.rest))
-    }
-}
-
-/// Boundary conversion: this crate's domain-specific three answers map
-/// one-to-one onto `harness_core`'s generic three answers, in the same
-/// priority order (`Deny`/`Violation` > `Ask`/`Undetermined` > `Allow`/`Clean`).
-fn decision_to_verdict(d: Decision) -> Verdict {
-    match d {
-        Decision::Allow => Verdict::from_findings(vec![]),
-        Decision::Deny(reason) => Verdict::violation(reason),
-        Decision::Ask(reason) => Verdict::undetermined(reason),
-    }
-}
-
-/// The inverse of [`decision_to_verdict`], used at the boundary where a
-/// computation finishes with a generic `Verdict` and must report back in this
-/// crate's own `Decision` vocabulary.
-fn verdict_to_decision(v: Verdict) -> Decision {
-    match v {
-        Verdict::Clean(_) => Decision::Allow,
-        Verdict::Violation(reason) => Decision::deny(reason.as_str().to_string()),
-        Verdict::Undetermined(reason) => Decision::ask(reason.as_str().to_string()),
-    }
-}
-
 /// Re-analyse a payload string that a shell-evaluation position will EXECUTE
 /// (`sh -c <payload>`, `eval <payload>`, `flock -c <payload>`).
 ///
@@ -911,67 +834,6 @@ fn depth_exhausted() -> Decision {
          (recursion depth limit) — analysis did not finish, so blastguard cannot \
          vouch for it either way",
     )
-}
-
-/// A destructive command word can be hidden from `-c` payload extraction by
-/// piling up backslash-escaped quotes until `first_shell_word`'s faithful POSIX
-/// unquoting truncates the payload BEFORE the command word. 99b506b7 (verified
-/// bypass): naive hand-nesting `sh -c "sh -c \"sh -c \\"rm -rf /\\"\""` accretes
-/// `\\"` runs that `first_shell_word` reads as escaped-backslash-then-closing-
-/// quote, so the extracted payload stops at `sh -c "sh -c \` and `rm -rf /` is
-/// dropped; the trailing tokens are then treated as the shell's positional
-/// operands (`$0`,`$1`,…), not commands, so no candidate normalises to `rm` and
-/// the whole line went ALLOW from depth 4 down. The structured extraction cannot
-/// be made to recover an *ambiguously* over-escaped payload without also
-/// mis-parsing the benign twin, so this is a WIDENING backstop rather than a
-/// smarter parser: strip the escape punctuation outright and re-scan EVERY
-/// resulting position with the full rule engine.
-///
-/// Scope and trigger keep it from touching ordinary work:
-///   * It is applied ONLY to shell-EVAL regions (the `-c`/eval operand, which is
-///     genuinely code), never to plain operands — so a quoted DATA string like
-///     `grep -rn 'rm -rf' src/` (not an eval region) is never de-noised.
-///   * It fires ONLY when the region actually carries a backslash, which is the
-///     construct that defeats `first_shell_word`. A single-/double-quoted data
-///     string with no backslash (`sh -c "git commit -m 'rm -rf x'"`) is left on
-///     its exact previous path, so the fix adds no new false positive there.
-///
-/// When it does fire on a backslash-escaped region whose de-noised form contains
-/// a destructive command word (e.g. `sh -c "echo \"rm -rf /\""`, where the
-/// string is only echoed), the deny is a false positive — but a recoverable one,
-/// and the documented acceptable side of this module's fail-closed bias for
-/// shell-eval wrappers, identical to the `dash_c_payloads`/`command_candidates`
-/// widening. Benign eval regions with no destructive word (`echo hi` nested to
-/// any depth) de-noise to a stream that matches no rule arm and stay ALLOW.
-fn denoised_eval_rescan(region: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
-    // Only backslash escaping can defeat `first_shell_word` into truncating a
-    // payload; without it the structured extraction already sees the region
-    // correctly, so skip to preserve exact prior behaviour (and avoid de-noising
-    // benign quoted data).
-    if !region.contains('\\') {
-        return Decision::Allow;
-    }
-    // Strip the escape/quote punctuation so an over-escaped command word
-    // (`\"rm`, `\\"rm`, `r""m`) collapses back to the bare program name, while
-    // whitespace that separated real words is preserved.
-    let denoised: String = region
-        .chars()
-        .filter(|c| !matches!(c, '\\' | '"' | '\''))
-        .collect();
-    if denoised == region {
-        return Decision::Allow;
-    }
-    let tokens: Vec<&str> = denoised.split_whitespace().collect();
-    let mut acc = VerdictAcc::default();
-    // Every position is a candidate command word (deny-if-ANY), exactly like the
-    // exec-wrapper widening in `command_candidates`: whichever position the real
-    // shell would exec is guaranteed to be among them.
-    for idx in 0..tokens.len() {
-        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth, None, ctx)) {
-            return deny;
-        }
-    }
-    acc.finish()
 }
 
 fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
@@ -1524,10 +1386,10 @@ through it, and refuses to guess"
 /// Judge ONE `;`/`&&`/`|`-separated segment of a command line.
 ///
 /// `line`/`seg_idx` locate this segment inside the command line it came from,
-/// and exist for one consumer only: [`unknown_wrapper_ask`]'s head check, which
-/// needs the EARLIER segments to read an expansion-valued command word back off
-/// the line (see [`resolve_expanded_command_word`]). Nothing else here uses
-/// them, and `seg` remains the only thing judged.
+/// and exist for two consumers: [`unknown_wrapper_ask`]'s head check (reads an
+/// expansion-valued command word back off EARLIER segments, see
+/// [`resolve_expanded_command_word`]) and `find_xargs::xargs_pipe_feed` (reads
+/// the stage that feeds an `xargs rm`). Nothing else here uses them.
 fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ctx<'_>) -> Decision {
     let tokens = split_substitution_opening_assignments(seg.split_whitespace().collect());
     let mut acc = VerdictAcc::default();
@@ -1623,12 +1485,24 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
         let _ = acc.record(ask);
     }
 
+    if let Some(deny) = acc.record(rm::known_path_harm(&tokens, line, seg_idx, ctx)) {
+        return deny;
+    }
     // D3: analyse EVERY candidate command-word position; deny if ANY is
     // destructive. See `command_candidates`.
     for idx in command_candidates(&tokens) {
-        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth, Some(seg), ctx)) {
+        if let Some(deny) = acc.record(harm_mark::analyze_command_at(
+            &tokens,
+            idx,
+            depth,
+            Some(seg),
+            ctx,
+        )) {
             return deny;
         }
+    }
+    if let Some(deny) = acc.record(find_xargs::xargs_pipe_feed(&tokens, line, seg_idx, ctx)) {
+        return deny;
     }
 
     // ASK-2: an UNRECOGNISED wrapper standing in front of a destructive command
@@ -1637,7 +1511,7 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
         return deny;
     }
 
-    acc.finish()
+    interpreter::python_body_segment_verdict(line, seg_idx, acc.finish())
 }
 
 /// ASK-2: an unrecognised command word standing in front of something that
@@ -2057,6 +1931,9 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         let _ = acc.record(depth_exhausted());
     }
 
+    if let Some(deny) = acc.record(system_paths::system_mutation_verdict(cmd, rest, ctx)) {
+        return deny;
+    }
     let verdict = match cmd {
         // BG-3 (second instance): `split_segments` splits on `;`, so the `\;`
         // terminator of a `find -exec` CUTS THE LINE before `analyze_find` ever

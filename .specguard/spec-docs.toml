@@ -40,6 +40,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'whole-tree staging は Ask': add_verdict / commit_verdict, git parse-options short-cluster and long-abbreviation reading, whole-tree pathspec predicate, and the cannot-determine -> Ask cases (backlog e9325654)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/system_paths.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'rm 以外のシステムファイル変更コマンドも system-harm Deny': system_mutation_verdict's per-command file lists, unquoting, home expansion and the Ask on unresolved expansions (backlog 3c750df2)."
+
+[[spec]]
 path = "crates/blastguard/src/detect/interpreter/inert_literal.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'inert literal の Deny→Ask 降格': inert_literal_bodies proof conditions, DYNAMIC_EXECUTION_MARKERS (incl. string-executing APIs, b4c03877), real-call Deny precedence (backlog 27795e6e)."
@@ -100,6 +105,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullets 'コマンド別 deny 規則' (analyze_rm) and 'system-harm（システムを壊すコマンド）は常に Deny' (rm_system_harm_deny, backlog fb338793)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/rm/operand_words.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'system-harm（システムを壊すコマンド）は常に Deny': shell-word reading of rm operands (quote removal, brace expansion, ~/$HOME, same-line literal variable and echo/printf substitution resolution, unresolvable expansion fails closed to Ask), backlog 3c750df2."
+
+[[spec]]
 path = "crates/blastguard/src/detect/protected.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullets 'disarm-by-non-write 規則' (protected path verdicts) and 'system-harm…は常に Deny' (system_path_block carries SYSTEM_HARM_MARK)."
@@ -112,7 +122,22 @@ reason = "'振る舞い' bullets 'inert literal の Deny→Ask 降格' and '埋�
 [[spec]]
 path = "crates/blastguard/src/detect/interpreter/osascript.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'振る舞い' bullet '埋め込み shell 文字列の Ask と osascript の削除': osascript_app_delete (Finder / System Events delete or empty trash is Deny, backlog 0fefcd3b)."
+reason = "'振る舞い' bullet '埋め込み shell 文字列の Ask と osascript の削除': osascript_app_delete / osascript_program_delete (Finder / System Events delete, empty or move to trash, or an application target that is not one plain literal, is a system-harm Deny however the program arrives; backlog 0fefcd3b, 3c750df2)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/shell_calls.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'interpreter program の OS 呼び出し': program_call_verdict (path-mutating / exec / shell-line calls read from code, system-harm Deny on system files, os.system('$CMD') Ask) and python_body_segment_verdict (expansion-head Ask dropped on quoted Python here-document body lines), backlog 3c750df2."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/unit_tests.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Unit tests of interpreter.rs private helpers (compile_call_is_regex_method, literal_is_read_only_open), moved unchanged out of interpreter.rs for the file-size cap; they pin the 'inert literal' / read-only open behaviour of the '振る舞い' bullets."
+
+[[spec]]
+path = "crates/blastguard/src/detect/harm_mark.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'system-harm（システムを壊すコマンド）は常に Deny、repeat でも降格しない': mark_system_harm re-issues shape Denies (find -delete, truncate, shred, chmod/chown -R, dd of=, recursive rm, osascript delete) on a system / home / raw-disk target with SYSTEM_HARM_MARK (backlog 3c750df2)."
 
 [[spec]]
 path = "crates/blastguard/src/detect/interpreter/comments.rs"
@@ -428,3 +453,8 @@ reason = "Review-queue section bullet 'overwatch undetermined-metrics' (aggregat
 path = "crates/overwatch/src/subagents.rs"
 doc = "docs/specs/overwatch.md"
 reason = "Section subagent registry と per-agent liveness (overwatch subagents): RECORD via presence hook (Agent|Task PostToolUse, SubagentStop) into subagents.json, classify() state order, clean definition, fail-closed resolution of undetermined/IO failure."
+
+[[spec]]
+path = "crates/blastguard/src/detect/verdict_acc.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `detect/verdict_acc`: VerdictAcc folds sub-verdicts Deny > Ask > Allow via Verdict::worst_of; moved out of detect.rs unchanged (file-growth cap)."

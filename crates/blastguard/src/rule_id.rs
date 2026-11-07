@@ -31,6 +31,10 @@ allowing it unanalysed. Re-run with a simpler command, or report this.";
 
 /// Classify a deny `reason` string into a stable rule id.
 pub fn rule_id(reason: &str) -> &'static str {
+    // A system-harm Deny is its rule's reason plus `SYSTEM_HARM_MARK`; the id
+    // is the rule's (the exact-match arms below compare the unmarked reason).
+    let marked = format!(" {}", crate::model::SYSTEM_HARM_MARK);
+    let reason = reason.strip_suffix(marked.as_str()).unwrap_or(reason);
     // Entry boundary: the call was blastguard's to judge and its operand could
     // not be read. Its own id, and FIRST, because a recurring one means
     // something no other signature can say: blastguard's idea of the payload
@@ -201,12 +205,20 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("this rm deletes from a system directory") {
         return "rm-system-file";
     }
+    // 3c750df2: unlink/rmdir/mv/sed -i/perl -i/chmod/chown/rsync --delete on a
+    // system file (`detect::system_paths`).
+    if reason.contains(", which is inside a system directory — removing, renaming") {
+        return "system-file-mutation";
+    }
+    if reason.contains("whose path depends on an expansion blastguard cannot resolve") {
+        return "system-file-mutation-unresolved";
+    }
     // 0fefcd3b: osascript telling Finder / System Events to delete.
     if reason.contains("`osascript` tells ") {
         return "osascript-app-delete";
     }
     // fb338793: an exec-capable git shape (ban ruling 2026-11-07).
-    if reason.contains("makes git run a command. Every git shape that runs a command") {
+    if reason.contains("Every git shape blastguard recognises as running a command") {
         return "git-exec-capable";
     }
 

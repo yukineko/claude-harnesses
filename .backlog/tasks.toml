@@ -932,3 +932,32 @@ exit 101: 54s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 18.48s
      Running tests/backlog_eof_redirect_fp_20261107.rs (target/debug/deps/backlog_eof_redirect_fp_20261107-10d2a5402ba5d093)
 error: test failed, to rerun pass `-p blastguard --test backlog_eof_redirect_fp_20261107`"""
+
+[[task]]
+id = "47592729"
+title = "guard-maintree: conflict を解消して merge を完了する commit を誤って refuse する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "pending"
+notes = "Verbatim RED: AssertionError: 2 != 0 : conflict-resolving merge conclusion refused (rc=2): Refused: this command modified this project's MAIN working tree outside integration (CLAUDE.md 8...). HEAD e65f6440d441 -> bf58a25092c8 (not classified as merge or fast-forward: the working tree / index also changed during this call (paths below), so the HEAD move was refused without checking it) brought_in.txt tracked.txt. Do NOT weaken the test to pass; remove the skip/expectedFailure marker when fixed (none present: plain failing test per repo convention). Controls (non-merge commit refused, tracked edit refused, clean merge allowed) pass today."
+created_at = 1794038426
+updated_at = 1794038426
+weight = 0.0
+issue_number = 1615
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1615"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_conflict_resolve_and_commit.py -q"
+rev = "a1126156548dd16a18bd5e26b68a3b83d3a4b180"
+observed_at = 1794038426
+detail = """
+exit 1: 79/main status` before reverting anything.
+
+scripts/test_guard_maintree_bash_conflict_resolve_and_commit.py:85: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_conflict_resolve_and_commit.py::ConflictResolveAndCommit::test_red_resolve_and_commit_concluding_conflicted_merge_is_allowed
+1 failed, 3 passed in 2.37s"""

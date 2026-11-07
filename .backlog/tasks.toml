@@ -259,33 +259,6 @@ FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::tes
 ========================= 3 failed, 2 passed in 12.26s ========================="""
 
 [[task]]
-id = "e2b9ffb1"
-title = "blastguard CRITICAL: no-heredoc fail-open — # comment with a quote / escaped quote hides the next line; <(...) body unanalysed (rm -rf /etc Allow)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers; matrix in the test file doc comment). User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed; do not weaken the test."
-created_at = 1794031539
-updated_at = 1794031539
-weight = 0.0
-issue_number = 1610
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1610"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_b_same_hole_without_any_heredoc -- --include-ignored"
-rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
-observed_at = 1794031539
-detail = """
-exit 101: ng blastguard v0.2.307 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.18s
-     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
-error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
-
-[[task]]
 id = "089bedd4"
 title = "blastguard: bash 3.2 early-close of $(...) — text after ) mis-read (escaped quote, #-comment quote, <( ) hides next line → Allow)"
 project = "/Users/yuki/src/harness"

@@ -458,3 +458,9 @@ reason = "Section subagent registry と per-agent liveness (overwatch subagents)
 path = "crates/blastguard/src/detect/verdict_acc.rs"
 doc = "docs/specs/blastguard.md"
 reason = "module list bullet `detect/verdict_acc`: VerdictAcc folds sub-verdicts Deny > Ask > Allow via Verdict::worst_of; moved out of detect.rs unchanged (file-growth cap)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/readings.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'bash 3.2 の読みも判定する': detect_bash_every_reading's second pass under under_bash32_reading, its trigger (<< with $( or backtick), most-restrictive merge, undetermined -> Ask, per-pass budget, and the open residue (backlogs 089bedd4 e2b9ffb1 5916d385 d328ea88)."
+

@@ -68847,272 +68847,6 @@ exit = 1
 kind = "behavioural"
 
 [[task]]
-id = "1ca662ec"
-title = "condukt verify: refuse a task whose worktree differs from HEAD"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "memory-audit-b",
-]
-touched_files = []
-status = "done"
-notes = """
-Audit B item 2 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: green-tests-prove-worktree-not-head.
-Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left != right` failed: state set --status verified accepted a task whose worktree has an UNCOMMITTED change to tracked source (gate.rs)... stderr: run 'run-b02-dirty': 1/1 verified  left: 0 right: 0 / test result: FAILED. 1 passed; 1 failed
-Readings: (a) refuse when the task worktree has uncommitted changes (pinned); (b) require the tdd green proof bound to HEAD^{tree} - proofs record no tree hash today (only passed/cmd), so (b) needs a tdd proof-format change and is not RED-testable via today's API. To tell apart: a clean tree whose proof was recorded at an older commit is refused only under (b).
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998293
-updated_at = 1794027974
-weight = 0.0
-issue_number = 1571
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1571"
-issue_closed_at = 1794027976
-rev = 3
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test audit_b02_verify_dirty_worktree -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998848
-detail = """
-exit 101: eds/crates/blastguard)
-   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.83s
-     Running tests/audit_b02_verify_dirty_worktree.rs (target/debug/deps/audit_b02_verify_dirty_worktree-fde283566c97c0c8)
-error: test failed, to rerun pass `-p condukt --test audit_b02_verify_dirty_worktree`"""
-
-[task.closure]
-reason = "fixed"
-
-[task.closure.green]
-runner = "cargo-test"
-cmd = "cargo test -p condukt --test audit_b02_verify_dirty_worktree"
-exit = 0
-passed = 2
-rev = "61382cd76e9a9b28e6938f4582302429679c8af9"
-observed_at = 1794027892
-output_digest = "sha256:74347327168442fdb6ad03a769279183cd632b3e474364a67f2ef1fddd4d8163"
-excerpt = """
-
-running 2 tests
-test clean_worktree_with_valid_oracle_verifies ... ok
-test verify_refuses_task_worktree_with_uncommitted_source_changes ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s
-
-   Compiling blastguard v0.2.302 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
-   Compiling condukt v0.7.360 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.75s
-     Running tests/audit_b02_verify_dirty_worktree.rs (target/debug/deps/audit_b02_verify_dirty_worktree-fdd250ca2f8551e7)
-"""
-
-[task.closure.red]
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-exit = 101
-kind = "behavioural"
-
-[[task]]
-id = "aaae849b"
-title = "condukt state abandon --task: refuse while the worker transcript is fresh"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "memory-audit-b",
-]
-touched_files = []
-status = "done"
-notes = """
-Audit B item 5 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: condukt-operator-gotchas (formerly condukt-redispatch-stuck-worker-dup).
-Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left != right` failed: state abandon --task reset a running task whose worker transcript (agent-a0b05f00dfeedbeef.jsonl) was modified seconds ago... stderr: abandoned 1 task(s): t1  left: 0 right: 0 / test result: FAILED. 1 passed; 1 failed
-Ambiguity: transcript location is an assumed convention ($HOME/.claude/projects/<slug(run cwd)>/<session>/subagents/agent-<agent_id>.jsonl, literal and canonical spellings). A fix looking elsewhere (e.g. worktree-path slug) fails this test while possibly valid; check the real layout first. A --force <reason> escape is not exercised.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998368
-updated_at = 1794028026
-weight = 0.0
-issue_number = 1572
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1572"
-issue_closed_at = 1794028029
-rev = 3
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test audit_b05_abandon_live_worker -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998870
-detail = """
-exit 101: tered out; finished in 3.89s
-
-   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
-     Running tests/audit_b05_abandon_live_worker.rs (target/debug/deps/audit_b05_abandon_live_worker-77dc06c4c36649c0)
-error: test failed, to rerun pass `-p condukt --test audit_b05_abandon_live_worker`"""
-
-[task.closure]
-reason = "fixed"
-
-[task.closure.green]
-runner = "cargo-test"
-cmd = "cargo test -p condukt --test audit_b05_abandon_live_worker"
-exit = 0
-passed = 2
-rev = "61382cd76e9a9b28e6938f4582302429679c8af9"
-observed_at = 1794027979
-output_digest = "sha256:463d0a8ab506580aaffd7bf8a16f1e2d4277f4dd0dad30f74063ef9f5d5ae766"
-excerpt = """
-
-running 2 tests
-test explicit_abandon_refuses_while_worker_transcript_is_fresh ... ok
-test explicit_abandon_of_task_with_idle_worker_transcript_proceeds ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
-
-   Compiling condukt v0.7.360 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.93s
-     Running tests/audit_b05_abandon_live_worker.rs (target/debug/deps/audit_b05_abandon_live_worker-271701fb1d2973be)
-"""
-
-[task.closure.red]
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-exit = 101
-kind = "behavioural"
-
-[[task]]
-id = "43034f75"
-title = "blastguard: Ask on deleting an unmerged branch or force-removing a dirty worktree"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "memory-audit-b",
-]
-touched_files = []
-status = "done"
-notes = """
-Audit B item 1 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: worktree-always-merge-then-delete.
-Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 3 of 6 cases have the wrong verdict: `git branch -D unmerged`, `git branch --delete --force unmerged`, `git worktree remove --force <...>/.harness-worktrees/dirty` each 'want ask, got allow ()'; test result: FAILED. Controls (branch -d/-D merged, worktree remove clean) stay Allow.
-Readings: (a) 'merged' = ancestor of the default branch (audit; pinned); (b) git's own -d rule (merged into upstream or HEAD). Fixture cannot separate them (HEAD is main, no upstream). To tell apart: add a branch merged into a non-default HEAD but not main: (a) Ask, (b) Allow. Dirty worktree has both a tracked edit and an untracked file; an untracked-only case would decide whether untracked alone counts as dirty.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998241
-updated_at = 1794029543
-weight = 0.0
-issue_number = 1568
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1568"
-issue_closed_at = 1794029546
-rev = 3
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 -- --include-ignored deleting_unmerged_branch_or_dirty_worktree_is_ask"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998833
-detail = """
-exit 101: ; finished in 3.13s
-
-   Compiling blastguard v0.2.288 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.43s
-     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-6f3de29852866f22)
-error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
-
-[task.closure]
-reason = "fixed"
-
-[task.closure.green]
-runner = "cargo-test"
-cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 deleting_unmerged_branch_or_dirty_worktree_is_ask"
-exit = 0
-passed = 1
-rev = "fbe9e6a44e0f496aefa429a06f71d22761b6280b"
-observed_at = 1794029509
-output_digest = "sha256:8b5145fea450338092f573ff298ebbfa3895c6bf1b6dbe2f83f4fd03a859a8c7"
-excerpt = """
-
-running 1 test
-test deleting_unmerged_branch_or_dirty_worktree_is_ask ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 1.47s
-
-   Compiling blastguard v0.2.303 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.59s
-     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-0a2375061013d473)
-"""
-
-[task.closure.red]
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-exit = 101
-kind = "behavioural"
-
-[[task]]
-id = "e9325654"
-title = "blastguard: Ask on whole-tree stage (git add -A/--all/., commit -a)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p1",
-    "memory-audit-b",
-]
-touched_files = []
-status = "done"
-notes = """
-Audit B item 3 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: condukt-operator-gotchas (formerly condukt-worker-dirty-tree-commit).
-Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 6 of 9 cases have the wrong verdict: `git add -A`, `git add --all`, `git add .`, `git commit -a -m wip`, `git commit -am wip`, `git commit --all -m wip` each 'want ask, got allow ()'; test result: FAILED. Controls (add tracked.txt, commit -m msg, commit -m msg -- tracked.txt) stay Allow.
-Readings: (a) `git add .` is always Ask (pinned); (b) Ask only when the pathspec reaches files outside the session's own changes. To tell apart: under (b) `add .` in a clean tree is Allow, so a clean-tree case would be needed.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998286
-updated_at = 1794029587
-weight = 0.0
-issue_number = 1569
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1569"
-issue_closed_at = 1794029590
-rev = 3
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 -- --include-ignored whole_tree_stage_or_commit_all_is_ask"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998841
-detail = """
-exit 101: _or_commit_all_is_ask
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.53s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
-     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-6f3de29852866f22)
-error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
-
-[task.closure]
-reason = "fixed"
-
-[task.closure.green]
-runner = "cargo-test"
-cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 whole_tree_stage_or_commit_all_is_ask"
-exit = 0
-passed = 1
-rev = "fbe9e6a44e0f496aefa429a06f71d22761b6280b"
-observed_at = 1794029546
-output_digest = "sha256:e2646e1377e0110dc37c3382baf97e59176f9e9a2151721900c1cde78651dfaa"
-excerpt = """
-
-running 1 test
-test whole_tree_stage_or_commit_all_is_ask ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 1.14s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
-     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-0a2375061013d473)
-"""
-
-[task.closure.red]
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-exit = 101
-kind = "behavioural"
-
-[[task]]
 id = "27e1f231"
 title = "donegate: shared repeat ledger waives the first stop of a new block chain (after green or give-up) when CLAUDE_CODE_SESSION_ID is set"
 project = "/Users/yuki/src/harness"
@@ -70409,5 +70143,322 @@ test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fin
 
 [task.closure.red]
 rev = "676f73774070772b04f50167311a9fbe729a958a"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "47592729"
+title = "guard-maintree: conflict を解消して merge を完了する commit を誤って refuse する"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = "Verbatim RED: AssertionError: 2 != 0 : conflict-resolving merge conclusion refused (rc=2): Refused: this command modified this project's MAIN working tree outside integration (CLAUDE.md 8...). HEAD e65f6440d441 -> bf58a25092c8 (not classified as merge or fast-forward: the working tree / index also changed during this call (paths below), so the HEAD move was refused without checking it) brought_in.txt tracked.txt. Do NOT weaken the test to pass; remove the skip/expectedFailure marker when fixed (none present: plain failing test per repo convention). Controls (non-merge commit refused, tracked edit refused, clean merge allowed) pass today."
+created_at = 1794038426
+updated_at = 1794038770
+weight = 0.0
+issue_number = 1615
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1615"
+issue_closed_at = 1794038773
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_conflict_resolve_and_commit.py -q"
+rev = "a1126156548dd16a18bd5e26b68a3b83d3a4b180"
+observed_at = 1794038426
+detail = """
+exit 1: 79/main status` before reverting anything.
+
+scripts/test_guard_maintree_bash_conflict_resolve_and_commit.py:85: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_conflict_resolve_and_commit.py::ConflictResolveAndCommit::test_red_resolve_and_commit_concluding_conflicted_merge_is_allowed
+1 failed, 3 passed in 2.37s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest scripts/test_guard_maintree_bash_conflict_resolve_and_commit.py -q"
+exit = 0
+passed = 4
+rev = "9362e2f047b018622b0ac8beab86ee10d1c268cb"
+observed_at = 1794038764
+output_digest = "sha256:7936a79a5cfa46e212c5d1b3ebe522df965bdd503d9a910e4c203e7357a0515c"
+excerpt = """
+....                                                                     [100%]
+4 passed in 2.06s
+"""
+
+[task.closure.red]
+rev = "0e4381fb7dd161315098b016d37de582219e5a5b"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "1ca662ec"
+title = "condukt verify: refuse a task whose worktree differs from HEAD"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 2 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: green-tests-prove-worktree-not-head.
+Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left != right` failed: state set --status verified accepted a task whose worktree has an UNCOMMITTED change to tracked source (gate.rs)... stderr: run 'run-b02-dirty': 1/1 verified  left: 0 right: 0 / test result: FAILED. 1 passed; 1 failed
+Readings: (a) refuse when the task worktree has uncommitted changes (pinned); (b) require the tdd green proof bound to HEAD^{tree} - proofs record no tree hash today (only passed/cmd), so (b) needs a tdd proof-format change and is not RED-testable via today's API. To tell apart: a clean tree whose proof was recorded at an older commit is refused only under (b).
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998293
+updated_at = 1794027974
+weight = 0.0
+issue_number = 1571
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1571"
+issue_closed_at = 1794027976
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b02_verify_dirty_worktree -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998848
+detail = """
+exit 101: eds/crates/blastguard)
+   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.83s
+     Running tests/audit_b02_verify_dirty_worktree.rs (target/debug/deps/audit_b02_verify_dirty_worktree-fde283566c97c0c8)
+error: test failed, to rerun pass `-p condukt --test audit_b02_verify_dirty_worktree`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test audit_b02_verify_dirty_worktree"
+exit = 0
+passed = 2
+rev = "61382cd76e9a9b28e6938f4582302429679c8af9"
+observed_at = 1794027892
+output_digest = "sha256:74347327168442fdb6ad03a769279183cd632b3e474364a67f2ef1fddd4d8163"
+excerpt = """
+
+running 2 tests
+test clean_worktree_with_valid_oracle_verifies ... ok
+test verify_refuses_task_worktree_with_uncommitted_source_changes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s
+
+   Compiling blastguard v0.2.302 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+   Compiling condukt v0.7.360 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.75s
+     Running tests/audit_b02_verify_dirty_worktree.rs (target/debug/deps/audit_b02_verify_dirty_worktree-fdd250ca2f8551e7)
+"""
+
+[task.closure.red]
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "aaae849b"
+title = "condukt state abandon --task: refuse while the worker transcript is fresh"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 5 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: condukt-operator-gotchas (formerly condukt-redispatch-stuck-worker-dup).
+Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left != right` failed: state abandon --task reset a running task whose worker transcript (agent-a0b05f00dfeedbeef.jsonl) was modified seconds ago... stderr: abandoned 1 task(s): t1  left: 0 right: 0 / test result: FAILED. 1 passed; 1 failed
+Ambiguity: transcript location is an assumed convention ($HOME/.claude/projects/<slug(run cwd)>/<session>/subagents/agent-<agent_id>.jsonl, literal and canonical spellings). A fix looking elsewhere (e.g. worktree-path slug) fails this test while possibly valid; check the real layout first. A --force <reason> escape is not exercised.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998368
+updated_at = 1794028026
+weight = 0.0
+issue_number = 1572
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1572"
+issue_closed_at = 1794028029
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b05_abandon_live_worker -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998870
+detail = """
+exit 101: tered out; finished in 3.89s
+
+   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.43s
+     Running tests/audit_b05_abandon_live_worker.rs (target/debug/deps/audit_b05_abandon_live_worker-77dc06c4c36649c0)
+error: test failed, to rerun pass `-p condukt --test audit_b05_abandon_live_worker`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test audit_b05_abandon_live_worker"
+exit = 0
+passed = 2
+rev = "61382cd76e9a9b28e6938f4582302429679c8af9"
+observed_at = 1794027979
+output_digest = "sha256:463d0a8ab506580aaffd7bf8a16f1e2d4277f4dd0dad30f74063ef9f5d5ae766"
+excerpt = """
+
+running 2 tests
+test explicit_abandon_refuses_while_worker_transcript_is_fresh ... ok
+test explicit_abandon_of_task_with_idle_worker_transcript_proceeds ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+   Compiling condukt v0.7.360 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.93s
+     Running tests/audit_b05_abandon_live_worker.rs (target/debug/deps/audit_b05_abandon_live_worker-271701fb1d2973be)
+"""
+
+[task.closure.red]
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "43034f75"
+title = "blastguard: Ask on deleting an unmerged branch or force-removing a dirty worktree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 1 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: worktree-always-merge-then-delete.
+Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 3 of 6 cases have the wrong verdict: `git branch -D unmerged`, `git branch --delete --force unmerged`, `git worktree remove --force <...>/.harness-worktrees/dirty` each 'want ask, got allow ()'; test result: FAILED. Controls (branch -d/-D merged, worktree remove clean) stay Allow.
+Readings: (a) 'merged' = ancestor of the default branch (audit; pinned); (b) git's own -d rule (merged into upstream or HEAD). Fixture cannot separate them (HEAD is main, no upstream). To tell apart: add a branch merged into a non-default HEAD but not main: (a) Ask, (b) Allow. Dirty worktree has both a tracked edit and an untracked file; an untracked-only case would decide whether untracked alone counts as dirty.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998241
+updated_at = 1794029543
+weight = 0.0
+issue_number = 1568
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1568"
+issue_closed_at = 1794029546
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 -- --include-ignored deleting_unmerged_branch_or_dirty_worktree_is_ask"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998833
+detail = """
+exit 101: ; finished in 3.13s
+
+   Compiling blastguard v0.2.288 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.43s
+     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-6f3de29852866f22)
+error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 deleting_unmerged_branch_or_dirty_worktree_is_ask"
+exit = 0
+passed = 1
+rev = "fbe9e6a44e0f496aefa429a06f71d22761b6280b"
+observed_at = 1794029509
+output_digest = "sha256:8b5145fea450338092f573ff298ebbfa3895c6bf1b6dbe2f83f4fd03a859a8c7"
+excerpt = """
+
+running 1 test
+test deleting_unmerged_branch_or_dirty_worktree_is_ask ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 1.47s
+
+   Compiling blastguard v0.2.303 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.59s
+     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-0a2375061013d473)
+"""
+
+[task.closure.red]
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "e9325654"
+title = "blastguard: Ask on whole-tree stage (git add -A/--all/., commit -a)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p1",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 3 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: condukt-operator-gotchas (formerly condukt-worker-dirty-tree-commit).
+Observed RED 2026-11-07 at 56cb4e6f (base fc7b5dd9) (verbatim): 6 of 9 cases have the wrong verdict: `git add -A`, `git add --all`, `git add .`, `git commit -a -m wip`, `git commit -am wip`, `git commit --all -m wip` each 'want ask, got allow ()'; test result: FAILED. Controls (add tracked.txt, commit -m msg, commit -m msg -- tracked.txt) stay Allow.
+Readings: (a) `git add .` is always Ask (pinned); (b) Ask only when the pathspec reaches files outside the session's own changes. To tell apart: under (b) `add .` in a clean tree is Allow, so a clean-tree case would be needed.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998286
+updated_at = 1794029587
+weight = 0.0
+issue_number = 1569
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1569"
+issue_closed_at = 1794029590
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 -- --include-ignored whole_tree_stage_or_commit_all_is_ask"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998841
+detail = """
+exit 101: _or_commit_all_is_ask
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 2.53s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-6f3de29852866f22)
+error: test failed, to rerun pass `-p blastguard --test audit_b_memory_rules_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test audit_b_memory_rules_20261107 whole_tree_stage_or_commit_all_is_ask"
+exit = 0
+passed = 1
+rev = "fbe9e6a44e0f496aefa429a06f71d22761b6280b"
+observed_at = 1794029546
+output_digest = "sha256:e2646e1377e0110dc37c3382baf97e59176f9e9a2151721900c1cde78651dfaa"
+excerpt = """
+
+running 1 test
+test whole_tree_stage_or_commit_all_is_ask ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 1.14s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/audit_b_memory_rules_20261107.rs (target/debug/deps/audit_b_memory_rules_20261107-0a2375061013d473)
+"""
+
+[task.closure.red]
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
 exit = 101
 kind = "behavioural"

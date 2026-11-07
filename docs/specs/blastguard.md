@@ -132,6 +132,20 @@ forge・condukt のスケジューラが再利用）。
   `` ` ``・`\` がある（展開される）、backtick 内の here-document、引数 token を元 segment に対応付け
   られない（空白で再結合され here-document が常に未終端に見える）場合は語が判定不能になり Ask（reason に
   `git commit -F - <<'EOF'` を案内する）。
+- **bash 3.2 の読みも判定する（`detect/readings.rs` の `detect_bash_every_reading`、blastguard 0.2.305）** —
+  macOS の `/bin/bash` 3.2 と `/bin/sh` は `$(…)` 内の here-document 本文を command text として読むので、
+  本文中の `)` が substitution を早く閉じ、続く text が実行されうる（2026-11-07 に harmless marker で観測:
+  本文が外側の double quote も閉じる形 `hi)"; P; echo "`、および unquoted `$(…)`。zsh は実行しない）。
+  Bash の top-level 判定は、従来の読み（modern）に加え、text が `<<` と `$(` または backtick を併せ持つとき
+  だけ bash 3.2 の読み（`detect/substitution.rs` の `under_bash32_reading`）でも `detect_bash` を走らせ、
+  **厳しい方**（`Deny > Ask > Allow`、`VerdictAcc`）を返す。bash 3.2 が別の位置で閉じると証明できればその
+  parse を判定し、bash 3.2 が入力切れ（syntax error でその command 以降は実行されない）になると証明できれば
+  modern の終端で再判定する。bash 3.2 の parse をモデル化できない場合は少なくとも Ask（判定不能を Allow に
+  丸めない）。各 pass は満額の node budget から始める（D4）。**残余（未対応、RED を `#[ignore]` で固定）**:
+  早期 close 後の text の読み違い（escape した quote、quote を含む `#` comment、`<(`。backlog 089bedd4）、
+  heredoc 無しでも `#` comment 中の quote / escape した quote の次の行と `<(…)` の本体が解析されない
+  （backlog e2b9ffb1、critical）、zsh が unquoted `<<EOF` 本文を展開する形（backlog 5916d385）、bash 3.2
+  の読みで quote・backtick・backslash を含む comment 行が Deny ではなく Ask（backlog d328ea88）。
 - **git の exec-capable 形は一律 Deny（backlog fb338793、ユーザー裁定 2026-11-07「git bisectでいろいろ
   構文を処理できてしまうくらいなら使用を禁止した方がいいのでは?」）** — git が呼び出し側の選んだコマンドを
   実行する形は、埋め込みコマンドの中身に関わらず Deny（`detect/git.rs` の `git_exec_ban`。

@@ -178,7 +178,6 @@ fn control_uncommitted_rs_change_runs_when_changed_check() {
 }
 
 #[test]
-#[ignore = "RED: donegate changed_files misses committed-unmerged 2026-11-07"]
 fn committed_unmerged_rs_change_runs_when_changed_check() {
     let f = Fixture::new("main", Change::Committed);
     let (decision, stdout, stderr) = f.stop_decision();
@@ -190,7 +189,6 @@ fn committed_unmerged_rs_change_runs_when_changed_check() {
 }
 
 #[test]
-#[ignore = "RED: donegate changed_files misses committed-unmerged 2026-11-07"]
 fn undeterminable_merge_base_does_not_read_as_no_changes() {
     // No `main` branch exists: the merge-base with main cannot be determined.
     let f = Fixture::new("trunk", Change::Committed);

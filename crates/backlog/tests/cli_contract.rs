@@ -1691,7 +1691,7 @@ fn claim_r_lock_order_never_inverted() {
     // (1) Hold the LEDGER lock. A claimer that takes ledger-then-tasks blocks
     // there and has NOT taken the tasks-file lock.
     let f = Fixture::new("lockorder-a");
-    let _ = f.add("claimable");
+    let _ = (f.add("claimable"), f.add("spare 1"), f.add("spare 2")); // spares: each claimer needs a candidate to reach the lock
     let _ = claim_id(&f); // creates claims dir + ledger
     let claims = claims_dir(&f);
     let ledger_lock = ledger_file(&f).with_extension("lock");

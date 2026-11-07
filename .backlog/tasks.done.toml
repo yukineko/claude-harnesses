@@ -71411,3 +71411,59 @@ scripts/test_check_test_weakening_branch_new_file.py ..........          [100%]
 rev = "1d8a6bae380dab1ef02f3f31b0fb01ee857821cb"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "e2b9ffb1"
+title = "blastguard CRITICAL: no-heredoc fail-open — # comment with a quote / escaped quote hides the next line; <(...) body unanalysed (rm -rf /etc Allow)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers; matrix in the test file doc comment). User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed; do not weaken the test."
+created_at = 1794031539
+updated_at = 1794064830
+weight = 0.0
+issue_number = 1610
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1610"
+issue_closed_at = 1794064833
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_b_same_hole_without_any_heredoc -- --include-ignored"
+rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
+observed_at = 1794031539
+detail = """
+exit 101: ng blastguard v0.2.307 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.18s
+     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
+error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_b_same_hole_without_any_heredoc"
+exit = 0
+passed = 1
+rev = "bf88a7c9eb486897a042adb4769e33ae8f24f337"
+observed_at = 1794064806
+output_digest = "sha256:bb75d2f052cdb2e04b84418905e24a62e77b8953ed2c75fdc874ce23bb3954b1"
+excerpt = """
+
+running 1 test
+test red_b_same_hole_without_any_heredoc ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.84s
+
+   Compiling blastguard v0.2.382 (/Users/yuki/src/.harness-worktrees/bl-commit-msg-fp/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.29s
+     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-e8b60a3ebbafe714)
+"""
+
+[task.closure.red]
+rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
+exit = 101
+kind = "behavioural"

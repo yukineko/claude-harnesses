@@ -259,33 +259,6 @@ FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::tes
 ========================= 3 failed, 2 passed in 12.26s ========================="""
 
 [[task]]
-id = "e2b9ffb1"
-title = "blastguard CRITICAL: no-heredoc fail-open — # comment with a quote / escaped quote hides the next line; <(...) body unanalysed (rm -rf /etc Allow)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers; matrix in the test file doc comment). User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed; do not weaken the test."
-created_at = 1794031539
-updated_at = 1794031539
-weight = 0.0
-issue_number = 1610
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1610"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_b_same_hole_without_any_heredoc -- --include-ignored"
-rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
-observed_at = 1794031539
-detail = """
-exit 101: ng blastguard v0.2.307 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.18s
-     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
-error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
-
-[[task]]
 id = "089bedd4"
 title = "blastguard: bash 3.2 early-close of $(...) — text after ) mis-read (escaped quote, #-comment quote, <( ) hides next line → Allow)"
 project = "/Users/yuki/src/harness"
@@ -719,3 +692,30 @@ exit 101:  v0.2.379 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/
     Finished `test` profile [unoptimized + debuginfo] target(s) in 16.43s
      Running tests/scratchpad_truncating_redirect_fp_20261107.rs (target/debug/deps/scratchpad_truncating_redirect_fp_20261107-92f2eef15545e45e)
 error: test failed, to rerun pass `-p blastguard --test scratchpad_truncating_redirect_fp_20261107`"""
+
+[[task]]
+id = "ffce9c59"
+title = "blastguard: git commit -F - heredoc with a trailing pipe/command scans the message body as code (FP)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-07 main agent 0.2.378: commit message line mentioning a recursive delete -> 'recursive rm (-r) can delete an entire directory tree'. RED: crates/blastguard/tests/commit_msg_heredoc_trailing_cmd_fp_20261107.rs (3 ignored targets: exact=ask, piped=deny, semicolon=deny; 4 controls pass). Remove the ignores when fixed."
+created_at = 1794064730
+updated_at = 1794064730
+weight = 0.0
+issue_number = 1632
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1632"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test commit_msg_heredoc_trailing_cmd_fp_20261107 -- --include-ignored"
+rev = "cf538f989bc143b93abc9492799fd536c185e8ae"
+observed_at = 1794064730
+detail = """
+exit 101: .2.381 (/Users/yuki/src/.harness-worktrees/bl-commit-msg-fp/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.31s
+     Running tests/commit_msg_heredoc_trailing_cmd_fp_20261107.rs (target/debug/deps/commit_msg_heredoc_trailing_cmd_fp_20261107-e7a1b95996def4d3)
+error: test failed, to rerun pass `-p blastguard --test commit_msg_heredoc_trailing_cmd_fp_20261107`"""

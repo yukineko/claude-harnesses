@@ -271,7 +271,6 @@ fn h4_repeated_bisect_and_osascript_stay_deny() {
 // ---- h5 system-file mutators ----
 
 #[test]
-#[ignore = "backlog 3c750df2: sed -i / perl -i / chmod / chown / rsync --delete / find|xargs rm on system paths must be Deny"]
 fn h5_system_file_mutators_are_deny() {
     Fixture::new("h5").assert_all(
         "h5 mutators",

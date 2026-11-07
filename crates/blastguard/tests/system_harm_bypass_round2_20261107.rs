@@ -235,7 +235,6 @@ fn g2_unlink_rmdir_mv_system_paths_are_deny() {
 // ---- 3. rm operand spellings ----
 
 #[test]
-#[ignore = "backlog 3c750df2: rm of a system file via quoted/brace/dynamic operand spelling must be Deny"]
 fn g3_rm_operand_spellings_are_deny() {
     Fixture::new("g3").assert_all_deny(
         "g3 rm operands",

@@ -572,14 +572,16 @@ fn placed_paths_verdict(paths: &[String], stage: &str, remover: &str, ctx: &Ctx<
             }
         }
     }
-    let ops: Vec<&str> = placed.iter().map(String::as_str).collect();
-    match super::rm::rm_system_harm_deny(ctx, &ops, false) {
-        Some(Decision::Deny(reason)) => Decision::deny_system_harm(format!(
-            "`{stage}` feeds `xargs {remover}` paths from a system directory, and xargs runs the \
-remover on them — {reason}"
+    match super::rm::rm_system_harm_deny(ctx, &placed, false) {
+        super::rm::SystemHarm::Deny(Decision::Deny(reason)) => Decision::deny_system_harm(format!(
+            "`{stage}` feeds `xargs {remover}` paths from a system directory, and xargs runs \
+the remover on them — {reason}"
         )),
-        Some(other) => other,
-        None => Decision::Allow,
+        super::rm::SystemHarm::Deny(other) => other,
+        // A fed path that could not be placed is not shown to be outside every
+        // system directory: fail closed.
+        super::rm::SystemHarm::Unplaced(why) => xargs_feed_ask(remover, &why),
+        super::rm::SystemHarm::Clear => Decision::Allow,
     }
 }
 

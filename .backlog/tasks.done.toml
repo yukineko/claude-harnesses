@@ -69620,3 +69620,68 @@ test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "01ac3360e2e1e5bef3e0e887daf13c96518c7efd"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "ebb0e1b5"
+title = "condukt: add pass cache for state check-criteria mechanical command"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "RED (cargo test -p condukt --test pass_cache_20261107 -- --include-ignored): p1_unchanged_worktree_and_argv_after_a_pass_is_not_reexecuted FAILED: 'assertion left == right failed: mechanical cmd re-executed on an unchanged worktree  left: 2  right: 1'. Command runs in 'condukt state check-criteria' (main.rs run_mechanical), not 'state set --status verified'. p1 = RED. Controls GREEN at HEAD: p2a, p2b, p3 (different argv), p4 (failed never cached), p5a (non-git worktree), p5b (corrupt store; vacuous at HEAD). Cached pass must keep exit 0 and skip_verifier true. Do NOT weaken the test to pass; remove the ignore marker when fixed. Test: crates/condukt/tests/pass_cache_20261107.rs"
+created_at = 1794028498
+updated_at = 1794029509
+weight = 0.0
+issue_number = 1607
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1607"
+issue_closed_at = 1794029513
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test pass_cache_20261107 -- --include-ignored p1_unchanged_worktree_and_argv_after_a_pass_is_not_reexecuted"
+rev = "5c2e79b90fe6725a60c521d7bd865b8913123f42"
+observed_at = 1794028498
+detail = """
+exit 101: anged_worktree_and_argv_after_a_pass_is_not_reexecuted
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 1.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/pass_cache_20261107.rs (target/debug/deps/pass_cache_20261107-72c27d4090148776)
+error: test failed, to rerun pass `-p condukt --test pass_cache_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test pass_cache_20261107"
+exit = 0
+passed = 7
+rev = "fdad319b0032ad66eef1bdb08c7a23de2118839b"
+observed_at = 1794029458
+output_digest = "sha256:68a186377e2f0aab5d466a8d57621ecf73fb0ced9fd3adebfb87b8d1be8de399"
+excerpt = """
+
+running 7 tests
+test p5a_uncomputable_key_not_a_git_repo_executes_every_time ... ok
+test p2b_adding_an_untracked_file_reexecutes ... ok
+test p4_a_failed_run_is_never_cached ... ok
+test p5b_corrupt_cache_store_executes_instead_of_hitting ... ok
+test p2a_editing_a_tracked_file_reexecutes ... ok
+test p1_unchanged_worktree_and_argv_after_a_pass_is_not_reexecuted ... ok
+test p3_different_argv_on_same_worktree_reexecutes ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.59s
+
+   Compiling condukt v0.7.368 (/Users/yuki/src/.harness-worktrees/condukt-pass-cache/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.54s
+     Running tests/pass_cache_20261107.rs (target/debug/deps/pass_cache_20261107-5906bed18097df40)
+"""
+
+[task.closure.red]
+rev = "e1546e1e39639d3e03d849df18b522a5e6b86dc8"
+exit = 101
+kind = "behavioural"

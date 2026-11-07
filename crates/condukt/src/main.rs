@@ -31,6 +31,7 @@ mod lock;
 mod maintree;
 mod model;
 mod oracle;
+mod pass_cache;
 mod policy;
 mod pr;
 mod precedent;
@@ -5482,8 +5483,26 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // command passes. A failing mechanical check fails this gate. If the
             // skip_eligible invariant is ever violated (no command), this fails
             // soft to skip_verifier:false rather than panicking an unattended run.
-            let (out, gate_failed) =
-                verify::mechanical_skip_verdict(&cls, |cmd| run_mechanical(cmd, &run_dir));
+            //
+            // Pass cache (backlog ebb0e1b5): a command that already PASSED with
+            // the exact same argv on the same worktree content is not re-run;
+            // the verdict is identical to a real pass and the JSON carries
+            // `"cache_hit": true`. Any key/store failure is a miss (runs).
+            let store = pass_cache::store_dir(&cfg.state_dir);
+            let mut cache_hit = false;
+            let (mut out, gate_failed) = verify::mechanical_skip_verdict(&cls, |cmd| {
+                let (passed, output, hit) =
+                    pass_cache::run_cached(&store, cmd, &run_dir, run_mechanical);
+                cache_hit = hit;
+                (passed, output)
+            });
+            if cache_hit {
+                out["cache_hit"] = serde_json::json!(true);
+                eprintln!(
+                    "condukt: pass-cache HIT for task '{task}': mechanical command not \
+                     re-executed (same argv, unchanged worktree content)"
+                );
+            }
             println!("{}", serde_json::to_string(&out)?);
             if gate_failed {
                 std::process::exit(1);

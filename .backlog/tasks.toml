@@ -776,3 +776,65 @@ scripts/test_check_test_weakening_macro_append_20261107.py:110: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_check_test_weakening_macro_append_20261107.py::MacroAppend::test_target_appending_a_standalone_test_passes
 1 failed, 2 passed in 1.78s"""
+
+[[task]]
+id = "8fe3a5c3"
+title = "blastguard: 読み取りの git config core.hooksPath を拒否する誤検知"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["blastguard"]
+touched_files = []
+status = "pending"
+notes = """git config core.hooksPath (1 positional, only non-mode options before key; also new-style 'git config get') is a READ in git 2.50.1 but Deny at HEAD. Rule: crates/blastguard/src/detect/git.rs "config" arm (HOOKSPATH_REASON). RED commit 8999494e on branch red-bg-hookspath-read."""
+created_at = 1794052452
+updated_at = 1794052452
+weight = 0.0
+issue_number = 1622
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1622"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --lib detect::hookspath_read_tests::git_config_hookspath_one_positional_read_is_allowed"
+rev = "8999494ed6e529f0c08b0d05839f829bd7c6ff17"
+observed_at = 1794052452
+detail = """
+exit 101: 0 passed; 1 failed; 0 ignored; 0 measured; 452 filtered out; finished in 0.00s
+
+   Compiling blastguard v0.2.376 (/Users/yuki/src/.harness-worktrees/red-bg-hookspath-read/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.99s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-b11cdb519f854bc9)
+error: test failed, to rerun pass `-p blastguard --lib`"""
+
+[[task]]
+id = "e103cd56"
+title = "blastguard: キーの後ろの --get 等を読み取りと誤認し core.hooksPath 書き込みを Allow する fail-open"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = """Legacy git config stops option parsing at the first positional, so 'git config core.hooksPath --get' WRITES the value '--get' (also --get-all/--get-regexp/--list/-l, and 'x --get' adds x); observed git 2.50.1. HEAD allows these because the read_only check in crates/blastguard/src/detect/git.rs "config" arm matches the flags anywhere in argv. RED commit 8999494e on branch red-bg-hookspath-read."""
+created_at = 1794052467
+updated_at = 1794052467
+weight = 0.0
+issue_number = 1623
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1623"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --lib detect::hookspath_read_tests::git_config_hookspath_read_flag_after_key_is_a_write_and_not_allowed"
+rev = "8999494ed6e529f0c08b0d05839f829bd7c6ff17"
+observed_at = 1794052467
+detail = """
+exit 101: okspath_read_tests::git_config_hookspath_read_flag_after_key_is_a_write_and_not_allowed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 452 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-b11cdb519f854bc9)
+error: test failed, to rerun pass `-p blastguard --lib`"""

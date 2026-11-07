@@ -71635,3 +71635,57 @@ scripts/test_check_test_weakening_index_not_worktree.py .......          [100%]
 rev = "525608cbf061e82514d36c56c1e45e7ab67050dd"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "836d0725"
+title = "check-test-weakening: pure append of a #[test] to a macro_rules! test file is undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate-fp",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-07 in session bf349dd5 adding a RED to crates/blastguard/tests/heredoc_body_gt_fp_20261107.rs. Verbatim: check-test-weakening: undetermined — ...: #[test] inside a macro_rules! template in a file that exists at the base -- macro invocations are not counted, so removed generated tests cannot be ruled out. A base-is-prefix append cannot remove generated tests. RED committed at bb0811e9: scripts/test_check_test_weakening_macro_append_20261107.py (controls: append + removed invocation, append + deleted template assert must still block). Do NOT weaken the test; remove the expectedFailure marker when fixed."
+created_at = 1794040972
+updated_at = 1794088914
+weight = 0.0
+issue_number = 1619
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1619"
+issue_closed_at = 1794088916
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_macro_append_20261107.py -q"
+rev = "bb0811e93f1a65cf659598dc1079c4cbc4f561c3"
+observed_at = 1794040972
+detail = """
+exit 1: -- macro invocations are not counted, so removed generated tests cannot be ruled out
+
+scripts/test_check_test_weakening_macro_append_20261107.py:110: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_macro_append_20261107.py::MacroAppend::test_target_appending_a_standalone_test_passes
+1 failed, 2 passed in 1.78s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q scripts/test_check_test_weakening_macro_append_20261107.py"
+exit = 0
+passed = 3
+rev = "c8451993dda6571cb4e9a04c2a75eacb9b7afb2b"
+observed_at = 1794088907
+output_digest = "sha256:222dec53f848e8c153a3101c6da58ee472427c5250aa8ca3ffa0f3cb83d15580"
+excerpt = """
+...                                                                      [100%]
+3 passed in 2.05s
+"""
+
+[task.closure.red]
+rev = "bb0811e93f1a65cf659598dc1079c4cbc4f561c3"
+exit = 1
+kind = "behavioural"

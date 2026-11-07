@@ -1111,3 +1111,30 @@ E           _pytest.outcomes.XFailed
 =========================== short test summary info ============================
 FAILED scripts/test_condukt_tdd_dependency_hook_path_20261107.py::CondukTddDependencyUnderHookPath::test_condukt_control_test_passes_without_ambient_tdd
 1 failed, 1 passed in 0.51s"""
+
+[[task]]
+id = "0fefcd3b"
+title = "blastguard allows python-heredoc os.system write to protected path and osascript Finder delete (system-harm fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-07 by differential probe (session 0d3d5bb8) at main 20a9de24; also Allow before the latest interpreter-heredoc change. User rulings 2026-11-07: system-harming commands are Deny through any wrapper (critical bug); false positives not allowed. Measured Allow: python3 - heredoc with os.system('echo x > .git/hooks/pre-commit'), subprocess.run(same, shell=True), os.system('echo x > .claude/settings.json'); osascript -e 'tell application "Finder" to delete POSIX file "/Users"' / '(path to home folder)' / POSIX file '/System/Library' / 'delete every item of trash' (also after a python heredoc). Measured Deny already: os.system('rm -rf ~/.ssh') and subprocess.run('rm -rf ~/.ssh', shell=True) in heredoc; top-level 'echo x > .git/hooks/pre-commit'. Controls pass: heredoc os.system('echo hi') and osascript display notification not Deny. Branch red/bg-embedded commit 01ac3360."""
+created_at = 1794014804
+updated_at = 1794014804
+weight = 0.0
+issue_number = 1594
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1594"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test embedded_shell_and_osascript_failopen_20261107 -- --include-ignored"
+rev = "01ac3360e2e1e5bef3e0e887daf13c96518c7efd"
+observed_at = 1794014804
+detail = """
+exit 101: (/Users/yuki/src/.harness-worktrees/red-bg-embedded/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.81s
+     Running tests/embedded_shell_and_osascript_failopen_20261107.rs (target/debug/deps/embedded_shell_and_osascript_failopen_20261107-534121fe7d903de8)
+error: test failed, to rerun pass `-p blastguard --test embedded_shell_and_osascript_failopen_20261107`"""

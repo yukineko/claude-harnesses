@@ -63,7 +63,9 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    従来どおり人間承認へ倒れる。非 autonomous モードでは policy_is_auto=false なので **全 gated が従来どおり
    Escalate**(後方互換・挙動不変)。decision は append-only JSONL に journal 記録され後から可観測。
    classify は散文（title/done_criteria）をコマンドとして解析せず、タスクの `commands`（+ `reproduction_tests`
-   / `checks`）だけをコマンドとして解析する（backlog dc955812）。**`commands` を宣言していないタスクは
+   / `checks`）だけをコマンドとして解析する（backlog dc955812）。schedule の force-gate で散文が効くのは
+   deploy/push/publish の signal だけで、散文が `filter-branch` / `git rebase` 等の名前を挙げているだけでは
+   force-gate しない（backlog 3a0e30a8。それらを実際に実行する宣言 `commands` は従来どおり gate する）。**`commands` を宣言していないタスクは
    判定不能として schedule で force-gate、`gate check` で Escalate になる**ので、decomposition には必ず
    `commands`（何も実行しないなら `[]`）を入れる。
 3. **共有ファイルは直列** — `condukt schedule` が `shared_globs` 設定と file 衝突解析で `serial` に

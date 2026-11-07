@@ -30,6 +30,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod config;
+mod duptest;
 mod gate;
 mod git;
 #[cfg(test)]
@@ -103,6 +104,20 @@ enum Command {
         #[arg(long)]
         reason: String,
     },
+    /// PreToolUse/PostToolUse(Bash) hooks: deny re-running a plain `cargo test`
+    /// that already passed with the same argv on the same tree.
+    DupTest {
+        #[command(subcommand)]
+        phase: DupTestPhase,
+    },
+}
+
+#[derive(Subcommand)]
+enum DupTestPhase {
+    /// PreToolUse(Bash): deny a proven duplicate; snapshot the tree key.
+    Pre,
+    /// PostToolUse / PostToolUseFailure(Bash): record a pass on an unchanged tree.
+    Post,
 }
 
 fn main() {
@@ -116,6 +131,12 @@ fn main() {
         Command::Status => status(),
         Command::Trust => exit_on_err(trust_cmd()),
         Command::Skip { reason } => exit_on_err(skip_cmd(&reason)),
+        Command::DupTest {
+            phase: DupTestPhase::Pre,
+        } => duptest::pre_command(),
+        Command::DupTest {
+            phase: DupTestPhase::Post,
+        } => duptest::post_command(),
     }
 }
 

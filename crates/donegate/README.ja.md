@@ -40,7 +40,7 @@ donegate は、この「未検証のまま完了宣言する」問題を停止�
 
 ## どう使うか
 
-donegate はプラグインに同梱された 1 つのバイナリと 2 つのフック（Stop / SubagentStop）だけで動く（サブスクリプション完結・API キー不要）。フックは `${CLAUDE_PLUGIN_ROOT}/bin/donegate gate` を Stop に、`${CLAUDE_PLUGIN_ROOT}/bin/donegate subagent-gate` を SubagentStop に配線する。
+donegate はプラグインに同梱された 1 つのバイナリとフック群（Stop / SubagentStop、および Bash の PreToolUse / PostToolUse / PostToolUseFailure）だけで動く（サブスクリプション完結・API キー不要）。フックは `${CLAUDE_PLUGIN_ROOT}/bin/donegate gate` を Stop に、`${CLAUDE_PLUGIN_ROOT}/bin/donegate subagent-gate` を SubagentStop に、`donegate dup-test pre|post` を Bash の前後に配線する。
 
 CLI を手動で使う場合の典型的な流れ:
 
@@ -69,6 +69,19 @@ donegate gate          # チェックを手動実行（人間向けレポート�
 | `donegate install` / `uninstall` | `~/.claude/settings.json` への Stop / SubagentStop フックの追加 / 削除。 |
 | `donegate status` | 解決済みの設定と、現在の作業ツリーに対して実行されるチェックを表示する。 |
 | `donegate trust` | 現在のプロジェクトをワークスペース信頼リストに追加し、そのプロジェクト固有の `donegate.toml` のコマンドを Stop 時に honor させる。 |
+| `donegate dup-test pre` / `post` | PreToolUse / PostToolUse(Bash) フック（下記「重複 cargo test の拒否」）。 |
+
+### 重複 cargo test の拒否（dup-test フック）
+
+`hooks/hooks.json` は Bash に `donegate dup-test pre`（PreToolUse）と `donegate dup-test post`（PostToolUse と PostToolUseFailure）も配線する。目的は「対象テストは 1 回だけ走らせる」の機械化で、**同じコマンドが同じツリーで既に PASS している `cargo test` の再実行を deny する**。
+
+- 対象は単一の素の `cargo test ...` だけ。`&&` `;` `|` `(` `$` クォート・リダイレクト・改行・環境変数代入・`cd`・`cargo +toolchain`・`--manifest-path`・`--config` を含むものは判定も記録もしない（常に通す）。
+- キーは canonical な cwd + git toplevel + 空白正規化した argv + passcache と同じツリー状態（HEAD・`main`・一時 index に `git add -A` して `write-tree` した作業ツリー内容。未追跡ファイルも含む。ignore されている未追跡ファイル〈`target/` 等〉・リポジトリ外・環境変数はキーに含まれない）。
+- `pre` はキーを計算し、そのキーの PASS 記録があれば `permissionDecision: "deny"` を返す（理由: 同じコマンドがこのツリーで既に PASS したので、本当に再実行したいならツリーかコマンドを変えること）。無ければ `tool_use_id` ごとにキーを退避する。
+- `post` は `hook_event_name == "PostToolUse"` かつ `tool_response.interrupted == false`（Bash の tool_response には exit code が無く、失敗は `PostToolUseFailure` で届く）かつ、`pre` が退避したキーと post 時点のキーが一致したときだけ PASS を記録する。
+- 疑わしいときは常に「deny しない・記録しない」に倒す: git 外・git エラー・ペイロード不正・ストア破損・未知のイベント。
+- ストア: `~/.donegate/dup-test/`（`passes/`・`pending/`・`tmp/`）。`DONEGATE_DISABLE=1` で無効。
+- コスト: 全 Bash 呼び出しで走るが、素の `cargo test` 以外は stdin の JSON パース直後に戻る（ファイル・git アクセス無し）。
 
 プロジェクトの `donegate.toml` は、そのプロジェクトが信頼済み（`donegate trust`）になって初めて honor される。これにより、敵対的なリポジトリが Stop 時に任意のコマンドを紛れ込ませることを防ぐ。未信頼のプロジェクトファイルの代わりに `~/.donegate/config.toml` のチェックを使うことは**しない**：`donegate trust`（または `HARNESS_TRUST_ALL=1`）するまで、実行拒否として停止をブロックする（有界、上記参照）。home 設定から取るのはつまみ（`enabled`・`max_attempts`・`state_dir`・タイムアウト）だけ。リポジトリの main 作業ツリーを信頼すれば、その linked git worktree も信頼される。
 

@@ -340,7 +340,7 @@ mod tests {
         let root = scratch_dir("clean");
         let root = root.as_path();
         for args in [
-            &["init", "-q"][..],
+            &["init", "-q", "-b", "main"][..],
             &["config", "user.email", "t@t.com"][..],
             &["config", "user.name", "t"][..],
         ] {

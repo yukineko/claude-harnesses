@@ -1225,7 +1225,8 @@ condukt state gate --run $RID      # exit 0 まで完了宣言しない
   場合は以下の手順で対処する:
   1. 衝突しているタスク (branch) を特定する。衝突 branch が複数ある場合は 1 つずつ処理する。
   2. 衝突が軽微で自動解消可能な場合: worktree 内に移動して `git merge --no-commit main` → 手動で
-     コンフリクトマーカーを解消して `git add` → task trailer 付きで確定する
+     コンフリクトマーカーを解消し、解消したファイルだけを `git add -- <path>...` で明示パス指定して
+     stage する（作業ツリー全体の一括 stage はしない）→ task trailer 付きで確定する
      `git commit --no-edit --trailer "Condukt-Task: $TASK_ID"` (`TASK_ID` は
      `TASK_ID=$(git config --get "branch.$(git branch --show-current).conduktTask")` で読む。
      trailer の無い merge commit は `condukt worktree merge` が拒否する) → 再度 `condukt worktree merge` を実行する。

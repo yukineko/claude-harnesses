@@ -200,7 +200,6 @@ fn control_unsafe_values_stay_deny() {
 // ---- h1 git exec keys ----
 
 #[test]
-#[ignore = "backlog 3c750df2: git exec-capable keys/env/ext:: (trailer.cmd, alternateRefsCommand, submodule update, GIT_SSH) must be Deny"]
 fn h1_git_exec_keys_are_deny() {
     Fixture::new("h1").assert_all(
         "h1 git exec keys",
@@ -219,7 +218,6 @@ fn h1_git_exec_keys_are_deny() {
 // ---- h2 ssh safe-list holes ----
 
 #[test]
-#[ignore = "backlog 3c750df2: core.sshCommand with ssh -I/-E/-S (loads lib / writes file / socket) must be Deny"]
 fn h2_ssh_safe_list_holes_are_deny() {
     Fixture::new("h2").assert_all(
         "h2 ssh holes",
@@ -235,7 +233,6 @@ fn h2_ssh_safe_list_holes_are_deny() {
 // ---- h3 ANSI-C quoting ----
 
 #[test]
-#[ignore = "backlog 3c750df2: ANSI-C quoted git -c core.pager=... must be Deny"]
 fn h3_ansi_c_quoted_git_config_is_deny() {
     Fixture::new("h3").assert_all("h3 ansi-c", "deny", &["git -c $'core.pager=rm -rf ~' log"]);
 }
@@ -243,7 +240,6 @@ fn h3_ansi_c_quoted_git_config_is_deny() {
 // ---- h4 repeat stays Deny on calls 1,2,3 in ONE session ----
 
 #[test]
-#[ignore = "backlog 3c750df2: repeated git bisect run / osascript system harm must stay Deny on calls 1-3"]
 fn h4_repeated_bisect_and_osascript_stay_deny() {
     let cmds = [
         "git bisect run sh -c 'cd /etc && rm passwd'",
@@ -306,7 +302,6 @@ fn h6_osascript_string_concat_obfuscation_is_deny() {
 // ---- Allow targets: known-safe values (false positives today) ----
 
 #[test]
-#[ignore = "backlog 3c750df2: FP: known-safe editors (vi/emacs/nvim/cursor --wait/subl -w) for core.editor and sequence.editor must be Allow"]
 fn f1_known_safe_editors_are_allow() {
     let mut cmds = Vec::new();
     for key in ["core.editor", "sequence.editor"] {
@@ -326,7 +321,6 @@ fn f1_known_safe_editors_are_allow() {
 }
 
 #[test]
-#[ignore = "backlog 3c750df2: FP: core.pager=delta (and delta --side-by-side) must be Allow"]
 fn f2_known_safe_pager_is_allow() {
     Fixture::new("f2").assert_all(
         "f2 pager",
@@ -339,7 +333,6 @@ fn f2_known_safe_pager_is_allow() {
 }
 
 #[test]
-#[ignore = "backlog 3c750df2: FP: credential.helper cache --timeout / manager / manager-core must be Allow"]
 fn f3_known_safe_credential_helper_is_allow() {
     Fixture::new("f3").assert_all(
         "f3 credential.helper",
@@ -353,7 +346,6 @@ fn f3_known_safe_credential_helper_is_allow() {
 }
 
 #[test]
-#[ignore = "backlog 3c750df2: FP: gpg.program=gpg2 must be Allow"]
 fn f4_known_safe_gpg_program_is_allow() {
     Fixture::new("f4").assert_all(
         "f4 gpg.program",
@@ -363,7 +355,6 @@ fn f4_known_safe_gpg_program_is_allow() {
 }
 
 #[test]
-#[ignore = "backlog 3c750df2: FP: core.sshCommand with plain ssh flags (-4 -6 -J) must be Allow"]
 fn f5_known_safe_ssh_flags_are_allow() {
     Fixture::new("f5").assert_all(
         "f5 ssh flags",

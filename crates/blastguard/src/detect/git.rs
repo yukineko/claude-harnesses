@@ -374,16 +374,72 @@ pub(super) struct GitExecBan {
     pub(super) embedded: Vec<String>,
 }
 
-/// The shared tail of every exec-ban reason.
-const EXEC_BAN_TAIL: &str = "Every git shape that runs a command of the caller's choosing is \
-refused outright, whatever that command is (user ruling 2026-11-07) — run the command directly, \
-where blastguard judges it, instead of through git";
+/// The shared tail of every exec-ban reason. It claims the shapes blastguard
+/// RECOGNISES, not every shape: git also runs commands from settings this ban
+/// does not model (e.g. `PAGER`/`EDITOR`, `sendemail.smtpServer` naming a
+/// program, `instaweb --httpd`, config already stored in a file), which keep
+/// their ordinary analysis — see docs/specs/blastguard.md.
+const EXEC_BAN_TAIL: &str = "Every git shape blastguard recognises as running a \
+command of the caller's choosing is refused outright, whatever that command is (user ruling \
+2026-11-07) — run the command directly, where blastguard judges it, instead of through git";
+
+/// The ban reason for an ENVIRONMENT variable that makes git run a command
+/// (`GIT_PAGER=…`, `GIT_SSH=…`, `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`,
+/// `GIT_CONFIG_PARAMETERS`; backlog 3c750df2). `what` names the variable(s).
+pub(super) fn env_exec_ban_reason(what: &str) -> String {
+    format!("`{what}` makes git run a command. {EXEC_BAN_TAIL}")
+}
 
 fn exec_ban(shape: &str, embedded: Option<String>) -> Option<GitExecBan> {
     Some(GitExecBan {
         reason: format!("`git {shape}` makes git run a command. {EXEC_BAN_TAIL}"),
         embedded: embedded.into_iter().filter(|e| !e.is_empty()).collect(),
     })
+}
+
+/// git's `ext::<command>` remote transport (backlog 3c750df2): git runs
+/// `<command>` itself to talk to the "remote". Banned whenever a URL-shaped
+/// word — a remote argument, an `--opt=ext::…` value, a config value or a
+/// `url.ext::….insteadOf` key — starts with `ext::`, whatever
+/// `protocol.ext.allow` says (the line can set that too).
+fn ext_transport_ban(shape: &str, words: &[&str]) -> Option<GitExecBan> {
+    words.iter().find_map(|w| {
+        let lowered = w.to_ascii_lowercase();
+        let value = lowered.split_once('=').map_or(lowered.as_str(), |(_, v)| v);
+        let at = [lowered.as_str(), value]
+            .into_iter()
+            .find_map(|s| s.strip_prefix("url.").unwrap_or(s).strip_prefix("ext::"))?;
+        let original = &w[w.len() - at.len()..];
+        exec_ban(shape, Some(original.replace("% ", " ")))
+    })
+}
+
+/// `words` (already shell-unquoted argv) re-joined as one shell line that
+/// splits back into the same words. A word holding whitespace or a shell
+/// metacharacter is single-quoted; any other word is left bare, so an
+/// originally unquoted `~`, `*` or `$X` keeps its (restrictive) expansion
+/// reading. Only used for the embedded line, which can add a Deny reason to
+/// a ban that is already a Deny.
+fn shell_join(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|w| {
+            let plain = !w.is_empty()
+                && !w.chars().any(|c| {
+                    c.is_whitespace()
+                        || matches!(
+                            c,
+                            ';' | '&' | '|' | '<' | '>' | '(' | ')' | '\'' | '"' | '\\' | '`'
+                        )
+                });
+            if plain {
+                w.clone()
+            } else {
+                format!("'{}'", w.replace('\'', r"'\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// True when `t` is a spelling git's option parser accepts for the long
@@ -457,7 +513,19 @@ fn short_opt(args: &[String], i: usize, letter: char, stops: &str) -> Option<Opt
 ///   * `--upload-pack`/`--receive-pack`/`--exec` on
 ///     `fetch`/`pull`/`clone`/`ls-remote`/`push`/`archive`/`fetch-pack`/`send-pack`,
 ///     and `-u` on `clone`/`ls-remote`;
-///   * `send-email` `--to-cmd`/`--cc-cmd`/`--header-cmd`/`--sendmail-cmd`.
+///   * `send-email` `--to-cmd`/`--cc-cmd`/`--header-cmd`/`--sendmail-cmd`;
+///   * the `ext::<command>` transport ([`ext_transport_ban`]) as a remote
+///     argument of `fetch`/`pull`/`push`/`clone`/`ls-remote`/`remote`/`config`/
+///     `archive`/`fetch-pack`/`send-pack`/`submodule`, or in a `-c` key/value.
+///
+/// The words are decoded with bash's quoting rules, ANSI-C `$'…'` included;
+/// a `$'…'` in git's global options that cannot be decoded is banned. The same
+/// ban is applied to git's ENVIRONMENT (`GIT_PAGER`, `GIT_SSH`, …,
+/// `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`, `GIT_CONFIG_PARAMETERS`) by
+/// `executors::env_exec_var_verdict`. Not modelled (their commands keep the
+/// ordinary analysis only): `PAGER`/`EDITOR`/`VISUAL` (honoured by git, but
+/// not git-specific), `sendemail.smtpServer` naming a program, `instaweb
+/// --httpd`, and settings already stored in a config file.
 ///
 /// `filter-branch` is not here: [`irreversible_git_subcommand`] already
 /// denies every use of it. Plain `bisect start/good/bad`, `rebase <upstream>`,
@@ -466,22 +534,44 @@ fn short_opt(args: &[String], i: usize, letter: char, stops: &str) -> Option<Opt
 ///
 /// Known-safe values are not banned (user ruling 2026-11-07, "Allow
 /// known-safe values"): a command-valued key set to a value on the fixed list
-/// of `executors::is_safe_command_value` — pager `less`/`more`/`cat`, editor
-/// `vim`/`nano`/`code`/`true`/`:`, credential helper
-/// `osxkeychain`/`store`/`cache`, `gpg.program` `gpg`, `core.sshCommand`
-/// `ssh` with plain flags (never `-o`/`-F`) — each with flag-only arguments.
+/// of `executors::is_safe_command_value` — pager `less`/`more`/`cat`/`delta`,
+/// editor `vim`/`vi`/`nvim`/`emacs`/`nano`/`code`/`cursor`/`subl`/`true`/`:`,
+/// credential helper `osxkeychain`/`store`/`cache`/`manager`/`manager-core`,
+/// `gpg.program` `gpg`/`gpg2`, `core.sshCommand` `ssh` with plain flags (never
+/// `-o`/`-F`/`-I`/`-E`/`-S`) — each with flag-only arguments.
 /// Any other value stays banned. `git --config-env <key>=VAR` keeps the Ask
 /// `judge_git_config` gives it (the value is in the environment; pinned by a
 /// pre-existing control).
 pub(super) fn git_exec_ban(rest: &[&str]) -> Option<GitExecBan> {
     use super::executors::git_config_command;
-    let words: Vec<String> = super::quote_aware_words(&rest.join(" "))
-        .iter()
-        .map(|w| super::first_shell_word(w).unwrap_or_else(|| w.clone()))
-        .collect();
+    // Backlog 3c750df2 (h3): bash's ANSI-C quoting is decoded
+    // (`git -c $'core.pager=rm -rf ~' log` is `-c core.pager=rm -rf ~`).
+    // A line the full decoder cannot read (a `$(`, a backquote, …) falls back
+    // to one-level unquoting, and a `$'…'` it could not decode in git's
+    // global options is refused below (fail closed).
+    let joined = rest.join(" ");
+    let (words, decoded): (Vec<String>, bool) = match stash_argv_words(&joined) {
+        Determination::Known(w) => (w, true),
+        Determination::Undetermined(_) => (
+            super::quote_aware_words(&joined)
+                .iter()
+                .map(|w| super::first_shell_word(w).unwrap_or_else(|| w.clone()))
+                .collect(),
+            false,
+        ),
+    };
     let refs: Vec<&str> = words.iter().map(String::as_str).collect();
     let idx = git_subcommand_index(&refs);
     let globals = &refs[..idx.unwrap_or(refs.len())];
+    if !decoded && globals.iter().any(|g| g.contains("$'")) {
+        return Some(GitExecBan {
+            reason: format!(
+                "`git` global options use `$'…'` quoting blastguard cannot decode, so it cannot \
+tell whether they set a command git runs. {EXEC_BAN_TAIL}"
+            ),
+            embedded: Vec::new(),
+        });
+    }
     // Global config: `-c k=v`, `-ck=v`. (`--config-env k=VAR` takes the value
     // from the environment; it keeps the Ask `judge_git_config` gives it —
     // see the doc comment above.)
@@ -502,6 +592,9 @@ pub(super) fn git_exec_ban(rest: &[&str]) -> Option<GitExecBan> {
         };
         if let Some((key, value)) = assignment.and_then(|a| a.split_once('=')) {
             let key = key.trim().to_ascii_lowercase();
+            if let Some(ban) = ext_transport_ban(&format!("-c {key}=…"), &[&key, value]) {
+                return Some(ban);
+            }
             if let Some(cmd) = git_config_command(&key, value) {
                 return exec_ban(&format!("-c {key}=…"), Some(cmd));
             }
@@ -511,6 +604,25 @@ pub(super) fn git_exec_ban(rest: &[&str]) -> Option<GitExecBan> {
     let idx = idx?;
     let sub = normalized_command(refs[idx]);
     let args: Vec<String> = words[idx + 1..].to_vec();
+    if matches!(
+        sub.as_str(),
+        "fetch"
+            | "pull"
+            | "push"
+            | "clone"
+            | "ls-remote"
+            | "remote"
+            | "config"
+            | "archive"
+            | "fetch-pack"
+            | "send-pack"
+            | "submodule"
+    ) {
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        if let Some(ban) = ext_transport_ban(&format!("{sub} ext::…"), &arg_refs) {
+            return Some(ban);
+        }
+    }
     let rebase_exec = |args: &[String]| -> Option<GitExecBan> {
         for i in 0..args.len() {
             if long_opt(&args[i], "--exec", 4) {
@@ -543,7 +655,10 @@ pub(super) fn git_exec_ban(rest: &[&str]) -> Option<GitExecBan> {
     };
     match sub.as_str() {
         "bisect" if args.first().map(String::as_str) == Some("run") => {
-            exec_ban("bisect run", Some(args[1..].join(" ")))
+            // `bisect run` execs its words as argv (no shell re-split), so the
+            // embedded line re-quotes each word: `sh -c 'cd /etc && rm passwd'`
+            // must reach the analyser as that, not as `sh -c cd /etc && …`.
+            exec_ban("bisect run", Some(shell_join(&args[1..])))
         }
         "rebase" => rebase_exec(&args),
         "pull" => rebase_exec(&args).or_else(|| pack_exec(&args, false, "")),

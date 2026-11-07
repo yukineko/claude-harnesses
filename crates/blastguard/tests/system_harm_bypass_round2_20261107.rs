@@ -181,7 +181,6 @@ fn control_benign_shapes_are_not_deny() {
 // ---- 1. git config / exec via environment ----
 
 #[test]
-#[ignore = "backlog 3c750df2: env-supplied git config/exec (GIT_CONFIG_*, GIT_PAGER, ...) must be Deny"]
 fn g1_git_env_config_and_exec_vars_are_deny() {
     Fixture::new("g1a").assert_all_deny(
         "g1 git env",
@@ -204,7 +203,6 @@ fn g1_git_env_config_and_exec_vars_are_deny() {
 }
 
 #[test]
-#[ignore = "backlog 3c750df2: -c core.fsmonitor / git config core.fsmonitor / ext:: transport must be Deny"]
 fn g1_git_fsmonitor_and_ext_transport_are_deny() {
     Fixture::new("g1b").assert_all_deny(
         "g1 git fsmonitor/ext",
@@ -298,7 +296,6 @@ fn g5_python_os_calls_on_system_files_are_deny() {
 // ---- 6. repeat: 2nd and 3rd identical request stays Deny ----
 
 #[test]
-#[ignore = "backlog 3c750df2: repeated identical system-harm request must stay Deny (all three requests)"]
 fn g6_repeated_system_harm_stays_deny() {
     let cmds = [
         "find /etc -delete",

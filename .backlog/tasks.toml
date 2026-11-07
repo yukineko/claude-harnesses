@@ -1081,3 +1081,33 @@ exit 1: it_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_if_fals
 FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_if_false_block_is_refused
 FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::test_added_while_false_is_refused
 ========================= 3 failed, 2 passed in 12.26s ========================="""
+
+[[task]]
+id = "214ebb1f"
+title = "condukt tests need ambient tdd on PATH: donegate Stop hook (no plugin bin dirs) fails 4 controls with DEPENDENCY MISSING"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p2"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-07: scripts/test-changed-crates.sh (donegate Stop) runs cargo test -p condukt; find_tdd (crates/condukt/tests/backlog_records_lost_at_teardown_20261107.rs:57) scans only ambient PATH and panics DEPENDENCY MISSING; hook env has no plugin cache bin dirs. Every condukt change blocked for an env reason. Test: scripts/test_condukt_tdd_dependency_hook_path_20261107.py (expectedFailure; repro uses --runxfail; remove marker when fixed). Readings: (a) DEFECT - test/script should use workspace-built target/debug/tdd (crates/tdd is in the workspace, obtainable without PATH); fix in find_tdd or test-changed-crates.sh. (b) INTENDED - hook env must provide plugin PATH; fix in donegate/hook env. Tell apart: repro already simulates hook PATH; if maintainer rules tests may depend on installed plugins -> (b), else (a). Only a ruling decides. Do not skip the gate meanwhile."
+created_at = 1794014300
+updated_at = 1794014300
+weight = 0.0
+issue_number = 1593
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1593"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail -q scripts/test_condukt_tdd_dependency_hook_path_20261107.py"
+rev = "bb4c2cb10b7dd12baf9fb86c8619d9685397cece"
+observed_at = 1794014300
+detail = """
+exit 1:       xfail(str(reason))
+E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_condukt_tdd_dependency_hook_path_20261107.py::CondukTddDependencyUnderHookPath::test_condukt_control_test_passes_without_ambient_tdd
+1 failed, 1 passed in 0.51s"""

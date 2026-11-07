@@ -201,7 +201,7 @@ impl Fx {
 const PASS: (Option<i32>, Option<bool>) = (Some(0), Some(true));
 
 #[test]
-#[ignore = "RED: condukt check-criteria has no pass cache; remove ignore when fixed"]
+#[ignore = "backlog ebb0e1b5: open defect, remove ignore when fixed"]
 fn p1_unchanged_worktree_and_argv_after_a_pass_is_not_reexecuted() {
     let mut fx = Fx::new("p1", true);
     let r = fx.run_with("exit 0");

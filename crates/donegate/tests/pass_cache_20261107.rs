@@ -162,7 +162,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 #[test]
-#[ignore = "RED: donegate has no pass cache; remove ignore when fixed"]
+#[ignore = "backlog e04711be: open defect, remove ignore when fixed"]
 fn p1_unchanged_tree_and_cmd_after_a_pass_is_not_reexecuted() {
     let fx = Fx::new(true);
     assert_eq!(fx.stop(), (Some(0), false));

@@ -146,7 +146,6 @@ fn stale_lock_with_idle_holder_transcript_passes() {
 
 /// RED: the holder's transcript is fresh, so the session is live.
 #[test]
-#[ignore = "backlog 3da84f08: open defect, remove ignore when fixed"]
 fn stale_lock_with_fresh_holder_transcript_blocks() {
     let out = guard("fresh", true);
     assert_eq!(
@@ -163,7 +162,6 @@ fn stale_lock_with_fresh_holder_transcript_blocks() {
 /// a stale lock whose holder has NO transcript cannot be proven ended, so it
 /// is fail-closed: the guard blocks.
 #[test]
-#[ignore = "backlog 3da84f08: RED, remove ignore when fixed"]
 fn stale_lock_with_no_holder_transcript_blocks() {
     let out = guard_with("notranscript", None);
     assert_eq!(

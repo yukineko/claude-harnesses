@@ -57,15 +57,48 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
+/// The real `tdd` under test: `CONDUKT_TEST_TDD_BIN` if set, otherwise built
+/// once from THIS workspace into the same target dir as the condukt binary.
+/// Independent of PATH and of any installed plugin-cache version.
 fn find_tdd() -> PathBuf {
-    let path = std::env::var("PATH").unwrap_or_default();
-    for d in path.split(':') {
-        let c = Path::new(d).join("tdd");
-        if c.is_file() {
-            return c;
+    static TDD: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    TDD.get_or_init(|| {
+        if let Ok(p) = std::env::var("CONDUKT_TEST_TDD_BIN") {
+            let p = PathBuf::from(p);
+            assert!(
+                p.is_file(),
+                "CONDUKT_TEST_TDD_BIN={} is not a file",
+                p.display()
+            );
+            return p;
         }
-    }
-    panic!("DEPENDENCY MISSING: no `tdd` binary on PATH; this test needs the real tdd");
+        let exe = PathBuf::from(env!("CARGO_BIN_EXE_condukt"));
+        let target = exe
+            .parent()
+            .and_then(|d| d.parent())
+            .expect("target dir above the condukt binary")
+            .to_path_buf();
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let out = Command::new(cargo)
+            .args(["build", "-p", "tdd", "--target-dir"])
+            .arg(&target)
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("spawn cargo build -p tdd");
+        assert!(
+            out.status.success(),
+            "DEPENDENCY MISSING: could not build the workspace `tdd`: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let bin = target.join("debug").join("tdd");
+        assert!(
+            bin.is_file(),
+            "DEPENDENCY MISSING: {} not built",
+            bin.display()
+        );
+        bin
+    })
+    .clone()
 }
 
 struct Fx {

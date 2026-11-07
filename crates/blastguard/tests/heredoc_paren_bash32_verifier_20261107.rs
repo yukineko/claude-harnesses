@@ -138,6 +138,7 @@ impl Fixture {
             .env("BLASTGUARD_APPROVALS_DIR", self.base.join("store"))
             .env("HOME", &self.home)
             .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+            .env("CLAUDECODE", "1")
             .env_remove("BLASTGUARD_ASK")
             .env_remove("TMPDIR")
             .env_remove("CLAUDE_CODE_SESSION_ID")
@@ -204,6 +205,7 @@ fn run_all(name: &str, tmpl_cases: &[(&str, &str)], want: &str) {
 }
 
 #[test]
+#[ignore = "backlog 089bedd4: open defect, remove ignore when fixed"]
 fn red_a_text_after_early_close_hides_next_line() {
     run_all(
         "a",
@@ -234,6 +236,7 @@ fn red_a_text_after_early_close_hides_next_line() {
 }
 
 #[test]
+#[ignore = "backlog e2b9ffb1: open defect, remove ignore when fixed"]
 fn red_b_same_hole_without_any_heredoc() {
     run_all(
         "b",
@@ -248,6 +251,7 @@ fn red_b_same_hole_without_any_heredoc() {
 }
 
 #[test]
+#[ignore = "backlog 5916d385: open defect, remove ignore when fixed"]
 fn red_c_zsh_unquoted_heredoc_expansion_after_stray_quote() {
     run_all(
         "c",

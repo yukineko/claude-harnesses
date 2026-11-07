@@ -18,7 +18,7 @@
 2699 crates/condukt/src/wt_reconcile.rs
 2176 crates/fugu-router/src/main.rs
 3647 crates/overwatch/src/store.rs
-2100 crates/overwatch/tests/cli_contract.rs
+2064 crates/overwatch/tests/cli_contract.rs
 3648 crates/propguard/src/gate.rs
 4770 crates/specguard/src/main.rs
 2409 crates/specguard/src/specmap.rs

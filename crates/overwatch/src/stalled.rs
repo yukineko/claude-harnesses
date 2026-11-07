@@ -4,6 +4,10 @@
 //! `$HOME/.claude/projects/<slug>/<session>/subagents/agent-<id>.jsonl` is
 //! listed as stalled when its LAST JSONL entry is an assistant `tool_use` (so no
 //! `tool_result` followed it) AND its mtime is at least [`STALL_SECS`] old.
+//! Trailing hook `attachment` entries are skipped when finding the last entry.
+//! A transcript whose last (non-attachment) entry is assistant text, with no
+//! SubagentHandback success anywhere, and idle as long, is listed as
+//! [`StallState::EndedNoHandback`] (backlog afd18dc0).
 //! Long-running commands and permission waits count too: this is report-only,
 //! nothing is killed or restarted. The signal is the transcript (mtime + last
 //! entry), never an output-file size.
@@ -27,6 +31,9 @@ pub const STALL_SECS: u64 = 5 * 60;
 pub enum StallState {
     /// Pending tool_use, idle for `idle_minutes`.
     Stalled { idle_minutes: u64, pending: String },
+    /// Turn ended on assistant text with no SubagentHandback success, idle
+    /// for `idle_minutes`: delivery of its result is not shown.
+    EndedNoHandback { idle_minutes: u64 },
     /// Could not be determined; `reason` says why.
     Unknown { reason: String },
 }
@@ -119,25 +126,87 @@ fn classify(path: &Path, id: &str, now: SystemTime) -> Option<StalledSubagent> {
         }
         Determination::Undetermined(why) => return Some(unknown(id, why.to_string())),
     };
-    let Some(last) = text.lines().rev().find(|l| !l.trim().is_empty()) else {
-        return Some(unknown(id, "transcript has no entries".to_string()));
+    // Trailing hook `attachment` entries (e.g. SubagentStop hook_success) say
+    // nothing about the agent; judge the last message entry before them.
+    let mut last = None;
+    for l in text.lines().rev().filter(|l| !l.trim().is_empty()) {
+        match is_attachment(l) {
+            Ok(true) => continue,
+            Ok(false) => {
+                last = Some(l);
+                break;
+            }
+            Err(why) => return Some(unknown(id, why)),
+        }
+    }
+    let Some(last) = last else {
+        return Some(unknown(
+            id,
+            "transcript has no entries other than hook attachments".to_string(),
+        ));
     };
-    let pending = match last_pending(last) {
+    let last = match last_entry(last) {
         Ok(p) => p,
         Err(why) => return Some(unknown(id, why)),
     };
-    let pending = pending?;
     let idle = now.duration_since(mtime).map(|d| d.as_secs()).unwrap_or(0);
     if idle < STALL_SECS {
         return None;
     }
-    Some(StalledSubagent {
-        agent_id: id.to_string(),
-        state: StallState::Stalled {
-            idle_minutes: idle / 60,
-            pending,
-        },
-    })
+    match last {
+        LastEntry::Pending(pending) => Some(StalledSubagent {
+            agent_id: id.to_string(),
+            state: StallState::Stalled {
+                idle_minutes: idle / 60,
+                pending,
+            },
+        }),
+        // The turn ended on assistant text. Without a SubagentHandback
+        // success the transcript cannot show the result was delivered (an
+        // async agent whose report was never handed back looks exactly like
+        // this), so it is listed, never dropped as fine.
+        LastEntry::AssistantEnd if !has_handback_success(&text) => Some(StalledSubagent {
+            agent_id: id.to_string(),
+            state: StallState::EndedNoHandback {
+                idle_minutes: idle / 60,
+            },
+        }),
+        LastEntry::AssistantEnd | LastEntry::Other => None,
+    }
+}
+
+/// Classification of the last message entry.
+enum LastEntry {
+    /// Assistant tool_use awaiting a result (summary).
+    Pending(String),
+    /// Assistant entry with no tool_use: the turn ended.
+    AssistantEnd,
+    /// Anything else (e.g. a user tool_result).
+    Other,
+}
+
+fn is_attachment(line: &str) -> Result<bool, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(line).map_err(|e| format!("entry is not valid JSON: {e}"))?;
+    Ok(v.get("type").and_then(|t| t.as_str()) == Some("attachment"))
+}
+
+fn last_entry(line: &str) -> Result<LastEntry, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(line).map_err(|e| format!("last entry is not valid JSON: {e}"))?;
+    let is_assistant = v.get("type").and_then(|t| t.as_str()) == Some("assistant");
+    match last_pending(line)? {
+        Some(p) => Ok(LastEntry::Pending(p)),
+        None if is_assistant => Ok(LastEntry::AssistantEnd),
+        None => Ok(LastEntry::Other),
+    }
+}
+
+/// Whether the transcript contains a SubagentHandback success (same rule as
+/// `overwatch subagents`). An unparseable transcript yields `false`, which
+/// keeps the agent listed (the restrictive side).
+fn has_handback_success(text: &str) -> bool {
+    crate::subagents::parse_transcript(text).is_ok_and(|f| f.handback_ok)
 }
 
 /// Ok(Some(summary)) if the entry is an assistant tool_use awaiting a result.

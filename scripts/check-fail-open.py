@@ -306,6 +306,16 @@ ALLOWLIST: list[dict[str, str]] = [
         "needle": "git ls-files 2>/dev/null",
         "reason": "benign: unborn-branch legitimate-absent (round #6, 231e20e), rc set to 0 intentionally after a verified rev-parse guard",
     },
+    # REVIEWED (backlog afd18dc0): overwatch subagents status-query lookup.
+    # Runs only on an Ok(Facts) (transcript parsed); a read/parse failure is
+    # Err and becomes `undetermined`. An unseen query cannot move a verdict
+    # toward clean: idle past the window is still `query_required`.
+    {
+        "path": "crates/overwatch/src/subagents.rs",
+        "pattern": "read-unwrap-or-empty",
+        "needle": "f.sent.get(agent).cloned().unwrap_or_default()",
+        "reason": "reviewed by condukt orchestrator run-20261107-063047-82235 for afd18dc0: post-parse map miss = no query observed; unparseable transcript is Err→undetermined",
+    },
     # (No `undetermined-arm-empty-fallback` entries: user ruling 2026-10-02
     # moved the five grandfathered `=> None` sites — backlog liveness.rs and
     # main.rs, stuckguard main.rs and verdict_monotonicity.rs, donegate

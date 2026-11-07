@@ -35,6 +35,16 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'inert literal の Deny→Ask 降格': inert_literal_bodies proof conditions, DYNAMIC_EXECUTION_MARKERS (incl. string-executing APIs, b4c03877), real-call Deny precedence (backlog 27795e6e)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/heredoc.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'stdin here-document の program text は body だけ': first_line_quoted_here_document_body and its fall-back conditions (backlog aafeaa05)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/payload.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'stdin here-document の program text は body だけ': analyze_interpreter_stdin_exec's program-text selection for a stage fed a here-document (backlog aafeaa05)."
+
+[[spec]]
 path = "crates/blastguard/src/exclude.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' exclude (ALLOW_GLOBS, glob_set, normalize, is_config_file, is_git_internal) and the 'config ファイル除外' invariant."
@@ -363,3 +373,8 @@ reason = "Same bullet (record-disposition / compact-findings): CLI glue for the 
 path = "crates/overwatch/src/undetermined_metrics.rs"
 doc = "docs/specs/overwatch.md"
 reason = "Review-queue section bullet 'overwatch undetermined-metrics' (aggregation of harness_core::undetermined telemetry)."
+
+[[spec]]
+path = "crates/overwatch/src/subagents.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Section subagent registry と per-agent liveness (overwatch subagents): RECORD via presence hook (Agent|Task PostToolUse, SubagentStop) into subagents.json, classify() state order, clean definition, fail-closed resolution of undetermined/IO failure."

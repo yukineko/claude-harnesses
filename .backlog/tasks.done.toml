@@ -71523,3 +71523,59 @@ scripts/test_ctw_macro_rules_helper_plus_invocations.py ...........      [100%]
 rev = "58eae660a5bed638eaa0e0f3ce85dee02136583b"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "25b88447"
+title = "check-test-weakening: helper fn・コメント・#[test] fn 挿入と呼び出し編集の併用（実際の heredoc_body_gt 修正形）を Undetermined にする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794072393
+updated_at = 1794073412
+weight = 0.0
+issue_number = 1635
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1635"
+issue_closed_at = 1794073414
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_ctw_macro_rules_helper_comment_testfn.py"
+rev = "d88fa5b69612ccad5acd651603358855c1597a57"
+observed_at = 1794072393
+detail = """
+exit 1: ::test_full_combination_real_shape_is_clean
+FAILED scripts/test_ctw_macro_rules_helper_comment_testfn.py::HelperCommentTestFn::test_inserted_mod_with_tests_is_undetermined
+FAILED scripts/test_ctw_macro_rules_helper_comment_testfn.py::HelperCommentTestFn::test_inserted_test_fn_duplicating_generated_name_is_undetermined
+========================= 3 failed, 11 passed in 5.59s ========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_ctw_macro_rules_helper_comment_testfn.py"
+exit = 0
+passed = 14
+rev = "439e59e48d2147bbe77a5edd2736f02007d3ef8f"
+observed_at = 1794073398
+output_digest = "sha256:18d37427cd3810a1cec082ad6a9607ca118dfd870a1f8799768f47c7f11840e3"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/red-tw-hdgt-shape
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 14 items
+
+scripts/test_ctw_macro_rules_helper_comment_testfn.py ..............     [100%]
+
+============================== 14 passed in 5.41s ==============================
+"""
+
+[task.closure.red]
+rev = "d88fa5b69612ccad5acd651603358855c1597a57"
+exit = 1
+kind = "behavioural"

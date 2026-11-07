@@ -198,7 +198,6 @@ class Fixture:
 # ─────────────────────────────── RED: seed works ─────────────────────────────
 
 class SeedReuse(unittest.TestCase):
-    @open_defect(BACKLOG_ID)
     def test_same_commit_seed_builds_with_zero_compiling(self):
         f = Fixture(self)
         new = f.add_worktree("same")
@@ -214,7 +213,6 @@ class SeedReuse(unittest.TestCase):
                          f"seeded worktree rebuilt workspace crates:\n{err}")
         self.assertEqual(_run_bin(new), "warm")
 
-    @open_defect(BACKLOG_ID)
     def test_identical_tracked_files_get_the_warm_mtime(self):
         f = Fixture(self)
         new = f.add_worktree("mt")
@@ -225,7 +223,6 @@ class SeedReuse(unittest.TestCase):
         self.assertEqual(os.stat(new / rel).st_mtime_ns,
                          os.stat(f.warm / rel).st_mtime_ns)
 
-    @open_defect(BACKLOG_ID)
     def test_session_worktree_hook_seeds_from_main_tree(self):
         f = Fixture(self)
         home = f.base / "home"
@@ -249,7 +246,6 @@ class SeedReuse(unittest.TestCase):
 # ──────────────────────────── SAFETY controls ────────────────────────────────
 
 class SeedSafety(unittest.TestCase):
-    @open_defect(BACKLOG_ID)
     def test_changed_committed_source_is_rebuilt_and_binary_is_new(self):
         f = Fixture(self)
         f.commit_change("lib1/src/lib.rs", LIB1.format("changed"), "chg")
@@ -266,7 +262,6 @@ class SeedSafety(unittest.TestCase):
         # ... and the observable behaviour is the NEW code, not the warm one.
         self.assertEqual(_run_bin(new), "changed")
 
-    @open_defect(BACKLOG_ID)
     def test_uncommitted_warm_edit_counts_as_a_difference(self):
         f = Fixture(self)
         # Warm working tree diverges from HEAD (edited, rebuilt); new worktree
@@ -285,7 +280,6 @@ class SeedSafety(unittest.TestCase):
         self.assertIn("lib1", compiling, err)
         self.assertEqual(_run_bin(new), "warm")
 
-    @open_defect(BACKLOG_ID)
     def test_untracked_and_ignored_files_are_not_mtime_touched(self):
         f = Fixture(self)
         new = f.add_worktree("untr")
@@ -315,7 +309,6 @@ class SeedDeclines(unittest.TestCase):
         self.assertEqual(_mtimes(new, TRACKED), before,
                          "declined seed touched mtimes")
 
-    @open_defect(BACKLOG_ID)
     def test_no_warm_target_leaves_worktree_unseeded(self):
         f = Fixture(self)
         shutil.rmtree(f.warm / "target")
@@ -325,7 +318,6 @@ class SeedDeclines(unittest.TestCase):
         self._assert_declined_untouched(r, v, new, before)
         self.assertFalse((new / "target").exists())
 
-    @open_defect(BACKLOG_ID)
     def test_clone_failure_leaves_no_partial_target_and_no_mtime_sync(self):
         f = Fixture(self)
         bad = f.warm / "target" / "debug" / "unreadable"
@@ -338,7 +330,6 @@ class SeedDeclines(unittest.TestCase):
         self.assertFalse((new / "target").exists(),
                          "partial target left behind after a failed clone")
 
-    @open_defect(BACKLOG_ID)
     def test_warm_not_a_git_checkout_cannot_compare_so_declines(self):
         f = Fixture(self)
         plain = f.base / "plain"
@@ -353,7 +344,6 @@ class SeedDeclines(unittest.TestCase):
         self._assert_declined_untouched(r, v, new, before)
         self.assertFalse((new / "target").exists())
 
-    @open_defect(BACKLOG_ID)
     def test_existing_new_target_is_left_untouched(self):
         f = Fixture(self)
         new = f.add_worktree("hastarget")

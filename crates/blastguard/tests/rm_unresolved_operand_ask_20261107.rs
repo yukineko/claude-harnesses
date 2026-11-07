@@ -179,7 +179,6 @@ impl Fixture {
 // ---- Targets: unresolved rm operand => Ask (main), Deny (subagent) ----
 
 #[test]
-#[ignore = "backlog 3c750df2: unresolved rm operand must be Ask, not Deny (user ruling 2026-11-07)"]
 fn t1_unresolved_rm_operand_is_ask_for_main_deny_for_sub() {
     Fixture::new("t1").assert_split(
         "t1 unresolved rm operand",
@@ -196,7 +195,6 @@ fn t1_unresolved_rm_operand_is_ask_for_main_deny_for_sub() {
 }
 
 #[test]
-#[ignore = "backlog 3c750df2: unresolved rm operand must be Ask, not Deny (user ruling 2026-11-07)"]
 fn t2_unresolved_rm_operand_repeat_stays_ask_for_main() {
     let f = Fixture::new("t2");
     let mut failing = Vec::new();

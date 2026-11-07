@@ -144,8 +144,20 @@ forge・condukt のスケジューラが再利用）。
   連結・backslash）を外し、brace のカンマ列は展開、連番 `{a..b}` は `*` 扱い、`~`・`$HOME`・`${HOME}` は
   home へ展開（home 起点で `..` が home より上へ登る綴り〈`~/../../etc/passwd`〉は `/` 起点としても判定）。
   それ以外の展開（`$X`・`$(…)`・backtick・`~user`・未対応 escape・不均衡な引用）を含む operand は解決不能
-  として飛ばさず、system-harm Deny に倒す（fail closed）。展開後もファイル名にならない operand（制御文字・
-  `{}` placeholder）は、他の rm 規則が Allow を返すときだけ Ask にする。cwd 不明の相対 operand は従来どおり
+  として飛ばさず、Ask に倒す（ユーザー裁定 2026-11-07「Ask, deny known paths」。subagent では既存の
+  Ask→Deny 硬化で Deny。Allow には決してしない）: 他の rm 規則が Deny を返せば Deny、Allow を返すときは Ask。
+  ただし同じコマンド行のテキストが値を決める単純な形は解決して判定し、システムパスなら system-harm Deny の
+  まま（`detect/rm.rs` の `known_path_harm`）: 同じ行の**前の**セグメントにある literal 代入
+  （`X=/etc/passwd; rm $X`・`X=/etc/passwd && rm "$X"`・`"$X/passwd"`。採否は
+  `vars::resolve_expanded_command_word` の規則〈条件付き代入・後続の再束縛・配列・空値は不採用〉に従う）と、
+  literal 語だけを出力する `$(echo …)`・`$(printf %s …)`・backtick（`rm $(echo /etc/passwd)`）。値が引用符・
+  `\`・`$`・backtick・`{}`・`~` を含むもの、引用外の展開が長い語の一部として単語分割されるものは解決しない
+  （Ask のまま）。解決して system 外になった operand も Ask のまま（この解決は Deny を足すだけ）。
+  引用符内の glob 文字は展開されないので、`-r`/`-d` なしの `rm "*.tmp"` は wildcard rm ではない
+  （`for f in *.tmp; do rm "$f"; done` の loop 値代入版がこの形になり、glob は `for` のもの）。その引用除去後の
+  operand は protected path（literal として、および pattern として literal prefix で）に照合する。
+  展開後もファイル名にならない operand（制御文字・`{}` placeholder）も、他の rm 規則が Allow を返すときだけ
+  Ask にする。cwd 不明の相対 operand は従来どおり
   この判定の対象外。redirect 語（`2>/dev/null` 等）は operand に数えない。この Deny、システムディレクトリへの
   書き込み Deny（`system_path_block`）、`crate::deletion` のシステムディレクトリ refusal は理由に
   `model::SYSTEM_HARM_MARK` を含み、`main::downgrade_on_repeat` は `Decision::is_system_harm` の Deny を

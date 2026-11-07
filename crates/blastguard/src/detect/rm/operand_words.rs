@@ -21,7 +21,16 @@
 //! model, unbalanced quoting, a brace list that explodes past
 //! [`MAX_EXPANSIONS`] — is [`OperandSpelling::Unresolvable`]. The caller does
 //! not skip such an operand: what `rm` will delete is unknown, and unknown is
-//! resolved to the restrictive side (Deny).
+//! resolved to the restrictive side — an Ask (user ruling 2026-11-07, "Ask,
+//! deny known paths"; a subagent's Ask is a Deny), never an Allow.
+//!
+//! [`expand_operand_with`] additionally resolves the few expansions whose value
+//! the command line's text determines — a variable with a literal assignment
+//! earlier on the same line, and `$(echo …)` / `` `printf %s …` `` of literal
+//! words — so that such an operand naming a system path is still a system-harm
+//! Deny ([`super::known_path_harm`]).
+
+use crate::detect::vars::{is_shell_identifier, quote_aware_words, unquote_literal_value};
 
 /// Upper bound on the number of words one operand may brace-expand into.
 /// Beyond it the operand is [`OperandSpelling::Unresolvable`] (restrictive).
@@ -128,16 +137,44 @@ pub(super) enum Placed {
     NotLiteral(String),
 }
 
+/// The value of a shell variable `NAME`, when the command line's own text
+/// determines it (a literal assignment earlier on the same line); `None`
+/// otherwise. See [`super::known_path_harm`].
+pub(super) type VarLookup<'a> = &'a dyn Fn(&str) -> Option<String>;
+
 /// Read one operand word. `home` is the session's home directory, if known.
-pub(super) fn expand_operand(word: &str, home: Option<&str>) -> OperandSpelling {
+/// With `vars` `None`, no variable or command substitution is resolved: such
+/// an operand is [`OperandSpelling::Unresolvable`]. With `vars`, the simple
+/// expansions whose value the text determines are resolved too:
+/// `$NAME` / `${NAME}` through `vars`, and a
+/// `$(…)` / backtick whose body is `echo` or `printf %s` of literal words
+/// ([`substitution_output`]). A resolved value must be plain path text
+/// ([`plain_value`]); anything else stays [`OperandSpelling::Unresolvable`].
+/// An UNQUOTED expansion is word-split by the shell, which is modelled only
+/// when it is the whole operand (`rm $X`, `rm $(echo /a /b)`); a split inside
+/// a longer word is unresolvable.
+pub(super) fn expand_operand_with(
+    word: &str,
+    home: Option<&str>,
+    vars: Option<VarLookup<'_>>,
+) -> OperandSpelling {
     let chars: Vec<char> = word.chars().collect();
+    if let Some(vars) = vars {
+        if let Some((value, len)) = resolved_expansion(&chars, 0, vars) {
+            if len == chars.len() {
+                return OperandSpelling::Paths(
+                    value.split_whitespace().map(str::to_string).collect(),
+                );
+            }
+        }
+    }
     let words = match brace_expand(chars) {
         Ok(w) => w,
         Err(why) => return OperandSpelling::Unresolvable(why),
     };
     let mut out = Vec::new();
     for w in words {
-        match unquote(&w, home) {
+        match unquote(&w, home, vars) {
             Ok((path, home_rest)) => {
                 if let Some(rooted) = home_rest.as_deref().and_then(climb_rooted_at_slash) {
                     out.push(rooted);
@@ -148,6 +185,20 @@ pub(super) fn expand_operand(word: &str, home: Option<&str>) -> OperandSpelling 
         }
     }
     OperandSpelling::Paths(out)
+}
+
+/// True when the shell word `word` carries a glob metacharacter (`*`, `?`,
+/// `[`) that is unquoted and unescaped, i.e. one the shell expands. `"*.tmp"`
+/// is the one file named `*.tmp`; `*.tmp` and `"a"*` are patterns. Unbalanced
+/// quoting answers true (restrictive).
+pub(super) fn has_unquoted_glob(word: &str) -> bool {
+    let chars: Vec<char> = word.chars().collect();
+    unquoted_mask(&chars).map_or(true, |mask| {
+        chars
+            .iter()
+            .zip(&mask)
+            .any(|(c, unquoted)| *unquoted && matches!(c, '*' | '?' | '['))
+    })
 }
 
 /// For each char of `w`: true when it is unquoted and unescaped (so it can be
@@ -285,7 +336,11 @@ fn is_sequence(body: &str) -> bool {
 /// Quote removal and `~`/`$HOME` expansion of one (brace-expanded) word.
 /// Returns the path and, when the word STARTS with a home expansion, the text
 /// that follows the home in the result.
-fn unquote(w: &[char], home: Option<&str>) -> Result<(String, Option<String>), String> {
+fn unquote(
+    w: &[char],
+    home: Option<&str>,
+    vars: Option<VarLookup<'_>>,
+) -> Result<(String, Option<String>), String> {
     let mut out = String::new();
     let mut home_end: Option<usize> = None;
     let home_or_err = || {
@@ -305,6 +360,18 @@ fn unquote(w: &[char], home: Option<&str>) -> Result<(String, Option<String>), S
     let mut in_double = false;
     while i < w.len() {
         let c = w[i];
+        let resolved = match c {
+            '`' | '$' => vars.and_then(|v| resolved_expansion(w, i, v)),
+            _ => None,
+        };
+        if let Some((value, len)) = resolved {
+            if !in_double && value.chars().any(char::is_whitespace) {
+                return Err("word splitting of an unquoted expansion".to_string());
+            }
+            out.push_str(&value);
+            i += len;
+            continue;
+        }
         match c {
             '`' => return Err("command substitution (backtick)".to_string()),
             '\\' if in_double => {
@@ -375,6 +442,86 @@ fn unquote(w: &[char], home: Option<&str>) -> Result<(String, Option<String>), S
     }
     let home_rest = home_end.map(|e| out[e..].to_string());
     Ok((out, home_rest))
+}
+
+/// The value of the expansion that starts at `w[i]` — `$NAME`, `${NAME}`
+/// (through `vars`), `$(…)` or a backtick ([`substitution_output`]) — and its
+/// length in chars. `None` when it is not one of those shapes, `vars` does not
+/// know the name, or the value is not [`plain_value`].
+fn resolved_expansion(w: &[char], i: usize, vars: VarLookup<'_>) -> Option<(String, usize)> {
+    let rest: String = w.get(i..)?.iter().collect();
+    let (value, len) = if let Some(after) = rest.strip_prefix("$(") {
+        let body = &after[..after.find(')')?];
+        (substitution_output(body)?, body.chars().count() + 3)
+    } else if let Some(after) = rest.strip_prefix('`') {
+        let body = &after[..after.find('`')?];
+        (substitution_output(body)?, body.chars().count() + 2)
+    } else if let Some(after) = rest.strip_prefix("${") {
+        let name = &after[..after.find('}')?];
+        if !is_shell_identifier(name) {
+            return None;
+        }
+        (vars(name)?, name.chars().count() + 3)
+    } else {
+        let after = rest.strip_prefix('$')?;
+        let name: String = after
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if !is_shell_identifier(&name) {
+            return None;
+        }
+        (vars(&name)?, name.len() + 1)
+    };
+    plain_value(&value).then_some((value, len))
+}
+
+/// True for an expansion value that is plain path text: not blank, and free of
+/// every character an expansion result carries LITERALLY where the same
+/// character typed in the operand would mean something else (quotes, a
+/// backslash, `$`, a backtick, `{`/`}`, `~`), and of control characters other
+/// than the whitespace word splitting acts on.
+fn plain_value(v: &str) -> bool {
+    !v.trim().is_empty()
+        && !v.chars().any(|c| {
+            matches!(c, '\'' | '"' | '\\' | '$' | '`' | '{' | '}' | '~')
+                || (c.is_control() && !matches!(c, '\t' | '\n'))
+        })
+}
+
+/// The output of a command-substitution body that prints literal words and
+/// does nothing else: `echo [-n] WORD…` (joined by a space), `printf %s WORD…`
+/// (concatenated), or `printf WORD` (a format with no `%`, no arguments).
+/// Anything else — another command, an option, a nested expansion, an escape,
+/// a redirect, a pipe, a list — is `None`.
+fn substitution_output(body: &str) -> Option<String> {
+    if body.contains(['(', ')', '`', '$', '\\', '<', '>', '|', ';', '&']) {
+        return None;
+    }
+    let words = quote_aware_words(body);
+    let (head, args) = words.split_first()?;
+    let args: Vec<String> = args
+        .iter()
+        .map(|a| unquote_literal_value(a))
+        .collect::<Option<_>>()?;
+    match head.as_str() {
+        "echo" => {
+            let args = match args.split_first() {
+                Some((n, rest)) if n == "-n" => rest,
+                _ => &args[..],
+            };
+            if args.iter().any(|a| a.starts_with('-')) {
+                return None;
+            }
+            Some(args.join(" "))
+        }
+        "printf" => match args.split_first()? {
+            (fmt, rest) if fmt == "%s" => Some(rest.concat()),
+            (fmt, []) if !fmt.contains('%') && !fmt.starts_with('-') => Some(fmt.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The body of `$'…'` with its escapes applied. Escapes this does not model

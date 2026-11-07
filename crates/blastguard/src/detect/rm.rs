@@ -5,7 +5,90 @@ use super::{
 };
 
 mod operand_words;
-use operand_words::{expand_operand, place_literal, rm_operand_words, OperandSpelling, Placed};
+use operand_words::{
+    expand_operand_with, has_unquoted_glob, place_literal, rm_operand_words, OperandSpelling,
+    Placed, VarLookup,
+};
+
+/// The protected-path Deny for an operand of a non-wildcard `rm` that carries
+/// QUOTED glob characters (`".claude/*"`): the per-operand protected check in
+/// `analyze_rm_placed` skips every glob-bearing token, and the wildcard Deny
+/// that backs that skip does not apply to a quoted glob. The quote-removed
+/// spelling is judged both as the literal file it names and, restrictively, as
+/// the pattern it looks like ([`protected_glob_deny`](super::protected::protected_glob_deny)).
+fn quoted_glob_protected_deny(ctx: &Ctx<'_>, rest: &[&str]) -> Option<Decision> {
+    for word in rm_operand_words(rest) {
+        if !has_glob_meta(&word) {
+            continue;
+        }
+        let OperandSpelling::Paths(paths) = expand_operand_with(&word, ctx.scope.home_real(), None)
+        else {
+            continue; // unresolvable: `rm_system_harm_deny` makes it an Ask
+        };
+        for p in &paths {
+            if let Some(deny) = protected_disarm_deny(ctx, "rm", p)
+                .or_else(|| super::protected::protected_glob_deny("rm", p))
+            {
+                return Some(deny);
+            }
+        }
+    }
+    None
+}
+
+/// Whether an `rm` argument list asks for recursion (`-r`/`-R`/`--recursive`).
+fn rm_is_recursive(rest: &[&str]) -> bool {
+    rest.iter()
+        .any(|t| (is_short_flag(t) && (t.contains('r') || t.contains('R'))) || *t == "--recursive")
+}
+
+/// The system-harm Deny for an `rm` in `tokens` (one segment, at `seg_idx` of
+/// the command line `line`) whose operand is spelled with an expansion the
+/// line's own text resolves to a path in a system directory, else `Allow`.
+///
+/// [`analyze_rm`] does not resolve expansions: an operand it cannot read is an
+/// Ask (user ruling 2026-11-07, "Ask, deny known paths"). This pass names the
+/// known paths among them, so they stay a system-harm Deny:
+///
+///   * `$NAME` / `${NAME}` with a literal assignment in an EARLIER segment of
+///     the same line that reaches this one unconditionally and is not rebound
+///     — exactly the believability rules of
+///     [`resolve_expanded_command_word`](super::vars::resolve_expanded_command_word)
+///     (`X=/etc/passwd; rm $X`, `X=/etc/passwd && rm "$X"`);
+///   * `$(…)` / a backtick whose body is `echo` / `printf %s` of literal words
+///     (`rm $(echo /etc/passwd)`).
+///
+/// Every other expansion is left unresolved here (and so stays an Ask in
+/// [`analyze_rm`]); this function only ever adds a Deny.
+pub(super) fn known_path_harm(
+    tokens: &[&str],
+    line: &str,
+    seg_idx: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
+    use super::vars::{resolve_expanded_command_word, CommandWordOrigin};
+    let vars =
+        |name: &str| match resolve_expanded_command_word(line, seg_idx, &format!("${{{name}}}")) {
+            CommandWordOrigin::Literal(v) => Some(v),
+            _ => None,
+        };
+    for idx in super::words::command_candidates(tokens) {
+        if super::words::normalized_command(tokens[idx]) != "rm" {
+            continue;
+        }
+        let rest = &tokens[idx + 1..];
+        let words = rm_operand_words(rest);
+        if !words.iter().any(|w| has_unresolvable_expansion(w)) {
+            continue;
+        }
+        if let SystemHarm::Deny(deny) =
+            rm_system_harm(ctx, &words, rm_is_recursive(rest), Some(&vars))
+        {
+            return deny;
+        }
+    }
+    Decision::Allow
+}
 
 pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     let mut unplaced: Option<String> = None;
@@ -21,9 +104,7 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
 }
 
 fn analyze_rm_placed(rest: &[&str], ctx: &Ctx<'_>, unplaced: &mut Option<String>) -> Decision {
-    let recursive = rest
-        .iter()
-        .any(|t| (is_short_flag(t) && (t.contains('r') || t.contains('R'))) || *t == "--recursive");
+    let recursive = rm_is_recursive(rest);
     // Round 4 (adversarial verifier): `-d`/`--dir` removes an EMPTY directory.
     // It is NOT recursive, so it never triggered the container check below, and
     // `rm -d .claude/hooks` / `rm --dir .git/hooks` / `rm -d .claude` were ALLOW.
@@ -40,7 +121,21 @@ fn analyze_rm_placed(rest: &[&str], ctx: &Ctx<'_>, unplaced: &mut Option<String>
         .filter(|t| !t.starts_with('-'))
         .copied()
         .collect();
-    let wildcard = operands.iter().any(|o| has_glob_meta(o));
+    // A glob character inside quotes is not expanded by the shell: plain
+    // `rm "*.tmp"` removes the ONE file named `*.tmp`. That is also the text a
+    // loop body `for f in *.tmp; do rm "$f"; done` is judged as once the loop
+    // value is substituted back in (`compound::loop_variants`), and there the
+    // glob belongs to `for`: each `rm` receives one entry it matched. So a
+    // plain (non-`-r`, non-`-d`) rm whose glob characters are all quoted is not
+    // a wildcard rm; its quote-removed operands are still checked against the
+    // protected trees below (`quoted_glob_protected_deny`).
+    let wildcard = operands.iter().any(|o| has_glob_meta(o))
+        && (recursive || dir_flag || rm_operand_words(rest).iter().any(|w| has_unquoted_glob(w)));
+    if !wildcard {
+        if let Some(deny) = quoted_glob_protected_deny(ctx, rest) {
+            return deny;
+        }
+    }
 
     // PROTECTED PRECEDENCE, ahead of BOTH exits below. This arm was the last
     // place in the crate where `is_config_file` was consulted without
@@ -229,9 +324,13 @@ fn analyze_rm_placed(rest: &[&str], ctx: &Ctx<'_>, unplaced: &mut Option<String>
 /// 3c750df2): quotes removed, brace lists expanded, `~`/`$HOME` expanded, and
 /// a home-relative climb above home also judged rooted at `/`. An operand
 /// whose text contains any other expansion (`$X`, `$(…)`, a backtick) is NOT
-/// skipped: what it deletes is unknown, so it is a system-harm Deny (fail
-/// closed). A literal operand that is not a filename (a control character, a
-/// `{}` placeholder) is [`SystemHarm::Unplaced`]: every rule below still
+/// skipped: what it deletes is unknown, so it is [`SystemHarm::Unplaced`]
+/// (user ruling 2026-11-07, "Ask, deny known paths": an Ask for the main
+/// agent, a Deny for a subagent — fail closed, never Allow). The expansions
+/// the line's own text resolves are judged by
+/// [`known_path_harm`] instead, so a known system path stays a
+/// Deny. A literal operand that is not a filename (a control character, a
+/// `{}` placeholder) is [`SystemHarm::Unplaced`] too: every rule below still
 /// runs, and an Allow they would give becomes an Ask ([`analyze_rm`]). A
 /// relative operand with no known working directory is NOT judged here (kept
 /// as before this check existed; see `operand_words::Placed::RelativeWithoutBase`).
@@ -240,16 +339,28 @@ pub(super) fn rm_system_harm_deny(
     operands: &[String],
     recursive: bool,
 ) -> SystemHarm {
+    rm_system_harm(ctx, operands, recursive, None)
+}
+
+/// [`rm_system_harm_deny`], with `vars` resolving the expansions
+/// [`expand_operand_with`] models.
+fn rm_system_harm(
+    ctx: &Ctx<'_>,
+    operands: &[String],
+    recursive: bool,
+    vars: Option<VarLookup<'_>>,
+) -> SystemHarm {
     let mut unplaced: Option<String> = None;
     for word in operands {
-        let paths = match expand_operand(word, ctx.scope.home_real()) {
+        let paths = match expand_operand_with(word, ctx.scope.home_real(), vars) {
             OperandSpelling::Paths(p) => p,
             OperandSpelling::Unresolvable(why) => {
-                return SystemHarm::Deny(Decision::deny_system_harm(format!(
+                unplaced = unplaced.or(Some(format!(
                     "this rm operand `{word}` cannot be resolved to a path ({why}), so what it \
-deletes is unknown — it may be an OS file or directory, and an rm whose target cannot be \
-determined is refused rather than assumed harmless"
+deletes is unknown — blastguard cannot tell whether it is an OS file or directory, so it asks \
+rather than assume it harmless"
                 )));
+                continue;
             }
         };
         for p in &paths {
@@ -265,12 +376,12 @@ determined is refused rather than assumed harmless"
 
 /// The system-harm answer for an `rm` operand list.
 pub(super) enum SystemHarm {
-    /// An operand lands in a system directory, or cannot be resolved at all.
+    /// An operand lands in a system directory.
     Deny(Decision),
-    /// No operand lands in a system directory, but a literal operand could
-    /// not be placed as an absolute path (a control character, a `{}`
-    /// placeholder), so "outside every system directory" is not established
-    /// for it.
+    /// No operand lands in a system directory, but one could not be resolved
+    /// (an expansion this crate does not resolve) or not placed as an absolute
+    /// path (a control character, a `{}` placeholder), so "outside every
+    /// system directory" is not established for it.
     /// [`analyze_rm`] turns what would otherwise be an Allow into an Ask with
     /// this reason.
     Unplaced(String),

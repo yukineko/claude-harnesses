@@ -221,7 +221,6 @@ fn check_all(f: &Fixture, cases: &[(String, &str)]) {
 
 /// Item 1 (memory `worktree-always-merge-then-delete`).
 #[test]
-#[ignore = "backlog 43034f75: open defect, remove ignore when fixed"]
 fn deleting_unmerged_branch_or_dirty_worktree_is_ask() {
     let f = Fixture::new("branch_delete");
     // Preconditions the verdict must depend on.

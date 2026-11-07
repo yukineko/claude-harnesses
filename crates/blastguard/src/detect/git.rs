@@ -752,6 +752,104 @@ from the working tree)",
                 }
             }
         }
+        "branch" => {
+            let has_force =
+                has_short(rest, 'D') || (rest.contains(&"--delete") && rest.contains(&"--force"));
+            if has_force {
+                // Parse the branch name from positional operands
+                let operands = positional_operands(&rest[idx + 1..], &[]);
+                if let Some(&branch) = operands.first() {
+                    // Check if the branch is merged into the default branch
+                    if let Some(base) = ctx.base_for("git") {
+                        let default_branch = "main";
+
+                        // Use git merge-base --is-ancestor to check if branch is merged
+                        let mut cmd = std::process::Command::new("git");
+                        harness_core::git_env::scrub(&mut cmd)
+                            .current_dir(base)
+                            .args(["merge-base", "--is-ancestor", branch, default_branch]);
+
+                        match harness_core::boundary::run_with_timeout(
+                            &mut cmd,
+                            std::time::Duration::from_millis(1500),
+                        ) {
+                            Determination::Known(out) => {
+                                // Exit code 0 means branch IS an ancestor (merged)
+                                if out.code() == 0 {
+                                    Decision::Allow
+                                } else {
+                                    // Exit code 1 means branch is NOT an ancestor (unmerged)
+                                    Decision::ask("deleting a branch containing commits not reachable from main destroys unmerged work")
+                                }
+                            }
+                            Determination::Undetermined(_) => {
+                                // If we can't determine, fail-closed: Ask
+                                Decision::ask(
+                                    "cannot determine if branch is merged into default branch",
+                                )
+                            }
+                        }
+                    } else {
+                        Decision::Allow
+                    }
+                } else {
+                    Decision::Allow
+                }
+            } else {
+                Decision::Allow
+            }
+        }
+        "worktree" => {
+            // Check if it's "remove --force"
+            if let Some(pos) = rest.iter().position(|t| *t == "remove") {
+                let has_force = has_short(&rest[pos..], 'f') || rest[pos..].contains(&"--force");
+                if has_force {
+                    // Parse the worktree path from positional operands
+                    let operands = positional_operands(&rest[pos + 1..], &[]);
+                    if let Some(&wt_path) = operands.first() {
+                        // Use the worktree path directly to check if it's dirty
+                        let mut cmd = std::process::Command::new("git");
+                        harness_core::git_env::scrub(&mut cmd)
+                            .current_dir(wt_path)
+                            .args(["status", "--porcelain", "--ignored"]);
+
+                        match harness_core::boundary::run_with_timeout(
+                            &mut cmd,
+                            std::time::Duration::from_millis(1500),
+                        ) {
+                            Determination::Known(out) => {
+                                if let Determination::Known(stdout) = out.stdout_on_success() {
+                                    if stdout.trim().is_empty() {
+                                        // No modifications, worktree is clean
+                                        Decision::Allow
+                                    } else {
+                                        // Has modifications or untracked files
+                                        Decision::ask("force-removing a worktree with uncommitted changes or untracked files destroys work")
+                                    }
+                                } else {
+                                    // If we can't read stdout, fail-closed: Ask
+                                    Decision::ask(
+                                        "cannot determine if worktree has uncommitted changes",
+                                    )
+                                }
+                            }
+                            Determination::Undetermined(_) => {
+                                // If we can't determine dirtiness, fail-closed: Ask
+                                Decision::ask(
+                                    "cannot determine if worktree has uncommitted changes",
+                                )
+                            }
+                        }
+                    } else {
+                        Decision::Allow
+                    }
+                } else {
+                    Decision::Allow
+                }
+            } else {
+                Decision::Allow
+            }
+        }
         _ => Decision::Allow,
     }
 }

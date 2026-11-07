@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "yukineko",
-  "description": "yukineko's subscription-native Claude Code harness — condukt orchestration, fugu-router model routing, spec/verify gates, and HOTL tooling. No API key; bundled per-platform binaries.",
+  "description": "yukineko's subscription-native Claude Code harness \u2014 condukt orchestration, fugu-router model routing, spec/verify gates, and HOTL tooling. No API key; bundled per-platform binaries.",
   "owner": {
     "name": "yukineko"
   },
@@ -57,7 +57,7 @@
     {
       "name": "blastguard",
       "description": "PreToolUse hook that denies or asks before project-destroying Bash commands and file operations, as a single self-contained Rust binary.",
-      "version": "0.2.292",
+      "version": "0.2.293",
       "category": "security",
       "keywords": [
         "hooks",
@@ -880,12 +880,12 @@
     },
     {
       "name": "daily-report",
-      "description": "Generates a scannable daily work report (日報) from the day's git commits and the Obsidian session records, written back to the vault as a single narrative note.",
+      "description": "Generates a scannable daily work report (\u65e5\u5831) from the day's git commits and the Obsidian session records, written back to the vault as a single narrative note.",
       "version": "0.1.4",
       "category": "reporting",
       "keywords": [
         "daily-report",
-        "日報",
+        "\u65e5\u5831",
         "standup",
         "git",
         "obsidian",

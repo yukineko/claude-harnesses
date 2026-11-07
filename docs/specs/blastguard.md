@@ -152,9 +152,19 @@ forge・condukt のスケジューラが再利用）。
   modern の終端で再判定する。bash 3.2 の parse をモデル化できない場合は少なくとも Ask（判定不能を Allow に
   丸めない）。各 pass は満額の node budget から始める（D4）。**残余（未対応、RED を `#[ignore]` で固定）**:
   早期 close 後の text の読み違い（escape した quote、quote を含む `#` comment、`<(`。backlog 089bedd4）、
-  heredoc 無しでも `#` comment 中の quote / escape した quote の次の行と `<(…)` の本体が解析されない
-  （backlog e2b9ffb1、critical）、zsh が unquoted `<<EOF` 本文を展開する形（backlog 5916d385）、bash 3.2
+  zsh が unquoted `<<EOF` 本文を展開する形（backlog 5916d385）、bash 3.2
   の読みで quote・backtick・backslash を含む comment 行が Deny ではなく Ask（backlog d328ea88）。
+- **shell の字句どおりの読みも判定する（`detect/shell_lex.rs` の `shell_lexed_reading`、backlog e2b9ffb1、
+  blastguard 0.2.379）** — segment 分割器と line-level scan は quote を素朴に追うだけで `#` comment も
+  backslash escape も知らないため、comment 中の quote（`echo $HOME #e"`）や escape した quote（`x\'a`）が
+  shell の開かない quote を開き、**次の行**（`rm -rf /etc` 等）を quote 内の operand として隠していた
+  （heredoc 無しで /bin/bash 3.2・/bin/sh・/bin/zsh すべてが次の行を実行することを観測）。
+  `detect_bash_every_reading` は、comment を除去し（改行は残す）escape された `'`/`"`/`` ` `` を `_` に
+  置き換えた text が元と異なるとき、それも `detect_bash` で判定し**厳しい方**を返す（読みを足すだけで
+  判定を減らさない）。single quote・`$'…'`・double quote・backtick・`$(…)`/`<(…)`/`(…)` の入れ子・
+  `$((…))`・here-document 本文（verbatim に写す）をモデル化する。あわせて unquoted の `<(…)`/`>(…)`
+  process substitution の本体も `$(…)` と同じく実行される command として解析する
+  （`executed_substitution_payloads`）。
 - **git の exec-capable 形は一律 Deny（backlog fb338793、ユーザー裁定 2026-11-07「git bisectでいろいろ
   構文を処理できてしまうくらいなら使用を禁止した方がいいのでは?」）** — git が呼び出し側の選んだコマンドを
   実行する形は、埋め込みコマンドの中身に関わらず Deny（`detect/git.rs` の `git_exec_ban`。

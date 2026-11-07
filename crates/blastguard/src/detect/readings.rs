@@ -1,3 +1,4 @@
+use super::shell_lex::shell_lexed_reading;
 use super::substitution::under_bash32_reading;
 use super::{
     detect_bash, Ctx, Decision, SafeRoots, VerdictAcc, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES,
@@ -18,18 +19,29 @@ use super::{
 /// no less than the first pass. Where the bash 3.2 parse is not modelled, the
 /// answer is at least Ask: "cannot determine" is never folded into Allow.
 ///
-/// D4: each pass starts from a full per-command node budget, so the second
-/// reading cannot be starved by the first; budget exhaustion in either pass is
-/// that pass's own Ask.
+/// A third pass (backlog e2b9ffb1) judges the SHELL-LEXED spelling of the
+/// text — `#` comments removed, backslash-escaped quotes spelt `_` — whenever
+/// it differs from the text, because the splitters track quotes without
+/// knowing comments or escapes, and a quote in a comment or an escaped quote
+/// hid the next line from them. See [`shell_lexed_reading`].
+///
+/// D4: each pass starts from a full per-command node budget, so a later
+/// reading cannot be starved by an earlier one; budget exhaustion in any pass
+/// is that pass's own Ask.
 pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision {
     ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
-    let modern = detect_bash(c, 0, &Ctx::new(scope, c));
-    if !(c.contains("<<") && (c.contains("$(") || c.contains('`'))) {
-        return modern;
-    }
     let mut acc = VerdictAcc::default();
-    if let Some(deny) = acc.record(modern) {
+    if let Some(deny) = acc.record(detect_bash(c, 0, &Ctx::new(scope, c))) {
         return deny;
+    }
+    if let Some(lexed) = shell_lexed_reading(c) {
+        ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+        if let Some(deny) = acc.record(detect_bash(&lexed, 0, &Ctx::new(scope, &lexed))) {
+            return deny;
+        }
+    }
+    if !(c.contains("<<") && (c.contains("$(") || c.contains('`'))) {
+        return acc.finish();
     }
     ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
     let (bash32, undetermined) = under_bash32_reading(|| detect_bash(c, 0, &Ctx::new(scope, c)));

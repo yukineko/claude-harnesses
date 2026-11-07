@@ -80,6 +80,7 @@ mod readings;
 mod readonly;
 mod redirect;
 mod rm;
+mod scratch_place;
 mod segment;
 mod sinks;
 mod substitution;

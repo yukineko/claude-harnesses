@@ -346,7 +346,6 @@ fn whole_tree_stage_or_commit_all_is_ask() {
 
 /// Item 16 (memory `scratch-artifacts-in-deletable-places`).
 #[test]
-#[ignore = "backlog ef7c9fbe: open defect, remove ignore when fixed"]
 fn scratch_tree_outside_managed_places_is_ask() {
     let f = Fixture::new("scratch_place");
     let r = f.repo.display().to_string();
@@ -363,7 +362,10 @@ fn scratch_tree_outside_managed_places_is_ask() {
     let cases = vec![
         // Unmanaged: a bare directory under $HOME.
         (format!("git clone {r} {h}/scratch-clone"), "ask"),
-        (format!("mkdir -p {h}/scratch/a/b"), "ask"),
+        // User ruling 2026-11-07 (binding, overrides the original RED):
+        // `mkdir -p` is NOT in the Ask set — only git clone / cp -r outside
+        // managed places. Pinned as an Allow control so the ruling holds.
+        (format!("mkdir -p {h}/scratch/a/b"), "allow"),
         (format!("cp -r {r} {h}/scratch-copy"), "ask"),
         // Controls: managed places.
         (format!("git clone {r} {tmp}/clone"), "allow"),
@@ -371,6 +373,37 @@ fn scratch_tree_outside_managed_places_is_ask() {
         (format!("mkdir -p {r}/build/a"), "allow"),
         (format!("mkdir -p {tmp}/a/b"), "allow"),
         (format!("cp -r {r}/tracked.txt {tmp}/copy.txt"), "allow"),
+    ];
+    check_all(&f, &cases);
+}
+
+/// Item 16 rework: independent verification of 9f27dd1f observed
+/// `cp -rt <home dir> a`, `cp -Rt ...`, `cp -at ...` as ALLOW: a `t` inside a
+/// short-option cluster takes the next word as the target directory, but the
+/// parser read it as a source and judged the last operand (a project-relative
+/// `a`) as the landing. The landing is the `-t` directory, outside managed
+/// places, so these must be Ask like the spelled-out `-r -t DIR`.
+#[test]
+fn scratch_cp_clustered_target_dir_is_ask() {
+    let f = Fixture::new("scratch_cp_cluster_t");
+    let r = f.repo.display().to_string();
+    let h = f.home.display().to_string();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tmp = format!(
+        "/private/tmp/blastguard-audit-b-cluster-{}-{nanos}",
+        std::process::id()
+    );
+    let cases = vec![
+        (format!("cp -rt {h}/scratch-copy {r}"), "ask"),
+        (format!("cp -Rt {h}/scratch-copy {r}"), "ask"),
+        (format!("cp -at {h}/scratch-copy {r}"), "ask"),
+        (format!("cp -r -t {h}/scratch-copy {r}"), "ask"),
+        // Controls: same clusters into a managed place.
+        (format!("cp -rt {tmp} {r}"), "allow"),
+        (format!("cp -Rt {tmp} {r}"), "allow"),
     ];
     check_all(&f, &cases);
 }

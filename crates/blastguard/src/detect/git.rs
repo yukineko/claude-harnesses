@@ -169,7 +169,7 @@ pub(super) fn git_worktree_eligible(command: &str) -> Option<String> {
 /// `-C` values apply cumulatively, as git applies them (a relative one is
 /// relative to the previous); a relative `--work-tree` is relative to the
 /// directory `-C` left git in.
-fn git_moved_dir(
+pub(super) fn git_moved_dir(
     scope: &crate::scope::SafeRoots,
     globals: &[&str],
     base: Option<&str>,
@@ -1253,6 +1253,9 @@ from the working tree)",
         // `add`.
         "add" | "stage" => super::git_stage::add_verdict(&rest[idx + 1..], seg),
         "commit" => super::git_stage::commit_verdict(&rest[idx + 1..], seg),
+        // Backlog ef7c9fbe: a clone outside the managed places is Ask. See
+        // `scratch_place`.
+        "clone" => super::scratch_place::clone_verdict(ctx, &rest[..idx], &rest[idx + 1..]),
         _ => Decision::Allow,
     }
 }

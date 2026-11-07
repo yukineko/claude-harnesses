@@ -1121,6 +1121,69 @@ is not decided by where it is spelled"
         self.classify_against(&self.worktree_roots, operand, cwd)
     }
 
+    /// True when this model was built by the filesystem-aware hook binary
+    /// (a resolver was supplied). [`SafeRoots::none`] — the no-model entry
+    /// [`crate::detect::detect`] uses for library consumers — answers `false`.
+    ///
+    /// The scratch-place rule ([`SafeRoots::classify_managed_place`]) applies
+    /// only when this is `true`: the no-model entry keeps the verdict it had
+    /// before that rule existed (its contract, see [`SafeRoots::none`]). A
+    /// model WITH a resolver whose roots all failed to resolve is still a
+    /// model, so there every landing is `Undetermined` and the rule asks.
+    pub(crate) fn has_location_model(&self) -> bool {
+        self.resolver.is_some()
+    }
+
+    /// Where does a NEW TREE created at `operand` (a `git clone` / `cp -r`
+    /// destination) land relative to the MANAGED PLACES (backlog ef7c9fbe,
+    /// memory `scratch-artifacts-in-deletable-places`; user ruling
+    /// 2026-11-07, reading (a))?
+    ///
+    /// The managed places are the safe roots (the payload cwd and
+    /// `CLAUDE_PROJECT_DIR` when acceptable as derived roots, `/tmp`,
+    /// `/private/tmp` — the session scratchpad lives there — and `$TMPDIR`)
+    /// together with the worktree storage roots (`$HOME/.condukt/worktrees`,
+    /// `.harness-worktrees`). No new list: both sets are the ones
+    /// [`SafeRoots::new`] already builds, with the same derivation rules
+    /// (`$HOME` itself is never a root, so a cwd of `$HOME` is not managed).
+    ///
+    /// `Inside` or `IsRoot` = managed (creating a child of a root is creation
+    /// inside it); `Outside` = not managed. `Undetermined` when the operand is
+    /// not a literal path, cannot be placed or resolved, carries a `..`
+    /// component (collapsed lexically before symlink resolution, so it could
+    /// be misplaced — refused outright), when the session's raw cwd /
+    /// `CLAUDE_PROJECT_DIR` was refused (`..`/`.` component, relative cwd),
+    /// or when there are no managed places at all. The caller must read
+    /// every `Undetermined` as "not shown to be managed".
+    pub(crate) fn classify_managed_place(
+        &self,
+        operand: &str,
+        cwd: Option<&str>,
+    ) -> Determination<Placement> {
+        if let Some(why) = &self.worktree_refusal {
+            return Determination::undetermined(why.clone());
+        }
+        let dotdot = |p: &str| p.split('/').any(|c| c == "..");
+        if dotdot(operand) || (!operand.starts_with('/') && cwd.is_some_and(dotdot)) {
+            return Determination::undetermined(
+                "the destination (or the directory it is relative to) has a `..` component, which this model collapses lexically \
+before resolving symlinks, so where it lands is not decided by its spelling",
+            );
+        }
+        let managed: Vec<String> = self
+            .roots
+            .iter()
+            .chain(self.worktree_roots.iter())
+            .cloned()
+            .collect();
+        if managed.is_empty() {
+            return Determination::undetermined(
+                "blastguard has no managed place for this session (no cwd / project dir / temp root resolved)",
+            );
+        }
+        self.classify_against(&managed, operand, cwd)
+    }
+
     fn classify_against(
         &self,
         roots: &[String],

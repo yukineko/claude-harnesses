@@ -76,7 +76,7 @@ fn decision(cwd: &Path, command: &str) -> String {
 
 /// TARGET: the exact observed shape.
 #[test]
-#[ignore = "backlog commit-msg-fp: open defect, remove ignore when fixed"]
+#[ignore = "backlog ffce9c59: open defect, remove ignore when fixed"]
 fn exact_observed_commit_message_heredoc_is_allow() {
     let base = fresh_dir("exact");
     let wt = base.display();
@@ -94,7 +94,7 @@ EOF"
 
 /// TARGET: minimal, a pipe after the opener.
 #[test]
-#[ignore = "backlog commit-msg-fp: open defect, remove ignore when fixed"]
+#[ignore = "backlog ffce9c59: open defect, remove ignore when fixed"]
 fn commit_message_heredoc_piped_is_allow() {
     let base = fresh_dir("pipe");
     let cmd = "git commit -F - <<'EOF' | cat\nrm -rf /some/path\nEOF";
@@ -103,7 +103,7 @@ fn commit_message_heredoc_piped_is_allow() {
 
 /// TARGET: minimal, a `;` command after the opener.
 #[test]
-#[ignore = "backlog commit-msg-fp: open defect, remove ignore when fixed"]
+#[ignore = "backlog ffce9c59: open defect, remove ignore when fixed"]
 fn commit_message_heredoc_semicolon_cmd_is_allow() {
     let base = fresh_dir("semi");
     let cmd = "git commit -F - <<'EOF'; git log -1\nrm -rf /some/path\nEOF";

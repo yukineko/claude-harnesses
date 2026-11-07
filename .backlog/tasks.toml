@@ -1044,35 +1044,6 @@ exit 101: condukt v0.7.360 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/
 error: test failed, to rerun pass `-p condukt --test shadow_run_finish_persists_proofs_20261107`"""
 
 [[task]]
-id = "547cf2f6"
-title = "blastguard: quoted heredoc body の内容で cd 先が解決不能扱いになる誤検知を直す"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """Reproduced at 91531ac1/7d8d3a9e. Trigger: cd <literal abs non-protected dir> && cat > rel/path <<'EOF' + quoted body containing an unbalanced delimiter ( ) or backtick, or the exact body line "for p in after.iter().filter(|p| !before.contains(p)) {" + ANY shell line after the closing EOF => Ask (Deny in subagent) "RELATIVE redirect after an earlier cd ... could not statically resolve". Same body with nothing after EOF, or body "x", is Allow. RED output: exact_observed_command_is_judged_like_its_neutral_body_variant: left "deny" right "allow"; unbalanced_delimiter_in_quoted_body_does_not_unresolve_a_literal_cd: [min0] body ")": left "deny" right "allow". Controls (cd "$X", cd /etc, real redirect in body, neutral body) pass. NOT filed: python3 heredoc with ">" before closing quote (print(chr39 a > chr39)) is Ask by documented R2 ruling in interpreter.rs - needs human decision. Do NOT weaken the test to pass; remove the ignore marker when fixed."""
-created_at = 1794020087
-updated_at = 1794020087
-weight = 0.0
-issue_number = 1601
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1601"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_cd_redirect_fp_20261107 -- --include-ignored"
-rev = "7d8d3a9ec36a0a9d1c859add61811eb40de0cb45"
-observed_at = 1794020087
-detail = """
-exit 101: in 2.82s
-
-   Compiling blastguard v0.2.297 (/Users/yuki/src/.harness-worktrees/bg-cd-redirect-fp/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.35s
-     Running tests/backlog_cd_redirect_fp_20261107.rs (target/debug/deps/backlog_cd_redirect_fp_20261107-fd37e9f81e875de8)
-error: test failed, to rerun pass `-p blastguard --test backlog_cd_redirect_fp_20261107`"""
-
-[[task]]
 id = "a63ee085"
 title = "blastguard: 引用付き heredoc 本文の孤立バッククォートで Ask になる誤検知"
 project = "/Users/yuki/src/harness"

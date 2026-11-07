@@ -108,43 +108,6 @@ exit 101: inished in 2.79s
 error: test failed, to rerun pass `-p condukt --test audit_b12_oracle_ids_and_teardown`"""
 
 [[task]]
-id = "6e97a022"
-title = "condukt schedule: name the matched command/token in force-gate warnings"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 14 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: condukt-operator-gotchas (formerly condukt-schedule-arrow-forcegate).
-Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): the force-gate warning does not name what matched (expected the culprit command 'git push origin main' / token 'git push'); warning: task 't2' force-gated: high-risk irreversible action (declared class Parallel) / test result: FAILED. 0 passed; 1 failed
-The memory's original `->` prose FP no longer reproduces (control: a `->` title schedules in parallel). Readings: (a) name the culprit command/token (pinned); (b) print a blastguard rule id - RiskAssessment has no rule-id field, needs blastguard API change. To tell apart: (b) only if a rule id string appears in the warning.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998378
-updated_at = 1794001893
-weight = 0.0
-issue_number = 1574
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1574"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p condukt --test audit_b14_schedule_names_gate_culprit -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998883
-detail = """
-exit 101: .71s
-
-   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
-     Running tests/audit_b14_schedule_names_gate_culprit.rs (target/debug/deps/audit_b14_schedule_names_gate_culprit-23e7c16e413fcd4c)
-error: test failed, to rerun pass `-p condukt --test audit_b14_schedule_names_gate_culprit`"""
-
-[[task]]
 id = "3da84f08"
 title = "condukt guard main-tree: treat a stale backlog lock as live when the holder transcript is fresh"
 project = "/Users/yuki/src/harness"

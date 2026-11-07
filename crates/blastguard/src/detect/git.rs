@@ -451,7 +451,9 @@ fn short_opt(args: &[String], i: usize, letter: char, stops: &str) -> Option<Opt
 ///     keys written by `git config [scope] <key> <value>` /
 ///     `git config set <key> <value>` or set by `git clone -c`/`--config`;
 ///   * `bisect run`; `rebase`/`pull` `-x`/`--exec`; `submodule foreach`;
-///   * `difftool`/`mergetool` `-x`/`--extcmd`; `grep -O`/`--open-files-in-pager`;
+///   * `difftool`/`mergetool` `-x`/`--extcmd`; `grep -O<cmd>` /
+///     `--open-files-in-pager=<cmd>` (a bare `-O` / `--open-files-in-pager`
+///     runs the configured pager and is not banned);
 ///   * `--upload-pack`/`--receive-pack`/`--exec` on
 ///     `fetch`/`pull`/`clone`/`ls-remote`/`push`/`archive`/`fetch-pack`/`send-pack`,
 ///     and `-u` on `clone`/`ls-remote`;
@@ -462,13 +464,15 @@ fn short_opt(args: &[String], i: usize, letter: char, stops: &str) -> Option<Opt
 /// `-c pager.log=false`, an empty value (`-c credential.helper=`) and a
 /// non-`!` alias run no caller-chosen command and are not banned.
 ///
-/// Two deliberate exceptions, pinned by pre-existing controls and kept for
-/// the 「false positiveは許可できない」 ruling: a pager key set to plain
-/// `less`/`more`/`cat` with flag-only arguments
-/// (`git -c core.pager='less -R' log`) is not banned, and
-/// `git --config-env <key>=VAR` keeps the Ask `judge_git_config` gives it
-/// (the value is in the environment). Whether the ban should cover these
-/// too is an open question for the user.
+/// Known-safe values are not banned (user ruling 2026-11-07, "Allow
+/// known-safe values"): a command-valued key set to a value on the fixed list
+/// of `executors::is_safe_command_value` — pager `less`/`more`/`cat`, editor
+/// `vim`/`nano`/`code`/`true`/`:`, credential helper
+/// `osxkeychain`/`store`/`cache`, `gpg.program` `gpg`, `core.sshCommand`
+/// `ssh` with plain flags (never `-o`/`-F`) — each with flag-only arguments.
+/// Any other value stays banned. `git --config-env <key>=VAR` keeps the Ask
+/// `judge_git_config` gives it (the value is in the environment; pinned by a
+/// pre-existing control).
 pub(super) fn git_exec_ban(rest: &[&str]) -> Option<GitExecBan> {
     use super::executors::git_config_command;
     let words: Vec<String> = super::quote_aware_words(&rest.join(" "))
@@ -568,16 +572,26 @@ pub(super) fn git_exec_ban(rest: &[&str]) -> Option<GitExecBan> {
                 if t == "--" {
                     break;
                 }
+                // The pager value is OPTIONAL and only ever glued (`-O<cmd>`,
+                // `--open-files-in-pager=<cmd>`): the next word is never it.
+                // Bare `-O` / `--open-files-in-pager` runs the configured
+                // pager, not a caller-chosen command, and is not banned (user
+                // ruling 2026-11-07).
                 if long_opt(t, "--open-files-in-pager", 6) {
-                    return exec_ban(
-                        "grep --open-files-in-pager",
-                        t.split_once('=').map(|(_, v)| v.to_string()),
-                    );
+                    match t.split_once('=') {
+                        Some((_, v)) if !v.is_empty() => {
+                            return exec_ban("grep --open-files-in-pager", Some(v.to_string()))
+                        }
+                        _ => {}
+                    }
                 }
                 if let Some(glued) = t.strip_prefix('-').filter(|_| !t.starts_with("--")) {
                     for (pos, c) in glued.char_indices() {
                         if c == 'O' {
                             let v = &glued[pos + 1..];
+                            if v.is_empty() {
+                                break;
+                            }
                             return exec_ban("grep -O", Some(v.to_string()));
                         }
                         if "efABCm".contains(c) {

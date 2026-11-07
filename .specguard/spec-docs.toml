@@ -82,7 +82,7 @@ reason = "'振る舞い' bullets 'コマンド別 deny 規則' (analyze_git arms
 [[spec]]
 path = "crates/blastguard/src/detect/executors.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'振る舞い' bullet 'git の exec-capable 形は一律 Deny': git_config_command (command-valued git config keys, plain-pager exception) used by the ban (backlog fb338793)."
+reason = "'振る舞い' bullet 'git の exec-capable 形は一律 Deny': git_config_command (command-valued git config keys) and is_safe_command_value (fixed known-safe value list, ruling 2026-11-07) used by the ban (backlog fb338793)."
 
 [[spec]]
 path = "crates/blastguard/src/detect/rm.rs"
@@ -97,7 +97,7 @@ reason = "'振る舞い' bullets 'disarm-by-non-write 規則' (protected path ve
 [[spec]]
 path = "crates/blastguard/src/detect/interpreter.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'振る舞い' bullets 'inert literal の Deny→Ask 降格' and '埋め込み shell 文字列の Ask と osascript の削除' (SHELL_STRING_EXEC_MARKERS pending Ask, osascript_app_delete, backlog 0fefcd3b)."
+reason = "'振る舞い' bullets 'inert literal の Deny→Ask 降格' and '埋め込み shell 文字列の Ask と osascript の削除' (SHELL_STRING_EXEC_MARKERS pending Ask, and the analyze_code_interpreter call into interpreter/osascript.rs, backlog 0fefcd3b)."
 
 [[spec]]
 path = "crates/blastguard/src/detect/interpreter/osascript.rs"

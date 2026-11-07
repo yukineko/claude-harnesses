@@ -98,7 +98,8 @@ forge・condukt のスケジューラが再利用）。
   `diff.external`/`pager.<cmd>`/`alias.<x>=!…`/`credential.helper` 等。`detect/executors.rs` の
   `git_config_command`）を設定、同じ key を `git config [scope] <key> <value>`/`git config set` で書く、
   `git clone -c`/`--config` で設定、`bisect run`、`rebase`/`pull` の `-x`/`--exec`、`submodule foreach`、
-  `difftool`/`mergetool` の `-x`/`--extcmd`、`grep -O`/`--open-files-in-pager`、
+  `difftool`/`mergetool` の `-x`/`--extcmd`、値付きの `grep -O<cmd>`/`--open-files-in-pager=<cmd>`
+  （値は glue された形だけ。値なしの `-O`/`--open-files-in-pager` は設定済み pager を起動するだけなので Allow）、
   `fetch`/`pull`/`clone`/`ls-remote`/`push`/`archive`/`fetch-pack`/`send-pack` の
   `--upload-pack`/`--receive-pack`/`--exec`（`clone`/`ls-remote` は `-u` も）、`send-email` の
   `--to-cmd`/`--cc-cmd`/`--header-cmd`/`--sendmail-cmd`。語は shell の quote を外してから見る。
@@ -106,9 +107,15 @@ forge・condukt のスケジューラが再利用）。
   されていてそれ自体が Deny のとき（`git bisect run rm -rf /usr`）はその Deny 理由を返す（system-harm
   marker を保つため。`detect.rs` の git arm）。非対象（Allow のまま）: `bisect start/good/bad`、
   `rebase <upstream>`、`-c pager.log=false`、空値（`-c credential.helper=`）、`!` で始まらない alias、
-  そして既存 control が固定する 2 例外 — pager key に素の `less`/`more`/`cat`（flag 引数のみ）を設定する
-  `git -c core.pager='less -R' log`（Allow）と、値が環境変数にある `git --config-env <key>=VAR`（従来の Ask）。
-  この 2 例外を ban に含めるかはユーザー判断待ち。
+  値が環境変数にある `git --config-env <key>=VAR`（従来の Ask。既存 control が固定）、そして
+  **既知の安全値**（ユーザー裁定 2026-11-07「Allow known-safe values」。`detect/executors.rs` の
+  `is_safe_command_value`）: 先頭語が key ごとの固定リストにあり、以降が素の flag（`-R`・`--wait` 等。
+  `=value`・展開・`;`・quote・operand を含まない）だけの値 — pager（`core.pager`/`pager.<cmd>`）は
+  `less`/`more`/`cat`、editor（`core.editor`/`sequence.editor`）は `vim`/`nano`/`code`/`true`/`:`、
+  `credential.helper`（`credential.<url>.helper` 含む）は `osxkeychain`/`store`/`cache`、`gpg.program` は `gpg`、
+  `core.sshCommand` は `ssh`（flag の後の素の値語〈`-i key`〉は可。`o`/`F` を含む flag〈`-o ProxyCommand=…`・
+  `-F <config>`〉は command を運ぶので不可）。`-c` と `git config` 書き込みの両方に適用。リスト外の値
+  （`vim; rm -rf ~`・`vim $(…)`・`!…`・`ssh -o ProxyCommand=sh` 等）は ban のまま Deny。
 - **system-harm（システムを壊すコマンド）は常に Deny、repeat でも降格しない（backlog fb338793、ユーザー裁定
   2026-11-07「いかなる理由であれシステムに害になるコマンドはdenyすべし」「1は絶対にdenyでいい」）** —
   `rm` の operand が `/` またはシステムディレクトリ（`scope::is_inside_system_dir`: `/bin`・`/etc`・`/usr`・
@@ -126,7 +133,7 @@ forge・condukt のスケジューラが再利用）。
   `os.system('echo x > .git/hooks/pre-commit')` が Allow だった。top-level の同じ redirect は保護パス Ask で、
   人間不在時は Deny）。「command word が展開」由来の Ask は対象外（`detect_bash` を直接使う）。
   `osascript` は、program が `"Finder"`/`"System Events"` を名指しし、かつ double-quote 文字列の外に
-  `delete` か `empty … trash` があれば Deny（`detect/interpreter.rs` の `osascript_app_delete`。
+  `delete` か `empty … trash` があれば Deny（`detect/interpreter/osascript.rs` の `osascript_app_delete`。
   `display notification "x"` 等は従来どおり）。
 - **disarm-by-non-write 規則（保護パスを『書かずに無力化』する経路）** — 保護ファイル
   （`.claude/settings.json`・`settings.local.json`・`hooks.json`・`hooks/**`、`.githooks/**`、

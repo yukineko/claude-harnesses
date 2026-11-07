@@ -159,7 +159,6 @@ impl Fixture {
 macro_rules! target {
     ($name:ident, $cmd:expr) => {
         #[test]
-        #[ignore = "backlog fb338793: safe-value exception (user ruling 2026-11-07)"]
         fn $name() {
             Fixture::new(stringify!($name)).assert_allow_both($cmd);
         }

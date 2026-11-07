@@ -20,6 +20,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' lib: public pure API re-exporting the detector modules for specforge/condukt reuse; 概要 last sentence."
 
 [[spec]]
+path = "crates/blastguard/src/scope/checkout.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'managed な使い捨て場所での working-tree 破棄の Allow': SafeRoots::is_linked_worktree_checkout and its Known(true)/Known(false)/Undetermined contract."
+
+[[spec]]
 path = "crates/blastguard/src/detect.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' detect and the whole '振る舞い' section (detect_write, detect_bash, split_segments, analyze_segment, analyze_rm/git/find, disarm-by-non-write rules)."
@@ -28,6 +33,16 @@ reason = "'module 責務' detect and the whole '振る舞い' section (detect_wr
 path = "crates/blastguard/src/detect/interpreter/inert_literal.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'inert literal の Deny→Ask 降格': inert_literal_bodies proof conditions, DYNAMIC_EXECUTION_MARKERS (incl. string-executing APIs, b4c03877), real-call Deny precedence (backlog 27795e6e)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/heredoc.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'stdin here-document の program text は body だけ': first_line_quoted_here_document_body and its fall-back conditions (backlog aafeaa05)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/payload.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'stdin here-document の program text は body だけ': analyze_interpreter_stdin_exec's program-text selection for a stage fed a here-document (backlog aafeaa05)."
 
 [[spec]]
 path = "crates/blastguard/src/exclude.rs"

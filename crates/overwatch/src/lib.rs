@@ -22,4 +22,5 @@ pub mod review_finding;
 pub mod rollback;
 pub mod stalled;
 pub mod store;
+pub mod subagents;
 pub mod violation;

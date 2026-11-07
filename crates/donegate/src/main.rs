@@ -38,6 +38,7 @@ mod git_env_red_tests;
 mod inflight;
 mod install;
 mod model;
+mod passcache;
 mod record;
 mod rootcheck;
 mod runner;

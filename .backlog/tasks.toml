@@ -1060,3 +1060,33 @@ exit 101: w v0.1.46 (/Users/yuki/.condukt/worktrees/run-20261107-114313-25739-fi
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.43s
      Running tests/runstate_roundtrip_drops_fields_20261107.rs (target/debug/deps/runstate_roundtrip_drops_fields_20261107-4f5eea4905080610)
 error: test failed, to rerun pass `-p autoflow --test runstate_roundtrip_drops_fields_20261107`"""
+
+[[task]]
+id = "ebb0e1b5"
+title = "condukt: add pass cache for state check-criteria mechanical command"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "RED (cargo test -p condukt --test pass_cache_20261107 -- --include-ignored): p1_unchanged_worktree_and_argv_after_a_pass_is_not_reexecuted FAILED: 'assertion left == right failed: mechanical cmd re-executed on an unchanged worktree  left: 2  right: 1'. Command runs in 'condukt state check-criteria' (main.rs run_mechanical), not 'state set --status verified'. p1 = RED. Controls GREEN at HEAD: p2a, p2b, p3 (different argv), p4 (failed never cached), p5a (non-git worktree), p5b (corrupt store; vacuous at HEAD). Cached pass must keep exit 0 and skip_verifier true. Do NOT weaken the test to pass; remove the ignore marker when fixed. Test: crates/condukt/tests/pass_cache_20261107.rs"
+created_at = 1794028498
+updated_at = 1794028498
+weight = 0.0
+issue_number = 1607
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1607"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test pass_cache_20261107 -- --include-ignored p1_unchanged_worktree_and_argv_after_a_pass_is_not_reexecuted"
+rev = "5c2e79b90fe6725a60c521d7bd865b8913123f42"
+observed_at = 1794028498
+detail = """
+exit 101: anged_worktree_and_argv_after_a_pass_is_not_reexecuted
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 1.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/pass_cache_20261107.rs (target/debug/deps/pass_cache_20261107-72c27d4090148776)
+error: test failed, to rerun pass `-p condukt --test pass_cache_20261107`"""

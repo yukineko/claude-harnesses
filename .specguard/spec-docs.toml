@@ -95,6 +95,11 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullets 'コマンド別 deny 規則' (analyze_rm) and 'system-harm（システムを壊すコマンド）は常に Deny' (rm_system_harm_deny, backlog fb338793)."
 
 [[spec]]
+path = "crates/blastguard/src/detect/rm/operand_words.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'system-harm（システムを壊すコマンド）は常に Deny': shell-word reading of rm operands (quote removal, brace expansion, ~/$HOME, unresolvable expansion fails closed), backlog 3c750df2."
+
+[[spec]]
 path = "crates/blastguard/src/detect/protected.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullets 'disarm-by-non-write 規則' (protected path verdicts) and 'system-harm…は常に Deny' (system_path_block carries SYSTEM_HARM_MARK)."

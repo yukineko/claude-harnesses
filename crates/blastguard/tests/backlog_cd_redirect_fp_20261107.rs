@@ -122,16 +122,23 @@ fn decision(cwd: &Path, command: &str) -> String {
 /// command whose quoted heredoc body is replaced by `x` (which is Allow).
 #[test]
 fn exact_observed_command_is_judged_like_its_neutral_body_variant() {
-    let (head, rest) = EXACT.split_once("<<'EOF'\n").expect("opener");
+    let base = fresh_dir("exact");
+    // Hermetic: the fixture's cd target is a real worktree path on the machine
+    // that observed it; whether that tree exists (and tracks the redirect target)
+    // changes the verdict. Swap in this test's fresh non-git temp dir; the body
+    // bytes stay as captured.
+    const OBSERVED_CD: &str = "cd /Users/yuki/src/.harness-worktrees/session-32935915 &&";
+    assert!(EXACT.starts_with(OBSERVED_CD), "fixture cd target changed");
+    let exact = EXACT.replacen(OBSERVED_CD, &format!("cd {} &&", base.display()), 1);
+    let (head, rest) = exact.split_once("<<'EOF'\n").expect("opener");
     let (_body, tail) = rest.rsplit_once("\nEOF").expect("terminator");
     let neutral = format!("{head}<<'EOF'\nx\nEOF{tail}");
-    let base = fresh_dir("exact");
     let neutral_d = decision(&base, &neutral);
     assert_eq!(
         neutral_d, "allow",
         "premise: the neutral variant must be Allow (literal cd, non-protected target)"
     );
-    let d = decision(&base, EXACT);
+    let d = decision(&base, &exact);
     assert_eq!(d, "allow", "quoted heredoc body is data; neutral is allow");
 }
 

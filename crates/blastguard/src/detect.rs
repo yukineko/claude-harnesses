@@ -1523,10 +1523,10 @@ through it, and refuses to guess"
 /// Judge ONE `;`/`&&`/`|`-separated segment of a command line.
 ///
 /// `line`/`seg_idx` locate this segment inside the command line it came from,
-/// and exist for one consumer only: [`unknown_wrapper_ask`]'s head check, which
-/// needs the EARLIER segments to read an expansion-valued command word back off
-/// the line (see [`resolve_expanded_command_word`]). Nothing else here uses
-/// them, and `seg` remains the only thing judged.
+/// and exist for two consumers: [`unknown_wrapper_ask`]'s head check (reads an
+/// expansion-valued command word back off EARLIER segments, see
+/// [`resolve_expanded_command_word`]) and `find_xargs::xargs_pipe_feed` (reads
+/// the stage that feeds an `xargs rm`). Nothing else here uses them.
 fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ctx<'_>) -> Decision {
     let tokens = split_substitution_opening_assignments(seg.split_whitespace().collect());
     let mut acc = VerdictAcc::default();
@@ -1628,6 +1628,9 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
         if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth, ctx)) {
             return deny;
         }
+    }
+    if let Some(deny) = acc.record(find_xargs::xargs_pipe_feed(&tokens, line, seg_idx, ctx)) {
+        return deny;
     }
 
     // ASK-2: an UNRECOGNISED wrapper standing in front of a destructive command

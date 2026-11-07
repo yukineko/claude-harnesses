@@ -138,6 +138,16 @@ forge・condukt のスケジューラが再利用）。
   `~`/`$HOME`/`${HOME}` は home に展開し、それ以外の `$`/backtick 展開（`$'…'` 含む）を含む対象 operand は
   **Ask**（判定不能は制限側。例: `chmod +x "$f"`・`mv "$a" b`）。`find -exec` の `{}` と rsync の remote
   operand（`host:/path`）は判定しない。base 不明の相対 operand は rm と同じく判定しない（他の rule は残る）。
+- **pipeline で供給される `xargs rm`/`xargs unlink`（backlog 3c750df2）** — `analyze_xargs` は xargs 自身の
+  token しか見ないため `echo /etc/passwd | xargs rm` は operand 無しの `rm` として Allow だった。
+  `detect/find_xargs.rs` の `xargs_pipe_feed`（`analyze_segment` から `line`/`seg_idx` で呼ぶ）が、
+  単一 `|` で xargs segment に供給する前段を読む（stdin のみを読む `sort`/`uniq`/`head`/`tail`/`grep` 系 filter は
+  遡って透過。exec wrapper〈`sudo`・`env` 等〉の後ろの program を見る）。前段が `echo`/`printf` の operand・
+  `find` の search root・`ls` の operand でシステムディレクトリ内を指せば `rm_system_harm_deny` と同じ判定で
+  **Deny（system harm）**（相対パスは raw base〈直前の `cd` 先〉に置いて判定。置けなければ Ask）。前段の出力が
+  コマンド行から分からない（`cat FILE`・`curl`・展開 `$X`・未知 program・`git -C`）ときは **Ask**（subagent では
+  hardened Deny）。非システムの literal パス・`git ls-files`/`diff`/`diff-tree`/`ls-tree`（repo 内）は従来どおり
+  （この規則は判定を足さない）。前段が無い・`-a FILE`・remover 以外の xargs は対象外。
 - **埋め込み shell 文字列の Ask と osascript の削除（backlog 0fefcd3b）** — interpreter program の
   文字列 literal（layer > 0）に対する shell pass の **Ask** は、program が shell に文字列を渡す API
   （`SHELL_STRING_EXEC_MARKERS`: `os.system`/`os.popen`/`subprocess`/`system(`/backtick/`child_process`/

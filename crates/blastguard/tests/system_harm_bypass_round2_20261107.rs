@@ -219,7 +219,6 @@ fn g1_git_fsmonitor_and_ext_transport_are_deny() {
 // ---- 2. system-file removal other than plain rm ----
 
 #[test]
-#[ignore = "backlog 3c750df2: unlink/rmdir/mv of system paths must be Deny"]
 fn g2_unlink_rmdir_mv_system_paths_are_deny() {
     Fixture::new("g2").assert_all_deny(
         "g2 unlink/rmdir/mv",

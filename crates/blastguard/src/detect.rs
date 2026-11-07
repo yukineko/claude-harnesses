@@ -80,6 +80,7 @@ mod rm;
 mod segment;
 mod sinks;
 mod substitution;
+mod system_paths;
 mod vars;
 mod words;
 
@@ -2044,6 +2045,9 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         let _ = acc.record(depth_exhausted());
     }
 
+    if let Some(deny) = acc.record(system_paths::system_mutation_verdict(cmd, rest, ctx)) {
+        return deny;
+    }
     let verdict = match cmd {
         // BG-3 (second instance): `split_segments` splits on `;`, so the `\;`
         // terminator of a `find -exec` CUTS THE LINE before `analyze_find` ever

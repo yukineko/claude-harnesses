@@ -204,6 +204,19 @@ impl Fx {
         wt
     }
 
+    /// Mark `task` verified so `worktree remove` may tear its worktree down
+    /// (backlog 6180333a: an unverified task's worktree is refused). Setup
+    /// only: it panics if the verify itself is refused.
+    fn verify(&self, task: &str) {
+        let out = self.condukt(&[
+            "state", "set", "--run", RUN, "--task", task, "--status", "verified",
+        ]);
+        assert!(
+            out.status.success(),
+            "fixture: state set verified {task}: {out:?}"
+        );
+    }
+
     fn register(&self, task: &str, wt: &Path, branch: Option<&str>) {
         let mut args = vec![
             "state",
@@ -613,6 +626,7 @@ fn remove_does_not_silently_lose_proofs_in_a_custom_proof_dir() {
             && !wt.join(".tdd").join("t5.red.json").exists(),
         "fixture unsound: tdd did not honor the custom proof_dir"
     );
+    fx.verify("t5");
     let branch = "b-t5";
     let out = fx.condukt(&[
         "worktree",

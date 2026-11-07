@@ -159,6 +159,53 @@ pub fn proof_files(wt: &Path) -> Result<Vec<PathBuf>> {
     Ok(by_name.into_values().collect())
 }
 
+/// One sentence for an oracle refusal naming the proof ids (`<id>.red.json` /
+/// `<id>.green.json` stems) actually present in `dir`'s proof dirs, so a proof
+/// recorded under another id (e.g. the backlog id instead of the
+/// decomposition task id) is visible (backlog 6180333a). A listing failure is
+/// said explicitly — never rendered as an empty list.
+pub fn found_proof_ids_note(dir: &Path, task: &str) -> String {
+    let files = match proof_files(dir) {
+        Ok(f) => f,
+        Err(e) => {
+            return format!(
+                "could NOT list the tdd proofs in {} ({e:#}), so which proof ids exist there is \
+                 unknown",
+                dir.display()
+            )
+        }
+    };
+    let mut ids: std::collections::BTreeMap<String, Vec<&str>> = Default::default();
+    for f in &files {
+        let name = f
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        for kind in ["red", "green"] {
+            if let Some(id) = name.strip_suffix(&format!(".{kind}.json")) {
+                ids.entry(id.to_string()).or_default().push(kind);
+            }
+        }
+    }
+    if ids.is_empty() {
+        return format!(
+            "no tdd proof files (*.red.json / *.green.json) found in {}; the oracle looks for \
+             '{task}'",
+            dir.display()
+        );
+    }
+    let listed: Vec<String> = ids
+        .iter()
+        .map(|(id, kinds)| format!("{id} ({})", kinds.join("+")))
+        .collect();
+    format!(
+        "proof ids found in {}: {}; the oracle looks for '{task}' — a proof recorded under any \
+         other id (e.g. the backlog id) is no proof for this task",
+        dir.display(),
+        listed.join(", ")
+    )
+}
+
 /// The proof files directly in `dir`, sorted. Missing `dir` = none.
 fn proof_files_in(dir: &Path) -> Result<Vec<PathBuf>> {
     let rd = match std::fs::read_dir(dir) {

@@ -49,6 +49,7 @@ mod state;
 mod status;
 mod store;
 mod subagent_stop;
+mod teardown_gate;
 mod timings;
 #[cfg(test)]
 mod verifier_f7a0cadc;
@@ -559,7 +560,10 @@ enum WtAction {
         #[arg(long)]
         id: String,
     },
-    /// Remove a worktree and (best-effort) delete its branch.
+    /// Remove a worktree and (best-effort) delete its branch. Refused (non-zero)
+    /// while the task that owns it is not verified, or when that cannot be
+    /// determined (backlog 6180333a; see `teardown_gate`). The explicit release
+    /// is `state abandon --task` (or `state cancel`); there is no bypass flag.
     Remove {
         #[arg(long)]
         path: PathBuf,
@@ -3693,6 +3697,9 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
             }
         },
         WtAction::Remove { path, branch } => {
+            // Verified-before-teardown (backlog 6180333a): an unverified (or
+            // undeterminable) owning task refuses before anything is touched.
+            teardown_gate::refuse_unverified_teardown(cfg, cwd, &repo, &path)?;
             // Persist the worktree's tdd proofs BEFORE removing it (backlog
             // ea6547c9); a persist failure refuses the removal via `?`.
             let kept = proof_archive::persist_before_teardown(cfg, cwd, &repo, &path, None)?;
@@ -4474,11 +4481,12 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         match state::enforce_fp_gate(&verdict) {
                             state::FpGateDecision::Reject => {
                                 bail!(
-                                    "refusing to verify task '{task}': no valid fail-to-pass reproduction oracle ({})",
+                                    "refusing to verify task '{task}': no valid fail-to-pass reproduction oracle ({}); {}",
                                     verdict
                                         .get("reason")
                                         .and_then(|v| v.as_str())
-                                        .unwrap_or("see `condukt state check-oracle` for details")
+                                        .unwrap_or("see `condukt state check-oracle` for details"),
+                                    proof_archive::found_proof_ids_note(&run_dir, &task)
                                 );
                             }
                             state::FpGateDecision::Allow(v) => {

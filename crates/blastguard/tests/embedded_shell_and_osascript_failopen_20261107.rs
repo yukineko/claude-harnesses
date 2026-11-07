@@ -155,7 +155,10 @@ fn control_python_heredoc_os_system_echo_is_not_deny() {
     let cmd = "python3 - <<'PY'\nimport os\nos.system('echo hi')\nPY";
     let base = fresh_dir("ctl-echo");
     let (d, r) = verdict(&base, cmd);
-    assert_ne!(d, "deny", "harmless os.system must not be Deny; reason: {r}");
+    assert_ne!(
+        d, "deny",
+        "harmless os.system must not be Deny; reason: {r}"
+    );
 }
 
 /// CONTROL: harmless osascript is not Deny.
@@ -164,7 +167,10 @@ fn control_osascript_display_notification_is_not_deny() {
     let cmd = "osascript -e 'display notification \"x\"'";
     let base = fresh_dir("ctl-osa");
     let (d, r) = verdict(&base, cmd);
-    assert_ne!(d, "deny", "harmless osascript must not be Deny; reason: {r}");
+    assert_ne!(
+        d, "deny",
+        "harmless osascript must not be Deny; reason: {r}"
+    );
 }
 
 /// CONTROL: the same redirect at top level stays Deny.

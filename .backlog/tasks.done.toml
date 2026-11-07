@@ -71167,3 +71167,70 @@ test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 93 filtered out; fi
 rev = "6590ea815d1a7f259b75f0abe5ee9647b702dbd0"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "3da84f08"
+title = "condukt guard main-tree: treat a stale backlog lock as live when the holder transcript is fresh"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 15 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: liveness-and-observability (formerly maintree-guard-stale-lock).
+Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left == right` failed: guard main-tree passed a staged primary-tree commit although the lock holder holder-sess-b15 wrote its transcript seconds ago (lock heartbeat stale, pid dead - neither proves the session ended). left: Some(0) right: Some(1) / test result: FAILED. 1 passed; 1 failed
+condukt half only (maintree::parse_backlog_lock drops stale:true locks without a transcript check). The backlog half (`backlog lock acquire --force` refusing on a fresh transcript) has NO RED here. Transcript path $HOME/.claude/projects/<slug(repo)>/<session-id>.jsonl is an assumed convention; liveness inputs are PATH stubs as in main_tree_guard_cli.rs.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998382
+updated_at = 1794055292
+weight = 0.0
+issue_number = 1575
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1575"
+issue_closed_at = 1794055296
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b15_maintree_transcript_liveness -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998888
+detail = """
+exit 101: s
+
+   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/audit_b15_maintree_transcript_liveness.rs (target/debug/deps/audit_b15_maintree_transcript_liveness-ab6ebae3c3fc3ec9)
+error: test failed, to rerun pass `-p condukt --test audit_b15_maintree_transcript_liveness`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test audit_b15_maintree_transcript_liveness -- --include-ignored"
+exit = 0
+passed = 3
+rev = "a8c08064e964fc855403fac04e3587354baceada"
+observed_at = 1794055163
+output_digest = "sha256:0950a1119d5722c1c5fa74917d89f4428951cf794913556950c434fd111be9e7"
+excerpt = """
+
+running 3 tests
+test stale_lock_with_idle_holder_transcript_passes ... ok
+test stale_lock_with_fresh_holder_transcript_blocks ... ok
+test stale_lock_with_no_holder_transcript_blocks ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/audit_b15_maintree_transcript_liveness.rs (target/debug/deps/audit_b15_maintree_transcript_liveness-e0e56282f4fb7e06)
+"""
+
+[task.closure.red]
+rev = "679c57e6dba690c81f30c80a3686562e79f472dc"
+exit = 101
+kind = "behavioural"

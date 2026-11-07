@@ -923,3 +923,30 @@ exit 101: condukt v0.7.360 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/
     Finished `test` profile [unoptimized + debuginfo] target(s) in 8.35s
      Running tests/shadow_run_finish_persists_proofs_20261107.rs (target/debug/deps/shadow_run_finish_persists_proofs_20261107-34fd92aad63feaf7)
 error: test failed, to rerun pass `-p condukt --test shadow_run_finish_persists_proofs_20261107`"""
+
+[[task]]
+id = "8ada7ad9"
+title = "condukt worktree merge: 45s timeout kills git mid-merge, leaves staged half-merge with no MERGE_HEAD"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-07 at main e6fc7abf, run run-20261107-114313-25739 task t3: 'condukt: merge of condukt/run-20261107-114313-25739/t3 into main failed: git [merge --no-edit -m ... 3087c5e6...] in /Users/yuki/src/harness timed out after 45s and was killed'; afterwards main had incoming changes STAGED (M  scripts/lint-changed-crates.sh, M  scripts/test-changed-crates.sh), no MERGE_HEAD (a foreign concurrent git merge was also running); same merge later succeeded in seconds. Reproduced deterministically at 56764042/8a9df328 with a pre-merge-commit hook sleeping past GIT_TIMEOUT (worktree.rs:27, final git merge at ~l.1316): HEAD unmoved, staged=task.txt, MERGE_HEAD absent, no recovery text in output. Fix direction: on timeout, restore index/worktree (reset --merge) or report recovery. Cause of the original slowness (lock contention vs other) undetermined; the half-applied outcome is reproduced."
+created_at = 1794027785
+updated_at = 1794027785
+weight = 0.0
+issue_number = 1605
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1605"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_merge_timeout_halfapplied_20261107 -- --ignored"
+rev = "8a9df328ad310a95e1cdcac50cb27e20b02b3e59"
+observed_at = 1794027785
+detail = """
+exit 101: .366 (/Users/yuki/.condukt/worktrees/run-20261107-114313-25739-fileA/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.24s
+     Running tests/backlog_merge_timeout_halfapplied_20261107.rs (target/debug/deps/backlog_merge_timeout_halfapplied_20261107-80093ed1dde55fdb)
+error: test failed, to rerun pass `-p condukt --test backlog_merge_timeout_halfapplied_20261107`"""

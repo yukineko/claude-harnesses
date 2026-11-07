@@ -925,3 +925,66 @@ exit 101: 54s
     Finished `test` profile [unoptimized + debuginfo] target(s) in 18.48s
      Running tests/backlog_eof_redirect_fp_20261107.rs (target/debug/deps/backlog_eof_redirect_fp_20261107-10d2a5402ba5d093)
 error: test failed, to rerun pass `-p blastguard --test backlog_eof_redirect_fp_20261107`"""
+
+[[task]]
+id = "7d615bf0"
+title = "blastguard: => inside a python triple-quoted literal in a quoted heredoc is read as a redirect (Ask)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate-fp",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-07 in session bf349dd5 (subagent editing crates/backlog). Verbatim reason: the program text contains a `>` that a shell would read as a redirect whose target cannot be determined. RED committed at bb0811e9: crates/blastguard/tests/heredoc_python_triple_quote_fp_20261107.rs target_python_triple_quoted_fat_arrow (control: same shape with real > /etc/hosts stays non-Allow). Do NOT weaken the test; remove the ignore marker when fixed."
+created_at = 1794040969
+updated_at = 1794040969
+weight = 0.0
+issue_number = 1618
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1618"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_python_triple_quote_fp_20261107 -- --include-ignored"
+rev = "bb0811e93f1a65cf659598dc1079c4cbc4f561c3"
+observed_at = 1794040969
+detail = """
+exit 101: sult: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running tests/heredoc_python_triple_quote_fp_20261107.rs (target/debug/deps/heredoc_python_triple_quote_fp_20261107-aa64d1a056fa3fe1)
+error: test failed, to rerun pass `-p blastguard --test heredoc_python_triple_quote_fp_20261107`"""
+
+[[task]]
+id = "836d0725"
+title = "check-test-weakening: pure append of a #[test] to a macro_rules! test file is undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate-fp",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-07 in session bf349dd5 adding a RED to crates/blastguard/tests/heredoc_body_gt_fp_20261107.rs. Verbatim: check-test-weakening: undetermined — ...: #[test] inside a macro_rules! template in a file that exists at the base -- macro invocations are not counted, so removed generated tests cannot be ruled out. A base-is-prefix append cannot remove generated tests. RED committed at bb0811e9: scripts/test_check_test_weakening_macro_append_20261107.py (controls: append + removed invocation, append + deleted template assert must still block). Do NOT weaken the test; remove the expectedFailure marker when fixed."
+created_at = 1794040972
+updated_at = 1794040972
+weight = 0.0
+issue_number = 1619
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1619"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_macro_append_20261107.py -q"
+rev = "bb0811e93f1a65cf659598dc1079c4cbc4f561c3"
+observed_at = 1794040972
+detail = """
+exit 1: -- macro invocations are not counted, so removed generated tests cannot be ruled out
+
+scripts/test_check_test_weakening_macro_append_20261107.py:110: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_macro_append_20261107.py::MacroAppend::test_target_appending_a_standalone_test_passes
+1 failed, 2 passed in 1.78s"""

@@ -131,6 +131,7 @@ impl Fixture {
 }
 
 #[test]
+#[ignore = "backlog 7d615bf0: open defect, remove ignore when fixed"]
 fn target_python_triple_quoted_fat_arrow() {
     let f = Fixture::new("target_python_triple_quoted_fat_arrow");
     let command = "cd {DIR} && python3 - <<'EOF'\ns=s.replace(\"\"\"    Claimed,\n\"\"\",1)\ns=s.replace(\"\"\"    /// Every status, in lifecycle order (the derived `Claimed` last).\n    ];\"\"\",1)\ns=s.replace(\"\"\"            Status::Claimed => \"claimed\",\n\"\"\",1)\nEOF";

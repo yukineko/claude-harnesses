@@ -69,6 +69,7 @@ mod fileops;
 mod find_xargs;
 mod gh;
 mod git;
+mod git_unmerged;
 mod heredoc;
 mod high_blast;
 mod interpreter;

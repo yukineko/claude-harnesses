@@ -181,7 +181,7 @@ fn control_benign_shapes_are_not_deny() {
 // ---- 1. git config / exec via environment ----
 
 #[test]
-#[ignore = "backlog <id>: env-supplied git config/exec (GIT_CONFIG_*, GIT_PAGER, ...) must be Deny"]
+#[ignore = "backlog 3c750df2: env-supplied git config/exec (GIT_CONFIG_*, GIT_PAGER, ...) must be Deny"]
 fn g1_git_env_config_and_exec_vars_are_deny() {
     Fixture::new("g1a").assert_all_deny(
         "g1 git env",
@@ -204,7 +204,7 @@ fn g1_git_env_config_and_exec_vars_are_deny() {
 }
 
 #[test]
-#[ignore = "backlog <id>: -c core.fsmonitor / git config core.fsmonitor / ext:: transport must be Deny"]
+#[ignore = "backlog 3c750df2: -c core.fsmonitor / git config core.fsmonitor / ext:: transport must be Deny"]
 fn g1_git_fsmonitor_and_ext_transport_are_deny() {
     Fixture::new("g1b").assert_all_deny(
         "g1 git fsmonitor/ext",
@@ -219,7 +219,7 @@ fn g1_git_fsmonitor_and_ext_transport_are_deny() {
 // ---- 2. system-file removal other than plain rm ----
 
 #[test]
-#[ignore = "backlog <id>: unlink/rmdir/mv of system paths must be Deny"]
+#[ignore = "backlog 3c750df2: unlink/rmdir/mv of system paths must be Deny"]
 fn g2_unlink_rmdir_mv_system_paths_are_deny() {
     Fixture::new("g2").assert_all_deny(
         "g2 unlink/rmdir/mv",
@@ -238,7 +238,7 @@ fn g2_unlink_rmdir_mv_system_paths_are_deny() {
 // ---- 3. rm operand spellings ----
 
 #[test]
-#[ignore = "backlog <id>: rm of a system file via quoted/brace/dynamic operand spelling must be Deny"]
+#[ignore = "backlog 3c750df2: rm of a system file via quoted/brace/dynamic operand spelling must be Deny"]
 fn g3_rm_operand_spellings_are_deny() {
     Fixture::new("g3").assert_all_deny(
         "g3 rm operands",
@@ -263,7 +263,7 @@ fn g3_rm_operand_spellings_are_deny() {
 // ---- 4. osascript ----
 
 #[test]
-#[ignore = "backlog <id>: osascript Finder delete (heredoc/pipe/app-id/JXA/move to trash) of system file must be Deny"]
+#[ignore = "backlog 3c750df2: osascript Finder delete (heredoc/pipe/app-id/JXA/move to trash) of system file must be Deny"]
 fn g4_osascript_finder_delete_is_deny() {
     Fixture::new("g4").assert_all_deny(
         "g4 osascript",
@@ -282,7 +282,7 @@ fn g4_osascript_finder_delete_is_deny() {
 // ---- 5. python exec*/spawn*/rename/system ----
 
 #[test]
-#[ignore = "backlog <id>: python os.exec*/spawn*/rename/system on system files must be Deny"]
+#[ignore = "backlog 3c750df2: python os.exec*/spawn*/rename/system on system files must be Deny"]
 fn g5_python_os_calls_on_system_files_are_deny() {
     let body = |line: &str| format!("python3 - <<'PY'\nimport os\n{line}\nPY");
     let cmds = [
@@ -298,7 +298,7 @@ fn g5_python_os_calls_on_system_files_are_deny() {
 // ---- 6. repeat: 2nd and 3rd identical request stays Deny ----
 
 #[test]
-#[ignore = "backlog <id>: repeated identical system-harm request must stay Deny (all three requests)"]
+#[ignore = "backlog 3c750df2: repeated identical system-harm request must stay Deny (all three requests)"]
 fn g6_repeated_system_harm_stays_deny() {
     let cmds = [
         "find /etc -delete",

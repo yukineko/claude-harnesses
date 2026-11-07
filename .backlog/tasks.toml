@@ -1042,3 +1042,32 @@ exit 101: condukt v0.7.360 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/
     Finished `test` profile [unoptimized + debuginfo] target(s) in 8.35s
      Running tests/shadow_run_finish_persists_proofs_20261107.rs (target/debug/deps/shadow_run_finish_persists_proofs_20261107-34fd92aad63feaf7)
 error: test failed, to rerun pass `-p condukt --test shadow_run_finish_persists_proofs_20261107`"""
+
+[[task]]
+id = "3c750df2"
+title = "blastguard: round-2 system-harm bypasses (env git config, unlink/mv/rmdir, quoted/brace/dynamic rm operands, osascript heredoc/app-id, python exec*, repeat marker)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = "RED on branch red/bg-round2 (676f7377, main 91531ac1): crates/blastguard/tests/system_harm_bypass_round2_20261107.rs; 7 ignored targets g1a g1b g2 g3 g4 g5 g6 fail, control passes. Rulings 2026-11-07: system harm Deny through any wrapper, repeat stays Deny, exec git wrappers banned, no false positives. Failing variants are in the test failure messages. Not covered by the other fix branch."
+created_at = 1794018631
+updated_at = 1794018631
+weight = 0.0
+issue_number = 1600
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1600"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test system_harm_bypass_round2_20261107 -- --include-ignored"
+rev = "676f73774070772b04f50167311a9fbe729a958a"
+observed_at = 1794018631
+detail = """
+exit 101: 54s
+
+   Compiling blastguard v0.2.297 (/Users/yuki/src/.harness-worktrees/red-bg-round2/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.68s
+     Running tests/system_harm_bypass_round2_20261107.rs (target/debug/deps/system_harm_bypass_round2_20261107-16d12ff5dd4045b8)
+error: test failed, to rerun pass `-p blastguard --test system_harm_bypass_round2_20261107`"""

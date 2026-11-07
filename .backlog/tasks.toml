@@ -32,98 +32,6 @@ FAILED scripts/test_check_test_weakening_macro_unignore.py::MacroUnignore::test_
 ============================== 1 failed in 0.54s ==============================='''
 
 [[task]]
-id = "fb338793"
-title = "blastguard: system-harming commands and git exec-capable shapes not Deny (bisect run, rebase --exec, submodule foreach, -c alias/pager/editor, difftool --extcmd, --upload-pack, rm /etc/passwd, repeat downgrade)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "blastguard",
-    "p1",
-]
-touched_files = []
-status = "pending"
-notes = """
-User rulings 2026-11-07 (relayed by coordinator):
- R1 "any command harmful to the system must be DENY, for whatever reason; this is a critical bug".
- R2 (design) instead of parsing what git exec-wrappers run, BAN them outright: every git subcommand/option that executes an arbitrary command must be Deny regardless of the embedded command (git bisect run, rebase --exec/-x/--exec=, submodule foreach, filter-branch any --*-filter, -c alias.X='!...' / shell alias, difftool/mergetool --extcmd, any other exec-capable shape).
-All targets assert deny. Do not fix in the filing task.
-
-Measured 2026-11-07 on main fa2e6fda (blastguard 0.2.287; target/debug/blastguard built from that rev; re-checked identical on 0.2.288 = 12e728b0, version-only bump). Bash PreToolUse payload, cwd=CLAUDE_PROJECT_DIR=/Users/yuki/src/harness, BLASTGUARD_ASK/CLAUDE_CODE_SESSION_ID/TMPDIR unset. Verbatim probe output (ALLOW = empty stdout):
--- ban shapes, harmless embedded command --
-ALLOW | git bisect run true
-ALLOW | git bisect run make test
-ALLOW | git rebase -x 'echo ok' HEAD~1
-ALLOW | git rebase --exec 'echo ok' HEAD~1
-ALLOW | git rebase --exec='echo ok' HEAD~1
-ALLOW | git rebase -i --exec 'echo ok' HEAD~1
-ALLOW | git pull --rebase -x 'echo ok'
-ALLOW | git submodule foreach 'echo ok'
-ALLOW | git submodule foreach --recursive true
-deny  | git filter-branch --tree-filter true HEAD   (also --index/--msg/--env/--commit/--parent/--tag-name-filter: deny)
-ALLOW | git -c 'alias.x=!echo ok' x
-ALLOW | git -c alias.x='!echo ok' x
-ALLOW | git config alias.x '!echo ok'
-ALLOW | git config --global alias.x '!echo ok'
-ALLOW | git difftool --extcmd=echo HEAD
-ALLOW | git difftool -x echo HEAD
-ALLOW | git difftool --extcmd echo HEAD
-ALLOW | git -c core.pager='echo ok' log
-ALLOW | git -c core.sshCommand='echo ok' fetch
-ALLOW | git grep -O'echo ok' foo
-ALLOW | git grep --open-files-in-pager='echo ok' foo
-ALLOW | git fetch --upload-pack='echo ok' origin
-ALLOW | git clone -u 'echo ok' /x /y
-ALLOW | git clone --upload-pack='echo ok' /x /y
-ALLOW | git push --receive-pack='echo ok' origin
-ALLOW | git ls-remote --upload-pack='echo ok' origin
-ALLOW | git archive --remote=origin --exec='echo ok' HEAD
-ALLOW | git send-email --to-cmd='echo ok' x.patch
-ALLOW | git -c diff.external='echo ok' diff
-ALLOW | git -c core.editor='echo ok' commit
-ALLOW | git -c sequence.editor='echo ok' rebase -i HEAD~1
--- exec shapes, destructive embedded command --
-ALLOW | git bisect run rm -rf /usr ; git bisect run rm -rf /usr/lib ; git bisect run sh -c 'rm -rf /usr'
-ALLOW | git rebase --exec 'rm -rf /usr' HEAD~1 ; git rebase -x 'rm -rf /usr' HEAD~1 ; git rebase -i --exec='rm -rf /usr' HEAD~1
-ALLOW | git submodule foreach 'rm -rf /usr' ; git submodule foreach --recursive rm -rf /usr
-deny  | git -c 'alias.x=!rm -rf /usr' x ; git filter-branch --tree-filter 'rm -rf /usr' HEAD
--- bare --
-deny  | rm -rf /usr, /usr/lib, /usr/bin, /etc, /etc/hosts, /System, /System/Library, /bin, /sbin, /var, /Library, /, ~/.ssh, $HOME/.ssh, /Users/yuki/.ssh, ~
-deny  | rm -f /Users/yuki/.ssh/id_ed25519 ; rm -f ~/.ssh/authorized_keys
-ALLOW | rm -f /etc/passwd ; rm /etc/passwd ; rm /etc/hosts ; rm -f /bin/ls ; rm -f /usr/lib/libSystem.B.dylib
-ALLOW | rm -rf /private/tmp/claude-502/scratchx/foo   (control: scratch deletion)
--- controls --
-ALLOW | git bisect start ; git bisect good ; git bisect bad ; git rebase HEAD~1 ; git log
--- repeat --
-With CLAUDE_CODE_SESSION_ID set, the 2nd identical `rm -rf /usr/lib` in the same session is ask; reason ends "(2度目の同一要求です。blastguard は同じ指示を2度は上書きしません — この判断は人間に返されました。)". This is why the coordinator saw ask for rm -rf /usr/lib (the first request is deny).
-Not investigated: the installed cache launcher ~/.claude/plugins/cache/yukineko/blastguard/0.2.287/bin/blastguard (shell script) answered ask for EVERY probed case when invoked directly outside a hook (incl git bisect run rm -rf /usr). The test drives the debug binary from the same rev.
-
-Defects:
-(1) git exec-capable shapes are Allow (R2 ban): all listed ALLOW lines above except filter-branch, which is already deny. Cause for bisect/rebase/submodule (read, not instrumented): crates/blastguard/src/detect/git.rs analyze_git_words ends its subcommand match with `_ => Decision::Allow` (line 755 at fa2e6fda); no arm for bisect/rebase/submodule/difftool/grep/fetch/clone/push/ls-remote/archive/send-email. -c config executors (alias/pager/sshCommand/editor/diff.external) are handled in src/detect/executors.rs but a harmless value is Allow; only a destructive alias body is deny (cause not read).
-(2) R1: non-recursive rm of system files (/etc/passwd, /etc/hosts, /bin/ls, /usr/lib/libSystem.B.dylib) is Allow. Cause not read.
-(3) R1: src/main.rs downgrade_on_repeat turns a repeated system-harming Deny into Ask. RULING CONFLICT: operator ruling 2026-09-18 「ユーザの指示を2度やぶるgateはいらない。2度目はaskせよ」「全 gate で 2度目は無条件に通す」 vs R1 "must be DENY, for whatever reason". Target second_identical_rm_rf_usr_lib_stays_deny pins R1; tests/repeat_downgrade.rs uses non-system paths (/mnt/c/tmp/aegis-worktrees/..., git reset --hard, git checkout -- .) so it does not pin the opposite. Implementer should confirm scope with the user before changing downgrade_on_repeat.
-
-Readings: (a) defect - per R1/R2 every target must be Deny; (b) intended - none found for (1)/(2) (no comment, test or ruling exempts these); for (3) the 2026-09-18 ruling is intended behaviour that R1 now overrides for system-harming commands. Tell apart: grep tests/ and ticket notes for a ruling exempting a shape; absent one, (a).
-
-Repro: crates/blastguard/tests/git_exec_subcommand_failopen_20261107.rs (commit 12e728b0) - 44 targets RED (43 got "allow", 1 got "ask"), 23 controls green (bare system rm -rf deny on first request incl ~/.ssh, $HOME/.ssh; bisect start/good/bad, rebase HEAD~1, log Allow; destructive alias and all 7 filter-branch --*-filter deny; rm -rf in /private/tmp scratch and in a managed .harness-worktrees linked worktree Allow). Targets are #[ignore = "backlog <id>: ..."] after filing; run with --include-ignored."""
-created_at = 1794000962
-updated_at = 1794000962
-weight = 0.0
-issue_number = 1589
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1589"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test git_exec_subcommand_failopen_20261107 -- --include-ignored"
-rev = "12e728b0cd011e9ed84b1929a5f2b8a570e62732"
-observed_at = 1794000962
-detail = """
-exit 101: iling blastguard v0.2.288 (/Users/yuki/src/.harness-worktrees/session-0d3d5bb8/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.27s
-     Running tests/git_exec_subcommand_failopen_20261107.rs (target/debug/deps/git_exec_subcommand_failopen_20261107-cbbfb8fe5d7d5db8)
-error: test failed, to rerun pass `-p blastguard --test git_exec_subcommand_failopen_20261107`"""
-
-[[task]]
 id = "43034f75"
 title = "blastguard: Ask on deleting an unmerged branch or force-removing a dirty worktree"
 project = "/Users/yuki/src/harness"
@@ -985,33 +893,6 @@ exit 101:
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.86s
      Running tests/stalled_scan_session_jsonl_20261107.rs (target/debug/deps/stalled_scan_session_jsonl_20261107-7a24cd38ed8bf7f4)
 error: test failed, to rerun pass `-p overwatch --test stalled_scan_session_jsonl_20261107`"""
-
-[[task]]
-id = "0fefcd3b"
-title = "blastguard allows python-heredoc os.system write to protected path and osascript Finder delete (system-harm fail-open)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = """Observed 2026-11-07 by differential probe (session 0d3d5bb8) at main 20a9de24; also Allow before the latest interpreter-heredoc change. User rulings 2026-11-07: system-harming commands are Deny through any wrapper (critical bug); false positives not allowed. Measured Allow: python3 - heredoc with os.system('echo x > .git/hooks/pre-commit'), subprocess.run(same, shell=True), os.system('echo x > .claude/settings.json'); osascript -e 'tell application "Finder" to delete POSIX file "/Users"' / '(path to home folder)' / POSIX file '/System/Library' / 'delete every item of trash' (also after a python heredoc). Measured Deny already: os.system('rm -rf ~/.ssh') and subprocess.run('rm -rf ~/.ssh', shell=True) in heredoc; top-level 'echo x > .git/hooks/pre-commit'. Controls pass: heredoc os.system('echo hi') and osascript display notification not Deny. Branch red/bg-embedded commit 01ac3360."""
-created_at = 1794014804
-updated_at = 1794014804
-weight = 0.0
-issue_number = 1594
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1594"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test embedded_shell_and_osascript_failopen_20261107 -- --include-ignored"
-rev = "01ac3360e2e1e5bef3e0e887daf13c96518c7efd"
-observed_at = 1794014804
-detail = """
-exit 101: (/Users/yuki/src/.harness-worktrees/red-bg-embedded/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.81s
-     Running tests/embedded_shell_and_osascript_failopen_20261107.rs (target/debug/deps/embedded_shell_and_osascript_failopen_20261107-534121fe7d903de8)
-error: test failed, to rerun pass `-p blastguard --test embedded_shell_and_osascript_failopen_20261107`"""
 
 [[task]]
 id = "77411d5b"

@@ -133,7 +133,6 @@ fn body(agents: &[(&str, &str)], clean: bool) -> String {
 
 /// A: exit 1 with no unselected non-ok agent is unexplained.
 #[test]
-#[ignore = "RED: agents check consistency 2026-11-07"]
 fn a_exit1_without_unselected_non_ok_is_not_clean() {
     let fx = Fx::new();
     fx.fake_overwatch(&body(&[("X", "done")], false), 1);
@@ -144,7 +143,6 @@ fn a_exit1_without_unselected_non_ok_is_not_clean() {
 
 /// B: empty set with no selection is not clean.
 #[test]
-#[ignore = "RED: agents check consistency 2026-11-07"]
 fn b_empty_agent_set_is_not_clean() {
     let fx = Fx::new();
     fx.fake_overwatch(&body(&[], true), 0);
@@ -155,7 +153,6 @@ fn b_empty_agent_set_is_not_clean() {
 
 /// C: duplicate agent ids are undeterminable.
 #[test]
-#[ignore = "RED: agents check consistency 2026-11-07"]
 fn c_duplicate_agent_ids_are_not_clean() {
     let fx = Fx::new();
     fx.fake_overwatch(&body(&[("X", "done"), ("X", "stalled")], true), 0);
@@ -176,7 +173,6 @@ fn d_control_unselected_stalled_is_clean() {
 
 /// E: body clean:false disagrees with exit 0.
 #[test]
-#[ignore = "RED: agents check consistency 2026-11-07"]
 fn e_body_clean_false_with_exit0_is_not_clean() {
     let fx = Fx::new();
     fx.fake_overwatch(&body(&[("X", "done")], false), 0);

@@ -14,8 +14,9 @@
 //! the output (reported as state `undetermined`), `--run` selecting zero ids or
 //! an unreadable run state — all exit 1 with `clean:false`. When specific
 //! agents are selected an overwatch exit 1 caused by UNSELECTED agents does not
-//! block; without a selection, an overwatch exit 1 that lists no blocking
-//! agent is inconsistent and is treated as undetermined.
+//! block. Inconsistent output is undetermined too: an empty agents array,
+//! duplicate agent ids, exit 1 with no non-ok agent anywhere, or a body
+//! `clean` that disagrees with the exit code.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -68,13 +69,32 @@ fn evaluate(
         .get("agents")
         .and_then(Value::as_array)
         .ok_or("overwatch output has no `agents` array")?;
-    let is_ok = |a: &Value| matches!(a["state"].as_str(), Some("done" | "progressing"));
-    let Some(sel) = selected else {
-        let blocking: Vec<Value> = agents.iter().filter(|a| !is_ok(a)).cloned().collect();
-        if code != 0 && blocking.is_empty() {
-            return Err("overwatch exited 1 but listed no blocking agent".into());
+    if agents.is_empty() {
+        return Err("overwatch listed no agents (an empty set is not clean)".into());
+    }
+    let mut seen = BTreeSet::new();
+    for a in agents {
+        let id = a["agent_id"]
+            .as_str()
+            .ok_or("agent entry without agent_id")?;
+        if !seen.insert(id) {
+            return Err(format!("duplicate agent_id '{id}' in overwatch output"));
         }
-        return Ok(blocking);
+    }
+    if let Some(c) = v.get("clean").filter(|c| !c.is_null()) {
+        let body_clean = c.as_bool().ok_or("overwatch `clean` is not a boolean")?;
+        if body_clean != (code == 0) {
+            return Err(format!(
+                "overwatch body clean={body_clean} disagrees with exit {code}"
+            ));
+        }
+    }
+    let is_ok = |a: &Value| matches!(a["state"].as_str(), Some("done" | "progressing"));
+    if code == 1 && agents.iter().all(is_ok) {
+        return Err("overwatch exited 1 but no agent is non-ok".into());
+    }
+    let Some(sel) = selected else {
+        return Ok(agents.iter().filter(|a| !is_ok(a)).cloned().collect());
     };
     let mut blocking = Vec::new();
     for id in sel {

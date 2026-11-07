@@ -597,6 +597,8 @@ condukt state checkpoint --run "$RID" --label baseline   # 復元フロア: 実�
      当該タスクを resume できる。`escalate` バイナリが無い等で enqueue に失敗したときのみ従来の即時報告に
      fail-soft する。GATED タスクの承認待ちも同様にこの channel に enqueue してよい。
 
+worker/verifier の完了通知を待つ旨 (「waiting」) を書く前に、停止・未配達の sub-agent が無いか `condukt agents check --session "$SESSION_ID" --run "$RID"` で機械判定する (exit 0 以外 = stalled / ended_undelivered / 判定不能のどれかが blocking。stdout の JSON `blocking` を読み、待たずに再投入か escalate する)。
+
 バッチ内は 1 メッセージで複数 `Task` を同時発行して並列化する。worker が完了するたびに即 verifier を起動し、worker 完了の待ち合わせはしない（後続 worker が動いている間に先行タスクの検証が進む）。`serial` タスクは並列バッチから外して 1 件ずつ実装するが、**順序の制約であって場所の制約ではない**: 各 serial タスクは自分専用の worktree（上記 1.〜2. と同じ `condukt worktree create --run "$RID" --topic <t.id> ...` → `state set ... --worktree "$WP"`）で worker が実装し verifier が検証する。**各 serial タスクの Phase 6 verifier が pass した直後に、Phase 7 を待たず mid-run で**
 `condukt worktree merge --branch condukt/$RID/<t.id> --run "$RID" --task <t.id>` → `condukt worktree remove --path "$WP" --branch condukt/$RID/<t.id>` を実行して既定ブランチへ統合し、**それから次の serial タスクの worktree を作る**（後続は先行タスクの成果を見る。Phase 7 の gate は run 全体を見るので、この順序制約は Phase 7 には任せられない）。merge が HOLD / 衝突したら**次の serial タスクへ進まず止まる**（Phase 7「merge pre-flight 衝突への対処」）。 verifier が fail した serial タスクは**決して merge せず**、serial の連鎖はそこで止まる（次の serial タスクの worktree を作らない）。
 

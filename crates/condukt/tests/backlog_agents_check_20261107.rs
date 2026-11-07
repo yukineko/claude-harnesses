@@ -195,7 +195,6 @@ fn control_state_set_agent_id_is_recorded() {
 }
 
 #[test]
-#[ignore = "RED: condukt agents check 2026-11-07"]
 fn t1_all_done_or_progressing_is_clean() {
     let fx = Fx::new();
     fx.fake_overwatch(&ow(&[("a1", "done"), ("a2", "progressing")]), 0);
@@ -207,7 +206,6 @@ fn t1_all_done_or_progressing_is_clean() {
 }
 
 #[test]
-#[ignore = "RED: condukt agents check 2026-11-07"]
 fn t2_stalled_and_ended_undelivered_block() {
     let fx = Fx::new();
     fx.fake_overwatch(
@@ -232,7 +230,6 @@ fn t2_stalled_and_ended_undelivered_block() {
 }
 
 #[test]
-#[ignore = "RED: condukt agents check 2026-11-07"]
 fn t3_overwatch_missing_is_nonzero() {
     let mut fx = Fx::new();
     fx.overwatch_on_path = false;
@@ -242,7 +239,6 @@ fn t3_overwatch_missing_is_nonzero() {
 }
 
 #[test]
-#[ignore = "RED: condukt agents check 2026-11-07"]
 fn t4_garbage_output_is_nonzero() {
     let fx = Fx::new();
     fx.fake_overwatch("this is not json {{{", 0);
@@ -252,7 +248,6 @@ fn t4_garbage_output_is_nonzero() {
 }
 
 #[test]
-#[ignore = "RED: condukt agents check 2026-11-07"]
 fn t5_missing_selected_agent_is_undetermined() {
     let fx = Fx::new();
     fx.fake_overwatch(&ow(&[("a1", "done")]), 0);
@@ -267,7 +262,6 @@ fn t5_missing_selected_agent_is_undetermined() {
 }
 
 #[test]
-#[ignore = "RED: condukt agents check 2026-11-07"]
 fn t6_run_selection_uses_recorded_agent_ids() {
     let fx = Fx::new();
     set_running(&fx, &["--agent-id", "X"]);
@@ -288,7 +282,6 @@ fn t6_run_selection_uses_recorded_agent_ids() {
 }
 
 #[test]
-#[ignore = "RED: condukt agents check 2026-11-07"]
 fn t7_run_without_recorded_ids_is_not_clean() {
     let fx = Fx::new();
     fx.fake_overwatch(&ow(&[("a1", "done")]), 0);

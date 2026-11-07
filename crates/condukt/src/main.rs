@@ -4566,6 +4566,21 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // decomposition (ENOENT — a real observation of absence, not a
             // failure to look) still passes through ungated.
             let mut fp_gate_value: Option<bool> = None;
+            // The task's worktree for both verified gates, resolved into an
+            // owned local *before* the `&mut` borrow below. A `--worktree W`
+            // passed in this same call wins (backlog cf70f785): it is the
+            // worktree this call records, so the proofs must be judged there,
+            // not in a previously recorded one. Mirrors the recording below
+            // (`--clear-worktree` beats `--worktree`); else the recorded one.
+            let passed_wt = if clear_worktree {
+                None
+            } else {
+                worktree.clone()
+            };
+            let task_wt = passed_wt.or_else(|| {
+                let t = rs.tasks.iter().find(|s| s.id == task);
+                t.and_then(|s| s.worktree.clone())
+            });
             if st == state::Status::Verified {
                 match state::fp_gate_scope(cfg, cwd, &run, &task) {
                     // The one deliberate carve-out: there is no decomposition
@@ -4582,31 +4597,14 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         requires_fp_oracle,
                         reproduction_tests,
                     } => {
-                        // Resolve run_dir into a local *before* taking the
-                        // `&mut` borrow below. A `--worktree W` passed in this
-                        // same call wins (backlog cf70f785): it is the worktree
-                        // this call records, so the oracle must judge the proofs
-                        // there, not in a previously recorded worktree or the
-                        // session cwd. The precedence mirrors the recording
-                        // below (`--clear-worktree` beats `--worktree`). Only
-                        // then fall back to the recorded worktree, then cwd.
+                        // The oracle judges the proofs in `task_wt`, else cwd.
                         // A missing/unreadable dir is not papered over: the
                         // `tdd` spawn fails there and `check_oracle` reports an
                         // undetermined oracle, which `enforce_fp_gate` rejects
                         // (pinned by `oracle::tests::
                         // spawn_failure_is_undetermined_and_rejects`).
-                        let passed_worktree = if clear_worktree {
-                            None
-                        } else {
-                            worktree.as_deref()
-                        };
-                        let run_dir = passed_worktree
-                            .or_else(|| {
-                                rs.tasks
-                                    .iter()
-                                    .find(|s| s.id == task)
-                                    .and_then(|s| s.worktree.as_deref())
-                            })
+                        let run_dir = task_wt
+                            .as_deref()
                             .map(std::path::PathBuf::from)
                             .unwrap_or_else(|| cwd.to_path_buf());
                         let verdict = oracle::check_oracle(
@@ -4631,6 +4629,8 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         }
                     }
                 }
+                // Committed-tree gate (backlog 1ca662ec); see the fn's doc.
+                worktree::refuse_uncommitted_task_worktree(&task, task_wt.as_deref())?;
             }
 
             let t = rs

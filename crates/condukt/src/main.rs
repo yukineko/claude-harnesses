@@ -10,6 +10,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod adversarial;
+mod agents_check;
 mod checkpoint;
 mod circuit;
 mod claim;
@@ -416,73 +417,12 @@ enum Command {
     /// (never merged) once evaluated.
     ShadowRun {
         #[command(subcommand)]
-        action: ShadowRunAction,
+        action: shadow_run::ShadowRunAction,
     },
-}
-
-#[derive(Subcommand)]
-enum ShadowRunAction {
-    /// Permit shadow-run to fire. Off by default.
-    Enable,
-    /// Forbid shadow-run from firing (the default state).
-    Disable,
-    /// Exit 0 if shadow-run is currently enabled, 1 otherwise (mirrors
-    /// `state autonomy-check`'s exit-code contract so callers can branch on it).
-    Status,
-    /// Create the second (shadow) worktree for `--topic` on `--branch`, gated
-    /// on the enable flag. Prints the worktree path on success; the caller
-    /// (the `/condukt` skill, via a worker agent) does the actual implementation
-    /// under `--model` inside it, then calls `finish` to evaluate and discard.
-    Exec {
-        #[arg(long)]
-        topic: String,
-        #[arg(long)]
-        branch: String,
-        /// Run id to namespace the shadow worktree and its branch under, exactly
-        /// as `worktree create --run` does. Omit it for the legacy,
-        /// un-namespaced layout (byte-identical path and ref). Whatever is
-        /// passed here must be passed to `shadow-run finish` too: the branch
-        /// created is the branch deleted.
-        #[arg(long)]
-        run: Option<String>,
-        /// Model the shadow attempt will run under (recorded, not enforced —
-        /// the caller is responsible for actually invoking that model).
-        #[arg(long)]
-        model: String,
-    },
-    /// Discard the shadow worktree (never merge) and best-effort record the
-    /// outcome to fugu-router for later routing comparison.
-    Finish {
-        #[arg(long)]
-        path: PathBuf,
-        #[arg(long)]
-        branch: String,
-        /// Run id the shadow worktree was cut under (the same `--run` that was
-        /// given to `exec`). Omit it for an un-namespaced shadow worktree. It is
-        /// checked against the branch git actually has checked out at `--path`:
-        /// a mismatch is refused outright rather than force-deleting a ref that
-        /// does not exist while the real branch survives.
-        #[arg(long)]
-        run: Option<String>,
-        #[arg(long)]
-        title: String,
-        #[arg(long)]
-        model: String,
-        #[arg(long)]
-        pass: bool,
-        /// Measured USD cost of the shadow attempt. OMIT it when no cost was
-        /// measured: the outcome is then recorded with the cost unmeasured
-        /// (`fugu-router record` gets no `--cost`), never with an invented
-        /// value. A supplied value must be finite and non-negative, or the
-        /// command is refused before anything is discarded (backlog `e44e233f`).
-        #[arg(long)]
-        cost: Option<f64>,
-        /// Measured wall-clock duration (seconds) of the shadow attempt. OMIT
-        /// it when not measured (recorded as unmeasured, never as 0). A
-        /// supplied value must be a finite positive number, or the command is
-        /// refused before anything is discarded (backlog `e44e233f`).
-        #[arg(long)]
-        duration: Option<f64>,
+    /// Sub-agent liveness check (wraps `overwatch subagents`).
+    Agents {
+        #[command(subcommand)]
+        action: agents_check::AgentsAction,
     },
 }
 
@@ -2820,7 +2760,8 @@ fn run_user(cmd: Command) -> Result<()> {
             head,
             json,
         } => run_review_order(&cwd, diff_file, from_git, &base, &head, json)?,
-        Command::ShadowRun { action } => run_shadow_run(&cfg, &cwd, action)?,
+        Command::Agents { action } => agents_check::run(&cfg, &cwd, action)?,
+        Command::ShadowRun { action } => shadow_run::run_shadow_run(&cfg, &cwd, action)?,
         // These are dispatched as hooks in main() (via a hook barrier that exits;
         // never returns here). Reaching this arm would be an internal dispatch
         // bug; return a clean error instead of panicking the process.
@@ -2830,120 +2771,6 @@ fn run_user(cmd: Command) -> Result<()> {
         | Command::SubagentStop
         | Command::SessionHeartbeat => {
             bail!("internal: hook subcommands must be dispatched in main(), not run_user()")
-        }
-    }
-    Ok(())
-}
-
-/// Dispatch `condukt shadow-run <action>`. All actions are gated by the
-/// on-disk enable flag except `enable`/`disable`/`status` themselves.
-fn run_shadow_run(cfg: &Config, cwd: &Path, action: ShadowRunAction) -> Result<()> {
-    // Overridable so integration tests never touch the real `~/.condukt`.
-    let dir = std::env::var("CONDUKT_SHADOW_RUN_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| config::base_dir());
-    match action {
-        ShadowRunAction::Enable => {
-            shadow_run::set_enabled(&dir, true)?;
-            println!("shadow-run enabled");
-        }
-        ShadowRunAction::Disable => {
-            shadow_run::set_enabled(&dir, false)?;
-            println!("shadow-run disabled");
-        }
-        ShadowRunAction::Status => {
-            let enabled = shadow_run::is_enabled(&dir);
-            println!("{}", if enabled { "enabled" } else { "disabled" });
-            if !enabled {
-                std::process::exit(1);
-            }
-        }
-        ShadowRunAction::Exec {
-            topic,
-            branch,
-            run,
-            model,
-        } => {
-            if !shadow_run::is_enabled(&dir) {
-                bail!("shadow-run is disabled — run `condukt shadow-run enable` first");
-            }
-            let repo = worktree::toplevel(cwd)?;
-            let path = worktree::create_namespaced(
-                &repo,
-                &cfg.worktree_base,
-                run.as_deref(),
-                &topic,
-                &branch,
-            )?;
-            println!("{}", path.display());
-            eprintln!("condukt: shadow-run worktree ready for model '{model}' at {}; the caller implements there, then calls `shadow-run finish`", path.display());
-        }
-        ShadowRunAction::Finish {
-            path,
-            branch,
-            run,
-            title,
-            model,
-            pass,
-            cost,
-            duration,
-        } => {
-            // Validate the optional measurements BEFORE anything is discarded:
-            // an invalid supplied value is refused outright (omitting the flag
-            // is the only way to say "unmeasured").
-            let cost_usd = shadow_run::validate_cost(cost)?;
-            let duration_secs = shadow_run::validate_duration(duration)?;
-            let repo = worktree::toplevel(cwd)?;
-            let outcome = shadow_run::ShadowOutcome {
-                title,
-                model,
-                pass,
-                cost_usd,
-                duration_secs,
-            };
-            // Resolve fugu-router (plugin cache first, `$PATH` second). The
-            // worktree is discarded regardless; only recording depends on it.
-            // Not installed (`Known(None)`) and could-not-look
-            // (`Undetermined`) are reported as different things — neither is
-            // ever read as "recorded".
-            match harness_core::plugin_bin::resolve("fugu-router") {
-                Determination::Known(Some(p)) => {
-                    let recorded = shadow_run::finish(
-                        &repo,
-                        &path,
-                        &branch,
-                        run.as_deref(),
-                        &outcome,
-                        Some(&p),
-                    )?;
-                    if recorded {
-                        println!("shadow-run discarded and recorded to fugu-router");
-                    } else {
-                        println!(
-                            "shadow-run discarded (fugu-router at {} unavailable or its record failed — outcome not recorded)",
-                            p.display()
-                        );
-                    }
-                }
-                Determination::Known(None) => {
-                    // No program ⇒ `finish` only discards; it returns `false`.
-                    shadow_run::finish(&repo, &path, &branch, run.as_deref(), &outcome, None)?;
-                    println!(
-                        "shadow-run discarded (fugu-router is not installed — outcome not recorded)"
-                    );
-                }
-                Determination::Undetermined(why) => {
-                    // Discard still happens; the outcome is NOT recorded and the
-                    // could-not-look is surfaced on both streams.
-                    shadow_run::finish(&repo, &path, &branch, run.as_deref(), &outcome, None)?;
-                    eprintln!(
-                        "condukt: could not determine whether fugu-router is installed: {why}"
-                    );
-                    println!(
-                        "shadow-run discarded (fugu-router could not be located: {why} — outcome not recorded)"
-                    );
-                }
-            }
         }
     }
     Ok(())

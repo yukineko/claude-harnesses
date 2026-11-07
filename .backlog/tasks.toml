@@ -1,41 +1,4 @@
 [[task]]
-id = "78cee053"
-title = "next --claim re-runs the stored repro and refuses to hand out a now-GREEN ticket"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 6 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: backlog-evidence-rules (formerly red-tickets-often-already-fixed).
-Observed RED 2026-11-07 at 34ece122 (base fc7b5dd9) (verbatim): panicked at ...audit_b6_claim_rejects_green_repro.rs:52:5: next --claim handed out 66b554ab, whose stored repro passes at HEAD / test result: FAILED
-Design choice left to the fix: skip the GREEN ticket vs refuse the whole claim; the test asserts only that the GREEN ticket is not handed out and the still-RED one is (control).
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998404
-updated_at = 1794001889
-weight = 0.0
-issue_number = 1577
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1577"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p backlog --test audit_b6_claim_rejects_green_repro -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998915
-detail = """
-exit 101: ished in 1.41s
-
-   Compiling backlog v0.3.91 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/backlog)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.43s
-     Running tests/audit_b6_claim_rejects_green_repro.rs (target/debug/deps/audit_b6_claim_rejects_green_repro-9f73f7bcdd949947)
-error: test failed, to rerun pass `-p backlog --test audit_b6_claim_rejects_green_repro`"""
-
-[[task]]
 id = "04f53dbe"
 title = "context-governor injector dedup keys on the hook input session_id, not env"
 project = "/Users/yuki/src/harness"

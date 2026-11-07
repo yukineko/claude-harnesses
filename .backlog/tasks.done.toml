@@ -71234,3 +71234,68 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "679c57e6dba690c81f30c80a3686562e79f472dc"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "78cee053"
+title = "next --claim re-runs the stored repro and refuses to hand out a now-GREEN ticket"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 6 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: backlog-evidence-rules (formerly red-tickets-often-already-fixed).
+Observed RED 2026-11-07 at 34ece122 (base fc7b5dd9) (verbatim): panicked at ...audit_b6_claim_rejects_green_repro.rs:52:5: next --claim handed out 66b554ab, whose stored repro passes at HEAD / test result: FAILED
+Design choice left to the fix: skip the GREEN ticket vs refuse the whole claim; the test asserts only that the GREEN ticket is not handed out and the still-RED one is (control).
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998404
+updated_at = 1794063014
+weight = 0.0
+issue_number = 1577
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1577"
+issue_closed_at = 1794063016
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test audit_b6_claim_rejects_green_repro -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998915
+detail = """
+exit 101: ished in 1.41s
+
+   Compiling backlog v0.3.91 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.43s
+     Running tests/audit_b6_claim_rejects_green_repro.rs (target/debug/deps/audit_b6_claim_rejects_green_repro-9f73f7bcdd949947)
+error: test failed, to rerun pass `-p backlog --test audit_b6_claim_rejects_green_repro`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test audit_b6_claim_rejects_green_repro -- --include-ignored"
+exit = 0
+passed = 1
+rev = "cf4416579968ebb27a0b81d116a137cc4006ac55"
+observed_at = 1794062992
+output_digest = "sha256:fc1d74736886cc5733c995012deb0acc32eb5f2ed20c4a380753c557ee572fa5"
+excerpt = """
+
+running 1 test
+test next_claim_does_not_hand_out_a_ticket_whose_repro_went_green ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/audit_b6_claim_rejects_green_repro.rs (target/debug/deps/audit_b6_claim_rejects_green_repro-377aeb22a30e0b96)
+"""
+
+[task.closure.red]
+rev = "03e67b25a1a3fc9b6e182dfa29f5ac36be6dd04e"
+exit = 101
+kind = "behavioural"

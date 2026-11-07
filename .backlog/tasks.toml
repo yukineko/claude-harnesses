@@ -766,3 +766,30 @@ exit 101: c/.harness-worktrees/red-bg-sysdir-newfile/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 3.84s
      Running tests/interpreter_system_dir_new_file_failopen_20261107.rs (target/debug/deps/interpreter_system_dir_new_file_failopen_20261107-211d2813ab019d9e)
 error: test failed, to rerun pass `-p blastguard --test interpreter_system_dir_new_file_failopen_20261107`"""
+
+[[task]]
+id = "e34eb0be"
+title = "blastguard: ~/Library/LaunchAgents への新規 plist 書込を direct/interpreter とも Allow する（裁定は Ask）"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794059850
+updated_at = 1794059850
+weight = 0.0
+issue_number = 1629
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1629"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test launch_agents_new_plist_ask_20261107 new_launch_agent_plist_is_ask_in_every_form"
+rev = "609573e8d5dc69eb6f1aaf9960a84c2cd22c98ae"
+observed_at = 1794059850
+detail = """
+exit 101: ing blastguard v0.2.379 (/Users/yuki/src/.harness-worktrees/red-bg-sysdir-newfile/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.33s
+     Running tests/launch_agents_new_plist_ask_20261107.rs (target/debug/deps/launch_agents_new_plist_ask_20261107-39fdc5abd5c5b807)
+error: test failed, to rerun pass `-p blastguard --test launch_agents_new_plist_ask_20261107`"""

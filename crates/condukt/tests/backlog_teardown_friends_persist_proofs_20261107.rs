@@ -563,7 +563,6 @@ fn cleanup_remove_keeps_dir_when_proofs_cannot_be_persisted() {
 /// proofs there, and `worktree remove` must not silently lose them. Either
 /// durable copies + a valid oracle survive, or the removal is refused.
 #[test]
-#[ignore = "RED: custom tdd proof_dir lost at teardown 2026-11-07"]
 fn remove_does_not_silently_lose_proofs_in_a_custom_proof_dir() {
     let fx = Fx::new();
     let cfg_dir = fx.home.join(".tdd");

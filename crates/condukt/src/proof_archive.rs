@@ -1,7 +1,9 @@
 //! Durable copies of a task worktree's `tdd` RED/GREEN proofs (backlog
 //! ea6547c9).
 //!
-//! `tdd red` / `tdd green` write their proofs into `<worktree>/.tdd/` — inside
+//! `tdd red` / `tdd green` write their proofs into `<worktree>/<proof_dir>/`
+//! (`.tdd` unless a tdd config overrides `proof_dir`, see
+//! [`proof_dir_candidates`]) — inside
 //! the very directory every condukt teardown path deletes. Before this module,
 //! `condukt worktree remove` (and `discard`, `reap`, `cleanup --remove`) took
 //! the proofs down with the worktree, and afterwards neither `tdd oracle` nor
@@ -9,15 +11,16 @@
 //!
 //! Contract:
 //!
-//! * [`persist_before_teardown`] copies every `<wt>/.tdd/*.red.json` /
+//! * [`persist_before_teardown`] copies every `<wt>/<proof dir>/*.red.json` /
 //!   `*.green.json` into the condukt home BEFORE a teardown path deletes the
 //!   worktree, keyed by run id + task id ([`archive_dir`]). Each copy is
 //!   written to a temp file, fsynced, renamed into place, and READ BACK and
 //!   compared byte-for-byte: an unobserved write is not an observation.
-//! * Any failure (IO error, unwritable dir, unreadable `.tdd`, read-back
-//!   mismatch) is an `Err`. Every caller treats that `Err` as "refuse the
+//! * Any failure (IO error, unwritable dir, unreadable proof dir or tdd
+//!   config, a `proof_dir` whose location relative to the worktree cannot be
+//!   decided, read-back mismatch) is an `Err`. Every caller treats that `Err` as "refuse the
 //!   teardown": the worktree stays on disk, so the proofs are never lost.
-//! * No proofs (no `.tdd` dir, or no proof files in it) = nothing to persist =
+//! * No proofs (no proof dir, or no proof files in it) = nothing to persist =
 //!   `Ok` with zero files; the teardown proceeds.
 //! * The run/task identity comes from the caller when it knows it (`discard`)
 //!   or from the worktree's branch record `branch.<b>.conduktTask` (written by
@@ -28,8 +31,8 @@
 //! * [`oracle_dir`] is the read half: `check-oracle` and the `state set
 //!   --status verified` gate run `tdd oracle` in the worktree when the
 //!   worktree still holds the task's proofs, and otherwise in the archive dir
-//!   when THAT holds them (its layout is `<dir>/.tdd/<task>.<kind>.json`, the
-//!   same layout `tdd` reads from its cwd), so `tdd` itself judges the copies.
+//!   when THAT holds them. The copies are written into every proof dir `tdd`
+//!   could resolve for the archive dir as its cwd, so `tdd` itself judges them.
 
 use crate::config::Config;
 use anyhow::{bail, Context, Result};
@@ -37,7 +40,79 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 /// The proof-file directory name `tdd` uses by default (its `proof_dir`).
-const PROOF_DIR: &str = ".tdd";
+const DEFAULT_PROOF_DIR: &str = ".tdd";
+
+/// `proof_dir` as configured in the tdd config file at `path`.
+/// `Ok(None)` = the file does not exist; `Ok(Some(None))` = it exists but sets
+/// no usable `proof_dir` (or does not parse — tdd then uses its default).
+/// A file that exists but cannot be read is an `Err`: tdd may have read it, so
+/// where its proofs went cannot be determined.
+fn configured_proof_dir(path: &Path) -> Result<Option<Option<String>>> {
+    match std::fs::metadata(path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("probing tdd config {}", path.display())),
+    }
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("reading tdd config {}", path.display()))?;
+    let v = toml::from_str::<toml::Value>(&text).ok();
+    let dir = v
+        .as_ref()
+        .and_then(|v| v.get("proof_dir"))
+        .and_then(|d| d.as_str())
+        .filter(|d| !d.trim().is_empty())
+        .map(str::to_string);
+    Ok(Some(dir))
+}
+
+/// Every `proof_dir` tdd could be using for project root `root`, lowest
+/// priority first and tdd's own effective choice LAST (mirrors tdd's
+/// `Config::load`: a project `tdd.toml` wins only when it exists and `root` is
+/// trusted, otherwise `~/.tdd/config.toml`, otherwise `.tdd`). The default and
+/// every configured value are all included — copying a superset is harmless,
+/// guessing one dir wrong loses proofs. `Err` = a config could not be read.
+pub fn proof_dir_candidates(root: &Path) -> Result<Vec<String>> {
+    let project = configured_proof_dir(&root.join("tdd.toml"))?;
+    let home = configured_proof_dir(&harness_core::config::base_dir("tdd").join("config.toml"))?;
+    let effective = if project.is_some() && harness_core::trust::resolve(root).is_trusted() {
+        project.clone().flatten()
+    } else {
+        home.clone().flatten()
+    }
+    .unwrap_or_else(|| DEFAULT_PROOF_DIR.to_string());
+    let mut out = vec![DEFAULT_PROOF_DIR.to_string()];
+    out.extend(project.flatten());
+    out.extend(home.flatten());
+    out.retain(|d| *d != effective);
+    out.dedup();
+    out.push(effective);
+    Ok(out)
+}
+
+/// Where proof dir `d` lies relative to `root`: `Ok(Some(path))` inside it
+/// (deleted with it), `Ok(None)` an absolute path outside it (survives the
+/// teardown, nothing to copy). A relative path with `..` (or any non-plain
+/// component) cannot be placed without resolving it, so it is an `Err`.
+fn proof_dir_inside(root: &Path, d: &str) -> Result<Option<PathBuf>> {
+    let p = Path::new(d);
+    if p.is_absolute() {
+        return Ok(p.starts_with(root).then(|| p.to_path_buf()));
+    }
+    let plain = p.components().all(|c| {
+        matches!(
+            c,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    });
+    if !plain {
+        bail!(
+            "tdd proof_dir {d:?} is not a plain relative path; cannot determine whether it \
+             lies inside {}",
+            root.display()
+        );
+    }
+    Ok(Some(root.join(p)))
+}
 
 /// The durable proof archive for `run_id`/`task_id`:
 /// `<run dir>/<run>.tdd-proofs/<task>`. Proof files live in its `.tdd/`
@@ -64,12 +139,29 @@ fn unattributed_dir(cfg: &Config, cwd: &Path, wt: &Path) -> Result<PathBuf> {
         )))
 }
 
-/// The proof files (`*.red.json` / `*.green.json`) in `<wt>/.tdd/`, sorted.
-/// No `.tdd` dir (or no worktree dir at all) is a real "none"; any other read
-/// failure is an `Err` — "could not look" is not "nothing there".
+/// The proof files (`*.red.json` / `*.green.json`) in every proof dir tdd
+/// could be using for `wt` ([`proof_dir_candidates`]), one per file name — the
+/// higher-priority dir wins a name clash. A missing dir is a real "none"; any
+/// other read failure (or an undeterminable proof dir) is an `Err` — "could not
+/// look" is not "nothing there".
 pub fn proof_files(wt: &Path) -> Result<Vec<PathBuf>> {
-    let dir = wt.join(PROOF_DIR);
-    let rd = match std::fs::read_dir(&dir) {
+    let mut by_name = std::collections::BTreeMap::new();
+    for d in proof_dir_candidates(wt)? {
+        let Some(dir) = proof_dir_inside(wt, &d)? else {
+            continue;
+        };
+        for f in proof_files_in(&dir)? {
+            if let Some(name) = f.file_name() {
+                by_name.insert(name.to_os_string(), f.clone());
+            }
+        }
+    }
+    Ok(by_name.into_values().collect())
+}
+
+/// The proof files directly in `dir`, sorted. Missing `dir` = none.
+fn proof_files_in(dir: &Path) -> Result<Vec<PathBuf>> {
+    let rd = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
@@ -89,6 +181,22 @@ pub fn proof_files(wt: &Path) -> Result<Vec<PathBuf>> {
         }
     }
     out.sort();
+    Ok(out)
+}
+
+/// The dirs inside archive `arch` the copies are written to: every proof dir
+/// tdd could resolve with `arch` as its cwd (so `tdd oracle` run there finds
+/// them), or `.tdd` when none of those lies inside `arch`.
+fn archive_proof_dirs(arch: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    for d in proof_dir_candidates(arch)? {
+        if let Some(p) = proof_dir_inside(arch, &d)? {
+            out.push(p);
+        }
+    }
+    if out.is_empty() {
+        out.push(arch.join(DEFAULT_PROOF_DIR));
+    }
     Ok(out)
 }
 
@@ -189,7 +297,13 @@ pub fn persist_before_teardown(
         Some((run, task)) => (archive_dir(cfg, cwd, run, task)?, true),
         None => (unattributed_dir(cfg, cwd, wt)?, false),
     };
-    copy_verified(&files, &dir.join(PROOF_DIR)).with_context(|| {
+    let copy = || -> Result<()> {
+        for dest in archive_proof_dirs(&dir)? {
+            copy_verified(&files, &dest)?;
+        }
+        Ok(())
+    };
+    copy().with_context(|| {
         format!(
             "refusing to tear down worktree {}: its tdd proofs could not be persisted to {} \
              (the worktree is left in place so the proofs are not lost)",
@@ -249,17 +363,22 @@ fn copy_verified(files: &[PathBuf], dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Whether `dir/.tdd` holds a RED or GREEN proof for `task`. A probe that
-/// errors counts as "holds" for the PRIMARY dir (see [`oracle_dir`]): the
-/// caller then keeps judging there, which is the behaviour before archives
-/// existed — never a switch to a different set of proofs on an IO error.
-fn holds_proof(dir: &Path, task: &str) -> std::io::Result<bool> {
-    let base = dir.join(PROOF_DIR);
-    for kind in ["red", "green"] {
-        match std::fs::symlink_metadata(base.join(format!("{task}.{kind}.json"))) {
-            Ok(_) => return Ok(true),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
+/// Whether any proof dir tdd could be using for `dir` holds a RED or GREEN
+/// proof for `task`. An `Err` (a config or probe that fails) counts as "holds"
+/// for the PRIMARY dir (see [`oracle_dir`]): the caller then keeps judging
+/// there, as before archives existed — never a switch to a different set of
+/// proofs on an IO error.
+fn holds_proof(dir: &Path, task: &str) -> Result<bool> {
+    for d in proof_dir_candidates(dir)? {
+        let Some(base) = proof_dir_inside(dir, &d)? else {
+            continue;
+        };
+        for kind in ["red", "green"] {
+            match std::fs::symlink_metadata(base.join(format!("{task}.{kind}.json"))) {
+                Ok(_) => return Ok(true),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
         }
     }
     Ok(false)
@@ -320,6 +439,33 @@ mod tests {
         let r = copy_verified(std::slice::from_ref(&src), &locked.join("a/.tdd"));
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(r.is_err(), "an unwritable archive must be an Err");
+    }
+
+    #[test]
+    fn proof_dir_inside_refuses_undeterminable_and_skips_outside() {
+        let root = Path::new("/w/t1");
+        assert_eq!(
+            proof_dir_inside(root, "custom").unwrap(),
+            Some(root.join("custom"))
+        );
+        assert_eq!(proof_dir_inside(root, "/elsewhere/p").unwrap(), None);
+        assert_eq!(
+            proof_dir_inside(root, "/w/t1/p").unwrap(),
+            Some(PathBuf::from("/w/t1/p"))
+        );
+        assert!(proof_dir_inside(root, "../p").is_err());
+        assert!(proof_dir_inside(root, "a/../../p").is_err());
+    }
+
+    #[test]
+    fn configured_proof_dir_reads_value_and_treats_unparseable_as_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let f = tmp.path().join("tdd.toml");
+        assert_eq!(configured_proof_dir(&f).unwrap(), None);
+        std::fs::write(&f, "proof_dir = \"pp\"\n").unwrap();
+        assert_eq!(configured_proof_dir(&f).unwrap(), Some(Some("pp".into())));
+        std::fs::write(&f, "not = = toml").unwrap();
+        assert_eq!(configured_proof_dir(&f).unwrap(), Some(None));
     }
 
     #[test]

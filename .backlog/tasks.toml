@@ -739,3 +739,65 @@ scripts/test_check_test_weakening_macro_append_20261107.py:110: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_check_test_weakening_macro_append_20261107.py::MacroAppend::test_target_appending_a_standalone_test_passes
 1 failed, 2 passed in 1.78s"""
+
+[[task]]
+id = "e9a30875"
+title = "blastguard: overwrite of a tracked file in a session-created ~/.condukt/worktrees checkout is refused as not this session's tree"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard-fp",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-07 (batch 3, memory-audit-b). Verbatim block: '> /Users/yuki/.condukt/worktrees/mab3-3da84f08/crates/condukt/src/maintree.rs' destroys the file's current contents and it is inside a git work tree, but not one of this session's trees (neither inside its safe roots nor a recognised worktree checkout), so git being able to restore it does not make the overwrite this session's to make. Coordinator ruling: misattribution. Test asserts only absence of the whose-tree refusal; Ctx::in_worktree_checkout (src/detect/rm.rs) grants recognised status only for a plain command or cd D && plain REST, so the chained command shape (; | $) is deliberately ineligible - the fix must relax that or change the decision for this shape. Remove the ignore when fixed."
+created_at = 1794053667
+updated_at = 1794053667
+weight = 0.0
+issue_number = 1625
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1625"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_worktree_redirect_and_sq_fp_20261107 case1 -- --include-ignored"
+rev = "602e10420e883f36b5984db3aaf6d8d67b36feae"
+observed_at = 1794053667
+detail = """
+exit 101: .376 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.67s
+     Running tests/backlog_worktree_redirect_and_sq_fp_20261107.rs (target/debug/deps/backlog_worktree_redirect_and_sq_fp_20261107-fc5a8aeb9a3322bf)
+error: test failed, to rerun pass `-p blastguard --test backlog_worktree_redirect_and_sq_fp_20261107`"""
+
+[[task]]
+id = "81a4a097"
+title = "blastguard: '> path' inside a single-quoted python3 -c program is read as an overwrite redirect"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard-fp",
+    "needs-ruling",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = """Observed 2026-11-07 (batch 3): the orchestrator's own python3 -c '...' read-only transcript scan, whose program text contained the string literal "> /Users/yuki/.condukt/worktrees/mab3-3da84f08/crates/condukt/src/maintree.rs", got the verbatim block: '> ...maintree.rs' destroys the file's current contents and it is inside a git work tree, but not one of this session's trees (...). Minimal repro: python3 -c 'import sys; s="> <tracked file>"; print(s)' -> deny; test asserts allow. OPEN QUESTION for the user: the inline-eval program-text scan for '>' is ruling R2 (Ask for undeterminable targets); whether R2 is meant to Deny determinable targets in program text decides if the allow assert is right. Do not fix before that ruling. Related unfiled: python3 -c 'print(1)' > file; awk '{...}' file gets an Ask citing inline-eval program text (scan may read across the redirect/awk). Remove the ignore when fixed."""
+created_at = 1794053691
+updated_at = 1794053691
+weight = 0.0
+issue_number = 1626
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1626"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test backlog_worktree_redirect_and_sq_fp_20261107 case3 -- --include-ignored"
+rev = "602e10420e883f36b5984db3aaf6d8d67b36feae"
+observed_at = 1794053691
+detail = """
+exit 101:  passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.68s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running tests/backlog_worktree_redirect_and_sq_fp_20261107.rs (target/debug/deps/backlog_worktree_redirect_and_sq_fp_20261107-fc5a8aeb9a3322bf)
+error: test failed, to rerun pass `-p blastguard --test backlog_worktree_redirect_and_sq_fp_20261107`"""

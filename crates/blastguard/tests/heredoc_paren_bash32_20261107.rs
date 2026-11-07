@@ -29,6 +29,18 @@
 //! 6b  Q  body `fix(x): thing (see #1)`              bad substitution   bad substitution   ok
 //! 7   Q  body `don't break`                         syntax error       syntax error       ok
 //! 8   Q  body `fix (part 1` (open paren only)       syntax error       syntax error       ok
+//! 9   delimiter / multi-heredoc variants (paren line is `hi)"; touch M; echo "` for Q',
+//!     `hi) ; touch M` for U; every row below RAN under bash and sh, never under zsh):
+//!     `<<EOF`  (unquoted delimiter)  Q'/U           RAN / RAN (+syntax err)  same         no exec
+//!     `<<"EOF"` (dq delimiter)       Q'/U           RAN / RAN (+syntax err)  same         no exec
+//!     `<<-'EOF'`, tab body+terminator Q'/U          RAN / RAN (+syntax err)  same         no exec
+//!     `cat <<'A' <<'B'`, paren in 1st body Q'/U     RAN / RAN (+syntax err)  same         no exec
+//!     `cat <<'A'; cat <<'B'`, paren in 1st body Q'/U RAN / RAN (+syntax err) same         no exec
+//!     `cat <<'A' <<'B'`, paren in 2nd body Q'/U     RAN / RAN (+syntax err)  same         no exec
+//! 10  unquoted `<<EOF` body holding `$(touch M)` or backticks (no paren at all):
+//!     RAN in bash, sh AND zsh (expansion is live in every shell); with `<<'EOF'`
+//!     it never runs. This is ordinary heredoc semantics, not the bash 3.2
+//!     divergence; it is recorded, not asserted, here.
 //! ```
 //!
 //! Consequences recorded here, not guessed:
@@ -318,6 +330,73 @@ fn red_unquoted_hidden_curl_sh_is_deny() {
         "deny",
     )];
     check_all(&f, &cases);
+}
+
+// ---------------------------------------------------------------------------
+// RED: delimiter variants and several heredocs in one substitution (matrix
+// row 9: all RAN under bash 3.2 and sh). Harmful payload => Deny.
+// ---------------------------------------------------------------------------
+
+/// Q' (outer quote broken by `"`) or U (unquoted) command with a caller-chosen
+/// `cat` head (`<<DELIM` / two heredocs) and the paren line placed in the
+/// body chosen by `tmpl`, where `{p}` is the paren line.
+fn variant_cases(f: &Fixture, payload: &str, tmpl: &str) -> Vec<(String, String, &'static str)> {
+    let c = f.commit();
+    let pq = format!("hi)\"; {payload}; echo \"");
+    let pu = format!("hi) ; {payload}");
+    vec![
+        (
+            "Q'".to_string(),
+            format!("{c} -m \"$(cat {})\"", tmpl.replace("{p}", &pq)),
+            "deny",
+        ),
+        (
+            "U".to_string(),
+            format!("{c} -m $(cat {})", tmpl.replace("{p}", &pu)),
+            "deny",
+        ),
+    ]
+}
+
+#[track_caller]
+fn check_variants(name: &str, tmpl: &str) {
+    let f = Fixture::new(name);
+    let owned = variant_cases(&f, "rm -rf /etc", tmpl);
+    let cases: Vec<(&str, String, &str)> = owned
+        .iter()
+        .map(|(l, c, w)| (l.as_str(), c.clone(), *w))
+        .collect();
+    check_all(&f, &cases);
+}
+
+#[test]
+fn red_unquoted_delimiter_heredoc_harmful_rm_is_deny() {
+    check_variants("red_v_unq_delim", "<<EOF\n{p}\nEOF\n");
+}
+
+#[test]
+fn red_double_quoted_delimiter_heredoc_harmful_rm_is_deny() {
+    check_variants("red_v_dq_delim", "<<\"EOF\"\n{p}\nEOF\n");
+}
+
+#[test]
+fn red_dash_heredoc_tab_indented_harmful_rm_is_deny() {
+    check_variants("red_v_dash", "<<-'EOF'\n\t{p}\n\tEOF\n");
+}
+
+#[test]
+fn red_two_heredocs_paren_in_first_body_harmful_rm_is_deny() {
+    check_variants("red_v_two_first", "<<'A' <<'B'\n{p}\nA\nbody b\nB\n");
+}
+
+#[test]
+fn red_two_heredocs_semicolon_form_harmful_rm_is_deny() {
+    check_variants("red_v_two_semi", "<<'A'; cat <<'B'\n{p}\nA\nbody b\nB\n");
+}
+
+#[test]
+fn red_two_heredocs_paren_in_second_body_harmful_rm_is_deny() {
+    check_variants("red_v_two_second", "<<'A' <<'B'\nbody a\nA\n{p}\nB\n");
 }
 
 // ---------------------------------------------------------------------------

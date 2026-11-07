@@ -739,3 +739,30 @@ scripts/test_check_test_weakening_macro_append_20261107.py:110: AssertionError
 =========================== short test summary info ============================
 FAILED scripts/test_check_test_weakening_macro_append_20261107.py::MacroAppend::test_target_appending_a_standalone_test_passes
 1 failed, 2 passed in 1.78s"""
+
+[[task]]
+id = "0fbfe00d"
+title = "blastguard: interpreter 経由のシステムディレクトリ新規書込を Allow する fail-open"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "pending"
+notes = ""
+created_at = 1794056271
+updated_at = 1794056271
+weight = 0.0
+issue_number = 1627
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1627"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test interpreter_system_dir_new_file_failopen_20261107 interpreter_new_system_file_at_least_as_restrictive_as_direct"
+rev = "15d07ba3df38c20a1b6283405927676b47724167"
+observed_at = 1794056271
+detail = """
+exit 101: c/.harness-worktrees/red-bg-sysdir-newfile/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.84s
+     Running tests/interpreter_system_dir_new_file_failopen_20261107.rs (target/debug/deps/interpreter_system_dir_new_file_failopen_20261107-211d2813ab019d9e)
+error: test failed, to rerun pass `-p blastguard --test interpreter_system_dir_new_file_failopen_20261107`"""

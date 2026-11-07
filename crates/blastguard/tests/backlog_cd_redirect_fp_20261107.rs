@@ -147,7 +147,6 @@ fn unbalanced_delimiter_in_quoted_body_does_not_unresolve_a_literal_cd() {
     for (i, body) in [
         ")",
         "(",
-        "`",
         "x)",
         "    for p in after.iter().filter(|p| !before.contains(p)) {",
     ]
@@ -158,6 +157,20 @@ fn unbalanced_delimiter_in_quoted_body_does_not_unresolve_a_literal_cd() {
         let d = decision(&base, &cmd);
         assert_eq!(d, "allow", "[min{i}] body {body:?}: quoted body is data");
     }
+}
+
+/// TARGET (RED at 91531ac1, separate defect, user ruling 2026-11-07): a lone
+/// backtick as the whole quoted body, one trailing line. The Ask here comes
+/// from the documented body-as-code scan (README.ja.md: a command after the
+/// heredoc keeps the body scanned), not from cd resolution; fixing it needs a
+/// ruling that changes that documented scan.
+#[test]
+#[ignore = "backlog PLACEHOLDER_BT: open defect, remove ignore when fixed"]
+fn lone_backtick_in_quoted_body_with_trailing_line_is_allow() {
+    let base = fresh_dir("bt");
+    let wt = base.display();
+    let cmd = format!("cd {wt} && cat > crates/condukt/tests/x.rs <<'EOF'\n`\nEOF\nls");
+    assert_eq!(decision(&base, &cmd), "allow", "quoted body is data");
 }
 
 // ------------------------------------------------- controls (pass at 91531ac1)

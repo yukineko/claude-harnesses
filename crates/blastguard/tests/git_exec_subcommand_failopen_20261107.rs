@@ -148,6 +148,7 @@ impl Fixture {
             .env("BLASTGUARD_APPROVALS_DIR", self.base.join("store"))
             .env("HOME", &self.home)
             .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+            .env("CLAUDECODE", "1")
             .env("CLAUDE_CODE_SESSION_ID", &self.session)
             .env_remove("BLASTGUARD_ASK")
             .env_remove("TMPDIR")

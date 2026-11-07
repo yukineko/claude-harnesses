@@ -4,8 +4,8 @@
 # Caps may only go DOWN: the pre-commit gate blocks raising a cap or adding a
 # new entry over 2000. To get a file off this list, split it under 2000 lines,
 # then lower or delete its entry in the same commit.
-2266 crates/backlog/src/main.rs
-6647 crates/backlog/src/store.rs
+2245 crates/backlog/src/main.rs
+6606 crates/backlog/src/store.rs
 2967 crates/backlog/tests/cli_contract.rs
 2330 crates/blastguard/src/detect.rs
 5021 crates/blastguard/src/detect/tests.rs

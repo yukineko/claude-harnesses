@@ -3,6 +3,7 @@ mod claim_ledger;
 mod closecmd;
 mod config;
 mod dedup;
+mod defer;
 mod divergence;
 mod driver;
 mod edit_repro;
@@ -15,6 +16,8 @@ mod lock;
 mod merge_driver;
 mod store;
 mod task;
+mod timefmt;
+use timefmt::format_unix_datetime;
 
 #[cfg(test)]
 mod audit_b1_0_tests;
@@ -246,6 +249,11 @@ enum Command {
         #[arg(long)]
         reason: String,
     },
+
+    /// Record a user ruling deferring a task (見送り): its status becomes
+    /// `ruled-deferred`, which `next` / `next --claim` never hand out and
+    /// nothing requeues. Exits are `cancel` / `done` only
+    Defer(defer::DeferArgs),
 
     /// Reconcile this store against its GitHub issues (one-way: local wins)
     Sync {
@@ -1595,6 +1603,8 @@ fn run(cli: Cli) -> Result<()> {
             mirror_close_for(&tasks_path, &id);
         }
 
+        Command::Defer(args) => defer::run(&write_store_path("backlog defer")?, &args)?,
+
         Command::Fail { id, reason } => {
             let tasks_path = write_store_path("backlog fail")?;
             store::mark_failed(&tasks_path, &id, reason.as_deref())?;
@@ -2041,34 +2051,6 @@ fn gh_probe(argv: &[&str]) -> Option<(bool, String)> {
         }
         Determination::Undetermined(_) => None,
     }
-}
-
-/// Unix タイムスタンプ (秒) を "YYYY-MM-DD HH:MM UTC" 形式の文字列に変換する。
-/// 標準ライブラリのみで実装 (外部クレート不使用)。
-fn format_unix_datetime(secs: u64) -> String {
-    // グレゴリオ暦変換 (ユリウス通日ベース)
-    let days = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hh = time_of_day / 3600;
-    let mm = (time_of_day % 3600) / 60;
-
-    // 1970-01-01 からの日数を年月日に変換 (Fliegel-Van Flandern algorithm)
-    let jd = days + 2440588; // Julian Day Number for 1970-01-01
-    let l = jd + 68569;
-    let n = 4 * l / 146097;
-    let l = l - (146097 * n).div_ceil(4);
-    let i = 4000 * (l + 1) / 1461001;
-    let l = l - 1461 * i / 4 + 31;
-    let j = 80 * l / 2447;
-    let day = l - 2447 * j / 80;
-    let l = j / 11;
-    let month = j + 2 - 12 * l;
-    let year = 100 * (n - 49) + i + l;
-
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
-        year, month, day, hh, mm
-    )
 }
 
 #[cfg(test)]

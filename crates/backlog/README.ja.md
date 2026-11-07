@@ -5,12 +5,13 @@
 ## サブコマンドを使うこと
 
 - `add` — `--repro-test` のコミット済みテストが HEAD で落ちた時だけタスクを追加する
-- `list` — store のタスク一覧: `--tag` / `--status`（`pending` / `done` / `failed` / `cancelled` / `claimed`、`claimed` は導出値、`open` は status ではない）/ `--json`。repo store では `--project` は絞り込みではなく **assertion**（下の「スコープ」参照）
+- `list` — store のタスク一覧: `--tag` / `--status`（`pending` / `done` / `failed` / `cancelled` / `claimed` / `ruled-deferred`、`claimed` は導出値、`open` は status ではない）/ `--json`。repo store では `--project` は絞り込みではなく **assertion**（下の「スコープ」参照）
 - `next` — reproduced な repro を持つ pending タスクのうち最高優先度のものを JSON で出力する（`--claim` で予約）
 - `done <id>` — タスクを**証拠付きで**完了マークする: `--test CMD --red-rev REV`（`--reason fixed|already-fixed|obsolete`）・`--doc-only COMMIT`・`--duplicate-of ID`。この 3 形式のちょうど 1 つが必要。素の `done <id>` は拒否される
   - RED の実行は `--red-rev` の detached な一時 worktree に HEAD のテストファイルを上書きしたもの（`cargo test` は全テストファイル、pytest は名指したファイル、`bash`/`sh` はそのスクリプト）で行う。修正と一緒に足したテストがそこに存在するようにするため。`--red-rev` でテストが通ったことによる拒否はその旨を述べる。修正そのものがテストファイルの中にあると、この上書きが修正を RED 側へ持ち込む。`--red-overlay PATH`（複数可）で上書きを名指した repro 側だけに絞れる。絞ることしかできず、各パスは既定の上書き集合に含まれている必要がある。`--red-rev` で通るテストは依然拒否される。絞った集合は `closure.red.overlay` に記録される。
 - `fail <id>` — タスクを失敗マークする (`--reason`)。再実行を 2 日先送りする
 - `cancel <id> --reason R` — 「やらないと決めた」としてテスト無しで閉じ、`discard` closure として記録する
+- `defer <id> --ruling QUOTE` — ユーザー裁定（見送り）を記録する: status は `ruled-deferred` になり、`next` / `next --claim` は決して払い出さず、再キューもされない。裁定は notes に追記される。`fail` と `edit --status` はキューへ戻すことを拒否し、`add` は同じ内容の再起票を `--force` なしでは拒否する。抜け出す経路は `cancel` / `done` だけ
 - `audit-closures` — 全終端行の closure 証拠を read-only で分類する（`--json`）。store は書かない
 - `overlap` — キュー中のタスクを宣言された `touched_files` scope でグループ化する（advisory、未宣言は別に列挙）
 - `edit <id>` — タスクの title / tags / notes / status を更新する。`--repro-test CMD` で pending タスクの repro を差し替える（「テストが無ければ起票しない」参照）
@@ -24,7 +25,7 @@
 
 ### store 書き込みは linked worktree で
 
-`add` / `done` / `fail` / `edit` / `cancel` / `sync --apply` は、store が git リポジトリの **primary（main）作業ツリー**内にある場合
+`add` / `done` / `fail` / `edit` / `cancel` / `defer` / `sync --apply` は、store が git リポジトリの **primary（main）作業ツリー**内にある場合
 **拒否**される（非 0 終了・何も書かない）。
 linked worktree から実行すること。
 git が checkout の種別を答えられない場合も `add` を拒否する。

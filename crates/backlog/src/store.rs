@@ -14,6 +14,10 @@ use crate::task::{
     new_id, Closure, Repro, Status, Task, STATUS_DONE, STATUS_FAILED, STATUS_PENDING,
 };
 
+/// The stored "a user ruled this out for now" status (backlog b3f5e3af),
+/// written only by [`mark_ruled_deferred`].
+pub(crate) const STATUS_RULED_DEFERRED: Status = Status::RuledDeferred;
+
 /// The DERIVED claim status (backlog f09db5ce). It is never written to the
 /// tracked store by this binary: a claim lease lives only in the untracked,
 /// project-wide claim ledger ([`crate::claim_ledger`]), and `claimed` is what
@@ -1088,6 +1092,18 @@ fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
             "duplicate task rejected: an existing pending/failed/claimed task already has this content (hashkey {hk}); use --force to add anyway"
         ));
     }
+    // backlog b3f5e3af: re-filing a ruled-deferred ticket under the same
+    // content would put the ruled-against work straight back on the queue.
+    if let Some(t) = tasks.iter().find(|t| {
+        crate::task::hashkey(&t.title, &t.project) == hk && t.status == STATUS_RULED_DEFERRED
+    }) {
+        return Err(anyhow!(
+            "duplicate task rejected: task {} has this content (hashkey {hk}) and is \
+             ruled-deferred by a user ruling (`backlog defer`); re-filing it would hand the \
+             ruled-against work out again. Use --force to add anyway",
+            t.id
+        ));
+    }
 
     match claim_check(&hk) {
         ClaimCheck::NotClaimed => {}
@@ -1780,7 +1796,10 @@ pub fn update_task(
 /// `failed`. A terminal row is final.
 pub fn require_closable(task: &Task) -> Result<()> {
     match task.status {
-        STATUS_PENDING | STATUS_FAILED => Ok(()),
+        // A ruled-deferred row may still be closed with a recorded closure
+        // (`cancel` turning the ruling into a discard, or `done` with evidence):
+        // closing it never puts it back on the queue (backlog b3f5e3af).
+        STATUS_PENDING | STATUS_FAILED | STATUS_RULED_DEFERRED => Ok(()),
         s if is_terminal_status(&s) => Err(anyhow!(
             "refused: task {} is already {s} (terminal status is final)",
             task.id
@@ -2300,6 +2319,15 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
                 "refused: task {id} is {} (terminal) and terminal status is final; \
                  `fail` would reopen it as a retryable task",
                 task.status
+            ));
+        }
+        // backlog b3f5e3af: `failed` is requeued once its defer window
+        // elapses, so failing a ruled-deferred row would hand the ruled-against
+        // work out again two days later.
+        if task.status == STATUS_RULED_DEFERRED {
+            return Err(anyhow!(
+                "refused: task {id} is ruled-deferred (a recorded user ruling); `fail` \
+                 would requeue it. Close it with `backlog cancel {id} --reason R` instead"
             ));
         }
         task.status = STATUS_FAILED;

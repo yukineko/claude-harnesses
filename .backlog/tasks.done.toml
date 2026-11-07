@@ -68896,3 +68896,165 @@ error: test failed, to rerun pass `-p donegate --test backlog_shared_ledger_new_
 [task.closure]
 reason = "discard"
 discard_reason = "User ruling 2026-11-07: count 2度目 per session (reading B, matches 2026-09-18 「同一セッション内のみ」). Waiver after green/give-up is intended. RED tests deleted, false gate.rs docstring clause removed (donegate 0.1.76)."
+
+[[task]]
+id = "aafeaa05"
+title = "blastguard: quoted non-redirect '>' in a shell command after a python stdin heredoc is misattributed as the heredoc's program-text redirect (Deny in subagent)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = '''
+User ruling 2026-11-07: 「false positiveは許可できない」. Do not fix in the filing task.
+
+Observed 2026-11-07 in subagent a4265a5c8acbb7f5e (session 0d3d5bb8): a harmless `python3 - "$F" <<'PY' ... PY` regex rewrite (writes open(p,'w') to argv path $F) followed by the shell line `grep -c '...' $F; diff $S/committed.rs $F | grep '^>' | wc -l` was DENIED (subagent hardening of an Ask) with verbatim reason: "`python3 - "$F" <<'PY'` takes its program from stdin, and the program text contains a `>` that a shell would read as a redirect whose target cannot be determined ('> ' destroys the file's current contents and `` is a relative path and blastguard does not know which directory it is relative to, so it cannot tell whether these bytes are recoverable); in program text it may be an operator or part of a string, but blastguard cannot show that it is not a redirect. Recommended: do not run this."
+
+Measured at d9863f70 (target/debug/blastguard, subagent payload with agent_id, cwd=CLAUDE_PROJECT_DIR=fresh temp dir): the heredoc BODY contains no `>`. The deciding `>` is the single-quoted grep pattern '^>' on the line AFTER the `PY` terminator. Exact command -> deny; same command with '^>' -> '^X' -> allow; exact without the trailing line -> allow; trailing line alone -> allow. Minimal: `python3 - <<'PY'\nprint(1)\nPY\necho '>'` -> deny (echo 'X' -> allow); `... grep '^>' x` and `... grep "^>" x` -> deny; `... echo 'a > b'` -> allow. A `>` as comparison/string INSIDE the quoted body (`if len(s) > 0:`, `print('a > b')`) is already allow. So the defect is attribution: a quoted, non-redirect `>` in a later shell command is reported as program text of the heredoc's interpreter (and with an empty target ``).
+
+Contract quotes:
+(1) crates/blastguard/src/detect/interpreter.rs `interpreter_code_verdict` docstring (user ruling R2, 2026-10-14): "The shell pass over the program text reads every `>` as a redirect, so `print(1 > 0)` or `s = 'x > \`y\`'` used to be DENIED as a truncating redirect onto a file it could not name. When that is the ONLY Deny the program text produces, the verdict is an Ask carrying [`RECOMMEND_NO`]".
+(2) crates/blastguard/src/detect.rs (line-level arm, 4a1cf1ad): "this `>` sits in the body of a quoted here-document handed to a code interpreter, so it is program text the shell never parses."
+Two readings:
+(A) intended: R2 says a `>` in program text is an undeterminable possible redirect -> Ask (Deny in subagent); if the `>` were in the program, the Ask is the documented behaviour.
+(B) false positive: the `>` here is not in the program text at all (it is inside single/double quotes in a separate shell command after the heredoc terminator, which no shell reads as a redirect), so the R2 finding is misattributed.
+How distinguished: targets compare against the neutral variant ('>' -> 'X'); the neutral variant is allow, so the `>` alone decides, and the body has none. Fix must keep the controls (all deny in a subagent at HEAD): `sh <<EOF\necho x > .git/hooks/pre-commit\nEOF`, `bash <<EOF\necho x > .claude/settings.json\nEOF`, `sh <<'EOF'\necho x > .git/hooks/pre-commit\nEOF`, `python3 - <<'PY'\nprint(1)\nPY\necho x > .git/hooks/pre-commit`, `python3 -c "open('.git/hooks/pre-commit','w').write('x')"`, `python3 -c "open('.claude/settings.json','w').write('x')"`.
+
+Test file: crates/blastguard/tests/quoted_heredoc_python_gt_fp_20261107.rs (targets #[ignore]). The exact-command test embeds absolute paths from the observing machine; blastguard only analyses them.'''
+created_at = 1794001972
+updated_at = 1794015688
+weight = 0.0
+issue_number = 1592
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1592"
+issue_closed_at = 1794015692
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test quoted_heredoc_python_gt_fp_20261107 -- --include-ignored"
+rev = "66c5846a482a0f571c0b43916bf6e68ddcae0ed3"
+observed_at = 1794001972
+detail = """
+exit 101: ompiling blastguard v0.2.290 (/Users/yuki/src/.harness-worktrees/session-0d3d5bb8/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.48s
+     Running tests/quoted_heredoc_python_gt_fp_20261107.rs (target/debug/deps/quoted_heredoc_python_gt_fp_20261107-90634fbd3885faa3)
+error: test failed, to rerun pass `-p blastguard --test quoted_heredoc_python_gt_fp_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test quoted_heredoc_python_gt_fp_20261107"
+exit = 0
+passed = 5
+rev = "f82bd3a0fea531921a375535985fbb7dac065e40"
+observed_at = 1794015627
+output_digest = "sha256:4ec1f9f3cd4aeee654ec7c663129894cd309f25bf86815ed87dd44d8e239567d"
+excerpt = """
+
+running 5 tests
+test control_python_c_writing_protected_path_stays_denied ... ok
+test exact_observed_python_heredoc_command_is_not_denied_for_a_later_quoted_gt ... ok
+test quoted_heredoc_python_body_gt_comparison_or_string_is_not_denied ... ok
+test control_real_redirect_to_protected_path_stays_denied ... ok
+test minimal_python_heredoc_then_quoted_gt_argument_is_not_denied ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.17s
+
+   Compiling overwatch v0.2.115 (/Users/yuki/src/.harness-worktrees/session-0d3d5bb8/crates/overwatch)
+   Compiling blastguard v0.2.296 (/Users/yuki/src/.harness-worktrees/session-0d3d5bb8/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.55s
+     Running tests/quoted_heredoc_python_gt_fp_20261107.rs (target/debug/deps/quoted_heredoc_python_gt_fp_20261107-7aed578e49d3772d)
+"""
+
+[task.closure.red]
+rev = "073988436379f7fa2444c2676127cefae1b41363"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "3a0e30a8"
+title = "condukt schedule force-gates a task whose prose only names a history-rewrite command (filter-branch / git rebase) with no such declared command"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "false-positive",
+    "p1",
+]
+touched_files = []
+status = "done"
+notes = """
+User ruling 2026-11-07: 「false positiveは許可できない」. Do not fix in the filing task.
+
+Observed 2026-11-07 on main d9863f70 (condukt 0.7.331 installed; re-observed with installed condukt in this session): `condukt schedule` put task fb338793 in `gated` with warning "task 'fb338793' force-gated: high-risk irreversible action (declared class Serial)". Minimal repro (one task, commands: [], title "x", touched_files ["a.rs"], class serial, done_criteria "filter-branch filters stay Deny") -> gated=["t1"], same warning. Also RED: done_criteria "git rebase --exec shapes stay Deny" (the history-rewrite needle list).
+
+Mechanism (read, not guessed): crates/condukt/src/schedule.rs `task_action_text` joins title+done_criteria+touched_files -> blastguard::classify::classify_change(prose, ...) -> classify(prose) matches HISTORY_SIGNALS ["git rebase", "rebase -i", "--amend", "filter-branch"] (crates/blastguard/src/classify.rs) -> Medium/reversible; schedule.rs resolve_force_gate gates on `a.requires_gate() || a.risk >= Risk::Medium`. So prose naming a history-rewrite command force-gates. The warning text "high-risk irreversible action" is also false for this case (the assessment is Medium + reversible).
+
+Contract quotes:
+(1) crates/condukt/skills/condukt/SKILL.md: "classify は散文（title/done_criteria）をコマンドとして解析せず、タスクの `commands`（+ `reproduction_tests` / `checks`）だけをコマンドとして解析する（backlog dc955812）。"
+(2) crates/condukt/src/schedule.rs `task_action_text` docstring: "its title, done-criteria, and touched files joined together, so a deploy/push signal in any of them trips the deterministic force-gate."
+(3) Also relevant, blastguard classify() docstring: "What prose still carries — intent-level needles ... 2. local history rewrite -> Medium, reversible", and the unit test `history_rewrite_is_medium_reversible_and_not_gated` asserts classify("run filter-branch") is Medium and `!requires_gate()` — while condukt's `risk >= Medium` predicate DOES gate it.
+
+Two readings:
+(A) intended: a history-rewrite word in prose is an intent signal and should force-gate (classify docstring item 2 + condukt's Medium predicate).
+(B) false positive: per (1) prose is not parsed as a command and per (2) only a deploy/push signal in prose trips the force-gate; a task that merely names filter-branch (e.g. adds Deny rules for it) must not be gated. The user ruling selects (B).
+How they are distinguished by the tests: targets assert prose-only naming (commands: []) is NOT gated; controls assert (i) the same actions as DECLARED commands (rm -rf build, git reset --hard HEAD~1, git filter-branch --tree-filter true HEAD) still gate, and (ii) prose deploy/push signals ("deploy to production", "git push origin main", "publish the package to the registry") still force-gate with the warning. A regression guard pins that prose naming rm -rf / reset --hard / clean -fdx is already not gated (passes at HEAD). Fix must keep all controls green; note the sensitive-path Medium signal (classify_diff) is what the `>= Medium` predicate exists for (schedule.rs docstring) and must keep gating.
+
+Test file: crates/condukt/tests/schedule_prose_command_name_fp_20261107.rs (targets #[ignore])."""
+created_at = 1794001952
+updated_at = 1794015777
+weight = 0.0
+issue_number = 1591
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1591"
+issue_closed_at = 1794015781
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test schedule_prose_command_name_fp_20261107 -- --include-ignored prose_naming_"
+rev = "66c5846a482a0f571c0b43916bf6e68ddcae0ed3"
+observed_at = 1794001952
+detail = """
+exit 101: ompiling condukt v0.7.352 (/Users/yuki/src/.harness-worktrees/session-0d3d5bb8/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.52s
+     Running tests/schedule_prose_command_name_fp_20261107.rs (target/debug/deps/schedule_prose_command_name_fp_20261107-ee7b9372f47e71e5)
+error: test failed, to rerun pass `-p condukt --test schedule_prose_command_name_fp_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test schedule_prose_command_name_fp_20261107"
+exit = 0
+passed = 5
+rev = "f82bd3a0fea531921a375535985fbb7dac065e40"
+observed_at = 1794015740
+output_digest = "sha256:b3a4bc9dd09919c5d49483b9b1c3436ab9003c7973be11ba633f454b3e82a712"
+excerpt = """
+
+running 5 tests
+test prose_naming_filter_branch_without_declared_command_is_not_gated ... ok
+test prose_naming_destructive_commands_without_declared_command_is_not_gated ... ok
+test prose_deploy_or_push_signal_still_force_gates ... ok
+test prose_naming_history_rewrite_commands_without_declared_command_is_not_gated ... ok
+test declared_destructive_or_history_rewrite_command_is_gated ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+
+   Compiling blastguard v0.2.296 (/Users/yuki/src/.harness-worktrees/session-0d3d5bb8/crates/blastguard)
+   Compiling condukt v0.7.356 (/Users/yuki/src/.harness-worktrees/session-0d3d5bb8/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.03s
+     Running tests/schedule_prose_command_name_fp_20261107.rs (target/debug/deps/schedule_prose_command_name_fp_20261107-a0197ddc42e2972b)
+"""
+
+[task.closure.red]
+rev = "073988436379f7fa2444c2676127cefae1b41363"
+exit = 101
+kind = "behavioural"

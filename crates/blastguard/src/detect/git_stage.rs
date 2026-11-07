@@ -54,12 +54,21 @@
 //! everything under it and stays Allow (a directory is not told apart from a
 //! file without reading the filesystem); a git alias
 //! whose body is `add -A` / `commit -a`; the `GIT_*` environment.
-//! Over-approximation, deliberately on the Ask side: the substitution scanner
-//! does not model here-document bodies, so a body inside `$(…)` with an odd
-//! number of apostrophes (`don't`) makes the word undeterminable and the line
-//! Ask.
+//!
+//! Here-documents inside `$(…)`: the substitution is read with
+//! [`closed_substitution_end_strict`], which models a here-document body as
+//! data (an apostrophe in it, `don't`, is not a quote; a `)` in it closes
+//! nothing), so `-m "$(cat <<'EOF'` … `EOF` … `)"` is one closed word and
+//! Allow. The argument text is read from the raw segment, newlines included
+//! (see `raw_args`). Over-approximation, deliberately on the Ask side: a body
+//! with no exact terminator line (indented, a substring of a longer line, or
+//! missing), an unreadable delimiter, an UNQUOTED delimiter whose body holds
+//! `$`, `` ` `` or `\` (it is expanded), a here-document inside a backtick
+//! body, and argument tokens that cannot be matched back to the raw segment
+//! (they are then re-joined with spaces, so every here-document looks
+//! unterminated) all make the word undeterminable and the line Ask.
 
-use super::{closed_substitution_end, Decision};
+use super::{closed_substitution_end_strict, Decision};
 
 /// The reason for every provable whole-tree stage. ONE wording so
 /// [`crate::rule_id`] files the class under one signature.
@@ -94,7 +103,8 @@ struct Word {
 fn expansion(chars: &[char], i: usize, w: &mut Word) -> Result<usize, &'static str> {
     let next = chars.get(i + 1).copied();
     if chars[i] == '`' || next == Some('(') {
-        let end = closed_substitution_end(chars, i).ok_or("an unclosed command substitution")?;
+        let end =
+            closed_substitution_end_strict(chars, i).ok_or("an unclosed command substitution")?;
         w.opaque = true;
         return Ok(end + 1);
     }
@@ -140,8 +150,9 @@ fn double_quoted(chars: &[char], mut i: usize, w: &mut Word) -> Result<usize, &'
                     w.text.push(d);
                     i += 2;
                 }
-                // The words were re-joined with single spaces, so whether
-                // this was an escaped newline (a continuation) is unknown.
+                // The words may have been re-joined with single spaces (see
+                // `raw_args`), so whether this was an escaped newline (a
+                // continuation) is not known in general; not modelled.
                 Some(d) if d.is_whitespace() => return Err("a backslash before whitespace"),
                 Some(_) => {
                     w.text.push('\\');
@@ -414,8 +425,47 @@ fn commit_short(cluster: &str) -> Result<(bool, bool), &'static str> {
     Ok((sweep, false))
 }
 
-fn verdict(sub: Sub, args: &[&str]) -> Decision {
-    let words = match shell_words(&args.join(" ")) {
+/// The text of `args` as it stands in `seg`, newlines included, when `args`
+/// are exactly the trailing whitespace-separated tokens of `seg` (which they
+/// are when the segment analyser split them from it). `None` when they are
+/// not, or `seg` is unknown; the caller then re-joins the tokens with single
+/// spaces, which loses every newline — a here-document inside `$(…)` is then
+/// unreadable and [`closed_substitution_end_strict`] reports it unclosed (Ask).
+fn raw_args<'s>(seg: Option<&'s str>, args: &[&str]) -> Option<&'s str> {
+    let seg = seg?;
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, c) in seg.char_indices() {
+        match (c.is_whitespace(), start) {
+            (true, Some(s)) => {
+                spans.push((s, i));
+                start = None;
+            }
+            (false, None) => start = Some(i),
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        spans.push((s, seg.len()));
+    }
+    let first = spans.len().checked_sub(args.len())?;
+    let tail = &spans[first..];
+    if tail.iter().zip(args).any(|(&(s, e), a)| &seg[s..e] != *a) {
+        return None;
+    }
+    Some(tail.first().map_or("", |&(s, _)| &seg[s..]))
+}
+
+fn verdict(sub: Sub, args: &[&str], seg: Option<&str>) -> Decision {
+    let joined;
+    let text = match raw_args(seg, args) {
+        Some(raw) => raw,
+        None => {
+            joined = args.join(" ");
+            joined.as_str()
+        }
+    };
+    let words = match shell_words(text) {
         Ok(w) => w,
         Err(why) => return undetermined(why),
     };
@@ -499,13 +549,13 @@ fn verdict(sub: Sub, args: &[&str]) -> Decision {
 
 /// Verdict for `git add` / `git stage`; `args` are the raw tokens after the
 /// subcommand.
-pub(super) fn add_verdict(args: &[&str]) -> Decision {
-    verdict(Sub::Add, args)
+pub(super) fn add_verdict(args: &[&str], seg: Option<&str>) -> Decision {
+    verdict(Sub::Add, args, seg)
 }
 
 /// Verdict for `git commit`; `args` are the raw tokens after the subcommand.
-pub(super) fn commit_verdict(args: &[&str]) -> Decision {
-    verdict(Sub::Commit, args)
+pub(super) fn commit_verdict(args: &[&str], seg: Option<&str>) -> Decision {
+    verdict(Sub::Commit, args, seg)
 }
 
 #[cfg(test)]
@@ -514,7 +564,7 @@ mod tests {
 
     fn v(sub: Sub, line: &str) -> &'static str {
         let toks: Vec<&str> = line.split_whitespace().collect();
-        match verdict(sub, &toks) {
+        match verdict(sub, &toks, Some(line)) {
             Decision::Allow => "allow",
             Decision::Ask(_) => "ask",
             _ => "deny",
@@ -600,7 +650,13 @@ mod tests {
             ("--message -a", "allow"),
             ("--author a -m x", "allow"),
             ("-m msg -- tracked.txt", "allow"),
-            ("-m \"$(cat <<'EOF' fix: thing EOF )\"", "allow"),
+            // The here-document message as the Bash tool sends it (real
+            // newlines) is Allow; the same text on ONE line has no terminator
+            // line, so the here-document never ends: undeterminable, Ask.
+            ("-m \"$(cat <<'EOF'\nfix: thing\nEOF\n)\"", "allow"),
+            ("-m \"$(cat <<'EOF'\nfix: don't\nEOF\n)\"", "allow"),
+            ("-m \"$(cat <<'EOF' fix: thing EOF )\"", "ask"),
+            ("-m \"$(cat <<EOF\nfix: $(id)\nEOF\n)\"", "ask"),
             ("-m \"fix $X\"", "allow"),
             ("--amend --no-edit", "allow"),
             ("-m x --trailer \"Condukt-Task: r/t\"", "allow"),

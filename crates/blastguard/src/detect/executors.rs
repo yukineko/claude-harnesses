@@ -464,7 +464,7 @@ blastguard cannot see what would execute"
             // `git` arm judges like any other.
             None => {
                 let tokens: Vec<&str> = value.split_whitespace().collect();
-                analyze_git(&tokens, ctx)
+                analyze_git(&tokens, None, ctx)
             }
         },
     }

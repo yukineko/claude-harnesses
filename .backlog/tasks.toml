@@ -954,36 +954,6 @@ exit 101: d; 0 ignored; 0 measured; 6 filtered out; finished in 0.71s
 error: test failed, to rerun pass `-p blastguard --test backlog_cd_redirect_fp_20261107`"""
 
 [[task]]
-id = "e04711be"
-title = "donegate: add pass cache so unchanged green tree is not re-checked on every Stop"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "RED (cargo test -p donegate --test pass_cache_20261107 -- --include-ignored): p1_unchanged_tree_and_cmd_after_a_pass_is_not_reexecuted FAILED: 'assertion left == right failed: check re-executed on an unchanged tree  left: 2  right: 1'. p1 (same root+cmd+tree after PASS not re-executed) = RED. Controls GREEN at HEAD: p2a edit tracked, p2b add untracked, p3 different cmd, p4 failed run never cached, p5a not a git repo executes, p5b corrupt store executes (p5b vacuous at HEAD). Key = git add -A temp-index tree content + base sha used for changed-set. Do NOT weaken the test to pass; remove the ignore marker when fixed. Test: crates/donegate/tests/pass_cache_20261107.rs"
-created_at = 1794028492
-updated_at = 1794028492
-weight = 0.0
-issue_number = 1606
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1606"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p donegate --test pass_cache_20261107 -- --include-ignored p1_unchanged_tree_and_cmd_after_a_pass_is_not_reexecuted"
-rev = "5c2e79b90fe6725a60c521d7bd865b8913123f42"
-observed_at = 1794028492
-detail = """
-exit 101: unchanged_tree_and_cmd_after_a_pass_is_not_reexecuted
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.86s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
-     Running tests/pass_cache_20261107.rs (target/debug/deps/pass_cache_20261107-2e3c2e399dbad9be)
-error: test failed, to rerun pass `-p donegate --test pass_cache_20261107`"""
-
-[[task]]
 id = "ebb0e1b5"
 title = "condukt: add pass cache for state check-criteria mechanical command"
 project = "/Users/yuki/src/harness"

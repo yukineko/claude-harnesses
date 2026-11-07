@@ -373,3 +373,8 @@ reason = "Same bullet (record-disposition / compact-findings): CLI glue for the 
 path = "crates/overwatch/src/undetermined_metrics.rs"
 doc = "docs/specs/overwatch.md"
 reason = "Review-queue section bullet 'overwatch undetermined-metrics' (aggregation of harness_core::undetermined telemetry)."
+
+[[spec]]
+path = "crates/overwatch/src/subagents.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Section subagent registry と per-agent liveness (overwatch subagents): RECORD via presence hook (Agent|Task PostToolUse, SubagentStop) into subagents.json, classify() state order, clean definition, fail-closed resolution of undetermined/IO failure."

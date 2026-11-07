@@ -243,6 +243,8 @@ pub struct TaskState {
     /// caveats as `verifier_model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verifier_agent_id: Option<String>,
+    #[serde(flatten)]
+    pub verifier_verdict: crate::verifier_record::VerifierVerdict,
     /// Unix timestamp (seconds) marking the start of the WORKER phase — stamped
     /// set-once on the first `running` transition (the orchestrator's real
     /// worker-dispatch edge), via [`stamp_if_unset`]. Per-phase measurement
@@ -1012,32 +1014,11 @@ pub fn load_run_policy_records(
         .collect())
 }
 
-/// Aggregate counts of RUN-POLICY decisions by verdict category. Used by
-/// `condukt run-policy stats`.
-#[derive(Debug, Clone, Serialize, PartialEq, Default)]
-pub struct RunPolicyStats {
-    pub verify_only: usize,
-    pub escalate_docker: usize,
-    pub escalate_ship: usize,
-    pub ask_human: usize,
-}
-
-/// Pure function: classify each record's `verdict` string into the four known
-/// categories and count them. Unknown/garbage verdict values are ignored
-/// (never panics, never bumps an "other" bucket that doesn't exist).
-pub fn aggregate_run_policy_stats(records: &[RunPolicyLogRecord]) -> RunPolicyStats {
-    let mut stats = RunPolicyStats::default();
-    for r in records {
-        match r.verdict.as_str() {
-            "verify_only" => stats.verify_only += 1,
-            "escalate_docker" => stats.escalate_docker += 1,
-            "escalate_ship" => stats.escalate_ship += 1,
-            "ask_human" => stats.ask_human += 1,
-            _ => {}
-        }
-    }
-    stats
-}
+// RunPolicyStats / aggregate_run_policy_stats: moved verbatim to state/run_policy_stats.rs.
+mod run_policy_stats;
+pub use run_policy_stats::aggregate_run_policy_stats;
+#[cfg(test)]
+use run_policy_stats::RunPolicyStats;
 
 // ── Reconcile ─────────────────────────────────────────────────────────────
 
@@ -1333,7 +1314,9 @@ pub fn discard_experiment(cfg: &Config, cwd: &Path, run_id: &str, task_id: &str)
     // Remove the worktree and force-delete the (unmerged) branch.
     if let Some(w) = &worktree_path {
         let p = PathBuf::from(w);
-        crate::worktree::discard(&repo, &p, branch.as_deref())?;
+        // Persists the tdd proofs first; refuses on failure (backlog ea6547c9).
+        let ident = Some((run_id, task_id));
+        crate::proof_archive::discard(cfg, cwd, &repo, &p, branch.as_deref(), ident)?;
     } else if let Some(b) = &branch {
         // No worktree recorded, but the branch still needs force-deleting.
         crate::worktree::git(&repo, &["branch", "-D", b])

@@ -147,6 +147,67 @@ CLI は `clap` の `Command` enum（`main.rs`）で定義。ledger/lease 系は�
   undetermined として記録し、テキストは `(unknown: ...)` を出して `(none)` を出さない。status cache は
   `presence.json` の mtime が cache 構築以降、または観測できないときに無効化される。
 
+## subagent registry と per-agent liveness (`overwatch subagents`, backlog afd18dc0)
+
+`crates/overwatch/src/subagents.rs`。subagent の起動・停止を記録（RECORD）し、session 単位で各 agent の
+生死を分類する（CHECK）。実装を読んだ上での記述であり、意図ではなくコードが実際にやることだけを書く。
+
+- **CLI** — `overwatch subagents --session <id> [--stall-secs N] [--json]`。`--stall-secs` の既定は 600、
+  clap の範囲は `1..=86400`。cwd は `std::env::current_dir()`。終了コードは clean なら 0、それ以外は 1
+  （`run_cli` は 2 を返さない。2 は clap の usage error 用）。`--json` は `CheckReport`
+  （`clean` / `session` / `stall_secs` / `agents[]` / `error`）。`agents[]` の `agent_id` / `state` /
+  `final_text` は condukt が読む契約フィールド。テキスト出力は `clean` / `NOT clean` と agent ごとの
+  `<id> <state> — <reason>`。JSON の serialize 失敗は `{"clean":false,...}` を出力して終了コード 1。
+- **RECORD（書き手）** — `hooks/hooks.json` が `overwatch presence` を PostToolUse（matcher `Agent|Task`）と
+  `SubagentStop` にも配線する。`presence::record` は `subagents::applies(payload)`（`SubagentStop`、または
+  `tool_name` が `Agent`/`Task` の PostToolUse）のときだけ `subagents::record_locked` を呼び、
+  presence.json への記録とは独立に実行する。どちらか一方が失敗してもフックは失敗（Err）にする。
+  記録先は `subagents.json`（`presence.json` と同じ `store::storage_root`＝main worktree root で key した
+  共有 store）で、`session_id -> agent_id -> AgentRecord`。書き込みは lease lock 下で temp + rename。
+  - PostToolUse Agent/Task: `tool_response.agentId` が起動された agent。payload トップの `agent_id` は
+    起動元（nested launch）で、無ければ `launcher = None`（main thread 起動）。`tool_response.status` を
+    `launch_status`（`async_launched` / `completed`）として保持。`description` / `subagent_type` /
+    `tool_use_id` / `outputFile` を記録。transcript は session transcript から
+    `<dir>/<session>/subagents/agent-<id>.jsonl` を導出。
+  - SubagentStop: `agent_id` / `agent_transcript_path` / `last_assistant_message` を記録し `stops` を加算。
+    stop は「result が届いた」ことではない（turn が終わっただけ）。
+  - 記録すべきイベントなのに識別フィールドが無い（`session_id` 無し、SubagentStop に `agent_id` 無し、
+    PostToolUse に `tool_response.agentId` 無し）場合は `bail!`（黙って捨てない）。
+  - pruning: 最後のイベントが `PRUNE_AFTER_SECS`(=30 日) より古い session を、次の hook 書き込み時に落とす。
+    落とされた session の check は「record 無し」で clean にならない。
+- **liveness 分類（CHECK）** — `classify` は次の順で評価する（上が優先）。
+  1. 永続化済み `delivered`、`launch_status == "completed"`（同期起動）→ `done`。
+  2. transcript が無い: `stops > 0` なら `ended_undelivered`（`final_text` は harvested → stop payload の
+     `last_assistant_message`）、そうでなければ `undetermined`。transcript が読めない → `undetermined`。
+  3. transcript が parse できない（途中の不正 JSON 行、message entry の timestamp 不正）→ `undetermined`。
+     改行で終わらない最終行の不正 JSON のみ並行書き込み中として skip。
+  4. transcript 内に SubagentHandback の成功 tool_result（`is_error` でなく、本文が JSON で
+     `"success": true`）→ `done`（`delivered` として書き戻す）。
+  5. SubagentStop が最後の assistant entry / tool result 以降 → `ended_undelivered`。
+  6. 直近 `LOOP_REPEATS`(=4) 件の tool call が (tool, input, result) 完全一致 → `stalled`。
+  7. status query（親/launcher から当該 agent への SendMessage）が読めない → `undetermined`。
+  8. 最終 activity より新しく、かつ `stall_secs` より古い未応答 query がある → `stalled`。
+  9. 最後の tool result（無ければ最初の entry）からの idle が `stall_secs` 以下 → `progressing`、
+     超過 → `query_required`、message entry が 1 つも無い → `undetermined`。
+  query の読み先は、top-level agent は session transcript、nested agent は launcher の transcript
+  （同じ `subagents/` 内の `agent-<launcher>.jsonl`）と session transcript。
+- **clean の定義** — `done` と `progressing` だけが clean。`report.clean` は agent が 1 件以上あり、全て
+  clean のときだけ true。
+- **durability** — check は観測を書き戻す: SubagentHandback 成功を見たら `delivered = true`、
+  `ended_undelivered` で見た transcript の最終 assistant text を `harvested_final_text` に保存。
+  後で transcript が消えても `ended_undelivered` と `final_text` を報告できる。
+- **判定不能・IO 失敗の解決先（コードの実挙動）** — いずれも `clean = false`（終了コード 1）:
+  store lock を取れない（`acquire_strict` 失敗）、`subagents.json` が無い（「何も記録されていない」）、
+  読めない・壊れている（空 registry にはせず、上書きもしない）、session の record が無い、agent が 0 件、
+  cwd を解決できない、書き戻し（save）の失敗（`error` に理由）。transcript の欠落/不読/不正は
+  agent 単位で `undetermined`（not clean）。
+- **既知の観察（未修正・コードは変更していない）** — query の読み先 transcript が *存在しない*
+  （`Known(None)`）場合 `queries_in` は「query 0 件」（`Facts::default()`）として扱う。agent 自身の
+  transcript 欠落は `undetermined` になるのと非対称で、親 transcript が消えると未応答 query による
+  `stalled` 判定が起きない（その場合でも `progressing` になるのは idle が `stall_secs` 以内のときだけ）。
+  また、`subagents.rs` 冒頭 docstring の規則 1 は「transcript 内の handback 成功 → done」を最上位に
+  置くが、実装は transcript が parse できないと handback を評価せず `undetermined` にする（3. が先）。
+
 ## fleet 相関エラー検知 (violation signatures)
 
 > **REVIEW-NEEDED**: コードから逆算 (2026-07-09 セッション)。人間レビュー前は正典としない。

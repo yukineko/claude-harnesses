@@ -5,8 +5,9 @@
 //! * A force-deleted branch (`-D`, or a delete flag plus a force flag in any
 //!   spelling: `-d -f`, `-df`, `-fd`, `--delete --force`, `--force --delete`)
 //!   loses its commits unless they are reachable from the repository's default
-//!   branch. Every operand is checked. Deleting the default branch itself is
-//!   Ask.
+//!   branch. Every operand is checked. Deleting the default branch itself —
+//!   in any letter case (`-D Main` deletes `main` on a case-insensitive
+//!   filesystem) — is Ask.
 //! * A force-removed worktree loses everything `git status --porcelain
 //!   --ignored` reports in it. Ignored files COUNT as content: the removal
 //!   deletes the whole directory, ignored build output (e.g. `target/`)
@@ -180,13 +181,18 @@ struct DefaultBranch {
     refs: Vec<String>,
 }
 
-/// Resolve the default branch of `t`, in this order:
+/// Pick the default branch of `t`, in this order:
 ///
 /// 1. `refs/remotes/origin/HEAD` as a symbolic ref (`git symbolic-ref`, exit 1
-///    = not set, go on);
+///    = not set, go on) — a recorded fact about the repository;
 /// 2. `init.defaultBranch` (`git config --get`, exit 1 = unset), used only when
-///    `refs/heads/<it>` exists;
-/// 3. the one local branch among `main` / `master` / `trunk` that exists.
+///    `refs/heads/<it>` exists. This setting only names the initial branch
+///    of NEW repositories, so for an existing repo it is a hint, not a fact;
+/// 3. a NAME-BASED HEURISTIC, reached only when steps 1 and 2 give nothing:
+///    if exactly one of the conventional names `main` / `master` / `trunk`
+///    exists as a local branch, it is taken as the default. Nothing in the
+///    repository records that it is; a repo whose real default is another
+///    branch but which also has e.g. `main` is judged against `main`.
 ///
 /// Undetermined when none of these names an existing ref, when step 3 finds
 /// more than one candidate, or when any probe fails. HEAD is never used as the
@@ -343,7 +349,14 @@ commits are kept elsewhere ({why}), and a force-delete destroys unmerged work"
         } else {
             format!("refs/heads/{op}")
         };
-        if (!remotes && op == default.name) || default.refs.contains(&full) {
+        // Compared case-insensitively: on a case-insensitive filesystem
+        // (macOS default) a loose `refs/heads/Main` IS the `main` ref file, so
+        // `git branch -D Main` deletes `main`, while the merge-base probe
+        // below would see `main` as an ancestor of itself and Allow. A
+        // case-variant that is a different ref on a case-sensitive
+        // filesystem is Ask too (the stricter side).
+        let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+        if (!remotes && same(op, &default.name)) || default.refs.iter().any(|r| same(r, &full)) {
             return Decision::ask(format!(
                 "git branch force-delete of `{op}`, the repository's default branch \
 (`{}`): deleting it removes the ref every other branch is judged against",

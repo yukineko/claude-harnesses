@@ -94,9 +94,11 @@ forge・condukt のスケジューラが再利用）。
   backlog 43034f75、blastguard 0.2.295）** — `git branch` で delete（`-d`/`-D`/`--delete`、短縮束を含む）と
   force（`-f`/`-D`/`--force`、順序・束ね方を問わない）が揃うとき、**全 operand** について、default branch
   の ref（`refs/remotes/origin/HEAD` の symbolic ref → 存在する `init.defaultBranch` → 存在する
-  `main`/`master`/`trunk` がちょうど 1 つ、の順に解決。HEAD では代用しない）から
+  `main`/`master`/`trunk` がちょうど 1 つ、の順。最後の段は repo に記録された事実ではなく名前による
+  heuristic で、前 2 段が何も与えないときだけ使う。HEAD では代用しない）から
   `merge-base --is-ancestor`（exit 0 = 祖先 / 1 = 非祖先）で到達可能なら Allow、非祖先・default branch
-  自身の削除は Ask。存在しない branch（`rev-parse --verify` exit 1）は何も消えないので Allow。
+  自身の削除は Ask（大文字小文字を区別せず比較する: case-insensitive FS では `-D Main` が `main` を消す。
+  blastguard 0.2.297）。存在しない branch（`rev-parse --verify` exit 1）は何も消えないので Allow。
   `git worktree … remove` に force（verb の前後どちらでも）があるとき、各 operand で
   `git status --porcelain --ignored` が exit 0 かつ空なら Allow、出力があれば Ask（ignored file も
   削除されるので数える。`target/` のような build 出力だけでも Ask）。probe は git が実際に作用する repo

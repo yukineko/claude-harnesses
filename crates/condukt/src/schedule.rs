@@ -12,8 +12,8 @@
 //! same decomposition always yields the same schedule.
 
 use crate::model::{Batch, Class, Decomposition, Schedule, Task};
-use blastguard::classify::{classify, classify_change, Risk};
-use blastguard::diffrisk::SensitiveConfig;
+use blastguard::classify::{classify, classify_change, classify_commands, Risk};
+use blastguard::diffrisk::{classify_diff, SensitiveConfig};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::collections::{HashMap, HashSet};
 
@@ -466,6 +466,73 @@ fn describe_assessment(a: &blastguard::classify::RiskAssessment) -> String {
     format!("{tier}-risk {rev} action (review required at risk >= medium)")
 }
 
+/// Name WHAT force-gated a task (backlog 6e97a022), for the schedule warning.
+///
+/// The gating decision itself is made on the merged assessment in
+/// [`schedule`]; this only attributes it. Each declared command, each touched
+/// path (sensitive-path signal) and each prose field is re-classified on its
+/// own with the same predicate that gated it: commands/paths gate on
+/// `requires_gate() || risk >= Medium` ([`resolve_action_gate`]), prose only on
+/// `requires_gate()`. Because [`blastguard::classify::RiskAssessment::merge`]
+/// is max-risk / and-reversible, a gating merged assessment always has at least
+/// one gating component among commands and paths, so the attribution is
+/// complete for them. Prose is classified as one concatenated string, so a
+/// needle can straddle two fields; that case is named as such rather than
+/// dropped. If nothing can be attributed the result says "culprit unknown"
+/// explicitly — an empty culprit list is never rendered as silence.
+fn gate_culprits(
+    t: &Task,
+    sensitive: &SensitiveConfig,
+    action_gated: bool,
+    prose_gated: bool,
+) -> String {
+    let mut out: Vec<String> = Vec::new();
+    if action_gated {
+        for c in task_commands(t).unwrap_or_default() {
+            let a = classify_commands(std::slice::from_ref(&c));
+            if a.requires_gate() || a.risk >= Risk::Medium {
+                out.push(format!("command `{c}`"));
+            }
+        }
+        for f in &t.touched_files {
+            match resolve_action_gate(classify_diff(std::slice::from_ref(f), "", sensitive)) {
+                ActionGate::Gate(_) => out.push(format!("sensitive path `{f}`")),
+                ActionGate::Undetermined(why) => {
+                    out.push(format!("path `{f}` (risk undetermined: {why})"))
+                }
+                ActionGate::NoGate => {}
+            }
+        }
+    }
+    if prose_gated {
+        let mut fields: Vec<(&str, &str)> = vec![("title", t.title.as_str())];
+        if let Some(dc) = &t.done_criteria {
+            fields.push(("done_criteria", dc.as_str()));
+        }
+        for f in &t.touched_files {
+            fields.push(("touched_files entry", f.as_str()));
+        }
+        let before = out.len();
+        for (name, text) in fields {
+            if classify(text).requires_gate() {
+                out.push(format!("{name} `{text}`"));
+            }
+        }
+        if out.len() == before {
+            out.push(
+                "task prose (title + done_criteria + touched_files; no single field \
+                 matches alone)"
+                    .to_string(),
+            );
+        }
+    }
+    if out.is_empty() {
+        "culprit unknown".to_string()
+    } else {
+        format!("matched {}", out.join(", "))
+    }
+}
+
 /// Compute the deterministic schedule. `shared_globs` come from config: any
 /// parallel task touching one is demoted to serial. A high-risk irreversible
 /// action (deploy/push/release, per [`blastguard::classify`]) is force-gated
@@ -580,6 +647,8 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
         let prose_gating = prose_assessment.requires_gate().then_some(prose_assessment);
         // The assessment that gated the task, stated in the warning. Only a
         // High + irreversible one is worded "high-risk irreversible action".
+        let action_gated = matches!(action, ActionGate::Gate(_));
+        let prose_gated = prose_gating.is_some();
         let gating = match (action, prose_gating) {
             (ActionGate::Undetermined(why), _) => Some(Err(why)),
             (ActionGate::Gate(a), Some(p)) => Some(Ok(a.merge(p))),
@@ -598,10 +667,11 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
                 Ok(a) => {
                     if !matches!(t.class, Class::Gated) {
                         sched.warnings.push(format!(
-                            "task '{}' force-gated: {} (declared class {:?})",
+                            "task '{}' force-gated: {} (declared class {:?}; {})",
                             t.id,
                             describe_assessment(&a),
-                            t.class
+                            t.class,
+                            gate_culprits(t, &sensitive, action_gated, prose_gated)
                         ));
                     }
                 }

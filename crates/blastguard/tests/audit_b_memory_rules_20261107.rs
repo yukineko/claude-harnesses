@@ -654,3 +654,82 @@ fn t1b_f8_relative_worktree_path_resolved_against_right_base() {
     ];
     check_all_in(&f, &cases);
 }
+
+/// True when the filesystem under `dir` folds case (macOS APFS default).
+fn fs_is_case_insensitive(dir: &Path) -> bool {
+    let probe = dir.join("CaseProbe.tmp");
+    write(&probe, "x");
+    let folded = dir.join("caseprobe.tmp").exists();
+    let _ = std::fs::remove_file(&probe);
+    folded
+}
+
+/// Finding 4b: on a case-insensitive filesystem `git branch -D Main` really
+/// deletes `main` (ref lookup goes through the filesystem), so a case-variant
+/// of the default branch must be Ask, on both the local-name route and the
+/// origin/HEAD route. Controls keep a blanket Ask from passing.
+///
+/// On a case-sensitive FS the variants name no branch, so the Ask assertions
+/// are skipped there (detected at runtime); the controls always run. On
+/// macOS APFS (default, case-insensitive) the Ask assertions DO run.
+#[test]
+fn t1b_f4b_case_variant_of_default_branch_is_ask() {
+    let f = Fixture::new("t1b_f4b");
+    let ci = fs_is_case_insensitive(&f.base);
+
+    // Route 1: local `main` default (no origin). `main` has a commit that is
+    // on no other branch; HEAD sits on `develop`.
+    let m = f.base.join("src/cimain");
+    seed_repo(&m, "main");
+    git(&m, &["branch", "develop", "main~1"]);
+    git(&m, &["branch", "feat", "main~1"]);
+    add_unmerged_branch(&m, "unmerged", "main");
+    write(&m.join("only-main.txt"), "only on main\n");
+    git(&m, &["add", "."]);
+    git(&m, &["commit", "-q", "-m", "only on main"]);
+    git(&m, &["switch", "-q", "develop"]);
+
+    // Route 2: origin/HEAD = develop, local develop ahead of origin/develop,
+    // HEAD on `side`.
+    let up = f.base.join("src/up");
+    seed_repo(&up, "develop");
+    let cl = f.base.join("src/cl");
+    git(
+        &up,
+        &["clone", "-q", up.to_str().unwrap(), cl.to_str().unwrap()],
+    );
+    git(&cl, &["branch", "merged-b", "origin/develop"]);
+    write(&cl.join("ahead.txt"), "local develop ahead\n");
+    git(&cl, &["add", "."]);
+    git(&cl, &["commit", "-q", "-m", "ahead"]);
+    git(&cl, &["switch", "-q", "-c", "side"]);
+
+    let mut cases: Vec<(String, PathBuf, &str)> = vec![
+        // Controls (any FS).
+        ("git branch -D feat".to_string(), m.clone(), "allow"),
+        ("git branch -D unmerged".to_string(), m.clone(), "ask"),
+        ("git branch -D main".to_string(), m.clone(), "ask"),
+        ("git branch -D develop".to_string(), cl.clone(), "ask"),
+        ("git branch -D merged-b".to_string(), cl.clone(), "allow"),
+    ];
+    if ci {
+        cases.extend([
+            ("git branch -D Main".to_string(), m.clone(), "ask"),
+            ("git branch -D MAIN".to_string(), m.clone(), "ask"),
+            (
+                "git branch --delete --force Main".to_string(),
+                m.clone(),
+                "ask",
+            ),
+            ("git branch -d -f Main".to_string(), m.clone(), "ask"),
+            ("git branch -D Develop".to_string(), cl.clone(), "ask"),
+            ("git branch -D DEVELOP".to_string(), cl.clone(), "ask"),
+            // A case-variant resolves exactly as git does: a merged
+            // non-default branch stays Allow, an unmerged one stays Ask.
+            ("git branch -D Feat".to_string(), m.clone(), "allow"),
+            ("git branch -D Unmerged".to_string(), m.clone(), "ask"),
+            ("git branch -D Merged-B".to_string(), cl.clone(), "allow"),
+        ]);
+    }
+    check_all_in(&f, &cases);
+}

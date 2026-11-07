@@ -25,7 +25,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn fresh_dir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("blastguard-commitmsg-{}-{tag}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("blastguard-commitmsg-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("mkdir");
     dir
@@ -89,7 +90,11 @@ fix: subject\n\
 Co-Authored-By: X <x@example.com>\n\
 EOF"
     );
-    assert_eq!(decision(&base, &cmd), "allow", "commit message body is data");
+    assert_eq!(
+        decision(&base, &cmd),
+        "allow",
+        "commit message body is data"
+    );
 }
 
 /// TARGET: minimal, a pipe after the opener.

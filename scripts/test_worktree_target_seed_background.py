@@ -180,7 +180,6 @@ def _edit_same_size(path):
 # ───────────────────────── A/B: hook backgrounds the seed ─────────────────────
 
 class HookBackgroundsSeed(unittest.TestCase):
-    @open_defect(BACKLOG_ID)
     def test_hook_returns_before_slow_clone_finishes_and_target_appears(self):
         f = BgFixture(self)
         out, elapsed = f.run_hook("bgseed12-0", SEED_TEST_CP_SLEEP="12")
@@ -205,7 +204,6 @@ class HookBackgroundsSeed(unittest.TestCase):
 
 
 class HookSeedFailureIsRecorded(unittest.TestCase):
-    @open_defect(BACKLOG_ID)
     def test_background_clone_failure_reason_lands_in_printed_log(self):
         f = BgFixture(self)
         bad = f.warm / "target" / "debug" / "unreadable"
@@ -237,7 +235,6 @@ class EditRace(unittest.TestCase):
         self.assertEqual(base._run_bin(new), "edit",
                          "binary reflects the warm (stale) source, not the edit")
 
-    @open_defect(BACKLOG_ID)
     def test_edit_during_clone_window_is_not_given_warm_mtime(self):
         """Needs only interface D. Against 016cdbf8 this fails for the REAL
         reason: the sync list is computed before the clone and applied after
@@ -254,7 +251,6 @@ class EditRace(unittest.TestCase):
         v = _verdict(p, self)
         self._assert_edit_survives(f, new, warm_mtime, v)
 
-    @open_defect(BACKLOG_ID)
     def test_edit_at_pause_seam_before_mtime_apply_is_not_given_warm_mtime(self):
         """Needs interface C. Durable regardless of how the implementer
         orders clone vs. planning: the edit lands after the identical-file

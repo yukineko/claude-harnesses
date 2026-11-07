@@ -23,9 +23,13 @@ worktree. The bucket is NOT a backlog project slug on purpose — see
 A worktree it creates is warm-seeded (backlog 9d9a429e): `seed-worktree-target.py`
 clones the main tree's `target/` by APFS clonefile and syncs mtimes only for
 tracked files whose content is identical, so the first cargo build is
-incremental instead of cold. The seeder declines (no target, no mtime touched)
-on any doubt; a declined or failed seed never prevents the worktree, and the
-hook prints one line saying whether it seeded.
+incremental instead of cold. Cloning a large target takes minutes (92s measured
+for 19G), so the seed is started DETACHED (backlog 675bc422, user ruling): new
+session, stdin from /dev/null, stdout/stderr to a log file inside the
+worktree's git dir; the hook does not wait. It prints `seed log: <path>`; the
+seeder's verdict JSON (seeded / declined / failed / crashed) lands there. A
+seed that cannot even be started writes its own `seeded: false` verdict to the
+log. A declined or failed seed never prevents the worktree.
 
 Fail-soft: this is a setup hook, not a gate. Any error prints a best-effort note
 and exits 0 — the edit-time guards and the pre-commit check still block the main
@@ -131,38 +135,52 @@ def _report_rollout_drift(root: str) -> None:
         print(text)
 
 
-def _seed_target(warm_root: str, wt_path: str) -> str:
-    """Warm-seed the new worktree's target/ from the main tree (backlog 9d9a429e).
+def _seed_log_path(wt_path: str) -> str:
+    """Absolute log path inside the worktree's own git dir (removed with the
+    worktree, never an untracked file in it). Falls back to the temp dir."""
+    gd = _git(wt_path, "rev-parse", "--absolute-git-dir")
+    if gd and os.path.isdir(gd):
+        return os.path.join(os.path.realpath(gd), "seed-target.log")
+    import tempfile
+    return os.path.join(os.path.realpath(tempfile.gettempdir()),
+                        f"seed-target-{os.path.basename(wt_path)}-{os.getpid()}.log")
 
-    Returns one short line saying whether it seeded. Never raises: a failed or
-    declined seed only means the first cargo build is cold — the worktree
-    already exists. The seeder itself is what keeps a declined seed clean (no
-    target, no mtime touched); this wrapper only reports, and reports a seeder
-    it could not run or could not parse as NOT seeded.
+
+def _seed_target(warm_root: str, wt_path: str) -> str:
+    """Start the warm seed of the new worktree's target/ DETACHED (backlog
+    9d9a429e / 675bc422) and return one short line naming the seed log.
+
+    The child gets a new session, stdin=/dev/null and stdout/stderr on the log
+    file only, so it holds none of this hook's pipes and the hook returns at
+    once. The seeder writes its verdict JSON (including declines and crashes)
+    to that log. If the seeder cannot even be started, this writes a
+    `seeded: false` verdict to the log itself. Never raises: a failed seed only
+    means the first cargo build is cold — the worktree already exists.
     """
     seeder = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "seed-worktree-target.py")
+    log = _seed_log_path(wt_path)
     try:
-        out = subprocess.run(
-            (sys.executable or "python3", seeder, warm_root, wt_path),
-            capture_output=True, text=True,
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        return f"[worktree-init] target/ not seeded (seeder could not run: {e}); first cargo build is cold"
-    lines = (out.stdout or "").strip().splitlines()
-    try:
-        verdict = json.loads(lines[-1]) if lines else None
-    except ValueError:
-        verdict = None
-    if not isinstance(verdict, dict):
-        return (f"[worktree-init] target/ seed UNKNOWN (seeder exit {out.returncode}, "
-                "no verdict line); check target/ before trusting incremental builds")
-    if out.returncode != 0:
-        return (f"[worktree-init] target/ seed FAILED uncleanly (exit {out.returncode}): "
-                f"{verdict.get('reason')}")
-    if verdict.get("seeded") is True:
-        return "[worktree-init] target/ warm-seeded from the main tree (clonefile)"
-    return f"[worktree-init] target/ not seeded ({verdict.get('reason')}); first cargo build is cold"
+        fh = open(log, "a", encoding="utf-8")
+    except OSError as e:
+        return (f"[worktree-init] target/ not seeded (cannot open seed log {log}: "
+                f"{e}); first cargo build is cold")
+    with fh:
+        fh.write(f"[worktree-init] seeding {wt_path} from {warm_root}\n")
+        fh.flush()
+        try:
+            child = subprocess.Popen(
+                (sys.executable or "python3", seeder, warm_root, wt_path),
+                stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+                start_new_session=True, close_fds=True,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            fh.write(json.dumps({"seeded": False,
+                                 "reason": f"seeder could not be started: {e}"}) + "\n")
+            return (f"[worktree-init] target/ not seeded (seeder could not start: {e}); "
+                    f"seed log: {log}")
+    return (f"[worktree-init] target/ warm seed running in background (pid {child.pid}); "
+            f"seed log: {log}")
 
 
 def main() -> int:
@@ -233,10 +251,7 @@ def main() -> int:
             "Author everything there, commit in the worktree, then merge onto main."
         )
         if created:
-            # After the instruction, flushed: cloning a large target/ takes
-            # time (measured 92s for a 19G target), and the worktree
-            # instruction must not depend on the seed finishing.
-            sys.stdout.flush()
+            # Detached: the hook does not wait for the clone (92s for 19G).
             print(_seed_target(root, wt_path))
     else:
         print(

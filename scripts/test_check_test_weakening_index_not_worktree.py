@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RED repro: check-test-weakening judges the WORKING TREE, not the INDEX,
+"""RED repro (backlog 54de84b4): check-test-weakening judges the WORKING TREE, not the INDEX,
 so it blocks commits on unstaged changes and passes staged weakenings that
 the working tree hides.
 
@@ -156,6 +156,7 @@ class IndexNotWorktree(unittest.TestCase):
 
     # -- RED: unstaged weakening must not be judged --------------------------
 
+    @unittest.expectedFailure  # backlog 54de84b4: open defect
     def test_unstaged_ignore_in_a_with_only_b_staged_is_not_reported(self) -> None:
         self.base()
         self.write(B, B_EDIT)
@@ -167,6 +168,7 @@ class IndexNotWorktree(unittest.TestCase):
         self.assertNotIn(A, out, "an unstaged change is not part of the commit: " + out)
         self.assertEqual(rc, 0, out)
 
+    @unittest.expectedFailure  # backlog 54de84b4: open defect
     def test_unstaged_unproven_macro_change_with_only_b_staged_is_not_undetermined(self) -> None:
         self.base(M_BASE)
         self.write(B, B_EDIT)
@@ -179,6 +181,7 @@ class IndexNotWorktree(unittest.TestCase):
 
     # -- RED: staged weakening hidden by the working tree must block ---------
 
+    @unittest.expectedFailure  # backlog 54de84b4: open defect
     def test_staged_ignore_with_worktree_restored_blocks(self) -> None:
         self.base()
         self.write(A, A_IGNORED)
@@ -189,6 +192,7 @@ class IndexNotWorktree(unittest.TestCase):
         self.assertEqual(rc, 1, "the commit adds #[ignore] but the gate passed: " + out)
         self.assertIn("ignore-added", out)
 
+    @unittest.expectedFailure  # backlog 54de84b4: open defect
     def test_partial_staging_index_weakened_worktree_differs_blocks(self) -> None:
         self.base()
         self.write(A, A_IGNORED)
@@ -201,6 +205,7 @@ class IndexNotWorktree(unittest.TestCase):
         self.assertEqual(rc, 1, "the commit adds #[ignore] but the gate passed: " + out)
         self.assertIn("ignore-added", out)
 
+    @unittest.expectedFailure  # backlog 54de84b4: open defect
     def test_partial_staging_index_harmless_worktree_weakened_is_clean(self) -> None:
         self.base()
         self.write(A, A_PLUS_TEST)

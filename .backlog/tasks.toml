@@ -1265,3 +1265,33 @@ exit 101: (/Users/yuki/src/.harness-worktrees/red-bg-embedded/crates/blastguard)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.81s
      Running tests/embedded_shell_and_osascript_failopen_20261107.rs (target/debug/deps/embedded_shell_and_osascript_failopen_20261107-534121fe7d903de8)
 error: test failed, to rerun pass `-p blastguard --test embedded_shell_and_osascript_failopen_20261107`"""
+
+[[task]]
+id = "77411d5b"
+title = "condukt shadow-run finish discards the worktree without persisting tdd proofs"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p2",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-07 at main 4e0d85a7 (merged into session-c2e3bc17): crates/condukt/src/shadow_run.rs finish() calls worktree::discard directly, whereas worktree discard/reap/cleanup go through proof_archive::discard (persist_before_teardown). RED: shadow worktree with .tdd/t5.red.json and t5.green.json, shadow-run finish exits 0 and removes it, then 'no durable copy of the tdd proofs survives shadow-run finish (red copies: [], green copies: [])'. Readings: (a) defect: proofs lost at teardown like the sibling paths fixed by ea6547c9; (b) intended: shadow worktrees are never merged and their proofs are throwaway. Tell apart: whether a shadow attempt's red/green is ever consulted (check-oracle, fugu-router record) after finish; if the shadow outcome pass flag is derived from those proofs, (a); if shadow proofs are by design disposable, close as (b)."
+created_at = 1794015899
+updated_at = 1794015899
+weight = 0.0
+issue_number = 1599
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1599"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test shadow_run_finish_persists_proofs_20261107 -- --ignored"
+rev = "62a8665c5ec8359b84b1fefd11cd317d4fb07c29"
+observed_at = 1794015899
+detail = """
+exit 101: condukt v0.7.360 (/Users/yuki/src/.harness-worktrees/session-c2e3bc17/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.35s
+     Running tests/shadow_run_finish_persists_proofs_20261107.rs (target/debug/deps/shadow_run_finish_persists_proofs_20261107-34fd92aad63feaf7)
+error: test failed, to rerun pass `-p condukt --test shadow_run_finish_persists_proofs_20261107`"""

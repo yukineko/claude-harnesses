@@ -41,9 +41,15 @@ struct Outcome {
 
 impl Env {
     fn new() -> Self {
+        // A per-process counter keeps parallel tests apart: pid + wall-clock
+        // nanos alone collided (two tests shared one home, one contended the
+        // other's lock and one's Drop removed the other's run file).
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let home = std::env::temp_dir().join(format!(
-            "autoflow-lockc-{}-{}",
+            "autoflow-lockc-{}-{}-{}",
             std::process::id(),
+            seq,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

@@ -11,6 +11,7 @@
 //! flag spelling; the implementer must match, or raise the spelling with the
 //! test author rather than weaken a test):
 //!   backlog done ID --test CMD [--red-rev REV] [--reason fixed|already-fixed|obsolete]
+//!     (since user ruling 2026-11-08 REV is recorded, never run: no RED execution)
 //!   backlog done ID --duplicate-of ID
 //!   backlog done ID --doc-only COMMIT
 //!   backlog add ... [--repro-test CMD]   (only a REPRODUCED outcome lands pending; else refused, nothing written)

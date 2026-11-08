@@ -11,8 +11,7 @@ allowed-tools: Bash(backlog:*), Bash(git:*), Read
 backlog list --status pending [--project <path>]   # ピックには使用禁止。キュー一覧（純粋な read）
 backlog next [--project <path>]                    # 次のアイテムを覗く（予約しない）
 backlog next --claim [--project <path>]            # 次のアイテムを予約して取る（driver はこちら）
-backlog done <id> --test "<cmd>" --red-rev <rev>   # 完了（committed test が REV で RED・HEAD で GREEN を実測）
-backlog done <id> --test "<cmd>" --red-rev <rev> --red-overlay <repro test file>   # 修正がテストファイルの中にあるとき: RED 側へ上書きする HEAD のテストファイルを repro 側だけに絞る（絞るだけで広げられない。REV で通るテストは拒否）
+backlog done <id> --test "<cmd>" --red-rev <rev>   # 完了（committed test が HEAD で GREEN を実測。REV は commit 解決と祖先判定だけして closure.red に executed = false で記録し、RED は実行しない: ユーザー裁定 2026-11-08）
 backlog done <id> --doc-only <commit>              # 完了（doc だけを触る祖先 commit が証拠）
 backlog done <id> --duplicate-of <id>              # 完了（重複。相手は pending / claimed / done）
 backlog add --repro-test "<cmd>" ...               # 再現した時だけ pending で起票し、それ以外は非 0 で拒否して store に何も書かない

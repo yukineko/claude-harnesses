@@ -22,7 +22,8 @@
 //! gate `scripts/check-closure-evidence.py`; the two must be changed together.
 
 use crate::task::{
-    GreenRun, RedRun, Repro, REPRO_NOT_REPRODUCED, REPRO_REPRODUCED, REPRO_UNDETERMINED,
+    GreenRun, RedRun, Repro, RED_KIND_NOT_EXECUTED, REPRO_NOT_REPRODUCED, REPRO_REPRODUCED,
+    REPRO_UNDETERMINED,
 };
 use harness_core::boundary::{self, CommandOutput};
 use harness_core::verdict::Determination;
@@ -313,9 +314,10 @@ pub struct RunResult {
 /// RED that re-running the stored command does not reproduce. Every run is
 /// therefore executed with the environment cleared down to this fixed set —
 /// what locating the toolchain, the user's git config and a temp dir needs —
-/// so the recorded command alone reproduces the observation, and an
-/// env-gated test that only goes RED with an extra variable is refused (its
-/// RED run skips) instead of being accepted on an irreproducible record.
+/// so the recorded command alone reproduces the observation. (`done` no
+/// longer runs RED — user ruling 2026-11-08 — so for a close this now bounds
+/// the GREEN run: an env-gated test that only runs with an extra variable
+/// skips at HEAD and is refused for reporting no `<N> passed`.)
 pub const INHERITED_ENV: &[&str] = &[
     "PATH",
     "HOME",
@@ -452,6 +454,9 @@ fn build_failure_marker(output: &str) -> Option<&'static str> {
 
 /// Is a non-zero run a BEHAVIOURAL failure (the test ran and failed)?
 /// `Err` names why it is not (build failure, runner usage error, signal...).
+/// Used by the repro run at HEAD ([`run_repro`]: `add --repro-test`,
+/// `edit --repro-test`, the `next --claim` re-check); `done` no longer calls it, because it no longer runs
+/// RED (user ruling 2026-11-08).
 ///
 /// For `cargo test`, a `test result: FAILED` line is checked **before** the
 /// build-failure marker: that line is printed only by a test binary that ran
@@ -552,43 +557,46 @@ fn preflight(root: &Path, cmd: &TestCmd, head: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The observed F2P evidence of a close.
+/// The evidence of a `done --test` close: the observed GREEN, plus the
+/// CLAIMED red revision (never executed, see [`run_green_with_claimed_red`]).
 #[derive(Debug, Clone)]
-pub struct F2p {
+pub struct TestClose {
     pub green: GreenRun,
     pub red: RedRun,
 }
 
-/// Run the F2P protocol: GREEN at HEAD in the (clean) working tree, RED at
-/// `red_rev` in a detached temp worktree with HEAD's test files overlaid
-/// (the default overlay: every HEAD test file for cargo, the named files for
-/// pytest, the script for a script runner). `red_overlay` (from `done
-/// --red-overlay`) NARROWS that overlay to the named files, so a fix that
-/// itself lives in a test file is not copied into the RED tree; it can never
-/// widen it. Every failure to observe either side refuses with its cause.
-pub fn run_f2p(
+/// The `closure.red.note` of a close whose RED was not executed.
+pub const RED_NOT_EXECUTED_NOTE: &str = "RED was NOT executed: backlog done's RED run was \
+     abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); \
+     rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, \
+     never run";
+
+/// Run a `done --test` close: GREEN at HEAD in the (clean) working tree.
+///
+/// The RED run is ABOLISHED (user ruling 2026-11-08: 「backlog doneのRED実行は
+/// そもそも全面廃止でいい」): no temp worktree is created, no test file is
+/// overlaid and `cmd` is never executed at `red_rev`. `red_rev` is still
+/// resolved to a commit and required to be an ancestor of HEAD (cheap git
+/// queries, no build) — either failure refuses — and is recorded as a CLAIM
+/// only: `RedRun { executed: Some(false), kind: "not-executed", exit: None }`,
+/// so the closure can never be read as a verified RED. Every failure to
+/// observe GREEN refuses with its cause, exactly as before.
+pub fn run_green_with_claimed_red(
     root: &Path,
     cmd: &TestCmd,
     red_rev: &str,
-    red_overlay: Option<&[String]>,
     now: i64,
-) -> Result<F2p, String> {
+) -> Result<TestClose, String> {
     let timeout = test_timeout()?;
     let head = head_commit(root)?;
     let red = resolve_commit(root, red_rev).map_err(|e| format!("--red-rev: {e}"))?;
     if !is_ancestor(root, &red, &head)? {
         return Err(format!(
-            "--red-rev {red} is not an ancestor of HEAD ({head}); RED must be observed on this \
-             history"
+            "--red-rev {red} is not an ancestor of HEAD ({head}); the claimed pre-fix revision \
+             must be on this history"
         ));
     }
     preflight(root, cmd, &head)?;
-    // Resolve the overlay BEFORE any run, so a bad --red-overlay costs nothing.
-    let default_overlay = narrow_to_named(cmd, head_test_files(root, &head, cmd)?);
-    let overlay = match red_overlay {
-        None => RedOverlay::Default(default_overlay),
-        Some(paths) => RedOverlay::Narrowed(narrowed_overlay(paths, &default_overlay)?),
-    };
 
     // GREEN at HEAD.
     let g = match execute(cmd, root, timeout) {
@@ -624,38 +632,7 @@ pub fn run_f2p(
         }
     };
 
-    // RED at red-rev.
-    let r = run_in_temp_worktree(root, &red, &head, cmd, overlay.files(), timeout)?;
-    let red_run = match r {
-        Determination::Known(r) => r,
-        Determination::Undetermined(why) => {
-            return Err(format!(
-                "the RED run at {red} did not complete, so no RED was observed: {why}"
-            ))
-        }
-    };
-    if red_run.exit == 0 {
-        let how = match &overlay {
-            RedOverlay::Default(f) => format!(
-                "the RED run was {red} with HEAD's test files overlaid onto it ({} file(s), the \
-                 default overlay). If the fix itself lives in one of those test files, the \
-                 overlay copied it into the RED tree: name only the repro side with \
-                 --red-overlay PATH",
-                f.len()
-            ),
-            RedOverlay::Narrowed(f) => format!(
-                "the RED run was {red} with only --red-overlay {} overlaid from HEAD",
-                f.join(", ")
-            ),
-        };
-        return Err(format!(
-            "the test PASSES at --red-rev {red}; a test that passes before the fix is not RED \
-             and proves nothing about it ({how})"
-        ));
-    }
-    classify_red(cmd, &red_run).map_err(|why| format!("RED at {red} refused: {why}"))?;
-
-    // Nothing the runs did may have moved HEAD or dirtied the tree.
+    // Nothing the run did may have moved HEAD or dirtied the tree.
     let head_after = head_commit(root)?;
     if head_after != head {
         return Err(format!(
@@ -665,7 +642,7 @@ pub fn run_f2p(
     }
     require_clean_tree(root).map_err(|e| format!("after the test run: {e}"))?;
 
-    Ok(F2p {
+    Ok(TestClose {
         green: GreenRun {
             runner: cmd.runner.label().to_string(),
             cmd: cmd.text.clone(),
@@ -678,72 +655,13 @@ pub fn run_f2p(
         },
         red: RedRun {
             rev: red,
-            exit: red_run.exit,
-            kind: "behavioural".to_string(),
-            overlay: match overlay {
-                RedOverlay::Default(_) => None,
-                RedOverlay::Narrowed(f) => Some(f),
-            },
+            exit: None,
+            kind: RED_KIND_NOT_EXECUTED.to_string(),
+            overlay: None,
+            executed: Some(false),
+            note: Some(RED_NOT_EXECUTED_NOTE.to_string()),
         },
     })
-}
-
-/// Which HEAD test files the RED worktree receives.
-enum RedOverlay {
-    /// The default overlay (see [`narrow_to_named`]).
-    Default(Vec<String>),
-    /// `--red-overlay`: a non-empty subset of the default overlay.
-    Narrowed(Vec<String>),
-}
-
-impl RedOverlay {
-    fn files(&self) -> &[String] {
-        match self {
-            RedOverlay::Default(f) | RedOverlay::Narrowed(f) => f,
-        }
-    }
-}
-
-/// Validate `--red-overlay` paths: each must be a test file tracked at HEAD
-/// that the default overlay already contains, so the flag can only remove
-/// files from the RED overlay, never add one. Sorted and deduplicated.
-fn narrowed_overlay(paths: &[String], default: &[String]) -> Result<Vec<String>, String> {
-    if paths.is_empty() {
-        return Err("--red-overlay names no file".to_string());
-    }
-    let mut out: Vec<String> = Vec::new();
-    for raw in paths {
-        let p = raw.strip_prefix("./").unwrap_or(raw);
-        if p.is_empty() {
-            return Err("--red-overlay \"\" is empty; name a HEAD test file".to_string());
-        }
-        if Path::new(p).is_absolute() || p.split('/').any(|c| c == ".." || c == "." || c.is_empty())
-        {
-            return Err(format!(
-                "--red-overlay {raw:?} must be a clean repo-relative path (no leading `/`, no \
-                 `.`/`..` components)"
-            ));
-        }
-        if !is_test_path(p) {
-            return Err(format!(
-                "--red-overlay {raw:?} is not a test file (no `tests`/`test` directory \
-                 component, not test_*.py / *_test.py / conftest.py); only test files are \
-                 overlaid"
-            ));
-        }
-        if !default.iter().any(|d| d == p) {
-            return Err(format!(
-                "--red-overlay {raw:?} is not in the default overlay for this command (a test \
-                 file tracked at HEAD that the argv selects); --red-overlay may only narrow the \
-                 default overlay, never widen it"
-            ));
-        }
-        if !out.iter().any(|o| o == p) {
-            out.push(p.to_string());
-        }
-    }
-    out.sort();
-    Ok(out)
 }
 
 fn excerpt_short(output: &str) -> String {
@@ -754,159 +672,6 @@ fn excerpt_short(output: &str) -> String {
         s += 1;
     }
     t[s..].to_string()
-}
-
-/// A detached temp worktree that is removed on every exit path.
-struct TempWorktree {
-    root: PathBuf,
-    path: PathBuf,
-    removed: bool,
-}
-
-impl TempWorktree {
-    fn create(root: &Path, rev: &str) -> Result<Self, String> {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .map_err(|e| format!("system clock before the epoch: {e}"))?;
-        let path = std::env::temp_dir().join(format!("backlog-red-{}-{nanos}", std::process::id()));
-        let p = path.to_string_lossy().into_owned();
-        git_ok(root, &["worktree", "add", "--detach", "--quiet", &p, rev])
-            .map_err(|e| format!("cannot create the temp worktree for the RED run: {e}"))?;
-        Ok(TempWorktree {
-            root: root.to_path_buf(),
-            path,
-            removed: false,
-        })
-    }
-
-    fn remove(&mut self) -> Result<(), String> {
-        if self.removed {
-            return Ok(());
-        }
-        self.removed = true;
-        let p = self.path.to_string_lossy().into_owned();
-        let r = git_ok(
-            &self.root,
-            &["worktree", "remove", "--force", "--force", &p],
-        );
-        if self.path.exists() {
-            if let Err(e) = std::fs::remove_dir_all(&self.path) {
-                return Err(format!(
-                    "the temp worktree {} could not be removed: {e}",
-                    self.path.display()
-                ));
-            }
-        }
-        let prune = git_ok(&self.root, &["worktree", "prune"]);
-        r.and(prune).map(|_| ())
-    }
-}
-
-impl Drop for TempWorktree {
-    fn drop(&mut self) {
-        if let Err(e) = self.remove() {
-            eprintln!("warning: {e}");
-        }
-    }
-}
-
-/// Is `p` (a `/`-separated repo path) a test file for the RED overlay? The
-/// same predicate as `is_test_path` in `scripts/check-closure-evidence.py`, so
-/// the CLI and the pre-commit gate re-run RED against the same overlay: any
-/// `tests`/`test` directory component, or a basename `test_*.py`,
-/// `*_test.py` or `conftest.py`.
-fn is_test_path(p: &str) -> bool {
-    let parts: Vec<&str> = p.split('/').collect();
-    let (base, dirs) = match parts.split_last() {
-        Some((b, d)) => (*b, d),
-        None => return false,
-    };
-    dirs.iter().any(|d| *d == "tests" || *d == "test")
-        || (base.starts_with("test_") && base.ends_with(".py"))
-        || base.ends_with("_test.py")
-        || base == "conftest.py"
-}
-
-/// Narrow `files` (HEAD's test files) to the ones the argv itself names, so a
-/// fix that lives in some OTHER test file is not smuggled into the RED
-/// worktree. Script: the script only. Pytest: each non-option argument, cut at
-/// `::`, as a file or a directory prefix. Cargo, or a pytest argv naming
-/// nothing that matches: unchanged (the whole set, which can only make a pass
-/// more likely, i.e. refuse, never accept).
-fn narrow_to_named(cmd: &TestCmd, files: Vec<String>) -> Vec<String> {
-    match cmd.runner {
-        Runner::Script => cmd.script.iter().cloned().collect(),
-        Runner::Pytest => {
-            let named: Vec<String> = cmd
-                .argv
-                .iter()
-                .filter(|a| !a.starts_with('-'))
-                .map(|a| a.split("::").next().unwrap_or(a))
-                .map(|a| a.strip_prefix("./").unwrap_or(a).trim_end_matches('/'))
-                .filter(|a| !a.is_empty())
-                .map(str::to_string)
-                .collect();
-            let picked: Vec<String> = files
-                .iter()
-                .filter(|f| {
-                    named
-                        .iter()
-                        .any(|n| *f == n || f.starts_with(&format!("{n}/")))
-                })
-                .cloned()
-                .collect();
-            if picked.is_empty() {
-                files
-            } else {
-                picked
-            }
-        }
-        Runner::CargoTest => files,
-    }
-}
-
-/// The test files of HEAD (see [`is_test_path`]), plus the script itself.
-fn head_test_files(root: &Path, head: &str, cmd: &TestCmd) -> Result<Vec<String>, String> {
-    let s = git_ok(root, &["ls-tree", "-r", "-z", "--name-only", head])?;
-    let mut files: Vec<String> = s
-        .split('\0')
-        .filter(|p| !p.is_empty() && is_test_path(p))
-        .map(str::to_string)
-        .collect();
-    if let Some(script) = &cmd.script {
-        if !files.iter().any(|f| f == script) {
-            files.push(script.clone());
-        }
-    }
-    Ok(files)
-}
-
-fn run_in_temp_worktree(
-    root: &Path,
-    red: &str,
-    head: &str,
-    cmd: &TestCmd,
-    files: &[String],
-    timeout: Duration,
-) -> Result<Determination<RunResult>, String> {
-    let mut wt = TempWorktree::create(root, red)?;
-    for chunk in files.chunks(200) {
-        let mut args: Vec<&str> = vec!["checkout", head, "--"];
-        args.extend(chunk.iter().map(String::as_str));
-        if let Err(e) = git_ok(&wt.path, &args) {
-            let cleanup = match wt.remove() {
-                Ok(()) => String::new(),
-                Err(c) => format!("; additionally {c}"),
-            };
-            return Err(format!(
-                "cannot overlay HEAD's test files onto the RED worktree: {e}{cleanup}"
-            ));
-        }
-    }
-    let out = execute(cmd, &wt.path, timeout);
-    wt.remove()?;
-    Ok(out)
 }
 
 // ---- findings: repro -------------------------------------------------------
@@ -1078,30 +843,10 @@ pub fn verify_doc_only(root: &Path, commit: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_path_matches_the_gate_predicate() {
-        for p in [
-            "tests/a.sh",
-            "crates/x/tests/y.rs",
-            "a/test/b.py",
-            "test_x.py",
-            "pkg/test_mod.py",
-            "pkg/mod_test.py",
-            "pkg/conftest.py",
-        ] {
-            assert!(is_test_path(p), "{p} is a test path");
-        }
-        for p in [
-            "tests",
-            "src/lib.rs",
-            "test_x.rs",
-            "pkg/testing.py",
-            "contest.py",
-            "a/tests_x/b.rs",
-        ] {
-            assert!(!is_test_path(p), "{p} is not a test path");
-        }
-    }
+    // `test_path_matches_the_gate_predicate` was removed with `is_test_path`:
+    // that predicate only chose which HEAD test files the RED worktree got,
+    // and the RED run is abolished (user ruling 2026-11-08: 「backlog doneの
+    // RED実行はそもそも全面廃止でいい」), so nothing in this crate uses it.
 
     #[test]
     fn allowlist_and_metachars() {

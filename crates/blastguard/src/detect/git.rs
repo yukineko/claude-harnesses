@@ -851,6 +851,76 @@ fn git_config_write_exec(args: &[String]) -> Option<GitExecBan> {
     exec_ban(&format!("config {key} …"), Some(cmd))
 }
 
+/// Does the legacy `git config` argv (the words AFTER `config`) select a
+/// read-only mode (`--get`, `--get-all`, `--get-regexp`, `--get-urlmatch`,
+/// `--list`, `-l`) in its option prefix?
+///
+/// git stops option parsing at the first non-option word (observed with git
+/// 2.50.1, table in `hookspath_read_tests.rs`): every word after the key is a
+/// positional, even one that looks like a flag, so `git config core.hooksPath
+/// --get` writes the value `--get`. Only the prefix is scanned, therefore:
+///
+///   * `--` ends the prefix (what follows is positional).
+///   * the first word not starting with `-` ends the prefix.
+///   * a known value-taking option (`-f`/`--file`, `--blob`, `--type`,
+///     `--default`, `--comment`) in separate form consumes the next word.
+///   * a known value-free option is skipped.
+///   * ANY other option word returns `false`: whether it consumes the next
+///     word is unknown, so the prefix cannot be delimited and the read is not
+///     established (the caller then treats the line as a write — fail-closed).
+fn config_read_mode_in_prefix(args: &[&str]) -> bool {
+    const READ_MODES: &[&str] = &[
+        "--get",
+        "--get-all",
+        "--get-regexp",
+        "--get-urlmatch",
+        "--list",
+        "-l",
+    ];
+    const VALUE_SEPARATE: &[&str] = &["-f", "--file", "--blob", "--type", "--default", "--comment"];
+    const VALUE_GLUED: &[&str] = &["--file=", "--blob=", "--type=", "--default=", "--comment="];
+    const VALUE_FREE: &[&str] = &[
+        "--local",
+        "--global",
+        "--system",
+        "--worktree",
+        "--show-origin",
+        "--show-scope",
+        "--null",
+        "-z",
+        "--name-only",
+        "--includes",
+        "--no-includes",
+        "--bool",
+        "--int",
+        "--bool-or-int",
+        "--path",
+        "--expiry-date",
+        "--fixed-value",
+        "--no-type",
+    ];
+    let mut i = 0;
+    while i < args.len() {
+        let t = args[i];
+        if t == "--" || !t.starts_with('-') {
+            return false;
+        }
+        if READ_MODES.contains(&t) {
+            return true;
+        }
+        if VALUE_SEPARATE.contains(&t) {
+            i += 2;
+            continue;
+        }
+        if VALUE_FREE.contains(&t) || VALUE_GLUED.iter().any(|p| t.starts_with(p)) {
+            i += 1;
+            continue;
+        }
+        return false;
+    }
+    false
+}
+
 fn analyze_git_words(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decision {
     // Backlog fb338793: exec-capable shapes never reach the per-subcommand
     // arms (and so never the `_ => Allow` at the end). See `git_exec_ban`.
@@ -1138,20 +1208,19 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
             // direction (it disarms the repo's opt-in `.githooks` tree), so it
             // is denied too.
             //
-            // Read-only forms are allowed: they change nothing. Anything that
-            // mentions the key WITHOUT one of those flags is treated as a write
-            // (the bare one-argument read included) — an unrecognised shape of
-            // a hook-repointing command resolves to the restrictive side.
+            // Read-only forms are allowed: they change nothing. A read-mode
+            // flag only selects a read when it sits in the OPTION PREFIX, before
+            // the first non-option word — see `config_read_mode_in_prefix`
+            // (backlog e103cd56: `git config core.hooksPath --get` WRITES the
+            // value `--get`). Anything that mentions the key WITHOUT a read-mode
+            // flag in that prefix is treated as a write (the bare one-argument
+            // read included) — an unrecognised shape of a hook-repointing
+            // command resolves to the restrictive side.
             let mentions_hookspath = rest[idx + 1..].iter().any(|t| {
                 let t = normalized_command(t).to_ascii_lowercase();
                 t == "core.hookspath" || t.starts_with("core.hookspath=")
             });
-            let read_only = rest[idx + 1..].iter().any(|t| {
-                matches!(
-                    *t,
-                    "--get" | "--get-all" | "--get-regexp" | "--get-urlmatch" | "--list" | "-l"
-                )
-            });
+            let read_only = config_read_mode_in_prefix(&rest[idx + 1..]);
             if mentions_hookspath && !read_only {
                 Decision::deny(HOOKSPATH_REASON)
             } else {

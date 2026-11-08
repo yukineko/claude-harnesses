@@ -249,7 +249,6 @@ fn red_b_same_hole_without_any_heredoc() {
 }
 
 #[test]
-#[ignore = "backlog 5916d385: open defect, remove ignore when fixed"]
 fn red_c_zsh_unquoted_heredoc_expansion_after_stray_quote() {
     run_all(
         "c",

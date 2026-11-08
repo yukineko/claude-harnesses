@@ -20,8 +20,14 @@
 //! Modelled: single quotes, `$'…'` (ANSI-C, where `\'` is escaped), double
 //! quotes, backticks, `$(…)`/`<(…)`/`>(…)`/`(…)` nesting (each a fresh code
 //! context, as in the shell), `$((…))` arithmetic (no comments there), and
-//! here-document bodies (copied verbatim: they are data, an apostrophe in them
-//! is not a quote — the existing body handling of the splitters still applies).
+//! here-document bodies: a QUOTED-delimiter body (`<<'EOF'`) is copied
+//! verbatim (it is data, an apostrophe in it is not a quote — the existing
+//! body handling of the splitters still applies); an UNQUOTED one (`<<EOF`) is
+//! expanded by the shell, so its `'`/`"` are literal (spelt `_`) while its
+//! `$(…)`/backtick spans are live code, lexed as such — a stray `)'` earlier
+//! in the body no longer opens a span that hides a later backtick or `$(…)`
+//! substitution (backlog 5916d385). An unquoted body this lexer does not model
+//! makes the reading [`ShellLexed::Undetermined`] (Ask), never clean.
 //! Where the model guesses (a `case` pattern `)` closing a `$(…)` early, a
 //! `<<` that is really an arithmetic shift outside `$((…))`), the guess only
 //! leaves text verbatim or mis-nests a context; that can make this reading
@@ -34,7 +40,8 @@
 //! model.
 
 use super::substitution::{
-    backtick_body_as_run, entry_comments, scan_bash32, Scan32, Stop, MAX_QUOTE_PAREN_DEPTH,
+    backtick_body_as_run, entry_comments, scan_balanced_strict_modern, scan_bash32, Scan32, Stop,
+    MAX_QUOTE_PAREN_DEPTH,
 };
 
 /// The lexer context the current character is read in.
@@ -56,15 +63,34 @@ enum Lex {
 struct Pending {
     delimiter: String,
     strips_tabs: bool,
+    /// The delimiter word held a `'`, `"` or `\`: the body is not expanded.
+    quoted: bool,
 }
 
-/// `cmd` re-spelled as the shell tokenises it (see the module doc), or `None`
-/// when that spelling is identical to `cmd` (nothing to add).
-pub(super) fn shell_lexed_reading(cmd: &str) -> Option<String> {
+/// The modern (bash 4+ / zsh) shell-lexed reading of a command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ShellLexed {
+    /// The spelling is identical to the command: nothing to add.
+    Same,
+    /// The command re-spelled as the shell tokenises it.
+    Text(String),
+    /// An unquoted here-document body holds a shape this lexer does not model
+    /// (see [`copy_here_doc_bodies`]): the caller must resolve this to Ask,
+    /// never to clean.
+    Undetermined,
+}
+
+/// `cmd` re-spelled as the shell tokenises it (see the module doc).
+pub(super) fn shell_lexed_reading(cmd: &str) -> ShellLexed {
     let chars: Vec<char> = cmd.chars().collect();
-    // Only the bash 3.2 branches of the lexer ever raise `undetermined`.
     let lexed = lex(&chars, false, 0);
-    (lexed.text != cmd).then_some(lexed.text)
+    if lexed.undetermined {
+        ShellLexed::Undetermined
+    } else if lexed.text == cmd {
+        ShellLexed::Same
+    } else {
+        ShellLexed::Text(lexed.text)
+    }
 }
 
 /// The bash 3.2 shell-lexed reading of a command (backlog 089bedd4).
@@ -133,7 +159,9 @@ struct Lexed {
     open: bool,
     /// Delimiters of the here-documents still open when the script ended.
     unterminated: Vec<String>,
-    /// A shape this lexer does not model was met (bash 3.2 mode only).
+    /// A shape this lexer does not model was met: in bash 3.2 mode (see
+    /// [`bash32_lexed_reading`]) or in an unquoted here-document body (both
+    /// modes, see [`copy_here_doc_bodies`]).
     undetermined: bool,
 }
 
@@ -312,9 +340,12 @@ fn lex(chars: &[char], bash32: bool, depth: usize) -> Lexed {
             '\n' => {
                 out.push(c);
                 i += 1;
-                let (after, open) = copy_here_doc_bodies(chars, i, &mut pending, &mut out);
-                unterminated.extend(open);
-                i = after;
+                let bodies = copy_here_doc_bodies(chars, i, &mut pending, &mut out, bash32, depth);
+                if bodies.undetermined {
+                    return Lexed::undetermined(out);
+                }
+                unterminated.extend(bodies.unterminated);
+                i = bodies.after;
                 continue;
             }
             _ => out.push(c),
@@ -467,13 +498,16 @@ fn read_here_doc_opener(
         j += 1;
     }
     let mut delimiter = String::new();
+    let mut quoted = false;
     while j < chars.len()
         && !matches!(
             chars[j],
             ' ' | '\t' | '\n' | ';' | '&' | '|' | '<' | '>' | '(' | ')'
         )
     {
-        if !matches!(chars[j], '\'' | '"' | '\\') {
+        if matches!(chars[j], '\'' | '"' | '\\') {
+            quoted = true;
+        } else {
             delimiter.push(chars[j]);
         }
         j += 1;
@@ -482,48 +516,213 @@ fn read_here_doc_opener(
     pending.push(Pending {
         delimiter,
         strips_tabs,
+        quoted,
     });
     j
 }
 
+/// What [`copy_here_doc_bodies`] did with the pending bodies.
+struct Bodies {
+    /// The index after the last body (and its delimiter line).
+    after: usize,
+    /// Delimiters of the bodies the input ended inside.
+    unterminated: Vec<String>,
+    /// An unquoted body held a shape [`spell_expanding_body`] does not model.
+    undetermined: bool,
+}
+
 /// After a code newline at `chars[from - 1]`: copy every pending here-document
-/// body verbatim through its delimiter line (or to the end of the input when
-/// it is unterminated or its delimiter is empty), and return the index after
-/// together with the delimiters of the bodies the input ended inside.
+/// body through its delimiter line (or to the end of the input when it is
+/// unterminated or its delimiter is empty).
+///
+/// A QUOTED-delimiter body (`<<'EOF'`) is data and is copied verbatim. An
+/// UNQUOTED one (`<<EOF`) is expanded by the shell, so it is neither plain
+/// data nor code: its `'` and `"` are literal characters, while its `$(…)`,
+/// `$((…))` and backtick spans are live command substitutions (observed:
+/// zsh runs `` `touch M` `` in `echo $(cat <<EOF` / `)'` / `` `touch M` `` /
+/// `EOF` / `)`, see `tests/heredoc_paren_bash32_verifier_20261107.rs` C1/C2).
+/// The naive quote trackers read such a literal `'` as opening a quoted span
+/// that hid the substitution after it, so the body is re-spelt by
+/// [`spell_expanding_body`]: each literal quote becomes `_` and each
+/// substitution is lexed as the code it is. In such a body a backslash-newline
+/// joins two lines and the delimiter is matched against the joined line
+/// (observed in /bin/bash 3.2, /bin/sh and /bin/zsh: `a\` / `EOF` / `b` /
+/// `EOF` prints `aEOF` and `b`); a `<<-` body with such a join, a delimiter
+/// line that is itself joined, and every shape [`spell_expanding_body`] does
+/// not model set [`Bodies::undetermined`].
 fn copy_here_doc_bodies(
     chars: &[char],
     from: usize,
     pending: &mut Vec<Pending>,
     out: &mut String,
-) -> (usize, Vec<String>) {
+    bash32: bool,
+    depth: usize,
+) -> Bodies {
     let mut pos = from;
     let mut unterminated = Vec::new();
+    let mut undetermined = false;
     for doc in pending.drain(..) {
-        let mut terminated = false;
+        let body_start = pos;
+        // `(start, end)` of the terminator's physical line, once found.
+        let mut terminator: Option<(usize, usize)> = None;
+        let mut joined = false;
         while pos < chars.len() {
-            let end = chars[pos..]
-                .iter()
-                .position(|&c| c == '\n')
-                .map_or(chars.len(), |p| pos + p);
-            let line: String = chars[pos..end].iter().collect();
-            out.push_str(&line);
-            if end < chars.len() {
-                out.push('\n');
+            let line_start = pos;
+            let mut end = line_end(chars, pos);
+            // An unquoted body joins a line ending in an odd number of
+            // backslashes to the next one.
+            let mut logical: Vec<char> = chars[pos..end].to_vec();
+            let mut physical_lines = 1;
+            while !doc.quoted && end < chars.len() && ends_in_continuation(&chars[pos..end]) {
+                logical.pop();
+                pos = end + 1;
+                end = line_end(chars, pos);
+                logical.extend_from_slice(&chars[pos..end]);
+                physical_lines += 1;
             }
+            joined |= physical_lines > 1;
             pos = end + 1;
-            let check = if doc.strips_tabs {
-                line.trim_start_matches('\t')
+            let check: String = if doc.strips_tabs {
+                logical.iter().skip_while(|&&c| c == '\t').collect()
             } else {
-                line.as_str()
+                logical.iter().collect()
             };
             if !doc.delimiter.is_empty() && check == doc.delimiter {
-                terminated = true;
+                if physical_lines > 1 {
+                    undetermined = true;
+                }
+                terminator = Some((line_start, end));
                 break;
             }
         }
-        if !terminated {
-            unterminated.push(doc.delimiter);
+        let body_end = terminator.map_or(chars.len(), |(start, _)| start);
+        let body = &chars[body_start..body_end.max(body_start)];
+        if doc.quoted {
+            out.extend(body);
+        } else {
+            undetermined |= joined && doc.strips_tabs;
+            match spell_expanding_body(body, bash32, depth) {
+                Some(spelt) => out.push_str(&spelt),
+                None => {
+                    undetermined = true;
+                    out.extend(body);
+                }
+            }
+        }
+        match terminator {
+            Some((start, end)) => {
+                out.extend(&chars[start..end]);
+                if end < chars.len() {
+                    out.push('\n');
+                }
+            }
+            None => unterminated.push(doc.delimiter),
         }
     }
-    (pos.min(chars.len()), unterminated)
+    Bodies {
+        after: pos.min(chars.len()),
+        unterminated,
+        undetermined,
+    }
+}
+
+/// The index of the newline ending the line that starts at `chars[pos]`, or
+/// `chars.len()` for the last line.
+fn line_end(chars: &[char], pos: usize) -> usize {
+    chars[pos.min(chars.len())..]
+        .iter()
+        .position(|&c| c == '\n')
+        .map_or(chars.len(), |p| pos + p)
+}
+
+/// True when `line` ends in an odd number of backslashes: in an unquoted
+/// here-document body the last one escapes the newline (a line continuation).
+fn ends_in_continuation(line: &[char]) -> bool {
+    line.iter().rev().take_while(|&&c| c == '\\').count() % 2 == 1
+}
+
+/// The body of an UNQUOTED here-document (the text between its opener line
+/// and its delimiter line) re-spelt for the naive quote trackers, or `None`
+/// for a shape not modelled.
+///
+/// The shell expands such a body the way it expands a double-quoted string
+/// whose `"` is not special: `'` and `"` are literal (spelt `_`, so that no
+/// tracker opens a quoted span at them); `\` escapes only `$`, `` ` ``, `\`
+/// and the newline (those pairs are copied, any other `\` is literal); and
+/// `$(…)` / `$((…))` / backtick spans are command (or arithmetic)
+/// substitutions, each lexed by [`lex`] as the code the shell runs — there a
+/// quote IS a quote. A `$(` span is delimited by the modern here-document-aware
+/// scan ([`scan_balanced_strict_modern`]) within the body (the shell reads the
+/// body lines before it expands them, so no substitution reaches past the
+/// delimiter line); a backtick span by the next unescaped backtick, its
+/// content backslash-processed ([`backtick_body_as_run`]) before it is lexed.
+/// `${…}` is copied verbatim when it holds none of `'`, `"`, `` ` ``, `\`,
+/// `$`, `{` or a newline.
+///
+/// `None` (not modelled — the caller resolves it to Ask, never to clean): a
+/// substitution that does not close inside the body, whose lexed content ends
+/// inside a quote or a nested context or with a here-document still open, or
+/// whose lexing meets an unmodelled shape; and every other `${…}`.
+fn spell_expanding_body(body: &[char], bash32: bool, depth: usize) -> Option<String> {
+    let mut out = String::with_capacity(body.len());
+    let lexed_code = |code: &[char]| -> Option<String> {
+        let inner = lex(code, bash32, depth + 1);
+        (!inner.undetermined && !inner.open && inner.unterminated.is_empty()).then_some(inner.text)
+    };
+    let mut k = 0;
+    while k < body.len() {
+        let c = body[k];
+        let next = body.get(k + 1).copied();
+        match c {
+            '\\' => {
+                out.push(c);
+                if let Some(n @ ('$' | '`' | '\\' | '\n')) = next {
+                    out.push(n);
+                    k += 2;
+                } else {
+                    k += 1;
+                }
+            }
+            '\'' | '"' => {
+                out.push('_');
+                k += 1;
+            }
+            '`' => {
+                let mut close = k + 1;
+                while close < body.len() && body[close] != '`' {
+                    close += if body[close] == '\\' { 2 } else { 1 };
+                }
+                if close >= body.len() {
+                    return None;
+                }
+                let run: Vec<char> = backtick_body_as_run(&body[k + 1..close]).chars().collect();
+                out.push('`');
+                out.push_str(&lexed_code(&run)?);
+                out.push('`');
+                k = close + 1;
+            }
+            '$' if next == Some('(') => {
+                let end = scan_balanced_strict_modern(body, k + 2, Stop::Paren, depth + 1)?;
+                out.push_str(&lexed_code(&body[k..=end])?);
+                k = end + 1;
+            }
+            '$' if next == Some('{') => {
+                let close = body[k + 2..].iter().position(|&ch| ch == '}')? + k + 2;
+                let span = &body[k..=close];
+                if span[2..span.len() - 1]
+                    .iter()
+                    .any(|&ch| matches!(ch, '\'' | '"' | '`' | '\\' | '$' | '{' | '\n'))
+                {
+                    return None;
+                }
+                out.extend(span);
+                k = close + 1;
+            }
+            _ => {
+                out.push(c);
+                k += 1;
+            }
+        }
+    }
+    Some(out)
 }

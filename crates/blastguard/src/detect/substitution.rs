@@ -434,8 +434,10 @@ pub(super) fn scan_balanced_strict(
     })
 }
 
-/// [`scan_balanced_strict`]'s modern (bash 4+ / zsh) reading.
-fn scan_balanced_strict_modern(
+/// [`scan_balanced_strict`]'s modern (bash 4+ / zsh) reading, whatever
+/// reading is active (the shell lexer uses it to delimit a `$(` inside an
+/// unquoted here-document body).
+pub(super) fn scan_balanced_strict_modern(
     chars: &[char],
     start: usize,
     stop: Stop,

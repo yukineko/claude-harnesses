@@ -1,4 +1,4 @@
-use super::shell_lex::{bash32_lexed_reading, shell_lexed_reading, Bash32Lexed};
+use super::shell_lex::{bash32_lexed_reading, shell_lexed_reading, Bash32Lexed, ShellLexed};
 use super::substitution::under_bash32_reading;
 use super::{
     detect_bash, Ctx, Decision, SafeRoots, VerdictAcc, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES,
@@ -23,7 +23,11 @@ use super::{
 /// text — `#` comments removed, backslash-escaped quotes spelt `_` — whenever
 /// it differs from the text, because the splitters track quotes without
 /// knowing comments or escapes, and a quote in a comment or an escaped quote
-/// hid the next line from them. See [`shell_lexed_reading`].
+/// hid the next line from them. The same pass spells the literal `'`/`"` of
+/// an UNQUOTED here-document body `_` and lexes its `$(...)`/backtick spans as
+/// the live code they are, so a stray quote in such a body no longer hides a
+/// later substitution (backlog 5916d385); an unquoted body whose expansion the
+/// lexer does not model is Ask. See [`shell_lexed_reading`].
 ///
 /// A fourth pass (backlog 089bedd4) does the same for the bash 3.2 reading:
 /// where bash 3.2 closes a substitution early at a here-document body `)`,
@@ -42,10 +46,21 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
     if let Some(deny) = acc.record(detect_bash(c, 0, &Ctx::new(scope, c))) {
         return deny;
     }
-    if let Some(lexed) = shell_lexed_reading(c) {
-        ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
-        if let Some(deny) = acc.record(detect_bash(&lexed, 0, &Ctx::new(scope, &lexed))) {
-            return deny;
+    match shell_lexed_reading(c) {
+        ShellLexed::Same => {}
+        ShellLexed::Undetermined => {
+            // An Ask never short-circuits, so there is nothing to return here.
+            let _ = acc.record(Decision::ask(
+                "the body of an unquoted here-document (`<<EOF`) is expanded by the shell — \
+                 its `$(...)` and backtick spans run as commands — and blastguard cannot \
+                 determine how this one expands, so it cannot vouch for it either way",
+            ));
+        }
+        ShellLexed::Text(lexed) => {
+            ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+            if let Some(deny) = acc.record(detect_bash(&lexed, 0, &Ctx::new(scope, &lexed))) {
+                return deny;
+            }
         }
     }
     if !(c.contains("<<") && (c.contains("$(") || c.contains('`'))) {

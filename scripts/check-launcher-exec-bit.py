@@ -157,7 +157,22 @@ def problems(found):
     return out
 
 
-def main():
+def _staged_scope():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import staged_scope
+
+    return staged_scope
+
+
+def main(argv=None):
+    # `--staged` (pre-commit, user ruling 2026-11-08): judge only launchers
+    # whose path is in the staged diff. The zero-launcher guard still runs on
+    # the whole index first; an unreadable staged set exits 2.
+    argv = sys.argv if argv is None else argv
+    staged = None
+    if "--staged" in argv:
+        ss = _staged_scope()
+        staged = ss.staged_paths_or_exit(REPO, "launcher-exec-bit")
     try:
         found = launchers(index_entries())
     except Undetermined as exc:
@@ -181,6 +196,12 @@ def main():
             file=sys.stderr,
         )
         return RC_UNDETERMINED
+
+    if staged is not None:
+        found = [(mode, path) for mode, path in found if path in staged]
+        if not found:
+            _staged_scope().print_nothing_in_scope("launcher-exec-bit")
+            return RC_OK
 
     found_problems = problems(found)
     if not found_problems:

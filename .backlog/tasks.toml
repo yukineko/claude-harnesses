@@ -663,3 +663,36 @@ exit 101: AILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; fini
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
      Running tests/backlog_merge_timeout_other_paths_20261108.rs (target/debug/deps/backlog_merge_timeout_other_paths_20261108-a0fa0e39fe78ac69)
 error: test failed, to rerun pass `-p condukt --test backlog_merge_timeout_other_paths_20261108`"""
+
+[[task]]
+id = "11023be2"
+title = "guard-maintree-bash refuses a genuine fast-forward made by 'git merge -m' (reflog suffix '(no commit created; -m option ignored)')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "guard-maintree-bash",
+    "false-positive",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-08 at cb6755f4 in /Users/yuki/src/harness during condukt worktree merge (run run-20261108-185146-6010 t1). Verbatim refusal: 'Refused: this command modified this project's MAIN working tree outside integration (CLAUDE.md 8: main only receives merges). Changed in /Users/yuki/src/harness: HEAD 656327ce1e0c -> cb6755f4b9e0 (not a merge / fast-forward)'. Reflog: 'merge cb6755f4...: Fast-forward (no commit created; -m option ignored)'. integration_step() requires message.endswith(': Fast-forward'). Every condukt worktree merge that fast-forwards trips this."
+created_at = 1794133442
+updated_at = 1794133442
+weight = 0.0
+issue_number = 1640
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1640"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_guard_maintree_bash_ff_with_m_20261108.py -k ff_with_m"
+rev = "6545d29f59017fa2d30b30b089b8dc3b297b70f5"
+observed_at = 1794133442
+detail = """
+exit 1: /mtg-observe-h8px45sq/main status` before reverting anything.
+
+scripts/test_guard_maintree_bash_ff_with_m_20261108.py:49: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_ff_with_m_20261108.py::FfWithM::test_ff_with_m_is_integration
+========================= 1 failed, 1 passed in 1.39s =========================="""

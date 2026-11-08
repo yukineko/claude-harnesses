@@ -1,9 +1,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //! Spec: implementation changes the session COMMITTED during the session (in
-//! any root) are evaluated like uncommitted ones. Observed defect: the session
-//! wrote impl + test in a linked worktree, committed, and stopped with the hook
-//! cwd in the primary tree; tdd scanned only uncommitted diffs, evaluated
-//! nothing, and blocked ("an empty scan is not a pass") a test-first session.
+//! the hook-cwd checkout) are evaluated like uncommitted ones. Observed defect:
+//! the session wrote impl + test in a linked worktree, committed, and tdd
+//! scanned only uncommitted diffs, evaluated nothing, and blocked ("an empty
+//! scan is not a pass") a test-first session.
+//!
+//! RE-SCOPED 2026-11-08 (user ruling 2026-11-08: gates judge own worktree
+//! only): the hook cwd used to be the PRIMARY tree while the work sat in a
+//! linked worktree, and the gate followed the transcript into that worktree.
+//! That cross-worktree reach is withdrawn. The committed-work property is kept
+//! by running the Stop hook with cwd = the checkout that holds the work
+//! (`Fixture::stop`); `committed_impl_in_other_worktree_is_not_judged_from_primary_cwd`
+//! pins the new boundary (the linked worktree is not looked at from another cwd).
 //!
 //! Approved design ("Hybrid"): per root, besides the uncommitted diff, the
 //! gate evaluates the added lines of non-merge commits reachable from HEAD
@@ -244,19 +252,26 @@ impl Fixture {
         p
     }
 
-    /// Run the real `tdd gate` with cwd = primary; returns (stdout, stderr).
+    /// Run the real `tdd gate` with cwd = the checkout that holds the work
+    /// (`self.work`; the primary tree for `Layout::SingleRoot`) — the only
+    /// checkout a gate judges (user ruling 2026-11-08). Returns (stdout, stderr).
     fn stop(&self, transcript: &Path) -> (String, String) {
+        self.stop_in(&self.work, transcript)
+    }
+
+    /// Run the real `tdd gate` with the hook cwd = `cwd`.
+    fn stop_in(&self, cwd: &Path, transcript: &Path) -> (String, String) {
         let payload = serde_json::json!({
             "session_id": "s-committed",
             "transcript_path": transcript.to_string_lossy(),
-            "cwd": self.primary.to_string_lossy(),
+            "cwd": cwd.to_string_lossy(),
             "hook_event_name": "Stop",
             "stop_hook_active": false,
         })
         .to_string();
         let mut child = harness_core::git_env::scrub(&mut Command::new(env!("CARGO_BIN_EXE_tdd")))
             .arg("gate")
-            .current_dir(&self.primary)
+            .current_dir(cwd)
             .env("HOME", &self.home)
             .env("CLAUDE_CODE_SESSION_ID", "s-committed")
             .env_remove("TDD_DISABLE")
@@ -299,12 +314,14 @@ fn blocks(stdout: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Linked worktree (hook cwd = primary, session committed in the worktree)
+// Linked worktree (session committed in the worktree; hook cwd = that worktree,
+// re-scoped 2026-11-08 from "cwd = primary")
 // ---------------------------------------------------------------------------
 
 /// REPRO: impl + test written and committed in the worktree during the
-/// session, tree clean, hook cwd = primary. The committed work is
-/// test-accompanied and must be accepted. Also pins "session start = EARLIEST
+/// session, tree clean, hook cwd = the worktree (re-scoped 2026-11-08: was
+/// cwd = primary; user ruling 2026-11-08: gates judge own worktree only). The
+/// committed work is test-accompanied and must be accepted. Also pins "session start = EARLIEST
 /// timestamp": the last record (05:30) is after the commit (05:20).
 #[test]
 fn committed_impl_with_test_is_accepted() {
@@ -321,7 +338,9 @@ fn committed_impl_with_test_is_accepted() {
 }
 
 /// ANTI-VACUITY: committed impl with NO test must still block, so the fix
-/// cannot be "allow whenever the scan is empty".
+/// cannot be "allow whenever the scan is empty". Re-scoped 2026-11-08 (user
+/// ruling 2026-11-08: gates judge own worktree only): hook cwd = the worktree
+/// holding the commit, not the primary tree.
 #[test]
 fn committed_impl_without_test_still_blocks() {
     let f = Fixture::new(Layout::LinkedWorktree);
@@ -340,6 +359,8 @@ fn committed_impl_without_test_still_blocks() {
 /// commit adds untested impl. The transcript also records a Write of the test
 /// file, so attribution alone does not exclude it — only the date window does.
 /// Crediting the pre-session commit would allow; the correct verdict blocks.
+/// Re-scoped 2026-11-08 (user ruling 2026-11-08: gates judge own worktree
+/// only): hook cwd = the worktree holding the commits.
 #[test]
 fn pre_session_test_commit_does_not_count_as_evidence() {
     let f = Fixture::new(Layout::LinkedWorktree);
@@ -358,8 +379,20 @@ fn pre_session_test_commit_does_not_count_as_evidence() {
 
 /// (c) No timestamp on any transcript record: the session start is
 /// undetermined, so committed work cannot be scoped to the session and is not
-/// credited. The session wrote + committed impl + test in the worktree; the
-/// gate must NOT allow on the basis of those commits.
+/// credited. The session wrote + committed impl + test in the worktree.
+///
+/// RE-SCOPED 2026-11-08 (user ruling 2026-11-08: gates judge own worktree
+/// only) and WEAKENED, deliberately: the old assertion ("the gate must NOT
+/// allow") was produced by the removed >1-roots rule ("wrote files but no
+/// implementation change was evaluated in any root"), because the hook cwd was
+/// the primary tree. With cwd = the worktree itself the remaining behaviour is
+/// the documented single-root one: the committed work is NOT scanned and the
+/// gate says so on stderr (`gate::committed_note`), judging only the uncommitted
+/// changes. This test pins that disclosure (the credit is withheld and never
+/// silent) and does NOT pin the allow/block verdict, because whether an
+/// undetermined session start with committed impl in the cwd checkout should
+/// block (CLAUDE.md section 3) is an open question for the user, not a fact
+/// established here.
 #[test]
 fn no_transcript_timestamps_committed_work_is_not_credited() {
     let f = Fixture::new(Layout::LinkedWorktree);
@@ -369,9 +402,64 @@ fn no_transcript_timestamps_committed_work_is_not_credited() {
     let tp = f.transcript_without_timestamps(&[&imp, &tst]);
     let (stdout, stderr) = f.stop(&tp);
     assert!(
+        stderr.contains("NOT scanned"),
+        "without a session start the committed work must be reported as not scanned; \
+         stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        !stderr.contains("credited with"),
+        "no credit may be claimed without a session start; stdout={stdout:?} stderr={stderr:?}"
+    );
+}
+
+/// NEW (user ruling 2026-11-08: gates judge own worktree only), (a)+(c): the
+/// session committed untested impl in a linked worktree but the hook cwd is the
+/// primary tree. The worktree is NOT looked at => no block (and the primary tree
+/// is clean). Anti-vacuity: the identical session, with cwd = the worktree,
+/// blocks (`committed_impl_without_test_still_blocks`), and with an untested
+/// impl committed in the cwd checkout itself, cwd = primary still blocks (below).
+#[test]
+fn committed_impl_in_other_worktree_is_not_judged_from_primary_cwd() {
+    let f = Fixture::new(Layout::LinkedWorktree);
+    let imp = f.put("src/lib.rs", IMPL);
+    f.commit_in_session();
+    let tp = f.transcript(&[&imp]);
+    let (stdout, stderr) = f.stop_in(&f.primary, &tp);
+    assert!(
+        !blocks(&stdout),
+        "an OTHER worktree's committed untested impl must not be judged; \
+         stdout={stdout:?} stderr={stderr:?}"
+    );
+    let (stdout, stderr) = f.stop_in(&f.work, &tp);
+    assert!(
         blocks(&stdout),
-        "without a session start, committed work cannot be attributed to the session and \
-         must not produce an allow; stdout={stdout:?} stderr={stderr:?}"
+        "apparatus: the same session judged in its own worktree must block; \
+         stdout={stdout:?} stderr={stderr:?}"
+    );
+}
+
+/// NEW (user ruling 2026-11-08), (c) in the mixed fixture: untested impl is
+/// committed in BOTH the linked worktree and the primary tree; hook cwd =
+/// primary. The cwd root is judged (block) and the verdict does not name the
+/// worktree's file path.
+#[test]
+fn committed_untested_impl_in_cwd_blocks_without_naming_other_worktree() {
+    let f = Fixture::new(Layout::LinkedWorktree);
+    let wt_imp = f.put("src/wt_only.rs", IMPL);
+    f.commit_in_session();
+    let p = f.primary.join("src/primary_only.rs");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, IMPL).unwrap();
+    commit_at(&f.primary, "primary session work", IN_SESSION_COMMIT);
+    let tp = f.transcript(&[&wt_imp, &p]);
+    let (stdout, stderr) = f.stop_in(&f.primary, &tp);
+    assert!(
+        blocks(&stdout),
+        "red cwd must block; stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        !stdout.contains("wt_only.rs") && !stdout.contains("linked-wt"),
+        "the block must not mention the other worktree; stdout={stdout:?}"
     );
 }
 

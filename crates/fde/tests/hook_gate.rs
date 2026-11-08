@@ -334,10 +334,16 @@ fn edit_with_no_registered_target_is_allowed() {
 
 // --------------------------------------------------- (4) git worktrees
 
-/// (4) A git worktree of the target, created OUTSIDE the target dir, counts
-/// as inside: denied while unratified, allowed after ratify.
+/// (4) INVERTED (user ruling 2026-11-08: gates judge own worktree only —
+/// "donegateそのものが他のworktreeを見たり検証したりテストしたりすることは禁止と
+/// する。他のgateでも禁止とする"). Was `edit_inside_git_worktree_of_target_is_inside`:
+/// a git worktree of the target, created OUTSIDE the target dir, counted as
+/// inside (denied while unratified). A guarded target's area is now its
+/// registered root only, so edits and Bash in the linked worktree are ALLOWED
+/// even while unratified. Anti-vacuity in the same fixture: an Edit inside the
+/// registered root is still denied while unratified and allowed after ratify.
 #[test]
-fn edit_inside_git_worktree_of_target_is_inside() {
+fn edit_inside_git_worktree_of_target_is_not_inside() {
     let e = unratified();
     let place = TempPlace::new("fde-wt-");
     let wt = place.path.join("wt");
@@ -352,19 +358,27 @@ fn edit_inside_git_worktree_of_target_is_inside() {
     );
     let file = s(&wt.join("README.md"));
     for (tool, p) in edit_payloads(&wt, &file) {
-        assert_denied(
+        assert_allowed(
             &gate(&e, &p),
-            &format!("{tool} in a worktree of an unratified target"),
+            &format!("{tool} in a (non-registered) worktree of an unratified target"),
         );
     }
-    assert_denied_or_asked(
+    assert_allowed(
         &gate(&e, &bash(&wt, "touch new-file")),
         "Bash with cwd in a worktree of an unratified target",
     );
+    // (c) the registered root is still judged.
+    let root_file = s(&e.root().join("README.md"));
+    for (tool, p) in edit_payloads(e.root(), &root_file) {
+        assert_denied(
+            &gate(&e, &p),
+            &format!("{tool} in the registered root of an unratified target"),
+        );
+    }
     e.ratify();
     assert_allowed(
-        &gate(&e, &edit(&wt, &file)),
-        "Edit in a worktree of a ratified target",
+        &gate(&e, &edit(e.root(), &root_file)),
+        "Edit in the root of a ratified target",
     );
 }
 

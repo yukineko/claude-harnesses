@@ -266,7 +266,11 @@ fn review_run(hook: Option<HookInput>, interactive: bool) -> ! {
     }
 
     let prior = state::load(&cfg.state_dir, &session);
-    let decision = review::all_roots::evaluate(&cfg, &root, &prior, &input.transcript_path);
+    // Only the checkout the hook runs in is judged (user ruling 2026-11-08:
+    // "donegateそのものが他のworktreeを見たり検証したりテストしたりすることは禁止とする。
+    // 他のgateでも禁止とする"). Other worktrees the session wrote into are not
+    // read, reviewed or tested here, and nothing reviews them in its place.
+    let decision = review::evaluate(&cfg, &root, &prior, &input.transcript_path);
 
     match decision {
         Decision::Allow {

@@ -83,20 +83,21 @@ fn print_help() {
         "precommit-audit {ver}\n\
 Config-driven pre-commit static audit (cross-platform).\n\n\
 USAGE:\n  precommit-audit [--mode stop|precommit] [--config <file>] [--root <dir>]\n  precommit-audit trust   (trust <root> so its .precommit-audit.toml is honored)\n  precommit-audit skip --reason \"<why>\"   (one-shot bypass, THIS session only)\n\n\
-OPTIONS:\n  --mode <m>     stop (default) or precommit\n  --config <f>   config file (default: <root>/.precommit-audit.toml)\n  --root <d>     repo root (default: $CLAUDE_PROJECT_DIR, else git toplevel)\n  --reason <r>   with `skip`: why the bypass is warranted (required)\n  -V, --version  print version\n  -h, --help     this help\n\n\
+OPTIONS:\n  --mode <m>     stop (default) or precommit\n  --config <f>   config file (default: <root>/.precommit-audit.toml)\n  --root <d>     repo root (default: git toplevel of the current directory)\n  --reason <r>   with `skip`: why the bypass is warranted (required)\n  -V, --version  print version\n  -h, --help     this help\n\n\
 EXIT: 0 clean | 1 blocked (precommit) | 2 blocked (stop)",
         ver = env!("CARGO_PKG_VERSION")
     );
 }
 
+/// The checkout to audit: `--root`, else the git top-level of the process cwd
+/// (where the hook / `git commit` runs). `$CLAUDE_PROJECT_DIR` is deliberately
+/// NOT consulted: it names the session's project dir, which for a session
+/// working in a linked worktree is a DIFFERENT worktree, and a gate judges only
+/// the worktree it runs in (user ruling 2026-11-08: "donegateそのものが他の
+/// worktreeを見たり検証したりテストしたりすることは禁止とする。他のgateでも禁止とする").
 fn resolve_root(arg: Option<PathBuf>) -> PathBuf {
     if let Some(r) = arg {
         return r;
-    }
-    if let Ok(p) = std::env::var("CLAUDE_PROJECT_DIR") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     if let Some(top) = git::toplevel(&cwd) {

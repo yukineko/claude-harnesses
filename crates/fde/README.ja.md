@@ -121,17 +121,18 @@ Forward Deployed Engineer 用の harness。外部の target リポジトリに�
 ## gate(PreToolUse)
 
 `hooks/hooks.json` で matcher `Bash|Edit|Write|MultiEdit|NotebookEdit` に `fde gate` を登録する。
-`fde begin` 済みで未批准(または状態が判定不能)の target を「保護対象」とし、その範囲(root と、その repo の
-全 worktree)への編集を拒否する。
+`fde begin` 済みで未批准(または状態が判定不能)の target を「保護対象」とし、その範囲(登録された target
+ディレクトリの root のみ)への編集を拒否する。target の repo の他の worktree は列挙も検査もしない
+(`git worktree list` を走らせない。ユーザー裁定 2026-11-08: ゲートは他の worktree を見ない)。
 
 - Edit 系: 対象パスを正規化し、保護範囲の中なら deny。
-- Bash: 正規化した cwd が保護範囲の中、コマンド文字列が root / worktree のパスを文字列として含む、または
+- Bash: 正規化した cwd が保護範囲の中、コマンド文字列が root のパスを文字列として含む、または
   コマンドの語を解決したパスが保護範囲の中なら deny。語は小さな保守的 lexer で切り出す: 引用符の外の空白(改行を
   含む)と `;&|()<>` で区切り(`>file` / `2>file` の `file` も 1 語)、シングルクォートは字義どおり、ダブルクォートは
   中身を保つ、バックスラッシュは次の 1 文字をエスケープする。先頭の `~` / `~/` は `$HOME` に展開し、`=` を含む語
   (`--opt=value`・`NAME=value`)は値の部分も 1 語として調べる。各語は payload の cwd(正規化後)に join して
   `canonical_lenient`(存在する最も近い祖先を正規化 = symlink を辿り、残りは字句的に適用)を通すので、
-  `../proj/x`・`rm -rf proj`・target を指す symlink 経由の `link/x`・linked worktree への相対パスも検出する。
+  `../proj/x`・`rm -rf proj`・target を指す symlink 経由の `link/x` も検出する。
   保護対象がある間、**解決できない語**があり、かつ保護範囲に触れると判明していなければ、その target について
   判定不能(deny)とし、理由に語そのものを含める。解決できない語: 引用符の外またはダブルクォート内の `$`・バッククォート、
   引用符の外の `*` `?` `[` `{`、末尾の孤立したバックスラッシュ、`~user` 形式、`HOME` が未設定・空のときの `~`。

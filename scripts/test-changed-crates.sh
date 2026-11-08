@@ -59,10 +59,11 @@ diff_out="$(git diff --name-only HEAD -- 2>/dev/null)" || diff_rc=$?
 # a legitimate, fully-DETERMINABLE state — "no baseline, everything present is
 # new" — not a broken environment, so it must not fail closed. Handle it by
 # treating every tracked/staged file as changed. Any OTHER git-diff failure is a
-# genuine cannot-determine and falls through to the fail-closed check below.
+# genuine cannot-determine and falls through to the fail-closed check below — as
+# does a failure of the ls-files call itself, whose rc is kept rather than reset.
 if [ "$diff_rc" -ne 0 ] && ! git rev-parse --verify -q HEAD >/dev/null 2>&1; then
-    diff_out="$(git ls-files 2>/dev/null)"
     diff_rc=0
+    diff_out="$(git ls-files)" || diff_rc=$?
 fi
 
 untracked_out=""

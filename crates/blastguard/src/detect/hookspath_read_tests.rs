@@ -63,11 +63,11 @@ fn bash(cmd: &str) -> Decision {
     detect("Bash", Some(&json!({ "command": cmd })))
 }
 
-/// RED at HEAD: every one of these is a READ in git (table above) and is
-/// denied with "the bare one-argument form is refused because it is not told
-/// apart from a write".
+/// Was RED at e12712e2: every one of these is a READ in git (table above) and
+/// was denied with "the bare one-argument form is refused because it is not
+/// told apart from a write". Allow since user ruling 2026-11-08 (backlog
+/// 8fe3a5c3).
 #[test]
-#[ignore = "backlog 8fe3a5c3: open defect (false positive), remove ignore when fixed"]
 fn git_config_hookspath_one_positional_read_is_allowed() {
     let reads = [
         "git config core.hooksPath",

@@ -95,12 +95,15 @@ forge・condukt のスケジューラが再利用）。
   `Known(false)` と同じく**元の verdict を保持**する（Allow へ倒さない）。main の作業ツリー・`.git` 内部・
   保護パス・`git stash drop/clear`（全 worktree で共有）は対象外のまま。
 - **`core.hooksPath` の付け替えは Deny（`detect/git.rs` の `config` arm、`HOOKSPATH_REASON`）** —
-  `git config` の引数に `core.hooksPath` が現れ、かつ read-mode flag（`--get`・`--get-all`・`--get-regexp`・
-  `--get-urlmatch`・`--list`・`-l`）が**option prefix（最初の非 option 語より前）にある**ときだけ read として
-  allow する（`config_read_mode_in_prefix`、backlog e103cd56、blastguard 0.2.388）。git は最初の非 option 語で
-  option 解析を止めるので、key の後ろの `--get` 等は書き込まれる値であり（`git config core.hooksPath --get`
-  は値 `--get` を書く。git 2.50.1 で観測）、read と数えない。prefix に未知の option があれば prefix の境界が
-  決まらないので read と認めない（Deny 側）。key 1 つだけの `git config core.hooksPath` は現状 Deny のまま。
+  `git config` の引数に `core.hooksPath` が現れ、git の argv 文法で read と判定できるときだけ allow する
+  （`config_argv_is_read`）。read は (1) read-mode flag（`--get`・`--get-all`・`--get-regexp`・`--get-urlmatch`・
+  `--list`・`-l`）が**option prefix（最初の非 option 語より前）にある**（backlog e103cd56、blastguard 0.2.388）、
+  (2) mode flag なしで positional が key 1 つだけ（`git config core.hooksPath`・`git config --local core.hooksPath`）、
+  (3) 最初の positional が `get`（`git config get core.hooksPath`）のいずれか（(2)(3) はユーザー裁定 2026-11-08、
+  backlog 8fe3a5c3）。git は最初の非 option 語で option 解析を止めるので、key の後ろの `--get` 等は書き込まれる
+  値であり（`git config core.hooksPath --get` は値 `--get` を書く。git 2.50.1 で観測）、read と数えない。
+  positional が 2 つ以上（`K value`・`K ''`・`K --`・`set K v`・`unset K`）は write。prefix の write-mode flag
+  （`--unset`・`--add` 等）や未知の option は read と認めない（Deny 側）。
   `git -c core.hooksPath=…`（global option の inline 設定）も Deny。
 - **未マージ branch の force-delete / dirty worktree の force-remove は Ask（`detect/git_unmerged.rs`、
   backlog 43034f75、blastguard 0.2.295）** — `git branch` で delete（`-d`/`-D`/`--delete`、短縮束を含む）と

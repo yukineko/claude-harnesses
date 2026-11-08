@@ -35,7 +35,6 @@ fn injected(out: &context_governor::HookOutput) -> bool {
 }
 
 #[test]
-#[ignore = "backlog 04f53dbe: open defect, remove ignore when fixed"]
 fn injector_dedup_uses_the_hook_input_session_not_the_env_session() {
     let state = tempfile::tempdir().expect("state dir");
     let cwd_dir = tempfile::tempdir().expect("cwd");

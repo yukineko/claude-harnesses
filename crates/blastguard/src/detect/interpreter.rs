@@ -329,11 +329,27 @@ const INTERPRETER_WRITE_CALLS: &[&str] = &[
 /// `writeFileSync(dir)` all fail on a directory (EISDIR), so a directory
 /// literal is not their target. `shutil.copy2(src, dir)` DOES write into a
 /// directory (`dir/<basename>`), so when the program spells it this answers
-/// `false` and the literal is probed exactly as before. A path whose kind
-/// cannot be read (`metadata` fails, relative with no base) is also `false`:
-/// unknown stays on the probing side.
-fn names_unwritable_directory(candidate: &str, payload: &str, base: Option<&str>) -> bool {
-    if payload.to_ascii_lowercase().contains("shutil.copy2(") {
+/// `false` for an UNPADDED literal and the literal is probed exactly as before.
+///
+/// Backlog 8bb1cec8: under `shutil.copy2(` a literal with leading or trailing
+/// whitespace is not that exception. `copy2` (Python) receives the string
+/// verbatim, so `" / "` names the relative path `" / "`, never the directory
+/// `/` the trimmed candidate resolves to; such a literal is in practice the
+/// path-join operator `new / "target"` paired out of the program by
+/// [`quoted_string_literals`], and probing its trimmed form reported "it
+/// writes `/`" with recoverability facts about the filesystem root. A padded
+/// directory literal is therefore treated like any other directory literal:
+/// not a write target. `literal` is the untrimmed text; `candidate` its trim.
+///
+/// A path whose kind cannot be read (`metadata` fails, relative with no base)
+/// is also `false`: unknown stays on the probing side.
+fn names_unwritable_directory(
+    literal: &str,
+    candidate: &str,
+    payload: &str,
+    base: Option<&str>,
+) -> bool {
+    if payload.to_ascii_lowercase().contains("shutil.copy2(") && literal == candidate {
         return false;
     }
     crate::reversible::resolve(candidate, base)
@@ -1238,7 +1254,12 @@ path — changing it changes which hooks and gates run, and blastguard will not 
                     && probed < MAX_RECOVERY_PROBES
                     && candidate.contains('/')
                     && !literal_is_read_only_open(candidate, payload)
-                    && !names_unwritable_directory(candidate, payload, ctx.raw_base.as_deref())
+                    && !names_unwritable_directory(
+                        literal,
+                        candidate,
+                        payload,
+                        ctx.raw_base.as_deref(),
+                    )
                 {
                     probed += 1;
                     let recovery = crate::reversible::probe(candidate, ctx.raw_base.as_deref());

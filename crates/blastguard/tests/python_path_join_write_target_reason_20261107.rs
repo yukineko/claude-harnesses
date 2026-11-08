@@ -12,9 +12,9 @@
 //! nothing holds a second copy of these bytes
 //! ```
 //!
-//! Refusing the stdin program is NOT what this file disputes (the control
-//! accepts Ask or Deny; measured at 5d2a61e3 the main-session verdict is Deny,
-//! from the unrecoverable-write arm, not an R2 Ask). The
+//! Measured at 5d2a61e3 the main-session verdict was Deny, from the
+//! unrecoverable-write arm, not an R2 Ask — and that Deny came only from the
+//! misread `/` (see the re-scoped control below, user ruling 2026-11-08). The
 //! defect is the REASON: `/` there is Python's path-join operator
 //! (`new / "Cargo.lock"`), not the filesystem root, and the reason then states
 //! facts about `/` ("not inside a git work tree") that are not facts about
@@ -26,8 +26,8 @@
 //! recoverability probe over the program's string literals), with `{why}`
 //! from crates/blastguard/src/reversible.rs `decide_recovery` (`NotRepo` row).
 //!
-//! Target: the decision stays a refusal (control) and the reason does not
-//! claim the write target is `/`. Control: a genuine literal write onto an
+//! Target: the reason does not claim the write target is `/`; with that
+//! fixed the program is Allow (control, user ruling 2026-11-08). Control: a genuine literal write onto an
 //! existing system file through `shutil.copy2` still names that path.
 //!
 //! Written by a disinterested author (CLAUDE.md §2(a)); `src/` untouched.
@@ -137,22 +137,27 @@ EOF"
     )
 }
 
-/// Control (must pass at HEAD): the stdin program is still refused — the R2
-/// ruling is not what this file disputes.
+/// Re-scoped by user ruling 2026-11-08 (backlog 8bb1cec8). This control used
+/// to require a refusal, but the only refusal this program ever earned was the
+/// misread `" / "` literal (the defect above). With that fixed, the program's
+/// one real write is `open(p,"w")` onto `scripts/x.py`, an untracked file
+/// inside a git work tree, which the 2026-09-18 recoverability ruling counts as
+/// recoverable (`reversible::decide_recovery`). The ruling: Allow is the
+/// correct verdict here.
 #[test]
-fn path_join_copy2_program_is_still_refused() {
+fn path_join_copy2_program_writing_only_a_worktree_file_is_allowed() {
     let repo = fresh_repo("ctl-decision");
     let (d, r) = verdict(&repo, &observed_command(&repo));
-    assert!(
-        d == "ask" || d == "deny",
-        "the stdin program spelling a write must stay refused; got {d:?}: {r}"
+    assert_eq!(
+        d, "allow",
+        "the program writes only an untracked file inside a work tree (recoverable per the \
+2026-09-18 ruling), so it is Allow (user ruling 2026-11-08); got {d:?}: {r}"
     );
 }
 
 /// Target (RED at e346bb04): the reason must not name `/` — the path-join
 /// operator — as the write target and assert recoverability facts about it.
 #[test]
-#[ignore = "backlog 8bb1cec8: python path-join `/` misreported as the write target"]
 fn path_join_slash_is_not_reported_as_write_target() {
     let repo = fresh_repo("target");
     let (d, r) = verdict(&repo, &observed_command(&repo));

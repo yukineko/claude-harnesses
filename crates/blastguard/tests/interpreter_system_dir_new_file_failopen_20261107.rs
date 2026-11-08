@@ -251,7 +251,6 @@ fn control_direct_forms_refuse_new_system_file() {
 /// RED: an interpreter carrying the same new-file write into a system
 /// directory must be at least as restrictive as the direct form.
 #[test]
-#[ignore = "backlog 0fbfe00d: interpreter new-file write into a system dir is Allow while the direct form is Deny (fail-open)"]
 fn interpreter_new_system_file_at_least_as_restrictive_as_direct() {
     let f = Fixture::new("red_interp");
     let mut failing = Vec::new();

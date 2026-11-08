@@ -195,7 +195,6 @@ impl Fixture {
 /// RED: a new plist in the sandboxed `$HOME/Library/LaunchAgents` is Ask
 /// (main) / Deny (subagent) in every direct and interpreter form.
 #[test]
-#[ignore = "backlog e34eb0be: new ~/Library/LaunchAgents plist is Allow in every form; ruled Ask (subagent Deny)"]
 fn new_launch_agent_plist_is_ask_in_every_form() {
     let f = Fixture::new("red_lagent");
     let mut failing = Vec::new();

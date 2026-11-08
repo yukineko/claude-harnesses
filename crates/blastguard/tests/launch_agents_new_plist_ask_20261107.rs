@@ -141,6 +141,13 @@ impl Fixture {
                 self.base.join("store").join(&case),
             )
             .env("HOME", home)
+            // Fixture fix (backlog e34eb0be, user ruling 2026-11-08): the
+            // main-session Ask is only emitted when `interactive::ask_available`
+            // sees CLAUDECODE=1 beside ENTRYPOINT=cli. This used to be inherited
+            // from the ambient Claude Code session, so under `backlog done`,
+            // which clears the environment (backlog evidence INHERITED_ENV), the
+            // Ask hardened to Deny ("deny (want ask)" for every form).
+            .env("CLAUDECODE", "1")
             .env("CLAUDE_CODE_ENTRYPOINT", "cli")
             .env("CLAUDE_CODE_SESSION_ID", &session)
             .env_remove("BLASTGUARD_ASK")

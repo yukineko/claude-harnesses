@@ -253,16 +253,18 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("git switch --force/--discard-changes") {
         return "git-switch-force";
     }
-    // `git stash clear/drop`. Round 1 added the rule and did NOT add this arm,
+    // `git stash clear`. Round 1 added the rule and did NOT add this arm,
     // so every stash-discard deny had been landing in the violation store as
     // "unknown" — the completeness obligation stated in the test below is real.
-    if reason.contains("git stash clear/drop irreversibly deletes stashed changes") {
+    // `git stash drop` left this rule by user ruling 2026-11-08 ("drop のみ
+    // Allow"); the id is kept for `clear`.
+    if reason.contains("git stash clear irreversibly deletes every stash entry") {
         return "git-stash-discard";
     }
     // Round 2: `git stash -u`/`-a`, which sweeps untracked files out of the
     // working tree. Its own id, not `git-stash-discard`: this one destroys
     // UNTRACKED work (git has no copy), which is the `git clean` hazard, while
-    // clear/drop destroys already-stashed work.
+    // clear destroys already-stashed work.
     if reason.contains("git stash -u/-a removes untracked") {
         return "git-stash-untracked";
     }

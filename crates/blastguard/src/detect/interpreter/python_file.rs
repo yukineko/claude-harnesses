@@ -61,7 +61,12 @@ pub(in crate::detect) struct PythonFileVerdict {
 ///   * a path removed or overwritten ([`sem::filesystem_verdict`]:
 ///     `shutil.rmtree`, `os.remove`, `Path.unlink`, `open(p, 'w')`, …) is
 ///     judged as the equivalent `rm` / `>` command; a path it cannot resolve
-///     statically is an Ask;
+///     statically is an Ask. A computed path is Allow only when provably
+///     repo-scoped (user ruling 2026-11-08, `python_semantics/values.rs`): a
+///     `for` target over `glob` / `Path.rglob` / `os.walk` / `os.listdir`
+///     rooted at a repo-relative literal, `sys.argv[N]` when every run of the
+///     file passes a repo-relative literal there ([`script_argv`]), or
+///     `self.attr` stored from a constructor argument;
 ///   * a relative, star-from-runner or non-standard-library import
 ///     ([`sem::import_verdict`]) is an Ask: that module's code is not here;
 ///   * in a program that imports a DB-API driver, destructive or computed SQL
@@ -84,14 +89,46 @@ pub(in crate::detect) fn python_file_body_verdict(
     }
     let also_shell = targets.iter().any(|t| !t.ends_with(".py"))
         || !later_lines_run_only_with_python(after, targets);
+    let argv = script_argv(after, targets);
     Some(PythonFileVerdict {
-        verdict: python_program_verdict(body, depth, ctx),
+        verdict: python_program_verdict(body, argv.as_ref(), depth, ctx),
         also_shell,
     })
 }
 
+/// The arguments of every run of the written file in `after` ([`sem::Argv`]),
+/// or `None` when they are not all known: `after` holds no run, or a segment
+/// that is not a direct python run of a target ([`python_script_word`]) — a
+/// `cd`, another command, a `-m` / `-c` run, anything that might run the file
+/// with other arguments.
+fn script_argv(after: &str, targets: &[String]) -> Option<sem::Argv> {
+    let names: Vec<&str> = targets
+        .iter()
+        .map(|t| t.rsplit('/').next().unwrap_or(t))
+        .filter(|n| !n.is_empty())
+        .collect();
+    let mut runs = Vec::new();
+    for seg in split_segments(after) {
+        let words = quote_aware_words(&seg);
+        if words.is_empty() {
+            continue;
+        }
+        let k = python_script_word(&words)?;
+        if !names.iter().any(|n| words[k].contains(n)) {
+            return None;
+        }
+        runs.push(words[k + 1..].iter().map(|w| sem::argv_word(w)).collect());
+    }
+    (!runs.is_empty()).then_some(runs)
+}
+
 /// The Python reading of [`python_file_body_verdict`].
-fn python_program_verdict(body: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+fn python_program_verdict(
+    body: &str,
+    argv: Option<&sem::Argv>,
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
     let shape = "the here-document writes a Python file";
     let refuse = || {
         Decision::ask(format!(
@@ -123,7 +160,7 @@ unbalanced bracket) — blastguard cannot tell its code from its strings, so it 
         if let Some(d) = note(calls) {
             return d;
         }
-        if let Some(d) = note(sem::filesystem_verdict(text, depth, ctx)) {
+        if let Some(d) = note(sem::filesystem_verdict(text, argv, depth, ctx)) {
             return d;
         }
     }

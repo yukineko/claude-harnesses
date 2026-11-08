@@ -5,12 +5,16 @@
 //! `python_file.rs` for the file-size cap.
 //!
 //! Every reading here is fail-closed: what cannot be resolved statically (a
-//! runner name passed around, a computed path, a module whose code is not in
-//! the text, computed SQL) is an Ask, never an Allow.
+//! runner name passed around, a computed path not proven repo-scoped by
+//! [`values`], a module whose code is not in the text, computed SQL) is an
+//! Ask, never an Allow.
 
 use std::collections::{HashMap, HashSet};
 
 use super::super::{analyze_shell_payload, Ctx, Decision};
+
+mod values;
+pub(super) use values::{argv_word, Argv};
 
 /// One lexical item, read with Python's rules. `Name` is a dotted name
 /// (`os.path.join`) with its byte span in the source; `Nl` ends a logical
@@ -381,26 +385,68 @@ pub(super) fn escaped_runner(code: &str) -> Option<String> {
 }
 
 /// A path a program names, as far as it can be read statically: a literal
-/// (Python never expands `~` in one), or the user's home plus a suffix.
+/// (Python never expands `~` in one), the user's home plus a suffix, or — for
+/// a path computed by iterating a directory ([`values`]) — "somewhere at or
+/// below a repo-relative directory".
 #[derive(Debug, Clone, PartialEq)]
 enum PathVal {
     Lit(String),
     Home(String),
+    /// Some path at or below the repo-relative directory `root` (a
+    /// [`values::dir_root`] spelling: relative, no `~` start, no `..` and no
+    /// dot-named component), reached by iterating it (`glob.glob`,
+    /// `Path.rglob`, `os.walk`, `os.listdir` joined back onto its directory).
+    /// `hidden` when the iteration may yield dot-named entries below `root`.
+    Under {
+        root: String,
+        hidden: bool,
+    },
+    /// One entry name of a directory listing (`os.listdir`, the name lists of
+    /// `os.walk`): one component, never `.` / `..`, never holding `/`, maybe
+    /// dot-named. As a path on its own it is an entry of the current
+    /// directory (`Under { root: ".", hidden: true }`).
+    Entry,
+    /// A name list of an `os.walk` step: iterating it yields [`PathVal::Entry`].
+    /// Not a path.
+    Entries,
 }
 
 impl PathVal {
-    fn join(self, other: PathVal) -> PathVal {
-        match (self, other) {
-            (_, h @ PathVal::Home(_)) => h,
-            (_, PathVal::Lit(b)) if b.starts_with('/') => PathVal::Lit(b),
-            (PathVal::Lit(a), PathVal::Lit(b)) if a.is_empty() || a == "." => PathVal::Lit(b),
-            (PathVal::Lit(a), PathVal::Lit(b)) => {
-                PathVal::Lit(format!("{}/{b}", a.trim_end_matches('/')))
+    /// `os.path.join` / `/` of two values, `None` when the result is not one
+    /// of the readable shapes (a `..` below an iterated root, a listing
+    /// joined onto the home directory, a name list used as a path).
+    fn join(self, other: PathVal) -> Option<PathVal> {
+        use PathVal::{Entries, Entry, Home, Lit, Under};
+        let cwd_entry = || Under {
+            root: ".".to_string(),
+            hidden: true,
+        };
+        Some(match (self, other) {
+            (Entries, _) | (_, Entries) => return None,
+            (_, h @ Home(_)) => h,
+            (_, Lit(b)) if b.starts_with('/') => Lit(b),
+            (Lit(a), Lit(b)) if a.is_empty() || a == "." => Lit(b),
+            (Lit(a), Lit(b)) => Lit(format!("{}/{b}", a.trim_end_matches('/'))),
+            (Home(a), Lit(b)) => Home(format!("{}/{b}", a.trim_end_matches('/'))),
+            (Home(_), _) => return None,
+            (Lit(a), Entry) => Under {
+                root: values::dir_root(&a)?,
+                hidden: true,
+            },
+            (Lit(a), u @ Under { .. }) if a.is_empty() || a == "." => u,
+            (Lit(_), Under { .. }) | (Under { .. }, Under { .. }) => return None,
+            (Under { root, .. }, Entry) => Under { root, hidden: true },
+            (Under { root, hidden }, Lit(b)) => {
+                // Evaluated first: `hidden || below(..)?` would skip the `..`
+                // check whenever `hidden` is already true.
+                let dotted = values::below(&b)?;
+                Under {
+                    hidden: hidden || dotted,
+                    root,
+                }
             }
-            (PathVal::Home(a), PathVal::Lit(b)) => {
-                PathVal::Home(format!("{}/{b}", a.trim_end_matches('/')))
-            }
-        }
+            (Entry, b) => return cwd_entry().join(b),
+        })
     }
 
     fn concat(self, other: PathVal) -> Option<PathVal> {
@@ -416,20 +462,24 @@ impl PathVal {
             PathVal::Lit(s) if s == "~" => Some(PathVal::Home(String::new())),
             PathVal::Lit(s) if s.starts_with("~/") => Some(PathVal::Home(s[1..].to_string())),
             PathVal::Lit(s) if s.starts_with('~') => None,
+            // An entry may be named `~` or `~user`.
+            PathVal::Entry | PathVal::Entries => None,
             other => Some(other),
         }
     }
 
     /// The path as one shell word: `~` left bare so the shell rules see the
-    /// home directory, everything else quoted when it is not plain.
-    fn shell_word(&self) -> String {
-        match self {
+    /// home directory, everything else quoted when it is not plain. `None`
+    /// for the iterated shapes, which are judged by [`values::under_verdict`].
+    fn shell_word(&self) -> Option<String> {
+        Some(match self {
             PathVal::Lit(s) => shell_quote(s),
             PathVal::Home(rest) => match rest.strip_prefix('/') {
                 Some(r) if !r.is_empty() => format!("~/{}", shell_quote(r)),
                 _ => "~".to_string(),
             },
-        }
+            PathVal::Under { .. } | PathVal::Entry | PathVal::Entries => return None,
+        })
     }
 }
 
@@ -462,19 +512,37 @@ fn cross(a: &Vals, b: &Vals, f: impl Fn(PathVal, PathVal) -> Option<PathVal>) ->
     Some(out)
 }
 
+/// One `for` target binding: (target index, target count, iterable span).
+type LoopBind = (usize, usize, (usize, usize));
+
 /// The static evaluator over one program's tokens.
 ///
 /// A plain name has a value only when every binding of it in the program is a
-/// simple `name = <expr>` statement; its values are then those of every such
-/// right-hand side, wherever it sits (so a path reassigned between two
-/// `open(p, 'w')` calls is judged on both, whatever the control flow). A name
-/// bound any other way — `for p in`, `as p`, a `def` / `lambda` parameter, a
-/// tuple or chained target, `p += …`, `p := …`, `global` / `del` / `import`,
-/// a subscript or attribute target — is in `rebound` and has no value.
+/// simple `name = <expr>` statement or a simple `for` target over a readable
+/// iteration ([`values`]); its values are then those of every such binding,
+/// wherever it sits (so a path reassigned between two `open(p, 'w')` calls is
+/// judged on both, whatever the control flow). A name bound any other way —
+/// `as p`, a `def` / `lambda` parameter, a tuple or chained target, `p += …`,
+/// `p := …`, `global` / `del` / `import`, a comprehension target, a subscript
+/// or attribute target — is in `rebound` and has no value. Two further
+/// readings live in [`values`]: `sys.argv[N]` (from the command that runs the
+/// file) and `self.attr` (from the constructor calls of its class).
 struct Eval<'a> {
     toks: &'a [Tok],
+    src: &'a str,
     assigns: HashMap<String, Vec<(usize, usize)>>,
+    /// `for` targets: name → (target index, target count, iterable span).
+    loops: HashMap<String, Vec<LoopBind>>,
     rebound: HashSet<String>,
+    /// Plain names bound some way other than as a `def` parameter, a simple
+    /// assignment or a simple `for` target (a subset of `rebound`).
+    nonparam: HashSet<String>,
+    /// Names bound by an `import` / `from … import` statement.
+    imported: HashSet<String>,
+    /// Statement spans `[pos, end)` in token order.
+    stmts: Vec<(usize, usize)>,
+    /// The arguments of every run of this file, as [`values::Argv`].
+    argv: Option<&'a values::Argv>,
     /// Remaining name lookups (bounds cyclic or deep definitions).
     budget: std::cell::Cell<usize>,
 }
@@ -492,11 +560,17 @@ fn is_assign_eq(st: &[Tok], k: usize, depth: usize) -> bool {
 }
 
 impl<'a> Eval<'a> {
-    fn new(toks: &'a [Tok]) -> Eval<'a> {
+    fn new(toks: &'a [Tok], src: &'a str, argv: Option<&'a values::Argv>) -> Eval<'a> {
         let mut e = Eval {
             toks,
+            src,
             assigns: HashMap::new(),
+            loops: HashMap::new(),
             rebound: HashSet::new(),
+            nonparam: HashSet::new(),
+            imported: HashSet::new(),
+            stmts: Vec::new(),
+            argv,
             budget: std::cell::Cell::new(4096),
         };
         let mut pos = 0;
@@ -505,14 +579,40 @@ impl<'a> Eval<'a> {
                 .iter()
                 .position(|t| *t == Tok::Nl)
                 .map_or(toks.len(), |p| pos + p);
+            if pos < end {
+                e.stmts.push((pos, end));
+            }
             e.read_statement(pos, end);
             pos = end + 1;
         }
         e
     }
 
+    /// Mark the plain name `n` (or the module a dotted import binds) rebound;
+    /// `param` when the binding is a `def` parameter.
+    fn rebind(&mut self, n: &str, param: bool, import: bool) {
+        self.rebound.insert(top(n).to_string());
+        if import {
+            self.imported.insert(top(n).to_string());
+        } else if !param && !n.contains('.') {
+            self.nonparam.insert(n.to_string());
+        }
+    }
+
     fn read_statement(&mut self, pos: usize, end: usize) {
-        let st = &self.toks[pos..end];
+        let toks = self.toks;
+        let st = &toks[pos..end];
+        let loop_targets = values::simple_for_header(st);
+        if let Some((targets, iter)) = &loop_targets {
+            for (i, n) in targets.iter().enumerate() {
+                self.loops.entry(n.clone()).or_default().push((
+                    i,
+                    targets.len(),
+                    (pos + iter.0, pos + iter.1),
+                ));
+            }
+        }
+        let params = values::def_param_positions(st);
         let mut depth = 0usize;
         let mut eqs = Vec::new();
         for (k, t) in st.iter().enumerate() {
@@ -533,16 +633,20 @@ impl<'a> Eval<'a> {
                 .push((pos + 2, end));
         } else if let Some(&last) = eqs.last() {
             // Any other assignment: every name in its targets is rebound.
-            for t in &st[..last] {
-                if let Some(n) = name(Some(t)) {
-                    self.rebound.insert(top(n).to_string());
-                }
+            let names: Vec<String> = st[..last]
+                .iter()
+                .filter_map(|t| name(Some(t)).map(str::to_string))
+                .collect();
+            for n in names {
+                self.rebind(&n, false, false);
             }
         }
         let whole_statement = matches!(
             name(st.first()),
             Some("def" | "class" | "global" | "nonlocal" | "del" | "import" | "from" | "case")
         );
+        let import = matches!(name(st.first()), Some("import" | "from"));
+        let mut marks: Vec<(String, bool)> = Vec::new();
         let mut until: Option<&str> = None;
         for (k, t) in st.iter().enumerate() {
             let Some(n) = name(Some(t)) else {
@@ -558,18 +662,28 @@ impl<'a> Eval<'a> {
                 && matches!(next, Some(Tok::Punct(c)) if *c != '=')
                 && st.get(k + 2) == Some(&Tok::Punct('='));
             let after_as = k > 0 && name(st.get(k - 1)) == Some("as");
-            if whole_statement || walrus || annotated || augmented || after_as || until.is_some() {
-                self.rebound.insert(top(n).to_string());
+            // A target of a recognised simple `for` header is read through
+            // `loops` instead (only those name tokens, between `for` and `in`).
+            let loop_target = until == Some("in")
+                && loop_targets
+                    .as_ref()
+                    .is_some_and(|(ts, iter)| k < iter.0 && ts.iter().any(|x| x == n));
+            let closes_for = n == "in" && until == Some("in");
+            if (whole_statement || walrus || annotated || augmented || after_as || until.is_some())
+                && !loop_target
+                && !closes_for
+            {
+                marks.push((n.to_string(), params.contains(&k)));
             }
             match n {
                 "for" => until = Some("in"),
                 "lambda" => until = Some(":"),
-                "in" if until == Some("in") => {
-                    self.rebound.remove("in");
-                    until = None;
-                }
+                "in" if closes_for => until = None,
                 _ => {}
             }
+        }
+        for (n, param) in marks {
+            self.rebind(&n, param, import);
         }
     }
 
@@ -662,7 +776,7 @@ impl<'a> Eval<'a> {
             let op = self.toks.get(k)?;
             let (rhs, next) = self.chain(k + 1, e)?;
             v = match op {
-                Tok::Punct('/') => cross(&v, &rhs, |a, b| Some(a.join(b)))?,
+                Tok::Punct('/') => cross(&v, &rhs, PathVal::join)?,
                 Tok::Punct('+') => cross(&v, &rhs, PathVal::concat)?,
                 _ => return None,
             };
@@ -692,13 +806,16 @@ impl<'a> Eval<'a> {
                 inner
             }
             Tok::Name { text, .. } => {
-                if self.toks.get(k + 1) == Some(&Tok::Punct('(')) {
+                if let Some((v, next)) = self.argv_subscript(k) {
+                    k = next;
+                    v
+                } else if self.toks.get(k + 1) == Some(&Tok::Punct('(')) {
                     let v = self.call_value(text, k + 1)?;
                     k = self.close(k + 1) + 1;
                     v
                 } else {
                     k += 1;
-                    self.name_value(text)?
+                    self.name_value_at(text, k - 1)?
                 }
             }
             _ => return None,
@@ -722,14 +839,33 @@ impl<'a> Eval<'a> {
         }
         let left = self.budget.get().checked_sub(1)?;
         self.budget.set(left);
+        let (assigns, loops) = (self.assigns.get(n), self.loops.get(n));
+        if assigns.is_none() && loops.is_none() {
+            return None;
+        }
         let mut out = Vec::new();
-        for (s, e) in self.assigns.get(n)? {
+        for (s, e) in assigns.into_iter().flatten() {
             out.extend(self.expr(*s, *e)?);
             if out.len() > MAX_VALUES {
                 return None;
             }
         }
+        for (index, count, iter) in loops.into_iter().flatten() {
+            out.extend(self.loop_value(*index, *count, *iter)?);
+            if out.len() > MAX_VALUES {
+                return None;
+            }
+        }
         Some(out)
+    }
+
+    /// [`Eval::name_value`], except that `self.attr` read at token `k` is
+    /// resolved through its class ([`Eval::attr_value`]).
+    fn name_value_at(&self, n: &str, k: usize) -> Option<Vals> {
+        match n.strip_prefix("self.") {
+            Some(attr) if !attr.contains('.') => self.attr_value(attr, k),
+            _ => self.name_value(n),
+        }
     }
 
     fn call_value(&self, n: &str, open: usize) -> Option<Vals> {
@@ -752,7 +888,7 @@ impl<'a> Eval<'a> {
             }
             _ => {
                 let (recv, m) = n.rsplit_once('.')?;
-                let recv = self.name_value(recv)?;
+                let recv = self.name_value_at(recv, open.checked_sub(1)?)?;
                 self.method_value(recv, m, open)
             }
         }
@@ -761,7 +897,7 @@ impl<'a> Eval<'a> {
     fn join_args(&self, open: usize, init: PathVal) -> Option<Vals> {
         let mut v = vec![init];
         for (s, e) in self.args(open) {
-            v = cross(&v, &self.expr(s, e)?, |a, b| Some(a.join(b)))?;
+            v = cross(&v, &self.expr(s, e)?, PathVal::join)?;
         }
         Some(v)
     }
@@ -791,7 +927,7 @@ impl<'a> Eval<'a> {
             return (end == k - 1).then_some(v);
         }
         let (recv, _) = n.rsplit_once('.')?;
-        self.name_value(recv)
+        self.name_value_at(recv, k)
     }
 
     /// The first token of the postfix chain that ends just before `dot`.
@@ -872,11 +1008,20 @@ fn literal_mode(ev: &Eval<'_>, span: Option<(usize, usize)>) -> Option<Option<Ef
 /// as `: > p`, and an append or `+` mode as `: >> p`; `os.open` with a write
 /// flag likewise. Each command is judged by the shell rules, so home, `/` and
 /// dotfile targets get the shell's Deny/Ask and a repo-relative path stays
-/// Allow. A path that cannot be resolved statically ([`Eval::expr`]), or an
-/// `open` mode / `os.open` flag that is not a literal, is an Ask.
-pub(super) fn filesystem_verdict(src: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+/// Allow. A path computed by iterating a repo-relative directory, or read
+/// from `sys.argv` / a constructor argument, is judged by [`values`] (user
+/// ruling 2026-11-08: Allow only when provably repo-scoped). A path that
+/// cannot be resolved statically ([`Eval::expr`]), or an `open` mode /
+/// `os.open` flag that is not a literal, is an Ask. `argv` is the arguments
+/// of every run of the file ([`values::Argv`]), `None` when not known.
+pub(super) fn filesystem_verdict(
+    src: &str,
+    argv: Option<&values::Argv>,
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
     let toks = lex(src);
-    let ev = Eval::new(&toks);
+    let ev = Eval::new(&toks, src, argv);
     let mut pending: Option<Decision> = None;
     for (k, t) in toks.iter().enumerate() {
         let Tok::Name { text: n, .. } = t else {
@@ -955,7 +1100,16 @@ cannot tell whether that removes or overwrites something irreversible"
             continue;
         };
         for path in paths {
-            let word = path.shell_word();
+            let Some(word) = path.shell_word() else {
+                match values::under_verdict(n, &path, effect, depth, ctx) {
+                    d @ Decision::Deny(_) => return d,
+                    a @ Decision::Ask(_) => {
+                        pending.get_or_insert(a);
+                    }
+                    Decision::Allow => {}
+                }
+                continue;
+            };
             let line = match effect {
                 Effect::Remove { recursive: true } => format!("rm -rf {word}"),
                 Effect::Remove { recursive: false } => format!("rm {word}"),
@@ -1012,7 +1166,7 @@ pub(super) fn sql_verdict(src: &str, b: &Bindings) -> Option<Decision> {
         return None;
     }
     let toks = lex(src);
-    let ev = Eval::new(&toks);
+    let ev = Eval::new(&toks, src, None);
     for (k, t) in toks.iter().enumerate() {
         let Some(n) = name(Some(t)) else { continue };
         let method = n.rsplit('.').next().unwrap_or(n);

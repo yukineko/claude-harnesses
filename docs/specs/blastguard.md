@@ -421,6 +421,34 @@ forge・condukt のスケジューラが再利用）。
     dotfile は shell と同じ Deny/Ask、repo 相対は Allow）。path は literal・`expanduser`・`Path.home()`・
     `os.path.join`・`/`・`joinpath` と、単純代入 `name = …` だけで束縛される名前（全代入の値を全部判定）から
     静的に解決し、解決できない path・literal でない mode/flag は Ask。
+  - **計算される書き込み path（user ruling 2026-11-08、`interpreter/python_semantics/values.rs`、
+    tests/heredoc_script_failopen_red_20261108.rs の FP 群）**: repo-scoped であると**証明できる**ときだけ Allow。
+    それ以外（絶対 root・`~`・`expanduser`・`Path.home()`・`/` や `~` を root とする iteration・出自不明）は Ask。
+    - **repo 相対 iteration**: 単純な `for a[, b, c] in <iterable>:` の target は、iterable が
+      `glob.glob`/`glob.iglob`（literal pattern、`recursive`/`include_hidden` 以外の keyword 無し）・
+      `Path(...).glob`/`rglob`/`iterdir`・`os.walk`（`followlinks` 無し）・`os.listdir`（と `sorted`/`list`/`tuple`
+      で包んだもの）のとき値を持つ。値は「repo 相対 root（`./` 除去後に相対・`~` 始まりでない・`..` も
+      dot 名 component も無い）以下の何か」で、`os.path.join`/`/` で root 以下に literal（`..` 無し）や
+      listing の entry 名を足しても保たれる。`os`/`glob` は素の `import os` だけで束縛され、`sorted` 等は
+      再束縛されていないこと（そうでなければ値無し＝Ask）。判定: root が `.`（作業ツリー最上位）で dot 名
+      entry を含みうる iteration（`os.walk`・`listdir`・pathlib の glob 系。`glob.glob` は dot 名を拾わない）は
+      `.git`/`.githooks`/`.claude` を指しうるので Ask。root が protected path に触れるなら Ask。それ以外は
+      等価な shell command — 書き込みは `: > <root>/<entry>`、削除は `rm [-rf] <root>/*` — の shell 判定。
+    - **`sys.argv[N]`**: file を実行する後続行が全部 python の直接実行（`python_script_word`）で、各 run が
+      N 番目の引数として repo 相対 literal 語（`..`・`~`・`$`・quote・glob 無し、`/`/`-` 始まりでない）を
+      渡すときだけ、その literal として判定。引数を渡さない run（`IndexError` になる）も Ask（ruling:
+      実際に渡される target が repo 相対 literal のときだけ Allow）。`sys.argv` は `sys.argv[N]` の読み出し
+      以外に現れない（代入・`del`・alias・`sys.modules`・`argv` component の別名・`setattr` 等が無い）こと。
+    - **`self.attr`**: module 直下の `class C:`（基底は無しか `object`）の method（第 1 引数 `self`）で読む
+      `self.x` は、program 中の `.x` への書き込みが全部 `C` 系 class の `__init__` 直下の `self.x = <rhs>` で、
+      `<rhs>` が `__init__` の引数（全 `C(...)` 呼び出しの対応引数か default の値）か静的に読める式のとき、
+      その値の和集合。`C` は class 文と `C(...)` 呼び出し以外で参照されない。reflection（`setattr`・`getattr`・
+      `vars`・`__dict__`・`__class__`・`type`・`super`・`pickle`・`copy` 等）・decorator・`x` を語として含む
+      文字列・`x`/`self` の他の束縛があれば値無し（Ask）。
+    **RESIDUAL**: iteration root 以下の symlink の先と、root 以下に入れ子になった protected path
+    （`crates/x/.claude/settings.json` 等）は見ない（root 自身だけ検査。literal path の shell 規則と同じ）。
+    `fp_os_system_git_add`（`os.system('git add -A')`）は shell の `git add -A` と同じ git 規則で Ask/Deny
+    のまま（main の shell 判定と一致させており特例化しない）。
   - **import**: 標準ライブラリ外の module・相対 import・runner module からの `import *` は Ask
     （module の code が text に無い。sibling file でありうる）。
   - **SQL**: DB-API driver（`sqlite3` 等）を import する program に限り、`.execute*` の SQL が

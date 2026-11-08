@@ -1,41 +1,4 @@
 [[task]]
-id = "04f53dbe"
-title = "context-governor injector dedup keys on the hook input session_id, not env"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = '''
-Audit B item 11 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: cg-injector-dedup-env-session.
-Observed RED 2026-11-07 at c564dbb9 (base fc7b5dd9) (verbatim): session X's ledger was written for a hook whose input names session Y: .../audit-b11-env-x/ledger.jsonl = "{\"event\":\"injected\",...\"session\":\"audit-b11-env-x\"...}" / test result: FAILED
-Readings: (A) hook input session_id is authoritative (audit; pinned); (B) env session authoritative - memory says they always match in production, so defect is only test hermeticity. To tell apart: capture a live hook stdin/env pair and see whether session_id can differ from env. Extra: the written row's session field shows the env session although LedgerNode.session is set from input.session_id (Ledger::open overrides it).
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.'''
-created_at = 1793998442
-updated_at = 1794001893
-weight = 0.0
-issue_number = 1580
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1580"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p context-governor --test audit_b11_injector_session -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998931
-detail = """
-exit 101: ed in 0.00s
-
-   Compiling context-governor v0.1.28 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/context-governor)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.16s
-     Running tests/audit_b11_injector_session.rs (target/debug/deps/audit_b11_injector_session-b6edd85e362a07e4)
-error: test failed, to rerun pass `-p context-governor --test audit_b11_injector_session`"""
-
-[[task]]
 id = "4b8e8cb0"
 title = "check-workspace-tests.py / mutation-gate.sh refuse to start while a live cargo test exists"
 project = "/Users/yuki/src/harness"

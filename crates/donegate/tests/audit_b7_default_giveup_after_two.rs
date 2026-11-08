@@ -139,7 +139,6 @@ fn violation_ledger(home: &Path) -> String {
 }
 
 #[test]
-#[ignore = "backlog f500c25a: open defect, remove ignore when fixed"]
 fn default_attempt_cap_gives_up_visibly_on_the_third_stop() {
     let (home, root) = project("default-cap", "exit 1");
     let session = "sess-default-cap";

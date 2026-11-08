@@ -3336,7 +3336,7 @@ fn an_assignment_with_a_trailing_comment_is_a_real_assignment_not_a_command_pref
         "for {cmd:?}"
     );
     let d = bash(cmd);
-    assert_eq!(verdict_name(&d), "ask", "for {cmd:?}, got {d:?}");
+    assert_eq!(verdict_name(&d), "deny", "for {cmd:?}, got {d:?}");
 }
 
 /// `opens_unmodelled_construct` is scanned only over the segments BEFORE

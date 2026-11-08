@@ -39,6 +39,13 @@
 //!
 //! This function only ever ADDS a Deny or an Ask; `Allow` leaves every
 //! per-command rule as it was.
+//!
+//! An operand whose expansion the line's OWN text resolves (a literal
+//! same-line assignment, `X=/etc/passwd; unlink $X`, or `$(echo …)` of
+//! literal words — the resolution `rm` uses, [`super::rm::known_path_harm`])
+//! is judged on the resolved path by [`known_mutation_harm`]: a system path
+//! there is the same system-harm Deny. Anything that does not resolve keeps
+//! the Ask above.
 
 use super::vars::quote_aware_words;
 use super::{
@@ -55,11 +62,62 @@ pub(super) fn system_mutation_verdict(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -
     system_mutation(cmd, rest, ctx).unwrap_or(Decision::Allow)
 }
 
-fn system_mutation(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Option<Decision> {
-    if !matches!(
+fn is_mutator(cmd: &str) -> bool {
+    matches!(
         cmd,
         "unlink" | "rmdir" | "mv" | "sed" | "perl" | "chmod" | "chown" | "chgrp" | "rsync"
-    ) {
+    )
+}
+
+fn system_deny(cmd: &str, what: &str, raw: &str, hit: &str) -> Decision {
+    let shown = if hit == raw {
+        format!("`{raw}`")
+    } else {
+        format!("`{raw}` (which lands on `{hit}`)")
+    };
+    Decision::deny_system_harm(format!(
+        "`{cmd}` {what} {shown}, which is inside a system directory — removing, renaming, \
+rewriting or re-permissioning an OS file or directory (a binary, a library, `/etc` \
+configuration) can break the machine itself, so blastguard refuses it"
+    ))
+}
+
+/// The system-harm Deny for `cmd rest…` when a file it modifies is spelled
+/// with an expansion that `resolve` (the line's own literal assignments and
+/// `$(echo …)` bodies, see [`super::rm::known_path_harm`]) turns into a path
+/// inside a system directory; `Allow` otherwise. Operands without such an
+/// expansion are [`system_mutation_verdict`]'s and are not re-judged; an
+/// operand `resolve` cannot read stays that function's Ask. Only ever adds a
+/// Deny.
+pub(super) fn known_mutation_harm(
+    cmd: &str,
+    rest: &[&str],
+    ctx: &Ctx<'_>,
+    resolve: &dyn Fn(&str) -> Option<Vec<String>>,
+) -> Decision {
+    if !is_mutator(cmd) {
+        return Decision::Allow;
+    }
+    let words = quote_aware_words(&rest.join(" "));
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    let Some((what, targets)) = mutated_files(cmd, &words) else {
+        return Decision::Allow;
+    };
+    for raw in targets {
+        if expand_home(raw, ctx).is_some() {
+            continue;
+        }
+        for path in resolve(raw).unwrap_or_default() {
+            if let Judged::System(hit) = judge(cmd, &path, ctx) {
+                return system_deny(cmd, what, raw, &hit);
+            }
+        }
+    }
+    Decision::Allow
+}
+
+fn system_mutation(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Option<Decision> {
+    if !is_mutator(cmd) {
         return None;
     }
     let words = quote_aware_words(&rest.join(" "));
@@ -68,18 +126,7 @@ fn system_mutation(cmd: &str, rest: &[&str], ctx: &Ctx<'_>) -> Option<Decision> 
     let mut ask: Option<Decision> = None;
     for raw in targets {
         match judge(cmd, raw, ctx) {
-            Judged::System(hit) => {
-                let shown = if hit == raw {
-                    format!("`{raw}`")
-                } else {
-                    format!("`{raw}` (which lands on `{hit}`)")
-                };
-                return Some(Decision::deny_system_harm(format!(
-                    "`{cmd}` {what} {shown}, which is inside a system directory — removing, \
-renaming, rewriting or re-permissioning an OS file or directory (a binary, a library, `/etc` \
-configuration) can break the machine itself, so blastguard refuses it"
-                )));
-            }
+            Judged::System(hit) => return Some(system_deny(cmd, what, raw, &hit)),
             Judged::Unresolved if ask.is_none() => {
                 ask = Some(Decision::ask(format!(
                     "`{cmd}` {what} `{raw}`, whose path depends on an expansion blastguard cannot \

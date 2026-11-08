@@ -75,6 +75,9 @@ class Base(unittest.TestCase):
     def weaken(self, new_src, *extra, base_src=BASE):
         d = self.repo(base_src)
         self.p.write_text(new_src)
+        # The gate judges the staged content (user ruling 2026-11-08, backlog
+        # 54de84b4: "Index everywhere"), so the weakening is staged.
+        _git(d, "add", "--", self.rel)
         return self.run_gate(d, *extra)
 
     def kinds(self, j):
@@ -132,12 +135,14 @@ class Detect(Base):
     def test_plain_function_test_file_name_suffix(self):
         d = self.repo("def test_a():\n    assert f()\n", rel="pkg/gate_test.py")
         self.p.write_text("def test_a():\n    pass\n")
+        _git(d, "add", "--", self.rel)  # staged: the gate judges the index (54de84b4)
         rc, j, r = self.run_gate(d)
         self.assertEqual(rc, 1, r.stdout)
 
     def test_file_under_tests_dir_without_test_prefix(self):
         d = self.repo("def test_a():\n    assert f()\n", rel="pkg/tests/helpers.py")
         self.p.write_text("def test_a():\n    pass\n")
+        _git(d, "add", "--", self.rel)  # staged: the gate judges the index (54de84b4)
         rc, j, r = self.run_gate(d)
         self.assertEqual(rc, 1, r.stdout)
 
@@ -192,6 +197,7 @@ class Clean(Base):
     def test_non_test_py_change_is_clean(self):
         d = self.repo("def f():\n    assert 1\n    assert 2\n", rel="scripts/helper.py")
         self.p.write_text("def f():\n    pass\n")
+        _git(d, "add", "--", self.rel)  # staged: the gate judges the index (54de84b4)
         rc, j, r = self.run_gate(d)
         self.assertEqual(rc, 0, r.stdout + r.stderr)
 
@@ -220,6 +226,7 @@ class Ack(Base):
         # two kinds at once: assertion removed + skip added
         self.p.write_text(BASE.replace("        self.assertTrue(g())\n", "").replace(
             "    def test_b", "    @unittest.skip('x')\n    def test_b"))
+        _git(d, "add", "--", self.rel)  # staged: the gate judges the index (54de84b4)
         rc, j, r = self.run_gate(d)
         self.assertEqual(rc, 1)
         self.assertEqual(self.kinds(j), ["assertion-removed", "ignore-added"], j)
@@ -234,6 +241,7 @@ class Ack(Base):
     def test_ack_for_other_path_or_bare_marker_acks_nothing(self):
         d = self.repo()
         self.p.write_text(BASE.replace("        self.assertTrue(g())\n", ""))
+        _git(d, "add", "--", self.rel)  # staged: the gate judges the index (54de84b4)
         for msg in ("test-weakening-justified: scripts/other.py:assertion-removed - r\n",
                     "test-weakening-justified: %s:test-removed - r\n" % self.rel,
                     "test-weakening-justified:\n"):

@@ -236,7 +236,6 @@ fn red_a_text_after_early_close_hides_next_line() {
 }
 
 #[test]
-#[ignore = "backlog e2b9ffb1: open defect, remove ignore when fixed"]
 fn red_b_same_hole_without_any_heredoc() {
     run_all(
         "b",

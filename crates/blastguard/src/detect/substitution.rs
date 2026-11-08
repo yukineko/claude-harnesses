@@ -747,7 +747,8 @@ pub(super) fn backtick_payloads(stage: &str) -> Vec<String> {
 
 /// Every command-substitution body in `seg` that the shell will actually RUN,
 /// in source order: `$(...)` and backtick bodies at the top level or inside
-/// double quotes, but NOT inside single quotes (`'$(rm x)'` is literal text).
+/// double quotes, and unquoted `<(...)`/`>(...)` process-substitution bodies,
+/// but NOT inside single quotes (`'$(rm x)'` is literal text).
 /// `$((...))` arithmetic is a `$(` too and is returned like the rest; its
 /// body is an expression, which the analyser finds nothing destructive in.
 ///
@@ -780,6 +781,16 @@ pub(super) fn executed_substitution_payloads(seg: &str) -> Vec<String> {
             }
             '"' => in_double = !in_double,
             '$' if chars.get(k + 1) == Some(&'(') => {
+                let Some(end) = scan_balanced(&chars, k + 2, Stop::Paren, 0) else {
+                    break;
+                };
+                out.push(chars[k + 2..end].iter().collect());
+                k = end + 1;
+                continue;
+            }
+            // e2b9ffb1: a `<(...)`/`>(...)` process substitution body is run
+            // too (unquoted only; inside double quotes it is literal text).
+            '<' | '>' if !in_double && chars.get(k + 1) == Some(&'(') => {
                 let Some(end) = scan_balanced(&chars, k + 2, Stop::Paren, 0) else {
                     break;
                 };

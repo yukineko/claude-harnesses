@@ -34,7 +34,16 @@ tests on main; user, 2026-11-08: "定期auditはmainだけgateについてのテ
     command caught in its pre-merge-commit window after an integration HEAD
     move). Its evidence needed a `git merge-tree` of HEAD with every local
     branch, i.e. reading other sessions' branches; without it the evidence is
-    incomplete, so that state is now REFUSED (the restrictive side).
+    incomplete, so that state is now REFUSED (the restrictive side);
+  * integration_head's `git for-each-ref --contains` over every ref (user
+    ruling 2026-11-08: read no other branch's refs). A HEAD move is now judged
+    only from main's own branch reflog and object store (integration_move).
+    Newly REFUSED as a result: a move onto a commit that lives on another
+    branch without a merge / ff-pull reflog entry (`git reset --hard <branch>`,
+    `git checkout -B main <x>`, `git update-ref`), a reset onto any merge
+    commit not made on main, a non-fast-forward `git pull` ("pull: Merge
+    made by ..."), `git pull --rebase`, and any HEAD move (even a real merge
+    commit) when main's reflog is missing or core.logAllRefUpdates=false.
 
 WRITE RECORD. At Post of a main-cwd call, every path whose state changed
 between Pre and Post (allowed or refused) is appended to this session's write
@@ -61,12 +70,16 @@ record. A record that cannot be written refuses the call.
                       HEAD moved, tree clean apart from paths (untracked or
                       tracked) that were already dirty at Pre with the same
                       status record and content hash, and exactly the same
-                      set of dirty paths as at Pre, and the new HEAD is a merge
-                      commit, or is contained in a ref other than the branch
-                      main has checked out, or that branch's reflog has an
-                      entry for exactly this old -> new move whose message
-                      starts with "merge " (written by `git merge`; covers a
-                      fast-forward whose source branch is already deleted)
+                      set of dirty paths as at Pre, and main's OWN branch
+                      reflog explains the move: an unbroken chain of entries
+                      from Pre HEAD to the new HEAD, each one either a
+                      fast-forward ("merge ...: Fast-forward" or
+                      "pull...: Fast-forward") that descends from its old
+                      value, or a merge commit made by `git merge` ("merge ...")
+                      or by a merge-concluding `git commit`
+                      ("commit (merge): ...") whose FIRST parent is its old
+                      value (see integration_move; no other branch's refs are
+                      read, user ruling 2026-11-08)
                                                             -> 0
                       MERGE_HEAD existed before and is gone after, and the new
                       HEAD's parents are exactly [Pre HEAD] + all Pre MERGE_HEAD
@@ -508,33 +521,75 @@ def checked_out_branch(main: Path) -> str:
     return proc.stdout.strip()
 
 
-def integration_head(main: Path, head: str, branch: str) -> bool:
-    """True if `head` is a merge commit or lives on a ref other than main's branch."""
-    parents = git(main, "rev-list", "--parents", "-n1", head).split()
-    if not parents or parents[0] != head:
-        raise Undetermined("`git rev-list --parents` did not describe %s" % head)
-    if len(parents) >= 3:
+def commit_parents(main: Path, oid: str) -> list[str]:
+    """The parents of `oid` (`git rev-list --parents -n1`), read from main's own
+    object store. A git failure or an answer that does not describe `oid` is
+    Undetermined (CLAUDE.md 3)."""
+    parents = git(main, "rev-list", "--parents", "-n1", oid).split()
+    if not parents or parents[0] != oid:
+        raise Undetermined("`git rev-list --parents` did not describe %s" % oid)
+    return parents[1:]
+
+
+def is_ancestor(main: Path, old: str, new: str) -> bool:
+    """`git merge-base --is-ancestor old new`: exit 0 = yes, 1 = no, anything
+    else (or git failing to run) is Undetermined."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(main), "merge-base", "--is-ancestor", old, new],
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise Undetermined("git could not be executed: %s" % exc) from exc
+    if proc.returncode == 0:
         return True
-    refs = git(main, "for-each-ref", "--contains", head, "--format=%(refname)").split()
-    return any(r != branch for r in refs)
+    if proc.returncode == 1:
+        return False
+    raise Undetermined(
+        "`git merge-base --is-ancestor %s %s` exited %d: %s"
+        % (old[:12], new[:12], proc.returncode, proc.stderr.strip() or "(no stderr)")
+    )
 
 
-# The reflog message `git merge` writes when it moves a branch. It is matched
-# as a PREFIX of the message field only: a direct commit whose subject imitates
-# a merge is logged as "commit: merge ...", which does not start with this.
+# Reflog messages that record an integration move of main's branch. Matched as
+# a PREFIX of the message field only: a direct commit whose subject imitates a
+# merge is logged as "commit: merge ...", which starts with neither.
+#   "merge "          -- written by `git merge` (fast-forward or merge commit)
+#   "commit (merge): " -- written by `git commit` concluding a merge in progress
+#   "pull" ... ": Fast-forward" -- written by a `git pull` that fast-forwarded
 MERGE_REFLOG_PREFIX = "merge "
+COMMIT_MERGE_REFLOG_PREFIX = "commit (merge): "
+PULL_REFLOG_PREFIX = "pull"
+FAST_FORWARD_SUFFIX = ": Fast-forward"
 
 
-def merge_reflog_entry(common: Path, branch: str, old: str, new: str) -> bool:
-    """True if `branch`'s reflog records the EXACT transition old -> new as written
-    by `git merge` (message starting with "merge ", e.g. "merge x: Fast-forward").
+def integration_step(main: Path, old: str, new: str, message: str) -> bool:
+    """True if ONE reflog entry old -> new of main's branch is an integration
+    step, judged from main's own object store:
+      - "merge ...: Fast-forward" or "pull...: Fast-forward": `new` descends from
+        `old` (the tip may itself be a merge commit; a fast-forward does not
+        create one, so its parents are not constrained);
+      - any other "merge ..." entry (a merge commit `git merge` made) and
+        "commit (merge): ..." (`git commit` concluding a merge): `new` has >= 2
+        parents and its FIRST parent is `old`.
+    Every other message (commit, reset, checkout, rebase, `pull --rebase`, a
+    non-fast-forward pull, update-ref without -m, ...) is False."""
+    fast_forward = message.endswith(FAST_FORWARD_SUFFIX) and (
+        message.startswith(MERGE_REFLOG_PREFIX) or message.startswith(PULL_REFLOG_PREFIX)
+    )
+    if fast_forward:
+        return is_ancestor(main, old, new)
+    if message.startswith(MERGE_REFLOG_PREFIX) or message.startswith(COMMIT_MERGE_REFLOG_PREFIX):
+        parents = commit_parents(main, new)
+        return len(parents) >= 2 and parents[0] == old
+    return False
 
-    This is the integration evidence for a fast-forward whose source branch is
-    already gone (user ruling 2026-10-16, backlog 86e21645). An entry for any
-    other transition (e.g. a ff followed by a direct commit in the same call)
-    does not count. No branch, or a reflog that is missing or unreadable, is
-    undetermined, never evidence (CLAUDE.md 3).
-    """
+
+def reflog_entries(common: Path, branch: str) -> list[tuple[str, str, str]]:
+    """(old, new, message) for every entry of main's branch reflog, oldest first.
+    Main's own state only. No branch, or a reflog that is missing or unreadable,
+    is Undetermined, never evidence (CLAUDE.md 3)."""
     if not branch.startswith("refs/heads/"):
         raise Undetermined("main is not on a branch; no reflog to confirm the HEAD move")
     log = common / "logs" / branch
@@ -542,9 +597,9 @@ def merge_reflog_entry(common: Path, branch: str, old: str, new: str) -> bool:
         raw = log.read_bytes()
     except OSError as exc:
         raise Undetermined(
-            "reflog %s unreadable, cannot confirm HEAD %s -> %s is a merge: %s"
-            % (log, old[:12], new[:12], exc)
+            "reflog %s unreadable, cannot confirm the HEAD move is a merge: %s" % (log, exc)
         ) from exc
+    out = []
     for line in raw.decode("utf-8", "replace").splitlines():
         head_part, sep, message = line.partition("\t")
         if not sep:
@@ -552,8 +607,48 @@ def merge_reflog_entry(common: Path, branch: str, old: str, new: str) -> bool:
         fields = head_part.split(" ", 2)
         if len(fields) < 2:
             continue
-        if fields[0] == old and fields[1] == new and message.startswith(MERGE_REFLOG_PREFIX):
+        out.append((fields[0], fields[1], message))
+    return out
+
+
+def integration_move(main: Path, common: Path, branch: str, old: str, new: str) -> bool:
+    """True if main's OWN state shows the HEAD move old -> new is integration.
+
+    User ruling 2026-11-08 (own tree only): the guard reads no other branch's
+    refs. It replaced `integration_head`, which ran `git for-each-ref
+    --contains` over every ref (other sessions' branches) and allowed any merge
+    commit or any HEAD that lived on another ref.
+
+    Evidence, all from main's own branch reflog and object store: the newest
+    reflog entry whose new value is `new` starts an unbroken chain of
+    consecutive entries back to an entry whose old value is `old`, and EVERY
+    entry of that chain is an integration_step (a `git merge` / `git pull`
+    fast-forward that descends from the entry's old value, or a merge commit
+    made by `git merge` / a merge-concluding `git commit` whose FIRST parent is
+    the entry's old value).
+    Several merges in one call (sequential `git merge`s) are therefore one
+    chain. Any other entry in the chain (commit, reset, rebase, pull --rebase,
+    checkout, update-ref, ...), a gap in the chain, or no entry ending at `new` is False
+    -> the caller refuses. A missing / unreadable reflog or a git failure is
+    Undetermined -> the caller refuses (CLAUDE.md 3).
+    """
+    entries = reflog_entries(common, branch)
+    i = len(entries) - 1
+    while i >= 0 and entries[i][1] != new:
+        i -= 1
+    if i < 0:
+        return False
+    target = new
+    while i >= 0:
+        e_old, e_new, message = entries[i]
+        if e_new != target or e_old == e_new:
+            return False
+        if not integration_step(main, e_old, e_new, message):
+            return False
+        if e_old == old:
             return True
+        target = e_old
+        i -= 1
     return False
 
 
@@ -747,9 +842,7 @@ def post(payload: dict, common: Path, main: Path) -> int:
         pass  # resolving + committing the in-progress merge, tree clean after
     elif after["head"] != before["head"] and only_unchanged_preexisting(before, after):
         branch = checked_out_branch(main)
-        if not integration_head(main, after["head"], branch) and not merge_reflog_entry(
-            common, branch, before["head"], after["head"]
-        ):
+        if not integration_move(main, common, branch, before["head"], after["head"]):
             verdict = REFUSE
             head_not_integration = True
     else:

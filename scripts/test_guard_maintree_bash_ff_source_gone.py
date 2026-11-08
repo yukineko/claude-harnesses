@@ -13,6 +13,14 @@ for main of the form "merge ...: Fast-forward" or "merge ..." is integration
 evidence. A reflog "commit:" entry (a direct commit) is still refused. A reflog
 that cannot be read is undetermined and is refused (CLAUDE.md 3).
 
+RE-SCOPED by user ruling 2026-11-08 (gates judge only their own tree; read no
+other branch's refs): integration_head() and its `for-each-ref --contains` are
+gone. integration_move() now accepts a HEAD move only from main's own branch
+reflog chain ("merge ...", "commit (merge): ...", "pull...: Fast-forward"),
+so the reflog is the ONLY evidence, whether or not the source branch still
+exists. _only_main_contains_head() below still runs for-each-ref in the TEST
+(fixture anti-vacuity), never in the guard. The verdicts here are unchanged.
+
 Fixed (backlog 86e21645): test_a / test_b were RED under @unittest.expectedFailure
 and are now plain tests:
 

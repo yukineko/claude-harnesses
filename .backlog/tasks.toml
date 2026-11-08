@@ -399,33 +399,6 @@ exit 101: .366 (/Users/yuki/.condukt/worktrees/run-20261107-114313-25739-fileA/c
 error: test failed, to rerun pass `-p condukt --test backlog_merge_timeout_halfapplied_20261107`"""
 
 [[task]]
-id = "b83ef4b1"
-title = "test-changed-crates.sh: unborn-HEAD branch discards git ls-files exit status -> 'no crate touched' exit 0 (fail-open)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Measured at worktree HEAD f900159d (main 56764042), 2026-11-07. scripts/test-changed-crates.sh l.63-65: diff_out=$(git ls-files 2>/dev/null); diff_rc=0 -- ls-files rc never checked. Repro (unborn repo, staged crates/foo/src/main.rs, shim: exact 'git ls-files' exits 128): test-changed-crates.sh exit=0 'no crate touched -- nothing to test'; control without shim sees the crate. lint-changed-crates.sh l.139-141 ALREADY fixed at this rev (diff_rc=0; diff_out=$(git ls-files) || diff_rc=$?) and exits 1 in the repro, so only test-changed-crates.sh is affected. Related variant (rev-parse --verify -q HEAD rc 128 conflated with unborn at the same line, diff also failing, committed repo with staged crate file): NOT an observable fail-open -- the later head_rc block fails closed in both scripts (exit 1 'cannot determine whether HEAD is born'); notes only."
-created_at = 1794022495
-updated_at = 1794022495
-weight = 0.0
-issue_number = 1603
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1603"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "bash scripts/tests/changed-crates-lsfiles-unborn-failclosed.sh"
-rev = "8010c8206e283a92ff904df484ccf5acd97e8023"
-observed_at = 1794022495
-detail = """
-exit 1: test-changed-crates.sh exit=0
-lint-changed-crates.sh exit=1
-FAIL: test-changed-crates.sh exited 0 although 'git ls-files' failed (128) on an unborn HEAD
-  | test-changed-crates: no crate touched — nothing to test"""
-
-[[task]]
 id = "f9bc1da8"
 title = "blastguard: git restore --staged --worktree denied even when file content is byte-identical to a blob already in a commit (FP)"
 project = "/Users/yuki/src/harness"
@@ -507,37 +480,6 @@ exit 101: w v0.1.46 (/Users/yuki/.condukt/worktrees/run-20261107-114313-25739-fi
     Finished `test` profile [unoptimized + debuginfo] target(s) in 6.43s
      Running tests/runstate_roundtrip_drops_fields_20261107.rs (target/debug/deps/runstate_roundtrip_drops_fields_20261107-4f5eea4905080610)
 error: test failed, to rerun pass `-p autoflow --test runstate_roundtrip_drops_fields_20261107`"""
-
-[[task]]
-id = "0fccf1eb"
-title = "blastguard: git commit -F - <<'EOF' の本文行を相対 redirect と誤読する誤検知"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = []
-touched_files = []
-status = "pending"
-notes = '''
-VERBATIM RED (HEAD 81903ff2, blastguard 0.2.305, subagent payload): exact_observed_commit_command_is_allow: assertion left == right failed: quoted heredoc commit message is data; left: "deny", right: "allow". Deny reason: '> EOF' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve — it cannot tell whether this lands in a system directory or on a protected gate/config path, and refuses to guess. MINIMIZED TRIGGER: a quoted heredoc body LINE ENDING IN '>' immediately before the closing delimiter, when a second command sits between the cd and the heredoc: cd D; true && cat <<'EOF'\nx>\nEOF (also cd D; ls; cat <<'EOF'..., cd D; git add -A && git commit -F - <<'EOF'\nCo-Authored-By: A <n@a.com>\nEOF). The scanner reads '>' newline 'EOF' as the redirect '> EOF'. NOT triggering: cd D; cat <<'EOF' (single command), cd D && A && git commit (all &&), body without a trailing '>'. README.ja.md only exempts quoted bodies without | ; & (documented conservative scan), but the delimiter line must not be taken as a redirect target and the cd (a literal absolute path) is resolvable. Tests: crates/blastguard/tests/backlog_eof_redirect_fp_20261107.rs. Do NOT weaken the test to pass; remove the ignore marker when fixed.
-Cross-session note 2026-11-07 (session bf349dd5, merge 8d73ff09): the exact observed command stages with `git add -A`, which is now Ask by user ruling (e9325654; Deny inside a subagent). The ignored REDs exact_observed_commit_command_is_allow / body_line_ending_in_gt_* that keep `git add -A` can never reach Allow; re-anchor their staging to an explicit path (as done for control_same_commit_neutral_message_is_allow) when fixing. Ask the user if the exact-command form must stay.'''
-created_at = 1794031849
-updated_at = 1794037877
-weight = 0.0
-issue_number = 1613
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1613"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_eof_redirect_fp_20261107 -- --include-ignored"
-rev = "81903ff2a1cfd91e6f404405eebbcaedd74714d7"
-observed_at = 1794031849
-detail = """
-exit 101: 54s
-
-   Compiling blastguard v0.2.305 (/Users/yuki/src/.harness-worktrees/bg-eof-redirect-fp/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.48s
-     Running tests/backlog_eof_redirect_fp_20261107.rs (target/debug/deps/backlog_eof_redirect_fp_20261107-10d2a5402ba5d093)
-error: test failed, to rerun pass `-p blastguard --test backlog_eof_redirect_fp_20261107`"""
 
 [[task]]
 id = "7d615bf0"
@@ -690,28 +632,32 @@ exit 101:  v0.2.379 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/
 error: test failed, to rerun pass `-p blastguard --test scratchpad_truncating_redirect_fp_20261107`"""
 
 [[task]]
-id = "ffce9c59"
-title = "blastguard: git commit -F - heredoc with a trailing pipe/command scans the message body as code (FP)"
+id = "8fe3a5c3"
+title = "blastguard: 読み取りの git config core.hooksPath を拒否する誤検知"
 project = "/Users/yuki/src/harness"
 project_unresolved = false
-tags = ["p2"]
+tags = ["blastguard"]
 touched_files = []
 status = "pending"
-notes = "Observed 2026-11-07 main agent 0.2.378: commit message line mentioning a recursive delete -> 'recursive rm (-r) can delete an entire directory tree'. RED: crates/blastguard/tests/commit_msg_heredoc_trailing_cmd_fp_20261107.rs (3 ignored targets: exact=ask, piped=deny, semicolon=deny; 4 controls pass). Remove the ignores when fixed."
-created_at = 1794064730
-updated_at = 1794064730
+notes = """git config core.hooksPath (1 positional, only non-mode options before key; also new-style 'git config get') is a READ in git 2.50.1 but Deny at HEAD. Rule: crates/blastguard/src/detect/git.rs "config" arm (HOOKSPATH_REASON). RED commit 8999494e on branch red-bg-hookspath-read."""
+created_at = 1794052452
+updated_at = 1794052608
 weight = 0.0
-issue_number = 1632
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1632"
-rev = 0
+issue_number = 1622
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1622"
+rev = 1
 
 [task.repro]
 outcome = "reproduced"
-cmd = "cargo test -p blastguard --test commit_msg_heredoc_trailing_cmd_fp_20261107 -- --include-ignored"
-rev = "cf538f989bc143b93abc9492799fd536c185e8ae"
-observed_at = 1794064730
+cmd = "cargo test -p blastguard --lib detect::hookspath_read_tests::git_config_hookspath_one_positional_read_is_allowed -- --ignored"
+rev = "e12712e25074e4ed40accea0eb4eb178c51feb03"
+observed_at = 1794052607
 detail = """
-exit 101: .2.381 (/Users/yuki/src/.harness-worktrees/bl-commit-msg-fp/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.31s
-     Running tests/commit_msg_heredoc_trailing_cmd_fp_20261107.rs (target/debug/deps/commit_msg_heredoc_trailing_cmd_fp_20261107-e7a1b95996def4d3)
-error: test failed, to rerun pass `-p blastguard --test commit_msg_heredoc_trailing_cmd_fp_20261107`"""
+exit 101: :
+    detect::hookspath_read_tests::git_config_hookspath_one_positional_read_is_allowed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 452 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-ecd1d97de95143b1)
+error: test failed, to rerun pass `-p blastguard --lib`"""

@@ -583,6 +583,12 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   本文を読む。引用無しの区切り・閉じていない本文・インタプリタ/シェルの読み手・
 >   here-document の後のコマンドがあれば従来通り本文も走査する
 >   （`src/detect/heredoc.rs` の `redirect_view_without_quoted_here_document_body`）。
+>   例外（backlog ffce9c59）: 読み手が `git commit -F -` で区切りが引用付きのとき、opener 行の
+>   `|`・`;`・`&&`・`||` 以降（`2>&1 | grep …; git log -1` 等）は git の stdout を受けるか本文を
+>   見ない別コマンドなので、本文は data として全ルールから外す。後続部分は本文から独立した
+>   コマンドとして従来通り判定する（`<<'EOF'; rm -rf /etc` は deny）。`&`・`|&`、`$`・backtick・`\`、
+>   `cat`/`grep`/`egrep`/`fgrep`/`head`/`tail`/`wc` 以外の pipe 先や `<`/`>`/`(`/`)` を含む pipe 段が
+>   あれば従来通り本文も走査する（`git_commit_reader_before_tail`）。
 > - **code-interpreter-inline-eval**: 「形」での一律 deny は廃止され、プログラム本文を
 >   監査する（`analyze_code_interpreter` / `interpreter_code_verdict`、`src/detect/interpreter.rs`）。破壊的な呼び出し
 >   や破壊的なシェル行を含めば `deny`、保護パスを名指しすれば `ask`、

@@ -360,6 +360,15 @@ forge・condukt のスケジューラが再利用）。
   `cd "$(git rev-parse --show-toplevel)" && git commit -F - <<'EOF'` の message 行 `> quoted` を
   未解決 cd 後の相対 redirect と誤認しない）。unquoted の `$(…)`・それ以外の head は剥がさない。
   opener 行は view に残るので、opener の redirect（`cat <<'EOF' > /etc/hosts`）は従来どおり Deny。
+- **`git commit -F - <<'EOF'` の後ろに続く opener 行のコマンド（tests/commit_msg_heredoc_trailing_cmd_fp_20261107.rs、
+  backlog ffce9c59）** — `strip_here_document_body`（全ルール前の data strip と redirect view の両方）は、
+  区切りが引用付きで opener の consumer が `git … commit … -F - <<'EOF' [2>&1] <op> <tail>`
+  （`<op>` は `|`・`;`・`&&`・`||`）のとき、`<op>` より前（`2>&1` を除く）を読み手として判定する
+  （`git_commit_reader_before_tail`）。here-document は付いた simple command の stdin だけを差し替えるので、
+  `|` 以降は git の stdout を、`;`/`&&`/`||` 以降は本文を見ない。tail は command text に残り独立に判定される
+  （`<<'EOF'; rm -rf /etc` は Deny）。consumer に `\`・`$`・backtick、単独 `&`・`|&`、読み手の出力 redirect、
+  git に繋がる pipe 段の program が `cat`/`grep`/`egrep`/`fgrep`/`head`/`tail`/`wc` 以外か `<`/`>`/`(`/`)`
+  を含む場合は従来どおり本文も判定する（git は subject を stdout に出すため `| sh` は本文を残す）。
 
 ### module 責務
 

@@ -92,7 +92,6 @@ fn git_config_hookspath_one_positional_read_is_allowed() {
 /// the key is a value, see the table), but HEAD allows them because it looks
 /// for `--get`/`--list`/… anywhere in the argv.
 #[test]
-#[ignore = "backlog e103cd56: open defect (fail-open), remove ignore when fixed"]
 fn git_config_hookspath_read_flag_after_key_is_a_write_and_not_allowed() {
     let writes = [
         "git config core.hooksPath --get",

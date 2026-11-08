@@ -12,6 +12,11 @@
 //! it.
 //!
 //! Written by the test author only (CLAUDE.md section 2(a)); no fix here.
+//!
+//! Since user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止で
+//! いい」) `done` no longer runs the RED at all, so this test now only shows
+//! that `done` accepts this close on GREEN at HEAD; it no longer exercises
+//! `classify_red` (still used by the `--repro-test` repro run at HEAD).
 mod common;
 use common::*;
 

@@ -92,7 +92,12 @@ reason = "Section '安定 rule id（overwatch 署名の粒度確保）' describe
 [[spec]]
 path = "crates/blastguard/src/detect/git.rs"
 doc = "docs/specs/blastguard.md"
-reason = "'振る舞い' bullets 'コマンド別 deny 規則' (analyze_git arms), 'managed な使い捨て場所での working-tree 破棄の Allow' (managed_worktree_git) and 'git の exec-capable 形は一律 Deny' (git_exec_ban, backlog fb338793)."
+reason = "'振る舞い' bullets 'コマンド別 deny 規則' (analyze_git arms), 'managed な使い捨て場所での working-tree 破棄の Allow' (managed_worktree_git), '`core.hooksPath` の付け替えは Deny' (config arm, config_read_mode_in_prefix, backlog e103cd56) and 'git の exec-capable 形は一律 Deny' (git_exec_ban, backlog fb338793)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/hookspath_read_tests.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Unit-test submodule of detect/git.rs's config arm; it pins the '振る舞い' bullet '`core.hooksPath` の付け替えは Deny' (read-mode flag counts only in the option prefix, backlog e103cd56; the one-positional read test stays ignored under open backlog 8fe3a5c3)."
 
 [[spec]]
 path = "crates/blastguard/src/detect/executors.rs"

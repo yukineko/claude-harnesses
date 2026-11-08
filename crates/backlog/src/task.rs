@@ -75,9 +75,11 @@ pub const FILTER_STATUSES: [Status; 6] = Status::ALL;
 /// must not drift: `reason`, `duplicate_of`, `doc_only_commit`, and the
 /// sub-tables `green`, `red`, plus `discard_reason`. Exactly one
 /// route is filled:
-///   - `green` + `red`: an executed committed test, RED (behavioural) at
-///     `red.rev` and GREEN at `green.rev` (reason fixed / already-fixed /
-///     obsolete);
+///   - `green` + `red`: an executed committed test, GREEN at `green.rev`
+///     (reason fixed / already-fixed / obsolete). `red` holds the claimed
+///     pre-fix `red.rev`; since user ruling 2026-11-08 it is NOT executed
+///     (`red.executed = false`), while legacy rows record an observed
+///     behavioural RED (see [`RedRun`]);
 ///   - `doc_only_commit`: an ancestor commit touching doc paths only;
 ///   - `duplicate_of`: the canonical task id;
 ///   - `discard_reason` (with `reason = "discard"`): `backlog cancel ID
@@ -133,20 +135,53 @@ pub struct GreenRun {
     pub excerpt: String,
 }
 
-/// The RED run of an F2P close: the same command at `rev` (a detached temp
-/// worktree with the test files overlaid from HEAD) exited non-zero with a
-/// BEHAVIOURAL failure. A build/compile failure is never recorded here.
+/// `RedRun::kind` of a close whose RED was claimed but not executed.
+pub const RED_KIND_NOT_EXECUTED: &str = "not-executed";
+
+/// The red side of a `done --test` close. Two shapes exist on disk:
+///
+///   * CURRENT (user ruling 2026-11-08: 「backlog doneのRED実行はそもそも全面
+///     廃止でいい」): `done` never runs the test at `rev`. `rev` is the
+///     caller's claimed pre-fix revision (resolved to a full commit and checked
+///     to be an ancestor of HEAD, nothing more), `executed = false`,
+///     `kind = "not-executed"`, a `note` quoting the ruling, and NO `exit`.
+///     This is a claim, never a verified RED ([`RedRun::was_executed`] is
+///     false).
+///   * LEGACY (closures written before the ruling): the command was run at
+///     `rev` (a detached temp worktree with HEAD's test files overlaid) and
+///     exited non-zero with a BEHAVIOURAL failure: `exit`, `kind =
+///     "behavioural"`, optionally `overlay`, and no `executed` key.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RedRun {
     pub rev: String,
-    pub exit: i32,
+    /// The observed exit of an executed RED. Absent when RED was not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<i32>,
     pub kind: String,
-    /// The HEAD test files overlaid onto `rev` when `done --red-overlay`
-    /// narrowed the overlay (sorted, deduplicated). Absent = the default
-    /// overlay (every HEAD test file, or the files a pytest argv names).
+    /// Legacy only: the HEAD test files overlaid onto `rev` when the removed
+    /// `done --red-overlay` narrowed the overlay. Never written any more.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overlay: Option<Vec<String>>,
+    /// `Some(false)`: the RED was NOT executed (current `done`). Absent on
+    /// legacy rows, whose `exit`/`kind` record an executed RED.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executed: Option<bool>,
+    /// Why the RED was not executed (the ruling), set with `executed = false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl RedRun {
+    /// True only for a legacy row that records an OBSERVED behavioural RED.
+    /// Anything else — `executed = false`, a missing `exit`, a zero `exit`, a
+    /// kind other than `behavioural` — is not a verified RED (restrictive
+    /// default, CLAUDE.md §3).
+    pub fn was_executed(&self) -> bool {
+        self.executed != Some(false)
+            && matches!(self.exit, Some(e) if e != 0)
+            && self.kind == "behavioural"
+    }
 }
 
 /// Outcomes of a finding's repro test (`add --repro-test` / `confirm`).

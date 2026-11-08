@@ -88,7 +88,9 @@ enum Command {
     },
 
     /// Read-only classification of every terminal row's closure evidence
-    /// (observed-f2p, doc-only, duplicate, discard, cited-only, judgment,
+    /// (observed-f2p = legacy close with an executed RED, green-only = GREEN
+    /// at HEAD with a claimed, not executed RED, doc-only, duplicate, discard,
+    /// cited-only, judgment,
     /// none — plus the legacy class of rows closed by the removed human-approval
     /// command) and the legacy untestable reasons grouped by crate. Never
     /// reopens anything; the store is not written.
@@ -188,8 +190,10 @@ enum Command {
     },
 
     /// Mark a task as done WITH evidence. Exactly one of: `--test CMD
-    /// --red-rev REV` (an executed committed test that FAILS behaviourally at
-    /// REV and PASSES at HEAD; `--reason fixed|already-fixed|obsolete`),
+    /// --red-rev REV` (an executed committed test that PASSES at HEAD; REV,
+    /// the claimed pre-fix commit, is resolved, ancestry-checked and recorded
+    /// with `executed = false` — the test is NOT run at REV, user ruling
+    /// 2026-11-08; `--reason fixed|already-fixed|obsolete`),
     /// `--doc-only COMMIT` (an ancestor commit touching doc paths only), or
     /// `--duplicate-of ID`. A bare `done ID` is refused. There is no
     /// evidence-free close: an item no test reproduces is `cancel`led.
@@ -201,18 +205,12 @@ enum Command {
         #[arg(long)]
         test: Option<String>,
 
-        /// The revision at which the test must FAIL behaviourally (RED).
+        /// The pre-fix commit (required with --test). It must resolve to a
+        /// commit that is an ancestor of HEAD; it is recorded as a claim
+        /// (closure.red.executed = false). The test is NOT run there: the
+        /// RED run was abolished by user ruling 2026-11-08.
         #[arg(long = "red-rev")]
         red_rev: Option<String>,
-
-        /// Narrow the RED run's overlay to this HEAD test file (repeatable).
-        /// By default the RED worktree at --red-rev gets every HEAD test file
-        /// (cargo) or the named ones (pytest); when the fix itself lives in a
-        /// test file, that copies the fix in. Name only the repro side here.
-        /// Each path must already be in the default overlay (narrow, never
-        /// widen); the narrowed set is recorded as closure.red.overlay.
-        #[arg(long = "red-overlay")]
-        red_overlay: Vec<String>,
 
         /// fixed (default) | already-fixed | obsolete
         #[arg(long)]
@@ -1341,7 +1339,6 @@ fn run(cli: Cli) -> Result<()> {
             id,
             test,
             red_rev,
-            red_overlay,
             reason,
             duplicate_of,
             doc_only,
@@ -1353,7 +1350,6 @@ fn run(cli: Cli) -> Result<()> {
                     id: id.clone(),
                     test,
                     red_rev,
-                    red_overlay,
                     reason,
                     duplicate_of,
                     doc_only,

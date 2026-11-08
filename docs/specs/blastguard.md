@@ -35,6 +35,10 @@ forge・condukt のスケジューラが再利用）。
 - **偽陽性ゼロ・バイアス** — 曖昧な入力は allow。Rust の戻り型矢印 `->`（`prev == b'-'`）と山括弧
   プレースホルダ `<value>` / `<run-id>`（`is_angle_placeholder_close`。hyphen を含む kebab-case
   プレースホルダも placeholder と認識する）は truncating redirect と誤認しない。
+  `>` / `>>` の書き込み先の語は改行をまたいで読まず（空白・タブのみ飛ばす、`skip_redirect_word_gap`）、
+  行末の `>`（改行・テキスト末尾の直前、`redirect_word_missing_at_line_end`）は書き込み先として数えない
+  （シェルでは何も開かない。backlog 0fccf1eb: `>` で終わる here-document 本文行の次の区切り行を
+  `> EOF` と誤読していた）。
   クォート内の破壊的テキスト（`echo 'rm -rf /'`）は実行されないので allow。opaque な
   `source <file>` / `bash <script>`（`-c` 無し）は中身を検査できないため allow。
 - **`>` スキャンは UTF-8 char 境界安全** — truncating redirect スキャナの whitespace/delimiter 判定は
@@ -90,6 +94,14 @@ forge・condukt のスケジューラが再利用）。
   ときだけ返る。probe 失敗・refusal・symlink・置けない綴りは `Undetermined` で、呼び出し側は
   `Known(false)` と同じく**元の verdict を保持**する（Allow へ倒さない）。main の作業ツリー・`.git` 内部・
   保護パス・`git stash drop/clear`（全 worktree で共有）は対象外のまま。
+- **`core.hooksPath` の付け替えは Deny（`detect/git.rs` の `config` arm、`HOOKSPATH_REASON`）** —
+  `git config` の引数に `core.hooksPath` が現れ、かつ read-mode flag（`--get`・`--get-all`・`--get-regexp`・
+  `--get-urlmatch`・`--list`・`-l`）が**option prefix（最初の非 option 語より前）にある**ときだけ read として
+  allow する（`config_read_mode_in_prefix`、backlog e103cd56、blastguard 0.2.388）。git は最初の非 option 語で
+  option 解析を止めるので、key の後ろの `--get` 等は書き込まれる値であり（`git config core.hooksPath --get`
+  は値 `--get` を書く。git 2.50.1 で観測）、read と数えない。prefix に未知の option があれば prefix の境界が
+  決まらないので read と認めない（Deny 側）。key 1 つだけの `git config core.hooksPath` は現状 Deny のまま。
+  `git -c core.hooksPath=…`（global option の inline 設定）も Deny。
 - **未マージ branch の force-delete / dirty worktree の force-remove は Ask（`detect/git_unmerged.rs`、
   backlog 43034f75、blastguard 0.2.295）** — `git branch` で delete（`-d`/`-D`/`--delete`、短縮束を含む）と
   force（`-f`/`-D`/`--force`、順序・束ね方を問わない）が揃うとき、**全 operand** について、default branch
@@ -372,6 +384,15 @@ forge・condukt のスケジューラが再利用）。
   `cd "$(git rev-parse --show-toplevel)" && git commit -F - <<'EOF'` の message 行 `> quoted` を
   未解決 cd 後の相対 redirect と誤認しない）。unquoted の `$(…)`・それ以外の head は剥がさない。
   opener 行は view に残るので、opener の redirect（`cat <<'EOF' > /etc/hosts`）は従来どおり Deny。
+- **`git commit -F - <<'EOF'` の後ろに続く opener 行のコマンド（tests/commit_msg_heredoc_trailing_cmd_fp_20261107.rs、
+  backlog ffce9c59）** — `strip_here_document_body`（全ルール前の data strip と redirect view の両方）は、
+  区切りが引用付きで opener の consumer が `git … commit … -F - <<'EOF' [2>&1] <op> <tail>`
+  （`<op>` は `|`・`;`・`&&`・`||`）のとき、`<op>` より前（`2>&1` を除く）を読み手として判定する
+  （`git_commit_reader_before_tail`）。here-document は付いた simple command の stdin だけを差し替えるので、
+  `|` 以降は git の stdout を、`;`/`&&`/`||` 以降は本文を見ない。tail は command text に残り独立に判定される
+  （`<<'EOF'; rm -rf /etc` は Deny）。consumer に `\`・`$`・backtick、単独 `&`・`|&`、読み手の出力 redirect、
+  git に繋がる pipe 段の program が `cat`/`grep`/`egrep`/`fgrep`/`head`/`tail`/`wc` 以外か `<`/`>`/`(`/`)`
+  を含む場合は従来どおり本文も判定する（git は subject を stdout に出すため `| sh` は本文を残す）。
 
 ### module 責務
 

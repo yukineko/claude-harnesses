@@ -658,7 +658,10 @@ pub(super) fn redirect_view_without_quoted_here_document_body(
 
 /// The shared shape rule of [`strip_data_here_document_bodies`] and
 /// [`redirect_view_without_quoted_here_document_body`]; see those for which
-/// `targets` each passes and what that changes.
+/// `targets` each passes and what that changes. One exception to their "no
+/// `|`, `;` or `&` on the opener line" condition, for both: a QUOTED-delimiter
+/// `git commit -F -` reader followed by a tail that cannot see the body
+/// ([`git_commit_reader_before_tail`]); the tail stays in the text and is judged.
 pub(super) fn strip_here_document_body(
     cmd: &str,
     targets: OutputTargets,
@@ -710,6 +713,14 @@ pub(super) fn strip_here_document_body(
     } else {
         opener_consumer(&opener_line)
     };
+    // Backlog ffce9c59: `git commit -F - <<'EOF' | cat` / `<<'EOF'; git log`.
+    // The body is git's stdin only; the tail stays in the text and is judged.
+    let git_reader = if here_document_delimiter_is_quoted(&opener_line) {
+        git_commit_reader_before_tail(consumer)
+    } else {
+        None
+    };
+    let consumer: &str = git_reader.as_deref().unwrap_or(consumer);
     let expansion_free = if redirect_view_of_quoted {
         !consumer.contains(['$', '`'])
     } else {
@@ -868,6 +879,95 @@ fn redirect_view_extra_head(head: &str, and_joined: bool) -> bool {
             .is_some_and(|inner| plain(inner, &[' '])),
         _ => false,
     }
+}
+
+/// Backlog ffce9c59: for a QUOTED-delimiter opener whose consumer text is
+/// `git … commit … -F - <<'EOF' [2>&1] <op> <tail>` (`<op>` is `|`, `;`, `&&`
+/// or `||`), the reader text before `<op>` with `2>&1` words removed, so
+/// [`strip_here_document_body`] can judge it like an opener with nothing after
+/// it. `None` (keep the body) on every doubt.
+///
+/// The here-document redirects the stdin of the simple command it is attached
+/// to, so the body is `git commit`'s stdin and nothing else's: a `|` after the
+/// opener takes git's STDOUT, and a `;`/`&&`/`||` starts a command that never
+/// sees the body. The tail is not removed: it stays in the command text and
+/// every rule judges it as its own command (`<<'EOF'; rm -rf /etc` is Deny).
+///
+/// Refused (`None`): no unquoted operator, a `\`, `$` or backtick anywhere in
+/// the consumer text, a single `&` (background) or `|&`, a reader that is not
+/// accepted by [`here_document_consumer_is_data`] as `git commit -F -` or that
+/// writes any output redirect, and any pipeline stage fed by git (up to the
+/// next `;`/`&&`/`||`) whose program is not `cat`/`grep`/`egrep`/`fgrep`/
+/// `head`/`tail`/`wc` or that holds `<`, `>`, `(`, `)`. git prints the commit
+/// subject on stdout, so a stage that could run its stdin keeps the body judged.
+fn git_commit_reader_before_tail(consumer: &str) -> Option<String> {
+    if consumer.contains(['\\', '$', '`']) {
+        return None;
+    }
+    // Unquoted operator positions: (byte index, operator text).
+    let mut ops: Vec<(usize, &str)> = Vec::new();
+    let (mut in_s, mut in_d) = (false, false);
+    let bytes = consumer.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        match c {
+            b'\'' if !in_d => in_s = !in_s,
+            b'"' if !in_s => in_d = !in_d,
+            b'|' | b';' | b'&' if !in_s && !in_d => {
+                let two = consumer.get(i..i + 2).unwrap_or("");
+                let op = match (c, two) {
+                    (_, "||" | "&&" | "|&") => &consumer[i..i + 2],
+                    _ => &consumer[i..i + 1],
+                };
+                // `2>&1` / `>&2`: an fd dup, not an operator.
+                if c == b'&' && op == "&" && i > 0 && bytes[i - 1] == b'>' {
+                    i += 1;
+                    continue;
+                }
+                ops.push((i, op));
+                i += op.len();
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if in_s || in_d {
+        return None;
+    }
+    let &(first, _) = ops.first()?;
+    if ops.iter().any(|(_, op)| matches!(*op, "&" | "|&")) {
+        return None;
+    }
+    let reader: Vec<String> = quote_aware_words(&consumer[..first])
+        .into_iter()
+        .filter(|w| w != "2>&1")
+        .collect();
+    let reader = reader.join(" ");
+    if reader.contains('>')
+        || !reader.starts_with("git ")
+        || !here_document_consumer_is_data(&reader, OutputTargets::DataFilesOnly)
+    {
+        return None;
+    }
+    // Pipeline stages fed by git's stdout, up to the first non-`|` operator.
+    let mut k = 0;
+    while k < ops.len() && ops[k].1 == "|" {
+        let start = ops[k].0 + 1;
+        let end = ops.get(k + 1).map_or(consumer.len(), |(j, _)| *j);
+        let stage = &consumer[start..end];
+        let words = quote_aware_words(stage);
+        let reads_only = matches!(
+            words.first().map(String::as_str),
+            Some("cat" | "grep" | "egrep" | "fgrep" | "head" | "tail" | "wc")
+        );
+        if !reads_only || stage.contains(['<', '>', '(', ')']) {
+            return None;
+        }
+        k += 1;
+    }
+    Some(reader)
 }
 
 /// True when `consumer` (the opener-line text [`opener_consumer`] returns, which
@@ -1163,6 +1263,35 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
 #[cfg(test)]
 mod peel_tests {
     use super::*;
+
+    /// Backlog ffce9c59: only a tail that cannot feed the body or run git's
+    /// output yields a reader.
+    #[test]
+    fn git_commit_reader_before_tail_refuses_executing_or_doubtful_tails() {
+        let f = git_commit_reader_before_tail;
+        assert_eq!(
+            f("git commit -F - <<'EOF' | cat").as_deref(),
+            Some("git commit -F - <<'EOF'")
+        );
+        assert!(f("git commit -q -F - <<'EOF' 2>&1 | grep -E 'a|b' ; git log -1").is_some());
+        assert!(f("git commit -F - <<'EOF'; git log -1").is_some());
+        assert!(f("git commit -F - <<'EOF' && git log -1").is_some());
+        for refused in [
+            "git commit -F - <<'EOF'",
+            "git commit -F - <<'EOF' | sh",
+            "git commit -F - <<'EOF' | grep x | bash",
+            "git commit -F - <<'EOF' | grep x > run.sh",
+            "git commit -F - <<'EOF' &",
+            "git commit -F - <<'EOF' |& cat",
+            "git commit -F - <<'EOF' > out.txt | cat",
+            "git commit -F - <<'EOF' | cat $(x)",
+            "cat <<'EOF' | cat",
+            "bash <<'EOF'; git log",
+            "git log <<'EOF'; git log",
+        ] {
+            assert_eq!(f(refused), None, "{refused}");
+        }
+    }
 
     #[test]
     fn redirect_view_peels_cd_heads_only_for_quoted_data_here_documents() {

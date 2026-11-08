@@ -23,6 +23,11 @@ Exit code note: in check-workspace-tests.py, 2 is already PYTHON_FAILURE, so
 this test only requires "non-zero and cargo not launched" there; which class
 (5 ENVIRONMENT, or a new one) is the fix's call.
 
+SCOPE (user ruling 2026-11-08, #1581): the refusal applies only to a cargo test
+live in the SAME worktree (the dummy's cwd is the gate's repo root); a dummy
+with any other cwd (another worktree/session) must be ignored, and the gates
+proceed as normal. The tests below pin both halves.
+
 Controls: the dummy is visible to `ps -ax -o command` as "cargo test"; without
 the dummy, the mutation-gate fixture does reach `cargo mutants --package`
 (so the "never started" assertion is not vacuous). Caveat: the control would
@@ -46,8 +51,8 @@ cws = T.cws
 class _LiveCargoTest:
     """A process whose ps command line reads `<tmp>/cargo test --workspace`."""
 
-    def __init__(self, tmp):
-        d = Path(tmp) / "dummy"
+    def __init__(self, tmp, cwd=None):
+        d = Path(tmp) / ("dummy" if cwd is None else "dummy-" + Path(cwd).name)
         d.mkdir()
         exe = d / "cargo"
         exe.write_text("#!/bin/sh\nwhile :; do sleep 1; done\n", encoding="utf-8")
@@ -57,6 +62,7 @@ class _LiveCargoTest:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            cwd=cwd,
             start_new_session=True,
         )
         time.sleep(0.3)
@@ -130,10 +136,16 @@ class RefuseWhileCargoTestIsLive(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _with_live(self):
-        live = _LiveCargoTest(self.tmp)
+    def _with_live(self, cwd=None):
+        live = _LiveCargoTest(self.tmp, cwd=cwd)
         self.addCleanup(live.stop)
         return live
+
+    def _elsewhere(self):
+        """A directory that is NOT the gate's worktree (another worktree/session)."""
+        other = Path(self.tmp) / "other-worktree"
+        other.mkdir()
+        return str(other)
 
     def test_control_dummy_is_visible_as_cargo_test(self):
         live = self._with_live()
@@ -144,10 +156,30 @@ class RefuseWhileCargoTestIsLive(unittest.TestCase):
         p = _run_mutation_gate(root, env)
         self.assertTrue(_mutants_runs(log), p.stdout)
 
-    @unittest.expectedFailure  # backlog 4b8e8cb0: open defect
-    def test_check_workspace_tests_refuses_while_cargo_test_is_live(self):
-        self._with_live()
+    # USER RULING 2026-11-08 (#1581): refuse only when a cargo test is live in
+    # the SAME worktree (same target dir). A cargo test in another worktree or
+    # session is ignored: gates never look at other worktrees.
+
+    def test_control_check_workspace_tests_ignores_cargo_test_in_other_dir(self):
+        self._with_live(cwd=self._elsewhere())
         repo = T._fixture_repo(os.path.join(self.tmp, "ws"))
+        runner = T.FakeRunner()
+        rc, out, err = T.MainCase().run_main(repo, runner)
+        self.assertEqual(rc, cws.RC_OK, f"out={out}\nerr={err}")
+        self.assertEqual(len(runner.cargo_calls), 1, "cargo body must run")
+
+    def test_control_mutation_gate_ignores_cargo_test_in_other_dir(self):
+        self._with_live(cwd=self._elsewhere())
+        root, env, log = _mutation_gate_fixture(self.tmp)
+        p = _run_mutation_gate(root, env)
+        self.assertTrue(
+            _mutants_runs(log), f"another worktree's cargo test must not block: {p.stdout}"
+        )
+
+    @unittest.expectedFailure  # #1581: open defect
+    def test_check_workspace_tests_refuses_while_cargo_test_is_live_in_same_worktree(self):
+        repo = T._fixture_repo(os.path.join(self.tmp, "ws"))
+        self._with_live(cwd=repo)
         runner = T.FakeRunner()
         rc, out, err = T.MainCase().run_main(repo, runner)
         self.assertEqual(
@@ -158,10 +190,10 @@ class RefuseWhileCargoTestIsLive(unittest.TestCase):
         )
         self.assertNotEqual(rc, cws.RC_OK, f"out={out}\nerr={err}")
 
-    @unittest.expectedFailure  # backlog 4b8e8cb0: open defect
-    def test_mutation_gate_refuses_while_cargo_test_is_live(self):
-        self._with_live()
+    @unittest.expectedFailure  # #1581: open defect
+    def test_mutation_gate_refuses_while_cargo_test_is_live_in_same_worktree(self):
         root, env, log = _mutation_gate_fixture(self.tmp)
+        self._with_live(cwd=str(root))
         p = _run_mutation_gate(root, env)
         self.assertEqual(
             _mutants_runs(log),

@@ -309,9 +309,10 @@ directory tree` で拒否されたこと。
     `--work-tree` 以外のグローバルオプション（`--git-dir`、`-c`、`--config-env` …）があれば対象外。
   - **据え置き（従来の判定のまま）**: primary の作業ツリー（`.git` ディレクトリ）、チェックアウトの
     サブディレクトリ、置き場そのもの、symlink 経由の綴り、展開できない `-C "$WT"`、`..` を含む綴り、
-    複合コマンド、チェックアウトの probe 失敗。`git stash drop` / `clear` は**対象外**
+    複合コマンド、チェックアウトの probe 失敗。`git stash clear` は**対象外**で常に deny
     （`refs/stash` は全 worktree で共有され、linked worktree から primary の stash が見えることを
-    実測した — 消すと管理外の作業が消える）。オブジェクトストア破壊（`gc --prune` 等）と
+    実測した — clear は他セッションの stash も全部消す）。`git stash drop [<stash>]` は
+    2026-11-08 のユーザー裁定（「drop のみ Allow」）で**どこでも allow**。オブジェクトストア破壊（`gc --prune` 等）と
     保護パスの判定も変わらない。
   - 併せて `git clean` の閉じ込め判定は `-C` / `--work-tree` が示すディレクトリを基準にする
     （以前はセッションの cwd で判定していた）。綴りが解決できない場合は従来の基準のまま。

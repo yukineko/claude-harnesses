@@ -970,7 +970,7 @@ fn analyze_git_words(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decisio
     // User ruling 2026-11-07: discarding working-tree changes of a linked
     // worktree checkout under a worktree storage root (a managed disposable
     // place) is Allow. Consulted only by the working-tree-discard arms below;
-    // the object-store rule right after this, `stash clear/drop` and every
+    // the object-store rule right after this, `stash clear` and every
     // protected-path check are unaffected. See `managed_worktree_git`.
     let managed = managed_worktree_git(ctx, rest, idx);
     // Object-store destruction, checked before the per-subcommand arms below.
@@ -1248,12 +1248,16 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
             }
         }
         "stash" => {
-            // `git stash clear` drops every stash entry and `git stash drop`
-            // drops one — both irreversibly delete stashed work, the same
-            // hazard class as the working-tree-discard forms above. Every
-            // other subcommand (list/show/push/save/pop/apply/branch and the
-            // bare `git stash` push) is non-destructive, so only the two
-            // discard forms are denied. The stash subcommand is the first
+            // `git stash clear` drops EVERY stash entry. `refs/stash` is shared
+            // by every worktree of the repository, so it irreversibly deletes
+            // other sessions' stashed work too — denied.
+            //
+            // `git stash drop [<stash>]` drops ONE entry and is Allow: user
+            // ruling 2026-11-08, "stashは自分で消していいとしたい" narrowed to
+            // "drop のみ Allow". Every other subcommand
+            // (list/show/push/save/pop/apply/branch and the bare `git stash`
+            // push) is non-destructive, apart from the untracked-sweep flags
+            // judged below. The stash subcommand is the first
             // non-flag token *after* the resolved `stash` token (`idx`) — not a
             // fresh naive scan, which under a global prefix would land on the
             // prefix value (`git -C DIR stash clear`).
@@ -1262,8 +1266,11 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
                 .find(|t| !t.starts_with('-'))
                 .map(|t| normalized_command(t))
                 .unwrap_or_default();
-            if subcmd == "clear" || subcmd == "drop" {
-                return Decision::deny("git stash clear/drop irreversibly deletes stashed changes");
+            if subcmd == "clear" {
+                return Decision::deny(
+                    "git stash clear irreversibly deletes every stash entry, and refs/stash is \
+shared by all worktrees (other sessions' stashes too)",
+                );
             }
             // Round 2: the scan above is `.find(|t| !t.starts_with('-'))`, so it
             // SKIPS every flag — and the flags are where the destruction is.

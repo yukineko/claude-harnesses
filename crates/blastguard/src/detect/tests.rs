@@ -190,13 +190,13 @@ fn ca_blastguard_07_git_global_option_prefix_still_fires_deny() {
 
 #[test]
 fn ca_blastguard_06_git_stash_discard_is_denied() {
-    // CA-blastguard-06: `git stash clear` drops every stash entry and
-    // `git stash drop` drops one — both irreversibly delete stashed work,
-    // the same hazard class as the already-denied working-tree-discard
-    // forms. analyze_git used to fall through to Allow for `stash`.
+    // CA-blastguard-06: `git stash clear` drops every entry of the refs/stash
+    // shared by all worktrees, so it stays denied (analyze_git once allowed it).
     assert!(bash("git stash clear").is_deny());
-    assert!(bash("git stash drop").is_deny());
-    assert!(bash("git stash drop stash@{2}").is_deny());
+    // test-weakening-justified: user ruling 2026-11-08 "drop のみ Allow" makes
+    // `git stash drop [<stash>]` Allow by contract; the pin flips, not removed.
+    assert_eq!(bash("git stash drop"), Decision::Allow);
+    assert_eq!(bash("git stash drop stash@{2}"), Decision::Allow);
     // Non-destructive stash subcommands (and the bare `git stash` push)
     // must stay allowed — the fix must not over-broaden.
     assert_eq!(bash("git stash"), Decision::Allow);

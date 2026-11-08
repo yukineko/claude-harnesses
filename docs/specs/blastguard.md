@@ -93,7 +93,9 @@ forge・condukt のスケジューラが再利用）。
   （main checkout は `.git` ディレクトリなので `Known(false)`）・root 以下に symlink が無い、を**全て観測した**
   ときだけ返る。probe 失敗・refusal・symlink・置けない綴りは `Undetermined` で、呼び出し側は
   `Known(false)` と同じく**元の verdict を保持**する（Allow へ倒さない）。main の作業ツリー・`.git` 内部・
-  保護パス・`git stash drop/clear`（全 worktree で共有）は対象外のまま。
+  保護パス・`git stash clear`（`refs/stash` は全 worktree で共有され、clear は他セッションの stash も
+  全部消す）は対象外のまま deny。`git stash drop [<stash>]` は 2026-11-08 のユーザー裁定
+  （「drop のみ Allow」）で場所を問わず allow（`detect/git.rs` の `stash` arm）。
 - **`core.hooksPath` の付け替えは Deny（`detect/git.rs` の `config` arm、`HOOKSPATH_REASON`）** —
   `git config` の引数に `core.hooksPath` が現れ、git の argv 文法で read と判定できるときだけ allow する
   （`config_argv_is_read`）。read は (1) read-mode flag（`--get`・`--get-all`・`--get-regexp`・`--get-urlmatch`・

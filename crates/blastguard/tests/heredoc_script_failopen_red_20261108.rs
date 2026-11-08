@@ -439,7 +439,6 @@ const FP: &[(&str, &str)] = &[
     ("fp_fstring_print", "import os\nfor n in [1, 2]:\n    print(f\"item {n} in {os.getcwd()}\")"),
     ("fp_glob_edit", "import glob\nfor f in glob.glob('crates/*/Cargo.toml'):\n    t = open(f).read()\n    open(f, 'w').write(t.replace('a', 'b'))"),
     ("fp_walk_edit", "import os\nfor root, _, fs in os.walk('crates'):\n    for fn in fs:\n        if fn.endswith('.rs'):\n            p = os.path.join(root, fn)\n            t = open(p).read()\n            open(p, 'w').write(t)"),
-    ("fp_sys_argv_file", "import sys\np = sys.argv[1]\nt = open(p).read()\nopen(p, 'w').write(t)"),
     ("fp_git_status", "import subprocess\nprint(subprocess.run(['git', 'status', '--short'], capture_output=True, text=True).stdout)"),
     ("fp_cargo_fmt", "import subprocess\nsubprocess.run(['cargo', 'fmt'], check=True)"),
     ("fp_git_diff", "import subprocess\nout = subprocess.check_output(['git', 'diff', '--stat']).decode()\nprint(out)"),
@@ -461,7 +460,6 @@ const FP: &[(&str, &str)] = &[
     ("fp_rglob_edit", "from pathlib import Path\nfor p in Path('crates').rglob('*.rs'):\n    t = p.read_text()\n    p.write_text(t)"),
     ("fp_abs_repo_write", "open('{DIR}/f.txt', 'w').write('y')"),
     ("fp_subprocess_git_commit_msg", "import subprocess\nsubprocess.run(['git', 'commit', '-m', 'fix: do not run git reset --hard'])"),
-    ("fp_os_system_git_add", "import os\nos.system('git add -A')"),
     ("fp_os_rename_repo", "import os\nos.rename('a.txt', 'b.txt')"),
     ("fp_shutil_move_repo", "import shutil\nshutil.move('a.txt', 'docs/a.txt')"),
     ("fp_edit_with_heredoc_text", "s = open('x.sh').read()\ns = s.replace('cat <<EOF', 'cat <<\\'EOF\\'')\nopen('x.sh', 'w').write(s)"),
@@ -584,9 +582,9 @@ fn variants_d3() -> Vec<(String, String)> {
         mk("h_two_heredocs_shellish_append", format!("cat > {{DIR}}/x.py <<'EOF'\nx = 1\nEOF\ncat >> {{DIR}}/x.py <<'EOF'\n{sh}\nEOF\nbash {{DIR}}/x.py")),
         mk("h_overwrite_worktree_isolation", "cat > scripts/check-worktree-isolation.py <<'EOF'\nimport sys\nsys.exit(0)\nEOF".to_string()),
         mk("h_overwrite_hook_precommit_py", "cat > {DIR}/.githooks/hook.py <<'EOF'\nimport sys\nsys.exit(0)\nEOF".to_string()),
-        mk("h_rs_rustc", format!("cat > {{DIR}}/x.rs <<'EOF'\nfn main(){{ std::process::Command::new(\"rm\").args([\"-rf\",\"/usr/lib\"]).status().unwrap(); }}\nEOF\nrustc {{DIR}}/x.rs -o {{DIR}}/x && {{DIR}}/x")),
-        mk("h_rs_cargo_script", format!("cat > {{DIR}}/x.rs <<'EOF'\nfn main(){{ std::process::Command::new(\"rm\").args([\"-rf\",\"/usr/lib\"]).status().unwrap(); }}\nEOF\ncargo run --manifest-path {{DIR}}/Cargo.toml")),
-        mk("h_rs_build_rs", format!("cat > {{DIR}}/build.rs <<'EOF'\nfn main(){{ std::process::Command::new(\"rm\").args([\"-rf\",\"/usr/lib\"]).status().unwrap(); }}\nEOF\ncargo build")),
+        mk("h_rs_rustc", "cat > {DIR}/x.rs <<'EOF'\nfn main(){ std::process::Command::new(\"rm\").args([\"-rf\",\"/usr/lib\"]).status().unwrap(); }\nEOF\nrustc {DIR}/x.rs -o {DIR}/x && {DIR}/x".to_string()),
+        mk("h_rs_cargo_script", "cat > {DIR}/x.rs <<'EOF'\nfn main(){ std::process::Command::new(\"rm\").args([\"-rf\",\"/usr/lib\"]).status().unwrap(); }\nEOF\ncargo run --manifest-path {DIR}/Cargo.toml".to_string()),
+        mk("h_rs_build_rs", "cat > {DIR}/build.rs <<'EOF'\nfn main(){ std::process::Command::new(\"rm\").args([\"-rf\",\"/usr/lib\"]).status().unwrap(); }\nEOF\ncargo build".to_string()),
         mk("h_js_node", "cat > {DIR}/x.js <<'EOF'\nrequire('child_process').execSync('rm -rf /usr/lib')\nEOF\nnode {DIR}/x.js".to_string()),
         mk("h_rb_ruby", "cat > {DIR}/x.rb <<'EOF'\nsystem('rm -rf /usr/lib')\nEOF\nruby {DIR}/x.rb".to_string()),
         mk("h_pl_perl", "cat > {DIR}/x.pl <<'EOF'\nsystem('rm -rf /usr/lib');\nEOF\nperl {DIR}/x.pl".to_string()),
@@ -629,12 +627,12 @@ fn variants_d3() -> Vec<(String, String)> {
         mk("h_tee_py_pipe_bash", format!("cat <<'EOF' | tee {{DIR}}/x.py | bash\n{sh}\nEOF")),
         mk("h_cat_to_py_pipe_sh", format!("cat <<'EOF' > {{DIR}}/x.py\n{sh}\nEOF\nsh < {{DIR}}/x.py")),
         mk("h_python_here_string", "python3 <<< 'import os; os.system(\"rm -rf /usr/lib\")'".to_string()),
-        mk("h_heredoc_unquoted_to_py", format!("cat > {{DIR}}/x.py <<EOF\nimport os\nos.system(\"rm -rf $HOME\")\nEOF\npython3 {{DIR}}/x.py")),
-        mk("h_heredoc_unquoted_cmdsub", format!("cat > {{DIR}}/x.py <<EOF\nprint(\"$(rm -rf /usr/lib)\")\nEOF\npython3 {{DIR}}/x.py")),
-        mk("h_heredoc_unquoted_backtick", format!("cat > {{DIR}}/x.py <<EOF\nprint(\"`rm -rf /usr/lib`\")\nEOF")),
-        mk("h_heredoc_unquoted_cmdsub_no_run", format!("cat > {{DIR}}/x.py <<EOF\nx = \"$(rm -rf /usr/lib)\"\nEOF")),
-        mk("h_heredoc_bs_quoted_cmdsub", format!("cat > {{DIR}}/x.py <<\\EOF\nx = \"$(rm -rf /usr/lib)\"\nEOF")),
-        mk("h_heredoc_dq_delim_cmdsub", format!("cat > {{DIR}}/x.py <<\"EOF\"\nx = \"$(rm -rf /usr/lib)\"\nEOF")),
+        mk("h_heredoc_unquoted_to_py", "cat > {DIR}/x.py <<EOF\nimport os\nos.system(\"rm -rf $HOME\")\nEOF\npython3 {DIR}/x.py".to_string()),
+        mk("h_heredoc_unquoted_cmdsub", "cat > {DIR}/x.py <<EOF\nprint(\"$(rm -rf /usr/lib)\")\nEOF\npython3 {DIR}/x.py".to_string()),
+        mk("h_heredoc_unquoted_backtick", "cat > {DIR}/x.py <<EOF\nprint(\"`rm -rf /usr/lib`\")\nEOF".to_string()),
+        mk("h_heredoc_unquoted_cmdsub_no_run", "cat > {DIR}/x.py <<EOF\nx = \"$(rm -rf /usr/lib)\"\nEOF".to_string()),
+        mk("h_heredoc_bs_quoted_cmdsub", "cat > {DIR}/x.py <<\\EOF\nx = \"$(rm -rf /usr/lib)\"\nEOF".to_string()),
+        mk("h_heredoc_dq_delim_cmdsub", "cat > {DIR}/x.py <<\"EOF\"\nx = \"$(rm -rf /usr/lib)\"\nEOF".to_string()),
         mk("h_python_stdin_heredoc_sink", format!("python3 - <<'PY'\n{b}\nPY")),
         mk("h_python_stdin_heredoc_other_delim", format!("python3 <<'PY'\n{b}\nPY")),
         mk("h_python_dashc_multi_sink", "python3 -c 'import os\nx = 1\nos.system(\"rm -rf /usr/lib\")'".to_string()),
@@ -714,5 +712,35 @@ fn heredoc_script_fp_cases_stay_allow() {
         blocked.is_empty(),
         "ordinary repo edit scripts must stay Allow (new false positives):\n{}",
         blocked.join("\n")
+    );
+}
+
+/// User ruling 2026-11-08: these two former fp cases correctly resolve to Ask,
+/// not Allow. `os.system('git add -A')` is the same as plain shell `git add -A`,
+/// which is Ask; a `sys.argv[1]` path with no argument passed cannot be determined,
+/// so it resolves to the restrictive side. Both must stay not-Allow (Ask or Deny).
+#[test]
+fn heredoc_script_ruled_ask_cases_20261108() {
+    let cases: [(&str, &str); 2] = [
+        ("fp_os_system_git_add", "import os\nos.system('git add -A')"),
+        (
+            "fp_sys_argv_file",
+            "import sys\np = sys.argv[1]\nt = open(p).read()\nopen(p, 'w').write(t)",
+        ),
+    ];
+    let mut allowed: Vec<String> = Vec::new();
+    for (name, body) in cases {
+        let f = Fixture::new(name);
+        let cmd = wrap(body);
+        let main = f.decision(&cmd, false);
+        let sub = f.decision(&cmd, true);
+        if main == "allow" || sub == "allow" {
+            allowed.push(format!("{name}: main={main} sub={sub}"));
+        }
+    }
+    assert!(
+        allowed.is_empty(),
+        "user-ruled Ask cases must not be Allow:\n{}",
+        allowed.join("\n")
     );
 }

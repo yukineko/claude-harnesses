@@ -298,7 +298,17 @@ fn managed_worktree_git(ctx: &Ctx<'_>, rest: &[&str], idx: usize) -> bool {
 /// One pathspec of `git checkout [<tree-ish>] -- <pathspec>`: Allow only when
 /// git reports nothing at or below it that the overwrite would destroy; Deny
 /// when it reports uncommitted changes; Ask whenever that cannot be observed.
-fn checkout_pathspec_verdict(ctx: &Ctx<'_>, op: &str) -> Decision {
+///
+/// A path that does not exist on disk (the work-tree probe cannot examine it)
+/// has no working-tree bytes to destroy; it is Allow when the absent-path
+/// probe ([`crate::reversible::probe_absent_path`]) observes that nothing at
+/// or below it is staged differently from HEAD, Deny when something is, and
+/// Ask otherwise. That Allow is withheld (Ask) when `op` starts with `:`
+/// (pathspec magic such as `:/x` names a different path than the literal one
+/// probed) or when `pathspec_globals` (a `--*-pathspecs` global option, e.g.
+/// `--icase-pathspecs`, which can match an existing file by another
+/// spelling).
+fn checkout_pathspec_verdict(ctx: &Ctx<'_>, op: &str, pathspec_globals: bool) -> Decision {
     let undetermined = |why: &str| {
         Decision::ask(format!(
             "git checkout -- `{op}` overwrites the file from git and would destroy any \
@@ -317,7 +327,26 @@ uncommitted changes in it, and blastguard cannot tell whether it has any ({why})
     };
     let facts = match probe(&real, &crate::deletion::build_candidates(&real)) {
         Determination::Known(f) => f,
-        Determination::Undetermined(_) => return undetermined("git could not be asked"),
+        Determination::Undetermined(_) => {
+            if op.starts_with(':') || pathspec_globals {
+                return undetermined("git could not be asked");
+            }
+            let Some(absent) = ctx.scope.git_absent_probe() else {
+                return undetermined("git could not be asked");
+            };
+            return match absent(&real) {
+                Determination::Known(crate::reversible::AbsentPathIndex::MatchesHead) => {
+                    Decision::Allow
+                }
+                Determination::Known(crate::reversible::AbsentPathIndex::DiffersFromHead) => {
+                    Decision::deny(format!(
+                        "git checkout -- `{op}` would overwrite a staged version that differs \
+from HEAD. Commit or stash it first."
+                    ))
+                }
+                Determination::Undetermined(_) => undetermined("git could not be asked"),
+            };
+        }
     };
     if facts.hidden_index_state {
         return undetermined("an index entry is assume-unchanged / skip-worktree / unmerged");
@@ -1140,6 +1169,7 @@ directory",
                         .any(|f| t == f || t.starts_with(&format!("{f}=")))
                         || (t.starts_with("-C") && t.len() > 2)
                 });
+                let pathspec_globals = rest[..idx].iter().any(|t| t.ends_with("-pathspecs"));
                 let mut acc = VerdictAcc::default();
                 for op in &rest[pos + 1..] {
                     let v = if moved_base {
@@ -1148,7 +1178,7 @@ directory",
 option, so blastguard cannot tell whether the file has uncommitted changes it would discard"
                         ))
                     } else {
-                        checkout_pathspec_verdict(ctx, op)
+                        checkout_pathspec_verdict(ctx, op, pathspec_globals)
                     };
                     if let Some(deny) = acc.record(v) {
                         return deny;

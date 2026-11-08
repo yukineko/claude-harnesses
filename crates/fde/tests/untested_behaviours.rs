@@ -208,13 +208,19 @@ fn stdin_over_the_size_cap_is_denied_even_with_nothing_registered() {
 
 // --------------------------------------- (3) `git worktree list` failure
 
-/// C4-3: when `git worktree list` fails for a guarded target, a call outside
-/// its root cannot be placed: Undetermined (deny), reason about the work
-/// trees. The probe is made to fail by corrupting `.git/HEAD` (the root still
-/// exists; deletion is item C3). Partner: the same Edit before corruption is
-/// allowed.
+/// C4-3, INVERTED (user ruling 2026-11-08: gates judge own worktree only —
+/// "donegateそのものが他のworktreeを見たり検証したりテストしたりすることは禁止と
+/// する"). Was `worktree_probe_failure_denies_calls_outside_the_root`: when
+/// `git worktree list` failed for a guarded target, a call outside its root was
+/// Undetermined (deny, reason about the work trees). The gate no longer runs
+/// `git worktree list` at all, so corrupting `.git/HEAD` (the old way of making
+/// that probe fail; fixture check below still confirms the probe WOULD fail)
+/// cannot deny a call outside the root: it stays allowed, and no reason mentions
+/// work trees. (c) Anti-vacuity in the same fixture: a call INSIDE the root is
+/// still denied while unratified, and a call outside is allowed before the
+/// corruption too.
 #[test]
-fn worktree_probe_failure_denies_calls_outside_the_root() {
+fn worktree_probe_failure_no_longer_denies_calls_outside_the_root() {
     let e = unratified();
     let elsewhere = TempPlace::new("fde-c4-elsewhere-");
     let file = s(&elsewhere.path.join("unrelated.txt"));
@@ -236,14 +242,23 @@ fn worktree_probe_failure_denies_calls_outside_the_root() {
     );
 
     let out = gate(&e, &p);
-    assert_denied(
+    assert_allowed(
         &out,
-        "Edit outside the target while its work trees cannot be listed",
+        "Edit outside the target while `git worktree list` would fail (no longer probed)",
     );
-    let r = reason(&out);
     assert!(
-        r.contains("work trees") && r.contains("undetermined"),
-        "reason must say the work trees cannot be listed (undetermined): {}",
+        !String::from_utf8_lossy(&out.stdout).contains("work trees"),
+        "no work-tree reason may appear: {}",
+        show(&out)
+    );
+
+    // (c) the registered root is still judged with the corrupted repo.
+    let inside = s(&e.root().join("README.md"));
+    let out = gate(&e, &edit(e.root(), &inside));
+    assert_denied(&out, "Edit inside the unratified root");
+    assert!(
+        !reason(&out).contains("work trees"),
+        "the inside-root deny must not be a work-tree probe failure: {}",
         show(&out)
     );
 }

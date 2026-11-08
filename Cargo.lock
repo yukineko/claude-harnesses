@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "donegate"
-version = "0.1.90"
+version = "0.1.93"
 dependencies = [
  "anyhow",
  "chrono",

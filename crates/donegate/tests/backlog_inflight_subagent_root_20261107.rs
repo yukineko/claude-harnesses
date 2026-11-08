@@ -26,12 +26,21 @@
 //! agentId}`, the sidechain's `agent-<id>.meta.json` carries the `toolUseId`,
 //! and no `<task-notification>` for that agent has arrived yet.
 //!
-//! Desired: such a root is not judged at the parent's Stop (it is judged at
-//! the owner's SubagentStop); not silently — the root is named in the output.
-//! Fail-closed controls (pass today, must keep passing): when liveness cannot be
-//! determined, or the parent itself also wrote into the root, it still blocks.
+//! Desired (2026-11-07): such a root is not judged at the parent's Stop (it is
+//! judged at the owner's SubagentStop); not silently — the root is named in
+//! the output. Fail-closed controls: when liveness cannot be determined, or
+//! the parent itself also wrote into the root, it still blocks.
+//!
+//! SUPERSEDED by user rulings 2026-11-08, verbatim: "donegateのworktreeテストは
+//! 問題ありすぎるので即時に停止" and "donegateそのものが他のworktreeを見たり検証
+//! したりテストしたりすることは禁止とする". donegate judges only the hook cwd; it
+//! never runs, blocks on or names another worktree, so the deferral (and its
+//! liveness / ownership controls) no longer exists. The three parent-Stop
+//! tests are re-scoped to that contract; the SubagentStop registration test is
+//! unchanged.
 //!
 //! Written by a disinterested author (CLAUDE.md section 2(a)): no fix exists.
+//! Re-scoped 2026-11-08 by the implementer of the ruling (not disinterested).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -120,7 +129,7 @@ impl Fixture {
         std::fs::write(
             wt.join("donegate.toml"),
             "max_attempts = 50\n\n[[check]]\nname = \"wt-check\"\n\
-             cmd = \"echo 'mid-edit tree is red'; exit 1\"\n",
+             cmd = \"echo ran > wt-check-ran.txt; echo 'mid-edit tree is red'; exit 1\"\n",
         )
         .unwrap();
         std::fs::write(wt.join("mid_edit.rs"), "fn half_done() {}\n").unwrap();
@@ -255,29 +264,43 @@ impl Drop for Fixture {
     }
 }
 
-/// THE BUG. Only the in-flight background subagent wrote into the worktree;
-/// the parent's Stop must not block on that worktree's mid-edit state, and
-/// must say (not silently skip) that the root was left to its owner.
+/// The contract every parent-Stop test below now pins, under user rulings
+/// 2026-11-08 ("donegateのworktreeテストは問題ありすぎるので即時に停止";
+/// "donegateそのものが他のworktreeを見たり検証したりテストしたりすることは禁止とする"):
+/// the parent's Stop at cwd = primary never runs the worktree's red check,
+/// never blocks on it, and never names it — whoever wrote it and whether or
+/// not its writer is still running.
+fn assert_worktree_not_judged(f: &Fixture, o: &Outcome) {
+    assert_ne!(
+        o.decision, "block",
+        "the parent's Stop blocked on another worktree. stdout={:?} stderr={:?}",
+        o.stdout, o.stderr
+    );
+    assert!(
+        !f.wt.join("wt-check-ran.txt").exists(),
+        "the other worktree's check ran. stdout={:?} stderr={:?}",
+        o.stdout,
+        o.stderr
+    );
+    let wt = f.wt.display().to_string();
+    assert!(
+        !o.stdout.contains(&wt) && !o.stderr.contains(&wt),
+        "donegate must not report on another worktree ({wt}). stdout={:?} stderr={:?}",
+        o.stdout,
+        o.stderr
+    );
+}
+
+/// Re-scoped by user rulings 2026-11-08 (see [`assert_worktree_not_judged`]).
+/// Was: the in-flight subagent's root is deferred AND named in the output.
+/// Now: it is not judged and not named.
 #[test]
 fn parent_stop_does_not_judge_a_root_only_an_inflight_subagent_wrote() {
     let f = Fixture::new();
     let tp = f.parent_transcript(true, false);
     f.sidechain(true);
     let o = f.stop(&tp);
-    assert_ne!(
-        o.decision, "block",
-        "the parent's Stop blocked on a root that only a still-running background subagent \
-         wrote (its mid-edit state). stdout={:?} stderr={:?}",
-        o.stdout, o.stderr
-    );
-    let wt = f.wt.display().to_string();
-    assert!(
-        o.stdout.contains(&wt) || o.stderr.contains(&wt),
-        "not judging the root must not be silent: the output must name {wt}. stdout={:?} \
-         stderr={:?}",
-        o.stdout,
-        o.stderr
-    );
+    assert_worktree_not_judged(&f, &o);
 }
 
 /// The other half: the root must be judged at its owner's stop, which needs a
@@ -299,34 +322,27 @@ fn donegate_registers_a_subagent_stop_hook() {
     );
 }
 
-/// FAIL-CLOSED CONTROL (passes today, must keep passing): the sidechain has no
-/// meta.json and the parent has no launch record, so neither ownership nor
-/// liveness of the writer can be determined — the parent's Stop keeps blocking.
+/// Re-scoped by user rulings 2026-11-08 (see [`assert_worktree_not_judged`]).
+/// Was `control_undetermined_liveness_still_blocks`: liveness unknown kept the
+/// other worktree judged and blocking. Liveness is no longer consulted at all.
 #[test]
-fn control_undetermined_liveness_still_blocks() {
+fn undetermined_liveness_does_not_judge_another_worktree() {
     let f = Fixture::new();
     let tp = f.parent_transcript(false, false);
     f.sidechain(false);
     let o = f.stop(&tp);
-    assert_eq!(
-        o.decision, "block",
-        "liveness undeterminable: must keep blocking. stdout={:?} stderr={:?}",
-        o.stdout, o.stderr
-    );
+    assert_worktree_not_judged(&f, &o);
 }
 
-/// FAIL-CLOSED CONTROL (passes today, must keep passing): the parent itself
-/// also wrote into the root, so the parent is an owner — it still blocks even
-/// though a subagent is in flight there too.
+/// Re-scoped by user rulings 2026-11-08 (see [`assert_worktree_not_judged`]).
+/// Was `control_parent_also_wrote_the_root_still_blocks`: a worktree the
+/// parent wrote itself was judged and blocked. Now the parent writing it does
+/// not make donegate look at it either.
 #[test]
-fn control_parent_also_wrote_the_root_still_blocks() {
+fn parent_also_wrote_another_worktree_still_not_judged() {
     let f = Fixture::new();
     let tp = f.parent_transcript(true, true);
     f.sidechain(true);
     let o = f.stop(&tp);
-    assert_eq!(
-        o.decision, "block",
-        "the parent wrote into the root itself: must keep blocking. stdout={:?} stderr={:?}",
-        o.stdout, o.stderr
-    );
+    assert_worktree_not_judged(&f, &o);
 }

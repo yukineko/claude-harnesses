@@ -248,6 +248,7 @@ run check-clippy-lints.py     clippy-lints
 run check-backlog-store.py    backlog-store
 run check-projkey-store-classification.py projkey-classification
 run check-file-growth.py      file-growth
+run check-scoped-spawn-unwind.py scoped-spawn-unwind
 
 # main-tree-guard — CLAUDE.md §8, the one gate here that is Rust rather than
 # python3, because its decision is a tri-state over injectable inputs and is

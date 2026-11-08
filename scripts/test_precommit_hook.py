@@ -69,6 +69,7 @@ EXPECTED_SCANNERS = [
     "check-backlog-store.py",
     "check-projkey-store-classification.py",
     "check-file-growth.py",
+    "check-scoped-spawn-unwind.py",
 ]
 
 # Label the hook prints for each scanner, used to check the message names the
@@ -92,6 +93,7 @@ LABELS = {
     "check-backlog-store.py": "backlog-store",
     "check-projkey-store-classification.py": "projkey-classification",
     "check-file-growth.py": "file-growth",
+    "check-scoped-spawn-unwind.py": "scoped-spawn-unwind",
 }
 
 _STUB = """#!/usr/bin/env python3

@@ -323,6 +323,20 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
+    // The chosen config file exists but could not be read / does not parse:
+    // its settings are unknown, and judging by the defaults would silently drop
+    // whatever it declared. Cannot determine → block (CLAUDE.md §3).
+    if let Some((p, err)) = &cfg.invalid_config {
+        log_event(&cfg, &session, "config-invalid", 0);
+        let reason = config::invalid_reason(p, err);
+        if interactive {
+            eprintln!("{reason}");
+            std::process::exit(1);
+        }
+        harness_core::repeat::emit_stop_block("tdd", &reason);
+        std::process::exit(0);
+    }
+
     // Scoped to what this session wrote (the Stop payload's transcript); an
     // undetermined attribution scans the whole checkout. The note is printed
     // on every run, allowing ones included, so an exclusion is never silent.
@@ -432,6 +446,12 @@ fn proof_command(
         eprintln!("{}", config::untrusted_reason(p));
         std::process::exit(1);
     }
+    // An unreadable / unparseable config: its `test_cmd` and
+    // `strict_separation` are unknown, so a proof would be of unknown rules.
+    if let Some((p, err)) = &cfg.invalid_config {
+        eprintln!("{}", config::invalid_reason(p, err));
+        std::process::exit(1);
+    }
     // Resolve the effective strict_separation before `green` consumes it:
     // explicit CLI/config > gate-crate-context default-on > global default-off.
     // (`red` records the RED author but never checks separation, so this only
@@ -451,9 +471,27 @@ fn proof_command(
     }
 }
 
+/// Exit `code` with the refusal when the config could not be honored: an
+/// untrusted project `tdd.toml`, or a chosen config file that cannot be read /
+/// parsed. Its `proof_dir` is then unknown, so reading proofs from the default
+/// `.tdd` would answer about a directory the config may not name (CLAUDE.md §3).
+fn refuse_on_unhonored_config(cfg: &Config, code: i32) {
+    if let Some(p) = &cfg.untrusted_project {
+        eprintln!("{}", config::untrusted_reason(p));
+        std::process::exit(code);
+    }
+    if let Some((p, err)) = &cfg.invalid_config {
+        eprintln!("{}", config::invalid_reason(p, err));
+        std::process::exit(code);
+    }
+}
+
+/// `tdd verify`: exit 0 only when both proofs exist; exit 1 when one is
+/// missing or the config could not be honored ([`refuse_on_unhonored_config`]).
 fn verify_command(task: &str) -> ! {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
+    refuse_on_unhonored_config(&cfg, 1);
     if proof::verify(&root, &cfg, task) {
         println!("✓ tdd: `{task}` has both RED and GREEN proofs (test-first verified)");
         std::process::exit(0);
@@ -473,10 +511,13 @@ fn verify_command(task: &str) -> ! {
 /// Fail→Pass whose RED and GREEN proofs were not recorded with the same test
 /// command yields `transition="command_mismatch"`, exit 1 (see
 /// `transition::oracle_report_same_cmd`). Exit 0 only for a valid Fail→Pass
-/// oracle of one and the same command.
+/// oracle of one and the same command. A config that could not be honored
+/// (untrusted project `tdd.toml`, unreadable / unparseable config) is
+/// "cannot determine": the refusal on stderr, no JSON, exit 2.
 fn oracle_command(task: &str) -> ! {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
+    refuse_on_unhonored_config(&cfg, 2);
     let pre = proof::read_passed(&root, &cfg, task, "red");
     let post = proof::read_passed(&root, &cfg, task, "green");
     let red_cmd = proof::read_cmd(&root, &cfg, task, "red");
@@ -551,6 +592,14 @@ fn status() {
             p.display()
         ),
         None => println!("config:        {}", src.display()),
+    }
+    if let Some((p, err)) = &cfg.invalid_config {
+        println!(
+            "config:        {} could not be read or does not parse ({}) — none of its settings \
+             are applied; stops are BLOCKED until it is fixed. Values below are the defaults.",
+            p.display(),
+            err.trim_end()
+        );
     }
     println!("enabled:       {}", cfg.enabled);
     println!("max_attempts:  {}", cfg.max_attempts);

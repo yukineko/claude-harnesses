@@ -73,10 +73,15 @@ fn allowlisted_bash_script_with_red_rev_closes_and_records_closure() {
         "green.output_digest: {c}"
     );
     assert!(g["excerpt"].as_str().is_some(), "green.excerpt: {c}");
+    // RE-SCOPED (user ruling 2026-11-08: 「backlog doneのRED実行はそもそも全面
+    // 廃止でいい」): RED is no longer executed, so there is no observed
+    // `red.exit` / `kind = "behavioural"` to assert. The record must instead
+    // carry the claimed rev and say it was NOT executed.
     let r = &c["red"];
     assert_eq!(r["rev"], red.as_str(), "red.rev: {c}");
-    assert_ne!(r["exit"], 0, "red.exit must be non-zero: {c}");
-    assert_eq!(r["kind"], "behavioural", "red.kind: {c}");
+    assert_eq!(r["executed"], false, "red.executed must be false: {c}");
+    assert!(r.get("exit").is_none(), "no observed red.exit: {c}");
+    assert_eq!(r["kind"], "not-executed", "red.kind: {c}");
 }
 
 #[test]
@@ -305,17 +310,29 @@ fn already_fixed_with_red_rev_is_accepted_and_recorded() {
     assert_eq!(f.row(&id)["closure"]["reason"], "already-fixed");
 }
 
+/// RE-SCOPED (user ruling 2026-11-08: 「backlog doneのRED実行はそもそも全面廃止
+/// でいい」). This used to assert that a test passing at `--red-rev` is
+/// refused as "not RED". The RED run is abolished, so the test is never run at
+/// `--red-rev` and the close is accepted on GREEN at HEAD, with the rev
+/// recorded as not executed.
 #[test]
-fn red_rev_where_test_already_passes_is_refused() {
+fn red_rev_where_test_already_passes_is_accepted_red_not_executed() {
     let f = Fixture::new("notred");
     let (_, head) = f.bug_then_fix();
     let id = f.add("t");
     let o = fix_done(&f, &id, &head);
-    assert_refused_unchanged(&f, &id, "pending", &o, "test passing at red-rev is not RED");
+    assert_eq!(o.code, 0, "RED is not run any more: {}", o.both());
+    assert_eq!(f.status(&id), "done");
+    assert_eq!(f.row(&id)["closure"]["red"]["executed"], false);
 }
 
+/// RE-SCOPED (user ruling 2026-11-08: 「backlog doneのRED実行はそもそも全面廃止
+/// でいい」). This used to assert that a RED failing at BUILD time is refused.
+/// Nothing is built or run at `--red-rev` any more, so a rev at which the
+/// test would not even build is accepted as a claim (GREEN at HEAD decides),
+/// and the closure must not record a behavioural RED.
 #[test]
-fn build_failure_red_is_not_accepted() {
+fn build_failure_at_red_rev_is_not_observed_and_not_recorded_as_red() {
     let f = Fixture::new("buildred");
     f.write("marker", "nobuild");
     let a = f.commit_paths(&["marker"], "pre-feature: api absent");
@@ -323,22 +340,18 @@ fn build_failure_red_is_not_accepted() {
     f.commit_paths(&["marker"], "feature lands");
     let id = f.add("feature");
     let o = f.run(&["done", &id, "--test", "cargo test -p x", "--red-rev", &a]);
-    assert_refused_unchanged(
-        &f,
-        &id,
-        "pending",
-        &o,
-        "RED that fails at BUILD is not behavioural",
-    );
-    let m = o.both().to_lowercase();
-    assert!(
-        m.contains("build") || m.contains("compile") || m.contains("ruling"),
-        "refusal must name the build-failure cause / ruling route: {m}"
-    );
+    assert_eq!(o.code, 0, "{}", o.both());
+    let r = f.row(&id)["closure"]["red"].clone();
+    assert_eq!(r["kind"], "not-executed", "{r}");
+    assert_eq!(r["executed"], false, "{r}");
+    assert!(r.get("exit").is_none(), "{r}");
 }
 
+/// RE-SCOPED (user ruling 2026-11-08: 「backlog doneのRED実行はそもそも全面廃止
+/// でいい」): the fake-cargo close is still accepted on GREEN at HEAD, but its
+/// red is recorded as `not-executed`, no longer as an observed `behavioural`.
 #[test]
-fn behavioural_red_under_fake_cargo_is_accepted() {
+fn fake_cargo_close_is_accepted_and_red_is_recorded_not_executed() {
     let f = Fixture::new("behavred");
     f.write("marker", "broken");
     let a = f.commit_paths(&["marker"], "buggy");
@@ -347,7 +360,7 @@ fn behavioural_red_under_fake_cargo_is_accepted() {
     let id = f.add("t");
     let o = f.run(&["done", &id, "--test", "cargo test -p x", "--red-rev", &a]);
     assert_eq!(o.code, 0, "{}", o.both());
-    assert_eq!(f.row(&id)["closure"]["red"]["kind"], "behavioural");
+    assert_eq!(f.row(&id)["closure"]["red"]["kind"], "not-executed");
 }
 
 #[test]
@@ -367,6 +380,8 @@ fn red_rev_must_be_an_ancestor_of_head() {
     assert_refused_unchanged(&f, &id, "pending", &o, "garbage red-rev");
 }
 
+/// Since user ruling 2026-11-08 (RED run abolished) `done` creates no temp
+/// worktree at all; this keeps pinning that the worktree list is unchanged.
 #[test]
 fn red_run_leaves_no_temp_worktree_behind() {
     let f = Fixture::new("wtclean");
@@ -519,7 +534,9 @@ fn duplicate_of_done_with_evidence_target_is_accepted() {
     );
 }
 
-// ---- RED overlay is scoped to the test the argv names ---------------------------
+// ---- fix in an unnamed test file (formerly: RED overlay scoping) -----------------
+// The RED overlay no longer exists (user ruling 2026-11-08); these keep
+// checking that such a close is accepted on GREEN at HEAD.
 
 /// rev A: tests/check.sh (named) sources tests/lib.sh; lib.sh fails at A.
 /// rev B: only lib.sh changes (the fix lives in a test file the argv does NOT name).
@@ -551,11 +568,16 @@ fn fix_living_in_an_unnamed_test_file_is_accepted() {
     assert_eq!(f.status(&id), "done");
 }
 
+/// RE-SCOPED (user ruling 2026-11-08: 「backlog doneのRED実行はそもそも全面廃止
+/// でいい」). This was the control that a test already passing at `--red-rev`
+/// is refused. With no RED run there is no overlay and nothing executes at
+/// `--red-rev`, so the close is accepted and the red is recorded not executed.
 #[test]
-fn control_test_already_passing_at_red_rev_is_still_refused_with_unnamed_files() {
+fn test_already_passing_at_red_rev_with_unnamed_files_is_accepted_red_not_executed() {
     let f = Fixture::new("unnamedctl");
     let (red, _) = fix_in_unnamed_test_file(&f, "true\n");
     let id = f.add("t");
     let o = fix_done(&f, &id, &red);
-    assert_refused_unchanged(&f, &id, "pending", &o, "passes at red-rev: not RED");
+    assert_eq!(o.code, 0, "{}", o.both());
+    assert_eq!(f.row(&id)["closure"]["red"]["executed"], false);
 }

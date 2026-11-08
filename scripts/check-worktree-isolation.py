@@ -33,10 +33,9 @@ A merge commit is the ALLOWED operation on main, and it is recognised two ways:
      "no merge in progress" apart from "a merge in progress whose marker has
      not become visible yet".
   2. The invocation context declaring it, corroborated by git's own record —
-     see `declared_merge_integration` below. This is the same fix already
-     applied to the Rust main-tree guard
-     (`crates/condukt/src/maintree.rs::declared_integration`, exercised by
-     `crates/condukt/tests/main_tree_guard_merge.rs`) for the same class of
+     see `declared_merge_integration` below. This is the same fix that was
+     applied to the Rust main-tree guard (`condukt guard main-tree`, removed
+     by user ruling 2026-11-08) for the same class of
      gap: git does not always write `MERGE_HEAD` for a merge that is
      proceeding (a `--no-ff` merge that succeeds never writes it at all), so
      the on-disk marker alone is insufficient on more than one path. This
@@ -93,14 +92,13 @@ MERGE_HEAD_RETRY_ATTEMPTS = 5
 MERGE_HEAD_RETRY_DELAY_S = 0.1
 
 # Set by `.githooks/pre-merge-commit` before it `exec`s `pre-commit`, naming the
-# hook git actually invoked. Mirrors crates/condukt/src/maintree.rs::HOOK_ENV.
+# hook git actually invoked.
 HOOK_ENV = "CONDUKT_GIT_HOOK"
 
 # git's own record of the operation it is performing. Measured (this script's
-# test suite, EnvSignalMeasuredFromARealMerge, and
-# crates/condukt/tests/main_tree_guard_merge.rs): git sets this to `merge <ref>`
+# test suite, EnvSignalMeasuredFromARealMerge): git sets this to `merge <ref>`
 # while running pre-merge-commit, and leaves it unset for an ordinary `git
-# commit`. Mirrors crates/condukt/src/maintree.rs::REFLOG_ACTION_ENV.
+# commit`.
 REFLOG_ACTION_ENV = "GIT_REFLOG_ACTION"
 
 
@@ -111,9 +109,7 @@ def declared_merge_integration(env: dict[str, str]) -> bool:
     via `HOOK_ENV`, AND git's own `REFLOG_ACTION_ENV` corroborates it. The
     second half is written by git, not the caller, so exporting `HOOK_ENV` by
     hand on an ordinary commit does not exclude it — `REFLOG_ACTION_ENV` stays
-    unset in that case. See the module docstring and
-    crates/condukt/src/maintree.rs::declared_integration, whose contract this
-    mirrors for the python gate.
+    unset in that case. See the module docstring.
     """
     hook = env.get(HOOK_ENV)
     if hook is None or hook.strip() != "pre-merge-commit":

@@ -377,10 +377,9 @@ mod tests {
     // sections, exit 0, as a store that had never been written.
     //
     // `(none)` in the Sessions section is the claim "no other session is live" —
-    // the fact CLAUDE.md §8 tells every session NOT to assume, and the liveness
-    // input condukt's main-tree guard reads before permitting a commit in main's
-    // shared working tree (`condukt/src/maintree.rs`, which documents this very
-    // flattening as "a real residual hole, not a safe degradation").
+    // the fact CLAUDE.md §8 tells every session NOT to assume. (condukt's
+    // main-tree guard, removed by user ruling 2026-11-08, once read it as a
+    // commit-time liveness input.)
 
     #[test]
     fn undetermined_sessions_render_unknown_not_none() {

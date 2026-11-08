@@ -81,7 +81,6 @@ users — the work runs inside Claude Code via two skills (`/condukt`,
 | `condukt statusline` | one-line run progress for the `statusLine` setting. |
 | `condukt status [--all]` | show open runs and their tasks as an ASCII tree (`--all` includes closed runs). |
 | `condukt repo commit --message <m> --path <p>...` | stage the named paths and commit them in the checkout you run it from (never the main tree), holding the repo-scoped primary lock across the read-modify-write. |
-| `condukt guard main-tree [--json]` | commit-time enforcement of CLAUDE.md §8, run from `.githooks/pre-commit`: refuses a commit from the shared primary working tree while another session is live. Exit 0 pass, 1 violation, 2 undetermined (blocks like a violation). Passes for linked worktrees, in-progress merges/rebases/cherry-picks/reverts, empty index, or no other live session. `CONDUKT_MAINTREE_OVERRIDE="<reason>"` (non-blank, echoed to stderr) bypasses it. |
 | `condukt run-policy decide/stats` | deterministic verify→docker→ship stage decision from a cheap-verify result, production divergence and change risk (`decide`, `--run` journals it); `stats --run` counts the journaled verdicts. Acting on the verdict stays the skill's job. |
 | `condukt sandbox run --cmd <c>` | run a worker's build/test command under docker sandboxing when `[worker] sandbox_enabled` / `CONDUKT_WORKER_SANDBOX` is set, otherwise unchanged on the host; prints the runtime verdict JSON with a `sandboxed` marker and always exits 0 (docker absent ⇒ `docker_unavailable`, never a host fallback of the container run). |
 | `condukt review-brief --run <id> --task <id> [--format md\|json]` | deterministic per-item reviewer digest from static persisted signals only (decomposition intent, blastguard sensitive-path classification, the overwatch violation ledger). |
@@ -235,7 +234,6 @@ parallel task touching one is demoted to serial with a warning.
 
 All config file keys can be overridden at runtime with environment variables.
 `CONDUKT_DISABLE` is a hook-only kill switch and has no config file equivalent.
-`CONDUKT_MAINTREE_OVERRIDE` only affects `guard main-tree`.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -243,7 +241,6 @@ All config file keys can be overridden at runtime with environment variables.
 | `CONDUKT_DEFAULT_BRANCH` | `main` | Branch completed work is merged back into. |
 | `CONDUKT_MAX_PARALLEL` | `4` | Advisory soft cap on concurrent workers. |
 | `CONDUKT_DISABLE` | _(unset)_ | Set to exactly `1` to make the `restore`, `statusline`, `editgate` and `subagent-stop` hooks no-op. Note this switches the edit-time compile gate OFF (edits are no longer checked). `session-heartbeat` ignores it. |
-| `CONDUKT_MAINTREE_OVERRIDE` | _(unset)_ | Non-blank reason that bypasses `guard main-tree` (echoed to stderr). |
 | `CONDUKT_CONSENSUS` | `false` | Set to `1`/`true` to enable multi-sample self-consistency fan-out (overrides `[consensus] enabled`). Opt-in cost guard; off by default. |
 | `CONDUKT_ADVERSARIAL` | `false` | Set to `1`/`true` to enable the adversarial refutation panel (overrides `[adversarial] enabled`). Opt-in cost guard; off by default. This switch (or `[adversarial] enabled`) is the only way to engage the panel; a GATE-crate-touching change does not force it. |
 | `CONDUKT_AUTONOMOUS` | `false` | Set to `1`/`true` to run autonomously (degrades human gates). Overrides BOTH config `autonomous` and the shared switch file, so a switch left on can always be forced off for one invocation. Read by `state autonomy-check`. |

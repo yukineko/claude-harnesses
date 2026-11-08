@@ -511,8 +511,8 @@ fn shell_source(cmd: &str, args: &[&str]) -> SourceOutput {
 /// once did — threw that distinction away and left `sessions` empty for BOTH,
 /// which renders as `(none)` = "no other session is live". That is the single
 /// most load-bearing fact in this output: CLAUDE.md §8 says to assume another
-/// session always exists, and condukt's main-tree guard reads this roster as a
-/// liveness input before allowing a commit in main's shared working tree.
+/// session always exists. (condukt's main-tree guard read this roster as a
+/// commit-time liveness input until it was removed by user ruling 2026-11-08.)
 pub(crate) fn apply_leases(
     view: &mut ProgressView,
     loaded: anyhow::Result<LeaseRegistry>,
@@ -1154,7 +1154,7 @@ mod tests {
         );
     }
 
-    /// `--json` is the machine surface condukt's main-tree guard reads. The key
+    /// `--json` is overwatch's machine surface for consumers. The key
     /// must be absent on the clean path (so the existing contract is unchanged)
     /// and present the moment a source is unobservable (so a consumer CAN tell,
     /// which the old shape made impossible).

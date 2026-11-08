@@ -1300,12 +1300,8 @@ it refuses to guess"
                     };
                     match block {
                         Some(d) if d.is_deny() => return d,
-                        Some(ask) => {
-                            if pending_ask.is_none() {
-                                pending_ask = Some(ask);
-                            }
-                        }
-                        None => {}
+                        Some(ask) if pending_ask.is_none() => pending_ask = Some(ask),
+                        _ => {}
                     }
                 }
             }

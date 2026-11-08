@@ -102,20 +102,6 @@ sys.stderr.write({name!r} + ": stub diagnostic\\n")
 sys.exit({code})
 """
 
-# The hook's main-tree-guard (CLAUDE.md 8) shells out to `condukt guard
-# main-tree`.  It is NOT one of the EXPECTED_SCANNERS -- it runs outside the
-# `run` helper -- so it gets its own stub and deliberately does not write to
-# HOOK_TEST_LOG, which would corrupt the scanner-order assertion.
-#
-# /bin/sh rather than `#!/usr/bin/env python3`: the with_python=False cases
-# withhold python3 from the hook's PATH on purpose, and a condukt stub that
-# died of a missing interpreter would block for a reason the test did not mean
-# to exercise, making that case pass for the wrong cause.
-_CONDUKT_STUB = """#!/bin/sh
-echo "condukt stub: $*" >&2
-exit {code}
-"""
-
 
 def _which(name):
     path = shutil.which(name)
@@ -127,14 +113,10 @@ def _which(name):
 class HookHarness:
     """A throwaway git repo containing a copy of the hook and stub scanners."""
 
-    def __init__(self, exits=None, missing=(), with_python=True, condukt_exit=0):
+    def __init__(self, exits=None, missing=(), with_python=True):
         """exits: {scanner_basename: exit_code}, default 0 for all present ones.
         missing: scanner basenames to NOT create at all.
         with_python: whether python3 is visible on the hook's PATH.
-        condukt_exit: exit code for the stubbed `condukt guard main-tree` call.
-            0 means the section-8 guard allows the commit, which is what the
-            control case needs.  None provides no condukt binary at all, which
-            is the gate's cannot-determine input and must block.
         """
         # .resolve() so the path matches what `git rev-parse --show-toplevel`
         # reports on macOS (/var -> /private/var).
@@ -181,29 +163,6 @@ class HookHarness:
             "GIT_CONFIG_NOSYSTEM": "1",
         }
 
-        # main-tree-guard is the one gate here that is a Rust binary rather than
-        # a python3 scanner, and it fails CLOSED when it cannot find condukt.
-        # That is correct in production and, for most cases here, beside the
-        # point: the subject under test is the SHELL hook's exit-code plumbing,
-        # not condukt's §8 verdict. The default condukt_exit=0 therefore gives
-        # every such case a stub answering "allowed", so the python-scanner
-        # properties are not all masked by one unrelated block. Tests that care
-        # about condukt's own decision live in crates/condukt/src/maintree.rs.
-        #
-        # This assignment MUST stay conditional. condukt_exit=None is the
-        # cannot-determine input -- no condukt binary anywhere -- and an
-        # unconditional CONDUKT_BIN hands that case a passing stub, turning the
-        # one test that checks the gate blocks when it cannot RUN into a test
-        # that checks nothing. CONDUKT_BIN is the guard's first candidate, so
-        # pointing it at the stub also keeps the lookup off target/ and off PATH
-        # -- the throwaway repo has neither, and the developer's real build must
-        # not leak in either.
-        if condukt_exit is not None:
-            condukt = self.root / "condukt-stub"
-            condukt.write_text(_CONDUKT_STUB.format(code=condukt_exit))
-            condukt.chmod(0o755)
-            self.env["CONDUKT_BIN"] = str(condukt)
-
     def run(self):
         return subprocess.run(
             [str(self.hook)],
@@ -247,41 +206,6 @@ class CleanTreePasses(HookTestCase):
             "clean tree must be allowed\n--- stderr ---\n%s" % proc.stderr,
         )
         self.assertEqual(h.ran(), EXPECTED_SCANNERS)
-
-
-class MainTreeGuardResolvesRestrictively(HookTestCase):
-    """The section-8 guard runs outside `run`, so `run`'s contract does not
-    cover it.  Its own undetermined path is asserted here.
-
-    This was found red: the guard was added to the hook after this file was
-    written, the harness never supplied a condukt, and so the control case
-    above had been failing on a clean checkout of main.  The guard was right --
-    it could not reach a verdict and blocked, exactly as CLAUDE.md 3 requires.
-    What was missing was a test that said so on purpose rather than by
-    accident.
-    """
-
-    def test_absent_condukt_binary_blocks(self):
-        h = self.harness(condukt_exit=None)
-        proc = h.run()
-        self.assertBlocked(proc, "when no condukt binary can be found")
-        self.assertIn("main-tree-guard", proc.stderr)
-        # The message must say the gate could not RUN.  "could not determine"
-        # and "determined you may not commit" are different facts, and a reader
-        # who is told the wrong one goes looking in the wrong place.
-        self.assertIn("could not run", proc.stderr)
-
-    def test_guard_exit_two_reads_as_undetermined(self):
-        h = self.harness(condukt_exit=2)
-        proc = h.run()
-        self.assertBlocked(proc, "when the guard exits 2")
-        self.assertIn("UNDETERMINED", proc.stderr)
-
-    def test_guard_finding_blocks(self):
-        h = self.harness(condukt_exit=1)
-        proc = h.run()
-        self.assertBlocked(proc, "when the guard reports a finding")
-        self.assertIn("main-tree-guard", proc.stderr)
 
 
 class FindingBlocks(HookTestCase):

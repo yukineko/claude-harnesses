@@ -25,7 +25,10 @@ use merge_gate::{ensure_base_on_default_branch, ensure_commits_carry_task_traile
 /// and fast, but a hung `git` (lock contention, a stuck credential helper
 /// prompt, a network-mounted repo, corrupted pack, etc.) must not block a
 /// condukt run indefinitely. 45s is generous for any of the local ops this
-/// module performs while still bounding worst-case hangs.
+/// module performs while still bounding worst-case hangs. A killed `git merge`
+/// can leave the tree half-applied or a stale `index.lock`; only [`merge`]'s
+/// final merge rolls back ([`recover_timed_out_merge`]), not the store-diff or
+/// `-X theirs` paths (RED: `tests/backlog_merge_timeout_other_paths_20261108.rs`).
 const GIT_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Output captured from a (possibly timed-out) git invocation.
@@ -1124,6 +1127,9 @@ fn abort_state_phrase(r: &std::result::Result<(), String>) -> String {
 ///    cannot be written the trial is still aborted but `merge` returns `Err`
 ///    (nothing is on the review surface, so `Conflict` would be a false claim).
 /// 3. **Clean**: abort the trial and perform the real merge → [`MergeOutcome::Merged`].
+///    A timed-out real merge is rolled back ([`recover_timed_out_merge`]) and
+///    is an `Err` saying "timed out" plus whether the rollback succeeded (else
+///    the manual recovery). See [`GIT_TIMEOUT`] for paths not yet covered.
 pub fn merge(
     cfg: &Config,
     repo: &Path,
@@ -1315,19 +1321,94 @@ pub fn merge(
         finalize_landed_branch(repo, branch);
         return Ok(MergeOutcome::Merged);
     }
-    git(
-        repo,
-        &[
-            "merge",
-            "--no-edit",
-            "-m",
-            &format!("Merge branch '{short}'"),
-            &tip,
-        ],
-    )
-    .with_context(|| format!("merge of {branch} into {default_branch} failed"))?;
+    let head_before = git(repo, &["rev-parse", "--verify", "HEAD"])
+        .with_context(|| format!("could not read {default_branch}'s HEAD before the merge"))?;
+    let merge_msg = format!("Merge branch '{short}'");
+    let merge_args = ["merge", "--no-edit", "-m", &merge_msg, &tip];
+    let out = run_git_bounded(repo, &merge_args)
+        .with_context(|| format!("merge of {branch} into {default_branch} failed"))?;
+    if out.timed_out {
+        // Backlog 8ada7ad9: the killed merge may have staged its result (no
+        // MERGE_HEAD) for the next commit to land silently. Roll back, report;
+        // nothing landed, so no `finalize_landed_branch`.
+        let (r, t) = (repo.display(), GIT_TIMEOUT);
+        let timed_out = format!("git {merge_args:?} in {r} timed out after {t:?} and was killed");
+        match recover_timed_out_merge(repo, &head_before) {
+            Ok(how) => bail!(
+                "merge of {branch} into {default_branch} failed: {timed_out}. The \
+                 half-applied merge was rolled back with `{how}` (index clean, HEAD unchanged \
+                 at {head_before}); the merge was NOT performed and can be retried."
+            ),
+            Err(d) => bail!(
+                "merge of {branch} into {default_branch} failed: {timed_out}. {default_branch} \
+                 in {} may be left HALF-APPLIED (the merge result staged without a merge \
+                 commit) and the automatic rollback FAILED: {d}. Do NOT commit in that tree; \
+                 recover manually there with `git merge --abort` if .git/MERGE_HEAD exists, \
+                 else `git reset --merge`, then confirm `git diff --cached --quiet` and that \
+                 HEAD is {head_before}.",
+                repo.display()
+            ),
+        }
+    }
+    git_output_to_result(out, repo, &merge_args, GIT_TIMEOUT)
+        .with_context(|| format!("merge of {branch} into {default_branch} failed"))?;
     finalize_landed_branch(repo, branch);
     Ok(MergeOutcome::Merged)
+}
+
+/// Roll back a `git merge` in `repo` killed on timeout (backlog 8ada7ad9), each
+/// step bounded by [`GIT_TIMEOUT`]: `git merge --abort` if MERGE_HEAD exists,
+/// else `git reset --merge` (the 2026-11-07 repro left the result staged with
+/// NO MERGE_HEAD). `Ok(cmd)` only after the rollback is VERIFIED (HEAD ==
+/// `head_before`, nothing staged, no MERGE_HEAD); anything else, including an
+/// unreadable probe, is `Err(detail)`. A present `index.lock` is NOT removed
+/// (condukt cannot prove it is the killed git's, not a live git's): `Err`.
+fn recover_timed_out_merge(repo: &Path, head_before: &str) -> std::result::Result<String, String> {
+    // Exit 0 → true, exit 1 → false; any other outcome is undetermined → Err.
+    let probe = |what: &str, args: &[&str]| match git_exit_code(repo, args) {
+        Ok(0) => Ok(true),
+        Ok(1) => Ok(false),
+        Ok(c) => Err(format!("{what} probe exited {c}")),
+        Err(e) => Err(format!("{what} probe failed: {e:#}")),
+    };
+    let merge_head = ["rev-parse", "-q", "--verify", "MERGE_HEAD"];
+    let git_dir = git(repo, &["rev-parse", "--absolute-git-dir"])
+        .map_err(|e| format!("could not locate the git dir: {e:#}"))?;
+    let lock = Path::new(&git_dir).join("index.lock");
+    let locked = lock.try_exists();
+    if !matches!(locked, Ok(false)) {
+        return Err(format!(
+            "{} is present or unreadable ({locked:?}; the killed git's or a live git's, so condukt \
+             did NOT remove it or touch the index; remove it once no git process runs there)",
+            lock.display()
+        ));
+    }
+    let cmd: &[&str] = if probe("MERGE_HEAD", &merge_head)? {
+        &["merge", "--abort"]
+    } else {
+        &["reset", "--merge"]
+    };
+    let shown = format!("git {}", cmd.join(" "));
+    match git_try(repo, cmd) {
+        Ok((true, _, _)) => {}
+        Ok((false, o, e)) => return Err(format!("`{shown}` failed: {} {}", o.trim(), e.trim())),
+        Err(e) => return Err(format!("`{shown}` failed: {e:#}")),
+    }
+    let after = |e: String| format!("after `{shown}`, {e}");
+    let head_after = git(repo, &["rev-parse", "--verify", "HEAD"])
+        .map_err(|e| after(format!("could not read HEAD: {e:#}")))?;
+    if head_after != head_before {
+        return Err(after(format!(
+            "HEAD is {head_after}, not {head_before} (committed before the kill?)"
+        )));
+    }
+    if !probe("staged-changes", &["diff", "--cached", "--quiet"]).map_err(after)? {
+        return Err(after("changes are still staged".to_string()));
+    }
+    if probe("MERGE_HEAD", &merge_head).map_err(after)? {
+        return Err(after("MERGE_HEAD is still present".to_string()));
+    }
+    Ok(shown)
 }
 
 /// A source worktree's uncommitted `.backlog/` store diff, captured as a
@@ -1974,6 +2055,77 @@ mod worktree_remove_tests {
         assert!(
             !merge_head.exists(),
             "MERGE_HEAD should not exist after aborted pre-flight"
+        );
+    }
+
+    /// Backlog 8ada7ad9: the observed timed-out state (result staged, no
+    /// MERGE_HEAD). With an `index.lock` present the rollback refuses from its
+    /// own pre-check (not git's "File exists") and touches nothing; without
+    /// it, `git reset --merge` rolls back and is verified.
+    #[test]
+    fn recover_timed_out_merge_refuses_a_lock_then_resets_a_staged_half_merge() {
+        let (_tmp, repo) = init_repo();
+        let head = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        fs::write(repo.join("incoming.txt"), "incoming\n").unwrap();
+        git(&repo, &["add", "incoming.txt"]).unwrap();
+        let (lock, staged) = (
+            repo.join(".git/index.lock"),
+            ["diff", "--cached", "--name-only"],
+        );
+        fs::write(&lock, "").unwrap();
+        let err = recover_timed_out_merge(&repo, &head).expect_err("must refuse");
+        assert!(
+            err.contains("index.lock") && err.contains("did NOT remove it"),
+            "{err}"
+        );
+        assert!(lock.exists(), "the lock must NOT be removed");
+        fs::remove_file(&lock).unwrap();
+        assert_eq!(
+            git(&repo, &staged).unwrap(),
+            "incoming.txt",
+            "index untouched"
+        );
+
+        let how = recover_timed_out_merge(&repo, &head).expect("rollback must succeed");
+        assert_eq!(how, "git reset --merge");
+        assert_eq!(git(&repo, &staged).unwrap(), "");
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]).unwrap(), head);
+        assert!(
+            !repo.join("incoming.txt").exists(),
+            "incoming file must be gone"
+        );
+    }
+
+    /// With a MERGE_HEAD the rollback is `git merge --abort`; a HEAD that moved
+    /// (the merge committed before the kill) is not a successful rollback.
+    #[test]
+    fn recover_timed_out_merge_aborts_on_merge_head_and_fails_when_head_moved() {
+        let (_tmp, repo) = init_repo();
+        let commit = |b: &str, f: &str| {
+            git(&repo, &["checkout", "-q", "-B", b]).unwrap();
+            fs::write(repo.join(f), "x\n").unwrap();
+            git(&repo, &["add", f]).unwrap();
+            git(&repo, &["commit", "-m", f]).unwrap();
+        };
+        commit("side", "side.txt");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let before = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        commit("main", "main.txt");
+        let head = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        git(&repo, &["merge", "--no-commit", "--no-ff", "side"]).unwrap();
+        assert!(repo.join(".git/MERGE_HEAD").exists());
+        let how = recover_timed_out_merge(&repo, &head).expect("rollback must succeed");
+        assert_eq!(how, "git merge --abort");
+        assert!(!repo.join(".git/MERGE_HEAD").exists());
+        assert_eq!(
+            git(&repo, &["diff", "--cached", "--name-only"]).unwrap(),
+            ""
+        );
+
+        let err = recover_timed_out_merge(&repo, &before).expect_err("HEAD moved");
+        assert!(
+            err.contains("HEAD is"),
+            "error must name the moved HEAD: {err}"
         );
     }
 

@@ -1234,12 +1234,11 @@ path — changing it changes which hooks and gates run, and blastguard will not 
                 // read-only `open(...)` consumed by a read is not the target
                 // (backlog 658b7839); anything not positively attributed that
                 // way is still probed.
-                if write_call.is_some()
-                    && probed < MAX_RECOVERY_PROBES
+                let write_target_candidate = write_call.is_some()
                     && candidate.contains('/')
                     && !literal_is_read_only_open(candidate, payload)
-                    && !names_unwritable_directory(candidate, payload, ctx.raw_base.as_deref())
-                {
+                    && !names_unwritable_directory(candidate, payload, ctx.raw_base.as_deref());
+                if write_target_candidate && probed < MAX_RECOVERY_PROBES {
                     probed += 1;
                     let recovery = crate::reversible::probe(candidate, ctx.raw_base.as_deref());
                     if let crate::reversible::Recovery::Unrecoverable(why) = &recovery {
@@ -1268,6 +1267,41 @@ path — changing it changes which hooks and gates run, and blastguard will not 
                                 "{shape}, and it writes `{candidate}` (`{call}`) — {why}"
                             )));
                         }
+                    }
+                }
+                // SYSTEM-DIRECTORY axis (backlog 0fbfe00d / e34eb0be). The
+                // probe above answers `NothingToDestroy` for a path that does
+                // not exist yet, which is the right answer about bytes and the
+                // wrong question for `/etc/sudoers.d/evil` or a new
+                // LaunchAgents plist: the file's EXISTENCE is the change. The
+                // direct forms (`>`, `tee`, `cp`) ask `system_path_block` for
+                // exactly this reason, and an interpreter carrying the same
+                // write must not answer less restrictively (user ruling
+                // 2026-11-07: system harm is Deny through any wrapper). Checked
+                // for every write-target literal, including those past the
+                // probe cap — it spawns nothing. A Deny returns at once; an Ask
+                // (the LaunchAgents ruling, or a landing whose symlinks cannot
+                // be resolved) is pending and outranked by any Deny later.
+                if write_target_candidate {
+                    let block = match super::system_path_block("interpreter write", candidate, ctx)
+                    {
+                        Some(d) => Some(d),
+                        None => {
+                            match super::real_system_path_block("interpreter write", candidate, ctx)
+                            {
+                                Ok(d) => d,
+                                Err(why) => Some(Decision::ask(format!(
+                                "{shape}, and it writes `{candidate}`, which could not be resolved \
+through its symlinks ({why}) — blastguard cannot tell whether it lands in a system directory, so \
+it refuses to guess"
+                            ))),
+                            }
+                        }
+                    };
+                    match block {
+                        Some(d) if d.is_deny() => return d,
+                        Some(ask) if pending_ask.is_none() => pending_ask = Some(ask),
+                        _ => {}
                     }
                 }
             }

@@ -16,7 +16,7 @@ fn library_verdict(command: &str) -> Decision {
 
 /// TARGET (open defect): must not be Allow.
 #[test]
-#[ignore = "backlog TBD: open defect, remove ignore when fixed"]
+#[ignore = "backlog 38fb077c: open defect, remove ignore when fixed"]
 fn library_entry_refuses_git_clone_into_home() {
     let d = library_verdict("git clone https://x/y ~/y");
     assert_ne!(

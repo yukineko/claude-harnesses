@@ -72,43 +72,6 @@ FAILED scripts/test_audit_b_scoped_spawn_unwind.py::ScopedSpawnNeedsCatchUnwind:
 ========================= 1 failed, 2 passed in 8.93s =========================="""
 
 [[task]]
-id = "4f9189da"
-title = "UserPromptSubmit blocks /flow unless permission_mode is bypassPermissions"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 17 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: flow-bypass-permissions-mode.
-Observed RED 2026-11-07 at ee3e6d1a (base fc7b5dd9) (verbatim): prompt "/flow" with permission_mode Some("auto") must be blocked until the session is in bypassPermissions; got exit Some(0) stdout="" stderr="" (same for "default" and None) / test result: FAILED. 2 passed; 3 failed
-Owner readings: (A) autoflow prompt-submit, the existing UserPromptSubmit hook that already knows /flow (pinned); (B) a new hook in the flow plugin (crates/flow is skill-only today) - test moves, property same. Either way prompt_submit_command goes through run_hook (never blocks); giving it a verdict means moving it off run_hook per CLAUDE.md s1. Missing permission_mode = cannot determine -> block (s3). Controls: /flow under bypassPermissions and 'hello' under auto pass.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
-created_at = 1793998479
-updated_at = 1794001896
-weight = 0.0
-issue_number = 1583
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1583"
-rev = 2
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p autoflow --test audit_b_flow_bypass -- --include-ignored"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998936
-detail = """
-exit 101: 0 ignored; 0 measured; 0 filtered out; finished in 3.25s
-
-   Compiling autoflow v0.1.45 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/autoflow)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.84s
-     Running tests/audit_b_flow_bypass.rs (target/debug/deps/audit_b_flow_bypass-f04d2fd96b42467a)
-error: test failed, to rerun pass `-p autoflow --test audit_b_flow_bypass`"""
-
-[[task]]
 id = "4f19b628"
 title = "pre-push runs check-fail-open-mutation.py per changed Undetermined arm"
 project = "/Users/yuki/src/harness"

@@ -30,7 +30,9 @@ This file reproduces that with a scratch repo (never the real main):
   * A must not be refused because of B's merge.
 Variants: B's merge completes wholly between A's Pre and Post; A's Pre falls in
 B's pre-merge-commit window (the observed shape); A's Post falls in it; B's
-merge falls between two separate A calls; B fast-forwards main.
+merge falls between two separate A calls; B fast-forwards main. Exception:
+when A's Post falls in B's window (test_3) the evidence is an ambiguous
+ORIG_HEAD rewrite and A stays REFUSED (user ruling 2026-11-08).
 
 Controls that MUST still refuse (so the allow cases prove something): a direct
 non-merge commit on main, a `git reset --hard` on main, and A's own write into
@@ -213,6 +215,9 @@ class ConcurrentMergeDoesNotRefuseMainCwdCall(ConcurrentMergeMainCwdBase):
                          "session B's merged path was charged to session A's write record")
 
     def test_3_a_post_inside_b_merge_window(self) -> None:
+        """User ruling 2026-11-08: an ORIG_HEAD rewrite with HEAD unmoved and no
+        MERGE_HEAD is ambiguous (this command's own reset/merge/rebase produces
+        it too), so it stays REFUSED (CLAUDE.md 3), with the AMBIGUOUS wording."""
         self._side_branch_commit()
         self._main_side_commit()
         old = self._head()
@@ -225,7 +230,12 @@ class ConcurrentMergeDoesNotRefuseMainCwdCall(ConcurrentMergeMainCwdBase):
         self.assertIn("tracked.txt", res["status"],
                       "anti-vacuity: B's merged path dirty vs HEAD at A's Post")
         self._assert_merge_commit_landed(old)
-        self._assert_a_not_refused(res["rc"], res["stderr"])
+        sys.stderr.write("\n[observed] A guard rc=%d stderr:\n%s\n" % (res["rc"], res["stderr"]))
+        self.assertEqual(res["rc"], 2,
+                         "ambiguous ORIG_HEAD rewrite must stay refused: %s" % res["stderr"])
+        self.assertIn("ORIG_HEAD was rewritten during this call while HEAD did "
+                      "not move and there is no MERGE_HEAD", res["stderr"])
+        self.assertIn("NOT asserted to be this command's", res["stderr"])
 
     def test_4_b_merge_between_two_separate_a_calls(self) -> None:
         self._side_branch_commit()

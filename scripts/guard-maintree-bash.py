@@ -81,6 +81,12 @@ record. A record that cannot be written refuses the call.
                       value (see integration_move; no other branch's refs are
                       read, user ruling 2026-11-08)
                                                             -> 0
+                      HEAD moved, `git status` names no path after, every Pre
+                      dirty path's Pre worktree content AND index entry equal
+                      the new HEAD's (pre_dirt_landed_in_head: another
+                      session's merge committing what it wrote before this
+                      call's Pre), and integration_move explains the move
+                                                            -> 0, nothing recorded
                       MERGE_HEAD existed before and is gone after, and the new
                       HEAD's parents are exactly [Pre HEAD] + all Pre MERGE_HEAD
                       oids in order, and the new HEAD's tree is exactly the
@@ -125,7 +131,19 @@ Known blind spots (not visible to `git status`): files under .git itself
 (.git/config, .git/hooks) and gitignored files. Changes by ANOTHER session in
 main between a main-cwd call's Pre and Post are REFUSED (they cannot be told
 apart from this call's own writes) and recorded in THIS session's write record
-(over-attribution, the restrictive side); the message says so. When ORIG_HEAD
+(over-attribution, the restrictive side); the message says so. One exception
+(pre_dirt_landed_in_head): HEAD moved, `git status` names no path at Post,
+every path dirty at Pre already held at Pre -- in both working tree and index
+-- exactly what the new HEAD holds, and integration_move explains the HEAD
+move. That is a Pre taken inside another session's `git merge`
+pre-merge-commit window followed by a Post after the merge committed; this
+call changed nothing itself, so it is allowed and NOTHING is recorded. Pre
+dirt that was discarded, stashed or re-staged by this call, or a tracked Pre
+modification it committed, does not match the new HEAD and is still refused.
+NOT covered: an UNTRACKED Pre path that this call itself commits, unchanged,
+into its own merge commit (`git merge --no-commit` + `git add` + `git commit`)
+passes, since an untracked path has no Pre index entry to compare -- the same
+class as any content a call adds to its own merge commit. When ORIG_HEAD
 was rewritten between Pre and Post with HEAD unchanged and no MERGE_HEAD (what
 another session's in-flight `git merge` in main looks like), the refusal
 reports that evidence as AMBIGUOUS: this command's own reset/merge/rebase
@@ -731,6 +749,91 @@ def only_unchanged_preexisting(before: dict, after: dict) -> bool:
     return True
 
 
+def pre_dirt_landed_in_head(main: Path, before: dict, after: dict) -> bool:
+    """True if `git status` names NO path at Post and every path dirty at Pre
+    already held, at Pre, exactly what the new HEAD holds -- in the working
+    tree AND in the index. Then this call changed none of those paths: at Post
+    the worktree and index equal the new HEAD, which equals their Pre state.
+
+    This is what a Pre snapshot taken inside ANOTHER session's `git merge`
+    pre-merge-commit window looks like (git has written the merged tree into
+    main's index + worktree, HEAD not yet moved), followed by a Post after that
+    merge committed. The caller still requires integration_move for the HEAD
+    move; this predicate only says the Pre dirt is not a change of this call.
+
+    Per Pre path (status_entries of the Pre porcelain):
+      - the Pre working-tree content hash equals the path's hash now (Post is
+        clean, so "now" is the new HEAD's content, or "absent");
+      - a "1" record (ordinary change): its index mode/oid (mI/hI) equal the
+        new HEAD's entry for the path (`git ls-tree -r` of the new HEAD), or
+        mI is 000000 and the new HEAD has no such path;
+      - a "2" record (rename/copy): the same for its destination; its source
+        path must be absent from the new HEAD;
+      - a "?" record (untracked): only the content hash check; an untracked
+        directory (path ending in "/") is not covered.
+    A conflict ("u") record, a submodule record, a Pre path without a hash, an
+    unreadable record, or any Post path -> False. Discarding, stashing or
+    re-staging pre-existing dirt, or committing a tracked Pre modification (its
+    Pre index or worktree state is not what the new HEAD holds) fails this, so
+    it is still refused. An untracked Pre path committed unchanged into this
+    call's own merge commit is NOT caught (no Pre index entry to compare).
+    A git failure raises Undetermined -> the caller refuses (CLAUDE.md 3).
+    """
+    if status_entries(after["porcelain"]):
+        return False
+    entries = status_entries(before["porcelain"])
+    if not entries:
+        return False
+    hashes = before["hashes"]
+    index_expect: dict[str, tuple[str, str] | None] = {}
+    for rec, paths in entries:
+        kind = rec[0]
+        if kind == "1":
+            fields = rec.split(" ", 8)
+        elif kind == "2":
+            fields = rec.split(" ", 9)
+        elif kind == "?":
+            if paths[0].endswith("/"):
+                return False
+            continue
+        else:
+            return False
+        if len(fields) < 9 or fields[2] != "N...":
+            return False
+        m_index, h_index = fields[4], fields[7]
+        index_expect[paths[0]] = None if m_index == "000000" else (m_index, h_index)
+        if kind == "2":
+            if len(paths) != 2 or not paths[1]:
+                return False
+            index_expect[paths[1]] = None
+    for p in status_paths(before["porcelain"]):
+        if p not in hashes:
+            return False
+        try:
+            now = hash_path(main / p)
+        except OSError as exc:
+            raise Undetermined("cannot hash path %s: %s" % (p, exc)) from exc
+        if now != hashes[p]:
+            return False
+    if not index_expect:
+        return True
+    out = git(main, "--literal-pathspecs", "ls-tree", "-r", "-z", "--full-tree",
+              after["head"], "--", *sorted(index_expect))
+    in_head: dict[str, tuple[str, str]] = {}
+    for item in out.split("\0"):
+        if not item:
+            continue
+        meta, sep, path = item.partition("\t")
+        parts = meta.split(" ")
+        if not sep or len(parts) != 3:
+            raise Undetermined("unreadable `git ls-tree` entry %r" % item[:80])
+        in_head[path] = (parts[0], parts[2])
+    for p, want in index_expect.items():
+        if in_head.get(p) != want:
+            return False
+    return True
+
+
 def status_records(porcelain: str) -> dict[str, str]:
     """path -> its status record line, for naming index-only changes."""
     out = {}
@@ -830,6 +933,11 @@ def post(payload: dict, common: Path, main: Path) -> int:
     # found to have none. Only then may the refusal say "not a merge"; when the
     # tree check failed first, the HEAD move was never classified (GH 1512).
     head_not_integration = False
+    # True only when the call changed nothing itself: the Pre dirt was already
+    # the new HEAD's content and the HEAD move is integration (another
+    # session's merge committing what it had written before this call's Pre).
+    # Then nothing is recorded in this session's write record either.
+    nothing_of_this_call = False
     if before == after:
         pass
     elif after["merge_head"]:
@@ -843,6 +951,13 @@ def post(payload: dict, common: Path, main: Path) -> int:
     elif after["head"] != before["head"] and only_unchanged_preexisting(before, after):
         branch = checked_out_branch(main)
         if not integration_move(main, common, branch, before["head"], after["head"]):
+            verdict = REFUSE
+            head_not_integration = True
+    elif after["head"] != before["head"] and pre_dirt_landed_in_head(main, before, after):
+        branch = checked_out_branch(main)
+        if integration_move(main, common, branch, before["head"], after["head"]):
+            nothing_of_this_call = True
+        else:
             verdict = REFUSE
             head_not_integration = True
     else:
@@ -890,7 +1005,8 @@ def post(payload: dict, common: Path, main: Path) -> int:
     # session's write record, whatever the verdict: the Stop gate blocks only
     # on dirt it can attribute to this session through that record. A record
     # that cannot be written makes the write unattributable -> refuse.
-    touched = changed_paths(before, after) if before != after else []
+    # A call that changed nothing itself (nothing_of_this_call) records nothing.
+    touched = changed_paths(before, after) if before != after and not nothing_of_this_call else []
     if touched:
         if deny_ledger is None:
             err = "scripts/deny_ledger.py could not be loaded (%s)" % _LEDGER_IMPORT_ERROR

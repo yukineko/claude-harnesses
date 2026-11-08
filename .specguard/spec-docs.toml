@@ -483,3 +483,18 @@ reason = "'振る舞い' bullet 'shell の字句どおりの読みも判定す�
 path = "crates/blastguard/src/detect/scratch_place.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'scratch tree は管理された場所にだけ作る': git clone / cp -r outside classify_managed_place -> Ask, mkdir -p excluded, cannot-determine -> Ask, raises Allow only, shared getopt parser, SafeRoots::none library entry exempt (open)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/python_file.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '.py へ書く quoted here-document の本文は Python として判定する': interpreter::python_file_body_verdict judges the body fail-closed (comments/plain strings inert, runner calls through the shell rules, filesystem destruction as the equivalent shell command, unreadable -> Ask)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/python_semantics.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Same bullet, sub-bullet 'alias 解決（interpreter/python_semantics.rs）': import X as Y / from X import f [as g] / s = os.system rewritten to canonical names; runner or os/subprocess module referenced other than by a call -> Ask."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/python_semantics/values.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Same bullet, sub-bullet '計算される書き込み path（user ruling 2026-11-08、interpreter/python_semantics/values.rs）': Allow only when provably repo-scoped (repo-relative iteration, sys.argv[N] with repo-relative literal runs, self.attr), everything else Ask."

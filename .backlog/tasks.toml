@@ -513,33 +513,6 @@ exit 101: sult: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered ou
 error: test failed, to rerun pass `-p blastguard --test heredoc_python_triple_quote_fp_20261107`"""
 
 [[task]]
-id = "0fbfe00d"
-title = "blastguard: interpreter 経由のシステムディレクトリ新規書込を Allow する fail-open"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p0"]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1794056271
-updated_at = 1794056271
-weight = 0.0
-issue_number = 1627
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1627"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test interpreter_system_dir_new_file_failopen_20261107 interpreter_new_system_file_at_least_as_restrictive_as_direct"
-rev = "15d07ba3df38c20a1b6283405927676b47724167"
-observed_at = 1794056271
-detail = """
-exit 101: c/.harness-worktrees/red-bg-sysdir-newfile/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.84s
-     Running tests/interpreter_system_dir_new_file_failopen_20261107.rs (target/debug/deps/interpreter_system_dir_new_file_failopen_20261107-211d2813ab019d9e)
-error: test failed, to rerun pass `-p blastguard --test interpreter_system_dir_new_file_failopen_20261107`"""
-
-[[task]]
 id = "e34eb0be"
 title = "blastguard: ~/Library/LaunchAgents への新規 plist 書込を direct/interpreter とも Allow する（裁定は Ask）"
 project = "/Users/yuki/src/harness"

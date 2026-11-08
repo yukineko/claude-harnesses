@@ -71983,3 +71983,59 @@ test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "81903ff2a1cfd91e6f404405eebbcaedd74714d7"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "0fbfe00d"
+title = "blastguard: interpreter 経由のシステムディレクトリ新規書込を Allow する fail-open"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p0"]
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794056271
+updated_at = 1794103168
+weight = 0.0
+issue_number = 1627
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1627"
+issue_closed_at = 1794103175
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test interpreter_system_dir_new_file_failopen_20261107 interpreter_new_system_file_at_least_as_restrictive_as_direct"
+rev = "15d07ba3df38c20a1b6283405927676b47724167"
+observed_at = 1794056271
+detail = """
+exit 101: c/.harness-worktrees/red-bg-sysdir-newfile/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.84s
+     Running tests/interpreter_system_dir_new_file_failopen_20261107.rs (target/debug/deps/interpreter_system_dir_new_file_failopen_20261107-211d2813ab019d9e)
+error: test failed, to rerun pass `-p blastguard --test interpreter_system_dir_new_file_failopen_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test interpreter_system_dir_new_file_failopen_20261107 interpreter_new_system_file_at_least_as_restrictive_as_direct"
+exit = 0
+passed = 1
+rev = "f7b61d56fb2f808a56f1a34aefc3ccff7d1fb351"
+observed_at = 1794103067
+output_digest = "sha256:9fdbcefe2da6e7021d7c6941ab8695718157f6065cc99301fd840be5af3de0c8"
+excerpt = """
+
+running 1 test
+test interpreter_new_system_file_at_least_as_restrictive_as_direct ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 4.15s
+
+   Compiling blastguard v0.2.397 (/Users/yuki/src/.harness-worktrees/red-bg-sysdir-newfile/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.79s
+     Running tests/interpreter_system_dir_new_file_failopen_20261107.rs (target/debug/deps/interpreter_system_dir_new_file_failopen_20261107-6acfad2b9231f706)
+"""
+
+[task.closure.red]
+rev = "15d07ba3df38c20a1b6283405927676b47724167"
+exit = 101
+kind = "behavioural"

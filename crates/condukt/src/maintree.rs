@@ -75,6 +75,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, SystemTime};
 
 use harness_core::boundary;
 use harness_core::verdict::{Determination, Reason, Required, Verdict};
@@ -182,7 +183,8 @@ pub const REFLOG_ACTION_ENV: &str = "GIT_REFLOG_ACTION";
 pub enum PeerSource {
     /// An `overwatch` lease roster entry with a live (non-stale) lease.
     OverwatchLease,
-    /// An active (non-stale) `backlog` run lock for this project.
+    /// A `backlog` run lock for this project: active, or heartbeat-stale with
+    /// a holder that was not observed idle (see [`stale_lock_peer`]).
     BacklogLock,
 }
 
@@ -728,21 +730,72 @@ pub fn parse_overwatch_sessions(
     Determination::known(peers)
 }
 
-/// A peer from `backlog lock status --project <repo>`.
+/// What `backlog lock status --project <repo>` reported, before the
+/// transcript-liveness check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BacklogLock {
+    /// No lock, or a lock held by this very session.
+    Free,
+    /// A lock held by another session whose heartbeat is within the TTL.
+    Held(PeerSession),
+    /// A lock held by another session (or by a holder that names no session)
+    /// whose heartbeat passed the TTL. Heartbeat age is NOT proof that the
+    /// holder ended — see [`stale_lock_peer`].
+    Stale(PeerSession),
+}
+
+/// Placeholder session id for a stale lock that names no holder session. Such
+/// a holder cannot be attributed to this process, nor can its transcript be
+/// found, so it is kept as a live peer (fail-closed).
+const UNNAMED_HOLDER: &str = "<unnamed lock holder>";
+
+/// How long a holder's transcript must have gone unwritten for a holder with a
+/// stale lock heartbeat to count as ended. Mirrors backlog's
+/// `LOCK_STALE_TTL_SECS` (1800 s): a holder idle for less than a heartbeat TTL
+/// is indistinguishable from one between heartbeats.
+pub const HOLDER_TRANSCRIPT_LIVE_SECS: u64 = 1800;
+
+/// The peer (if any) reported by `backlog lock status --project <repo>`. This
+/// is the function [`observe_peers`] calls.
 ///
 /// The command prints the literal `none` when no lock file exists, and a JSON
 /// object otherwise, with `"stale": true` added when the holder's heartbeat has
-/// passed the TTL. A stale lock is not a live session — it is an explicit
-/// observation that the holder stopped reporting — so it is not a peer;
-/// blocking on it would leave the gate permanently red after any crash, which
-/// is the "detector that always fires" failure.
+/// passed the TTL. `none`, or a lock held by `self_session`, is `Known(None)`.
+/// A non-stale lock held by another session is a peer. A stale lock is NOT
+/// dropped on heartbeat age alone (heartbeat and pid prove nothing about the
+/// holder session): it is passed through [`stale_lock_peer`] against the
+/// transcript stores of this process ([`transcript_stores`]), and is
+/// `Known(None)` only when the holder's transcript was observed idle for at
+/// least [`HOLDER_TRANSCRIPT_LIVE_SECS`]. A fresh transcript, no transcript
+/// found, or any undetermined reading keeps it a peer (fail-closed).
 pub fn parse_backlog_lock(
     stdout: &str,
     self_session: Option<&str>,
 ) -> Determination<Option<PeerSession>> {
+    match classify_backlog_lock(stdout, self_session) {
+        Determination::Known(BacklogLock::Free) => Determination::known(None),
+        Determination::Known(BacklogLock::Held(peer)) => Determination::known(Some(peer)),
+        Determination::Known(BacklogLock::Stale(peer)) => Determination::known(stale_lock_peer(
+            peer,
+            &transcript_stores(),
+            SystemTime::now(),
+        )),
+        Determination::Undetermined(r) => Determination::Undetermined(r),
+    }
+}
+
+/// Classify the output of `backlog lock status --project <repo>` without the
+/// transcript check. A lock held by `self_session` is [`BacklogLock::Free`].
+/// A non-stale lock with no string `session_id` is `Undetermined`; a stale one
+/// is [`BacklogLock::Stale`] under [`UNNAMED_HOLDER`], so [`stale_lock_peer`]
+/// cannot clear it. A `stale` value that is not a bool is `Undetermined`.
+pub fn classify_backlog_lock(
+    stdout: &str,
+    self_session: Option<&str>,
+) -> Determination<BacklogLock> {
     let text = stdout.trim();
     if text == "none" {
-        return Determination::known(None);
+        return Determination::known(BacklogLock::Free);
     }
     let doc: serde_json::Value = match serde_json::from_str(text) {
         Ok(v) => v,
@@ -752,34 +805,199 @@ pub fn parse_backlog_lock(
             ))
         }
     };
-    if doc
-        .get("stale")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
-        // `stale` absent means "not stale": the field is only added on the
-        // stale branch. Absence here is a real observation, not a default
-        // standing in for an unread value.
-        return Determination::known(None);
-    }
-    let Some(id) = doc.get("session_id").and_then(serde_json::Value::as_str) else {
+    if !doc.is_object() {
         return Determination::undetermined(
-            "backlog lock status: lock JSON has no string `session_id`; liveness is unknown",
+            "backlog lock status emitted a non-object; liveness is unknown",
         );
+    }
+    // `stale` absent means "not stale": the field is only added on the stale
+    // branch. Absence here is a real observation, not a default standing in
+    // for an unread value. A `stale` present but not a bool is unreadable.
+    let stale = match doc.get("stale") {
+        None => false,
+        Some(v) => match v.as_bool() {
+            Some(b) => b,
+            None => {
+                return Determination::undetermined(
+                    "backlog lock status: `stale` is not a bool; liveness is unknown",
+                )
+            }
+        },
     };
-    if Some(id) == self_session {
-        return Determination::known(None);
+    let id = doc.get("session_id").and_then(serde_json::Value::as_str);
+    if id.is_some() && id == self_session {
+        return Determination::known(BacklogLock::Free);
     }
     let pid = doc
         .get("pid")
         .and_then(serde_json::Value::as_i64)
         .map(|p| format!("pid {p}"))
         .unwrap_or_else(|| "pid unknown".to_string());
-    Determination::known(Some(PeerSession {
-        session_id: id.to_string(),
-        source: PeerSource::BacklogLock,
-        detail: pid,
-    }))
+    match (id, stale) {
+        (Some(id), false) => Determination::known(BacklogLock::Held(PeerSession {
+            session_id: id.to_string(),
+            source: PeerSource::BacklogLock,
+            detail: pid,
+        })),
+        (None, false) => Determination::undetermined(
+            "backlog lock status: lock JSON has no string `session_id`; liveness is unknown",
+        ),
+        (id, true) => Determination::known(BacklogLock::Stale(PeerSession {
+            session_id: id.unwrap_or(UNNAMED_HOLDER).to_string(),
+            source: PeerSource::BacklogLock,
+            detail: format!("{pid}, heartbeat stale"),
+        })),
+    }
+}
+
+/// The transcript stores this process can see: `$HOME/.claude/projects`, and
+/// `$CLAUDE_CONFIG_DIR/projects` when that is set. An unset `$HOME` contributes
+/// nothing; with no store at all, [`holder_transcript_idle`] is `Undetermined`.
+fn transcript_stores() -> Vec<PathBuf> {
+    let mut stores = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").filter(|v| !v.is_empty()) {
+        stores.push(PathBuf::from(home).join(".claude").join("projects"));
+    }
+    if let Some(cfg) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+        stores.push(PathBuf::from(cfg).join("projects"));
+    }
+    stores
+}
+
+/// Resolve a stale lock: `None` (not a peer) ONLY when the holder's transcript
+/// was observed idle for at least [`HOLDER_TRANSCRIPT_LIVE_SECS`]. A fresh
+/// transcript keeps the holder as a live peer; so does every undetermined
+/// reading (no store, unnamed holder, unsafe session id, no transcript found,
+/// IO error), with the reason in the peer's detail (CLAUDE.md §3: cannot
+/// determine is restrictive).
+pub fn stale_lock_peer(
+    peer: PeerSession,
+    stores: &[PathBuf],
+    now: SystemTime,
+) -> Option<PeerSession> {
+    if peer.session_id == UNNAMED_HOLDER {
+        return Some(PeerSession {
+            detail: format!("{}; no holder session to check, kept live", peer.detail),
+            ..peer
+        });
+    }
+    match holder_transcript_idle(stores, &peer.session_id, now) {
+        Determination::Known(true) => None,
+        Determination::Known(false) => Some(PeerSession {
+            detail: format!(
+                "{}; holder transcript written within {HOLDER_TRANSCRIPT_LIVE_SECS}s",
+                peer.detail
+            ),
+            ..peer
+        }),
+        Determination::Undetermined(r) => Some(PeerSession {
+            detail: format!(
+                "{}; holder liveness undetermined ({}), kept live",
+                peer.detail,
+                r.as_str()
+            ),
+            ..peer
+        }),
+    }
+}
+
+/// `Known(true)` only when at least one `<store>/*/<session_id>.jsonl` exists
+/// and every one found was last modified [`HOLDER_TRANSCRIPT_LIVE_SECS`] or
+/// more before `now`. `Known(false)` when any is fresher (an mtime in the
+/// future counts as fresh). A store directory that does not exist contributes
+/// no transcript (it is not by itself an error, but it cannot supply the
+/// required one either). Everything else is `Undetermined`: a session id that
+/// is not a single path component, no store, a store or entry that cannot be
+/// read or stat'd, an unreadable mtime, or no transcript found at all.
+pub fn holder_transcript_idle(
+    stores: &[PathBuf],
+    session_id: &str,
+    now: SystemTime,
+) -> Determination<bool> {
+    let sid = session_id.trim();
+    if sid.is_empty()
+        || sid == "."
+        || sid == ".."
+        || sid.contains('/')
+        || sid.contains('\\')
+        || sid.contains('\0')
+    {
+        return Determination::undetermined(format!(
+            "session id {session_id:?} does not name a transcript file"
+        ));
+    }
+    if stores.is_empty() {
+        return Determination::undetermined("no transcript store ($HOME unset)");
+    }
+    let target = format!("{sid}.jsonl");
+    let window = Duration::from_secs(HOLDER_TRANSCRIPT_LIVE_SECS);
+    let mut found = 0usize;
+    for projects in stores {
+        let entries = match std::fs::read_dir(projects) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "transcript store {} unreadable: {e}",
+                    projects.display()
+                ))
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(en) => en,
+                Err(e) => {
+                    return Determination::undetermined(format!(
+                        "transcript store {} entry unreadable: {e}",
+                        projects.display()
+                    ))
+                }
+            };
+            let slug = entry.path();
+            match std::fs::metadata(&slug) {
+                Ok(m) if !m.is_dir() => continue,
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    return Determination::undetermined(format!(
+                        "project dir {} could not be stat'd: {e}",
+                        slug.display()
+                    ))
+                }
+            }
+            let candidate = slug.join(&target);
+            let meta = match std::fs::metadata(&candidate) {
+                Ok(m) => m,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    return Determination::undetermined(format!(
+                        "transcript {} could not be stat'd: {e}",
+                        candidate.display()
+                    ))
+                }
+            };
+            let mtime = match meta.modified() {
+                Ok(t) => t,
+                Err(e) => {
+                    return Determination::undetermined(format!(
+                        "transcript {} mtime unreadable: {e}",
+                        candidate.display()
+                    ))
+                }
+            };
+            found += 1;
+            match now.duration_since(mtime) {
+                Ok(age) if age >= window => {}
+                // Younger than the window, or written "after" now (clock skew):
+                // either way the holder cannot be shown idle.
+                _ => return Determination::known(false),
+            }
+        }
+    }
+    if found == 0 {
+        return Determination::undetermined(format!("no transcript {target} found in any store"));
+    }
+    Determination::known(true)
 }
 
 /// Narrow a `plugin_bin::resolve` answer to "a program to spawn". An observed
@@ -1259,13 +1477,25 @@ mod tests {
     }
 
     #[test]
-    fn backlog_lock_none_and_stale_are_not_peers() {
+    fn backlog_lock_none_is_not_a_peer() {
         assert_eq!(
             parse_backlog_lock("none\n", None),
             Determination::Known(None)
         );
-        let stale = r#"{"session_id":"ghost","pid":1,"stale":true}"#;
-        assert_eq!(parse_backlog_lock(stale, None), Determination::Known(None));
+    }
+
+    /// user ruling 2026-11-07: Rewrite assert, redo tests (backlog 3da84f08).
+    /// A stale lock whose holder has no transcript is fail-closed: a peer.
+    #[test]
+    fn backlog_lock_stale_without_transcript_is_a_peer() {
+        let stale =
+            r#"{"session_id":"nonexistent-sess-3da84f08-9c1e7b52a6d4","pid":1,"stale":true}"#;
+        let got = parse_backlog_lock(stale, None);
+        assert!(
+            matches!(got, Determination::Known(Some(_))),
+            "a stale lock whose holder has no transcript must be treated as a live peer \
+             (fail-closed, cannot prove the session ended); got {got:?}"
+        );
     }
 
     #[test]

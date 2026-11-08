@@ -385,12 +385,38 @@ class DetectsWeakening(GateTestCase):
         self.assertNotEqual(rc, 0, f"deleting a test file is not clean\nSTDOUT:{out}\nSTDERR:{err}")
 
     def test_uncommitted_working_tree_weakening_is_seen(self):
-        """The contract diffs base...HEAD PLUS uncommitted changes, so a
-        weakening that has not been committed yet must still block — otherwise
-        the pre-commit path is blind exactly when it matters."""
+        """A weakening that is STAGED but not yet committed must block.
+
+        User ruling 2026-11-08 (backlog 54de84b4): "Index everywhere". The
+        gate judges only the staged content, i.e. the index git hands the
+        hook (GIT_INDEX_FILE honoured), in every mode including manual CLI
+        runs, and unstaged changes are ignored. The property this test always
+        named still holds, now pinned to the index: a weakening that has not
+        been committed yet must still block, or the commit-time path is blind
+        exactly when it matters. It used to leave the write unstaged; it now
+        stages it.
+
+        Overlap: `test_staged_but_uncommitted_weakening_is_seen` below pins the
+        same staged case. The complement, that a merely UNSTAGED weakening is
+        not reported, is
+        `test_unstaged_working_tree_weakening_is_not_reported`.
+        """
         repo = self.make_repo()
-        repo.write(TEST_PATH, TESTS_RS_ASSERTION_REMOVED)  # left uncommitted
+        repo.write(TEST_PATH, TESTS_RS_ASSERTION_REMOVED)
+        repo.git("add", TEST_PATH)  # staged, deliberately NOT committed
         self.assertBlocks(*self.run_gate(repo.root), kind="assertion-removed")
+
+    def test_unstaged_working_tree_weakening_is_not_reported(self):
+        """An UNSTAGED weakening is not part of the commit, so it is not
+        reported (user ruling 2026-11-08, backlog 54de84b4: "Index
+        everywhere"). Today the gate reads the working tree and blocks."""
+        repo = self.make_repo()
+        repo.write(TEST_PATH, TESTS_RS_ASSERTION_REMOVED)  # left unstaged
+        self.assertIn(TEST_PATH, repo.git("diff", "--name-only").stdout,
+                      "anti-vacuity: the weakening is unstaged")
+        rc, out, err = self.run_gate(repo.root)
+        self.assertNotIn("assertion-removed", out + err)
+        self.assertEqual(rc, 0, f"STDOUT:{out}\nSTDERR:{err}")
 
     def test_staged_but_uncommitted_weakening_is_seen(self):
         """`git add`-ed but not yet committed must block too.

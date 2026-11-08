@@ -482,37 +482,6 @@ exit 101: w v0.1.46 (/Users/yuki/.condukt/worktrees/run-20261107-114313-25739-fi
 error: test failed, to rerun pass `-p autoflow --test runstate_roundtrip_drops_fields_20261107`"""
 
 [[task]]
-id = "0fccf1eb"
-title = "blastguard: git commit -F - <<'EOF' の本文行を相対 redirect と誤読する誤検知"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = []
-touched_files = []
-status = "pending"
-notes = '''
-VERBATIM RED (HEAD 81903ff2, blastguard 0.2.305, subagent payload): exact_observed_commit_command_is_allow: assertion left == right failed: quoted heredoc commit message is data; left: "deny", right: "allow". Deny reason: '> EOF' is a RELATIVE redirect after an earlier cd/pushd/popd whose target directory blastguard could not statically resolve — it cannot tell whether this lands in a system directory or on a protected gate/config path, and refuses to guess. MINIMIZED TRIGGER: a quoted heredoc body LINE ENDING IN '>' immediately before the closing delimiter, when a second command sits between the cd and the heredoc: cd D; true && cat <<'EOF'\nx>\nEOF (also cd D; ls; cat <<'EOF'..., cd D; git add -A && git commit -F - <<'EOF'\nCo-Authored-By: A <n@a.com>\nEOF). The scanner reads '>' newline 'EOF' as the redirect '> EOF'. NOT triggering: cd D; cat <<'EOF' (single command), cd D && A && git commit (all &&), body without a trailing '>'. README.ja.md only exempts quoted bodies without | ; & (documented conservative scan), but the delimiter line must not be taken as a redirect target and the cd (a literal absolute path) is resolvable. Tests: crates/blastguard/tests/backlog_eof_redirect_fp_20261107.rs. Do NOT weaken the test to pass; remove the ignore marker when fixed.
-Cross-session note 2026-11-07 (session bf349dd5, merge 8d73ff09): the exact observed command stages with `git add -A`, which is now Ask by user ruling (e9325654; Deny inside a subagent). The ignored REDs exact_observed_commit_command_is_allow / body_line_ending_in_gt_* that keep `git add -A` can never reach Allow; re-anchor their staging to an explicit path (as done for control_same_commit_neutral_message_is_allow) when fixing. Ask the user if the exact-command form must stay.'''
-created_at = 1794031849
-updated_at = 1794037877
-weight = 0.0
-issue_number = 1613
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1613"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test backlog_eof_redirect_fp_20261107 -- --include-ignored"
-rev = "81903ff2a1cfd91e6f404405eebbcaedd74714d7"
-observed_at = 1794031849
-detail = """
-exit 101: 54s
-
-   Compiling blastguard v0.2.305 (/Users/yuki/src/.harness-worktrees/bg-eof-redirect-fp/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.48s
-     Running tests/backlog_eof_redirect_fp_20261107.rs (target/debug/deps/backlog_eof_redirect_fp_20261107-10d2a5402ba5d093)
-error: test failed, to rerun pass `-p blastguard --test backlog_eof_redirect_fp_20261107`"""
-
-[[task]]
 id = "7d615bf0"
 title = "blastguard: => inside a python triple-quoted literal in a quoted heredoc is read as a redirect (Ask)"
 project = "/Users/yuki/src/harness"

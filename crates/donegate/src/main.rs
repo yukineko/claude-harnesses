@@ -36,7 +36,6 @@ mod git;
 #[cfg(test)]
 #[path = "gitenv_red.rs"]
 mod git_env_red_tests;
-mod inflight;
 mod install;
 mod model;
 mod passcache;
@@ -69,8 +68,9 @@ struct Cli {
 enum Command {
     /// Stop hook: run applicable checks; block the stop until they pass.
     Gate,
-    /// SubagentStop hook: judge the roots the stopping subagent wrote; block
-    /// its stop until their checks pass.
+    /// SubagentStop hook: when the stopping subagent wrote inside the hook
+    /// cwd, run the cwd's checks; block its stop until they pass. No other
+    /// root or worktree is judged (user rulings 2026-11-08).
     SubagentGate,
     /// Merge the donegate Stop and SubagentStop hooks into ~/.claude/settings.json.
     Install {
@@ -226,39 +226,28 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
-    // Every checkout the session wrote into, not only the hook cwd: a session
-    // working in a linked worktree while the hook runs in the primary tree must
-    // have the worktree's checks run (otherwise the clean primary tree reads as
-    // "green, checks: []"). Extra roots are evaluated here; the hook cwd keeps
-    // the existing flow below.
-    let roots = match harness_core::session_roots::resolve(&root, &input.transcript_path) {
-        harness_core::verdict::Determination::Known(sr) => sr,
+    // donegate judges ONLY the hook's own root (the cwd). User ruling
+    // 2026-11-08, verbatim: "donegateのworktreeテストは問題ありすぎるので即時に停止"
+    // and "donegateそのものが他のworktreeを見たり検証したりテストしたりすることは
+    // 禁止とする". donegate does not resolve, list, check or report any other
+    // worktree or root the session wrote into. The transcript is read only to
+    // learn whether the session wrote a path INSIDE the cwd
+    // (`rootcheck::wrote_in_cwd`); an unreadable transcript blocks.
+    let wrote_here = match rootcheck::wrote_in_cwd(&input.transcript_path, &root) {
+        harness_core::verdict::Determination::Known(b) => b,
         harness_core::verdict::Determination::Undetermined(why) => stop_block_now(
             &format!(
-                "donegate: BLOCKED - the session's roots cannot be determined ({}). No checks \
-                 ran for the roots it wrote into. Fix the cause or use `donegate skip --reason ...`.",
+                "donegate: BLOCKED - whether the session wrote into {} cannot be determined \
+                 ({}). No checks ran. Fix the cause or use `donegate skip --reason ...`.",
+                root.display(),
                 why.as_str()
             ),
             interactive,
         ),
     };
-    // A root ONLY still-running background subagents wrote is left to their
-    // SubagentStop (`inflight` module docs; backlog 95deaa32). Never silent: each
-    // is named on stderr now and in the stop's systemMessage / block reason.
-    // An undeterminable deferral keeps every root and adds a notice saying so.
-    let mut roots = roots;
-    let (kept, deferred_notices) =
-        inflight::split(std::mem::take(&mut roots.roots), &input.transcript_path);
-    roots.roots = kept;
-    for n in &deferred_notices {
-        eprintln!("donegate: {n}");
-    }
-    // Only the single-root, no-writes case may take the early "nothing declared"
-    // allow below; every other shape is judged by the per-root loop that follows
-    // the operator escapes.
-    let single_plain_root = roots.roots.len() == 1 && !roots.wrote_any;
 
     let (cfg, declaration) = Config::resolve(&root);
+    let session = input.session_key();
     if !cfg.enabled {
         // An explicit opt-out written in a config we were entitled to read.
         if interactive {
@@ -267,8 +256,6 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         harness_core::hook_latency::record("donegate", "", __start.elapsed().as_millis() as u64);
         std::process::exit(0);
     }
-
-    let session = input.session_key();
 
     // The declaration is resolved BEFORE `checks.is_empty()`, because those two
     // questions used to share one answer: "I am refusing to run the checks this
@@ -285,7 +272,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         );
     }
 
-    if cfg.checks.is_empty() && single_plain_root {
+    if cfg.checks.is_empty() && !wrote_here {
         // A real observation: nothing was declared (Absent), or a config we DID
         // read declares no `[[check]]`. donegate is opt-in per project, so this
         // allows — see `Declaration::Absent`'s docs for why that is not the same
@@ -342,108 +329,30 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
-    // Every checkout the session wrote into, not only the hook cwd: a session
-    // working in a linked worktree while the hook runs in the primary tree must
-    // have the worktree's checks run (otherwise the clean primary tree reads as
-    // "green, checks: []"). Extra roots are evaluated here; the hook cwd keeps
-    // the existing flow below. Placed after the operator escapes (see
-    // `tests/gate_escape_ordering.rs`).
-    // Non-blocking stop messages (deferred in-flight roots, give-ups,
-    // identical-finding waivers) collected from every root; printed once as a
-    // single `systemMessage` JSON at the exit, or appended to a block reason.
-    let mut notices: Vec<String> = deferred_notices;
+    // Non-blocking stop messages (give-up, identical-finding waiver); printed
+    // once as a single `systemMessage` JSON at the exit.
+    let mut notices: Vec<String> = Vec::new();
     // The identical-finding waiver applies only to a Stop hook carrying a real
     // session id. Manual CLI mode reports failure by exit code and must keep
     // exiting 1 (verifier F3a); a payload without a session id shares the
     // `_local` bucket with every other such session, so a repeat cannot be
     // attributed and the stop blocks (F3b).
     let waiver_allowed = !interactive && !input.session_id.trim().is_empty();
-    // Whether some extra root's red verdict was waived this stop: then the
-    // chain of blocks has not ended, even if the cwd root is green.
-    let mut waived_any = false;
-    {
-        let names = roots
-            .roots
-            .iter()
-            .map(|r| r.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let mut any_ran = false;
-        let mut all_opted_out = true;
-        // Roots with NO donegate config at all (Declaration::Absent) vs roots
-        // whose config exists but declares no checks (a real observation that
-        // blocks when the session wrote into it).
-        let mut unconfigured: Vec<String> = Vec::new();
-        let mut configured_empty = false;
-        let mut blocks: Vec<String> = Vec::new();
-        // The repeat-ledger identity of each block (record paths normalised).
-        let mut block_keys: Vec<String> = Vec::new();
-        for (i, r) in roots.roots.iter().enumerate() {
-            let (rcfg, rdecl) = Config::resolve(r);
-            if rdecl.is_refusal() {
-                all_opted_out = false;
-                any_ran = true;
-                if i != 0 {
-                    let b = format!(
-                        "[root: {}] donegate refuses to run this root's checks: {}",
-                        r.display(),
-                        declaration_note(r, &rdecl)
-                    );
-                    block_keys.push(b.clone());
-                    blocks.push(b);
-                }
-                continue;
-            }
-            if !rcfg.enabled {
-                continue;
-            }
-            all_opted_out = false;
-            if rcfg.checks.is_empty() {
-                if matches!(rdecl, config::Declaration::Absent) {
-                    unconfigured.push(r.display().to_string());
-                } else {
-                    configured_empty = true;
-                }
-                continue;
-            }
-            any_ran = true;
-            if i == 0 {
-                continue;
-            }
-            match rootcheck::judge(&rcfg, r, &session, waiver_allowed, &mut notices) {
-                rootcheck::Judged::Green | rootcheck::Judged::GaveUp => {}
-                rootcheck::Judged::Waived => waived_any = true,
-                rootcheck::Judged::Blocked { reason, key } => {
-                    blocks.push(reason);
-                    block_keys.push(key);
-                }
-            }
-        }
-        if !blocks.is_empty() {
-            // Give-up / waiver notices of other roots ride along in the block
-            // reason (verifier F6): the block JSON is the only thing printed, so
-            // a separate systemMessage would be lost. Not part of the
-            // repeat-ledger key.
-            let mut reason = blocks.join("\n\n");
-            append_notices(&mut reason, &notices);
-            stop_block_now_keyed(&reason, &block_keys.join("\n\n"), interactive);
-        }
-        if roots.wrote_any && !any_ran && !all_opted_out && !configured_empty {
-            // Every written root has no donegate config at all: allow (donegate is
-            // opt-in per project). User ruling 2026-10-27 removed the user-visible
+    if cfg.checks.is_empty() {
+        // Reached only when the session wrote into the cwd (the no-writes case
+        // allowed above). Placed after the operator escapes (see
+        // `tests/gate_escape_ordering.rs`).
+        if matches!(declaration, config::Declaration::Absent) {
+            // No donegate config at all: allow (donegate is opt-in per
+            // project). User ruling 2026-10-27 removed the user-visible
             // `systemMessage` that used to accompany this allow: stdout stays
             // empty. The allow is not silent in the record, though — the
-            // stderr line names the roots, and a durable `verdict:"unconfigured"`
-            // entry naming each root is appended to `<state_dir>/log.jsonl`
+            // stderr line names the root, and a durable `verdict:"unconfigured"`
+            // entry naming it is appended to `<state_dir>/log.jsonl`
             // (`tests/no_config_quiet_allow.rs`).
-            let msg = format!(
-                "donegate not configured for {}: no checks ran",
-                unconfigured.join(", ")
-            );
-            eprintln!("{msg}");
-            log_unconfigured(&cfg, &session, &unconfigured);
-            // Only deferred-root notices can be pending here (no check ran).
-            emit_notices(&notices, interactive);
+            let r = root.display().to_string();
+            eprintln!("donegate not configured for {r}: no checks ran");
+            log_unconfigured(&cfg, &session, &[r]);
             harness_core::hook_latency::record(
                 "donegate",
                 &session,
@@ -451,15 +360,15 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             );
             std::process::exit(0);
         }
-        if roots.wrote_any && !any_ran && !all_opted_out {
-            let mut reason = format!(
-                "donegate: BLOCKED - the session wrote files but no check ran for any root \
-                 (an empty check set is not a pass). Roots judged: {names}. Declare checks \
-                 in a donegate.toml or use `donegate skip --reason ...` if this is intended."
-            );
-            append_notices(&mut reason, &notices);
-            stop_block_now(&reason, interactive);
-        }
+        stop_block_now(
+            &format!(
+                "donegate: BLOCKED - the session wrote files but no check ran (an empty \
+                 check set is not a pass). Root judged: {}. Declare checks in a \
+                 donegate.toml or use `donegate skip --reason ...` if this is intended.",
+                root.display()
+            ),
+            interactive,
+        );
     }
 
     let mut report = gate::evaluate(&cfg, &root);
@@ -473,20 +382,13 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             0,
             cfg.output_tail_lines,
         );
-        if waived_any {
-            // An extra root is still red (its identical finding was waived):
-            // the chain has not ended, so only this root's memory is cleared.
-            state::forget(&cfg.state_dir, &session, &root);
-        } else {
-            // Green ends the chain: counter AND every remembered signature
-            // (verifier F1 — a later revert to a blocked tree blocks again).
-            state::reset(&cfg.state_dir, &session);
-        }
+        // Green ends the chain: counter AND every remembered signature
+        // (verifier F1 — a later revert to a blocked tree blocks again).
+        state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "green", &ran_names(&report), 0);
         if interactive {
             println!("{}", gate::human_report(&report));
         }
-        emit_notices(&notices, interactive);
         harness_core::hook_latency::record(
             "donegate",
             &session,
@@ -610,10 +512,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             chain.as_deref(),
         );
     }
-    let mut reason = gate::block_reason(&report, attempt, cfg.max_attempts);
-    // Extra roots' give-up / waiver notices ride along in the reason (verifier
-    // F6); the repeat-ledger key below stays the bare fingerprint.
-    append_notices(&mut reason, &notices);
+    let reason = gate::block_reason(&report, attempt, cfg.max_attempts);
 
     if interactive {
         // The failing checks are rendered once, in `reason`; the context lines
@@ -697,16 +596,6 @@ fn red_signature(root: &Path, report: &gate::GateReport) -> Option<String> {
         .map(|o| (o.name.clone(), o.exit_code, o.output_tail.clone()))
         .collect();
     Some(state::signature(root, &tree, &checks))
-}
-
-/// Append the collected non-blocking messages (other roots' give-ups and
-/// waivers) to a block reason, so they are not lost when the stop blocks.
-fn append_notices(reason: &mut String, notices: &[String]) {
-    if notices.is_empty() {
-        return;
-    }
-    reason.push_str("\n\n(other roots, not blocking this stop:)\n");
-    reason.push_str(&notices.join("\n\n"));
 }
 
 /// Print the collected non-blocking messages as one Stop-hook `systemMessage`

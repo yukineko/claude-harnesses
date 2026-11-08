@@ -31,19 +31,18 @@
 //! says authorship was NOT verified — undetermined is never read as "this
 //! session wrote nothing" (CLAUDE.md §3).
 //!
-//! **The gate judges per session, not per checkout** (user ruling 2026-11-03,
-//! backlog 49e95d32). [`evaluate`] reads one root; the Stop hook evaluates
-//! every root the session wrote into (`harness_core::session_roots`) and then
-//! folds their test evidence with [`session_test_evidence`]: a test the session
-//! wrote (attributed via the transcript) AND committed since its start in ANY
-//! root is credited ([`Credit`]) to the implementation change in every root,
-//! so an implementation worktree whose test lives in a sibling worktree is not
-//! blocked. A test left uncommitted counts only for its own root, never across
-//! roots ([`committed_test_evidence`]). An undetermined root (failed git scan),
-//! an unverified attribution (no / unreadable transcript) or an undetermined
-//! session start makes the fold `Undetermined`: nothing is credited, each root
-//! is judged on its own scan alone. Every missing-test block reason names the checkout it
-//! judged ([`Report::root`]).
+//! **The gate judges only the hook cwd's checkout** (user ruling 2026-11-08,
+//! superseding the per-session cross-worktree credit of 2026-11-03 / backlog
+//! 49e95d32: "donegateそのものが他のworktreeを見たり検証したりテストしたりすることは
+//! 禁止とする。他のgateでも禁止とする"). [`evaluate`] reads that one root; the Stop
+//! hook folds its own test evidence with [`session_test_evidence`] over that
+//! single report: a test the session wrote (attributed via the transcript) AND
+//! committed since its start in this checkout is credited ([`Credit`]) to its
+//! implementation change ([`committed_test_evidence`]). No other worktree is
+//! read or credited. A failed git scan, an unverified attribution (no /
+//! unreadable transcript) or an undetermined session start makes the fold
+//! `Undetermined`: nothing is credited. Every missing-test block reason names
+//! the checkout it judged ([`Report::root`]).
 
 use std::path::Path;
 
@@ -113,27 +112,27 @@ pub struct Report {
     /// missing-test block reason names it, so a reader with several roots can
     /// tell which checkout was judged.
     pub root: Option<std::path::PathBuf>,
-    /// Session-wide test credit from another root — see [`Credit`].
+    /// Committed-test credit of this checkout — see [`Credit`].
     pub credit: Credit,
 }
 
-/// Whether this root's implementation change is credited with test evidence
-/// the same session produced in ANOTHER root (user ruling 2026-11-03: the gate
-/// judges per session — a test the session wrote and committed in any checkout
-/// it wrote into counts for its implementation change in every root; backlog
-/// 49e95d32).
+/// Whether this root's implementation change is credited with the committed
+/// test evidence the session produced in it. The Stop hook folds exactly one
+/// report — the hook cwd's checkout — so `from` is always that checkout (user
+/// ruling 2026-11-08: a gate judges its own worktree only; the cross-worktree
+/// credit of 2026-11-03 / backlog 49e95d32 is withdrawn).
 ///
-/// * `NotApplied` — no session-wide fold was run (a single report, a manual
-///   `tdd status`, a unit fixture). The root is judged on its own scan alone.
-/// * `Credited { from }` — the session-wide fold found attributed test evidence
-///   (see [`session_test_evidence`]) in the root `from` — a test the session
+/// * `NotApplied` — no fold was run (a manual `tdd status`, a unit fixture).
+///   The root is judged on its own scan alone.
+/// * `Credited { from }` — the fold found attributed test evidence (see
+///   [`session_test_evidence`]) in the root `from` — a test the session
 ///   wrote and committed since it started.
-/// * `Absent` — the fold ran and determined no root holds a committed session
-///   test.
-/// * `Undetermined { why }` — some root's evidence could not be determined (a
+/// * `Absent` — the fold ran and determined the root holds no committed
+///   session test.
+/// * `Undetermined { why }` — the root's evidence could not be determined (a
 ///   failed git scan, an unverified attribution — e.g. an unreadable
 ///   transcript). Never credited: the root is judged on its own scan alone,
-///   and the block reason says why the cross-root credit was not applied.
+///   and the block reason says why the credit was not applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Credit {
     NotApplied,
@@ -142,7 +141,7 @@ pub enum Credit {
     Undetermined { why: String },
 }
 
-/// What one root's report contributes to the session-wide test evidence:
+/// What one root's report contributes to the folded test evidence:
 ///
 /// * a failed scan → `Undetermined` (we cannot tell whether a test is there);
 /// * an unverified attribution (no / unreadable transcript) → `Undetermined`:
@@ -492,7 +491,7 @@ pub fn session_start(transcript_path: &str) -> Determination<i64> {
 /// The committed lines are also judged on their own
 /// ([`committed_test_evidence`], recorded in `Committed::Included {
 /// test_evidence }`): a test the session wrote AND committed is the only
-/// evidence credited across roots. The commits' removed lines are folded in.
+/// evidence the fold credits. The commits' removed lines are folded in.
 pub fn include_committed(
     cfg: &Config,
     root: &Path,
@@ -553,8 +552,8 @@ pub fn include_committed(
 /// session start, narrowed to the files the transcript shows this session
 /// writing, add a test (the same marker rule as [`Fields::has_test_evidence`]).
 /// This — a test the session wrote AND committed — is the only evidence the
-/// session-wide fold credits to other roots (user ruling 2026-11-03); a
-/// root's uncommitted tests count for that root alone.
+/// fold credits; uncommitted tests count through the scan itself. No other
+/// worktree is read (user ruling 2026-11-08).
 ///
 /// Undetermined attribution (no / unreadable transcript) is `Undetermined`,
 /// never `false`-and-carry-on and never `true`.
@@ -662,9 +661,9 @@ pub fn committed_note(v: &Report) -> Option<String> {
 }
 
 /// The stderr line saying a root's implementation change was let through on a
-/// test the session wrote and committed in a root — printed so a cross-root credit is
-/// never silent. `None` unless the root has implementation lines, no evidence
-/// of its own, and a `Credited` session-wide fold.
+/// test the session wrote and committed in it — printed so a credit is never
+/// silent. `None` unless the root has implementation lines, no evidence in its
+/// scan, and a `Credited` fold.
 pub fn credit_note(v: &Report) -> Option<String> {
     let (Credit::Credited { from }, Determination::Known(Some(f))) = (&v.credit, &v.scan) else {
         return None;
@@ -679,7 +678,7 @@ pub fn credit_note(v: &Report) -> Option<String> {
         .unwrap_or_else(|| "(unrecorded root)".to_string());
     Some(format!(
         "tdd: {at} has {} new implementation line(s) and no test of its own in scope; credited \
-         with the test this session wrote and committed in {} (the gate judges per session)",
+         with the test this session wrote and committed in {}",
         f.added_impl_lines,
         from.display()
     ))
@@ -728,8 +727,7 @@ pub fn block_reason(v: &Report, attempt: u32, max: u32) -> String {
     let credit = match &v.credit {
         Credit::NotApplied => String::new(),
         Credit::Absent => " No test this session wrote and committed since it started was found \
-                           in any checkout it wrote into either (uncommitted tests in another \
-                           checkout are not credited here)."
+                           in this checkout either (other worktrees are not read by this gate)."
             .to_string(),
         Credit::Credited { from } => format!(
             " (A test this session wrote and committed was found in {}, but it did not lift \
@@ -737,8 +735,8 @@ pub fn block_reason(v: &Report, attempt: u32, max: u32) -> String {
             from.display()
         ),
         Credit::Undetermined { why } => format!(
-            " Tests this session committed in its other checkouts were NOT credited, because \
-             the session-wide test evidence could not be determined ({why})."
+            " Tests this session committed in this checkout were NOT credited, because \
+             its committed test evidence could not be determined ({why})."
         ),
     };
     format!("{base}\n\nCheckout judged: {judged}.{credit}")

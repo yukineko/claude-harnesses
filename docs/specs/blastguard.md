@@ -319,6 +319,18 @@ forge・condukt のスケジューラが再利用）。
   いずれかの operand が、または `cp`/`ln`/`install` で最後の operand がシステムディレクトリ内なら
   system-harm Deny（`os.system('mv /etc/hosts /tmp/x')`）。引数が literal でない呼び出し（変数）は
   ここでは判定せず、従来の program audit に残る（未対応の residual）。
+- **interpreter の書き込み literal にもシステムディレクトリ軸（backlog 0fbfe00d、blastguard 0.2.395）** —
+  program audit の回復可能性 probe（`detect/interpreter.rs`）は存在しない path に `NothingToDestroy` を返すので、
+  `shutil.copy2(src, "/etc/x")`・`open("/etc/x","w")` のような**新規ファイル**作成が Allow だった（直接形
+  `cp`/`>`/`tee` は Deny）。書き込み呼び出しを含む program の write-target literal（probe と同じ条件、probe 上限を
+  超えた literal も含む）に `system_path_block` → `real_system_path_block` を適用し、Deny はその場で返す。
+  symlink を解決できない landing は Ask（pending、後続の Deny に負ける）。相対 literal は判定しない（従来どおり）。
+- **`Library/LaunchAgents` への新規ファイルは Ask（ユーザー裁定 2026-11-07、backlog e34eb0be、blastguard 0.2.395）** —
+  `system_path_block` が最初に `launch_agents_new_file_ask` を見る: 正規化した絶対パス（先頭 `~/` は `$HOME` で展開）に
+  `Library/LaunchAgents` の component 対（ASCII 大小無視）とその下の component があり、システムディレクトリ外で、
+  対象が存在しないとき Ask（subagent では Deny）。`confined_root` で逃げられない。存在を読めないときも Ask。
+  既存ファイルへの書き込みは対象外で、呼び出し側の回復可能性規則に委ねる（Ask で Deny を降格させないため）。
+  直接形（`>`・`>>`・`tee`・`cp`/`install`・file tools）と interpreter 形の両方に効く。
   併せて、quoted-delimiter here-document を Python が読む body 行（`python_program_body_segments`）では、
   top-level segment 解析の「command word が展開」Ask（`EXPANSION_HEAD_TAIL`）を落とす
   （`python_body_segment_verdict`。shell はその body を parse しない。program が実際に shell に渡すかは

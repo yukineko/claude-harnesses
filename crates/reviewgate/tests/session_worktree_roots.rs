@@ -1,17 +1,21 @@
 // このファイルは丸ごと integration test なので unwrap/expect/panic を許可する
 // (workspace の [workspace.lints.clippy] は production 向けの deny)。
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! RED reproduction: the session worked in a LINKED git worktree while the
-//! Stop-hook `cwd` was the primary tree (observed 2026-10-22 00:00:07:
-//! reviewgate logged `{"files":[],"mode":"inject","verdict":"no-reviewable-changes"}`
-//! although the worktree held uncommitted session edits). reviewgate uses
-//! `input.cwd_or_current()` as its only root.
+//! reviewgate judges ONLY the checkout the Stop hook runs in (the payload
+//! `cwd`) — user ruling 2026-11-08: gates judge own worktree only
+//! ("donegateそのものが他のworktreeを見たり検証したりテストしたりすることは禁止
+//! とする。他のgateでも禁止とする"). Nothing replaces the dropped cross-worktree
+//! judging.
 //!
-//! Intended contract: roots = hook cwd ∪ git toplevel of every file the
-//! session transcript records as written; reviewed per root. If the session
-//! wrote files but the reviewable set is empty, or a written root cannot be
-//! resolved (path gone / not a git repo), the stop BLOCKS with a reason naming
-//! the roots. A session with no recorded writes still allows.
+//! History: this file began (2026-10-22) as the RED reproduction for the
+//! opposite contract — roots = hook cwd ∪ git toplevel of every file the
+//! session transcript records as written, a written root that cannot be
+//! resolved or an empty review set BLOCKS. That contract is withdrawn: a
+//! linked worktree the session wrote into is not read, reviewed or probed, so
+//! it can neither add a finding nor an "undetermined" block. The tests below
+//! that pinned the old contract are inverted (they now assert the other
+//! worktree does NOT affect the verdict); the cwd checkout is still judged
+//! (`control_*` and `red_cwd_root_still_blocks_*`, anti-vacuity).
 //!
 //! Fixture: `$HOME` is a tempdir with `mode = "inject"` (reviewgate's default
 //! is off) and a trust list naming BOTH trees; `HARNESS_TRUST_ALL` removed.
@@ -223,6 +227,24 @@ impl Drop for LockedDir {
     }
 }
 
+/// Chmods an EXISTING dir to 000 and restores 0o755 on drop.
+struct Unreadable(PathBuf);
+
+impl Unreadable {
+    fn new(dir: &Path) -> Unreadable {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        Unreadable(dir.to_path_buf())
+    }
+}
+
+impl Drop for Unreadable {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+    }
+}
+
 fn edit(path: &Path) -> (&'static str, serde_json::Value) {
     (
         "Edit",
@@ -238,7 +260,7 @@ fn read(path: &Path) -> (&'static str, serde_json::Value) {
 }
 
 /// ANTI-VACUITY CONTROL: cwd = the worktree reviews the file (mode inject,
-/// trusted), so the RED test below cannot be an off/untrusted allow.
+/// trusted), so the tests below cannot be an off/untrusted allow.
 #[test]
 fn control_cwd_is_the_worktree_reviews_the_file() {
     let f = Fixture::new();
@@ -256,83 +278,130 @@ fn control_cwd_is_the_worktree_reviews_the_file() {
     );
 }
 
-/// THE BUG. cwd = primary tree, Edit names the worktree file: the review set
-/// must be non-empty and name the worktree file, not `no-reviewable-changes`.
+/// INVERTED (user ruling 2026-11-08: gates judge own worktree only). Was
+/// `worktree_file_is_reviewed_when_cwd_is_the_primary_tree`, which demanded the
+/// linked worktree's dirty file be reviewed from a primary-tree cwd. Now the
+/// worktree the session wrote into is NOT reviewed: cwd = clean primary =>
+/// `no-reviewable-changes`, allow, and the worktree file is not in the review set.
 #[test]
-fn worktree_file_is_reviewed_when_cwd_is_the_primary_tree() {
+fn dirty_other_worktree_is_not_reviewed_when_cwd_is_the_primary_tree() {
     let f = Fixture::new();
     let tp = f.transcript(&[edit(&f.wt.join("session_edit.rs"))]);
     let o = f.stop(&f.primary, &tp);
     assert_ne!(
+        o.decision, "block",
+        "a dirty OTHER worktree must not affect the verdict; stdout={:?} stderr={:?}",
+        o.stdout, o.stderr
+    );
+    assert_eq!(
         o.log_verdict.as_deref(),
         Some("no-reviewable-changes"),
-        "reviewgate judged the primary tree only; log files={:?} stdout={:?} stderr={:?}",
-        o.log_files,
-        o.stdout,
+        "the gate must have run and judged the clean cwd; stderr={:?}",
         o.stderr
     );
     assert!(
-        o.log_files.iter().any(|s| s.contains("session_edit.rs")),
-        "review file list must name the worktree file; got {:?}",
+        !o.log_files.iter().any(|s| s.contains("session_edit.rs")),
+        "the other worktree's file must not be in the review set; got {:?}",
         o.log_files
     );
-    assert_eq!(o.decision, "block", "stdout={:?}", o.stdout);
 }
 
-/// The session wrote files (a recorded Edit in a clean worktree: the reviewable
-/// set resolves to empty). "Nothing was reviewed" is not "clean": must block,
-/// naming the roots.
+/// Same fixture, with the cwd (primary) ALSO dirty and edited by the session:
+/// the cwd root is still judged (red cwd => block naming ONLY the cwd file),
+/// while the dirty linked worktree stays out of the review set. Anti-vacuity
+/// for the inversion above.
 #[test]
-fn wrote_files_but_empty_review_set_blocks_naming_roots() {
+fn red_cwd_root_still_blocks_and_other_worktree_is_not_in_the_set() {
     let f = Fixture::new();
-    let tp = f.transcript(&[edit(&f.wt.join("seed.rs"))]);
+    std::fs::write(f.primary.join("primary_edit.rs"), BODY).unwrap();
+    let tp = f.transcript(&[
+        edit(&f.wt.join("session_edit.rs")),
+        edit(&f.primary.join("primary_edit.rs")),
+    ]);
     let o = f.stop(&f.primary, &tp);
     assert_eq!(
         o.decision, "block",
-        "session wrote files, review set empty: must block. stdout={:?} stderr={:?}",
+        "red cwd must block. stdout={:?} stderr={:?}",
         o.stdout, o.stderr
     );
     assert!(
-        o.reason.contains(&f.wt.display().to_string())
-            && o.reason.contains(&f.primary.display().to_string()),
-        "reason must name both roots; reason={:?}",
+        o.log_files.iter().any(|s| s.contains("primary_edit.rs")),
+        "cwd file must be reviewed; got {:?}",
+        o.log_files
+    );
+    assert!(
+        !o.log_files.iter().any(|s| s.contains("session_edit.rs")),
+        "other worktree's file must not be reviewed; got {:?}",
+        o.log_files
+    );
+    assert!(
+        !o.reason.contains("session_edit.rs") && !o.reason.contains("linked-wt"),
+        "block reason must not mention the other worktree; reason={:?}",
         o.reason
     );
 }
 
+/// INVERTED (user ruling 2026-11-08: gates judge own worktree only). Was
+/// `wrote_files_but_empty_review_set_blocks_naming_roots` (tag
+/// `wrote-but-nothing-reviewed`, removed with the multi-root rule). A recorded
+/// Edit in a clean linked worktree with a clean primary cwd is now simply
+/// `no-reviewable-changes` => allow; nothing about the other worktree is blocked.
 #[test]
-fn written_root_gone_blocks_naming_the_root() {
+fn wrote_files_in_clean_other_worktree_with_empty_review_set_allows() {
     let f = Fixture::new();
-    // user ruling 2026-10-27: a gone dir under a NON-repo base is now excluded;
-    // this keeps its property (unresolvable written root blocks, naming it) with
-    // a gone dir whose nearest existing ancestor git cannot enter (mode 000).
+    let tp = f.transcript(&[edit(&f.wt.join("seed.rs"))]);
+    let o = f.stop(&f.primary, &tp);
+    assert_ne!(
+        o.decision, "block",
+        "the other worktree must not produce a block. stdout={:?} stderr={:?}",
+        o.stdout, o.stderr
+    );
+    assert_eq!(
+        o.log_verdict.as_deref(),
+        Some("no-reviewable-changes"),
+        "apparatus: the gate must have run; stderr={:?}",
+        o.stderr
+    );
+}
+
+/// INVERTED (user ruling 2026-11-08: gates judge own worktree only). Was
+/// `written_root_gone_blocks_naming_the_root` (tag `session-roots-undetermined`,
+/// removed). A written path under a directory git cannot enter (mode 000) was an
+/// undetermined root and blocked; the dir is not a root any more and is never
+/// probed, so the stop allows.
+#[test]
+fn unprobeable_written_path_does_not_block() {
+    let f = Fixture::new();
     let locked = f.home.join("gone-root-4711");
     let gone = locked.join("gone").join("x.rs");
     let tp = f.transcript(&[edit(&gone)]);
     let _unlock = LockedDir::new(&locked);
     let o = f.stop(&f.primary, &tp);
-    assert_eq!(
+    assert_ne!(
         o.decision, "block",
-        "unresolvable written root must block. stdout={:?} stderr={:?}",
+        "an unprobeable OTHER location must not block. stdout={:?} stderr={:?}",
         o.stdout, o.stderr
     );
     assert!(
-        o.reason.contains("gone-root-4711"),
-        "reason must name the root; reason={:?}",
+        !o.reason.contains("gone-root-4711"),
+        "reason must not name the unprobed location; reason={:?}",
         o.reason
+    );
+    assert_eq!(
+        o.log_verdict.as_deref(),
+        Some("no-reviewable-changes"),
+        "apparatus: the gate must have run; stderr={:?}",
+        o.stderr
     );
 }
 
-/// A written file whose git root cannot be determined (a corrupt `.git`
-/// gitfile pointing nowhere) must block, naming the root.
-///
-/// Re-anchored for backlog 775e5bc8 (GitHub 1459): this test used a plain
-/// non-git directory, which the user ruling now treats as POSITIVELY outside
-/// every repo and excludes from the roots. A corrupt gitfile makes git say
-/// "not a git repository" without "(or any of the parent directories)", so the
-/// root stays undetermined and must still block.
+/// INVERTED (user ruling 2026-11-08: gates judge own worktree only). Was
+/// `written_root_corrupt_gitfile_blocks_naming_the_root` (re-anchored for
+/// backlog 775e5bc8): a written file whose git root cannot be determined (a
+/// corrupt `.git` gitfile) used to block naming the root. That root is no longer
+/// resolved, so its git probe failing cannot create an undetermined block.
 #[test]
-fn written_root_corrupt_gitfile_blocks_naming_the_root() {
+fn written_path_with_corrupt_gitfile_does_not_block() {
     let f = Fixture::new();
     let plain = f.home.join("plain-dir-4712");
     std::fs::create_dir_all(&plain).unwrap();
@@ -340,15 +409,69 @@ fn written_root_corrupt_gitfile_blocks_naming_the_root() {
     std::fs::write(plain.join("x.rs"), BODY).unwrap();
     let tp = f.transcript(&[edit(&plain.join("x.rs"))]);
     let o = f.stop(&f.primary, &tp);
-    assert_eq!(
+    assert_ne!(
         o.decision, "block",
-        "non-git written root must block. stdout={:?} stderr={:?}",
+        "a broken OTHER repo must not block. stdout={:?} stderr={:?}",
         o.stdout, o.stderr
     );
     assert!(
-        o.reason.contains("plain-dir-4712"),
-        "reason must name the root; reason={:?}",
+        !o.reason.contains("plain-dir-4712"),
+        "reason must not name the other location; reason={:?}",
         o.reason
+    );
+    assert_eq!(
+        o.log_verdict.as_deref(),
+        Some("no-reviewable-changes"),
+        "apparatus: the gate must have run; stderr={:?}",
+        o.stderr
+    );
+}
+
+/// NEW (user ruling 2026-11-08: gates judge own worktree only), (b) "not read":
+/// the linked worktree the session wrote into is made unreadable (mode 000,
+/// restored on Drop). It is never opened, so there is no undetermined block; the
+/// verdict is the clean primary's `no-reviewable-changes`.
+#[test]
+fn unreadable_other_worktree_does_not_block() {
+    let f = Fixture::new();
+    let tp = f.transcript(&[edit(&f.wt.join("session_edit.rs"))]);
+    let _unlock = Unreadable::new(&f.wt);
+    let o = f.stop(&f.primary, &tp);
+    assert_ne!(
+        o.decision, "block",
+        "an unreadable OTHER worktree must not block. stdout={:?} stderr={:?}",
+        o.stdout, o.stderr
+    );
+    assert_eq!(
+        o.log_verdict.as_deref(),
+        Some("no-reviewable-changes"),
+        "apparatus: the gate must have run and judged the clean cwd; stderr={:?}",
+        o.stderr
+    );
+}
+
+/// NEW, (b)+(c) in one fixture: the other worktree is unreadable AND the cwd is
+/// red => still a block on the cwd file (the unreadable neighbour neither
+/// downgrades nor replaces the cwd verdict).
+#[test]
+fn red_cwd_blocks_even_when_other_worktree_is_unreadable() {
+    let f = Fixture::new();
+    std::fs::write(f.primary.join("primary_edit.rs"), BODY).unwrap();
+    let tp = f.transcript(&[
+        edit(&f.wt.join("session_edit.rs")),
+        edit(&f.primary.join("primary_edit.rs")),
+    ]);
+    let _unlock = Unreadable::new(&f.wt);
+    let o = f.stop(&f.primary, &tp);
+    assert_eq!(
+        o.decision, "block",
+        "red cwd must block. stdout={:?} stderr={:?}",
+        o.stdout, o.stderr
+    );
+    assert!(
+        o.log_files.iter().any(|s| s.contains("primary_edit.rs")),
+        "cwd file must be reviewed; got {:?}",
+        o.log_files
     );
 }
 

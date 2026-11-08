@@ -53,7 +53,7 @@ precommit-audit skip --reason "<理由>"   # 一回限りのバイパス（こ�
 - `--mode stop`（既定）— Claude Code の Stop フック向け。subagent のレビュー契約を honor し、指摘をエージェントへ戻すため **2** で終了する。hook 入力が `stop_hook_active: true`（同じ停止サイクル内の再発火）なら監査せず **0** で終了する。**SessionEnd** フックから呼ばれた場合（同梱の `hooks/hooks.json` が登録するのは **Stop のみ**で、SessionEnd は自分で配線したときだけ到達する）は advisory（助言）モードで走り、ブロッキングな指摘も引き続き表面化する（stderr へ目立つ形で出力し、監査ログに `block` として記録する）が、指摘による終了コードは **0** のままになる。ただし advisory モードでも非0終了は起こりうる: 変更集合の取得で git エラーが出れば **3**、panic なら **2** で終了する（いずれも fail-closed）。
 - モードは環境変数 `AUDIT_MODE` からも与えられる（`--mode` が優先）。
 - `--config` — 既定は `<root>/.precommit-audit.toml`。明示指定はオペレータの意図的選択として、信頼の有無にかかわらず常に honor される。読み込みに失敗した設定は **64** で終了する。
-- `--root` — 既定は `$CLAUDE_PROJECT_DIR`、無ければ git のトップレベル。
+- `--root` — 既定はカレントディレクトリの git トップレベル（hook が走る worktree）。`$CLAUDE_PROJECT_DIR` は参照しない: ゲートは自分の worktree だけを判定する（ユーザー裁定 2026-11-08）。
 - `trust` — 解決済みの `--root` を共有のワークスペース信頼リスト（`harness_core::trust`。`donegate`/`reviewgate`/`tdd` と同じリスト）に追加し、自動発見された `.precommit-audit.toml` を honor させる。信頼するまではリポジトリ同梱の設定は無視される（組み込みチェックはデフォルトで動作）。
 
 終了コード: `0` クリーン・`1` ブロック（precommit）・`2` ブロック（stop）・`3` SessionEnd での git エラー・`64` 引数／設定エラー。

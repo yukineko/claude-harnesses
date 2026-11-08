@@ -104,7 +104,9 @@ precommit-audit skip --reason "<why>"   # one-shot bypass, THIS session only
 - The mode can also come from the `AUDIT_MODE` env var (`--mode` wins).
 - `--config` — defaults to `<root>/.precommit-audit.toml`. A config that fails
   to load exits **64**.
-- `--root` — defaults to `$CLAUDE_PROJECT_DIR`, else the git top-level.
+- `--root` — defaults to the git top-level of the current directory (the
+  worktree the hook runs in). `$CLAUDE_PROJECT_DIR` is not consulted: a gate
+  judges only its own worktree (user ruling 2026-11-08).
 
 Exit codes: `0` clean · `1` blocked (precommit) · `2` blocked (stop) ·
 `3` git error under SessionEnd · `64` usage / config error.

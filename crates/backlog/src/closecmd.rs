@@ -1,5 +1,7 @@
 //! The evidence-gated terminal transitions and the findings intake:
-//! `done` (F2P test / doc-only commit / duplicate) and the read-only
+//! `done` (GREEN test at HEAD with a claimed, NOT executed red rev — the
+//! RED run was abolished by user ruling 2026-11-08 / doc-only commit /
+//! duplicate) and the read-only
 //! `audit-closures` (close-evidence spec, user-ratified 2026-10-01).
 //! There is no evidence-free close: the `ruling` subcommand and its
 //! `needs-ruling` status were removed (user ruling 2026-10-15); an item no
@@ -41,17 +43,18 @@ fn toplevel() -> Result<std::path::PathBuf> {
 pub struct DoneArgs {
     pub id: String,
     pub test: Option<String>,
+    /// The claimed pre-fix revision. Required for a `--test` close; resolved
+    /// and ancestry-checked, recorded with `executed = false`, never run
+    /// (user ruling 2026-11-08).
     pub red_rev: Option<String>,
-    /// `--red-overlay PATH` (repeatable): narrow the RED overlay to these
-    /// HEAD test files. Empty = the default overlay.
-    pub red_overlay: Vec<String>,
     pub reason: Option<String>,
     pub duplicate_of: Option<String>,
     pub doc_only: Option<String>,
 }
 
 const DONE_USAGE: &str = "`backlog done ID --test CMD --red-rev REV [--reason \
-     fixed|already-fixed|obsolete]` (an executed committed test, RED at REV and GREEN at HEAD), \
+     fixed|already-fixed|obsolete]` (an executed committed test, GREEN at HEAD; REV is recorded \
+     as the claimed pre-fix commit and RED is not run), \
      `backlog done ID --doc-only COMMIT`, or `backlog done ID --duplicate-of ID`. There is no evidence-free close: \
      an item no test reproduces is discarded with `backlog cancel ID --reason R`";
 
@@ -69,10 +72,9 @@ pub fn done(tasks_path: &Path, a: DoneArgs) -> Result<()> {
     if routes > 1 {
         bail!("refused: give exactly one of --test, --doc-only, --duplicate-of");
     }
-    if a.test.is_none() && (a.red_rev.is_some() || a.reason.is_some() || !a.red_overlay.is_empty())
-    {
+    if a.test.is_none() && (a.red_rev.is_some() || a.reason.is_some()) {
         bail!(
-            "refused: --red-rev / --red-overlay / --reason belong to a --test close (an obsolete close also needs \
+            "refused: --red-rev / --reason belong to a --test close (an obsolete close also needs \
              a committed test proving the old surface is gone); use {DONE_USAGE}"
         );
     }
@@ -105,22 +107,22 @@ pub fn done(tasks_path: &Path, a: DoneArgs) -> Result<()> {
         }
         let Some(red_rev) = &a.red_rev else {
             bail!(
-                "refused: --red-rev is required. F2P is required for every test close (fixed, \
-                 already-fixed and obsolete alike): the test must FAIL behaviourally at --red-rev \
-                 and PASS at HEAD"
+                "refused: --red-rev is required for every test close (fixed, already-fixed and \
+                 obsolete alike): name the pre-fix commit. It must resolve to a commit that is an \
+                 ancestor of HEAD; it is recorded with executed = false and the test is NOT run \
+                 there (RED run abolished, user ruling 2026-11-08). The test must PASS at HEAD"
             );
         };
         let cmd = evidence::parse_test_cmd(test).map_err(|e| anyhow!("refused: {e}"))?;
         let root = toplevel()?;
-        let overlay = (!a.red_overlay.is_empty()).then_some(a.red_overlay.as_slice());
-        let f2p = evidence::run_f2p(&root, &cmd, red_rev, overlay, now)
+        let close = evidence::run_green_with_claimed_red(&root, &cmd, red_rev, now)
             .map_err(|e| anyhow!("refused: {e}"))?;
         Closure {
             reason,
             duplicate_of: None,
             doc_only_commit: None,
-            green: Some(f2p.green),
-            red: Some(f2p.red),
+            green: Some(close.green),
+            red: Some(close.red),
             discard_reason: None,
         }
     } else if let Some(commit) = &a.doc_only {
@@ -181,11 +183,18 @@ fn check_duplicate_target(id: &str, target: &str, all: &[Task]) -> Result<()> {
 
 // ---- audit-closures ----------------------------------------------------------
 
-/// Classes of a terminal row's closure.
+/// Classes of a terminal row's closure. `observed-f2p` only for a legacy
+/// closure whose RED was really executed ([`crate::task::RedRun::was_executed`]);
+/// a test close since user ruling 2026-11-08 (RED claimed, not run) is
+/// `green-only`, so it never reads as a verified RED.
 fn classify(t: &Task) -> &'static str {
     if let Some(c) = &t.closure {
-        if c.green.is_some() && c.red.is_some() {
-            return "observed-f2p";
+        if let (Some(_), Some(red)) = (&c.green, &c.red) {
+            return if red.was_executed() {
+                "observed-f2p"
+            } else {
+                "green-only"
+            };
         }
         if c.doc_only_commit.is_some() {
             return "doc-only";
@@ -285,9 +294,15 @@ pub fn evidence_label(t: &Task) -> String {
     }
 }
 
+/// `f2p` only when the RED was really executed (legacy); a GREEN with a
+/// claimed-but-not-run RED (user ruling 2026-11-08) is `green`.
 fn classify_closure_label(c: &Closure) -> &str {
     if c.green.is_some() {
-        "f2p"
+        if c.red.as_ref().is_some_and(|r| r.was_executed()) {
+            "f2p"
+        } else {
+            "green"
+        }
     } else if c.doc_only_commit.is_some() {
         "doc-only"
     } else if c.duplicate_of.is_some() {

@@ -1,14 +1,74 @@
-//! Judging one extra root (a root other than the hook cwd) that declares
-//! checks. Shared by the parent's Stop loop (`gate_run` in `main.rs`) and the
-//! SubagentStop judgment ([`crate::subagent`]), so the two apply the SAME
-//! green / identical-finding waiver / max_attempts give-up / block logic. The
-//! caller passes the attempt-counter key (`session`): the parent's session key,
-//! or a per-agent key for a subagent, so the two never share a chain.
+//! The hook's own root — the cwd — is the ONLY root donegate judges.
+//!
+//! User rulings 2026-11-08, verbatim: "donegateのworktreeテストは問題ありすぎるので
+//! 即時に停止" and "donegateそのものが他のworktreeを見たり検証したりテストしたり
+//! することは禁止とする". donegate does not resolve, list, inspect, check or
+//! report any other worktree or root, on Stop or on SubagentStop. The only
+//! thing it learns from a transcript is whether a written path lies INSIDE the
+//! cwd ([`writes_in`] / [`wrote_in_cwd`]) — a path comparison, never a look at
+//! what lies outside it.
+//!
+//! [`judge`] runs the cwd's checks for the SubagentStop ([`crate::subagent`]):
+//! green / identical-finding waiver / max_attempts give-up / block. The caller
+//! passes the attempt-counter key (`session`), a per-agent key, so a subagent
+//! never shares the parent's chain.
 
 use std::path::Path;
 
+use harness_core::attribution::SessionWrites;
+use harness_core::verdict::Determination;
+
 use crate::config::Config;
 use crate::{gate, state};
+
+/// Whether some write in `writes` lies inside `cwd` (as given or canonical).
+/// A relative path cannot be placed and counts as inside (the restrictive
+/// side: the cwd is then judged). Pure path comparison: nothing outside the
+/// cwd is opened.
+pub(crate) fn writes_in(cwd: &Path, writes: &SessionWrites) -> bool {
+    let cwd_c = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    // macOS spells `/private/var/...` and `/private/tmp/...` also without the
+    // `/private` prefix; compare against that alias too (string-only, so no
+    // path outside the cwd is ever touched).
+    let alias = cwd_c
+        .strip_prefix("/private")
+        .ok()
+        .map(|p| Path::new("/").join(p));
+    let inside = |p: &Path| {
+        p.is_relative()
+            || p.starts_with(cwd)
+            || p.starts_with(&cwd_c)
+            || alias.as_deref().is_some_and(|a| p.starts_with(a))
+    };
+    writes
+        .edited
+        .iter()
+        .chain(writes.bash.iter())
+        .any(|p| inside(p))
+}
+
+/// Whether the session (parent and its subagent sidechains) wrote into the
+/// cwd. No transcript (manual CLI run) or a transcript file that does not
+/// exist records no writes: `Known(false)`. Any other read problem is
+/// `Undetermined` and the caller blocks.
+pub(crate) fn wrote_in_cwd(transcript_path: &str, cwd: &Path) -> Determination<bool> {
+    if transcript_path.trim().is_empty() {
+        return Determination::known(false);
+    }
+    if matches!(
+        std::fs::metadata(transcript_path),
+        Err(ref e) if e.kind() == std::io::ErrorKind::NotFound
+    ) {
+        return Determination::known(false);
+    }
+    match harness_core::attribution::session_written_paths(transcript_path) {
+        Determination::Known(w) => Determination::known(writes_in(cwd, &w)),
+        Determination::Undetermined(why) => Determination::undetermined(format!(
+            "cannot read the session's writes from the transcript: {}",
+            why.as_str()
+        )),
+    }
+}
 
 /// What judging one root produced. `Waived` and `GaveUp` also pushed a
 /// non-blocking notice; neither blocks the stop.
@@ -23,7 +83,7 @@ pub(crate) enum Judged {
     },
 }
 
-/// Run `rcfg`'s checks on `r` and decide. `waiver_allowed` gates the
+/// Run `rcfg`'s checks on `r` (the hook cwd) and decide. `waiver_allowed` gates the
 /// identical-finding waiver (hook mode with a real session id only).
 pub(crate) fn judge(
     rcfg: &Config,

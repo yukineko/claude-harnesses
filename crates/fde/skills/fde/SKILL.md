@@ -71,7 +71,7 @@ allowed-tools: Task, Bash, Read, Write, Edit, Grep, Glob, AskUserQuestion
 4. 登録: `fde begin [TARGET] --spec <dir>/specs/<spec-id>.toml`(spec は target の**外**であること。中なら exit 1)。
    これで target は「登録済み・未批准」になり、gate が target への変更を拒否し始める。
    gate が有効なとき、未批准の間は cwd が target 内の Bash も、target の root パスを文字列で含む Bash も、
-   語を解決すると target(またはその worktree)に入る Bash(`../proj/x`、`rm -rf proj`、symlink 経由、
+   語を解決すると target(登録ディレクトリのみ。他の worktree は見ない)に入る Bash(`../proj/x`、`rm -rf proj`、symlink 経由、
    `--out=proj/x`、`~/` で HOME が target など)も拒否される(target 内のテスト・ビルド・git コマンドも含む)。
    さらに未批准の target(または消えた target)がある間は、gate が解決できない語 — `$`・バッククォート・引用符の外のグロブ
    (`*` `?` `[`)・`{`・`~user`・閉じていない引用符 — を含む Bash は、target と無関係でも拒否される

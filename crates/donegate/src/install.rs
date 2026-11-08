@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 
 const EVENT: &str = "Stop";
 const SUB: &str = "gate";
-/// The SubagentStop hook judges the roots a stopping subagent wrote
-/// (`subagent` module); the Stop gate leaves an in-flight subagent's root to it.
+/// The SubagentStop hook judges the hook cwd when the stopping subagent wrote
+/// inside it (`subagent` module; no other worktree, user rulings 2026-11-08).
 const SUB_EVENT: &str = "SubagentStop";
 const SUB_SUB: &str = "subagent-gate";
 /// Generous timeout — this hook runs the project's build/test suite.

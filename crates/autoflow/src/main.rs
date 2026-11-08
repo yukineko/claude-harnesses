@@ -54,6 +54,7 @@ mod backlog;
 mod condukt;
 mod config;
 mod delegation_audit;
+mod flow_bypass;
 mod insights;
 mod lock;
 mod state;
@@ -87,8 +88,10 @@ enum Command {
     /// next UserPromptSubmit re-injects a "/flow を再開" instruction. Never blocks
     /// compaction; silent when the gate isn't met.
     PreCompact,
-    /// UserPromptSubmit hook: consume this session's resume-flow marker (if any)
-    /// and inject the "/flow を再開" instruction exactly once after a /compact.
+    /// UserPromptSubmit hook: block a `/flow` prompt unless `permission_mode`
+    /// is `bypassPermissions` (absent/unreadable = undetermined = block); else
+    /// consume this session's resume-flow marker (if any) and inject the
+    /// "/flow を再開" instruction exactly once after a /compact.
     /// Silent (no output) on every ordinary turn — zero noise.
     PromptSubmit,
 }
@@ -671,32 +674,54 @@ fn pre_compact_command() -> ! {
     })
 }
 
+/// UserPromptSubmit entry point. It carries a verdict — a `/flow` prompt
+/// outside `bypassPermissions` is blocked ([`flow_bypass::decide`]) — so it
+/// runs under the fail-closed `harness_core::gate::run::run_guarded` barrier,
+/// not `run_hook` (CLAUDE.md §1): a panic blocks the prompt rather than
+/// exiting 0 with no decision. The barrier is keyed `autoflow-prompt-submit`
+/// so its panic-streak marker never touches the Stop hook's `autoflow` one.
+/// `stop_hook_active` does not exist on this event, so every panic blocks;
+/// the operator escapes (`enabled = false`, `AUTOFLOW_DISABLE=1`) are checked
+/// first, before any panic-prone work, so a crash stays escapable.
 fn prompt_submit_command() -> ! {
-    run_hook(|| {
-        // A stdin READ ERROR: the session is unknown, so no resume marker can
-        // be consumed. The marker (if any) stays in place for the next prompt;
-        // the failure is reported on stderr, not injected as context.
+    let interactive = std::io::IsTerminal::is_terminal(&std::io::stdin());
+    harness_core::gate::run::run_guarded("autoflow-prompt-submit", interactive, false, || {
+        let cfg = Config::load();
+        if !cfg.enabled || Config::disabled_env() {
+            return;
+        }
+        // A stdin READ ERROR: the prompt is unknown, so whether it is `/flow`
+        // cannot be determined → block (CLAUDE.md §3). The session is unknown
+        // too, so no resume marker is consumed; it stays for the next prompt.
         let raw = match try_read_stdin() {
             Ok(raw) => raw,
             Err(e) => {
                 eprintln!(
                     "autoflow prompt-submit: stdin read failed: {e}; no resume marker consumed"
                 );
+                let reason = format!(
+                    "autoflow: UserPromptSubmit の stdin を読めず、このプロンプトが /flow \
+                     かどうかを判定できません（判定不能のためブロック）: {e}"
+                );
+                println!("{}", flow_bypass::block_json(&reason));
                 return;
             }
         };
-        let input = HookInput::parse(&raw).unwrap_or_default();
-        let session_id = resolve_session_id(&input);
-        let cfg = Config::load();
-        if !cfg.enabled || Config::disabled_env() {
+        if let Some(reason) = flow_bypass::decide(&raw) {
+            // The blocked prompt is erased, so the resume marker (if any) is
+            // NOT consumed: it is still owed to the next accepted prompt.
+            println!("{}", flow_bypass::block_json(&reason));
             return;
         }
+        let input = HookInput::parse(&raw).unwrap_or_default();
+        let session_id = resolve_session_id(&input);
         // UserPromptSubmit injects whatever a hook writes to stdout on exit 0
         // (same channel as ctxrot's guard). Nothing is printed on ordinary turns.
         if let Some(msg) = prompt_submit_run(&session_id, &cfg) {
             println!("{msg}");
         }
-    })
+    });
+    std::process::exit(0);
 }
 
 #[cfg(test)]

@@ -412,6 +412,32 @@ fn no_transcript_timestamps_committed_work_is_not_credited() {
     );
 }
 
+/// FAIL-OPEN REPRO (CLAUDE.md section 3: undetermined resolves RESTRICTIVE).
+/// No transcript record carries a `timestamp`, so `session_start` is
+/// Undetermined and committed work cannot be scoped to the session; the tree is
+/// clean; HEAD carries this session's commit adding untested implementation
+/// (attributed by the transcript's Write of that file). Today the gate scans
+/// only the empty uncommitted changes and ALLOWS with just a stderr note. An
+/// undetermined scope over committed impl with no test must BLOCK.
+///
+/// Anti-vacuity: the identical session WITH timestamps blocks
+/// (`single_root_committed_impl_without_test_blocks`), so the repo state is one
+/// the gate does judge as a violation when it can determine the scope.
+#[test]
+fn no_transcript_timestamps_committed_untested_impl_must_block() {
+    let f = Fixture::new(Layout::SingleRoot);
+    let imp = f.put("src/lib.rs", IMPL);
+    f.commit_in_session();
+    // Clean tree: nothing uncommitted for the gate to scan.
+    let tp = f.transcript_without_timestamps(&[&imp]);
+    let (stdout, stderr) = f.stop(&tp);
+    assert!(
+        blocks(&stdout),
+        "undetermined session start + committed untested impl (clean tree) must BLOCK, not \
+         allow with a stderr note; stdout={stdout:?} stderr={stderr:?}"
+    );
+}
+
 /// NEW (user ruling 2026-11-08: gates judge own worktree only), (a)+(c): the
 /// session committed untested impl in a linked worktree but the hook cwd is the
 /// primary tree. The worktree is NOT looked at => no block (and the primary tree

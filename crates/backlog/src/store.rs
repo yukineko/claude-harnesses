@@ -2893,10 +2893,9 @@ pub(crate) fn canonicalize_project(project: &str) -> String {
 /// default scope hard-errors, since an empty filtered result there is
 /// indistinguishable from a genuinely empty queue — see that call site).
 ///
-/// Filesystem-only (no `git` subprocess), mirroring
-/// `harness_core::trust::resolve`'s worktree-inheritance algorithm exactly —
-/// the SAME verified (not assumed) `gitdir:` walk, ported here because that
-/// function is private to `harness-core`.
+/// Filesystem-only (no `git` subprocess): a verified `gitdir:` walk from this
+/// checkout's `.git` file to its repository. Project identity only, never
+/// trust (harness-core's copy went with worktree trust, 2026-11-08).
 ///
 /// Resolution:
 ///   1. Nearest ancestor of `cwd` (inclusive) holding a `.git` entry — the
@@ -2958,8 +2957,9 @@ pub(crate) fn canonical_project_id(cwd: &Path) -> Determination<PathBuf> {
 }
 
 /// If `root` is a **linked** git worktree, the main working tree it belongs
-/// to. Ported from `harness_core::trust::main_worktree_of` (private to that
-/// crate) — see its doc comment for the full rationale; this is the identical
+/// to. Originally ported from `harness_core::trust::main_worktree_of`, which
+/// was deleted on 2026-11-08 together with worktree trust inheritance; this
+/// copy is now the only one, and it serves project identity, not trust. The
 /// algorithm: read the `gitdir:` gitfile, walk up
 /// `.../<common-git-dir>/worktrees/<name>`, and VERIFY the inference (not
 /// assume it from path shape alone) by canonicalizing both the common git dir

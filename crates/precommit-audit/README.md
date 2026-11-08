@@ -88,7 +88,8 @@ precommit-audit skip --reason "<why>"   # one-shot bypass, THIS session only
 - `trust` — add the resolved `--root` to the shared workspace-trust list
   (`harness_core::trust`, the same list `donegate`/`reviewgate`/`tdd` use) so an
   auto-discovered `.precommit-audit.toml` is honored. Until trusted, a
-  repo-shipped config is ignored (built-in checks still run on defaults).
+  repo-shipped config is not honored and the audit BLOCKS (refusal, not a
+  pass). Trust is per root: a linked worktree does not inherit it.
 - `--mode precommit` — for a pre-commit-framework / git hook on a human commit.
   Exits **1** on failure. Skips the (Claude Code) review contract.
 - `--mode stop` (default) — for a Claude Code Stop hook. Honors the subagent
@@ -189,8 +190,11 @@ project `.precommit-audit.toml` only when the root is trusted
 (config only *toggles* hard-coded built-in linters and adds **regex** rules — it
 can't name an arbitrary command), but `linters.node_projects` can resolve
 repo-local `eslint`/`tsc` binaries, so a cloned untrusted repo was the one
-execution vector. Now an untrusted repo's config is ignored (built-in checks
-still run on defaults) with a one-shot stderr notice; trust the root with
+execution vector. An untrusted root that ships a config is a refusal to audit:
+the run blocks (exit 1 precommit / 2 stop; 0 under SessionEnd, which cannot
+block) naming the file — never "built-in checks only", which would silently
+skip what the project declared. A linked worktree does not inherit its main
+tree's trust (user ruling 2026-11-08); trust the root with
 `precommit-audit trust` (the shared list, so `donegate trust` / `tdd trust`
 work too) to honor it. An explicit `--config <file>` is the operator's
 deliberate choice and is always honored, trusted or not.

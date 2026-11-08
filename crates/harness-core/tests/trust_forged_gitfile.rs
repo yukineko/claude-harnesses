@@ -1,9 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-//! e79afdd2: `trust::resolve` must not grant `InheritedFromMainWorktree` to a
-//! directory merely because its `.git` FILE says `gitdir: <trusted>/.git/worktrees/x`.
-//! A real linked worktree has (a) `worktrees/<name>` present in the main repo and
-//! (b) git's back-pointer `<git_dir>/gitdir` naming `<root>/.git`. A forged gitfile
-//! has neither, or has (a) without (b).
+//! e79afdd2 (updated 2026-11-08, worktree trust inheritance removed):
+//! `trust::resolve` must not trust a directory merely because its `.git` FILE
+//! says `gitdir: <trusted>/.git/worktrees/x`. Neither forged gitfiles NOR genuine
+//! linked worktrees inherit from a listed main tree any more.
 //!
 //! Integration test => its own process. HOME is pinned to a temp dir under a
 //! local lock; the real home is never touched.
@@ -105,11 +104,9 @@ fn forged_gitfile_naming_existing_worktree_with_foreign_backpointer_is_untrusted
     let main_git = std::fs::canonicalize(main.join(".git")).unwrap();
     let existing = main_git.join("worktrees").join("realwt");
     assert!(existing.is_dir(), "apparatus: worktrees/realwt exists");
-    // Control: the genuine worktree resolves, so `existing` is a valid target.
-    assert!(matches!(
-        trust::resolve(&real),
-        Trust::InheritedFromMainWorktree(_)
-    ));
+    // Control: the genuine worktree is not trusted either (no inheritance),
+    // and listing it directly is the only way in.
+    assert_eq!(trust::resolve(&real), Trust::Untrusted);
     let forged = forged_dir(base.path(), &format!("gitdir: {}\n", existing.display()));
     assert_eq!(
         trust::resolve(&forged),
@@ -119,23 +116,23 @@ fn forged_gitfile_naming_existing_worktree_with_foreign_backpointer_is_untrusted
 }
 
 #[test]
-fn real_worktree_of_trusted_main_inherits() {
+fn real_worktree_of_trusted_main_does_not_inherit() {
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _home = pin_home();
     let base = tempfile::tempdir().unwrap();
     let main = make_main(base.path());
     trust::add(&main).unwrap();
+    assert_eq!(trust::resolve(&main), Trust::Direct, "apparatus");
     let wt = base.path().join("wt");
     real_worktree(&main, &wt, "wt1");
-    match trust::resolve(&wt) {
-        Trust::InheritedFromMainWorktree(m) => {
-            assert_eq!(
-                std::fs::canonicalize(m).unwrap(),
-                std::fs::canonicalize(&main).unwrap()
-            );
-        }
-        other => panic!("expected InheritedFromMainWorktree, got {other:?}"),
-    }
+    assert_eq!(
+        trust::resolve(&wt),
+        Trust::Untrusted,
+        "user ruling 2026-11-08: no worktree trust inheritance"
+    );
+    // Listing the worktree itself is the only way in.
+    trust::add(&wt).unwrap();
+    assert_eq!(trust::resolve(&wt), Trust::Direct);
 }
 
 #[test]

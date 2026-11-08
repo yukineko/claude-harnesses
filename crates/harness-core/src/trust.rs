@@ -12,19 +12,21 @@
 //! honored once the user has explicitly **trusted** that project root, mirroring
 //! VS Code Workspace Trust / git's `safe.directory`.
 //!
-//! **What a plugin does with "untrusted" is the plugin's decision, and it is not
-//! uniform.** Most of the consumers below fall back to the (trusted) home config
-//! or built-in defaults. `donegate` deliberately does not: for a *gate*, "a check
-//! set was declared and I am refusing to run it" is a refusal to judge, so it
-//! blocks rather than rendering the refusal as "no checks" (CLAUDE.md 3). Do not
-//! assume a single downstream meaning for the answer this module returns.
+//! **What a plugin does with "untrusted" is the plugin's decision.** For a
+//! *gate*, "a config was declared and I am refusing to honor it" is a refusal
+//! to judge, so the gates block rather than rendering the refusal as "no
+//! checks" (CLAUDE.md 3). A non-gate consumer (beacon's notifier command,
+//! condukt's proof-dir superset) only drops or widens what it uses.
 //!
-//! Two resolvers, and they are not interchangeable:
-//! * [`is_trusted`] — exact canonical-path membership. Unchanged.
-//! * [`resolve`] — the same, plus **worktree inheritance** (a linked git
-//!   worktree of a trusted repository is trusted). Returns the three-valued
-//!   [`Trust`] so the caller can say *how* it was reached. Only `donegate`
-//!   consumes this today; see its docs for the migration argument.
+//! [`is_trusted`] is exact canonical-path membership (or `HARNESS_TRUST_ALL`);
+//! [`resolve`] is the same answer as the [`Trust`] enum. There is NO worktree
+//! inheritance (user ruling 2026-11-08): a linked worktree is trusted only when
+//! it is itself listed, which this repo's worktree creators do at creation.
+//!
+//! **Untrusted with a project config present is a refusal, not "defaults"**
+//! for every gate consumer (donegate, reviewgate, propguard, tdd,
+//! precommit-audit): falling back to built-in defaults / `Off` would silently
+//! skip what the project declared (CLAUDE.md §3).
 //!
 //! The trust list lives in `~/.harness/trust.toml`:
 //! ```toml
@@ -143,182 +145,47 @@ pub fn is_trusted(root: &Path) -> bool {
     is_listed(root)
 }
 
-/// How a project root's trust was resolved, kept as three answers rather than a
-/// bool so "inherited from the repository this is a worktree of" is *visible* to
-/// the caller (and to the operator it reports to) instead of being
-/// indistinguishable from an explicit entry.
+/// How a project root's trust was resolved. Kept as an enum (rather than a
+/// bool) so every collapse to a bool is explicit at the call site.
 ///
-/// [`Trust::Untrusted`] is the restricted side: every failure to resolve
-/// (unreadable `.git`, un-canonicalizable path, a gitfile whose shape we do not
-/// recognize) lands here rather than on a trusted answer.
+/// There is no worktree inheritance (user ruling 2026-11-08, #11 removed: a
+/// gate must not look at any other worktree, and resolving a linked worktree's
+/// trust from its main working tree's `.git/worktrees` metadata did exactly
+/// that). A linked worktree is trusted only when it is itself listed; the
+/// worktree creators in this repo (condukt `worktree::create`,
+/// `scripts/session-worktree-init.py`, specforge `implement::run_task`)
+/// register each worktree they cut from a listed repository at creation time.
+///
+/// [`Trust::Untrusted`] is the restricted side.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Trust {
     /// The root is listed in `~/.harness/trust.toml`, or `HARNESS_TRUST_ALL` is
     /// set truthy.
     Direct,
-    /// The root is a **linked git worktree** whose main working tree is trusted,
-    /// so it inherits that trust. Carries the main working tree that granted it,
-    /// so a caller can name it when explaining the decision.
-    InheritedFromMainWorktree(PathBuf),
     /// Not trusted.
     Untrusted,
 }
 
 impl Trust {
-    /// True for both trusted answers. Named (rather than `From<Trust> for bool`)
-    /// so every collapse to a bool is explicit at the call site.
+    /// True only for [`Trust::Direct`]. Named (rather than `From<Trust> for
+    /// bool`) so every collapse to a bool is explicit at the call site.
     #[must_use]
     pub fn is_trusted(&self) -> bool {
         !matches!(self, Trust::Untrusted)
     }
 }
 
-/// Resolve trust for a project root, honoring **worktree inheritance**: a linked
-/// git worktree of a repository whose main working tree is trusted is itself
-/// trusted.
-///
-/// # Why inheritance is not a loosening
-///
-/// Trusting repository `R` means "I accept running the command strings that
-/// `R`'s working tree contains". A linked worktree of `R` shares `R`'s object
-/// database and is a checkout of `R`'s history: anything that can appear in the
-/// worktree's `donegate.toml` could be checked out in `R`'s own working tree by
-/// `git checkout`, with identical privileges. So the blast radius of inheriting
-/// is exactly the blast radius already accepted when `R` was trusted — refusing
-/// to inherit does not shrink it, it only makes the trust answer wrong for a
-/// directory whose contents are `R`'s.
-///
-/// The measured need: this repo's own CLAUDE.md 8 mandates that *all* work
-/// happen in session worktrees, while [`is_trusted`] matches a canonical path
-/// exactly. Every session worktree was therefore untrusted, which — once a
-/// gate stops rendering "untrusted" as "nothing to check" — would block every
-/// session at once.
-///
-/// # What it does not do
-///
-/// * It does not walk parent directories. Only the single `worktree ->
-///   main working tree` hop is followed, and only when the `.git` *gitfile*
-///   proves the relationship.
-/// * It does not trust the `.git` gitfile's claim. The gitfile is writable by
-///   whoever controls `root`, so the relationship is accepted only when the
-///   main working tree's own `.git` is the named common git dir, the named
-///   `worktrees/<name>` admin dir exists as a real directory, AND git's
-///   back-pointer `worktrees/<name>/gitdir` resolves to `root/.git` (see
-///   `main_worktree_of`). Forging those requires write access inside the
-///   trusted repository's `.git` — with one exception: a *stale* admin entry
-///   (the worktree directory was deleted but `git worktree prune` has not
-///   run) still names its original path, so whoever controls that exact path
-///   can place a gitfile there and inherit trust.
-/// * It does not consult `git` as a subprocess: the answer is read from the
-///   files above, so there is no exit status to ignore and no `PATH` to
-///   depend on.
-/// * Every unreadable / unrecognized / un-canonicalizable step returns
-///   [`Trust::Untrusted`] — the restricted side.
+/// Resolve trust for a project root: [`Trust::Direct`] when [`is_trusted`]
+/// (listed, or `HARNESS_TRUST_ALL`), else [`Trust::Untrusted`]. Reads only the
+/// trust list — never the root's `.git` nor any other worktree's metadata (see
+/// [`Trust`] for why worktree inheritance was removed).
 #[must_use]
 pub fn resolve(root: &Path) -> Trust {
     if is_trusted(root) {
-        return Trust::Direct;
-    }
-    match main_worktree_of(root) {
-        Some(main) if is_trusted(&main) => Trust::InheritedFromMainWorktree(main),
-        _ => Trust::Untrusted,
-    }
-}
-
-/// If `root` is a **linked** git worktree, the main working tree it belongs to.
-///
-/// A linked worktree's `.git` is a *file* (never a directory) whose first line
-/// is `gitdir: <path to>/<common-git-dir>/worktrees/<name>` (gitrepository-layout(5)).
-/// The main working tree is the parent of that common git dir. The gitfile is
-/// written by whoever controls `root`, so nothing it says is taken on faith;
-/// `Some` is returned only when ALL of these are verified:
-///
-/// 1. the gitdir path has the shape `<common>/worktrees/<name>`;
-/// 2. the candidate main working tree's own `.git` canonicalizes to `<common>`;
-/// 3. `<common>/worktrees/<name>` exists as a real directory (not a symlink);
-/// 4. git's back-pointer `<common>/worktrees/<name>/gitdir` (absolute, or
-///    relative to that admin dir) canonicalizes to the same path as
-///    `canonicalize(root/.git)`.
-///
-/// 3 and 4 live inside the trusted repository's `.git`, so a forged gitfile in
-/// an arbitrary directory (naming a nonexistent `worktrees/<name>`, or an
-/// existing one that belongs to a different worktree) cannot satisfy them
-/// without write access to that `.git`. The exception is a stale admin entry
-/// whose worktree directory was deleted without `git worktree prune`: its
-/// back-pointer still names the original path, so a gitfile placed at exactly
-/// that path satisfies 3 and 4. A bare repository (whose worktrees have
-/// no main working tree to inherit from), a `GIT_DIR` in an unusual location,
-/// or any read / parse / canonicalize failure yields `None` — the restricted
-/// side, since the only caller uses `Some` to *grant* trust.
-fn main_worktree_of(root: &Path) -> Option<PathBuf> {
-    let dot_git = root.join(".git");
-    // A main working tree has a `.git` DIRECTORY and inherits from nobody.
-    if !std::fs::symlink_metadata(&dot_git).ok()?.is_file() {
-        return None;
-    }
-    let text = std::fs::read_to_string(&dot_git).ok()?;
-    let target = text
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("gitdir:"))?
-        .trim();
-    if target.is_empty() {
-        return None;
-    }
-    let target = Path::new(target);
-    let git_dir = if target.is_absolute() {
-        target.to_path_buf()
+        Trust::Direct
     } else {
-        root.join(target)
-    };
-
-    // .../<common-git-dir>/worktrees/<name>
-    let worktrees = git_dir.parent()?;
-    if worktrees.file_name()? != "worktrees" {
-        return None;
+        Trust::Untrusted
     }
-    let common = worktrees.parent()?;
-    let candidate = common.parent()?;
-
-    // Verify the inference instead of trusting the path shape: the candidate's
-    // own `.git` must BE this common git dir.
-    let common_key = std::fs::canonicalize(common).ok()?;
-    let candidate_key = std::fs::canonicalize(candidate.join(".git")).ok()?;
-    if common_key != candidate_key {
-        return None;
-    }
-
-    // The gitfile is attacker-writable: anyone can drop a `.git` FILE naming
-    // `<trusted-main>/.git/worktrees/<anything>` into any directory, and every
-    // check above would pass. What only git (or someone who can already write
-    // inside the trusted repo's `.git`) can produce is the per-worktree admin
-    // dir and its BACK-POINTER, so both are required:
-    //
-    // 1. `git_dir` (`.../worktrees/<name>`) must exist as a real directory
-    //    (not a symlink, not a file).
-    if !std::fs::symlink_metadata(&git_dir).ok()?.is_dir() {
-        return None;
-    }
-    // 2. `<git_dir>/gitdir` (gitrepository-layout(5): "the path to the .git
-    //    file" of the linked worktree) must canonicalize to THIS root's `.git`.
-    //    git writes it absolute, or relative to `git_dir` under
-    //    `worktree.useRelativePaths`.
-    let back = std::fs::read_to_string(git_dir.join("gitdir")).ok()?;
-    let back = back.lines().next()?.trim();
-    if back.is_empty() {
-        return None;
-    }
-    let back = Path::new(back);
-    let back = if back.is_absolute() {
-        back.to_path_buf()
-    } else {
-        git_dir.join(back)
-    };
-    let back_key = std::fs::canonicalize(back).ok()?;
-    let own_key = std::fs::canonicalize(&dot_git).ok()?;
-    if back_key != own_key {
-        return None;
-    }
-    Some(candidate.to_path_buf())
 }
 
 /// Add a project root to the trust list (idempotent). Returns the canonical key
@@ -556,15 +423,15 @@ mod tests {
             .unwrap_or(false)
     }
 
-    /// Worktree inheritance, both directions, in one `#[test]` -- serialized
-    /// against every other env-mutating test by `crate::test_env::lock()`, not
-    /// by being a single function (it mutates the process-global `HOME`, like
-    /// the roundtrip test above).
+    /// NO worktree inheritance (user ruling 2026-11-08): a linked worktree of a
+    /// listed main working tree is Untrusted unless it is itself listed.
+    /// Serialized against every other env-mutating test by
+    /// `crate::test_env::lock()` (it mutates the process-global `HOME`).
     #[test]
-    fn resolve_inherits_trust_from_the_main_worktree_but_only_when_it_is_trusted() {
+    fn resolve_does_not_inherit_trust_from_the_main_worktree() {
         let _guard = crate::test_env::lock();
         if !git_available() {
-            eprintln!("SKIPPED resolve_inherits_...: git unavailable");
+            eprintln!("SKIPPED resolve_does_not_inherit_...: git unavailable");
             return;
         }
         let home = tempfile::tempdir().unwrap();
@@ -595,60 +462,40 @@ mod tests {
         assert!(wt.join(".git").is_file(), "apparatus: linked worktree");
         assert!(main.join(".git").is_dir(), "apparatus: main working tree");
 
-        // 1. Nothing trusted ⇒ neither is trusted. Inheritance must not invent
-        //    trust out of "is a worktree".
+        // 1. Nothing trusted => neither is trusted.
         assert_eq!(resolve(&main), Trust::Untrusted);
+        assert_eq!(resolve(&wt), Trust::Untrusted);
+
+        // 2. Trust the main working tree => the worktree is STILL Untrusted.
+        add(&main).unwrap();
+        assert_eq!(resolve(&main), Trust::Direct, "apparatus: main is trusted");
         assert_eq!(
             resolve(&wt),
             Trust::Untrusted,
-            "a worktree of an UNTRUSTED repo must stay untrusted"
+            "a linked worktree of a trusted main tree must NOT inherit its trust"
         );
+        assert!(!is_trusted(&wt));
 
-        // 2. Trust the main working tree ⇒ the worktree inherits, and says so.
-        let key = add(&main).unwrap();
-        assert_eq!(resolve(&main), Trust::Direct);
-        match resolve(&wt) {
-            Trust::InheritedFromMainWorktree(from) => assert_eq!(
-                std::fs::canonicalize(&from).unwrap(),
-                std::fs::canonicalize(&key).unwrap(),
-                "inheritance must name the main working tree that granted it"
-            ),
-            other => panic!("worktree must inherit the main tree's trust; got {other:?}"),
-        }
-        // The legacy exact-match resolver is deliberately unchanged, so the five
-        // other consumers keep their current behaviour until each migrates.
-        assert!(
-            !is_trusted(&wt),
-            "is_trusted must remain exact-match — migrating the other crates is a separate change"
-        );
-
-        // 3. Untrusting the main tree revokes the inherited trust too.
+        // 3. Untrusting the main tree changes nothing for the worktree.
         assert!(remove(&main).unwrap());
         assert_eq!(resolve(&wt), Trust::Untrusted);
 
-        // 4. Trusting the WORKTREE directly still works and reports Direct.
+        // 4. Trusting the WORKTREE directly works and reports Direct.
         add(&wt).unwrap();
         assert_eq!(resolve(&wt), Trust::Direct);
         assert!(remove(&wt).unwrap());
 
-        // 5. A plain directory that is not a worktree at all inherits nothing.
+        // 5. A plain directory that is not a worktree at all is untrusted.
         let plain = base.path().join("plain");
         std::fs::create_dir_all(&plain).unwrap();
         assert_eq!(resolve(&plain), Trust::Untrusted);
-        assert_eq!(main_worktree_of(&plain), None);
 
-        // 6. A `.git` FILE whose gitdir does not have the `…/worktrees/<name>`
-        //    shape must not resolve to a parent (no path-shape guessing).
+        // 6. A gitfile pointing at a trusted repo's tree is untrusted too.
         let bogus = base.path().join("bogus");
         std::fs::create_dir_all(&bogus).unwrap();
         std::fs::write(bogus.join(".git"), format!("gitdir: {}\n", main.display())).unwrap();
-        assert_eq!(main_worktree_of(&bogus), None);
         add(&main).unwrap();
-        assert_eq!(
-            resolve(&bogus),
-            Trust::Untrusted,
-            "a gitfile pointing at a trusted repo's TREE (not its worktrees dir) must not inherit"
-        );
+        assert_eq!(resolve(&bogus), Trust::Untrusted);
         assert!(remove(&main).unwrap());
     }
 }

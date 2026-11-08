@@ -97,6 +97,12 @@ pub struct Config {
     /// review runs (even when nothing is reviewable). `reviewgate status`
     /// reports it.
     pub config_invalid: Option<String>,
+    /// `Some(path)` when the project `reviewgate.toml` EXISTS but the root is
+    /// not trusted. Its settings are not honored (its `reviewer_cmd` would be
+    /// arbitrary code execution), and that is a refusal to judge, not the
+    /// `Off` default: the Stop hook blocks `config-untrusted` naming the file
+    /// (CLAUDE.md §3). The home config's knobs still load.
+    pub untrusted_project: Option<PathBuf>,
 }
 
 /// On-disk form; every field optional.
@@ -199,6 +205,7 @@ impl Default for Config {
             state_dir: base_dir().join("state"),
             load_error: None,
             config_invalid: None,
+            untrusted_project: None,
         }
     }
 }
@@ -220,11 +227,12 @@ impl Config {
     /// to the (trusted) home config, then built-in defaults. The home config and
     /// defaults need no trust. A read/parse error of the chosen file is recorded
     /// in `load_error` AND `config_invalid` (the Stop hook then blocks
-    /// `config-invalid`); it never silently becomes the `Off` default. Note that an
-    /// untrusted project file is *ignored*, not invalid: with no home config the
-    /// result is the `Off` default (announced on stderr). Trust is resolved with
-    /// [`harness_core::trust::resolve`], i.e. including worktree inheritance: a
-    /// linked git worktree of a trusted checkout is trusted (same rule as donegate).
+    /// `config-invalid`); it never silently becomes the `Off` default. An
+    /// untrusted project file is not honored and is recorded in
+    /// [`Config::untrusted_project`], which the Stop hook blocks on
+    /// (`config-untrusted`) — never the `Off` default. Trust is resolved with
+    /// [`harness_core::trust::resolve`], which has no worktree inheritance
+    /// (user ruling 2026-11-08).
     pub fn load(root: &Path) -> Self {
         let mut cfg = Config::default();
 
@@ -234,13 +242,9 @@ impl Config {
                 Some(p)
             } else {
                 if p.exists() {
-                    // Project file present but untrusted: ignore it (best effort
-                    // one-line notice) and fall back to home / defaults.
-                    eprintln!(
-                        "reviewgate: {} is not trusted; ignoring it. \
-                         Run 'reviewgate trust' to enable.",
-                        p.display()
-                    );
+                    // Project file present but untrusted: not honored, and a
+                    // refusal to judge (blocked by the Stop hook).
+                    cfg.untrusted_project = Some(p.clone());
                 }
                 let h = Config::home_path();
                 if h.exists() {

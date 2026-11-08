@@ -93,6 +93,7 @@ propguard init                         # 雛形 ./propguard.toml を生成
 [`propguard.example.toml`](./propguard.example.toml) を参照。
 主なつまみ：`mode`、`min_properties`/`max_properties`（`max_properties` は 5 に上限、`min_properties` = 1 は 3 へ引き上げずそのまま受け付ける）、`threshold`、`max_attempts`、`reset_after_secs`、`min_changed_files`、`max_diff_bytes`、`criteria_file`、`include`/`exclude`、`enabled`、（subprocess）`checker_cmd` / `checker_timeout_secs`。
 project の `propguard.toml` は root を **trust** して初めて honored される。
+trust されていない間は、毎回の停止がそのファイルを名指しして `config-untrusted` でブロックされる（拒否であって、組み込み既定値には倒さない）。trust は root ごとで、linked worktree は main の trust を継承しない（ユーザー裁定 2026-11-08）。
 root は `propguard trust` で trust する。
 
 `propguard status` で解決済み設定と現タスクのプロパティを確認できる。

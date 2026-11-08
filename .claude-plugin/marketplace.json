@@ -33,7 +33,7 @@
     {
       "name": "beacon",
       "description": "Desktop and webhook notifications for Claude Code: Stop and Notification hooks that ping you via desktop, Slack, webhook or a custom command when a turn finishes or input is needed.",
-      "version": "0.1.16",
+      "version": "0.1.17",
       "category": "notifications",
       "keywords": [
         "hooks",
@@ -82,7 +82,7 @@
     {
       "name": "backlog",
       "description": "Cross-project task queue for Claude Code with cycle-type tags, a SessionStart hook that injects pending work, and subcommands to add, list, claim and finish tasks.",
-      "version": "0.3.103",
+      "version": "0.3.104",
       "category": "workflow",
       "keywords": [
         "backlog",
@@ -331,7 +331,7 @@
     {
       "name": "donegate",
       "description": "Completion-verification gate for Claude Code: on Stop it runs your acceptance commands and blocks until every applicable check is green, feeding failures back for an auto-fix loop.",
-      "version": "0.1.93",
+      "version": "0.1.94",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -533,7 +533,7 @@
     {
       "name": "precommit-audit",
       "description": "Config-driven pre-commit static audit hook with generic built-in checks and project rules in a TOML file, running on Linux, macOS and Windows.",
-      "version": "0.1.26",
+      "version": "0.1.27",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -557,7 +557,7 @@
     {
       "name": "reviewgate",
       "description": "Code-review gate for Claude Code whose Stop hook defaults to off; opt in to inject a review rubric for self-review or to spawn an independent reviewer command.",
-      "version": "0.1.66",
+      "version": "0.1.67",
       "category": "quality",
       "keywords": [
         "hooks",
@@ -653,7 +653,7 @@
     {
       "name": "specguard",
       "description": "Project-agnostic spec and implementation drift audit harness that drives a read-only LLM agent to check an implementation against its canonical specs and the specs against each other.",
-      "version": "0.2.109",
+      "version": "0.2.110",
       "category": "quality",
       "keywords": [
         "spec",
@@ -703,7 +703,7 @@
     {
       "name": "tdd",
       "description": "Test-first gate for Claude Code: on Stop it blocks when implementation lines were added with no test visible in the uncommitted changes, and red/green/verify subcommands record RED before GREEN.",
-      "version": "0.1.73",
+      "version": "0.1.74",
       "category": "quality",
       "keywords": [
         "tdd",
@@ -957,7 +957,7 @@
     {
       "name": "propguard",
       "description": "Property gate for Claude Code that derives invariants from a task's done_criteria and checks the code against them; its Stop hook is not wired by default and must be installed explicitly.",
-      "version": "0.1.77",
+      "version": "0.1.78",
       "category": "quality",
       "keywords": [
         "hooks",

@@ -151,9 +151,10 @@ fn skip_cmd(reason: &str) -> anyhow::Result<()> {
 /// Add the current project root to the shared workspace-trust list so its
 /// project-local `donegate.toml` commands are honored on Stop.
 ///
-/// Trusting a repository's MAIN working tree is enough for its linked git
-/// worktrees: `harness_core::trust::resolve` inherits trust across that one hop
-/// (see its docs for why that is not a loosening).
+/// Trust is per root: a linked git worktree is NOT trusted through its main
+/// working tree (user ruling 2026-11-08, inheritance removed). Run this in the
+/// worktree, or create it through the session init / condukt, which register
+/// it at creation.
 fn trust_cmd() -> anyhow::Result<()> {
     let root = std::env::current_dir()?;
     let key = harness_core::trust::add(&root)?;
@@ -746,8 +747,9 @@ fn refusal_reason(d: &config::Declaration, attempt: u32, max: u32) -> String {
              list, so donegate will not run them. That is a refusal to judge, NOT a pass: donegate \
              cannot tell you whether this project's own checks are green.\n\n\
              Remedy — run once, in this project root:\n    donegate trust\n\n\
-             If this root is a git worktree, trusting its MAIN working tree is enough; worktrees \
-             inherit that trust.",
+             If this root is a git worktree, run `donegate trust` in the worktree itself (trust \
+             is not inherited from the main working tree), or create the worktree through the \
+             session init, which registers it.",
             project_path.display()
         ),
         config::Declaration::Unreadable { path, why } => format!(
@@ -1000,10 +1002,6 @@ fn status() {
     }
     match harness_core::trust::resolve(&root) {
         harness_core::trust::Trust::Direct => println!("trust:         trusted (explicit)"),
-        harness_core::trust::Trust::InheritedFromMainWorktree(main) => println!(
-            "trust:         trusted (inherited — this is a worktree of {})",
-            main.display()
-        ),
         harness_core::trust::Trust::Untrusted => println!("trust:         UNTRUSTED"),
     }
     println!("enabled:       {}", cfg.enabled);

@@ -61,7 +61,7 @@ reviewgate install       # wire the Stop hook into ~/.claude/settings.json
 - `reviewgate init [--force]` — write a starter `reviewgate.toml`.
 - `reviewgate status` — show the resolved config and what would be reviewed now.
 - `reviewgate trust` — trust the current project so its `./reviewgate.toml` (including `reviewer_cmd`) is honored.
-- Until trusted, a repo-shipped config is ignored.
+- Until trusted, a repo-shipped config is not honored and the Stop hook BLOCKS `config-untrusted` naming the file (a refusal, never the `off` default). Trust is per root: a linked worktree does not inherit its main tree's trust (user ruling 2026-11-08); the session init and condukt register the worktrees they create.
 - `reviewgate skip --reason "<why>"` — one-shot, session-scoped skip (see below).
 
 Run `reviewgate review` by hand (no stdin) for a dry check: it exits 1 on a block and prints no hook JSON.

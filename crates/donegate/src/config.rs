@@ -218,12 +218,10 @@ impl Config {
     /// A project `donegate.toml` wins outright — but only when the project root
     /// is trusted, because a project `[[check]].cmd` is later run via `sh -c` and
     /// a hostile repository could otherwise ship arbitrary commands. Trust is
-    /// resolved with [`harness_core::trust::resolve`], i.e. **including worktree
-    /// inheritance**: a linked git worktree of a trusted repository is trusted,
-    /// because its `donegate.toml` is that repository's content and could be
-    /// checked out in the repository's own working tree with identical
-    /// privileges. Without that, CLAUDE.md 8's mandate that all work happen in
-    /// session worktrees would put every session on the untrusted side.
+    /// resolved with [`harness_core::trust::resolve`], which has NO worktree
+    /// inheritance (user ruling 2026-11-08): a linked worktree is trusted only
+    /// when it is itself listed, which the session init and condukt do at
+    /// creation. An untrusted root with a project file is a refusal (block).
     pub fn resolve(root: &Path) -> (Self, Declaration) {
         let project = Config::project_path(root);
         let home = Config::home_path();

@@ -105,7 +105,12 @@ impl Fixture {
         let d = self.home.join(".claude/projects/-slug");
         std::fs::create_dir_all(&d).unwrap();
         let p = d.join("sess.jsonl");
-        let mut body = String::from(r#"{"type":"user","message":{"role":"user","content":"go"}}"#);
+        // Real transcripts carry record timestamps; without one the session
+        // start is undetermined and tdd BLOCKS (CLAUDE.md §3), which these
+        // scenarios do not test. Placed after the fixture's setup commits.
+        let mut body = String::from(
+            r#"{"type":"user","timestamp":"2099-01-01T00:00:00.000Z","message":{"role":"user","content":"go"}}"#,
+        );
         body.push('\n');
         for (tool, input) in uses {
             body.push_str(

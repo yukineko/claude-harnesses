@@ -192,30 +192,12 @@ fn effective_threshold(cfg: &Config, n_props: usize) -> usize {
 
 /// Core decision. `st` is the loaded prior session state.
 pub fn evaluate(cfg: &Config, root: &Path, st: &crate::state::SessionState) -> Decision {
-    // 0. A config file that exists but could not be read/parsed: every knob
-    //    below (including `done_criteria`) is a built-in default standing in
-    //    for an operator config we could not see. Undetermined ⇒ fail closed
-    //    (CA-propguard-03). No give-up: retrying cannot fix it, the operator can.
-    if let Some(why) = &cfg.load_error {
+    // 0 / 0a / 0b. Config refusals — unreadable, untrusted, invalid — block
+    //    before anything else, with no give-up (crate::config_refusal).
+    if let Some((reason, tag)) = crate::config_refusal::check(cfg) {
         return Decision::Block {
-            reason: config_unreadable_reason(why),
-            tag: "config-unreadable",
-            files: vec![],
-            properties: Vec::new(),
-            attempts: st.attempts.saturating_add(1),
-            last_hash: String::new(),
-        };
-    }
-
-    // 0b. A value we read but cannot interpret (unknown `mode`): also
-    //     undetermined, not a mode choice. Same shape as `config-unreadable`
-    //     (unbounded: retrying cannot fix a typo; `propguard skip` /
-    //     PROPGUARD_DISABLE and the repeat-ledger waiver in
-    //     `harness_core::repeat::emit_stop_block` are the bounded exits).
-    if let Some(why) = &cfg.config_invalid {
-        return Decision::Block {
-            reason: config_invalid_reason(why),
-            tag: "config-invalid",
+            reason,
+            tag,
             files: vec![],
             properties: Vec::new(),
             attempts: st.attempts.saturating_add(1),
@@ -801,13 +783,13 @@ fn diff_failed_reason(why: &str, files: &[String], attempt: u32, max: u32) -> St
     )
 }
 
-fn config_unreadable_reason(why: &str) -> String {
+pub(crate) fn config_unreadable_reason(why: &str) -> String {
     format!(
         "🚧 propguard: 設定ファイルを読めませんでした — {why}\n\n         設定ファイルは存在するのに読み取り/解析できないため、propguard が従うべき設定 (done_criteria・         mode・threshold など) が判定不能です。組み込みの既定値で代用すると「未設定」と区別できないまま         検査を素通りさせるので、この停止をブロックしています (再試行では解消しないため自動の通過許可は         ありません)。\n\n         前に進むには次のいずれか:\n         - 設定ファイルの権限/内容を直す (`propguard status` で対象ファイルを確認)。\n         - このチェックを1回だけスキップ: `propguard skip --reason ...` を実行 (理由を1行)。\n         - propguard を完全に無効化: 環境変数 PROPGUARD_DISABLE=1。"
     )
 }
 
-fn config_invalid_reason(why: &str) -> String {
+pub(crate) fn config_invalid_reason(why: &str) -> String {
     format!(
         "🚧 propguard: config-invalid — 設定値を解釈できません: {why}\n\n\
          `mode` に指定できる値は \"inject\" または \"subprocess\" (別名: checker / independent) です。\

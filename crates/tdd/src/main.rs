@@ -25,6 +25,7 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod committed;
 mod config;
 mod gate;
 mod git;
@@ -308,6 +309,20 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
+    // A project tdd.toml exists but the root is untrusted: refusing to honor
+    // it is a refusal to judge, never "judge by the defaults" (CLAUDE.md §3;
+    // trust inheritance removed 2026-11-08). The skip above stays the escape.
+    if let Some(p) = &cfg.untrusted_project {
+        log_event(&cfg, &session, "config-untrusted", 0);
+        let reason = config::untrusted_reason(p);
+        if interactive {
+            eprintln!("{reason}");
+            std::process::exit(1);
+        }
+        harness_core::repeat::emit_stop_block("tdd", &reason);
+        std::process::exit(0);
+    }
+
     // Scoped to what this session wrote (the Stop payload's transcript); an
     // undetermined attribution scans the whole checkout. The note is printed
     // on every run, allowing ones included, so an exclusion is never silent.
@@ -378,8 +393,8 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
 
     log_event(&cfg, &session, "blocked", attempt);
-    emit_violation(&root, &session, gate::check_kind(&verdict));
-    let reason = gate::block_reason(&verdict, attempt, cfg.max_attempts);
+    emit_violation(&root, &session, gate::check_kind(&verdict, &cfg));
+    let reason = gate::block_reason(&verdict, &cfg, attempt, cfg.max_attempts);
 
     if interactive {
         eprintln!("{}", gate::human_report(&verdict, &cfg));
@@ -411,6 +426,12 @@ fn proof_command(
 ) -> ! {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let mut cfg = Config::load(&root);
+    // An untrusted project tdd.toml: running the default `test_cmd` instead of
+    // the project's would record a proof of a different command. Refuse.
+    if let Some(p) = &cfg.untrusted_project {
+        eprintln!("{}", config::untrusted_reason(p));
+        std::process::exit(1);
+    }
     // Resolve the effective strict_separation before `green` consumes it:
     // explicit CLI/config > gate-crate-context default-on > global default-off.
     // (`red` records the RED author but never checks separation, so this only
@@ -523,7 +544,14 @@ fn status() {
     } else {
         Path::new("(defaults — no config file)").to_path_buf()
     };
-    println!("config:        {}", src.display());
+    match &cfg.untrusted_project {
+        Some(p) => println!(
+            "config:        {} is NOT TRUSTED — not honored; stops are BLOCKED until `tdd trust` \
+             is run in this root. Values below are the home/default ones.",
+            p.display()
+        ),
+        None => println!("config:        {}", src.display()),
+    }
     println!("enabled:       {}", cfg.enabled);
     println!("max_attempts:  {}", cfg.max_attempts);
     println!("min impl lines:{}", cfg.min_added_impl_lines);

@@ -35,6 +35,10 @@ forge・condukt のスケジューラが再利用）。
 - **偽陽性ゼロ・バイアス** — 曖昧な入力は allow。Rust の戻り型矢印 `->`（`prev == b'-'`）と山括弧
   プレースホルダ `<value>` / `<run-id>`（`is_angle_placeholder_close`。hyphen を含む kebab-case
   プレースホルダも placeholder と認識する）は truncating redirect と誤認しない。
+  `>` / `>>` の書き込み先の語は改行をまたいで読まず（空白・タブのみ飛ばす、`skip_redirect_word_gap`）、
+  行末の `>`（改行・テキスト末尾の直前、`redirect_word_missing_at_line_end`）は書き込み先として数えない
+  （シェルでは何も開かない。backlog 0fccf1eb: `>` で終わる here-document 本文行の次の区切り行を
+  `> EOF` と誤読していた）。
   クォート内の破壊的テキスト（`echo 'rm -rf /'`）は実行されないので allow。opaque な
   `source <file>` / `bash <script>`（`-c` 無し）は中身を検査できないため allow。
 - **`>` スキャンは UTF-8 char 境界安全** — truncating redirect スキャナの whitespace/delimiter 判定は

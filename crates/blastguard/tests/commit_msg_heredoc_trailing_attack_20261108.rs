@@ -15,8 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn fresh_dir(tag: &str) -> PathBuf {
-    let dir =
-        std::env::temp_dir().join(format!("blastguard-cmatk-{}-{tag}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("blastguard-cmatk-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("mkdir");
     dir
@@ -70,7 +69,11 @@ fn assert_deny(tag: &str, cmd: &str) {
 
 fn assert_not_allow(tag: &str, cmd: &str) {
     let base = fresh_dir(tag);
-    assert_ne!(decision(&base, cmd), "allow", "must not be allow; cmd: {cmd:?}");
+    assert_ne!(
+        decision(&base, cmd),
+        "allow",
+        "must not be allow; cmd: {cmd:?}"
+    );
 }
 
 /// Case 1: body is executed by sh. Deny expected.
@@ -82,7 +85,10 @@ fn case01_pipe_sh_body() {
 /// Case 2: body reaches bash through a pipeline. Deny expected.
 #[test]
 fn case02_pipe_grep_bash_body() {
-    assert_deny("c02", "git commit -F - <<'EOF' | grep x | bash\nrm -rf /etc\nEOF");
+    assert_deny(
+        "c02",
+        "git commit -F - <<'EOF' | grep x | bash\nrm -rf /etc\nEOF",
+    );
 }
 
 /// Case 3: real tail after &&. Deny expected.
@@ -124,7 +130,10 @@ fn case08_redirect_etc_passwd() {
 /// Case 9: sh -c 'cat' ignores stdin; verdict not clearly Deny: not allow.
 #[test]
 fn case09_sh_c_cat_body() {
-    assert_not_allow("c09", "git commit -F - <<'EOF' | sh -c 'cat'\nrm -rf /etc\nEOF");
+    assert_not_allow(
+        "c09",
+        "git commit -F - <<'EOF' | sh -c 'cat'\nrm -rf /etc\nEOF",
+    );
 }
 
 /// Case 10: git alias runs a shell command. Not allow.
@@ -139,7 +148,10 @@ fn case10_alias_bang() {
 /// Case 11: real tail after `;`. Deny expected.
 #[test]
 fn case11_pipe_cat_then_semicolon_tail() {
-    assert_deny("c11", "git commit -F - <<'EOF' | cat; rm -rf /etc\nmsg\nEOF");
+    assert_deny(
+        "c11",
+        "git commit -F - <<'EOF' | cat; rm -rf /etc\nmsg\nEOF",
+    );
 }
 
 /// Case 12: second heredoc fed to bash. Deny expected.
@@ -160,13 +172,19 @@ fn case13_unquoted_command_substitution() {
 /// Case 14: -F /dev/stdin piped to sh. Deny expected.
 #[test]
 fn case14_dev_stdin_pipe_sh() {
-    assert_deny("c14", "git commit -F /dev/stdin <<'EOF' | sh\nrm -rf /etc\nEOF");
+    assert_deny(
+        "c14",
+        "git commit -F /dev/stdin <<'EOF' | sh\nrm -rf /etc\nEOF",
+    );
 }
 
 /// Case 15: body reaches sh through head. Deny expected.
 #[test]
 fn case15_pipe_head_sh() {
-    assert_deny("c15", "git commit -F - <<'EOF' | head -1 | sh\nrm -rf /etc\nEOF");
+    assert_deny(
+        "c15",
+        "git commit -F - <<'EOF' | head -1 | sh\nrm -rf /etc\nEOF",
+    );
 }
 
 /// Benign control: tail only reads, body is a commit message. Allow.

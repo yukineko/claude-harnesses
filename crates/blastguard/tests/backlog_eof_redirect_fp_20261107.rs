@@ -111,7 +111,6 @@ fn decision(cwd: &Path, command: &str) -> String {
 /// TARGET (RED at 6d230618): the exact observed command. The cd target is a
 /// literal path, the body is quoted (data); nothing in it writes anywhere.
 #[test]
-#[ignore = "backlog 0fccf1eb: open defect, remove ignore when fixed"]
 fn exact_observed_commit_command_is_allow() {
     let base = fresh_dir("exact");
     // User ruling 2026-11-08: only the staging is re-anchored to an explicit
@@ -126,7 +125,6 @@ fn exact_observed_commit_command_is_allow() {
 /// TARGET (RED at 6d230618): the minimized shape. A second command after the
 /// `cd`, then a quoted heredoc whose last body line ends in `>`.
 #[test]
-#[ignore = "backlog 0fccf1eb: open defect, remove ignore when fixed"]
 fn body_line_ending_in_gt_does_not_make_delimiter_a_redirect_target() {
     let base = fresh_dir("min");
     let wt = base.display();

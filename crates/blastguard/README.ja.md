@@ -589,6 +589,12 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   コマンドとして従来通り判定する（`<<'EOF'; rm -rf /etc` は deny）。`&`・`|&`、`$`・backtick・`\`、
 >   `cat`/`grep`/`egrep`/`fgrep`/`head`/`tail`/`wc` 以外の pipe 先や `<`/`>`/`(`/`)` を含む pipe 段が
 >   あれば従来通り本文も走査する（`git_commit_reader_before_tail`）。
+>   0.2.388 以降（backlog 0fccf1eb）、`>` / `>>` の書き込み先の語は改行をまたいで読まない
+>   （空白・タブだけを飛ばす。`src/detect/redirect.rs` の `skip_redirect_word_gap`）。行末の
+>   `>`（改行またはテキスト末尾の直前）は書き込み先を持たず、シェルでは本文データか構文エラーで
+>   何も開かないため、書き込み先として数えない。以前は本文を走査する形（`cd D; A && cat <<'EOF'`
+>   等）で `>` で終わる本文行（`Co-Authored-By: … <…>`）の次の区切り行が `> EOF` と読まれ、
+>   unplaceable な相対リダイレクトとして deny されていた。
 > - **code-interpreter-inline-eval**: 「形」での一律 deny は廃止され、プログラム本文を
 >   監査する（`analyze_code_interpreter` / `interpreter_code_verdict`、`src/detect/interpreter.rs`）。破壊的な呼び出し
 >   や破壊的なシェル行を含めば `deny`、保護パスを名指しすれば `ask`、

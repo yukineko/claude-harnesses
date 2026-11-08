@@ -871,7 +871,43 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // call. See `strip_data_here_document_bodies` for the exact shape rule.
     let stripped = strip_data_here_document_bodies(cmd);
     let cmd: &str = &stripped;
+    // 0b. A QUOTED here-document body written to a literal `.py` file is judged
+    // as Python, not as shell lines (user ruling 2026-11-08); the rest of the
+    // command, later lines included, is judged here without it — or, when the
+    // body may also be read as shell (`also_shell`), the whole command, body
+    // included. `None` keeps the body in the text. See
+    // `heredoc::python_file_here_document`.
+    if let Some(parts) = heredoc::python_file_here_document(cmd) {
+        let judged = interpreter::python_file_body_verdict(
+            &parts.body,
+            &parts.after,
+            &parts.targets,
+            depth,
+            ctx,
+        );
+        if let Some(py) = judged {
+            if py.verdict.is_deny() {
+                return py.verdict;
+            }
+            // Neither branch can recurse here again: the body is empty, or
+            // the rules below are entered past this step.
+            let rest = if py.also_shell {
+                detect_bash_rules(cmd, depth, ctx)
+            } else {
+                detect_bash(&parts.without_body, depth, ctx)
+            };
+            return match (py.verdict, rest) {
+                (_, d @ Decision::Deny(_)) | (d @ Decision::Ask(_), _) => d,
+                (_, rest) => rest,
+            };
+        }
+    }
+    detect_bash_rules(cmd, depth, ctx)
+}
 
+/// Every rule of [`detect_bash`] after its budget guard and here-document
+/// steps 0 / 0b, on `cmd` as given.
+fn detect_bash_rules(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // 1. Fork bomb (whitespace-insensitive signature).
     let compact: String = cmd.chars().filter(|c| !c.is_whitespace()).collect();
     if compact.contains(":(){") && compact.contains(":|:") {

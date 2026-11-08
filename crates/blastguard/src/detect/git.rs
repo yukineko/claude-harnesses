@@ -53,16 +53,15 @@ pub(super) fn git_subcommand_index(rest: &[&str]) -> Option<usize> {
 /// The shared reason for every way of repointing `core.hooksPath`. One wording
 /// so [`crate::rule_id`] gives the whole class one signature.
 ///
-/// The second clause is there for the one-argument READ, `git config
-/// core.hooksPath`, which the `config` arm denies on purpose (see there). Every
-/// field occurrence of this rule measured on 2026-09-24 (backlog 326edfee) was
-/// that read, retried until it tripped the repeat signal. The verdict stays the
-/// same. The reason now names the spelling that is actually allowed, so the
-/// caller can read the value without asking.
+/// The second clause names the explicit read spelling, so a caller whose
+/// command was refused can read the value without asking (backlog 326edfee:
+/// every field occurrence measured on 2026-09-24 was a read retried until it
+/// tripped the repeat signal). The bare one-argument read `git config
+/// core.hooksPath` is itself Allow since user ruling 2026-11-08 (backlog
+/// 8fe3a5c3, `config_argv_is_read`), so it never carries this reason.
 const HOOKSPATH_REASON: &str =
     "git config core.hooksPath repoints every git hook at once, disabling the repo's hook gates \
-     — to only READ the current value, use `git config --get core.hooksPath` \
-     (the bare one-argument form is refused because it is not told apart from a write)";
+     — to only READ the current value, use `git config --get core.hooksPath`";
 
 /// Config assignments carried by git's GLOBAL options, in every spelling git
 /// accepts: `-c k=v`, `-ck=v` (glued), `--config-env k=v`, `--config-env=k=v`.
@@ -851,24 +850,35 @@ fn git_config_write_exec(args: &[String]) -> Option<GitExecBan> {
     exec_ban(&format!("config {key} …"), Some(cmd))
 }
 
-/// Does the legacy `git config` argv (the words AFTER `config`) select a
-/// read-only mode (`--get`, `--get-all`, `--get-regexp`, `--get-urlmatch`,
-/// `--list`, `-l`) in its option prefix?
+/// Is this `git config` argv (the words AFTER `config`) a READ?
 ///
 /// git stops option parsing at the first non-option word (observed with git
 /// 2.50.1, table in `hookspath_read_tests.rs`): every word after the key is a
 /// positional, even one that looks like a flag, so `git config core.hooksPath
-/// --get` writes the value `--get`. Only the prefix is scanned, therefore:
+/// --get` writes the value `--get` (backlog e103cd56). The option prefix is
+/// scanned:
 ///
 ///   * `--` ends the prefix (what follows is positional).
 ///   * the first word not starting with `-` ends the prefix.
+///   * a read-mode flag (`--get`, `--get-all`, `--get-regexp`,
+///     `--get-urlmatch`, `--list`, `-l`) in the prefix → read.
 ///   * a known value-taking option (`-f`/`--file`, `--blob`, `--type`,
 ///     `--default`, `--comment`) in separate form consumes the next word.
 ///   * a known value-free option is skipped.
-///   * ANY other option word returns `false`: whether it consumes the next
-///     word is unknown, so the prefix cannot be delimited and the read is not
-///     established (the caller then treats the line as a write — fail-closed).
-fn config_read_mode_in_prefix(args: &[&str]) -> bool {
+///   * ANY other option word (the write modes `--unset`, `--add`,
+///     `--replace-all`, … and every unknown option) returns `false`: either it
+///     is a write, or whether it consumes the next word is unknown, so the
+///     read is not established (the caller then treats the line as a write —
+///     fail-closed).
+///
+/// With no mode flag, the positionals after the prefix decide (user ruling
+/// 2026-11-08, backlog 8fe3a5c3): exactly ONE positional (the key) is the
+/// legacy read `git config core.hooksPath`; a first positional `get` is the
+/// new-style `git config get <key>` read (on a git without that subcommand it
+/// is the invalid key `get`, an error that writes nothing). Two or more
+/// positionals otherwise — `K value`, `K ''`, `K --`, `set K v`, `unset K` —
+/// are a write.
+fn config_argv_is_read(args: &[&str]) -> bool {
     const READ_MODES: &[&str] = &[
         "--get",
         "--get-all",
@@ -900,10 +910,15 @@ fn config_read_mode_in_prefix(args: &[&str]) -> bool {
         "--no-type",
     ];
     let mut i = 0;
-    while i < args.len() {
-        let t = args[i];
-        if t == "--" || !t.starts_with('-') {
-            return false;
+    let positionals: &[&str] = loop {
+        let Some(&t) = args.get(i) else {
+            break &[];
+        };
+        if t == "--" {
+            break args.get(i + 1..).unwrap_or(&[]);
+        }
+        if !t.starts_with('-') {
+            break &args[i..];
         }
         if READ_MODES.contains(&t) {
             return true;
@@ -917,8 +932,12 @@ fn config_read_mode_in_prefix(args: &[&str]) -> bool {
             continue;
         }
         return false;
+    };
+    match positionals {
+        [_key] => true,
+        [first, ..] => normalized_command(first) == "get",
+        [] => false,
     }
-    false
 }
 
 fn analyze_git_words(rest: &[&str], seg: Option<&str>, ctx: &Ctx<'_>) -> Decision {
@@ -1208,19 +1227,20 @@ option, so blastguard cannot tell whether the file has uncommitted changes it wo
             // direction (it disarms the repo's opt-in `.githooks` tree), so it
             // is denied too.
             //
-            // Read-only forms are allowed: they change nothing. A read-mode
-            // flag only selects a read when it sits in the OPTION PREFIX, before
-            // the first non-option word — see `config_read_mode_in_prefix`
-            // (backlog e103cd56: `git config core.hooksPath --get` WRITES the
-            // value `--get`). Anything that mentions the key WITHOUT a read-mode
-            // flag in that prefix is treated as a write (the bare one-argument
-            // read included) — an unrecognised shape of a hook-repointing
-            // command resolves to the restrictive side.
+            // Read-only forms are allowed: they change nothing. What is a read
+            // is decided by git's own argv grammar — see `config_argv_is_read`:
+            // a read-mode flag counts only in the OPTION PREFIX (backlog
+            // e103cd56: `git config core.hooksPath --get` WRITES the value
+            // `--get`), and the bare one-positional `git config core.hooksPath`
+            // and `git config get core.hooksPath` are reads (user ruling
+            // 2026-11-08, backlog 8fe3a5c3). Anything else that mentions the
+            // key is treated as a write — an unrecognised shape of a
+            // hook-repointing command resolves to the restrictive side.
             let mentions_hookspath = rest[idx + 1..].iter().any(|t| {
                 let t = normalized_command(t).to_ascii_lowercase();
                 t == "core.hookspath" || t.starts_with("core.hookspath=")
             });
-            let read_only = config_read_mode_in_prefix(&rest[idx + 1..]);
+            let read_only = config_argv_is_read(&rest[idx + 1..]);
             if mentions_hookspath && !read_only {
                 Decision::deny(HOOKSPATH_REASON)
             } else {

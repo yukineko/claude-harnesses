@@ -513,33 +513,6 @@ exit 101: sult: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered ou
 error: test failed, to rerun pass `-p blastguard --test heredoc_python_triple_quote_fp_20261107`"""
 
 [[task]]
-id = "e34eb0be"
-title = "blastguard: ~/Library/LaunchAgents への新規 plist 書込を direct/interpreter とも Allow する（裁定は Ask）"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = ""
-created_at = 1794059850
-updated_at = 1794059850
-weight = 0.0
-issue_number = 1629
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1629"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test launch_agents_new_plist_ask_20261107 new_launch_agent_plist_is_ask_in_every_form"
-rev = "609573e8d5dc69eb6f1aaf9960a84c2cd22c98ae"
-observed_at = 1794059850
-detail = """
-exit 101: ing blastguard v0.2.379 (/Users/yuki/src/.harness-worktrees/red-bg-sysdir-newfile/crates/blastguard)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.33s
-     Running tests/launch_agents_new_plist_ask_20261107.rs (target/debug/deps/launch_agents_new_plist_ask_20261107-39fdc5abd5c5b807)
-error: test failed, to rerun pass `-p blastguard --test launch_agents_new_plist_ask_20261107`"""
-
-[[task]]
 id = "e9a30875"
 title = "blastguard: overwrite of a tracked file in a session-created ~/.condukt/worktrees checkout is refused as not this session's tree"
 project = "/Users/yuki/src/harness"
@@ -629,34 +602,3 @@ exit 101:  v0.2.379 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/
     Finished `test` profile [unoptimized + debuginfo] target(s) in 16.43s
      Running tests/scratchpad_truncating_redirect_fp_20261107.rs (target/debug/deps/scratchpad_truncating_redirect_fp_20261107-92f2eef15545e45e)
 error: test failed, to rerun pass `-p blastguard --test scratchpad_truncating_redirect_fp_20261107`"""
-
-[[task]]
-id = "8fe3a5c3"
-title = "blastguard: 読み取りの git config core.hooksPath を拒否する誤検知"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["blastguard"]
-touched_files = []
-status = "pending"
-notes = """git config core.hooksPath (1 positional, only non-mode options before key; also new-style 'git config get') is a READ in git 2.50.1 but Deny at HEAD. Rule: crates/blastguard/src/detect/git.rs "config" arm (HOOKSPATH_REASON). RED commit 8999494e on branch red-bg-hookspath-read."""
-created_at = 1794052452
-updated_at = 1794052608
-weight = 0.0
-issue_number = 1622
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1622"
-rev = 1
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --lib detect::hookspath_read_tests::git_config_hookspath_one_positional_read_is_allowed -- --ignored"
-rev = "e12712e25074e4ed40accea0eb4eb178c51feb03"
-observed_at = 1794052607
-detail = """
-exit 101: :
-    detect::hookspath_read_tests::git_config_hookspath_one_positional_read_is_allowed
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 452 filtered out; finished in 0.00s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
-     Running unittests src/lib.rs (target/debug/deps/blastguard-ecd1d97de95143b1)
-error: test failed, to rerun pass `-p blastguard --lib`"""

@@ -72268,3 +72268,118 @@ rev = "dd65c432cc21c70a2222951db1db066c21dbf73f"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "11023be2"
+title = "guard-maintree-bash refuses a genuine fast-forward made by 'git merge -m' (reflog suffix '(no commit created; -m option ignored)')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "guard-maintree-bash",
+    "false-positive",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-08 at cb6755f4 in /Users/yuki/src/harness during condukt worktree merge (run run-20261108-185146-6010 t1). Verbatim refusal: 'Refused: this command modified this project's MAIN working tree outside integration (CLAUDE.md 8: main only receives merges). Changed in /Users/yuki/src/harness: HEAD 656327ce1e0c -> cb6755f4b9e0 (not a merge / fast-forward)'. Reflog: 'merge cb6755f4...: Fast-forward (no commit created; -m option ignored)'. integration_step() requires message.endswith(': Fast-forward'). Every condukt worktree merge that fast-forwards trips this."
+created_at = 1794133442
+updated_at = 1794138150
+weight = 0.0
+issue_number = 1640
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1640"
+issue_closed_at = 1794138152
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_guard_maintree_bash_ff_with_m_20261108.py -k ff_with_m"
+rev = "6545d29f59017fa2d30b30b089b8dc3b297b70f5"
+observed_at = 1794133442
+detail = """
+exit 1: /mtg-observe-h8px45sq/main status` before reverting anything.
+
+scripts/test_guard_maintree_bash_ff_with_m_20261108.py:49: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_ff_with_m_20261108.py::FfWithM::test_ff_with_m_is_integration
+========================= 1 failed, 1 passed in 1.39s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q scripts/test_guard_maintree_bash_ff_with_m_20261108.py"
+exit = 0
+passed = 2
+rev = "0c3ad237d14b84e4dd20ee43a666b52ad6914f3b"
+observed_at = 1794138148
+output_digest = "sha256:3459dd0fd3d0918a7a46de3c450cbd0bf495e128eeaf38ff04b2267ff461d462"
+excerpt = """
+..                                                                       [100%]
+2 passed in 0.94s
+"""
+
+[task.closure.red]
+rev = "4eae446b74db367d127666569670f6e5419812bc"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "5c9f9a75"
+title = "autoflow Stop hook rewrites condukt run-state via lossy mirror struct: drops agent_id/model/branch_sha/verifier_*/started_at/paused, unlocked"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Observed run run-20261107-114313-25739 (state /Users/yuki/.condukt/state/harness-e77d23c7/run-20261107-114313-25739.json, measured 2026-11-07 by reading state + .checkpoints.json): checkpoint seq 2 (verified:t3, ts 1794021143) holds t3 agent_id=af4bf84534761cb46; checkpoint seq 3 (ts 1794028444) already shows t2/t4/t5 status=running updated_at=1794021266 worktree=null and t3 agent_id=null, model=null, branch_sha=null, no verifier_*; current file t2/t5 same, t3 retains only worktree/branch/updated_at (+later merge_completed_at). Coincides with overwatch entry [systemic] ts=1794021266 <autoflow:condukt-pending>. WRITER (current code, file:line at main aa8872da): crates/autoflow/src/condukt.rs:36-55 private TaskState{id,status,worktree,branch,updated_at} + RunState{run_id,goal,tasks}; mark_running (:149-181) loads via load_latest (:190), flips pending/failed->running (:164-171) for ids autoflow main.rs:331-367 passes, then save_run (:232) writes the mirror back over condukt's file: serde drops every unmodelled field, run-level paused/terminal_label/recorded_*, and it takes no condukt run-state lock (condukt state.rs:with_run_locked). find_pending (:60-103) stale-running sweep uses the same save_run. Explains (a) t2/t4/t5 pending->running with no worktree/started_at (documented autoflow behaviour, main.rs:296-327) and (b) t3 loss (touched-by-rewrite though untouched). Not version skew: reproduces on current source. Reading 2 (not excluded): installed condukt 0.7.333 could also drop fields on its own load/save if its TaskState predates the fields - but t3 retained worktree/branch/updated_at and lost exactly the non-mirror fields, and the 1794021266 timestamp matches the autoflow review-queue entry, so autoflow is the supported cause; discriminate by running installed condukt state set on a seeded file. Also noted (not filed, no RED): condukt state init (main.rs:4250-4290) rs.save unconditionally overwrites an existing same-id run file, unlocked; only ensure_init_does_not_shadow_legacy guards."
+created_at = 1794029069
+updated_at = 1794138174
+weight = 0.0
+issue_number = 1608
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1608"
+issue_closed_at = 1794138176
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p autoflow --test runstate_roundtrip_drops_fields_20261107 -- --ignored"
+rev = "446c1ba0be485fa578ed4b5141e9c96a590dfa50"
+observed_at = 1794029069
+detail = """
+exit 101: w v0.1.46 (/Users/yuki/.condukt/worktrees/run-20261107-114313-25739-fileC/crates/autoflow)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.43s
+     Running tests/runstate_roundtrip_drops_fields_20261107.rs (target/debug/deps/runstate_roundtrip_drops_fields_20261107-4f5eea4905080610)
+error: test failed, to rerun pass `-p autoflow --test runstate_roundtrip_drops_fields_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p autoflow --test runstate_roundtrip_drops_fields_20261107 -- --include-ignored"
+exit = 0
+passed = 1
+rev = "0c3ad237d14b84e4dd20ee43a666b52ad6914f3b"
+observed_at = 1794138166
+output_digest = "sha256:bff45f0c06732ee9aa2b41ade53d3aa2b46f2c47bbbb95dae90adebb652721d0"
+excerpt = """
+
+running 1 test
+test autoflow_stop_preserves_fields_it_does_not_own ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
+   Compiling harness-core v0.2.96 (/Users/yuki/src/.harness-worktrees/session-f8bda85a/crates/harness-core)
+   Compiling overwatch v0.2.118 (/Users/yuki/src/.harness-worktrees/session-f8bda85a/crates/overwatch)
+   Compiling autoflow v0.1.49 (/Users/yuki/src/.harness-worktrees/session-f8bda85a/crates/autoflow)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.64s
+     Running tests/runstate_roundtrip_drops_fields_20261107.rs (target/debug/deps/runstate_roundtrip_drops_fields_20261107-dff3046f8bdd267a)
+"""
+
+[task.closure.red]
+rev = "a58101a8f5f8689110b7b7f33dff84fbcd3850fb"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

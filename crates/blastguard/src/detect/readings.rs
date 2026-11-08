@@ -1,4 +1,4 @@
-use super::shell_lex::shell_lexed_reading;
+use super::shell_lex::{bash32_lexed_reading, shell_lexed_reading, Bash32Lexed};
 use super::substitution::under_bash32_reading;
 use super::{
     detect_bash, Ctx, Decision, SafeRoots, VerdictAcc, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES,
@@ -25,6 +25,14 @@ use super::{
 /// knowing comments or escapes, and a quote in a comment or an escaped quote
 /// hid the next line from them. See [`shell_lexed_reading`].
 ///
+/// A fourth pass (backlog 089bedd4) does the same for the bash 3.2 reading:
+/// where bash 3.2 closes a substitution early at a here-document body `)`,
+/// the text after that close is top-level code, and the naive trackers again
+/// read a quote in its comment (or an escaped quote) as opening a span that
+/// hid the next line. [`bash32_lexed_reading`] spells the command the way
+/// bash 3.2 tokenises it, and that text is judged under
+/// [`under_bash32_reading`] too; a shape that lexer does not model is Ask.
+///
 /// D4: each pass starts from a full per-command node budget, so a later
 /// reading cannot be starved by an earlier one; budget exhaustion in any pass
 /// is that pass's own Ask.
@@ -44,9 +52,23 @@ pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision 
         return acc.finish();
     }
     ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
-    let (bash32, undetermined) = under_bash32_reading(|| detect_bash(c, 0, &Ctx::new(scope, c)));
+    let (bash32, mut undetermined) =
+        under_bash32_reading(|| detect_bash(c, 0, &Ctx::new(scope, c)));
     if let Some(deny) = acc.record(bash32) {
         return deny;
+    }
+    match bash32_lexed_reading(c) {
+        Bash32Lexed::Same => {}
+        Bash32Lexed::Undetermined => undetermined = true,
+        Bash32Lexed::Text(lexed) => {
+            ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+            let (verdict, lexed_undetermined) =
+                under_bash32_reading(|| detect_bash(&lexed, 0, &Ctx::new(scope, &lexed)));
+            if let Some(deny) = acc.record(verdict) {
+                return deny;
+            }
+            undetermined |= lexed_undetermined;
+        }
     }
     if undetermined {
         // An Ask never short-circuits, so there is nothing to return here.

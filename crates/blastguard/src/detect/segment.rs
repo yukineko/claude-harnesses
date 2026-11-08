@@ -121,6 +121,30 @@ pub(super) fn closed_substitution_end_strict(chars: &[char], i: usize) -> Option
     substitution_end_with(chars, i, scan_balanced_strict)
 }
 
+/// When `chars[i]` OPENS an unquoted process substitution — a `<(` or `>(`
+/// whose `<`/`>` is not backslash-escaped — that is closed later in `chars`,
+/// the index of its closing `)`. `None` otherwise. The caller checks that
+/// `chars[i]` is outside single AND double quotes (inside `"…"` the `<(` is
+/// literal text, and treating it as a span there would swallow the quote's
+/// end and the separators after it).
+///
+/// Used by [`split_segments`] and [`split_segments_with_separators`] exactly
+/// like [`closed_substitution_end`], and for the same reason: a `;`/newline
+/// inside the body separates the BODY's commands. Cutting there left the
+/// fragment `cat <(rm -rf /etc`, whose process substitution no longer closes
+/// inside the segment, so [`executed_substitution_payloads`] stopped at it and
+/// the body was judged nowhere (`cat <(rm -rf /etc;)` and the bash 3.2 shape
+/// `echo $(cat <<'EOF'` / `x)<(rm -rf /etc` / `EOF` / `)` were Allow).
+/// Uses the extraction scan [`scan_balanced`] (bash 3.2's end under
+/// [`super::substitution::under_bash32_reading`]).
+pub(super) fn closed_process_substitution_end(chars: &[char], i: usize) -> Option<usize> {
+    let escaped = chars[..i].iter().rev().take_while(|&&c| c == '\\').count() % 2 == 1;
+    if escaped || !matches!(chars[i], '<' | '>') || chars.get(i + 1) != Some(&'(') {
+        return None;
+    }
+    scan_balanced(chars, i + 2, Stop::Paren, 0)
+}
+
 fn substitution_end_with(
     chars: &[char],
     i: usize,
@@ -173,7 +197,9 @@ pub(super) fn split_segments(cmd: &str) -> Vec<String> {
             continue;
         }
         if !in_s {
-            if let Some(end) = closed_substitution_end(&chars, i) {
+            let end = closed_substitution_end(&chars, i)
+                .or_else(|| (!in_d).then(|| closed_process_substitution_end(&chars, i))?);
+            if let Some(end) = end {
                 cur.extend(&chars[i..=end]);
                 line_code.push('_');
                 i = end + 1;
@@ -430,7 +456,9 @@ pub(super) fn split_segments_with_separators(cmd: &str) -> Vec<SeparatedSegment>
         // Same substitution span as `split_segments`, so the two stay
         // element-for-element equal.
         if !in_s {
-            if let Some(end) = closed_substitution_end(&chars, i) {
+            let end = closed_substitution_end(&chars, i)
+                .or_else(|| (!in_d).then(|| closed_process_substitution_end(&chars, i))?);
+            if let Some(end) = end {
                 cur.extend(&chars[i..=end]);
                 line_code.push('_');
                 i = end + 1;

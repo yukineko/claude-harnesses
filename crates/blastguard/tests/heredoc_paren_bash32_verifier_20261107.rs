@@ -205,7 +205,6 @@ fn run_all(name: &str, tmpl_cases: &[(&str, &str)], want: &str) {
 }
 
 #[test]
-#[ignore = "backlog 089bedd4: open defect, remove ignore when fixed"]
 fn red_a_text_after_early_close_hides_next_line() {
     run_all(
         "a",

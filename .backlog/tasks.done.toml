@@ -72383,3 +72383,117 @@ rev = "a58101a8f5f8689110b7b7f33dff84fbcd3850fb"
 kind = "not-executed"
 executed = false
 note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "089bedd4"
+title = "blastguard: bash 3.2 early-close of $(...) — text after ) mis-read (escaped quote, #-comment quote, <( ) hides next line → Allow)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers; matrix in the test file doc comment). User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed; do not weaken the test."
+created_at = 1794031557
+updated_at = 1794138534
+weight = 0.0
+issue_number = 1611
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1611"
+issue_closed_at = 1794138536
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_a_text_after_early_close_hides_next_line -- --include-ignored"
+rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
+observed_at = 1794031557
+detail = """
+exit 101:  result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.35s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
+error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_a_text_after_early_close_hides_next_line -- --include-ignored"
+exit = 0
+passed = 1
+rev = "9a42fc6ec3cdf4b4f1fb6cf076833077e274568d"
+observed_at = 1794138533
+output_digest = "sha256:48a5892ac3ff10a94f1f2e5e68c3aa01b6416f4592e0210f86ffe03a46ddf687"
+excerpt = """
+
+running 1 test
+test red_a_text_after_early_close_hides_next_line ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.76s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-488e5cc797f63f6d)
+"""
+
+[task.closure.red]
+rev = "0c3ad237d14b84e4dd20ee43a666b52ad6914f3b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"
+
+[[task]]
+id = "5916d385"
+title = "blastguard: zsh expands unquoted <<EOF body in $( after stray ) or ' before backtick/$(P) → Allow"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers; matrix in the test file doc comment). User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed; do not weaken the test."
+created_at = 1794031565
+updated_at = 1794138538
+weight = 0.0
+issue_number = 1612
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1612"
+issue_closed_at = 1794138540
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_c_zsh_unquoted_heredoc_expansion_after_stray_quote -- --include-ignored"
+rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
+observed_at = 1794031565
+detail = """
+exit 101:  result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.93s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
+     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
+error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_c_zsh_unquoted_heredoc_expansion_after_stray_quote -- --include-ignored"
+exit = 0
+passed = 1
+rev = "9a42fc6ec3cdf4b4f1fb6cf076833077e274568d"
+observed_at = 1794138536
+output_digest = "sha256:7d1fa7c2113d7ce8538592ac00dc5ec92ed5bab4015908b544badf2222dcdb27"
+excerpt = """
+
+running 1 test
+test red_c_zsh_unquoted_heredoc_expansion_after_stray_quote ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.65s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-488e5cc797f63f6d)
+"""
+
+[task.closure.red]
+rev = "0c3ad237d14b84e4dd20ee43a666b52ad6914f3b"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

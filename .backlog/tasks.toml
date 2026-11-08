@@ -259,62 +259,6 @@ FAILED scripts/test_audit_b_never_executed_ratchet.py::NeverExecutedRatchet::tes
 ========================= 3 failed, 2 passed in 12.26s ========================="""
 
 [[task]]
-id = "089bedd4"
-title = "blastguard: bash 3.2 early-close of $(...) — text after ) mis-read (escaped quote, #-comment quote, <( ) hides next line → Allow)"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers; matrix in the test file doc comment). User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed; do not weaken the test."
-created_at = 1794031557
-updated_at = 1794031557
-weight = 0.0
-issue_number = 1611
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1611"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_a_text_after_early_close_hides_next_line -- --include-ignored"
-rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
-observed_at = 1794031557
-detail = """
-exit 101:  result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.35s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
-     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
-error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
-
-[[task]]
-id = "5916d385"
-title = "blastguard: zsh expands unquoted <<EOF body in $( after stray ) or ' before backtick/$(P) → Allow"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = ["p1"]
-touched_files = []
-status = "pending"
-notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers; matrix in the test file doc comment). User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed; do not weaken the test."
-created_at = 1794031565
-updated_at = 1794031565
-weight = 0.0
-issue_number = 1612
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1612"
-rev = 0
-
-[task.repro]
-outcome = "reproduced"
-cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_c_zsh_unquoted_heredoc_expansion_after_stray_quote -- --include-ignored"
-rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
-observed_at = 1794031565
-detail = """
-exit 101:  result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.93s
-
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.28s
-     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
-error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
-
-[[task]]
 id = "d328ea88"
 title = "blastguard: bash 3.2 reading — comment line with quote/backtick/backslash gives Ask where Deny is wanted"
 project = "/Users/yuki/src/harness"

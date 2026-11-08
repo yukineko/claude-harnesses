@@ -1,13 +1,33 @@
 #!/usr/bin/env python3
-"""Stop hook: refuse to stop while sitting on the MAIN checkout with uncommitted
-changes.
+"""Stop hook: refuse to stop while THIS session's own writes sit uncommitted on
+the MAIN checkout.
 
 CLAUDE.md 最上位の方針 8 + the Stop-gate invariant (判定不能は block へ): the
-session's work belongs in a worktree, so ending a turn with dirty, uncommitted
-changes on the MAIN tree is the failure this catches. If the session is in a
-worktree, or the main tree is clean, the stop is allowed. If it is on the main
-tree AND dirty, the stop is BLOCKED so the changes get moved into a worktree
-before the turn ends.
+session's work belongs in a worktree, so ending a turn with its own dirty,
+uncommitted changes on the MAIN tree is the failure this catches.
+
+SCOPE (user ruling 2026-11-08, verbatim: "donegateそのものが他のworktreeを見たり
+検証したりテストしたりすることは禁止とする。他のgateでも禁止とする。合理的理由が
+あって確認するなら、それを提示すること。基本的に認めない" / "おそらく他のworktree
+への干渉をやめないと並行性があがるほど、処理する時間が膨大になる、そこに合理的
+理由はない。定期的にまとまったauditの実施での担保とする。"): this gate judges only
+the tree the Stop payload's cwd is in.
+  * cwd in a linked worktree: allowed, and NOTHING in main (or any other tree)
+    is read — not even a deny-ledger target recorded against main.
+  * cwd on main: main is the session's own tree. The stop is BLOCKED only for
+    (signal 3) a path in this session's own write record
+    (deny_ledger.writes_stop_check: its allowed edits on main and the paths its
+    main-cwd Bash calls changed) that is dirty now, or (signal 2) a deny-ledger
+    target of main that changed since its refusal. Dirt in main that is not in
+    this session's record is another session's and does NOT block. An absent
+    record means this session wrote nothing; an unreadable or corrupt record
+    blocks. A payload with no session_id cannot consult a record, so any dirt
+    in main blocks then (restrictive fallback, still main-only).
+DROPPED, with no compensating mechanism: a worktree-cwd session that writes
+into main by another route (Bash `cd main && ...`, an edit refused and then
+made anyway) is not caught at Stop. The periodic audit runs only the gate tests
+on main (user, 2026-11-08: "定期auditはmainだけgateについてのテストを行うだけで
+いいはず"); it does not look for such writes.
 
 Fail-closed throughout (CLAUDE.md 3, 判定不能は制限側へ). Exactly ONE git outcome
 allows the stop without an inspection: git itself reporting that this is not a
@@ -21,9 +41,9 @@ That distinction is the whole point: the earlier version collapsed "git said no
 repo" and "git could not answer" into one `return 0`, so any git malfunction
 silently waved through the exact case this gate exists to catch.
 
-Refused-then-changed (e033c406, signal 2 of scripts/deny_ledger.py). BEFORE the
-cwd checks above — so it applies whether the session sits on main or in a
-worktree — every target that guard-maintree-edit.py refused in this session
+Refused-then-changed (e033c406, signal 2 of scripts/deny_ledger.py). Only when
+the session sits on main (the cwd checks above), every main target that
+guard-maintree-edit.py refused in this session
 (guard-maintree-bash.py records nothing in the ledger since the 2026-10-04 ruling) (the per-session ledger
 `~/.claude/state/maintree-deny/<session_id>.jsonl` — or, when that cannot be
 written, the temp-dir fallback `<tmp>/maintree-deny-<uid>/<session_id>.jsonl`
@@ -298,12 +318,6 @@ def _check(payload) -> int:
         sys.stderr.write(UNDETERMINED.format(
             what=f"loading scripts/deny_ledger.py ({_LEDGER_IMPORT_ERROR})"))
         return 2
-    if isinstance(payload, dict):
-        changed = deny_ledger.stop_check(payload)
-        if changed is not None:
-            sys.stderr.write(changed)
-            return 2
-
     cwd = (payload.get("cwd") if isinstance(payload, dict) else None) or os.getcwd()
 
     st_git, git_dir = _probe(cwd, "rev-parse", "--absolute-git-dir")
@@ -323,9 +337,37 @@ def _check(payload) -> int:
         return 0  # git says there is no repository here — nothing to verify
     assert git_dir is not None and common is not None  # OK implies a value
     if os.path.realpath(git_dir) != os.path.realpath(common):
-        return 0  # in a worktree — the sanctioned place
+        # In a linked worktree — the sanctioned place. Nothing in main (or in
+        # any other tree) is inspected from here, not even a deny-ledger
+        # target (user ruling 2026-11-08).
+        return 0
 
-    # Main checkout: allowed only if clean.
+    # Main checkout: the session's own tree.
+    st_top, top = _probe(cwd, "rev-parse", "--show-toplevel")
+    if st_top != OK or top is None:
+        sys.stderr.write(UNDETERMINED.format(what="git rev-parse --show-toplevel"))
+        return 2
+    own_root = os.path.realpath(top)
+    if isinstance(payload, dict):
+        changed = deny_ledger.stop_check(payload, own_root)
+        if changed is not None:
+            sys.stderr.write(changed)
+            return 2
+    try:
+        sid = deny_ledger.session_of(payload) if isinstance(payload, dict) else None
+    except deny_ledger.Undetermined as e:
+        sys.stderr.write(UNDETERMINED.format(what=f"the session id ({e})"))
+        return 2
+    if sid is not None:
+        dirty = deny_ledger.writes_stop_check(sid, own_root)
+        if dirty is not None:
+            sys.stderr.write(dirty)
+            return 2
+        return 0
+
+    # No session_id: this session's write record cannot be consulted, so its
+    # own dirt cannot be told from another session's. Restrictive fallback,
+    # still confined to this (the cwd's own) tree: any dirt blocks.
     status = _git(cwd, "status", "--porcelain")
     if status is None or status.returncode != 0:
         sys.stderr.write(UNDETERMINED.format(what="git status --porcelain"))

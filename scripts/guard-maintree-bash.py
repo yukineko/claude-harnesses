@@ -10,7 +10,39 @@ from the command text whether python / node / perl / awk / shell payloads would
 write into main. That is undecidable; every closed gap opened another false
 positive or false negative (4a64e6ff and ~30 sibling tickets).
 
-  PreToolUse (Bash)   snapshot main: `git status --porcelain=v2 -z
+OWN TREE ONLY (user ruling 2026-11-08, verbatim: "donegateそのものが他のworktree
+を見たり検証したりテストしたりすることは禁止とする。他のgateでも禁止とする。合理的
+理由があって確認するなら、それを提示すること。基本的に認めない" / "おそらく他の
+worktreeへの干渉をやめないと並行性があがるほど、処理する時間が膨大になる、そこに
+合理的理由はない。定期的にまとまったauditの実施での担保とする。"). The tree a Bash
+call runs in is the toplevel of its PRE payload `cwd`. Only when that tree IS
+this project's main tree is main snapshotted and compared. When the cwd is a
+linked worktree (or in no git tree at all) Pre stores only a small marker under
+<git-common-dir>/maintree-guard/ and Post allows WITHOUT reading main, whatever
+happened there.
+
+DROPPED, with no compensating mechanism (the periodic audit only runs the gate
+tests on main; user, 2026-11-08: "定期auditはmainだけgateについてのテストを
+行うだけでいいはず"):
+  * a call whose cwd is a linked worktree but which writes into main
+    (`cd <main> && ...`, `git -C <main> ...`, a script that chdirs) is not
+    observed;
+  * the attribution of a foreign `git merge` window in main to another
+    process (formerly command_cannot_target_main) — it only ever applied to a
+    worktree cwd, which is no longer judged at all;
+  * backlog 2dee8b0e's in_flight_merge_window allow (a later merge of this
+    command caught in its pre-merge-commit window after an integration HEAD
+    move). Its evidence needed a `git merge-tree` of HEAD with every local
+    branch, i.e. reading other sessions' branches; without it the evidence is
+    incomplete, so that state is now REFUSED (the restrictive side).
+
+WRITE RECORD. At Post of a main-cwd call, every path whose state changed
+between Pre and Post (allowed or refused) is appended to this session's write
+record (deny_ledger.record_writes); the Stop gate blocks only on dirt in that
+record. A record that cannot be written refuses the call.
+
+  PreToolUse (Bash, cwd main)
+                      snapshot main: `git status --porcelain=v2 -z
                       --untracked-files=all`, a content hash of every dirty or
                       untracked path, HEAD, and whether MERGE_HEAD exists;
                       while it exists, also the oids it names and the staged
@@ -36,14 +68,6 @@ positive or false negative (4a64e6ff and ~30 sibling tickets).
                       starts with "merge " (written by `git merge`; covers a
                       fast-forward whose source branch is already deleted)
                                                             -> 0
-                      HEAD moved by integration (same evidence as above)
-                      and the dirty tree is a LATER merge of this command
-                      caught in its pre-merge-commit window: ORIG_HEAD
-                      rewritten to the current HEAD, no SQUASH_MSG,
-                      index == AUTO_MERGE tree == working tree, and that tree
-                      is the clean `git merge-tree` of HEAD with a local
-                      branch not yet in HEAD (backlog 2dee8b0e; see
-                      in_flight_merge_window)               -> 0
                       MERGE_HEAD existed before and is gone after, and the new
                       HEAD's parents are exactly [Pre HEAD] + all Pre MERGE_HEAD
                       oids in order, and the new HEAD's tree is exactly the
@@ -64,19 +88,10 @@ positive or false negative (4a64e6ff and ~30 sibling tickets).
                       commit; backlog 47592729; see merge_concluded_clean. An
                       unreadable Pre MERGE_HEAD -> not covered)
                                                             -> 0
-                      HEAD unchanged, no MERGE_HEAD, ORIG_HEAD rewritten
-                      between Pre and Post, the call demonstrably did not run
-                      in or point at main (Pre and Post payload cwd both
-                      resolve to a linked worktree, not main; command text
-                      names neither main nor its git dir and has no cd /
-                      pushd / popd / chdir / -C / --git-dir / --work-tree /
-                      --directory / GIT_* / CLAUDE_PROJECT_DIR; no GIT_DIR /
-                      GIT_WORK_TREE / GIT_COMMON_DIR in the hook env), and the
-                      dirty tree is a clean merge window (same evidence as
-                      in_flight_merge_window): ANOTHER process's `git merge`
-                      in main caught in its pre-merge-commit window (see
-                      command_cannot_target_main)           -> 0
                       anything else                        -> 2, naming the paths
+  Pre / Post (Bash, cwd a linked worktree or no git tree)
+                      Pre stores the marker; Post consumes it -> 0. main is
+                      not read.
 
 Exit 2 at Post cannot undo the command — the write has happened. It stops the
 turn from proceeding as if main were untouched and names what changed, so the
@@ -94,45 +109,18 @@ AttributeError on a snapshot with wrong field types) exits 2 (blocked), never 1
 that crashed has not passed (CLAUDE.md 3), so it resolves to the restricted side.
 
 Known blind spots (not visible to `git status`): files under .git itself
-(.git/config, .git/hooks) and gitignored files. After an integration HEAD
-move, a command that stages exactly the clean merge of a local branch without
-committing it by non-merge means and with ORIG_HEAD reset to HEAD (observed:
-`git reset -q HEAD` then `git cherry-pick -n` of a one-commit branch) is
-on-disk identical to a later merge's pre-merge-commit window and is allowed
-(in_flight_merge_window). Changes by ANOTHER session
-between this call's Pre and Post are still REFUSED (they cannot be told apart
-from this call's own writes) and the message says so, with ONE exception: a
-foreign `git merge` window in main (below) when the call demonstrably did not
-run in or point at main. When the Post lands in
-another session's `git merge` window (merged tree already in main's index and
-working tree, HEAD not moved, no MERGE_HEAD yet because git is running
-pre-merge-commit) and ORIG_HEAD was rewritten between Pre and Post with HEAD
-unchanged (observed: git writes ORIG_HEAD at merge start, MERGE_HEAD only after
-pre-merge-commit):
-  - if the call's Pre and Post cwd both resolve to a linked worktree (not main,
-    git dir not main's), its command text cannot redirect it to main (see
-    command_cannot_target_main), and main's dirty state is a clean merge
-    window (in_flight_merge_window evidence), it is ALLOWED: main's ORIG_HEAD
-    lives in main's own git dir, which git run from a linked worktree does not
-    write. Residual: a program the command runs (script file, build script)
-    can still chdir / run git on main invisibly to the command text; it goes
-    unrefused only if it leaves exactly a clean merge window in main.
-  - otherwise (cwd missing / unresolvable / main / not a git work tree, Pre
-    snapshot without `cwd`, command text naming main or a redirect marker, or
-    not a clean merge window) the refusal reports that evidence as AMBIGUOUS:
-    a concurrent merge in main is a possible cause, but this command's own
-    reset/merge/rebase rewrites ORIG_HEAD too, so the change is not asserted to
-    be this command's (and is still refused, CLAUDE.md 3).
-Evidence = ORIG_HEAD differs between Pre and Post (including
-absent OR unreadable at Pre, both stored as None, and readable at Post), HEAD
-unchanged, no MERGE_HEAD. It is recorded in the snapshot as `orig_head` (and
-the Pre payload cwd as `cwd`), both excluded from the before==after comparison.
-ORIG_HEAD enters exactly two verdict branches, never sufficient alone: the
-foreign-window allow above, and, when HEAD DID move by integration, an
-ORIG_HEAD rewritten to the current HEAD as one of several required pieces of
-in_flight_merge_window evidence. Otherwise it changes WORDING only; a Pre
-snapshot without the field (key missing, not merely None), or an ORIG_HEAD
-that is absent or unreadable at Post, means no evidence (existing wording).
+(.git/config, .git/hooks) and gitignored files. Changes by ANOTHER session in
+main between a main-cwd call's Pre and Post are REFUSED (they cannot be told
+apart from this call's own writes) and recorded in THIS session's write record
+(over-attribution, the restrictive side); the message says so. When ORIG_HEAD
+was rewritten between Pre and Post with HEAD unchanged and no MERGE_HEAD (what
+another session's in-flight `git merge` in main looks like), the refusal
+reports that evidence as AMBIGUOUS: this command's own reset/merge/rebase
+rewrites ORIG_HEAD too, so the change is not asserted to be this command's (and
+is still refused, CLAUDE.md 3). ORIG_HEAD is recorded in the snapshot as
+`orig_head`, excluded from the before==after comparison, and changes WORDING
+only; a Pre snapshot without the field, or an ORIG_HEAD absent or unreadable at
+Post, means no evidence (existing wording).
 """
 
 from __future__ import annotations
@@ -140,11 +128,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import deny_ledger  # noqa: E402  (only its per-session write record)
+    _LEDGER_IMPORT_ERROR = ""
+except Exception as _e:  # noqa: BLE001 — resolves to a refusal when needed
+    deny_ledger = None
+    _LEDGER_IMPORT_ERROR = "%s: %s" % (type(_e).__name__, _e)
 
 REFUSE = 2
 ALLOW = 0
@@ -259,8 +254,7 @@ def snapshot(main: Path, common: Path) -> dict:
 def orig_head_identity(common: Path) -> list | None:
     """[content, mtime_ns, inode] of ORIG_HEAD, or None when absent/unreadable.
 
-    Never sufficient alone (see post()): it is one required piece of the
-    in_flight_merge_window and foreign-window evidence, otherwise wording only.
+    It changes the refusal's WORDING only (see post()); it never allows.
     None means "no evidence", never a verdict.
     git rewrites ORIG_HEAD via a lockfile rename, so the inode/mtime change even
     when the oid is the same as before.
@@ -563,180 +557,39 @@ def merge_reflog_entry(common: Path, branch: str, old: str, new: str) -> bool:
     return False
 
 
-def git_equal(cwd: Path, *args: str) -> bool:
-    """Run a `--quiet` comparison: exit 0 -> True, exit 1 -> False, else Undetermined."""
+def cwd_is_main(payload: dict, common: Path, main: Path) -> bool:
+    """True when the payload cwd is inside this project's MAIN tree — the only
+    case in which this guard reads main (user ruling 2026-11-08).
+
+    cwd is a string naming an existing directory, else Undetermined. git
+    answering "not a git repository" there -> False (outside any tree). Any
+    other git failure -> Undetermined. Otherwise True iff cwd's git dir IS its
+    common dir (a primary checkout, not a linked worktree), that common dir is
+    this project's, and its toplevel is main. Only rev-parse runs at cwd —
+    i.e. in the cwd's own tree."""
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not cwd or not os.path.isdir(cwd):
+        raise Undetermined("payload cwd %r is not an existing directory" % (cwd,))
     try:
         proc = subprocess.run(
-            ["git", "-C", str(cwd), *args], capture_output=True, text=True
+            ["git", "-C", cwd, "rev-parse", "--path-format=absolute",
+             "--show-toplevel", "--absolute-git-dir", "--git-common-dir"],
+            capture_output=True, text=True, env={**os.environ, "LC_ALL": "C"},
         )
     except OSError as exc:
         raise Undetermined("git could not be executed: %s" % exc) from exc
-    if proc.returncode not in (0, 1):
+    if proc.returncode != 0:
+        if "not a git repository" in proc.stderr:
+            return False
         raise Undetermined(
-            "`git %s` exited %d: %s"
-            % (" ".join(args), proc.returncode, proc.stderr.strip() or "(no stderr)")
-        )
-    return proc.returncode == 0
-
-
-def _hex_oid(text: str) -> str | None:
-    first = text.split()
-    if len(first) != 1 or len(first[0]) not in (40, 64) or not all(c in "0123456789abcdef" for c in first[0]):
-        return None
-    return first[0]
-
-
-def in_flight_merge_window(
-    main: Path, common: Path, before: dict, after: dict, has_orig: bool, before_orig, after_orig
-) -> bool:
-    """True if the Post state is a LATER `git merge` of this same command caught
-    inside its pre-merge-commit window (backlog 2dee8b0e): the merged tree is
-    already in main's index and working tree but neither MERGE_HEAD nor the merge
-    commit exists yet (observed: git writes AUTO_MERGE and ORIG_HEAD before
-    pre-merge-commit, MERGE_HEAD and the commit after it).
-
-    Every piece of evidence is required; any missing one is False (-> refuse):
-      - ORIG_HEAD rewritten between Pre and Post and naming the current HEAD
-        (`git merge` sets ORIG_HEAD = HEAD when it starts),
-      - no SQUASH_MSG (an uncommitted `git merge --squash` leaves the same
-        index/AUTO_MERGE state but never becomes a merge commit),
-      - AUTO_MERGE names a tree, the index equals it and the working tree equals
-        the index; no unmerged path; untracked paths only the pre-existing,
-        unchanged ones,
-      - that tree is exactly the clean `git merge-tree --write-tree HEAD <b>` of
-        some local branch <b> other than main's branch and not yet in HEAD.
-    The caller still requires the HEAD move itself to be integration.
-    Known residual: git's on-disk state in this window is the same as a command
-    that stages exactly a clean merge of a branch without committing it by other
-    means (e.g. `git reset -q HEAD` then `git cherry-pick -n` of a one-commit
-    branch); such content is what merging that branch would bring in.
-    """
-    if not has_orig or after_orig is None or before_orig == after_orig:
-        return False
-    if not isinstance(after_orig, list) or not after_orig or after_orig[0] != after["head"]:
-        return False
-    if (common / "SQUASH_MSG").exists():
-        return False
-    try:
-        auto = _hex_oid((common / "AUTO_MERGE").read_text())
-    except (OSError, UnicodeDecodeError):
-        return False
-    if auto is None:
-        return False
-    ra, rb = status_records(before["porcelain"]), status_records(after["porcelain"])
-    for p, rec in rb.items():
-        if rec.startswith("u "):
-            return False
-        if rec.startswith("? "):
-            if ra.get(p) != rec or before["hashes"].get(p) is None or before["hashes"].get(p) != after["hashes"].get(p):
-                return False
-    if not git_equal(main, "diff-index", "--cached", "--quiet", auto, "--"):
-        return False
-    if not git_equal(main, "diff", "--quiet", "--"):
-        return False
-    branch = checked_out_branch(main)
-    candidates = git(
-        main, "for-each-ref", "--no-merged", after["head"], "--format=%(refname)", "refs/heads/"
-    ).split()
-    for ref in candidates:
-        if ref == branch:
-            continue
-        try:
-            proc = subprocess.run(
-                ["git", "-C", str(main), "merge-tree", "--write-tree", after["head"], ref],
-                capture_output=True,
-                text=True,
-            )
-        except OSError as exc:
-            raise Undetermined("git could not be executed: %s" % exc) from exc
-        if proc.returncode == 1:
-            continue  # conflicted merge: not a clean merge result
-        if proc.returncode != 0:
-            raise Undetermined(
-                "`git merge-tree --write-tree %s %s` exited %d" % (after["head"][:12], ref, proc.returncode)
-            )
-        lines = proc.stdout.splitlines()
-        if lines and lines[0].strip() == auto:
-            return True
-    return False
-
-
-# Command-text markers that can point a process at a directory / git repository
-# other than its cwd. Any of them in the command makes attribution undetermined.
-REDIRECT_MARKERS = re.compile(
-    r"(?:^|[^\w-])(?:cd|pushd|popd|chdir)(?:$|[^\w-])"
-    r"|(?:^|\s)-C"
-    r"|--git-dir|--work-tree|--directory"
-    r"|GIT_[A-Z_]*|CLAUDE_PROJECT_DIR"
-)
-
-
-def _toplevel_and_gitdir(cwd: Path) -> tuple[Path, Path] | None:
-    """(work tree top level, git dir) of `cwd`, both resolved; None when git cannot say."""
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(cwd), "rev-parse", "--path-format=absolute",
-             "--show-toplevel", "--git-dir"],
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return None
+            "`git rev-parse` at cwd %s exited %d: %s"
+            % (cwd, proc.returncode, proc.stderr.strip() or "(no stderr)"))
     lines = proc.stdout.splitlines()
-    if proc.returncode != 0 or len(lines) != 2 or not all(lines):
-        return None
-    return Path(os.path.realpath(lines[0])), Path(os.path.realpath(lines[1]))
-
-
-def command_cannot_target_main(main: Path, common: Path, payload: dict, pre_cwd) -> bool:
-    """True only if this call demonstrably did not run in, or point at, main.
-
-    Used ONLY to attribute a `git merge` window in main (ORIG_HEAD rewritten,
-    HEAD unmoved, no MERGE_HEAD) to ANOTHER process. main's ORIG_HEAD,
-    AUTO_MERGE and index live in main's own git dir (<common>); a linked
-    worktree's live in its own git dir under <common>/worktrees/. Every piece
-    of evidence is required; anything missing or unresolvable is False
-    (-> the existing refusal, CLAUDE.md 3):
-      - the Pre and Post payload `cwd` are both non-empty strings naming
-        existing directories,
-      - each resolves (`git rev-parse --show-toplevel --git-dir`) to a work tree
-        other than main whose git dir is not main's (i.e. a linked worktree; a
-        cwd that is not inside a git work tree at all is not accepted),
-      - the command text is a string that contains neither main's path nor its
-        git dir (as given or resolved), nor a marker that can move a process to
-        another directory or repository (cd / pushd / popd / chdir, `-C`,
-        --git-dir, --work-tree, --directory, any GIT_* variable name,
-        CLAUDE_PROJECT_DIR),
-      - no GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR in this hook's environment.
-    Known residual (stated plainly): a program the command runs (a script file,
-    a build script) can still change directory or run git on main without the
-    command text showing it. The caller therefore also requires the on-disk
-    state to be a genuine clean merge window (in_flight_merge_window), so such a
-    program goes unrefused only if what it leaves in main is exactly that window.
-    """
-    if any(os.environ.get(v) for v in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")):
-        return False
-    tool_input = payload.get("tool_input")
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    if not isinstance(command, str):
-        return False
-    main_real = Path(os.path.realpath(main))
-    common_real = Path(os.path.realpath(common))
-    for needle in {str(main), str(main_real), str(common), str(common_real)}:
-        if needle in command:
-            return False
-    if REDIRECT_MARKERS.search(command):
-        return False
-    for cwd in (pre_cwd, payload.get("cwd")):
-        if not isinstance(cwd, str) or not cwd or not os.path.isdir(cwd):
-            return False
-        resolved = _toplevel_and_gitdir(Path(cwd))
-        if resolved is None:
-            return False
-        top, gitdir = resolved
-        if top == main_real or gitdir == common_real:
-            return False
-    return True
+    if len(lines) != 3 or not all(lines):
+        raise Undetermined("`git rev-parse` at cwd %s printed %r" % (cwd, proc.stdout))
+    top, gitdir, cdir = (os.path.realpath(x) for x in lines)
+    return (gitdir == cdir and cdir == os.path.realpath(common)
+            and top == os.path.realpath(main))
 
 
 def changed_paths(before: dict, after: dict) -> list[str]:
@@ -817,11 +670,19 @@ def sweep_orphans(state_dir: Path) -> None:
             pass
 
 
+LINKED_MARKER = {"scope": "not-main"}
+
+
 def pre(payload: dict, common: Path, main: Path) -> int:
-    snap = snapshot(main, common)
-    # Attribution evidence only (see command_cannot_target_main): where the
-    # command started. Popped in post() before the before==after comparison.
-    snap["cwd"] = payload.get("cwd")
+    if cwd_is_main(payload, common, main):
+        snap = snapshot(main, common)
+        snap["scope"] = "main"
+    else:
+        # The call runs in a linked worktree (or outside any tree): main is
+        # not its tree, so main is not read (user ruling 2026-11-08). Only
+        # this marker is stored so that Post can tell "Pre ran" from "Pre
+        # never ran" (the latter still refuses).
+        snap = dict(LINKED_MARKER)
     path = state_file(common, payload)
     sweep_orphans(path.parent)
     try:
@@ -842,8 +703,17 @@ def post(payload: dict, common: Path, main: Path) -> int:
         raise Undetermined("no Pre snapshot %s for this call" % path) from exc
     except (OSError, ValueError) as exc:
         raise Undetermined("Pre snapshot %s unreadable: %s" % (path, exc)) from exc
-    if not isinstance(before, dict) or not {"porcelain", "hashes", "head", "merge_head"} <= set(before):
+    if before == LINKED_MARKER:
+        # Pre found the call running outside main: nothing of main is read.
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return ALLOW
+    if (not isinstance(before, dict) or before.get("scope") != "main"
+            or not {"porcelain", "hashes", "head", "merge_head"} <= set(before)):
         raise Undetermined("Pre snapshot %s is malformed" % path)
+    before.pop("scope")
     after = snapshot(main, common)
     # Stripped so it never enters the before==after comparison; it reaches a
     # verdict only as one required piece of the window evidence below.
@@ -851,9 +721,6 @@ def post(payload: dict, common: Path, main: Path) -> int:
     # (ORIG_HEAD absent at Pre) is a real value.
     has_orig_field = "orig_head" in before
     before_orig = before.pop("orig_head", None)
-    # A MISSING key (old-format Pre snapshot) is no attribution evidence.
-    has_pre_cwd = "cwd" in before
-    pre_cwd = before.pop("cwd", None)
     after_orig = after.pop("orig_head", None)
     concurrent_merge = (
         has_orig_field
@@ -878,17 +745,7 @@ def post(payload: dict, common: Path, main: Path) -> int:
         pass  # `git commit` concluding a merge staged by an earlier call
     elif merge_concluded_clean(main, before, after):
         pass  # resolving + committing the in-progress merge, tree clean after
-    elif (
-        concurrent_merge
-        and has_pre_cwd
-        and command_cannot_target_main(main, common, payload, pre_cwd)
-        and in_flight_merge_window(main, common, before, after, has_orig_field, before_orig, after_orig)
-    ):
-        pass  # ANOTHER process's `git merge` in main, caught in its pre-merge-commit window
-    elif after["head"] != before["head"] and (
-        only_unchanged_preexisting(before, after)
-        or in_flight_merge_window(main, common, before, after, has_orig_field, before_orig, after_orig)
-    ):
+    elif after["head"] != before["head"] and only_unchanged_preexisting(before, after):
         branch = checked_out_branch(main)
         if not integration_head(main, after["head"], branch) and not merge_reflog_entry(
             common, branch, before["head"], after["head"]
@@ -936,6 +793,25 @@ def post(payload: dict, common: Path, main: Path) -> int:
                 "check `git -C %s status` before reverting anything."
             )
         print(msg % (main, "\n  ".join(changed), main), file=sys.stderr)
+    # Every path this call changed in main (its own tree) goes into the
+    # session's write record, whatever the verdict: the Stop gate blocks only
+    # on dirt it can attribute to this session through that record. A record
+    # that cannot be written makes the write unattributable -> refuse.
+    touched = changed_paths(before, after) if before != after else []
+    if touched:
+        if deny_ledger is None:
+            err = "scripts/deny_ledger.py could not be loaded (%s)" % _LEDGER_IMPORT_ERROR
+        else:
+            err = deny_ledger.record_writes(
+                payload, str(main), [str(main / p) for p in touched], "guard-maintree-bash.py")
+        if err is not None:
+            print(
+                "Refused: the main-tree paths this call changed could not be recorded "
+                "in this session's write record (%s); the Stop gate could not "
+                "attribute them (CLAUDE.md 3).\n  %s" % (err, "\n  ".join(touched)),
+                file=sys.stderr,
+            )
+            verdict = REFUSE
     try:
         path.unlink()
     except OSError:

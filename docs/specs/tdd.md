@@ -30,7 +30,9 @@ RED だったか・RED→GREEN になったか）は `tdd` バイナリと Stop 
   証跡欠落・破損時は `transition:"unknown"`・`valid_fp_oracle:false` を返し panic しない（fail-soft）。
 - **project `test_cmd` は workspace-trust ゲート下** — `test_cmd` は `tdd red`/`green` で verbatim 実行
   されるため、`Config::load` は project `tdd.toml` を `harness_core::trust::is_trusted` が真のときだけ
-  採用する。未信頼なら一度だけ警告（`warn_untrusted`）を出し home config→built-in default へフォールバック。
+  採用する。未信頼 root に `tdd.toml` があれば既定へは倒さず、Stop hook はそのファイルを名指ししてブロックし、
+  `tdd red`/`green` は exit 1 で拒否する（`Config::untrusted_project` / `untrusted_reason`）。linked worktree は
+  main の信頼を継承しない（ユーザー裁定 2026-11-08）。
   `tdd trust` で明示信頼、`HARNESS_TRUST_ALL=1` で全信頼。
 - **キルスイッチと逃げ道** — `TDD_DISABLE=1`（`Config::disabled_env`）で全停止、config `enabled=false`
   でも停止許可。純リファクタ/リネーム/docs 向けに `tdd skip --reason "<理由>"`（理由必須・発行セッション

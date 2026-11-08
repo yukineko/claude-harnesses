@@ -170,6 +170,11 @@ doc = "docs/specs/propguard.md"
 reason = "'module 責務' derive: Property, bilingual CATALOG, derive_properties, source_criteria; '導出の決定論と上限' invariant."
 
 [[spec]]
+path = "crates/propguard/src/config_refusal.rs"
+doc = "docs/specs/propguard.md"
+reason = "'untrusted config は honor せず、ブロックする' — evaluate step 0/0a/0b refusals (config-unreadable / config-untrusted / config-invalid), split out of gate.rs."
+
+[[spec]]
 path = "crates/propguard/src/gate.rs"
 doc = "docs/specs/propguard.md"
 reason = "'module 責務' gate (below_threshold, evaluate, decide_from_count, run_checker, parse_checker_output) and '振る舞い' gate::evaluate steps."

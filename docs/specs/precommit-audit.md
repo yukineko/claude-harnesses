@@ -31,11 +31,13 @@ Claude Code の **Stop hook** として `bin/precommit-audit --mode stop`（time
   （不正バイト・linter サブプロセスの癖等）でコミットを中断せずターンも壊さない: 真のパニックは exit 0 に
   フォールバックする（`run` 内の実 `exit(...)` は直接終了するので影響を受けない）。
 - **未信頼リポジトリの config 実行防止** — auto-discovery した `.precommit-audit.toml` は root を信頼
-  するまで無視する（`project_config_blocked(explicit, exists, trusted)` = `!explicit && exists && !trusted`）。
+  するまで honor しない（`project_config_blocked(explicit, exists, trusted)` = `!explicit && exists && !trusted`）。
   実行ベクタは `linters.node_projects` が repo-local な eslint/tsc を解決する経路。信頼は `precommit-audit trust`
   が `harness_core::trust`（donegate/reviewgate/tdd と同じ共有 workspace-trust list）へ root を追加して honor
-  させる。明示 `--config` はオペレータの意図的選択として信頼有無に関わらず常に honor。未信頼時は組み込み
-  既定チェックのみ走る（`trust_gate_tests` が真偽表を保証）。
+  させる。明示 `--config` はオペレータの意図的選択として信頼有無に関わらず常に honor。未信頼 root に設定が
+  ある場合は組み込みチェックだけで通さず **監査を拒否**し、fail exit で終わる（stop 2 / precommit 1 /
+  SessionEnd 0 = advisory）。linked worktree は main の信頼を継承しない（ユーザー裁定 2026-11-08）
+  （`trust_gate_tests` が `project_config_blocked` の真偽表を保証）。
 - **git 非改変（read-only）** — `git.rs` は `diff`/`ls-files`/`grep`/`rev-parse` の read-only な git のみを
   shell out する（`GIT_TERMINAL_PROMPT=0`）。commit/add/checkout 等の状態変更コマンドは呼ばない。
 - **再帰ガード** — stdin JSON の `stop_hook_active` が真（同一 stop サイクル内の再発火）なら即 exit 0。
@@ -94,7 +96,7 @@ CLI: `precommit-audit [--mode stop|precommit] [--config <file>] [--root <dir>]` 
 ### module 責務
 
 - **`main`** — 引数 parse（`parse_args`/`Args`）、root/mode 解決、trust ハンドリング、config の trust ゲート
-  （`project_config_blocked`/`warn_untrusted_once`）、SessionEnd advisory の `fail_exit` 決定、panic fail-open、
+  （`project_config_blocked` → 未信頼 config の監査拒否）、SessionEnd advisory の `fail_exit` 決定、panic fail-open、
   `plan_emission`（純: 出力計画）と `emit_and_exit`（IO + exit）、`now_iso8601`。
 - **`config`** — `Config` と全サブテーブル（`Classify`/`Checks`/`HardcodedIp`/`HardcodedSecret`/`SwallowedError`/
   `DuplicateFunction`/`LocalCapture`/`LineEndings`/`FileLength`/`Linters`/`ReviewContract`/`Rule`/`Severity`）を

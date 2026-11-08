@@ -34,44 +34,6 @@ FAILED scripts/test_audit_b_live_cargo_refusal.py::RefuseWhileCargoTestIsLive::t
 ========================= 2 failed, 2 passed in 6.22s =========================="""
 
 [[task]]
-id = "4620134f"
-title = "pre-commit ratchet: refuse new thread::scope spawns without catch_unwind in gate crates"
-project = "/Users/yuki/src/harness"
-project_unresolved = false
-tags = [
-    "p2",
-    "memory-audit-b",
-]
-touched_files = []
-status = "pending"
-notes = """
-Audit B item 9 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
-Source memory: thread-scope-reraises-panic.
-Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): no pre-commit scanner refuses a newly added thread::scope spawn without catch_unwind in crates/blastguard/src/store.rs. Scanners accepting the wrapped control: ['check-backlog-store.py', 'check-clippy-lints.py', ... 'check-version-bumped.py']; their exit codes on the bare diff: {... all 0}
-Test runs every `run X.py` scanner in .githooks/pre-commit against a fixture repo (independent of the new scanner's name); only scanners passing the wrapped control count, so the new scanner must be runnable in a minimal fixture repo. Ratchet guard (an existing bare spawn is not refused) passes today. Runtime ~30s.
-Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
-User ruling 2026-11-07 (AskUserQuestion): accept the ~80s added to the pre-push python suites; do not shrink detection strength for speed."""
-created_at = 1793998463
-updated_at = 1794001892
-weight = 0.0
-issue_number = 1582
-issue_url = "https://github.com/yukineko/claude-harnesses/issues/1582"
-rev = 3
-
-[task.repro]
-outcome = "reproduced"
-cmd = "python3 -m pytest --runxfail scripts/test_audit_b_scoped_spawn_unwind.py"
-rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
-observed_at = 1793998951
-detail = """
-exit 1: _pytest.outcomes.XFailed
-
-../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
-=========================== short test summary info ============================
-FAILED scripts/test_audit_b_scoped_spawn_unwind.py::ScopedSpawnNeedsCatchUnwind::test_added_scoped_spawn_without_catch_unwind_is_refused
-========================= 1 failed, 2 passed in 8.93s =========================="""
-
-[[task]]
 id = "4f19b628"
 title = "pre-push runs check-fail-open-mutation.py per changed Undetermined arm"
 project = "/Users/yuki/src/harness"

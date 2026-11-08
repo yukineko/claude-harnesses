@@ -11,6 +11,12 @@ output*, not text planted in the repo itself. This script is that missing gate:
 it flags concealment / verification-bypass / egress phrasings in the prompt
 assets and prints `file:line` + the verbatim line, exiting 1 on any hit.
 
+`--staged` (what the pre-commit hook passes; user ruling 2026-11-08): only the
+target files that are in the staged diff are judged (their working-tree
+content), after the empty-discovery guard has run on the full target set. No
+staged target prints one line and exits 0; an unreadable staged set exits 2.
+Without the flag the full sweep below runs unchanged.
+
 Self-contained: stdlib only, so it runs identically in CI and locally
 (`python3 scripts/check-prompt-injection.py`). Exit 0 = clean; exit 1 = one or
 more suspicious lines (all printed); exit 2 = UNDETERMINED, the gate could not
@@ -373,7 +379,21 @@ RC_FINDINGS = 1
 RC_UNDETERMINED = 2
 
 
+def _staged_scope():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import staged_scope
+
+    return staged_scope
+
+
 def main(argv: list[str]) -> int:
+    # `--staged` (pre-commit): judge only staged files of the target set. The
+    # empty-discovery guard below still runs on the UNFILTERED set first.
+    staged = None
+    if "--staged" in argv:
+        ss = _staged_scope()
+        _, argv = ss.pop_flag(argv)
+        staged = ss.staged_paths_or_exit(REPO, "injectguard")
     if len(argv) > 1:
         # Caller named the files explicitly. `len(argv) > 1` guarantees this is
         # non-empty, so the vacuity guard below neither applies nor should:
@@ -418,6 +438,12 @@ def main(argv: list[str]) -> int:
                 file=sys.stderr,
             )
             return RC_UNDETERMINED
+    if staged is not None:
+        ss = _staged_scope()
+        files = [p for p in files if ss.rel(p, REPO) in staged]
+        if not files:
+            ss.print_nothing_in_scope("injectguard")
+            return RC_OK
     total = 0
     for path in files:
         for lineno, text, name in scan_file(path):

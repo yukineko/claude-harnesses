@@ -23,6 +23,16 @@
 #
 # What runs (all stdlib-only python3; each blocks, none warn-and-continue)
 # -----------------------------------------------------------------------
+# Scope (user ruling 2026-11-08): every gate judges only THIS commit's range.
+# The scanners run with `--staged` look only at the staged files of their
+# target set (injectguard, fail-open-guard, launcher-exec-bit, backlog-store,
+# doc-duplication, clippy-lints), or — when they judge a whole-repo property
+# (raw-io-ratchet, projkey-classification, gate-protection, version-lockstep,
+# gate-crates-sync, crossx-constants, fault-injection-adoption) — run their
+# full check only when the staged diff touches one of their inputs. The rest
+# were already diff-scoped. No gate reads another worktree. The table below
+# describes what each gate checks once it runs.
+#
 #   injectguard        check-prompt-injection.py  planted prompt-injection in a
 #                                                 committed prompt asset
 #   fail-open-guard    check-fail-open.py         a new fail-open swallow on the
@@ -200,6 +210,7 @@ rc=0
 run() {
     scanner="$1"
     label="$2"
+    shift 2
     path="$REPO/scripts/$scanner"
 
     if [ ! -f "$path" ]; then
@@ -210,7 +221,7 @@ run() {
         return
     fi
 
-    python3 "$path"
+    python3 "$path" "$@"
     status=$?
     [ "$status" -eq 0 ] && return
 
@@ -225,28 +236,33 @@ run() {
     rc=1
 }
 
-run check-prompt-injection.py injectguard
-run check-fail-open.py        fail-open-guard
+# `--staged` (user ruling 2026-11-08): the scanner checks only this commit's
+# range — the staged files of its target set, or, for a scanner that judges a
+# whole-repo property, a full run only when the staged diff touches one of its
+# inputs (see scripts/staged_scope.py). Without the flag every scanner still
+# sweeps the whole repo; nothing here runs that sweep.
+run check-prompt-injection.py injectguard --staged
+run check-fail-open.py        fail-open-guard --staged
 run check-fail-open-diff.py   fail-open-diff
-run check-doc-duplication.py  doc-duplication
+run check-doc-duplication.py  doc-duplication --staged
 # check-test-weakening.py is NOT run here: it is run from .githooks/commit-msg
 # instead. Its acknowledgment marker lives in the commit message, which git has
 # not prepared yet at pre-commit time, so from here the remedy it prints is
 # unreachable and `--no-verify` becomes the only way past a false positive.
 # It blocks the same commit either way; see that hook's header for the detail.
-run check-plugin-versions.py  version-lockstep
+run check-plugin-versions.py  version-lockstep --staged
 run check-version-bumped.py   bump-on-change
 run check-hardcoded-secret.py secret-guard
-run check-raw-io-ratchet.py   raw-io-ratchet
-run check-fault-injection-adoption.py fault-injection-adoption
+run check-raw-io-ratchet.py   raw-io-ratchet --staged
+run check-fault-injection-adoption.py fault-injection-adoption --staged
 run check-worktree-isolation.py worktree-isolation
-run check-gate-crates-sync.py gate-crates-sync
-run check-gate-protection.py gate-protection
-run check-cross-crate-constants.py crossx-constants
-run check-launcher-exec-bit.py launcher-exec-bit
-run check-clippy-lints.py     clippy-lints
-run check-backlog-store.py    backlog-store
-run check-projkey-store-classification.py projkey-classification
+run check-gate-crates-sync.py gate-crates-sync --staged
+run check-gate-protection.py gate-protection --staged
+run check-cross-crate-constants.py crossx-constants --staged
+run check-launcher-exec-bit.py launcher-exec-bit --staged
+run check-clippy-lints.py     clippy-lints --staged
+run check-backlog-store.py    backlog-store --staged
+run check-projkey-store-classification.py projkey-classification --staged
 run check-file-growth.py      file-growth
 
 # main-tree-guard — CLAUDE.md §8, the one gate here that is Rust rather than

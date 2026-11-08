@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Tests for the per-phase timing and the bounded target-dir cleanup that
-.githooks/pre-push gained in d60e62c7 and 7511bf6d.
+"""Tests for the per-phase timing that .githooks/pre-push gained in d60e62c7,
+and for the ABSENCE of the shared-target-dir cleanup that 7511bf6d added and
+the 2026-11-08 ruling removed (hooks check only the change's range: no temp
+worktree, no shared prepush-typecheck-target, no target-cleanup phase).
 
 Run: `python3 scripts/test_prepush_timing.py` (stdlib `unittest` only).
 
@@ -21,13 +23,17 @@ What is pinned
 4. An unwritable log (a directory in its place) gives one warning, same rc.
 5. compile-fail stderr passes through line by line; an rc that never comes back
    blocks.
-6. target-cleanup: threshold, env fallback, unreadable dir, live/dead sibling
-   pid, held flock, no rc change, and an anti-vacuity pair on one fixture.
+6. no target-cleanup: a pre-existing $GIT_COMMON/prepush-typecheck-target is
+   never removed whatever its size, PREPUSH_TARGET_MAX_DEPS / sibling pids /
+   held cargo locks are not consulted, no target-cleanup phase is logged, and
+   the rc follows cargo alone. Each of those tests also asserts cargo check
+   really ran, so "nothing was deleted" cannot be "the hook exited early".
 
-A test that only ever sees the "kept" outcome proves nothing about the delete
-path, so the delete tests assert the directory is really gone, and every
-"no delete" test has a sibling control that is the same fixture without the one
-knob and does delete.
+Every scenario commits a crate (TimedHarness defaults crate=True): since the
+2026-11-08 ruling cargo runs only when the pushed range touches one.
+Phase lists are checked as an ordered subsequence plus a forbidden set, not
+as an exact list: the phase names beyond those pinned here are not part of
+the range-scope contract.
 """
 
 from __future__ import annotations
@@ -60,6 +66,7 @@ class TimedHarness(HookHarness):
     and target removal use them; the base harness PATH has neither)."""
 
     def __init__(self, **kw):
+        kw.setdefault("crate", True)
         super().__init__(**kw)
         for tool in (_which("date"), _which("rm")):
             link = self.bindir / Path(tool).name
@@ -161,20 +168,27 @@ def _cf_missing(h):
     h.remove_compile_fail()
 
 
+# "phases in" is an ordered subsequence of the logged phases; "phases out" must
+# be absent. target-cleanup is absent in every scenario (2026-11-08 ruling).
 _SCENARIOS = [
     ("allow", {}, None, 0,
-     ["bypass-ledger", "nudges", "target-cleanup", "typecheck", "compile-fail", "cleanup", "ref-recheck"], []),
+     ["bypass-ledger", "nudges", "typecheck", "compile-fail", "ref-recheck"], ["target-cleanup"]),
     ("cargo-fail", {"cargo_exit": 1}, None, 1,
-     ["bypass-ledger", "nudges", "target-cleanup", "typecheck"], ["compile-fail", "cleanup", "ref-recheck"]),
+     ["bypass-ledger", "nudges", "typecheck"], ["target-cleanup", "compile-fail", "ref-recheck"]),
     ("compile-fail-rc1", {}, _cf_rc1, 1,
-     ["bypass-ledger", "nudges", "target-cleanup", "typecheck", "compile-fail"], ["cleanup", "ref-recheck"]),
+     ["bypass-ledger", "nudges", "typecheck", "compile-fail"], ["target-cleanup", "ref-recheck"]),
     ("compile-fail-rc2", {}, _cf_rc2, 1,
-     ["bypass-ledger", "nudges", "target-cleanup", "typecheck", "compile-fail"], ["cleanup", "ref-recheck"]),
+     ["bypass-ledger", "nudges", "typecheck", "compile-fail"], ["target-cleanup", "ref-recheck"]),
     ("compile-fail-missing", {}, _cf_missing, 1,
-     ["bypass-ledger", "nudges", "target-cleanup", "typecheck", "compile-fail"], ["cleanup", "ref-recheck"]),
+     ["bypass-ledger", "nudges", "typecheck", "compile-fail"], ["target-cleanup", "ref-recheck"]),
     ("bypass-block", {"gate_bypass_exit": 1}, None, 1,
      ["bypass-ledger"], ["nudges", "target-cleanup", "typecheck", "ref-recheck"]),
 ]
+
+
+def _is_subsequence(want, got):
+    it = iter(got)
+    return all(any(w == g for g in it) for w in want)
 
 
 def _baseline_hook_text():
@@ -239,7 +253,8 @@ class SummaryLine(TimingTestCase):
                 names = re.findall(
                     r"(?:^|, )([a-z-]+)(?:\([0-9a-f]{8}\))? (?:\d+|\?)s", m.group("phases")
                 )
-                self.assertEqual(names, present, "listed phases %r" % m.group("phases"))
+                self.assertTrue(_is_subsequence(present, names),
+                                "listed phases %r lack %r in order" % (m.group("phases"), present))
                 for no in absent:
                     self.assertNotIn(no, names)
 
@@ -275,10 +290,11 @@ class JsonLog(TimingTestCase):
         self.assertIsInstance(rec["total"], int)
         self.assertRegex(rec["start"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         names = [p["phase"] for p in rec["phases"]]
-        self.assertEqual(
+        self.assertTrue(
+            _is_subsequence(["bypass-ledger", "nudges", "typecheck", "compile-fail", "ref-recheck"], names),
             names,
-            ["bypass-ledger", "nudges", "target-cleanup", "typecheck", "compile-fail", "cleanup", "ref-recheck"],
         )
+        self.assertNotIn("target-cleanup", names)
 
     def test_block_record_has_hook_rc(self):
         h = self.harness(cargo_exit=1)
@@ -293,6 +309,11 @@ class JsonLog(TimingTestCase):
         h = self.harness()
         sha1 = h.local_sha
         h._git("branch", "first", sha1)
+        # sha1 is not HEAD once sha2 exists, so (2026-11-08 ruling) it can only
+        # pass on a recorded pass for its tree; record the checks its range needs.
+        tree1 = h.tree_of(sha1)
+        h.write_record(tree1, "cargo-check:" + tph.CRATE_DIR)
+        h.write_record(tree1, "compile-fail")
         (h.root / "g.txt").write_text("2\n")
         h._git("add", "-A")
         h._git("commit", "-q", "-m", "second")
@@ -368,23 +389,31 @@ class CompileFailPassThrough(TimingTestCase):
         mark = None
         h = self.harness()
         mark = h.root / "killed.mark"
+        # The hook pid used to be read off the cwd (the temp worktree
+        # prepush-typecheck.<pid>); the check now runs in the repo root
+        # (2026-11-08 ruling), so it is found instead as the TOPMOST ancestor
+        # whose command line names the hook (its subshells share that line).
         h.set_compile_fail(
             "#!/usr/bin/env python3\n"
             "import os, signal, subprocess, sys\n"
-            "hook_pid = int(os.getcwd().rsplit('.', 1)[1])\n"
-            "chain = []\n"
+            "hook = os.environ['CF_HOOK']\n"
+            "anc = []\n"
             "p = os.getppid()\n"
-            "while p != hook_pid and p > 1:\n"
-            "    chain.append(p)\n"
-            "    p = int(subprocess.run(['/bin/ps', '-o', 'ppid=', '-p', str(p)],\n"
-            "        capture_output=True, text=True).stdout.strip())\n"
+            "while p > 1:\n"
+            "    out = subprocess.run(['/bin/ps', '-o', 'ppid=,command=', '-p', str(p)],\n"
+            "        capture_output=True, text=True).stdout.strip()\n"
+            "    ppid, cmd = out.split(None, 1)\n"
+            "    anc.append((p, cmd))\n"
+            "    p = int(ppid)\n"
+            "top = max(i for i, (_, c) in enumerate(anc) if hook in c)\n"
+            "chain = [q for q, _ in anc[:top]]\n"
             "victims = chain[:-1]\n"
             "open(os.environ['CF_MARK'], 'w').write('killed:%d' % len(victims))\n"
             "for v in reversed(victims):\n"
             "    os.kill(v, signal.SIGKILL)\n"
             "sys.exit(0)\n"
         )
-        proc = h.run_with({"CF_MARK": str(mark)})
+        proc = h.run_with({"CF_MARK": str(mark), "CF_HOOK": str(h.hook)})
         self.assertTrue(mark.is_file(), "stub never ran its kill step\n" + proc.stderr)
         self.assertNotEqual(mark.read_text(), "killed:0", "no process was killed; test setup is vacuous")
         self.assertEqual(proc.returncode, 1, "a missing rc must block\n" + proc.stderr)
@@ -393,7 +422,17 @@ class CompileFailPassThrough(TimingTestCase):
 
 
 class TargetCleanup(TimingTestCase):
-    """(6) bounded cleanup of $GIT_COMMON/prepush-typecheck-target."""
+    """(6) NO cleanup of $GIT_COMMON/prepush-typecheck-target.
+
+    RE-ANCHORED (2026-11-08 ruling: no shared prepush-typecheck-target, no
+    target-cleanup phase). These tests used to pin the bounded cleanup's
+    branches (threshold, env fallback, unreadable dir, live/dead sibling pid,
+    held flock). With the phase removed, each fixture now pins that the hook
+    leaves a leftover dir alone, consults none of those knobs, logs no
+    target-cleanup phase, and that its rc follows cargo alone. Every test
+    also asserts cargo check really ran, so "nothing was deleted" cannot be
+    "the hook never got that far".
+    """
 
     N = 5
     MAX = {"PREPUSH_TARGET_MAX_DEPS": "3"}
@@ -401,79 +440,70 @@ class TargetCleanup(TimingTestCase):
     def fixture(self, **kw):
         h = self.harness(**kw)
         h.make_deps(self.N)
+        (h.target / "debug" / "sentinel").write_text("keep me")
         return h
 
-    def action(self, h):
-        return self.phase_entry(h, "target-cleanup")["action"]
+    def assertUntouched(self, h, proc, n=None):
+        self.assertTrue((h.target / "debug" / "sentinel").is_file(),
+                        "the leftover target dir must not be touched\n" + proc.stderr)
+        self.assertEqual(len(list(h.deps.iterdir())), self.N if n is None else n)
+        names = [p["phase"] for p in json.loads(h.log_lines()[-1])["phases"]]
+        self.assertNotIn("target-cleanup", names)
+        self.assertNotIn("target-cleanup", self.summary(proc).group("phases"))
+        self.assertTrue(h.cargo_checks(), "cargo check must have run\n" + proc.stderr)
 
-    def test_over_threshold_removes(self):
-        h = self.fixture()
-        proc = h.run_with(self.MAX)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertFalse(h.target.exists(), "target dir must be removed")
-        e = self.phase_entry(h, "target-cleanup")
-        self.assertEqual(e["action"], "removed")
-        self.assertEqual(e["threshold"], 3)
-        self.assertEqual(e["deps_entries_seen"], 4)  # stops at threshold+1
-        self.assertIn("target-cleanup", self.summary(proc).group("phases"))
+    def test_over_threshold_dir_is_not_removed(self):
+        # was test_over_threshold_removes / test_one_over_threshold_removes /
+        # test_exactly_threshold_keeps
+        for n in (3, 4, 5):
+            with self.subTest(entries=n):
+                h = self.harness()
+                h.make_deps(n)
+                (h.target / "debug" / "sentinel").write_text("keep me")
+                proc = h.run_with(self.MAX)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertUntouched(h, proc, n=n)
+                self.assertNotIn("removing the shared target dir", proc.stderr)
 
-    def test_exactly_threshold_keeps(self):
-        h = self.harness()
-        h.make_deps(3)
-        proc = h.run_with(self.MAX)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertTrue(h.deps.is_dir())
-        self.assertEqual(len(list(h.deps.iterdir())), 3)
-        e = self.phase_entry(h, "target-cleanup")
-        self.assertEqual((e["action"], e["deps_entries_seen"]), ("kept", 3))
-
-    def test_one_over_threshold_removes(self):
-        h = self.harness()
-        h.make_deps(4)
-        h.run_with(self.MAX)
-        self.assertFalse(h.target.exists())
-
-    def test_invalid_env_falls_back_to_default(self):
+    def test_max_deps_env_is_not_consulted(self):
+        # was test_invalid_env_falls_back_to_default
         for bad in ("abc", "-1", "1.5", "3x"):
             with self.subTest(bad):
                 h = self.fixture()
                 proc = h.run_with({"PREPUSH_TARGET_MAX_DEPS": bad})
                 self.assertEqual(proc.returncode, 0, proc.stderr)
-                self.assertIn("using 20000", proc.stderr)
-                self.assertTrue(h.deps.is_dir(), "5 entries is far below the default 20000")
-                e = self.phase_entry(h, "target-cleanup")
-                self.assertEqual((e["action"], e["threshold"], e["deps_entries_seen"]), ("kept", 20000, 5))
+                self.assertNotIn("PREPUSH_TARGET_MAX_DEPS", proc.stderr)
+                self.assertNotIn("using 20000", proc.stderr)
+                self.assertUntouched(h, proc)
 
-    def test_unreadable_deps_does_not_delete(self):
+    def test_unreadable_leftover_dir_changes_nothing(self):
+        # was test_unreadable_deps_does_not_delete
         h = self.fixture()
         os.chmod(h.deps, 0)
         self.addCleanup(os.chmod, h.deps, 0o755)
         proc = h.run_with(self.MAX)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertTrue(h.target.exists())
-        self.assertEqual(self.action(h), "skipped-undetermined")
-        self.assertIn("could not count", proc.stderr)
+        self.assertNotIn("could not count", proc.stderr)
+        os.chmod(h.deps, 0o755)
+        self.assertUntouched(h, proc)
 
-    def test_live_sibling_pid_does_not_delete_and_dead_pid_does(self):
-        # live: this very process
-        h = self.fixture()
-        (h.git_common / ("prepush-typecheck.%d" % os.getpid())).mkdir()
-        proc = h.run_with(self.MAX)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertTrue(h.target.exists(), "live sibling: must not delete")
-        self.assertEqual(self.action(h), "skipped-busy")
-        self.assertIn("another pre-push (pid %d)" % os.getpid(), proc.stderr)
-        # dead: a child that has exited and been reaped
+    def test_sibling_typecheck_dirs_are_not_consulted(self):
+        # was test_live_sibling_pid_does_not_delete_and_dead_pid_does
         child = subprocess.Popen([sys.executable, "-c", "pass"])
         child.wait()
-        h2 = self.fixture()
-        (h2.git_common / ("prepush-typecheck.%d" % child.pid)).mkdir()
-        proc2 = h2.run_with(self.MAX)
-        self.assertEqual(proc2.returncode, 0, proc2.stderr)
-        self.assertFalse(h2.target.exists(), "dead sibling pid: must delete")
-        self.assertEqual(self.action(h2), "removed")
+        for pid in (os.getpid(), child.pid):
+            with self.subTest(pid=pid):
+                h = self.fixture()
+                sib = h.git_common / ("prepush-typecheck.%d" % pid)
+                sib.mkdir()
+                proc = h.run_with(self.MAX)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertNotIn("another pre-push", proc.stderr)
+                self.assertTrue(sib.is_dir(), "the hook must not touch a sibling's dir")
+                self.assertUntouched(h, proc)
 
-    def test_held_cargo_lock_does_not_delete_and_released_does(self):
+    def test_held_cargo_lock_is_not_consulted(self):
+        # was test_held_cargo_lock_does_not_delete_and_released_does
         h = self.fixture()
         lockfile = h.target / "debug" / ".cargo-lock"
         lockfile.write_text("")
@@ -484,55 +514,30 @@ class TargetCleanup(TimingTestCase):
         finally:
             os.close(fd)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertTrue(h.target.exists(), "held flock: must not delete")
-        self.assertEqual(self.action(h), "skipped-busy")
-        self.assertIn("holds a lock", proc.stderr)
-        # control: same fixture, lock released
-        proc2 = h.run_with(self.MAX)
-        self.assertEqual(proc2.returncode, 0, proc2.stderr)
-        self.assertFalse(h.target.exists(), "released flock: must delete")
+        self.assertNotIn("holds a lock", proc.stderr)
+        self.assertUntouched(h, proc)
 
-    def test_no_branch_changes_rc(self):
-        def live(h):
-            (h.git_common / ("prepush-typecheck.%d" % os.getpid())).mkdir()
+    def test_rc_follows_cargo_alone(self):
+        # was test_no_branch_changes_rc
+        for kw, want in (({}, 0), ({"cargo_exit": 1}, 1)):
+            with self.subTest(cargo_exit=kw.get("cargo_exit", 0)):
+                h = self.fixture(**kw)
+                proc = h.run_with(self.MAX)
+                self.assertEqual(proc.returncode, want, proc.stderr)
+                self.assertEqual(json.loads(h.log_lines()[0])["exit"], want)
+                self.assertUntouched(h, proc)
 
-        def unreadable(h):
-            os.chmod(h.deps, 0)
-            self.addCleanup(os.chmod, h.deps, 0o755)
-
-        branches = {"removed": None, "skipped-busy": live, "skipped-undetermined": unreadable}
-        for name, prep in branches.items():
-            for kw, want in (({}, 0), ({"cargo_exit": 1}, 1)):
-                with self.subTest("%s cargo_exit=%s" % (name, kw.get("cargo_exit", 0))):
-                    h = self.fixture(**kw)
-                    if prep:
-                        prep(h)
-                    proc = h.run_with(self.MAX)
-                    self.assertEqual(proc.returncode, want, proc.stderr)
-                    self.assertEqual(self.action(h), name)
-                    self.assertEqual(json.loads(h.log_lines()[0])["exit"], want)
+    def test_no_shared_target_dir_is_created_or_named(self):
+        # was test_anti_vacuity_pair_same_fixture: the pair's two outcomes no
+        # longer exist; what remains to pin is that cargo is never pointed at
+        # the shared dir and the hook never creates it.
         h = self.harness()
-        h.make_deps(2)
-        self.assertEqual(h.run_with(self.MAX).returncode, 0)  # kept
-
-    def test_anti_vacuity_pair_same_fixture(self):
-        """Same fixture, one knob: without it the dir is removed, with it the
-        dir (and a sentinel inside it) survives. Neither outcome can be a
-        constant."""
-        def build():
-            h = self.fixture()
-            (h.target / "debug" / "sentinel").write_text("keep me")
-            return h
-
-        removed = build()
-        removed.run_with(self.MAX)
-        skipped = build()
-        (skipped.git_common / ("prepush-typecheck.%d" % os.getpid())).mkdir()
-        skipped.run_with(self.MAX)
-        self.assertFalse((removed.target / "debug" / "sentinel").exists())
-        self.assertTrue((skipped.target / "debug" / "sentinel").exists())
-        self.assertEqual(self.action(removed), "removed")
-        self.assertEqual(self.action(skipped), "skipped-busy")
+        proc = h.run_with()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(h.cargo_checks(), proc.stderr)
+        for _, target_dir, _ in h.cargo_calls():
+            self.assertNotIn("prepush-typecheck-target", target_dir)
+        self.assertFalse(h.target.exists(), "the hook created the shared target dir")
 
 
 if __name__ == "__main__":

@@ -425,10 +425,21 @@ class ProjkeyClassificationIsGated(HookTestCase):
         'evidence = "test fixture"\n'
     )
 
+    @staticmethod
+    def _stage(h, *paths):
+        subprocess.run(
+            [_which("git"), "-C", str(h.root), "add", "--", *map(str, paths)],
+            check=True,
+            capture_output=True,
+        )
+
     def test_unclassified_projkey_consumer_blocks_the_commit(self):
         h = self.harness()
         checker = "check-projkey-store-classification.py"
         shutil.copy2(_HERE / checker, h.root / "scripts" / checker)
+        # pre-commit runs it with --staged, which imports the shared scoping
+        # helper next to it (user ruling 2026-11-08).
+        shutil.copy2(_HERE / "staged_scope.py", h.root / "scripts" / "staged_scope.py")
         src = h.root / "crates" / "demo" / "src"
         src.mkdir(parents=True)
         table = h.root / "scripts" / "projkey-store-classification.toml"
@@ -441,7 +452,12 @@ class ProjkeyClassificationIsGated(HookTestCase):
             "pub fn a(p: &Path) { let _ = repo_root(p); }\n"
         )
         table.write_text(self._TABLE_ENTRY.format(symbol="repo_root"))
+        # The hook runs the checker with --staged, so the fixture must STAGE the
+        # consumer and the table; an unstaged tree is (correctly) out of scope
+        # and would make both halves of this test vacuous "skipped" runs.
+        self._stage(h, lib, table)
         proc = h.run()
+        self.assertNotIn("skipped", proc.stdout, "control must reach the real checker")
         self.assertEqual(
             proc.returncode,
             0,
@@ -456,6 +472,7 @@ class ProjkeyClassificationIsGated(HookTestCase):
             "pub fn a(p: &Path) { let _ = repo_root(p); }\n"
             "pub fn b(p: &Path) { let _ = project_key(p); }\n"
         )
+        self._stage(h, lib)
         proc = h.run()
         self.assertBlocked(proc, "when a projkey consumer is unclassified")
         self.assertIn("UNCLASSIFIED", proc.stderr)

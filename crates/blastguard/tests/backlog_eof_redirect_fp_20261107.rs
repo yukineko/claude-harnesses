@@ -114,7 +114,12 @@ fn decision(cwd: &Path, command: &str) -> String {
 #[ignore = "backlog 0fccf1eb: open defect, remove ignore when fixed"]
 fn exact_observed_commit_command_is_allow() {
     let base = fresh_dir("exact");
-    let d = decision(&base, EXACT);
+    // User ruling 2026-11-08: only the staging is re-anchored to an explicit
+    // path (whole-tree staging is Ask by a separate ruling, so it could never
+    // be Allow); everything else in the fixture is byte-identical.
+    let exact = EXACT.replacen("git add -A &&", "git add crates/donegate/src/main.rs &&", 1);
+    assert!(!exact.contains("add -A"), "premise: explicit-path staging");
+    let d = decision(&base, &exact);
     assert_eq!(d, "allow", "quoted heredoc commit message is data");
 }
 
@@ -129,7 +134,7 @@ fn body_line_ending_in_gt_does_not_make_delimiter_a_redirect_target() {
         format!("cd {wt}; true && cat <<'EOF'\nx>\nEOF"),
         format!("cd {wt}; ls; cat <<'EOF'\nx>\nEOF"),
         format!(
-            "cd {wt}; git add -A && git commit -q -F - <<'EOF'\nCo-Authored-By: A <n@a.com>\nEOF"
+            "cd {wt}; git add crates/donegate/src/main.rs && git commit -q -F - <<'EOF'\nCo-Authored-By: A <n@a.com>\nEOF"
         ),
     ]
     .iter()

@@ -218,7 +218,7 @@ pub(super) enum Comments {
 /// here-document that could change the quoting state), where it is
 /// [`Comments::Off`] inside double quotes and [`Comments::On`] outside.
 /// [`Comments::Unknown`] otherwise.
-fn entry_comments(chars: &[char], start: usize, stop: Stop) -> Comments {
+pub(super) fn entry_comments(chars: &[char], start: usize, stop: Stop) -> Comments {
     if stop != Stop::Paren || start < 2 || chars[start - 2] != '$' || chars[start - 1] != '(' {
         return Comments::Unknown;
     }
@@ -434,8 +434,10 @@ pub(super) fn scan_balanced_strict(
     })
 }
 
-/// [`scan_balanced_strict`]'s modern (bash 4+ / zsh) reading.
-fn scan_balanced_strict_modern(
+/// [`scan_balanced_strict`]'s modern (bash 4+ / zsh) reading, whatever
+/// reading is active (the shell lexer uses it to delimit a `$(` inside an
+/// unquoted here-document body).
+pub(super) fn scan_balanced_strict_modern(
     chars: &[char],
     start: usize,
     stop: Stop,
@@ -757,9 +759,11 @@ pub(super) fn backtick_payloads(stage: &str) -> Vec<String> {
 /// feeds the FULL rule engine, so literal single-quoted text must not be
 /// mistaken for code. Each body is found with [`scan_balanced`], so quoting
 /// and nesting inside the body cannot end it early. An unterminated
-/// substitution ends the scan: [`split_segments`] keeps a CLOSED `$(a; b)` in
-/// one segment (see [`closed_substitution_end`]) but cuts an unclosed one
-/// apart, and those pieces are analysed as segments of their own.
+/// substitution ends the scan: [`split_segments`] keeps a CLOSED `$(a; b)` —
+/// and an unquoted closed `<(a; b)` / `>(a; b)` — in one segment (see
+/// [`closed_substitution_end`] and
+/// [`super::segment::closed_process_substitution_end`]) but cuts an unclosed
+/// one apart, and those pieces are analysed as segments of their own.
 pub(super) fn executed_substitution_payloads(seg: &str) -> Vec<String> {
     let chars: Vec<char> = seg.chars().collect();
     let mut out = Vec::new();

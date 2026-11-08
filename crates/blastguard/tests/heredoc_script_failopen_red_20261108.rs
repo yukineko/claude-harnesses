@@ -439,7 +439,6 @@ const FP: &[(&str, &str)] = &[
     ("fp_fstring_print", "import os\nfor n in [1, 2]:\n    print(f\"item {n} in {os.getcwd()}\")"),
     ("fp_glob_edit", "import glob\nfor f in glob.glob('crates/*/Cargo.toml'):\n    t = open(f).read()\n    open(f, 'w').write(t.replace('a', 'b'))"),
     ("fp_walk_edit", "import os\nfor root, _, fs in os.walk('crates'):\n    for fn in fs:\n        if fn.endswith('.rs'):\n            p = os.path.join(root, fn)\n            t = open(p).read()\n            open(p, 'w').write(t)"),
-    ("fp_sys_argv_file", "import sys\np = sys.argv[1]\nt = open(p).read()\nopen(p, 'w').write(t)"),
     ("fp_git_status", "import subprocess\nprint(subprocess.run(['git', 'status', '--short'], capture_output=True, text=True).stdout)"),
     ("fp_cargo_fmt", "import subprocess\nsubprocess.run(['cargo', 'fmt'], check=True)"),
     ("fp_git_diff", "import subprocess\nout = subprocess.check_output(['git', 'diff', '--stat']).decode()\nprint(out)"),
@@ -461,7 +460,6 @@ const FP: &[(&str, &str)] = &[
     ("fp_rglob_edit", "from pathlib import Path\nfor p in Path('crates').rglob('*.rs'):\n    t = p.read_text()\n    p.write_text(t)"),
     ("fp_abs_repo_write", "open('{DIR}/f.txt', 'w').write('y')"),
     ("fp_subprocess_git_commit_msg", "import subprocess\nsubprocess.run(['git', 'commit', '-m', 'fix: do not run git reset --hard'])"),
-    ("fp_os_system_git_add", "import os\nos.system('git add -A')"),
     ("fp_os_rename_repo", "import os\nos.rename('a.txt', 'b.txt')"),
     ("fp_shutil_move_repo", "import shutil\nshutil.move('a.txt', 'docs/a.txt')"),
     ("fp_edit_with_heredoc_text", "s = open('x.sh').read()\ns = s.replace('cat <<EOF', 'cat <<\\'EOF\\'')\nopen('x.sh', 'w').write(s)"),
@@ -714,5 +712,35 @@ fn heredoc_script_fp_cases_stay_allow() {
         blocked.is_empty(),
         "ordinary repo edit scripts must stay Allow (new false positives):\n{}",
         blocked.join("\n")
+    );
+}
+
+/// User ruling 2026-11-08: these two former fp cases correctly resolve to Ask,
+/// not Allow. `os.system('git add -A')` is the same as plain shell `git add -A`,
+/// which is Ask; a `sys.argv[1]` path with no argument passed cannot be determined,
+/// so it resolves to the restrictive side. Both must stay not-Allow (Ask or Deny).
+#[test]
+fn heredoc_script_ruled_ask_cases_20261108() {
+    let cases: [(&str, &str); 2] = [
+        ("fp_os_system_git_add", "import os\nos.system('git add -A')"),
+        (
+            "fp_sys_argv_file",
+            "import sys\np = sys.argv[1]\nt = open(p).read()\nopen(p, 'w').write(t)",
+        ),
+    ];
+    let mut allowed: Vec<String> = Vec::new();
+    for (name, body) in cases {
+        let f = Fixture::new(name);
+        let cmd = wrap(body);
+        let main = f.decision(&cmd, false);
+        let sub = f.decision(&cmd, true);
+        if main == "allow" || sub == "allow" {
+            allowed.push(format!("{name}: main={main} sub={sub}"));
+        }
+    }
+    assert!(
+        allowed.is_empty(),
+        "user-ruled Ask cases must not be Allow:\n{}",
+        allowed.join("\n")
     );
 }

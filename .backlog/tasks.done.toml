@@ -72209,3 +72209,62 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 453 filtered out; fi
 rev = "e12712e25074e4ed40accea0eb4eb178c51feb03"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "8ada7ad9"
+title = "condukt worktree merge: 45s timeout kills git mid-merge, leaves staged half-merge with no MERGE_HEAD"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-07 at main e6fc7abf, run run-20261107-114313-25739 task t3: 'condukt: merge of condukt/run-20261107-114313-25739/t3 into main failed: git [merge --no-edit -m ... 3087c5e6...] in /Users/yuki/src/harness timed out after 45s and was killed'; afterwards main had incoming changes STAGED (M  scripts/lint-changed-crates.sh, M  scripts/test-changed-crates.sh), no MERGE_HEAD (a foreign concurrent git merge was also running); same merge later succeeded in seconds. Reproduced deterministically at 56764042/8a9df328 with a pre-merge-commit hook sleeping past GIT_TIMEOUT (worktree.rs:27, final git merge at ~l.1316): HEAD unmoved, staged=task.txt, MERGE_HEAD absent, no recovery text in output. Fix direction: on timeout, restore index/worktree (reset --merge) or report recovery. Cause of the original slowness (lock contention vs other) undetermined; the half-applied outcome is reproduced."
+created_at = 1794027785
+updated_at = 1794137857
+weight = 0.0
+issue_number = 1605
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1605"
+issue_closed_at = 1794137859
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_merge_timeout_halfapplied_20261107 -- --ignored"
+rev = "8a9df328ad310a95e1cdcac50cb27e20b02b3e59"
+observed_at = 1794027785
+detail = """
+exit 101: .366 (/Users/yuki/.condukt/worktrees/run-20261107-114313-25739-fileA/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.24s
+     Running tests/backlog_merge_timeout_halfapplied_20261107.rs (target/debug/deps/backlog_merge_timeout_halfapplied_20261107-80093ed1dde55fdb)
+error: test failed, to rerun pass `-p condukt --test backlog_merge_timeout_halfapplied_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test backlog_merge_timeout_halfapplied_20261107 -- --include-ignored"
+exit = 0
+passed = 2
+rev = "a58101a8f5f8689110b7b7f33dff84fbcd3850fb"
+observed_at = 1794137799
+output_digest = "sha256:f70b9ee277b05053cd759e962d41fb24e30d809aff1ea7bde738421b43bc8165"
+excerpt = """
+
+running 2 tests
+test timed_out_merge_does_not_leave_a_silent_half_applied_index ... ok
+test timed_out_merge_with_a_left_index_lock_fails_loudly_and_keeps_the_lock ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 47.22s
+
+   Compiling blastguard v0.2.429 (/Users/yuki/src/.harness-worktrees/session-f8bda85a/crates/blastguard)
+   Compiling condukt v0.7.379 (/Users/yuki/src/.harness-worktrees/session-f8bda85a/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.41s
+     Running tests/backlog_merge_timeout_halfapplied_20261107.rs (target/debug/deps/backlog_merge_timeout_halfapplied_20261107-994d9bb6f8a2ee68)
+"""
+
+[task.closure.red]
+rev = "dd65c432cc21c70a2222951db1db066c21dbf73f"
+kind = "not-executed"
+executed = false
+note = "RED was NOT executed: backlog done's RED run was abolished by user ruling 2026-11-08 (「backlog doneのRED実行はそもそも全面廃止でいい」); rev is the caller's claim, resolved to a commit and checked to be an ancestor of HEAD, never run"

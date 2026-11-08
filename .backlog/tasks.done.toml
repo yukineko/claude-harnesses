@@ -71808,3 +71808,64 @@ test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 rev = "79c04f3becc84912f59307d792430cf86a16fede"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "e103cd56"
+title = "blastguard: キーの後ろの --get 等を読み取りと誤認し core.hooksPath 書き込みを Allow する fail-open"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "blastguard",
+    "p0",
+]
+touched_files = []
+status = "done"
+notes = """Legacy git config stops option parsing at the first positional, so 'git config core.hooksPath --get' WRITES the value '--get' (also --get-all/--get-regexp/--list/-l, and 'x --get' adds x); observed git 2.50.1. HEAD allows these because the read_only check in crates/blastguard/src/detect/git.rs "config" arm matches the flags anywhere in argv. RED commit 8999494e on branch red-bg-hookspath-read."""
+created_at = 1794052467
+updated_at = 1794099790
+weight = 0.0
+issue_number = 1623
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1623"
+issue_closed_at = 1794099793
+rev = 2
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --lib detect::hookspath_read_tests::git_config_hookspath_read_flag_after_key_is_a_write_and_not_allowed -- --ignored"
+rev = "e12712e25074e4ed40accea0eb4eb178c51feb03"
+observed_at = 1794052609
+detail = """
+exit 101: okspath_read_tests::git_config_hookspath_read_flag_after_key_is_a_write_and_not_allowed
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 452 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-ecd1d97de95143b1)
+error: test failed, to rerun pass `-p blastguard --lib`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --lib detect::hookspath_read_tests::git_config_hookspath_read_flag_after_key_is_a_write_and_not_allowed -- --include-ignored"
+exit = 0
+passed = 1
+rev = "bf90abac21da64c932117e4d45c5d92feb8b1e3f"
+observed_at = 1794099719
+output_digest = "sha256:3dcf884610155c97a0731ac33e031bc32c9017972f077ef021a1f321c5ff8567"
+excerpt = """
+
+running 1 test
+test detect::hookspath_read_tests::git_config_hookspath_read_flag_after_key_is_a_write_and_not_allowed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running unittests src/lib.rs (target/debug/deps/blastguard-6db3506d09dea45d)
+"""
+
+[task.closure.red]
+rev = "e12712e25074e4ed40accea0eb4eb178c51feb03"
+exit = 101
+kind = "behavioural"

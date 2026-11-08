@@ -72,7 +72,7 @@
 //! the records that belong to this session (same `session_id`) or that name the
 //! worktree the session is working in (the git top level of the hook's `cwd`).
 //! Records in backlog's own project buckets are `/flow` driver registrations
-//! that `autoflow`, `daily` and the main-tree guard read as "a driver is
+//! that `autoflow` and `daily` read as "a driver is
 //! active"; refreshing those from an ordinary tool call would keep a dead
 //! driver looking alive, so they are never written here.
 //!
@@ -94,7 +94,7 @@ use crate::wt_reconcile::{self, Attribution, Occupancy, Role};
 /// worktree registrations live in. Deliberately NOT a backlog project slug
 /// (those are 16 hex digits): `backlog lock status --project <repo>` reads the
 /// slug bucket of the repository, and a session registration there would make
-/// `autoflow` and the main-tree guard see every open session as a `/flow`
+/// `autoflow` see every open session as a `/flow`
 /// driver. `wt_reconcile::registrations_in` walks every bucket, so the reaper
 /// sees records here without knowing the name.
 ///

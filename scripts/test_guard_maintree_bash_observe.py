@@ -447,6 +447,17 @@ class HeadMoveIntegrationOnly(ObserveGuardBase):
     missing / unreadable reflog is still refused (see
     test_guard_maintree_bash_ff_source_gone.py). c2 = the existing
     test_completed_fast_forward_merge_clean, c3 = test_completed_non_ff_merge_commit_clean.
+
+    RE-SCOPED by user ruling 2026-11-08 (read no other branch's refs): the
+    first two accepted cases above ("any merge commit" and "contained in
+    another ref", i.e. integration_head's for-each-ref) are gone. A HEAD move
+    is now allowed only by main's own branch reflog chain (integration_move:
+    "merge ..." / "commit (merge): ..." merge commits whose first parent is the
+    old HEAD, and "merge|pull...: Fast-forward" entries that descend from it).
+    The refusals pinned here (c1, c4) are unchanged; c5 still refuses because
+    integration_move's rev-list / merge-base calls are intercepted by the stub.
+    _only_main_contains_head() runs for-each-ref in the TEST only, as fixture
+    anti-vacuity. See test_guard_maintree_bash_own_state_only.py.
     """
 
     def _head(self) -> str:

@@ -82,6 +82,7 @@ mod redirect;
 mod rm;
 mod scratch_place;
 mod segment;
+mod shell_lex;
 mod sinks;
 mod substitution;
 mod system_paths;

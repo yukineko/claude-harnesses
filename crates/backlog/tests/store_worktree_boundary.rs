@@ -84,6 +84,14 @@ fn fixture(seed: Option<&dyn Fn(&Path) -> String>) -> Fixture {
     );
     std::fs::write(primary.join("README"), "x\n").unwrap();
     if let Some(f) = seed {
+        // A REAL committed RED repro for the seeded rows' stored cmd (exit 1 =
+        // reproduced), so `next --claim` can re-run it in a clean checkout.
+        std::fs::create_dir_all(primary.join("tests")).unwrap();
+        std::fs::write(
+            primary.join("tests/repro.sh"),
+            "#!/bin/bash\necho 'bug present'\nexit 1\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(primary.join(".backlog")).unwrap();
         std::fs::write(primary.join(".backlog/tasks.toml"), f(&primary)).unwrap();
     }
@@ -113,7 +121,7 @@ fn fixture(seed: Option<&dyn Fn(&Path) -> String>) -> Fixture {
 
 fn seeded_task(project: &Path) -> String {
     format!(
-        "[[task]]\nid = \"seed0001\"\ntitle = \"seeded\"\nproject = \"{}\"\ntags = []\nstatus = \"pending\"\nnotes = \"\"\ncreated_at = 1000\nupdated_at = 1000\n[task.repro]\noutcome = \"reproduced\"\ncmd = \"cargo test -p fixture\"\nobserved_at = 1000\ndetail = \"fixture\"\n\n",
+        "[[task]]\nid = \"seed0001\"\ntitle = \"seeded\"\nproject = \"{}\"\ntags = []\nstatus = \"pending\"\nnotes = \"\"\ncreated_at = 1000\nupdated_at = 1000\n[task.repro]\noutcome = \"reproduced\"\ncmd = \"bash tests/repro.sh\"\nobserved_at = 1000\ndetail = \"fixture\"\n\n",
         project.display()
     )
 }

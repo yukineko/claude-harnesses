@@ -71028,3 +71028,721 @@ scripts/test_check_test_weakening_macro_additive.py ..                   [100%]
 rev = "91f02405b7d4f78b4382ecee65ebaa213fac47c2"
 exit = 1
 kind = "behavioural"
+
+[[task]]
+id = "f500c25a"
+title = "donegate default max_attempts=2: give up visibly on the 3rd stop"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = '''
+Audit B item 7 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: ask-policy (formerly gate-block-giveup-after-two).
+Observed RED 2026-11-07 at 35d0d2bf (base fc7b5dd9) (verbatim): stop 3 blocked again: the default cap allows more than two blocks; stdout="{\"decision\":\"block\",\"reason\":\"donegate: 1 required check(s) failed (attempt 3/3)... / test result: FAILED
+Related but separate from backlog b80023b3 (repeat waiver defeated by attempt number in the fingerprint); if that lands, stop 2 may become a waiver - the control accepts it. Visible give-up = marker donegate:giveup:typecheck in the violation ledger. tests/giveup_sentinel.rs sets max_attempts=3 explicitly (unaffected); the template line max_attempts = 3 at crates/donegate/src/main.rs:1069 needs updating with the fix.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.'''
+created_at = 1793998413
+updated_at = 1794052648
+weight = 0.0
+issue_number = 1578
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1578"
+issue_closed_at = 1794052651
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p donegate --test audit_b7_default_giveup_after_two -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998919
+detail = """
+exit 101: ished in 2.95s
+
+   Compiling donegate v0.1.68 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/donegate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.49s
+     Running tests/audit_b7_default_giveup_after_two.rs (target/debug/deps/audit_b7_default_giveup_after_two-59f886dfa0df1f53)
+error: test failed, to rerun pass `-p donegate --test audit_b7_default_giveup_after_two`"""
+
+[task.closure]
+reason = "already-fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p donegate --test audit_b7_default_giveup_after_two"
+exit = 0
+passed = 1
+rev = "801cb502f167e480e7a452b7afe0bb7038ffe455"
+observed_at = 1794052608
+output_digest = "sha256:8878c39e0b3c3aef2cf0bf2c1ae085b7ff9b4c4a872e11fd2d1298c6dfdff7e0"
+excerpt = """
+
+running 1 test
+test default_attempt_cap_gives_up_visibly_on_the_third_stop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/audit_b7_default_giveup_after_two.rs (target/debug/deps/audit_b7_default_giveup_after_two-52ffbc317b0c794e)
+"""
+
+[task.closure.red]
+rev = "35d0d2bf18258b6b96ff64458d81c3818b07479d"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "e95bf58f"
+title = "compass looks_like_path: do not flag slash lists or bare filenames in DoD prose"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 10 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: compass-gotchas (formerly compass-dod-refs-slash-falsepos).
+Observed RED 2026-11-07 at b555d70a (base fc7b5dd9) (verbatim): prose tokens were flagged as missing paths: ["DoD references missing path `groom/inject/snapshot`", "DoD references missing path `ledger/state`", "DoD references missing path `types.rs`", "DoD references missing path `handlers.rs`"] / test result: FAILED
+The memory's own example 入力が無い/ゼロ is NOT flagged at HEAD (CJK split leaves token '/', an existing path); kept as a guard. Real FPs are ASCII slash lists and bare *.rs names. Control: crates/nope/missing.rs under an existing top-level dir still trips. Conflict: planned rule 'only tokens rooted at an existing top-level dir' contradicts dod_missing_path_trips_when_check_enabled (expects src/does_not_exist.rs to trip in a tempdir without src/); reconcile e.g. by creating src/ in that fixture.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998435
+updated_at = 1794053901
+weight = 0.0
+issue_number = 1579
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1579"
+issue_closed_at = 1794053903
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p compass --bin compass dod_prose_slash_lists_and_bare_filenames_are_not_paths -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998927
+detail = """
+exit 101: sult: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.05s
+
+   Compiling compass v0.1.50 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/compass)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.57s
+     Running unittests src/main.rs (target/debug/deps/compass-8133ee8f753b6f53)
+error: test failed, to rerun pass `-p compass --bin compass`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p compass --bin compass dod_ -- --include-ignored"
+exit = 0
+passed = 10
+rev = "07a6c6f671c124b1e7fc25611af8d93067321ef9"
+observed_at = 1794053864
+output_digest = "sha256:49953a58d01562fac4718d46a179d64369eb8bf4aca96636627cf023c6f12a5e"
+excerpt = """
+
+running 10 tests
+test freshness::tests::dod_missing_path_trips_when_check_enabled ... ok
+test freshness::tests::dod_prose_slash_lists_and_bare_filenames_are_not_paths ... ok
+test freshness::tests::dod_bare_filename_without_slash_is_never_checked ... ok
+test freshness::tests::dod_rule_b_leading_dot_segment_missing_trips ... ok
+test freshness::tests::dod_present_path_does_not_trip_on_that_signal ... ok
+test freshness::tests::dod_rule_a_absolute_missing_path_trips ... ok
+test freshness::tests::dod_rule_c_extension_with_missing_first_segment_trips ... ok
+test freshness::tests::dod_rule_d_existing_first_segment_missing_leaf_trips ... ok
+test freshness::tests::dod_slash_token_without_dot_ext_or_existing_root_is_not_checked ... ok
+test gates::tests::c2_fires_on_missing_dod_path ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 93 filtered out; finished in 0.31s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running unittests src/main.rs (target/debug/deps/compass-5d743d1ca694aebc)
+"""
+
+[task.closure.red]
+rev = "6590ea815d1a7f259b75f0abe5ee9647b702dbd0"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "3da84f08"
+title = "condukt guard main-tree: treat a stale backlog lock as live when the holder transcript is fresh"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 15 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: liveness-and-observability (formerly maintree-guard-stale-lock).
+Observed RED 2026-11-07 at bc70aa0f (base fc7b5dd9) (verbatim): assertion `left == right` failed: guard main-tree passed a staged primary-tree commit although the lock holder holder-sess-b15 wrote its transcript seconds ago (lock heartbeat stale, pid dead - neither proves the session ended). left: Some(0) right: Some(1) / test result: FAILED. 1 passed; 1 failed
+condukt half only (maintree::parse_backlog_lock drops stale:true locks without a transcript check). The backlog half (`backlog lock acquire --force` refusing on a fresh transcript) has NO RED here. Transcript path $HOME/.claude/projects/<slug(repo)>/<session-id>.jsonl is an assumed convention; liveness inputs are PATH stubs as in main_tree_guard_cli.rs.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998382
+updated_at = 1794055292
+weight = 0.0
+issue_number = 1575
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1575"
+issue_closed_at = 1794055296
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test audit_b15_maintree_transcript_liveness -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998888
+detail = """
+exit 101: s
+
+   Compiling condukt v0.7.351 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.33s
+     Running tests/audit_b15_maintree_transcript_liveness.rs (target/debug/deps/audit_b15_maintree_transcript_liveness-ab6ebae3c3fc3ec9)
+error: test failed, to rerun pass `-p condukt --test audit_b15_maintree_transcript_liveness`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p condukt --test audit_b15_maintree_transcript_liveness -- --include-ignored"
+exit = 0
+passed = 3
+rev = "a8c08064e964fc855403fac04e3587354baceada"
+observed_at = 1794055163
+output_digest = "sha256:0950a1119d5722c1c5fa74917d89f4428951cf794913556950c434fd111be9e7"
+excerpt = """
+
+running 3 tests
+test stale_lock_with_idle_holder_transcript_passes ... ok
+test stale_lock_with_fresh_holder_transcript_blocks ... ok
+test stale_lock_with_no_holder_transcript_blocks ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running tests/audit_b15_maintree_transcript_liveness.rs (target/debug/deps/audit_b15_maintree_transcript_liveness-e0e56282f4fb7e06)
+"""
+
+[task.closure.red]
+rev = "679c57e6dba690c81f30c80a3686562e79f472dc"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "78cee053"
+title = "next --claim re-runs the stored repro and refuses to hand out a now-GREEN ticket"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 6 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: backlog-evidence-rules (formerly red-tickets-often-already-fixed).
+Observed RED 2026-11-07 at 34ece122 (base fc7b5dd9) (verbatim): panicked at ...audit_b6_claim_rejects_green_repro.rs:52:5: next --claim handed out 66b554ab, whose stored repro passes at HEAD / test result: FAILED
+Design choice left to the fix: skip the GREEN ticket vs refuse the whole claim; the test asserts only that the GREEN ticket is not handed out and the still-RED one is (control).
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed."""
+created_at = 1793998404
+updated_at = 1794063014
+weight = 0.0
+issue_number = 1577
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1577"
+issue_closed_at = 1794063016
+rev = 3
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p backlog --test audit_b6_claim_rejects_green_repro -- --include-ignored"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998915
+detail = """
+exit 101: ished in 1.41s
+
+   Compiling backlog v0.3.91 (/Users/yuki/src/.harness-worktrees/b-items-reds/crates/backlog)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.43s
+     Running tests/audit_b6_claim_rejects_green_repro.rs (target/debug/deps/audit_b6_claim_rejects_green_repro-9f73f7bcdd949947)
+error: test failed, to rerun pass `-p backlog --test audit_b6_claim_rejects_green_repro`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p backlog --test audit_b6_claim_rejects_green_repro -- --include-ignored"
+exit = 0
+passed = 1
+rev = "cf4416579968ebb27a0b81d116a137cc4006ac55"
+observed_at = 1794062992
+output_digest = "sha256:fc1d74736886cc5733c995012deb0acc32eb5f2ed20c4a380753c557ee572fa5"
+excerpt = """
+
+running 1 test
+test next_claim_does_not_hand_out_a_ticket_whose_repro_went_green ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/audit_b6_claim_rejects_green_repro.rs (target/debug/deps/audit_b6_claim_rejects_green_repro-377aeb22a30e0b96)
+"""
+
+[task.closure.red]
+rev = "03e67b25a1a3fc9b6e182dfa29f5ac36be6dd04e"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "4f3da889"
+title = "check-test-weakening: macro_rules! テストファイルの呼び出し引数変更を Undetermined にして正当な修正を一切通さない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794061924
+updated_at = 1794065200
+weight = 0.0
+issue_number = 1631
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1631"
+issue_closed_at = 1794065202
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_ctw_macro_rules_invocation_args.py"
+rev = "bbd05adc9e5fc7b857e45fc8a34580d43d256b58"
+observed_at = 1794061924
+detail = """
+exit 1: RulesInvocationArgs::test_blastguard_fix_shape_args_changed_and_control_added_is_clean
+FAILED scripts/test_ctw_macro_rules_invocation_args.py::MacroRulesInvocationArgs::test_invocation_added_is_clean
+FAILED scripts/test_ctw_macro_rules_invocation_args.py::MacroRulesInvocationArgs::test_invocation_args_changed_is_clean
+========================= 3 failed, 8 passed in 3.84s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_ctw_macro_rules_invocation_args.py"
+exit = 0
+passed = 11
+rev = "05403bc447a5b860fda1539276c5417e75826fcd"
+observed_at = 1794065189
+output_digest = "sha256:37d82775d94148ccf3dc960b311b154d566b3f4b1ed3248e15b7d2cfb8c360d8"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/red-tw-newfile-tests
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 11 items
+
+scripts/test_ctw_macro_rules_invocation_args.py ...........              [100%]
+
+============================== 11 passed in 4.98s ==============================
+"""
+
+[task.closure.red]
+rev = "bbd05adc9e5fc7b857e45fc8a34580d43d256b58"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "78817f03"
+title = "check-test-weakening: ブランチ内で新規追加したテストファイルの弱体化を判定しない"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794052324
+updated_at = 1794065225
+weight = 0.0
+issue_number = 1621
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1621"
+issue_closed_at = 1794065227
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_check_test_weakening_branch_new_file.py"
+rev = "1d8a6bae380dab1ef02f3f31b0fb01ee857821cb"
+observed_at = 1794052324
+detail = """
+exit 1: ======================
+FAILED scripts/test_check_test_weakening_branch_new_file.py::BranchNewFileWeakening::test_assertion_removed_from_test_committed_earlier_on_branch_blocks
+FAILED scripts/test_check_test_weakening_branch_new_file.py::BranchNewFileWeakening::test_skip_added_to_test_committed_earlier_on_branch_blocks
+========================= 2 failed, 4 passed in 2.32s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_check_test_weakening_branch_new_file.py"
+exit = 0
+passed = 10
+rev = "05403bc447a5b860fda1539276c5417e75826fcd"
+observed_at = 1794065210
+output_digest = "sha256:5004de2cf10692c8c74e5674c26faf5c4afadc240a8db65dd2db5623154878e3"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/red-tw-newfile-tests
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 10 items
+
+scripts/test_check_test_weakening_branch_new_file.py ..........          [100%]
+
+============================== 10 passed in 7.21s ==============================
+"""
+
+[task.closure.red]
+rev = "1d8a6bae380dab1ef02f3f31b0fb01ee857821cb"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "e2b9ffb1"
+title = "blastguard CRITICAL: no-heredoc fail-open — # comment with a quote / escaped quote hides the next line; <(...) body unanalysed (rm -rf /etc Allow)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Found 2026-11-07 by the bg32 verifier (observed in /bin/bash 3.2, /bin/sh, /bin/zsh with harmless markers; matrix in the test file doc comment). User ruling 2026-11-07: fix in a later session. Remove the #[ignore] when fixed; do not weaken the test."
+created_at = 1794031539
+updated_at = 1794064830
+weight = 0.0
+issue_number = 1610
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1610"
+issue_closed_at = 1794064833
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_b_same_hole_without_any_heredoc -- --include-ignored"
+rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
+observed_at = 1794031539
+detail = """
+exit 101: ng blastguard v0.2.307 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.18s
+     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-00e2d9df46979fb5)
+error: test failed, to rerun pass `-p blastguard --test heredoc_paren_bash32_verifier_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test heredoc_paren_bash32_verifier_20261107 red_b_same_hole_without_any_heredoc"
+exit = 0
+passed = 1
+rev = "bf88a7c9eb486897a042adb4769e33ae8f24f337"
+observed_at = 1794064806
+output_digest = "sha256:bb75d2f052cdb2e04b84418905e24a62e77b8953ed2c75fdc874ce23bb3954b1"
+excerpt = """
+
+running 1 test
+test red_b_same_hole_without_any_heredoc ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.84s
+
+   Compiling blastguard v0.2.382 (/Users/yuki/src/.harness-worktrees/bl-commit-msg-fp/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.29s
+     Running tests/heredoc_paren_bash32_verifier_20261107.rs (target/debug/deps/heredoc_paren_bash32_verifier_20261107-e8b60a3ebbafe714)
+"""
+
+[task.closure.red]
+rev = "c5b71363990bcdc235a51464dcfb92b4072712ec"
+exit = 101
+kind = "behavioural"
+
+[[task]]
+id = "ed82c49b"
+title = "check-test-weakening: macro_rules! テストファイルで top-level helper 追加と呼び出し編集の併用を Undetermined にする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794066055
+updated_at = 1794067632
+weight = 0.0
+issue_number = 1633
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1633"
+issue_closed_at = 1794067636
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_ctw_macro_rules_helper_plus_invocations.py"
+rev = "58eae660a5bed638eaa0e0f3ce85dee02136583b"
+observed_at = 1794066055
+detail = """
+exit 1: r_fn_after_brace_item_alone_is_clean
+FAILED scripts/test_ctw_macro_rules_helper_plus_invocations.py::HelperPlusInvocations::test_helper_fn_after_brace_item_plus_invocation_edits_is_clean
+FAILED scripts/test_ctw_macro_rules_helper_plus_invocations.py::HelperPlusInvocations::test_helper_fn_plus_invocation_edits_is_clean
+========================= 3 failed, 8 passed in 5.06s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_ctw_macro_rules_helper_plus_invocations.py"
+exit = 0
+passed = 11
+rev = "8fbc8dbaf55ffddacb6108484969400e6ed53855"
+observed_at = 1794067619
+output_digest = "sha256:6526040600e6011f21ab85c42736a058b32dbabec92d0a70f2aa23e283661b7e"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/red-tw-macro-helper
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 11 items
+
+scripts/test_ctw_macro_rules_helper_plus_invocations.py ...........      [100%]
+
+============================== 11 passed in 4.79s ==============================
+"""
+
+[task.closure.red]
+rev = "58eae660a5bed638eaa0e0f3ce85dee02136583b"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "25b88447"
+title = "check-test-weakening: helper fn・コメント・#[test] fn 挿入と呼び出し編集の併用（実際の heredoc_body_gt 修正形）を Undetermined にする"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794072393
+updated_at = 1794073412
+weight = 0.0
+issue_number = 1635
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1635"
+issue_closed_at = 1794073414
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_ctw_macro_rules_helper_comment_testfn.py"
+rev = "d88fa5b69612ccad5acd651603358855c1597a57"
+observed_at = 1794072393
+detail = """
+exit 1: ::test_full_combination_real_shape_is_clean
+FAILED scripts/test_ctw_macro_rules_helper_comment_testfn.py::HelperCommentTestFn::test_inserted_mod_with_tests_is_undetermined
+FAILED scripts/test_ctw_macro_rules_helper_comment_testfn.py::HelperCommentTestFn::test_inserted_test_fn_duplicating_generated_name_is_undetermined
+========================= 3 failed, 11 passed in 5.59s ========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_ctw_macro_rules_helper_comment_testfn.py"
+exit = 0
+passed = 14
+rev = "439e59e48d2147bbe77a5edd2736f02007d3ef8f"
+observed_at = 1794073398
+output_digest = "sha256:18d37427cd3810a1cec082ad6a9607ca118dfd870a1f8799768f47c7f11840e3"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/red-tw-hdgt-shape
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 14 items
+
+scripts/test_ctw_macro_rules_helper_comment_testfn.py ..............     [100%]
+
+============================== 14 passed in 5.41s ==============================
+"""
+
+[task.closure.red]
+rev = "d88fa5b69612ccad5acd651603358855c1597a57"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "54de84b4"
+title = "check-test-weakening: index ではなく working tree を判定し、unstaged 変更で block し staged 弱体化を見逃す"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794067425
+updated_at = 1794073170
+weight = 0.0
+issue_number = 1634
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1634"
+issue_closed_at = 1794073173
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_check_test_weakening_index_not_worktree.py"
+rev = "525608cbf061e82514d36c56c1e45e7ab67050dd"
+observed_at = 1794067425
+detail = """
+exit 1: ree_restored_blocks
+FAILED scripts/test_check_test_weakening_index_not_worktree.py::IndexNotWorktree::test_unstaged_ignore_in_a_with_only_b_staged_is_not_reported
+FAILED scripts/test_check_test_weakening_index_not_worktree.py::IndexNotWorktree::test_unstaged_unproven_macro_change_with_only_b_staged_is_not_undetermined
+========================= 5 failed, 2 passed in 2.57s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_check_test_weakening_index_not_worktree.py"
+exit = 0
+passed = 7
+rev = "6679097a03701d93f7058b6805b9d83762dc4a79"
+observed_at = 1794073162
+output_digest = "sha256:6236c3d9735e238ab1ca521700df6c7640d68887b6fdac51d255585af9b21dc5"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/red-tw-index
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 7 items
+
+scripts/test_check_test_weakening_index_not_worktree.py .......          [100%]
+
+============================== 7 passed in 3.20s ===============================
+"""
+
+[task.closure.red]
+rev = "525608cbf061e82514d36c56c1e45e7ab67050dd"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "836d0725"
+title = "check-test-weakening: pure append of a #[test] to a macro_rules! test file is undetermined"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "gate-fp",
+    "p2",
+]
+touched_files = []
+status = "done"
+notes = "Observed 2026-11-07 in session bf349dd5 adding a RED to crates/blastguard/tests/heredoc_body_gt_fp_20261107.rs. Verbatim: check-test-weakening: undetermined — ...: #[test] inside a macro_rules! template in a file that exists at the base -- macro invocations are not counted, so removed generated tests cannot be ruled out. A base-is-prefix append cannot remove generated tests. RED committed at bb0811e9: scripts/test_check_test_weakening_macro_append_20261107.py (controls: append + removed invocation, append + deleted template assert must still block). Do NOT weaken the test; remove the expectedFailure marker when fixed."
+created_at = 1794040972
+updated_at = 1794088914
+weight = 0.0
+issue_number = 1619
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1619"
+issue_closed_at = 1794088916
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest scripts/test_check_test_weakening_macro_append_20261107.py -q"
+rev = "bb0811e93f1a65cf659598dc1079c4cbc4f561c3"
+observed_at = 1794040972
+detail = """
+exit 1: -- macro invocations are not counted, so removed generated tests cannot be ruled out
+
+scripts/test_check_test_weakening_macro_append_20261107.py:110: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_check_test_weakening_macro_append_20261107.py::MacroAppend::test_target_appending_a_standalone_test_passes
+1 failed, 2 passed in 1.78s"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest -q scripts/test_check_test_weakening_macro_append_20261107.py"
+exit = 0
+passed = 3
+rev = "c8451993dda6571cb4e9a04c2a75eacb9b7afb2b"
+observed_at = 1794088907
+output_digest = "sha256:222dec53f848e8c153a3101c6da58ee472427c5250aa8ca3ffa0f3cb83d15580"
+excerpt = """
+...                                                                      [100%]
+3 passed in 2.05s
+"""
+
+[task.closure.red]
+rev = "bb0811e93f1a65cf659598dc1079c4cbc4f561c3"
+exit = 1
+kind = "behavioural"
+
+[[task]]
+id = "1389f634"
+title = "blastguard: heredoc_body_gt_fp target_cd_var_git_commit_heredoc が main で赤"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = []
+touched_files = []
+status = "done"
+notes = ""
+created_at = 1794059788
+updated_at = 1794088916
+weight = 0.0
+issue_number = 1628
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1628"
+issue_closed_at = 1794088919
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p blastguard --test heredoc_body_gt_fp_20261107 target_cd_var_git_commit_heredoc"
+rev = "6c15d77e1ff2ad16d12ebb861d8988fbcaf4eae5"
+observed_at = 1794059788
+detail = """
+exit 101: s2/crates/overwatch)
+   Compiling blastguard v0.2.378 (/Users/yuki/src/.harness-worktrees/fix-hdgt-regress2/crates/blastguard)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.35s
+     Running tests/heredoc_body_gt_fp_20261107.rs (target/debug/deps/heredoc_body_gt_fp_20261107-088ddbf05c37eb9d)
+error: test failed, to rerun pass `-p blastguard --test heredoc_body_gt_fp_20261107`"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "cargo-test"
+cmd = "cargo test -p blastguard --test heredoc_body_gt_fp_20261107 target_cd_var_git_commit_heredoc"
+exit = 0
+passed = 1
+rev = "f5c8e303668e7900074e57d2a382a56e6c211044"
+observed_at = 1794088891
+output_digest = "sha256:81651f5ecc860e4eb504ab8b511805882221ca186eb2154ccc693b52b99ab950"
+excerpt = """
+
+running 1 test
+test target_cd_var_git_commit_heredoc ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 1.21s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/heredoc_body_gt_fp_20261107.rs (target/debug/deps/heredoc_body_gt_fp_20261107-dea67376ddfeaaee)
+"""
+
+[task.closure.red]
+rev = "6c15d77e1ff2ad16d12ebb861d8988fbcaf4eae5"
+exit = 101
+kind = "behavioural"
+overlay = ["crates/blastguard/tests/commit_msg_heredoc_trailing_cmd_fp_20261107.rs"]

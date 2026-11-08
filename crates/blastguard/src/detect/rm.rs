@@ -60,6 +60,12 @@ fn rm_is_recursive(rest: &[&str]) -> bool {
 ///
 /// Every other expansion is left unresolved here (and so stays an Ask in
 /// [`analyze_rm`]); this function only ever adds a Deny.
+///
+/// The non-`rm` system-file mutators (`unlink`, `rmdir`, `mv`, `sed -i`,
+/// `perl -i`, `chmod`, `chown`, `chgrp`, `rsync`) get the same resolution for
+/// the files they modify: [`super::system_paths::known_mutation_harm`], so
+/// `X=/etc/passwd; unlink $X` is the same system-harm Deny as
+/// `unlink /etc/passwd`, not the expansion Ask.
 pub(super) fn known_path_harm(
     tokens: &[&str],
     line: &str,
@@ -72,11 +78,20 @@ pub(super) fn known_path_harm(
             CommandWordOrigin::Literal(v) => Some(v),
             _ => None,
         };
+    let resolve = |word: &str| match expand_operand_with(word, ctx.scope.home_real(), Some(&vars)) {
+        OperandSpelling::Paths(p) => Some(p),
+        OperandSpelling::Unresolvable(_) => None,
+    };
     for idx in super::words::command_candidates(tokens) {
-        if super::words::normalized_command(tokens[idx]) != "rm" {
+        let cmd = super::words::normalized_command(tokens[idx]);
+        let rest = &tokens[idx + 1..];
+        if cmd != "rm" {
+            let deny = super::system_paths::known_mutation_harm(&cmd, rest, ctx, &resolve);
+            if deny.is_deny() {
+                return deny;
+            }
             continue;
         }
-        let rest = &tokens[idx + 1..];
         let words = rm_operand_words(rest);
         if !words.iter().any(|w| has_unresolvable_expansion(w)) {
             continue;

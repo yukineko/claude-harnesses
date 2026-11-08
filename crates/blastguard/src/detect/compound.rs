@@ -94,7 +94,23 @@ pub(super) fn case_pattern_end(s: &str) -> Option<usize> {
 #[derive(Clone, Debug)]
 pub(super) struct LoopBinding {
     name: String,
-    values: Vec<String>,
+    values: Vec<LoopValue>,
+}
+
+/// One value a loop variable takes, as the header lists it.
+#[derive(Clone, Debug, PartialEq)]
+struct LoopValue {
+    text: String,
+    /// The header word was an UNQUOTED glob with no other shell syntax in it
+    /// (`*.tmp`, `build/*.o`): bash expands it in the header, so each
+    /// iteration receives ONE entry it matched, not the pattern. A use of the
+    /// variable is then a single name inside the pattern's literal directory,
+    /// and [`substitute_var_refs`] quotes it where the reference is unquoted,
+    /// so the body's rules see one file there (the glob belongs to `for`,
+    /// not to the body's command — user ruling 2026-11-07). A quoted header
+    /// word (`for f in "*.tmp"`) is the literal pattern, which an unquoted
+    /// `$f` DOES expand in the body, so it is not marked.
+    glob_matched: bool,
 }
 
 /// The binding a `for`/`select` header establishes, or `None` for a header
@@ -112,15 +128,29 @@ pub(super) fn loop_binding(header: &str) -> Option<LoopBinding> {
     let values = match words.get(2).map(String::as_str) {
         Some("in") => words[3..]
             .iter()
-            .map(|w| unquote_literal_value(w).unwrap_or_else(|| w.clone()))
+            .map(|w| LoopValue {
+                text: unquote_literal_value(w).unwrap_or_else(|| w.clone()),
+                glob_matched: is_plain_unquoted_glob(w),
+            })
             .collect(),
-        None => vec!["\"$@\"".to_string()],
+        None => vec![LoopValue {
+            text: "\"$@\"".to_string(),
+            glob_matched: false,
+        }],
         Some(_) => return None,
     };
     Some(LoopBinding {
         name: name.clone(),
         values,
     })
+}
+
+/// True for a header word that is a glob pattern and nothing else: a `*`, `?`
+/// or `[` and no quote, backslash, `$`, backtick or brace (anything that would
+/// make the word's expansion something other than "the entries it matches").
+fn is_plain_unquoted_glob(word: &str) -> bool {
+    word.contains(['*', '?', '['])
+        && !word.contains(['\'', '"', '\\', '$', '`', '{', '}', '(', ')'])
 }
 
 /// One [`split_segments`] segment with its compound-command syntax separated
@@ -340,15 +370,40 @@ pub(super) const MAX_LOOP_VARIANTS: usize = 256;
 /// An operator form is replaced by the WHOLE value (`${f%.sh}` by all of
 /// `.githooks/pre-commit.sh`), again an over-approximation: the path the
 /// operator would derive lies inside the one substituted.
-pub(super) fn substitute_var_refs(text: &str, name: &str, value: &str) -> Option<String> {
+///
+/// `quote_unquoted` (a [`LoopValue::glob_matched`] value) wraps the value in
+/// double quotes where the reference is outside every quote, so a glob the
+/// loop header already expanded is not read as a second, body-level glob.
+/// Inside double or single quotes the value is inserted as it is.
+fn substitute_var_refs(
+    text: &str,
+    name: &str,
+    value: &str,
+    quote_unquoted: bool,
+) -> Option<String> {
     let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut hit = false;
+    let (mut in_s, mut in_d) = (false, false);
+    let push_value = |out: &mut String, in_quotes: bool| {
+        if quote_unquoted && !in_quotes {
+            out.push('"');
+            out.push_str(value);
+            out.push('"');
+        } else {
+            out.push_str(value);
+        }
+    };
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        if c == '\\' {
+        if c == '\'' && !in_d {
+            in_s = !in_s;
+        } else if c == '"' && !in_s {
+            in_d = !in_d;
+        }
+        if c == '\\' && !in_s {
             out.push(c);
             if let Some(&n) = chars.get(i + 1) {
                 out.push(n);
@@ -364,7 +419,7 @@ pub(super) fn substitute_var_refs(text: &str, name: &str, value: &str) -> Option
                         .strip_prefix(name)
                         .is_some_and(|r| !r.starts_with(is_ident));
                     if names_it {
-                        out.push_str(value);
+                        push_value(&mut out, in_s || in_d);
                         hit = true;
                         i += close + 3;
                         continue;
@@ -377,7 +432,7 @@ pub(super) fn substitute_var_refs(text: &str, name: &str, value: &str) -> Option
                     .map_or(chars.len(), |p| i + 1 + p);
                 let ident: String = chars[i + 1..end].iter().collect();
                 if ident == name {
-                    out.push_str(value);
+                    push_value(&mut out, in_s || in_d);
                     hit = true;
                     i = end;
                     continue;
@@ -421,24 +476,18 @@ pub(super) fn loop_variants(command: &str, bindings: &[LoopBinding]) -> LoopVari
     // Union values per name, latest binding first, so a list that itself
     // names an earlier loop variable (`for g in $f`) is substituted before
     // that variable's own values are.
-    let mut names: Vec<(&str, Vec<&str>)> = Vec::new();
+    let mut names: Vec<(&str, Vec<&LoopValue>)> = Vec::new();
     for b in bindings.iter().rev() {
-        match names.iter_mut().find(|(n, _)| *n == b.name) {
-            Some((_, vals)) => {
-                for v in &b.values {
-                    if !vals.contains(&v.as_str()) {
-                        vals.push(v);
-                    }
-                }
-            }
+        let at = match names.iter().position(|(n, _)| *n == b.name) {
+            Some(at) => at,
             None => {
-                let mut vals: Vec<&str> = Vec::new();
-                for v in &b.values {
-                    if !vals.contains(&v.as_str()) {
-                        vals.push(v);
-                    }
-                }
-                names.push((&b.name, vals));
+                names.push((&b.name, Vec::new()));
+                names.len() - 1
+            }
+        };
+        for v in &b.values {
+            if !names[at].1.contains(&v) {
+                names[at].1.push(v);
             }
         }
     }
@@ -447,7 +496,7 @@ pub(super) fn loop_variants(command: &str, bindings: &[LoopBinding]) -> LoopVari
     for (name, values) in names {
         if !variants
             .iter()
-            .any(|v| substitute_var_refs(v, name, "").is_some())
+            .any(|v| substitute_var_refs(v, name, "", false).is_some())
         {
             continue;
         }
@@ -462,7 +511,10 @@ pub(super) fn loop_variants(command: &str, bindings: &[LoopBinding]) -> LoopVari
         let mut next = Vec::with_capacity(count);
         for v in &variants {
             for value in &values {
-                next.push(substitute_var_refs(v, name, value).unwrap_or_else(|| v.clone()));
+                next.push(
+                    substitute_var_refs(v, name, &value.text, value.glob_matched)
+                        .unwrap_or_else(|| v.clone()),
+                );
             }
         }
         variants = next;

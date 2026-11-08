@@ -17,7 +17,14 @@ parallelguard) it
   1. applies one concrete, mechanical fail-open mutation to a real source
      file (a literal old-string -> new-string replacement, applied
      programmatically — never "an LLM decides at check-time whether this
-     would break something"),
+     would break something"). The mutation DELETES the construct under
+     test (a guard, a call, a comparison) or replaces it with the
+     fail-open value; it never neutralizes it in place. Wrapping the
+     guarded block in `if false {` or adding an always-taken
+     `if true { return ...; }` is banned (user ruling 2026-11-07): code
+     that can never run is garbage, in mutants as much as in real code.
+     `scripts/test_audit_b_mutation_deletes.py` enforces this on every
+     registered scenario,
   2. runs `cargo test -p <crate>` and captures the real exit code,
   3. asserts the exit code is non-zero (i.e., the crate's OWN test suite
      went RED because of the injected fail-open), and
@@ -34,7 +41,7 @@ INCONCLUSIVE (it doesn't exercise the test suite's semantic judgment at all)
 and is reported separately from both CAUGHT and NOT-CAUGHT.
 
 Exit codes:
-  0 — every scenario across all 6 crates was CAUGHT (red confirmed).
+  0 — every selected scenario was CAUGHT (red confirmed).
   1 — at least one scenario was NOT CAUGHT (existing tests missed a real
       fail-open) or INCONCLUSIVE (mutation didn't compile), or an
       unexpected error occurred. Details are always printed; the mutated
@@ -79,7 +86,11 @@ class Scenario:
 
     `old` must appear EXACTLY ONCE in the target file (checked before
     mutating) so the replacement is unambiguous — if it appears zero or more
-    than once, the scenario is treated as INCONCLUSIVE rather than guessing.
+    than once, the scenario is reported as an error rather than guessing.
+
+    `new` must DELETE the construct under test (or replace it with the
+    fail-open value), never neutralize it in place with `if false {` or an
+    always-taken `if true {` (see the module docstring).
     """
 
     def __init__(self, crate, file_rel, description, old, new):
@@ -133,27 +144,25 @@ SCENARIOS = [
         crate="stuckguard",
         file_rel="crates/stuckguard/src/detect.rs",
         description=(
-            "repeat(): make the repeat-threshold check always report 'not "
-            "enough repeats yet', so the repeat detector never trips "
-            "regardless of how many times an action repeats."
+            "detect(): delete the call to the repeat detector, so detect() "
+            "never reports a repeat trip regardless of how many times an "
+            "action repeats (only oscillation can still trip)."
         ),
-        old="    if same.len() < cfg.repeat_threshold {\n        return None;\n    }\n",
-        new="    if true {\n        return None;\n    }\n",
+        old="        return Some(t);\n    }\n    repeat(window, cur, cfg)\n}\n",
+        new="        return Some(t);\n    }\n    None\n}\n",
     ),
     Scenario(
         crate="parallelguard",
         file_rel="crates/parallelguard/src/model.rs",
         description=(
-            "acquire(): hardcode the cap check to never fire, so a class that "
-            "already holds `cap` live slots is admitted anyway — the width "
-            "limit this gate exists to enforce, removed."
+            "acquire(): delete the cap check, so a class that already holds "
+            "`cap` live slots is admitted anyway — the width limit this gate "
+            "exists to enforce, removed."
         ),
         old="        if live >= cap {\n"
         "            return Decision::Deny(deny_reason(class, live, cap));\n"
         "        }\n",
-        new="        if false {\n"
-        "            return Decision::Deny(deny_reason(class, live, cap));\n"
-        "        }\n",
+        new="",
     ),
     Scenario(
         crate="mutategate",

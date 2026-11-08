@@ -3,8 +3,9 @@
 mutation-remove-dont-disable; user ruling 2026-11-07 on audit row #40).
 
 Ruling: a mutant must DELETE the construct under test, never neutralize it in
-place. `scripts/check-fail-open-mutation.py` still has a scenario whose `new`
-text wraps the guarded block in `if false {` (the parallelguard cap check).
+place. `scripts/check-fail-open-mutation.py` had a scenario whose `new`
+text wrapped the guarded block in `if false {` (the parallelguard cap check;
+fixed under backlog d425cfc3 by deleting the guard).
 Code that can never execute is garbage (「絶対に処理されないコードはプログラムと
 コンパイラのゴミ」), in mutants as much as in real code.
 
@@ -57,7 +58,6 @@ class MutantsDeleteRatherThanDisable(unittest.TestCase):
                 text = (REPO / s.file_rel).read_text(encoding="utf-8")
                 self.assertEqual(text.count(s.old), 1, s.file_rel)
 
-    @unittest.expectedFailure  # backlog d425cfc3: open defect
     def test_generated_mutant_contains_no_if_false(self):
         offenders = []
         for s in cfom.SCENARIOS:
@@ -72,7 +72,6 @@ class MutantsDeleteRatherThanDisable(unittest.TestCase):
             "(ruling 2026-11-07): " + "; ".join(offenders),
         )
 
-    @unittest.expectedFailure  # backlog d425cfc3: open defect
     def test_generated_mutant_contains_no_if_true(self):
         offenders = []
         for s in cfom.SCENARIOS:

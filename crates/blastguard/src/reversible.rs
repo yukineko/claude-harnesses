@@ -590,6 +590,155 @@ pub(crate) fn probe_tree_with_timeout(
     })
 }
 
+/// What the index holds at a path that does NOT exist on disk, for the
+/// `git checkout [<tree-ish>] -- <pathspec>` verdict
+/// ([`crate::detect`]'s checkout arm; backlog fp 2026-11-08).
+///
+/// Overwriting an absent path destroys no working-tree bytes. The only
+/// uncommitted state it can destroy is an index entry that differs from HEAD
+/// (a staged version), which `git checkout <rev> -- <path>` overwrites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbsentPathIndex {
+    /// `git diff --cached --quiet` exited 0: nothing at or below the path is
+    /// staged differently from HEAD, so the checkout has nothing uncommitted
+    /// to destroy.
+    MatchesHead,
+    /// `git diff --cached --quiet` exited 1: a staged version at or below the
+    /// path differs from HEAD and the checkout would overwrite it.
+    DiffersFromHead,
+}
+
+/// The injected form of [`probe_absent_path`], carried by
+/// [`crate::scope::SafeRoots`] (attached only by the hook binary through
+/// [`crate::scope::SafeRoots::with_git_absent_probe`]). The argument is the
+/// canonical absolute path of the pathspec.
+pub type GitAbsentProbe = fn(&str) -> Determination<AbsentPathIndex>;
+
+/// The wired [`GitAbsentProbe`]. Real filesystem and subprocess I/O.
+///
+/// `Known` ONLY when ALL of these were observed:
+///
+///   * `lstat` on `path` fails with `NotFound` (the path exists — even as a
+///     dangling symlink — or `lstat` fails any other way: `Undetermined`);
+///   * the nearest existing ancestor of `path` is a real directory, and
+///     `git rev-parse --show-toplevel` run there exits 0 with an absolute root
+///     that `path` lies strictly inside (not a repository, or a path outside
+///     it: `Undetermined`);
+///   * `git ls-files -z -s -v -- <path>` exits 0, parses, and reports no
+///     gitlink and no tag other than `H` (assume-unchanged / skip-worktree /
+///     unmerged entries: `Undetermined`);
+///   * `git diff --cached --quiet --no-ext-diff --no-textconv -- <path>` exits
+///     0 ([`AbsentPathIndex::MatchesHead`]) or 1
+///     ([`AbsentPathIndex::DiffersFromHead`]). Any other exit, a failure to
+///     run or a timeout is `Undetermined`.
+///
+/// Every git call uses `--literal-pathspecs` and is bounded by
+/// [`TREE_GIT_TIMEOUT`].
+pub fn probe_absent_path(path: &str) -> Determination<AbsentPathIndex> {
+    probe_absent_path_with_timeout(std::ffi::OsStr::new("git"), path, TREE_GIT_TIMEOUT)
+}
+
+/// [`probe_absent_path`] with the `git` program and the per-invocation bound
+/// named explicitly (the test seam; production passes `git` and
+/// [`TREE_GIT_TIMEOUT`]).
+pub(crate) fn probe_absent_path_with_timeout(
+    git: &std::ffi::OsStr,
+    path: &str,
+    timeout: Duration,
+) -> Determination<AbsentPathIndex> {
+    let p = Path::new(path);
+    match std::fs::symlink_metadata(p) {
+        Ok(_) => return Determination::undetermined(format!("`{path}` exists on disk")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Determination::undetermined(format!("`{path}` could not be examined ({e})"))
+        }
+    }
+    let mut dir: Option<&Path> = None;
+    for anc in p.ancestors().skip(1) {
+        match std::fs::symlink_metadata(anc) {
+            Ok(m) if m.file_type().is_dir() => {
+                dir = Some(anc);
+                break;
+            }
+            Ok(_) => {
+                return Determination::undetermined(format!(
+                    "`{}` is not a directory",
+                    anc.display()
+                ))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Determination::undetermined(format!(
+                    "`{}` could not be examined ({e})",
+                    anc.display()
+                ))
+            }
+        }
+    }
+    let Some(dir) = dir else {
+        return Determination::undetermined("no existing ancestor directory");
+    };
+    let toplevel = match run_tree_git(
+        tree_git(git, dir, true).args(["rev-parse", "--show-toplevel"]),
+        &[0],
+        timeout,
+    ) {
+        Determination::Known((_, out)) => out.trim().to_string(),
+        Determination::Undetermined(u) => return Determination::Undetermined(u),
+    };
+    if !toplevel.starts_with('/') {
+        return Determination::undetermined("git printed a work-tree root that is not absolute");
+    }
+    if !path.starts_with(&format!("{}/", toplevel.trim_end_matches('/'))) {
+        return Determination::undetermined("the path is not inside the work tree git reported");
+    }
+    let ls_out = match run_tree_git(
+        tree_git(git, dir, true)
+            .args(["ls-files", "-z", "-s", "-v", "--"])
+            .arg(path),
+        &[0],
+        timeout,
+    ) {
+        Determination::Known((_, out)) => out,
+        Determination::Undetermined(u) => return Determination::Undetermined(u),
+    };
+    match parse_ls_files_sv_z(&ls_out) {
+        Some((_, false, false)) => {}
+        Some(_) => {
+            return Determination::undetermined(
+                "an index entry is a gitlink or assume-unchanged / skip-worktree / unmerged",
+            )
+        }
+        None => {
+            return Determination::undetermined(
+                "git ls-files printed a record blastguard cannot parse",
+            )
+        }
+    }
+    match run_tree_git(
+        tree_git(git, dir, true)
+            .args([
+                "diff",
+                "--cached",
+                "--quiet",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--",
+            ])
+            .arg(path),
+        &[0, 1],
+        timeout,
+    ) {
+        Determination::Known((0, _)) => Determination::known(AbsentPathIndex::MatchesHead),
+        Determination::Known((1, _)) => Determination::known(AbsentPathIndex::DiffersFromHead),
+        Determination::Known((code, _)) => {
+            Determination::undetermined(format!("git diff --cached exited {code}"))
+        }
+        Determination::Undetermined(u) => Determination::Undetermined(u),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

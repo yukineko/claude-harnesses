@@ -74,8 +74,15 @@ forge・condukt のスケジューラが再利用）。
   `git`（`analyze_git`: `clean -f` + `-d`/`-x`、`clean -f` 単体でも追跡外ファイルを消すので deny、
   `reset --hard`、`checkout --force`/`-f`、`checkout -- .`（whole-tree）、`switch -f/--discard-changes`、
   `stash` の `-a/--all/-u`（追跡外・無視ファイルを working-tree から除去）、`git rm`（`--cached` 含む・
-  保護パス target のみ）、および `checkout`/`restore` の operand が保護パスの場合。**通常の追跡ファイルへの
-  `git checkout -- <path>` は allow**＝保護パス限定に絞り、日常操作を blanket deny しない）、
+  保護パス target のみ）、および `checkout`/`restore` の operand が保護パスの場合。**通常のパスへの
+  `git checkout [<rev>] -- <path>` は壊すもので判定する**（`detect/git.rs` の `checkout_pathspec_verdict`）:
+  git probe（`reversible::probe_tree`）が path 以下に未コミット変更無しと答えれば Allow、有れば Deny、
+  聞けなければ Ask。**disk に無い path**（probe_tree は Undetermined）は working tree に壊すものが無いので、
+  `reversible::probe_absent_path` が `lstat` NotFound・最寄りの既存祖先が repo 内・index entry が `H` のみ・
+  `git diff --cached --quiet -- <path>` exit 0（HEAD と異なる staged 版無し）を全て観測したときだけ Allow、
+  exit 1（staged 版を上書きする）は Deny、それ以外（repo 外・git 失敗・`:` で始まる pathspec magic・
+  `--*-pathspecs` global）は Ask（tests/checkout_absent_path_fp_20261108.rs）。`GIT_ICASE_PATHSPECS` 等の
+  環境変数は見ていない（open）。日常操作を blanket deny しない）、
   `find`（`analyze_find`: `-delete`、`-exec`/`-execdir` の直後が shell または `rm`）、
   `truncate`/`shred`/`dd of=`/`mkfs*`、再帰 `chmod`/`chown`（`-R`/`--recursive`）、
   `sort`/`uniq`（read-only ではない: `sort -o <保護パス>`／`uniq <in> <保護パス>` は出力ファイルを

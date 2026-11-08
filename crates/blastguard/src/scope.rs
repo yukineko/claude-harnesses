@@ -607,6 +607,12 @@ pub struct SafeRoots {
     /// classes can never answer `Allow`. Set only by the hook binary through
     /// [`SafeRoots::with_git_tree_probe`].
     git_tree_probe: Option<crate::reversible::GitTreeProbe>,
+    /// The index probe for a `git checkout -- <pathspec>` whose path does not
+    /// exist on disk ([`crate::reversible::probe_absent_path`]). `None` (the
+    /// default, and always for [`SafeRoots::none`]) keeps such a pathspec at
+    /// Ask. Set only by the hook binary through
+    /// [`SafeRoots::with_git_absent_probe`].
+    git_absent_probe: Option<crate::reversible::GitAbsentProbe>,
     /// The "is this directory a linked git worktree checkout" probe behind
     /// [`SafeRoots::classify_worktree_checkout`] and
     /// [`SafeRoots::is_linked_worktree_checkout`] (module doc, "Protected-named
@@ -638,6 +644,7 @@ impl SafeRoots {
             cache_roots: Vec::new(),
             home_real: None,
             git_tree_probe: None,
+            git_absent_probe: None,
             checkout_probe: None,
         }
     }
@@ -744,6 +751,7 @@ impl SafeRoots {
             cache_roots,
             home_real,
             git_tree_probe: None,
+            git_absent_probe: None,
             checkout_probe: resolver.map(|_| is_linked_checkout as CheckoutProbe),
         }
     }
@@ -761,6 +769,20 @@ impl SafeRoots {
     /// The attached git work-tree probe, if any.
     pub(crate) fn git_tree_probe(&self) -> Option<crate::reversible::GitTreeProbe> {
         self.git_tree_probe
+    }
+
+    /// Attach the absent-path index probe the `git checkout -- <pathspec>`
+    /// verdict uses when the path does not exist on disk. Only the hook binary
+    /// does this; without it such a pathspec stays Ask.
+    #[must_use]
+    pub fn with_git_absent_probe(mut self, probe: crate::reversible::GitAbsentProbe) -> SafeRoots {
+        self.git_absent_probe = Some(probe);
+        self
+    }
+
+    /// The attached absent-path index probe, if any.
+    pub(crate) fn git_absent_probe(&self) -> Option<crate::reversible::GitAbsentProbe> {
+        self.git_absent_probe
     }
 
     /// The canonical home directory, if known.

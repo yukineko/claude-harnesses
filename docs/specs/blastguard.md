@@ -398,6 +398,27 @@ forge・condukt のスケジューラが再利用）。
   （`<<'EOF'; rm -rf /etc` は Deny）。consumer に `\`・`$`・backtick、単独 `&`・`|&`、読み手の出力 redirect、
   git に繋がる pipe 段の program が `cat`/`grep`/`egrep`/`fgrep`/`head`/`tail`/`wc` 以外か `<`/`>`/`(`/`)`
   を含む場合は従来どおり本文も判定する（git は subject を stdout に出すため `| sh` は本文を残す）。
+- **`.py` へ書く quoted here-document の本文は Python として判定する（user ruling 2026-11-08、
+  tests/quoted_heredoc_backtick_fp_20261108.rs）** — `detect_bash` の手順 0b。
+  `heredoc::python_file_here_document` が、data strip と同じ形（前行は `permitted_prefix_line`、opener 行は
+  1 個の here-document・`$`/backtick 無し・quote 均衡、本文は終端行で閉じる、奇妙な空白無し）で、
+  区切りが**引用付き**、読み手が `cat`/`tee` で書き込み先（redirect 先と `tee` operand）が全て literal の
+  `.py` ファイル（1 個以上）、本文が空でないときだけ本文を切り出す。終端後の行は何行あってもよく、
+  本文を除いた command text（`without_body`）に残って shell の全規則で判定される。
+  本文は `interpreter::python_file_body_verdict` が判定する: comment と plain string literal は不活性
+  （docstring の `` `git stash clear` `` は Allow）。OS に command を渡す call は literal 引数から
+  `program_call_verdict` で shell 規則にかける（`subprocess.run(["git","stash","clear"])`・
+  `os.system("git stash clear")` は Deny。f-string の `{…}` 内の code も対象）。command が計算される call
+  （`os.system(cmd)`、`computed_shell_call`）と `CODE_BUILDING` marker（`exec(` 等）は Ask。Python として
+  token 化できない本文（未終端 string・括弧不均衡）は Ask。最終判定は Deny > Ask > Allow で
+  `without_body` の判定と合成する。次のときは `None` で従来どおり本文を shell 行として判定する:
+  1 行目が python を含まない `#!` 行、終端後の行のどこかに shell の語（`sh x.py`・`| bash`・`xargs sh`）、
+  または `source`/`.`/`eval`/`.py` path を head とする segment がある（shebang 無しの `./x.py` は sh が
+  実行する）。`.sh`・拡張子無し・他の言語の拡張子は従来どおり shell 判定。
+  **未対応（RESIDUAL）**: OS command ではない call の効果（`shutil.rmtree`・`open(p,'w')`）はここでは
+  判定しない（変更前の shell 行判定も見ていなかった）。Python として不正な本文（裸の `git stash clear`
+  行など）は python では実行されないので Allow になる。後続の別 tool call で `sh x.py` されたら、その
+  call の text だけで判定される（data file と同じ residual）。
 
 ### module 責務
 

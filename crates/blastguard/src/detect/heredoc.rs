@@ -612,6 +612,56 @@ pub(super) enum OutputTargets {
     /// `>` / `>>` scans ([`redirect_view_without_quoted_here_document_body`]);
     /// every other rule still reads the body.
     AnyTarget,
+    /// Only literal `.py` files ([`is_python_file_target`]), at least one, by
+    /// `cat` or `tee`, with a QUOTED delimiter. Used ONLY by
+    /// [`python_file_here_document`], whose body is then judged as Python
+    /// instead of as shell lines; lines after the close are allowed and stay
+    /// judged as shell.
+    PythonFiles,
+}
+
+/// A here-document split by [`here_document_body_parts`].
+pub(super) struct HereDocumentParts {
+    /// The command with the body removed (opener and delimiter lines kept).
+    pub(super) without_body: String,
+    /// The body, up to the closing delimiter line.
+    pub(super) body: String,
+    /// Every line after the closing delimiter line.
+    pub(super) after: String,
+}
+
+/// User ruling 2026-11-08 (narrows the extension part of 6cf12ce9): a QUOTED
+/// here-document body that `cat`/`tee` writes to a literal `.py` file is judged
+/// by the language of that file, not read line by line as shell. The shell
+/// never parses that body (quoted delimiter: no expansion, no substitution),
+/// so a `` `git stash clear` `` in a Python comment or docstring is not a
+/// command; but the body is CODE (a later `python3 edit.py` runs it), so it is
+/// not data either. The caller judges `body` with the Python program judge
+/// ([`super::interpreter::python_file_body_verdict`]) and `without_body` with
+/// every shell rule.
+///
+/// The shape rule is [`strip_data_here_document_bodies`]'s (permitted lines
+/// before the opener, one opener line with no `$`/backtick, a CLOSED body, no
+/// odd whitespace), with three differences: the delimiter MUST be quoted; the
+/// reader is `cat` or `tee` writing only literal `.py` files
+/// ([`OutputTargets::PythonFiles`]); and ANY lines may follow the close — they
+/// stay in `without_body` and are judged as shell. An empty body answers
+/// `None` (nothing to judge), as does every other shape: the body then stays in
+/// the command and is judged as shell lines, exactly as before.
+pub(super) fn python_file_here_document(cmd: &str) -> Option<HereDocumentParts> {
+    here_document_body_parts(cmd, OutputTargets::PythonFiles).filter(|p| !p.body.is_empty())
+}
+
+/// `.py` files whose here-document body [`python_file_here_document`] judges
+/// as Python. `.sh`, extension-less and every other code extension stay
+/// shell-judged.
+pub(super) fn is_python_file_target(target: &str) -> bool {
+    let inner = unquote_data_file_target(target);
+    is_data_file_target_shape(inner)
+        && std::path::Path::new(inner)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e == "py")
 }
 
 /// The text the line-level truncating (`>`) and append (`>>`) redirect scans
@@ -666,9 +716,17 @@ pub(super) fn strip_here_document_body(
     cmd: &str,
     targets: OutputTargets,
 ) -> std::borrow::Cow<'_, str> {
-    let unchanged = std::borrow::Cow::Borrowed(cmd);
+    match here_document_body_parts(cmd, targets) {
+        Some(parts) => std::borrow::Cow::Owned(parts.without_body),
+        None => std::borrow::Cow::Borrowed(cmd),
+    }
+}
+
+/// The shape rule behind [`strip_here_document_body`] and
+/// [`python_file_here_document`]: `None` when the body must stay in the text.
+fn here_document_body_parts(cmd: &str, targets: OutputTargets) -> Option<HereDocumentParts> {
     if !cmd.contains("<<") {
-        return unchanged;
+        return None;
     }
     let lines: Vec<&str> = cmd.split_inclusive('\n').collect();
     let text = |l: &str| l.strip_suffix('\n').unwrap_or(l).to_string();
@@ -685,22 +743,20 @@ pub(super) fn strip_here_document_body(
     while idx < lines.len() {
         let l = text(lines[idx]);
         if odd_whitespace(&l) {
-            return unchanged;
+            return None;
         }
         if !(inert(&l) || permitted_prefix_line(&l)) {
             break;
         }
         idx += 1;
     }
-    let Some(opener_line) = lines.get(idx).map(|l| text(l)) else {
-        return unchanged;
-    };
+    let opener_line = lines.get(idx).map(|l| text(l))?;
     let openers = here_document_openers(&opener_line);
     // The redirect view removes a body only when the shell cannot expand it.
     let redirect_view_of_quoted =
         targets == OutputTargets::AnyTarget && here_document_delimiter_is_quoted(&opener_line);
-    if targets == OutputTargets::AnyTarget && !redirect_view_of_quoted {
-        return unchanged;
+    if targets != OutputTargets::DataFilesOnly && !here_document_delimiter_is_quoted(&opener_line) {
+        return None;
     }
     // Quoted delimiter, redirect view: further `cd <word>` heads (split at `;`
     // or `&&`) are peeled too, even with an unresolvable operand like "$WT".
@@ -732,33 +788,37 @@ pub(super) fn strip_here_document_body(
         || !quotes_balance(&opener_line)
         || !here_document_consumer_is_data(consumer, targets)
     {
-        return unchanged;
+        return None;
     }
     // The body, up to the first exact delimiter line.
-    let Some(close) = (idx + 1..lines.len())
-        .find(|&j| segment_closes_here_document(&text(lines[j]), &openers[0]))
-    else {
-        return unchanged;
-    };
+    let close = (idx + 1..lines.len())
+        .find(|&j| segment_closes_here_document(&text(lines[j]), &openers[0]))?;
     let body: String = lines[idx + 1..close].concat();
     if !here_document_delimiter_is_quoted(&opener_line) && body.contains(['$', '`', '\\']) {
-        return unchanged;
+        return None;
     }
     // Lines after the close. The redirect view may keep LATER commands when the
     // reader stores the body nowhere a later command could run it from
     // ([`here_document_reader_stores_nothing`]): those lines stay in the view
     // and every redirect rule still judges them; only the body leaves.
-    let later_commands_ok =
-        targets == OutputTargets::AnyTarget && here_document_reader_stores_nothing(consumer);
+    // The Python-file split keeps every later line too: the body is judged as
+    // Python whether or not a later line runs it, and the later lines are
+    // judged as shell.
+    let later_commands_ok = targets == OutputTargets::PythonFiles
+        || (targets == OutputTargets::AnyTarget && here_document_reader_stores_nothing(consumer));
     if lines[close + 1..]
         .iter()
         .any(|l| odd_whitespace(&text(l)) || !(later_commands_ok || inert(&text(l))))
     {
-        return unchanged;
+        return None;
     }
     let mut out: String = lines[..=idx].concat();
     out.push_str(&lines[close..].concat());
-    std::borrow::Cow::Owned(out)
+    Some(HereDocumentParts {
+        without_body: out,
+        body,
+        after: lines[close + 1..].concat(),
+    })
 }
 
 /// The part of the opener line [`here_document_consumer_is_data`] judges: the
@@ -1060,6 +1120,10 @@ pub(super) fn permitted_prefix_line(line: &str) -> bool {
 /// `yml`, `xml`/plist, `patch`/`diff`, which `git apply` turns into code) are
 /// deliberately absent, as are `.sh`, `.py` and extension-less names (the
 /// 6cf12ce9 ruling `cat > run.sh <<'EOF'`): a body headed there stays judged.
+/// A `.sh` or extension-less body is judged as shell lines. A `.py` body
+/// written by `cat`/`tee` under a QUOTED delimiter is judged as Python instead
+/// (user ruling 2026-11-08, [`python_file_here_document`]): still code, never
+/// data, but not shell either.
 ///
 /// This is a statement about the NAME only. Any file can be executed
 /// (`sh notes.txt`). Within one command that is covered by the shape rule in
@@ -1085,12 +1149,7 @@ pub(super) fn unquote_data_file_target(target: &str) -> &str {
 /// answers false.
 pub(super) fn is_data_file_target(target: &str) -> bool {
     let inner = unquote_data_file_target(target);
-    if inner.is_empty()
-        || inner.contains([
-            '$', '`', '\\', '\'', '"', '*', '?', '[', ']', '{', '}', '(', ')', '<', '>', '|', ';',
-            '&',
-        ])
-    {
+    if !is_data_file_target_shape(inner) {
         return false;
     }
     if inner == "/dev/null" {
@@ -1104,6 +1163,16 @@ pub(super) fn is_data_file_target(target: &str) -> bool {
                 .iter()
                 .any(|d| d.eq_ignore_ascii_case(e))
         })
+}
+
+/// True when the unquoted target word `inner` is a literal path: non-empty,
+/// with no expansion, glob, escape, quote or shell operator in it.
+fn is_data_file_target_shape(inner: &str) -> bool {
+    !inner.is_empty()
+        && !inner.contains([
+            '$', '`', '\\', '\'', '"', '*', '?', '[', ']', '{', '}', '(', ')', '<', '>', '|', ';',
+            '&',
+        ])
 }
 
 /// True when a here-document delimiter is spelled as a plain word: `TAG`,
@@ -1172,11 +1241,15 @@ pub(super) fn strip_output_redirect_operator(word: &str) -> Option<&str> {
 /// [`redirect_view_without_quoted_here_document_body`]) lets a redirect name
 /// any target word free of shell syntax (`\`, backtick, `(`, `)`, `;`, `&`,
 /// `|`, `<`, `>`, `$`). Everything else, including the `tee` operand rule
-/// (DATA files only), is the same for both.
+/// (DATA files only), is the same for both. [`OutputTargets::PythonFiles`]
+/// (only from [`python_file_here_document`]) accepts ONLY `cat` or `tee`, and
+/// only when every redirect target and `tee` operand is a literal `.py` file
+/// ([`is_python_file_target`]) and there is at least one.
 pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets) -> bool {
     let raw = quote_aware_words(line);
     let mut words: Vec<&str> = Vec::new();
     let mut saw_here_document = false;
+    let mut python_targets = 0usize;
     let mut i = 0;
     while i < raw.len() {
         let w = raw[i].as_str();
@@ -1217,10 +1290,12 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
                     !target.is_empty()
                         && !target.contains(['\\', '`', '(', ')', ';', '&', '|', '<', '>', '$'])
                 }
+                OutputTargets::PythonFiles => is_python_file_target(target),
             };
             if !target_ok {
                 return false;
             }
+            python_targets += 1;
             i += 1;
             continue;
         }
@@ -1233,6 +1308,21 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
             .any(|w| w.contains(['<', '>', '\\', '`', '(', ')', ';', '&', '|']))
     {
         return false;
+    }
+    // [`OutputTargets::PythonFiles`]: `cat`/`tee` writing at least one `.py`
+    // file and nothing else (a `tee` operand counts as a target).
+    if targets == OutputTargets::PythonFiles {
+        return match words.first().copied() {
+            Some("cat") => python_targets > 0 && words[1..].iter().all(|w| *w == "-"),
+            Some("tee") => {
+                let files = words[1..]
+                    .iter()
+                    .filter(|w| !matches!(**w, "-a" | "--append"));
+                python_targets + files.clone().count() > 0
+                    && files.into_iter().all(|w| is_python_file_target(w))
+            }
+            _ => false,
+        };
     }
     match words.first().copied() {
         Some("cat") => words[1..].iter().all(|w| *w == "-"),

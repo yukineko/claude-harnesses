@@ -871,6 +871,24 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // call. See `strip_data_here_document_bodies` for the exact shape rule.
     let stripped = strip_data_here_document_bodies(cmd);
     let cmd: &str = &stripped;
+    // 0b. A QUOTED here-document body written to a literal `.py` file is judged
+    // as Python, not as shell lines (user ruling 2026-11-08); the rest of the
+    // command, later lines included, is judged here without it. `None` keeps
+    // the body in the text. See `heredoc::python_file_here_document`.
+    if let Some(parts) = heredoc::python_file_here_document(cmd) {
+        if let Some(py) =
+            interpreter::python_file_body_verdict(&parts.body, &parts.after, depth, ctx)
+        {
+            if py.is_deny() {
+                return py;
+            }
+            // The text left has an empty body, so this cannot recurse again.
+            return match (py, detect_bash(&parts.without_body, depth, ctx)) {
+                (_, d @ Decision::Deny(_)) | (d @ Decision::Ask(_), _) => d,
+                (_, rest) => rest,
+            };
+        }
+    }
 
     // 1. Fork bomb (whitespace-insensitive signature).
     let compact: String = cmd.chars().filter(|c| !c.is_whitespace()).collect();

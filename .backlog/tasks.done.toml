@@ -72135,3 +72135,71 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; fi
 rev = "e12712e25074e4ed40accea0eb4eb178c51feb03"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "d425cfc3"
+title = "check-fail-open-mutation.py: mutate by deleting the construct, not if false"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "p2",
+    "memory-audit-b",
+]
+touched_files = []
+status = "done"
+notes = """
+Audit B item 19 (memory audit 2026-11-07; user ruling 2026-11-07 '実装で補えるものは実装にして。LLMの推論での防御はすべてあてにならない').
+Source memory: fail-open-review-checklist s7 (formerly mutation-remove-dont-disable); ruled 2026-11-07.
+Observed RED 2026-11-07 at c93704e7 (base fc7b5dd9) (verbatim): - ['parallelguard (crates/parallelguard/src/model.rs): +1 `if false`'] / + [] : mutants must delete the construct, not wrap it in `if false` (ruling 2026-11-07)
+Control: each scenario's anchor occurs exactly once in its target file. Untested reading: the stuckguard scenario replaces the threshold guard with `if true { return None; }` (always-taken early return, also 'neutralize in place'); the RED asserts only 'no if false' per the ruling - human to decide whether `if true {` is also out.
+Do NOT weaken the test to pass; remove the ignore/expectedFailure marker when fixed.
+User ruling 2026-11-07 (AskUserQuestion): `if true { return ...; }` (always-taken early return) is ALSO banned as neutralize-in-place; the mutant must delete the guard. Extend the RED to assert no `if true {` either."""
+created_at = 1793998489
+updated_at = 1794101002
+weight = 0.0
+issue_number = 1585
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1585"
+issue_closed_at = 1794101006
+rev = 4
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_audit_b_mutation_deletes.py"
+rev = "1a364a51a12dda437ee9c28d2eaac43e018b2448"
+observed_at = 1793998962
+detail = """
+exit 1: 
+E           _pytest.outcomes.XFailed
+
+../../../venv/lib/python3.12/site-packages/_pytest/unittest.py:354: XFailed
+=========================== short test summary info ============================
+FAILED scripts/test_audit_b_mutation_deletes.py::MutantsDeleteRatherThanDisable::test_generated_mutant_contains_no_if_false
+========================= 1 failed, 1 passed in 0.07s =========================="""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "pytest"
+cmd = "python3 -m pytest --runxfail scripts/test_audit_b_mutation_deletes.py"
+exit = 0
+passed = 3
+rev = "afb1cda821df297f373278664400b052ef3a15cd"
+observed_at = 1794100994
+output_digest = "sha256:c5077855c1bb8c59a572e3011e96978ef7494624b92c7c47d39ab22852916efe"
+excerpt = """
+============================= test session starts ==============================
+platform darwin -- Python 3.12.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/yuki/src/.harness-worktrees/session-bf349dd5
+plugins: anyio-4.9.0, langsmith-0.4.8
+collected 3 items
+
+scripts/test_audit_b_mutation_deletes.py ...                             [100%]
+
+============================== 3 passed in 0.40s ===============================
+"""
+
+[task.closure.red]
+rev = "5e1c00ec441f9d418ffdd670640c4f03792ac5ac"
+exit = 1
+kind = "behavioural"

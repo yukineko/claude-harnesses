@@ -580,12 +580,16 @@ MERGE_REFLOG_PREFIX = "merge "
 COMMIT_MERGE_REFLOG_PREFIX = "commit (merge): "
 PULL_REFLOG_PREFIX = "pull"
 FAST_FORWARD_SUFFIX = ": Fast-forward"
+# `git merge -m <msg>` that fast-forwards logs this instead (the -m is unused);
+# condukt's worktree merge passes -m, so its fast-forwards end this way.
+FAST_FORWARD_WITH_M_SUFFIX = ": Fast-forward (no commit created; -m option ignored)"
 
 
 def integration_step(main: Path, old: str, new: str, message: str) -> bool:
     """True if ONE reflog entry old -> new of main's branch is an integration
     step, judged from main's own object store:
-      - "merge ...: Fast-forward" or "pull...: Fast-forward": `new` descends from
+      - "merge ...: Fast-forward" (also with git's "(no commit created; -m
+        option ignored)" suffix) or "pull...: Fast-forward": `new` descends from
         `old` (the tip may itself be a merge commit; a fast-forward does not
         create one, so its parents are not constrained);
       - any other "merge ..." entry (a merge commit `git merge` made) and
@@ -593,9 +597,10 @@ def integration_step(main: Path, old: str, new: str, message: str) -> bool:
         parents and its FIRST parent is `old`.
     Every other message (commit, reset, checkout, rebase, `pull --rebase`, a
     non-fast-forward pull, update-ref without -m, ...) is False."""
-    fast_forward = message.endswith(FAST_FORWARD_SUFFIX) and (
-        message.startswith(MERGE_REFLOG_PREFIX) or message.startswith(PULL_REFLOG_PREFIX)
-    )
+    fast_forward = (
+        message.endswith(FAST_FORWARD_SUFFIX)
+        and (message.startswith(MERGE_REFLOG_PREFIX) or message.startswith(PULL_REFLOG_PREFIX))
+    ) or (message.startswith(MERGE_REFLOG_PREFIX) and message.endswith(FAST_FORWARD_WITH_M_SUFFIX))
     if fast_forward:
         return is_ancestor(main, old, new)
     if message.startswith(MERGE_REFLOG_PREFIX) or message.startswith(COMMIT_MERGE_REFLOG_PREFIX):

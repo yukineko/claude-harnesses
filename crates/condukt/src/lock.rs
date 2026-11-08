@@ -8,6 +8,13 @@
 //! each run a lock file next to its state so the whole load→mutate→save cycle is
 //! mutually exclusive per run — unrelated runs never block each other.
 //!
+//! The locking protocol itself lives in [`harness_core::run_lock`] (moved there
+//! from this module, behaviour unchanged, so autoflow's Stop hook — the other
+//! writer of run-state files — contends the very same `<run>.lock` file in the
+//! very same format; GH #1608 / backlog 5c9f9a75). This module keeps condukt's
+//! keying (which file to lock for a run, a project registry, the repo-primary
+//! lock) and its fallible wrappers.
+//!
 //! Reuses the proven atomicity from `backlog::lock`: the lock is published with a
 //! hard link (link(2) fails `EEXIST` if the target already exists, so exactly one
 //! racer wins the publish and a reader never observes a partial file), stale
@@ -28,43 +35,25 @@ use anyhow::{bail, Result};
 
 use crate::config::Config;
 use crate::store::project_key;
+#[cfg(test)]
+use harness_core::run_lock::LockInfo;
+use harness_core::run_lock::{self, LIVENESS_PROBE_INTERVAL};
 use harness_core::verdict::{Determination, Required};
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
-
-/// Process-wide monotonic counter so two threads in the SAME process (identical
-/// pid, and possibly an identical `now_unix_nanos()` under a coarse clock) never
-/// derive the same private temp-lock name. Without it a nanos collision makes the
-/// loser's `create_new` fail `AlreadyExists`, turning a perfectly acquirable lock
-/// into a spurious acquisition failure (now a refusal, previously an unlocked
-/// proceed — the exact race this lock exists to prevent).
-static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Debug, Serialize, Deserialize)]
-struct LockInfo {
-    pid: u32,
-    run_id: String,
-    acquired_at: i64,
-}
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
 /// RAII guard for a per-run state lock. Held across a load→mutate→save cycle and
-/// released (best-effort) on drop. `path == None` is the INTERNAL representation
-/// of a failed acquisition; it never escapes this module as a usable guard —
-/// [`RunLock::acquire_or_skip`] maps it to `None` and [`acquire_repo_primary`]
-/// maps it to `Err`, so a caller can never be handed an unheld guard.
+/// released (best-effort) on drop — the release is the inner
+/// [`harness_core::run_lock::LockGuard`]'s. `inner == None` is the INTERNAL
+/// representation of a failed acquisition; it never escapes this module as a
+/// usable guard — [`RunLock::acquire_or_skip`] maps it to `None` and
+/// [`acquire_repo_primary`] maps it to `Err`, so a caller can never be handed an
+/// unheld guard.
 #[must_use = "the run lock is released as soon as this guard is dropped"]
 pub struct RunLock {
-    path: Option<PathBuf>,
-}
-
-impl Drop for RunLock {
-    fn drop(&mut self) {
-        if let Some(p) = &self.path {
-            let _ = std::fs::remove_file(p);
-        }
-    }
+    inner: Option<run_lock::LockGuard>,
 }
 
 /// Reserved run-id used only to key the REPO-scoped primary lock file
@@ -178,6 +167,7 @@ pub fn acquire_repo_primary_loaded(cwd: &Path) -> Result<RunLock> {
     acquire_repo_primary(&cfg, cwd)
 }
 
+#[cfg(test)]
 fn now_unix() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -186,44 +176,13 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+#[cfg(test)]
 fn now_unix_nanos() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0)
-}
-
-/// Whether the process `pid` is alive — as three answers, not two.
-///
-/// `Known(true)`/`Known(false)` are positive observations (the OS answered).
-/// `Undetermined` is "I could not ask": `kill` could not be spawned (empty
-/// `PATH`, denied exec) or was killed by a signal, so there is no exit code to
-/// read. The previous `.status().map(..).unwrap_or(false)` mapped that opacity
-/// to `false` = "the holder is dead", which is the fail-open the caller's reap
-/// arm turns into stealing a *live* holder's lock. Routing through
-/// [`harness_core::boundary::run`] keeps the spawn/signal failure as
-/// `Undetermined`; `map` carries the exit code (`0` == alive) only when the
-/// process actually ran.
-///
-/// `child_path` is an optional `PATH` for the spawned `kill` CHILD only.
-/// `None` (production, via [`RunLock::acquire_at`]) inherits this process's environment;
-/// `Some(p)` sets `PATH=p` on the child, which on Unix is also what the bare
-/// `kill` is resolved against. Exists so a test can interpose a fake `kill`
-/// without mutating the process-wide PATH (backlog 7c798579).
-fn pid_alive_with_env_path(pid: u32, child_path: Option<&std::ffi::OsStr>) -> Determination<bool> {
-    #[cfg(target_os = "linux")]
-    {
-        if Path::new(&format!("/proc/{pid}")).exists() {
-            return Determination::known(true);
-        }
-    }
-    let mut cmd = std::process::Command::new("kill");
-    cmd.args(["-0", &pid.to_string()]);
-    if let Some(p) = child_path {
-        cmd.env("PATH", p);
-    }
-    harness_core::boundary::run(&mut cmd).map(|out| out.code() == 0)
 }
 
 /// Lock file path keyed by the CHECKOUT (`repo_root(cwd)`) and a sanitised
@@ -261,39 +220,11 @@ pub(crate) fn lock_path_in_project(cfg: &Config, project_root: &Path, run_id: &s
     ))
 }
 
-/// Minimum spacing between two liveness probes of the SAME holder pid while a
-/// waiter polls a held lock (backlog e9262d91). The wait loop polls every 10ms,
-/// and off Linux each probe is a `kill -0` fork+exec; probing on every poll
-/// meant ~100 spawns per second per waiter, which under CPU saturation slowed
-/// the waiter's own acquisition. Skipping a probe only ever means "keep
-/// waiting" (the reap arm needs a positive `Known(false)`), so the throttle is
-/// on the restrictive side: it can delay reaping a holder that died mid-wait by
-/// about this interval plus one 10ms poll (and the probe's own run time), and
-/// can never steal a live holder's lock.
-const LIVENESS_PROBE_INTERVAL: Duration = Duration::from_millis(200);
-
-/// Liveness of a lock holder `pid` as seen from this process. A holder pid
-/// equal to our own pid is this very process — alive by observation, so no
-/// `kill` is spawned (the in-process contention case, e.g. several threads of
-/// one condukt invocation). Every other pid goes to
-/// [`pid_alive_with_env_path`] with its three-valued answer unchanged.
-fn holder_alive(pid: u32, child_path: Option<&std::ffi::OsStr>) -> Determination<bool> {
-    if pid == std::process::id() {
-        return Determination::known(true);
-    }
-    pid_alive_with_env_path(pid, child_path)
-}
-
-fn read_info(path: &Path) -> Option<LockInfo> {
-    let txt = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&txt).ok()
-}
-
 impl RunLock {
     /// Default bounded wait before the acquisition FAILS (`None`/`Err` — never
     /// an unlocked proceed). Generous enough that a normal RMW cycle (a few file
     /// ops) always releases well within it.
-    pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
+    pub(crate) const DEADLINE: Duration = run_lock::DEADLINE;
 
     /// Returns `true` when this guard genuinely holds the lock. Internal to the
     /// fallible acquire paths: a `false` here means acquisition failed (timeout
@@ -302,7 +233,7 @@ impl RunLock {
     /// unheld guard — "I could not determine whether a peer holds this" must not
     /// be representable as a usable lock.
     pub fn held(&self) -> bool {
-        self.path.is_some()
+        self.inner.is_some()
     }
 
     /// Fallible acquire: returns `Some(guard)` only when the lock is genuinely
@@ -338,10 +269,7 @@ impl RunLock {
         run_id: &str,
     ) -> Result<Option<Self>> {
         let dir = crate::state::run_dir(cfg, cwd, run_id)?;
-        let path = dir.join(format!(
-            "{}.lock",
-            harness_core::store::safe_session(run_id)
-        ));
+        let path = run_lock::lock_path(&dir, run_id);
         Ok(Self::acquire_or_skip_at(path, Self::DEADLINE))
     }
 
@@ -403,7 +331,7 @@ impl RunLock {
     }
 
     /// Core locking mechanics against an explicit lock-file `path`. Private, so
-    /// the unheld (`path: None`) result it returns on any timeout/error can only
+    /// the unheld (`inner: None`) result it returns on any timeout/error can only
     /// reach a caller through a fallible wrapper that turns it into `None`/`Err`
     /// — the tests drive it directly against a self-contained temp path.
     fn acquire_at(path: PathBuf, deadline: Duration) -> Self {
@@ -411,7 +339,8 @@ impl RunLock {
     }
 
     /// [`RunLock::acquire_at`] with an optional `PATH` passed to the liveness
-    /// probe's `kill` child only (see [`pid_alive_with_env_path`]). `None` is
+    /// probe's `kill` child only (see
+    /// [`harness_core::run_lock::pid_alive_with_env_path`]). `None` is
     /// the production behaviour; the seam lets a test count `kill` spawns
     /// without mutating the process-wide PATH (backlog 7c798579).
     fn acquire_at_with_env_path(
@@ -424,150 +353,30 @@ impl RunLock {
 
     /// [`RunLock::acquire_at_with_env_path`] with the same-holder probe
     /// throttle as a parameter. Production always passes
-    /// [`LIVENESS_PROBE_INTERVAL`] (via the wrapper above); the seam exists so
-    /// a test can pin "a CHANGED holder pid bypasses the throttle" with an
-    /// interval far above its deadline, which no amount of scheduling delay
-    /// can blur (backlog c77cdc98).
+    /// [`run_lock::LIVENESS_PROBE_INTERVAL`] (via the wrapper above); the seam
+    /// exists so a test can pin "a CHANGED holder pid bypasses the throttle"
+    /// with an interval far above its deadline, which no amount of scheduling
+    /// delay can blur (backlog c77cdc98).
+    ///
+    /// The protocol itself (hard-link publish, `LockInfo` body, reap only on a
+    /// positive dead-holder `kill -0`, bounded 10ms-poll wait) is
+    /// [`harness_core::run_lock::acquire_with_probe`], shared with autoflow so
+    /// both writers of a run-state file contend the same lock. A failed
+    /// acquisition is reported on stderr as `condukt: <reason>` and becomes the
+    /// unheld internal guard.
     fn acquire_at_with_probe_interval(
         path: PathBuf,
         deadline: Duration,
         kill_path: Option<&std::ffi::OsStr>,
         probe_interval: Duration,
     ) -> Self {
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!(
-                    "condukt: could not create lock dir {} ({e}); lock NOT acquired",
-                    parent.display()
-                );
-                return RunLock { path: None };
+        match run_lock::acquire_with_probe(path, deadline, kill_path, probe_interval) {
+            Ok(guard) => RunLock { inner: Some(guard) },
+            Err(e) => {
+                eprintln!("condukt: {e}");
+                RunLock { inner: None }
             }
         }
-
-        // Fully write our lock contents to a private temp file first, then
-        // publish it atomically via hard link. A concurrent reader can never
-        // observe a partial lock at the final path. The run id is recorded for
-        // diagnostics only (never read functionally — reap keys off `pid`); it
-        // is recovered from the lock filename (`<safe_session(run_id)>.lock`)
-        // since `acquire_at` operates on an already-resolved path.
-        let run_id = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        let info = LockInfo {
-            pid: std::process::id(),
-            run_id,
-            acquired_at: now_unix(),
-        };
-        let json = match serde_json::to_string(&info) {
-            Ok(j) => j,
-            Err(_) => return RunLock { path: None },
-        };
-        let tmp_path = path.with_extension(format!(
-            "lock.tmp.{}.{}.{}",
-            std::process::id(),
-            now_unix_nanos(),
-            TMP_SEQ.fetch_add(1, Ordering::Relaxed)
-        ));
-        {
-            use std::io::Write;
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&tmp_path)
-            {
-                Ok(mut f) => {
-                    if f.write_all(json.as_bytes()).is_err() {
-                        let _ = std::fs::remove_file(&tmp_path);
-                        eprintln!("condukt: could not write temp lock; lock NOT acquired");
-                        return RunLock { path: None };
-                    }
-                    f.sync_all().ok();
-                }
-                Err(e) => {
-                    eprintln!("condukt: could not create temp lock ({e}); lock NOT acquired");
-                    return RunLock { path: None };
-                }
-            }
-        }
-        let _guard = TmpGuard(&tmp_path);
-
-        let start = Instant::now();
-        // The holder pid we last probed and when. A new holder pid is probed
-        // immediately; the same holder is re-probed at most once per
-        // `probe_interval` (= `LIVENESS_PROBE_INTERVAL` in production;
-        // backlog e9262d91).
-        let mut last_probe: Option<(u32, Instant)> = None;
-        loop {
-            match std::fs::hard_link(&tmp_path, &path) {
-                Ok(()) => return RunLock { path: Some(path) },
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    // Someone holds the lock. Reap it only if we can positively
-                    // confirm the owner pid is gone; otherwise wait for release.
-                    //
-                    // Reap ONLY on a positive "the owner is gone"
-                    // (`Known(false)`). A live owner (`Known(true)`), an
-                    // UNDETERMINED liveness (`kill` unspawnable / signalled —
-                    // "I could not ask the OS"), an unreadable lock file, AND a
-                    // probe skipped by the throttle all fall through to the
-                    // wait arm below. Reaping on "cannot tell" would steal a
-                    // live holder's lock — the exact fail-open this lock exists
-                    // to close.
-                    let holder_gone = match read_info(&path) {
-                        Some(existing) => {
-                            let due = match last_probe {
-                                Some((pid, at)) => {
-                                    pid != existing.pid || at.elapsed() >= probe_interval
-                                }
-                                None => true,
-                            };
-                            if due {
-                                last_probe = Some((existing.pid, Instant::now()));
-                                matches!(
-                                    holder_alive(existing.pid, kill_path),
-                                    Determination::Known(false)
-                                )
-                            } else {
-                                false
-                            }
-                        }
-                        None => false,
-                    };
-                    if holder_gone {
-                        let _ = std::fs::remove_file(&path);
-                        last_probe = None;
-                        continue;
-                    }
-                    if start.elapsed() >= deadline {
-                        eprintln!(
-                            "condukt: state lock {} contended for {:?}; \
-                             lock NOT acquired",
-                            path.display(),
-                            deadline
-                        );
-                        return RunLock { path: None };
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                    continue;
-                }
-                Err(e) => {
-                    eprintln!(
-                        "condukt: could not publish lock {} ({e}); lock NOT acquired",
-                        path.display()
-                    );
-                    return RunLock { path: None };
-                }
-            }
-        }
-    }
-}
-
-/// Removes a temp lock file when dropped, on every exit path.
-struct TmpGuard<'a>(&'a Path);
-impl Drop for TmpGuard<'_> {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(self.0);
     }
 }
 

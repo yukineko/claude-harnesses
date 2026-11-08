@@ -11,101 +11,221 @@
 //! was allowed — the shell judge sees nothing harmful in Python syntax
 //! (tests/quoted_heredoc_backtick_fp_20261108.rs).
 //!
-//! Here comments and string literals are inert, and the calls that hand a
-//! command to the OS are judged by the shell rules applied to that command.
+//! Here comments and string literals are inert; the calls that hand a command
+//! to the OS, and the calls that remove or overwrite a path, are judged by the
+//! shell rules applied to the equivalent command. What cannot be read
+//! statically is an Ask. The Python reading never decides alone when the body
+//! may also be read as shell (see [`PythonFileVerdict::also_shell`]).
 
-use super::super::{
-    is_shell, normalized_command, quote_aware_words, split_segments, wrapped_command_heads,
-};
-use super::{code_building_marker, shell_calls, Ctx, Decision};
+use super::super::{is_assignment, normalized_command, quote_aware_words, split_segments};
+use super::{code_building_marker, python_semantics as sem, shell_calls, Ctx, Decision};
 
-/// The verdict on the Python program `body`, or `None` when the body must stay
-/// judged as shell lines, exactly as before the ruling:
-///   * its first line is a `#!` line that does not name python (it is a script
-///     for another interpreter);
-///   * a line of `after` (the command lines after the closing delimiter) could
-///     run the file as a shell script: a segment with a shell word anywhere in
-///     it (`sh edit.py`, `| bash`, `xargs sh`), or headed by `source` / `.` /
-///     `eval`, or headed by a `.py` path (`./edit.py` without a shebang is run
-///     by `sh`).
+/// The Python judge's answer for one here-document body.
+pub(in crate::detect) struct PythonFileVerdict {
+    /// The verdict on the body read as a Python program.
+    pub(in crate::detect) verdict: Decision,
+    /// The body may ALSO be read as shell, so the caller must judge the whole
+    /// command, body included, with the shell rules too and combine Deny over
+    /// Ask over Allow. True when a target is not a `.py` file, or when a later
+    /// line references a target other than as a direct python script argument
+    /// ([`later_lines_run_only_with_python`]).
+    pub(in crate::detect) also_shell: bool,
+}
+
+/// The verdict on the Python program `body` written to `targets`, or `None`
+/// when the body must stay judged as shell lines only, exactly as before the
+/// ruling: its first line is a `#!` line that does not name python (a script
+/// for another interpreter).
 ///
-/// Otherwise, Deny over Ask over Allow:
+/// The Python reading, Deny over Ask over Allow, on the body with its aliases
+/// resolved ([`sem::bindings`] / [`sem::rewrite`]: `import subprocess as sp`,
+/// `from os import system as s`, `s = os.system` — a call through the alias is
+/// judged as a call of the original; `pty.spawn` and
+/// `asyncio.create_subprocess_*` are judged as the `subprocess.run` /
+/// `os.system` they equal):
 ///   * a body that cannot be tokenised as Python (an unterminated string, an
 ///     unbalanced bracket) is an Ask: string boundaries are unknown, so no
 ///     call in it can be shown inert;
 ///   * every OS-facing call is judged from its literal arguments by
-///     [`shell_calls::program_call_verdict`] (`os.system("…")` and
-///     `subprocess.run([...])` as the command they run), on the raw body and on
-///     its code view (comments and plain strings blanked, f-string `{…}` code
-///     kept), so a call inside an f-string replacement field is judged too;
+///     [`shell_calls::program_call_verdict_keeping_argv_asks`]
+///     (`os.system("…")` and `subprocess.run([...])` as the command they run,
+///     an argv's Ask kept), on the raw body and on its code view (comments
+///     and plain strings blanked, f-string `{…}` code kept), so a call inside
+///     an f-string replacement field is judged too;
 ///   * a call whose command is computed ([`shell_calls::computed_shell_call`]:
 ///     `os.system(cmd)`) is an Ask;
 ///   * a [`super::CODE_BUILDING`] marker in the code view (`exec(`, `eval(`,
-///     `__import__`, …) is an Ask: the text is not the program that runs.
+///     `__import__`, …) is an Ask: the text is not the program that runs;
+///   * a runner referenced without being called (`f(os.system)`, a module
+///     like `os` passed as a value; [`sem::escaped_runner`]) is an Ask;
+///   * a path removed or overwritten ([`sem::filesystem_verdict`]:
+///     `shutil.rmtree`, `os.remove`, `Path.unlink`, `open(p, 'w')`, …) is
+///     judged as the equivalent `rm` / `>` command; a path it cannot resolve
+///     statically is an Ask;
+///   * a relative, star-from-runner or non-standard-library import
+///     ([`sem::import_verdict`]) is an Ask: that module's code is not here;
+///   * in a program that imports a DB-API driver, destructive or computed SQL
+///     ([`sem::sql_verdict`]) is an Ask.
 ///
 /// Text in a comment or in a plain string literal is never judged, so a
-/// docstring that names `git stash clear` is Allow. NOT covered, and not judged
-/// here: what the program does through calls that are not OS commands
-/// (`shutil.rmtree`, `open(p, 'w')`). A file written here and run by a LATER,
-/// separate tool call is judged on that call's own text, as for data files.
+/// docstring that names `git stash clear` is Allow. A file written here and run
+/// by a LATER, separate tool call is judged on that call's own text, as for
+/// data files.
 pub(in crate::detect) fn python_file_body_verdict(
     body: &str,
     after: &str,
+    targets: &[String],
     depth: usize,
     ctx: &Ctx<'_>,
-) -> Option<Decision> {
+) -> Option<PythonFileVerdict> {
     let first = body.lines().next().unwrap_or("");
     if first.starts_with("#!") && !first.contains("python") {
         return None;
     }
-    if after_may_run_as_shell(after) {
-        return None;
-    }
+    let also_shell = targets.iter().any(|t| !t.ends_with(".py"))
+        || !later_lines_run_only_with_python(after, targets);
+    Some(PythonFileVerdict {
+        verdict: python_program_verdict(body, depth, ctx),
+        also_shell,
+    })
+}
+
+/// The Python reading of [`python_file_body_verdict`].
+fn python_program_verdict(body: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let shape = "the here-document writes a Python file";
-    let Some(code) = code_view(body) else {
-        return Some(Decision::ask(format!(
+    let refuse = || {
+        Decision::ask(format!(
             "{shape}, and its program cannot be tokenised as Python (an unterminated string or an \
 unbalanced bracket) — blastguard cannot tell its code from its strings, so it cannot vouch for it"
-        )));
+        ))
+    };
+    let Some(code) = code_view(body) else {
+        return refuse();
+    };
+    let names = sem::bindings(&code);
+    let raw = sem::rewrite(body, &names);
+    let Some(code2) = code_view(&raw).map(|c| sem::rewrite(&c, &names)) else {
+        return refuse();
     };
     let mut pending: Option<Decision> = None;
-    for text in [body, code.as_str()] {
-        match shell_calls::program_call_verdict(text, depth, ctx) {
-            d @ Decision::Deny(_) => return Some(d),
+    let mut note = |d: Decision| -> Option<Decision> {
+        match d {
+            d @ Decision::Deny(_) => Some(d),
             a @ Decision::Ask(_) => {
                 pending.get_or_insert(a);
+                None
             }
-            Decision::Allow => {}
+            Decision::Allow => None,
+        }
+    };
+    for text in [raw.as_str(), code2.as_str()] {
+        let calls = shell_calls::program_call_verdict_keeping_argv_asks(text, depth, ctx);
+        if let Some(d) = note(calls) {
+            return d;
+        }
+        if let Some(d) = note(sem::filesystem_verdict(text, depth, ctx)) {
+            return d;
         }
     }
-    if let Some(call) = shell_calls::computed_shell_call(&code) {
-        pending.get_or_insert(Decision::ask(format!(
+    if let Some(call) = shell_calls::computed_shell_call(&code2) {
+        note(Decision::ask(format!(
             "{shape}, and that program runs a command it computes (`{call}` with a non-literal \
 argument) — blastguard cannot see what would actually execute"
         )));
     }
-    if let Some(marker) = code_building_marker(&code) {
-        pending.get_or_insert(Decision::ask(format!(
+    if let Some(marker) = code_building_marker(&code).or_else(|| code_building_marker(&code2)) {
+        note(Decision::ask(format!(
             "{shape}, and that program builds or decodes the code it runs (`{marker}`) — the text \
 is not the program that will execute, so blastguard cannot tell whether anything here is \
 irreversible"
         )));
     }
-    Some(pending.unwrap_or(Decision::Allow))
+    if let Some(runner) = sem::escaped_runner(&code2) {
+        note(Decision::ask(format!(
+            "{shape}, and that program uses `{runner}` other than by calling it directly (it is \
+passed around or stored) — blastguard cannot follow what it will run"
+        )));
+    }
+    if let Some(d) = sem::import_verdict(&names) {
+        note(Decision::ask(format!("{shape}: {}", reason(&d))));
+    }
+    if let Some(d) = sem::sql_verdict(&raw, &names) {
+        note(Decision::ask(format!("{shape}: {}", reason(&d))));
+    }
+    pending.unwrap_or(Decision::Allow)
 }
 
-/// Could a line of `after` run the written file as a shell script? See
-/// [`python_file_body_verdict`]. A false hit only keeps the shell judging.
-fn after_may_run_as_shell(after: &str) -> bool {
-    split_segments(after).iter().any(|seg| {
+fn reason(d: &Decision) -> &str {
+    match d {
+        Decision::Deny(r) | Decision::Ask(r) => r,
+        Decision::Allow => "",
+    }
+}
+
+/// True when every later reference to a target in `after` (the command lines
+/// after the closing delimiter) is the script argument of a python
+/// interpreter ([`python_script_word`]: `python3 edit.py`, `env python3
+/// edit.py`), or there is none. This is an allowlist: any other reference —
+/// `sh edit.py`, `./edit.py`, `find … -name edit.py -exec`, `xargs`, `cat
+/// edit.py | sh`, an unknown command — answers false, and the body is then
+/// judged as shell too. A reference is a word holding a target's file name, or
+/// a word with a glob character (it may name the file).
+fn later_lines_run_only_with_python(after: &str, targets: &[String]) -> bool {
+    let names: Vec<&str> = targets
+        .iter()
+        .map(|t| t.rsplit('/').next().unwrap_or(t))
+        .filter(|n| !n.is_empty())
+        .collect();
+    split_segments(after).iter().all(|seg| {
         let words = quote_aware_words(seg);
-        let refs: Vec<&str> = words.iter().map(String::as_str).collect();
-        refs.iter().any(|w| is_shell(&normalized_command(w)))
-            || wrapped_command_heads(&refs).into_iter().any(|h| {
-                let head = normalized_command(refs[h]);
-                matches!(head.as_str(), "source" | "." | "eval") || head.ends_with(".py")
-            })
+        let refs: Vec<usize> = words
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| names.iter().any(|n| w.contains(n)) || w.contains(['*', '?', '[']))
+            .map(|(k, _)| k)
+            .collect();
+        refs.is_empty() || (refs.len() == 1 && python_script_word(&words) == Some(refs[0]))
     })
+}
+
+/// The index of the script word of a segment that runs a python interpreter
+/// on a script: leading `NAME=value` assignments, optionally `env` with only
+/// assignments after it, then `python`, `python3` or `python3.N` (any
+/// directory), then only flag-only options (`-u`, `-B`, …; never `-c`, `-m`,
+/// `-W`, `-X` or `-`), then the script word. `None` for every other shape.
+fn python_script_word(words: &[String]) -> Option<usize> {
+    let mut k = 0;
+    while words.get(k).is_some_and(|w| is_assignment(w)) {
+        k += 1;
+    }
+    if words.get(k).map(|w| normalized_command(w)).as_deref() == Some("env") {
+        k += 1;
+        while words.get(k).is_some_and(|w| is_assignment(w)) {
+            k += 1;
+        }
+    }
+    let head = normalized_command(words.get(k)?);
+    let version = head.strip_prefix("python")?;
+    let versioned = version.is_empty()
+        || version == "3"
+        || version
+            .strip_prefix("3.")
+            .is_some_and(|v| !v.is_empty() && v.chars().all(|c| c.is_ascii_digit()));
+    if !versioned {
+        return None;
+    }
+    k += 1;
+    while let Some(w) = words.get(k) {
+        let Some(flags) = w.strip_prefix('-') else {
+            break;
+        };
+        if flags.is_empty() || !flags.chars().all(|c| "bBdEiIOPqsSuvR".contains(c)) {
+            return None;
+        }
+        k += 1;
+    }
+    let script = words.get(k)?;
+    (!script.starts_with('-')).then_some(k)
 }
 
 /// `src` with `#` comments removed and the contents of plain string literals

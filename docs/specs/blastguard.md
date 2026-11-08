@@ -402,23 +402,42 @@ forge・condukt のスケジューラが再利用）。
   tests/quoted_heredoc_backtick_fp_20261108.rs）** — `detect_bash` の手順 0b。
   `heredoc::python_file_here_document` が、data strip と同じ形（前行は `permitted_prefix_line`、opener 行は
   1 個の here-document・`$`/backtick 無し・quote 均衡、本文は終端行で閉じる、奇妙な空白無し）で、
-  区切りが**引用付き**、読み手が `cat`/`tee` で書き込み先（redirect 先と `tee` operand）が全て literal の
-  `.py` ファイル（1 個以上）、本文が空でないときだけ本文を切り出す。終端後の行は何行あってもよく、
-  本文を除いた command text（`without_body`）に残って shell の全規則で判定される。
-  本文は `interpreter::python_file_body_verdict` が判定する: comment と plain string literal は不活性
-  （docstring の `` `git stash clear` `` は Allow）。OS に command を渡す call は literal 引数から
-  `program_call_verdict` で shell 規則にかける（`subprocess.run(["git","stash","clear"])`・
-  `os.system("git stash clear")` は Deny。f-string の `{…}` 内の code も対象）。command が計算される call
-  （`os.system(cmd)`、`computed_shell_call`）と `CODE_BUILDING` marker（`exec(` 等）は Ask。Python として
-  token 化できない本文（未終端 string・括弧不均衡）は Ask。最終判定は Deny > Ask > Allow で
-  `without_body` の判定と合成する。次のときは `None` で従来どおり本文を shell 行として判定する:
-  1 行目が python を含まない `#!` 行、終端後の行のどこかに shell の語（`sh x.py`・`| bash`・`xargs sh`）、
-  または `source`/`.`/`eval`/`.py` path を head とする segment がある（shebang 無しの `./x.py` は sh が
-  実行する）。`.sh`・拡張子無し・他の言語の拡張子は従来どおり shell 判定。
-  **未対応（RESIDUAL）**: OS command ではない call の効果（`shutil.rmtree`・`open(p,'w')`）はここでは
-  判定しない（変更前の shell 行判定も見ていなかった）。Python として不正な本文（裸の `git stash clear`
-  行など）は python では実行されないので Allow になる。後続の別 tool call で `sh x.py` されたら、その
-  call の text だけで判定される（data file と同じ residual）。
+  区切りが**引用付き**、読み手が `cat`/`tee` で書き込み先（redirect 先と `tee` operand）が全て literal path で
+  うち 1 個以上が `.py`、本文が空でないときだけ本文を切り出す（書き込み先は `targets` に返す）。終端後の行は
+  何行あってもよく、本文を除いた command text（`without_body`）に残って shell の全規則で判定される。
+  本文は `interpreter::python_file_body_verdict` が判定する（fail-closed。静的に読めないものは Ask）:
+  - comment と plain string literal は不活性（docstring の `` `git stash clear` `` は Allow）。
+  - **alias 解決**（`interpreter/python_semantics.rs`）: `import X as Y`・`from X import f [as g]`・
+    `s = os.system` を正規名に書き換えてから判定する。runner（`os.system`・`subprocess.*`・`os.exec*`・
+    `shutil.rmtree` 等）や `os`/`subprocess` module を呼び出し以外で参照（引数として渡す等）したら Ask。
+  - OS に command を渡す call は literal 引数から `program_call_verdict_keeping_argv_asks` で shell 規則に
+    かける（argv の Ask も保持: `subprocess.check_output(["git","clean","-fdx"])` は git 規則の Ask）。
+    `pty.spawn`・`asyncio.create_subprocess_exec` は `subprocess.run`、`asyncio.create_subprocess_shell` は
+    `os.system` として判定。f-string の `{…}` 内の code も対象。command が計算される call
+    （`computed_shell_call`）と `CODE_BUILDING` marker は Ask。
+  - **filesystem 破壊**: `shutil.rmtree(p)` → `rm -rf p`、`os.remove`/`os.unlink`/`os.rmdir`/`os.removedirs`/
+    `Path.unlink()`/`.rmdir()` → `rm p`、`open(p,'w'|'x'|…)`・`Path.open('w')`・`write_text`/`write_bytes`
+    → `: > p`（`a`/`+` は `: >> p`）、`os.open` の書き込み flag も同様として shell 規則で判定（home・`/`・
+    dotfile は shell と同じ Deny/Ask、repo 相対は Allow）。path は literal・`expanduser`・`Path.home()`・
+    `os.path.join`・`/`・`joinpath` と、単純代入 `name = …` だけで束縛される名前（全代入の値を全部判定）から
+    静的に解決し、解決できない path・literal でない mode/flag は Ask。
+  - **import**: 標準ライブラリ外の module・相対 import・runner module からの `import *` は Ask
+    （module の code が text に無い。sibling file でありうる）。
+  - **SQL**: DB-API driver（`sqlite3` 等）を import する program に限り、`.execute*` の SQL が
+    DROP/DELETE/TRUNCATE/ALTER/UPDATE/REPLACE を含む literal、または literal でないなら Ask。
+  - Python として token 化できない本文は Ask。
+  最終判定は Deny > Ask > Allow で `without_body` の判定と合成する。ただし **書き込み先に `.py` 以外が
+  ある**か、**終端後の行が書き込み先を python interpreter（`python`/`python3`/`python3.N`、`env` 経由可）の
+  直接の script 引数以外で参照する**（`find -exec`・`xargs`・`sh x.py`・`./x.py`・未知の command。
+  参照 = file 名を含む語か glob 文字を含む語。allowlist であり列挙ではない）ときは、本文込みの command 全体も
+  shell 規則で判定して合成する（Python の判定だけで決めない）。1 行目が python を含まない `#!` 行のときは
+  `None` で従来どおり本文を shell 行としてのみ判定する。`.sh`・拡張子無し・他の言語の拡張子のみの書き込みは
+  従来どおり shell 判定。
+  **未対応（RESIDUAL）**: 静的解析の外にある効果（`sys.modules`・`globals()` 経由の参照、
+  `loop.subprocess_shell` 等の method 経由の spawner、`os.rename`/`shutil.move` の宛先が home 等の場合）は
+  拾えない。python 実行時の cwd が `cd` で変わる場合の相対 path は hook の cwd で判定される。Python として
+  不正な本文（裸の `git stash clear` 行など）は python では実行されないので Allow。後続の別 tool call で
+  `sh x.py` されたら、その call の text だけで判定される（data file と同じ residual）。
 
 ### module 責務
 

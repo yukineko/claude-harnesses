@@ -612,11 +612,10 @@ pub(super) enum OutputTargets {
     /// `>` / `>>` scans ([`redirect_view_without_quoted_here_document_body`]);
     /// every other rule still reads the body.
     AnyTarget,
-    /// Only literal `.py` files ([`is_python_file_target`]), at least one, by
-    /// `cat` or `tee`, with a QUOTED delimiter. Used ONLY by
-    /// [`python_file_here_document`], whose body is then judged as Python
-    /// instead of as shell lines; lines after the close are allowed and stay
-    /// judged as shell.
+    /// At least one literal `.py` file ([`is_python_file_target`]) and only
+    /// literal targets, by `cat` or `tee`, with a QUOTED delimiter. Used ONLY
+    /// by [`python_file_here_document`], whose body is then judged as Python;
+    /// lines after the close are allowed and stay judged as shell.
     PythonFiles,
 }
 
@@ -628,6 +627,9 @@ pub(super) struct HereDocumentParts {
     pub(super) body: String,
     /// Every line after the closing delimiter line.
     pub(super) after: String,
+    /// The files the reader writes the body to, quotes removed (only for
+    /// [`OutputTargets::PythonFiles`]; empty otherwise).
+    pub(super) targets: Vec<String>,
 }
 
 /// User ruling 2026-11-08 (narrows the extension part of 6cf12ce9): a QUOTED
@@ -638,14 +640,18 @@ pub(super) struct HereDocumentParts {
 /// command; but the body is CODE (a later `python3 edit.py` runs it), so it is
 /// not data either. The caller judges `body` with the Python program judge
 /// ([`super::interpreter::python_file_body_verdict`]) and `without_body` with
-/// every shell rule.
+/// every shell rule — or, when that judge says the body may also be read as
+/// shell (a non-`.py` target in `targets`, or a later line that references the
+/// file other than as a `python3 <file>` script argument), the WHOLE command,
+/// body included, with every shell rule, Deny over Ask over Allow.
 ///
 /// The shape rule is [`strip_data_here_document_bodies`]'s (permitted lines
 /// before the opener, one opener line with no `$`/backtick, a CLOSED body, no
 /// odd whitespace), with three differences: the delimiter MUST be quoted; the
-/// reader is `cat` or `tee` writing only literal `.py` files
-/// ([`OutputTargets::PythonFiles`]); and ANY lines may follow the close — they
-/// stay in `without_body` and are judged as shell. An empty body answers
+/// reader is `cat` or `tee` writing at least one literal `.py` file and only
+/// literal targets ([`OutputTargets::PythonFiles`]; `targets` lists them); and
+/// ANY lines may follow the close — they stay in `without_body` and are judged
+/// as shell. An empty body answers
 /// `None` (nothing to judge), as does every other shape: the body then stays in
 /// the command and is judged as shell lines, exactly as before.
 pub(super) fn python_file_here_document(cmd: &str) -> Option<HereDocumentParts> {
@@ -818,7 +824,48 @@ fn here_document_body_parts(cmd: &str, targets: OutputTargets) -> Option<HereDoc
         without_body: out,
         body,
         after: lines[close + 1..].concat(),
+        targets: if targets == OutputTargets::PythonFiles {
+            here_document_write_targets(consumer)
+        } else {
+            Vec::new()
+        },
     })
+}
+
+/// The files a `cat`/`tee` here-document reader `line` writes to, quotes
+/// removed: every output-redirect target and every `tee` operand other than
+/// `-a` / `--append`. Only meaningful for a line
+/// [`here_document_consumer_is_data`] accepted under
+/// [`OutputTargets::PythonFiles`].
+fn here_document_write_targets(line: &str) -> Vec<String> {
+    let raw = quote_aware_words(line);
+    let mut out = Vec::new();
+    let (mut head_seen, mut tee) = (false, false);
+    let mut i = 0;
+    while i < raw.len() {
+        let w = raw[i].as_str();
+        if let Some(rest) = w.strip_prefix("<<") {
+            let rest = rest.strip_prefix('-').unwrap_or(rest);
+            i += if rest.is_empty() { 2 } else { 1 };
+            continue;
+        }
+        if let Some(glued) = strip_output_redirect_operator(w) {
+            let target = if glued.is_empty() {
+                i += 1;
+                raw.get(i).map(String::as_str).unwrap_or("")
+            } else {
+                glued
+            };
+            out.push(unquote_data_file_target(target).to_string());
+        } else if !head_seen {
+            head_seen = true;
+            tee = w == "tee";
+        } else if tee && !matches!(w, "-a" | "--append") {
+            out.push(unquote_data_file_target(w).to_string());
+        }
+        i += 1;
+    }
+    out
 }
 
 /// The part of the opener line [`here_document_consumer_is_data`] judges: the
@@ -1243,8 +1290,8 @@ pub(super) fn strip_output_redirect_operator(word: &str) -> Option<&str> {
 /// `|`, `<`, `>`, `$`). Everything else, including the `tee` operand rule
 /// (DATA files only), is the same for both. [`OutputTargets::PythonFiles`]
 /// (only from [`python_file_here_document`]) accepts ONLY `cat` or `tee`, and
-/// only when every redirect target and `tee` operand is a literal `.py` file
-/// ([`is_python_file_target`]) and there is at least one.
+/// only when every redirect target and `tee` operand is a literal path and at
+/// least one of them is a `.py` file ([`is_python_file_target`]).
 pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets) -> bool {
     let raw = quote_aware_words(line);
     let mut words: Vec<&str> = Vec::new();
@@ -1290,12 +1337,16 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
                     !target.is_empty()
                         && !target.contains(['\\', '`', '(', ')', ';', '&', '|', '<', '>', '$'])
                 }
-                OutputTargets::PythonFiles => is_python_file_target(target),
+                OutputTargets::PythonFiles => {
+                    is_data_file_target_shape(unquote_data_file_target(target))
+                }
             };
             if !target_ok {
                 return false;
             }
-            python_targets += 1;
+            if is_python_file_target(target) {
+                python_targets += 1;
+            }
             i += 1;
             continue;
         }
@@ -1310,7 +1361,9 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
         return false;
     }
     // [`OutputTargets::PythonFiles`]: `cat`/`tee` writing at least one `.py`
-    // file and nothing else (a `tee` operand counts as a target).
+    // file, every target a literal path (a `tee` operand counts as a target).
+    // A non-`.py` target is allowed here; the caller then judges the body as
+    // shell lines too ([`python_file_here_document`]).
     if targets == OutputTargets::PythonFiles {
         return match words.first().copied() {
             Some("cat") => python_targets > 0 && words[1..].iter().all(|w| *w == "-"),
@@ -1318,8 +1371,10 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
                 let files = words[1..]
                     .iter()
                     .filter(|w| !matches!(**w, "-a" | "--append"));
-                python_targets + files.clone().count() > 0
-                    && files.into_iter().all(|w| is_python_file_target(w))
+                python_targets + files.clone().filter(|w| is_python_file_target(w)).count() > 0
+                    && files
+                        .into_iter()
+                        .all(|w| is_data_file_target_shape(unquote_data_file_target(w)))
             }
             _ => false,
         };

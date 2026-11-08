@@ -11,6 +11,7 @@ mod comments;
 mod inert_literal;
 mod osascript;
 mod python_file;
+mod python_semantics;
 mod shell_calls;
 #[cfg(test)]
 mod unit_tests;

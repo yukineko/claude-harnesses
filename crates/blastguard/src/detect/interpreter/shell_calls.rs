@@ -103,6 +103,23 @@ const DEST_OPERAND_MUTATORS: &[&str] = &["cp", "ln", "install"];
 /// whose argument is not a literal (a variable) is not judged here either; it
 /// stays with the rest of the program audit, as before.
 pub(super) fn program_call_verdict(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
+    program_calls(payload, depth, ctx, false)
+}
+
+/// [`program_call_verdict`], except that an Ask on the re-assembled argv of an
+/// exec-style or argv-list `subprocess` call is kept, not dropped
+/// (`subprocess.check_output(["git", "clean", "-fdx"])` reaches the git
+/// rules' Ask). Used by the Python-file judge
+/// ([`super::python_file_body_verdict`]), whose program is the whole file.
+pub(super) fn program_call_verdict_keeping_argv_asks(
+    payload: &str,
+    depth: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
+    program_calls(payload, depth, ctx, true)
+}
+
+fn program_calls(payload: &str, depth: usize, ctx: &Ctx<'_>, argv_asks: bool) -> Decision {
     let toks = lex(payload);
     let mut pending: Option<Decision> = None;
     for call in calls(&toks) {
@@ -137,9 +154,9 @@ moving or re-permissioning an OS file can break the machine itself, so blastguar
                 }
                 other => other.to_vec(),
             };
-            argv_verdict(&call.name, &words, depth, ctx)
+            argv_verdict(&call.name, &words, depth, ctx, argv_asks)
         } else if SUBPROCESS_CALLS.contains(&last) && call.name.starts_with("subprocess.") {
-            argv_verdict(&call.name, &strings, depth, ctx)
+            argv_verdict(&call.name, &strings, depth, ctx, argv_asks)
         } else {
             Decision::Allow
         };
@@ -244,8 +261,14 @@ fn shell_line_verdict(call: &str, line: &str, depth: usize, ctx: &Ctx<'_>) -> De
     }
 }
 
-/// An argv a call executes directly.
-fn argv_verdict(call: &str, words: &[&str], depth: usize, ctx: &Ctx<'_>) -> Decision {
+/// An argv a call executes directly. Its Ask is kept only when `keep_ask`.
+fn argv_verdict(
+    call: &str,
+    words: &[&str],
+    depth: usize,
+    ctx: &Ctx<'_>,
+    keep_ask: bool,
+) -> Decision {
     if words.is_empty() {
         return Decision::Allow;
     }
@@ -259,9 +282,12 @@ fn argv_verdict(call: &str, words: &[&str], depth: usize, ctx: &Ctx<'_>) -> Deci
         .join(" ");
     match analyze_shell_payload(&line, depth, ctx) {
         Decision::Deny(r) => Decision::Deny(r),
-        // Only a Deny is taken from the re-joined argv, as for the argv-list
-        // `subprocess` re-join in the program audit: the join is a model of
-        // the exec, not a line a shell parses.
+        Decision::Ask(r) if keep_ask => {
+            Decision::ask(format!("the program runs `{line}` through `{call}`: {r}"))
+        }
+        // Otherwise only a Deny is taken from the re-joined argv, as for the
+        // argv-list `subprocess` re-join in the program audit: the join is a
+        // model of the exec, not a line a shell parses.
         _ => Decision::Allow,
     }
 }

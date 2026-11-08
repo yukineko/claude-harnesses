@@ -247,10 +247,10 @@ fn injector_reads_reference_doc_from_env_and_injects() {
 
     // Hermetic ledger state: pin CONTEXT_GOVERNOR_STATE_DIR to an isolated
     // (absolute) tempdir and CLAUDE_CODE_SESSION_ID to a fixed test session.
-    // The injector's dedup read (`was_injected` → `resolve_state`) resolves the
-    // session from CLAUDE_CODE_SESSION_ID, so without this the test would read
-    // AND write the *real* session's ledger when run inside a live Claude Code
-    // session — deduping against prior runs (returning `{}`) and polluting the
+    // The injector's dedup read and row write are keyed on the input's
+    // `session_id` ("integ" below), but the state dir base comes from
+    // CONTEXT_GOVERNOR_STATE_DIR, so without this the test would read
+    // AND write a ledger under the user's *real* state dir — deduping against prior runs (returning `{}`) and polluting the
     // user's ledger with `reference-injection` rows.
     let state = tempfile::tempdir().expect("state dir");
     let prev_state = std::env::var_os("CONTEXT_GOVERNOR_STATE_DIR");

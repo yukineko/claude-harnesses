@@ -3,14 +3,20 @@
 mutation-remove-dont-disable; user ruling 2026-11-07 on audit row #40).
 
 Ruling: a mutant must DELETE the construct under test, never neutralize it in
-place. `scripts/check-fail-open-mutation.py` still has a scenario whose `new`
-text wraps the guarded block in `if false {` (the parallelguard cap check).
+place. `scripts/check-fail-open-mutation.py` had a scenario whose `new`
+text wrapped the guarded block in `if false {` (the parallelguard cap check;
+fixed under backlog d425cfc3 by deleting the guard).
 Code that can never execute is garbage (「絶対に処理されないコードはプログラムと
 コンパイラのゴミ」), in mutants as much as in real code.
 
 Property asserted: for every registered scenario, the mutant source generated
 from the REAL target file (old -> new applied once, in memory; nothing is
 written to disk) contains no more `if false` occurrences than the original.
+
+Extended ruling (2026-11-07, recorded in backlog d425cfc3 notes): `if true {
+return ...; }` (an always-taken early return) is ALSO banned as
+neutralize-in-place; the mutant must delete the guard. A second test asserts
+the mutant contains no more `if true` conditions than the original.
 
 Control: every scenario's anchor occurs exactly once in its real target file,
 so the mutant really is generated (a missing anchor would make the property
@@ -36,6 +42,8 @@ exec(  # noqa: S102
 
 # `if false` as a Rust condition: `if false {`, `if false &&`, `if false ||`.
 DISABLED = re.compile(r"\bif\s+false\b")
+# `if true` as a Rust condition (always-taken early return = neutralize-in-place).
+ALWAYS_TAKEN = re.compile(r"\bif\s+true\b")
 
 
 def _mutant(scenario):
@@ -50,7 +58,6 @@ class MutantsDeleteRatherThanDisable(unittest.TestCase):
                 text = (REPO / s.file_rel).read_text(encoding="utf-8")
                 self.assertEqual(text.count(s.old), 1, s.file_rel)
 
-    @unittest.expectedFailure  # backlog d425cfc3: open defect
     def test_generated_mutant_contains_no_if_false(self):
         offenders = []
         for s in cfom.SCENARIOS:
@@ -63,6 +70,21 @@ class MutantsDeleteRatherThanDisable(unittest.TestCase):
             [],
             "mutants must delete the construct, not wrap it in `if false` "
             "(ruling 2026-11-07): " + "; ".join(offenders),
+        )
+
+    def test_generated_mutant_contains_no_if_true(self):
+        offenders = []
+        for s in cfom.SCENARIOS:
+            original, mutant = _mutant(s)
+            added = len(ALWAYS_TAKEN.findall(mutant)) - len(ALWAYS_TAKEN.findall(original))
+            if added > 0:
+                offenders.append(f"{s.crate} ({s.file_rel}): +{added} `if true`")
+        self.assertEqual(
+            offenders,
+            [],
+            "mutants must delete the guard, not neutralize it with an "
+            "always-taken `if true {` (extended ruling 2026-11-07): "
+            + "; ".join(offenders),
         )
 
 

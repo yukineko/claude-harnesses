@@ -292,8 +292,14 @@ def fmt_pair(a: Block, b: Block, jac: float) -> str:
 # ---------------------------------------------------------------- modes
 
 
-def changed_files(repo: str) -> set[str]:
-    out = run_git(repo, "diff", "HEAD", "--name-only", "-z", "--no-renames")
+def changed_files(repo: str, staged: bool = False) -> set[str]:
+    """Corpus files that differ from HEAD: in the working tree, or — with
+    `staged` (the `--staged` mode, user ruling 2026-11-08) — in the index.
+    Only pairs with at least one changed side are judged either way."""
+    if staged:
+        out = run_git(repo, "diff", "--cached", "--name-only", "-z", "--no-renames")
+    else:
+        out = run_git(repo, "diff", "HEAD", "--name-only", "-z", "--no-renames")
     return {p for p in out.decode("utf-8", "replace").split("\0") if p and in_corpus(p)}
 
 
@@ -301,8 +307,8 @@ def key(fa: str, fb: str) -> tuple[str, str]:
     return (fa, fb) if fa <= fb else (fb, fa)
 
 
-def run_default(repo: str) -> int:
-    changed = changed_files(repo)
+def run_default(repo: str, staged: bool = False) -> int:
+    changed = changed_files(repo, staged)
     if not changed:
         return 0
     wt_blocks = blocks_of(read_worktree(repo, worktree_files(repo)))
@@ -348,12 +354,17 @@ def run_all(repo: str) -> int:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--all", action="store_true", help="audit the whole corpus")
+    ap.add_argument(
+        "--staged",
+        action="store_true",
+        help="judge only pairs with a STAGED side (pre-commit; user ruling 2026-11-08)",
+    )
     args = ap.parse_args(argv)
     try:
         repo = run_git(os.getcwd(), "rev-parse", "--show-toplevel").decode().strip()
         if not args.all:
             run_git(repo, "rev-parse", "--verify", "-q", "HEAD^{commit}")
-        return run_all(repo) if args.all else run_default(repo)
+        return run_all(repo) if args.all else run_default(repo, args.staged)
     except Undetermined as exc:
         print(f"{NAME}: UNDETERMINED: {exc}", file=sys.stderr)
         return 2

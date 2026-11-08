@@ -345,6 +345,38 @@ pub fn reconcile(store_root: &Path, detection: Determination<&Path>) -> Reconcil
     )
 }
 
+/// `specguard reconcile-findings`: close structural review findings the
+/// re-run detection no longer reports. Returns 0, or 3 when anything stayed
+/// open for lack of a determination. (Moved out of `main.rs` unchanged.)
+pub(crate) fn run_command(cli: &crate::Cli, json: bool) -> u8 {
+    const TOOL: &str = "specguard reconcile-findings";
+    let report = match crate::load(cli) {
+        Ok(l) => {
+            let map_path = l.repo_root.join(&l.cfg.map.path);
+            reconcile(&l.repo_root, Determination::known(map_path.as_path()))
+        }
+        Err(e) => {
+            // No config → no repo root from it; the store is still keyed by the
+            // cwd's repo, so judge (as undetermined) the findings found there.
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            reconcile(
+                &cwd,
+                Determination::undetermined(format!(
+                    "specguard config could not be loaded ({e:#}), so the structural \
+                     detection cannot run"
+                )),
+            )
+        }
+    };
+    match report.emit(TOOL, json) {
+        0 => crate::EXIT_OK,
+        _ => EXIT_RECONCILE_UNDETERMINED,
+    }
+}
+
+/// `reconcile-findings`: at least one finding stayed open undetermined.
+const EXIT_RECONCILE_UNDETERMINED: u8 = 3;
+
 #[cfg(test)]
 mod tests {
     use super::*;

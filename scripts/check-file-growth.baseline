@@ -20,7 +20,7 @@
 3647 crates/overwatch/src/store.rs
 2064 crates/overwatch/tests/cli_contract.rs
 3648 crates/propguard/src/gate.rs
-4770 crates/specguard/src/main.rs
+4755 crates/specguard/src/main.rs
 2409 crates/specguard/src/specmap.rs
 2015 crates/specguard/tests/integration.rs
 2413 crates/tdd/src/gate.rs

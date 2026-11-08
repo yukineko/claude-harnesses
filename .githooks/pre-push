@@ -4,12 +4,15 @@
 #     git config core.hooksPath .githooks
 #
 # This hook has three advisory nudges plus five blocking checks (the bypass
-# ledger below, `cargo check` over each pushed tip, the trybuild compile-fail
-# type contracts via scripts/check-compile-fail.py, `specguard map
-# gate-check` over each pushed tip, and a final re-check that each pushed ref
-# still names the sha those checks judged — see the end of this file; over
-# https that re-check narrows but does not close the window, a residual window
-# remains):
+# ledger below, `cargo check` over the crates each pushed range touches, the
+# trybuild compile-fail type contracts via scripts/check-compile-fail.py,
+# `specguard map gate-check` over each pushed range, and a final re-check that
+# each pushed ref still names the sha those checks judged — see the end of this
+# file; over https that re-check narrows but does not close the window, a
+# residual window remains). Every check is scoped to THIS push's range, runs in
+# THIS worktree only (no temp checkout, no other worktree is consulted), and a
+# check already recorded as passed for the exact pushed tree is not rerun
+# (scripts/test-pass-record.py; user ruling 2026-11-08):
 #   1. GATE crates (advisory) — when the push touches blastguard/propguard/
 #      specguard/stuckguard/mutategate/overwatch (the fleet defense gates),
 #      suggest a Continuous-Audit round (`scripts/continuous-audit.sh --dry-run`).
@@ -191,14 +194,20 @@ prepush_timing_report() {
 }
 prepush_on_exit() {
     _tm_rc=$?
-    cleanup_typecheck_tree
+    cleanup_specmap
     prepush_timing_report "$_tm_rc"
     exit "$_tm_rc"
 }
-cleanup_typecheck_tree() {
-    if [ -n "${TYPECHECK_TREE:-}" ] && [ -d "$TYPECHECK_TREE" ]; then
-        git worktree remove --force "$TYPECHECK_TREE" >/dev/null 2>&1 || true
+# The specguard gate-check builds its spec map in a temp dir (never the
+# worktree's own machine-local map); this removes that dir. Nothing else here
+# creates files outside the git common dir.
+SPECMAP_TMP=""
+cleanup_specmap() {
+    if [ -n "${SPECMAP_TMP:-}" ] && [ -d "$SPECMAP_TMP" ]; then
+        rm -f "$SPECMAP_TMP/spec-map.toml"
+        rmdir "$SPECMAP_TMP" 2>/dev/null
     fi
+    return 0
 }
 trap prepush_on_exit EXIT
 
@@ -216,12 +225,18 @@ cd "$REPO" 2>/dev/null || { echo "pre-push: cannot enter the repository work tre
 # entries THIS push carries (reachable from the local sha, not from the remote
 # sha) block it; an ungated commit on some other branch does not (user ruling
 # 2026-10-22). That also keeps `git push origin <sha>:main` of an orphaned
-# ungated commit blocked. An undeterminable range exits 2 and blocks. With no
-# stdin lines at all, gate-bypass.py falls back to judging every entry any
-# ref or worktree HEAD contains (the restrictive side).
+# ungated commit blocked. An undeterminable range exits 2 and blocks.
+#
+# Only THIS push's range is judged (user ruling 2026-11-08: no other-worktree
+# scan). With no stdin lines at all (a manual run) the range is @{push}..HEAD:
+# HEAD over the @{push} sha, or over nothing (every ancestor of HEAD counts as
+# carried, the restrictive side) when @{push} does not resolve. With only delete
+# lines, no commit is carried, so there is nothing for the ledger to judge.
 PUSH_INPUT="$(cat)"
 set --
+_saw_line=0
 while read -r _lr _ls _rr _rs; do
+    [ -n "${_ls:-}" ] && _saw_line=1
     case "${_ls:-}" in
         ""|0000000000000000000000000000000000000000) ;;
         *) set -- "$@" --push "$_ls" "${_rs:-0000000000000000000000000000000000000000}"
@@ -230,8 +245,24 @@ while read -r _lr _ls _rr _rs; do
 done <<EOF
 $PUSH_INPUT
 EOF
+ledger_skip=0
+if [ "$#" -eq 0 ]; then
+    if [ "$_saw_line" -eq 1 ]; then
+        ledger_skip=1
+    else
+        _manual_head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)"
+        if [ -z "$_manual_head" ]; then
+            echo "pre-push: no ref lines on stdin and no resolvable HEAD — nothing determinate to judge, so blocking." >&2
+            exit 1
+        fi
+        _manual_base="$(git rev-parse --verify --quiet '@{push}' 2>/dev/null)"
+        set -- --push "$_manual_head" "${_manual_base:-0000000000000000000000000000000000000000}"
+    fi
+fi
 phase_begin bypass-ledger
-if command -v python3 >/dev/null 2>&1 && [ -f "$REPO/scripts/gate-bypass.py" ]; then
+if [ "$ledger_skip" -eq 1 ]; then
+    : # delete-only push: no commit leaves this machine
+elif command -v python3 >/dev/null 2>&1 && [ -f "$REPO/scripts/gate-bypass.py" ]; then
     python3 "$REPO/scripts/gate-bypass.py" "$@" >/dev/null
     bypass_rc=$?
     if [ "$bypass_rc" -ne 0 ]; then
@@ -274,6 +305,9 @@ pushed_shas=""
 # otherwise the two halves of the hook would be answering about different
 # content. git's empty-tree object is the determinate base for a root commit.
 pushed_pairs=""
+# "<sha>:<remote sha>" per pushed ref, or "<sha>:-" when the remote tip is not
+# known here. The type/test checks below derive their crate scope from it.
+pushed_remotes=""
 EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
 
 while read -r local_ref local_sha remote_ref remote_sha; do
@@ -303,6 +337,11 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         diff_out="$(git show --name-only --pretty=format: "$local_sha" 2>/dev/null)"
     fi
     pushed_pairs="$pushed_pairs $local_sha:$push_base"
+    if [ "$has_remote" = "1" ]; then
+        pushed_remotes="$pushed_remotes $local_sha:$remote_sha"
+    else
+        pushed_remotes="$pushed_remotes $local_sha:-"
+    fi
     changed="$changed
 $diff_out"
 done <<EOF
@@ -479,330 +518,326 @@ EOF
     phase_end
 fi
 
-# --- the second blocking check: the compiler ---------------------------------
-# The one surface `--no-verify` cannot jump is the compiler, and until this block
-# landed nothing in this repo ran it. The three `cargo` hits in
-# .githooks/pre-commit are a comment and two remediation strings; this file had
-# none at all, and every gate pre-commit runs (injectguard, fail-open-guard,
-# version-lockstep, bump-on-change, secret-guard, raw-io-ratchet,
-# worktree-isolation) is a Python text scanner. donegate DOES run
-# cargo, but it is a Stop hook bounded by max_attempts
-# (crates/donegate/src/main.rs:202-217 prints "Allowing stop" and exits 0 once the
-# attempt budget is spent, so a persistent type error passes on the 4th Stop), and
-# it only arms on a trusted root (crates/donegate/src/config.rs:111
-# trust::is_trusted) — while CLAUDE.md 8 mandates that all work happen in a FRESH
-# worktree, which is never in ~/.harness/trust.toml. On the mandated path donegate
-# therefore runs zero checks. A three-strikes advisory that is inert on the
-# required workflow is not an enforcement surface.
+# --- blocking checks 2-4: compiler, trybuild contracts, gate spec-docs -------
+# The one surface `--no-verify` cannot jump is the compiler. donegate runs cargo
+# too, but as a Stop hook bounded by max_attempts and armed only on trusted
+# roots, so it is not an enforcement surface on the mandated fresh-worktree path.
 #
-# WHAT IS JUDGED: the tip commit of each pushed ref, checked out into a throwaway
-# detached worktree. NOT the working tree. Checking the tree on disk would mean a
-# dirty tree yields a verdict about content that is not being pushed — printing a
-# caveat and pushing anyway is exactly the "undetermined rendered as clean" this
-# repo's gates exist to stop (CLAUDE.md 3). Measured cost of doing it properly
-# (2026-08-06, this workspace, 39 crates): 20s and 681M into an empty target dir,
-# ~0s warm. That is affordable, so the accurate check is the one that ships.
+# SCOPE (user ruling 2026-11-08): only THIS push's range, never another
+# worktree, never a whole-workspace sweep the range does not call for, and never
+# a rerun of a check already confirmed for the same content.
+#   * Range: REMOTE..S when the remote tip is known here, else the commits of S
+#     on no remote-tracking ref (`git log S --not --remotes`). A range git cannot
+#     compute widens to the whole workspace (the restrictive side).
+#   * cargo check --all-targets runs for the crates/<dir> the range touches; a
+#     root Cargo.toml / Cargo.lock / rust-toolchain(.toml) / .cargo change, or a
+#     touched crates/<dir> with no Cargo.toml at S, widens it to --workspace. A
+#     breakage this introduces in a crate OUTSIDE the range (a dependent of a
+#     changed crate) is not caught here: that coverage was dropped
+#     deliberately (user ruling 2026-11-08; the periodic audit runs only the
+#     gate tests on main, not a workspace check).
+#   * Dedupe: each check has a test id; before running it the hook asks
+#     scripts/test-pass-record.py whether that id already passed for the EXACT
+#     tree of S. Only an exit 0 skips; a missing, unreadable, corrupt or
+#     mismatched record runs the check. A pass is recorded for that tree.
+#   * In place: a check that must run runs in THIS worktree (cwd = repo root,
+#     cargo's own target dir), and only when HEAD == S, the tree and index equal
+#     HEAD, and nothing untracked sits under crates/ or the root cargo files —
+#     so the content judged is exactly the content pushed. Anything else BLOCKS:
+#     a verdict about the files on disk is not a verdict about S.
 #
-# FAIL-CLOSED throughout: no cargo, no git-common-dir, no worktree, no resolvable
-# sha => block. A toolchain we cannot run is not a clean workspace.
+# FAIL-CLOSED throughout: no cargo when a check must run, an unresolvable tree,
+# unreadable cargo metadata, a crate dir that maps to no package => block.
 
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
-if ! command -v cargo >/dev/null 2>&1; then
-    echo "" >&2
-    echo "pre-push: cargo not found, so the pushed commits could not be type-checked" >&2
-    echo "— blocking rather than assuming they compile. Install the rustup toolchain," >&2
-    echo "or make it visible to git hooks (. \"\$HOME/.cargo/env\")." >&2
-    exit 1
-fi
+RECORD="$REPO/scripts/test-pass-record.py"
 
-GIT_COMMON="$(git rev-parse --git-common-dir 2>/dev/null)"
-# MUST be absolute. `git rev-parse --git-common-dir` answers RELATIVELY (".git")
-# when invoked from the main working tree and ABSOLUTELY from a linked worktree.
-# A relative value poisons CARGO_TARGET_DIR: cargo resolves it against the
-# throwaway worktree's cwd and tries to mkdir ".git" there, where git has already
-# put its worktree-pointer FILE, so the check dies with "File exists (os error
-# 17)" and reports a hook defect as a type error. Caught on this hook's first
-# real push (2026-08-06) precisely because the pre-landing F-to-P pair had only
-# been observed from a linked worktree — one of the two invocation contexts.
-case "${GIT_COMMON:-}" in
-    "" ) ;;
-    /* ) ;;
-    *  ) GIT_COMMON="$(cd "$GIT_COMMON" 2>/dev/null && pwd)" ;;
-esac
-if [ -z "${GIT_COMMON:-}" ]; then
-    echo "" >&2
-    echo "pre-push: could not resolve the git common dir, so the type-check worktree" >&2
-    echo "cannot be created — blocking rather than skipping the compiler." >&2
-    exit 1
-fi
-
-# Persistent and shared across pushes so repeat runs are warm (~0s instead of
-# ~20s). Concurrent sessions contend on cargo's own lock and wait, which is the
-# correct behaviour.
-TYPECHECK_TARGET="$GIT_COMMON/prepush-typecheck-target"
-# Unique per invocation so two sessions pushing at once do not fight over a path.
-TYPECHECK_TREE="$GIT_COMMON/prepush-typecheck.$$"
-
-# cleanup_typecheck_tree is defined at the top: the EXIT trap (prepush_on_exit)
-# calls it before reporting timing. INT/TERM keep their original handler.
-trap cleanup_typecheck_tree INT TERM
-
-# No ref-update lines arrived (manual invocation) — fall back to HEAD, which is
-# still a determinate commit. Never fall back to "skip".
-if [ -z "${pushed_shas:-}" ]; then
-    pushed_shas="$(git rev-parse HEAD 2>/dev/null)"
+# No ref-update lines arrived (manual invocation) — fall back to HEAD over
+# @{push}, which is still a determinate range. Never fall back to "skip".
+if [ -z "${pushed_shas:-}" ] && [ "$saw_ref" = "0" ]; then
+    pushed_shas="$(git rev-parse --verify --quiet HEAD 2>/dev/null)"
     if [ -z "$pushed_shas" ]; then
         echo "" >&2
         echo "pre-push: no pushed ref and no resolvable HEAD — nothing determinate to" >&2
         echo "type-check, so blocking rather than reporting a pass." >&2
         exit 1
     fi
+    _mb="$(git rev-parse --verify --quiet '@{push}' 2>/dev/null)"
+    pushed_remotes="$pushed_shas:${_mb:--}"
 fi
 
-# --- bounded cleanup of the shared target dir (maintenance, no verdict) ------
-# $TYPECHECK_TARGET persists across pushes and nothing pruned it: every source
-# change leaves a new hashed artifact set behind. Measured 2026-11-03 on this
-# repo's main clone: debug/deps held 488,578 entries (oldest from 2026-08-06),
-# so every cargo run fingerprint-scanned half a million files. When debug/deps
-# holds more than PREPUSH_TARGET_MAX_DEPS entries (default 20000; a value that
-# is not a non-negative integer falls back to the default) the whole dir is
-# removed, so the next build is one cold build.
-#
-# Deleting is the destructive side, so every "cannot determine" here means DO
-# NOT delete: no python3 (it does the count and the lock test), an entry count
-# that cannot be read, a sibling pre-push whose prepush-typecheck.<pid>
-# worktree exists and whose pid is alive (kill -0), or a cargo lock under the
-# dir that is held or whose state cannot be read (non-blocking flock on each
-# known .cargo-lock: debug/, release/, <triple>/debug/, tests/trybuild/debug/,
-# tests/trybuild/<triple>/debug/; cargo takes them with std File::try_lock /
-# lock, i.e. flock(2), on macOS and Linux). Each skip prints one line saying
-# why. A sibling dir whose pid cannot be signalled is treated as stale.
-# Residual race: a cargo that starts between the lock test and the rm can lose
-# its artifacts mid-build; that build then fails, which blocks that push (the
-# restrictive side); it cannot make one pass.
-#
-# Nothing here changes a block/allow outcome: every branch falls through to the
-# type check below. The outcome is recorded in the timing as the
-# target-cleanup phase (deps_entries_seen, threshold, action).
-phase_begin target-cleanup
-tc_max="${PREPUSH_TARGET_MAX_DEPS:-20000}"
-case "$tc_max" in
-    ''|*[!0-9]*)
-        echo "pre-push: PREPUSH_TARGET_MAX_DEPS='$tc_max' is not a non-negative integer — using 20000." >&2
-        tc_max=20000 ;;
-esac
-tc_deps="$TYPECHECK_TARGET/debug/deps"
-tc_count=""
-tc_action=""
-if [ ! -e "$tc_deps" ]; then
-    tc_count=0
-    tc_action="kept"
-elif ! command -v python3 >/dev/null 2>&1; then
-    tc_action="skipped-undetermined"
-    echo "pre-push: no python3 to count the entries in $tc_deps — not cleaning the shared target dir (continuing)." >&2
-else
-    # Counted with os.scandir (no per-entry stat) and stopped at threshold+1:
-    # "more than the threshold" is all that is decided, and the full count is
-    # slow on a bloated dir (measured 2026-11-03 on the 488,578-entry dir:
-    # `ls -f | awk` 60s, a full scandir 3.55s, scandir stopped at 20001 0.19s).
-    # So tc_count is exact up to the threshold and a lower bound (threshold+1)
-    # above it. A failed count prints nothing and is undetermined, never 0.
-    tc_count="$(python3 -c '
-import os, sys
-limit = int(sys.argv[2])
-n = 0
-with os.scandir(sys.argv[1]) as it:
-    for _ in it:
-        n += 1
-        if n > limit:
-            break
-print(n)
-' "$tc_deps" "$tc_max" 2>/dev/null)" || tc_count=""
-    case "$tc_count" in ''|*[!0-9]*) tc_count="" ;; esac
-    if [ -z "$tc_count" ]; then
-        tc_action="skipped-undetermined"
-        echo "pre-push: could not count the entries in $tc_deps — not cleaning the shared target dir (continuing)." >&2
-    elif [ "$tc_count" -le "$tc_max" ]; then
-        tc_action="kept"
-    else
-        tc_busy=""
-        for tc_d in "$GIT_COMMON"/prepush-typecheck.*; do
-            [ -e "$tc_d" ] || continue
-            tc_pid="${tc_d##*.}"
-            case "$tc_pid" in ''|*[!0-9]*) continue ;; esac
-            [ "$tc_pid" = "$$" ] && continue
-            if kill -0 "$tc_pid" 2>/dev/null; then
-                tc_busy="another pre-push (pid $tc_pid) is type-checking with it"
-                break
-            fi
-        done
-        if [ -z "$tc_busy" ]; then
-            python3 -c '
-import fcntl, glob, os, sys
-t = sys.argv[1]
-c = {os.path.join(t, "debug", ".cargo-lock"),
-     os.path.join(t, "release", ".cargo-lock"),
-     os.path.join(t, "tests", "trybuild", "debug", ".cargo-lock")}
-c.update(glob.glob(os.path.join(t, "*", "debug", ".cargo-lock")))
-c.update(glob.glob(os.path.join(t, "tests", "trybuild", "*", "debug", ".cargo-lock")))
-for p in sorted(c):
-    try:
-        fd = os.open(p, os.O_RDONLY)
-    except FileNotFoundError:
-        continue
-    except OSError:
-        sys.exit(2)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        sys.exit(3)
-    except OSError:
-        sys.exit(2)
-    finally:
-        os.close(fd)
-sys.exit(0)
-' "$TYPECHECK_TARGET" 2>/dev/null
-            tc_lock_rc=$?
-            case "$tc_lock_rc" in
-                0) ;;
-                3) tc_busy="a cargo process holds a lock under it" ;;
-                *) tc_busy="its cargo locks could not be tested (rc $tc_lock_rc)"
-                   tc_action="skipped-undetermined" ;;
-            esac
-        fi
-        if [ -n "$tc_busy" ]; then
-            [ -n "$tc_action" ] || tc_action="skipped-busy"
-            echo "pre-push: $tc_deps holds more than $tc_max entries but $tc_busy — not cleaning it (continuing)." >&2
-        else
-            case "$GIT_COMMON" in
-                /?*)
-                    echo "pre-push: $tc_deps holds more than $tc_max entries — removing the shared target dir; this push builds cold." >&2
-                    if rm -rf "$GIT_COMMON/prepush-typecheck-target"; then
-                        tc_action="removed"
-                    else
-                        tc_action="rm-failed"
-                        echo "pre-push: could not fully remove $GIT_COMMON/prepush-typecheck-target (continuing)." >&2
-                    fi ;;
-                *)
-                    tc_action="skipped-undetermined"
-                    echo "pre-push: git common dir is not an absolute path — not cleaning the shared target dir (continuing)." >&2 ;;
-            esac
-        fi
+# in_place_ok <sha>: 0 when this worktree's checkout IS <sha>, clean. Sets
+# in_place_reason otherwise. Any git failure is "not ok" (the restrictive side).
+in_place_reason=""
+in_place_ok() {
+    _ip_head="$(git rev-parse --verify --quiet HEAD 2>/dev/null)"
+    if [ "$_ip_head" != "$1" ]; then
+        in_place_reason="HEAD is ${_ip_head:-unresolvable}, not the pushed commit"
+        return 1
     fi
-fi
-# deps_entries_seen is exact when <= threshold, else threshold+1 (counting
-# stops there), so seen > threshold reads as "at least that many".
-_tm_extra_sum="deps seen ${tc_count:-?} (threshold $tc_max), $tc_action"
-_tm_extra_field=",\"deps_entries_seen\":${tc_count:-null},\"threshold\":$tc_max,\"action\":\"$tc_action\""
-phase_end
+    git diff --quiet HEAD -- 2>/dev/null
+    _ip_rc=$?
+    if [ "$_ip_rc" -eq 1 ]; then
+        in_place_reason="the working tree or index differs from HEAD"
+        return 1
+    elif [ "$_ip_rc" -ne 0 ]; then
+        in_place_reason="git diff HEAD exited $_ip_rc"
+        return 1
+    fi
+    _ip_untracked="$(git ls-files --others --exclude-standard -- crates Cargo.toml Cargo.lock rust-toolchain.toml rust-toolchain .cargo 2>/dev/null)" || {
+        in_place_reason="git ls-files --others failed"
+        return 1
+    }
+    if [ -n "$_ip_untracked" ]; then
+        in_place_reason="untracked files under crates/ or the root cargo files"
+        return 1
+    fi
+    return 0
+}
+
+# require_in_place <test id> <sha>: blocks unless <sha> is the clean checkout.
+require_in_place() {
+    if ! in_place_ok "$2"; then
+        echo "" >&2
+        echo "pre-push: BLOCKED — $1 for $(git rev-parse --short "$2" 2>/dev/null || printf '%s' "$2") has no recorded pass and it is not the clean checkout here ($in_place_reason)." >&2
+        echo "  Push it from the worktree whose clean HEAD is that commit, or commit/stash" >&2
+        echo "  the local changes. The hook never checks a commit out elsewhere." >&2
+        exit 1
+    fi
+}
+
+# recorded_pass <tree> <test id>: 0 only when the record script says so.
+recorded_pass() {
+    [ -f "$RECORD" ] || return 1
+    python3 "$RECORD" check --tree "$1" --test "$2"
+}
+
+record_pass() {
+    [ -f "$RECORD" ] || { echo "pre-push: $RECORD missing — pass for $2 not recorded" >&2; return 0; }
+    python3 "$RECORD" record --tree "$1" --test "$2" ||
+        echo "pre-push: could not record the pass for $2 (it reruns next push)" >&2
+    return 0
+}
+
+require_cargo() {
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "" >&2
+        echo "pre-push: cargo not found, so $1 could not run — blocking rather than" >&2
+        echo "assuming it passes. Install the rustup toolchain, or make it visible to" >&2
+        echo "git hooks (. \"\$HOME/.cargo/env\")." >&2
+        exit 1
+    fi
+}
+
+# cargo_meta: `cargo metadata --no-deps` of this worktree (in place only).
+CARGO_META=""
+cargo_meta() {
+    [ -n "$CARGO_META" ] && return 0
+    CARGO_META="$(cargo metadata --no-deps --format-version 1 2>/dev/null)" || CARGO_META=""
+    if [ -z "$CARGO_META" ]; then
+        echo "" >&2
+        echo "pre-push: BLOCKED — cargo metadata failed, so the crates of this range" >&2
+        echo "cannot be mapped to packages." >&2
+        exit 1
+    fi
+}
 
 for sha in $pushed_shas; do
-    phase_begin typecheck "$sha"
-    cleanup_typecheck_tree
-    if ! git worktree add --detach "$TYPECHECK_TREE" "$sha" >/dev/null 2>&1; then
+    short="$(git rev-parse --short "$sha" 2>/dev/null)" || short="$sha"
+    tree="$(git rev-parse --verify --quiet "$sha^{tree}" 2>/dev/null)"
+    if [ -z "$tree" ]; then
         echo "" >&2
-        echo "pre-push: could not create a worktree at $sha to type-check it —" >&2
-        echo "blocking. 'could not determine' is not 'compiles'." >&2
+        echo "pre-push: BLOCKED — the tree of $short could not be resolved, so nothing" >&2
+        echo "determinate can be checked or matched against a recorded pass." >&2
         exit 1
     fi
-    echo "" >&2
-    echo "pre-push: type-checking $(git rev-parse --short "$sha") (cargo check --workspace --all-targets)..." >&2
-    if ! ( cd "$TYPECHECK_TREE" && CARGO_TARGET_DIR="$TYPECHECK_TARGET" \
-             cargo check --workspace --all-targets --quiet >&2 ); then
-        echo "" >&2
-        echo "pre-push: BLOCKED — commit $(git rev-parse --short "$sha") does not" >&2
-        echo "type-check (errors above). This is the only gate in this repo that runs" >&2
-        echo "the compiler; fix the errors rather than routing around it." >&2
-        exit 1
-    fi
-    phase_end
 
-    # --- the third blocking check: the trybuild type contracts --------------
-    # `cargo check` never builds the trybuild fixtures, so the compile-fail
-    # contracts (harness_core::verdict / scope: "a fail-open is unrepresentable",
-    # pinned by .stderr snapshots in harness-core, blastguard and donegate) were
-    # observed at no enforcement point (backlog 034b6620). Run them against the
-    # SAME pushed tree, using the script as committed in that tree. The rustc
-    # that judges the snapshots is pinned by that tree's rust-toolchain.toml.
-    # rc=1 (a contract test failed) and rc=2 (undetermined: no cargo, wrong
-    # rustc, build error, test count not observed) both block. A pushed tree
-    # without the script (pre-034b6620 commit) also blocks: the contract could
-    # not be checked, which is not "the contract holds".
-    phase_begin compile-fail "$sha"
-    if [ ! -f "$TYPECHECK_TREE/scripts/check-compile-fail.py" ]; then
-        echo "" >&2
-        echo "pre-push: BLOCKED — commit $(git rev-parse --short "$sha") has no" >&2
-        echo "scripts/check-compile-fail.py, so its trybuild type contracts cannot be" >&2
-        echo "checked. Rebase/merge onto a main that has it (backlog 034b6620)." >&2
-        exit 1
+    # --- this sha's range ----------------------------------------------------
+    sha_remote="-"
+    for pair in ${pushed_remotes:-}; do
+        case "$pair" in
+            "$sha":*) sha_remote="${pair#*:}"; break ;;
+        esac
+    done
+    range_wide=0
+    if [ "$sha_remote" != "-" ]; then
+        range_files="$(git diff --name-only "$sha_remote" "$sha" -- 2>/dev/null)" || range_wide=1
+    else
+        range_files="$(git log --format= --name-only "$sha" --not --remotes -- 2>/dev/null)" || range_wide=1
     fi
-    echo "pre-push: trybuild compile-fail contracts at $(git rev-parse --short "$sha") (scripts/check-compile-fail.py)..." >&2
-    # The script's stderr is passed through prepush_cf_filter (unchanged, line
-    # by line) only to time each trybuild target. Its exit status and the
-    # filter's per-target times come back on fd 3; a status that did not come
-    # back is treated as 2 (undetermined), never as 0.
-    _cf_out="$( { { ( cd "$TYPECHECK_TREE" && CARGO_TARGET_DIR="$TYPECHECK_TARGET" \
-          python3 scripts/check-compile-fail.py >&2 ) 2>&1 3>&-; echo "RC $?" >&3; } \
-          | prepush_cf_filter >&2; } 3>&1 )"
-    compile_fail_rc=""
-    while IFS= read -r _cf_r; do
-        case "$_cf_r" in
-            "RC "*) compile_fail_rc="${_cf_r#RC }" ;;
-            "T "*)
-                _cf_rest="${_cf_r#T }"
-                _cf_tl="${_cf_rest% *}"; _cf_ts="${_cf_rest##* }"
-                case "$_cf_ts" in ''|*[!0-9]*) _cf_ts="" ;; esac
-                _tm_extra_sum="${_tm_extra_sum:+$_tm_extra_sum, }$_cf_tl ${_cf_ts:-?}s"
-                _tm_extra_json="${_tm_extra_json:+$_tm_extra_json,}\"$_cf_tl\":${_cf_ts:-null}" ;;
-            "S "*)
-                _cf_tl="${_cf_r#S }"
-                _tm_extra_sum="${_tm_extra_sum:+$_tm_extra_sum, }$_cf_tl skipped"
-                _tm_extra_json="${_tm_extra_json:+$_tm_extra_json,}\"$_cf_tl\":\"skipped\"" ;;
+    if [ "$range_wide" -eq 1 ]; then
+        echo "pre-push: the range of $short could not be computed — checking the whole workspace." >&2
+    fi
+
+    cc_dirs=""
+    cc_wide="$range_wide"
+    cf_need="$range_wide"
+    sg_need="$range_wide"
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        case "$f" in
+            Cargo.toml|Cargo.lock|rust-toolchain.toml|rust-toolchain|.cargo/*)
+                cc_wide=1; cf_need=1 ;;
+            crates/*/*)
+                _rest="${f#crates/}"
+                _d="crates/${_rest%%/*}"
+                case " $cc_dirs " in
+                    *" $_d "*) ;;
+                    *) cc_dirs="$cc_dirs $_d" ;;
+                esac
+                cf_need=1 ;;
+            *.rs|scripts/check-compile-fail.py)
+                cf_need=1 ;;
         esac
     done <<EOF
-$_cf_out
+$range_files
 EOF
-    case "$compile_fail_rc" in ''|*[!0-9]*) compile_fail_rc=2 ;; esac
-    if [ "$compile_fail_rc" -ne 0 ]; then
+    if printf '%s\n' "$range_files" | grep -Eq "$GATE_PATTERN"; then
+        sg_need=1
+    fi
+    # A touched crate dir with no manifest at S (a deleted or half-added crate)
+    # cannot be named with -p; widen rather than skip it.
+    for _d in $cc_dirs; do
+        git cat-file -e "$sha:$_d/Cargo.toml" 2>/dev/null || cc_wide=1
+    done
+    cc_id=""
+    if [ "$cc_wide" -eq 1 ]; then
+        cc_id="cargo-check:workspace"
+    elif [ -n "$cc_dirs" ]; then
+        _joined=""
+        for _d in $(printf '%s\n' $cc_dirs | sort -u); do
+            _joined="${_joined:+$_joined,}$_d"
+        done
+        cc_id="cargo-check:$_joined"
+    fi
+
+    # --- blocking check 2: the compiler --------------------------------------
+    phase_begin typecheck "$sha"
+    if [ -z "$cc_id" ]; then
+        echo "pre-push: $short touches no crate and no root cargo file — no cargo check needed." >&2
+    elif recorded_pass "$tree" "$cc_id"; then
+        echo "pre-push: $cc_id already passed for tree $(printf '%.12s' "$tree") — not rerun" >&2
+    else
+        require_in_place "$cc_id" "$sha"
+        require_cargo "$cc_id"
+        if [ "$cc_wide" -eq 1 ]; then
+            cc_args="--workspace"
+        else
+            cargo_meta
+            cc_args="$(printf '%s' "$CARGO_META" | python3 -c '
+import json, os, sys
+root = os.path.realpath(sys.argv[1])
+try:
+    by_dir = {}
+    for p in json.load(sys.stdin)["packages"]:
+        d = os.path.relpath(os.path.dirname(os.path.realpath(p["manifest_path"])), root)
+        by_dir.setdefault(d, []).append(p["name"])
+except (ValueError, KeyError, TypeError) as e:
+    print("pre-push: cargo metadata not parseable: %r" % (e,), file=sys.stderr)
+    sys.exit(2)
+out = []
+for d in sys.argv[2:]:
+    names = by_dir.get(d, [])
+    if len(names) != 1:
+        print("pre-push: %s maps to %d workspace packages" % (d, len(names)), file=sys.stderr)
+        sys.exit(2)
+    out += ["-p", names[0]]
+print(" ".join(out))
+' "$REPO" $cc_dirs)" || cc_args=""
+            if [ -z "$cc_args" ]; then
+                echo "" >&2
+                echo "pre-push: BLOCKED — the crates of $short ($cc_id) could not be mapped to" >&2
+                echo "workspace packages (see above)." >&2
+                exit 1
+            fi
+        fi
         echo "" >&2
-        echo "pre-push: BLOCKED — trybuild compile-fail check at $(git rev-parse --short "$sha")" >&2
-        echo "exited $compile_fail_rc (1 = a type contract failed, 2 = could not be" >&2
-        echo "determined). See the output above." >&2
-        exit 1
+        echo "pre-push: type-checking $short (cargo check --all-targets $cc_args)..." >&2
+        if ! cargo check --all-targets --quiet $cc_args >&2; then
+            echo "" >&2
+            echo "pre-push: BLOCKED — commit $short does not type-check (errors above)." >&2
+            echo "Fix the errors rather than routing around the compiler." >&2
+            exit 1
+        fi
+        record_pass "$tree" "$cc_id"
     fi
     phase_end
 
-    # --- the fourth blocking check: gate-crate spec-doc coverage -----------
-    # A change to a blocking gate crate (harness_core::fleet::BLOCKING_GATES)
-    # must not leave this machine while the file it touched is described by no
-    # spec doc and acknowledged by nobody. `specguard map gate-check` is the
-    # deterministic form of that question (backlog 0c277117); until this block
-    # landed it was wired to NOTHING — specguard ran only from post-merge and
-    # SessionStart, neither of which can stop anything, which is why the last
-    # spec audit in this repo is dated 2026-07-13 with 700+ commits since.
+    # --- blocking check 3: the trybuild type contracts -----------------------
+    # `cargo check` never builds the trybuild fixtures, so the compile-fail
+    # contracts (harness_core::verdict / scope: "a fail-open is unrepresentable")
+    # are run here (backlog 034b6620) whenever the range touches a Rust input.
+    # rc=1 (a contract test failed) and rc=2 (undetermined) both block, and so
+    # does a tree without the script. check-compile-fail.py keeps its own
+    # content-keyed per-target cache on top of this record.
+    phase_begin compile-fail "$sha"
+    if [ "$cf_need" -eq 0 ]; then
+        echo "pre-push: $short touches no Rust input — trybuild contracts not needed." >&2
+    elif recorded_pass "$tree" compile-fail; then
+        echo "pre-push: compile-fail already passed for tree $(printf '%.12s' "$tree") — not rerun" >&2
+    else
+        require_in_place compile-fail "$sha"
+        require_cargo compile-fail
+        if [ ! -f "$REPO/scripts/check-compile-fail.py" ]; then
+            echo "" >&2
+            echo "pre-push: BLOCKED — commit $short has no scripts/check-compile-fail.py," >&2
+            echo "so its trybuild type contracts cannot be checked. Rebase/merge onto a" >&2
+            echo "main that has it (backlog 034b6620)." >&2
+            exit 1
+        fi
+        echo "pre-push: trybuild compile-fail contracts at $short (scripts/check-compile-fail.py)..." >&2
+        # The script's stderr is passed through prepush_cf_filter (unchanged,
+        # line by line) only to time each trybuild target. Its exit status and
+        # the per-target times come back on fd 3; a status that did not come
+        # back is treated as 2 (undetermined), never as 0.
+        _cf_out="$( { { ( cd "$REPO" && python3 scripts/check-compile-fail.py >&2 ) 2>&1 3>&-; echo "RC $?" >&3; } \
+              | prepush_cf_filter >&2; } 3>&1 )"
+        compile_fail_rc=""
+        while IFS= read -r _cf_r; do
+            case "$_cf_r" in
+                "RC "*) compile_fail_rc="${_cf_r#RC }" ;;
+                "T "*)
+                    _cf_rest="${_cf_r#T }"
+                    _cf_tl="${_cf_rest% *}"; _cf_ts="${_cf_rest##* }"
+                    case "$_cf_ts" in ''|*[!0-9]*) _cf_ts="" ;; esac
+                    _tm_extra_sum="${_tm_extra_sum:+$_tm_extra_sum, }$_cf_tl ${_cf_ts:-?}s"
+                    _tm_extra_json="${_tm_extra_json:+$_tm_extra_json,}\"$_cf_tl\":${_cf_ts:-null}" ;;
+                "S "*)
+                    _cf_tl="${_cf_r#S }"
+                    _tm_extra_sum="${_tm_extra_sum:+$_tm_extra_sum, }$_cf_tl skipped"
+                    _tm_extra_json="${_tm_extra_json:+$_tm_extra_json,}\"$_cf_tl\":\"skipped\"" ;;
+            esac
+        done <<EOF
+$_cf_out
+EOF
+        case "$compile_fail_rc" in ''|*[!0-9]*) compile_fail_rc=2 ;; esac
+        if [ "$compile_fail_rc" -ne 0 ]; then
+            echo "" >&2
+            echo "pre-push: BLOCKED — trybuild compile-fail check at $short exited" >&2
+            echo "$compile_fail_rc (1 = a type contract failed, 2 = could not be determined)." >&2
+            echo "See the output above." >&2
+            exit 1
+        fi
+        record_pass "$tree" compile-fail
+    fi
+    phase_end
+
+    # --- blocking check 4: gate-crate spec-doc coverage ----------------------
+    # A change to a blocking gate crate must not leave this machine while the
+    # file it touched is described by no spec doc and acknowledged by nobody
+    # (`specguard map gate-check`, backlog 0c277117).
     #
-    # WHY THE MAP IS REBUILT HERE: .specguard/spec-map.toml is gitignored — a
-    # machine-local derived cache (.gitignore:80). Judging a pushed tree by THIS
-    # machine's map would let a stale or hand-edited local cache decide a push,
-    # and a fresh clone would have nothing to read at all. So the map is rebuilt
-    # inside $TYPECHECK_TREE (the detached checkout of the pushed sha) with the
-    # pushed range as its baseline, and only the two TRACKED files can actually
-    # satisfy the check: .specguard/spec-docs.toml ([[spec]] path/doc/reason,
-    # doc = an existing docs/specs/*.md) and .specguard/spec-doc-acks.toml
-    # ([[ack]] path/reason). `specguard map set-spec` writes the machine-local
-    # map only and deliberately does NOT satisfy this check.
+    # The map is built FRESH into a temp file (`--map-path`): the worktree's own
+    # .specguard/spec-map.toml is a gitignored machine-local cache whose
+    # spec_doc would otherwise satisfy the check, so it is never read or written
+    # here. Only the two TRACKED files can satisfy it: .specguard/spec-docs.toml
+    # and .specguard/spec-doc-acks.toml. The specguard that judges is built
+    # from the pushed tree (it is the clean checkout), not the plugin cache.
     #
-    # The specguard that judges the tree is BUILT FROM THAT TREE, not taken from
-    # the plugin cache: a stale cache binary would answer about different gate
-    # logic than the one being pushed. The build is warm after the first push
-    # because $TYPECHECK_TARGET persists.
-    #
-    # FAIL-CLOSED throughout: rc=1 (a changed entry is uncovered) and rc=2
-    # (undetermined — absent map, unparseable ack/binding file, bad rev, git
-    # failure, or a changed gate file no entry references) both block, and so
-    # does a tree whose specguard cannot be built or has no `map` subcommand.
-    # "Could not be checked" is not "covered".
+    # FAIL-CLOSED: rc=1 (uncovered) and rc=2 (undetermined) block, and so does a
+    # specguard that cannot be built or lacks `--map-path` (a tree that predates
+    # it: rebase onto main).
     sha_base=""
     for pair in ${pushed_pairs:-}; do
         case "$pair" in
@@ -810,60 +845,65 @@ EOF
         esac
     done
     if [ -z "$sha_base" ]; then
-        # Manual invocation (no ref lines on stdin): the tip commit is still a
-        # determinate range. Never fall back to "skip".
         sha_base="$(git rev-parse --verify --quiet "${sha}^" 2>/dev/null)"
         [ -n "$sha_base" ] || sha_base="$EMPTY_TREE"
     fi
-
-    # Only pay for the specguard build when the range actually touches a gate
-    # crate. A diff we could NOT compute is not an answer, so that case falls
-    # through to the full check rather than skipping it.
-    sha_changed="$(git diff --name-only "$sha_base..$sha" -- 2>/dev/null)"
-    sha_diff_rc=$?
-    if [ "$sha_diff_rc" -eq 0 ] && ! printf '%s\n' "$sha_changed" | grep -Eq "$GATE_PATTERN"; then
-        : # no gate-crate path in this range — gate-check would exit 0 anyway
-    else
+    if [ "$sg_need" -eq 1 ]; then
+        sg_id="specguard-gate-check:$sha_base"
         phase_begin specguard "$sha"
-        echo "pre-push: gate spec-doc check at $(git rev-parse --short "$sha") (specguard map gate-check)..." >&2
-        if ! ( cd "$TYPECHECK_TREE" && CARGO_TARGET_DIR="$TYPECHECK_TARGET" \
-                 cargo build --quiet -p specguard --bin specguard >&2 ); then
-            echo "" >&2
-            echo "pre-push: BLOCKED — specguard could not be built from commit" >&2
-            echo "$(git rev-parse --short "$sha"), so that tree's gate-crate spec-doc" >&2
-            echo "coverage could not be checked. 'could not determine' is not 'covered'." >&2
-            exit 1
-        fi
-        SPECGUARD_BIN="$TYPECHECK_TARGET/debug/specguard"
-        if ! ( cd "$TYPECHECK_TREE" && "$SPECGUARD_BIN" map build --baseline "$sha_base" >/dev/null 2>&1 ); then
-            echo "" >&2
-            echo "pre-push: BLOCKED — the spec map could not be rebuilt inside the pushed" >&2
-            echo "tree at $(git rev-parse --short "$sha") (specguard map build --baseline" >&2
-            echo "$sha_base). Either that tree's specguard has no 'map' subcommand or the" >&2
-            echo "build failed; with no map built from that tree there is nothing" >&2
-            echo "determinate to check." >&2
-            exit 1
-        fi
-        ( cd "$TYPECHECK_TREE" && "$SPECGUARD_BIN" map gate-check --base "$sha_base" --head "$sha" >&2 )
-        gate_check_rc=$?
-        if [ "$gate_check_rc" -ne 0 ]; then
-            echo "" >&2
-            echo "pre-push: BLOCKED — gate spec-doc check at $(git rev-parse --short "$sha")" >&2
-            echo "exited $gate_check_rc (1 = a changed gate-crate entry has no spec doc and" >&2
-            echo "no reasoned ack, 2 = could not be determined). See the output above." >&2
-            echo "Fix: bind the file in .specguard/spec-docs.toml (path/doc/reason, doc = an" >&2
-            echo "existing docs/specs/*.md) or ack it in .specguard/spec-doc-acks.toml" >&2
-            echo "(path/reason). Both are tracked; 'specguard map set-spec' writes only the" >&2
-            echo "machine-local map and does not satisfy this check." >&2
-            exit 1
+        if recorded_pass "$tree" "$sg_id"; then
+            echo "pre-push: $sg_id already passed for tree $(printf '%.12s' "$tree") — not rerun" >&2
+        else
+            require_in_place "$sg_id" "$sha"
+            require_cargo "$sg_id"
+            echo "pre-push: gate spec-doc check at $short (specguard map gate-check)..." >&2
+            if ! cargo build --quiet -p specguard --bin specguard >&2; then
+                echo "" >&2
+                echo "pre-push: BLOCKED — specguard could not be built from $short, so its" >&2
+                echo "gate-crate spec-doc coverage could not be checked." >&2
+                exit 1
+            fi
+            cargo_meta
+            sg_target="$(printf '%s' "$CARGO_META" | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null)" || sg_target=""
+            SPECGUARD_BIN="$sg_target/debug/specguard"
+            if [ -z "$sg_target" ] || [ ! -x "$SPECGUARD_BIN" ]; then
+                echo "" >&2
+                echo "pre-push: BLOCKED — the built specguard was not found (target dir" >&2
+                echo "'${sg_target:-unknown}' from cargo metadata)." >&2
+                exit 1
+            fi
+            SPECMAP_TMP="$(mktemp -d "${TMPDIR:-/tmp}/prepush-specmap.XXXXXX" 2>/dev/null)" || SPECMAP_TMP=""
+            if [ -z "$SPECMAP_TMP" ]; then
+                echo "pre-push: BLOCKED — no temp dir for the fresh spec map." >&2
+                exit 1
+            fi
+            if ! "$SPECGUARD_BIN" --map-path "$SPECMAP_TMP/spec-map.toml" map build --baseline "$sha_base" >/dev/null 2>&1; then
+                echo "" >&2
+                echo "pre-push: BLOCKED — a fresh spec map could not be built at $short" >&2
+                echo "(specguard --map-path <tmp> map build --baseline $sha_base). A specguard" >&2
+                echo "without --map-path predates this hook: rebase onto main." >&2
+                exit 1
+            fi
+            "$SPECGUARD_BIN" --map-path "$SPECMAP_TMP/spec-map.toml" map gate-check --base "$sha_base" --head "$sha" >&2
+            gate_check_rc=$?
+            cleanup_specmap
+            SPECMAP_TMP=""
+            if [ "$gate_check_rc" -ne 0 ]; then
+                echo "" >&2
+                echo "pre-push: BLOCKED — gate spec-doc check at $short exited $gate_check_rc" >&2
+                echo "(1 = a changed gate-crate entry has no spec doc and no reasoned ack," >&2
+                echo "2 = could not be determined). See the output above." >&2
+                echo "Fix: bind the file in .specguard/spec-docs.toml (path/doc/reason, doc = an" >&2
+                echo "existing docs/specs/*.md) or ack it in .specguard/spec-doc-acks.toml" >&2
+                echo "(path/reason). Both are tracked; 'specguard map set-spec' writes only the" >&2
+                echo "machine-local map and does not satisfy this check." >&2
+                exit 1
+            fi
+            record_pass "$tree" "$sg_id"
         fi
         phase_end
     fi
 done
-
-phase_begin cleanup
-cleanup_typecheck_tree
-phase_end
 
 # --- the last blocking check: the pushed refs still name the certified shas --
 # Every check above judged the local_sha values git gave on stdin. Over a remote

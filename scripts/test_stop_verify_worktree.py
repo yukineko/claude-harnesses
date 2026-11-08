@@ -41,8 +41,22 @@ def env(tmp_path):
     return repo, state, e
 
 
-def dirty(repo):
-    (repo / "dirty.txt").write_text("x")
+def dirty(repo, e=None, sid=None, name="dirty.txt"):
+    """Make a violation. RE-SCOPED by user ruling 2026-11-08 ("donegateその
+    ものが他のworktreeを見たり検証したりテストしたりすることは禁止とする。..."):
+    the Stop gate now blocks only on dirt in THIS session's own write record, so
+    the dirty path is also entered in that record
+    ($HOME/.claude/state/maintree-writes/<sid>.jsonl, as the hooks write it).
+    Without e/sid it is unattributed (another session's) dirt."""
+    p = repo / name
+    p.write_text("x")
+    if e is not None and sid is not None:
+        d = Path(e["HOME"]) / ".claude" / "state" / "maintree-writes"
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / (sid + ".jsonl"), "a") as f:
+            f.write(json.dumps({"v": 1, "kind": "write", "epoch": 1.0,
+                                "root": os.path.realpath(repo),
+                                "path": os.path.realpath(p), "by": "test"}) + "\n")
 
 
 def clean(repo):
@@ -67,20 +81,28 @@ def has_sysmsg(r):
 
 def test_1_first_stop_with_violation_blocks(env):
     repo, _, e = env
-    dirty(repo)
+    dirty(repo, e, "s1")
     assert run(repo, e, session_id="s1").returncode == 2
+
+
+def test_1b_unattributed_dirt_does_not_block(env):
+    """Control for test_1 (user ruling 2026-11-08): the same dirt, absent from
+    this session's record, is another session's and does not block."""
+    repo, _, e = env
+    dirty(repo)
+    assert run(repo, e, session_id="s1b").returncode == 0
 
 
 def test_2_reentry_without_own_marker_still_blocks(env):
     repo, _, e = env
-    dirty(repo)
+    dirty(repo, e, "s2")
     r = run(repo, e, session_id="s2", stop_hook_active=True)
     assert r.returncode == 2, f"another gate's re-entry skipped the check: {r.stdout!r}"
 
 
 def test_3_reentry_with_own_marker_bounded_allow_with_message(env):
     repo, _, e = env
-    dirty(repo)
+    dirty(repo, e, "s3")
     assert run(repo, e, session_id="s3").returncode == 2  # writes marker
     r = run(repo, e, session_id="s3", stop_hook_active=True)
     assert r.returncode == 0
@@ -89,12 +111,11 @@ def test_3_reentry_with_own_marker_bounded_allow_with_message(env):
 
 def test_4_clean_run_clears_marker(env):
     repo, _, e = env
-    dirty(repo)
+    dirty(repo, e, "s4")
     assert run(repo, e, session_id="s4").returncode == 2
     clean(repo)
     assert run(repo, e, session_id="s4").returncode == 0
-    dirty_again = repo / "dirty2.txt"
-    dirty_again.write_text("y")
+    dirty(repo, e, "s4", name="dirty2.txt")
     r = run(repo, e, session_id="s4", stop_hook_active=True)
     assert r.returncode == 2, "stale marker survived a clean run"
 

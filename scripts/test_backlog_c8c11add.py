@@ -63,6 +63,9 @@ class MergeHeadEditCarveOut(unittest.TestCase):
             "tool_name": tool,
             "tool_input": {key: path},
             "session_id": f"sess-{os.path.basename(self.tmp)}-{self.n}",
+            # cwd main: since user ruling 2026-11-08 the merge carve-out reads
+            # main's MERGE_HEAD only when main is the session's own tree (cwd).
+            "cwd": self.main,
         }
         env = dict(os.environ)
         env.update(CLAUDE_PROJECT_DIR=self.main, HOME=self.home, TMPDIR=self.tdir)

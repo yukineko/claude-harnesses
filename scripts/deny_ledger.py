@@ -9,10 +9,11 @@ stopped the agent from reaching the very same file with a different spelling
 (the "hack route"). The denier must therefore RECORD its refusals, and that
 record is this ledger.
 
-ONLY THE EDIT GUARD USES IT (user ruling 2026-10-04). guard-maintree-bash.py
-OBSERVES main before and after each Bash call instead of predicting writes from
-command text; it records nothing here, consults nothing here, and does not
-protect the ledger directories. A Bash call is therefore neither recorded as a
+ONLY THE EDIT GUARD USES THE DENY LEDGER (user ruling 2026-10-04).
+guard-maintree-bash.py OBSERVES main before and after each Bash call (whose
+cwd is main) instead of predicting writes from command text; it records no
+deny here, consults no deny here, and does not protect the ledger directories.
+It DOES append to the separate per-session write record (signal 3 below). A Bash call is therefore neither recorded as a
 deny, nor counted as a guarded call, nor refused by signal 1. A Bash write into
 main is caught by that guard's own Post comparison; a Bash write that reaches a
 target refused by the edit guard is still seen at Stop by signal 2.
@@ -102,7 +103,11 @@ failure — keeps the full substring test (CLAUDE.md 3). A scratchpad that sits
 inside some repository is therefore NOT narrowed.
 
 SIGNAL 2 — DETECTION (stop_check, called by scripts/stop-verify-worktree.py).
-At Stop, every deny entry with a target is re-snapshotted. The target counts as
+At Stop, every deny entry with a target whose recorded root is the tree the
+Stop payload's cwd is in is re-snapshotted; a deny recorded against another
+tree (e.g. main, when the session sits in a linked worktree) is NOT inspected
+(user ruling 2026-11-08: a gate judges only its own tree; that cross-tree
+detection is dropped, with no compensating mechanism). The target counts as
 CHANGED when its git status line differs from the snapshot, or when it is dirty
 now (non-empty status) and exists / is_dir / mtime_ns / size differ. A target
 that is clean against HEAD now while HEAD moved (a merge on main — the one
@@ -161,6 +166,11 @@ RESIDUALS (recorded, not hidden — CLAUDE.md 4):
   * signal 2 can block a stop for a change another session made to the same
     main-tree path during this turn; the message says so, and the Stop gate's
     `stop_hook_active` bounded allow still applies.
+  * signals 2 and 3 run only for the tree the Stop payload's cwd is in. A
+    session in a linked worktree that changed a main path (refused or not) by
+    some route is not caught at Stop (user ruling 2026-11-08). This detection
+    is dropped, with no compensating mechanism: the periodic audit runs only
+    the gate tests on main.
   * the ledger is cleared by the UserPromptSubmit hook
     (scripts/deny-ledger-clear.py): a new human instruction is new authority.
     A non-interactive session never submits a prompt, so its entries age out
@@ -178,10 +188,9 @@ RESIDUALS (recorded, not hidden — CLAUDE.md 4):
     the session, and each Stop blocks once before `stop_hook_active` releases
     it. Restrictive by design — the prior refusals it holds cannot be read.
   * a deny whose recorded root no longer exists (the main checkout was moved
-    or deleted) cannot be re-snapshotted, so Stop blocks as undetermined for
-    it until the ledger is cleared (the next UserPromptSubmit) or pruned (a
-    file older than 7 days, at a later clear). This is deliberate: a vanished
-    root is not evidence that the refused path was left alone.
+    or deleted) is not re-snapshotted at Stop: a Stop cwd can never be inside a
+    vanished root, and only the cwd's own tree is inspected (user ruling
+    2026-11-08). (Before that ruling it blocked as undetermined.)
   * ledger self-protection covers the edit tools only. A Bash command can
     write, delete or move a ledger file and no hook refuses it (user ruling
     2026-10-04 dropped the Bash side). A tampered or deleted ledger FILE is not
@@ -317,10 +326,16 @@ def _is_fallback(path: str) -> bool:
 
 def protected_dirs() -> list[str]:
     """The ledger directories a TOOL CALL must not write into (realpaths):
-    erasing or back-dating the ledger would erase signals 1 and 2."""
+    erasing or back-dating the ledger would erase signals 1 and 2. The
+    per-session write record directory (WRITE RECORD below) is included: a
+    session that erased its own record would erase signal 3."""
     out = []
     try:
         out.append(os.path.realpath(ledger_dir()))
+    except Undetermined:
+        pass
+    try:
+        out.append(os.path.realpath(writes_dir()))
     except Undetermined:
         pass
     fb = fallback_dir()
@@ -847,8 +862,15 @@ def _changed(old: dict, new: dict) -> bool:
     return any(old.get(k) != new.get(k) for k in ("exists", "is_dir", "mtime_ns", "size"))
 
 
-def stop_check(payload: dict) -> str | None:
-    """Signal 2. None to allow the stop; otherwise the block reason."""
+def stop_check(payload: dict, own_root: str | None) -> str | None:
+    """Signal 2. None to allow the stop; otherwise the block reason.
+
+    Only deny entries whose recorded root IS `own_root` (the realpath of the
+    tree the Stop payload's cwd is in) are re-snapshotted. A deny recorded
+    against any other tree is not inspected (user ruling 2026-11-08: a gate
+    judges only the tree the session runs in; the cross-tree check is dropped,
+    with no compensating mechanism). `own_root` None (cwd in no git tree)
+    inspects nothing."""
     try:
         sid = session_of(payload)
         if sid is None:
@@ -863,6 +885,8 @@ def stop_check(payload: dict) -> str | None:
         if root is None or not isinstance(old, dict):
             return STOP_UNDETERMINED.format(
                 why=f"the deny of {target} recorded no root or snapshot")
+        if own_root is None or _fold(os.path.realpath(root)) != _fold(own_root):
+            continue  # another tree: not this session's to inspect
         if not _under(target, root):
             continue
         if old.get("status") is None or old.get("exists") is None:
@@ -896,6 +920,172 @@ determined, and a check that could not run has not passed (CLAUDE.md 3).
 
 
 # ---------------------------------------------------------------------------
+# signal 3: the session's own write record (user ruling 2026-11-08)
+# ---------------------------------------------------------------------------
+# The Stop gate used to block on ANY dirt in main, i.e. on other sessions'
+# dirt too. It now blocks only on dirt at main paths THIS session wrote, and
+# that attribution comes from this record, never from guessing:
+#   * guard-maintree-edit.py appends the target of every edit it ALLOWS into
+#     the main tree (cwd is main and a merge is in progress);
+#   * guard-maintree-bash.py appends, at Post of a call whose cwd is main, every
+#     path whose state changed between its Pre and Post snapshots (allowed or
+#     refused). Another session writing main during that very call is
+#     indistinguishable from this call and is recorded too (over-attribution:
+#     the restrictive side).
+# File: $HOME/.claude/state/maintree-writes/<session_id>.jsonl, JSON lines
+#   {"v": 1, "kind": "write", "epoch", "root", "path", "by"}
+# root and path are absolute realpaths. It is NOT cleared by a user prompt (a
+# path this session left dirty stays this session's). A record that cannot be
+# appended makes the recording hook refuse (the write would otherwise be
+# unattributable). At Stop: an ABSENT file means this session wrote nothing in
+# main; an unreadable file or ANY line that is not a valid entry blocks
+# (CLAUDE.md 3; no brick bound — the Stop gate's stop_hook_active bounded allow
+# still releases each chain once).
+WRITES_SUBDIR = os.path.join(".claude", "state", "maintree-writes")
+_PATHSPEC_CHUNK = 400
+
+
+def writes_dir() -> str:
+    home = os.path.expanduser("~")
+    if not home or not os.path.isabs(home):
+        raise Undetermined("the home directory is not an absolute path")
+    return os.path.join(home, WRITES_SUBDIR)
+
+
+def writes_path(session_id: str) -> str:
+    return os.path.join(writes_dir(), session_id + ".jsonl")
+
+
+def record_writes(payload: dict, root: str, paths, by: str) -> str | None:
+    """Append one write entry per path for this payload's session. None on
+    success or when there is nothing to record; otherwise why it failed (the
+    caller refuses). A payload with no session_id key is an error here: the
+    write could not be attributed later."""
+    paths = sorted({os.path.realpath(p) for p in paths})
+    if not paths:
+        return None
+    try:
+        sid = session_of(payload)
+        if sid is None:
+            return "the hook payload has no session_id to key the write record"
+        path = writes_path(sid)
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        now = time.time()
+        data = "".join(
+            json.dumps({"v": 1, "kind": "write", "epoch": now,
+                        "root": os.path.realpath(root), "path": p, "by": by},
+                       ensure_ascii=False, sort_keys=True) + "\n"
+            for p in paths).encode("utf-8")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND
+                     | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
+        return None
+    except (Undetermined, OSError, ValueError) as e:
+        return f"the session write record could not be written ({e})"
+
+
+def _valid_write(obj) -> bool:
+    return (isinstance(obj, dict) and obj.get("v") == 1
+            and obj.get("kind") == "write"
+            and isinstance(obj.get("epoch"), (int, float))
+            and isinstance(obj.get("by"), str)
+            and all(isinstance(obj.get(k), str) and os.path.isabs(obj[k])
+                    for k in ("root", "path")))
+
+
+def read_writes(session_id: str) -> list[dict]:
+    """This session's write entries. [] when the file does not exist; raises
+    Undetermined when it cannot be read or any line is not a valid entry."""
+    path = writes_path(session_id)
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        raise Undetermined(f"the session write record {path} could not be read ({e})") from e
+    try:
+        chunks = []
+        while True:
+            b = os.read(fd, 1 << 16)
+            if not b:
+                break
+            chunks.append(b)
+    except OSError as e:
+        raise Undetermined(f"the session write record {path} could not be read ({e})") from e
+    finally:
+        os.close(fd)
+    try:
+        text = b"".join(chunks).decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise Undetermined(f"the session write record {path} is not UTF-8") from e
+    out = []
+    for n, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            obj = None
+        if not _valid_write(obj):
+            raise Undetermined(f"the session write record {path} line {n} is not a valid entry")
+        out.append(obj)
+    return out
+
+
+def writes_stop_check(session_id: str, own_root: str) -> str | None:
+    """Signal 3. None to allow; otherwise the block reason. Only entries whose
+    root is `own_root` are looked at, and only in that tree."""
+    try:
+        entries = read_writes(session_id)
+    except Undetermined as e:
+        return WRITES_UNDETERMINED.format(why=e)
+    root_f = _fold(own_root)
+    paths = sorted({e["path"] for e in entries if _fold(e["root"]) == root_f})
+    dirty: list[str] = []
+    for i in range(0, len(paths), _PATHSPEC_CHUNK):
+        chunk = paths[i:i + _PATHSPEC_CHUNK]
+        try:
+            r = subprocess.run(
+                ("git", "--literal-pathspecs", "status", "--porcelain", "-z",
+                 "--untracked-files=all", "--", *chunk),
+                cwd=own_root, capture_output=True, timeout=15)
+        except (OSError, subprocess.SubprocessError) as e:
+            return WRITES_UNDETERMINED.format(why=f"git status could not run ({e})")
+        if r.returncode != 0:
+            return WRITES_UNDETERMINED.format(
+                why=f"git status exited {r.returncode}: "
+                    f"{r.stderr.decode('utf-8', 'replace').strip() or '(no stderr)'}")
+        for rec in r.stdout.decode("utf-8", "surrogateescape").split("\0"):
+            if len(rec) > 3 and rec[2] == " ":
+                dirty.append(rec[3:])
+    if not dirty:
+        return None
+    return WRITES_DIRTY.format(root=own_root, paths="\n  ".join(dirty[:50]),
+                               more="" if len(dirty) <= 50 else f"\n  ... and {len(dirty) - 50} more")
+
+
+WRITES_DIRTY = """Do not stop yet: main-tree paths THIS session wrote are still uncommitted in {root}.
+
+  {paths}{more}
+
+CLAUDE.md 最上位の方針 8: work is authored in a worktree, never left dirty on
+main. These paths are in this session's own write record (its allowed edits on
+main and the changes its Bash calls made while running in main). Commit them as
+part of the merge you are integrating, or move them into a worktree. Dirt in
+main that is NOT in this record is another session's and does not block.
+"""
+
+WRITES_UNDETERMINED = """Do not stop yet: this session's main-tree write record could not be checked ({why}).
+
+Whether this session left its own writes uncommitted on main cannot be
+determined, and a check that could not run has not passed (CLAUDE.md 3).
+"""
+
+
+# ---------------------------------------------------------------------------
 # lifecycle (UserPromptSubmit)
 # ---------------------------------------------------------------------------
 PRUNE_AFTER_SECS = 7 * 24 * 3600
@@ -919,6 +1109,11 @@ def clear(payload: dict) -> str | None:
         dirs.insert(0, ledger_dir())
     except Undetermined as e:
         notes.append(str(e))
+    try:
+        # pruned only (never cleared): a write record outlives a user prompt
+        dirs.append(writes_dir())
+    except Undetermined:
+        pass
     if sid is not None:
         for path in ledger_paths(sid):
             if _is_fallback(path) and not fb_ok:

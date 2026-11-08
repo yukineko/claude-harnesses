@@ -75,11 +75,18 @@ class EditGuardDuringMerge(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _edit(self, path):
-        payload = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "a", "new_string": "b"}}
+        # cwd + session_id + sandboxed HOME: since user ruling 2026-11-08 the
+        # merge carve-out applies only when main is the session's own tree
+        # (payload cwd), and an allowed main edit is entered in the session's
+        # write record under $HOME (no session_id -> unrecordable -> refused).
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": str(path), "old_string": "a", "new_string": "b"},
+                   "cwd": str(self.m), "session_id": "s05m-session"}
+        home = self.tmp / "home"
+        home.mkdir(exist_ok=True)
         return subprocess.run(
             [sys.executable, str(SCRIPTS / "guard-maintree-edit.py")],
             input=json.dumps(payload), capture_output=True, text=True,
-            cwd=str(self.m), env=_env(CLAUDE_PROJECT_DIR=str(self.m)),
+            cwd=str(self.m), env=_env(CLAUDE_PROJECT_DIR=str(self.m), HOME=str(home)),
         ).returncode
 
     def test_unrelated_file_edit_allowed_during_merge(self):

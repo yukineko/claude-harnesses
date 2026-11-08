@@ -34,6 +34,14 @@ RED だったか・RED→GREEN になったか）は `tdd` バイナリと Stop 
   `tdd red`/`green` は exit 1 で拒否する（`Config::untrusted_project` / `untrusted_reason`）。linked worktree は
   main の信頼を継承しない（ユーザー裁定 2026-11-08）。
   `tdd trust` で明示信頼、`HARNESS_TRUST_ALL=1` で全信頼。
+- **読めない・parse できない設定は判定拒否** — 採用対象の `tdd.toml`（信頼済み）または `~/.tdd/config.toml`
+  が存在するのに読めない／parse できない場合、既定値で判定しない。Stop hook はそのファイルと error を
+  名指ししてブロックし、`tdd red`/`green`/`verify`/`oracle` は exit 1 で拒否する
+  （`Config::invalid_config` / `invalid_reason`、`tests/config_parse_error_blocks.rs`）。未信頼 project
+  `tdd.toml`（`untrusted_project`）も `verify`/`oracle` で同じく拒否する
+  （`tests/config_refusal_verify_oracle_skip.rs`）。`tdd skip` は拒否しない — 両 refusal が名指しする
+  1 回限りの逃げ道であり、gate は config 判定より前に同じ既定 state_dir で消費する。
+  設定ファイルが無い場合だけが既定値での判定になる。
 - **キルスイッチと逃げ道** — `TDD_DISABLE=1`（`Config::disabled_env`）で全停止、config `enabled=false`
   でも停止許可。純リファクタ/リネーム/docs 向けに `tdd skip --reason "<理由>"`（理由必須・発行セッション
   限定・`consume_session_skip` で1回だけ消費・発行と消費を gate log に記録）がある。共有 project root の
@@ -68,8 +76,10 @@ RED だったか・RED→GREEN になったか）は `tdd` バイナリと Stop 
 - **`green --task <id> [--cmd]`** — 先行 RED 証跡の存在を確認 → テスト実行 → `judge_green`（RED あり かつ
   pass を要求）→ `<id>.green.json`（red_proof パス含む）を書く。
 - **`verify --task <id>`** — RED と GREEN 両証跡が存在すれば exit 0、無ければ exit 1（`proof::verify`）。
+  config を honor できない（`untrusted_project` / `invalid_config`）ときは証跡を読まず refusal を出して exit 1。
 - **`oracle --task <id>`** — `proof::read_passed`（fail-soft: missing/corrupt/非 bool は `None`）で両 phase
   の `passed` を読み、`transition::oracle_report` を JSON 出力。有効な Fail→Pass のみ exit 0、他は exit 1。
+  config を honor できない（`untrusted_project` / `invalid_config`）ときは判定不能として JSON を出さず exit 2。
   `/tdd` skill のフェーズ外の機械オラクルで、`condukt` の Fail→Pass ゲートが呼ぶ想定。
 - **`status`** — 解決済み config（source/enabled/max_attempts/min impl lines/test_cmd/proof_dir/state_dir/
   strict_separation）と cwd に対する gate verdict（`gate::human_report`）を表示。
@@ -85,7 +95,9 @@ RED だったか・RED→GREEN になったか）は `tdd` バイナリと Stop 
 - **`config`** — `Config`（enabled/max_attempts/reset_after_secs/state_dir/proof_dir/test_cmd/
   default_timeout_secs/output_tail_lines/impl_globs/test_path_globs/test_markers/min_added_impl_lines）を
   project `tdd.toml`＞`~/.tdd/config.toml`＞言語対応 built-in default で解決。`FileConfig` を optional
-  上書きとして層化し、parse error は黙ってフォールバック（gate はクラッシュしない）。project config は
+  上書きとして層化する。選ばれた設定ファイルが読めない・parse できないときはその設定を一切適用せず
+  `Config::invalid_config`（ファイルと error）に記録する（`invalid_reason`。既定値へ黙って倒すと宣言済みの
+  厳しい設定が消えるため。CLAUDE.md §3）。project config は
   workspace-trust ゲート下。値の sanitize（0→既定）を行う。
 - **`gate`** — test-existence 判定。`Verdict`（added_impl_lines/test_marker_added/test_file_changed/
   impl_files/git_unscoped）、`classify`（純関数）/`evaluate`（git 実行）/`blocks`/`block_reason`/

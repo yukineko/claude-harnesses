@@ -30,7 +30,9 @@ use harness_core::trust;
 ///   `warned.rs`.
 ///
 /// A value other than `strict` / `loose` fails to parse, and an unparseable
-/// `tdd.toml` falls back to the defaults, i.e. `Strict`.
+/// config file is not replaced by the defaults: it is recorded in
+/// [`Config::invalid_config`] and the Stop gate blocks / `tdd red`/`green`
+/// refuse (CLAUDE.md §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
@@ -94,6 +96,14 @@ pub struct Config {
     /// defaults": the Stop gate blocks and `tdd red`/`green` refuse, naming the
     /// file (CLAUDE.md §3; trust inheritance removed 2026-11-08).
     pub untrusted_project: Option<PathBuf>,
+    /// `Some((path, error))` when the chosen config file (trusted project
+    /// `tdd.toml`, or `~/.tdd/config.toml`) EXISTS but could not be read or
+    /// does not parse. None of its settings are applied, and that is
+    /// "cannot determine", not "use the defaults": the defaults would silently
+    /// drop whatever stricter settings the file declares (`strict_separation`,
+    /// wider `impl_globs`, its `test_cmd`). The Stop gate blocks and
+    /// `tdd red`/`green` refuse, naming the file and the error (CLAUDE.md §3).
+    pub invalid_config: Option<(PathBuf, String)>,
 }
 
 /// Fleet gate crates that must not be handled loosely: for these crates,
@@ -169,9 +179,6 @@ pub fn base_dir() -> PathBuf {
     harness_core::config::base_dir("tdd")
 }
 
-/// Emit a one-time, best-effort notice that an untrusted project `tdd.toml` was
-/// ignored. Printed at most once per process so a hook that loads the config
-/// repeatedly doesn't spam stderr.
 /// The refusal shown when a project `tdd.toml` exists but the root is not
 /// trusted ([`Config::untrusted_project`]).
 pub fn untrusted_reason(path: &Path) -> String {
@@ -185,6 +192,22 @@ pub fn untrusted_reason(path: &Path) -> String {
          not inherited from the main working tree.\n\
          One stop only: `tdd skip --reason \"...\"`.",
         path.display()
+    )
+}
+
+/// The refusal shown when the chosen config file exists but could not be read
+/// or parsed ([`Config::invalid_config`]).
+pub fn invalid_reason(path: &Path, error: &str) -> String {
+    format!(
+        "🔴 tdd: REFUSING TO JUDGE — config {} could not be read or does not parse, so none of \
+         its settings (test_cmd, impl_globs, mode, strict_separation, …) are applied. That is a \
+         refusal, not a pass: built-in defaults would silently judge by rules this config did \
+         not declare.\n\n\
+         Parse/read error: {}\n\n\
+         Remedy: fix the file (or remove it to use the built-in defaults on purpose).\n\
+         One stop only: `tdd skip --reason \"...\"`.",
+        path.display(),
+        error.trim_end()
     )
 }
 
@@ -261,6 +284,7 @@ impl Default for Config {
             strict_separation: false,
             strict_separation_explicit: None,
             untrusted_project: None,
+            invalid_config: None,
         }
     }
 }
@@ -280,8 +304,10 @@ impl Config {
     /// malicious repo could otherwise smuggle in an arbitrary command. An
     /// untrusted project `tdd.toml` is not honored and is recorded in
     /// [`Config::untrusted_project`] (the Stop gate blocks on it, `red`/`green`
-    /// refuse); the trusted home config's knobs still load. Any parse error
-    /// silently falls back (the gate must never crash a turn).
+    /// refuse); the trusted home config's knobs still load. A chosen file that
+    /// cannot be read or does not parse applies none of its settings and is
+    /// recorded in [`Config::invalid_config`]; the Stop gate blocks on it and
+    /// `red`/`green` refuse, so it never degrades to the defaults silently.
     /// Trust is resolved with [`harness_core::trust::resolve`], which has no
     /// worktree inheritance (user ruling 2026-11-08).
     pub fn load(root: &Path) -> Self {
@@ -305,8 +331,14 @@ impl Config {
         };
 
         if let Some(path) = chosen {
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                if let Ok(fc) = toml::from_str::<FileConfig>(&text) {
+            let parsed = std::fs::read_to_string(&path)
+                .map_err(|e| format!("read failed: {e}"))
+                .and_then(|text| {
+                    toml::from_str::<FileConfig>(&text).map_err(|e| format!("parse failed: {e}"))
+                });
+            match parsed {
+                Err(e) => cfg.invalid_config = Some((path.clone(), e)),
+                Ok(fc) => {
                     if let Some(v) = fc.enabled {
                         cfg.enabled = v;
                     }

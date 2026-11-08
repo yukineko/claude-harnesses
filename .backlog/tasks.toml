@@ -602,3 +602,97 @@ exit 101:  v0.2.379 (/Users/yuki/src/.harness-worktrees/session-bf349dd5/crates/
     Finished `test` profile [unoptimized + debuginfo] target(s) in 16.43s
      Running tests/scratchpad_truncating_redirect_fp_20261107.rs (target/debug/deps/scratchpad_truncating_redirect_fp_20261107-92f2eef15545e45e)
 error: test failed, to rerun pass `-p blastguard --test scratchpad_truncating_redirect_fp_20261107`"""
+
+[[task]]
+id = "8a05d9ee"
+title = "condukt merge_carrying_store_diff: timed-out merge leaves stale .git/index.lock while reporting 'trial merge was aborted'"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-08 at cb6755f4 (run run-20261108-185146-6010 t1 worktree). Verbatim: 'observation: .git/index.lock present = true, .git/MERGE_HEAD present = false' / stderr '... timed out after 45s and was killed; the merge of runT/b1 was NOT performed ... The trial merge was aborted (no merge in progress).' abort_trial_merge returns Ok when MERGE_HEAD is absent even though index.lock remains. Readings: (a) defect: false safe statement + every later git command fails; (b) intended: none plausible. Distinguish by the repro."
+created_at = 1794133153
+updated_at = 1794133153
+weight = 0.0
+issue_number = 1638
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1638"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_merge_timeout_other_paths_20261108 timed_out_store_diff_merge_is_not_left_silently_half_applied -- --ignored"
+rev = "cb6755f4b9e07999812de7c36a4bdfbdb17016ae"
+observed_at = 1794133153
+detail = """
+exit 101: condukt v0.7.379 (/Users/yuki/src/.harness-worktrees/session-f8bda85a/crates/condukt)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.93s
+     Running tests/backlog_merge_timeout_other_paths_20261108.rs (target/debug/deps/backlog_merge_timeout_other_paths_20261108-a0fa0e39fe78ac69)
+error: test failed, to rerun pass `-p condukt --test backlog_merge_timeout_other_paths_20261108`"""
+
+[[task]]
+id = "46635843"
+title = "condukt resolve-merge -X theirs: 45s timeout leaves staged half-merge with no MERGE_HEAD, unannounced"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "condukt",
+    "p1",
+]
+touched_files = []
+status = "pending"
+notes = '''Observed 2026-11-08 at cb6755f4 (run run-20261108-185146-6010 t1 worktree). Verbatim: 'observation: .git/index.lock present = false, .git/MERGE_HEAD present = false' / panic 'timed-out merge left the target tree HALF-APPLIED and unannounced: staged="shared.txt\ntask.txt", MERGE_HEAD present=false; stderr="condukt: merge -X theirs of runT/b1 into main failed: ... timed out after 45s and was killed"'. Same hazard as 8ada7ad9 (fixed only for the final merge path in worktree.rs::merge). -s ours path: worker reported no RED reproducible (stages HEAD tree, no driver) — UNVERIFIED by verifier.'''
+created_at = 1794133215
+updated_at = 1794133215
+weight = 0.0
+issue_number = 1639
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1639"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "cargo test -p condukt --test backlog_merge_timeout_other_paths_20261108 timed_out_resolve_theirs_merge_is_not_left_silently_half_applied -- --ignored"
+rev = "cb6755f4b9e07999812de7c36a4bdfbdb17016ae"
+observed_at = 1794133215
+detail = """
+exit 101: AILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 46.77s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running tests/backlog_merge_timeout_other_paths_20261108.rs (target/debug/deps/backlog_merge_timeout_other_paths_20261108-a0fa0e39fe78ac69)
+error: test failed, to rerun pass `-p condukt --test backlog_merge_timeout_other_paths_20261108`"""
+
+[[task]]
+id = "11023be2"
+title = "guard-maintree-bash refuses a genuine fast-forward made by 'git merge -m' (reflog suffix '(no commit created; -m option ignored)')"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = [
+    "guard-maintree-bash",
+    "false-positive",
+    "p0",
+]
+touched_files = []
+status = "pending"
+notes = "Observed 2026-11-08 at cb6755f4 in /Users/yuki/src/harness during condukt worktree merge (run run-20261108-185146-6010 t1). Verbatim refusal: 'Refused: this command modified this project's MAIN working tree outside integration (CLAUDE.md 8: main only receives merges). Changed in /Users/yuki/src/harness: HEAD 656327ce1e0c -> cb6755f4b9e0 (not a merge / fast-forward)'. Reflog: 'merge cb6755f4...: Fast-forward (no commit created; -m option ignored)'. integration_step() requires message.endswith(': Fast-forward'). Every condukt worktree merge that fast-forwards trips this."
+created_at = 1794133442
+updated_at = 1794133442
+weight = 0.0
+issue_number = 1640
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1640"
+rev = 0
+
+[task.repro]
+outcome = "reproduced"
+cmd = "python3 -m pytest --runxfail scripts/test_guard_maintree_bash_ff_with_m_20261108.py -k ff_with_m"
+rev = "6545d29f59017fa2d30b30b089b8dc3b297b70f5"
+observed_at = 1794133442
+detail = """
+exit 1: /mtg-observe-h8px45sq/main status` before reverting anything.
+
+scripts/test_guard_maintree_bash_ff_with_m_20261108.py:49: AssertionError
+=========================== short test summary info ============================
+FAILED scripts/test_guard_maintree_bash_ff_with_m_20261108.py::FfWithM::test_ff_with_m_is_integration
+========================= 1 failed, 1 passed in 1.39s =========================="""

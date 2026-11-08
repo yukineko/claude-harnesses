@@ -71869,3 +71869,53 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 452 filtered out; fi
 rev = "e12712e25074e4ed40accea0eb4eb178c51feb03"
 exit = 101
 kind = "behavioural"
+
+[[task]]
+id = "b83ef4b1"
+title = "test-changed-crates.sh: unborn-HEAD branch discards git ls-files exit status -> 'no crate touched' exit 0 (fail-open)"
+project = "/Users/yuki/src/harness"
+project_unresolved = false
+tags = ["p1"]
+touched_files = []
+status = "done"
+notes = "Measured at worktree HEAD f900159d (main 56764042), 2026-11-07. scripts/test-changed-crates.sh l.63-65: diff_out=$(git ls-files 2>/dev/null); diff_rc=0 -- ls-files rc never checked. Repro (unborn repo, staged crates/foo/src/main.rs, shim: exact 'git ls-files' exits 128): test-changed-crates.sh exit=0 'no crate touched -- nothing to test'; control without shim sees the crate. lint-changed-crates.sh l.139-141 ALREADY fixed at this rev (diff_rc=0; diff_out=$(git ls-files) || diff_rc=$?) and exits 1 in the repro, so only test-changed-crates.sh is affected. Related variant (rev-parse --verify -q HEAD rc 128 conflated with unborn at the same line, diff also failing, committed repo with staged crate file): NOT an observable fail-open -- the later head_rc block fails closed in both scripts (exit 1 'cannot determine whether HEAD is born'); notes only."
+created_at = 1794022495
+updated_at = 1794101136
+weight = 0.0
+issue_number = 1603
+issue_url = "https://github.com/yukineko/claude-harnesses/issues/1603"
+issue_closed_at = 1794101139
+rev = 1
+
+[task.repro]
+outcome = "reproduced"
+cmd = "bash scripts/tests/changed-crates-lsfiles-unborn-failclosed.sh"
+rev = "8010c8206e283a92ff904df484ccf5acd97e8023"
+observed_at = 1794022495
+detail = """
+exit 1: test-changed-crates.sh exit=0
+lint-changed-crates.sh exit=1
+FAIL: test-changed-crates.sh exited 0 although 'git ls-files' failed (128) on an unborn HEAD
+  | test-changed-crates: no crate touched — nothing to test"""
+
+[task.closure]
+reason = "fixed"
+
+[task.closure.green]
+runner = "script"
+cmd = "bash scripts/tests/changed-crates-lsfiles-unborn-failclosed.sh"
+exit = 0
+passed = 2
+rev = "fe2715b93c5df8395db3cdea21d501e18819e144"
+observed_at = 1794101119
+output_digest = "sha256:c8b27a8921965bcb4c12a61ca365a8b8f31b0684286a36157daa81f779dc0566"
+excerpt = """
+test-changed-crates.sh exit=1
+lint-changed-crates.sh exit=1
+test result: ok. 2 passed; 0 failed
+"""
+
+[task.closure.red]
+rev = "b88bbb123613d71c2523408b678f75c355c90919"
+exit = 1
+kind = "behavioural"

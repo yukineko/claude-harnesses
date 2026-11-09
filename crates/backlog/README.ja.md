@@ -5,12 +5,13 @@
 ## サブコマンドを使うこと
 
 - `add` — `--repro-test` のコミット済みテストが HEAD で落ちた時だけタスクを追加する
-- `list` — store のタスク一覧: `--tag` / `--status`（`pending` / `done` / `failed` / `cancelled` / `claimed`、`claimed` は導出値、`open` は status ではない）/ `--json`。repo store では `--project` は絞り込みではなく **assertion**（下の「スコープ」参照）
+- `list` — store のタスク一覧: `--tag` / `--status`（`pending` / `done` / `failed` / `cancelled` / `claimed` / `ruled-deferred`、`claimed` は導出値、`open` は status ではない）/ `--json`。repo store では `--project` は絞り込みではなく **assertion**（下の「スコープ」参照）
 - `next` — reproduced な repro を持つ pending タスクのうち最高優先度のものを JSON で出力する（`--claim` で予約）
 - `done <id>` — タスクを**証拠付きで**完了マークする: `--test CMD --red-rev REV`（`--reason fixed|already-fixed|obsolete`）・`--doc-only COMMIT`・`--duplicate-of ID`。この 3 形式のちょうど 1 つが必要。素の `done <id>` は拒否される
-  - RED の実行は `--red-rev` の detached な一時 worktree に HEAD のテストファイルを上書きしたもの（`cargo test` は全テストファイル、pytest は名指したファイル、`bash`/`sh` はそのスクリプト）で行う。修正と一緒に足したテストがそこに存在するようにするため。`--red-rev` でテストが通ったことによる拒否はその旨を述べる。修正そのものがテストファイルの中にあると、この上書きが修正を RED 側へ持ち込む。`--red-overlay PATH`（複数可）で上書きを名指した repro 側だけに絞れる。絞ることしかできず、各パスは既定の上書き集合に含まれている必要がある。`--red-rev` で通るテストは依然拒否される。絞った集合は `closure.red.overlay` に記録される。
+  - **`done` は RED を実行しない**（ユーザー裁定 2026-11-08「backlog doneのRED実行はそもそも全面廃止でいい」）。一時 worktree も、HEAD テストファイルの上書きも、`--red-rev` での実行も無い。実行するのは HEAD での GREEN だけで、その終了ステータス・`<N> passed` 判定・判定不能時の拒否は従来どおり。`--red-rev` は依然必須で、commit に解決できない・HEAD の祖先でない場合は（ビルド無しで）拒否する。解決した rev は**主張された rev としてのみ** `closure.red` に `rev` / `executed = false` / `kind = "not-executed"` / `note`（裁定の引用）で記録され、`exit` は記録されない。この closure は「RED を検証済み」とは読めない: `audit-closures` は `green-only`、`list` は `closed:green` と表示する。`--red-overlay` は削除した（上書きそのものが無くなったため。渡すと usage エラー）。旧形式の closure（`exit` と `kind = "behavioural"` を持つ実測 RED）はそのまま読める。
 - `fail <id>` — タスクを失敗マークする (`--reason`)。再実行を 2 日先送りする
 - `cancel <id> --reason R` — 「やらないと決めた」としてテスト無しで閉じ、`discard` closure として記録する
+- `defer <id> --ruling QUOTE` — ユーザー裁定（見送り）を記録する: status は `ruled-deferred` になり、`next` / `next --claim` は決して払い出さず、再キューもされない。裁定は notes に追記される。`fail` と `edit --status` はキューへ戻すことを拒否し、`add` は同じ内容の再起票を `--force` なしでは拒否する。抜け出す経路は `cancel` / `done` だけ
 - `audit-closures` — 全終端行の closure 証拠を read-only で分類する（`--json`）。store は書かない
 - `overlap` — キュー中のタスクを宣言された `touched_files` scope でグループ化する（advisory、未宣言は別に列挙）
 - `edit <id>` — タスクの title / tags / notes / status を更新する。`--repro-test CMD` で pending タスクの repro を差し替える（「テストが無ければ起票しない」参照）
@@ -24,7 +25,7 @@
 
 ### store 書き込みは linked worktree で
 
-`add` / `done` / `fail` / `edit` / `cancel` / `sync --apply` は、store が git リポジトリの **primary（main）作業ツリー**内にある場合
+`add` / `done` / `fail` / `edit` / `cancel` / `defer` / `sync --apply` は、store が git リポジトリの **primary（main）作業ツリー**内にある場合
 **拒否**される（非 0 終了・何も書かない）。
 linked worktree から実行すること。
 git が checkout の種別を答えられない場合も `add` を拒否する。
@@ -42,7 +43,7 @@ backlog add --title "Fix X" --project "$PWD" --priority p1 \
   --repro-test "bash tests/repro_fix_x.sh"                  # コミット済みテストが HEAD で落ちた時だけ起票
 backlog list --status pending
 backlog next                                                 # 次の項目をピック
-backlog done <id> --test "cargo test -p x" --red-rev <rev>  # 解決する（REV で RED・HEAD で GREEN を実測）
+backlog done <id> --test "cargo test -p x" --red-rev <rev>  # 解決する（HEAD で GREEN を実測。REV は記録のみで RED は実行しない）
 backlog done <id> --doc-only <commit>                        # または doc だけの祖先 commit
 backlog done <id> --duplicate-of <id>                        # または重複
 backlog fail <id> --reason "blocked"                         # 2 日先送りする（2 日後に pending へ戻る）

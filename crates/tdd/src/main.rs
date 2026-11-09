@@ -25,10 +25,10 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod committed;
 mod config;
 mod gate;
 mod git;
-mod impl_evidence;
 mod install;
 mod model;
 mod moved;
@@ -40,7 +40,7 @@ mod transition;
 mod trust_worktree_tests;
 mod warned;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use clap::{Parser, Subcommand};
 use serde_json::json;
@@ -309,134 +309,53 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
+    // A project tdd.toml exists but the root is untrusted: refusing to honor
+    // it is a refusal to judge, never "judge by the defaults" (CLAUDE.md §3;
+    // trust inheritance removed 2026-11-08). The skip above stays the escape.
+    if let Some(p) = &cfg.untrusted_project {
+        log_event(&cfg, &session, "config-untrusted", 0);
+        let reason = config::untrusted_reason(p);
+        if interactive {
+            eprintln!("{reason}");
+            std::process::exit(1);
+        }
+        harness_core::repeat::emit_stop_block("tdd", &reason);
+        std::process::exit(0);
+    }
+
+    // The chosen config file exists but could not be read / does not parse:
+    // its settings are unknown, and judging by the defaults would silently drop
+    // whatever it declared. Cannot determine → block (CLAUDE.md §3).
+    if let Some((p, err)) = &cfg.invalid_config {
+        log_event(&cfg, &session, "config-invalid", 0);
+        let reason = config::invalid_reason(p, err);
+        if interactive {
+            eprintln!("{reason}");
+            std::process::exit(1);
+        }
+        harness_core::repeat::emit_stop_block("tdd", &reason);
+        std::process::exit(0);
+    }
+
     // Scoped to what this session wrote (the Stop payload's transcript); an
     // undetermined attribution scans the whole checkout. The note is printed
     // on every run, allowing ones included, so an exclusion is never silent.
     //
-    // Every checkout the session wrote into is evaluated, not only the hook cwd
-    // (a session in a linked worktree while the hook runs in the primary tree
-    // would otherwise be judged on the clean primary tree). The first root whose
-    // verdict blocks is the one reported; an undetermined root blocks.
-    //
-    // The gate judges PER SESSION (user ruling 2026-11-03, backlog 49e95d32):
-    // every enabled root is evaluated first, then the test evidence the session
-    // wrote AND committed since the session start in ANY of them (attributed
-    // via the transcript) is credited to the implementation change in every
-    // root (`gate::session_test_evidence`). An uncommitted test counts for its
-    // own root only. An undetermined root, attribution or session start makes
-    // that fold undetermined: no credit, each root is judged on its own scan
-    // alone, and the block reason says why.
-    let sr = match harness_core::session_roots::resolve(&root, &input.transcript_path) {
-        Determination::Known(sr) => sr,
-        Determination::Undetermined(why) => stop_block_now(
-            &format!(
-                "🔴 tdd: the session's roots cannot be determined ({}). Nothing was evaluated \
-                 for the roots it wrote into; fix the cause or run `tdd skip --reason \"...\"`.",
-                why.as_str()
-            ),
-            interactive,
-        ),
-    };
-    let first_cfg = cfg.clone();
-    let mut cfg = cfg;
-    let mut root = root;
-    let mut chosen: Option<gate::Report> = None;
-    let mut first: Option<gate::Report> = None;
-    let mut evaluated_something = false;
-    let mut all_opted_out = true;
-    let mut evaluated: Vec<(usize, PathBuf, Config, gate::Report)> = Vec::new();
-    for (i, r) in sr.roots.iter().enumerate() {
-        let rcfg = if i == 0 { cfg.clone() } else { Config::load(r) };
-        if !rcfg.enabled {
-            continue;
-        }
-        all_opted_out = false;
-        let rep = gate::evaluate(&rcfg, r, &input.transcript_path);
-        evaluated.push((i, r.clone(), rcfg, rep));
+    // Only the hook cwd's checkout is judged (user ruling 2026-11-08:
+    // "donegateそのものが他のworktreeを見たり検証したりテストしたりすることは禁止とする。
+    // 他のgateでも禁止とする"). No other worktree is looked at, scanned or
+    // credited, even when the session wrote into it, and nothing judges those
+    // in its place. The test evidence is this checkout's own: a test the session wrote
+    // AND committed here since the session start is credited
+    // (`gate::session_test_evidence` over this one report); an undetermined
+    // attribution or session start credits nothing and the reason says why.
+    let mut verdict = gate::evaluate(&cfg, &root, &input.transcript_path);
+    verdict.credit = gate::session_test_evidence(&[&verdict]);
+    if let Some(note) = gate::credit_note(&verdict) {
+        eprintln!("{note}");
     }
-    let credit = {
-        let reps: Vec<&gate::Report> = evaluated.iter().map(|(_, _, _, rep)| rep).collect();
-        gate::session_test_evidence(&reps)
-    };
-    for (i, r, rcfg, mut rep) in evaluated {
-        rep.credit = credit.clone();
-        if let Some(note) = gate::credit_note(&rep) {
-            eprintln!("{note}");
-        }
-        if let Some(note) = moved::moved_note(&rep) {
-            eprintln!("{} ({})", note, r.display());
-        }
-        if rep.blocks(&rcfg) {
-            if chosen.is_none() {
-                cfg = rcfg;
-                root = r;
-                chosen = Some(rep);
-            }
-            continue;
-        }
-        if let Determination::Known(Some(f)) = &rep.scan {
-            if f.added_impl_lines > 0 {
-                evaluated_something = true;
-            }
-        }
-        if i == 0 {
-            first = Some(rep);
-        }
-    }
-    let verdict = match chosen.or(first) {
-        Some(v) => v,
-        None => {
-            // Every root is disabled in its own config.
-            std::process::exit(0);
-        }
-    };
-    // Only when the session wrote into a root other than the hook cwd: with the
-    // cwd as the sole root, "wrote a file that has no uncommitted implementation
-    // change" is the long-standing allow (tests/session_scope_own.rs).
-    //
-    // "Wrote files" counts only writes tdd itself treats as an implementation
-    // change (`impl_evidence::session_wrote_impl`, user ruling 2026-11-05): a `cd`
-    // target, a `.backlog/*.toml`, a script path or a file outside every repo
-    // is bookkeeping, not an implementation write, so a merge / backlog /
-    // rollout-only session is not blocked here. An implementation file written
-    // with an empty scan still blocks, and an unreadable transcript counts as
-    // an implementation write (CLAUDE.md §3).
-    if !verdict.blocks(&cfg)
-        && sr.roots.len() > 1
-        && sr.wrote_any
-        && !evaluated_something
-        && !all_opted_out
-        && {
-            let root_cfgs: Vec<(PathBuf, Config)> = sr
-                .roots
-                .iter()
-                .enumerate()
-                .map(|(i, r)| {
-                    let c = if i == 0 {
-                        first_cfg.clone()
-                    } else {
-                        Config::load(r)
-                    };
-                    (r.clone(), c)
-                })
-                .collect();
-            impl_evidence::session_wrote_impl(&root_cfgs, &first_cfg, &input.transcript_path)
-        }
-    {
-        let names = sr
-            .roots
-            .iter()
-            .map(|r| r.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        stop_block_now(
-            &format!(
-                "🔴 tdd: the session wrote files but no implementation change was evaluated in \
-                 any root (an empty scan is not a pass). Roots judged: {names}. Run `tdd skip \
-                 --reason \"...\"` if this is intended."
-            ),
-            interactive,
-        );
+    if let Some(note) = moved::moved_note(&verdict) {
+        eprintln!("{} ({})", note, root.display());
     }
     if let Some(note) = gate::attribution_note(&verdict) {
         eprintln!("{note}");
@@ -488,8 +407,8 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
 
     log_event(&cfg, &session, "blocked", attempt);
-    emit_violation(&root, &session, gate::check_kind(&verdict));
-    let reason = gate::block_reason(&verdict, attempt, cfg.max_attempts);
+    emit_violation(&root, &session, gate::check_kind(&verdict, &cfg));
+    let reason = gate::block_reason(&verdict, &cfg, attempt, cfg.max_attempts);
 
     if interactive {
         eprintln!("{}", gate::human_report(&verdict, &cfg));
@@ -509,17 +428,6 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     std::process::exit(0);
 }
 
-/// Emit a blocking verdict and exit: hook mode prints the Stop `decision:block`
-/// JSON (exit 0 toward Claude), manual CLI mode prints to stderr and exits 1.
-fn stop_block_now(reason: &str, interactive: bool) -> ! {
-    if interactive {
-        eprintln!("{reason}");
-        std::process::exit(1);
-    }
-    harness_core::repeat::emit_stop_block("tdd", reason);
-    std::process::exit(0);
-}
-
 /// `tdd red` / `tdd green`. Manual CLI: non-zero exit signals the skill that the
 /// phase precondition (must-fail / must-pass, or — under `strict_separation` —
 /// distinct test/impl authorship) was not met.
@@ -532,6 +440,18 @@ fn proof_command(
 ) -> ! {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let mut cfg = Config::load(&root);
+    // An untrusted project tdd.toml: running the default `test_cmd` instead of
+    // the project's would record a proof of a different command. Refuse.
+    if let Some(p) = &cfg.untrusted_project {
+        eprintln!("{}", config::untrusted_reason(p));
+        std::process::exit(1);
+    }
+    // An unreadable / unparseable config: its `test_cmd` and
+    // `strict_separation` are unknown, so a proof would be of unknown rules.
+    if let Some((p, err)) = &cfg.invalid_config {
+        eprintln!("{}", config::invalid_reason(p, err));
+        std::process::exit(1);
+    }
     // Resolve the effective strict_separation before `green` consumes it:
     // explicit CLI/config > gate-crate-context default-on > global default-off.
     // (`red` records the RED author but never checks separation, so this only
@@ -551,9 +471,27 @@ fn proof_command(
     }
 }
 
+/// Exit `code` with the refusal when the config could not be honored: an
+/// untrusted project `tdd.toml`, or a chosen config file that cannot be read /
+/// parsed. Its `proof_dir` is then unknown, so reading proofs from the default
+/// `.tdd` would answer about a directory the config may not name (CLAUDE.md §3).
+fn refuse_on_unhonored_config(cfg: &Config, code: i32) {
+    if let Some(p) = &cfg.untrusted_project {
+        eprintln!("{}", config::untrusted_reason(p));
+        std::process::exit(code);
+    }
+    if let Some((p, err)) = &cfg.invalid_config {
+        eprintln!("{}", config::invalid_reason(p, err));
+        std::process::exit(code);
+    }
+}
+
+/// `tdd verify`: exit 0 only when both proofs exist; exit 1 when one is
+/// missing or the config could not be honored ([`refuse_on_unhonored_config`]).
 fn verify_command(task: &str) -> ! {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
+    refuse_on_unhonored_config(&cfg, 1);
     if proof::verify(&root, &cfg, task) {
         println!("✓ tdd: `{task}` has both RED and GREEN proofs (test-first verified)");
         std::process::exit(0);
@@ -573,10 +511,13 @@ fn verify_command(task: &str) -> ! {
 /// Fail→Pass whose RED and GREEN proofs were not recorded with the same test
 /// command yields `transition="command_mismatch"`, exit 1 (see
 /// `transition::oracle_report_same_cmd`). Exit 0 only for a valid Fail→Pass
-/// oracle of one and the same command.
+/// oracle of one and the same command. A config that could not be honored
+/// (untrusted project `tdd.toml`, unreadable / unparseable config) is
+/// "cannot determine": the refusal on stderr, no JSON, exit 2.
 fn oracle_command(task: &str) -> ! {
     let root = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
     let cfg = Config::load(&root);
+    refuse_on_unhonored_config(&cfg, 2);
     let pre = proof::read_passed(&root, &cfg, task, "red");
     let post = proof::read_passed(&root, &cfg, task, "green");
     let red_cmd = proof::read_cmd(&root, &cfg, task, "red");
@@ -644,7 +585,22 @@ fn status() {
     } else {
         Path::new("(defaults — no config file)").to_path_buf()
     };
-    println!("config:        {}", src.display());
+    match &cfg.untrusted_project {
+        Some(p) => println!(
+            "config:        {} is NOT TRUSTED — not honored; stops are BLOCKED until `tdd trust` \
+             is run in this root. Values below are the home/default ones.",
+            p.display()
+        ),
+        None => println!("config:        {}", src.display()),
+    }
+    if let Some((p, err)) = &cfg.invalid_config {
+        println!(
+            "config:        {} could not be read or does not parse ({}) — none of its settings \
+             are applied; stops are BLOCKED until it is fixed. Values below are the defaults.",
+            p.display(),
+            err.trim_end()
+        );
+    }
     println!("enabled:       {}", cfg.enabled);
     println!("max_attempts:  {}", cfg.max_attempts);
     println!("min impl lines:{}", cfg.min_added_impl_lines);

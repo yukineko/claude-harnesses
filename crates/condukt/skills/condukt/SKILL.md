@@ -63,7 +63,9 @@ allowed-tools: Task, AskUserQuestion, Bash(condukt:*), Bash(fugu-router:*), Bash
    従来どおり人間承認へ倒れる。非 autonomous モードでは policy_is_auto=false なので **全 gated が従来どおり
    Escalate**(後方互換・挙動不変)。decision は append-only JSONL に journal 記録され後から可観測。
    classify は散文（title/done_criteria）をコマンドとして解析せず、タスクの `commands`（+ `reproduction_tests`
-   / `checks`）だけをコマンドとして解析する（backlog dc955812）。**`commands` を宣言していないタスクは
+   / `checks`）だけをコマンドとして解析する（backlog dc955812）。schedule の force-gate で散文が効くのは
+   deploy/push/publish の signal だけで、散文が `filter-branch` / `git rebase` 等の名前を挙げているだけでは
+   force-gate しない（backlog 3a0e30a8。それらを実際に実行する宣言 `commands` は従来どおり gate する）。**`commands` を宣言していないタスクは
    判定不能として schedule で force-gate、`gate check` で Escalate になる**ので、decomposition には必ず
    `commands`（何も実行しないなら `[]`）を入れる。
 3. **共有ファイルは直列** — `condukt schedule` が `shared_globs` 設定と file 衝突解析で `serial` に
@@ -151,14 +153,15 @@ pending に戻したタスクは Phase 0-alt → Phase 5 で通常通り再投�
   巻き添えにしないための設計である。
 - 本当に死んだ worker で worktree が消えている場合は `Undetermined` が続き bulk では戻らない。
   その場合は人間が明示する `condukt state abandon --run $RID --task <id>` を使う
-  (こちらは意図的に **ゲート無し**)。
+  (進捗ゲートは無いが、worker transcript が liveness window 内に更新されている／判定不能なら拒否する。
+  worker が死んでいると分かっているなら `--force <理由>` で上書きし、理由は journal に残る)。
 
 **`--all-stuck` の exit code (判定不能を黙って clean にしないための三値)**:
 
 | exit | 意味 | 取るべき行動 |
 |---|---|---|
 | `0` | **観測に失敗したタスクは無い**。stuck と確定したタスクは pending に戻した (0 件でも 0)。`awaiting-sample` (全 signal は読めたが multi-sample の観測が未完了) だけが残っている場合もここに入る — その場合もタスクは stderr に列挙される | `awaiting-sample` が出ていれば window を空けて再実行。それ以外は Phase 5 へ |
-| `3` | **`unobservable`**: durable な進捗 signal をそもそも読めなかったタスクがある (`updated_at` が無い / worktree HEAD が読めない / worktree を持たない)。これは「問題なし」ではなく「判定できなかった」 | 該当タスクを人間が確認し、死んでいるなら `--task <id>` (ゲート無しの override) で戻す |
+| `3` | **`unobservable`**: durable な進捗 signal をそもそも読めなかったタスクがある (`updated_at` が無い / worktree HEAD が読めない / worktree を持たない)。これは「問題なし」ではなく「判定できなかった」 | 該当タスクを人間が確認し、死んでいるなら `--task <id>` (進捗ゲート無しの override。transcript が新しければ拒否) で戻す |
 | `1` | 通常のエラー (run state が読めない・タスクが無い 等) | エラーを読んで修正 |
 
 exit 0/3 のどちらでも、判定不能なタスクは **必ず stderr に id・class・理由つきで出力される**。
@@ -584,7 +587,7 @@ condukt state checkpoint --run "$RID" --label baseline   # 復元フロア: 実�
 4. worker の返却 status を確認する。status に関係なく、まず `notes` の `別件:` 行を拾って
    `backlog add` する (不変条件 6・7。別件は分解に足さず、この run はそのまま続ける):
    - `done`: `condukt state set --run $RID --task <t.id> --status done` し、**他の worker の完了を待たずにその場で Phase 6 の verifier を起動する**（パイプライン化）。
-   - `needs-serial`: 分類ミス。この worktree を破棄（`condukt worktree remove --path "$WP" --branch condukt/$RID/<t.id>`。`worktree discard` は使わない: task を `discarded` にするので再実行には SKILL に無い status 戻しが要り、さらに「discarded experiment」という誤った所見を記録する）し、タスクを serial タスクとして **新しい worktree**
+   - `needs-serial`: 分類ミス。この worktree を破棄（まず `condukt state abandon --run "$RID" --task <t.id>` でタスクを pending に戻し worktree 参照を外してから `condukt worktree remove --path "$WP" --branch condukt/$RID/<t.id>`。`worktree remove` は所有タスクが `verified` / `cancelled` / `discarded` か、abandon 後の「pending かつ worktree 未記録」でない限り非0で拒否する — 未 verify の worktree を消すと F→P oracle が読む `.tdd` 証跡が消えるため（backlog 6180333a）。abandon が worker transcript の鮮度で拒否したら、worker は needs-serial を返して終了済みなので `--force "worker returned needs-serial"` を理由付きで渡す。`worktree discard` は使わない: task を `discarded` にするので再実行には SKILL に無い status 戻しが要り、さらに「discarded experiment」という誤った所見を記録する）し、タスクを serial タスクとして **新しい worktree**
      （`WP=$(condukt worktree create --run "$RID" --topic <t.id> --branch condukt/<t.id>)` →
      `state set ... --worktree "$WP" --branch condukt/$RID/<t.id>`。create の `--branch` は `--run` が
      名前空間化するので `condukt/<t.id>` を渡す）で再実装する。main の作業ツリーでは実装しない。順序は
@@ -596,6 +599,8 @@ condukt state checkpoint --run "$RID" --label baseline   # 復元フロア: 実�
      で開いている質疑を見て `condukt escalate resolve --id <ID> --choice "<選択>"` で答えると、その回答を添えて
      当該タスクを resume できる。`escalate` バイナリが無い等で enqueue に失敗したときのみ従来の即時報告に
      fail-soft する。GATED タスクの承認待ちも同様にこの channel に enqueue してよい。
+
+worker/verifier の完了通知を待つ旨 (「waiting」) を書く前に、停止・未配達の sub-agent が無いか `condukt agents check --session "$SESSION_ID" --run "$RID"` で機械判定する (exit 0 以外 = stalled / ended_undelivered / 判定不能のどれかが blocking。stdout の JSON `blocking` を読み、待たずに再投入か escalate する)。
 
 バッチ内は 1 メッセージで複数 `Task` を同時発行して並列化する。worker が完了するたびに即 verifier を起動し、worker 完了の待ち合わせはしない（後続 worker が動いている間に先行タスクの検証が進む）。`serial` タスクは並列バッチから外して 1 件ずつ実装するが、**順序の制約であって場所の制約ではない**: 各 serial タスクは自分専用の worktree（上記 1.〜2. と同じ `condukt worktree create --run "$RID" --topic <t.id> ...` → `state set ... --worktree "$WP"`）で worker が実装し verifier が検証する。**各 serial タスクの Phase 6 verifier が pass した直後に、Phase 7 を待たず mid-run で**
 `condukt worktree merge --branch condukt/$RID/<t.id> --run "$RID" --task <t.id>` → `condukt worktree remove --path "$WP" --branch condukt/$RID/<t.id>` を実行して既定ブランチへ統合し、**それから次の serial タスクの worktree を作る**（後続は先行タスクの成果を見る。Phase 7 の gate は run 全体を見るので、この順序制約は Phase 7 には任せられない）。merge が HOLD / 衝突したら**次の serial タスクへ進まず止まる**（Phase 7「merge pre-flight 衝突への対処」）。 verifier が fail した serial タスクは**決して merge せず**、serial の連鎖はそこで止まる（次の serial タスクの worktree を作らない）。
@@ -873,7 +878,10 @@ condukt state check-oracle --run "$RID" --task "<id>"
 valid_fp_oracle:false` のときは昇格を**拒否**する (非0終了・理由を出力)。
 `tdd` が無い環境でもこの拒否は同じで、`kind: fix/feature` のタスクは本物の Fail→Pass 再現が
 記録されるまで `verified` にできない。
-`fallback:true` (kind が fix/feature でないタスク等) のときは verifier agent の pass/fail 判定に委ねる。
+加えて全タスクについて、そのタスクのワークツリー (同じ呼び出しの `--worktree`。未指定か `--clear-worktree` 時は記録済みのもの) に
+`.backlog/` 以外の追跡ファイルへの未コミット変更 (staged/unstaged。未追跡・ignore 済みは数えない) があると、
+該当ファイル名を示して昇格を拒否し、そのワークツリーが読めない (自身の git worktree の最上位でない・存在しない・
+`git status` が非0終了) ときも拒否する。ワークツリーが渡されも記録されもしていないタスクは検査しない (backlog `1ca662ec`)。`fallback:true` (kind が fix/feature でないタスク等) のときは verifier agent の pass/fail 判定に委ねる。
 
 done の各タスクを `condukt-verifier` 相当で done_criteria 照合する。検証する子の **model は
 worker と必ず別モデルにする**（同一モデルだと generation と verification が同じ盲点を共有するため）。
@@ -1221,7 +1229,8 @@ condukt state gate --run $RID      # exit 0 まで完了宣言しない
   場合は以下の手順で対処する:
   1. 衝突しているタスク (branch) を特定する。衝突 branch が複数ある場合は 1 つずつ処理する。
   2. 衝突が軽微で自動解消可能な場合: worktree 内に移動して `git merge --no-commit main` → 手動で
-     コンフリクトマーカーを解消して `git add` → task trailer 付きで確定する
+     コンフリクトマーカーを解消し、解消したファイルだけを `git add -- <path>...` で明示パス指定して
+     stage する（作業ツリー全体の一括 stage はしない）→ task trailer 付きで確定する
      `git commit --no-edit --trailer "Condukt-Task: $TASK_ID"` (`TASK_ID` は
      `TASK_ID=$(git config --get "branch.$(git branch --show-current).conduktTask")` で読む。
      trailer の無い merge commit は `condukt worktree merge` が拒否する) → 再度 `condukt worktree merge` を実行する。
@@ -1410,7 +1419,7 @@ condukt state cancel --run <run_id> --task <task_id>
 - 子が共有ファイルに触りたがる → 分類ミス。serial 降格し、新しい worktree で実装し直す（main の作業ツリーでは実装しない）。
 - worktree 残置 → Phase 7 で必ず閉じる。`condukt state gate` が残置を検出する。
 - **stuck worker** → `condukt state abandon --run $RID --task <id>` で `pending` に戻し Phase 5 へ
-  再投入する (この明示指定は人間の override であり意図的にゲート無し)。`--all-stuck` は TTL 超過
+  再投入する (この明示指定は人間の override で進捗ゲートは無いが、worker transcript が新しい間は拒否され、`--force <理由>` で上書きする)。`--all-stuck` は TTL 超過
   かつ **進捗が `Known(Stalled)` と確定した** running タスクだけをまとめて戻す (multi-sample な
   ので 1 回目は何も戻らないのが正常で、`awaiting-sample` として報告され exit 0。**exit 3 は
   `unobservable`** = signal を読めなかったタスクがあるという報告であり、コマンドの故障ではない。

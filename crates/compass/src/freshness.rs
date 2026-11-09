@@ -128,9 +128,10 @@ fn elapsed_days(f: &mut Freshness, repo_root: &Path, charter_path: &Path, cfg: &
     }
 }
 
-/// Signal 3 — DoD ref missing: scan each `definition_of_done` item for path-like
-/// tokens (containing `/` or ending in a file extension) and flag any that don't
-/// exist on disk. A vanished referenced path is a strong stale signal.
+/// Signal 3 — DoD ref missing: scan each `definition_of_done` item for path
+/// references (tokens accepted by both [`looks_like_path`] and
+/// [`is_checkable_path_ref`]) and flag any that don't exist on disk. A
+/// vanished referenced path is a strong stale signal.
 fn dod_refs_missing(f: &mut Freshness, repo_root: &Path, charter: &Charter) {
     for item in &charter.definition_of_done {
         for tok in path_candidates(item) {
@@ -144,7 +145,7 @@ fn dod_refs_missing(f: &mut Freshness, repo_root: &Path, charter: &Charter) {
             if tok.is_empty() || !tok.chars().any(|c| c.is_ascii_alphabetic()) {
                 continue;
             }
-            if !looks_like_path(&tok) {
+            if !looks_like_path(&tok) || !is_checkable_path_ref(&tok, repo_root) {
                 continue;
             }
             let candidate = if Path::new(&tok).is_absolute() {
@@ -203,6 +204,45 @@ fn looks_like_path(tok: &str) -> bool {
             && ext.chars().all(|c| c.is_ascii_alphanumeric());
     }
     false
+}
+
+/// Whether a DoD token is concrete enough to be checked against disk
+/// (backlog e95bf58f). DoD prose routinely uses `/` as a list separator
+/// (`groom/inject/snapshot`, `無い/ゼロ`) and names bare files
+/// (`types.rs`), so "contains `/` or has an extension" is too broad.
+///
+/// Rule: a token is checked only if it contains `/` AND at least one of:
+/// - (a) it is an absolute path;
+/// - (b) its first segment starts with `.` (dotfile/dotdir, e.g.
+///   `.githooks/pre-commit`);
+/// - (c) its last segment has a file extension, using the same notion as
+///   [`looks_like_path`] (e.g. `nodir/missing.rs`);
+/// - (d) `repo_root.join(first segment)` exists (e.g. `crates/foo` when
+///   `crates/` exists).
+///
+/// A bare filename (no `/`) is never checked.
+///
+/// Trade-off: this deliberately accepts false negatives to remove false
+/// positives. A missing bare filename (`missing.rs`) is never flagged, and
+/// neither is an extensionless relative path whose top-level directory is
+/// itself gone (`olddir/sub`) — the vanished top-level dir is
+/// indistinguishable from prose such as `ledger/state`. Paths with an
+/// extension, a leading dot, an absolute root, or an existing top-level
+/// segment are still flagged when missing.
+fn is_checkable_path_ref(tok: &str, repo_root: &Path) -> bool {
+    let (Some((first, _)), Some((_, last))) = (tok.split_once('/'), tok.rsplit_once('/')) else {
+        return false; // no `/`: a bare filename is never checked.
+    };
+    if Path::new(tok).is_absolute() {
+        return true;
+    }
+    if first.starts_with('.') {
+        return true;
+    }
+    if looks_like_path(last) {
+        return true;
+    }
+    !first.is_empty() && repo_root.join(first).exists()
 }
 
 /// Signal 4 — next_action divergence (soft heuristic).
@@ -594,5 +634,145 @@ mod tests {
         assert!(toks.contains(&"gather".to_string()));
         // "rs" is < 3 chars => dropped as ASCII noise.
         assert!(!toks.contains(&"rs".to_string()));
+    }
+
+    /// Audit B item 10 (memory compass-gotchas, "DoD refs false-positive"):
+    /// ordinary Japanese prose that uses `/` as a list separator, or names a
+    /// bare `*.rs` file, must not be read as a missing repo path. Fixed by
+    /// `is_checkable_path_ref` (e95bf58f rule, below). CONTROL: a token rooted
+    /// at an existing top-level dir that does not resolve must still trip, so
+    /// the fix cannot be "never flag anything".
+    #[test]
+    fn dod_prose_slash_lists_and_bare_filenames_are_not_paths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("crates")).unwrap();
+        let prose = [
+            "入力が無い/ゼロのときも落ちない",
+            "groom/inject/snapshotの3経路が通る",
+            "ledger/stateの整合が取れる",
+            "types.rsとhandlers.rsの責務を分ける",
+        ];
+        let control = "crates/nope/missing.rsを参照する";
+        let mut dod: Vec<String> = prose.iter().map(|s| s.to_string()).collect();
+        dod.push(control.to_string());
+        let charter = Charter {
+            north_star: "x".to_string(),
+            definition_of_done: dod,
+            ..Charter::default()
+        };
+        let charter_path = Charter::project_path(dir.path());
+        let f = check(dir.path(), &charter_path, &charter, &Config::default());
+        assert!(
+            f.reasons
+                .iter()
+                .any(|r| r.contains("crates/nope/missing.rs")),
+            "control: a missing path under an existing top-level dir must still trip: {:?}",
+            f.reasons
+        );
+        let flagged: Vec<&String> = f
+            .reasons
+            .iter()
+            .filter(|r| r.contains("DoD references missing path"))
+            .filter(|r| !r.contains("crates/nope/missing.rs"))
+            .collect();
+        assert!(
+            flagged.is_empty(),
+            "prose tokens were flagged as missing paths: {flagged:?}"
+        );
+    }
+
+    /// Run `check` on a one-item DoD in `dir` and report whether the exact
+    /// token `tok` was flagged as a missing path.
+    fn dod_token_flagged(dir: &Path, item: &str, tok: &str) -> (bool, Vec<String>) {
+        let charter = Charter {
+            north_star: "x".to_string(),
+            definition_of_done: vec![item.to_string()],
+            ..Charter::default()
+        };
+        let charter_path = Charter::project_path(dir);
+        let f = check(dir, &charter_path, &charter, &Config::default());
+        let needle = format!("DoD references missing path `{tok}`");
+        (f.reasons.iter().any(|r| r == &needle), f.reasons)
+    }
+
+    // ---- e95bf58f rule: a token is checked only if it has `/` AND one of
+    // (a) absolute, (b) first segment starts with `.`, (c) last segment has
+    // an extension, (d) <root>/<first segment> exists. ----
+
+    /// CONTROL (passes at base): rule (a) absolute missing path trips.
+    #[test]
+    fn dod_rule_a_absolute_missing_path_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let abs = dir.path().join("nonexistent_abs_dir").join("missing");
+        let abs = abs.to_string_lossy().to_string();
+        let (hit, reasons) = dod_token_flagged(dir.path(), &format!("see {abs} here"), &abs);
+        assert!(
+            hit,
+            "rule (a): a missing absolute path must be flagged: {reasons:?}"
+        );
+    }
+
+    /// CONTROL (passes at base): rule (b) leading-dot first segment, no extension.
+    #[test]
+    fn dod_rule_b_leading_dot_segment_missing_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (hit, reasons) =
+            dod_token_flagged(dir.path(), "see .somedot/missing here", ".somedot/missing");
+        assert!(
+            hit,
+            "rule (b): a missing path whose first segment starts with `.` must be flagged: {reasons:?}"
+        );
+    }
+
+    /// CONTROL (passes at base): rule (c) last segment has an extension even
+    /// though the first segment does not exist.
+    #[test]
+    fn dod_rule_c_extension_with_missing_first_segment_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (hit, reasons) =
+            dod_token_flagged(dir.path(), "see nodir/missing.rs here", "nodir/missing.rs");
+        assert!(
+            hit,
+            "rule (c): a missing `dir/file.ext` path must be flagged even when dir is absent: {reasons:?}"
+        );
+    }
+
+    /// CONTROL (passes at base): rule (d) first segment exists, no extension.
+    #[test]
+    fn dod_rule_d_existing_first_segment_missing_leaf_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("existingdir")).unwrap();
+        let (hit, reasons) = dod_token_flagged(
+            dir.path(),
+            "see existingdir/missing here",
+            "existingdir/missing",
+        );
+        assert!(
+            hit,
+            "rule (d): a missing leaf under an existing first segment must be flagged: {reasons:?}"
+        );
+    }
+
+    /// RED at base: no leading dot, no extension, first segment absent ->
+    /// prose slash list, never checked.
+    #[test]
+    fn dod_slash_token_without_dot_ext_or_existing_root_is_not_checked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (hit, reasons) = dod_token_flagged(dir.path(), "see alpha/beta here", "alpha/beta");
+        assert!(
+            !hit,
+            "`alpha/beta` (not absolute, no leading dot, no extension, `alpha` absent) must not be flagged: {reasons:?}"
+        );
+    }
+
+    /// RED at base: a bare filename (no `/`) is never checked against disk.
+    #[test]
+    fn dod_bare_filename_without_slash_is_never_checked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (hit, reasons) = dod_token_flagged(dir.path(), "see missing.rs here", "missing.rs");
+        assert!(
+            !hit,
+            "bare `missing.rs` (no `/`) must not be flagged: {reasons:?}"
+        );
     }
 }

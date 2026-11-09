@@ -105,11 +105,37 @@ fn save(root: &Path, outcomes: &[Outcome]) -> Result<()> {
     write_atomic(&path, &json)
 }
 
-/// Retry budget for acquiring a store lock: `LOCK_MAX_ATTEMPTS` tries spaced
-/// `LOCK_RETRY_DELAY_MS` apart (~5 s), mirroring the create_new lockfile
-/// convention of `harness_core::lessons::acquire_lock`.
-const LOCK_MAX_ATTEMPTS: u32 = 1000;
-const LOCK_RETRY_DELAY_MS: u64 = 5;
+/// Retry budget for acquiring a store lock, polled every `retry_delay_ms`
+/// (create_new lockfile convention of `harness_core::lessons::acquire_lock`).
+///
+/// Two separate limits, because "the lock is busy" and "the lock is stuck" are
+/// different facts:
+/// - `per_holder_attempts`: polls spent while the SAME lockfile instance is in
+///   place. Running out means one holder kept the lock the whole time (a crashed
+///   process's stale lockfile, or a hung holder), so we refuse. Each time the
+///   lockfile is released or replaced by a new instance, the queue made
+///   progress, and this count restarts.
+/// - `total_attempts`: hard cap across all holders. Running out means the lock
+///   kept changing hands but this process never won it, so we refuse.
+///
+/// Before this split a single 1000-poll budget counted the whole queue. With
+/// many concurrent `compass apply`/`evaluate` runs (each holding the carve lock
+/// for ~100-240 ms under load, mostly the C2 git subprocesses), a waiter that
+/// kept losing the race gave up after ~5 s even though no holder was stuck.
+/// The refused `apply` exited non-zero and its answer was never saved.
+#[derive(Debug, Clone, Copy)]
+struct LockBudget {
+    per_holder_attempts: u32,
+    total_attempts: u32,
+    retry_delay_ms: u64,
+}
+
+/// ~5 s with one holder in place (stale lock), ~60 s overall.
+const LOCK_BUDGET: LockBudget = LockBudget {
+    per_holder_attempts: 1000,
+    total_attempts: 12_000,
+    retry_delay_ms: 5,
+};
 
 /// An exclusive advisory lock on a store file, held as long as this guard
 /// lives. The lock IS the lockfile `<store file>.lock` (held iff it exists);
@@ -140,20 +166,63 @@ fn lock_path_for(store: &Path) -> PathBuf {
     PathBuf::from(p)
 }
 
+/// Identity of one lockfile instance: inode (unix) plus mtime. A new holder
+/// creates a new file, so the identity changes when the lock changes hands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LockInstance {
+    ino: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+/// What a poll of the lockfile saw while it was held by someone else.
+enum Holder {
+    /// The lockfile was gone by the time we looked (released).
+    Released,
+    /// The lockfile instance currently in place.
+    Instance(LockInstance),
+    /// Could not stat it. Counted as "same holder" (no progress observed), so
+    /// an unreadable lockfile still runs out the per-holder budget.
+    Unknown,
+}
+
+fn current_holder(lock_path: &Path) -> Holder {
+    match std::fs::symlink_metadata(lock_path) {
+        Ok(m) => {
+            #[cfg(unix)]
+            let ino = std::os::unix::fs::MetadataExt::ino(&m);
+            #[cfg(not(unix))]
+            let ino = 0;
+            Holder::Instance(LockInstance {
+                ino,
+                modified: m.modified().ok(),
+            })
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Holder::Released,
+        Err(_) => Holder::Unknown,
+    }
+}
+
 /// Acquire the exclusive lock for `store` (creating its parent dir), retrying
 /// while another process holds it. Fail-closed: if the lock cannot be acquired
-/// within the retry budget, or the lockfile cannot be created for any other
-/// reason, this returns an error naming the lock path and the caller must
-/// refuse the write. There is NO fallback to an unlocked write and NO
-/// automatic reaping of a stale lockfile: a lock left by a crashed process
-/// keeps refusing writes until a human removes the named file.
+/// within the [`LockBudget`] (one holder in place for ~5 s, or ~60 s overall),
+/// or the lockfile cannot be created for any other reason, this returns an
+/// error naming the lock path and the caller must refuse the write. There is
+/// NO fallback to an unlocked write and NO automatic reaping of a stale
+/// lockfile: a lock left by a crashed process keeps refusing writes until a
+/// human removes the named file.
 pub(crate) fn lock_store(store: &Path) -> Result<StoreLock> {
+    lock_store_with(store, LOCK_BUDGET)
+}
+
+fn lock_store_with(store: &Path, budget: LockBudget) -> Result<StoreLock> {
     let lock_path = lock_path_for(store);
     if let Some(parent) = lock_path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    for _ in 0..LOCK_MAX_ATTEMPTS {
+    let mut seen: Option<LockInstance> = None;
+    let mut same_holder_polls: u32 = 0;
+    for _ in 0..budget.total_attempts {
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -170,7 +239,33 @@ pub(crate) fn lock_store(store: &Path) -> Result<StoreLock> {
                 return Ok(guard);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                std::thread::sleep(std::time::Duration::from_millis(LOCK_RETRY_DELAY_MS));
+                match current_holder(&lock_path) {
+                    // Released between our create and our stat: retry now.
+                    Holder::Released => {
+                        seen = None;
+                        same_holder_polls = 0;
+                        continue;
+                    }
+                    Holder::Instance(inst) if seen.as_ref() != Some(&inst) => {
+                        // A different holder than last poll: the queue moved.
+                        seen = Some(inst);
+                        same_holder_polls = 0;
+                    }
+                    Holder::Instance(_) | Holder::Unknown => {}
+                }
+                same_holder_polls += 1;
+                if same_holder_polls >= budget.per_holder_attempts {
+                    anyhow::bail!(
+                        "refusing to write {}: store lock {} is held by another process \
+                         (one holder kept it for ~{} ms). If no compass process is running, \
+                         the lock is stale: remove {} and retry.",
+                        store.display(),
+                        lock_path.display(),
+                        u64::from(budget.per_holder_attempts) * budget.retry_delay_ms,
+                        lock_path.display()
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(budget.retry_delay_ms));
             }
             Err(e) => {
                 return Err(e).with_context(|| {
@@ -184,13 +279,13 @@ pub(crate) fn lock_store(store: &Path) -> Result<StoreLock> {
         }
     }
     anyhow::bail!(
-        "refusing to write {}: store lock {} is held by another process \
-         (gave up after ~{} ms). If no compass process is running, the lock is \
-         stale: remove {} and retry.",
+        "refusing to write {}: store lock {} kept changing hands but this process \
+         never acquired it (gave up after {} polls, ~{} ms). Retry when fewer \
+         compass processes are running.",
         store.display(),
         lock_path.display(),
-        u64::from(LOCK_MAX_ATTEMPTS) * LOCK_RETRY_DELAY_MS,
-        lock_path.display()
+        budget.total_attempts,
+        u64::from(budget.total_attempts) * budget.retry_delay_ms,
     )
 }
 
@@ -254,7 +349,14 @@ pub fn record(
     // concurrent recorders cannot lose each other's entries.
     let _lock = lock_store(&store_path(root))?;
     let mut outcomes = load(root)?;
-    let seq = outcomes.last().map(|o| o.seq + 1).unwrap_or(0);
+    // max+1, not last+1: the store may be non-monotonic (hand edit, merge),
+    // and last+1 would then duplicate an existing seq. Overflow fails closed.
+    let seq = match outcomes.iter().map(|o| o.seq).max() {
+        None => 0,
+        Some(m) => m.checked_add(1).ok_or_else(|| {
+            anyhow::anyhow!("outcome seq overflow: store already holds seq {m} (u64::MAX)")
+        })?,
+    };
     let outcome = Outcome {
         seq,
         recorded_at: now_unix(),
@@ -616,5 +718,94 @@ mod tests {
             let back: Verdict = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(back, v);
         }
+    }
+
+    /// Replace the lockfile with a fresh instance (new inode) every few ms,
+    /// never leaving the path free, until `stop` is set; then release it.
+    fn spawn_rotator(
+        lock: PathBuf,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> std::thread::JoinHandle<()> {
+        std::fs::write(&lock, b"holder").expect("seed lock");
+        std::thread::spawn(move || {
+            let mut n = 0u64;
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                let mut tmp = lock.as_os_str().to_owned();
+                tmp.push(format!(".rot{n}"));
+                let tmp = PathBuf::from(tmp);
+                std::fs::write(&tmp, n.to_string()).expect("write rot");
+                std::fs::rename(&tmp, &lock).expect("rotate lock");
+                n += 1;
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            std::fs::remove_file(&lock).expect("release lock");
+        })
+    }
+
+    #[test]
+    fn lock_waits_past_per_holder_budget_while_holders_change() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = dir.path().join("s.json");
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let rot = spawn_rotator(lock_path_for(&store), stop.clone());
+        let budget = LockBudget {
+            per_holder_attempts: 100,
+            total_attempts: 100_000,
+            retry_delay_ms: 5,
+        };
+        let stopper = {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                // Several per-holder budgets' worth (>= 100 polls * 5 ms each).
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+        };
+        let t = std::time::Instant::now();
+        let got = lock_store_with(&store, budget);
+        stopper.join().unwrap();
+        rot.join().unwrap();
+        assert!(
+            got.is_ok(),
+            "a busy lock that keeps changing hands must not be refused as stale: {:?}",
+            got.err()
+        );
+        assert!(t.elapsed() >= std::time::Duration::from_millis(1500));
+    }
+
+    #[test]
+    fn lock_refuses_when_one_holder_keeps_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = dir.path().join("s.json");
+        std::fs::write(lock_path_for(&store), b"stale").unwrap();
+        let budget = LockBudget {
+            per_holder_attempts: 20,
+            total_attempts: 100_000,
+            retry_delay_ms: 5,
+        };
+        let err = lock_store_with(&store, budget).expect_err("stale lock must refuse");
+        assert!(err.to_string().contains("stale"), "{err}");
+        assert!(
+            lock_path_for(&store).exists(),
+            "a stale lock is never reaped"
+        );
+    }
+
+    #[test]
+    fn lock_refuses_at_total_cap_even_while_holders_change() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = dir.path().join("s.json");
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let rot = spawn_rotator(lock_path_for(&store), stop.clone());
+        let budget = LockBudget {
+            per_holder_attempts: 1_000_000,
+            total_attempts: 50,
+            retry_delay_ms: 5,
+        };
+        let got = lock_store_with(&store, budget);
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        rot.join().unwrap();
+        let err = got.expect_err("total cap must refuse");
+        assert!(err.to_string().contains("never acquired"), "{err}");
     }
 }

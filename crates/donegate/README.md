@@ -25,17 +25,24 @@ and reads exit codes — so it can never hit a rate limit.
 
 `donegate gate` is wired to the Claude Code **Stop** hook. On each stop it:
 
-1. reads the hook JSON from stdin (`session_id`, `cwd`, `stop_hook_active`) and
-   resolves the roots to judge: the hook `cwd` plus the git toplevel of every file
-   the session transcript records as written (`harness_core::session_roots`). Checks
-   of every written root run, not only the cwd's. An unresolvable written root, or a
-   session that wrote files into a root whose config exists but declares no check,
-   blocks naming the roots. If every written root has no donegate config at all, the
-   stop is allowed with an empty stdout (no `systemMessage`; user ruling 2026-10-27).
-   The allow is still recorded: stderr says "donegate not configured for <roots>: no
-   checks ran", and a `"verdict":"unconfigured"` entry naming the session and each such
-   root (`roots`) is appended to `<state_dir>/log.jsonl`.
-   A session with no recorded writes is unaffected;
+1. reads the hook JSON from stdin (`session_id`, `cwd`, `stop_hook_active`).
+   **donegate judges only the hook `cwd`.** User rulings 2026-11-08, verbatim:
+   "donegateのworktreeテストは問題ありすぎるので即時に停止" (donegate's worktree
+   tests are too problematic; stop them immediately) and
+   "donegateそのものが他のworktreeを見たり検証したりテストしたりすることは禁止とする"
+   (donegate itself may not look at, verify or test other worktrees). Other
+   worktrees or roots the session wrote into are not resolved, listed, run,
+   blocked on or named. The transcript is read only to learn whether a written
+   path lies inside the cwd (a path comparison; nothing outside the cwd is
+   opened); an unreadable transcript blocks. A write into a worktree nested
+   inside the cwd (e.g. `.claude/worktrees/…`) counts as a write into the cwd.
+   A session that wrote into the cwd whose config exists but declares no check
+   blocks naming the cwd. If the cwd has no donegate config at all, the stop is
+   allowed with an empty stdout (no `systemMessage`; user ruling 2026-10-27).
+   The allow is still recorded: stderr says "donegate not configured for <cwd>: no
+   checks ran", and a `"verdict":"unconfigured"` entry naming the session and the
+   cwd (`roots`) is appended to `<state_dir>/log.jsonl`.
+   A session with no recorded writes into the cwd is unaffected;
 2. loads `./donegate.toml` (or `~/.donegate/config.toml`);
 3. asks `git` which files changed, and selects the checks whose `when_changed`
    globs match (unscoped checks always run);
@@ -61,6 +68,41 @@ and reads exit codes — so it can never hit a rate limit.
    Raw `--- stdout ---` / `--- stderr ---` sections and progress lines are never
    shown.
 
+### SubagentStop
+
+(The deferral of roots that only still-running background subagents wrote was
+removed with the 2026-11-08 rulings: the parent's Stop judges only its cwd.)
+
+`donegate subagent-gate` is the **SubagentStop** hook (registered in
+`hooks/hooks.json`, and by `donegate install`). It judges the hook cwd only,
+and only when the stopping subagent's transcript (`agent_transcript_path`, or
+`<transcript dir>/<stem>/subagents/agent-<agent_id>.jsonl`) records a write
+inside the cwd; no other worktree or root is judged. Green allows, red blocks
+the subagent's stop with `{"decision":"block"}`, an identical repeat is waived
+with a `systemMessage`, and `max_attempts` gives up. The counter and the waiver
+memory are keyed `<session>-agent-<agent_id>`, so the subagent's chain is
+separate from the parent's. A subagent that wrote nothing inside the cwd is
+allowed silently. A cwd with no config or no declared checks is not judged
+here. A cwd whose checks donegate refuses to run blocks. An unlocatable or
+unreadable agent transcript also blocks. `donegate skip` is not consumed at
+SubagentStop because it belongs to the parent session.
+
+### Duplicate `cargo test` denial (dup-test hooks)
+
+`hooks/hooks.json` also wires `donegate dup-test pre` (PreToolUse, Bash) and
+`donegate dup-test post` (PostToolUse and PostToolUseFailure, Bash). `pre`
+denies (`permissionDecision: "deny"`) a plain single `cargo test ...` that
+already PASSED with the same normalized argv on the same tree; the reason says
+so, and that a genuine re-run means changing the tree or the command. Key:
+canonical cwd + git toplevel + argv + the passcache tree state (HEAD, `main`,
+working-tree content incl. untracked files). `post` records a pass only for
+`hook_event_name == "PostToolUse"` with `tool_response.interrupted == false`
+and a key equal to the one `pre` snapshotted for the same `tool_use_id`. Any
+doubt — compound commands, `cd`, quotes/`$`, `--manifest-path`/`--config`, not
+a git repo, a git error, a corrupt store, an unknown event — means no deny and
+no record. Store: `~/.donegate/dup-test/`. Non-`cargo test` calls return right
+after the stdin JSON parse. `DONEGATE_DISABLE=1` turns it off.
+
 ### Session records of failing output
 
 Every failing check's full raw output is saved byte-for-byte to
@@ -75,15 +117,28 @@ If the record cannot be saved, the check still runs and the stop still blocks;
 the reason says the full output could not be saved (with why) and shows **more**,
 not less: the digest plus the last `max(output_tail_lines, 40)` raw lines.
 The repeat ledger keys a block on its reason with the per-run record path
-normalised. The attempt counter (`attempt N/max`) is deliberately kept in that
-key, so the same failure is never waived as a repeat below `max_attempts`: every
-stop under the cap blocks. The bounded exit is the attempt cap plus its give-up
-sentinel (`donegate:giveup:<check>`, see Loop safety).
+normalised (the attempt counter `attempt N/max` stays in that key).
+
+**Identical-finding waiver** (backlog b80023b3). Within one chain of consecutive
+blocks, a Stop whose root tree (HEAD, tracked diff, untracked files) and failing
+check outputs are identical to that root's previous block is NOT blocked again:
+donegate allows it with a JSON `systemMessage` saying nothing new was verified
+and the checks are still RED. A waived stop does not count toward
+`max_attempts`; a changed tree still blocks. It applies only to a Stop hook
+payload with a non-empty `session_id` (manual `donegate gate` keeps exiting 1;
+a payload without a session id blocks). The memory is cleared when the chain
+ends (green, give-up, skip, or the counter's `reset_after_secs` idle reset).
+Separately, the shared `harness_core::repeat` ledger (ruling 2026-09-18) can
+still waive a block whose text recurs in the same session. A tree or
+signature that cannot be determined blocks. Waived stops are logged
+(`repeat-waived` in the gate log) but write no overwatch ledger entry.
+The bounded exit is the attempt cap plus its
+give-up sentinel (`donegate:giveup:<check>`, see Loop safety).
 
 ### Loop safety
 
 - A per-session **attempt counter** gives up after `max_attempts` consecutive
-  blocks (default 3) and allows the stop, so a genuinely stuck agent isn't
+  blocks (default 2) and allows the stop, so a genuinely stuck agent isn't
   trapped. The counter resets after `reset_after_secs` of idle, or on any green.
 - **Escape hatch**: `donegate skip --reason "<why>"` — consumed once, allows
   the next stop, and applies only to the session that issued it. A reason is
@@ -121,7 +176,7 @@ cargo install --path .
 cd your/project
 donegate init          # writes a starter donegate.toml for your stack
 donegate trust         # honor this project's donegate.toml (project configs are trust-gated)
-donegate install       # merges the Stop hook into ~/.claude/settings.json (backs it up)
+donegate install       # merges the Stop + SubagentStop hooks into ~/.claude/settings.json (backs it up)
 ```
 
 A project `donegate.toml` is only honored once the project is trusted

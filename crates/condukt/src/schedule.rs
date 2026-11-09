@@ -12,8 +12,8 @@
 //! same decomposition always yields the same schedule.
 
 use crate::model::{Batch, Class, Decomposition, Schedule, Task};
-use blastguard::classify::{classify_change, Risk};
-use blastguard::diffrisk::SensitiveConfig;
+use blastguard::classify::{classify, classify_change, classify_commands, Risk};
+use blastguard::diffrisk::{classify_diff, SensitiveConfig};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use std::collections::{HashMap, HashSet};
 
@@ -342,6 +342,14 @@ pub fn validate(dec: &Decomposition) -> Vec<String> {
 /// any of them trips the deterministic force-gate. Shared with
 /// [`crate::gate_exec::run_gate_check`] so the gate-exec decision classifies the
 /// exact same action text this force-gate does (no duplicated join logic).
+///
+/// In [`schedule`] this prose force-gates ONLY on a deploy/push/publish signal
+/// ([`blastguard::classify::classify`] answering High + irreversible, i.e.
+/// `requires_gate()`). A prose history-rewrite needle (`filter-branch`,
+/// `git rebase`, ...) is Medium + reversible and does NOT force-gate on its
+/// own (backlog 3a0e30a8): prose that merely NAMES a command is not a command
+/// the task runs. The declared commands keep the full `>= Medium` predicate
+/// via [`resolve_action_gate`].
 pub(crate) fn task_action_text(t: &Task) -> String {
     let mut s = t.title.clone();
     if let Some(dc) = &t.done_criteria {
@@ -386,16 +394,142 @@ pub(crate) fn task_commands(t: &Task) -> Option<Vec<String>> {
 /// * `Undetermined` → **always gate**, carrying the reason so the caller can
 ///   emit a warning that names the misconfiguration. "Could not measure this
 ///   task's risk" must never resolve to the permissive `false`.
+///
+/// Since backlog 3a0e30a8 [`schedule`] calls [`resolve_action_gate`] directly
+/// (it needs the gating assessment for the warning); this function is the
+/// two-valued projection of that same predicate, kept so the existing tests
+/// pin it. It is a thin delegate, so the tests exercise the code `schedule`
+/// runs.
+#[cfg(test)]
 fn resolve_force_gate(
     d: harness_core::verdict::Determination<blastguard::classify::RiskAssessment>,
 ) -> (bool, Option<String>) {
+    match resolve_action_gate(d) {
+        ActionGate::Gate(_) => (true, None),
+        ActionGate::NoGate => (false, None),
+        ActionGate::Undetermined(why) => (true, Some(why)),
+    }
+}
+
+/// Three-valued resolution of the declared-commands + sensitive-path
+/// classification (backlog 3a0e30a8). Carries the gating assessment in
+/// [`ActionGate::Gate`] so the schedule warning can state it, and names the
+/// undetermined state instead of collapsing it to an empty value.
+#[derive(Debug)]
+enum ActionGate {
+    /// Measured and gating (`requires_gate() || risk >= Medium`).
+    Gate(blastguard::classify::RiskAssessment),
+    /// Measured and not gating.
+    NoGate,
+    /// Could not be measured — always force-gates (FAIL-CLOSED), with reason.
+    Undetermined(String),
+}
+
+/// The single force-gate predicate for declared commands + sensitive paths:
+/// `Known(a)` gates iff `a.requires_gate() || a.risk >= Medium`;
+/// `Undetermined` always gates (FAIL-CLOSED) and carries the reason.
+fn resolve_action_gate(
+    d: harness_core::verdict::Determination<blastguard::classify::RiskAssessment>,
+) -> ActionGate {
     match d.require() {
         harness_core::verdict::Required::Determined(a) => {
-            (a.requires_gate() || a.risk >= Risk::Medium, None)
+            if a.requires_gate() || a.risk >= Risk::Medium {
+                ActionGate::Gate(a)
+            } else {
+                ActionGate::NoGate
+            }
         }
         harness_core::verdict::Required::Blocked(verdict) => {
-            (true, Some(verdict.as_str().to_string()))
+            ActionGate::Undetermined(verdict.as_str().to_string())
         }
+    }
+}
+
+/// Human-readable statement of the assessment that force-gated a task, used
+/// verbatim in the schedule warning. Only `requires_gate()` (High +
+/// irreversible) is called a "high-risk irreversible action"; anything else
+/// names its actual tier and reversibility (backlog 3a0e30a8).
+fn describe_assessment(a: &blastguard::classify::RiskAssessment) -> String {
+    if a.requires_gate() {
+        return "high-risk irreversible action".to_string();
+    }
+    let tier = match a.risk {
+        Risk::Low => "low",
+        Risk::Medium => "medium",
+        Risk::High => "high",
+    };
+    let rev = if a.reversible {
+        "reversible"
+    } else {
+        "irreversible"
+    };
+    format!("{tier}-risk {rev} action (review required at risk >= medium)")
+}
+
+/// Name WHAT force-gated a task (backlog 6e97a022), for the schedule warning.
+///
+/// The gating decision itself is made on the merged assessment in
+/// [`schedule`]; this only attributes it. Each declared command, each touched
+/// path (sensitive-path signal) and each prose field is re-classified on its
+/// own with the same predicate that gated it: commands/paths gate on
+/// `requires_gate() || risk >= Medium` ([`resolve_action_gate`]), prose only on
+/// `requires_gate()`. Because [`blastguard::classify::RiskAssessment::merge`]
+/// is max-risk / and-reversible, a gating merged assessment always has at least
+/// one gating component among commands and paths, so the attribution is
+/// complete for them. Prose is classified as one concatenated string, so a
+/// needle can straddle two fields; that case is named as such rather than
+/// dropped. If nothing can be attributed the result says "culprit unknown"
+/// explicitly — an empty culprit list is never rendered as silence.
+fn gate_culprits(
+    t: &Task,
+    sensitive: &SensitiveConfig,
+    action_gated: bool,
+    prose_gated: bool,
+) -> String {
+    let mut out: Vec<String> = Vec::new();
+    if action_gated {
+        for c in task_commands(t).unwrap_or_default() {
+            let a = classify_commands(std::slice::from_ref(&c));
+            if a.requires_gate() || a.risk >= Risk::Medium {
+                out.push(format!("command `{c}`"));
+            }
+        }
+        for f in &t.touched_files {
+            match resolve_action_gate(classify_diff(std::slice::from_ref(f), "", sensitive)) {
+                ActionGate::Gate(_) => out.push(format!("sensitive path `{f}`")),
+                ActionGate::Undetermined(why) => {
+                    out.push(format!("path `{f}` (risk undetermined: {why})"))
+                }
+                ActionGate::NoGate => {}
+            }
+        }
+    }
+    if prose_gated {
+        let mut fields: Vec<(&str, &str)> = vec![("title", t.title.as_str())];
+        if let Some(dc) = &t.done_criteria {
+            fields.push(("done_criteria", dc.as_str()));
+        }
+        for f in &t.touched_files {
+            fields.push(("touched_files entry", f.as_str()));
+        }
+        let before = out.len();
+        for (name, text) in fields {
+            if classify(text).requires_gate() {
+                out.push(format!("{name} `{text}`"));
+            }
+        }
+        if out.len() == before {
+            out.push(
+                "task prose (title + done_criteria + touched_files; no single field \
+                 matches alone)"
+                    .to_string(),
+            );
+        }
+    }
+    if out.is_empty() {
+        "culprit unknown".to_string()
+    } else {
+        format!("matched {}", out.join(", "))
     }
 }
 
@@ -418,9 +552,16 @@ fn resolve_force_gate(
 /// trip `requires_gate()` on its own. We therefore force-gate on
 /// `requires_gate() || risk >= Risk::Medium`, which is exactly the "review
 /// required" OR that `classify_diff`'s doc comment anticipates callers add.
+/// That predicate applies to the declared commands ([`task_commands`]) and the
+/// sensitive-path signal. The task PROSE ([`task_action_text`]) is classified
+/// separately and force-gates only on `requires_gate()` — a deploy/push/publish
+/// signal; a prose history-rewrite needle (Medium + reversible) does not gate
+/// on its own (backlog 3a0e30a8). The warning states the assessment that
+/// gated the task; only High + irreversible is worded "high-risk irreversible
+/// action".
 ///
 /// A classification that could NOT be determined (an unparseable configured
-/// sensitive-path glob) force-gates as well, via [`resolve_force_gate`], and
+/// sensitive-path glob) force-gates as well, via [`resolve_action_gate`], and
 /// emits a warning naming the misconfiguration — "could not measure the risk"
 /// is never read as "low risk".
 pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
@@ -485,27 +626,55 @@ pub fn schedule(dec: &Decomposition, shared_globs: &[String]) -> Schedule {
         // risk" is NOT "this task is low risk" — it force-gates, exactly like a
         // measured Medium+, and says so in a warning so the misconfiguration is
         // visible rather than silently widening the gate.
+        //
+        // Prose vs commands (backlog 3a0e30a8): the declared commands and the
+        // sensitive-path signal are classified with empty prose and keep the
+        // full `requires_gate() || >= Medium` predicate (and the Undetermined
+        // arm). The prose is classified on its own and force-gates only when it
+        // carries the deploy/push/publish signal `task_action_text` promises
+        // (High + irreversible); a prose history-rewrite needle (Medium +
+        // reversible) only NAMES a command and does not gate by itself.
         let commands = task_commands(t);
-        let (force_gate, undetermined_why) = resolve_force_gate(classify_change(
-            &task_action_text(t),
+        let action = resolve_action_gate(classify_change(
+            "",
             commands.as_deref(),
             &t.touched_files,
             "",
             &sensitive,
         ));
-        if force_gate {
+        let prose_assessment = classify(&task_action_text(t));
+        // Prose force-gates only on a deploy/push/publish signal.
+        let prose_gating = prose_assessment.requires_gate().then_some(prose_assessment);
+        // The assessment that gated the task, stated in the warning. Only a
+        // High + irreversible one is worded "high-risk irreversible action".
+        let action_gated = matches!(action, ActionGate::Gate(_));
+        let prose_gated = prose_gating.is_some();
+        let gating = match (action, prose_gating) {
+            (ActionGate::Undetermined(why), _) => Some(Err(why)),
+            (ActionGate::Gate(a), Some(p)) => Some(Ok(a.merge(p))),
+            (ActionGate::Gate(a), None) => Some(Ok(a)),
+            (ActionGate::NoGate, Some(p)) => Some(Ok(p)),
+            (ActionGate::NoGate, None) => None,
+        };
+        if let Some(gating) = gating {
             gated.push(t.id.clone());
-            if let Some(why) = undetermined_why {
-                sched.warnings.push(format!(
+            match gating {
+                Err(why) => sched.warnings.push(format!(
                     "task '{}' force-gated: risk could not be determined ({why}) — \
                      resolved to the restricted side",
                     t.id
-                ));
-            } else if !matches!(t.class, Class::Gated) {
-                sched.warnings.push(format!(
-                    "task '{}' force-gated: high-risk irreversible action (declared class {:?})",
-                    t.id, t.class
-                ));
+                )),
+                Ok(a) => {
+                    if !matches!(t.class, Class::Gated) {
+                        sched.warnings.push(format!(
+                            "task '{}' force-gated: {} (declared class {:?}; {})",
+                            t.id,
+                            describe_assessment(&a),
+                            t.class,
+                            gate_culprits(t, &sensitive, action_gated, prose_gated)
+                        ));
+                    }
+                }
             }
             continue;
         }

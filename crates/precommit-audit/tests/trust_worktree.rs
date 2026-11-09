@@ -1,11 +1,13 @@
-//! backlog 4cacdfae: a LINKED git worktree whose main working tree is in the
-//! trust store must honor its own `.precommit-audit.toml`. Exact-match
-//! `is_trusted` does not. End-to-end against the real binary with a private
-//! `HOME` (trust store) so no process-global env is mutated here.
+//! backlog 4cacdfae, INVERTED by the user ruling 2026-11-08: a LINKED git
+//! worktree whose main working tree is in the trust store does NOT inherit that
+//! trust, so its `.precommit-audit.toml` is not honored and the audit REFUSES
+//! (exit 1 in precommit mode, "REFUSING TO AUDIT"). End-to-end against the
+//! real binary with a private `HOME` (trust store) so no process-global env is
+//! mutated here.
 //!
-//! Observable: a custom `[[rule]]` blocks the commit (exit 1) only when the
-//! project config is honored; when it is ignored the audit is clean (exit 0)
-//! and stderr says the config "is not trusted".
+//! Observable: a custom `[[rule]]` reports `NO-TODO-FIXME` (exit 1) only when
+//! the project config is honored. A refusal is ALSO exit 1, so the tests pin
+//! the stderr reason, not the exit code alone.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
@@ -99,7 +101,7 @@ fn audit(root: &Path, home: &Path) -> (i32, String) {
 }
 
 #[test]
-fn linked_worktree_of_trusted_main_honors_project_config() {
+fn linked_worktree_of_trusted_main_does_not_inherit_and_refuses() {
     let (home, base) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let (main, wt) = fixture(base.path());
     trust(&main, home.path());
@@ -108,27 +110,40 @@ fn linked_worktree_of_trusted_main_honors_project_config() {
         code, 1,
         "apparatus: trusted main honors the rule; stderr: {err}"
     );
+    assert!(
+        err.contains("NO-TODO-FIXME"),
+        "apparatus: the custom rule fires in the trusted main; stderr: {err}"
+    );
+    // User ruling 2026-11-08: no inheritance. Exit 1 alone would also be what
+    // an honored rule produces, so pin the REASON: the refusal is reported and
+    // the project's custom rule never ran.
     let (code, err) = audit(&wt, home.path());
-    assert_eq!(
-        code, 1,
-        "a linked worktree of a TRUSTED main must honor its project config; stderr: {err}"
+    assert_eq!(code, 1, "worktree must refuse; stderr: {err}");
+    assert!(
+        err.contains("REFUSING TO AUDIT") && err.contains(".precommit-audit.toml"),
+        "a linked worktree of a TRUSTED main must NOT inherit trust: it must refuse, naming the \
+         file; stderr: {err}"
     );
     assert!(
-        !err.contains("not trusted"),
-        "must not warn untrusted; stderr: {err}"
+        !err.contains("NO-TODO-FIXME"),
+        "the untrusted project rule must not have been honored; stderr: {err}"
     );
 }
 
 #[test]
-fn linked_worktree_of_untrusted_main_still_ignores_project_config() {
+fn linked_worktree_of_untrusted_main_refuses_to_audit() {
     let (home, base) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let (_main, wt) = fixture(base.path());
     let (code, err) = audit(&wt, home.path());
     assert_eq!(
-        code, 0,
-        "untrusted worktree config must be ignored; stderr: {err}"
+        code, 1,
+        "untrusted worktree config must be a refusal, not a pass; stderr: {err}"
     );
-    assert!(err.contains("not trusted"), "should warn; stderr: {err}");
+    assert!(
+        err.contains("REFUSING TO AUDIT") && err.contains(".precommit-audit.toml"),
+        "must say why; stderr: {err}"
+    );
+    assert!(!err.contains("NO-TODO-FIXME"), "stderr: {err}");
 }
 
 #[test]

@@ -59,10 +59,11 @@ diff_out="$(git diff --name-only HEAD -- 2>/dev/null)" || diff_rc=$?
 # a legitimate, fully-DETERMINABLE state — "no baseline, everything present is
 # new" — not a broken environment, so it must not fail closed. Handle it by
 # treating every tracked/staged file as changed. Any OTHER git-diff failure is a
-# genuine cannot-determine and falls through to the fail-closed check below.
+# genuine cannot-determine and falls through to the fail-closed check below — as
+# does a failure of the ls-files call itself, whose rc is kept rather than reset.
 if [ "$diff_rc" -ne 0 ] && ! git rev-parse --verify -q HEAD >/dev/null 2>&1; then
-    diff_out="$(git ls-files 2>/dev/null)"
     diff_rc=0
+    diff_out="$(git ls-files)" || diff_rc=$?
 fi
 
 untracked_out=""
@@ -77,7 +78,37 @@ if [ "$diff_rc" -ne 0 ] || [ "$untracked_rc" -ne 0 ]; then
     exit 1
 fi
 
-changed="$(printf '%s\n%s\n' "$diff_out" "$untracked_out" | sort -u)"
+# COMMITTED-BUT-UNMERGED work (backlog 355d3b12): `git diff HEAD` sees only the
+# uncommitted tree, so a worker that COMMITTED its crate changes on a task branch
+# (clean tree) was reported "no crate touched". Add the files changed between the
+# merge-base with the default branch (`main`) and HEAD. A merge-base that cannot
+# be determined (no `main`, unrelated history, git failure) is UNDETERMINED — it
+# must never read as "nothing changed" — so it fails CLOSED (exit 1) with the
+# reason. An unborn HEAD has no commits at all, hence nothing committed to add.
+committed_out=""
+committed_rc=0
+head_rc=0
+git rev-parse --verify -q HEAD >/dev/null 2>&1 || head_rc=$?
+if [ "$head_rc" -eq 0 ]; then
+    mb="$(git merge-base HEAD main 2>/dev/null)" || committed_rc=$?
+    if [ "$committed_rc" -eq 0 ] && [ -n "$mb" ]; then
+        committed_out="$(git diff --name-only "$mb" HEAD -- 2>/dev/null)" || committed_rc=$?
+    elif [ "$committed_rc" -eq 0 ]; then
+        committed_rc=1
+    fi
+elif [ "$head_rc" -ne 1 ]; then
+    # Only rc 1 means an unborn HEAD; any other failure (e.g. 128) is unknowable.
+    echo "test-changed-crates: cannot determine whether HEAD is born (rev-parse rc=$head_rc) — committed-but-unmerged changes cannot be enumerated" >&2
+    echo "  refusing to pass a turn as 'nothing to test' when the change set is unknown — fix the repo state, or disable this check in donegate.toml" >&2
+    exit 1
+fi
+if [ "$committed_rc" -ne 0 ]; then
+    echo "test-changed-crates: cannot determine the merge-base of HEAD with main (rc=$committed_rc) — committed-but-unmerged changes cannot be enumerated" >&2
+    echo "  refusing to pass a turn as 'nothing to test' when the change set is unknown — fix the repo state (a local 'main' branch must exist), or disable this check in donegate.toml" >&2
+    exit 1
+fi
+
+changed="$(printf '%s\n%s\n%s\n' "$diff_out" "$untracked_out" "$committed_out" | sort -u)"
 
 # crates/<dir>/... -> <dir>
 dirs="$(printf '%s\n' "$changed" | sed -n 's#^crates/\([^/]*\)/.*#\1#p' | sort -u)"
@@ -131,15 +162,45 @@ fi
 "$REPO/scripts/cap-target-dir.sh"
 
 echo "test-changed-crates: testing$pkgs"
+# Where cap-target-dir.sh leaves its "cleaned at <epoch>" marker (best effort).
+cap_marker=""
+if meta="$(cargo metadata --no-deps --format-version=1)"; then
+    td="$(printf '%s' "$meta" | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
+    [ -n "$td" ] && cap_marker="${td%/}/.cap-cleaned-at"
+fi
+
 failed=""
+env_failed=""
 for p in $pkgs; do
-    if ! cargo test -p "$p" --quiet; then
-        failed="$failed $p"
+    run_start="$(date +%s)"
+    out_file="$(mktemp)"
+    # stderr is merged into stdout so the output can be inspected, then replayed.
+    cargo test -p "$p" --quiet >"$out_file" 2>&1
+    rc=$?
+    cat "$out_file"
+    if [ "$rc" -ne 0 ]; then
+        # Environment failure ONLY on two observed facts together: the spawn
+        # NotFound signature in the output AND a cap-target-dir clean stamped
+        # during this run. Either alone stays an ordinary failure.
+        cleaned_at=""
+        [ -n "$cap_marker" ] && [ -f "$cap_marker" ] && cleaned_at="$(cat "$cap_marker")"
+        case "$cleaned_at" in '' | *[!0-9]*) cleaned_at="" ;; esac
+        if grep -q 'kind: NotFound' "$out_file" && [ -n "$cleaned_at" ] && [ "$cleaned_at" -ge "$run_start" ]; then
+            env_failed="$env_failed $p"
+        else
+            failed="$failed $p"
+        fi
     fi
+    rm -f "$out_file"
 done
 
+if [ -n "$env_failed" ]; then
+    echo "test-changed-crates: ENVIRONMENT failure for$env_failed - undetermined, not a test verdict: the target dir was cleaned (cap-target-dir.sh cargo clean) while this run was executing, deleting the test binary (NotFound on spawn). Re-run." >&2
+fi
 if [ -n "$failed" ]; then
     echo "test-changed-crates: FAILED for$failed" >&2
+fi
+if [ -n "$failed$env_failed" ]; then
     exit 1
 fi
 

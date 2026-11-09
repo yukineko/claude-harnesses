@@ -16,7 +16,9 @@ observation). Two shapes are driven here:
   (1) several sequential merges all COMPLETE between Pre and Post, clean tree.
   (2) Post is taken from inside the pre-merge-commit hook of the 2nd merge:
       HEAD = 1st merge commit (!= Pre HEAD), 2nd branch's tree already in
-      index + worktree, no MERGE_HEAD yet.
+      index + worktree, no MERGE_HEAD yet. Since user ruling 2026-11-08 this
+      shape is REFUSED (the 2dee8b0e merge-tree scan over every local branch
+      was dropped, with no compensating mechanism).
 
 Fixture repos live under a temp dir; git runs with inherited GIT_* removed.
 
@@ -55,6 +57,7 @@ if n != 2:
     sys.exit(0)
 env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 env["CLAUDE_PROJECT_DIR"] = cfg["main"]
+env["HOME"] = str(Path(cfg["main"]).parent / "home")  # sandbox the write record
 def g(*a):
     return subprocess.run(["git", "-C", cfg["main"], *a], env=env,
                           capture_output=True, text=True).stdout
@@ -147,9 +150,18 @@ class MultiMerge(ObserveGuardBase):
         parents = git(self.main, "rev-list", "--parents", "-n1", res["head"]).stdout.split()
         self.assertEqual(len(parents), 3, "anti-vacuity: HEAD at Post is a merge commit")
         sys.stderr.write("\n[observed] guard rc=%d stderr:\n%s\n" % (res["rc"], res["stderr"]))
-        self.assertEqual(res["rc"], 0,
-                         "guard refused Post taken mid-way through a multi-merge "
-                         "command: %s" % res["stderr"])
+        # RE-SCOPED by user ruling 2026-11-08 ("donegateそのものが他のworktreeを
+        # 見たり検証したりテストしたりすることは禁止とする。他のgateでも禁止とする。
+        # ..."): backlog 2dee8b0e's allow for this window needed a `git
+        # merge-tree` of HEAD against EVERY local branch, i.e. reading other
+        # sessions' branches. That scan was dropped with no compensating
+        # mechanism, so this window now has incomplete evidence and is REFUSED
+        # (the restrictive side). This pins the refusal; it does not prove the
+        # window is anything other than what the anti-vacuity checks show.
+        self.assertEqual(res["rc"], 2,
+                         "Post taken mid-way through a multi-merge command must be "
+                         "refused now that the merge-tree scan is gone: %s" % res["stderr"])
+        self.assertIn("mb-two.txt", res["stderr"], "the refusal names the in-window path")
 
 
 if __name__ == "__main__":

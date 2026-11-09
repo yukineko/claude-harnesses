@@ -277,7 +277,8 @@ directory tree` で拒否されたこと。
   置き場の*厳密な*内側にあるときだけ `allow`。
 - **変わらないもの**: 保護パスの優先（`<置き場>/x/.git/hooks` などは従来どおり deny）
   ／置き場それ自身とその上（`rm -rf ~/.condukt/worktrees` は deny）／内外混在
-  （従来の判定へ落ちる）／glob（`~/.condukt/worktrees/*`）／`..` 成分を含む
+  （従来の判定へ落ちる）／glob（`~/.condukt/worktrees/*`。linked worktree チェックアウトの
+  厳密な内側を親とする wildcard は 0.2.287 から別規則で `allow`、下記）／`..` 成分を含む
   オペランドすべて（外へ出るかどうかに関わらず）・symlink で外を指すもの／解決できないパス（`Undetermined` は allow にならない）／
   ライブラリ利用（`SafeRoots::none()` には置き場が無い）／非再帰 `rm`・`rm -d`。
 - **既知の未修正事項**: 安全ルート（プロジェクト・一時ディレクトリ）に対する `ask`
@@ -286,6 +287,40 @@ directory tree` で拒否されたこと。
   プロジェクトを名指しするが、実際に消えるのは `<lnk の指す先の親>/x`。`cd lnk/..` による
   cwd 追跡も、`<project>/lnk/..` と綴られた payload の cwd も同様にずれる（payload の
   cwd の規則が止めるのは worktree の `allow` だけで、この `ask` は止めない）。`allow` にはならないが、人間に見せる質問が誤っている。
+
+### linked worktree チェックアウト内の作業ツリー破棄・wildcard `rm` は `allow` — 0.2.287（ユーザー裁定 2026-11-07）
+
+削除方針の裁定（「消してはいけないのはシステム構成と取り返しのつかない資産だけ。管理された
+使い捨ての場所にある作業成果物は消してよい」）により、**管理された使い捨ての場所**（worktree
+置き場の直下にある linked worktree チェックアウト、および `/tmp`・`/private/tmp`）の中の次の操作は
+確認なしで `allow` になる。
+
+- **git の作業ツリー破棄**（`git restore`、`git checkout --force` / `-- .` / `.` / `-- <path>`、
+  `git reset --hard`、`git clean -f[dx]`、`git switch --force` / `--discard-changes`、
+  `git stash -u` / `-a`）: git が repo を探す起点のディレクトリ（`-C <dir>`、無ければ
+  そのセグメントの解決済み cwd — 行頭の `cd D && ` を含む）が**それ自体** linked worktree
+  チェックアウトであるとき。チェックアウトかどうかはパス文字列ではなく**ディスクの観測**で決める
+  （`SafeRoots::is_linked_worktree_checkout`）: worktree 置き場の直下 1 階層の実ディレクトリ
+  （symlink でない）で、`.git` が `gitdir:` で始まる通常ファイル、置き場より下に symlink が無い。
+  `--work-tree` は同じチェックアウトを指すときだけ可。
+  - 行全体の条件（`git_worktree_eligible`）: 1 つの素の `git` コマンド（または
+    `literal_cd_and_rest` が受理する `cd D && git …`）。区切り文字・クォート・`$`・glob・
+    リダイレクト等なし、先頭語がちょうど `git`、どの語にも `..` 成分なし。`-C`（1 回まで）と
+    `--work-tree` 以外のグローバルオプション（`--git-dir`、`-c`、`--config-env` …）があれば対象外。
+  - **据え置き（従来の判定のまま）**: primary の作業ツリー（`.git` ディレクトリ）、チェックアウトの
+    サブディレクトリ、置き場そのもの、symlink 経由の綴り、展開できない `-C "$WT"`、`..` を含む綴り、
+    複合コマンド、チェックアウトの probe 失敗。`git stash clear` は**対象外**で常に deny
+    （`refs/stash` は全 worktree で共有され、linked worktree から primary の stash が見えることを
+    実測した — clear は他セッションの stash も全部消す）。`git stash drop [<stash>]` は
+    2026-11-08 のユーザー裁定（「drop のみ Allow」）で**どこでも allow**。オブジェクトストア破壊（`gc --prune` 等）と
+    保護パスの判定も変わらない。
+  - 併せて `git clean` の閉じ込め判定は `-C` / `--work-tree` が示すディレクトリを基準にする
+    （以前はセッションの cwd で判定していた）。綴りが解決できない場合は従来の基準のまま。
+- **wildcard を含む再帰 `rm`**（`rm -rf <wt>/subdir/*`）: wildcard の親ディレクトリがチェックアウトの
+  **厳密な内側**（`classify_worktree_checkout` が `Inside`）なら、`/tmp` wildcard と同じ行条件
+  （`tmp_glob_rm_eligible`）で `allow`。親そのものが保護パス（`<wt>/.githooks/pre-*`）なら据え置き。
+  展開先が保護名に当たりうる場合（裸の `*` は常に当たりうる）は `Ctx::in_worktree_checkout` の
+  リフト（絶対パス・1 つの素のコマンド）が要る。チェックアウトそのもの（`<wt>/*`）は対象外。
 
 ## 再帰 `rm` は「何が消えるか」で判定する — 0.2.95（ユーザー裁定、backlog 3aa215e1）
 
@@ -549,6 +584,18 @@ exit 2 を使うのは、panic したのが stdout 書き込みそのもので�
 >   本文を読む。引用無しの区切り・閉じていない本文・インタプリタ/シェルの読み手・
 >   here-document の後のコマンドがあれば従来通り本文も走査する
 >   （`src/detect/heredoc.rs` の `redirect_view_without_quoted_here_document_body`）。
+>   例外（backlog ffce9c59）: 読み手が `git commit -F -` で区切りが引用付きのとき、opener 行の
+>   `|`・`;`・`&&`・`||` 以降（`2>&1 | grep …; git log -1` 等）は git の stdout を受けるか本文を
+>   見ない別コマンドなので、本文は data として全ルールから外す。後続部分は本文から独立した
+>   コマンドとして従来通り判定する（`<<'EOF'; rm -rf /etc` は deny）。`&`・`|&`、`$`・backtick・`\`、
+>   `cat`/`grep`/`egrep`/`fgrep`/`head`/`tail`/`wc` 以外の pipe 先や `<`/`>`/`(`/`)` を含む pipe 段が
+>   あれば従来通り本文も走査する（`git_commit_reader_before_tail`）。
+>   0.2.388 以降（backlog 0fccf1eb）、`>` / `>>` の書き込み先の語は改行をまたいで読まない
+>   （空白・タブだけを飛ばす。`src/detect/redirect.rs` の `skip_redirect_word_gap`）。行末の
+>   `>`（改行またはテキスト末尾の直前）は書き込み先を持たず、シェルでは本文データか構文エラーで
+>   何も開かないため、書き込み先として数えない。以前は本文を走査する形（`cd D; A && cat <<'EOF'`
+>   等）で `>` で終わる本文行（`Co-Authored-By: … <…>`）の次の区切り行が `> EOF` と読まれ、
+>   unplaceable な相対リダイレクトとして deny されていた。
 > - **code-interpreter-inline-eval**: 「形」での一律 deny は廃止され、プログラム本文を
 >   監査する（`analyze_code_interpreter` / `interpreter_code_verdict`、`src/detect/interpreter.rs`）。破壊的な呼び出し
 >   や破壊的なシェル行を含めば `deny`、保護パスを名指しすれば `ask`、

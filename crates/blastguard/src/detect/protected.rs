@@ -253,18 +253,92 @@ symlink loop",
 /// `/opt/myproj` is a safe root like any other, and `confined_root` is what
 /// decides that. The escape is asked only for paths this predicate already
 /// matched, so it can never ADMIT a system path that was not confined.
+///
+/// The Deny carries [`crate::model::SYSTEM_HARM_MARK`], so a repeat of it is
+/// never downgraded to an Ask (user ruling 2026-11-07).
+///
+/// It also answers the per-user persistence directory: see
+/// [`launch_agents_new_file_ask`], checked first and NOT escapable through
+/// `confined_root`. That answer is an `Ask`, not a `Deny`.
 pub(super) fn system_path_block(action: &str, target: &str, ctx: &Ctx) -> Option<Decision> {
+    if let Some(ask) = launch_agents_new_file_ask(action, target) {
+        return Some(ask);
+    }
     if !crate::scope::is_inside_system_dir(target) {
         return None;
     }
     if ctx.confined_root(action, &[target]).is_some() {
         return None;
     }
-    Some(Decision::deny(format!(
+    Some(Decision::deny_system_harm(format!(
         "'{action} {target}' writes into a system directory - a NEW file there is itself the \
 change (a `sudoers.d`/`paths.d` drop-in, a LaunchDaemon plist, a binary shadowing one on \
 $PATH), so whether the old bytes were recoverable does not make it safe"
     )))
+}
+
+/// Ask for a write that creates a NEW file inside a per-user
+/// `Library/LaunchAgents` directory, or `None` otherwise.
+///
+/// User ruling 2026-11-07 (backlog e34eb0be): a new plist there registers a
+/// program launchd runs at every login (persistence), so it is `Ask` for the
+/// direct and the interpreter forms alike (a subagent cannot answer an Ask, so
+/// there it is Deny). The system-wide `/Library/LaunchAgents` lies inside a
+/// system directory: this returns `None` for every system-directory path, so
+/// [`system_path_block`] keeps answering those with its Deny, never this Ask.
+///
+/// Matching is on the absolute, normalised path: a `Library/LaunchAgents`
+/// component pair followed by at least one more component, compared
+/// ASCII-case-insensitively (the default macOS volume is case-insensitive, so
+/// `library/launchagents` lands in the same directory). It is not tied to
+/// `$HOME`: every user's LaunchAgents directory is the same hazard, and not
+/// reading `$HOME` means an unset or odd `$HOME` cannot make this answer
+/// `None`. A leading `~/` is expanded against `$HOME` when it is set; a
+/// relative path is not judged here (same contract as
+/// [`crate::scope::is_inside_system_dir`]).
+///
+/// Only a target that does NOT exist gets the Ask: an existing file there is
+/// left to the caller's recoverability rules, which Deny an unrecoverable
+/// overwrite — answering Ask first would downgrade that Deny. A target whose
+/// existence cannot be read (`symlink_metadata` fails with anything other
+/// than "not found") is also an Ask (CLAUDE.md §3).
+fn launch_agents_new_file_ask(action: &str, target: &str) -> Option<Decision> {
+    let expanded;
+    let target = match target.strip_prefix("~/") {
+        Some(rest) => match std::env::var("HOME") {
+            Ok(home) if home.starts_with('/') => {
+                expanded = format!("{}/{rest}", home.trim_end_matches('/'));
+                expanded.as_str()
+            }
+            _ => return None,
+        },
+        None => target,
+    };
+    let norm = exclude::normalize(target);
+    if !norm.starts_with('/') || crate::scope::is_inside_system_dir(&norm) {
+        return None;
+    }
+    let parts: Vec<&str> = norm.split('/').filter(|c| !c.is_empty()).collect();
+    let inside = parts
+        .windows(3)
+        .any(|w| w[0].eq_ignore_ascii_case("Library") && w[1].eq_ignore_ascii_case("LaunchAgents"));
+    if !inside {
+        return None;
+    }
+    match std::fs::symlink_metadata(&norm) {
+        Ok(_) => None,
+        Err(e) => {
+            let why = if e.kind() == std::io::ErrorKind::NotFound {
+                "a NEW file there".to_string()
+            } else {
+                format!("a file whose existence could not be read ({e})")
+            };
+            Some(Decision::ask(format!(
+                "'{action} {target}' creates {why} in a LaunchAgents directory — launchd runs \
+a plist placed there at every login (persistence), so blastguard asks before installing one"
+            )))
+        }
+    }
 }
 
 /// [`system_path_block`] applied to the path the kernel will really write

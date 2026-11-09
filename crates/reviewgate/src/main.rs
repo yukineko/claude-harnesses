@@ -215,7 +215,9 @@ fn review_run(hook: Option<HookInput>, interactive: bool) -> ! {
     // an error resolved to allow. Guarded on `config_invalid` because an
     // invalid/unreadable config leaves `mode` at the `Off` placeholder: that
     // is undetermined and must reach the config-invalid block below.
-    if cfg.mode == Mode::Off && cfg.config_invalid.is_none() {
+    // Also guarded on `untrusted_project`: an untrusted project file leaves
+    // `mode` at the `Off` default, which is a refusal to honor it, not a choice.
+    if cfg.mode == Mode::Off && cfg.config_invalid.is_none() && cfg.untrusted_project.is_none() {
         if interactive {
             eprintln!("reviewgate: mode = off (no review configured)");
         }
@@ -265,8 +267,34 @@ fn review_run(hook: Option<HookInput>, interactive: bool) -> ! {
         std::process::exit(0);
     }
 
+    // A project reviewgate.toml exists but the root is untrusted: its settings
+    // are not honored, and that is a refusal to judge — never the `Off`
+    // default (CLAUDE.md §3; trust inheritance removed 2026-11-08). Same emit
+    // path as config-invalid; the session skip above stays the escape hatch.
+    if let Some(p) = &cfg.untrusted_project {
+        let tag = "config-untrusted";
+        let reason = config_untrusted_reason(p);
+        log_event(&cfg, &session, tag, &[], 0);
+        emit_violation(&root, &session, tag);
+        harness_core::hook_latency::record(
+            "reviewgate",
+            &session,
+            __start.elapsed().as_millis() as u64,
+        );
+        if interactive {
+            eprintln!("{reason}");
+            std::process::exit(1);
+        }
+        harness_core::repeat::emit_stop_block("reviewgate", &reason);
+        std::process::exit(0);
+    }
+
     let prior = state::load(&cfg.state_dir, &session);
-    let decision = review::all_roots::evaluate(&cfg, &root, &prior, &input.transcript_path);
+    // Only the checkout the hook runs in is judged (user ruling 2026-11-08:
+    // "donegateそのものが他のworktreeを見たり検証したりテストしたりすることは禁止とする。
+    // 他のgateでも禁止とする"). Other worktrees the session wrote into are not
+    // read, reviewed or tested here, and nothing reviews them in its place.
+    let decision = review::evaluate(&cfg, &root, &prior, &input.transcript_path);
 
     match decision {
         Decision::Allow {
@@ -368,6 +396,20 @@ fn config_invalid_reason(why: &str) -> String {
     )
 }
 
+fn config_untrusted_reason(path: &std::path::Path) -> String {
+    format!(
+        "🚧 reviewgate: config-untrusted — REFUSING TO JUDGE. {} exists, but this project root \
+         is not on the workspace-trust list, so its settings are not honored. That is a refusal, \
+         not a pass: falling back to the `off` default would silently skip the review this \
+         project declared.\n\n\
+         Remedy: run `reviewgate trust` in this root, or create the worktree through the session \
+         init (scripts/session-worktree-init.py) or condukt, which register it at creation. \
+         Trust is not inherited from the main working tree.\n\
+         One stop only: `reviewgate skip --reason ...`.",
+        path.display()
+    )
+}
+
 /// Append one JSONL line per decision. Best effort, local only.
 /// Record a fleet-level violation for a blocking review verdict (or for the
 /// `review-giveup` allow, which lets a known violation through), for
@@ -422,7 +464,15 @@ fn status() {
             "config:        {} (FAILED to load: {e} — built-in defaults in effect)",
             src.display()
         ),
-        None => println!("config:        {}", src.display()),
+        None => match &cfg.untrusted_project {
+            Some(p) => println!(
+                "config:        {} is NOT TRUSTED — not honored; stops are BLOCKED \
+                 (config-untrusted) until `reviewgate trust` is run in this root. Values below \
+                 are the home/default ones.",
+                p.display()
+            ),
+            None => println!("config:        {}", src.display()),
+        },
     }
     println!("enabled:       {}", cfg.enabled);
     match &cfg.config_invalid {

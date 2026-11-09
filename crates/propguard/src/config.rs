@@ -99,6 +99,12 @@ pub struct Config {
     /// resolves it fail-closed (`gate::evaluate` → `config-unreadable` Block).
     /// `None` when a config was read and applied, or none exists.
     pub load_error: Option<String>,
+    /// `Some(path)` when the project `propguard.toml` EXISTS but the root is
+    /// not trusted: it is not honored (its `checker_cmd` would be arbitrary
+    /// code execution), and that is a refusal to judge, not "no criteria" —
+    /// `gate::evaluate` blocks `config-untrusted` naming the file (CLAUDE.md
+    /// §3; trust inheritance removed 2026-11-08).
+    pub untrusted_project: Option<std::path::PathBuf>,
     /// `Some(description)` when the config was read but holds a value that
     /// cannot be interpreted (currently: an unrecognised `mode`). Undetermined,
     /// not a choice: `gate::evaluate` resolves it to a `config-invalid` Block
@@ -209,6 +215,7 @@ impl Default for Config {
             state_dir: base_dir().join("state"),
             load_error: None,
             config_invalid: None,
+            untrusted_project: None,
         }
     }
 }
@@ -226,10 +233,11 @@ impl Config {
     /// but only once the project root is **trusted** (`harness_core::trust`),
     /// since its `checker_cmd` is later run as a subprocess from the Stop hook
     /// and an untrusted, repo-shipped value would be arbitrary code execution.
-    /// When the project file exists but the root is not trusted we ignore it and
-    /// fall back to the (trusted) home config, then built-in defaults. Trust is resolved with
-    /// [`harness_core::trust::resolve`], i.e. including worktree inheritance: a
-    /// linked git worktree of a trusted checkout is trusted (same rule as donegate).
+    /// When the project file exists but the root is not trusted it is not
+    /// honored and is recorded in [`Config::untrusted_project`], which the gate
+    /// blocks on (`config-untrusted`); the home config's knobs still load.
+    /// Trust is resolved with [`harness_core::trust::resolve`], which has no
+    /// worktree inheritance (user ruling 2026-11-08).
     ///
     /// A chosen file that exists but cannot be read (permission denied, invalid
     /// UTF-8, …) or does not parse as TOML is NOT treated as "no config": the
@@ -245,11 +253,7 @@ impl Config {
                 Some(p)
             } else {
                 if p.exists() {
-                    eprintln!(
-                        "propguard: {} is not trusted; ignoring it. \
-                         Run 'propguard trust' to enable.",
-                        p.display()
-                    );
+                    cfg.untrusted_project = Some(p.clone());
                 }
                 let h = Config::home_path();
                 if h.exists() {

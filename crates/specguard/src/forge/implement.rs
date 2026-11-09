@@ -240,6 +240,41 @@ fn reconcile(
     }
 }
 
+/// List `wt_path` in the workspace-trust list when `repo_root` is itself listed
+/// (condukt `worktree::create`'s rule). `None` = registered, or nothing to
+/// propagate (repo not listed); `Some(why)` = the write failed or could not be
+/// read back — the caller fails closed.
+fn register_worktree_trust(repo_root: &Path, wt_path: &Path) -> Option<String> {
+    let repo_canon = std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+    if !harness_core::trust::is_listed(&repo_canon) {
+        return None;
+    }
+    let path_canon = match std::fs::canonicalize(wt_path) {
+        Ok(p) => p,
+        Err(e) => {
+            return Some(format!(
+                "cannot canonicalize the new worktree {}: {e}",
+                wt_path.display()
+            ))
+        }
+    };
+    if let Err(e) = harness_core::trust::add(&path_canon) {
+        return Some(format!(
+            "could not record {} in {}: {e}",
+            path_canon.display(),
+            harness_core::trust::trust_path().display()
+        ));
+    }
+    if !harness_core::trust::is_listed(&path_canon) {
+        return Some(format!(
+            "{} reported added but is not listed in {} on read-back",
+            path_canon.display(),
+            harness_core::trust::trust_path().display()
+        ));
+    }
+    None
+}
+
 /// Run one impl task: create a worktree, run the agent in it, parse output.
 ///
 /// If the worktree cannot be created the agent is NOT run (fail-closed): the
@@ -304,6 +339,32 @@ pub fn run_task(
                 "[harness] worktree creation failed; impl agent was not run (fail-closed, no isolated tree): {why}"
             )),
             worktree: None,
+            agent_exit: -1,
+        };
+    }
+    // Register the new worktree in the workspace-trust list, exactly when the
+    // repository is itself listed — the rule condukt's `worktree::create`
+    // applies. Trust is not inherited from the main working tree (user ruling
+    // 2026-11-08), so an unregistered worktree with a project config would make
+    // every gate refuse it (config-untrusted). Membership (`is_listed`), never
+    // `HARNESS_TRUST_ALL`: propagating a grant is not minting one. The entry is
+    // read back; a failed or unobserved registration fails the task closed (the
+    // agent is NOT run), the same as a failed `worktree add`. Reads only the
+    // trust list.
+    if let Some(why) = register_worktree_trust(repo_root, &wt_path) {
+        eprintln!(
+            "specforge: WARN {spec_id}/{req_id}: workspace-trust registration failed — impl agent NOT run (fail-closed). {why}"
+        );
+        return ImplResult {
+            spec_id: spec_id.to_string(),
+            req_id: req_id.to_string(),
+            status: "failed".to_string(),
+            test_cmd: None,
+            test_result: None,
+            evidence_note: Some(format!(
+                "[harness] workspace-trust registration of the worktree failed; impl agent was not run (fail-closed): {why}"
+            )),
+            worktree: Some(wt_path.display().to_string()),
             agent_exit: -1,
         };
     }
@@ -850,6 +911,235 @@ mod tests {
         // Passes only if cwd is the worktree dir where sentinel.txt exists.
         let run = run_test_cmd(tmp.path(), "test -f sentinel.txt").expect("sh spawns");
         assert!(run.passed, "test_cmd must run in the worktree dir");
+    }
+
+    // ── worktree trust registration (user ruling 2026-11-08: trust is not
+    // inherited from the main working tree, so `run_task` lists the worktree it
+    // creates iff the repo is itself listed). The trust list lives under
+    // `$HOME`, a process-global, so each scenario re-execs this test binary as
+    // a child with its own HOME (same pattern as the gitenv tests above).
+
+    /// Child half: only acts when `TRUSTREG_CHILD=1`. Runs the production
+    /// `run_task` and prints the observed status / worktree on marker lines.
+    #[test]
+    fn trustreg_inner_run_task() {
+        if std::env::var("TRUSTREG_CHILD").as_deref() != Ok("1") {
+            return;
+        }
+        let repo = std::path::PathBuf::from(std::env::var("TRUSTREG_REPO").unwrap());
+        let base = std::path::PathBuf::from(std::env::var("TRUSTREG_WT_BASE").unwrap());
+        let cfg = AgentConfig {
+            command: std::env::var("TRUSTREG_AGENT").unwrap(),
+            args: vec![],
+        };
+        let r = run_task(&repo, "S1", "R1", "prompt", &base, &cfg, false);
+        println!("TRUSTREG_STATUS={}", r.status);
+        println!("TRUSTREG_NOTE={}", r.evidence_note.unwrap_or_default());
+        println!("TRUSTREG_WT={}", r.worktree.unwrap_or_default());
+    }
+
+    struct TrustReg {
+        _tmp: tempfile::TempDir,
+        home: std::path::PathBuf,
+        repo: std::path::PathBuf,
+        base: std::path::PathBuf,
+        agent: std::path::PathBuf,
+        sentinel: std::path::PathBuf,
+    }
+
+    impl TrustReg {
+        fn new() -> TrustReg {
+            use std::os::unix::fs::PermissionsExt;
+            let tmp = tempfile::tempdir().unwrap();
+            let root = std::fs::canonicalize(tmp.path()).unwrap();
+            let home = root.join("home");
+            let repo = root.join("repo");
+            let base = root.join("wt_base");
+            for d in [&home, &repo, &base] {
+                std::fs::create_dir_all(d).unwrap();
+            }
+            gitenv_git(&repo, &["init", "-q"]);
+            gitenv_git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+            let sentinel = root.join("agent_ran");
+            let agent = root.join("agent_stub.sh");
+            std::fs::write(
+                &agent,
+                format!("#!/bin/sh\ntouch '{}'\nexit 0\n", sentinel.display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&agent, std::fs::Permissions::from_mode(0o755)).unwrap();
+            TrustReg {
+                _tmp: tmp,
+                home,
+                repo,
+                base,
+                agent,
+                sentinel,
+            }
+        }
+
+        fn trust_file(&self) -> std::path::PathBuf {
+            self.home.join(".harness").join("trust.toml")
+        }
+
+        fn list(&self, entries: &[&std::path::Path]) {
+            std::fs::create_dir_all(self.home.join(".harness")).unwrap();
+            let body = entries
+                .iter()
+                .map(|e| format!("{:?}", e.to_string_lossy()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            std::fs::write(self.trust_file(), format!("trusted = [{body}]\n")).unwrap();
+        }
+
+        fn trusted(&self) -> Vec<String> {
+            let Ok(text) = std::fs::read_to_string(self.trust_file()) else {
+                return vec![];
+            };
+            let v: toml::Value = toml::from_str(&text).unwrap();
+            v.get("trusted")
+                .and_then(|t| t.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+
+        /// (status, note, worktree) observed by the child `run_task`.
+        fn run(&self, trust_all: bool) -> (String, String, String) {
+            let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+            harness_core::git_env::scrub(&mut cmd);
+            cmd.args([
+                "--exact",
+                "implement::tests::trustreg_inner_run_task",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("TRUSTREG_CHILD", "1")
+            .env("TRUSTREG_REPO", &self.repo)
+            .env("TRUSTREG_WT_BASE", &self.base)
+            .env("TRUSTREG_AGENT", &self.agent)
+            .env("HOME", &self.home)
+            .env_remove("HARNESS_SANDBOX_HOME")
+            .env_remove("HARNESS_TRUST_ALL");
+            if trust_all {
+                cmd.env("HARNESS_TRUST_ALL", "1");
+            }
+            let o = cmd.output().expect("re-exec test binary");
+            let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
+            assert!(
+                o.status.success(),
+                "child failed: {stdout}\n{}",
+                String::from_utf8_lossy(&o.stderr)
+            );
+            let find = |k: &str| {
+                stdout
+                    .lines()
+                    .find_map(|l| l.split_once(k).map(|(_, v)| v.to_string()))
+                    .unwrap_or_default()
+            };
+            (
+                find("TRUSTREG_STATUS="),
+                find("TRUSTREG_NOTE="),
+                find("TRUSTREG_WT="),
+            )
+        }
+    }
+
+    #[test]
+    fn run_task_lists_the_new_worktree_when_the_repo_is_listed() {
+        let t = TrustReg::new();
+        t.list(&[&t.repo]);
+        let (status, note, wt) = t.run(false);
+        assert!(!wt.is_empty(), "apparatus: worktree created; note={note}");
+        assert!(
+            !note.contains("workspace-trust"),
+            "registration must succeed; status={status} note={note}"
+        );
+        let wt_canon = std::fs::canonicalize(&wt)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let trusted = t.trusted();
+        assert!(
+            trusted.contains(&wt_canon),
+            "the created worktree must be in trust.toml: {trusted:?} (want {wt_canon})"
+        );
+        assert!(
+            trusted.contains(&t.repo.to_string_lossy().into_owned()),
+            "the repo entry must be preserved: {trusted:?}"
+        );
+        assert!(
+            t.sentinel.exists(),
+            "apparatus: the agent ran after registration"
+        );
+    }
+
+    #[test]
+    fn run_task_does_not_list_the_worktree_when_the_repo_is_unlisted() {
+        let t = TrustReg::new();
+        let (_status, note, wt) = t.run(false);
+        assert!(!wt.is_empty(), "apparatus: worktree created; note={note}");
+        let wt_canon = std::fs::canonicalize(&wt)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            !t.trusted().contains(&wt_canon),
+            "an unlisted repo has nothing to propagate: {:?}",
+            t.trusted()
+        );
+        assert!(
+            t.sentinel.exists(),
+            "unlisted repo is not an error: the agent runs"
+        );
+    }
+
+    #[test]
+    fn run_task_trust_all_env_does_not_mint_a_permanent_grant() {
+        let t = TrustReg::new();
+        let (_status, note, wt) = t.run(true);
+        assert!(!wt.is_empty(), "apparatus: worktree created; note={note}");
+        let wt_canon = std::fs::canonicalize(&wt)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            !t.trusted().contains(&wt_canon),
+            "HARNESS_TRUST_ALL is transient; propagation is membership-only: {:?}",
+            t.trusted()
+        );
+    }
+
+    /// Fail-closed: the repo is listed but the trust list cannot be written
+    /// (its directory is read-only, so the lock file cannot be created). The
+    /// registration fails => the task is `failed` and the write-enabled agent
+    /// is NOT run.
+    #[test]
+    fn run_task_fails_closed_when_trust_registration_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = TrustReg::new();
+        t.list(&[&t.repo]);
+        let dir = t.home.join(".harness");
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Apparatus: the directory really is unwritable for this user.
+        let writable = std::fs::File::create(dir.join("probe")).is_ok();
+        if writable {
+            let _ = std::fs::remove_file(dir.join("probe"));
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!("SKIPPED: read-only directory is still writable (running as root?)");
+            return;
+        }
+        let (status, note, _wt) = t.run(false);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(status, "failed", "note={note}");
+        assert!(note.contains("workspace-trust"), "{note}");
+        assert!(
+            !t.sentinel.exists(),
+            "a failed trust registration must NOT run the write-enabled agent"
+        );
     }
 
     #[test]

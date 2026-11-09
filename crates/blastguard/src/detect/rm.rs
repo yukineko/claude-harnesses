@@ -1,13 +1,125 @@
 use super::{
-    confined_ask, dotgit_link_deny, exclude, glob_literal_prefix, has_glob_meta, home_asset_deny,
-    is_short_flag, protected_disarm_deny, protected_tree_deny, Ctx, Decision, Determination,
-    Placement, SafeRoots,
+    confined_ask, dotgit_link_deny, exclude, glob_literal_prefix, has_glob_meta,
+    has_unresolvable_expansion, home_asset_deny, is_short_flag, protected_disarm_deny,
+    protected_tree_deny, Ctx, Decision, Determination, Placement, SafeRoots,
 };
 
+mod operand_words;
+use operand_words::{
+    expand_operand_with, has_unquoted_glob, place_literal, rm_operand_words, OperandSpelling,
+    Placed, VarLookup,
+};
+
+/// The protected-path Deny for an operand of a non-wildcard `rm` that carries
+/// QUOTED glob characters (`".claude/*"`): the per-operand protected check in
+/// `analyze_rm_placed` skips every glob-bearing token, and the wildcard Deny
+/// that backs that skip does not apply to a quoted glob. The quote-removed
+/// spelling is judged both as the literal file it names and, restrictively, as
+/// the pattern it looks like ([`protected_glob_deny`](super::protected::protected_glob_deny)).
+fn quoted_glob_protected_deny(ctx: &Ctx<'_>, rest: &[&str]) -> Option<Decision> {
+    for word in rm_operand_words(rest) {
+        if !has_glob_meta(&word) {
+            continue;
+        }
+        let OperandSpelling::Paths(paths) = expand_operand_with(&word, ctx.scope.home_real(), None)
+        else {
+            continue; // unresolvable: `rm_system_harm_deny` makes it an Ask
+        };
+        for p in &paths {
+            if let Some(deny) = protected_disarm_deny(ctx, "rm", p)
+                .or_else(|| super::protected::protected_glob_deny("rm", p))
+            {
+                return Some(deny);
+            }
+        }
+    }
+    None
+}
+
+/// Whether an `rm` argument list asks for recursion (`-r`/`-R`/`--recursive`).
+fn rm_is_recursive(rest: &[&str]) -> bool {
+    rest.iter()
+        .any(|t| (is_short_flag(t) && (t.contains('r') || t.contains('R'))) || *t == "--recursive")
+}
+
+/// The system-harm Deny for an `rm` in `tokens` (one segment, at `seg_idx` of
+/// the command line `line`) whose operand is spelled with an expansion the
+/// line's own text resolves to a path in a system directory, else `Allow`.
+///
+/// [`analyze_rm`] does not resolve expansions: an operand it cannot read is an
+/// Ask (user ruling 2026-11-07, "Ask, deny known paths"). This pass names the
+/// known paths among them, so they stay a system-harm Deny:
+///
+///   * `$NAME` / `${NAME}` with a literal assignment in an EARLIER segment of
+///     the same line that reaches this one unconditionally and is not rebound
+///     — exactly the believability rules of
+///     [`resolve_expanded_command_word`](super::vars::resolve_expanded_command_word)
+///     (`X=/etc/passwd; rm $X`, `X=/etc/passwd && rm "$X"`);
+///   * `$(…)` / a backtick whose body is `echo` / `printf %s` of literal words
+///     (`rm $(echo /etc/passwd)`).
+///
+/// Every other expansion is left unresolved here (and so stays an Ask in
+/// [`analyze_rm`]); this function only ever adds a Deny.
+///
+/// The non-`rm` system-file mutators (`unlink`, `rmdir`, `mv`, `sed -i`,
+/// `perl -i`, `chmod`, `chown`, `chgrp`, `rsync`) get the same resolution for
+/// the files they modify: [`super::system_paths::known_mutation_harm`], so
+/// `X=/etc/passwd; unlink $X` is the same system-harm Deny as
+/// `unlink /etc/passwd`, not the expansion Ask.
+pub(super) fn known_path_harm(
+    tokens: &[&str],
+    line: &str,
+    seg_idx: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
+    use super::vars::{resolve_expanded_command_word, CommandWordOrigin};
+    let vars =
+        |name: &str| match resolve_expanded_command_word(line, seg_idx, &format!("${{{name}}}")) {
+            CommandWordOrigin::Literal(v) => Some(v),
+            _ => None,
+        };
+    let resolve = |word: &str| match expand_operand_with(word, ctx.scope.home_real(), Some(&vars)) {
+        OperandSpelling::Paths(p) => Some(p),
+        OperandSpelling::Unresolvable(_) => None,
+    };
+    for idx in super::words::command_candidates(tokens) {
+        let cmd = super::words::normalized_command(tokens[idx]);
+        let rest = &tokens[idx + 1..];
+        if cmd != "rm" {
+            let deny = super::system_paths::known_mutation_harm(&cmd, rest, ctx, &resolve);
+            if deny.is_deny() {
+                return deny;
+            }
+            continue;
+        }
+        let words = rm_operand_words(rest);
+        if !words.iter().any(|w| has_unresolvable_expansion(w)) {
+            continue;
+        }
+        if let SystemHarm::Deny(deny) =
+            rm_system_harm(ctx, &words, rm_is_recursive(rest), Some(&vars))
+        {
+            return deny;
+        }
+    }
+    Decision::Allow
+}
+
 pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
-    let recursive = rest
-        .iter()
-        .any(|t| (is_short_flag(t) && (t.contains('r') || t.contains('R'))) || *t == "--recursive");
+    let mut unplaced: Option<String> = None;
+    let verdict = analyze_rm_placed(rest, ctx, &mut unplaced);
+    // A literal operand the system-harm check could not place (see
+    // [`SystemHarm::Unplaced`]) is not an Allow by default: when every other
+    // rule would have let the rm through, ask instead. Any Deny / Ask from the
+    // other rules stands as it is.
+    match (verdict, unplaced) {
+        (Decision::Allow, Some(why)) => Decision::ask(why),
+        (verdict, _) => verdict,
+    }
+}
+
+fn analyze_rm_placed(rest: &[&str], ctx: &Ctx<'_>, unplaced: &mut Option<String>) -> Decision {
+    let recursive = rm_is_recursive(rest);
     // Round 4 (adversarial verifier): `-d`/`--dir` removes an EMPTY directory.
     // It is NOT recursive, so it never triggered the container check below, and
     // `rm -d .claude/hooks` / `rm --dir .git/hooks` / `rm -d .claude` were ALLOW.
@@ -24,7 +136,21 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         .filter(|t| !t.starts_with('-'))
         .copied()
         .collect();
-    let wildcard = operands.iter().any(|o| has_glob_meta(o));
+    // A glob character inside quotes is not expanded by the shell: plain
+    // `rm "*.tmp"` removes the ONE file named `*.tmp`. That is also the text a
+    // loop body `for f in *.tmp; do rm "$f"; done` is judged as once the loop
+    // value is substituted back in (`compound::loop_variants`), and there the
+    // glob belongs to `for`: each `rm` receives one entry it matched. So a
+    // plain (non-`-r`, non-`-d`) rm whose glob characters are all quoted is not
+    // a wildcard rm; its quote-removed operands are still checked against the
+    // protected trees below (`quoted_glob_protected_deny`).
+    let wildcard = operands.iter().any(|o| has_glob_meta(o))
+        && (recursive || dir_flag || rm_operand_words(rest).iter().any(|w| has_unquoted_glob(w)));
+    if !wildcard {
+        if let Some(deny) = quoted_glob_protected_deny(ctx, rest) {
+            return deny;
+        }
+    }
 
     // PROTECTED PRECEDENCE, ahead of BOTH exits below. This arm was the last
     // place in the crate where `is_config_file` was consulted without
@@ -67,6 +193,20 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
                 return deny;
             }
         }
+    }
+
+    // SYSTEM-HARM axis (backlog fb338793, user ruling 2026-11-07:
+    // 「いかなる理由であれシステムに害になるコマンドはdenyすべし」). Ahead of the
+    // "below the destructive bar" exit for ONE file, which measures how many
+    // files vanish and not which: `rm /etc/passwd`, `rm -f /bin/ls` and
+    // `rm -f /usr/lib/libSystem.B.dylib` were Allow on 0.2.287. Applies to
+    // recursive and wildcard operands too, so every `rm` into a system
+    // directory carries the system-harm marker whichever later rule would
+    // have refused it. See [`rm_system_harm_deny`].
+    match rm_system_harm_deny(ctx, &rm_operand_words(rest), recursive) {
+        SystemHarm::Deny(deny) => return deny,
+        SystemHarm::Unplaced(why) => *unplaced = Some(why),
+        SystemHarm::Clear => {}
     }
 
     if !recursive && !wildcard {
@@ -145,7 +285,10 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
     // its literal parent directory, so when that parent provably is a real
     // directory strictly inside the real fixed `/tmp` root (or the root itself
     // with a literal name head of 4+ characters, ruling 2026-11-05), the
-    // blast radius is bounded exactly like a literal operand there. Every condition and every refusal is in
+    // blast radius is bounded exactly like a literal operand there. The same
+    // holds for a parent strictly inside a linked worktree checkout under a
+    // worktree storage root (user ruling 2026-11-07, managed disposable
+    // place). Every condition and every refusal is in
     // [`tmp_glob_confined`]; anything it cannot decide keeps the logic below.
     if wildcard && tmp_glob_confined(ctx, &operands) {
         return Decision::Allow;
@@ -175,6 +318,203 @@ pub(super) fn analyze_rm(rest: &[&str], ctx: &Ctx<'_>) -> Decision {
         Decision::deny("recursive rm (-r) can delete an entire directory tree")
     } else {
         Decision::deny("rm with a wildcard can delete many files at once")
+    }
+}
+
+/// `Deny` (system harm, [`Decision::deny_system_harm`]) when an `rm` operand
+/// names `/`, or a path at or below a system directory
+/// ([`crate::scope::is_inside_system_dir`]: `/bin`, `/etc`, `/usr`,
+/// `/System`, `/Library`, …), and the session does not own it (a project
+/// checked out under `/opt` is a safe root and escapes, exactly as for
+/// `system_path_block`).
+///
+/// Judged on the operand as written, made absolute against the segment's
+/// base, and again with its PARENT directory resolved through symlinks (the
+/// final component is what `rm` unlinks, so it is not followed): `rm
+/// <proj>/esc/etc/passwd` with `esc -> /` unlinks `/etc/passwd`. A wildcard
+/// operand is judged by its literal directory prefix (`/usr/lib/*` cannot
+/// expand outside `/usr/lib`; `/*` is `/`).
+///
+/// Each operand is first read as a shell word ([`operand_words`], backlog
+/// 3c750df2): quotes removed, brace lists expanded, `~`/`$HOME` expanded, and
+/// a home-relative climb above home also judged rooted at `/`. An operand
+/// whose text contains any other expansion (`$X`, `$(…)`, a backtick) is NOT
+/// skipped: what it deletes is unknown, so it is [`SystemHarm::Unplaced`]
+/// (user ruling 2026-11-07, "Ask, deny known paths": an Ask for the main
+/// agent, a Deny for a subagent — fail closed, never Allow). The expansions
+/// the line's own text resolves are judged by
+/// [`known_path_harm`] instead, so a known system path stays a
+/// Deny. A literal operand that is not a filename (a control character, a
+/// `{}` placeholder) is [`SystemHarm::Unplaced`] too: every rule below still
+/// runs, and an Allow they would give becomes an Ask ([`analyze_rm`]). A
+/// relative operand with no known working directory is NOT judged here (kept
+/// as before this check existed; see `operand_words::Placed::RelativeWithoutBase`).
+pub(super) fn rm_system_harm_deny(
+    ctx: &Ctx<'_>,
+    operands: &[String],
+    recursive: bool,
+) -> SystemHarm {
+    rm_system_harm(ctx, operands, recursive, None)
+}
+
+/// [`rm_system_harm_deny`], with `vars` resolving the expansions
+/// [`expand_operand_with`] models.
+fn rm_system_harm(
+    ctx: &Ctx<'_>,
+    operands: &[String],
+    recursive: bool,
+    vars: Option<VarLookup<'_>>,
+) -> SystemHarm {
+    let mut unplaced: Option<String> = None;
+    for word in operands {
+        let paths = match expand_operand_with(word, ctx.scope.home_real(), vars) {
+            OperandSpelling::Paths(p) => p,
+            OperandSpelling::Unresolvable(why) => {
+                unplaced = unplaced.or(Some(format!(
+                    "this rm operand `{word}` cannot be resolved to a path ({why}), so what it \
+deletes is unknown — blastguard cannot tell whether it is an OS file or directory, so it asks \
+rather than assume it harmless"
+                )));
+                continue;
+            }
+        };
+        for p in &paths {
+            match rm_path_system_harm_deny(ctx, word, p, recursive) {
+                SystemHarm::Deny(deny) => return SystemHarm::Deny(deny),
+                SystemHarm::Unplaced(why) => unplaced = unplaced.or(Some(why)),
+                SystemHarm::Clear => {}
+            }
+        }
+    }
+    unplaced.map_or(SystemHarm::Clear, SystemHarm::Unplaced)
+}
+
+/// The system-harm answer for an `rm` operand list.
+pub(super) enum SystemHarm {
+    /// An operand lands in a system directory.
+    Deny(Decision),
+    /// No operand lands in a system directory, but one could not be resolved
+    /// (an expansion this crate does not resolve) or not placed as an absolute
+    /// path (a control character, a `{}` placeholder), so "outside every
+    /// system directory" is not established for it.
+    /// [`analyze_rm`] turns what would otherwise be an Allow into an Ask with
+    /// this reason.
+    Unplaced(String),
+    /// Every operand was placed, and none is in a system directory.
+    Clear,
+}
+
+/// One shell-expanded `rm` operand path `op` (spelled `word`) against the
+/// system directories; see [`rm_system_harm_deny`].
+fn rm_path_system_harm_deny(ctx: &Ctx<'_>, word: &str, op: &str, recursive: bool) -> SystemHarm {
+    let spelled: String = if has_glob_meta(op) {
+        match glob_literal_prefix(op) {
+            Some(p) if p.is_empty() && op.starts_with('/') => "/".to_string(),
+            Some(p) if !p.is_empty() => p,
+            // A relative glob with no literal directory (`*.o`, `a*/b`)
+            // expands inside the working directory.
+            _ => ".".to_string(),
+        }
+    } else {
+        op.to_string()
+    };
+    let lexical = match place_literal(&spelled, ctx.base_for("rm")) {
+        Placed::Absolute(l) => l,
+        // Kept as before this check existed; see `Placed::RelativeWithoutBase`.
+        Placed::RelativeWithoutBase => return SystemHarm::Clear,
+        Placed::NotLiteral(why) => {
+            return SystemHarm::Unplaced(format!(
+                "rm operand `{word}` could not be placed as an absolute path ({why}), so \
+blastguard cannot establish that it is outside every system directory"
+            ));
+        }
+    };
+    let parent_real = lexical.rsplit_once('/').and_then(|(parent, name)| {
+        let parent = if parent.is_empty() { "/" } else { parent };
+        ctx.scope.resolve(parent).map(|p| {
+            let p = match p.strip_prefix("/System/Volumes/Data/") {
+                Some(rest) => format!("/{rest}"),
+                None => p,
+            };
+            if name.is_empty() {
+                p
+            } else {
+                format!("{}/{name}", p.trim_end_matches('/'))
+            }
+        })
+    });
+    let is_system = |p: &str| p == "/" || crate::scope::is_inside_system_dir(p);
+    let hit = if is_system(&lexical) {
+        Some(lexical.clone())
+    } else {
+        parent_real.filter(|r| is_system(r))
+    };
+    let Some(hit) = hit else {
+        return SystemHarm::Clear;
+    };
+    if ctx.confined_root("rm", &[lexical.as_str()]).is_some() {
+        return SystemHarm::Clear;
+    }
+    let shown = if hit == lexical {
+        format!("`{word}`")
+    } else {
+        format!("`{word}` (which lands on `{hit}`)")
+    };
+    // The shape clause keeps the wording `crate::rule_id` already files
+    // recursive / wildcard rm under; a single named file gets its own.
+    let shape = if recursive {
+        "recursive rm (-r) can delete an entire directory tree, and this one"
+    } else if has_glob_meta(op) {
+        "rm with a wildcard can delete many files at once, and this one"
+    } else {
+        "this rm"
+    };
+    SystemHarm::Deny(Decision::deny_system_harm(format!(
+        "{shape} deletes from a system directory: {shown} — removing an OS file or \
+directory (a binary, a library, `/etc` configuration) can break the machine itself, so \
+blastguard refuses it whatever the flags and however few files it names"
+    )))
+}
+
+impl Ctx<'_> {
+    /// True ONLY when `path` is a protected-NAMED path that is the checkout's
+    /// own file: spelled ABSOLUTE, no glob/expansion, on a command line that is
+    /// a single plain command ([`checkout_exempt_eligible`]), and placed by
+    /// [`SafeRoots::classify_worktree_checkout`] as
+    /// [`Placement::Inside`] a linked worktree checkout under a worktree
+    /// storage root (user ruling 2026-10-03:
+    /// 「worktreeの編集や削除を拒むのはむしろ不正なのでなおしてほしい」).
+    ///
+    /// Every other answer — relative spelling, an ineligible command line,
+    /// `IsRoot`, `Outside`, and every `Undetermined` — is `false`, i.e. the
+    /// protected-path rule applies exactly as before. There is no default that
+    /// answers `true`.
+    ///
+    /// Relative operands are refused because the base they are judged against
+    /// is this analysis' model of the cwd, and a cwd change it does not model
+    /// (`env -C`, `git -C`, a `cd` that fails) would place a main-tree file
+    /// inside a checkout. An absolute operand's placement depends on no base.
+    /// (After a `cd D &&` that [`literal_cd_and_rest`] accepts, a relative
+    /// redirect target, and a relative operand of the verbs the cwd walk
+    /// rewrites ([`super::verb_targets`]), reach here already re-expressed as the
+    /// absolute `D/<operand>`; any other relative operand is still relative
+    /// and still refused by the check below.)
+    /// The placement (symlinks included) is observed at JUDGE time; that is
+    /// why the whole line must be one plain command — see
+    /// [`checkout_exempt_eligible`].
+    pub(super) fn in_worktree_checkout(&self, path: &str) -> bool {
+        if !self.checkout_exempt_eligible
+            || !path.starts_with('/')
+            || has_glob_meta(path)
+            || has_unresolvable_expansion(path)
+        {
+            return false;
+        }
+        match self.scope.classify_worktree_checkout(path, None) {
+            Determination::Known(Placement::Inside { .. }) => true,
+            Determination::Known(Placement::IsRoot { .. } | Placement::Outside { .. })
+            | Determination::Undetermined(_) => false,
+        }
     }
 }
 
@@ -602,8 +942,8 @@ impl DeletionEligibility {
     }
 }
 
-/// Whole-command precondition for the `/tmp` wildcard `Allow`
-/// ([`tmp_glob_confined`]): EXACTLY [`deletion_rm_eligible`] with `*` allowed
+/// Whole-command precondition for the `/tmp` (and linked-worktree-checkout)
+/// wildcard `Allow` ([`tmp_glob_confined`]): EXACTLY [`deletion_rm_eligible`] with `*` allowed
 /// in one place only — the LAST path component of an `rm` OPERAND word
 /// ([`last_component_glob`]: literal parent, no leading `.` in the pattern,
 /// no other glob metacharacter). A `*` anywhere else (the verb, an option
@@ -644,7 +984,9 @@ fn last_component_glob(operand: &str) -> Option<(&str, &str)> {
     Some((parent, pattern))
 }
 
-/// The `/tmp` wildcard `Allow` (user ruling 2026-11-02, backlog 486fb7de):
+/// The `/tmp` wildcard `Allow` (user ruling 2026-11-02, backlog 486fb7de),
+/// which since 0.2.287 also covers a wildcard whose parent is strictly inside
+/// a linked worktree checkout (user ruling 2026-11-07; the name is kept):
 /// true only when the line is [`tmp_glob_rm_eligible`], the session has no
 /// deletion refusal, `operands` is non-empty, and EVERY operand is either
 ///
@@ -668,7 +1010,7 @@ fn tmp_glob_confined(ctx: &Ctx<'_>, operands: &[&str]) -> bool {
     let base = ctx.base_for("rm");
     operands.iter().all(|o| {
         if o.contains('*') || has_glob_meta(o) {
-            tmp_glob_operand_allowed(ctx.scope, o, base)
+            tmp_glob_operand_allowed(ctx, o, base)
         } else {
             matches!(
                 crate::deletion::judge_operand(ctx.scope, o, base),
@@ -685,29 +1027,54 @@ const MIN_TMP_ROOT_GLOB_HEAD: usize = 4;
 
 /// One wildcard operand of [`tmp_glob_confined`]. True only when
 /// [`last_component_glob`] splits it into a literal parent and a `*` pattern,
-/// neither the parent nor any entry the pattern could match touches a
-/// protected path ([`exclude::glob_entry_may_touch_protected`]), and
-/// [`SafeRoots::classify_temp`] (the FIXED `/tmp` roots only — never
-/// `$TMPDIR`, never a cache root; symlinks above the anchor accepted, none
-/// below it, the parent itself included) places the parent:
+/// the parent itself touches no protected path ([`exclude::touches_protected`]:
+/// `<wt>/.githooks/pre-*` keeps its verdict even inside a checkout), and the
+/// parent is placed in a managed disposable place:
 ///
-///   * `Inside` the real `/tmp` root — any such pattern; or
-///   * `IsRoot` — only with a literal head of at least
-///     [`MIN_TMP_ROOT_GLOB_HEAD`] characters before the first `*` (user ruling
-///     2026-11-05, #1531: `/tmp/name*` yes; `/tmp/*`, `/tmp/c*`, `/tmp/cla*`
-///     never), and only when the parent is spelled
-///     as the canonical root itself or a single top-level component (`/tmp`),
-///     so a symlink below `/tmp` that resolves back to the root is refused.
+///   * STRICTLY inside a linked worktree checkout under a worktree storage
+///     root ([`SafeRoots::classify_worktree_checkout`] answers `Inside`: no
+///     `..` in the spelling, no `.git` component below the checkout, no
+///     symlink below the storage root, the parent itself included; user ruling
+///     2026-11-07). The checkout itself (`IsRoot`) does not count. When an
+///     ENTRY the pattern could match may touch a protected path
+///     ([`exclude::glob_entry_may_touch_protected`] — a bare `*` always may,
+///     since it is matched against every protected name, e.g.
+///     `settings.local.json`), it is accepted only when
+///     [`Ctx::in_worktree_checkout`] lifts the protected-path rule for the
+///     parent (absolute spelling, one plain command line) — the lift a literal
+///     operand inside the checkout gets (user ruling 2026-10-03); every entry
+///     is strictly below the parent and so inside the same checkout. Otherwise:
+///   * no entry the pattern could match touches a protected path, and
+///     [`SafeRoots::classify_temp`] (the FIXED `/tmp`
+///     roots only — never `$TMPDIR`, never a cache root; symlinks above the
+///     anchor accepted, none below it, the parent itself included) places the
+///     parent:
+///     * `Inside` the real `/tmp` root — any such pattern; or
+///     * `IsRoot` — only with a literal head of at least
+///       [`MIN_TMP_ROOT_GLOB_HEAD`] characters before the first `*` (user
+///       ruling 2026-11-05, #1531: `/tmp/name*` yes; `/tmp/*`, `/tmp/c*`,
+///       `/tmp/cla*` never), and only when the parent is spelled as the
+///       canonical root itself or a single top-level component (`/tmp`), so a
+///       symlink below `/tmp` that resolves back to the root is refused.
 ///
 /// `Outside` and every `Undetermined` (unresolvable, no resolver, a symlink
 /// below the root, `..` left after normalisation) answer `false`.
-fn tmp_glob_operand_allowed(scope: &SafeRoots, operand: &str, base: Option<&str>) -> bool {
+fn tmp_glob_operand_allowed(ctx: &Ctx<'_>, operand: &str, base: Option<&str>) -> bool {
+    let scope = ctx.scope;
     let Some((parent, pattern)) = last_component_glob(operand) else {
         return false;
     };
-    if exclude::touches_protected(parent)
-        || exclude::glob_entry_may_touch_protected(parent, pattern)
-    {
+    if exclude::touches_protected(parent) {
+        return false;
+    }
+    let entry_may_be_protected = exclude::glob_entry_may_touch_protected(parent, pattern);
+    if matches!(
+        scope.classify_worktree_checkout(parent, base),
+        Determination::Known(Placement::Inside { .. })
+    ) {
+        return !entry_may_be_protected || ctx.in_worktree_checkout(parent);
+    }
+    if entry_may_be_protected {
         return false;
     }
     match scope.classify_temp(parent, base) {

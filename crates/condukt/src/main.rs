@@ -9,7 +9,9 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod abandon_gate;
 mod adversarial;
+mod agents_check;
 mod checkpoint;
 mod circuit;
 mod claim;
@@ -27,12 +29,13 @@ mod install;
 mod learning_signal;
 mod lessons;
 mod lock;
-mod maintree;
 mod model;
 mod oracle;
+mod pass_cache;
 mod policy;
 mod pr;
 mod precedent;
+mod proof_archive;
 mod replan;
 mod review_brief;
 mod review_order;
@@ -45,8 +48,11 @@ mod state;
 mod status;
 mod store;
 mod subagent_stop;
+mod teardown_gate;
+mod timings;
 #[cfg(test)]
 mod verifier_f7a0cadc;
+mod verifier_record;
 mod verify;
 mod worktree;
 mod wt_reap;
@@ -123,7 +129,9 @@ enum Command {
     /// Run-state tracking and the completion gate.
     State {
         #[command(subcommand)]
-        action: StateAction,
+        // Boxed: `StateAction::Set` is large (see its allow below), which
+        // would otherwise make every `Command` value that size.
+        action: Box<StateAction>,
     },
     /// Central graded autonomy policy: map a decision's risk x reversibility x
     /// confidence to auto|escalate|block.
@@ -173,14 +181,6 @@ enum Command {
     Gate {
         #[command(subcommand)]
         action: GateAction,
-    },
-    /// Local commit-time guards. Currently one: `main-tree`, the machine
-    /// enforcement of CLAUDE.md §8 (do not share-edit the primary working
-    /// tree). Blocks by exiting non-zero, so `.githooks/pre-commit` — not a CI
-    /// job, per §7 — is the enforcement point.
-    Guard {
-        #[command(subcommand)]
-        action: GuardAction,
     },
     /// Opt-in worker sandboxing: run a worker's build/test command through the
     /// docker exec backend (network + filesystem + resource isolation) when
@@ -411,73 +411,12 @@ enum Command {
     /// (never merged) once evaluated.
     ShadowRun {
         #[command(subcommand)]
-        action: ShadowRunAction,
+        action: shadow_run::ShadowRunAction,
     },
-}
-
-#[derive(Subcommand)]
-enum ShadowRunAction {
-    /// Permit shadow-run to fire. Off by default.
-    Enable,
-    /// Forbid shadow-run from firing (the default state).
-    Disable,
-    /// Exit 0 if shadow-run is currently enabled, 1 otherwise (mirrors
-    /// `state autonomy-check`'s exit-code contract so callers can branch on it).
-    Status,
-    /// Create the second (shadow) worktree for `--topic` on `--branch`, gated
-    /// on the enable flag. Prints the worktree path on success; the caller
-    /// (the `/condukt` skill, via a worker agent) does the actual implementation
-    /// under `--model` inside it, then calls `finish` to evaluate and discard.
-    Exec {
-        #[arg(long)]
-        topic: String,
-        #[arg(long)]
-        branch: String,
-        /// Run id to namespace the shadow worktree and its branch under, exactly
-        /// as `worktree create --run` does. Omit it for the legacy,
-        /// un-namespaced layout (byte-identical path and ref). Whatever is
-        /// passed here must be passed to `shadow-run finish` too: the branch
-        /// created is the branch deleted.
-        #[arg(long)]
-        run: Option<String>,
-        /// Model the shadow attempt will run under (recorded, not enforced —
-        /// the caller is responsible for actually invoking that model).
-        #[arg(long)]
-        model: String,
-    },
-    /// Discard the shadow worktree (never merge) and best-effort record the
-    /// outcome to fugu-router for later routing comparison.
-    Finish {
-        #[arg(long)]
-        path: PathBuf,
-        #[arg(long)]
-        branch: String,
-        /// Run id the shadow worktree was cut under (the same `--run` that was
-        /// given to `exec`). Omit it for an un-namespaced shadow worktree. It is
-        /// checked against the branch git actually has checked out at `--path`:
-        /// a mismatch is refused outright rather than force-deleting a ref that
-        /// does not exist while the real branch survives.
-        #[arg(long)]
-        run: Option<String>,
-        #[arg(long)]
-        title: String,
-        #[arg(long)]
-        model: String,
-        #[arg(long)]
-        pass: bool,
-        /// Measured USD cost of the shadow attempt. OMIT it when no cost was
-        /// measured: the outcome is then recorded with the cost unmeasured
-        /// (`fugu-router record` gets no `--cost`), never with an invented
-        /// value. A supplied value must be finite and non-negative, or the
-        /// command is refused before anything is discarded (backlog `e44e233f`).
-        #[arg(long)]
-        cost: Option<f64>,
-        /// Measured wall-clock duration (seconds) of the shadow attempt. OMIT
-        /// it when not measured (recorded as unmeasured, never as 0). A
-        /// supplied value must be a finite positive number, or the command is
-        /// refused before anything is discarded (backlog `e44e233f`).
-        #[arg(long)]
-        duration: Option<f64>,
+    /// Sub-agent liveness check (wraps `overwatch subagents`).
+    Agents {
+        #[command(subcommand)]
+        action: agents_check::AgentsAction,
     },
 }
 
@@ -612,7 +551,10 @@ enum WtAction {
         #[arg(long)]
         id: String,
     },
-    /// Remove a worktree and (best-effort) delete its branch.
+    /// Remove a worktree and (best-effort) delete its branch. Refused (non-zero)
+    /// while the task that owns it is not verified, or when that cannot be
+    /// determined (backlog 6180333a; see `teardown_gate`). The explicit release
+    /// is `state abandon --task` (or `state cancel`); there is no bypass flag.
     Remove {
         #[arg(long)]
         path: PathBuf,
@@ -1000,6 +942,8 @@ enum StateAction {
         /// `gauge subagents`). Omitted → unchanged.
         #[arg(long)]
         verifier_agent_id: Option<String>,
+        #[command(flatten)]
+        verdict: verifier_record::VerdictArgs,
     },
     /// Print a run's full state as JSON.
     Show {
@@ -1194,7 +1138,8 @@ enum StateAction {
     /// scan that must not be read as clean.
     ///
     /// The explicit `--task <id>` override performs no scan and therefore never
-    /// exits 3.
+    /// exits 3; it refuses (exit 1) while the task's worker transcript is fresh
+    /// or its liveness is undetermined, unless `--force <REASON>` ([`abandon_gate`]).
     Abandon {
         #[arg(long)]
         run: String,
@@ -1204,6 +1149,9 @@ enum StateAction {
         /// Abandon all stuck tasks (running + TTL exceeded) at once.
         #[arg(long)]
         all_stuck: bool,
+        /// With `--task`: reset despite a live/undetermined worker transcript; non-empty reason, journaled.
+        #[arg(long, requires = "task")]
+        force: Option<String>,
     },
     /// Pause a run: no new workers will be dispatched until resumed.
     Pause {
@@ -1816,27 +1764,6 @@ enum GateAction {
 }
 
 #[derive(Subcommand)]
-enum GuardAction {
-    /// Refuse a commit made from the SHARED primary working tree while another
-    /// session is live (CLAUDE.md §8). Exits 0 when it passes, 1 on a
-    /// violation, 2 when the answer could not be determined — an undetermined
-    /// answer blocks exactly like a violation (§3).
-    ///
-    /// It passes when the commit comes from a linked worktree, when an
-    /// integration (merge/rebase/cherry-pick/revert) is in progress, when
-    /// nothing is staged, or when no other session is live.
-    ///
-    /// `CONDUKT_MAINTREE_OVERRIDE="<reason>"` bypasses it; the reason must be
-    /// non-blank and is echoed to stderr. It is an environment variable, never
-    /// a file, so it cannot leak into another session's commit.
-    MainTree {
-        /// Emit the decision as one JSON line instead of prose.
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
 enum PrAction {
     /// Prepare (dry-run) or, with --execute, open a PR via `gh pr create`.
     ///
@@ -2269,7 +2196,7 @@ fn run_user(cmd: Command) -> Result<()> {
             }
         }
         Command::Worktree { action } => run_worktree(&cfg, &cwd, action)?,
-        Command::State { action } => run_state(&cfg, &cwd, action)?,
+        Command::State { action } => run_state(&cfg, &cwd, *action)?,
         Command::Verify { action } => match action {
             VerifyAction::Digest { file } => {
                 let raw = match file {
@@ -2602,14 +2529,6 @@ fn run_user(cmd: Command) -> Result<()> {
                 std::process::exit(finding_reconcile::run_cli(&cfg, &cwd, json));
             }
         },
-        Command::Guard { action } => match action {
-            GuardAction::MainTree { json } => {
-                // Exit directly with the gate's own status so the pre-commit
-                // hook can tell violation (1) from undetermined (2).
-                let code = maintree::run_guard(&cwd, json);
-                std::process::exit(code);
-            }
-        },
         Command::Consensus { action } => run_consensus(&cfg, action)?,
         Command::Adversarial { action } => run_adversarial(&cfg, action)?,
         Command::Init => init(&cfg)?,
@@ -2813,7 +2732,8 @@ fn run_user(cmd: Command) -> Result<()> {
             head,
             json,
         } => run_review_order(&cwd, diff_file, from_git, &base, &head, json)?,
-        Command::ShadowRun { action } => run_shadow_run(&cfg, &cwd, action)?,
+        Command::Agents { action } => agents_check::run(&cfg, &cwd, action)?,
+        Command::ShadowRun { action } => shadow_run::run_shadow_run(&cfg, &cwd, action)?,
         // These are dispatched as hooks in main() (via a hook barrier that exits;
         // never returns here). Reaching this arm would be an internal dispatch
         // bug; return a clean error instead of panicking the process.
@@ -2823,120 +2743,6 @@ fn run_user(cmd: Command) -> Result<()> {
         | Command::SubagentStop
         | Command::SessionHeartbeat => {
             bail!("internal: hook subcommands must be dispatched in main(), not run_user()")
-        }
-    }
-    Ok(())
-}
-
-/// Dispatch `condukt shadow-run <action>`. All actions are gated by the
-/// on-disk enable flag except `enable`/`disable`/`status` themselves.
-fn run_shadow_run(cfg: &Config, cwd: &Path, action: ShadowRunAction) -> Result<()> {
-    // Overridable so integration tests never touch the real `~/.condukt`.
-    let dir = std::env::var("CONDUKT_SHADOW_RUN_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| config::base_dir());
-    match action {
-        ShadowRunAction::Enable => {
-            shadow_run::set_enabled(&dir, true)?;
-            println!("shadow-run enabled");
-        }
-        ShadowRunAction::Disable => {
-            shadow_run::set_enabled(&dir, false)?;
-            println!("shadow-run disabled");
-        }
-        ShadowRunAction::Status => {
-            let enabled = shadow_run::is_enabled(&dir);
-            println!("{}", if enabled { "enabled" } else { "disabled" });
-            if !enabled {
-                std::process::exit(1);
-            }
-        }
-        ShadowRunAction::Exec {
-            topic,
-            branch,
-            run,
-            model,
-        } => {
-            if !shadow_run::is_enabled(&dir) {
-                bail!("shadow-run is disabled — run `condukt shadow-run enable` first");
-            }
-            let repo = worktree::toplevel(cwd)?;
-            let path = worktree::create_namespaced(
-                &repo,
-                &cfg.worktree_base,
-                run.as_deref(),
-                &topic,
-                &branch,
-            )?;
-            println!("{}", path.display());
-            eprintln!("condukt: shadow-run worktree ready for model '{model}' at {}; the caller implements there, then calls `shadow-run finish`", path.display());
-        }
-        ShadowRunAction::Finish {
-            path,
-            branch,
-            run,
-            title,
-            model,
-            pass,
-            cost,
-            duration,
-        } => {
-            // Validate the optional measurements BEFORE anything is discarded:
-            // an invalid supplied value is refused outright (omitting the flag
-            // is the only way to say "unmeasured").
-            let cost_usd = shadow_run::validate_cost(cost)?;
-            let duration_secs = shadow_run::validate_duration(duration)?;
-            let repo = worktree::toplevel(cwd)?;
-            let outcome = shadow_run::ShadowOutcome {
-                title,
-                model,
-                pass,
-                cost_usd,
-                duration_secs,
-            };
-            // Resolve fugu-router (plugin cache first, `$PATH` second). The
-            // worktree is discarded regardless; only recording depends on it.
-            // Not installed (`Known(None)`) and could-not-look
-            // (`Undetermined`) are reported as different things — neither is
-            // ever read as "recorded".
-            match harness_core::plugin_bin::resolve("fugu-router") {
-                Determination::Known(Some(p)) => {
-                    let recorded = shadow_run::finish(
-                        &repo,
-                        &path,
-                        &branch,
-                        run.as_deref(),
-                        &outcome,
-                        Some(&p),
-                    )?;
-                    if recorded {
-                        println!("shadow-run discarded and recorded to fugu-router");
-                    } else {
-                        println!(
-                            "shadow-run discarded (fugu-router at {} unavailable or its record failed — outcome not recorded)",
-                            p.display()
-                        );
-                    }
-                }
-                Determination::Known(None) => {
-                    // No program ⇒ `finish` only discards; it returns `false`.
-                    shadow_run::finish(&repo, &path, &branch, run.as_deref(), &outcome, None)?;
-                    println!(
-                        "shadow-run discarded (fugu-router is not installed — outcome not recorded)"
-                    );
-                }
-                Determination::Undetermined(why) => {
-                    // Discard still happens; the outcome is NOT recorded and the
-                    // could-not-look is surfaced on both streams.
-                    shadow_run::finish(&repo, &path, &branch, run.as_deref(), &outcome, None)?;
-                    eprintln!(
-                        "condukt: could not determine whether fugu-router is installed: {why}"
-                    );
-                    println!(
-                        "shadow-run discarded (fugu-router could not be located: {why} — outcome not recorded)"
-                    );
-                }
-            }
         }
     }
     Ok(())
@@ -3853,6 +3659,13 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
             }
         },
         WtAction::Remove { path, branch } => {
+            // Verified-before-teardown (backlog 6180333a): an unverified (or
+            // undeterminable) owning task refuses before anything is touched.
+            teardown_gate::refuse_unverified_teardown(cfg, cwd, &repo, &path)?;
+            // Persist the worktree's tdd proofs BEFORE removing it (backlog
+            // ea6547c9); a persist failure refuses the removal via `?`.
+            let kept = proof_archive::persist_before_teardown(cfg, cwd, &repo, &path, None)?;
+            kept.report();
             let undeleted = worktree::remove(&repo, &path, branch.as_deref())?;
             if let Some(b) = undeleted {
                 eprintln!(
@@ -4002,6 +3815,16 @@ fn run_worktree(cfg: &Config, cwd: &Path, action: WtAction) -> Result<()> {
                     continue;
                 }
                 if remove {
+                    // Persist tdd proofs first (backlog ea6547c9); failure
+                    // refuses this deletion via `?`.
+                    let kept = proof_archive::persist_before_teardown(
+                        cfg,
+                        cwd,
+                        &repo,
+                        Path::new(&e.path),
+                        None,
+                    )?;
+                    kept.report();
                     std::fs::remove_dir_all(&e.path)
                         .with_context(|| format!("removing {}", e.path))?;
                     eprintln!("removed {}", e.path);
@@ -4473,6 +4296,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             verifier_model,
             verifier_cost,
             verifier_agent_id,
+            verdict,
         } => {
             // Hold the per-run state lock across the entire load → oracle-gate →
             // mutate → save cycle so a concurrent session/worktree cannot lose
@@ -4566,6 +4390,21 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // decomposition (ENOENT — a real observation of absence, not a
             // failure to look) still passes through ungated.
             let mut fp_gate_value: Option<bool> = None;
+            // The task's worktree for both verified gates, resolved into an
+            // owned local *before* the `&mut` borrow below. A `--worktree W`
+            // passed in this same call wins (backlog cf70f785): it is the
+            // worktree this call records, so the proofs must be judged there,
+            // not in a previously recorded one. Mirrors the recording below
+            // (`--clear-worktree` beats `--worktree`); else the recorded one.
+            let passed_wt = if clear_worktree {
+                None
+            } else {
+                worktree.clone()
+            };
+            let task_wt = passed_wt.or_else(|| {
+                let t = rs.tasks.iter().find(|s| s.id == task);
+                t.and_then(|s| s.worktree.clone())
+            });
             if st == state::Status::Verified {
                 match state::fp_gate_scope(cfg, cwd, &run, &task) {
                     // The one deliberate carve-out: there is no decomposition
@@ -4582,33 +4421,19 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         requires_fp_oracle,
                         reproduction_tests,
                     } => {
-                        // Resolve run_dir into a local *before* taking the
-                        // `&mut` borrow below. A `--worktree W` passed in this
-                        // same call wins (backlog cf70f785): it is the worktree
-                        // this call records, so the oracle must judge the proofs
-                        // there, not in a previously recorded worktree or the
-                        // session cwd. The precedence mirrors the recording
-                        // below (`--clear-worktree` beats `--worktree`). Only
-                        // then fall back to the recorded worktree, then cwd.
+                        // The oracle judges the proofs in `task_wt`, else cwd.
                         // A missing/unreadable dir is not papered over: the
                         // `tdd` spawn fails there and `check_oracle` reports an
                         // undetermined oracle, which `enforce_fp_gate` rejects
                         // (pinned by `oracle::tests::
                         // spawn_failure_is_undetermined_and_rejects`).
-                        let passed_worktree = if clear_worktree {
-                            None
-                        } else {
-                            worktree.as_deref()
-                        };
-                        let run_dir = passed_worktree
-                            .or_else(|| {
-                                rs.tasks
-                                    .iter()
-                                    .find(|s| s.id == task)
-                                    .and_then(|s| s.worktree.as_deref())
-                            })
+                        let run_dir = task_wt
+                            .as_deref()
                             .map(std::path::PathBuf::from)
                             .unwrap_or_else(|| cwd.to_path_buf());
+                        // After teardown the worktree's proofs live only in
+                        // the durable archive (backlog ea6547c9).
+                        let run_dir = proof_archive::oracle_dir(cfg, cwd, &run, &task, &run_dir);
                         let verdict = oracle::check_oracle(
                             requires_fp_oracle,
                             reproduction_tests.as_deref(),
@@ -4618,11 +4443,12 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         match state::enforce_fp_gate(&verdict) {
                             state::FpGateDecision::Reject => {
                                 bail!(
-                                    "refusing to verify task '{task}': no valid fail-to-pass reproduction oracle ({})",
+                                    "refusing to verify task '{task}': no valid fail-to-pass reproduction oracle ({}); {}",
                                     verdict
                                         .get("reason")
                                         .and_then(|v| v.as_str())
-                                        .unwrap_or("see `condukt state check-oracle` for details")
+                                        .unwrap_or("see `condukt state check-oracle` for details"),
+                                    proof_archive::found_proof_ids_note(&run_dir, &task)
                                 );
                             }
                             state::FpGateDecision::Allow(v) => {
@@ -4631,6 +4457,8 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         }
                     }
                 }
+                // Committed-tree gate (backlog 1ca662ec); see the fn's doc.
+                worktree::refuse_uncommitted_task_worktree(&task, task_wt.as_deref())?;
             }
 
             let t = rs
@@ -4702,6 +4530,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             if verifier_agent_id.is_some() {
                 t.verifier_agent_id = verifier_agent_id;
             }
+            t.verifier_verdict.apply(verdict);
             // Findings persist regardless of status (this whole handler runs for
             // any status): a failed/pending/unmerged experiment still records
             // what was learned. Preserve any existing artifact fields
@@ -5036,7 +4865,7 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
         }
         StateAction::Timings { run, json } => {
             let rs = state::RunState::load(cfg, cwd, &run)?;
-            print_timings(&rs, json)?;
+            timings::print_timings(&rs, json)?;
         }
         StateAction::Claim { run, session, file } => {
             let files = if file.is_empty() {
@@ -5398,18 +5227,16 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             run,
             task,
             all_stuck,
+            force,
         } => {
             let mut rs = state::RunState::load(cfg, cwd, &run)?;
-            // Running tasks whose staleness could not be determined at all. Only
-            // the bulk scan can produce these; the explicit `--task` override
-            // performs no scan, so it leaves this empty and never exits 3.
+            // Running tasks whose staleness could not be determined. Only the bulk
+            // scan produces these; the explicit `--task` arm never exits 3.
             let mut undetermined: Vec<state::UndeterminedTask> = Vec::new();
-            // Whether any of them is a failure to OBSERVE (as opposed to an
-            // observation still in progress) — the only thing that makes the
-            // scan non-clean.
+            // Whether any is a failure to OBSERVE (not an observation still in
+            // progress) — the only thing that makes the scan non-clean.
             let mut unobservable_present = false;
             let ids: Vec<String> = if let Some(task_id) = task {
-                // Specific task: validate it exists and is running/failed.
                 let t = rs
                     .tasks
                     .iter()
@@ -5421,19 +5248,18 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                         t.status
                     );
                 }
+                abandon_gate::check_explicit(cfg, cwd, &run, t, force.as_deref())?;
                 vec![task_id]
             } else if all_stuck {
                 // Bulk path: TTL-staleness alone does NOT authorise a reset —
-                // `scan_stuck` additionally requires a confirmed
-                // `Known(Stalled)` progress verdict per task AND a worktree
-                // observed clean, because a reset clears the task's worktree
-                // reference and re-dispatches a second worker, which would
-                // orphan any uncommitted work there. A task held back by the
-                // dirty veto is named on stderr by the scan — so a shorter list
-                // here is never the only trace of a check that could not run.
-                // The explicit `--task` arm above stays deliberately ungated
-                // (human override), which is how a worker that died mid-edit,
-                // leaving a dirty worktree the bulk gate refuses, is reclaimed.
+                // `scan_stuck` also requires a confirmed `Known(Stalled)` progress
+                // verdict per task AND a worktree observed clean, because a reset
+                // clears the task's worktree reference and re-dispatches a second
+                // worker, which would orphan any uncommitted work there. A task held
+                // back by the dirty veto is named on stderr by the scan — so a shorter
+                // list here is never the only trace of a check that could not run.
+                // The explicit `--task` arm (human override, gated only on the
+                // worker transcript) reclaims a worker that died mid-edit.
                 //
                 // The scan is tri-valued: what it could NOT determine is carried
                 // out separately instead of being folded into "healthy", because
@@ -5474,12 +5300,10 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 eprintln!("abandoned {} task(s): {}", ids.len(), ids.join(", "));
             }
 
-            // Report what could NOT be determined. This runs AFTER the abandon
-            // above: a task that is confirmed stuck is still recovered even when
-            // a different task is undetermined — abandoning and reporting are
-            // independent. Reporting is also independent of the exit code: BOTH
-            // classes are printed, because the silence is the defect, and only
-            // the class decides whether the scan counts as clean.
+            // Report what could NOT be determined, AFTER the abandon above (a
+            // confirmed-stuck task is recovered even when another is undetermined)
+            // and whatever the exit code: BOTH classes are printed, because the
+            // silence is the defect; only the class decides whether it is clean.
             let unobservable: Vec<&state::UndeterminedTask> = undetermined
                 .iter()
                 .filter(|u| u.class == state::Undetermination::Unobservable)
@@ -5629,8 +5453,26 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
             // command passes. A failing mechanical check fails this gate. If the
             // skip_eligible invariant is ever violated (no command), this fails
             // soft to skip_verifier:false rather than panicking an unattended run.
-            let (out, gate_failed) =
-                verify::mechanical_skip_verdict(&cls, |cmd| run_mechanical(cmd, &run_dir));
+            //
+            // Pass cache (backlog ebb0e1b5): a command that already PASSED with
+            // the exact same argv on the same worktree content is not re-run;
+            // the verdict is identical to a real pass and the JSON carries
+            // `"cache_hit": true`. Any key/store failure is a miss (runs).
+            let store = pass_cache::store_dir(&cfg.state_dir);
+            let mut cache_hit = false;
+            let (mut out, gate_failed) = verify::mechanical_skip_verdict(&cls, |cmd| {
+                let (passed, output, hit) =
+                    pass_cache::run_cached(&store, cmd, &run_dir, run_mechanical);
+                cache_hit = hit;
+                (passed, output)
+            });
+            if cache_hit {
+                out["cache_hit"] = serde_json::json!(true);
+                eprintln!(
+                    "condukt: pass-cache HIT for task '{task}': mechanical command not \
+                     re-executed (same argv, unchanged worktree content)"
+                );
+            }
             println!("{}", serde_json::to_string(&out)?);
             if gate_failed {
                 std::process::exit(1);
@@ -5652,6 +5494,9 @@ fn run_state(cfg: &Config, cwd: &Path, action: StateAction) -> Result<()> {
                 .and_then(|s| s.worktree.as_deref())
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| cwd.to_path_buf());
+            // After teardown the worktree's proofs live only in the durable
+            // archive (backlog ea6547c9).
+            let run_dir = proof_archive::oracle_dir(cfg, cwd, &run, &task, &run_dir);
             let out = oracle::check_oracle(
                 t.requires_fp_oracle(),
                 t.reproduction_tests.as_deref(),
@@ -6172,74 +6017,6 @@ fn fugu_fingerprint() -> Result<Option<(PathBuf, String)>> {
     }
     let fp = String::from_utf8_lossy(&out.stdout).trim().to_string();
     Ok(Some((bin, fp)))
-}
-
-/// Wall-clock seconds spanning `[a, b]`, or `None` when the span is unmeasured.
-/// Unmeasured means EITHER endpoint was never stamped (`None`) OR the endpoints
-/// are out of order (`b < a`, a cannot-determine that resolves to unmeasured,
-/// never a negative or a fabricated 0). A genuine same-instant phase (`b == a`)
-/// is a real, measured `Some(0)` — completed-instantly is distinct from
-/// never-measured, which is the whole point of the tri-state.
-fn phase_span_secs(a: Option<i64>, b: Option<i64>) -> Option<i64> {
-    match (a, b) {
-        (Some(a), Some(b)) if b >= a => Some(b - a),
-        _ => None,
-    }
-}
-
-/// Render an optional measured span for the text table: `"{n}s"` when measured
-/// (including a real `0s`), the explicit marker `"unmeasured"` when `None`.
-fn fmt_span(secs: Option<i64>) -> String {
-    match secs {
-        Some(s) => format!("{s}s"),
-        None => "unmeasured".to_string(),
-    }
-}
-
-/// Print each task's per-phase timing breakdown. An unmeasured phase is rendered
-/// as an explicit `unmeasured` marker (text) or `null` (JSON), NEVER as 0
-/// seconds — so a never-measured phase and a completed-instantly phase (a real
-/// measured `0`) stay distinguishable, the same tri-state norm as the fugu-router
-/// duration field.
-fn print_timings(rs: &state::RunState, json: bool) -> Result<()> {
-    if json {
-        let tasks: Vec<serde_json::Value> = rs
-            .tasks
-            .iter()
-            .map(|t| {
-                let worker = phase_span_secs(t.worker_started_at, t.worker_ended_at);
-                let verifier = phase_span_secs(t.verifier_started_at, t.verifier_ended_at);
-                let verify_to_merge = phase_span_secs(t.verifier_ended_at, t.merge_completed_at);
-                serde_json::json!({
-                    "id": t.id,
-                    "worker_started_at": t.worker_started_at,
-                    "worker_ended_at": t.worker_ended_at,
-                    "verifier_started_at": t.verifier_started_at,
-                    "verifier_ended_at": t.verifier_ended_at,
-                    "merge_completed_at": t.merge_completed_at,
-                    // Derived spans: null (not 0) when unmeasured.
-                    "worker_secs": worker,
-                    "verifier_secs": verifier,
-                    "verify_to_merge_secs": verify_to_merge,
-                })
-            })
-            .collect();
-        let out = serde_json::json!({ "run": rs.run_id, "tasks": tasks });
-        println!("{}", serde_json::to_string_pretty(&out)?);
-    } else {
-        println!("run '{}' phase timings:", rs.run_id);
-        for t in &rs.tasks {
-            let worker = fmt_span(phase_span_secs(t.worker_started_at, t.worker_ended_at));
-            let verifier = fmt_span(phase_span_secs(t.verifier_started_at, t.verifier_ended_at));
-            let verify_to_merge =
-                fmt_span(phase_span_secs(t.verifier_ended_at, t.merge_completed_at));
-            println!(
-                "  {}  worker: {}  verifier: {}  verify→merge: {}",
-                t.id, worker, verifier, verify_to_merge
-            );
-        }
-    }
-    Ok(())
 }
 
 /// Record completed runs' outcomes to fugu-router. Deterministic and idempotent:

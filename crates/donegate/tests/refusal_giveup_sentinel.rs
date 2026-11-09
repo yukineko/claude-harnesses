@@ -45,7 +45,7 @@ static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// built-in default (`Config::default`), asserted indirectly by the apparatus
 /// checks below: if the default ever changes, the "under the cap" loop stops
 /// matching and the tests fail loudly instead of silently skipping the cap.
-const MAX_ATTEMPTS: u32 = 3;
+const MAX_ATTEMPTS: u32 = 2;
 
 fn scratch(tag: &str) -> PathBuf {
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

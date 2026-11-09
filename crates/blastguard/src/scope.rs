@@ -68,8 +68,12 @@
 //! bounded blast radius, and buys an unattended agent nothing at all. The
 //! exceptions are the next two sections (worktree storage roots; temp and
 //! cache roots), and both are exceptions by user ruling, not by inference.
-//! They are consulted only by the recursive-`rm` arm of [`crate::detect`]
-//! (through [`crate::deletion`] for temp/cache and the git classes).
+//! They are consulted by the recursive-`rm` arm of [`crate::detect`]
+//! (through [`crate::deletion`] for temp/cache and the git classes), and the
+//! worktree storage roots additionally by the protected-path lift and the git
+//! working-tree-discard `Allow` (sections "Protected-named paths inside a
+//! linked worktree checkout" and "Git working-tree discards inside a linked
+//! worktree checkout" below).
 //!
 //! # Worktree storage roots — a placement that yields `Allow`
 //!
@@ -81,8 +85,10 @@
 //!
 //! The worktree storage roots are a SEPARATE set from the safe roots, built by
 //! [`SafeRoots::new`] from the same inputs and consulted only through
-//! [`SafeRoots::classify_worktree`], which only `detect`'s recursive-`rm` arm
-//! calls (no other verb gains anything from them):
+//! [`SafeRoots::classify_worktree`] — directly by `detect`'s recursive-`rm`
+//! arm, and inside [`SafeRoots::classify_worktree_checkout`] /
+//! [`SafeRoots::is_linked_worktree_checkout`] (the checkout sections below);
+//! no other verb gains anything from them:
 //!
 //!   * `$HOME/.condukt/worktrees` — only when `HOME` is absolute;
 //!   * for each of the payload `cwd` and `CLAUDE_PROJECT_DIR`: the prefix up to
@@ -212,6 +218,24 @@
 //! under a storage root, a symlink into the main tree, and every undetermined
 //! placement keep the protected-path verdict.
 //!
+//! The same placement (`Inside` a checkout) also lets a recursive wildcard
+//! `rm` whose literal parent is strictly inside a checkout be `Allow` (user
+//! ruling 2026-11-07; `detect`'s rm arm, `tmp_glob_operand_allowed`).
+//!
+//! # Git working-tree discards inside a linked worktree checkout
+//!
+//! User ruling 2026-11-07 (deletion policy: work products in a managed
+//! disposable place may be deleted). `git -C <dir> restore|reset --hard|clean
+//! -f|…` names exactly the checkout directory, for which
+//! [`SafeRoots::classify_worktree_checkout`] answers `IsRoot` before probing
+//! anything. [`SafeRoots::is_linked_worktree_checkout`] is the checked answer
+//! to "is this directory ITSELF a linked checkout": exactly one component
+//! below a storage root, not `.git`, the same `.git`-file probe, no `..` in
+//! the spelling and no symlink below the storage root. `Known(true)` is the
+//! only answer `detect` (`managed_worktree_git`) acts on; a primary working
+//! tree is an observed `Known(false)` and every probe failure is
+//! `Undetermined`, both of which keep the git verdict.
+//!
 //! # Temp and cache roots — also `Allow`, for recursive `rm` only
 //!
 //! User ruling 2026-09-30 (backlog 3aa215e1): 「作業や復帰できるものは削除していい」.
@@ -254,7 +278,9 @@
 //! verdict: [`Placement::Inside`], which means "resolved, and provably a strict
 //! descendant of a root this session is allowed to destroy things in" (a safe
 //! root, or — for recursive rm only — a worktree storage, temp or cache
-//! deletion root).
+//! deletion root; or a linked worktree checkout, for the protected-path lift
+//! and the wildcard rm). The git working-tree-discard `Allow` relaxes only on
+//! the `Known(true)` of [`SafeRoots::is_linked_worktree_checkout`].
 //! [`Placement::Outside`] and every `Undetermined` leave the caller's existing
 //! Deny exactly as it was. [`Placement::IsRoot`] is a fourth statement that
 //! deliberately does NOT collapse into `Inside`: `rm -rf <the project itself>`
@@ -277,6 +303,10 @@
 //! wrong. Not fixed here.
 
 use harness_core::verdict::Determination;
+
+mod checkout;
+
+use checkout::{is_linked_checkout, CheckoutProbe};
 
 /// A function that maps a lexically-normalised absolute path to its REAL path,
 /// resolving symlinked components against the filesystem.
@@ -544,9 +574,11 @@ pub struct SafeRoots {
     /// `.harness-worktrees` directory derived from `cwd` / `CLAUDE_PROJECT_DIR`),
     /// kept only when each exists as a real, non-symlinked directory below its
     /// canonicalised anchor and passes the derived-root rules (see
-    /// [`worktree_storage_roots`]). Consulted ONLY by [`SafeRoots::classify_worktree`], which only
-    /// the recursive-`rm` arm of [`crate::detect`] calls — see the module doc,
-    /// "Worktree storage roots". Kept separate from `roots` on purpose: adding
+    /// [`worktree_storage_roots`]). Consulted ONLY by [`SafeRoots::classify_worktree`], which
+    /// the recursive-`rm` arm of [`crate::detect`] calls directly and the two
+    /// checkout classifications ([`SafeRoots::classify_worktree_checkout`],
+    /// [`SafeRoots::is_linked_worktree_checkout`]) call internally — see the
+    /// module doc, "Worktree storage roots". Kept separate from `roots` on purpose: adding
     /// these to `roots` would hand every OTHER location-aware verb (`truncate`,
     /// `find -delete`, `git clean`, `chmod -R`, redirects) a confined `Ask`
     /// there, which nobody ruled on.
@@ -575,9 +607,17 @@ pub struct SafeRoots {
     /// classes can never answer `Allow`. Set only by the hook binary through
     /// [`SafeRoots::with_git_tree_probe`].
     git_tree_probe: Option<crate::reversible::GitTreeProbe>,
+    /// The index probe for a `git checkout -- <pathspec>` whose path does not
+    /// exist on disk ([`crate::reversible::probe_absent_path`]). `None` (the
+    /// default, and always for [`SafeRoots::none`]) keeps such a pathspec at
+    /// Ask. Set only by the hook binary through
+    /// [`SafeRoots::with_git_absent_probe`].
+    git_absent_probe: Option<crate::reversible::GitAbsentProbe>,
     /// The "is this directory a linked git worktree checkout" probe behind
-    /// [`SafeRoots::classify_worktree_checkout`] (module doc, "Protected-named
-    /// paths inside a linked worktree checkout"). Set by [`SafeRoots::new`]
+    /// [`SafeRoots::classify_worktree_checkout`] and
+    /// [`SafeRoots::is_linked_worktree_checkout`] (module doc, "Protected-named
+    /// paths inside a linked worktree checkout", "Git working-tree discards
+    /// inside a linked worktree checkout"). Set by [`SafeRoots::new`]
     /// only when a resolver was supplied, like the storage-root `lstat` probe;
     /// `None` (always for [`SafeRoots::none`]) means no operand is ever placed
     /// inside a checkout.
@@ -604,6 +644,7 @@ impl SafeRoots {
             cache_roots: Vec::new(),
             home_real: None,
             git_tree_probe: None,
+            git_absent_probe: None,
             checkout_probe: None,
         }
     }
@@ -710,6 +751,7 @@ impl SafeRoots {
             cache_roots,
             home_real,
             git_tree_probe: None,
+            git_absent_probe: None,
             checkout_probe: resolver.map(|_| is_linked_checkout as CheckoutProbe),
         }
     }
@@ -727,6 +769,20 @@ impl SafeRoots {
     /// The attached git work-tree probe, if any.
     pub(crate) fn git_tree_probe(&self) -> Option<crate::reversible::GitTreeProbe> {
         self.git_tree_probe
+    }
+
+    /// Attach the absent-path index probe the `git checkout -- <pathspec>`
+    /// verdict uses when the path does not exist on disk. Only the hook binary
+    /// does this; without it such a pathspec stays Ask.
+    #[must_use]
+    pub fn with_git_absent_probe(mut self, probe: crate::reversible::GitAbsentProbe) -> SafeRoots {
+        self.git_absent_probe = Some(probe);
+        self
+    }
+
+    /// The attached absent-path index probe, if any.
+    pub(crate) fn git_absent_probe(&self) -> Option<crate::reversible::GitAbsentProbe> {
+        self.git_absent_probe
     }
 
     /// The canonical home directory, if known.
@@ -1087,37 +1143,41 @@ is not decided by where it is spelled"
         self.classify_against(&self.worktree_roots, operand, cwd)
     }
 
-    /// Is `operand` STRICTLY INSIDE a linked git worktree checkout that sits
-    /// directly under a worktree storage root (`<root>/<checkout>/<more>`)?
+    /// True when this model was built by the filesystem-aware hook binary
+    /// (a resolver was supplied). [`SafeRoots::none`] — the no-model entry
+    /// [`crate::detect::detect`] uses for library consumers — answers `false`.
     ///
-    /// `Known(Inside { root: <checkout>, path })` is the only answer that may
-    /// lift the protected-path rule (module doc, "Protected-named paths inside
-    /// a linked worktree checkout"). Everything else — the checkout itself
-    /// (`IsRoot`), a path directly under a storage root or outside every root
-    /// (`Outside`), and every `Undetermined` — leaves the caller's verdict
-    /// exactly as it was. All of these are required:
+    /// The scratch-place rule ([`SafeRoots::classify_managed_place`]) applies
+    /// only when this is `true`: the no-model entry keeps the verdict it had
+    /// before that rule existed (its contract, see [`SafeRoots::none`]). A
+    /// model WITH a resolver whose roots all failed to resolve is still a
+    /// model, so there every landing is `Undetermined` and the rule asks.
+    pub(crate) fn has_location_model(&self) -> bool {
+        self.resolver.is_some()
+    }
+
+    /// Where does a NEW TREE created at `operand` (a `git clone` / `cp -r`
+    /// destination) land relative to the MANAGED PLACES (backlog ef7c9fbe,
+    /// memory `scratch-artifacts-in-deletable-places`; user ruling
+    /// 2026-11-07, reading (a))?
     ///
-    ///   * the session is not refused (raw cwd / `CLAUDE_PROJECT_DIR`), and a
-    ///     checkout probe exists (only with a resolver);
-    ///   * the operand has no `..` component as SPELLED — the same refusal the
-    ///     worktree rm `Allow` makes, because `..` is collapsed lexically
-    ///     before symlinks are resolved;
-    ///   * [`SafeRoots::classify_worktree`] places it `Inside` a storage root,
-    ///     at least two components deep;
-    ///   * no component below `<root>/<checkout>` is `.git` (a nested repo's
-    ///     own hooks/config are not this checkout's tracked files);
-    ///   * `<root>/<checkout>` is a real directory (not a symlink) holding a
-    ///     `.git` FILE whose content starts with `gitdir:` — what `git worktree
-    ///     add` writes; a main checkout has a `.git` DIRECTORY and never
-    ///     qualifies;
-    ///   * the operand's own spelling passes through the worktree STORAGE
-    ///     ROOT with no symlink below it ([`SafeRoots::no_symlink_below`]
-    ///     anchored at the storage root, not at the checkout), so a
-    ///     `<checkout>/.githooks` symlinked into the main tree, a checkout
-    ///     entry that is itself a symlink (`<root>/<link> -> <root>/<checkout>`),
-    ///     and a spelling through a symlink outside every storage root that
-    ///     lands in a checkout are never `Inside`.
-    pub fn classify_worktree_checkout(
+    /// The managed places are the safe roots (the payload cwd and
+    /// `CLAUDE_PROJECT_DIR` when acceptable as derived roots, `/tmp`,
+    /// `/private/tmp` — the session scratchpad lives there — and `$TMPDIR`)
+    /// together with the worktree storage roots (`$HOME/.condukt/worktrees`,
+    /// `.harness-worktrees`). No new list: both sets are the ones
+    /// [`SafeRoots::new`] already builds, with the same derivation rules
+    /// (`$HOME` itself is never a root, so a cwd of `$HOME` is not managed).
+    ///
+    /// `Inside` or `IsRoot` = managed (creating a child of a root is creation
+    /// inside it); `Outside` = not managed. `Undetermined` when the operand is
+    /// not a literal path, cannot be placed or resolved, carries a `..`
+    /// component (collapsed lexically before symlink resolution, so it could
+    /// be misplaced — refused outright), when the session's raw cwd /
+    /// `CLAUDE_PROJECT_DIR` was refused (`..`/`.` component, relative cwd),
+    /// or when there are no managed places at all. The caller must read
+    /// every `Undetermined` as "not shown to be managed".
+    pub(crate) fn classify_managed_place(
         &self,
         operand: &str,
         cwd: Option<&str>,
@@ -1125,63 +1185,25 @@ is not decided by where it is spelled"
         if let Some(why) = &self.worktree_refusal {
             return Determination::undetermined(why.clone());
         }
-        let Some(probe) = self.checkout_probe else {
+        let dotdot = |p: &str| p.split('/').any(|c| c == "..");
+        if dotdot(operand) || (!operand.starts_with('/') && cwd.is_some_and(dotdot)) {
             return Determination::undetermined(
-                "blastguard has no worktree checkout probe for this session (no resolver)",
-            );
-        };
-        if operand.split('/').any(|c| c == "..") {
-            return Determination::undetermined(
-                "operand has a `..` component, so where it lands is not decided by its spelling",
+                "the destination (or the directory it is relative to) has a `..` component, which this model collapses lexically \
+before resolving symlinks, so where it lands is not decided by its spelling",
             );
         }
-        let lexical = match self.lexical_absolute(operand, cwd) {
-            Determination::Known(l) => l,
-            Determination::Undetermined(u) => return Determination::Undetermined(u),
-        };
-        let (root, real) = match self.classify_worktree(operand, cwd) {
-            Determination::Known(Placement::Inside { root, path }) => (root, path),
-            Determination::Known(other) => return Determination::known(other),
-            Determination::Undetermined(u) => return Determination::Undetermined(u),
-        };
-        let prefix = format!("{}/", root.trim_end_matches('/'));
-        let Some(rest) = real.strip_prefix(&prefix) else {
-            return Determination::undetermined("placed path does not start with its root");
-        };
-        let comps: Vec<&str> = rest.split('/').filter(|c| !c.is_empty()).collect();
-        let Some((name, below)) = comps.split_first() else {
-            return Determination::undetermined("placed path has no component below its root");
-        };
-        let checkout = format!("{prefix}{name}");
-        if below.is_empty() {
-            return Determination::known(Placement::IsRoot { root: checkout });
+        let managed: Vec<String> = self
+            .roots
+            .iter()
+            .chain(self.worktree_roots.iter())
+            .cloned()
+            .collect();
+        if managed.is_empty() {
+            return Determination::undetermined(
+                "blastguard has no managed place for this session (no cwd / project dir / temp root resolved)",
+            );
         }
-        if below.contains(&".git") {
-            return Determination::undetermined(format!(
-                "`{operand}` is inside git metadata below {checkout}, not a checked-out file"
-            ));
-        }
-        match probe(&checkout) {
-            Determination::Known(true) => {}
-            Determination::Known(false) => {
-                return Determination::known(Placement::Outside { path: real });
-            }
-            Determination::Undetermined(u) => return Determination::Undetermined(u),
-        }
-        // Anchored at the storage root: the checkout entry is a component
-        // BELOW it, so an entry that is itself a symlink fails here. Anchored
-        // at `checkout`, a prefix like `<root>/<link>` would resolve to the
-        // checkout and be accepted as the anchor.
-        match self.no_symlink_below(&lexical, &root) {
-            Determination::Known(true) => Determination::known(Placement::Inside {
-                root: checkout,
-                path: real,
-            }),
-            Determination::Known(false) => Determination::undetermined(format!(
-                "`{operand}` reaches {checkout} through a symlink below its storage root {root}"
-            )),
-            Determination::Undetermined(u) => Determination::Undetermined(u),
-        }
+        self.classify_against(&managed, operand, cwd)
     }
 
     fn classify_against(
@@ -1304,40 +1326,6 @@ fn is_real_dir(path: &str) -> bool {
     std::fs::symlink_metadata(path)
         .map(|m| m.file_type().is_dir())
         .unwrap_or(false)
-}
-
-/// "Is `dir` a linked git worktree checkout?" — `Known(false)` only for an
-/// observed no; an IO error is `Undetermined` (never folded into "no", so the
-/// caller can name it rather than report the operand as placed `Outside`).
-type CheckoutProbe = fn(&str) -> Determination<bool>;
-
-/// The real checkout probe for [`SafeRoots::classify_worktree_checkout`]:
-/// `dir` is a real directory (`lstat`, not a symlink) whose `.git` is a
-/// regular FILE (`lstat`) starting with `gitdir:` — the shape `git worktree
-/// add` creates. A missing `dir` or `.git`, a symlink, a `.git` directory, or
-/// a `.git` file that is shorter than or does not start with `gitdir:` is an
-/// observed `Known(false)`; any other IO error is `Undetermined`.
-fn is_linked_checkout(dir: &str) -> Determination<bool> {
-    use std::io::{ErrorKind, Read};
-    match std::fs::symlink_metadata(dir) {
-        Ok(m) if m.file_type().is_dir() => {}
-        Ok(_) => return Determination::known(false),
-        Err(e) if e.kind() == ErrorKind::NotFound => return Determination::known(false),
-        Err(e) => return Determination::undetermined(format!("cannot lstat {dir}: {e}")),
-    }
-    let dotgit = format!("{}/.git", dir.trim_end_matches('/'));
-    match std::fs::symlink_metadata(&dotgit) {
-        Ok(m) if m.file_type().is_file() => {}
-        Ok(_) => return Determination::known(false),
-        Err(e) if e.kind() == ErrorKind::NotFound => return Determination::known(false),
-        Err(e) => return Determination::undetermined(format!("cannot lstat {dotgit}: {e}")),
-    }
-    let mut head = [0u8; 7];
-    match std::fs::File::open(&dotgit).and_then(|mut f| f.read_exact(&mut head)) {
-        Ok(()) => Determination::known(&head == b"gitdir:"),
-        Err(e) if e.kind() == ErrorKind::UnexpectedEof => Determination::known(false),
-        Err(e) => Determination::undetermined(format!("cannot read {dotgit}: {e}")),
-    }
 }
 
 /// Build the worktree storage roots (module doc, "Worktree storage roots").

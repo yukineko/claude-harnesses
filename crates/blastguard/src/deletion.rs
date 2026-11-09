@@ -29,9 +29,13 @@
 //! checkout"; this module's own `touches_protected` refusal in
 //! [`judge_operand`] is unchanged), AFTER
 //! the worktree-storage `Allow` (backlog 873651b9) and AFTER the literal
-//! config-file exemption. Wildcards (the one wildcard `Allow`, below `/tmp`,
-//! is `tmp_glob_confined` in the rm arm), `find -delete`, `git clean`,
-//! `truncate`, redirects and `~`/`$HOME` operands are not judged here.
+//! config-file exemption. Wildcards (the wildcard `Allow` — below `/tmp`, or
+//! with a literal parent strictly inside a linked worktree checkout under a
+//! worktree storage root, user ruling 2026-11-07 — is `tmp_glob_confined` in
+//! the rm arm), `find -delete`, `git clean` (and the other git
+//! working-tree discards, whose checkout `Allow` is `managed_worktree_git` in
+//! `detect`'s git arm), `truncate`, redirects and `~`/`$HOME` operands are not
+//! judged here.
 //!
 //! # Verdicts
 //!
@@ -376,7 +380,8 @@ fn never_project(real: &str, home: Option<&str>) -> Option<OperandJudgement> {
     }
     if is_system_path(real) {
         return Some(OperandJudgement::Refused(format!(
-            "`{real}` is a system directory"
+            "`{real}` is a system directory {}",
+            crate::model::SYSTEM_HARM_MARK
         )));
     }
     let Some(home) = home else {
@@ -444,7 +449,10 @@ pub fn decide_project(
         ));
     }
     if is_system_path(top) {
-        return OperandJudgement::Refused(format!("work tree {top} is a system directory"));
+        return OperandJudgement::Refused(format!(
+            "work tree {top} is a system directory {}",
+            crate::model::SYSTEM_HARM_MARK
+        ));
     }
     match no_symlink {
         Determination::Known(true) => {}

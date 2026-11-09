@@ -39,7 +39,7 @@ fn git(dir: &Path, args: &[&str]) {
 fn fixture_repo(root: &Path, name: &str, dirty: bool) -> PathBuf {
     let p = root.join(name);
     std::fs::create_dir_all(&p).unwrap();
-    git(&p, &["init", "-q"]);
+    git(&p, &["init", "-q", "-b", "main"]);
     std::fs::write(p.join("tracked.txt"), "x\n").unwrap();
     git(&p, &["add", "tracked.txt"]);
     git(&p, &["commit", "-q", "-m", "init"]);

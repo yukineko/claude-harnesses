@@ -23,6 +23,16 @@
 #
 # What runs (all stdlib-only python3; each blocks, none warn-and-continue)
 # -----------------------------------------------------------------------
+# Scope (user ruling 2026-11-08): every gate judges only THIS commit's range.
+# The scanners run with `--staged` look only at the staged files of their
+# target set (injectguard, fail-open-guard, launcher-exec-bit, backlog-store,
+# doc-duplication, clippy-lints), or — when they judge a whole-repo property
+# (raw-io-ratchet, projkey-classification, gate-protection, version-lockstep,
+# gate-crates-sync, crossx-constants, fault-injection-adoption) — run their
+# full check only when the staged diff touches one of their inputs. The rest
+# were already diff-scoped. No gate reads another worktree. The table below
+# describes what each gate checks once it runs.
+#
 #   injectguard        check-prompt-injection.py  planted prompt-injection in a
 #                                                 committed prompt asset
 #   fail-open-guard    check-fail-open.py         a new fail-open swallow on the
@@ -148,11 +158,6 @@
 #                                                 file's size at HEAD. Caps only
 #                                                 go down
 #
-# Plus one Rust gate (not python3):
-#   main-tree-guard    condukt guard main-tree    a commit from the SHARED primary
-#                                                 working tree while another
-#                                                 session is live (CLAUDE.md §8)
-#
 # The binary-reproducibility gate stays out: it rebuilds every bin from source,
 # which is far too slow for a commit.
 #
@@ -200,6 +205,7 @@ rc=0
 run() {
     scanner="$1"
     label="$2"
+    shift 2
     path="$REPO/scripts/$scanner"
 
     if [ ! -f "$path" ]; then
@@ -210,7 +216,7 @@ run() {
         return
     fi
 
-    python3 "$path"
+    python3 "$path" "$@"
     status=$?
     [ "$status" -eq 0 ] && return
 
@@ -225,157 +231,34 @@ run() {
     rc=1
 }
 
-run check-prompt-injection.py injectguard
-run check-fail-open.py        fail-open-guard
+# `--staged` (user ruling 2026-11-08): the scanner checks only this commit's
+# range — the staged files of its target set, or, for a scanner that judges a
+# whole-repo property, a full run only when the staged diff touches one of its
+# inputs (see scripts/staged_scope.py). Without the flag every scanner still
+# sweeps the whole repo; nothing here runs that sweep.
+run check-prompt-injection.py injectguard --staged
+run check-fail-open.py        fail-open-guard --staged
 run check-fail-open-diff.py   fail-open-diff
-run check-doc-duplication.py  doc-duplication
+run check-doc-duplication.py  doc-duplication --staged
 # check-test-weakening.py is NOT run here: it is run from .githooks/commit-msg
 # instead. Its acknowledgment marker lives in the commit message, which git has
 # not prepared yet at pre-commit time, so from here the remedy it prints is
 # unreachable and `--no-verify` becomes the only way past a false positive.
 # It blocks the same commit either way; see that hook's header for the detail.
-run check-plugin-versions.py  version-lockstep
+run check-plugin-versions.py  version-lockstep --staged
 run check-version-bumped.py   bump-on-change
 run check-hardcoded-secret.py secret-guard
-run check-raw-io-ratchet.py   raw-io-ratchet
-run check-fault-injection-adoption.py fault-injection-adoption
+run check-raw-io-ratchet.py   raw-io-ratchet --staged
+run check-fault-injection-adoption.py fault-injection-adoption --staged
 run check-worktree-isolation.py worktree-isolation
-run check-gate-crates-sync.py gate-crates-sync
-run check-gate-protection.py gate-protection
-run check-cross-crate-constants.py crossx-constants
-run check-launcher-exec-bit.py launcher-exec-bit
-run check-clippy-lints.py     clippy-lints
-run check-backlog-store.py    backlog-store
-run check-projkey-store-classification.py projkey-classification
+run check-gate-crates-sync.py gate-crates-sync --staged
+run check-gate-protection.py gate-protection --staged
+run check-cross-crate-constants.py crossx-constants --staged
+run check-launcher-exec-bit.py launcher-exec-bit --staged
+run check-clippy-lints.py     clippy-lints --staged
+run check-backlog-store.py    backlog-store --staged
+run check-projkey-store-classification.py projkey-classification --staged
 run check-file-growth.py      file-growth
-
-# main-tree-guard — CLAUDE.md §8, the one gate here that is Rust rather than
-# python3, because its decision is a tri-state over injectable inputs and is
-# unit-tested (crates/condukt/src/maintree.rs). It refuses a commit made from
-# the SHARED primary working tree while another session is live; it passes from
-# a linked worktree, during an integration, with nothing staged, or when no peer
-# session is reported.
-#
-# The binary is resolved with a freshly built one first, because a condukt on
-# PATH that predates `guard main-tree` answers "unrecognized subcommand" (exit
-# 2) — which blocks, as an unrunnable gate must. Build with
-# `cargo build --release -p condukt`, or roll the plugin out, rather than
-# loosening this.
-#
-# Resolution order: $CONDUKT_BIN, target/release, target/debug, then the
-# rolled-out plugin cache, then PATH. A fresh worktree has no target/, so the
-# plugin cache is what makes a worker's first commit gateable. The cache lookup
-# mirrors harness_core::plugin_bin::cache_lookup_in
-# (crates/harness-core/src/plugin_bin.rs): it enumerates
-# ~/.claude/plugins/cache/yukineko/condukt/<version>/bin/condukt, follows
-# symlinks when classifying entries, skips non-directories and dangling
-# entries, picks the highest version by numeric dot-components (not a string
-# sort, so 0.1.12 beats 0.1.9), and is consulted BEFORE PATH because the cache
-# is the copy whose provenance is known (rollout-plugins.sh). Three answers:
-# found (exit 0, path on stdout), not installed (exit 1, fall through to PATH),
-# or undetermined (exit 2: $HOME unset, or the cache dir / an entry / a
-# candidate could not be read or stat'ed). Undetermined blocks rather than
-# falling through to PATH (CLAUDE.md §3).
-guard_bin=""
-guard_undetermined=""
-for cand in "${CONDUKT_BIN:-}" "$REPO/target/release/condukt" "$REPO/target/debug/condukt"; do
-    if [ -n "$cand" ] && [ -x "$cand" ]; then
-        guard_bin="$cand"
-        break
-    fi
-done
-if [ -z "$guard_bin" ]; then
-    cache_out="$(python3 - <<'PY'
-import os
-import stat
-import sys
-
-home = os.environ.get("HOME", "")
-if not home:
-    print("$HOME is unset, so the plugin cache could not be located")
-    sys.exit(2)
-base = os.path.join(home, ".claude", "plugins", "cache", "yukineko", "condukt")
-try:
-    names = os.listdir(base)
-except FileNotFoundError:
-    sys.exit(1)  # never rolled out here: an observation
-except OSError as e:
-    print("could not enumerate %s: %s" % (base, e))
-    sys.exit(2)
-versions = []
-for name in names:
-    entry = os.path.join(base, name)
-    try:
-        st = os.stat(entry)  # follows symlinks, like std::fs::metadata
-    except FileNotFoundError:
-        continue  # dangling symlink / vanished entry
-    except OSError as e:
-        print("could not stat %s: %s" % (entry, e))
-        sys.exit(2)
-    if not stat.S_ISDIR(st.st_mode):
-        continue  # e.g. the .version-history.jsonl written by rollout
-    cand = os.path.join(entry, "bin", "condukt")
-    try:
-        os.stat(cand)
-    except FileNotFoundError:
-        continue
-    except OSError as e:
-        print("could not test %s: %s" % (cand, e))
-        sys.exit(2)
-    versions.append(name)
-if not versions:
-    sys.exit(1)
-
-
-def key(n):
-    return ([(1, int(p)) if p.isdigit() else (0, 0) for p in n.split(".")], n)
-
-
-print(os.path.join(base, max(versions, key=key), "bin", "condukt"))
-sys.exit(0)
-PY
-)"
-    cache_status=$?
-    if [ "$cache_status" -eq 0 ] && [ -n "$cache_out" ] && [ -x "$cache_out" ]; then
-        guard_bin="$cache_out"
-    elif [ "$cache_status" -eq 0 ]; then
-        guard_undetermined="plugin-cache condukt is not executable: $cache_out"
-    elif [ "$cache_status" -ne 1 ]; then
-        guard_undetermined="plugin-cache lookup undetermined (exit $cache_status): $cache_out"
-    fi
-fi
-if [ -z "$guard_bin" ] && [ -z "$guard_undetermined" ]; then
-    guard_bin="$(command -v condukt 2>/dev/null)" || guard_bin=""
-fi
-
-if [ -n "$guard_undetermined" ]; then
-    echo "" >&2
-    echo "main-tree-guard: $guard_undetermined" >&2
-    echo "  Whether a condukt is installed could not be determined — the §8 gate" >&2
-    echo "  could not run, so this blocks." >&2
-    rc=1
-elif [ -z "$guard_bin" ]; then
-    echo "" >&2
-    echo "main-tree-guard: no condukt binary found (tried \$CONDUKT_BIN, target/release," >&2
-    echo "  target/debug, ~/.claude/plugins/cache/yukineko/condukt/<ver>/bin/condukt," >&2
-    echo "  PATH) — the §8 gate could not run, so this blocks." >&2
-    echo "  Build it (cargo build --release -p condukt) or roll the plugin out." >&2
-    rc=1
-else
-    "$guard_bin" guard main-tree
-    guard_status=$?
-    if [ "$guard_status" -ne 0 ]; then
-        echo "" >&2
-        if [ "$guard_status" -eq 2 ]; then
-            echo "main-tree-guard: UNDETERMINED (exit 2) — the gate could not reach a verdict." >&2
-            echo "  This blocks. If the message names an unrecognized subcommand, the condukt" >&2
-            echo "  binary predates this gate: cargo build --release -p condukt." >&2
-        else
-            echo "main-tree-guard: blocked (exit $guard_status)." >&2
-        fi
-        rc=1
-    fi
-fi
 
 if [ "$rc" -ne 0 ]; then
     cat >&2 <<'EOF'
@@ -450,14 +333,6 @@ Remediation hints:
                     2000 may only record a file's existing size at HEAD (not
                     growth). After a split, lower or delete the entry in the same
                     commit.
-  main-tree-guard  commit from a worktree instead of the shared primary tree
-                    (`condukt worktree create`, or `git stash` + `git worktree
-                    add`). Merges and rebases in the main tree already pass. If
-                    you must commit here anyway, say why:
-                    CONDUKT_MAINTREE_OVERRIDE="<reason>" git commit ... — the
-                    reason is printed and the finding is not rewritten. It is an
-                    environment variable, never a file, so it cannot leak into
-                    another session's commit.
 
 `git commit --no-verify` skips this hook — git offers no way to refuse that. It
 is no longer silent, though: .githooks/post-commit records any commit whose tree

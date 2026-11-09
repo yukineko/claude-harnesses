@@ -112,10 +112,45 @@ fn format_stalled(list: &[crate::stalled::StalledSubagent]) -> String {
             StallState::Unknown { reason } => {
                 let _ = writeln!(s, "  {} (unknown: {})", e.agent_id, reason);
             }
+            StallState::EndedNoHandback { .. } => {}
         }
+    }
+    // Ended-without-handback agents are summarized (count + the most recently
+    // idle ids) so they never flood status; `status --json` lists them all.
+    let mut ended: Vec<(&str, u64)> = list
+        .iter()
+        .filter_map(|e| match &e.state {
+            StallState::EndedNoHandback { idle_minutes } => {
+                Some((e.agent_id.as_str(), *idle_minutes))
+            }
+            _ => None,
+        })
+        .collect();
+    if !ended.is_empty() {
+        ended.sort_by_key(|(_, m)| *m);
+        let shown: Vec<String> = ended
+            .iter()
+            .take(ENDED_SHOWN)
+            .map(|(id, m)| format!("{id} ({m} min)"))
+            .collect();
+        let more = ended.len().saturating_sub(ENDED_SHOWN);
+        let _ = writeln!(
+            s,
+            "  {} ended without SubagentHandback (delivery not shown): {}{}",
+            ended.len(),
+            shown.join(", "),
+            if more > 0 {
+                format!(", +{more} more (status --json lists all)")
+            } else {
+                String::new()
+            }
+        );
     }
     s
 }
+
+/// How many ended-without-handback ids `status` names individually.
+const ENDED_SHOWN: usize = 5;
 
 /// Render only the per-session roster (section 1 of `status`), or JSON if `json` is true.
 pub fn sessions(json: bool) -> Result<()> {
@@ -342,10 +377,9 @@ mod tests {
     // sections, exit 0, as a store that had never been written.
     //
     // `(none)` in the Sessions section is the claim "no other session is live" —
-    // the fact CLAUDE.md §8 tells every session NOT to assume, and the liveness
-    // input condukt's main-tree guard reads before permitting a commit in main's
-    // shared working tree (`condukt/src/maintree.rs`, which documents this very
-    // flattening as "a real residual hole, not a safe degradation").
+    // the fact CLAUDE.md §8 tells every session NOT to assume. (condukt's
+    // main-tree guard, removed by user ruling 2026-11-08, once read it as a
+    // commit-time liveness input.)
 
     #[test]
     fn undetermined_sessions_render_unknown_not_none() {

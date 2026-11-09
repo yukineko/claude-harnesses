@@ -83,20 +83,21 @@ fn print_help() {
         "precommit-audit {ver}\n\
 Config-driven pre-commit static audit (cross-platform).\n\n\
 USAGE:\n  precommit-audit [--mode stop|precommit] [--config <file>] [--root <dir>]\n  precommit-audit trust   (trust <root> so its .precommit-audit.toml is honored)\n  precommit-audit skip --reason \"<why>\"   (one-shot bypass, THIS session only)\n\n\
-OPTIONS:\n  --mode <m>     stop (default) or precommit\n  --config <f>   config file (default: <root>/.precommit-audit.toml)\n  --root <d>     repo root (default: $CLAUDE_PROJECT_DIR, else git toplevel)\n  --reason <r>   with `skip`: why the bypass is warranted (required)\n  -V, --version  print version\n  -h, --help     this help\n\n\
+OPTIONS:\n  --mode <m>     stop (default) or precommit\n  --config <f>   config file (default: <root>/.precommit-audit.toml)\n  --root <d>     repo root (default: git toplevel of the current directory)\n  --reason <r>   with `skip`: why the bypass is warranted (required)\n  -V, --version  print version\n  -h, --help     this help\n\n\
 EXIT: 0 clean | 1 blocked (precommit) | 2 blocked (stop)",
         ver = env!("CARGO_PKG_VERSION")
     );
 }
 
+/// The checkout to audit: `--root`, else the git top-level of the process cwd
+/// (where the hook / `git commit` runs). `$CLAUDE_PROJECT_DIR` is deliberately
+/// NOT consulted: it names the session's project dir, which for a session
+/// working in a linked worktree is a DIFFERENT worktree, and a gate judges only
+/// the worktree it runs in (user ruling 2026-11-08: "donegateそのものが他の
+/// worktreeを見たり検証したりテストしたりすることは禁止とする。他のgateでも禁止とする").
 fn resolve_root(arg: Option<PathBuf>) -> PathBuf {
     if let Some(r) = arg {
         return r;
-    }
-    if let Ok(p) = std::env::var("CLAUDE_PROJECT_DIR") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     if let Some(top) = git::toplevel(&cwd) {
@@ -117,21 +118,6 @@ fn resolve_mode(arg: Option<String>) -> String {
 /// execution vector is `linters.node_projects` resolving repo-local binaries).
 fn project_config_blocked(explicit: bool, exists: bool, trusted: bool) -> bool {
     !explicit && exists && !trusted
-}
-
-/// One-shot notice (per process) that the auto-discovered project config was
-/// ignored because the root isn't trusted. Best effort — never blocks.
-fn warn_untrusted_once(config_path: &Path) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static WARNED: AtomicBool = AtomicBool::new(false);
-    if WARNED.swap(true, Ordering::Relaxed) {
-        return;
-    }
-    eprintln!(
-        "precommit-audit: {} can resolve repo-local linters but this project is not trusted; \
-         ignoring it (using built-in checks only). Run 'precommit-audit trust' to enable.",
-        config_path.display()
-    );
 }
 
 fn main() {
@@ -289,21 +275,24 @@ fn run() {
     // binaries (`linters.node_projects` → eslint/tsc), so a cloned untrusted
     // checkout is an execution vector. Gate the AUTO-DISCOVERED project config
     // behind `harness_core::trust` (same pattern as donegate/reviewgate/tdd):
-    // when the root isn't trusted, ignore the repo file and use built-in
-    // defaults. An explicit `--config` is the operator's deliberate choice and
-    // is always honored. Trust is resolved with `harness_core::trust::resolve`
-    // (worktree inheritance): a linked git worktree of a trusted checkout is
-    // trusted, same rule as donegate.
+    // when the root isn't trusted, the repo file is NOT honored, and that is a
+    // refusal to audit — it blocks below (after the session skip), never
+    // "built-in checks only" (CLAUDE.md §3). An explicit `--config` is the
+    // operator's deliberate choice and is always honored. Trust is resolved
+    // with `harness_core::trust::resolve`, which has no worktree inheritance
+    // (user ruling 2026-11-08).
     let explicit_config = args.config.is_some();
     let config_path = args
         .config
         .unwrap_or_else(|| root.join(".precommit-audit.toml"));
-    let cfg = if project_config_blocked(
+    let untrusted_config = project_config_blocked(
         explicit_config,
         config_path.exists(),
         harness_core::trust::resolve(&root).is_trusted(),
-    ) {
-        warn_untrusted_once(&config_path);
+    );
+    let cfg = if untrusted_config {
+        // Placeholder only: its `audit_dir` serves the skip lookup below; the
+        // audit itself does not run.
         Config::default()
     } else {
         match Config::load(&config_path) {
@@ -323,6 +312,21 @@ fn run() {
     if let Some(reason) = hookio::consume_session_skip(&root, &cfg.audit_dir) {
         eprintln!("pre-commit audit SKIPPED (one-shot, this session) -- reason: {reason}");
         exit(0);
+    }
+
+    if untrusted_config {
+        eprintln!(
+            "precommit-audit: REFUSING TO AUDIT — {} exists, but this project root ({}) is not on \
+             the workspace-trust list, so its rules are not honored. That is a refusal, not a \
+             pass: built-in checks only would silently skip what this project declared.\n\
+             Remedy: run `precommit-audit trust` in this root, or create the worktree through the \
+             session init (scripts/session-worktree-init.py) or condukt, which register it at \
+             creation. Trust is not inherited from the main working tree.\n\
+             One stop only: `precommit-audit skip --reason \"...\"`.",
+            config_path.display(),
+            root.display()
+        );
+        exit(fail_exit);
     }
 
     let mut files = match git::changed_and_untracked(&root) {

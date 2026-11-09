@@ -36,10 +36,13 @@
   ハッシュし、直前に検査を強制した停止と一致すれば `already-verified` で許可。inject モードでは
   新しい diff は未検証（`satisfied=0 < threshold`）なので一度ブロックし、エージェントが対応した後の
   同一 diff は許可される。
-- **untrusted config は無視（RCE 防止）** — project `propguard.toml` は `harness_core::trust::is_trusted`
-  が真のときのみ honored（`Config::load`）。その `checker_cmd` は Stop hook から subprocess 実行される
-  ため、未 trust なら repo 同梱値を arbitrary code execution とみなし無視して home config→既定へ
-  fall back する。TOML の parse エラーも黙って fall back（ゲートはターンを crash させない）。
+- **untrusted config は honor せず、ブロックする（RCE 防止＋fail-closed）** — project `propguard.toml` は
+  `harness_core::trust::is_trusted` が真のときのみ honored（`Config::load`）。その `checker_cmd` は Stop hook
+  から subprocess 実行されるため、未 trust の repo 同梱値は実行しない。ただし既定値へ黙って倒すと
+  project が宣言した検査を素通りさせるので、未 trust root に `propguard.toml` があれば `config-untrusted`
+  でブロックする（`Config::untrusted_project`、`config_refusal::check`）。trust は root ごとで、linked
+  worktree は main の trust を継承しない（ユーザー裁定 2026-11-08）。存在するのに読めない／parse できない
+  設定は `config-unreadable`、未知の `mode` は `config-invalid` でブロックする（いずれも give-up なし）。
 - **subprocess 出力の fail-closed パース** — `parse_checker_output` は `PROP <id>: PASS` を明示した
   プロパティのみ satisfied に数える。導出プロパティ id を1つも含まない出力は「全 PASS」ではなく
   `Error`（fail closed）とする。

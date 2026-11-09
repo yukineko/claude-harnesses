@@ -1,6 +1,6 @@
 //! `backlog audit-closures [--json]`: read-only classification of done rows.
 //! Assumed JSON shape: somewhere in the document there is an object per row
-//! carrying `"id"` and a string `"class"` (observed-f2p, doc-only, duplicate,
+//! carrying `"id"` and a string `"class"` (observed-f2p, green-only, doc-only, duplicate,
 //! ruling-approved, cited-only, judgment, none).
 mod common;
 use common::*;
@@ -84,8 +84,12 @@ fn classifies_each_done_row() {
     assert_eq!(o.code, 0, "{}", o.both());
     let v: serde_json::Value = serde_json::from_str(o.stdout.trim())
         .unwrap_or_else(|e| panic!("--json must be valid JSON ({e}): {:?}", o.stdout));
+    // RE-SCOPED (user ruling 2026-11-08: 「backlog doneのRED実行はそもそも全面
+    // 廃止でいい」): a `done --test` close no longer executes RED, so it is
+    // classed `green-only`, never `observed-f2p` (which is left to legacy
+    // closures that recorded an executed RED).
     for (id, want) in [
-        (&s.f2p, "observed-f2p"),
+        (&s.f2p, "green-only"),
         (&s.doc, "doc-only"),
         (&s.dup, "duplicate"),
         (&s.cited, "cited-only"),
@@ -100,13 +104,9 @@ fn human_output_lists_every_class_name_in_use() {
     let s = scenario();
     let o = s.f.run(&["audit-closures"]);
     assert_eq!(o.code, 0, "{}", o.both());
-    for c in [
-        "observed-f2p",
-        "doc-only",
-        "duplicate",
-        "cited-only",
-        "none",
-    ] {
+    // RE-SCOPED (user ruling 2026-11-08): the CLI-written test close is
+    // `green-only` now (RED not executed), not `observed-f2p`.
+    for c in ["green-only", "doc-only", "duplicate", "cited-only", "none"] {
         assert!(o.stdout.contains(c), "class {c} missing: {}", o.stdout);
     }
 }

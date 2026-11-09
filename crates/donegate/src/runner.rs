@@ -37,6 +37,10 @@ pub struct Outcome {
     pub optional: bool,
     /// Where the full output is kept.
     pub record: Record,
+    /// `Some(passed_at)` when this outcome was NOT executed now but reused from
+    /// the pass cache ([`crate::passcache`]): a pass recorded at `passed_at` on
+    /// the identical key. Always `None` for an executed run.
+    pub cached: Option<String>,
 }
 
 impl Outcome {
@@ -104,5 +108,24 @@ pub fn run_check(check: &Check, root: &Path, default_timeout: u64, tmp_dir: &Pat
         output_tail: raw.output_tail,
         optional: check.optional,
         record,
+        cached: None,
+    }
+}
+
+/// The outcome of a pass-cache hit: the check was not executed; the stored pass
+/// for the identical key (recorded at `passed_at`) is reported, marked `cached`.
+pub fn cached_pass(check: &Check, passed_at: String) -> Outcome {
+    Outcome {
+        name: check.name.clone(),
+        cmd: check.cmd.clone(),
+        passed: true,
+        exit_code: Some(0),
+        timed_out: false,
+        spawn_error: None,
+        duration_secs: 0.0,
+        output_tail: String::new(),
+        optional: check.optional,
+        record: Record::None,
+        cached: Some(passed_at),
     }
 }

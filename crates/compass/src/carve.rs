@@ -53,57 +53,56 @@ pub fn load(root: &Path) -> Result<Option<CarveState>> {
     })
 }
 
-/// Serialize `state` and write it atomically to `path` via a unique temp
-/// sibling (`crate::outcome::write_atomic`). The caller MUST hold the store
-/// lock for `path`; the parent dir already exists because `lock_store`
-/// creates it.
-fn write_locked(path: &Path, state: &CarveState) -> Result<()> {
+/// Take the exclusive carve-state lock (`carve-state.json.lock`). A read-modify-write
+/// of the state (load then [`save`]) must hold this guard across both, or concurrent
+/// `compass apply` runs lose each other's answers. Fail-closed: a lock that cannot be
+/// acquired is an `Err` (non-zero exit), never an unlocked fallback.
+pub(crate) fn lock(root: &Path) -> Result<crate::outcome::StoreLock> {
+    crate::outcome::lock_store(&state_path(root))
+}
+
+/// Persist `state` to `.compass/carve-state.json`, creating parent dirs. Uses a
+/// unique temp name; callers doing load-modify-save hold [`lock`].
+pub fn save(root: &Path, state: &CarveState) -> Result<()> {
+    let path = state_path(root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
     let json = serde_json::to_string_pretty(state).context("serializing carve state")?;
-    crate::outcome::write_atomic(path, &json)
+    crate::outcome::write_atomic(&path, &json)
 }
 
 /// Locked read-modify-write of `.compass/carve-state.json` (backlog 03e655dc).
 ///
-/// Takes the same exclusive lockfile helper the outcomes/opportunities stores
-/// use (`crate::outcome::lock_store`, lockfile `carve-state.json.lock`), then
-/// loads the current state, hands it to `f`, and writes the state `f` returns
-/// atomically, all while the lock is held — so concurrent `compass apply` /
-/// `compass evaluate` runs serialize instead of overwriting each other's
-/// answers.
+/// Takes [`lock`], then loads the current state, hands it to `f`, and writes
+/// the state `f` returns via [`save`], all while the lock is held — so
+/// concurrent `compass apply` / `compass evaluate` runs serialize instead of
+/// overwriting each other's answers.
 ///
 /// Fail-closed: if the lock cannot be acquired, or the existing file cannot be
 /// read or parsed ([`load`] returns `Err`), this returns that `Err` without
 /// calling `f` and without writing. Only a missing file reaches `f` as `None`.
-/// If `f` returns `Err`, nothing is written.
+/// If `f` returns `Err`, nothing is written. Callers must NOT already hold
+/// [`lock`] (the lock is not re-entrant).
 pub fn update<T>(
     root: &Path,
     f: impl FnOnce(Option<CarveState>) -> Result<(CarveState, T)>,
 ) -> Result<T> {
-    let path = state_path(root);
-    let _lock = crate::outcome::lock_store(&path)?;
+    let _lock = lock(root)?;
     let current = load(root)?;
     let (state, out) = f(current)?;
-    write_locked(&path, &state)?;
+    save(root, &state)?;
     Ok(out)
 }
 
-/// Persist `state` to `.compass/carve-state.json` (blind overwrite, no read),
-/// under the store lock and via a unique temp file. Callers that derive the
-/// new state from the old one must use [`update`] instead, or they lose
-/// concurrent updates.
-#[cfg(test)]
-pub fn save(root: &Path, state: &CarveState) -> Result<()> {
-    let path = state_path(root);
-    let _lock = crate::outcome::lock_store(&path)?;
-    write_locked(&path, state)
-}
-
 /// Clear the persisted carve state (start fresh). Idempotent: a missing file is
-/// not an error. Takes the store lock so a reset is not interleaved with an
-/// in-flight [`update`] (which would otherwise re-create the file after it).
+/// not an error. Takes the carve lock itself so it cannot race a concurrent
+/// `apply`/`evaluate` load-modify-save; callers must NOT already hold [`lock`]
+/// (the lock is not re-entrant). A lock that cannot be acquired is an `Err`.
 pub fn reset(root: &Path) -> Result<()> {
+    let _lock = lock(root)?;
     let path = state_path(root);
-    let _lock = crate::outcome::lock_store(&path)?;
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),

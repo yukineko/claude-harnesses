@@ -62,17 +62,17 @@
 //! 6. Of the present targets, every one whose [`crate::ratify::status`] is
 //!    `Ratified` is out of the question. Every other one (`Unratified`, or an
 //!    `Undetermined` status) is *guarded*. A guarded target's area is its
-//!    canonical root plus every work tree of
-//!    its repository (`git worktree list`, each canonicalized), so a linked
-//!    worktree created outside the target dir is inside.
+//!    registered canonical root ALONE. The target repository's other git
+//!    work trees are not enumerated (no `git worktree list`; user ruling
+//!    2026-11-08: a gate must not look at any other worktree — "残しているのは
+//!    worktreeの最適化だけとした"), so a linked worktree created outside the
+//!    target dir is NOT inside, and nothing else checks it.
 //!    * Edit tools: the path is canonicalized ([`canonical_lenient`]: the
 //!      nearest existing ancestor is canonicalized — symlinks resolved — and
 //!      the not-yet-existing rest is appended, with `.` / `..` applied
-//!      lexically). It is inside a target when it lies under the root or
-//!      under any of its work trees.
+//!      lexically). It is inside a target when it lies under the root.
 //!    * Bash: inside when the canonicalized payload `cwd` lies in the area,
-//!      when the command string contains the text of the root or of any
-//!      work tree path (canonical or as git printed it), or when one of the
+//!      when the command string contains the text of the root, or when one of the
 //!      command's words resolves into the area. Words come from a small
 //!      conservative lexer ([`crate::bashwords`]): split on unquoted
 //!      whitespace (newline included) and `;&|()<>` (so `>file` / `2>file`
@@ -81,16 +81,14 @@
 //!      `=` (`--opt=value`, `NAME=value`) the value is a further word. Each
 //!      word is joined onto the canonical cwd (unless absolute) and passed
 //!      through [`canonical_lenient`], so `../proj/x`, `proj`, `link/x`
-//!      (symlink into the target) and a relative path into a linked worktree
-//!      are all inside. A word is *unresolvable* when it holds an unquoted or
+//!      (symlink into the target) are all inside. A word is *unresolvable* when it holds an unquoted or
 //!      double-quoted `$` or backtick, an unquoted `*` `?` `[` `{`, a dangling
 //!      backslash, a `~user` prefix, or `~` with `HOME` unset / empty; an
 //!      unterminated quote makes the whole command unresolvable.
 //!    * Decision: inside an `Unratified` target is a `Violation`; inside a
 //!      target whose status is `Undetermined` is `Undetermined`. Failing to
-//!      canonicalize the path, or to determine the area (git probe failure;
-//!      only needed when the path / cwd / command is not already under the
-//!      root), is `Undetermined` — even for a path that might lie elsewhere.
+//!      canonicalize the path is `Undetermined` — even for a path that might
+//!      lie elsewhere.
 //!      For Bash, when nothing touches the area but a word is unresolvable or
 //!      its path cannot be canonicalized (an error other than `NotFound`, e.g.
 //!      `notes.txt/x` with `notes.txt` a file), the call is `Undetermined` for
@@ -117,7 +115,6 @@ use std::path::{Component, Path, PathBuf};
 use harness_core::verdict::{Determination, Verdict};
 use serde_json::Value;
 
-use crate::git;
 use crate::ratify;
 use crate::target::{self, ResolvedTarget};
 
@@ -264,34 +261,22 @@ pub fn canonical_lenient(p: &Path) -> Determination<PathBuf> {
     ))
 }
 
-/// The area of a guarded target: canonical root, canonical work trees, and
-/// the work tree paths as git printed them (for the Bash text match).
+/// The area of a guarded target: its canonical root (for the path checks) and
+/// the root as spelled (for the Bash text match). Only the registered dir:
+/// the target's other git work trees are not enumerated (user ruling
+/// 2026-11-08: a gate must not look at any other worktree — "残しているのは
+/// worktreeの最適化だけとした").
 struct Area {
     canonical: Vec<PathBuf>,
     spelled: Vec<PathBuf>,
 }
 
-/// Root + work trees of `t`; see the module doc, step 6.
-fn area(t: &ResolvedTarget) -> Determination<Area> {
-    let wts = match git::worktree_paths(&t.root) {
-        Determination::Known(w) => w,
-        Determination::Undetermined(why) => {
-            return Determination::undetermined(format!(
-                "cannot list the work trees of registered target {}: {why}",
-                t.root.display()
-            ))
-        }
-    };
-    let mut canonical = vec![t.root.clone()];
-    for w in &wts {
-        match canonical_lenient(w) {
-            Determination::Known(c) => canonical.push(c),
-            Determination::Undetermined(why) => return Determination::Undetermined(why),
-        }
+/// The registered root of `t`; see the module doc, step 6. No git probe.
+fn area(t: &ResolvedTarget) -> Area {
+    Area {
+        canonical: vec![t.root.clone()],
+        spelled: vec![t.root.clone()],
     }
-    let mut spelled = vec![t.root.clone()];
-    spelled.extend(wts);
-    Determination::known(Area { canonical, spelled })
 }
 
 /// Whether a request touches an area.
@@ -713,25 +698,7 @@ fn evaluate_with(req: Request, state: &Path) -> Verdict {
             Determination::Known(ratify::Status::Unratified { reason }) => Ok(reason),
             Determination::Undetermined(why) => Err(why),
         };
-        // Fast path: inside the root itself needs no git probe.
-        let root_only = Area {
-            canonical: vec![t.root.clone()],
-            spelled: vec![t.root.clone()],
-        };
-        let touch = match touches(&checked, &root_only) {
-            Touch::Hit(h) => Touch::Hit(h),
-            // Not inside the root itself (or not decidable there): the whole
-            // area decides, so a word landing in a linked worktree is a hit
-            // rather than merely unknown.
-            Touch::Unknown(_) | Touch::Miss => match area(t) {
-                Determination::Known(a) => touches(&checked, &a),
-                Determination::Undetermined(why) => {
-                    verdicts.push(why.into_verdict());
-                    continue;
-                }
-            },
-        };
-        let hit = match touch {
+        let hit = match touches(&checked, &area(t)) {
             Touch::Hit(h) => h,
             Touch::Miss => continue,
             Touch::Unknown(why) => {

@@ -61,8 +61,8 @@ pub const LEASE_TTL_SECS: i64 = 1800;
 /// Keying on `projkey::repo_root` partitioned the store per linked worktree
 /// (`repo_root` stops at the worktree's own `.git` FILE), so a lease begun in
 /// `.harness-worktrees/<x>` was invisible to `overwatch status` run from the
-/// main checkout — exactly where condukt's CLAUDE.md §8 main-tree guard runs
-/// it. Every checkout of one repository (main checkout, linked worktrees, and
+/// main checkout (where condukt's §8 main-tree guard, removed 2026-11-08, ran
+/// it). Every checkout of one repository (main checkout, linked worktrees, and
 /// any subdirectory of either) now shares ONE store.
 ///
 /// For the main checkout itself `main_worktree_root` returns the very path
@@ -76,7 +76,7 @@ pub const LEASE_TTL_SECS: i64 = 1800;
 /// returns `Err`. Falling back to `repo_root` would silently re-open the very
 /// partition this function closes: the caller would read a DIFFERENT, possibly
 /// empty store and report "no sessions" as if it had looked at the shared one.
-fn storage_root(cwd: &Path) -> Result<PathBuf> {
+pub(crate) fn storage_root(cwd: &Path) -> Result<PathBuf> {
     let base = harness_core::config::base_dir("overwatch");
     let main_root = match harness_core::projkey::main_worktree_root(cwd) {
         Determination::Known(root) => root,

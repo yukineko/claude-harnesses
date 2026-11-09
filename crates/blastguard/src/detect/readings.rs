@@ -1,0 +1,98 @@
+use super::shell_lex::{bash32_lexed_reading, shell_lexed_reading, Bash32Lexed, ShellLexed};
+use super::substitution::under_bash32_reading;
+use super::{
+    detect_bash, Ctx, Decision, SafeRoots, VerdictAcc, ANALYSIS_BUDGET, MAX_ANALYSIS_NODES,
+};
+
+/// The top-level Bash analysis: [`detect_bash`] under the modern reading and,
+/// when the command could be parsed differently by macOS `/bin/bash` 3.2 /
+/// `/bin/sh`, again under [`under_bash32_reading`], the MOST restrictive
+/// verdict winning (`Deny > Ask > Allow`, via [`VerdictAcc`]).
+///
+/// The two readings differ for a here-document inside a command substitution
+/// (bash 3.2 reads the body as command text, so a `)` in it can close the
+/// substitution and run what follows), so the second pass runs only when the
+/// text holds `<<` together with `$(` or a backtick. Where bash 3.2 provably
+/// closes a substitution elsewhere, the second pass analyses that parse. Where
+/// bash 3.2 provably runs out of input (a syntax error: that command and
+/// everything after it never run), it analyses the modern end again, which is
+/// no less than the first pass. Where the bash 3.2 parse is not modelled, the
+/// answer is at least Ask: "cannot determine" is never folded into Allow.
+///
+/// A third pass (backlog e2b9ffb1) judges the SHELL-LEXED spelling of the
+/// text — `#` comments removed, backslash-escaped quotes spelt `_` — whenever
+/// it differs from the text, because the splitters track quotes without
+/// knowing comments or escapes, and a quote in a comment or an escaped quote
+/// hid the next line from them. The same pass spells the literal `'`/`"` of
+/// an UNQUOTED here-document body `_` and lexes its `$(...)`/backtick spans as
+/// the live code they are, so a stray quote in such a body no longer hides a
+/// later substitution (backlog 5916d385); an unquoted body whose expansion the
+/// lexer does not model is Ask. See [`shell_lexed_reading`].
+///
+/// A fourth pass (backlog 089bedd4) does the same for the bash 3.2 reading:
+/// where bash 3.2 closes a substitution early at a here-document body `)`,
+/// the text after that close is top-level code, and the naive trackers again
+/// read a quote in its comment (or an escaped quote) as opening a span that
+/// hid the next line. [`bash32_lexed_reading`] spells the command the way
+/// bash 3.2 tokenises it, and that text is judged under
+/// [`under_bash32_reading`] too; a shape that lexer does not model is Ask.
+///
+/// D4: each pass starts from a full per-command node budget, so a later
+/// reading cannot be starved by an earlier one; budget exhaustion in any pass
+/// is that pass's own Ask.
+pub(super) fn detect_bash_every_reading(c: &str, scope: &SafeRoots) -> Decision {
+    ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+    let mut acc = VerdictAcc::default();
+    if let Some(deny) = acc.record(detect_bash(c, 0, &Ctx::new(scope, c))) {
+        return deny;
+    }
+    match shell_lexed_reading(c) {
+        ShellLexed::Same => {}
+        ShellLexed::Undetermined => {
+            // An Ask never short-circuits, so there is nothing to return here.
+            let _ = acc.record(Decision::ask(
+                "the body of an unquoted here-document (`<<EOF`) is expanded by the shell — \
+                 its `$(...)` and backtick spans run as commands — and blastguard cannot \
+                 determine how this one expands, so it cannot vouch for it either way",
+            ));
+        }
+        ShellLexed::Text(lexed) => {
+            ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+            if let Some(deny) = acc.record(detect_bash(&lexed, 0, &Ctx::new(scope, &lexed))) {
+                return deny;
+            }
+        }
+    }
+    if !(c.contains("<<") && (c.contains("$(") || c.contains('`'))) {
+        return acc.finish();
+    }
+    ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+    let (bash32, mut undetermined) =
+        under_bash32_reading(|| detect_bash(c, 0, &Ctx::new(scope, c)));
+    if let Some(deny) = acc.record(bash32) {
+        return deny;
+    }
+    match bash32_lexed_reading(c) {
+        Bash32Lexed::Same => {}
+        Bash32Lexed::Undetermined => undetermined = true,
+        Bash32Lexed::Text(lexed) => {
+            ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
+            let (verdict, lexed_undetermined) =
+                under_bash32_reading(|| detect_bash(&lexed, 0, &Ctx::new(scope, &lexed)));
+            if let Some(deny) = acc.record(verdict) {
+                return deny;
+            }
+            undetermined |= lexed_undetermined;
+        }
+    }
+    if undetermined {
+        // An Ask never short-circuits, so there is nothing to return here.
+        let _ = acc.record(Decision::ask(
+            "macOS /bin/bash 3.2 and /bin/sh read a here-document inside `$(...)` as command \
+             text (a `)` in its body can end the substitution early and run what follows), \
+             and blastguard cannot determine how bash 3.2 parses this one — it cannot vouch \
+             for it either way",
+        ));
+    }
+    acc.finish()
+}

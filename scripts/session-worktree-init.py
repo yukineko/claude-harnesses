@@ -20,6 +20,25 @@ branch is merged and the tree clean, `condukt worktree reap` may remove the
 worktree. The bucket is NOT a backlog project slug on purpose — see
 `SESSION_WORKTREE_BUCKET` in crates/condukt/src/wt_reap.rs.
 
+It also lists the worktree in the workspace-trust list `~/.harness/trust.toml`
+(user ruling 2026-11-08: trust is no longer inherited from the main working
+tree, so the creator registers what it creates), exactly when the main tree is
+itself listed — the rule condukt's `worktree::create` applies. A failed trust
+registration is printed loudly; the gates then block that worktree as
+config-untrusted (they do not fall back to defaults), and `<gate> trust` inside
+the worktree is the remedy.
+
+A worktree it creates is warm-seeded (backlog 9d9a429e): `seed-worktree-target.py`
+clones the main tree's `target/` by APFS clonefile and syncs mtimes only for
+tracked files whose content is identical, so the first cargo build is
+incremental instead of cold. Cloning a large target takes minutes (92s measured
+for 19G), so the seed is started DETACHED (backlog 675bc422, user ruling): new
+session, stdin from /dev/null, stdout/stderr to a log file inside the
+worktree's git dir; the hook does not wait. It prints `seed log: <path>`; the
+seeder's verdict JSON (seeded / declined / failed / crashed) lands there. A
+seed that cannot even be started writes its own `seeded: false` verdict to the
+log. A declined or failed seed never prevents the worktree.
+
 Fail-soft: this is a setup hook, not a gate. Any error prints a best-effort note
 and exits 0 — the edit-time guards and the pre-commit check still block the main
 tree regardless of whether this hook managed to pre-make the worktree. A failed
@@ -56,6 +75,129 @@ def _fnv1a64(data: bytes) -> int:
         h ^= b
         h = (h * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
     return h
+
+
+def _harness_home() -> str | None:
+    """Mirror of harness_core::config::home() (resolve_home): a declared
+    `$HARNESS_SANDBOX_HOME` wins unless `$HOME` is set to a directory provably
+    different from the account home; else `$HOME`. None = undetermined (the
+    caller then does not write — no guessing the real home)."""
+    home = os.environ.get("HOME") or None
+    sandbox = os.environ.get("HARNESS_SANDBOX_HOME") or None
+    if sandbox:
+        try:
+            import pwd
+
+            acct = pwd.getpwuid(os.getuid()).pw_dir or None
+        except (ImportError, KeyError, OSError):
+            acct = None
+        if home and acct and os.path.realpath(home) != os.path.realpath(acct):
+            return home
+        return sandbox
+    return home
+
+
+def _trust_path() -> str | None:
+    home = _harness_home()
+    return os.path.join(home, ".harness", "trust.toml") if home else None
+
+
+def _read_trust_strict(path: str) -> list[str]:
+    """harness_core::trust::read_file_strict: absent = empty; unreadable or
+    unparseable raises (the caller must not write back a list that lost
+    entries)."""
+    import tomllib
+
+    try:
+        with open(path, "rb") as fh:
+            data = tomllib.load(fh)
+    except FileNotFoundError:
+        return []
+    trusted = data.get("trusted", [])
+    if not isinstance(trusted, list) or not all(isinstance(t, str) for t in trusted):
+        raise ValueError(f"trust list {path}: `trusted` is not a list of strings")
+    return trusted
+
+
+def _register_trust(root: str, wt_path: str) -> str | None:
+    """Register `wt_path` in ~/.harness/trust.toml at creation — the same rule
+    condukt's worktree::create applies (crates/condukt/src/worktree.rs, the
+    `trust::is_listed(repo)` → `trust::add(path)` → read-back block).
+
+    There is no trust inheritance (user ruling 2026-11-08): a linked worktree
+    is trusted only when it is itself listed, so the creator lists it. Only a
+    worktree cut from a repo that is itself LISTED is registered (membership,
+    never `HARNESS_TRUST_ALL` — propagation is not a grant). Reads only the
+    trust list; nothing from any other worktree.
+
+    Same write discipline as harness_core::trust::add: exclusive flock on
+    `trust.toml.lock` (bounded wait), strict read (an unparseable list is
+    never rewritten), atomic tmp + fsync + rename, then a read-back.
+
+    Returns None when registered or when the repo is not listed (nothing to
+    propagate), else the reason registration failed.
+    """
+    import fcntl
+
+    path = _trust_path()
+    if path is None:
+        return "home directory undetermined ($HOME unset)"
+    root_key = os.path.realpath(root)
+    wt_key = os.path.realpath(wt_path)
+    lock_path = path + ".lock"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_WRONLY, 0o644)
+    except OSError as e:
+        return f"cannot open trust lock {lock_path}: {e}"
+    try:
+        deadline = time.monotonic() + 10.0
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    return f"timed out waiting for trust lock {lock_path}"
+                time.sleep(0.005)
+            except OSError as e:
+                return f"cannot lock trust list {lock_path}: {e}"
+        try:
+            trusted = _read_trust_strict(path)
+        except Exception as e:  # noqa: BLE001 — any read/parse failure refuses the write
+            return f"trust list {path} unreadable; refusing to rewrite it: {e}"
+        if root_key not in trusted:
+            return None  # repo not listed: nothing to propagate (never escalate)
+        if wt_key not in trusted:
+            trusted.append(wt_key)
+            body = "trusted = [" + ", ".join(json.dumps(t) for t in trusted) + "]\n"
+            tmp = f"{path}.tmp.{os.getpid()}"
+            try:
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    fh.write(body)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                os.replace(tmp, path)
+                dfd = os.open(os.path.dirname(path), os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+            except OSError as e:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                return f"cannot write trust list {path}: {e}"
+        try:
+            listed = wt_key in _read_trust_strict(path)
+        except Exception as e:  # noqa: BLE001
+            return f"trust list {path} unreadable on read-back: {e}"
+        if not listed:
+            return f"{wt_key} is not listed in {path} after the write"
+        return None
+    finally:
+        os.close(lock_fd)
 
 
 def _register_worktree(wt_path: str, session_id: str) -> str | None:
@@ -124,6 +266,54 @@ def _report_rollout_drift(root: str) -> None:
         print(text)
 
 
+def _seed_log_path(wt_path: str) -> str:
+    """Absolute log path inside the worktree's own git dir (removed with the
+    worktree, never an untracked file in it). Falls back to the temp dir."""
+    gd = _git(wt_path, "rev-parse", "--absolute-git-dir")
+    if gd and os.path.isdir(gd):
+        return os.path.join(os.path.realpath(gd), "seed-target.log")
+    import tempfile
+    return os.path.join(os.path.realpath(tempfile.gettempdir()),
+                        f"seed-target-{os.path.basename(wt_path)}-{os.getpid()}.log")
+
+
+def _seed_target(warm_root: str, wt_path: str) -> str:
+    """Start the warm seed of the new worktree's target/ DETACHED (backlog
+    9d9a429e / 675bc422) and return one short line naming the seed log.
+
+    The child gets a new session, stdin=/dev/null and stdout/stderr on the log
+    file only, so it holds none of this hook's pipes and the hook returns at
+    once. The seeder writes its verdict JSON (including declines and crashes)
+    to that log. If the seeder cannot even be started, this writes a
+    `seeded: false` verdict to the log itself. Never raises: a failed seed only
+    means the first cargo build is cold — the worktree already exists.
+    """
+    seeder = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "seed-worktree-target.py")
+    log = _seed_log_path(wt_path)
+    try:
+        fh = open(log, "a", encoding="utf-8")
+    except OSError as e:
+        return (f"[worktree-init] target/ not seeded (cannot open seed log {log}: "
+                f"{e}); first cargo build is cold")
+    with fh:
+        fh.write(f"[worktree-init] seeding {wt_path} from {warm_root}\n")
+        fh.flush()
+        try:
+            child = subprocess.Popen(
+                (sys.executable or "python3", seeder, warm_root, wt_path),
+                stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+                start_new_session=True, close_fds=True,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            fh.write(json.dumps({"seeded": False,
+                                 "reason": f"seeder could not be started: {e}"}) + "\n")
+            return (f"[worktree-init] target/ not seeded (seeder could not start: {e}); "
+                    f"seed log: {log}")
+    return (f"[worktree-init] target/ warm seed running in background (pid {child.pid}); "
+            f"seed log: {log}")
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
@@ -161,6 +351,7 @@ def main() -> int:
     except OSError:
         pass
 
+    created = False
     if not os.path.isdir(wt_path):
         # Fresh worktree off current HEAD. If the branch name is taken, fall back
         # to attaching without -b so we still land in a worktree.
@@ -173,8 +364,20 @@ def main() -> int:
                 ("git", "worktree", "add", wt_path, "HEAD"),
                 cwd=root, capture_output=True, text=True,
             )
+        created = os.path.isdir(wt_path)
 
     if os.path.isdir(wt_path):
+        # Trust is per root (no inheritance, user ruling 2026-11-08). Done for a
+        # reused worktree too, so one created before this rule gets listed.
+        terr = _register_trust(root, wt_path)
+        if terr is not None:
+            print(
+                f"⚠ [worktree-init] could NOT register {wt_path} in the workspace "
+                f"trust list ({terr}). Gates that find a project config there "
+                "(donegate / reviewgate / propguard / tdd / precommit-audit) will "
+                "BLOCK as config-untrusted until you run `donegate trust` (or the "
+                "gate's own `trust`) inside the worktree."
+            )
         err = _register_worktree(wt_path, str(sid))
         if err is not None:
             print(
@@ -189,6 +392,9 @@ def main() -> int:
             f"    cd {wt_path}\n"
             "Author everything there, commit in the worktree, then merge onto main."
         )
+        if created:
+            # Detached: the hook does not wait for the clone (92s for 19G).
+            print(_seed_target(root, wt_path))
     else:
         print(
             "⚠ You are on the MAIN working tree and a session worktree could not "

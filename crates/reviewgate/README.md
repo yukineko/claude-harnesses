@@ -28,7 +28,7 @@ The exclusion is appended to the block reason.
 The exclusion is printed to stderr.
 When attribution is undetermined (no/unreadable transcript) every changed file is reviewed.
 
-**Which trees.** The review runs over every root the session wrote into, not only the hook `cwd`: the cwd plus the git toplevel of each file the transcript records as written (`harness_core::session_roots`). An unresolvable written root, or a session that wrote files while no root produced a review set, blocks naming the roots; a session with no recorded writes is unaffected.
+**Which tree.** The review runs over the hook `cwd`'s checkout only (user ruling 2026-11-08: a gate must not look at, verify or test any other worktree). Files the session wrote into another worktree are not read or reviewed by this gate, and no other mechanism reviews them in its place.
 
 A *reviewer* that itself fails is **not** the same as a clean review, so it does not silently allow — that would turn a broken reviewer into a bypass:
 
@@ -61,7 +61,7 @@ reviewgate install       # wire the Stop hook into ~/.claude/settings.json
 - `reviewgate init [--force]` — write a starter `reviewgate.toml`.
 - `reviewgate status` — show the resolved config and what would be reviewed now.
 - `reviewgate trust` — trust the current project so its `./reviewgate.toml` (including `reviewer_cmd`) is honored.
-- Until trusted, a repo-shipped config is ignored.
+- Until trusted, a repo-shipped config is not honored and the Stop hook BLOCKS `config-untrusted` naming the file (a refusal, never the `off` default). Trust is per root: a linked worktree does not inherit its main tree's trust (user ruling 2026-11-08); the session init and condukt register the worktrees they create.
 - `reviewgate skip --reason "<why>"` — one-shot, session-scoped skip (see below).
 
 Run `reviewgate review` by hand (no stdin) for a dry check: it exits 1 on a block and prints no hook JSON.

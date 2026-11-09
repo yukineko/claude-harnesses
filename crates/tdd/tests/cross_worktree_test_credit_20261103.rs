@@ -42,6 +42,17 @@
 //! Control: no test written anywhere still blocks with "no test is visible"
 //! (the apparatus can produce the verdict at all).
 //!
+//! RE-SCOPED 2026-11-08 (user ruling 2026-11-08: gates judge own worktree only
+//! — "donegateそのものが他のworktreeを見たり検証したりテストしたりすることは禁止
+//! とする。他のgateでも禁止とする"). The cross-worktree credit described above
+//! (properties 1 and 2 as "a test in a SIBLING worktree is credited") is
+//! WITHDRAWN: the hook now runs with cwd = the checkout holding the
+//! implementation and reads nothing else. Property 1 is inverted
+//! (`test_written_in_a_sibling_worktree_is_not_credited`), property 2 is kept
+//! for the cwd checkout's own HEAD history, and property 3 / the control are
+//! kept with cwd = the implementation worktree (previously cwd = a clean
+//! primary tree that the gate looked past).
+//!
 //! Written by a disinterested author (CLAUDE.md §2(a)); `src/` untouched.
 
 use std::io::Write;
@@ -178,8 +189,9 @@ impl Fixture {
         p
     }
 
-    fn stop(&self, transcript: &Path) -> Outcome {
-        let cwd = &self.primary;
+    /// Run `tdd gate` with the hook cwd = `cwd` (user ruling 2026-11-08: the
+    /// gate judges only that checkout).
+    fn stop(&self, cwd: &Path, transcript: &Path) -> Outcome {
         let payload = serde_json::json!({
             "session_id": "s-xwt",
             "transcript_path": transcript.to_string_lossy(),
@@ -265,33 +277,44 @@ fn sibling_layout(write_test: bool) -> (Fixture, PathBuf, PathBuf) {
     (f, tp, imp)
 }
 
-/// CONTROL (anti-vacuity): the session wrote implementation and no test
-/// anywhere — tdd must block with "no test is visible".
+/// CONTROL (anti-vacuity), re-scoped 2026-11-08 (user ruling 2026-11-08: gates
+/// judge own worktree only): hook cwd = the impl worktree (was: the clean
+/// primary). The session wrote implementation and no test anywhere — tdd must
+/// block with "no test is visible".
 #[test]
 fn control_no_test_written_anywhere_blocks() {
-    let (f, tp, _) = sibling_layout(false);
-    let o = f.stop(&tp);
+    let (f, tp, imp) = sibling_layout(false);
+    let o = f.stop(&imp, &tp);
     assert!(no_test_block(&o), "apparatus must block: {}", o.raw);
 }
 
-/// THE OBSERVED SHAPE: test in a sibling worktree, impl in another, both
-/// committed by this session and merged into the integration branch.
+/// INVERTED (user ruling 2026-11-08: gates judge own worktree only). Was
+/// `test_written_by_this_session_in_a_sibling_worktree_is_credited` (the
+/// 2026-11-03 cross-worktree credit; passed only vacuously once cwd was the
+/// clean primary). The session's committed test lives in sibling wt-red, the
+/// impl in wt-impl (cwd, cut BEFORE the RED merge so its HEAD history lacks the
+/// test): the sibling is not read, so the block stays and nothing is credited.
 #[test]
-fn test_written_by_this_session_in_a_sibling_worktree_is_credited() {
-    let (f, tp, _) = sibling_layout(true);
-    let o = f.stop(&tp);
+fn test_written_in_a_sibling_worktree_is_not_credited() {
+    let (f, tp, imp) = sibling_layout(true);
+    let o = f.stop(&imp, &tp);
     assert!(
-        !no_test_block(&o),
-        "the session wrote and committed a test (wt-red) for the implementation it \
-         wrote (wt-impl), yet tdd reported no test visible: {}",
+        no_test_block(&o),
+        "a test committed in a SIBLING worktree must not lift the block: {}",
+        o.raw
+    );
+    assert!(
+        !o.raw.contains("credited with"),
+        "must not claim a cross-worktree credit: {}",
         o.raw
     );
 }
 
 /// The condukt impl-task shape: the impl worktree is cut AFTER the RED merge,
 /// so the session's test commit is in the impl worktree's own HEAD history.
-#[test]
-fn session_test_commit_in_the_impl_worktree_history_is_credited() {
+/// Shared fixture: returns (fixture, red worktree test path, impl worktree,
+/// impl file path).
+fn red_merged_before_impl_cut() -> (Fixture, PathBuf, PathBuf, PathBuf) {
     let f = Fixture::new();
     let integ = f.worktree("integ", "main");
     let red = f.worktree("wt-red", "integ");
@@ -305,8 +328,21 @@ fn session_test_commit_in_the_impl_worktree_history_is_credited() {
     commit(&imp, "impl");
     git(&integ, &["merge", "-q", "--ff-only", "wt-impl"]);
     f.trust(&[&f.primary, &integ, &red, &imp]);
-    let tp = f.transcript(&[&t, &i]);
-    let o = f.stop(&tp);
+    (f, t, imp, i)
+}
+
+/// Re-scoped 2026-11-08 (user ruling 2026-11-08: gates judge own worktree
+/// only): hook cwd = wt-impl, whose OWN history holds the test commit, and the
+/// transcript shows the session writing that test AT wt-impl's path (attribution
+/// is keyed on the checkout's own paths; the test is credited as the cwd
+/// checkout's own committed session test).
+#[test]
+fn session_test_commit_in_the_impl_worktree_history_is_credited() {
+    let (f, _t_at_red, imp, i) = red_merged_before_impl_cut();
+    let t_here = imp.join("tests/adds.rs");
+    assert!(t_here.exists(), "apparatus: the RED test is in wt-impl");
+    let tp = f.transcript(&[&t_here, &i]);
+    let o = f.stop(&imp, &tp);
     assert!(
         !no_test_block(&o),
         "the session's own test commit is in wt-impl's HEAD history, yet tdd \
@@ -315,13 +351,34 @@ fn session_test_commit_in_the_impl_worktree_history_is_credited() {
     );
 }
 
+/// NEW (user ruling 2026-11-08: gates judge own worktree only). Same history,
+/// but the transcript shows the session writing the test only in the SIBLING
+/// wt-red (the original cross-worktree shape). The cwd checkout cannot attribute
+/// that file to the session by looking at wt-red, so it is not credited and the
+/// block stands. (Consequence of the ruling for condukt-style flows: the impl
+/// worktree's stop is blocked unless the test is also written there or
+/// `tdd skip` is used; the cross-worktree credit is withdrawn.)
+#[test]
+fn test_written_only_in_sibling_path_is_not_attributed_in_cwd() {
+    let (f, t_at_red, imp, i) = red_merged_before_impl_cut();
+    let tp = f.transcript(&[&t_at_red, &i]);
+    let o = f.stop(&imp, &tp);
+    assert!(
+        no_test_block(&o),
+        "a test the transcript places in a sibling worktree must not credit wt-impl: {}",
+        o.raw
+    );
+    assert!(!o.raw.contains("credited with"), "{}", o.raw);
+}
+
 /// A missing-test block must say WHICH checkout it judged: with several roots
 /// the reader cannot otherwise tell a stale sibling worktree from the branch
-/// they are looking at.
+/// they are looking at. Re-scoped 2026-11-08 (user ruling 2026-11-08: gates
+/// judge own worktree only): hook cwd = the impl worktree, which the reason names.
 #[test]
 fn missing_test_block_names_the_checkout_it_judged() {
     let (f, tp, imp) = sibling_layout(false);
-    let o = f.stop(&tp);
+    let o = f.stop(&imp, &tp);
     assert!(no_test_block(&o), "apparatus must block: {}", o.raw);
     assert!(
         o.reason.contains(&imp.display().to_string()),

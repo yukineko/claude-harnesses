@@ -1,8 +1,10 @@
 mod audit_open;
 mod claim_ledger;
+mod claim_recheck;
 mod closecmd;
 mod config;
 mod dedup;
+mod defer;
 mod divergence;
 mod driver;
 mod edit_repro;
@@ -15,6 +17,8 @@ mod lock;
 mod merge_driver;
 mod store;
 mod task;
+mod timefmt;
+use timefmt::format_unix_datetime;
 
 #[cfg(test)]
 mod audit_b1_0_tests;
@@ -84,7 +88,9 @@ enum Command {
     },
 
     /// Read-only classification of every terminal row's closure evidence
-    /// (observed-f2p, doc-only, duplicate, discard, cited-only, judgment,
+    /// (observed-f2p = legacy close with an executed RED, green-only = GREEN
+    /// at HEAD with a claimed, not executed RED, doc-only, duplicate, discard,
+    /// cited-only, judgment,
     /// none — plus the legacy class of rows closed by the removed human-approval
     /// command) and the legacy untestable reasons grouped by crate. Never
     /// reopens anything; the store is not written.
@@ -184,8 +190,10 @@ enum Command {
     },
 
     /// Mark a task as done WITH evidence. Exactly one of: `--test CMD
-    /// --red-rev REV` (an executed committed test that FAILS behaviourally at
-    /// REV and PASSES at HEAD; `--reason fixed|already-fixed|obsolete`),
+    /// --red-rev REV` (an executed committed test that PASSES at HEAD; REV,
+    /// the claimed pre-fix commit, is resolved, ancestry-checked and recorded
+    /// with `executed = false` — the test is NOT run at REV, user ruling
+    /// 2026-11-08; `--reason fixed|already-fixed|obsolete`),
     /// `--doc-only COMMIT` (an ancestor commit touching doc paths only), or
     /// `--duplicate-of ID`. A bare `done ID` is refused. There is no
     /// evidence-free close: an item no test reproduces is `cancel`led.
@@ -197,18 +205,12 @@ enum Command {
         #[arg(long)]
         test: Option<String>,
 
-        /// The revision at which the test must FAIL behaviourally (RED).
+        /// The pre-fix commit (required with --test). It must resolve to a
+        /// commit that is an ancestor of HEAD; it is recorded as a claim
+        /// (closure.red.executed = false). The test is NOT run there: the
+        /// RED run was abolished by user ruling 2026-11-08.
         #[arg(long = "red-rev")]
         red_rev: Option<String>,
-
-        /// Narrow the RED run's overlay to this HEAD test file (repeatable).
-        /// By default the RED worktree at --red-rev gets every HEAD test file
-        /// (cargo) or the named ones (pytest); when the fix itself lives in a
-        /// test file, that copies the fix in. Name only the repro side here.
-        /// Each path must already be in the default overlay (narrow, never
-        /// widen); the narrowed set is recorded as closure.red.overlay.
-        #[arg(long = "red-overlay")]
-        red_overlay: Vec<String>,
 
         /// fixed (default) | already-fixed | obsolete
         #[arg(long)]
@@ -246,6 +248,11 @@ enum Command {
         #[arg(long)]
         reason: String,
     },
+
+    /// Record a user ruling deferring a task (見送り): its status becomes
+    /// `ruled-deferred`, which `next` / `next --claim` never hand out and
+    /// nothing requeues. Exits are `cancel` / `done` only
+    Defer(defer::DeferArgs),
 
     /// Reconcile this store against its GitHub issues (one-way: local wins)
     Sync {
@@ -1079,8 +1086,10 @@ fn run(cli: Cli) -> Result<()> {
                 // normalization themselves.
                 //
                 // `status` carries the SAME derived value the text renderer
-                // shows: a task whose `defer_until` is still in the future is
-                // `deferred` (backlog d65da48d). `deferred` is never stored —
+                // shows: a non-terminal task whose `defer_until` is still in the
+                // future is `deferred` (backlog d65da48d); a done/cancelled task
+                // keeps its terminal status whatever its `defer_until` says
+                // (backlog 8cd825f3). `deferred` is never stored —
                 // it is computed from `defer_until` (still present in the row)
                 // — so overwatch's `status == "deferred"` counter is reachable
                 // only through this derivation.
@@ -1094,7 +1103,7 @@ fn run(cli: Cli) -> Result<()> {
                                 "hashkey".to_string(),
                                 serde_json::Value::String(task::hashkey(&t.title, &t.project)),
                             );
-                            if t.is_deferred(now) {
+                            if t.is_displayed_deferred(now) {
                                 obj.insert(
                                     "status".to_string(),
                                     serde_json::Value::String("deferred".to_string()),
@@ -1120,7 +1129,7 @@ fn run(cli: Cli) -> Result<()> {
                         2 => "p2",
                         _ => "-",
                     };
-                    let status_str = if t.is_deferred(now) {
+                    let status_str = if t.is_displayed_deferred(now) {
                         "deferred".to_string()
                     } else {
                         t.status.to_string()
@@ -1236,31 +1245,13 @@ fn run(cli: Cli) -> Result<()> {
                          {why}"
                     ));
                 }
-                let claimed = claim_ledger::claim_next(
+                claim_recheck::claim_rechecked(
                     &tasks_path,
                     tag.as_deref(),
                     effective_project.as_deref(),
                     &identity,
                     session_id.as_deref(),
-                    None,
-                )?;
-                match claimed {
-                    Determination::Known(t) => t,
-                    // REFUSED, not empty. Non-zero exit, reason on stderr,
-                    // nothing on stdout — the identical shape
-                    // `guard_store_divergence` uses, and the shape
-                    // `autoflow::backlog::find_open` reads as
-                    // `Determination::Undetermined` rather than "no work".
-                    // Rendering this as `no pending tasks` on exit 0 is the
-                    // fail-open this whole path exists to close.
-                    Determination::Undetermined(why) => {
-                        return Err(anyhow::anyhow!(
-                            "backlog next --claim REFUSED to claim (this is NOT \
-                             \"no pending tasks\" — nothing was claimed and the queue was not \
-                             judged empty): {why}"
-                        ));
-                    }
-                }
+                )?
             } else {
                 // A pure read, but claim-aware: a task holding a live lease in
                 // the project-wide ledger (claimed in this or any other
@@ -1348,7 +1339,6 @@ fn run(cli: Cli) -> Result<()> {
             id,
             test,
             red_rev,
-            red_overlay,
             reason,
             duplicate_of,
             doc_only,
@@ -1360,7 +1350,6 @@ fn run(cli: Cli) -> Result<()> {
                     id: id.clone(),
                     test,
                     red_rev,
-                    red_overlay,
                     reason,
                     duplicate_of,
                     doc_only,
@@ -1592,6 +1581,8 @@ fn run(cli: Cli) -> Result<()> {
             // leaves it for `backlog sync`.
             mirror_close_for(&tasks_path, &id);
         }
+
+        Command::Defer(args) => defer::run(&write_store_path("backlog defer")?, &args)?,
 
         Command::Fail { id, reason } => {
             let tasks_path = write_store_path("backlog fail")?;
@@ -2039,34 +2030,6 @@ fn gh_probe(argv: &[&str]) -> Option<(bool, String)> {
         }
         Determination::Undetermined(_) => None,
     }
-}
-
-/// Unix タイムスタンプ (秒) を "YYYY-MM-DD HH:MM UTC" 形式の文字列に変換する。
-/// 標準ライブラリのみで実装 (外部クレート不使用)。
-fn format_unix_datetime(secs: u64) -> String {
-    // グレゴリオ暦変換 (ユリウス通日ベース)
-    let days = secs / 86400;
-    let time_of_day = secs % 86400;
-    let hh = time_of_day / 3600;
-    let mm = (time_of_day % 3600) / 60;
-
-    // 1970-01-01 からの日数を年月日に変換 (Fliegel-Van Flandern algorithm)
-    let jd = days + 2440588; // Julian Day Number for 1970-01-01
-    let l = jd + 68569;
-    let n = 4 * l / 146097;
-    let l = l - (146097 * n).div_ceil(4);
-    let i = 4000 * (l + 1) / 1461001;
-    let l = l - 1461 * i / 4 + 31;
-    let j = 80 * l / 2447;
-    let day = l - 2447 * j / 80;
-    let l = j / 11;
-    let month = j + 2 - 12 * l;
-    let year = 100 * (n - 49) + i + l;
-
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
-        year, month, day, hh, mm
-    )
 }
 
 #[cfg(test)]

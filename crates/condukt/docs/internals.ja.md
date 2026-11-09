@@ -499,6 +499,14 @@ condukt worktree merge --branch condukt/<id>
 condukt worktree remove --path "$WP" --branch condukt/<id>
 ```
 
+- 削除前に所有タスクを判定する（backlog 6180333a）。所有タスクはブランチの
+  `branch.<b>.conduktTask` 記録、無ければ run state 上でこの worktree を記録しているタスク。
+  `verified` / `cancelled` / `discarded`、または `state abandon` 後の「pending かつ worktree 未記録」
+  以外（running / done / failed 等）は、タスク id と status を名指しして非0で拒否する
+  （未 verify のまま消すと F→P oracle が読む `.tdd` 証跡が消える）。run state が読めない・記録された
+  タスクが run に無い・ブランチが判定できない場合も拒否する。bypass フラグは無い:
+  verify するか、`condukt state abandon --run R --task T`（または `state cancel`）で明示的に手放す。
+- どのタスクも記録していない worktree は従来どおり削除できる。
 - merge が完了した worktree を削除する
 - branch も削除する
 

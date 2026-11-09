@@ -53,37 +53,48 @@
 //! An `Ask` is only emitted by the hook when a human is actually there to
 //! answer it (see [`crate::interactive`]); otherwise it is hardened to a Deny.
 
-use std::collections::HashMap;
-
 use serde_json::Value;
 
 use crate::exclude;
 use crate::model::Decision;
 use crate::scope::{Placement, SafeRoots};
-use harness_core::verdict::{Determination, Verdict};
+use harness_core::verdict::Determination;
 
 mod compound;
 mod cwd;
+mod denoise;
 mod executors;
 mod fileops;
 mod find_xargs;
 mod gh;
 mod git;
+mod git_stage;
+mod git_unmerged;
+mod harm_mark;
 mod heredoc;
 mod high_blast;
 mod interpreter;
 mod payload;
 mod protected;
+mod readings;
 mod readonly;
 mod redirect;
 mod rm;
+mod scratch_place;
 mod segment;
+mod shell_lex;
 mod sinks;
 mod substitution;
+mod system_paths;
 mod vars;
+mod verdict_acc;
 mod words;
 
+use verdict_acc::VerdictAcc;
+
+use denoise::denoised_eval_rescan;
 use gh::analyze_gh;
+use readings::detect_bash_every_reading;
 
 use high_blast::{analyze_high_blast_tier, high_blast_outside_tree_rm};
 
@@ -93,7 +104,7 @@ use sinks::{
     here_string_spans, split_statements_into_pipe_stages, upload_flag_operand,
 };
 
-use git::{analyze_git, git_subcommand_index};
+use git::{analyze_git, git_subcommand_index, git_worktree_eligible};
 
 use find_xargs::{analyze_find, analyze_xargs, xargs_command_start, xargs_reads_arg_file};
 
@@ -136,28 +147,28 @@ use cwd::verb_targets;
 
 use cwd::{
     advance_cwd_and_rewrite, cwd_rewrite_was_lost, is_relative_operand, line_changes_cwd_before,
-    segment_cwd_states, verb_operands_are_rewritten, CwdState, SubshellCwdScopes,
+    segment_cwd_states, verb_operands_are_rewritten, CwdState, CwdWalks,
 };
 
 use substitution::{
     backtick_body_as_run, command_substitution_payloads, executed_substitution_payloads,
-    process_substitution_payloads, scan_balanced, Stop,
+    process_substitution_payloads, scan_balanced, scan_balanced_strict, Stop,
 };
 
 use heredoc::{
-    here_document_delimiter_is_quoted, here_document_layout, interpreter_program_body_segments,
-    opens_here_document, python_program_body_segments,
-    redirect_view_without_quoted_here_document_body, strip_data_here_document_bodies,
+    first_line_quoted_here_document_body, here_document_delimiter_is_quoted, here_document_layout,
+    here_document_openers, interpreter_program_body_segments, opens_here_document,
+    python_program_body_segments, quoted_here_document_body_walks,
+    redirect_view_without_quoted_here_document_body, segment_closes_here_document,
+    strip_data_here_document_bodies,
 };
 #[cfg(test)]
-use heredoc::{
-    here_document_openers, opener_consumer, permitted_prefix_line, segment_closes_here_document,
-};
+use heredoc::{opener_consumer, permitted_prefix_line};
 
 use segment::{
     assignment_execution_is_unconditional, assignments_reach_parent_shell, closed_substitution_end,
-    split_segments, split_segments_paren_aware, split_segments_with_separators, SegmentSep,
-    SeparatedSegment,
+    closed_substitution_end_strict, here_doc_body_spans, split_segments,
+    split_segments_paren_aware, split_segments_with_separators, SegmentSep, SeparatedSegment,
 };
 
 use words::{
@@ -194,13 +205,7 @@ pub fn detect_scoped(tool_name: &str, tool_input: Option<&Value>, scope: &SafeRo
                 .and_then(|v| v.get("command"))
                 .and_then(|c| c.as_str());
             match cmd {
-                Some(c) => {
-                    // D4: reset the per-command node budget at the single
-                    // top-level entry point, so each tool call gets a full
-                    // budget and no state leaks between calls.
-                    ANALYSIS_BUDGET.with(|b| b.set(MAX_ANALYSIS_NODES));
-                    detect_bash(c, 0, &Ctx::new(scope, c))
-                }
+                Some(c) => detect_bash_every_reading(c, scope),
                 // A Bash call IS in jurisdiction, and the command could not be
                 // read out of it (absent key, non-string value, schema drift).
                 // That is "failed to determine", not "nothing to judge" — see
@@ -284,6 +289,14 @@ struct Ctx<'a> {
     /// [`Ctx::in_worktree_checkout`] and [`checkout_exempt_eligible`].
     /// Computed once in [`Ctx::new`], carried unchanged into derived contexts.
     checkout_exempt_eligible: bool,
+    /// `Some(words after git)` ONLY when the TOP-LEVEL command line (or the
+    /// `REST` of a [`literal_cd_and_rest`] line) is ONE plain `git` command
+    /// ([`git_worktree_eligible`]): the precondition of the git
+    /// working-tree-discard `Allow` inside a linked worktree checkout (user
+    /// ruling 2026-11-07). The git arm compares it with the words it is
+    /// judging, so a NESTED git invocation (an alias body, `bisect run git …`)
+    /// never inherits it. Computed once in [`Ctx::new`], carried unchanged.
+    git_eligible_rest: Option<String>,
     /// `Some` ONLY while [`interpreter_code_verdict`] runs its shell pass over
     /// interpreter PROGRAM TEXT (user ruling R2, 2026-10-14). A truncating
     /// redirect whose target cannot be determined (it carries a shell
@@ -345,47 +358,9 @@ impl<'a> Ctx<'a> {
             worktree_rm_eligible: eligible(worktree_rm_eligible),
             deletion_rm_eligible: DeletionEligibility::of(eligible(deletion_rm_eligible), eligible),
             checkout_exempt_eligible: eligible(checkout_exempt_eligible),
+            git_eligible_rest: git_worktree_eligible(command)
+                .or_else(|| tied_rest.and_then(git_worktree_eligible)),
             program_text_redirects: None,
-        }
-    }
-
-    /// True ONLY when `path` is a protected-NAMED path that is the checkout's
-    /// own file: spelled ABSOLUTE, no glob/expansion, on a command line that is
-    /// a single plain command ([`checkout_exempt_eligible`]), and placed by
-    /// [`SafeRoots::classify_worktree_checkout`] as
-    /// [`Placement::Inside`] a linked worktree checkout under a worktree
-    /// storage root (user ruling 2026-10-03:
-    /// 「worktreeの編集や削除を拒むのはむしろ不正なのでなおしてほしい」).
-    ///
-    /// Every other answer — relative spelling, an ineligible command line,
-    /// `IsRoot`, `Outside`, and every `Undetermined` — is `false`, i.e. the
-    /// protected-path rule applies exactly as before. There is no default that
-    /// answers `true`.
-    ///
-    /// Relative operands are refused because the base they are judged against
-    /// is this analysis' model of the cwd, and a cwd change it does not model
-    /// (`env -C`, `git -C`, a `cd` that fails) would place a main-tree file
-    /// inside a checkout. An absolute operand's placement depends on no base.
-    /// (After a `cd D &&` that [`literal_cd_and_rest`] accepts, a relative
-    /// redirect target, and a relative operand of the verbs the cwd walk
-    /// rewrites ([`verb_targets`]), reach here already re-expressed as the
-    /// absolute `D/<operand>`; any other relative operand is still relative
-    /// and still refused by the check below.)
-    /// The placement (symlinks included) is observed at JUDGE time; that is
-    /// why the whole line must be one plain command — see
-    /// [`checkout_exempt_eligible`].
-    fn in_worktree_checkout(&self, path: &str) -> bool {
-        if !self.checkout_exempt_eligible
-            || !path.starts_with('/')
-            || has_glob_meta(path)
-            || has_unresolvable_expansion(path)
-        {
-            return false;
-        }
-        match self.scope.classify_worktree_checkout(path, None) {
-            Determination::Known(Placement::Inside { .. }) => true,
-            Determination::Known(Placement::IsRoot { .. } | Placement::Outside { .. })
-            | Determination::Undetermined(_) => false,
         }
     }
 
@@ -404,6 +379,7 @@ impl<'a> Ctx<'a> {
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
+            git_eligible_rest: self.git_eligible_rest.clone(),
             program_text_redirects: self.program_text_redirects,
         }
     }
@@ -420,6 +396,7 @@ impl<'a> Ctx<'a> {
             worktree_rm_eligible: self.worktree_rm_eligible,
             deletion_rm_eligible: self.deletion_rm_eligible,
             checkout_exempt_eligible: self.checkout_exempt_eligible,
+            git_eligible_rest: self.git_eligible_rest.clone(),
             program_text_redirects: self.program_text_redirects,
         }
     }
@@ -808,90 +785,6 @@ fn take_budget() -> bool {
     })
 }
 
-/// Combines sub-analysis verdicts under the `Deny > Ask > Allow` ranking.
-///
-/// Every re-analysis loop in this file (segments, `-c` payload candidates,
-/// command-word candidates, `-exec` tails) evaluates several sub-commands and
-/// must report the STRONGEST verdict any of them produced. Two mistakes are
-/// possible here and both are fail-opens:
-///
-///   * testing `is_deny()` and returning early on it alone — an `Ask` from a
-///     sub-analysis is then dropped and the loop falls through to Allow;
-///   * returning the FIRST blocking verdict — an early `Ask` would then mask a
-///     later `Deny` on the same line, downgrading a known-destructive command
-///     to a question.
-///
-/// So: a `Deny` short-circuits (nothing can outrank it), an `Ask` is remembered
-/// but the scan continues in case a `Deny` follows, and `finish` reports the
-/// remembered `Ask` only if no `Deny` was ever seen.
-///
-/// Internally this ranking is exactly [`harness_core::verdict::Verdict`]'s own
-/// `Violation > Undetermined > Clean` priority (`Verdict::worst_of`), renamed
-/// to this crate's domain vocabulary at the two edges (see
-/// [`decision_to_verdict`]/[`verdict_to_decision`]) rather than re-implemented.
-#[derive(Default)]
-struct VerdictAcc {
-    // Holds at most one Undetermined (the first one seen) — a Violation is
-    // resolved and returned by `record` immediately so it never sits here,
-    // and Clean carries nothing worth keeping.
-    rest: Vec<Verdict>,
-}
-
-impl VerdictAcc {
-    /// Record a sub-verdict. Returns `Some(deny)` when the caller must stop and
-    /// return it immediately; `None` when the scan should continue.
-    fn record(&mut self, d: Decision) -> Option<Decision> {
-        match decision_to_verdict(d) {
-            // Nothing recorded so far can outrank a Violation, so there is no
-            // need to fold it into `rest` first — report it straight away.
-            v @ Verdict::Violation(_) => Some(verdict_to_decision(v)),
-            v @ Verdict::Undetermined(_) => {
-                // Keep only the FIRST undetermined, so the reported reason is
-                // the outermost / earliest unanalysable construct rather than
-                // the last one. `Verdict::worst_of` joins every `Undetermined`
-                // reason it is handed, so recording just the first is what
-                // preserves that "first wins" behavior through to `finish`.
-                if !self
-                    .rest
-                    .iter()
-                    .any(|r| matches!(r, Verdict::Undetermined(_)))
-                {
-                    self.rest.push(v);
-                }
-                None
-            }
-            Verdict::Clean(_) => None,
-        }
-    }
-
-    /// The strongest verdict seen, given no `Deny` short-circuited the caller.
-    fn finish(self) -> Decision {
-        verdict_to_decision(Verdict::worst_of(self.rest))
-    }
-}
-
-/// Boundary conversion: this crate's domain-specific three answers map
-/// one-to-one onto `harness_core`'s generic three answers, in the same
-/// priority order (`Deny`/`Violation` > `Ask`/`Undetermined` > `Allow`/`Clean`).
-fn decision_to_verdict(d: Decision) -> Verdict {
-    match d {
-        Decision::Allow => Verdict::from_findings(vec![]),
-        Decision::Deny(reason) => Verdict::violation(reason),
-        Decision::Ask(reason) => Verdict::undetermined(reason),
-    }
-}
-
-/// The inverse of [`decision_to_verdict`], used at the boundary where a
-/// computation finishes with a generic `Verdict` and must report back in this
-/// crate's own `Decision` vocabulary.
-fn verdict_to_decision(v: Verdict) -> Decision {
-    match v {
-        Verdict::Clean(_) => Decision::Allow,
-        Verdict::Violation(reason) => Decision::deny(reason.as_str().to_string()),
-        Verdict::Undetermined(reason) => Decision::ask(reason.as_str().to_string()),
-    }
-}
-
 /// Re-analyse a payload string that a shell-evaluation position will EXECUTE
 /// (`sh -c <payload>`, `eval <payload>`, `flock -c <payload>`).
 ///
@@ -904,6 +797,11 @@ fn verdict_to_decision(v: Verdict) -> Decision {
 /// Deny is checked FIRST so a payload that is both destructive and partly
 /// unresolvable (`sh -c "rm -rf $DIR"` — command word `rm`, resolvable) keeps
 /// its Deny.
+/// Tail of the "command word is an expansion" Ask. The interpreter embedded-string
+/// pass drops exactly this Ask (a literal such as `"$HOME"` is data, not a
+/// command); see `interpreter::is_expansion_head_ask`.
+pub(super) const EXPANSION_HEAD_TAIL: &str = " is an expansion whose value only exists at run time — blastguard cannot tell what program this runs";
+
 fn analyze_shell_payload(payload: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     let d = detect_bash(payload, depth + 1, ctx);
     if d.is_blocking() {
@@ -940,67 +838,6 @@ fn depth_exhausted() -> Decision {
     )
 }
 
-/// A destructive command word can be hidden from `-c` payload extraction by
-/// piling up backslash-escaped quotes until `first_shell_word`'s faithful POSIX
-/// unquoting truncates the payload BEFORE the command word. 99b506b7 (verified
-/// bypass): naive hand-nesting `sh -c "sh -c \"sh -c \\"rm -rf /\\"\""` accretes
-/// `\\"` runs that `first_shell_word` reads as escaped-backslash-then-closing-
-/// quote, so the extracted payload stops at `sh -c "sh -c \` and `rm -rf /` is
-/// dropped; the trailing tokens are then treated as the shell's positional
-/// operands (`$0`,`$1`,…), not commands, so no candidate normalises to `rm` and
-/// the whole line went ALLOW from depth 4 down. The structured extraction cannot
-/// be made to recover an *ambiguously* over-escaped payload without also
-/// mis-parsing the benign twin, so this is a WIDENING backstop rather than a
-/// smarter parser: strip the escape punctuation outright and re-scan EVERY
-/// resulting position with the full rule engine.
-///
-/// Scope and trigger keep it from touching ordinary work:
-///   * It is applied ONLY to shell-EVAL regions (the `-c`/eval operand, which is
-///     genuinely code), never to plain operands — so a quoted DATA string like
-///     `grep -rn 'rm -rf' src/` (not an eval region) is never de-noised.
-///   * It fires ONLY when the region actually carries a backslash, which is the
-///     construct that defeats `first_shell_word`. A single-/double-quoted data
-///     string with no backslash (`sh -c "git commit -m 'rm -rf x'"`) is left on
-///     its exact previous path, so the fix adds no new false positive there.
-///
-/// When it does fire on a backslash-escaped region whose de-noised form contains
-/// a destructive command word (e.g. `sh -c "echo \"rm -rf /\""`, where the
-/// string is only echoed), the deny is a false positive — but a recoverable one,
-/// and the documented acceptable side of this module's fail-closed bias for
-/// shell-eval wrappers, identical to the `dash_c_payloads`/`command_candidates`
-/// widening. Benign eval regions with no destructive word (`echo hi` nested to
-/// any depth) de-noise to a stream that matches no rule arm and stay ALLOW.
-fn denoised_eval_rescan(region: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
-    // Only backslash escaping can defeat `first_shell_word` into truncating a
-    // payload; without it the structured extraction already sees the region
-    // correctly, so skip to preserve exact prior behaviour (and avoid de-noising
-    // benign quoted data).
-    if !region.contains('\\') {
-        return Decision::Allow;
-    }
-    // Strip the escape/quote punctuation so an over-escaped command word
-    // (`\"rm`, `\\"rm`, `r""m`) collapses back to the bare program name, while
-    // whitespace that separated real words is preserved.
-    let denoised: String = region
-        .chars()
-        .filter(|c| !matches!(c, '\\' | '"' | '\''))
-        .collect();
-    if denoised == region {
-        return Decision::Allow;
-    }
-    let tokens: Vec<&str> = denoised.split_whitespace().collect();
-    let mut acc = VerdictAcc::default();
-    // Every position is a candidate command word (deny-if-ANY), exactly like the
-    // exec-wrapper widening in `command_candidates`: whichever position the real
-    // shell would exec is guaranteed to be among them.
-    for idx in 0..tokens.len() {
-        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth, ctx)) {
-            return deny;
-        }
-    }
-    acc.finish()
-}
-
 fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     #[cfg(test)]
     VISIT_PROBE.with(|p| {
@@ -1034,7 +871,43 @@ fn detect_bash(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // call. See `strip_data_here_document_bodies` for the exact shape rule.
     let stripped = strip_data_here_document_bodies(cmd);
     let cmd: &str = &stripped;
+    // 0b. A QUOTED here-document body written to a literal `.py` file is judged
+    // as Python, not as shell lines (user ruling 2026-11-08); the rest of the
+    // command, later lines included, is judged here without it — or, when the
+    // body may also be read as shell (`also_shell`), the whole command, body
+    // included. `None` keeps the body in the text. See
+    // `heredoc::python_file_here_document`.
+    if let Some(parts) = heredoc::python_file_here_document(cmd) {
+        let judged = interpreter::python_file_body_verdict(
+            &parts.body,
+            &parts.after,
+            &parts.targets,
+            depth,
+            ctx,
+        );
+        if let Some(py) = judged {
+            if py.verdict.is_deny() {
+                return py.verdict;
+            }
+            // Neither branch can recurse here again: the body is empty, or
+            // the rules below are entered past this step.
+            let rest = if py.also_shell {
+                detect_bash_rules(cmd, depth, ctx)
+            } else {
+                detect_bash(&parts.without_body, depth, ctx)
+            };
+            return match (py.verdict, rest) {
+                (_, d @ Decision::Deny(_)) | (d @ Decision::Ask(_), _) => d,
+                (_, rest) => rest,
+            };
+        }
+    }
+    detect_bash_rules(cmd, depth, ctx)
+}
 
+/// Every rule of [`detect_bash`] after its budget guard and here-document
+/// steps 0 / 0b, on `cmd` as given.
+fn detect_bash_rules(cmd: &str, depth: usize, ctx: &Ctx<'_>) -> Decision {
     // 1. Fork bomb (whitespace-insensitive signature).
     let compact: String = cmd.chars().filter(|c| !c.is_whitespace()).collect();
     if compact.contains(":(){") && compact.contains(":|:") {
@@ -1423,8 +1296,6 @@ cannot tell whether it is a protected gate/config file or a system directory"
         return deny;
     }
 
-    let mut cwd = CwdState::Root;
-    let mut aliases: HashMap<String, String> = HashMap::new();
     // ENUMERATED, so `unknown_wrapper_ask` can ask `resolve_expanded_command_word`
     // what an expansion-valued command word in THIS segment was assigned by an
     // EARLIER one. `advance_cwd_and_rewrite` below rewrites a segment's text but
@@ -1433,11 +1304,15 @@ cannot tell whether it is a protected gate/config file or a system directory"
     // Compound-command syntax (`for … in`, `do`, `then`, `{`, `case` patterns)
     // separated from the command each segment really runs; see
     // `compound_views`. Index-aligned with `split_segments(cmd)`.
-    let views = compound_views(cmd);
-    let mut scopes = SubshellCwdScopes::new(&views);
+    let views = compound_views(cmd); // The cwd, alias table and subshell-group bookkeeping, one walk for the
+                                     // line and one per quoted here-document body (backlog 547cf2f6); see
+                                     // `CwdWalks`. `segment_cwd_states` replays the same walks.
+    let mut walks = CwdWalks::new(cmd, &views);
     // `for`/`select` variables bound so far on this line; see `loop_variants`.
     let mut bindings: Vec<LoopBinding> = Vec::new();
     for (seg_idx, seg) in split_segments(cmd).into_iter().enumerate() {
+        let walk = walks.walk_for(seg_idx);
+        let cwd = walk.cwd.clone();
         // The base for THIS segment's relative operands is the cwd state as it
         // stands BEFORE the segment runs — the same state
         // `advance_cwd_and_rewrite` rewrites the segment against — so it is
@@ -1463,11 +1338,15 @@ cannot tell whether it is a protected gate/config file or a system directory"
         if let Some(b) = binding {
             bindings.push(b);
         }
-        let cwd_before = cwd.clone();
-        let aliases_before = aliases.clone();
-        scopes.enter(views.get(seg_idx));
-        let (effective_seg, extra, next_cwd) = advance_cwd_and_rewrite(command, &cwd, &mut aliases);
-        cwd = scopes.leave(views.get(seg_idx), &cwd_before, next_cwd).0;
+        let cwd_before = cwd;
+        let aliases_before = walk.aliases.clone();
+        walk.scopes.enter(views.get(seg_idx));
+        let (effective_seg, extra, next_cwd) =
+            advance_cwd_and_rewrite(command, &cwd_before, &mut walk.aliases);
+        walk.cwd = walk
+            .scopes
+            .leave(views.get(seg_idx), &cwd_before, next_cwd)
+            .0;
         // The same segment once more for every value its loop variables take
         // (see `loop_variants`), IN ADDITION to the judgement of the text as
         // written below — so this can only add verdicts, never remove one.
@@ -1545,10 +1424,10 @@ through it, and refuses to guess"
 /// Judge ONE `;`/`&&`/`|`-separated segment of a command line.
 ///
 /// `line`/`seg_idx` locate this segment inside the command line it came from,
-/// and exist for one consumer only: [`unknown_wrapper_ask`]'s head check, which
-/// needs the EARLIER segments to read an expansion-valued command word back off
-/// the line (see [`resolve_expanded_command_word`]). Nothing else here uses
-/// them, and `seg` remains the only thing judged.
+/// and exist for two consumers: [`unknown_wrapper_ask`]'s head check (reads an
+/// expansion-valued command word back off EARLIER segments, see
+/// [`resolve_expanded_command_word`]) and `find_xargs::xargs_pipe_feed` (reads
+/// the stage that feeds an `xargs rm`). Nothing else here uses them.
 fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ctx<'_>) -> Decision {
     let tokens = split_substitution_opening_assignments(seg.split_whitespace().collect());
     let mut acc = VerdictAcc::default();
@@ -1644,12 +1523,24 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
         let _ = acc.record(ask);
     }
 
+    if let Some(deny) = acc.record(rm::known_path_harm(&tokens, line, seg_idx, ctx)) {
+        return deny;
+    }
     // D3: analyse EVERY candidate command-word position; deny if ANY is
     // destructive. See `command_candidates`.
     for idx in command_candidates(&tokens) {
-        if let Some(deny) = acc.record(analyze_command_at(&tokens, idx, depth, ctx)) {
+        if let Some(deny) = acc.record(harm_mark::analyze_command_at(
+            &tokens,
+            idx,
+            depth,
+            Some(seg),
+            ctx,
+        )) {
             return deny;
         }
+    }
+    if let Some(deny) = acc.record(find_xargs::xargs_pipe_feed(&tokens, line, seg_idx, ctx)) {
+        return deny;
     }
 
     // ASK-2: an UNRECOGNISED wrapper standing in front of a destructive command
@@ -1658,7 +1549,7 @@ fn analyze_segment(seg: &str, depth: usize, line: &str, seg_idx: usize, ctx: &Ct
         return deny;
     }
 
-    acc.finish()
+    interpreter::python_body_segment_verdict(line, seg_idx, acc.finish())
 }
 
 /// ASK-2: an unrecognised command word standing in front of something that
@@ -1826,9 +1717,7 @@ fn unknown_wrapper_ask(
             // change.
             CommandWordOrigin::NoReachingAssignment | CommandWordOrigin::AssignedButUnknowable => {
                 let head = tokens[idx];
-                return Decision::ask(format!(
-                    "the command word `{head}` is an expansion whose value only exists at run time — blastguard cannot tell what program this runs"
-                ));
+                return Decision::ask(format!("the command word `{head}`{EXPANSION_HEAD_TAIL}"));
             }
         }
     }
@@ -1951,7 +1840,18 @@ fn unknown_wrapper_ask(
     }
 }
 
-fn analyze_command_at(tokens: &[&str], idx: usize, depth: usize, ctx: &Ctx<'_>) -> Decision {
+/// `seg` is the raw segment text `tokens` were whitespace-split from, when
+/// there is one (`None` for a de-noised rescan). It is consulted by exactly one
+/// consumer, the whole-tree-staging check ([`git_stage`]), which needs the
+/// argument text WITH its newlines to read a here-document inside a
+/// `-m "$(cat <<'EOF' … EOF)"` value; every other rule judges `tokens`.
+fn analyze_command_at(
+    tokens: &[&str],
+    idx: usize,
+    depth: usize,
+    seg: Option<&str>,
+    ctx: &Ctx<'_>,
+) -> Decision {
     // CA-blastguard-013 (verified bypass): the command word must be UNQUOTED
     // before basename matching. `\rm -rf /some/path` (the standard alias-bypass
     // idiom) and `"rm" -rf /some/path` previously matched no rule arm and fell
@@ -2069,6 +1969,9 @@ analyse — it cannot tell what this would do, so it refuses to guess"
         let _ = acc.record(depth_exhausted());
     }
 
+    if let Some(deny) = acc.record(system_paths::system_mutation_verdict(cmd, rest, ctx)) {
+        return deny;
+    }
     let verdict = match cmd {
         // BG-3 (second instance): `split_segments` splits on `;`, so the `\;`
         // terminator of a `find -exec` CUTS THE LINE before `analyze_find` ever
@@ -2090,7 +1993,15 @@ analyse — it cannot tell what this would do, so it refuses to guess"
             {
                 return deny;
             }
-            match git_acc.record(analyze_git(rest, ctx)) {
+            // fb338793: an exec-capable git shape is banned by `analyze_git`
+            // whatever it runs. When the command it would run is spelled out
+            // and is itself refused (`git bisect run rm -rf /usr`), that
+            // refusal is reported instead, so its own reason — and its
+            // system-harm marker, which keeps a repeat a Deny — survives.
+            if let Some(deny) = git::git_exec_ban_embedded_deny(rest, depth, ctx) {
+                return deny;
+            }
+            match git_acc.record(analyze_git(rest, seg, ctx)) {
                 Some(deny) => deny,
                 None => git_acc.finish(),
             }
@@ -2404,3 +2315,9 @@ quotes (or escape the backtick) to keep it literal"
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod heredoc_subst_tests;
+
+#[cfg(test)]
+mod hookspath_read_tests;

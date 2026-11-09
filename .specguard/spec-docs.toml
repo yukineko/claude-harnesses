@@ -20,9 +20,44 @@ doc = "docs/specs/blastguard.md"
 reason = "'module 責務' lib: public pure API re-exporting the detector modules for specforge/condukt reuse; 概要 last sentence."
 
 [[spec]]
+path = "crates/blastguard/src/scope/checkout.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'managed な使い捨て場所での working-tree 破棄の Allow': SafeRoots::is_linked_worktree_checkout and its Known(true)/Known(false)/Undetermined contract."
+
+[[spec]]
 path = "crates/blastguard/src/detect.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' detect and the whole '振る舞い' section (detect_write, detect_bash, split_segments, analyze_segment, analyze_rm/git/find, disarm-by-non-write rules)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/git_unmerged.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '未マージ branch の force-delete / dirty worktree の force-remove は Ask': branch_verdict / worktree_verdict, target-repo resolution (-C/--git-dir/--work-tree), default-branch resolution order, and the cannot-determine -> Ask cases (backlog 43034f75)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/git_stage.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'whole-tree staging は Ask': add_verdict / commit_verdict, git parse-options short-cluster and long-abbreviation reading, whole-tree pathspec predicate, and the cannot-determine -> Ask cases (backlog e9325654)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/system_paths.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'rm 以外のシステムファイル変更コマンドも system-harm Deny': system_mutation_verdict's per-command file lists, unquoting, home expansion and the Ask on unresolved expansions (backlog 3c750df2)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/inert_literal.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'inert literal の Deny→Ask 降格': inert_literal_bodies proof conditions, DYNAMIC_EXECUTION_MARKERS (incl. string-executing APIs, b4c03877), real-call Deny precedence (backlog 27795e6e)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/heredoc.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'stdin here-document の program text は body だけ': first_line_quoted_here_document_body and its fall-back conditions (backlog aafeaa05)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/payload.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'stdin here-document の program text は body だけ': analyze_interpreter_stdin_exec's program-text selection for a stage fed a here-document (backlog aafeaa05)."
 
 [[spec]]
 path = "crates/blastguard/src/exclude.rs"
@@ -55,6 +90,71 @@ doc = "docs/specs/blastguard.md"
 reason = "Section '安定 rule id（overwatch 署名の粒度確保）' describes rule_id(reason) -> &'static str and its lockstep with detect wording."
 
 [[spec]]
+path = "crates/blastguard/src/detect/git.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullets 'コマンド別 deny 規則' (analyze_git arms), 'managed な使い捨て場所での working-tree 破棄の Allow' (managed_worktree_git), '`core.hooksPath` の付け替えは Deny' (config arm, config_argv_is_read, backlog e103cd56 / 8fe3a5c3) and 'git の exec-capable 形は一律 Deny' (git_exec_ban, backlog fb338793)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/hookspath_read_tests.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Unit-test submodule of detect/git.rs's config arm; it pins the '振る舞い' bullet '`core.hooksPath` の付け替えは Deny' (read-mode flag counts only in the option prefix, backlog e103cd56; the one-positional and `get` reads are Allow, user ruling 2026-11-08, backlog 8fe3a5c3)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/executors.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'git の exec-capable 形は一律 Deny': git_config_command (command-valued git config keys) and is_safe_command_value (fixed known-safe value list, ruling 2026-11-07) used by the ban (backlog fb338793)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/rm.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullets 'コマンド別 deny 規則' (analyze_rm) and 'system-harm（システムを壊すコマンド）は常に Deny' (rm_system_harm_deny, backlog fb338793)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/rm/operand_words.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'system-harm（システムを壊すコマンド）は常に Deny': shell-word reading of rm operands (quote removal, brace expansion, ~/$HOME, same-line literal variable and echo/printf substitution resolution, unresolvable expansion fails closed to Ask), backlog 3c750df2."
+
+[[spec]]
+path = "crates/blastguard/src/detect/protected.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullets 'disarm-by-non-write 規則' (protected path verdicts), 'system-harm…は常に Deny' (system_path_block carries SYSTEM_HARM_MARK) and '`Library/LaunchAgents` への新規ファイルは Ask' (launch_agents_new_file_ask, backlog e34eb0be)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullets 'inert literal の Deny→Ask 降格' and '埋め込み shell 文字列の Ask と osascript の削除' (SHELL_STRING_EXEC_MARKERS pending Ask, and the analyze_code_interpreter call into interpreter/osascript.rs, backlog 0fefcd3b), and 'interpreter の書き込み literal にもシステムディレクトリ軸' (system_path_block on write-target literals, backlog 0fbfe00d)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/osascript.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '埋め込み shell 文字列の Ask と osascript の削除': osascript_app_delete / osascript_program_delete (Finder / System Events delete, empty or move to trash, or an application target that is not one plain literal, is a system-harm Deny however the program arrives; backlog 0fefcd3b, 3c750df2)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/shell_calls.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'interpreter program の OS 呼び出し': program_call_verdict (path-mutating / exec / shell-line calls read from code, system-harm Deny on system files, os.system('$CMD') Ask) and python_body_segment_verdict (expansion-head Ask dropped on quoted Python here-document body lines), backlog 3c750df2."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/unit_tests.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Unit tests of interpreter.rs private helpers (compile_call_is_regex_method, literal_is_read_only_open), moved unchanged out of interpreter.rs for the file-size cap; they pin the 'inert literal' / read-only open behaviour of the '振る舞い' bullets."
+
+[[spec]]
+path = "crates/blastguard/src/detect/harm_mark.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'system-harm（システムを壊すコマンド）は常に Deny、repeat でも降格しない': mark_system_harm re-issues shape Denies (find -delete, truncate, shred, chmod/chown -R, dd of=, recursive rm, osascript delete) on a system / home / raw-disk target with SYSTEM_HARM_MARK (backlog 3c750df2)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/comments.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'inert literal の Deny→Ask 降格': strip_hash_comments decides the comment-only-mention Ask (backlog 6798f47d); moved unchanged out of interpreter.rs for the file-size cap."
+
+[[spec]]
+path = "crates/blastguard/src/deletion.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'system-harm…は常に Deny': deletion's system-directory refusals carry SYSTEM_HARM_MARK so a repeat stays Deny (backlog fb338793)."
+
+[[spec]]
 path = "crates/propguard/src/main.rs"
 doc = "docs/specs/propguard.md"
 reason = "'振る舞い': clap Command enum and the check/derive/status/install/uninstall/init/trust subcommands."
@@ -68,6 +168,11 @@ reason = "'module 責務' config: Config/FileConfig/Mode, trusted-project->home-
 path = "crates/propguard/src/derive.rs"
 doc = "docs/specs/propguard.md"
 reason = "'module 責務' derive: Property, bilingual CATALOG, derive_properties, source_criteria; '導出の決定論と上限' invariant."
+
+[[spec]]
+path = "crates/propguard/src/config_refusal.rs"
+doc = "docs/specs/propguard.md"
+reason = "'untrusted config は honor せず、ブロックする' — evaluate step 0/0a/0b refusals (config-unreadable / config-untrusted / config-invalid), split out of gate.rs."
 
 [[spec]]
 path = "crates/propguard/src/gate.rs"
@@ -353,3 +458,43 @@ reason = "Same bullet (record-disposition / compact-findings): CLI glue for the 
 path = "crates/overwatch/src/undetermined_metrics.rs"
 doc = "docs/specs/overwatch.md"
 reason = "Review-queue section bullet 'overwatch undetermined-metrics' (aggregation of harness_core::undetermined telemetry)."
+
+[[spec]]
+path = "crates/overwatch/src/subagents.rs"
+doc = "docs/specs/overwatch.md"
+reason = "Section subagent registry と per-agent liveness (overwatch subagents): RECORD via presence hook (Agent|Task PostToolUse, SubagentStop) into subagents.json, classify() state order, clean definition, fail-closed resolution of undetermined/IO failure."
+
+[[spec]]
+path = "crates/blastguard/src/detect/verdict_acc.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `detect/verdict_acc`: VerdictAcc folds sub-verdicts Deny > Ask > Allow via Verdict::worst_of; moved out of detect.rs unchanged (file-growth cap)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/readings.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'bash 3.2 の読みも判定する': detect_bash_every_reading's second pass under under_bash32_reading, its trigger (<< with $( or backtick), most-restrictive merge, undetermined -> Ask, per-pass budget, and the open residue (backlogs 089bedd4 5916d385 d328ea88); third pass over shell_lexed_reading (e2b9ffb1)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/shell_lex.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'shell の字句どおりの読みも判定する': shell_lexed_reading removes # comments and spells escaped quotes `_` so the naive splitters cannot hide the next line (backlog e2b9ffb1); judged in addition to the original, most restrictive wins."
+
+[[spec]]
+path = "crates/blastguard/src/detect/scratch_place.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet 'scratch tree は管理された場所にだけ作る': git clone / cp -r outside classify_managed_place -> Ask, mkdir -p excluded, cannot-determine -> Ask, raises Allow only, shared getopt parser, SafeRoots::none library entry exempt (open)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/python_file.rs"
+doc = "docs/specs/blastguard.md"
+reason = "'振る舞い' bullet '.py へ書く quoted here-document の本文は Python として判定する': interpreter::python_file_body_verdict judges the body fail-closed (comments/plain strings inert, runner calls through the shell rules, filesystem destruction as the equivalent shell command, unreadable -> Ask)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/python_semantics.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Same bullet, sub-bullet 'alias 解決（interpreter/python_semantics.rs）': import X as Y / from X import f [as g] / s = os.system rewritten to canonical names; runner or os/subprocess module referenced other than by a call -> Ask."
+
+[[spec]]
+path = "crates/blastguard/src/detect/interpreter/python_semantics/values.rs"
+doc = "docs/specs/blastguard.md"
+reason = "Same bullet, sub-bullet '計算される書き込み path（user ruling 2026-11-08、interpreter/python_semantics/values.rs）': Allow only when provably repo-scoped (repo-relative iteration, sys.argv[N] with repo-relative literal runs, self.attr), everything else Ask."

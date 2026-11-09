@@ -67,19 +67,35 @@ Two consequences of that design, stated so they read as decisions:
   scratch file -- and it is held to the same exactness rules. This gate now runs
   from .githooks/commit-msg, where git supplies that path as $1.
 * Scope is the current branch/worktree's own changes: merge-base(local `main`,
-  HEAD) -- the fork point from the branch it integrates into -- vs the worktree,
-  not per commit and not from `origin/main`. User ruling 2026-10-25:
+  HEAD) -- the fork point from the branch it integrates into -- vs the INDEX,
+  not per commit and not from `origin/main`. "The index" is the one git hands
+  this process (`GIT_INDEX_FILE`, so `git commit -a` / `git commit <paths>`
+  judge their temporary index), in every mode including a manual CLI run;
+  unstaged changes are ignored, because they are not part of the commit (user
+  ruling 2026-11-08 "Index everywhere", backlog 54de84b4). Until then the
+  after side was read from DISK: an unstaged edit was blamed on the commit, and
+  a weakening staged while the disk copy was restored passed. User ruling 2026-10-25:
   「スキャナは現在作業しているbranch,worktreeに限定した」 (GitHub #1181, backlog
   52d17300). A stale `origin/main` behind local `main` used to charge main's
   commits to every branch commit. A base that does not resolve, or a merge-base
   that cannot be computed, is Undetermined (exit 2, block); there is no fallback
-  ref. Within that scope it is branch-wide. A file that did not exist at the base
-  cannot have had existing coverage weakened, and per-commit analysis would fire
-  on ordinary iteration (write test, refactor, consolidate); a gate that fires on
-  normal work gets switched off. The gap this leaves -- adding a strong new test
-  inside a PR and gutting it before merge -- is covered by a different control,
-  the tdd F->P oracle, which requires a RED observation before the GREEN and so
-  leaves a proof trail this scanner need not duplicate.
+  ref. Within that scope it is branch-wide, with ONE per-commit exception for a
+  file that did not exist at the base. Against the base such a file has no
+  coverage to lose, so it alone yields nothing; but it may already exist at HEAD,
+  committed earlier on this branch, and then its tests did exist. For such a file
+  the scanner ALSO compares HEAD with the index and blocks a skip or
+  expected-failure marker gained by a test present on both (`ignore-added` /
+  `should-panic-added`; `head_marker_findings`; backlog 78817f03, user ruling
+  2026-11-07). That comparison deliberately does NOT judge assertion loss or
+  test removal: per-commit counting of those fires on ordinary iteration (write
+  test, refactor, consolidate), and a gate that fires on normal work gets
+  switched off. So the gap that remains -- adding a strong new test inside a PR
+  and then removing its assertions or the test itself before merge -- is still
+  NOT covered by this scanner; the tdd F->P oracle (a RED observation before the
+  GREEN) is the control for that, not this gate. The HEAD comparison only sees
+  the step from HEAD to the index, so it judges each commit as it is made
+  (commit-msg); a pre-push run, where the index equals HEAD, adds nothing.
+  A marker present in the file's FIRST commit (absent at HEAD) is not judged.
 * Assertion loss is counted at TWO granularities, and either one raises the
   finding. Until 2026-09-24 it was counted only NET PER FILE, and that alone was
   a hole large enough to walk a deletion through: removing two real assertions
@@ -128,6 +144,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import difflib
 import json
 import os
 import posixpath
@@ -153,7 +170,8 @@ SHOULD_PANIC_RE = re.compile(r"#\s*\[\s*should_panic\b")
 # inside a macro template is attributed to the template body instead of
 # skipping ahead to the next real `fn` (backlog fa35fde1 / GH #1525). Such a
 # function is a TEMPLATE: how many tests it expands to depends on invocations,
-# which are not counted -- see `scan` for where that is judged.
+# which `counts` does not count -- see `scan` for where that is judged (and
+# weakening_macro.py for the one shape whose invocations ARE counted).
 FN_DECL_RE = re.compile(r"\bfn\s+(\$?[A-Za-z_][A-Za-z0-9_]*)")
 # Everything Rust permits between an attribute and the `fn` it applies to:
 # further attributes, visibility, and the asyncness/constness/ABI qualifiers.
@@ -163,90 +181,33 @@ ITEM_PREFIX_RE = re.compile(
     r'|extern(?:\s*"[^"]*")?)*\Z'
 )
 
-KIND_ASSERTION_REMOVED = "assertion-removed"
-KIND_TEST_REMOVED = "test-removed"
-KIND_IGNORE_ADDED = "ignore-added"
-KIND_SHOULD_PANIC_ADDED = "should-panic-added"
-
-ALL_KINDS = (
+# Kinds, the justification marker, Undetermined and the git / file-content
+# plumbing live in weakening_vcs.py (split out under the file-growth cap,
+# backlog 78817f03). Imported by name so they are the same objects here. The
+# gate's own directory is put on sys.path first: it is run as a script by the
+# hooks and loaded by path from tests, and neither guarantees that.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from weakening_vcs import (  # noqa: E402
+    ALL_KINDS,
+    JUSTIFY_RE,
     KIND_ASSERTION_REMOVED,
-    KIND_TEST_REMOVED,
     KIND_IGNORE_ADDED,
     KIND_SHOULD_PANIC_ADDED,
+    KIND_TEST_REMOVED,
+    Undetermined,
+    _PATH_ATTR_GREP,
+    acknowledgements,
+    blob_at,
+    blob_or_none,
+    changed_pairs,
+    git,
+    grep_path_attr_files,
+    is_git_repo,
+    resolve_base,
+    index_content,
+    index_or_none,
 )
-
-# The separator must be a dash FENCED BY WHITESPACE, and the id is matched
-# greedily. Both details matter: the id is `<path>:<kind>`, so it contains `:`
-# and `-` itself. A non-greedy id with `:` allowed as a separator stops at the
-# first colon, silently reducing the id to the bare path and acknowledging
-# nothing — the marker looks accepted while the finding still blocks.
-JUSTIFY_RE = re.compile(
-    r"^\s*test-weakening-justified\s*:\s*(?P<id>\S+)\s+[-—–]+\s+(?P<reason>\S.*)$",
-)
-
-
-class Undetermined(Exception):
-    """The verdict could not be established. Always resolves to exit 2."""
-
-
-# --- git plumbing ----------------------------------------------------------
-
-
-def git(repo: str, *args: str, allow_fail: bool = False) -> str:
-    """Run git, treating every failure mode as undetermined unless allowed.
-
-    `allow_fail` is only for probes whose non-zero exit is itself an ANSWER
-    (e.g. `rev-parse --verify` on a ref that may legitimately not exist); it
-    returns "" in that case. Everything else raises, because a checker that
-    did not run is not a checker that passed.
-    """
-    try:
-        proc = subprocess.run(
-            ("git", "-C", repo) + args,
-            capture_output=True,
-            text=True,
-        )
-    except OSError as exc:
-        raise Undetermined(f"could not run git: {exc}") from exc
-    if proc.returncode != 0:
-        if allow_fail:
-            return ""
-        raise Undetermined(
-            "git {} exited {}: {}".format(
-                " ".join(args), proc.returncode, proc.stderr.strip()
-            )
-        )
-    return proc.stdout
-
-
-def resolve_base(repo: str, base: str) -> str:
-    """Resolve the comparison base to a commit sha.
-
-    The default is the LOCAL `main` -- the branch a worktree integrates into --
-    not `origin/main`. Until 2026-10-25 the default was `origin/main` (falling
-    back to `main`), and a stale `origin/main` behind local `main` charged every
-    commit already on main to each commit of every branch: an unrelated commit
-    printed `[ack] crates/tdd/src/git.rs: ignore-added` for a file neither it nor
-    its branch touched (GitHub #1181, backlog 52d17300). User ruling 2026-10-25:
-    「スキャナは現在作業しているbranch,worktreeに限定した」.
-
-    There is NO fallback, for the default or an explicit `--base`: a base that
-    does not resolve raises Undetermined (exit 2, block). Silently comparing
-    against some other ref would produce a confident verdict about the wrong
-    range.
-    """
-    out = git(repo, "rev-parse", "--verify", "--quiet", base + "^{commit}",
-              allow_fail=True).strip()
-    if out:
-        return out
-    raise Undetermined(f"base ref does not resolve: {base}")
-
-
-def is_git_repo(repo: str) -> bool:
-    if not os.path.isdir(repo):
-        return False
-    out = git(repo, "rev-parse", "--is-inside-work-tree", allow_fail=True).strip()
-    return out == "true"
+from weakening_macro import template_invocation_edit_is_safe  # noqa: E402
 
 
 # --- test-surface extraction ----------------------------------------------
@@ -500,7 +461,7 @@ def _mask_noncode(src: str, path: str) -> str:
 #
 # Now the body FILE is resolved with Rust's module path rules and its whole
 # contents are test surface, read from the same side as the declaring file (the
-# merge-base blob for the base, the worktree for the change). The body is
+# merge-base blob for the base, the index for the change). The body is
 # appended to the DECLARING file's surface, so findings stay keyed by the
 # declaring path on both sides: a verbatim inline -> out-of-line move compares
 # equal, while an assertion or `#[test]` lost in the move is still reported (it
@@ -1431,106 +1392,6 @@ def py_findings_for(path: str, before: dict, after: dict) -> list:
     return out
 
 
-# --- file contents on both sides ------------------------------------------
-
-
-def blob_at(repo: str, rev: str, path: str) -> str:
-    """Content of `path` at `rev`, or "" when it genuinely did not exist there.
-
-    Existence is settled against the TREE first, and only a real absence maps to
-    "". Deriving absence from `git show`'s exit code instead would swallow every
-    other failure — a corrupt object, an unreadable pack — as "the file is new".
-    That is not a harmless mistake here: an empty base surface makes
-    `after < before` unsatisfiable, so no weakening in that file is detectable
-    and the run reports `clean`. Confirmed by fault injection, not argued:
-    corrupting the base blob flipped an `assertion-removed` finding (exit 1)
-    into `{"verdict": "clean"}` (exit 0) with nothing on stderr.
-    """
-    listed = git(repo, "ls-tree", "-r", "--name-only", rev, "--", path)
-    if not listed.strip():
-        return ""  # absent at `rev`: the file is new, which is a real answer
-    try:
-        proc = subprocess.run(
-            ("git", "-C", repo, "show", f"{rev}:{path}"),
-            capture_output=True,
-        )
-    except OSError as exc:
-        raise Undetermined(f"could not run git show: {exc}") from exc
-    if proc.returncode != 0:
-        # The tree says the blob is there, so a read failure is a failure to
-        # observe, not an absence.
-        raise Undetermined(
-            "{}@{}: present in the tree but unreadable (git show exited {}): {}".format(
-                path, rev, proc.returncode, proc.stderr.decode("utf-8", "replace").strip()
-            )
-        )
-    try:
-        return proc.stdout.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise Undetermined(f"{path}@{rev}: not valid UTF-8: {exc}") from exc
-
-
-def worktree_content(repo: str, path: str) -> str:
-    full = os.path.join(repo, path)
-    if not os.path.exists(full):
-        return ""  # deleted
-    try:
-        with open(full, "r", encoding="utf-8") as fh:
-            return fh.read()
-    except (OSError, UnicodeDecodeError) as exc:
-        raise Undetermined(f"{path}: unreadable in the worktree: {exc}") from exc
-
-
-def blob_or_none(repo: str, rev: str, path: str):
-    """Like `blob_at`, but None (not "") for a path absent at `rev`, so an empty
-    out-of-line body file is distinguishable from a missing one."""
-    listed = git(repo, "ls-tree", "-z", "--name-only", rev, "--", path)
-    if path not in listed.split("\0"):
-        return None
-    return blob_at(repo, rev, path)
-
-
-def worktree_or_none(repo: str, path: str):
-    """Worktree content of `path`, None when it is not a regular file there."""
-    full = os.path.join(repo, path)
-    if not os.path.lexists(full):
-        return None
-    if not os.path.isfile(full):
-        raise Undetermined(f"{path}: present in the worktree but not a regular file")
-    return worktree_content(repo, path)
-
-
-_PATH_ATTR_GREP = r"#[[:space:]]*\[[[:space:]]*path[[:space:]]*="
-
-
-def grep_path_attr_files(repo: str, rev: str | None) -> list:
-    """`.rs` files containing a `#[path` attribute, at `rev` or (None) in the
-    worktree. `git grep` exits 1 for "no match", which is an answer; any other
-    non-zero exit is Undetermined."""
-    args = ["git", "-C", repo, "-c", "core.quotePath=false", "grep", "-l", "-z", "-E",
-            _PATH_ATTR_GREP]
-    if rev is not None:
-        args.append(rev)
-    args += ["--", "*.rs"]
-    try:
-        proc = subprocess.run(args, capture_output=True, text=True)
-    except OSError as exc:
-        raise Undetermined(f"could not run git grep: {exc}") from exc
-    if proc.returncode == 1 and not proc.stdout:
-        return []
-    if proc.returncode != 0:
-        raise Undetermined(f"git grep exited {proc.returncode}: {proc.stderr.strip()}")
-    prefix = f"{rev}:" if rev is not None else ""
-    out = []
-    for tok in proc.stdout.split("\0"):
-        if not tok:
-            continue
-        if prefix and not tok.startswith(prefix):
-            raise Undetermined(f"unexpected git grep output: {tok!r}")
-        out.append(tok[len(prefix):])
-    return out
-
-
 # --- findings --------------------------------------------------------------
 
 
@@ -1615,67 +1476,6 @@ def findings_for(path: str, before: dict, after: dict) -> list:
     return [(path, kind, detail) for kind, detail in out]
 
 
-def acknowledgements(repo: str, base_sha: str, pending_msg: str | None = None) -> set:
-    """`<path>:<kind>` pairs acknowledged by commit messages in the range.
-
-    A line without a well-formed `<path>:<kind>` and a non-empty reason is
-    ignored on purpose, so a bare marker cannot act as a blanket pass.
-
-    `pending_msg` is the path to a commit message that is about to be written —
-    the `$1` a `commit-msg` hook receives. It is scanned in ADDITION to the
-    range, never instead of it, and it is held to exactly the same exactness
-    rules; it widens WHERE a marker may live, not HOW loose one may be.
-
-    Without it the escape hatch is unreachable at the moment it is needed. git
-    runs `pre-commit` before any message exists, and on a branch's first commit
-    `base..HEAD` is empty, so a marker in the message being written is invisible
-    and the only way past a false positive is `--no-verify` — the bypass this
-    repo has a separate hook to refuse. A gate whose documented remedy cannot be
-    applied is not strict, it is broken.
-
-    During a merge (MERGE_HEAD present) the commits being merged in are also
-    read, as `base_sha..MERGE_HEAD`. The diff this gate scans runs from the
-    merge-base to the WORKTREE, and mid-merge the worktree already holds the
-    other side's changes, so those changes are charged to the merge commit.
-    Their acknowledgments live in the other side's own commit messages, which
-    `base_sha..HEAD` cannot reach (backlog 0d007aa5). The same exactness rules
-    apply; an unacknowledged removal from either side still blocks.
-
-    A MERGE_HEAD that does not resolve to a commit contributes NO extra acks:
-    the restrictive reading, so a broken merge state can only cause blocks,
-    never a pass. Only the first MERGE_HEAD line is honoured (`rev-parse`); the
-    extra heads of an octopus merge contribute no acks, which again can only
-    over-block. A MERGE_HEAD that resolves but whose log cannot be read raises
-    Undetermined like every other git failure here.
-    """
-    body = git(repo, "log", "--format=%B", f"{base_sha}..HEAD")
-    merge_head = git(repo, "rev-parse", "--verify", "--quiet", "MERGE_HEAD^{commit}",
-                     allow_fail=True).strip()
-    if merge_head:
-        body += "\n" + git(repo, "log", "--format=%B", f"{base_sha}..{merge_head}")
-    if pending_msg is not None:
-        try:
-            with open(pending_msg, encoding="utf-8", errors="replace") as fh:
-                body += "\n" + fh.read()
-        except OSError as exc:
-            # "could not read it" is not "it contained no markers". Reading the
-            # first as the second would silently drop every acknowledgment the
-            # caller believed they had written.
-            raise Undetermined(f"pending commit message unreadable ({pending_msg}): {exc}")
-    acked = set()
-    for line in body.splitlines():
-        m = JUSTIFY_RE.match(line)
-        if not m:
-            continue
-        ident = m.group("id")
-        if ":" not in ident:
-            continue
-        path, _, kind = ident.rpartition(":")
-        if path and kind in ALL_KINDS:
-            acked.add((path, kind))
-    return acked
-
-
 # --- driver ----------------------------------------------------------------
 
 
@@ -1683,54 +1483,138 @@ def _is_rs(path) -> bool:
     return bool(path) and path.endswith(".rs")
 
 
-def changed_pairs(repo: str, merge_base: str) -> list:
-    """`(old_path, new_path)` for every change between `merge_base` and the worktree.
+# One whole line that is exactly an `#[ignore]` / `#[ignore = "reason"]`
+# attribute (a reason without quotes or backslashes inside it), nothing else.
+_IGNORE_LINE_RE = re.compile(
+    r'[ \t]*#[ \t]*\[[ \t]*ignore[ \t]*(?:=[ \t]*"[^"\\\n]*"[ \t]*)?\][ \t]*\n?'
+)
+# The same line after `_mask_noncode`: the reason literal is blanked to spaces.
+_IGNORE_LINE_MASKED_RE = re.compile(
+    r"[ \t]*#[ \t]*\[[ \t]*ignore[ \t]*(?:=[ \t]*)?\][ \t]*\n?"
+)
 
-    Two git flags carry the fail-closed contract here:
 
-    * `--name-status -z` emits LITERAL, NUL-delimited paths. The default
-      `--name-only` renders a non-ASCII path through `core.quotePath` as
-      `"crates/…/\\343\\203\\206.rs"` -- a string ending in `"`, not `.rs`, so an
-      `endswith('.rs')` filter drops the file and any weakening in it passes
-      unseen. A path the scanner cannot even name is the purest cannot-determine.
-    * `-M` makes a rename a single record whose OLD side is known, so a rename
-      that also drops assertions is compared against the coverage it moved FROM.
-      Without it, default rename detection reports only the destination, which
-      then looks like a brand-new file (absent at base) and its lost coverage is
-      invisible -- a weakening laundered through a `git mv`.
+# Inserted code may not contain a (shadowing) template, a macro leaking out of
+# a module, or an inner attribute `#![...]` (applies to the whole file/module);
+# nor, at its own top level, a macro invocation (`name!`, not `!=`).
+_INSERT_FORBIDDEN_RE = re.compile(r"\bmacro_rules\b|\bmacro_use\b|#[ \t\n]*!")
+_ITEM_MACRO_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*[ \t\n]*!(?!=)")
 
-    `old_path` is None for an addition; `new_path` is None for a deletion.
-    """
-    raw = git(
-        repo, "-c", "core.quotePath=false",
-        "diff", "--name-status", "-z", "-M", merge_base,
+
+def _inserted_block_is_safe(ma: list, j1: int, j2: int) -> bool:
+    """True only when the inserted MASKED after-lines `ma[j1:j2]` are whole
+    top-level items that cannot touch an existing test: the block starts at
+    bracket depth 0 over `{}[]()` (outside every `macro_rules!` template body,
+    whatever its delimiter, and every fn/mod body); is balanced on its own
+    (cannot wrap existing lines, e.g. `fn dead() {` ... `}` around
+    invocations); follows and ends at an item boundary (`}`/`;`), so it splits
+    no item and leaves no dangling `#[cfg(any())]` on the next invocation; and
+    has none of `_INSERT_FORBIDDEN_RE` nor a top-level macro invocation, which
+    could redefine the template so later invocations expand to nothing."""
+    prev = [ln for ln in ma[:j1] if ln.strip()]
+    if prev and not prev[-1].rstrip().endswith(("}", ";")):
+        return False
+    depth, top = 0, []
+    for ch in "".join(ma[:j1]):
+        depth += (ch in "{[(") - (ch in "}])")
+    if depth != 0:
+        return False
+    block = "".join(ma[j1:j2])
+    for ch in block:
+        depth += (ch in "{[(") - (ch in "}])")
+        if depth < 0:
+            return False
+        top.append(ch if depth == 0 and ch not in "}])" else " ")
+    last = [ln for ln in ma[j1:j2] if ln.strip()]
+    return (
+        depth == 0
+        and not _INSERT_FORBIDDEN_RE.search(block)
+        and not _ITEM_MACRO_RE.search("".join(top))
+        and not (last and not last[-1].rstrip().endswith(("}", ";")))
     )
-    toks = raw.split("\0")
-    pairs = []
-    i = 0
-    while i < len(toks):
-        status = toks[i]
-        if status == "":
-            i += 1
+
+
+def _only_proven_safe_line_changes(before: str, after: str, path: str) -> bool:
+    """True only when `after` is `before` with whole `#[ignore...]` attribute
+    lines deleted and/or blocks inserted that `_inserted_block_is_safe` proves
+    are top-level items; every other line is byte-identical AND identical after
+    masking (an insert cannot open a comment/literal swallowing existing code).
+    No line may be edited or moved.
+
+    These are the changes to a file holding a `macro_rules!` test template that
+    are PROVEN not to remove or weaken a generated test: every invocation,
+    template body and assertion survives byte for byte with the same meaning.
+    Each deleted line must also be an ignore attribute in CODE -- the masked
+    line must still read `#[ignore ...]` -- so deleting a look-alike inside a
+    string literal or a comment does not qualify. An insertion inside a
+    template (a `return;` before the asserts, a new `#[ignore]`) is not proven
+    safe. Anything else returns False and the caller stays Undetermined. A
+    tokenisation failure in `_mask_noncode` propagates as Undetermined.
+    """
+    b = before.splitlines(keepends=True)
+    a = after.splitlines(keepends=True)
+    mb = _mask_noncode(before, path).splitlines(keepends=True)
+    ma = _mask_noncode(after, path).splitlines(keepends=True)
+    if len(mb) != len(b) or len(ma) != len(a):
+        return False
+    sm = difflib.SequenceMatcher(None, b, a, autojunk=False)
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal" and mb[i1:i2] == ma[j1:j2]:
             continue
-        code = status[0]
-        if code in ("R", "C"):
-            if i + 2 >= len(toks):
-                raise Undetermined(f"truncated {code} record in diff output")
-            pairs.append((toks[i + 1], toks[i + 2]))
-            i += 3
-        else:
-            if i + 1 >= len(toks):
-                raise Undetermined(f"truncated '{code}' record in diff output")
-            path = toks[i + 1]
-            if code == "A":
-                pairs.append((None, path))
-            elif code == "D":
-                pairs.append((path, None))
-            else:  # M, T, U -- and any future code -- same path on both sides
-                pairs.append((path, path))
-            i += 2
-    return pairs
+        if tag == "insert" and _inserted_block_is_safe(ma, j1, j2):
+            continue
+        if tag != "delete":
+            return False
+        for k in range(i1, i2):
+            if not _IGNORE_LINE_RE.fullmatch(b[k]):
+                return False
+            if not _IGNORE_LINE_MASKED_RE.fullmatch(mb[k]):
+                return False
+    return True
+
+
+HEAD_MARKER_KINDS = (KIND_IGNORE_ADDED, KIND_SHOULD_PANIC_ADDED)
+
+
+def head_marker_findings(rep: str, new: str, head_side: Side, after_side: Side) -> list:
+    """Skip / expected-failure marker gains of `new` since HEAD, for a file that
+    is absent at the merge-base (backlog 78817f03).
+
+    Only the marker kinds (`HEAD_MARKER_KINDS`) are returned; assertion and
+    test-count loss against HEAD is out of scope by the 2026-11-07 ruling. A
+    path absent at HEAD (the file's first commit) yields nothing: a test that is
+    skipped from birth hides no coverage that ever existed. A HEAD blob that is
+    in the tree but unreadable raises Undetermined (via `blob_at`).
+
+    A Rust `macro_rules!` test template is NOT Undetermined here, unlike the
+    base comparison in `scan`: marker gains are counted from the textual
+    `#[ignore]` / `#[should_panic]` attributes, which a template body carries
+    verbatim, and a new invocation of an already-marked template is a new
+    already-skipped test, the same shape as the first-commit pin above.
+    """
+    head_src = head_side.read(new)
+    if head_src is None:
+        return []
+    after_src = after_side.read(new) or ""
+    if is_py_test_file(new):
+        found = py_findings_for(rep, py_counts(head_src, new), py_counts(after_src, new))
+    else:
+        found = findings_for(
+            rep,
+            counts(test_surface(head_src, new, head_side), new) if head_src else counts(""),
+            counts(test_surface(after_src, new, after_side), new) if after_src else counts(""),
+        )
+    return [
+        (p, kind, detail + " (since HEAD; file absent at the merge-base)")
+        for p, kind, detail in found
+        if kind in HEAD_MARKER_KINDS
+    ]
+
+
+# Removed invocations of a test-generating `macro_rules!` defined in ANY file
+# (not only the scanned one): scripts/weakening_macro_resolve.py.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import weakening_macro_resolve  # noqa: E402
 
 
 def scan(repo: str, base: str, pending_msg=None) -> list:
@@ -1749,15 +1633,24 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
 
     acked = acknowledgements(repo, merge_base, pending_msg)
 
+    # Before the cfg(test) body-file reassignment below: every changed `.rs` file.
+    macro_found = weakening_macro_resolve.macro_invocation_findings(
+        argparse.Namespace(**globals()), repo, merge_base, pairs)
+
     base_side = Side(
         f"base {merge_base[:12]}",
         lambda p: blob_or_none(repo, merge_base, p),
         lambda: grep_path_attr_files(repo, merge_base),
     )
     after_side = Side(
-        "worktree",
-        lambda p: worktree_or_none(repo, p),
+        "index",
+        lambda p: index_or_none(repo, p),
         lambda: grep_path_attr_files(repo, None),
+    )
+    head_side = Side(
+        "HEAD",
+        lambda p: blob_or_none(repo, "HEAD", p),
+        lambda: grep_path_attr_files(repo, "HEAD"),
     )
 
     # Out-of-line `#[cfg(test)] mod x;` body files are scanned as part of their
@@ -1782,12 +1675,15 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
             pairs.append((r, r))
             touched.add(r)
 
-    results = []
+    results = [
+        {"path": p, "kind": kind, "detail": detail, "acknowledged": (p, kind) in acked}
+        for p, kind, detail in macro_found
+    ]
     for old, new in sorted(set(pairs), key=lambda pr: (pr[1] or "", pr[0] or "")):
-        # Taken BEFORE the body remap below: only a path the diff reports as an
-        # addition (absent at the base) is a new file. A body file re-keyed to None
-        # by `body_base` existed at the base and must not inherit that exemption.
-        added_in_diff = old is None
+        # Remember whether the old side was absent in the original pair,
+        # before reassignments for out-of-line cfg(test) body files.
+        old_is_new = old is None
+        after_surface = ""  # Rust test surface of the new side; set below
         if old in body_base:
             old = None
         if new in body_after:
@@ -1796,7 +1692,7 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
             continue
         rep = new or old  # attribute the finding to the surviving/current path
         before_src = blob_at(repo, merge_base, old) if old else ""
-        after_src = worktree_content(repo, new) if new else ""
+        after_src = index_content(repo, new) if new else ""
         if is_py_test_file(old) or is_py_test_file(new):
             # Python side(s). A side that is not a Python test file (a rename to
             # a non-test name, or an `.rs` counterpart) contributes an EMPTY
@@ -1811,31 +1707,88 @@ def scan(repo: str, base: str, pending_msg=None) -> list:
             )
             after_surface = test_surface(after_src, new, after_side) if after_src else ""
             after = counts(after_surface, new) if after_src else counts("")
-            if before_src and (before["template_tests"] or after["template_tests"]):
+            if (
+                before_src
+                and (before["template_tests"] or after["template_tests"])
+                and not (
+                    old == new
+                    and _only_proven_safe_line_changes(before_src, after_src, rep)
+                    and _only_proven_safe_line_changes(
+                        test_surface(before_src, old, base_side),
+                        test_surface(after_src, new, after_side),
+                        rep,
+                    )
+                )
+                and not (
+                    old == new
+                    and is_integration_tests_file(rep)
+                    and test_surface(before_src, old, base_side) == before_src
+                    and test_surface(after_src, new, after_side) == after_src
+                    and template_invocation_edit_is_safe(
+                        before_src, after_src,
+                        _mask_noncode(before_src, rep), _mask_noncode(after_src, rep),
+                        TEST_ATTR_RE,
+                    )
+                )
+            ):
                 # A `macro_rules!` test template expands once per invocation,
                 # and invocations are not counted: dropping `t!(case, ...)` or
                 # turning explicit tests into a template removes tests with no
                 # textual `#[test]` / assertion change. Against a base where
                 # the file existed we cannot judge that. Only a file with no
-                # base (`before` all zero, so no finding can exist) is judged.
+                # base (`before` all zero, so no finding can exist) is judged,
+                # plus one proven-safe shape: the same path whose whole file AND
+                # whose test surface (which includes out-of-line `#[cfg(test)]`
+                # bodies) differ from the base only by deleted whole-line
+                # `#[ignore...]` attributes in code and/or inserted whole
+                # top-level items proven to lie outside every template and fn
+                # body (`_only_proven_safe_line_changes`). Every invocation and
+                # template body is then byte-identical with the same meaning,
+                # so no generated test can have been removed or weakened; such
+                # a change falls through to the ordinary findings below.
+                # A second proven-safe shape (backlog 4f3da889): an integration
+                # test file (no out-of-line bodies) whose invocations ARE
+                # counted, per template, by `template_invocation_edit_is_safe`
+                # (weakening_macro.py) -- every template body and other item is
+                # unchanged and in place, no invocation is removed, and only an
+                # invocation's arguments may change, new invocations be added,
+                # or plain top-level helper fns, `#[test] fn`s and
+                # `#[cfg(test)] mod`s be inserted, comments included (backlog
+                # ed82c49b / 25b88447; judged on the top-level item sequence,
+                # not a line diff).
+                # Everything that module cannot prove stays Undetermined.
                 raise Undetermined(
                     f"{rep}: #[test] inside a macro_rules! template in a file "
-                    "that exists at the base -- macro invocations are not "
-                    "counted, so removed generated tests cannot be ruled out"
+                    "that exists at the base -- the change is not one of the "
+                    "proven-safe shapes (invocation counting included), so "
+                    "removed generated tests cannot be ruled out"
                 )
             found = findings_for(rep, before, after)
-            if (
-                added_in_diff
-                and after_src
-                and after["ignores"] > 0
-                and _ignores_all_backlog_reasoned(after_surface, new)
-            ):
-                # A file absent at the base cannot have had a surviving test
-                # skipped, and a backlog-filed RED repro is the protocol's way to
-                # record a known failure. Only the ignore-added kind is lifted;
-                # any other finding on the file still stands. A bare #[ignore]
-                # (no backlog reason) in the same file keeps the finding.
-                found = [f for f in found if f[1] != KIND_IGNORE_ADDED]
+        # A file that did not exist at the base cannot have had existing
+        # coverage weakened, so the ignore-added finding is lifted for it
+        # (old_is_new, captured before the body-file remap above). For a Rust
+        # file only a backlog-filed RED repro qualifies (backlog 6140e776): every
+        # counted #[ignore] must carry a `backlog` reason, so a bare #[ignore] in
+        # the same new file keeps the finding. Python skip markers have no such
+        # reason convention and are lifted as before.
+        if old_is_new:
+            is_py = is_py_test_file(old) or is_py_test_file(new)
+            if is_py or _ignores_all_backlog_reasoned(after_surface, new):
+                found = [
+                    (p, kind, detail) for p, kind, detail in found
+                    if kind != KIND_IGNORE_ADDED
+                ]
+            # ...but a file absent at the base may already exist at HEAD, from an
+            # earlier commit of this branch, and its tests then DID exist. For
+            # such a file, a skip / expected-failure marker gained since HEAD is
+            # judged (backlog 78817f03, user ruling 2026-11-07). Assertion and
+            # test-count loss against HEAD is deliberately NOT judged: it fires
+            # on ordinary refactoring of a test still being written.
+            if new is not None:
+                have = {(p, kind) for p, kind, _ in found}
+                for p, kind, detail in head_marker_findings(rep, new, head_side, after_side):
+                    if (p, kind) not in have:
+                        found.append((p, kind, detail))
         for p, kind, detail in found:
             results.append(
                 {
@@ -1854,7 +1807,8 @@ def main(argv=None) -> int:
         "--base",
         default="main",
         help="the branch this worktree integrates into (default: local main); "
-        "the scan covers merge-base(BASE, HEAD) to the worktree. Not origin/main: "
+        "the scan covers merge-base(BASE, HEAD) to the index (GIT_INDEX_FILE "
+        "honoured; unstaged changes are ignored). Not origin/main: "
         "a stale remote ref charges main's commits to the branch (#1181)",
     )
     ap.add_argument("--repo", default=None)

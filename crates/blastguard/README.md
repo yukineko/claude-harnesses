@@ -224,6 +224,26 @@ plus `Undetermined` — and **only `Inside` may relax a verdict**.
   not `$HOME` or an ancestor, and not below `$HOME` (0.2.95).
   Full table: `src/deletion.rs` and the README.ja.md section
   「再帰 `rm` は「何が消えるか」で判定する」.
+  **Exception — linked worktree checkouts** (user ruling 2026-11-07, 0.2.287:
+  work products in a managed disposable place may be deleted): git's
+  working-tree discards (`restore`, `checkout --force` / `-- .` / `-- <path>`,
+  `reset --hard`, `clean -f[dx]`, `switch --force` / `--discard-changes`,
+  `stash -u` / `-a`) are `allow` when the directory git discovers its repo
+  from (`-C <dir>`, else the segment's resolved cwd, `cd D && ` included) is
+  ITSELF a linked worktree checkout directly under a worktree storage root —
+  observed on disk (a real directory whose `.git` is a `gitdir:` FILE, no
+  symlink below the storage root), never inferred from the path string. Only
+  for one plain `git` command line (`git_worktree_eligible`), with no global
+  option but `-C` (once) and a `--work-tree` naming the same checkout. A
+  primary tree, a checkout subdirectory, an unresolvable or `..` spelling, a
+  compound line and every probe failure keep the verdicts above; `stash
+  drop` / `clear` stay `deny` (`refs/stash` is shared by every worktree of a
+  repo). A recursive wildcard `rm` whose literal parent is STRICTLY inside such
+  a checkout (`rm -rf <wt>/subdir/*`) is `allow` under the `/tmp`-wildcard
+  line rule; a protected parent (`<wt>/.githooks/pre-*`) and the checkout
+  itself (`<wt>/*`) keep their verdicts. `git clean`'s confinement is now
+  judged against the directory `-C` / `--work-tree` name (it used to be the
+  session cwd); an unplaceable one keeps the old base.
 - **What does not** (each pinned by a test in `tests/scoped_destructive.rs`):
   anything outside every safe root; anything that is not a literal path (`$VAR`,
   `~`, `` `pwd` ``, `*`, `{}`); an unresolvable `cd`; a relative operand a `cd`

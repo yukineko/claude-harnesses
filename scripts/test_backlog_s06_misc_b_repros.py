@@ -133,6 +133,7 @@ class Backlog_911a93b8(unittest.TestCase):
                      "        self.assertEqual(f(), 1)\n        self.assertTrue(g())\n        self.assertIn('x', h())\n")
         _git(d, "add", "-A"); _git(d, "commit", "-q", "-m", "base")
         p.write_text("import unittest\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n")
+        _git(d, "add", "-A")  # staged: the gate judges the index (54de84b4)
         r = subprocess.run([sys.executable, str(HERE / "check-test-weakening.py"), "--repo", str(d), "--base", "HEAD", "--json"],
                            capture_output=True, text=True, cwd=d)
         self.assertNotEqual(r.returncode, 0, r.stdout)

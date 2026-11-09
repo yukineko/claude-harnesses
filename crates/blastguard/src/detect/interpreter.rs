@@ -7,6 +7,21 @@ use super::{
 };
 use crate::exclude;
 
+mod comments;
+mod inert_literal;
+mod osascript;
+mod python_file;
+mod python_semantics;
+mod shell_calls;
+#[cfg(test)]
+mod unit_tests;
+use comments::strip_hash_comments;
+use inert_literal::{has_dynamic_code_execution, inert_literal_bodies};
+use osascript::osascript_app_delete;
+pub(super) use osascript::osascript_program_delete;
+pub(super) use python_file::python_file_body_verdict;
+pub(super) use shell_calls::python_body_segment_verdict;
+
 /// Non-shell interpreters that run an inline program supplied as a string
 /// argument (e.g. `python3 -c "…"`, `perl -e "…"`). Like a shell's `-c`, this
 /// lets `find -exec <interp> -c "<payload>"` run an arbitrary destructive
@@ -317,11 +332,27 @@ const INTERPRETER_WRITE_CALLS: &[&str] = &[
 /// `writeFileSync(dir)` all fail on a directory (EISDIR), so a directory
 /// literal is not their target. `shutil.copy2(src, dir)` DOES write into a
 /// directory (`dir/<basename>`), so when the program spells it this answers
-/// `false` and the literal is probed exactly as before. A path whose kind
-/// cannot be read (`metadata` fails, relative with no base) is also `false`:
-/// unknown stays on the probing side.
-fn names_unwritable_directory(candidate: &str, payload: &str, base: Option<&str>) -> bool {
-    if payload.to_ascii_lowercase().contains("shutil.copy2(") {
+/// `false` for an UNPADDED literal and the literal is probed exactly as before.
+///
+/// Backlog 8bb1cec8: under `shutil.copy2(` a literal with leading or trailing
+/// whitespace is not that exception. `copy2` (Python) receives the string
+/// verbatim, so `" / "` names the relative path `" / "`, never the directory
+/// `/` the trimmed candidate resolves to; such a literal is in practice the
+/// path-join operator `new / "target"` paired out of the program by
+/// [`quoted_string_literals`], and probing its trimmed form reported "it
+/// writes `/`" with recoverability facts about the filesystem root. A padded
+/// directory literal is therefore treated like any other directory literal:
+/// not a write target. `literal` is the untrimmed text; `candidate` its trim.
+///
+/// A path whose kind cannot be read (`metadata` fails, relative with no base)
+/// is also `false`: unknown stays on the probing side.
+fn names_unwritable_directory(
+    literal: &str,
+    candidate: &str,
+    payload: &str,
+    base: Option<&str>,
+) -> bool {
+    if payload.to_ascii_lowercase().contains("shutil.copy2(") && literal == candidate {
         return false;
     }
     crate::reversible::resolve(candidate, base)
@@ -450,73 +481,17 @@ fn interpreter_destructive_call(payload: &str) -> Option<&'static str> {
         .copied()
 }
 
-/// `payload` with every `#` line comment removed, quote-aware.
-///
-/// Backlog 6798f47d: `# deliberately does not call shutil.rmtree` was denied
-/// as "it runs `rmtree`". A `#` opens a comment here only at the start of a
-/// line or after whitespace, and only outside `'`/`"`/`` ` `` quotes
-/// (backslash escapes honoured), so `"#{x}"`, `$#a`, `${#v}` and `this.#p`
-/// are kept. `//` is NOT stripped: in Python it is floor division, and code
-/// after it would vanish.
-///
-/// This is not a parser for any one language, and it can be wrong — a JS
-/// private field `{ #p; … }` reads as a comment. That is why its only use is
-/// to tell "a destructive spelling appears outside comments" (Deny, as before)
-/// from "it appears ONLY inside what reads as a comment" (Ask, see
-/// [`interpreter_code_verdict`]). A misreading moves a Deny to an Ask, never
-/// to an Allow.
-///
-/// With `blank_strings`, the contents of quoted strings are dropped too (the
-/// quote characters stay). That text is used ONLY to choose the wording of a
-/// Deny — "it runs `x`" versus "a quoted string spells `x`" — never the verdict.
-fn strip_hash_comments(payload: &str, blank_strings: bool) -> String {
-    let mut out = String::with_capacity(payload.len());
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-    let mut in_comment = false;
-    let mut prev: Option<char> = None;
-    for c in payload.chars() {
-        if in_comment {
-            if c == '\n' {
-                in_comment = false;
-                out.push(c);
-            }
-            prev = Some(c);
-            continue;
-        }
-        match quote {
-            Some(q) => {
-                if escaped {
-                    escaped = false;
-                } else if c == '\\' {
-                    escaped = true;
-                } else if c == q {
-                    quote = None;
-                }
-                if !blank_strings || quote.is_none() {
-                    out.push(c);
-                }
-            }
-            None => {
-                if c == '\\' {
-                    escaped = !escaped;
-                    out.push(c);
-                } else if escaped {
-                    escaped = false;
-                    out.push(c);
-                } else if c == '\'' || c == '"' || c == '`' {
-                    quote = Some(c);
-                    out.push(c);
-                } else if c == '#' && prev.is_none_or(char::is_whitespace) {
-                    in_comment = true;
-                } else {
-                    out.push(c);
-                }
-            }
-        }
-        prev = Some(c);
-    }
-    out
+/// Every [`INTERPRETER_DESTRUCTIVE_CALLS`] spelling present in `payload`
+/// (case-folded). [`interpreter_destructive_call`] returns only the first; the
+/// inert-literal downgrade must hold for ALL of them, or a second spelling in
+/// code would ride along with the first one's string-only proof.
+fn interpreter_destructive_calls(payload: &str) -> Vec<&'static str> {
+    let lowered = payload.to_ascii_lowercase();
+    INTERPRETER_DESTRUCTIVE_CALLS
+        .iter()
+        .filter(|needle| lowered.contains(**needle))
+        .copied()
+        .collect()
 }
 
 /// Commands whose effect cannot be undone after the fact, sitting beside the
@@ -895,7 +870,7 @@ pub(super) fn interpreter_code_verdict(
         program_text_redirects: Some(&redirects),
         ..ctx.clone()
     };
-    let comment_mention = std::cell::Cell::new(None);
+    let mentions = Mentions::default();
     let verdict = interpreter_program_verdict(
         shape,
         payloads,
@@ -903,14 +878,38 @@ pub(super) fn interpreter_code_verdict(
         ctx,
         &program_ctx,
         expansion_possible,
-        &comment_mention,
+        &mentions,
     );
+    // A destructive spelling that `inert_literal_bodies` showed sits only inside
+    // plain, non-interpolating quoted literals of the layer-0 program, with no
+    // dynamic-execution marker anywhere in it (backlog 27795e6e). Recorded
+    // during the scan rather than returned from it, so a Deny found anywhere
+    // else — an unrecoverable write, a shell command, a deeper layer — still
+    // outranks it (model.rs). Otherwise it is an Ask, never Allow: the marker
+    // list is a heuristic, so blastguard cannot show the string is never run.
+    let verdict = match (mentions.string.get(), verdict) {
+        (_, Decision::Deny(reason)) => Decision::Deny(reason),
+        (None, v) => v,
+        (Some(call), v) => {
+            let finding = format!(
+                "{shape}, and its program spells `{call}` only inside plain quoted string \
+literals (no interpolation, no dynamic-execution marker seen); blastguard does not parse the \
+program's language, so it cannot show that string is never run as code."
+            );
+            match v {
+                Decision::Ask(reason) => {
+                    recommend_against(Decision::ask(format!("{reason}; {finding}")))
+                }
+                _ => recommend_against(Decision::ask(finding)),
+            }
+        }
+    };
     // A destructive spelling seen ONLY inside what reads as a `#` comment
     // (backlog 6798f47d). Not a Deny — the reason would claim a call nobody
     // observed — and not silence either: `strip_hash_comments` is not a parser
     // for the program's language, so a misread comment cannot be shown to be
     // inert. A Deny found elsewhere still wins.
-    let verdict = match (comment_mention.get(), verdict) {
+    let verdict = match (mentions.comment.get(), verdict) {
         (_, Decision::Deny(reason)) => Decision::Deny(reason),
         (None, v) => v,
         (Some(call), v) => {
@@ -943,6 +942,58 @@ string, but blastguard cannot show that it is not a redirect."
     }
 }
 
+/// APIs (matched case-insensitively as substrings) that hand a STRING to a
+/// shell: Python `os.system`/`os.popen`/`subprocess` (`shell=True` or not — an
+/// argv list is re-joined separately), Perl/Ruby/PHP `system`/backticks/`qx`/
+/// `%x`/`shell_exec`/`passthru`/`proc_open`/`popen`, Node `child_process`/
+/// `execSync`, AppleScript `do shell script`. A false hit only lets a
+/// shell-pass Ask on a literal stand (backlog 0fefcd3b); it never Denies.
+const SHELL_STRING_EXEC_MARKERS: &[&str] = &[
+    "os.system",
+    "os.popen",
+    "subprocess",
+    "popen",
+    "commands.getoutput",
+    "commands.getstatusoutput",
+    "pty.spawn",
+    "system(",
+    "system ",
+    "child_process",
+    "execsync",
+    "shell_exec",
+    "passthru",
+    "proc_open",
+    "qx",
+    "%x",
+    "`",
+    "do shell script",
+];
+
+/// Is `d` the plain "command word is an expansion" Ask of `detect_bash`?
+fn is_expansion_head_ask(d: &Decision) -> bool {
+    matches!(d, Decision::Ask(r) if r.contains(super::EXPANSION_HEAD_TAIL))
+}
+
+/// Does `program` contain a [`SHELL_STRING_EXEC_MARKERS`] entry?
+fn runs_shell_strings(program: &str) -> bool {
+    let lowered = program.to_ascii_lowercase();
+    SHELL_STRING_EXEC_MARKERS
+        .iter()
+        .any(|m| lowered.contains(m))
+}
+
+/// Destructive spellings [`interpreter_program_verdict`] saw but did not deny
+/// on the spot. Each becomes an Ask in [`interpreter_code_verdict`] unless the
+/// scan returns a Deny, which outranks it.
+#[derive(Default)]
+struct Mentions {
+    /// Spelled only in what reads as a `#` comment (backlog 6798f47d).
+    comment: std::cell::Cell<Option<&'static str>>,
+    /// Spelled only inside literals [`inert_literal_bodies`] proved inert, in a
+    /// layer-0 program with no dynamic-execution marker (backlog 27795e6e).
+    string: std::cell::Cell<Option<&'static str>>,
+}
+
 /// The body of [`interpreter_code_verdict`]. `program_ctx` is `ctx` with
 /// [`Ctx::program_text_redirects`] set; it is used ONLY for the shell pass
 /// over each program-text layer, so every other check judges exactly as before
@@ -954,7 +1005,7 @@ fn interpreter_program_verdict(
     ctx: &Ctx<'_>,
     program_ctx: &Ctx<'_>,
     expansion_possible: bool,
-    comment_mention: &std::cell::Cell<Option<&'static str>>,
+    mentions: &Mentions,
 ) -> Decision {
     // Descend through nested quoting rather than stopping at the first layer.
     // A destructive command can sit several quote layers down —
@@ -967,6 +1018,35 @@ fn interpreter_program_verdict(
     // PreToolUse hook, so the number of them a single command line can provoke
     // is bounded rather than left to the length of the program.
     const MAX_RECOVERY_PROBES: usize = 6;
+    // Backlog 27795e6e: the inert-literal downgrade is only considered when no
+    // layer-0 payload carries a dynamic-execution marker — a program that can
+    // run a string is not one whose strings are shown to be data.
+    let dynamic_execution = payloads.iter().any(|p| has_dynamic_code_execution(p));
+    // Backlog 0fefcd3b: whether a string of this program may be handed to a
+    // shell, which makes a shell-pass Ask on a literal count (see below).
+    let shell_strings = payloads.iter().any(|p| runs_shell_strings(p));
+    // Bodies of layer-0 literals `inert_literal_bodies` proved inert. A deeper
+    // layer is exempt from the destructive-spelling Deny ONLY when it is
+    // verbatim one of these (it is the same string contents one layer down);
+    // every other deeper-layer payload keeps the Deny.
+    let mut inert_bodies: Vec<String> = Vec::new();
+    // Backlog 7483e85b: an Ask earned inside the descent (a protected-path
+    // literal, a write confined to a safe root) is PENDING, never an early
+    // return — every literal of every layer is still scanned, so a Deny earned
+    // anywhere else outranks it (Deny over Ask over Allow, model.rs). The
+    // first pending Ask is kept so its reason is the one reported.
+    let mut pending_ask: Option<Decision> = None;
+    // Backlog 3c750df2: the program's OS-facing calls, read from its code (see
+    // `shell_calls::program_call_verdict`). A Deny returns; an Ask is pending.
+    for payload in payloads {
+        match shell_calls::program_call_verdict(payload, depth, ctx) {
+            d @ Decision::Deny(_) => return d,
+            a @ Decision::Ask(_) => {
+                pending_ask.get_or_insert(a);
+            }
+            Decision::Allow => {}
+        }
+    }
     let mut layer: Vec<String> = payloads.to_vec();
     for depth_of_layer in 0..MAX_QUOTE_LAYERS {
         if layer.is_empty() {
@@ -977,33 +1057,107 @@ fn interpreter_program_verdict(
             // Backlog 6798f47d: judged on the text with `#` comments removed,
             // so a mention in a comment is not reported as a call. A spelling
             // that exists ONLY in a comment is recorded, not dropped.
-            if let Some(call) = interpreter_destructive_call(&strip_hash_comments(payload, false)) {
-                // Layer 0 is the program text itself; deeper layers, and any
-                // spelling found only inside a quoted string of layer 0, are
-                // string contents that may or may not be run as code — the
-                // reason says so rather than claiming a call. Same Deny either
-                // way: only the wording depends on this.
-                let outside_strings = depth_of_layer == 0
-                    && interpreter_destructive_call(&strip_hash_comments(payload, true)).is_some();
-                if outside_strings {
+            let calls = interpreter_destructive_calls(&strip_hash_comments(payload, false));
+            if let Some(&call) = calls.first() {
+                // Backlog 27795e6e: a spelling that sits only inside literals
+                // `inert_literal_bodies` positively proved inert (layer 0, every
+                // destructive spelling in the payload, no dynamic-execution
+                // marker in the program) is recorded as a PENDING Ask and the
+                // scan continues, so a Deny earned anywhere else still outranks
+                // it. It is never an early return.
+                let proven_inert: Option<Vec<String>> = if dynamic_execution {
+                    None
+                } else if depth_of_layer == 0 {
+                    calls
+                        .iter()
+                        .map(|c| inert_literal_bodies(payload, c))
+                        .collect::<Option<Vec<Vec<&str>>>>()
+                        .map(|v| v.into_iter().flatten().map(str::to_string).collect())
+                } else if inert_bodies.iter().any(|b| b == payload) {
+                    Some(Vec::new())
+                } else {
+                    None
+                };
+                if let Some(bodies) = proven_inert {
+                    if mentions.string.get().is_none() {
+                        mentions.string.set(Some(call));
+                    }
+                    for body in bodies {
+                        if !inert_bodies.contains(&body) {
+                            inert_bodies.push(body);
+                        }
+                    }
+                } else {
+                    // Layer 0 is the program text itself; deeper layers, and
+                    // any spelling found only inside a quoted string of layer
+                    // 0, are string contents that may or may not be run as
+                    // code — the reason says so rather than claiming a call.
+                    // Same Deny either way: only the wording depends on
+                    // `strip_hash_comments(payload, true)`.
+                    let outside_strings = depth_of_layer == 0
+                        && interpreter_destructive_call(&strip_hash_comments(payload, true))
+                            .is_some();
+                    if outside_strings {
+                        return Decision::deny(format!(
+                            "{shape}, and it runs `{call}`, which deletes files or directories \
+outright"
+                        ));
+                    }
                     return Decision::deny(format!(
-                        "{shape}, and it runs `{call}`, which deletes files or directories outright"
+                        "{shape}, and a quoted string in its program spells `{call}`, which deletes \
+files or directories outright if that string is run as code; blastguard cannot show it is not"
                     ));
                 }
-                return Decision::deny(format!(
-                    "{shape}, and a quoted string in its program spells `{call}`, which deletes \
-files or directories outright if that string is run as code; blastguard cannot show it is not"
-                ));
-            }
-            if comment_mention.get().is_none() {
+            } else if mentions.comment.get().is_none() {
                 if let Some(call) = interpreter_destructive_call(payload) {
-                    comment_mention.set(Some(call));
+                    mentions.comment.set(Some(call));
                 }
             }
             // `program_ctx`: an undeterminable redirect target is recorded for
             // `interpreter_code_verdict` instead of denied (ruling R2).
-            if let Decision::Deny(reason) = analyze_shell_payload(payload, depth, program_ctx) {
-                return Decision::Deny(reason);
+            //
+            // Backlog 0fefcd3b: an ASK from this shell pass used to be dropped,
+            // so `os.system('echo x > .git/hooks/pre-commit')` was Allow while
+            // the same redirect at top level is the protected-path Ask (Deny
+            // wherever no human can answer). A string literal (layer > 0) of a
+            // program that hands strings to a shell ([`runs_shell_strings`])
+            // is that shell command line, so its Ask is kept as PENDING —
+            // outranked by any Deny the rest of the scan earns. `detect_bash`
+            // directly, not `analyze_shell_payload`: the latter's extra
+            // "command word is an expansion" Ask would fire on every literal
+            // such as `"$HOME/x"`, which is data far more often than a command.
+            // Its Deny is the same (`analyze_shell_payload` denies only through
+            // `detect_bash`).
+            //
+            // The R2 side channel (`program_text_redirects`) follows the same
+            // rule as that Ask: a string literal of a program with NO
+            // shell-string marker is never a shell line, so an undeterminable
+            // `>` it holds (`print('>')`, `"x->y"`) is data, not a redirect
+            // (tests/heredoc_body_gt_fp_20261107.rs). Its rows are dropped;
+            // the program text itself (layer 0) keeps them, and a Deny from the
+            // literal still returns below. A program that hands strings to a
+            // shell keeps every row.
+            let sink_rows = program_ctx.program_text_redirects.map(|s| s.borrow().len());
+            let verdict = super::detect_bash(payload, depth + 1, program_ctx);
+            if depth_of_layer > 0 && !shell_strings {
+                if let (Some(sink), Some(rows)) = (program_ctx.program_text_redirects, sink_rows) {
+                    sink.borrow_mut().truncate(rows);
+                }
+            }
+            match verdict {
+                Decision::Deny(reason) => return Decision::Deny(reason),
+                // The "command word is an expansion" Ask (detect.rs
+                // `EXPANSION_HEAD_TAIL`) is NOT kept: a literal like `"$HOME"`
+                // or an argv element `'$HOME'` is data far more often than a
+                // command. Any other Ask (protected path, ...) is kept.
+                ask @ Decision::Ask(_)
+                    if depth_of_layer > 0 && shell_strings && !is_expansion_head_ask(&ask) =>
+                {
+                    if pending_ask.is_none() {
+                        pending_ask = Some(ask);
+                    }
+                }
+                Decision::Ask(_) | Decision::Allow => {}
             }
             let literals = quoted_string_literals(payload);
             // GATE-DISABLING axis, checked on the OBJECTS rather than the verbs.
@@ -1060,11 +1214,11 @@ files or directories outright if that string is run as code; blastguard cannot s
                 if candidate.is_empty() || candidate.contains(char::is_whitespace) {
                     continue;
                 }
-                if exclude::touches_protected(candidate) {
-                    return Decision::ask(format!(
+                if exclude::touches_protected(candidate) && pending_ask.is_none() {
+                    pending_ask = Some(Decision::ask(format!(
                         "{shape}, and that program names `{candidate}`, a protected gate/config \
 path — changing it changes which hooks and gates run, and blastguard will not do that implicitly"
-                    ));
+                    )));
                 }
                 // RECOVERABILITY of what the program OVERWRITES.
                 //
@@ -1099,32 +1253,89 @@ path — changing it changes which hooks and gates run, and blastguard will not 
                 // read-only `open(...)` consumed by a read is not the target
                 // (backlog 658b7839); anything not positively attributed that
                 // way is still probed.
-                if write_call.is_some()
-                    && probed < MAX_RECOVERY_PROBES
+                let write_target_candidate = write_call.is_some()
                     && candidate.contains('/')
                     && !literal_is_read_only_open(candidate, payload)
-                    && !names_unwritable_directory(candidate, payload, ctx.raw_base.as_deref())
-                {
+                    && !names_unwritable_directory(
+                        literal,
+                        candidate,
+                        payload,
+                        ctx.raw_base.as_deref(),
+                    );
+                if write_target_candidate && probed < MAX_RECOVERY_PROBES {
                     probed += 1;
                     let recovery = crate::reversible::probe(candidate, ctx.raw_base.as_deref());
                     if let crate::reversible::Recovery::Unrecoverable(why) = &recovery {
                         let call = write_call.unwrap_or("a write");
                         if let Some(root) = ctx.confined_root("interpreter write", &[candidate]) {
-                            return confined_ask(
-                                &format!("`{call}` onto `{candidate}`"),
-                                &root,
-                                &[candidate],
-                            );
+                            if pending_ask.is_none() {
+                                pending_ask = Some(confined_ask(
+                                    &format!("`{call}` onto `{candidate}`"),
+                                    &root,
+                                    &[candidate],
+                                ));
+                            }
+                            continue;
                         }
                         return Decision::deny(format!(
                             "{shape}, and it writes `{candidate}` (`{call}`) — {why}"
                         ));
+                    }
+                    // An unanswered probe is not "recoverable" (CLAUDE.md §3):
+                    // it is a pending Ask, outranked by any Deny the rest of
+                    // the program earns, and never left to reach Allow.
+                    if let crate::reversible::Recovery::Undetermined(why) = &recovery {
+                        if pending_ask.is_none() {
+                            let call = write_call.unwrap_or("a write");
+                            pending_ask = Some(Decision::ask(format!(
+                                "{shape}, and it writes `{candidate}` (`{call}`) — {why}"
+                            )));
+                        }
+                    }
+                }
+                // SYSTEM-DIRECTORY axis (backlog 0fbfe00d / e34eb0be). The
+                // probe above answers `NothingToDestroy` for a path that does
+                // not exist yet, which is the right answer about bytes and the
+                // wrong question for `/etc/sudoers.d/evil` or a new
+                // LaunchAgents plist: the file's EXISTENCE is the change. The
+                // direct forms (`>`, `tee`, `cp`) ask `system_path_block` for
+                // exactly this reason, and an interpreter carrying the same
+                // write must not answer less restrictively (user ruling
+                // 2026-11-07: system harm is Deny through any wrapper). Checked
+                // for every write-target literal, including those past the
+                // probe cap — it spawns nothing. A Deny returns at once; an Ask
+                // (the LaunchAgents ruling, or a landing whose symlinks cannot
+                // be resolved) is pending and outranked by any Deny later.
+                if write_target_candidate {
+                    let block = match super::system_path_block("interpreter write", candidate, ctx)
+                    {
+                        Some(d) => Some(d),
+                        None => {
+                            match super::real_system_path_block("interpreter write", candidate, ctx)
+                            {
+                                Ok(d) => d,
+                                Err(why) => Some(Decision::ask(format!(
+                                "{shape}, and it writes `{candidate}`, which could not be resolved \
+through its symlinks ({why}) — blastguard cannot tell whether it lands in a system directory, so \
+it refuses to guess"
+                            ))),
+                            }
+                        }
+                    };
+                    match block {
+                        Some(d) if d.is_deny() => return d,
+                        Some(ask) if pending_ask.is_none() => pending_ask = Some(ask),
+                        _ => {}
                     }
                 }
             }
             next.extend(literals);
         }
         layer = next;
+    }
+    // The whole descent ran without a Deny; an Ask it recorded now stands.
+    if let Some(ask) = pending_ask {
+        return ask;
     }
     // THE EMPTY SET IS NOT A CLEAN SCAN (CLAUDE.md §3). Everything below turns
     // on the program text having been READ; if there was no text, nothing was
@@ -1158,83 +1369,9 @@ read, so it cannot tell whether anything here is irreversible"
     // placeholder", and the mirror closure in
     // `tests/inline_eval_mirror_closure.rs` would be re-opened through a
     // spelling it does not enumerate.
-    // NOR IS TEXT THAT BUILDS ITS OWN CODE. Same principle as the shell
-    // expansion below, one level in: a program that decodes, concatenates or
-    // looks up the name of what it is about to call is not described by its own
-    // source. `getattr(__import__('os'), 'sys' + 'tem')('wipefs -a /dev/sda')`
-    // contains no `os.system` for any scan to find, and
-    // `exec(bytes.fromhex('…'))` contains no operation at all until it runs.
-    // All four spellings were measured reaching Allow on 2026-09-09.
-    //
-    // Be clear about what this is and is not. It IS a list, and a list can be
-    // short. It is not the v0.2.57 mistake, because it does not enumerate
-    // effects (open-ended, and a miss there meant "allow"); it enumerates the
-    // constructs that make the text unfaithful to the program, and a miss means
-    // the text is taken at face value — the same standing this arm already
-    // gives text with no marker in it at all. Adding a spelling here is a
-    // strict improvement; the set never has to be complete to be sound in the
-    // direction it moves.
-    const CODE_BUILDING: &[&str] = &[
-        "exec(",
-        "eval(",
-        "compile(",
-        "getattr(",
-        "__import__",
-        "__builtins__",
-        "__getattribute__",
-        "globals()[",
-        "vars(",
-        "sys.modules[",
-        "b64decode",
-        "fromhex(",
-        "decode('hex'",
-        "instance_eval",
-        "class_eval",
-        "kernel.send",
-        ".send \"",
-        ".send '",
-        "new function(",
-        "settimeout(\"",
-        "settimeout('",
-        // Execution reached through a PATH or a SERIALISED OBJECT rather than
-        // through source text. Each of these runs code the command line does
-        // not contain, so the text that was read describes the loader and not
-        // the program. All measured reaching Allow on 2026-09-09.
-        "runpy.",
-        "run_path(",
-        "import_module(",
-        "pickle.load",
-        "marshal.load",
-        "functiontype(",
-        "yaml.unsafe_load",
-        "yaml.load(",
-        // `os.system(open(…).read())` — a shell command assembled at run time.
-        // The literal-argument spellings never reach here: the descent hands
-        // them to `analyze_shell_payload`, which denies `os.system('mkfs …')`
-        // several lines above.
-        "system(open(",
-        "system(f\"",
-        "system(f'",
-        "popen(open(",
-    ];
+    // NOR IS TEXT THAT BUILDS ITS OWN CODE: see [`CODE_BUILDING`].
     for payload in payloads {
-        let lowered = payload.to_ascii_lowercase();
-        // `compile(` is the one marker with a common unrelated spelling:
-        // `re.compile(` builds a regex, not code (backlog 80b18990). It is
-        // exempted only occurrence by occurrence, and only when
-        // `compile_call_is_regex_method` positively establishes the regex
-        // module; any other occurrence still fires.
-        let fires = |m: &&&str| {
-            let m: &str = m;
-            if m == "compile(" {
-                lowered
-                    .match_indices("compile(")
-                    .any(|(at, _)| !compile_call_is_regex_method(payload, at))
-            } else {
-                lowered.contains(m)
-            }
-        };
-        if let Some(marker) = CODE_BUILDING.iter().find(fires) {
+        if let Some(marker) = code_building_marker(payload) {
             return Decision::ask(format!(
                 "{shape}, and that program builds or decodes the code it runs (`{marker}`) — the \
 text on the command line is not the program that will execute, so blastguard cannot tell whether \
@@ -1393,6 +1530,11 @@ pub(super) fn analyze_code_interpreter(
     depth: usize,
     ctx: &Ctx<'_>,
 ) -> Decision {
+    if strip_version_suffix(cmd) == "osascript" {
+        if let Some(deny) = osascript_app_delete(rest) {
+            return deny;
+        }
+    }
     if let Some(pos) = interpreter_inline_eval_pos(cmd, rest) {
         let mut payloads = interpreter_payloads_after(rest, pos);
         // Glued forms, where the program is in the SAME token as the flag:
@@ -1565,6 +1707,85 @@ fn compile_call_is_regex_method(payload: &str, at: usize) -> bool {
     false
 }
 
+/// NOR IS TEXT THAT BUILDS ITS OWN CODE ([`interpreter_program_verdict`] and
+/// [`python_file_body_verdict`] Ask on these). Same principle as the shell
+/// expansion check, one level in: a program that decodes, concatenates or
+/// looks up the name of what it is about to call is not described by its own
+/// source. `getattr(__import__('os'), 'sys' + 'tem')('wipefs -a /dev/sda')`
+/// contains no `os.system` for any scan to find, and
+/// `exec(bytes.fromhex('…'))` contains no operation at all until it runs.
+/// All four spellings were measured reaching Allow on 2026-09-09.
+///
+/// Be clear about what this is and is not. It IS a list, and a list can be
+/// short. It is not the v0.2.57 mistake, because it does not enumerate
+/// effects (open-ended, and a miss there meant "allow"); it enumerates the
+/// constructs that make the text unfaithful to the program, and a miss means
+/// the text is taken at face value — the same standing this arm already
+/// gives text with no marker in it at all. Adding a spelling here is a
+/// strict improvement; the set never has to be complete to be sound in the
+/// direction it moves.
+pub(super) const CODE_BUILDING: &[&str] = &[
+    "exec(",
+    "eval(",
+    "compile(",
+    "getattr(",
+    "__import__",
+    "__builtins__",
+    "__getattribute__",
+    "globals()[",
+    "vars(",
+    "sys.modules[",
+    "b64decode",
+    "fromhex(",
+    "decode('hex'",
+    "instance_eval",
+    "class_eval",
+    "kernel.send",
+    ".send \"",
+    ".send '",
+    "new function(",
+    "settimeout(\"",
+    "settimeout('",
+    // Execution reached through a PATH or a SERIALISED OBJECT rather than
+    // through source text. Each of these runs code the command line does
+    // not contain, so the text that was read describes the loader and not
+    // the program. All measured reaching Allow on 2026-09-09.
+    "runpy.",
+    "run_path(",
+    "import_module(",
+    "pickle.load",
+    "marshal.load",
+    "functiontype(",
+    "yaml.unsafe_load",
+    "yaml.load(",
+    // `os.system(open(…).read())` — a shell command assembled at run time.
+    // The literal-argument spellings never reach here: the descent hands
+    // them to `analyze_shell_payload`, which denies `os.system('mkfs …')`
+    // several lines above.
+    "system(open(",
+    "system(f\"",
+    "system(f'",
+    "popen(open(",
+];
+
+/// The first [`CODE_BUILDING`] marker in `payload` (case-folded), if any.
+/// `compile(` is the one marker with a common unrelated spelling:
+/// `re.compile(` builds a regex, not code (backlog 80b18990). It is exempted
+/// only occurrence by occurrence, and only when [`compile_call_is_regex_method`]
+/// positively establishes the regex module; any other occurrence still fires.
+pub(super) fn code_building_marker(payload: &str) -> Option<&'static str> {
+    let lowered = payload.to_ascii_lowercase();
+    CODE_BUILDING.iter().copied().find(|m| {
+        if *m == "compile(" {
+            lowered
+                .match_indices("compile(")
+                .any(|(at, _)| !compile_call_is_regex_method(payload, at))
+        } else {
+            lowered.contains(m)
+        }
+    })
+}
+
 /// Whether `name` is bound in `payload` only by a plain module-level import
 /// and otherwise used only to read attributes of it.
 ///
@@ -1689,160 +1910,4 @@ fn payload_has_star_import(payload: &str) -> bool {
             .trim_start_matches(|c: char| c.is_whitespace() || c == '\\' || c == '(')
             .starts_with('*')
     })
-}
-
-#[cfg(test)]
-mod regex_compile_tests {
-    use super::compile_call_is_regex_method;
-
-    /// Mirrors the `CODE_BUILDING` loop: true when the `compile(` marker fires.
-    fn fires(payload: &str) -> bool {
-        payload
-            .to_ascii_lowercase()
-            .match_indices("compile(")
-            .any(|(at, _)| !compile_call_is_regex_method(payload, at))
-    }
-
-    #[test]
-    fn imported_re_compile_is_exempt() {
-        assert!(!fires("import re\np=re.compile(r'a')"));
-        assert!(!fires("import os, re\nre.compile('x')"));
-        assert!(!fires(
-            "import re\np = re.compile(r'a+b', re.I)\nprint(p.findall('aab'))"
-        ));
-        assert!(!fires("import regex\nregex.compile('x')"));
-    }
-
-    #[test]
-    fn bare_and_other_module_compile_fire() {
-        assert!(fires("compile('x','f','exec')"));
-        assert!(fires("import builtins\nbuiltins.compile('x','f','exec')"));
-        assert!(fires("import re\nmyre.compile('x')"));
-        assert!(fires("import re\nx.re.compile('x')"));
-        assert!(fires("import re\n__builtins__.compile('x','f','exec')"));
-    }
-
-    #[test]
-    fn rebinding_or_missing_import_fires() {
-        assert!(fires("import builtins as re\nre.compile('x','f','exec')"));
-        assert!(fires(
-            "import re\nre = builtins\nre.compile('x','f','exec')"
-        ));
-        assert!(fires("import re\nre=builtins\nre.compile('x','f','exec')"));
-        assert!(fires("re.compile('x')"));
-        assert!(fires("from builtins import compile as re\nre.compile('x')"));
-        assert!(fires("import re\nfrom x import y as re\nre.compile('x')"));
-        assert!(fires("import re\nfor re in [b]:\n  re.compile('x')"));
-        assert!(fires("import re\ndef re(): pass\nre.compile('x')"));
-        assert!(fires("import re\nglobal re\nre.compile('x')"));
-        assert!(fires("import re\nf = lambda re: re.compile('x')"));
-        assert!(fires(
-            "import re\nre.compile = builtins.compile\nre.compile('x','f','exec')"
-        ));
-        assert!(fires("import re\nre.__dict__\nre.compile('x')"));
-        assert!(fires("re.compile('x')\nimport re"));
-        assert!(fires("def f():\n    import re\nre.compile('x')"));
-        assert!(fires("s = '''\nimport re\n'''\nre.compile('x')"));
-        assert!(fires("import RE\nRE.compile('x')"));
-        assert!(fires("import re\nre.COMPILE('x')"));
-    }
-
-    #[test]
-    fn star_import_fires() {
-        assert!(fires(
-            "import re\nfrom evil import *\nre.compile('import os','f','exec')"
-        ));
-        assert!(fires(
-            "import re\nif True:\n    from evil import *\nre.compile('x')"
-        ));
-        assert!(fires("import re\nfrom evil import*\nre.compile('x')"));
-        assert!(fires("import re\nfrom evil import (*)\nre.compile('x')"));
-        assert!(fires("import re\nx=1; from evil import *\nre.compile('x')"));
-        assert!(fires(
-            "import re\nfrom evil import \\\n    *\nre.compile('x')"
-        ));
-        assert!(fires("from evil import *\nimport re\nre.compile('x')"));
-    }
-
-    #[test]
-    fn any_non_exempt_occurrence_fires() {
-        assert!(fires("import re\nre.compile('a')\ncompile('x','f','exec')"));
-    }
-}
-
-#[cfg(test)]
-mod read_only_open_tests {
-    use super::literal_is_read_only_open;
-
-    const A: &str = "/tmp/x/a.json";
-
-    #[test]
-    fn fp4_shape_json_load_open_is_read_only() {
-        let p = "import json;d=json.load(open('/tmp/x/a.json'))\nfor t in d['tasks']:\n  open('/tmp/s/task-%s.json'%t['id'],'w').write('')";
-        assert!(literal_is_read_only_open(A, p));
-    }
-
-    #[test]
-    fn read_call_and_read_mode_are_read_only() {
-        assert!(literal_is_read_only_open(
-            A,
-            "s=open('/tmp/x/a.json').read()"
-        ));
-        assert!(literal_is_read_only_open(
-            A,
-            "s=open(\"/tmp/x/a.json\", \"rb\").readlines()"
-        ));
-    }
-
-    #[test]
-    fn write_mode_is_not_read_only() {
-        assert!(!literal_is_read_only_open(
-            A,
-            "open('/tmp/x/a.json','w').write('')"
-        ));
-        assert!(!literal_is_read_only_open(A, "open('/tmp/x/a.json','w')"));
-    }
-
-    #[test]
-    fn second_occurrence_as_assignment_rejects() {
-        let p = "d=json.load(open('/tmp/x/a.json'))\nx='/tmp/x/a.json'\nopen(x,'w')";
-        assert!(!literal_is_read_only_open(A, p));
-    }
-
-    #[test]
-    fn with_open_as_is_not_read_only() {
-        let p = "with open('/tmp/x/a.json') as f:\n  d=f.read()";
-        assert!(!literal_is_read_only_open(A, p));
-    }
-
-    #[test]
-    fn f_string_is_not_read_only() {
-        assert!(!literal_is_read_only_open(
-            A,
-            "s=open(f'/tmp/x/a.json').read()"
-        ));
-    }
-
-    #[test]
-    fn open_name_is_not_read_only() {
-        let p = "n=open('/tmp/x/a.json').name\nopen(n,'w')";
-        assert!(!literal_is_read_only_open(A, p));
-    }
-
-    #[test]
-    fn non_bare_open_and_absent_literal_are_not_read_only() {
-        assert!(!literal_is_read_only_open(
-            A,
-            "s=os.open('/tmp/x/a.json').read()"
-        ));
-        assert!(!literal_is_read_only_open(
-            A,
-            "s=myopen('/tmp/x/a.json').read()"
-        ));
-        assert!(!literal_is_read_only_open(
-            A,
-            "d=myload(open('/tmp/x/a.json'))"
-        ));
-        assert!(!literal_is_read_only_open(A, "print(1)"));
-    }
 }

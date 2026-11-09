@@ -30,6 +30,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod config;
+mod duptest;
 mod gate;
 mod git;
 #[cfg(test)]
@@ -37,9 +38,12 @@ mod git;
 mod git_env_red_tests;
 mod install;
 mod model;
+mod passcache;
 mod record;
+mod rootcheck;
 mod runner;
 mod state;
+mod subagent;
 
 use std::path::Path;
 
@@ -64,12 +68,16 @@ struct Cli {
 enum Command {
     /// Stop hook: run applicable checks; block the stop until they pass.
     Gate,
-    /// Merge the donegate Stop hook into ~/.claude/settings.json.
+    /// SubagentStop hook: when the stopping subagent wrote inside the hook
+    /// cwd, run the cwd's checks; block its stop until they pass. No other
+    /// root or worktree is judged (user rulings 2026-11-08).
+    SubagentGate,
+    /// Merge the donegate Stop and SubagentStop hooks into ~/.claude/settings.json.
     Install {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Remove the donegate Stop hook from ~/.claude/settings.json.
+    /// Remove the donegate Stop and SubagentStop hooks from ~/.claude/settings.json.
     Uninstall {
         #[arg(long)]
         dry_run: bool,
@@ -96,18 +104,39 @@ enum Command {
         #[arg(long)]
         reason: String,
     },
+    /// PreToolUse/PostToolUse(Bash) hooks: deny re-running a plain `cargo test`
+    /// that already passed with the same argv on the same tree.
+    DupTest {
+        #[command(subcommand)]
+        phase: DupTestPhase,
+    },
+}
+
+#[derive(Subcommand)]
+enum DupTestPhase {
+    /// PreToolUse(Bash): deny a proven duplicate; snapshot the tree key.
+    Pre,
+    /// PostToolUse / PostToolUseFailure(Bash): record a pass on an unchanged tree.
+    Post,
 }
 
 fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::Gate => gate_command(),
+        Command::SubagentGate => subagent::subagent_gate_command(),
         Command::Install { dry_run } => exit_on_err(install::install(dry_run)),
         Command::Uninstall { dry_run } => exit_on_err(install::uninstall(dry_run)),
         Command::Init { force } => exit_on_err(init(force)),
         Command::Status => status(),
         Command::Trust => exit_on_err(trust_cmd()),
         Command::Skip { reason } => exit_on_err(skip_cmd(&reason)),
+        Command::DupTest {
+            phase: DupTestPhase::Pre,
+        } => duptest::pre_command(),
+        Command::DupTest {
+            phase: DupTestPhase::Post,
+        } => duptest::post_command(),
     }
 }
 
@@ -122,9 +151,10 @@ fn skip_cmd(reason: &str) -> anyhow::Result<()> {
 /// Add the current project root to the shared workspace-trust list so its
 /// project-local `donegate.toml` commands are honored on Stop.
 ///
-/// Trusting a repository's MAIN working tree is enough for its linked git
-/// worktrees: `harness_core::trust::resolve` inherits trust across that one hop
-/// (see its docs for why that is not a loosening).
+/// Trust is per root: a linked git worktree is NOT trusted through its main
+/// working tree (user ruling 2026-11-08, inheritance removed). Run this in the
+/// worktree, or create it through the session init / condukt, which register
+/// it at creation.
 fn trust_cmd() -> anyhow::Result<()> {
     let root = std::env::current_dir()?;
     let key = harness_core::trust::add(&root)?;
@@ -197,28 +227,28 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
-    // Every checkout the session wrote into, not only the hook cwd: a session
-    // working in a linked worktree while the hook runs in the primary tree must
-    // have the worktree's checks run (otherwise the clean primary tree reads as
-    // "green, checks: []"). Extra roots are evaluated here; the hook cwd keeps
-    // the existing flow below.
-    let roots = match harness_core::session_roots::resolve(&root, &input.transcript_path) {
-        harness_core::verdict::Determination::Known(sr) => sr,
+    // donegate judges ONLY the hook's own root (the cwd). User ruling
+    // 2026-11-08, verbatim: "donegateのworktreeテストは問題ありすぎるので即時に停止"
+    // and "donegateそのものが他のworktreeを見たり検証したりテストしたりすることは
+    // 禁止とする". donegate does not resolve, list, check or report any other
+    // worktree or root the session wrote into. The transcript is read only to
+    // learn whether the session wrote a path INSIDE the cwd
+    // (`rootcheck::wrote_in_cwd`); an unreadable transcript blocks.
+    let wrote_here = match rootcheck::wrote_in_cwd(&input.transcript_path, &root) {
+        harness_core::verdict::Determination::Known(b) => b,
         harness_core::verdict::Determination::Undetermined(why) => stop_block_now(
             &format!(
-                "donegate: BLOCKED - the session's roots cannot be determined ({}). No checks \
-                 ran for the roots it wrote into. Fix the cause or use `donegate skip --reason ...`.",
+                "donegate: BLOCKED - whether the session wrote into {} cannot be determined \
+                 ({}). No checks ran. Fix the cause or use `donegate skip --reason ...`.",
+                root.display(),
                 why.as_str()
             ),
             interactive,
         ),
     };
-    // Only the single-root, no-writes case may take the early "nothing declared"
-    // allow below; every other shape is judged by the per-root loop that follows
-    // the operator escapes.
-    let single_plain_root = roots.roots.len() == 1 && !roots.wrote_any;
 
     let (cfg, declaration) = Config::resolve(&root);
+    let session = input.session_key();
     if !cfg.enabled {
         // An explicit opt-out written in a config we were entitled to read.
         if interactive {
@@ -227,8 +257,6 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         harness_core::hook_latency::record("donegate", "", __start.elapsed().as_millis() as u64);
         std::process::exit(0);
     }
-
-    let session = input.session_key();
 
     // The declaration is resolved BEFORE `checks.is_empty()`, because those two
     // questions used to share one answer: "I am refusing to run the checks this
@@ -245,7 +273,7 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         );
     }
 
-    if cfg.checks.is_empty() && single_plain_root {
+    if cfg.checks.is_empty() && !wrote_here {
         // A real observation: nothing was declared (Absent), or a config we DID
         // read declares no `[[check]]`. donegate is opt-in per project, so this
         // allows — see `Declaration::Absent`'s docs for why that is not the same
@@ -302,124 +330,30 @@ fn gate_run(hook: Option<HookInput>) -> ! {
         std::process::exit(0);
     }
 
-    // Every checkout the session wrote into, not only the hook cwd: a session
-    // working in a linked worktree while the hook runs in the primary tree must
-    // have the worktree's checks run (otherwise the clean primary tree reads as
-    // "green, checks: []"). Extra roots are evaluated here; the hook cwd keeps
-    // the existing flow below. Placed after the operator escapes (see
-    // `tests/gate_escape_ordering.rs`).
-    {
-        let names = roots
-            .roots
-            .iter()
-            .map(|r| r.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let mut any_ran = false;
-        let mut all_opted_out = true;
-        // Roots with NO donegate config at all (Declaration::Absent) vs roots
-        // whose config exists but declares no checks (a real observation that
-        // blocks when the session wrote into it).
-        let mut unconfigured: Vec<String> = Vec::new();
-        let mut configured_empty = false;
-        let mut blocks: Vec<String> = Vec::new();
-        // The repeat-ledger identity of each block (record paths normalised).
-        let mut block_keys: Vec<String> = Vec::new();
-        for (i, r) in roots.roots.iter().enumerate() {
-            let (rcfg, rdecl) = Config::resolve(r);
-            if rdecl.is_refusal() {
-                all_opted_out = false;
-                any_ran = true;
-                if i != 0 {
-                    let b = format!(
-                        "[root: {}] donegate refuses to run this root's checks: {}",
-                        r.display(),
-                        declaration_note(r, &rdecl)
-                    );
-                    block_keys.push(b.clone());
-                    blocks.push(b);
-                }
-                continue;
-            }
-            if !rcfg.enabled {
-                continue;
-            }
-            all_opted_out = false;
-            if rcfg.checks.is_empty() {
-                if matches!(rdecl, config::Declaration::Absent) {
-                    unconfigured.push(r.display().to_string());
-                } else {
-                    configured_empty = true;
-                }
-                continue;
-            }
-            any_ran = true;
-            if i == 0 {
-                continue;
-            }
-            let mut report = gate::evaluate(&rcfg, r);
-            if report.all_green() {
-                // Only failing optional checks can have a log here; keep them too.
-                gate::save_records(
-                    &mut report,
-                    &rcfg.state_dir,
-                    &session,
-                    0,
-                    rcfg.output_tail_lines,
-                );
-                continue;
-            }
-            let attempt = state::bump(&rcfg.state_dir, &session, rcfg.reset_after_secs);
-            gate::save_records(
-                &mut report,
-                &rcfg.state_dir,
-                &session,
-                attempt,
-                rcfg.output_tail_lines,
-            );
-            let failing: Vec<String> = report.blocking().iter().map(|o| o.name.clone()).collect();
-            if attempt > rcfg.max_attempts {
-                state::reset(&rcfg.state_dir, &session);
-                log_event(&rcfg, &session, "giveup", &failing, attempt);
-                eprintln!(
-                    "donegate: root {} still failing after {} attempts ({}); giving up on it. \
-                     The checks are still RED.",
-                    r.display(),
-                    rcfg.max_attempts,
-                    failing.join(", ")
-                );
-                continue;
-            }
-            log_event(&rcfg, &session, "blocked", &failing, attempt);
-            emit_violations(r, &session, &failing, Outcome::Blocked);
-            blocks.push(format!(
-                "[root: {}]\n{}",
-                r.display(),
-                gate::block_reason(&report, attempt, rcfg.max_attempts)
-            ));
-            block_keys.push(format!(
-                "[root: {}]\n{}",
-                r.display(),
-                gate::block_fingerprint(&report, attempt, rcfg.max_attempts)
-            ));
-        }
-        if !blocks.is_empty() {
-            stop_block_now_keyed(&blocks.join("\n\n"), &block_keys.join("\n\n"), interactive);
-        }
-        if roots.wrote_any && !any_ran && !all_opted_out && !configured_empty {
-            // Every written root has no donegate config at all: allow (donegate is
-            // opt-in per project). User ruling 2026-10-27 removed the user-visible
+    // Non-blocking stop messages (give-up, identical-finding waiver); printed
+    // once as a single `systemMessage` JSON at the exit.
+    let mut notices: Vec<String> = Vec::new();
+    // The identical-finding waiver applies only to a Stop hook carrying a real
+    // session id. Manual CLI mode reports failure by exit code and must keep
+    // exiting 1 (verifier F3a); a payload without a session id shares the
+    // `_local` bucket with every other such session, so a repeat cannot be
+    // attributed and the stop blocks (F3b).
+    let waiver_allowed = !interactive && !input.session_id.trim().is_empty();
+    if cfg.checks.is_empty() {
+        // Reached only when the session wrote into the cwd (the no-writes case
+        // allowed above). Placed after the operator escapes (see
+        // `tests/gate_escape_ordering.rs`).
+        if matches!(declaration, config::Declaration::Absent) {
+            // No donegate config at all: allow (donegate is opt-in per
+            // project). User ruling 2026-10-27 removed the user-visible
             // `systemMessage` that used to accompany this allow: stdout stays
             // empty. The allow is not silent in the record, though — the
-            // stderr line names the roots, and a durable `verdict:"unconfigured"`
-            // entry naming each root is appended to `<state_dir>/log.jsonl`
+            // stderr line names the root, and a durable `verdict:"unconfigured"`
+            // entry naming it is appended to `<state_dir>/log.jsonl`
             // (`tests/no_config_quiet_allow.rs`).
-            let msg = format!(
-                "donegate not configured for {}: no checks ran",
-                unconfigured.join(", ")
-            );
-            eprintln!("{msg}");
-            log_unconfigured(&cfg, &session, &unconfigured);
+            let r = root.display().to_string();
+            eprintln!("donegate not configured for {r}: no checks ran");
+            log_unconfigured(&cfg, &session, &[r]);
             harness_core::hook_latency::record(
                 "donegate",
                 &session,
@@ -427,16 +361,15 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             );
             std::process::exit(0);
         }
-        if roots.wrote_any && !any_ran && !all_opted_out {
-            stop_block_now(
-                &format!(
-                    "donegate: BLOCKED - the session wrote files but no check ran for any root \
-                     (an empty check set is not a pass). Roots judged: {names}. Declare checks \
-                     in a donegate.toml or use `donegate skip --reason ...` if this is intended."
-                ),
-                interactive,
-            );
-        }
+        stop_block_now(
+            &format!(
+                "donegate: BLOCKED - the session wrote files but no check ran (an empty \
+                 check set is not a pass). Root judged: {}. Declare checks in a \
+                 donegate.toml or use `donegate skip --reason ...` if this is intended.",
+                root.display()
+            ),
+            interactive,
+        );
     }
 
     let mut report = gate::evaluate(&cfg, &root);
@@ -450,6 +383,8 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             0,
             cfg.output_tail_lines,
         );
+        // Green ends the chain: counter AND every remembered signature
+        // (verifier F1 — a later revert to a blocked tree blocks again).
         state::reset(&cfg.state_dir, &session);
         log_event(&cfg, &session, "green", &ran_names(&report), 0);
         if interactive {
@@ -464,6 +399,27 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     }
 
     // blocking failures present
+    //
+    // Identical-finding waiver, checked BEFORE the counter is bumped: a waived
+    // stop is not a block and does not count toward max_attempts (verifier F2).
+    let sig = red_signature(&root, &report);
+    if waiver_allowed {
+        if let Some(sig) = &sig {
+            if state::is_repeat(&cfg.state_dir, &session, &root, sig, cfg.reset_after_secs) {
+                let failing: Vec<String> =
+                    report.blocking().iter().map(|o| o.name.clone()).collect();
+                log_event(&cfg, &session, "repeat-waived", &failing, 0);
+                notices.push(repeat_message(&failing));
+                emit_notices(&notices, interactive);
+                harness_core::hook_latency::record(
+                    "donegate",
+                    &session,
+                    __start.elapsed().as_millis() as u64,
+                );
+                std::process::exit(0);
+            }
+        }
+    }
     let attempt = state::bump(&cfg.state_dir, &session, cfg.reset_after_secs);
     // Every failing check's full output goes to the durable session record
     // before anything is rendered; the reason shows only a digest + the path.
@@ -535,6 +491,8 @@ fn gate_run(hook: Option<HookInput>) -> ! {
             cfg.max_attempts,
             failing.join(", ")
         );
+        notices.push(giveup_message(&failing, cfg.max_attempts));
+        emit_notices(&notices, interactive);
         harness_core::hook_latency::record(
             "donegate",
             &session,
@@ -545,6 +503,16 @@ fn gate_run(hook: Option<HookInput>) -> ! {
 
     log_event(&cfg, &session, "blocked", &failing, attempt);
     emit_violations(&root, &session, &failing, Outcome::Blocked);
+    if waiver_allowed {
+        let chain = state::chain_for_block(&cfg.state_dir, &session, attempt);
+        state::remember(
+            &cfg.state_dir,
+            &session,
+            &root,
+            sig.as_deref(),
+            chain.as_deref(),
+        );
+    }
     let reason = gate::block_reason(&report, attempt, cfg.max_attempts);
 
     if interactive {
@@ -572,8 +540,9 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     // same blocking JSON on a first occurrence and announces a waiver — never
     // falls silent — on a second. The old `None` arm's job (never let a
     // non-green gate end the turn by printing nothing) is preserved inside it.
-    // Keyed on `block_fingerprint`: the reason minus the per-attempt record path,
-    // which is fresh on every run and would otherwise defeat the repeat ledger.
+    // Keyed on `block_fingerprint`: the reason minus the per-run record path,
+    // retention-failure text (`<why>`) and per-check duration (`<secs>`), which
+    // vary on every run and would otherwise defeat the repeat ledger.
     harness_core::repeat::emit_stop_block_keyed(
         "donegate",
         &reason,
@@ -581,6 +550,67 @@ fn gate_run(hook: Option<HookInput>) -> ! {
     );
     harness_core::hook_latency::record("donegate", &session, __start.elapsed().as_millis() as u64);
     std::process::exit(0);
+}
+
+/// The still-red-check guidance appended to every non-blocking message that
+/// leaves a red check standing (give-up and identical-finding waiver).
+fn red_guidance(failing: &[String]) -> String {
+    format!(
+        "Still RED: {}. Order of response: (1) a red check can be treated as a problem, so it \
+         is testable: write a failing test that pins it; if that test has no contradiction with \
+         the requirement, fix until it passes and the red is resolved. (2) If writing the test \
+         exposes a contradiction (check vs spec, test vs intent, two requirements), the problem \
+         is misframed: fix the premise (spec, check or test expectation) first and do not keep \
+         retrying the implementation. (3) Only if no alternative response exists does this \
+         give-up stand; then report the red check output verbatim.",
+        failing.join(", ")
+    )
+}
+
+/// systemMessage text for the bounded give-up after `max` blocks.
+fn giveup_message(failing: &[String], max: u32) -> String {
+    format!(
+        "donegate gave up after {max} consecutive blocks and is ALLOWING the stop; the check(s) \
+         are NOT green. {}",
+        red_guidance(failing)
+    )
+}
+
+/// systemMessage text for a stop whose tree and failing output are unchanged
+/// since the previous block.
+fn repeat_message(failing: &[String]) -> String {
+    format!(
+        "donegate did not block again: the tree and the failing output of {} are identical to \
+         the previous block, so NOTHING NEW WAS VERIFIED. The check(s) are still RED. {}",
+        failing.join(", "),
+        red_guidance(failing)
+    )
+}
+
+/// Signature of a red verdict for the identical-finding waiver. `None` (tree
+/// fingerprint undeterminable) means "cannot show it is a repeat" -> block.
+fn red_signature(root: &Path, report: &gate::GateReport) -> Option<String> {
+    let tree = state::tree_fingerprint(root)?;
+    let checks: Vec<(String, Option<i32>, String)> = report
+        .blocking()
+        .iter()
+        .map(|o| (o.name.clone(), o.exit_code, o.output_tail.clone()))
+        .collect();
+    Some(state::signature(root, &tree, &checks))
+}
+
+/// Print the collected non-blocking messages as one Stop-hook `systemMessage`
+/// (no `decision`), or to stderr in interactive mode. Nothing collected: nothing.
+fn emit_notices(notices: &[String], interactive: bool) {
+    if notices.is_empty() {
+        return;
+    }
+    let msg = notices.join("\n\n");
+    if interactive {
+        eprintln!("{msg}");
+    } else {
+        println!("{}", json!({ "systemMessage": msg }));
+    }
 }
 
 /// Emit a blocking verdict and exit: hook mode prints the Stop `decision:block`
@@ -717,8 +747,9 @@ fn refusal_reason(d: &config::Declaration, attempt: u32, max: u32) -> String {
              list, so donegate will not run them. That is a refusal to judge, NOT a pass: donegate \
              cannot tell you whether this project's own checks are green.\n\n\
              Remedy — run once, in this project root:\n    donegate trust\n\n\
-             If this root is a git worktree, trusting its MAIN working tree is enough; worktrees \
-             inherit that trust.",
+             If this root is a git worktree, run `donegate trust` in the worktree itself (trust \
+             is not inherited from the main working tree), or create the worktree through the \
+             session init, which registers it.",
             project_path.display()
         ),
         config::Declaration::Unreadable { path, why } => format!(
@@ -806,6 +837,9 @@ fn refuse(
     }
 
     let attempt = state::bump(&cfg.state_dir, session, cfg.reset_after_secs);
+    // A refusal block is a different finding from any remembered red verdict:
+    // drop the chain id so no earlier signature can waive the next stop.
+    state::end_chain(&cfg.state_dir, session);
     if attempt > cfg.max_attempts {
         state::reset(&cfg.state_dir, session);
         harness_core::gate::run::concede(&cfg.state_dir, session);
@@ -968,10 +1002,6 @@ fn status() {
     }
     match harness_core::trust::resolve(&root) {
         harness_core::trust::Trust::Direct => println!("trust:         trusted (explicit)"),
-        harness_core::trust::Trust::InheritedFromMainWorktree(main) => println!(
-            "trust:         trusted (inherited — this is a worktree of {})",
-            main.display()
-        ),
         harness_core::trust::Trust::Untrusted => println!("trust:         UNTRUSTED"),
     }
     println!("enabled:       {}", cfg.enabled);
@@ -1066,7 +1096,7 @@ const HEADER: &str = r#"# donegate.toml — completion gate for Claude Code.
 #
 # Global:
 enabled = true
-max_attempts = 3          # give up (allow stop) after N consecutive blocks
+max_attempts = 2          # give up (allow stop) after N consecutive blocks
 default_timeout_secs = 300
 output_tail_lines = 40    # raw lines shown only if a failing check's record can't be saved
 reset_after_secs = 600    # attempt counter resets after this idle gap

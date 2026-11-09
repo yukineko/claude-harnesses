@@ -124,9 +124,15 @@ class _Fixture(unittest.TestCase):
                          interactive=interactive)
 
     def stop(self, sid: str = SID, cwd: str | None = None, active: bool = False):
+        # Default cwd is MAIN (was the worktree). RE-SCOPED by user ruling
+        # 2026-11-08 ("donegateそのものが他のworktreeを見たり検証したりテストしたり
+        # することは禁止とする。..."): the deny ledger's main targets are
+        # re-snapshotted at Stop only when the session's own tree is main —
+        # which is where edit() runs (cwd main). From a worktree cwd nothing in
+        # main is inspected (pinned in test_gate_own_tree_only.py B5).
         payload = {"hook_event_name": "Stop", "session_id": sid,
-                   "cwd": cwd or self.wt, "stop_hook_active": active}
-        return self.run_hook(STOP, payload, cwd=cwd or self.wt)
+                   "cwd": cwd or self.main, "stop_hook_active": active}
+        return self.run_hook(STOP, payload, cwd=cwd or self.main)
 
     def clear(self, sid: str = SID):
         payload = {"hook_event_name": "UserPromptSubmit", "session_id": sid,
@@ -562,17 +568,20 @@ class LedgerFallbackAndBounds(_Fixture):
         self.assertNotIn("\n", e["reason"])
 
     # RESIDUAL kept on purpose: a vanished root blocks Stop until clear.
-    def test_deny_whose_root_vanished_blocks_stop_until_clear(self):
+    def test_deny_whose_root_vanished_is_not_inspected_from_outside_it(self):
+        """RE-SCOPED by user ruling 2026-11-08 ("donegateそのものが他のworktreeを
+        見たり検証したりテストしたりすることは禁止とする。..."): a deny is
+        re-snapshotted only when the Stop cwd is in the deny's own root. A
+        vanished root can never be the session's cwd tree, so it is no longer
+        inspected (formerly: blocked as undetermined until cleared). Proves the
+        ledger is still readable (the deny is there); does NOT prove anything
+        about a cwd inside the recorded root."""
         self.deny_main()
         shutil.rmtree(self.main)
+        ledger = os.path.join(self.home, ".claude", "state", "maintree-deny", SID + ".jsonl")
+        self.assertTrue(os.path.exists(ledger), "anti-vacuity: the deny is in the ledger")
         r = self.stop(cwd=self.tmp)
-        self.assertEqual(r.returncode, 2, r.stderr)
-        self.assertIn("cannot be read now", r.stderr)
-        r = self.run_hook(CLEAR, {"hook_event_name": "UserPromptSubmit",
-                                  "session_id": SID, "cwd": self.tmp,
-                                  "prompt": "next"}, cwd=self.tmp)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self.stop(cwd=self.tmp).returncode, 0)
 
 
 if __name__ == "__main__":

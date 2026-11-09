@@ -31,6 +31,10 @@ allowing it unanalysed. Re-run with a simpler command, or report this.";
 
 /// Classify a deny `reason` string into a stable rule id.
 pub fn rule_id(reason: &str) -> &'static str {
+    // A system-harm Deny is its rule's reason plus `SYSTEM_HARM_MARK`; the id
+    // is the rule's (the exact-match arms below compare the unmarked reason).
+    let marked = format!(" {}", crate::model::SYSTEM_HARM_MARK);
+    let reason = reason.strip_suffix(marked.as_str()).unwrap_or(reason);
     // Entry boundary: the call was blastguard's to judge and its operand could
     // not be read. Its own id, and FIRST, because a recurring one means
     // something no other signature can say: blastguard's idea of the payload
@@ -197,6 +201,26 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("rm with a wildcard can delete many files at once") {
         return "rm-wildcard";
     }
+    // fb338793: a single named file in a system directory (`rm /etc/passwd`).
+    if reason.contains("this rm deletes from a system directory") {
+        return "rm-system-file";
+    }
+    // 3c750df2: unlink/rmdir/mv/sed -i/perl -i/chmod/chown/rsync --delete on a
+    // system file (`detect::system_paths`).
+    if reason.contains(", which is inside a system directory — removing, renaming") {
+        return "system-file-mutation";
+    }
+    if reason.contains("whose path depends on an expansion blastguard cannot resolve") {
+        return "system-file-mutation-unresolved";
+    }
+    // 0fefcd3b: osascript telling Finder / System Events to delete.
+    if reason.contains("`osascript` tells ") {
+        return "osascript-app-delete";
+    }
+    // fb338793: an exec-capable git shape (ban ruling 2026-11-07).
+    if reason.contains("Every git shape blastguard recognises as running a command") {
+        return "git-exec-capable";
+    }
 
     // Bash: git.
     if reason.contains("git clean -f with -d/-x deletes untracked files") {
@@ -229,18 +253,26 @@ pub fn rule_id(reason: &str) -> &'static str {
     if reason.contains("git switch --force/--discard-changes") {
         return "git-switch-force";
     }
-    // `git stash clear/drop`. Round 1 added the rule and did NOT add this arm,
+    // `git stash clear`. Round 1 added the rule and did NOT add this arm,
     // so every stash-discard deny had been landing in the violation store as
     // "unknown" — the completeness obligation stated in the test below is real.
-    if reason.contains("git stash clear/drop irreversibly deletes stashed changes") {
+    // `git stash drop` left this rule by user ruling 2026-11-08 ("drop のみ
+    // Allow"); the id is kept for `clear`.
+    if reason.contains("git stash clear irreversibly deletes every stash entry") {
         return "git-stash-discard";
     }
     // Round 2: `git stash -u`/`-a`, which sweeps untracked files out of the
     // working tree. Its own id, not `git-stash-discard`: this one destroys
     // UNTRACKED work (git has no copy), which is the `git clean` hazard, while
-    // clear/drop destroys already-stashed work.
+    // clear destroys already-stashed work.
     if reason.contains("git stash -u/-a removes untracked") {
         return "git-stash-untracked";
+    }
+    // Backlog e9325654: whole-tree staging (`git add -A`/`.`, `git commit -a`).
+    // ONE id for the provable sweep and the cannot-determine Ask: both
+    // wordings in `detect::git_stage` carry the phrase "whole-tree staging".
+    if reason.contains("whole-tree staging") {
+        return "git-whole-tree-stage";
     }
     if reason.contains("git config core.hooksPath repoints every git hook") {
         return "git-config-hookspath";
@@ -503,6 +535,10 @@ mod tests {
             ("Bash", json!({ "command": "git switch -f main" })),
             ("Bash", json!({ "command": "git stash clear" })),
             ("Bash", json!({ "command": "git stash -a" })),
+            // Backlog e9325654: whole-tree staging, provable and undeterminable.
+            ("Bash", json!({ "command": "git add -A" })),
+            ("Bash", json!({ "command": "git commit -am wip" })),
+            ("Bash", json!({ "command": "git add $FILES" })),
             // The `..` bypass: same protected-path class, reached through a
             // spelling that used to defeat the match entirely.
             (

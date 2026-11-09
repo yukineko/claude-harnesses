@@ -155,6 +155,7 @@ impl Fixture {
             // affirmatively-interactive entrypoint every `Ask` hardens to a
             // `Deny` and the memo's own effect would be invisible.
             .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+            .env("CLAUDECODE", "1")
             .env_remove("BLASTGUARD_ASK")
             .env_remove("TMPDIR")
             // Hold the OTHER downgrade mechanism constant. Since 2026-09-18 a

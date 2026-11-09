@@ -14,12 +14,21 @@ use harness_core::verdict::Determination;
 use crate::config::Config;
 use crate::lock;
 
+mod dirty_tracked;
+mod lint_gate;
+mod merge_gate;
+pub use dirty_tracked::refuse_uncommitted_task_worktree;
+use merge_gate::{ensure_base_on_default_branch, ensure_commits_carry_task_trailer};
+
 /// Every `git` subprocess spawned by this module is bounded by this timeout.
 /// worktree lifecycle ops (add/remove/merge/status) are expected to be local
 /// and fast, but a hung `git` (lock contention, a stuck credential helper
 /// prompt, a network-mounted repo, corrupted pack, etc.) must not block a
 /// condukt run indefinitely. 45s is generous for any of the local ops this
-/// module performs while still bounding worst-case hangs.
+/// module performs while still bounding worst-case hangs. A killed `git merge`
+/// can leave the tree half-applied or a stale `index.lock`; only [`merge`]'s
+/// final merge rolls back ([`recover_timed_out_merge`]), not the store-diff or
+/// `-X theirs` paths (RED: `tests/backlog_merge_timeout_other_paths_20261108.rs`).
 const GIT_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Output captured from a (possibly timed-out) git invocation.
@@ -847,6 +856,22 @@ fn task_identity_key(branch: &str) -> String {
     format!("branch.{branch}.conduktTask")
 }
 
+/// The `<run>/<task>` identity recorded for `branch` by [`record_task_identity`].
+/// `Ok(None)` = git answered "no such key" (exit 1); any other non-zero exit is
+/// an `Err` (could not read is not "unrecorded").
+pub(crate) fn recorded_task_identity(repo: &Path, branch: &str) -> Result<Option<String>> {
+    let key = task_identity_key(branch);
+    let (ok, stdout, stderr) = git_try(repo, &["config", "--local", "--get", &key])?;
+    if ok {
+        let v = stdout.trim();
+        return Ok((!v.is_empty()).then(|| v.to_string()));
+    }
+    match git_exit_code(repo, &["config", "--local", "--get", &key])? {
+        1 => Ok(None),
+        code => bail!("git config --get {key} exited {code}: {}", stderr.trim()),
+    }
+}
+
 /// The commit trailer key every task-branch commit must carry.
 pub const TASK_TRAILER: &str = "Condukt-Task";
 
@@ -868,186 +893,6 @@ fn record_task_identity(repo: &Path, branch: &str, identity: &str) -> Result<()>
         );
     }
     Ok(())
-}
-
-/// Refuse to integrate `branch` unless EVERY commit the merge would newly land
-/// on `default_branch` (`<base>..<tip>` minus what `default_branch` already
-/// has) carries a `Condukt-Task: <run>/<task>` trailer naming this task, and
-/// only that task.
-///
-/// Parallel sessions share one git identity, so authorship cannot tell a
-/// task's own commits from a foreign session's commit made on the same branch;
-/// the trailer is the only per-task mark. The expected identity is the
-/// `conduktTask` record written at create time; a caller-supplied
-/// `--run/--task` must agree with it, and stands in for it only when no
-/// record exists. Every non-determination refuses: no identity, a half-given
-/// `--run/--task`, a disagreeing pair, an unreadable log, a malformed record.
-///
-/// Merge commits are not exempt. condukt itself never commits on a task
-/// branch — [`merge`] and [`resolve_merge`] create their merge commit on
-/// `default_branch` — so any merge commit in the range was made by someone in
-/// the worktree (e.g. `git merge main` to resolve a conflict) and must carry
-/// the trailer like any other commit. Commits merged in from `default_branch`
-/// are already on it and so are outside the range.
-///
-/// An empty range lands nothing, so there is nothing that could be foreign and
-/// the check passes; the returned tip is what the caller must merge (pinned,
-/// so a commit arriving after the check is not merged unchecked).
-fn ensure_commits_carry_task_trailer(
-    repo: &Path,
-    branch: &str,
-    default_branch: &str,
-    base: &str,
-    cli_task: Option<(&str, &str)>,
-) -> Result<String> {
-    let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
-    let key = task_identity_key(short);
-    // `--local`: only the repository's own record counts, never a value in
-    // the global/system gitconfig (backlog 50158d9d, twin of the base read).
-    let (found, value, err) = git_try(repo, &["config", "--local", "--get", &key])?;
-    let recorded = value.trim();
-    let recorded = (found && !recorded.is_empty()).then(|| recorded.to_string());
-    let cli = cli_task.map(|(r, t)| format!("{r}/{t}"));
-    let identity = match (recorded, cli) {
-        (Some(rec), Some(cli)) if rec != cli => bail!(
-            "merge-task-mismatch: '{branch}' is recorded as task '{rec}' ({key}) but the \
-             merge was asked for task '{cli}'; refusing to merge ('{default_branch}' untouched)"
-        ),
-        (Some(rec), _) => rec,
-        (None, Some(cli)) => cli,
-        (None, None) => bail!(
-            "merge-task-undetermined: '{branch}' has no recorded task identity ({key}{}) and \
-             no --run/--task was given; cannot tell which commits belong to the task, \
-             refusing to merge ('{default_branch}' untouched)",
-            if err.trim().is_empty() {
-                String::new()
-            } else {
-                format!(": {}", err.trim())
-            }
-        ),
-    };
-
-    let tip = git(
-        repo,
-        &["rev-parse", "--verify", &format!("{branch}^{{commit}}")],
-    )
-    .with_context(|| format!("could not resolve '{branch}' to a commit"))?
-    .trim()
-    .to_string();
-    let fmt = format!(
-        "--format=%H%x1f%(trailers:key={TASK_TRAILER},valueonly,unfold,separator=%x1f)%x1e"
-    );
-    let log =
-        git(repo, &["log", &fmt, &tip, "--not", base, default_branch]).with_context(|| {
-            format!(
-                "merge-task-undetermined: could not list the commits of '{branch}' not on \
-             '{default_branch}'; refusing to merge ('{default_branch}' untouched)"
-            )
-        })?;
-    let mut offending = Vec::new();
-    for rec in log.split('\x1e') {
-        let rec = rec.trim_matches(|c| c == '\n' || c == '\r');
-        if rec.is_empty() {
-            continue;
-        }
-        let mut fields = rec.split('\x1f');
-        let sha = fields.next().unwrap_or("").trim();
-        if sha.len() != 40 || !sha.bytes().all(|b| b.is_ascii_hexdigit()) {
-            bail!(
-                "merge-task-undetermined: unparseable `git log` record {rec:?} for '{branch}'; \
-                 refusing to merge ('{default_branch}' untouched)"
-            );
-        }
-        let values: Vec<&str> = fields.map(str::trim).filter(|v| !v.is_empty()).collect();
-        if values.is_empty() || values.iter().any(|v| *v != identity) {
-            let got = if values.is_empty() {
-                "no trailer".to_string()
-            } else {
-                values.join(", ")
-            };
-            offending.push(format!("{sha} ({got})"));
-        }
-    }
-    if !offending.is_empty() {
-        bail!(
-            "merge-task-trailer-missing: {} commit(s) on '{branch}' do not carry \
-             `{TASK_TRAILER}: {identity}` and may not belong to this task (a parallel session \
-             shares the git identity); refusing to merge ('{default_branch}' untouched):\n  {}",
-            offending.len(),
-            offending.join("\n  ")
-        );
-    }
-    Ok(tip)
-}
-
-/// Refuse to integrate `branch` into `default_branch` unless the branch's
-/// recorded creation base is already an ancestor of `default_branch`
-/// (backlog 51595c41). Returns the verified base.
-///
-/// `create` cuts the task branch from whatever HEAD the primary tree is on;
-/// `merge` always integrates into `default_branch`. A run started on a feature
-/// branch would therefore carry the feature's whole unreviewed history into
-/// `default_branch` with nothing saying so. Every non-determination — no record
-/// (e.g. a branch cut by an older binary or by hand), an unreadable config, a
-/// record that does not name a commit, a failed ancestry probe — refuses too:
-/// "could not tell" is not "the base is on the default branch".
-fn ensure_base_on_default_branch(
-    repo: &Path,
-    branch: &str,
-    default_branch: &str,
-) -> Result<String> {
-    const HOW: &str = "condukt integrates a task branch only into the default branch and only \
-         when the branch was cut from it; review `git log <default>..<branch>` and merge by \
-         hand if that history is meant to land, or re-run the task from the default branch";
-    let short = branch.strip_prefix("refs/heads/").unwrap_or(branch);
-    let key = creation_base_key(short);
-    // `--local` (backlog 50158d9d): the record is what `worktree create`
-    // wrote into the repository's config. A `conduktBase` in the user's
-    // global or system gitconfig is not that record and must not be honoured.
-    let (found, value, err) = git_try(repo, &["config", "--local", "--get", &key])?;
-    let base = value.trim();
-    if !found || base.is_empty() {
-        bail!(
-            "merge-base-unrecorded: '{branch}' has no recorded creation base ({key}{}); \
-             cannot determine whether it was cut from '{default_branch}', refusing to merge \
-             ('{default_branch}' untouched). {HOW}",
-            if err.trim().is_empty() {
-                String::new()
-            } else {
-                format!(": {}", err.trim())
-            }
-        );
-    }
-    let (resolves, _, _) = git_try(
-        repo,
-        &[
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("{base}^{{commit}}"),
-        ],
-    )?;
-    if !resolves {
-        bail!(
-            "merge-base-unrecorded: the recorded creation base of '{branch}' ({key} = {base}) \
-             does not resolve to a commit; refusing to merge ('{default_branch}' untouched). {HOW}"
-        );
-    }
-    // `--is-ancestor` exits 0 for yes, 1 for no; any other code (or a timeout,
-    // surfaced as `Err` by `?`) is undetermined and refuses as well.
-    match git_exit_code(repo, &["merge-base", "--is-ancestor", base, default_branch])? {
-        0 => Ok(base.to_string()),
-        1 => bail!(
-            "merge-base-not-on-default-branch: '{branch}' was cut from {base}, which is not \
-             on '{default_branch}'; merging it would carry that commit's history into \
-             '{default_branch}' silently, refusing ('{default_branch}' untouched). {HOW}"
-        ),
-        code => bail!(
-            "merge-base-undetermined: `git merge-base --is-ancestor {base} {default_branch}` \
-             exited {code}; cannot determine whether '{branch}' was cut from \
-             '{default_branch}', refusing to merge ('{default_branch}' untouched). {HOW}"
-        ),
-    }
 }
 
 /// Run a git command without bailing on non-zero exit; return (success, stdout, stderr).
@@ -1126,27 +971,26 @@ pub enum MergeOutcome {
 /// Staying inside condukt's own id space is the whole point.
 ///
 /// **Fail CLOSED on ambiguity.** The hold keeps blocking unless we have POSITIVE
-/// evidence its placer run is dead: only a CLEAN registry read that finds no
-/// fresh claim ([`crate::claim::RunLiveness::Dead`]) drops it. `Live` obviously
-/// keeps it, and `Undetermined` — a present-but-unreadable/corrupt registry, or
-/// an UNATTRIBUTED hold (empty `run_id`, no placer to test) — ALSO keeps it.
-/// Letting the merge proceed on "could not determine liveness" is precisely the
-/// silent fail-open this gate exists to prevent (the reverted disjoint-id bug's
-/// failure class — an empty read making every hold look dead — re-entering via
-/// registry absence instead of id mismatch).
+/// evidence its placer run is dead ([`crate::claim::RunLiveness::Dead`]): a
+/// CLEAN registry read that finds no fresh claim AND a run-state file for
+/// `run_id` that is genuinely absent or has every task terminal
+/// (verified/cancelled/discarded). `Live` obviously keeps it, and
+/// `Undetermined` — a present-but-unreadable/corrupt registry or run-state
+/// file, or an UNATTRIBUTED hold (empty `run_id`, no placer to test) — ALSO
+/// keeps it. Letting the merge proceed on "could not determine liveness" is
+/// precisely the silent fail-open this gate exists to prevent (the reverted
+/// disjoint-id bug's failure class — an empty read making every hold look dead
+/// — re-entering via registry absence instead of id mismatch).
 ///
-/// **Known residual (tracked, not a cannot-determine fail-open).** Liveness is
-/// keyed purely on the claim registry, so a run that placed a hold but holds NO
-/// claim under `run_id` — e.g. a task whose decomposition `touched_files` was
-/// empty (claims key off declared `touched_files`, while the hold is placed off
-/// the actual git diff), or a run that already released its claims at the
-/// `verified` transition while an open hold lingers — reads as `Dead` and its
-/// hold drops. This is a positive-evidence heuristic (a CLEAN read finding no
-/// live claim), the SAME basis the reaper uses — categorically different from the
-/// `Undetermined` fail-closed path above. The proper closure is a second
-/// positive signal (is `run_id` a currently-active, non-terminal run in
-/// `state::RunState`?); tracked as a backlog follow-up rather than coupling
-/// run-state into this gate under the current fix.
+/// **Zero claims is not death (backlog 4fa94cba).** A live run can hold NO
+/// claim (claims passed over by the cross-session claim gate, empty declared
+/// `touched_files`, or released at `verified` while another task stays open);
+/// its state file still has a non-terminal task, so
+/// [`crate::claim::run_liveness`] reads it `Live` and the hold keeps blocking.
+/// Deliberate consequence (fail-closed): a run that crashed with non-terminal
+/// tasks keeps its holds blocking until the hold is resolved or its tasks are
+/// made terminal (e.g. `state cancel`); only a run whose state is gone or fully
+/// terminal AND whose claims aged out lets a stale hold drop for a reused branch.
 fn hold_placed_by_live_run(cfg: &Config, repo: &Path, run_id: &str, now: i64) -> bool {
     match crate::claim::run_liveness(cfg, repo, run_id, now) {
         crate::claim::RunLiveness::Dead => false,
@@ -1283,6 +1127,9 @@ fn abort_state_phrase(r: &std::result::Result<(), String>) -> String {
 ///    cannot be written the trial is still aborted but `merge` returns `Err`
 ///    (nothing is on the review surface, so `Conflict` would be a false claim).
 /// 3. **Clean**: abort the trial and perform the real merge → [`MergeOutcome::Merged`].
+///    A timed-out real merge is rolled back ([`recover_timed_out_merge`]) and
+///    is an `Err` saying "timed out" plus whether the rollback succeeded (else
+///    the manual recovery). See [`GIT_TIMEOUT`] for paths not yet covered.
 pub fn merge(
     cfg: &Config,
     repo: &Path,
@@ -1344,6 +1191,9 @@ pub fn merge(
     // exactly it, so a commit added to the branch after this check is not
     // carried along unchecked.
     let tip = ensure_commits_carry_task_trailer(repo, branch, default_branch, &base, cli_task)?;
+
+    // The pinned tip must be fmt/clippy clean (backlog 0a68823d); pre-checkout.
+    lint_gate::ensure_tip_lint_clean(repo, branch, default_branch, &base, &tip)?;
 
     // ── Pre-merge hold gate (decision A) ─────────────────────────────────────
     // A detected mid-flight actual-diff overlap HOLDS this branch for review.
@@ -1471,19 +1321,94 @@ pub fn merge(
         finalize_landed_branch(repo, branch);
         return Ok(MergeOutcome::Merged);
     }
-    git(
-        repo,
-        &[
-            "merge",
-            "--no-edit",
-            "-m",
-            &format!("Merge branch '{short}'"),
-            &tip,
-        ],
-    )
-    .with_context(|| format!("merge of {branch} into {default_branch} failed"))?;
+    let head_before = git(repo, &["rev-parse", "--verify", "HEAD"])
+        .with_context(|| format!("could not read {default_branch}'s HEAD before the merge"))?;
+    let merge_msg = format!("Merge branch '{short}'");
+    let merge_args = ["merge", "--no-edit", "-m", &merge_msg, &tip];
+    let out = run_git_bounded(repo, &merge_args)
+        .with_context(|| format!("merge of {branch} into {default_branch} failed"))?;
+    if out.timed_out {
+        // Backlog 8ada7ad9: the killed merge may have staged its result (no
+        // MERGE_HEAD) for the next commit to land silently. Roll back, report;
+        // nothing landed, so no `finalize_landed_branch`.
+        let (r, t) = (repo.display(), GIT_TIMEOUT);
+        let timed_out = format!("git {merge_args:?} in {r} timed out after {t:?} and was killed");
+        match recover_timed_out_merge(repo, &head_before) {
+            Ok(how) => bail!(
+                "merge of {branch} into {default_branch} failed: {timed_out}. The \
+                 half-applied merge was rolled back with `{how}` (index clean, HEAD unchanged \
+                 at {head_before}); the merge was NOT performed and can be retried."
+            ),
+            Err(d) => bail!(
+                "merge of {branch} into {default_branch} failed: {timed_out}. {default_branch} \
+                 in {} may be left HALF-APPLIED (the merge result staged without a merge \
+                 commit) and the automatic rollback FAILED: {d}. Do NOT commit in that tree; \
+                 recover manually there with `git merge --abort` if .git/MERGE_HEAD exists, \
+                 else `git reset --merge`, then confirm `git diff --cached --quiet` and that \
+                 HEAD is {head_before}.",
+                repo.display()
+            ),
+        }
+    }
+    git_output_to_result(out, repo, &merge_args, GIT_TIMEOUT)
+        .with_context(|| format!("merge of {branch} into {default_branch} failed"))?;
     finalize_landed_branch(repo, branch);
     Ok(MergeOutcome::Merged)
+}
+
+/// Roll back a `git merge` in `repo` killed on timeout (backlog 8ada7ad9), each
+/// step bounded by [`GIT_TIMEOUT`]: `git merge --abort` if MERGE_HEAD exists,
+/// else `git reset --merge` (the 2026-11-07 repro left the result staged with
+/// NO MERGE_HEAD). `Ok(cmd)` only after the rollback is VERIFIED (HEAD ==
+/// `head_before`, nothing staged, no MERGE_HEAD); anything else, including an
+/// unreadable probe, is `Err(detail)`. A present `index.lock` is NOT removed
+/// (condukt cannot prove it is the killed git's, not a live git's): `Err`.
+fn recover_timed_out_merge(repo: &Path, head_before: &str) -> std::result::Result<String, String> {
+    // Exit 0 → true, exit 1 → false; any other outcome is undetermined → Err.
+    let probe = |what: &str, args: &[&str]| match git_exit_code(repo, args) {
+        Ok(0) => Ok(true),
+        Ok(1) => Ok(false),
+        Ok(c) => Err(format!("{what} probe exited {c}")),
+        Err(e) => Err(format!("{what} probe failed: {e:#}")),
+    };
+    let merge_head = ["rev-parse", "-q", "--verify", "MERGE_HEAD"];
+    let git_dir = git(repo, &["rev-parse", "--absolute-git-dir"])
+        .map_err(|e| format!("could not locate the git dir: {e:#}"))?;
+    let lock = Path::new(&git_dir).join("index.lock");
+    let locked = lock.try_exists();
+    if !matches!(locked, Ok(false)) {
+        return Err(format!(
+            "{} is present or unreadable ({locked:?}; the killed git's or a live git's, so condukt \
+             did NOT remove it or touch the index; remove it once no git process runs there)",
+            lock.display()
+        ));
+    }
+    let cmd: &[&str] = if probe("MERGE_HEAD", &merge_head)? {
+        &["merge", "--abort"]
+    } else {
+        &["reset", "--merge"]
+    };
+    let shown = format!("git {}", cmd.join(" "));
+    match git_try(repo, cmd) {
+        Ok((true, _, _)) => {}
+        Ok((false, o, e)) => return Err(format!("`{shown}` failed: {} {}", o.trim(), e.trim())),
+        Err(e) => return Err(format!("`{shown}` failed: {e:#}")),
+    }
+    let after = |e: String| format!("after `{shown}`, {e}");
+    let head_after = git(repo, &["rev-parse", "--verify", "HEAD"])
+        .map_err(|e| after(format!("could not read HEAD: {e:#}")))?;
+    if head_after != head_before {
+        return Err(after(format!(
+            "HEAD is {head_after}, not {head_before} (committed before the kill?)"
+        )));
+    }
+    if !probe("staged-changes", &["diff", "--cached", "--quiet"]).map_err(after)? {
+        return Err(after("changes are still staged".to_string()));
+    }
+    if probe("MERGE_HEAD", &merge_head).map_err(after)? {
+        return Err(after("MERGE_HEAD is still present".to_string()));
+    }
+    Ok(shown)
 }
 
 /// A source worktree's uncommitted `.backlog/` store diff, captured as a
@@ -1756,6 +1681,10 @@ pub fn resolve_merge(cfg: &Config, repo: &Path, conflict_id: &str) -> Result<Res
     // the strategies below merge the verified `tip`, not the branch name.
     let base = ensure_base_on_default_branch(repo, branch, default_branch)?;
     let tip = ensure_commits_carry_task_trailer(repo, branch, default_branch, &base, None)?;
+    if !matches!(resolution.choice, ResolveChoice::Ours) {
+        // Twin of `merge`'s lint gate; `ours` lands nothing of the tip.
+        lint_gate::ensure_tip_lint_clean(repo, branch, default_branch, &base, &tip)?;
+    }
 
     git(repo, &["checkout", default_branch])
         .with_context(|| format!("could not checkout {default_branch} before resolve-merge"))?;
@@ -2129,6 +2058,77 @@ mod worktree_remove_tests {
         );
     }
 
+    /// Backlog 8ada7ad9: the observed timed-out state (result staged, no
+    /// MERGE_HEAD). With an `index.lock` present the rollback refuses from its
+    /// own pre-check (not git's "File exists") and touches nothing; without
+    /// it, `git reset --merge` rolls back and is verified.
+    #[test]
+    fn recover_timed_out_merge_refuses_a_lock_then_resets_a_staged_half_merge() {
+        let (_tmp, repo) = init_repo();
+        let head = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        fs::write(repo.join("incoming.txt"), "incoming\n").unwrap();
+        git(&repo, &["add", "incoming.txt"]).unwrap();
+        let (lock, staged) = (
+            repo.join(".git/index.lock"),
+            ["diff", "--cached", "--name-only"],
+        );
+        fs::write(&lock, "").unwrap();
+        let err = recover_timed_out_merge(&repo, &head).expect_err("must refuse");
+        assert!(
+            err.contains("index.lock") && err.contains("did NOT remove it"),
+            "{err}"
+        );
+        assert!(lock.exists(), "the lock must NOT be removed");
+        fs::remove_file(&lock).unwrap();
+        assert_eq!(
+            git(&repo, &staged).unwrap(),
+            "incoming.txt",
+            "index untouched"
+        );
+
+        let how = recover_timed_out_merge(&repo, &head).expect("rollback must succeed");
+        assert_eq!(how, "git reset --merge");
+        assert_eq!(git(&repo, &staged).unwrap(), "");
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]).unwrap(), head);
+        assert!(
+            !repo.join("incoming.txt").exists(),
+            "incoming file must be gone"
+        );
+    }
+
+    /// With a MERGE_HEAD the rollback is `git merge --abort`; a HEAD that moved
+    /// (the merge committed before the kill) is not a successful rollback.
+    #[test]
+    fn recover_timed_out_merge_aborts_on_merge_head_and_fails_when_head_moved() {
+        let (_tmp, repo) = init_repo();
+        let commit = |b: &str, f: &str| {
+            git(&repo, &["checkout", "-q", "-B", b]).unwrap();
+            fs::write(repo.join(f), "x\n").unwrap();
+            git(&repo, &["add", f]).unwrap();
+            git(&repo, &["commit", "-m", f]).unwrap();
+        };
+        commit("side", "side.txt");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let before = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        commit("main", "main.txt");
+        let head = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        git(&repo, &["merge", "--no-commit", "--no-ff", "side"]).unwrap();
+        assert!(repo.join(".git/MERGE_HEAD").exists());
+        let how = recover_timed_out_merge(&repo, &head).expect("rollback must succeed");
+        assert_eq!(how, "git merge --abort");
+        assert!(!repo.join(".git/MERGE_HEAD").exists());
+        assert_eq!(
+            git(&repo, &["diff", "--cached", "--name-only"]).unwrap(),
+            ""
+        );
+
+        let err = recover_timed_out_merge(&repo, &before).expect_err("HEAD moved");
+        assert!(
+            err.contains("HEAD is"),
+            "error must name the moved HEAD: {err}"
+        );
+    }
+
     /// Build a repo with a guaranteed 3-way conflict on `shared.txt` between
     /// `conflict-branch` ("branch version") and `main` ("main version"), and
     /// record a `MergeConflictEntry` for it (origin MergeConflict). Returns
@@ -2473,9 +2473,9 @@ mod worktree_remove_tests {
     }
 
     /// DEAD holder by ABSENCE (e117d351): an OPEN `RuntimeOverlap` hold whose
-    /// holder run holds NO claim in condukt's registry (a fully
-    /// abandoned/crashed run whose claims were released or never re-recorded)
-    /// must NOT block a task that REUSES the same `condukt/<task.id>` branch
+    /// holder run holds NO claim in condukt's registry AND has no run-state file
+    /// (a fully gone run whose claims were released or never re-recorded) must
+    /// NOT block a task that REUSES the same `condukt/<task.id>` branch
     /// name. The stale hold is filtered by holder-run liveness, so `merge()`
     /// proceeds and returns `Merged`. RED without the liveness filter (the hold
     /// matches by branch name and the merge comes back `Held`); GREEN with it.

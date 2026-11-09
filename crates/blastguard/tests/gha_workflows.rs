@@ -90,6 +90,7 @@ impl Fx {
             .env("BLASTGUARD_APPROVALS_DIR", self.base.join("store"))
             .env("HOME", &self.home)
             .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+            .env("CLAUDECODE", "1")
             .env_remove("BLASTGUARD_ASK")
             .env_remove("CLAUDE_CODE_SESSION_ID")
             .env_remove("TMPDIR")
@@ -852,6 +853,7 @@ fn p_symlink_loop_write_is_answered_within_bound() {
         .env("BLASTGUARD_APPROVALS_DIR", f.base.join("store"))
         .env("HOME", &f.home)
         .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+        .env("CLAUDECODE", "1")
         .env_remove("BLASTGUARD_ASK")
         .env_remove("CLAUDE_CODE_SESSION_ID")
         .current_dir(&f.base);

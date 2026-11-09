@@ -72,7 +72,7 @@
 //! the records that belong to this session (same `session_id`) or that name the
 //! worktree the session is working in (the git top level of the hook's `cwd`).
 //! Records in backlog's own project buckets are `/flow` driver registrations
-//! that `autoflow`, `daily` and the main-tree guard read as "a driver is
+//! that `autoflow` and `daily` read as "a driver is
 //! active"; refreshing those from an ordinary tool call would keep a dead
 //! driver looking alive, so they are never written here.
 //!
@@ -94,7 +94,7 @@ use crate::wt_reconcile::{self, Attribution, Occupancy, Role};
 /// worktree registrations live in. Deliberately NOT a backlog project slug
 /// (those are 16 hex digits): `backlog lock status --project <repo>` reads the
 /// slug bucket of the repository, and a session registration there would make
-/// `autoflow` and the main-tree guard see every open session as a `/flow`
+/// `autoflow` see every open session as a `/flow`
 /// driver. `wt_reconcile::registrations_in` walks every bucket, so the reaper
 /// sees records here without knowing the name.
 ///
@@ -404,9 +404,30 @@ pub fn reap(cfg: &Config, cwd: &Path, repo: &Path) -> Result<ReapReport> {
                 // Collected BEFORE removal: afterwards the path no longer
                 // canonicalizes and could not be matched.
                 let records = own_bucket_records_naming(&j.path);
+                // Persist the worktree's tdd proofs (git-ignored, so
+                // `git worktree remove` deletes them) BEFORE removing it
+                // (backlog ea6547c9). A persist failure keeps the worktree.
+                let persisted =
+                    crate::proof_archive::persist_before_teardown(cfg, cwd, repo, &j.path, None);
+                // A note, not a warning: `warnings` make the reap exit
+                // non-zero, and a successful persist is not a failure.
+                if let Ok(p) = &persisted {
+                    if let Some(dir) = &p.dir {
+                        eprintln!(
+                            "condukt: persisted {} tdd proof file(s) of {path} to {}",
+                            p.files,
+                            dir.display()
+                        );
+                    }
+                }
                 // No `--force`: git re-checks cleanliness now and refuses a
                 // tree that became dirty after it was judged.
-                match crate::worktree::git(repo, &["worktree", "remove", &path]) {
+                let removed = match persisted {
+                    Err(e) => Err(format!("worktree kept: {e:#}")),
+                    Ok(_) => crate::worktree::git(repo, &["worktree", "remove", &path])
+                        .map_err(|e| format!("git worktree remove: {e:#}")),
+                };
+                match removed {
                     Ok(_) => {
                         for r in records {
                             if let Err(e) = std::fs::remove_file(&r) {
@@ -425,7 +446,7 @@ pub fn reap(cfg: &Config, cwd: &Path, repo: &Path) -> Result<ReapReport> {
                             .map(|b| delete_merged_branch(repo, b, &cfg.default_branch));
                         ReapOutcome::Removed
                     }
-                    Err(e) => ReapOutcome::Failed(format!("git worktree remove: {e:#}")),
+                    Err(why) => ReapOutcome::Failed(why),
                 }
             }
         };

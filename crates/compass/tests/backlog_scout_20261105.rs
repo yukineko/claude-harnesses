@@ -7,8 +7,9 @@
 //!    processes lose each other's recorded answers / trample the tmp file.
 //! 2. `outcome::record` assigns `seq = last().seq + 1`; a store whose last entry
 //!    has a lower seq than an earlier one yields a duplicate seq.
-//! 3. `opportunity::slug_id(title)` hashes the title only, so two bets with the
-//!    same title under different outcomes get the same id.
+//! 3. `opportunity::slug_id` used to hash the title only, so two bets with the
+//!    same title under different outcomes got the same id. Fixed (backlog
+//!    b0353884): it now hashes `(title, outcome_ref)`; the test is un-ignored.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -115,7 +116,6 @@ fn concurrent_carve_apply_loses_no_answers() {
 }
 
 #[test]
-#[ignore = "backlog: open defect (scout 2026-11-05) outcome seq = last+1 duplicates on non-monotonic store"]
 fn outcome_seq_is_unique_when_last_entry_has_lower_seq() {
     let fx = fixture();
     let store = fx.proj.join(".compass/outcomes.json");
@@ -153,7 +153,6 @@ fn outcome_seq_is_unique_when_last_entry_has_lower_seq() {
 }
 
 #[test]
-#[ignore = "backlog: open defect (scout 2026-11-05) opportunity id derived from title only"]
 fn same_title_under_different_outcomes_gets_distinct_ids_or_is_refused() {
     let fx = fixture();
     let add = |outcome: &str| {

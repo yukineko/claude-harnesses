@@ -17,7 +17,10 @@ i.e. it only applies when the WHOLE tree is clean. An untracked path that is
 identical at Pre and Post is not a change, yet it keeps `after["porcelain"]`
 non-empty, so the merge falls to the final `else: verdict = REFUSE`
 (guard-maintree-bash.py:399-400) without integration_head() ever being asked
-whether the new HEAD is a merge commit.
+whether the new HEAD is a merge commit. (Historical: integration_head() was
+replaced by integration_move(), which judges the HEAD move only from main's own
+branch reflog, user ruling 2026-11-08; the merges here are real `git merge`s,
+so the reflog evidence is present and the verdicts are unchanged.)
 
 Drives the guard exactly like the hook: stdin JSON payload (PreToolUse, then
 PostToolUse with the same tool_use_id and the real command text),

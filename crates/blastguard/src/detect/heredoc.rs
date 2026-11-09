@@ -1,6 +1,6 @@
 use super::{
     basename, git_subcommand_index, is_code_interpreter, is_shell, quote_aware_words,
-    split_segments_with_separators, strip_version_suffix, SeparatedSegment,
+    split_segments_with_separators, strip_version_suffix, SegmentSep, SeparatedSegment,
 };
 
 /// True when this segment opens a HERE-DOCUMENT (`<<WORD`, `<<-WORD`,
@@ -222,6 +222,82 @@ pub(super) fn segment_closes_here_document(seg: &str, opener: &HereDocOpener) ->
     line == opener.delimiter
 }
 
+/// The BODY of the here-document opened on the first line of `cmd` — the lines
+/// strictly between the opener line and its closing delimiter line — when, and
+/// only when, `stage` (one pipe stage of `cmd`) is the stage on that first line
+/// that opens it and the shape leaves no doubt about where the body ends.
+/// Otherwise `None`, and the caller keeps treating everything after the first
+/// newline as the program (the restrictive over-approximation).
+///
+/// Backlog aafeaa05: `payload::analyze_interpreter_stdin_exec` took
+/// "everything after the first newline" as the program of
+/// `python3 - <<'PY'`, so a quoted, non-redirect `>` in an ordinary shell
+/// command AFTER the `PY` terminator (`echo '>'`, `grep '^>' x`) was reported
+/// as "the program text contains a `>`" of that program (user ruling R2's
+/// Ask, a Deny in a subagent). The lines after the terminator are not the
+/// program: the shell stops feeding stdin at the delimiter line, and those
+/// lines are judged as ordinary shell by every other rule of `detect_bash`
+/// (a real redirect there, `echo x > .git/hooks/pre-commit`, is still denied
+/// by those rules — pinned by tests/quoted_heredoc_python_gt_fp_20261107.rs).
+///
+/// Restrictive on every doubt; `None` unless ALL of these hold:
+///   * `cmd` has no whitespace other than space, tab and newline (bash keeps a
+///     `\r` in the delimiter word, so a `PY` line would not close `<<'PY'\r`);
+///   * the first line has balanced quotes, does not end in `\` (a
+///     continuation), and contains exactly one `<<` — counted textually, not
+///     quote-aware, so a here-string `<<<` or a second opener also refuses;
+///   * that one opener has a non-empty, QUOTED delimiter. With an unquoted
+///     delimiter bash processes backslash-newline inside the body, so a
+///     delimiter-looking line need not close it;
+///   * `stage` contains `<<` and is a substring of the first line;
+///   * some later line is exactly the delimiter (leading tabs stripped for
+///     `<<-`), see [`segment_closes_here_document`];
+///   * the text after that closing line contains no `<<` at all (textually),
+///     so no later stage can open a second here-document whose body this
+///     narrowing would hide from a stage that merely looks the same.
+pub(super) fn first_line_quoted_here_document_body<'a>(
+    cmd: &'a str,
+    stage: &str,
+) -> Option<&'a str> {
+    if cmd
+        .chars()
+        .any(|c| c.is_whitespace() && !matches!(c, ' ' | '\t' | '\n'))
+    {
+        return None;
+    }
+    let (first, after_first) = cmd.split_once('\n')?;
+    if !quotes_balance(first) || first.ends_with('\\') || first.matches("<<").count() != 1 {
+        return None;
+    }
+    if !here_document_delimiter_is_quoted(first) {
+        return None;
+    }
+    let openers = here_document_openers(first);
+    let [opener] = openers.as_slice() else {
+        return None;
+    };
+    if opener.delimiter.is_empty() {
+        return None;
+    }
+    let stage = stage.trim();
+    if !stage.contains("<<") || !first.contains(stage) {
+        return None;
+    }
+    let mut offset = 0;
+    for line in after_first.split('\n') {
+        if segment_closes_here_document(line, opener) {
+            let rest = &after_first[offset + line.len()..];
+            if rest.contains("<<") {
+                return None;
+            }
+            // The body without the newline that precedes the closing line.
+            return Some(after_first[..offset].strip_suffix('\n').unwrap_or(""));
+        }
+        offset += line.len() + 1;
+    }
+    None
+}
+
 /// Which segments are here-document BODY (data the shell never executes), and
 /// whether any here-document is left OPEN at the end of the line.
 ///
@@ -263,6 +339,126 @@ pub(super) fn here_document_layout(segs: &[SeparatedSegment]) -> (Vec<bool>, Opt
         }
     }
     (is_body, opener_idx)
+}
+
+/// Per segment of [`split_segments_with_separators`]`(cmd)`: `Some(k)` when the
+/// segment lies wholly inside the body (closing delimiter line included) of the
+/// `k`-th CLOSED, QUOTED-delimiter here-document of the line, `None` when it is
+/// the line's own shell text. An empty vector means "no segment is body": the
+/// caller keeps ONE cwd walk over every segment, exactly as before this
+/// existed.
+///
+/// Backlog 547cf2f6: the cwd walk ([`segment_cwd_states`] and the per-segment
+/// loop of [`detect_bash`]) counted the `(`/`)` of such a body as subshell
+/// groups of the line, so one unbalanced `)` in a Rust body
+/// (`.filter(|p| !before.contains(p)) {` is fine, a lone `)` line is not)
+/// marked the line unbalanced, and the literal `cd /abs/wt` before the opener
+/// then made every later relative redirect "after a cd blastguard could not
+/// statically resolve". The bash manual: with a quoted delimiter the body is
+/// not expanded, and the body is the reader's stdin — the shell never parses
+/// it, so it holds no groups and runs no `cd` of the line. The caller walks
+/// each body on its own (it is still judged as code, as if it ran) and the
+/// line past it resumes from the cwd in force at the opener.
+///
+/// Every doubt answers the empty vector (one walk, the old behaviour), because
+/// calling LINE text "body" would hide a real `cd` or `(` from the walk:
+///   * any whitespace other than space, tab or newline anywhere in `cmd`
+///     (`\r` or a no-break space changes where bash ends the delimiter word);
+///   * a non-body line with unbalanced quotes, a trailing `\`, or (on a line
+///     that opens a here-document) any of `\`, `#`, backtick, `$(`, `<(`,
+///     `>(`, `((`, `[[` — constructs where the `<<` may be no opener at all
+///     (a comment, an arithmetic shift, an escaped `\<<`) or where the body may
+///     start elsewhere;
+///   * a line opening more than one here-document, an empty delimiter, an
+///     UNQUOTED delimiter, or a here-document never closed;
+///   * a segment that straddles a body boundary or a segmentation that does not
+///     reproduce `cmd` exactly (the segmenter lost sync with the shell, e.g. a
+///     body apostrophe opened a quote that ran past the delimiter line).
+pub(super) fn quoted_here_document_body_walks(cmd: &str) -> Vec<Option<usize>> {
+    quoted_here_document_body_walks_checked(cmd).unwrap_or_default()
+}
+
+fn quoted_here_document_body_walks_checked(cmd: &str) -> Option<Vec<Option<usize>>> {
+    if !cmd.contains("<<") {
+        return None;
+    }
+    if cmd
+        .chars()
+        .any(|c| c.is_whitespace() && !matches!(c, ' ' | '\t' | '\n'))
+    {
+        return None;
+    }
+    // Byte spans [start, end) of each body: from the line after the opener's
+    // line to the end of the closing delimiter line (newline excluded).
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut pending: Option<HereDocOpener> = None;
+    let mut body_start = 0usize;
+    let mut offset = 0usize;
+    for raw in cmd.split_inclusive('\n') {
+        let line = raw.strip_suffix('\n').unwrap_or(raw);
+        let line_start = offset;
+        offset += raw.len();
+        if let Some(opener) = &pending {
+            let candidate = if opener.strips_tabs {
+                line.trim_start_matches('\t')
+            } else {
+                line
+            };
+            if candidate == opener.delimiter {
+                spans.push((body_start, line_start + line.len()));
+                pending = None;
+            }
+            continue;
+        }
+        if !quotes_balance(line) || line.ends_with('\\') {
+            return None;
+        }
+        let openers = here_document_openers(line);
+        if openers.is_empty() {
+            continue;
+        }
+        let doubtful = ["\\", "#", "`", "$(", "<(", ">(", "((", "[["];
+        if doubtful.iter().any(|d| line.contains(d))
+            || openers.len() != 1
+            || openers[0].delimiter.is_empty()
+            || !here_document_delimiter_is_quoted(line)
+        {
+            return None;
+        }
+        pending = openers.into_iter().next();
+        body_start = offset;
+    }
+    if pending.is_some() || spans.is_empty() {
+        return None;
+    }
+    let segs = split_segments_with_separators(cmd);
+    let mut out = Vec::with_capacity(segs.len());
+    let mut pos = 0usize;
+    for seg in &segs {
+        let (start, end) = (pos, pos + seg.text.len());
+        if cmd.get(start..end) != Some(seg.text.as_str()) {
+            return None;
+        }
+        let mut walk = None;
+        for (k, &(s, e)) in spans.iter().enumerate() {
+            if start >= s && end <= e {
+                walk = Some(k);
+            } else if start < e && end > s {
+                return None;
+            }
+        }
+        out.push(walk);
+        pos = end
+            + match seg.sep_after {
+                SegmentSep::Conditional => 2,
+                SegmentSep::EndOfLine => 0,
+                _ => 1,
+            };
+    }
+    if pos != cmd.len() {
+        return None;
+    }
+    Some(out)
 }
 
 /// Per segment of [`split_segments_with_separators`]`(cmd)`: true when the
@@ -323,8 +519,10 @@ pub(super) fn program_body_segments_fed_to(cmd: &str, reader: impl Fn(&str) -> b
             body += 1;
         }
         // Marked only when the body is CLOSED by its delimiter line and no
-        // body segment spans a newline (an unbalanced quote in the body, e.g.
-        // a Python `# don't`, merges lines and can bury the delimiter).
+        // body segment spans a newline (an unbalanced quote in an
+        // UNTERMINATED body, e.g. a Python `# don't`, still merges lines —
+        // the splitters read a body line by line only once its delimiter
+        // line is found, see `here_doc_body_spans`).
         let closed = body < segs.len();
         let clean = segs[idx + 1..body.min(segs.len())]
             .iter()
@@ -414,6 +612,62 @@ pub(super) enum OutputTargets {
     /// `>` / `>>` scans ([`redirect_view_without_quoted_here_document_body`]);
     /// every other rule still reads the body.
     AnyTarget,
+    /// At least one literal `.py` file ([`is_python_file_target`]) and only
+    /// literal targets, by `cat` or `tee`, with a QUOTED delimiter. Used ONLY
+    /// by [`python_file_here_document`], whose body is then judged as Python;
+    /// lines after the close are allowed and stay judged as shell.
+    PythonFiles,
+}
+
+/// A here-document split by [`here_document_body_parts`].
+pub(super) struct HereDocumentParts {
+    /// The command with the body removed (opener and delimiter lines kept).
+    pub(super) without_body: String,
+    /// The body, up to the closing delimiter line.
+    pub(super) body: String,
+    /// Every line after the closing delimiter line.
+    pub(super) after: String,
+    /// The files the reader writes the body to, quotes removed (only for
+    /// [`OutputTargets::PythonFiles`]; empty otherwise).
+    pub(super) targets: Vec<String>,
+}
+
+/// User ruling 2026-11-08 (narrows the extension part of 6cf12ce9): a QUOTED
+/// here-document body that `cat`/`tee` writes to a literal `.py` file is judged
+/// by the language of that file, not read line by line as shell. The shell
+/// never parses that body (quoted delimiter: no expansion, no substitution),
+/// so a `` `git stash clear` `` in a Python comment or docstring is not a
+/// command; but the body is CODE (a later `python3 edit.py` runs it), so it is
+/// not data either. The caller judges `body` with the Python program judge
+/// ([`super::interpreter::python_file_body_verdict`]) and `without_body` with
+/// every shell rule — or, when that judge says the body may also be read as
+/// shell (a non-`.py` target in `targets`, or a later line that references the
+/// file other than as a `python3 <file>` script argument), the WHOLE command,
+/// body included, with every shell rule, Deny over Ask over Allow.
+///
+/// The shape rule is [`strip_data_here_document_bodies`]'s (permitted lines
+/// before the opener, one opener line with no `$`/backtick, a CLOSED body, no
+/// odd whitespace), with three differences: the delimiter MUST be quoted; the
+/// reader is `cat` or `tee` writing at least one literal `.py` file and only
+/// literal targets ([`OutputTargets::PythonFiles`]; `targets` lists them); and
+/// ANY lines may follow the close — they stay in `without_body` and are judged
+/// as shell. An empty body answers
+/// `None` (nothing to judge), as does every other shape: the body then stays in
+/// the command and is judged as shell lines, exactly as before.
+pub(super) fn python_file_here_document(cmd: &str) -> Option<HereDocumentParts> {
+    here_document_body_parts(cmd, OutputTargets::PythonFiles).filter(|p| !p.body.is_empty())
+}
+
+/// `.py` files whose here-document body [`python_file_here_document`] judges
+/// as Python. `.sh`, extension-less and every other code extension stay
+/// shell-judged.
+pub(super) fn is_python_file_target(target: &str) -> bool {
+    let inner = unquote_data_file_target(target);
+    is_data_file_target_shape(inner)
+        && std::path::Path::new(inner)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e == "py")
 }
 
 /// The text the line-level truncating (`>`) and append (`>>`) redirect scans
@@ -427,10 +681,11 @@ pub(super) enum OutputTargets {
 /// the Rust doc comment `/// corrupt => \`Err\`` was denied as the redirect
 /// ``> `Err` ``.
 ///
-/// The shape rule is exactly [`strip_data_here_document_bodies`]'s (permitted
-/// lines before the opener, one opener line with no `$`/backtick, a reader on
-/// the closed `cat`/`tee`/`git commit -F -` list, no `|`, `;` or `&`, a CLOSED
-/// body, only blank or comment lines after it), with three differences:
+/// The shape rule is [`strip_data_here_document_bodies`]'s (permitted
+/// lines before the opener, one opener line, a reader on the closed
+/// `cat`/`tee`/`git commit -F -` list, a CLOSED body, only blank or comment
+/// lines after it), where the opener-line conditions (no `$`/backtick, no `|`,
+/// `;` or `&`) apply to the consumer text, with four differences:
 ///   * the delimiter MUST be quoted (`'EOF'`, `"EOF"`, `\EOF`). An unquoted
 ///     one lets the shell expand `$(…)` and backticks in the body, so the body
 ///     stays in the view;
@@ -440,7 +695,14 @@ pub(super) enum OutputTargets {
 ///   * when the reader stores the body in no file
 ///     ([`here_document_reader_stores_nothing`]: bare `cat`, `git commit -F -`,
 ///     no output redirect), ANY lines may follow the closing delimiter. They
-///     stay in the view and are judged like every other line.
+///     stay in the view and are judged like every other line;
+///   * the consumer text is [`redirect_view_consumer`]'s: besides the heads
+///     [`opener_consumer`] splits, further `cd <one word>` heads split at `;`
+///     or `&&` are peeled, even with an unresolvable operand like `"$WT"`. The
+///     `$`/backtick check then applies only to the remaining reader text, not
+///     to the whole opener line. The `cd` heads stay in the view and are judged
+///     like every other line; a head that is not `cd <word>`, or whose operand
+///     holds a backtick or `$(`, is not peeled and the line stays refused.
 ///
 /// Every other rule (the per-segment loop, the interpreter and egress scans)
 /// still reads the full text, body included.
@@ -452,14 +714,25 @@ pub(super) fn redirect_view_without_quoted_here_document_body(
 
 /// The shared shape rule of [`strip_data_here_document_bodies`] and
 /// [`redirect_view_without_quoted_here_document_body`]; see those for which
-/// `targets` each passes and what that changes.
+/// `targets` each passes and what that changes. One exception to their "no
+/// `|`, `;` or `&` on the opener line" condition, for both: a QUOTED-delimiter
+/// `git commit -F -` reader followed by a tail that cannot see the body
+/// ([`git_commit_reader_before_tail`]); the tail stays in the text and is judged.
 pub(super) fn strip_here_document_body(
     cmd: &str,
     targets: OutputTargets,
 ) -> std::borrow::Cow<'_, str> {
-    let unchanged = std::borrow::Cow::Borrowed(cmd);
+    match here_document_body_parts(cmd, targets) {
+        Some(parts) => std::borrow::Cow::Owned(parts.without_body),
+        None => std::borrow::Cow::Borrowed(cmd),
+    }
+}
+
+/// The shape rule behind [`strip_here_document_body`] and
+/// [`python_file_here_document`]: `None` when the body must stay in the text.
+fn here_document_body_parts(cmd: &str, targets: OutputTargets) -> Option<HereDocumentParts> {
     if !cmd.contains("<<") {
-        return unchanged;
+        return None;
     }
     let lines: Vec<&str> = cmd.split_inclusive('\n').collect();
     let text = |l: &str| l.strip_suffix('\n').unwrap_or(l).to_string();
@@ -476,54 +749,123 @@ pub(super) fn strip_here_document_body(
     while idx < lines.len() {
         let l = text(lines[idx]);
         if odd_whitespace(&l) {
-            return unchanged;
+            return None;
         }
         if !(inert(&l) || permitted_prefix_line(&l)) {
             break;
         }
         idx += 1;
     }
-    let Some(opener_line) = lines.get(idx).map(|l| text(l)) else {
-        return unchanged;
-    };
+    let opener_line = lines.get(idx).map(|l| text(l))?;
     let openers = here_document_openers(&opener_line);
+    // The redirect view removes a body only when the shell cannot expand it.
+    let redirect_view_of_quoted =
+        targets == OutputTargets::AnyTarget && here_document_delimiter_is_quoted(&opener_line);
+    if targets != OutputTargets::DataFilesOnly && !here_document_delimiter_is_quoted(&opener_line) {
+        return None;
+    }
+    // Quoted delimiter, redirect view: further `cd <word>` heads (split at `;`
+    // or `&&`) are peeled too, even with an unresolvable operand like "$WT".
+    // They run BEFORE the reader and never see the body, and they stay in the
+    // command text so every rule still judges them; `$` / backtick are then
+    // refused only in the remaining reader text. [`opener_consumer`]'s own
+    // contract is unchanged.
+    let consumer = if redirect_view_of_quoted {
+        redirect_view_consumer(&opener_line)
+    } else {
+        opener_consumer(&opener_line)
+    };
+    // Backlog ffce9c59: `git commit -F - <<'EOF' | cat` / `<<'EOF'; git log`.
+    // The body is git's stdin only; the tail stays in the text and is judged.
+    let git_reader = if here_document_delimiter_is_quoted(&opener_line) {
+        git_commit_reader_before_tail(consumer)
+    } else {
+        None
+    };
+    let consumer: &str = git_reader.as_deref().unwrap_or(consumer);
+    let expansion_free = if redirect_view_of_quoted {
+        !consumer.contains(['$', '`'])
+    } else {
+        !opener_line.contains(['$', '`'])
+    };
     if openers.len() != 1
         || openers[0].delimiter.is_empty()
-        || opener_line.contains(['$', '`'])
+        || !expansion_free
         || !quotes_balance(&opener_line)
-        || !here_document_consumer_is_data(opener_consumer(&opener_line), targets)
+        || !here_document_consumer_is_data(consumer, targets)
     {
-        return unchanged;
-    }
-    // The redirect view removes a body only when the shell cannot expand it.
-    if targets == OutputTargets::AnyTarget && !here_document_delimiter_is_quoted(&opener_line) {
-        return unchanged;
+        return None;
     }
     // The body, up to the first exact delimiter line.
-    let Some(close) = (idx + 1..lines.len())
-        .find(|&j| segment_closes_here_document(&text(lines[j]), &openers[0]))
-    else {
-        return unchanged;
-    };
+    let close = (idx + 1..lines.len())
+        .find(|&j| segment_closes_here_document(&text(lines[j]), &openers[0]))?;
     let body: String = lines[idx + 1..close].concat();
     if !here_document_delimiter_is_quoted(&opener_line) && body.contains(['$', '`', '\\']) {
-        return unchanged;
+        return None;
     }
     // Lines after the close. The redirect view may keep LATER commands when the
     // reader stores the body nowhere a later command could run it from
     // ([`here_document_reader_stores_nothing`]): those lines stay in the view
     // and every redirect rule still judges them; only the body leaves.
-    let later_commands_ok = targets == OutputTargets::AnyTarget
-        && here_document_reader_stores_nothing(opener_consumer(&opener_line));
+    // The Python-file split keeps every later line too: the body is judged as
+    // Python whether or not a later line runs it, and the later lines are
+    // judged as shell.
+    let later_commands_ok = targets == OutputTargets::PythonFiles
+        || (targets == OutputTargets::AnyTarget && here_document_reader_stores_nothing(consumer));
     if lines[close + 1..]
         .iter()
         .any(|l| odd_whitespace(&text(l)) || !(later_commands_ok || inert(&text(l))))
     {
-        return unchanged;
+        return None;
     }
     let mut out: String = lines[..=idx].concat();
     out.push_str(&lines[close..].concat());
-    std::borrow::Cow::Owned(out)
+    Some(HereDocumentParts {
+        without_body: out,
+        body,
+        after: lines[close + 1..].concat(),
+        targets: if targets == OutputTargets::PythonFiles {
+            here_document_write_targets(consumer)
+        } else {
+            Vec::new()
+        },
+    })
+}
+
+/// The files a `cat`/`tee` here-document reader `line` writes to, quotes
+/// removed: every output-redirect target and every `tee` operand other than
+/// `-a` / `--append`. Only meaningful for a line
+/// [`here_document_consumer_is_data`] accepted under
+/// [`OutputTargets::PythonFiles`].
+fn here_document_write_targets(line: &str) -> Vec<String> {
+    let raw = quote_aware_words(line);
+    let mut out = Vec::new();
+    let (mut head_seen, mut tee) = (false, false);
+    let mut i = 0;
+    while i < raw.len() {
+        let w = raw[i].as_str();
+        if let Some(rest) = w.strip_prefix("<<") {
+            let rest = rest.strip_prefix('-').unwrap_or(rest);
+            i += if rest.is_empty() { 2 } else { 1 };
+            continue;
+        }
+        if let Some(glued) = strip_output_redirect_operator(w) {
+            let target = if glued.is_empty() {
+                i += 1;
+                raw.get(i).map(String::as_str).unwrap_or("")
+            } else {
+                glued
+            };
+            out.push(unquote_data_file_target(target).to_string());
+        } else if !head_seen {
+            head_seen = true;
+            tee = w == "tee";
+        } else if tee && !matches!(w, "-a" | "--append") {
+            out.push(unquote_data_file_target(w).to_string());
+        }
+        i += 1;
+    }
+    out
 }
 
 /// The part of the opener line [`here_document_consumer_is_data`] judges: the
@@ -561,6 +903,178 @@ pub(super) fn opener_consumer(line: &str) -> &str {
         rest = tail;
     }
     rest
+}
+
+/// [`opener_consumer`], then further `cd <one word>` heads split at `&&` or
+/// `;` are peeled, for the redirect view of a QUOTED-delimiter here-document
+/// only (backlog 9f90b96f: `cd /tmp/wt; git commit -F- <<'MSG'`; backlog
+/// 5651745b: `cd "$WT" && cat <<'EOF'`). A `cd` runs before the reader and never
+/// sees the body, so it cannot make the body code; its operand may be
+/// unresolvable (`"$WT"`) because the opener line, `cd` included, stays in the
+/// command and the cwd walk and every redirect rule still judge it. A head
+/// whose operand holds a backtick or `$(`, or that is anything but `cd <word>`,
+/// stops the peeling; the remaining text is then judged (and refused) as before.
+///
+/// Three more head shapes are peeled the same way
+/// (tests/heredoc_body_gt_fp_20261107.rs: `WT=/x; cd "$WT" && git add -A &&
+/// git commit -F - <<'EOF'` and `cd "$(git rev-parse --show-toplevel)" && …`
+/// had a `> quoted` message line read as a relative redirect after an
+/// unresolvable cd), each of which runs before the reader and never sees the
+/// body ([`redirect_view_extra_head`]):
+///   * a line [`permitted_prefix_line`] accepts (`git add <paths>`, `set -e`,
+///     `mkdir -p <paths>`, `cd <literal>`), followed by `&&` only;
+///   * one assignment `NAME=<literal>` (no quote, `$`, backtick or operator in
+///     the value), followed by `;` or `&&`;
+///   * followed by `&&` only, `cd "$(<plain words>)"`: a DOUBLE-QUOTED substitution whose body is
+///     only letters, digits, spaces and `-_./=:,@%+`, so it holds no quote,
+///     nested substitution, redirect, pipe or separator. An unquoted `$(…)` is
+///     still not peeled.
+pub(super) fn redirect_view_consumer(line: &str) -> &str {
+    let mut rest = opener_consumer(line);
+    loop {
+        let cut = [
+            rest.find("&&").map(|i| (i, 2)),
+            rest.find(';').map(|i| (i, 1)),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        let Some((i, len)) = cut else { return rest };
+        let (head, tail) = (&rest[..i], &rest[i + len..]);
+        let words = quote_aware_words(head);
+        let peelable = matches!(words.as_slice(), [cd, _] if cd == "cd")
+            && !head.contains(['`', '<', '>', '|', '&', '(', ')', '\\'])
+            && !head.contains("$(")
+            && quotes_balance(head);
+        if !(peelable || redirect_view_extra_head(head, len == 2)) {
+            return rest;
+        }
+        rest = tail;
+    }
+}
+
+/// The extra head shapes [`redirect_view_consumer`] peels; see there.
+/// `and_joined`: the head is followed by `&&`, not `;`. Only the assignment
+/// shape is also peeled before a `;` (tests/heredoc_chain_heads.rs pins
+/// `git add a.txt ; git commit -F - <<'EOF'` as restrictive).
+fn redirect_view_extra_head(head: &str, and_joined: bool) -> bool {
+    let plain = |s: &str, extra: &[char]| {
+        !s.is_empty()
+            && s.chars().all(|c| {
+                c.is_ascii_alphanumeric()
+                    || matches!(c, '-' | '_' | '.' | '/' | '=' | ':' | ',' | '@' | '%' | '+')
+                    || extra.contains(&c)
+            })
+    };
+    if !quotes_balance(head) || head.contains(['\n', '\r']) {
+        return false;
+    }
+    if and_joined && permitted_prefix_line(head) {
+        return true;
+    }
+    let words = quote_aware_words(head);
+    match words.as_slice() {
+        [assign] => assign.split_once('=').is_some_and(|(name, value)| {
+            !name.is_empty()
+                && !name.starts_with(|c: char| c.is_ascii_digit())
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && (value.is_empty() || plain(value, &[]))
+        }),
+        [cd, operand] if and_joined && cd == "cd" => operand
+            .strip_prefix("\"$(")
+            .and_then(|s| s.strip_suffix(")\""))
+            .is_some_and(|inner| plain(inner, &[' '])),
+        _ => false,
+    }
+}
+
+/// Backlog ffce9c59: for a QUOTED-delimiter opener whose consumer text is
+/// `git … commit … -F - <<'EOF' [2>&1] <op> <tail>` (`<op>` is `|`, `;`, `&&`
+/// or `||`), the reader text before `<op>` with `2>&1` words removed, so
+/// [`strip_here_document_body`] can judge it like an opener with nothing after
+/// it. `None` (keep the body) on every doubt.
+///
+/// The here-document redirects the stdin of the simple command it is attached
+/// to, so the body is `git commit`'s stdin and nothing else's: a `|` after the
+/// opener takes git's STDOUT, and a `;`/`&&`/`||` starts a command that never
+/// sees the body. The tail is not removed: it stays in the command text and
+/// every rule judges it as its own command (`<<'EOF'; rm -rf /etc` is Deny).
+///
+/// Refused (`None`): no unquoted operator, a `\`, `$` or backtick anywhere in
+/// the consumer text, a single `&` (background) or `|&`, a reader that is not
+/// accepted by [`here_document_consumer_is_data`] as `git commit -F -` or that
+/// writes any output redirect, and any pipeline stage fed by git (up to the
+/// next `;`/`&&`/`||`) whose program is not `cat`/`grep`/`egrep`/`fgrep`/
+/// `head`/`tail`/`wc` or that holds `<`, `>`, `(`, `)`. git prints the commit
+/// subject on stdout, so a stage that could run its stdin keeps the body judged.
+fn git_commit_reader_before_tail(consumer: &str) -> Option<String> {
+    if consumer.contains(['\\', '$', '`']) {
+        return None;
+    }
+    // Unquoted operator positions: (byte index, operator text).
+    let mut ops: Vec<(usize, &str)> = Vec::new();
+    let (mut in_s, mut in_d) = (false, false);
+    let bytes = consumer.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        match c {
+            b'\'' if !in_d => in_s = !in_s,
+            b'"' if !in_s => in_d = !in_d,
+            b'|' | b';' | b'&' if !in_s && !in_d => {
+                let two = consumer.get(i..i + 2).unwrap_or("");
+                let op = match (c, two) {
+                    (_, "||" | "&&" | "|&") => &consumer[i..i + 2],
+                    _ => &consumer[i..i + 1],
+                };
+                // `2>&1` / `>&2`: an fd dup, not an operator.
+                if c == b'&' && op == "&" && i > 0 && bytes[i - 1] == b'>' {
+                    i += 1;
+                    continue;
+                }
+                ops.push((i, op));
+                i += op.len();
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if in_s || in_d {
+        return None;
+    }
+    let &(first, _) = ops.first()?;
+    if ops.iter().any(|(_, op)| matches!(*op, "&" | "|&")) {
+        return None;
+    }
+    let reader: Vec<String> = quote_aware_words(&consumer[..first])
+        .into_iter()
+        .filter(|w| w != "2>&1")
+        .collect();
+    let reader = reader.join(" ");
+    if reader.contains('>')
+        || !reader.starts_with("git ")
+        || !here_document_consumer_is_data(&reader, OutputTargets::DataFilesOnly)
+    {
+        return None;
+    }
+    // Pipeline stages fed by git's stdout, up to the first non-`|` operator.
+    let mut k = 0;
+    while k < ops.len() && ops[k].1 == "|" {
+        let start = ops[k].0 + 1;
+        let end = ops.get(k + 1).map_or(consumer.len(), |(j, _)| *j);
+        let stage = &consumer[start..end];
+        let words = quote_aware_words(stage);
+        let reads_only = matches!(
+            words.first().map(String::as_str),
+            Some("cat" | "grep" | "egrep" | "fgrep" | "head" | "tail" | "wc")
+        );
+        if !reads_only || stage.contains(['<', '>', '(', ')']) {
+            return None;
+        }
+        k += 1;
+    }
+    Some(reader)
 }
 
 /// True when `consumer` (the opener-line text [`opener_consumer`] returns, which
@@ -653,6 +1167,10 @@ pub(super) fn permitted_prefix_line(line: &str) -> bool {
 /// `yml`, `xml`/plist, `patch`/`diff`, which `git apply` turns into code) are
 /// deliberately absent, as are `.sh`, `.py` and extension-less names (the
 /// 6cf12ce9 ruling `cat > run.sh <<'EOF'`): a body headed there stays judged.
+/// A `.sh` or extension-less body is judged as shell lines. A `.py` body
+/// written by `cat`/`tee` under a QUOTED delimiter is judged as Python instead
+/// (user ruling 2026-11-08, [`python_file_here_document`]): still code, never
+/// data, but not shell either.
 ///
 /// This is a statement about the NAME only. Any file can be executed
 /// (`sh notes.txt`). Within one command that is covered by the shape rule in
@@ -678,12 +1196,7 @@ pub(super) fn unquote_data_file_target(target: &str) -> &str {
 /// answers false.
 pub(super) fn is_data_file_target(target: &str) -> bool {
     let inner = unquote_data_file_target(target);
-    if inner.is_empty()
-        || inner.contains([
-            '$', '`', '\\', '\'', '"', '*', '?', '[', ']', '{', '}', '(', ')', '<', '>', '|', ';',
-            '&',
-        ])
-    {
+    if !is_data_file_target_shape(inner) {
         return false;
     }
     if inner == "/dev/null" {
@@ -697,6 +1210,16 @@ pub(super) fn is_data_file_target(target: &str) -> bool {
                 .iter()
                 .any(|d| d.eq_ignore_ascii_case(e))
         })
+}
+
+/// True when the unquoted target word `inner` is a literal path: non-empty,
+/// with no expansion, glob, escape, quote or shell operator in it.
+fn is_data_file_target_shape(inner: &str) -> bool {
+    !inner.is_empty()
+        && !inner.contains([
+            '$', '`', '\\', '\'', '"', '*', '?', '[', ']', '{', '}', '(', ')', '<', '>', '|', ';',
+            '&',
+        ])
 }
 
 /// True when a here-document delimiter is spelled as a plain word: `TAG`,
@@ -765,11 +1288,15 @@ pub(super) fn strip_output_redirect_operator(word: &str) -> Option<&str> {
 /// [`redirect_view_without_quoted_here_document_body`]) lets a redirect name
 /// any target word free of shell syntax (`\`, backtick, `(`, `)`, `;`, `&`,
 /// `|`, `<`, `>`, `$`). Everything else, including the `tee` operand rule
-/// (DATA files only), is the same for both.
+/// (DATA files only), is the same for both. [`OutputTargets::PythonFiles`]
+/// (only from [`python_file_here_document`]) accepts ONLY `cat` or `tee`, and
+/// only when every redirect target and `tee` operand is a literal path and at
+/// least one of them is a `.py` file ([`is_python_file_target`]).
 pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets) -> bool {
     let raw = quote_aware_words(line);
     let mut words: Vec<&str> = Vec::new();
     let mut saw_here_document = false;
+    let mut python_targets = 0usize;
     let mut i = 0;
     while i < raw.len() {
         let w = raw[i].as_str();
@@ -810,9 +1337,15 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
                     !target.is_empty()
                         && !target.contains(['\\', '`', '(', ')', ';', '&', '|', '<', '>', '$'])
                 }
+                OutputTargets::PythonFiles => {
+                    is_data_file_target_shape(unquote_data_file_target(target))
+                }
             };
             if !target_ok {
                 return false;
+            }
+            if is_python_file_target(target) {
+                python_targets += 1;
             }
             i += 1;
             continue;
@@ -826,6 +1359,25 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
             .any(|w| w.contains(['<', '>', '\\', '`', '(', ')', ';', '&', '|']))
     {
         return false;
+    }
+    // [`OutputTargets::PythonFiles`]: `cat`/`tee` writing at least one `.py`
+    // file, every target a literal path (a `tee` operand counts as a target).
+    // A non-`.py` target is allowed here; the caller then judges the body as
+    // shell lines too ([`python_file_here_document`]).
+    if targets == OutputTargets::PythonFiles {
+        return match words.first().copied() {
+            Some("cat") => python_targets > 0 && words[1..].iter().all(|w| *w == "-"),
+            Some("tee") => {
+                let files = words[1..]
+                    .iter()
+                    .filter(|w| !matches!(**w, "-a" | "--append"));
+                python_targets + files.clone().filter(|w| is_python_file_target(w)).count() > 0
+                    && files
+                        .into_iter()
+                        .all(|w| is_data_file_target_shape(unquote_data_file_target(w)))
+            }
+            _ => false,
+        };
     }
     match words.first().copied() {
         Some("cat") => words[1..].iter().all(|w| *w == "-"),
@@ -848,5 +1400,59 @@ pub(super) fn here_document_consumer_is_data(line: &str, targets: OutputTargets)
             })
         }
         _ => false,
+    }
+}
+
+/// Backlog 9f90b96f / 5651745b: the redirect view peels `cd <word>` heads of a
+/// QUOTED-delimiter here-document, and nothing else.
+#[cfg(test)]
+mod peel_tests {
+    use super::*;
+
+    /// Backlog ffce9c59: only a tail that cannot feed the body or run git's
+    /// output yields a reader.
+    #[test]
+    fn git_commit_reader_before_tail_refuses_executing_or_doubtful_tails() {
+        let f = git_commit_reader_before_tail;
+        assert_eq!(
+            f("git commit -F - <<'EOF' | cat").as_deref(),
+            Some("git commit -F - <<'EOF'")
+        );
+        assert!(f("git commit -q -F - <<'EOF' 2>&1 | grep -E 'a|b' ; git log -1").is_some());
+        assert!(f("git commit -F - <<'EOF'; git log -1").is_some());
+        assert!(f("git commit -F - <<'EOF' && git log -1").is_some());
+        for refused in [
+            "git commit -F - <<'EOF'",
+            "git commit -F - <<'EOF' | sh",
+            "git commit -F - <<'EOF' | grep x | bash",
+            "git commit -F - <<'EOF' | grep x > run.sh",
+            "git commit -F - <<'EOF' &",
+            "git commit -F - <<'EOF' |& cat",
+            "git commit -F - <<'EOF' > out.txt | cat",
+            "git commit -F - <<'EOF' | cat $(x)",
+            "cat <<'EOF' | cat",
+            "bash <<'EOF'; git log",
+            "git log <<'EOF'; git log",
+        ] {
+            assert_eq!(f(refused), None, "{refused}");
+        }
+    }
+
+    #[test]
+    fn redirect_view_peels_cd_heads_only_for_quoted_data_here_documents() {
+        let view = redirect_view_without_quoted_here_document_body;
+        let stripped = |c: &str| view(c).len() < c.len();
+        // Quoted delimiter, data reader, cd heads (`;`, `&&`, unresolved operand).
+        assert!(stripped("cd /tmp/wt; git commit -F- <<'MSG'\nA <a@b>\nMSG"));
+        assert!(stripped("cd \"$WT\" && cat <<'EOF'\nv > {bar}\nEOF"));
+        // Unquoted delimiter: the shell expands the body, so it stays in the view.
+        assert!(!stripped("cd /tmp/wt; git commit -F- <<MSG\nA <a@b>\nMSG"));
+        assert!(!stripped("cd \"$WT\" && cat <<EOF\nv > {bar}\nEOF"));
+        // A reader that executes its stdin keeps the body.
+        assert!(!stripped("cd /tmp/wt; sh <<'EOF'\necho > x\nEOF"));
+        assert!(!stripped("cd \"$WT\" && bash <<'EOF'\necho > x\nEOF"));
+        // A non-cd head, or a cd whose operand substitutes a command, is not peeled.
+        assert!(!stripped("rm x; cat <<'EOF'\nv > {bar}\nEOF"));
+        assert!(!stripped("cd $(evil) && cat <<'EOF'\nv > {bar}\nEOF"));
     }
 }

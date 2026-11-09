@@ -1,4 +1,4 @@
-//! Merge/remove the donegate Stop hook in `~/.claude/settings.json`.
+//! Merge/remove the donegate Stop and SubagentStop hooks in `~/.claude/settings.json`.
 //!
 //! Idempotent: existing donegate groups are stripped before re-adding, so
 //! running install twice is safe. The file is backed up before any write.
@@ -11,6 +11,10 @@ use serde_json::{json, Value};
 
 const EVENT: &str = "Stop";
 const SUB: &str = "gate";
+/// The SubagentStop hook judges the hook cwd when the stopping subagent wrote
+/// inside it (`subagent` module; no other worktree, user rulings 2026-11-08).
+const SUB_EVENT: &str = "SubagentStop";
+const SUB_SUB: &str = "subagent-gate";
 /// Generous timeout — this hook runs the project's build/test suite.
 const TIMEOUT_SECS: u64 = 600;
 
@@ -57,6 +61,12 @@ pub fn install(dry_run: bool) -> Result<()> {
         EVENT,
         harness_core::install::command_group(&format!("{bin} {SUB}"), TIMEOUT_SECS),
     )?;
+    harness_core::install::push_group(
+        &mut settings,
+        MARKERS,
+        SUB_EVENT,
+        harness_core::install::command_group(&format!("{bin} {SUB_SUB}"), TIMEOUT_SECS),
+    )?;
 
     if dry_run {
         println!("--- dry run (settings.json would become) ---");
@@ -65,6 +75,7 @@ pub fn install(dry_run: bool) -> Result<()> {
     }
     harness_core::install::write_settings(&settings_path(), &settings)?;
     println!("\nInstalled Stop hook → {bin} {SUB}");
+    println!("Installed SubagentStop hook → {bin} {SUB_SUB}");
     println!("Add at least one [[check]] to ./donegate.toml (or ~/.donegate/config.toml).");
     Ok(())
 }
@@ -74,8 +85,11 @@ pub fn uninstall(dry_run: bool) -> Result<()> {
     if !settings.is_object() {
         anyhow::bail!("settings.json is not a JSON object");
     }
-    let removed =
-        harness_core::install::remove_hooks_from_settings(&mut settings, MARKERS, &[EVENT]);
+    let removed = harness_core::install::remove_hooks_from_settings(
+        &mut settings,
+        MARKERS,
+        &[EVENT, SUB_EVENT],
+    );
 
     if dry_run {
         println!("--- dry run (would remove {removed} donegate group(s)) ---");

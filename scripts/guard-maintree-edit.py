@@ -14,18 +14,36 @@ Scope, stated precisely so the ALLOW paths are not accidents:
 
   * Only the EDIT tools are inspected — Edit / Write / MultiEdit / NotebookEdit.
     Every other tool exits 0 (allow).
-  * Only THIS project's main checkout is guarded. "This project" is
-    realpath($CLAUDE_PROJECT_DIR); "main checkout" is where the target file's
-    `--git-dir` equals its `--git-common-dir` (a linked worktree's git-dir lives
-    under `<common>/worktrees/<name>`, so they differ there). A file in a
-    worktree — nested inside the repo or outside it — is therefore ALLOWED, which
-    is the whole point: work in a worktree and this hook is silent.
+  * Only THIS project's main checkout is guarded. Its location is the parent
+    of the git common dir of $CLAUDE_PROJECT_DIR (or, unset, of the payload
+    cwd) — a location lookup, not a read of main's state.
+  * OWN TREE ONLY (user ruling 2026-11-08, verbatim: "donegateそのものが他の
+    worktreeを見たり検証したりテストしたりすることは禁止とする。他のgateでも禁止
+    とする。合理的理由があって確認するなら、それを提示すること。基本的に認めない"
+    / "おそらく他のworktreeへの干渉をやめないと並行性があがるほど、処理する時間が
+    膨大になる、そこに合理的理由はない。定期的にまとまったauditの実施での担保と
+    する。"). The session's own tree is the tree its payload cwd is in; the
+    tree a TARGET belongs to is judged by its path alone:
+      - a target under main's directory, not below a nested `.git` entry, is
+        in main. If the cwd is NOT main it is refused by path; no git runs in
+        main and main's MERGE_HEAD is not read (so a merge in progress in main
+        does not unlock it). If the cwd IS main, main is the session's own tree
+        and the rules below (gitignored allow, merge-in-progress allow) apply,
+        reading main's own state;
+      - a target in any linked worktree (nested under main below a `.git`
+        entry, or outside it) is ALLOWED, without reading that tree's state or
+        the worktree registration list.
+    Consequence, stated plainly: a gitignored main path is refused unless the
+    cwd is main (its ignore status is main's state).
   * Files OUTSIDE the project main tree are allowed: the memory dir under
     ~/.claude, the session scratchpad under /tmp, any other repo. Those are not
     the shared index this rule protects.
-  * MERGE IN PROGRESS (backlog c8c11add, user ruling 2026-10-04): while
-    `MERGE_HEAD` exists in the main checkout's git dir, an edit to ANY path in
-    the main tree is ALLOWED — conflict resolution is the integration step §8
+  * MERGE IN PROGRESS (backlog c8c11add, user ruling 2026-10-04), cwd main
+    only: while `MERGE_HEAD` exists in the main checkout's git dir, an edit to
+    ANY path in the main tree is ALLOWED and its target appended to this
+    session's write record (deny_ledger.record_writes; a record that cannot be
+    written refuses the edit) so the Stop gate can attribute it — conflict
+    resolution is the integration step §8
     permits on main, and the commit-side guard (check-worktree-isolation.py)
     already allows the commit whenever MERGE_HEAD exists. The probe mirrors that
     guard's bounded retry for the marker's visibility lag. Only MERGE_HEAD
@@ -63,7 +81,9 @@ written and by its realpath, so a worktree path that symlinks into main's
 `.githooks` is refused the same way. A `.git` beside the `.githooks` that
 cannot be stat'ed is undetermined and refused. Only a merge in progress in
 that checkout (a readable MERGE_HEAD, as in the main-tree rule) lifts this
-refusal; an unreadable MERGE_HEAD is refused. Likewise an edit whose realpath is inside either deny
+refusal, and only when the payload cwd is in that very checkout (its own
+tree); otherwise its MERGE_HEAD is not read (user ruling 2026-11-08). An
+unreadable MERGE_HEAD is refused. Likewise an edit whose realpath is inside either deny
 ledger directory (`~/.claude/state/maintree-deny`, `<tmp>/maintree-deny-<uid>`)
 is refused in any tree: editing it would erase or forge the record below.
 There are no twin rules for Bash: guard-maintree-bash.py observes main's state
@@ -207,6 +227,51 @@ def _primary_githooks_root(path: str) -> tuple[str, str | None]:
     return "none", None
 
 
+def payload_cwd(payload: dict) -> str | None:
+    cwd = payload.get("cwd")
+    return cwd if isinstance(cwd, str) and os.path.isabs(cwd) else None
+
+
+def _cwd_tree(payload: dict) -> tuple[str, str, str] | None:
+    """(toplevel, git dir, common dir) realpaths of the tree the payload's cwd
+    is in — the session's OWN tree — or None when cwd is missing / not a
+    directory / not inside a git work tree / git cannot answer. None is never
+    "main": a target in main is then refused (restrictive side)."""
+    cwd = payload_cwd(payload)
+    if cwd is None or not os.path.isdir(cwd):
+        return None
+    out = _git(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel",
+               "--absolute-git-dir", "--git-common-dir")
+    if out is None:
+        return None
+    lines = out.splitlines()
+    if len(lines) != 3 or not all(lines):
+        return None
+    top, gd, common = (os.path.realpath(x) for x in lines)
+    return top, gd, common
+
+
+def _nested_tree(target: str, main_root: str) -> str:
+    """Does `target` (under main_root) belong to a tree nested inside main —
+    a linked worktree or submodule checked out under main's directory? Judged
+    by path alone: some directory strictly between main_root and the target
+    holds a `.git` entry. "nested" / "main" / "undetermined" (an lstat error
+    other than not-found). No git runs in that other tree and its state is not
+    read (user ruling 2026-11-08)."""
+    d = os.path.dirname(target)
+    root = main_root.rstrip("/")
+    while _under(d, root) and d != root:
+        try:
+            os.lstat(os.path.join(d, ".git"))
+            return "nested"
+        except (FileNotFoundError, NotADirectoryError):
+            pass
+        except OSError:
+            return "undetermined"
+        d = os.path.dirname(d)
+    return "main"
+
+
 def decide(payload: dict) -> tuple[int, str]:
     """(exit_code, stderr). 0 allow, 2 deny."""
     code, reason, _meta = _judge(payload)
@@ -233,6 +298,10 @@ def _judge(payload: dict) -> tuple[int, str, dict]:
         if _under(*(x.casefold() if _FOLD_CASE else x for x in (target, d))):
             return 2, DENY_LEDGER_DIR.format(path=raw, dir=d), meta
 
+    # The session's own tree is the tree its cwd is in. Only that tree's state
+    # may be read (user ruling 2026-11-08); every other tree is judged by path.
+    own = _cwd_tree(payload)
+
     # A primary checkout's `.githooks`, in any repo and under any project
     # anchor, judged as written and by realpath.
     for cand in (os.path.abspath(raw), target):
@@ -243,6 +312,10 @@ def _judge(payload: dict) -> tuple[int, str, dict]:
         meta["root"] = os.path.realpath(root)
         if kind == "undetermined":
             return 2, DENY_UNDETERMINED, meta
+        if own is None or own[0] != meta["root"] or own[1] != own[2]:
+            # Another tree's primary checkout: refused by path; its MERGE_HEAD
+            # is not read.
+            return 2, DENY_PRIMARY_GITHOOKS.format(path=raw, root=root), meta
         merge = _merge_head_state(os.path.realpath(os.path.join(root, ".git")))
         if merge == "undetermined":
             return 2, DENY_MERGE_HEAD_UNDETERMINED.format(
@@ -252,17 +325,45 @@ def _judge(payload: dict) -> tuple[int, str, dict]:
     meta = {"target_abs": None, "root": None}
 
     proj_env = os.environ.get("CLAUDE_PROJECT_DIR")
-    if not proj_env:
-        # Without the project anchor we cannot scope "this project's main tree".
-        # Fall back to the intrinsic test (git-dir == git-common-dir) so the hook
-        # still enforces, rather than silently allowing everything.
-        proj = None
-    else:
-        proj = os.path.realpath(proj_env)
-        if not _under(target, proj):
-            # Outside this project entirely (memory, scratchpad, other repo).
-            return 0, "", meta
+    anchor = proj_env or payload_cwd(payload)
+    if not anchor:
+        return 2, DENY_UNDETERMINED, meta
+    anchor = os.path.realpath(anchor)
+    # Where this project's MAIN tree is: the parent of the anchor's git common
+    # dir. A location lookup only (rev-parse at the anchor); no state of main
+    # or of any other tree is read.
+    common_out = _git(anchor, "rev-parse", "--path-format=absolute", "--git-common-dir") \
+        if os.path.isdir(anchor) else None
+    if common_out is None:
+        # The anchor is in no repo (or git is unusable there): a target under
+        # it cannot be cleared, anything else is outside this project.
+        if _under(target, anchor):
+            return 2, DENY_UNDETERMINED, meta
+        return 0, "", meta
+    common_real = os.path.realpath(common_out)
+    if os.path.basename(common_real) != ".git":
+        return 0, "", meta  # a bare repository has no main working tree
+    main_root = os.path.dirname(common_real)
+    if not _under(target, main_root):
+        # Outside main: a linked worktree outside the repo (ALLOWED without
+        # reading its state), memory, scratchpad, another repo.
+        return 0, "", meta
+    nested = _nested_tree(target, main_root)
+    if nested == "undetermined":
+        return 2, DENY_UNDETERMINED, meta
+    if nested == "nested":
+        return 0, "", meta  # a nested linked worktree / submodule: another tree
+    if own is None or own[0] != main_root or own[1] != own[2]:
+        # Main is not this session's tree: refused by path alone. main's
+        # MERGE_HEAD is NOT read, so a merge in progress in main does not
+        # unlock it (resolve conflicts from a session whose cwd is main).
+        meta["target_abs"] = target
+        meta["root"] = main_root
+        return 2, DENY_MAINTREE_NOT_OWN.format(path=raw, main=main_root), meta
+    proj = main_root
 
+    # From here main IS the session's own tree (cwd is main), so its state
+    # may be read: the pre-2026-11-08 rules apply unchanged.
     query_dir = _nearest_existing_dir(target)
     git_dir = _git(query_dir, "rev-parse", "--absolute-git-dir")
     common = _git(query_dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
@@ -305,6 +406,9 @@ def _judge(payload: dict) -> tuple[int, str, dict]:
     # main, editing main's tree IS the allowed operation (conflict resolution).
     merge = _merge_head_state(git_dir)
     if merge == "present":
+        # An allowed write into main by THIS session: it goes into the
+        # session's write record so the Stop gate can attribute it (main()).
+        meta["write"] = True
         return 0, "", meta
     if merge == "undetermined":
         return 2, DENY_MERGE_HEAD_UNDETERMINED.format(
@@ -371,6 +475,22 @@ main tree: while a merge is in progress on main (a readable MERGE_HEAD regular
 file in main's git dir) edits to main's tree are allowed so the conflicts can be
 resolved. A rebase or cherry-pick in progress (REBASE_HEAD / CHERRY_PICK_HEAD)
 does not unlock this.
+"""
+
+DENY_MAINTREE_NOT_OWN = """Refused: editing `{path}` writes to this project's MAIN working tree, and main is not this session's tree.
+
+The session's cwd is not main (`{main}`), so main is another tree. Under the
+user ruling of 2026-11-08 a gate judges only its own tree and does not read
+another tree's state, so this edit is refused by its path alone: a merge in
+progress in main is NOT consulted and does not unlock it. Make the edit in your
+worktree and merge it; resolve main's conflicts from a session whose cwd is main.
+"""
+
+DENY_WRITE_RECORD = """Refused: editing `{path}` (main, merge in progress) could not be recorded in this session's write record: {why}.
+
+The Stop gate attributes uncommitted main-tree paths to this session only
+through that record; an unrecorded write could not be attributed, and a check
+that could not run has not passed (CLAUDE.md 3).
 """
 
 DENY_MERGE_HEAD_UNDETERMINED = """Refused: editing `{path}` writes to this project's MAIN working tree, and
@@ -459,7 +579,18 @@ def main() -> int:
     # This guard's own judgement allowed the edit; now the deny ledger
     # (signal 1): the same session re-reaching a refused target.
     rc = deny_ledger.gate(payload)
-    return 0 if rc is None else rc
+    if rc is not None:
+        return rc
+    if meta.get("write"):
+        # An allowed edit of main by this session (cwd main, merge in
+        # progress): unrecorded, it could not be attributed at Stop, so a
+        # write that cannot be recorded is refused (CLAUDE.md 3).
+        err = deny_ledger.record_writes(payload, meta["root"], [meta["target_abs"]],
+                                        "guard-maintree-edit.py")
+        if err is not None:
+            sys.stderr.write(DENY_WRITE_RECORD.format(path=_target_path(payload), why=err))
+            return 2
+    return 0
 
 
 if __name__ == "__main__":

@@ -437,6 +437,13 @@ fn emit_line(decision: Decision, input: Option<&HookInput>) {
 /// `Allow` — the strongest thing it produces is a question. The escalation
 /// `Ask` → `Deny` has no path through here at all.
 ///
+/// # System harm is never downgraded (user ruling 2026-11-07)
+///
+/// 「いかなる理由であれシステムに害になるコマンドはdenyすべし」/「1は絶対にdenyで
+/// いい」: a `Deny` whose reason carries [`blastguard::model::SYSTEM_HARM_MARK`]
+/// ([`Decision::is_system_harm`]) is returned unchanged on every repeat. Every
+/// other `Deny` keeps the downgrade above.
+///
 /// # Fail-closed (CLAUDE.md §3)
 ///
 /// [`harness_core::repeat::must_yield`] answers `false` for both "first time"
@@ -447,6 +454,11 @@ fn downgrade_on_repeat(input: Option<&HookInput>, decision: Decision) -> Decisio
     let Decision::Deny(reason) = &decision else {
         return decision;
     };
+    // User ruling 2026-11-07 (「1は絶対にdenyでいい」): a command that harms the
+    // system stays Deny on every request. See `model::SYSTEM_HARM_MARK`.
+    if decision.is_system_harm() {
+        return decision;
+    }
     let Some(input) = input else {
         // No parsed payload means no effect to identify, and an unidentifiable
         // effect cannot be shown to be a repeat of anything.
@@ -553,7 +565,9 @@ fn analyse(input: &HookInput) -> Decision {
 /// and cache roots (`$HOME/.cache`, `$HOME/Library/Caches`) — each only when it
 /// is a real, non-symlinked directory right now — and this function attaches
 /// the git work-tree probe (`reversible::probe_tree`) that its project classes
-/// need. Recursive rm strictly inside them is Allow under the same
+/// need, plus the absent-path index probe (`reversible::probe_absent_path`)
+/// the `git checkout -- <pathspec>` verdict uses for a path missing on disk.
+/// Recursive rm strictly inside them is Allow under the same
 /// whole-command conditions as the worktree Allow plus a few more (no `.`
 /// component, plain options-then-operands); see `deletion`'s module doc.
 ///
@@ -573,6 +587,7 @@ fn safe_roots(input: &HookInput) -> SafeRoots {
         Some(real_path),
     )
     .with_git_tree_probe(blastguard::reversible::probe_tree)
+    .with_git_absent_probe(blastguard::reversible::probe_absent_path)
 }
 
 /// Resolve `path` to its real path — symlinked components included — WITHOUT

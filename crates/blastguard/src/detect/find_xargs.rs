@@ -1,6 +1,8 @@
 use super::{
-    analyze_code_interpreter, command_candidates, confined_ask, depth_exhausted, detect_bash,
-    is_code_interpreter, is_shell, normalized_command, Ctx, Decision, VerdictAcc, MAX_SHELL_DEPTH,
+    analyze_code_interpreter, command_candidates, compound_views, confined_ask, depth_exhausted,
+    detect_bash, git_subcommand_index, is_code_interpreter, is_exec_wrapper, is_shell,
+    normalized_command, split_segments_with_separators, wrapped_command_heads, Ctx, Decision,
+    SegmentSep, VerdictAcc, MAX_SHELL_DEPTH,
 };
 
 /// find's own global options, which sit BEFORE the search roots and are not
@@ -412,4 +414,364 @@ pub(super) fn xargs_reads_arg_file(opts: &[&str]) -> bool {
     opts.iter().any(|t| {
         t.starts_with("--arg-file") || xargs_short_value_flag(t).is_some_and(|(c, _)| c == 'a')
     })
+}
+
+/// What one pipeline stage writes to its stdout, as far as the text shows.
+enum StageOutput {
+    /// Paths (or path prefixes the output stays under) the stage names: the
+    /// operands of `echo`/`printf`, the search roots of `find`, the operands of
+    /// `ls`.
+    Paths(Vec<String>),
+    /// Paths of the repository's own files (`git ls-files`, `git diff`): what
+    /// `git ls-files -z | xargs -0 rm` deletes is tracked project content.
+    InRepo,
+    /// The output cannot be told from the text (a file's contents, a network
+    /// response, an expansion, an unrecognised program). The string names it.
+    Unknown(String),
+}
+
+/// Filters that pass a stage's items through unchanged in kind: they only
+/// drop, reorder or duplicate lines, so the only paths that can come out are
+/// ones that went in.
+const PASS_THROUGH_FILTERS: &[&str] = &["sort", "uniq", "head", "tail", "grep", "egrep", "fgrep"];
+
+/// Round 2 (backlog 3c750df2): `xargs` running a remover (`rm`/`unlink`) on the
+/// items an EARLIER pipeline stage writes.
+///
+/// [`analyze_xargs`] judges only xargs's own tokens, so `echo /etc/passwd |
+/// xargs rm` was judged as a bare `rm` with no operand and allowed: the path
+/// the remover gets was never looked at. This reads the stage that feeds the
+/// xargs segment (`line`/`seg_idx` locate it, see `analyze_segment`), walking
+/// back through pass-through filters ([`PASS_THROUGH_FILTERS`] reading only
+/// their stdin):
+///
+///   * the producer names a path at or below a system directory (`echo`/
+///     `printf` operands, `find` search roots, `ls` operands, judged by
+///     [`rm_system_harm_deny`](super::rm::rm_system_harm_deny) exactly as an
+///     `rm` operand) — `Deny` (system harm);
+///   * the producer's output cannot be known from the text — `Ask` (a subagent
+///     gets the hardened `Deny`): the remover's operands are unknown, and
+///     blastguard refuses to guess them;
+///   * the producer names only non-system literal paths, or lists the
+///     repository's own files (`git ls-files`, `git diff`, `git diff-tree`,
+///     `git ls-tree`, with no `-C`/`--git-dir`/`--work-tree`) — no verdict
+///     here (`Allow`); every other rule keeps its say.
+///
+/// A segment that is not the consumer of a `|`, xargs reading an argument file
+/// (`-a FILE`), and an xargs whose command is not a remover are not judged
+/// here. This only ever adds a verdict.
+pub(super) fn xargs_pipe_feed(
+    tokens: &[&str],
+    line: &str,
+    seg_idx: usize,
+    ctx: &Ctx<'_>,
+) -> Decision {
+    let Some(remover) = xargs_remover(tokens) else {
+        return Decision::Allow;
+    };
+    let segs = split_segments_with_separators(line);
+    let views = compound_views(line);
+    let mut i = seg_idx;
+    loop {
+        // The stage before `i` feeds it only through a single `|`.
+        let fed = i > 0
+            && segs
+                .get(i - 1)
+                .is_some_and(|s| s.sep_after == SegmentSep::Pipe);
+        if !fed {
+            // Nothing in the text feeds this stage (the first stage of the
+            // line, or a filter reading the line's own stdin): xargs reads what
+            // the caller pipes in, which this rule cannot see either way.
+            return Decision::Allow;
+        }
+        let text = match (views.get(i - 1), segs.get(i - 1)) {
+            (Some(v), _) => v.command.clone(),
+            (None, Some(s)) => s.text.clone(),
+            (None, None) => {
+                return xargs_feed_ask(&remover, "a pipeline stage the parser could not line up")
+            }
+        };
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let stage = text.trim();
+        // The program the stage finally runs, behind any exec wrapper (`sudo
+        // find /usr`). A wrapper option that may be either its value or the
+        // program (`sudo -u root find …`) gives more than one head; each is
+        // judged, a system path behind ANY of them is the Deny, and a mix the
+        // text does not settle is the Ask.
+        let heads: Vec<usize> = wrapped_command_heads(&words)
+            .into_iter()
+            .filter(|&h| !is_exec_wrapper(&normalized_command(words[h])))
+            .collect();
+        if heads.is_empty() {
+            return xargs_feed_ask(&remover, &format!("`{stage}` (a stage with no command)"));
+        }
+        let outputs: Vec<Option<StageOutput>> =
+            heads.iter().map(|&h| stage_output(&words, h)).collect();
+        if outputs.iter().all(Option::is_none) {
+            // A pass-through filter: judge what feeds IT.
+            i -= 1;
+            continue;
+        }
+        let mut undetermined: Option<String> = None;
+        for out in &outputs {
+            match out {
+                Some(StageOutput::Paths(paths)) => {
+                    match placed_paths_verdict(paths, stage, &remover, ctx) {
+                        d @ Decision::Deny(_) => return d,
+                        Decision::Ask(why) => {
+                            undetermined.get_or_insert(why);
+                        }
+                        Decision::Allow => {}
+                    }
+                }
+                Some(StageOutput::InRepo) => {}
+                Some(StageOutput::Unknown(what)) => {
+                    undetermined.get_or_insert_with(|| xargs_feed_reason(&remover, what));
+                }
+                None => {
+                    undetermined.get_or_insert_with(|| {
+                        xargs_feed_reason(
+                            &remover,
+                            &format!("`{stage}` (a wrapped command whose program is ambiguous)"),
+                        )
+                    });
+                }
+            }
+        }
+        return match undetermined {
+            Some(why) => Decision::Ask(why),
+            None => Decision::Allow,
+        };
+    }
+}
+
+/// The verdict for the literal `paths` a producer stage `stage` names, fed to
+/// `xargs <remover>`: `Deny` (system harm) when one lands at or below a system
+/// directory ([`rm_system_harm_deny`](super::rm::rm_system_harm_deny)), `Ask`
+/// when a relative one cannot be placed, else `Allow`.
+///
+/// The producer's text is the RAW segment (its relative paths are not
+/// rewritten the way an `rm` operand is), so a relative path is placed against
+/// the raw base — the directory the earlier `cd`s left (`cd /etc && find . |
+/// xargs rm`). With no base to place it against, it cannot be told apart from
+/// a system path.
+fn placed_paths_verdict(paths: &[String], stage: &str, remover: &str, ctx: &Ctx<'_>) -> Decision {
+    let mut placed = Vec::with_capacity(paths.len());
+    for p in paths {
+        if p.starts_with('/') || p.starts_with('~') {
+            placed.push(p.clone());
+            continue;
+        }
+        match ctx.raw_base.as_deref() {
+            Some(base) => placed.push(format!("{}/{p}", base.trim_end_matches('/'))),
+            None => {
+                return xargs_feed_ask(
+                    remover,
+                    &format!("`{stage}` (a relative path with no known working directory)"),
+                )
+            }
+        }
+    }
+    match super::rm::rm_system_harm_deny(ctx, &placed, false) {
+        super::rm::SystemHarm::Deny(Decision::Deny(reason)) => Decision::deny_system_harm(format!(
+            "`{stage}` feeds `xargs {remover}` paths from a system directory, and xargs runs \
+the remover on them — {reason}"
+        )),
+        super::rm::SystemHarm::Deny(other) => other,
+        // A fed path that could not be placed is not shown to be outside every
+        // system directory: fail closed.
+        super::rm::SystemHarm::Unplaced(why) => xargs_feed_ask(remover, &why),
+        super::rm::SystemHarm::Clear => Decision::Allow,
+    }
+}
+
+/// The remover (`rm`/`unlink`) an `xargs` among `tokens` runs, when one does
+/// and its items come from stdin.
+fn xargs_remover(tokens: &[&str]) -> Option<String> {
+    for idx in command_candidates(tokens) {
+        if normalized_command(tokens[idx]) != "xargs" {
+            continue;
+        }
+        let rest = &tokens[idx + 1..];
+        let Some(start) = xargs_command_start(rest) else {
+            continue;
+        };
+        if xargs_reads_arg_file(&rest[..start]) {
+            // The items come from the named file, not from the pipe.
+            continue;
+        }
+        let inner = &rest[start..];
+        for j in command_candidates(inner) {
+            let word = normalized_command(inner[j]);
+            if matches!(word.as_str(), "rm" | "unlink") {
+                return Some(word);
+            }
+        }
+    }
+    None
+}
+
+fn xargs_feed_reason(remover: &str, what: &str) -> String {
+    format!(
+        "xargs runs `{remover}` on the items {what} writes to the pipe — those are the paths \
+it deletes, and blastguard cannot tell from the command line what they are, so it refuses to \
+guess"
+    )
+}
+
+fn xargs_feed_ask(remover: &str, what: &str) -> Decision {
+    Decision::Ask(xargs_feed_reason(remover, what))
+}
+
+/// What the stage `words`, running the program at `head_idx`, writes to
+/// stdout. `None` for a pass-through filter (see [`PASS_THROUGH_FILTERS`])
+/// reading only its stdin.
+fn stage_output(words: &[&str], head_idx: usize) -> Option<StageOutput> {
+    let head = normalized_command(words[head_idx]);
+    let rest: Vec<&str> = words[head_idx + 1..]
+        .iter()
+        .copied()
+        .filter(|w| !is_stage_redirect(w))
+        .collect();
+    let unknown = |why: &str| Some(StageOutput::Unknown(format!("`{head}` ({why})")));
+    let paths = |ops: &[&str]| match literal_paths(ops) {
+        Some(p) => Some(StageOutput::Paths(p)),
+        None => unknown("an operand the shell expands"),
+    };
+    match head.as_str() {
+        "echo" => {
+            let ops: Vec<&str> = rest
+                .iter()
+                .copied()
+                .filter(|w| !matches!(*w, "-n" | "-e" | "-E" | "-ne" | "-en"))
+                .collect();
+            paths(&ops)
+        }
+        "printf" => paths(&rest),
+        "find" => match find_search_roots(&rest) {
+            Some(roots) => paths(&roots),
+            None => unknown("a search root that cannot be read"),
+        },
+        "ls" => {
+            let ops: Vec<&str> = rest
+                .iter()
+                .copied()
+                .filter(|w| !w.starts_with('-'))
+                .collect();
+            if ops.is_empty() {
+                paths(&["."])
+            } else {
+                paths(&ops)
+            }
+        }
+        "git" => {
+            let sub_idx = git_subcommand_index(&rest);
+            let relocated = rest[..sub_idx.unwrap_or(rest.len())].iter().any(|w| {
+                w.starts_with("-C") || w.starts_with("--git-dir") || w.starts_with("--work-tree")
+            });
+            match sub_idx.map(|i| rest[i]) {
+                Some("ls-files" | "diff" | "diff-tree" | "ls-tree") if !relocated => {
+                    Some(StageOutput::InRepo)
+                }
+                _ => unknown("its output is not a listing of this repository's files"),
+            }
+        }
+        f if PASS_THROUGH_FILTERS.contains(&f) => {
+            if filter_reads_only_stdin(f, &rest) {
+                None
+            } else {
+                unknown("it reads a file whose contents are not on the command line")
+            }
+        }
+        _ => unknown("its output is not on the command line"),
+    }
+}
+
+/// A redirect word in a producer stage (`2>/dev/null`, `>&2`): not an operand.
+fn is_stage_redirect(w: &str) -> bool {
+    w.contains('>') || w.starts_with('<')
+}
+
+/// True when the filter `f` reads only its stdin: every word is a flag or a
+/// numeric flag value (`head -n 5`, `tail -n +2`, `sort -u`), plus — for the
+/// grep family — exactly one pattern and no flag that names a pattern or a
+/// file/directory to read (`-e`, `-f`, `-r`, `-R`, `-d`, `-D`, `--file`, …).
+/// `sort -o`/`--output` and `--files0-from` are not pass-through either.
+fn filter_reads_only_stdin(f: &str, rest: &[&str]) -> bool {
+    let is_grep = matches!(f, "grep" | "egrep" | "fgrep");
+    let numeric = |w: &str| {
+        let w = w.strip_prefix('+').unwrap_or(w);
+        !w.is_empty() && w.chars().all(|c| c.is_ascii_digit())
+    };
+    let mut positional = 0usize;
+    for w in rest {
+        if let Some(long) = w.strip_prefix("--") {
+            let names_input = if is_grep {
+                [
+                    "file",
+                    "recursive",
+                    "dereference-recursive",
+                    "regexp",
+                    "directories",
+                    "devices",
+                ]
+                .iter()
+                .any(|p| long.starts_with(p))
+            } else {
+                long.starts_with("output") || long.starts_with("files0-from")
+            };
+            if names_input {
+                return false;
+            }
+            continue;
+        }
+        if let Some(short) = w.strip_prefix('-') {
+            if short.is_empty() || numeric(short) {
+                continue; // `-` is stdin; `-5` is `head -5`
+            }
+            if is_grep
+                && short
+                    .chars()
+                    .any(|c| matches!(c, 'f' | 'r' | 'R' | 'e' | 'd' | 'D'))
+            {
+                return false;
+            }
+            if f == "sort" && short.contains('o') {
+                return false;
+            }
+            continue;
+        }
+        if numeric(w) {
+            continue;
+        }
+        positional += 1;
+    }
+    positional == usize::from(is_grep)
+}
+
+/// The literal paths `words` spell (see [`literal_items`]); `None` when any of
+/// them carries an expansion whose value the text does not show.
+fn literal_paths(words: &[&str]) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    for w in words {
+        out.append(&mut literal_items(w)?);
+    }
+    Some(out)
+}
+
+/// The items one `echo`/`printf`/operand word puts on the pipe as xargs splits
+/// them: quotes removed, the `\n`/`\t`/`\0`/`\r` escapes read as item
+/// separators. `None` for a word carrying an expansion (`$X`, `$(…)`,
+/// `` `…` ``). Splitting MORE finely than xargs would only adds candidate paths
+/// to judge — it can add a refusal, never hide one.
+fn literal_items(word: &str) -> Option<Vec<String>> {
+    if word.contains('$') || word.contains('`') {
+        return None;
+    }
+    let mut s: String = word.chars().filter(|c| !matches!(c, '\'' | '"')).collect();
+    for esc in ["\\n", "\\t", "\\0", "\\r"] {
+        s = s.replace(esc, " ");
+    }
+    let s = s.replace('\\', "");
+    Some(s.split_whitespace().map(str::to_string).collect())
 }

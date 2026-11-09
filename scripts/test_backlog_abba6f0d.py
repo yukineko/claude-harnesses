@@ -296,26 +296,20 @@ class RemainingAdHocResolvers(unittest.TestCase):
         `Command::new(program)` spawns its argument by bare name, so a caller
         passing a harness plugin name literal (`run_tool(repo, "overwatch",
         ..)`) is the same bare-name spawn the sweep above forbids, hidden one
-        call deep. Open defect (RED observed): condukt maintree.rs
-        observe_peers."""
+        call deep. The site this was first observed at (condukt maintree.rs
+        observe_peers's run_tool) was deleted with `condukt guard main-tree`
+        (user ruling 2026-11-08); the sweep itself stays."""
         helpers = spawn_param_helpers()
-        # Anti-vacuity: the detector must see maintree's run_tool, and must NOT
-        # flag helpers that resolve first (overwatch shell_source, stuckguard
-        # heartbeat_via spawn a resolved local, not their name parameter).
-        self.assertIn("run_tool", helpers)
+        # Anti-vacuity: the detector must see harness-status's gather (a
+        # non-test fn that passes its own `cmd: &str` to Command::new), and
+        # must NOT flag helpers that resolve first (overwatch shell_source,
+        # stuckguard heartbeat_via spawn a resolved local, not their name
+        # parameter).
+        self.assertIn("gather", helpers)
         self.assertNotIn("shell_source", helpers)
         self.assertNotIn("heartbeat_via", helpers)
 
         hits = plugin_literal_calls(helpers)
-        # Concrete pin for the known site: maintree must locate both binaries
-        # through plugin_bin.
-        rel = "crates/condukt/src/maintree.rs"
-        code = "\n".join(c for _, c in non_test_lines(rel))
-        for binary in ("overwatch", "backlog"):
-            if not re.search(r'plugin_bin::(resolve|cache_lookup_in)\([^;]*"%s"'
-                             % re.escape(binary), code):
-                hits.append(f"{rel}: [missing] no harness_core::plugin_bin "
-                            f"lookup of {binary!r} in non-test code")
         self.assertEqual(
             sorted(set(hits)), [],
             "harness plugin name literal passed to a helper that spawns its "

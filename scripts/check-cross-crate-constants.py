@@ -129,6 +129,21 @@ def read_value(root: Path, rel: str, pattern: str) -> tuple[str | None, str | No
 
 def main() -> int:
     root = repo_root()
+    # `--staged` (pre-commit, user ruling 2026-11-08): a canonical/copy pair is
+    # a cross-file property, so it runs in full only when the staged diff
+    # touches a PINS path, this script or the scoping helper; otherwise it
+    # exits 0. An unreadable staged set exits 2.
+    if "--staged" in sys.argv:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import staged_scope
+
+        pin_paths = [p["canonical"][0] for p in PINS] + [c[0] for p in PINS for c in p["copies"]]
+        sys.argv = staged_scope.gate_on_inputs(
+            root,
+            "check-cross-crate-constants",
+            sys.argv,
+            pin_paths + ["scripts/check-cross-crate-constants.py", "scripts/staged_scope.py"],
+        )
     failures: list[str] = []
     checked = 0
 

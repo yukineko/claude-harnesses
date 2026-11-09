@@ -56,7 +56,7 @@ fn run(dir: &Path) -> (i32, String) {
     // Tests exercise config-driven behavior, so the temp repo's config must be
     // honored: trust every root for these in-process runs (env-scoped to the
     // spawned binary; never touches the real trust list). The untrusted path is
-    // covered separately by `untrusted_repo_config_is_ignored`.
+    // covered separately by `untrusted_repo_config_refuses_to_audit`.
     let bin = env!("CARGO_BIN_EXE_precommit-audit");
     let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .arg("--mode")
@@ -271,11 +271,14 @@ fn swallowed_exception_blocks() {
 }
 
 /// The security contract: an auto-discovered project `.precommit-audit.toml`
-/// in an UNTRUSTED repo must be ignored — its custom rules / linter knobs carry
-/// no weight, so a cloned hostile repo can't steer the audit. Same config as
-/// `custom_rule_blocks_with_glob_scope`, but run without `HARNESS_TRUST_ALL`.
+/// in an UNTRUSTED repo is NOT honored — its custom rules / linter knobs carry
+/// no weight, so a cloned hostile repo can't steer the audit — and (user
+/// ruling 2026-11-08, CLAUDE.md section 3) that is a REFUSAL TO AUDIT, not a
+/// pass: the run fails closed (exit 1 in precommit mode) and names the file.
+/// Same config as `custom_rule_blocks_with_glob_scope`, but run without
+/// `HARNESS_TRUST_ALL`.
 #[test]
-fn untrusted_repo_config_is_ignored() {
+fn untrusted_repo_config_refuses_to_audit() {
     let dir = init_repo();
     let cfg = r#"
 [checks]
@@ -295,8 +298,10 @@ message = "Resolve TODO/FIXME before committing."
     // isolates the custom rule from the built-in missing-test default.
     write(&dir, "src/a.conf", "key = value  # TODO later\n");
 
-    // Untrusted run: NO HARNESS_TRUST_ALL, so the project config is dropped and
-    // the custom rule never fires.
+    // Untrusted run: NO HARNESS_TRUST_ALL and a sandbox HOME (empty trust
+    // list), so the project config is not honored: the custom rule never
+    // fires, and the audit refuses instead of passing.
+    let home = unique_dir();
     let bin = env!("CARGO_BIN_EXE_precommit-audit");
     let out = harness_core::git_env::scrub(&mut Command::new(bin))
         .arg("--mode")
@@ -304,21 +309,24 @@ message = "Resolve TODO/FIXME before committing."
         .arg("--root")
         .arg(&dir)
         .current_dir(&dir)
+        .env("HOME", &home)
+        .env_remove("HARNESS_SANDBOX_HOME")
+        .env_remove("HARNESS_TRUST_ALL")
         .output()
         .expect("binary runs");
     let code = out.status.code().unwrap_or(-1);
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
-        code, 0,
-        "untrusted custom rule must NOT block; stderr: {err}"
+        code, 1,
+        "untrusted repo config must REFUSE (fail exit), not pass; stderr: {err}"
     );
     assert!(
         !err.contains("NO-TODO-FIXME"),
         "custom rule from untrusted config must not fire; stderr: {err}"
     );
     assert!(
-        err.contains("not trusted"),
-        "should warn the config was ignored; stderr: {err}"
+        err.contains(".precommit-audit.toml") && err.contains("not on the workspace-trust list"),
+        "refusal must name the config file and why; stderr: {err}"
     );
 }
 

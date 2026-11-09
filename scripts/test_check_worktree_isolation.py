@@ -11,9 +11,8 @@ this merge, but at the instant `.githooks/pre-merge-commit` -> pre-commit ->
 this script ran, the file was not yet visible — a filesystem-visibility race
 between git writing MERGE_HEAD and the hook chain reading for it.
 
-This is the SAME class of gap `crates/condukt/src/maintree.rs::declared_integration`
-was written to close for the Rust `guard main-tree` gate (see
-`crates/condukt/tests/main_tree_guard_merge.rs`): the on-disk marker is not
+This is the SAME class of gap the Rust `condukt guard main-tree` gate (removed
+by user ruling 2026-11-08) once closed the same way: the on-disk marker is not
 sufficient because git does not always write it (a `--no-ff` merge that succeeds
 never writes MERGE_HEAD at all; a race can additionally delay visibility of one
 that IS about to be written for a merge that stops). The corroborating signal is
@@ -200,8 +199,7 @@ class MergeHeadVisibilityRace(unittest.TestCase):
 
 
 class DeclaredMergeIntegrationUnit(unittest.TestCase):
-    """Direct unit coverage of the corroboration function, mirroring
-    crates/condukt/src/maintree.rs::declared_integration's contract."""
+    """Direct unit coverage of the corroboration function's contract."""
 
     def test_both_signals_present_is_true(self):
         self.assertTrue(

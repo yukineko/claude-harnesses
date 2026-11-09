@@ -31,7 +31,8 @@
   そうしないと同一の truncated diff が "already-reviewed" 経路で無審査に通ってしまう。
 - **trust 境界（任意コード実行の防止）** — project `./reviewgate.toml` の `reviewer_cmd` は `subprocess` モードで
   実行されるため、project root を `harness_core::trust` で **trust** して初めて project 設定が honored される
-  （`Config::load`）。未 trust なら project ファイルは無視し home config → 組み込みデフォルトへフォールバック。
+  （`Config::load`）。未 trust なら project ファイルは honor せず、Stop hook は `config-untrusted` でブロックする
+  （`Config::untrusted_project`。`off` 既定へは倒さない）。linked worktree は main の trust を継承しない（ユーザー裁定 2026-11-08）。
   `HARNESS_TRUST_ALL=1` は trust リストを上書きする。config precedence は project(trusted) > `~/.reviewgate/config.toml`
   > 組み込みデフォルト。パースエラーは無言でフォールバック（ゲートはターンをクラッシュさせない）。
 - **safe by default** — git リポジトリでない（`changed_files` が `None`）・レビュー対象ファイルが

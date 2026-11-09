@@ -14,6 +14,10 @@ use crate::task::{
     new_id, Closure, Repro, Status, Task, STATUS_DONE, STATUS_FAILED, STATUS_PENDING,
 };
 
+/// The stored "a user ruled this out for now" status (backlog b3f5e3af),
+/// written only by [`mark_ruled_deferred`].
+pub(crate) const STATUS_RULED_DEFERRED: Status = Status::RuledDeferred;
+
 /// The DERIVED claim status (backlog f09db5ce). It is never written to the
 /// tracked store by this binary: a claim lease lives only in the untracked,
 /// project-wide claim ledger ([`crate::claim_ledger`]), and `claimed` is what
@@ -1088,6 +1092,18 @@ fn check_duplicate(tasks: &[Task], title: &str, project: &str) -> Result<()> {
             "duplicate task rejected: an existing pending/failed/claimed task already has this content (hashkey {hk}); use --force to add anyway"
         ));
     }
+    // backlog b3f5e3af: re-filing a ruled-deferred ticket under the same
+    // content would put the ruled-against work straight back on the queue.
+    if let Some(t) = tasks.iter().find(|t| {
+        crate::task::hashkey(&t.title, &t.project) == hk && t.status == STATUS_RULED_DEFERRED
+    }) {
+        return Err(anyhow!(
+            "duplicate task rejected: task {} has this content (hashkey {hk}) and is \
+             ruled-deferred by a user ruling (`backlog defer`); re-filing it would hand the \
+             ruled-against work out again. Use --force to add anyway",
+            t.id
+        ));
+    }
 
     match claim_check(&hk) {
         ClaimCheck::NotClaimed => {}
@@ -1780,7 +1796,10 @@ pub fn update_task(
 /// `failed`. A terminal row is final.
 pub fn require_closable(task: &Task) -> Result<()> {
     match task.status {
-        STATUS_PENDING | STATUS_FAILED => Ok(()),
+        // A ruled-deferred row may still be closed with a recorded closure
+        // (`cancel` turning the ruling into a discard, or `done` with evidence):
+        // closing it never puts it back on the queue (backlog b3f5e3af).
+        STATUS_PENDING | STATUS_FAILED | STATUS_RULED_DEFERRED => Ok(()),
         s if is_terminal_status(&s) => Err(anyhow!(
             "refused: task {} is already {s} (terminal status is final)",
             task.id
@@ -2300,6 +2319,15 @@ pub fn mark_failed(path: &Path, id: &str, reason: Option<&str>) -> Result<()> {
                 "refused: task {id} is {} (terminal) and terminal status is final; \
                  `fail` would reopen it as a retryable task",
                 task.status
+            ));
+        }
+        // backlog b3f5e3af: `failed` is requeued once its defer window
+        // elapses, so failing a ruled-deferred row would hand the ruled-against
+        // work out again two days later.
+        if task.status == STATUS_RULED_DEFERRED {
+            return Err(anyhow!(
+                "refused: task {id} is ruled-deferred (a recorded user ruling); `fail` \
+                 would requeue it. Close it with `backlog cancel {id} --reason R` instead"
             ));
         }
         task.status = STATUS_FAILED;
@@ -2865,10 +2893,9 @@ pub(crate) fn canonicalize_project(project: &str) -> String {
 /// default scope hard-errors, since an empty filtered result there is
 /// indistinguishable from a genuinely empty queue — see that call site).
 ///
-/// Filesystem-only (no `git` subprocess), mirroring
-/// `harness_core::trust::resolve`'s worktree-inheritance algorithm exactly —
-/// the SAME verified (not assumed) `gitdir:` walk, ported here because that
-/// function is private to `harness-core`.
+/// Filesystem-only (no `git` subprocess): a verified `gitdir:` walk from this
+/// checkout's `.git` file to its repository. Project identity only, never
+/// trust (harness-core's copy went with worktree trust, 2026-11-08).
 ///
 /// Resolution:
 ///   1. Nearest ancestor of `cwd` (inclusive) holding a `.git` entry — the
@@ -2930,8 +2957,9 @@ pub(crate) fn canonical_project_id(cwd: &Path) -> Determination<PathBuf> {
 }
 
 /// If `root` is a **linked** git worktree, the main working tree it belongs
-/// to. Ported from `harness_core::trust::main_worktree_of` (private to that
-/// crate) — see its doc comment for the full rationale; this is the identical
+/// to. Originally ported from `harness_core::trust::main_worktree_of`, which
+/// was deleted on 2026-11-08 together with worktree trust inheritance; this
+/// copy is now the only one, and it serves project identity, not trust. The
 /// algorithm: read the `gitdir:` gitfile, walk up
 /// `.../<common-git-dir>/worktrees/<name>`, and VERIFY the inference (not
 /// assume it from path shape alone) by canonicalizing both the common git dir

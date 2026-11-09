@@ -11,8 +11,7 @@ allowed-tools: Bash(backlog:*), Bash(git:*), Read
 backlog list --status pending [--project <path>]   # ピックには使用禁止。キュー一覧（純粋な read）
 backlog next [--project <path>]                    # 次のアイテムを覗く（予約しない）
 backlog next --claim [--project <path>]            # 次のアイテムを予約して取る（driver はこちら）
-backlog done <id> --test "<cmd>" --red-rev <rev>   # 完了（committed test が REV で RED・HEAD で GREEN を実測）
-backlog done <id> --test "<cmd>" --red-rev <rev> --red-overlay <repro test file>   # 修正がテストファイルの中にあるとき: RED 側へ上書きする HEAD のテストファイルを repro 側だけに絞る（絞るだけで広げられない。REV で通るテストは拒否）
+backlog done <id> --test "<cmd>" --red-rev <rev>   # 完了（committed test が HEAD で GREEN を実測。REV は commit 解決と祖先判定だけして closure.red に executed = false で記録し、RED は実行しない: ユーザー裁定 2026-11-08）
 backlog done <id> --doc-only <commit>              # 完了（doc だけを触る祖先 commit が証拠）
 backlog done <id> --duplicate-of <id>              # 完了（重複。相手は pending / claimed / done）
 backlog add --repro-test "<cmd>" ...               # 再現した時だけ pending で起票し、それ以外は非 0 で拒否して store に何も書かない
@@ -20,6 +19,7 @@ backlog audit-open [--json]                        # open 行（pending/failed�
 backlog audit-closures [--json]                    # 既存 close の証拠クラスを集計（read-only）
 backlog fail <id> --reason "<概要>"                # アイテムを失敗マーク（2 日後に再キューされる）
 backlog cancel <id> --reason "<理由>"              # やらないと決めて捨てる（終端。`discard` closure として理由を記録。証明できない推測はこれで捨てること。done と違い完了を主張しない）
+backlog defer <id> --ruling "<裁定の逐語引用>"      # ユーザーの見送り裁定を記録（status ruled-deferred。next / next --claim は払い出さず、再キューもしない。抜けるのは cancel / done のみ）
 
 # driver の存在通知（非排他。何セッションでも同時に登録できる）
 backlog driver register   --session-id <id> --project <path>
@@ -59,6 +59,7 @@ backlog lock release --project <path> [--session-id <id>]   # 保有セッショ
 - 記録が読めなければ失敗する。
 - `cancel` は空でない `--reason` が要る。
 - `edit --status done|cancelled` は拒否される。
+- `defer` は空でない `--ruling` が要る。`edit --status ruled-deferred` も、ruled-deferred 行への `edit --status` / `fail` も拒否される。
 
 ## コマンドを用途で使い分けること
 
@@ -66,6 +67,7 @@ backlog lock release --project <path> [--session-id <id>]   # 保有セッショ
 - 次のアイテムだけ確認したいときは `backlog next` を使うこと。着手するなら `next --claim` を使うこと。
 - 手動で完了したいときは `backlog done <id> --test "<cmd>" --red-rev <rev>` を使うこと。素の `done` は拒否される。失敗マークしたいときは `backlog fail <id>` を使うこと。
 - やらないと決めて閉じたいときは `backlog cancel <id> --reason "<理由>"` を使うこと（テスト無しで `discard` として記録される）。
+- ユーザーが見送りと裁定したチケットは notes に書くだけにせず `backlog defer <id> --ruling "<逐語>"` で記録すること（notes だけの裁定は `next --claim` に払い出される）。
 - キューを自動で全件消化したいときは **`/flow` を使う**こと。
 
 ## 失敗モードの対処に従うこと

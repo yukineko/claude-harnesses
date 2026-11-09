@@ -4,10 +4,10 @@
 # Caps may only go DOWN: the pre-commit gate blocks raising a cap or adding a
 # new entry over 2000. To get a file off this list, split it under 2000 lines,
 # then lower or delete its entry in the same commit.
-2266 crates/backlog/src/main.rs
-6647 crates/backlog/src/store.rs
+2245 crates/backlog/src/main.rs
+6606 crates/backlog/src/store.rs
 2967 crates/backlog/tests/cli_contract.rs
-2406 crates/blastguard/src/detect.rs
+2330 crates/blastguard/src/detect.rs
 5021 crates/blastguard/src/detect/tests.rs
 2480 crates/blastguard/src/scope.rs
 4095 crates/condukt/src/claim.rs
@@ -18,9 +18,9 @@
 2699 crates/condukt/src/wt_reconcile.rs
 2176 crates/fugu-router/src/main.rs
 3647 crates/overwatch/src/store.rs
-2100 crates/overwatch/tests/cli_contract.rs
+2064 crates/overwatch/tests/cli_contract.rs
 3648 crates/propguard/src/gate.rs
-4770 crates/specguard/src/main.rs
+4755 crates/specguard/src/main.rs
 2409 crates/specguard/src/specmap.rs
 2015 crates/specguard/tests/integration.rs
 2413 crates/tdd/src/gate.rs

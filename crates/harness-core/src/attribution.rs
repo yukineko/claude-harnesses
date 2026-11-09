@@ -270,7 +270,7 @@ pub fn attribute_from_transcript(
 ///   test, so it OVER-attributes (`src/a.rs` also matches a mention of
 ///   `crates/x/src/a.rs`); over-attribution keeps more files in the gate, the
 ///   restrictive side. A statement made only of read-only commands
-///   (`git diff a.js`, `grep … a.js | head`, `tdd skip --reason "… a.js …"`)
+///   (`git diff a.js`, `grep … a.js | head`, `tdd skip --reason "… a.js …"`, `donegate skip --reason "… a.js …"`)
 ///   does not count: before this rule, reading a peer's dirty file — or
 ///   naming it in the very skip reason that says "not mine" — made the file
 ///   this session's and blocked every later stop (observed 2026-10-20,
@@ -718,7 +718,7 @@ fn read_only_stage(stage: &Stage) -> bool {
                 )
             ) && !rest.iter().any(|a| a.starts_with("--output"))
         }
-        "tdd" | "reviewgate" => rest.get(1) == Some(&"skip"),
+        "tdd" | "reviewgate" | "donegate" => rest.get(1) == Some(&"skip"),
         _ => false,
     }
 }
@@ -770,14 +770,8 @@ pub struct SessionWrites {
 /// Every file the session (and its subagents) is recorded as having written.
 /// An unreadable transcript or sidechain is `Undetermined`, never an empty set.
 pub fn session_written_paths(transcript_path: &str) -> Determination<SessionWrites> {
-    let mut edited = match crate::transcript::files_edited_by_session(transcript_path) {
-        Determination::Known(v) => v,
-        Determination::Undetermined(why) => {
-            return Determination::undetermined(why.as_str().to_string())
-        }
-    };
-    let mut bash = match crate::transcript::bash_commands_by_session(transcript_path) {
-        Determination::Known(v) => v,
+    let mut all = match own_written_paths(transcript_path) {
+        Determination::Known(w) => w,
         Determination::Undetermined(why) => {
             return Determination::undetermined(why.as_str().to_string())
         }
@@ -789,18 +783,11 @@ pub fn session_written_paths(transcript_path: &str) -> Determination<SessionWrit
         }
     };
     for side in sides {
-        let s = side.to_string_lossy();
-        match crate::transcript::files_edited_by_session(&s) {
-            Determination::Known(v) => edited.extend(v),
-            Determination::Undetermined(why) => {
-                return Determination::undetermined(format!(
-                    "subagent transcript: {}",
-                    why.as_str()
-                ))
+        match own_written_paths(&side.to_string_lossy()) {
+            Determination::Known(w) => {
+                all.edited.extend(w.edited);
+                all.bash.extend(w.bash);
             }
-        }
-        match crate::transcript::bash_commands_by_session(&s) {
-            Determination::Known(v) => bash.extend(v),
             Determination::Undetermined(why) => {
                 return Determination::undetermined(format!(
                     "subagent transcript: {}",
@@ -809,6 +796,27 @@ pub fn session_written_paths(transcript_path: &str) -> Determination<SessionWrit
             }
         }
     }
+    Determination::known(all)
+}
+
+/// The files ONE transcript records as written: the transcript at
+/// `transcript_path` only, without its subagent sidechains ([`session_written_paths`]
+/// is the union of this over the parent and every sidechain). Lets a caller
+/// tell WHICH transcript wrote a path. Same failure contract: an unreadable
+/// transcript is `Undetermined`, never an empty set.
+pub fn own_written_paths(transcript_path: &str) -> Determination<SessionWrites> {
+    let edited = match crate::transcript::files_edited_by_session(transcript_path) {
+        Determination::Known(v) => v,
+        Determination::Undetermined(why) => {
+            return Determination::undetermined(why.as_str().to_string())
+        }
+    };
+    let bash = match crate::transcript::bash_commands_by_session(transcript_path) {
+        Determination::Known(v) => v,
+        Determination::Undetermined(why) => {
+            return Determination::undetermined(why.as_str().to_string())
+        }
+    };
     let mut bash_paths = BTreeSet::new();
     for call in &bash {
         let cwd = call.cwd.as_deref().map(Path::new);

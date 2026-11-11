@@ -25,6 +25,16 @@ doc = "docs/specs/blastguard.md"
 reason = "'振る舞い' bullet 'managed な使い捨て場所での working-tree 破棄の Allow': SafeRoots::is_linked_worktree_checkout and its Known(true)/Known(false)/Undetermined contract."
 
 [[spec]]
+path = "crates/blastguard/src/scope/deletion_roots.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `scope/deletion_roots`: deletion_roots builds the temp/cache DELETION roots (spec 3aa215e1 class 2/3) with the NEVER_A_ROOT / system-dir / home-containment exclusions; moved out of scope.rs unchanged (file-growth cap)."
+
+[[spec]]
+path = "crates/blastguard/src/detect/tests/file_ops.rs"
+doc = "docs/specs/blastguard.md"
+reason = "module list bullet `detect/tests/file_ops`: unit tests for the file tools and the entry-boundary unreadable-operand Ask; moved out of detect/tests.rs unchanged (file-growth cap)."
+
+[[spec]]
 path = "crates/blastguard/src/detect.rs"
 doc = "docs/specs/blastguard.md"
 reason = "'module 責務' detect and the whole '振る舞い' section (detect_write, detect_bash, split_segments, analyze_segment, analyze_rm/git/find, disarm-by-non-write rules)."

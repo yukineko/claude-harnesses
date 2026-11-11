@@ -45,6 +45,12 @@ fn assert_not_dispatched(o: &common::Out, x: &str, y: &str, what: &str) {
              expected Y ({y}). stdout: {}",
             o.stdout
         );
+        assert!(
+            o.stdout.contains(y),
+            "{what} exited 0 without X but did not hand out Y ({y}) either; \
+             emitting nothing is not a fix. stdout: {}",
+            o.stdout
+        );
     } else {
         assert!(
             o.both().contains(x),
@@ -80,4 +86,14 @@ fn next_claim_does_not_dispatch_task_whose_fix_commit_is_in_head() {
     land_fix(&fx, &x);
     let after = fx.run(&["next", "--claim"]);
     assert_not_dispatched(&after, &x, &y, "`backlog next --claim`");
+    // State read back through the CLI (`list --all --json`).
+    assert_eq!(
+        fx.status(&x),
+        "pending",
+        "X ({x}) must stay pending, not be leased: {}",
+        after.both()
+    );
+    if after.code == 0 {
+        assert_eq!(fx.status(&y), "claimed", "Y ({y}) must be the claimed task");
+    }
 }
